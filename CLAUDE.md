@@ -387,6 +387,35 @@ the packet decoder, which are the three things a scripted click exists to
 drive. The packet still does all the work; the registry only reports where it
 landed.
 
+**START ONE WITH `os88marty.launch`, WAIT WITH `settle`, AND NAME A FLAG WITH
+`m.sym`.** Three lines that between them replace the twenty every scripted
+session used to hand-roll, and each exists because of a failure that does not
+announce itself. `launch(img, apps=..., machine=...)` kills survivors **by
+PID out of /proc** and waits for port 9001 to go quiet — a survivor keeps the
+port, the new emulator cannot bind, and the client then drives the STALE
+machine, which reads as a hang or as a change that did nothing; `pkill -f
+martypc_headless` and `pgrep -f` both self-match the calling shell and are
+never the answer. It copies each floppy into the run directory (the guest
+WRITES to a mounted image), asserts `cycles == 0`, and OWNS the process, so
+`close()` or leaving the `with` cannot leak one. **`Mouse(marty=m)` shares
+that one connection** — the debug server takes a single client and a second
+`Marty` HANGS rather than erroring. `settle(m)` replaces every
+`time.sleep(4)`: two identical rendered frames a second apart, which an
+os8088 screen only is between events. The boot needs a GATE on top of it and
+the two obvious gates are both wrong — stillness alone returns during the
+BIOS POST (measured: an 8.3 s "boot" showing a quarter of the desktop's lit
+pixels) and "has the card left text mode" hangs on Hercules, whose MDA
+reports text mode forever — so it gates on the menu bar's white field, read
+through `vram` on 1bpp and `fbuf` on VGA. CGA 17.5 s, Hercules 16.1 s, VGA
+7.1 s, against a 26 s fixed sleep. And **`m.sym('fpg_on')` / `python3
+tools/os88sym.py --all`** is where a kernel symbol actually lives: `nasm -l`'s
+listing is SECTION-RELATIVE for anything in `.bss`, so `menu_bovr` reads
+there as `0x0879` and is at `0xCBA4` — a plausible small number inside
+`.text` that a script reads a byte from forever. It uses nasm's `[map]` on a
+temporary copy of `kernel.asm` and asserts byte-identity with
+`build/kernel.bin`, so a map of a different kernel is an error rather than a
+wrong answer. docs/MARTYPC-DEBUG.md.
+
 `os88marty.py key` enters the emulator's keyboard buffer so the guest sees a
 keystroke through the 8255 and int 09h, and `mouse` builds a real Microsoft
 3-byte packet and clocks it into the serial controller so mou_isr decodes it

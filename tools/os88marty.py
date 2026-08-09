@@ -80,6 +80,14 @@ class Marty:
             self.s.close()
         except OSError:
             pass
+        proc = getattr(self, "_proc", None)      # launch() gave us the process
+        if proc is not None:                     # to own: end it, or the next
+            self._proc = None                    # session inherits a survivor
+            try:                                 # holding the port
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
 
     def cmd(self, **kw):
         self.f.write((json.dumps(kw) + "\n").encode())
@@ -212,6 +220,19 @@ class Marty:
 
     def readseg(self, seg, off, length):
         return self.read((seg << 4) + off, length)
+
+    def sym(self, name, defines=()):
+        """The flat address of a KERNEL symbol, from nasm's own map.
+
+            m.read(m.sym("fpg_on"), 1)
+
+        Never take one out of `nasm -l`'s listing: for anything in `.bss` the
+        listing prints a SECTION-RELATIVE address that is fixed up afterwards,
+        so it is a plausible small number pointing into `.text` - and reading
+        a byte from it succeeds and means nothing. os88sym.py has the story.
+        """
+        import os88sym
+        return os88sym.linear(name, defines)
 
     def write(self, addr, data):
         return self.cmd(cmd="write", addr=addr, data=data.hex())["written"]
@@ -382,6 +403,255 @@ def _png(path, w, h, raw, colour_type):
         f.write(chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, colour_type, 0, 0, 0)))
         f.write(chunk(b"IDAT", zlib.compress(raw, 9)))
         f.write(chunk(b"IEND", b""))
+
+
+# =============================================================================
+# LAUNCHING ONE. Every scripted session needs a fresh emulator, and until this
+# existed every one of them hand-rolled the same twenty lines - which is where
+# essentially all of this harness's lost time has gone. The failures do not
+# announce themselves:
+#
+#   * A SURVIVOR FROM A PREVIOUS RUN KEEPS PORT 9001. The new emulator cannot
+#     bind, says so only in its log, and the client then drives the STALE
+#     machine - a different image, at a different point in its boot. It reads
+#     as the guest hanging, or as a change that did nothing.
+#   * `pkill -f martypc_headless` IS NOT RELIABLE HERE. The pattern matches
+#     the calling shell's own command line, so it can kill the caller instead
+#     of (or as well as) the target; the `[m]artypc` bracket dodge fixes that
+#     one and not the rest. This kills by PID, read out of /proc.
+#   * `pgrep -f <pattern>` SELF-MATCHES for the same reason, so the obvious
+#     `until ! pgrep -f foo; do sleep; done` wait never finishes.
+#   * THE SERVER TAKES ONE CLIENT. A second connection does not error, it
+#     HANGS until the read times out - so a script that wants both the mouse
+#     driver and the framebuffer must share one Marty, never build two.
+#
+# All of that is handled once, here, and loudly: every failure raises with a
+# sentence saying which of the above it was.
+# =============================================================================
+
+def _marty_pids():
+    """Every running martypc_headless, by PID, without pgrep's self-match."""
+    import os
+    out = []
+    for ent in os.listdir("/proc"):
+        if not ent.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % ent, "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        # the EXECUTABLE, not any shell or client that merely names it
+        if "martypc_headless" in cmd and "pgrep" not in cmd and "pkill" not in cmd:
+            if cmd.split()[0].endswith("martypc_headless"):
+                out.append(int(ent))
+    return out
+
+
+def _port_free(host, port, tries=60, gap=0.5):
+    """True once nothing answers on the port. A survivor holding it is the
+    single commonest reason a scripted session drives the wrong machine."""
+    import time
+    for _ in range(tries):
+        s = socket.socket()
+        s.settimeout(0.3)
+        try:
+            s.connect((host, port))
+            s.close()
+            time.sleep(gap)
+        except OSError:
+            s.close()
+            return True
+    return False
+
+
+MBAR_H = 20                     # SPEC.md 12: the same on every adapter
+
+
+def _sample(m):
+    """The screen as comparable bytes, on whichever card this machine has.
+
+    `fbuf` would be the obvious one and is WRONG on Hercules: MartyPC's MDA
+    does not rasterise graphics mode, so the rendered buffer sits still while
+    the guest draws - which reads as a settled screen from the first sample.
+    `vram` is the truth on both 1bpp cards and is unavailable on VGA, where
+    mode 12h is four planes behind the Graphics Controller, so the two split
+    exactly along the line the two functions already draw.
+    """
+    if m.cmd(cmd="video")["type"] in ("cga", "mda", "hercules"):
+        return b"".join(bytes(r) for r in m.vram()[2])
+    return m.fbuf()[2]
+
+
+def _bar_up(m):
+    """Is the os8088 MENU BAR on screen? - the boot gate, and the only one
+    that works on all three adapters.
+
+    Not "has the card left text mode": MartyPC's MDA answers text forever, in
+    graphics mode as in any other, so that gate hangs the whole 120 s on the
+    Hercules machine. Not stillness on its own either: the BIOS POST sits
+    PERFECTLY still for seconds before the floppy is touched, and a settle
+    that accepted it returned an 8.3s "boot" showing a quarter of the
+    desktop's lit pixels. The bar's white field is the one thing on screen
+    that neither the POST nor the splash has.
+    """
+    if m.cmd(cmd="video")["type"] in ("cga", "mda", "hercules"):
+        w, _, rows = m.vram()
+        band = rows[0:MBAR_H - 1]
+        return sum(sum(r) for r in band) > 0.8 * w * len(band)
+    w, _, d = m.fbuf()
+    band = d[0:w * (MBAR_H - 1) * 3]
+    return sum(band) > 0.8 * 255 * len(band)
+
+
+def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0):
+    """Run until the SCREEN STOPS CHANGING, and answer how long that took.
+
+    A fixed sleep is either waste or a lie. A 360KB CGA boot is ~25 s on this
+    container and a driver-loading or Hercules one is longer, so the number
+    that works today is the number that silently truncates the next machine's
+    boot - and a truncated boot does not look like a truncated boot, it looks
+    like the thing under test not working.
+
+    `stable` consecutive rendered frames `quiet` apart being identical is the
+    signal, because an os8088 screen is genuinely static between events: the
+    splash bar moves while the kernel loads, and after that nothing does until
+    something is clicked. The clock is the one exception and it changes once a
+    MINUTE, so at worst it costs one more round.
+
+    `gate` is a predicate that must answer True BEFORE stillness is believed -
+    `_bar_up` for a boot, nothing for an action. Without one this returns
+    during the BIOS's own POST, which sits perfectly still for seconds before
+    the floppy is touched: measured, and it looked exactly like a booted
+    machine (an 8.3s "boot" showing a quarter of the desktop's lit pixels).
+
+    It is equally the right wait AFTER an action: `settle(m)` in place of the
+    `time.sleep(4)` every script in this tree has after a click, which is the
+    same guess in the same two directions.
+    """
+    import time
+    t0 = time.time()
+    if gate is not None:
+        while not gate(m):
+            if time.time() - t0 > limit:
+                raise MartyError(
+                    "the os8088 menu bar never appeared in %.0fs: this "
+                    "machine never finished booting, so nothing below would "
+                    "mean what it says. See the MartyPC log." % limit)
+            time.sleep(quiet)
+    last, run = None, 0
+    while time.time() - t0 < limit:
+        try:
+            cur = _sample(m)
+        except MartyError:
+            cur = None
+        run = run + 1 if (cur is not None and cur == last) else 0
+        if run >= stable:
+            return time.time() - t0
+        last = cur
+        time.sleep(quiet)
+    raise MartyError(
+        "the screen was still changing after %.0fs: the machine never "
+        "finished booting (or something on it is animating, in which case "
+        "pass boot=<seconds> instead)." % limit)
+
+
+def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
+           run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=()):
+    """Start a FRESH martypc_headless on `image` and return a booted Marty.
+
+    `image` and `apps` are paths to floppy images (fd:0 and fd:1). `boot` is
+    True to run until the screen settles (`settle`, the right answer on any
+    machine), a NUMBER of seconds to run blind for that long, or 0/False to
+    return the machine PAUSED. The returned Marty owns the process: close() -
+    or the `with` block - kills it, so a session cannot leak a survivor onto
+    the next one.
+
+        with os88marty.launch("build/os8088-360.img",
+                              apps="build/apps360.img") as m:
+            m.vram("cga")
+
+    Raises rather than limping: a port that will not go quiet, an emulator
+    that never answers, and a machine that is already part-way through its
+    boot are all errors with a sentence each.
+    """
+    import os
+    import shutil
+    import subprocess
+    import time
+
+    host, _, port = addr.rpartition(":")         # NOT parse_addr, which is for
+    if not host:                                 # seg:off memory addresses
+        host, port = "127.0.0.1", addr
+    port = int(port)
+    if run_dir is None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        run_dir = os.path.join(os.path.dirname(here), "build", "martypc", "run")
+    if not os.path.isdir(run_dir):
+        raise MartyError("no MartyPC run directory at %s - `make marty` first"
+                         % run_dir)
+
+    for pid in _marty_pids():                   # ...by PID, never by pattern
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+    if not _port_free(host, port):
+        raise MartyError(
+            "%s never went quiet: something is still holding the port, so a "
+            "new emulator cannot bind it and this would silently drive the "
+            "OLD one." % addr)
+
+    media = os.path.join(run_dir, "media", "floppies")
+    os.makedirs(media, exist_ok=True)
+    mounts = []
+    for i, src in enumerate((image, apps)):
+        if src is None:
+            continue
+        dst = os.path.join(media, "run%d.img" % i)   # a copy per DRIVE, so two
+        shutil.copyfile(src, dst)                    # sessions cannot collide
+        mounts += ["--mount", "fd:%d:media/floppies/run%d.img" % (i, i)]
+
+    cmd = ["./martypc_headless", "--machine-config-name", machine] + mounts \
+        + list(extra)
+    env = dict(os.environ, MARTYPC_DEBUG_ADDR=addr)
+    log = open(os.path.join(run_dir, "martypc.log"), "wb")
+    proc = subprocess.Popen(cmd, cwd=run_dir, env=env, stdout=log, stderr=log)
+
+    m = None
+    for _ in range(80):                          # wait for it to ANSWER
+        if proc.poll() is not None:
+            raise MartyError("martypc_headless exited at once (rc=%s); see %s"
+                             % (proc.returncode,
+                                os.path.join(run_dir, "martypc.log")))
+        try:
+            m = Marty(addr, timeout=timeout)
+            break
+        except MartyError:
+            time.sleep(0.5)
+    if m is None:
+        proc.kill()
+        raise MartyError("martypc_headless never answered on %s; see %s"
+                         % (addr, os.path.join(run_dir, "martypc.log")))
+
+    if m.status()["cycles"] != 0:
+        m.close()
+        raise MartyError(
+            "attached to a machine that is already running: this is a STALE "
+            "emulator, not the one just started. Nothing below would mean "
+            "what it says.")
+    m._proc = proc                               # so close() can end it
+    if boot:
+        try:
+            m.run()
+            if boot is True:
+                settle(m, gate=_bar_up)
+            else:
+                time.sleep(boot)
+        except BaseException:                    # ...or the caller never gets
+            m.close()                            # the object that owns the
+            raise                                # process, and it survives
+    return m
 
 
 def write_png(path, w, h, rows):
