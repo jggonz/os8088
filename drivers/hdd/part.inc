@@ -61,13 +61,24 @@ HP_MAXSEC    equ 65535          ; the kernel's volume ceiling (SPEC.md 18.7)
 ; hd_part_load - read the selected device's partition table into hd_mbr
 ; in:  DI = the device row
 ; out: CF = 0 and hd_mbr holds a table with a valid signature;
-;      CF = 1 = unreadable, and hd_mbr holds a BLANK table instead
+;      CF = 1 = no usable table, and hd_mbr holds a BLANK one instead.
+;      [hd_mbrok] says WHICH, and callers that write must look:
+;        HMB_BAD  (0) the read FAILED - what is on the disk is unknown
+;        HMB_OK   (1) it came off the disk with a signature
+;        HMB_NONE (2) it read fine and nobody has partitioned it
 ; clobbers: flags
 ;
 ; A disk with no signature is not an error here - it is a disk nobody has
 ; partitioned - so the failure path leaves a table the user can edit rather
 ; than nothing at all. What it must never do is leave the PREVIOUS device's
 ; table in the buffer, which is why the blank happens before the read.
+;
+; HMB_BAD AND HMB_NONE USED TO BE THE SAME ANSWER, and that was a way to lose
+; a disk: a marginal LBA 0 on a drive with three real partitions read as "not
+; partitioned", every slot showed free, and a free slot skipped the confirm -
+; so one click wrote this fabricated table over the live one and formatted
+; through the data behind it. A blank table is a fine thing to EDIT and never
+; a fine thing to COMMIT when we could not read what it replaces.
 ; -----------------------------------------------------------------------------
 hd_part_load:
     push ax
@@ -84,10 +95,10 @@ hd_part_load:
     mov cx, 1
     mov byte [hd_rawop], 0      ; read
     call hd_raw
-    jc .bad
+    jc .bad                     ; the READ failed: leave HMB_BAD
     cmp word [hd_mbr+510], 0xAA55
-    jne .bad
-    mov byte [hd_mbrok], 1
+    jne .nosig
+    mov byte [hd_mbrok], HMB_OK
     pop es
     pop dx
     pop cx
@@ -95,8 +106,13 @@ hd_part_load:
     pop ax
     clc
     ret
+.nosig:                         ; read fine, nobody has partitioned it - the
+    call hd_mbr_blank           ; blank IS the right answer, and committing it
+    mov byte [hd_mbrok], HMB_NONE   ; destroys nothing
+    jmp short .out
 .bad:
-    call hd_mbr_blank
+    call hd_mbr_blank           ; leaves HMB_BAD: this table is a fabrication
+.out:
     pop es
     pop dx
     pop cx

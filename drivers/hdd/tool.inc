@@ -107,6 +107,9 @@ hd_tw_open:
     push bx
     push si
     mov al, [hd_sel]
+    mov [hd_tdev], al           ; BOUND here, and every write below uses it:
+                                ; the panel underneath can move [hd_sel] while
+                                ; this window is up
     call hd_dev_row
     push di
     call hd_part_load
@@ -115,6 +118,10 @@ hd_tw_open:
     mov byte [hd_tsel], 0
     mov byte [hd_tarm], 0
     mov word [hd_tmsg], hd_s_tready
+    cmp byte [hd_mbrok], HMB_BAD    ; the read FAILED. hd_mbr is a blank we
+    jne .win                        ; made up, not the disk's table, and every
+    mov word [hd_tmsg], hd_s_tnomb  ; slot below will therefore read free -
+.win:                               ; so say so, and refuse to commit it
     mov bx, [hd_twin]
     or bx, bx
     jnz .show
@@ -548,21 +555,25 @@ hd_tw_format:
     push si
     push di
 
-    mov bl, [hd_tsel]
-    xor bh, bh
-    cmp byte [bx+hd_tstate], HTS_FREE
-    je .go                      ; nothing here to lose
+    cmp byte [hd_mbrok], HMB_BAD    ; we could not read what this would
+    je .notable                     ; replace: never commit a fabrication
 
-    mov al, HTA_FMT
-    call hd_tw_confirm
-    jnc .go                     ; asked and answered
-    jmp .out                    ; ...otherwise the caption is asking, and .out
-                                ; is NEAR: the format below is well past 127
-                                ; bytes and a `jc` cannot reach it
+    mov al, HTA_FMT             ; EVERY slot is confirmed, free ones included.
+    call hd_tw_confirm          ; The confirmation is per-slot but the write
+    jnc .go                     ; replaces the whole 512-byte sector, so
+    jmp .out                    ; "nothing here to lose" is only ever true
+                                ; about the slot and never about the table.
+                                ; .out is NEAR: the format below is well past
+                                ; 127 bytes and a `jc` cannot reach it
+.notable:
+    mov byte [hd_tarm], 0
+    mov word [hd_tmsg], hd_s_tnomb
+    call hd_tw_repaint
+    jmp .out
 .go:
     mov byte [hd_tarm], 0
-    mov al, [hd_sel]
-    call hd_dev_row
+    mov al, [hd_tdev]           ; the device this table CAME FROM, never the
+    call hd_dev_row             ; one the panel happens to highlight now
     mov al, [hd_tsel]
     call hd_slot_extent         ; -> [hd_fbase] / [hd_fsecs] (SPEC.md 52.2.1)
     jc .noroom
@@ -589,13 +600,13 @@ hd_tw_format:
     mov byte [si+HP_TYPE], HPT_FAT12
 .type:
     mov byte [si+HP_STATUS], 0
-    mov al, [hd_sel]
+    mov al, [hd_tdev]
     call hd_dev_row
     call hd_part_chs
 
     call hd_part_write          ; one sector, and it is the first commit
     jc .werr
-    mov al, [hd_sel]
+    mov al, [hd_tdev]
     call hd_dev_row
     call hd_fmt_run             ; ...and the volume, boot sector last
     jc .ferr
@@ -614,7 +625,7 @@ hd_tw_format:
     mov word [hd_tmsg], hd_s_tnofit
     jmp short .out
 .rescan:
-    mov al, [hd_sel]            ; the states again, which re-reads the boot
+    mov al, [hd_tdev]            ; the states again, which re-reads the boot
     call hd_dev_row             ; sector we just wrote: the row is what the
     call hd_tw_scan             ; DISK says and not what we hoped
 .out:
@@ -649,6 +660,9 @@ hd_tw_delete:
     push dx
     push si
     push di
+
+    cmp byte [hd_mbrok], HMB_BAD    ; hd_mbr is a blank we made up: committing
+    je .notable                     ; it would clear three entries we never saw
 
     call hd_tw_delok            ; the same predicate that greyed the button:
     jc .empty                   ; the refusal only puts the reason back on
@@ -685,7 +699,7 @@ hd_tw_delete:
     rep stosb                   ; a zero type and a zero length is exactly what
     pop es                      ; hd_part_used calls free
 
-    mov al, [hd_sel]
+    mov al, [hd_tdev]
     call hd_dev_row
     call hd_part_write          ; one sector, and it is the commit
     jc .werr
@@ -695,16 +709,22 @@ hd_tw_delete:
     mov word [hd_tmsg], hd_s_tdelunm    ; a drive icon leaving the desktop with
     jmp short .rescan                   ; no explanation is worse than the pause
 .werr:
-    mov al, [hd_sel]            ; **the table goes back**, which Format's own
+    mov al, [hd_tdev]            ; **the table goes back**, which Format's own
     call hd_dev_row             ; failure path deliberately does not do: RAM
     call hd_part_load           ; claiming a region the disk does not is
     mov word [hd_tmsg], hd_s_twerr  ; conservative, and RAM calling a LIVE
                                     ; partition free is the one state the next
                                     ; Format destroys something from
 .rescan:
-    mov al, [hd_sel]            ; the states again, off the disk rather than
+    mov al, [hd_tdev]            ; the states again, off the disk rather than
     call hd_dev_row             ; off what we hoped we wrote
     call hd_tw_scan
+    jmp short .out
+    jmp short .out
+.notable:
+    mov byte [hd_tarm], 0
+    mov word [hd_tmsg], hd_s_tnomb
+    call hd_tw_repaint
     jmp short .out
 .empty:
     mov word [hd_tmsg], hd_s_tdempty
@@ -748,7 +768,7 @@ hd_tw_delok:
 
 ; -----------------------------------------------------------------------------
 ; hd_tw_unmount_slot - drop every volume mounted on one partition (internal)
-; in:  AL = the slot, [hd_sel] = the device; the gfx lock is HELD
+; in:  AL = the slot, [hd_tdev] = the device; the gfx lock is HELD
 ; out: [hd_tdrop] = 1 if anything was unmounted, 0 if not
 ; clobbers: flags
 ;
@@ -769,7 +789,7 @@ hd_tw_unmount_slot:
     cmp byte [bx+HDV_USED], 0
     je .next
     mov al, [bx+HDV_DEV]
-    cmp al, [hd_sel]
+    cmp al, [hd_tdev]
     jne .next
     mov al, [bx+HDV_PART]
     cmp al, dl
@@ -910,6 +930,7 @@ hd_s_tdone:   db 'Formatted - now Mount it', 0
 hd_s_twerr:   db 'Could not write the table', 0
 hd_s_tferr:   db 'Could not write the volume', 0
 hd_s_tnoroom: db 'No room left on this drive', 0
+hd_s_tnomb:   db 'Cannot read the partition table', 0
 hd_s_tnofit:  db 'No FAT layout fits that space', 0
 hd_s_task0:   db 'Erase slot ', 0
 hd_s_task1:   db '? Click Format again', 0

@@ -114,6 +114,10 @@ hd_iw_open:
     mov byte [hd_iw_st], HII_IDLE
     mov word [hd_imsg], hd_s_ipick
     mov byte [hd_iautod], 0xFF  ; a fresh run asks the machine again
+    mov al, [hd_sel]
+    mov [hd_idev], al           ; BOUND here, tool.inc's hd_tdev reason: the
+                                ; Control Panel underneath stays clickable, and
+                                ; hd_istate/hd_isecs below describe THIS device
     call hd_iw_scan             ; a fresh table every time, tool.inc's reason:
                                 ; the disk can be swapped between two clicks
     cmp word [hd_iwin], 0
@@ -170,7 +174,7 @@ hd_iw_scan:
     push dx
     push si
     push di
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     call hd_part_load           ; the table, or a blank one if unreadable
     xor cl, cl
@@ -195,7 +199,7 @@ hd_iw_scan:
     jmp short .sized
 .extent:
     push cx
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     mov al, cl
     call hd_slot_extent         ; -> [hd_fbase]/[hd_fsecs] (SPEC.md 52.2.1)
@@ -903,6 +907,9 @@ hd_inst_sys:
     push dx
     push si
     push di
+    cmp byte [hd_mbrok], HMB_BAD    ; hd_mbr is a fabrication, not this disk's
+    je .notable                     ; table: an Install that commits it wipes
+                                    ; every partition we could not see
     call hd_ibuf_get            ; the buffer FIRST: a format we cannot follow
     jc .nomem                   ; with a copy is a wiped partition
     mov word [hd_imsg], hd_s_iwork
@@ -925,6 +932,10 @@ hd_inst_sys:
     call hd_ivol_back
     call hd_ibuf_put
     clc
+    jmp short .out
+.notable:
+    mov word [hd_imsg], hd_s_inomb
+    stc
     jmp short .out
 .nomem:
     mov word [hd_imsg], hd_s_inomem
@@ -1861,7 +1872,7 @@ hd_inst_fmt:
     push dx
     push si
     push di
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     mov al, [hd_isel]
     call hd_slot_extent
@@ -1884,12 +1895,12 @@ hd_inst_fmt:
 .type:
     mov byte [si+HP_STATUS], 0  ; NOT active yet: the MBR is the commit and it
                                 ; is written at the very end (SPEC.md 52.10.4)
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     call hd_part_chs
     call hd_part_write
     jc .fail
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     call hd_fmt_run
     jc .fail
@@ -1921,7 +1932,7 @@ hd_inst_mount:
     mov al, [hd_isel]
     call hd_tw_unmount_slot     ; a stale volume on this slot names a FAT the
                                 ; format has just replaced
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     call hd_part_load           ; the table as the format left it
     mov al, [hd_isel]
@@ -1939,7 +1950,7 @@ hd_inst_mount:
     cmp byte [bx+HDV_USED], 0
     je .next
     mov al, [bx+HDV_DEV]
-    cmp al, [hd_sel]
+    cmp al, [hd_idev]
     jne .next
     mov al, [bx+HDV_PART]
     cmp al, [hd_isel]
@@ -2003,7 +2014,7 @@ hd_inst_vbr:
     mov byte [hd_sec0+HF_B_MEDIA], HF_MEDIA
     mov ax, [hd_ffatsz]
     mov [hd_sec0+HF_B_FATSZ], ax
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     mov ax, [di+HDD_SPT]
     mov [hd_sec0+HF_B_SPT], ax
@@ -2021,7 +2032,7 @@ hd_inst_vbr:
     jc .fail
     mov [hd_sec0+BOOTHD_KSECS], ax
 
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     mov byte [hd_rawop], 1          ; write
     mov ax, [hd_fbase]              ; volume LBA 0, absolute
@@ -2107,7 +2118,7 @@ hd_inst_mbr:
     push dx
     push si
     push di
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     call hd_part_load           ; re-read: the format wrote the table and this
     jc .fail                    ; must not put a stale copy back
@@ -2135,7 +2146,7 @@ hd_inst_mbr:
     cmp cl, 4
     jb .flag
 
-    mov al, [hd_sel]
+    mov al, [hd_idev]
     call hd_dev_row
     call hd_part_write
     jc .fail
@@ -2198,6 +2209,7 @@ hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone
     HIMSG hd_s_idone, 'Done - remove the floppy, Restart'
     HIMSG hd_s_ibad, 'That partition cannot be used'
     HIMSG hd_s_inomem, 'Not enough memory to copy'
+    HIMSG hd_s_inomb, 'Cannot read the partition table'
     HIMSG hd_s_ifmt, 'Could not format that partition'
     HIMSG hd_s_imnt, 'Formatted, but it would not mount'
     HIMSG hd_s_ierr, 'Disk error - the install stopped'

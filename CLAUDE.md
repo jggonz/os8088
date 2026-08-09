@@ -356,9 +356,27 @@ converge rather than clicking into empty desktop.
 ```
 python3 tools/os88mouse.py 127.0.0.1:9001 where          # (320,100) buttons 00
 python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
+python3 tools/os88mouse.py 127.0.0.1:9001 dblclick 150 90    # NOT two clicks
 python3 tools/os88mouse.py 127.0.0.1:9001 menu 12 8 40 45    # press/drag/release
 python3 tools/os88mouse.py 127.0.0.1:9001 drag 200 78 200 120
 ```
+
+**`dblclick` is a verb of its own and two `click`s are NOT a double-click** -
+the trap that has cost the most harness time here. `click` ends in a 1.5s
+settle and every detector in the system (SPEC.md 22/26/38, `ui_tdbl`'s title
+bar) compares the two presses' BIRTH TICKS against a **9-tick** window; take
+the sleep out and the opposite trap closes, because packets sent faster than
+the 1200-baud UART can carry them are **dropped** and the guest decodes one
+press instead of two. Either way it sees a single click - a file row SELECTS
+instead of launching, a title bar DRAGS instead of zooming - and nothing says
+so, which is how "the double-click feature is broken" gets reported about a
+working kernel. So `dblclick` proves all four button edges against the
+published `mouse_btn` and measures the gap in the guest's own 18.2 Hz ticks
+(`0040:006C`, the BIOS counter - the kernel's clock and the kernel's units,
+not host timing). It prints the span and RAISES if an edge never arrived or
+the window was missed; a healthy one reads 2-4 ticks. **And the debug server
+takes ONE connection**: a script wanting the mouse driver and the framebuffer
+must share it (`mo.m`), because a second `Marty` does not error - it hangs.
 
 **`menu` is a separate verb because a menu cannot be opened with a click**:
 `menu_track` draws the pull-down and then polls a level, so press-and-release
