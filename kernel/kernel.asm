@@ -131,10 +131,10 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
-KERN_BUDGET equ 92160           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
-                                ; It has moved thirteen times, every raise asked
+                                ; It has moved fourteen times, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
                                 ; SPEC.md 41 store and the two API surfaces
                                 ; that came with it (wm_geom, wm_about_set);
@@ -412,6 +412,32 @@ KERN_BUDGET equ 92160           ; the whole kernel's FOOTPRINT. Growing past
                                 ; day that second build exists, this figure
                                 ; is kern_big's and stops being the one that
                                 ; has to be defended.
+                                ;
+                                ; The fourteenth move, 92,160 -> 94,208, is
+                                ; 2KB granted in ADVANCE for SPEC.md 18.94.2's
+                                ; finding: a file operation spends over half
+                                ; its disk TIME on work the progress widget
+                                ; never shows, and the reason is that the
+                                ; kernel optimised for SECTORS where the media
+                                ; charges for REVOLUTIONS. Measured over one
+                                ; install, the payload streams at 5.78 sectors
+                                ; per int 13h call and every other phase - the
+                                ; BPB, the FAT window, the root scan, the
+                                ; subdirectory walks - runs at exactly 1.00,
+                                ; because dsk_dirw_next hands out one LBA at a
+                                ; time and every caller reads it with cx = 1
+                                ; into a single 512-byte buffer. The fixes are
+                                ; a per-volume banked BPB (so a fixed disk,
+                                ; which cannot be swapped, revalidates once
+                                ; ever) and coalescing the directory walks
+                                ; into runs, which needs somewhere bigger than
+                                ; dsk_secbuf to read into. Granted at 2KB on
+                                ; the thirteenth move's terms - headroom, half
+                                ; a step - with the batch bracket and its
+                                ; sector cache still to come; that one is a
+                                ; REFUSABLE heap claim by explicit decision,
+                                ; so it costs this figure nothing and a 128KB
+                                ; machine can still install, just slowly.
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
                                 ; must fit one 64KB window. Unlike KERN_BUDGET
