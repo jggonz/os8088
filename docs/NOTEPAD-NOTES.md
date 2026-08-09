@@ -420,7 +420,7 @@ looked identical to the feature being absent, on every screen and in every
 timing. And **the arithmetic was visible in the claim table the whole time**;
 what stopped anyone reading it is §6.7 below.
 
-### 5.2.1 The first scroll after opening leaves ~11 cells stale
+### 5.2.1 A short run of ArrowDowns leaves 66 glyph cells stale
 
 **Found while pixel-verifying §27.13, and it PREDATES all of this work** — the
 A/B is what says so, and it is the reason this is a report rather than a
@@ -442,6 +442,38 @@ so the instrument is not manufacturing it).
 
 `tools/notepad` + the crop-to-content diff in this entry reproduces it in one
 run; that harness is the thing to start from.
+
+**It is bigger than eleven cells and it needs no scroll at all.** The
+reproduction now is three commands from a cold boot and it is deterministic to
+the byte:
+
+```sh
+python3 tools/notepad/lab.py boot
+python3 tools/notepad/lab.py press ArrowDown 6      # top stays 0 throughout
+python3 tools/notepad/pixcheck.py
+```
+
+**2,743 bytes = 686 pixels = 66 glyph cells**, bounding box x 56..299 (the
+full content width) and y 51..121 — nine rows of the sixteen, and the caret
+never left the view. Byte-for-byte identical on two different builds of the
+module, which is what says it is the code under both and not either change.
+
+Three things that narrows: the view never scrolled, so `np_scrollpaint`,
+`[np_ptop]` and §27.7.2's blit are all out; six `ArrowDown`s is fewer than the
+24 in the paragraph above, so it is not a long sequence accumulating; and it
+is the full width of nine rows rather than the tail of one, so it is whole
+rows not being drawn rather than a run stopping short. §27.7.3's chunked
+height count is still the standing suspicion — `drows` reads 532 of 781 while
+this is happening — and the next step is to hold the worker off (breakpoint
+`np_hchunk` and never resume it) and see whether the mismatch survives.
+
+**The instrument had to be repaired before any of this meant anything** — see
+the note at the top of `pixcheck.py`. Its "forced full repaint" stopped being
+forced the moment SPEC.md §50.6.1's fix brought §11.96's raise cache to life,
+because a raise then restores the banked pixels instead of calling `W_PAINT`
+and the check compares a copy against its own original. It clears `WF_SAVEU`
+for the round trip now, and it puts a breakpoint on `np_paint` and reports
+INVALID rather than a comforting zero if the repaint did not happen.
 
 ### 5.3.1 `[np_rowsn]` is not capped to the array it indexes
 

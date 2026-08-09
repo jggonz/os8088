@@ -4268,8 +4268,23 @@ np_move:
     mov cl, 3
     shr ax, cl
     pop cx
+
+    ; THE TWO ROWS ARE THE WHOLE OF IT (SPEC.md 27.4.1). np_ask folds the caret
+    ; into a row's signature and a caret move changes nothing else, so the only
+    ; rows whose signatures can differ are the one it left and the one it
+    ; arrived on. The seed below already puts the walk at the FIRST of them;
+    ; this records the SECOND, so np_redraw's pass 1 can stop there instead of
+    ; laying out the rest of the view to be told nothing moved.
+    ; [np_ckpr] is still the row the caret CAME FROM at this point - the branch
+    ; below is what moves it back - so the two are in hand together here and
+    ; nowhere else.
+    mov [np_mvbot], ax
     cmp ax, [np_ckpr]
     jae .arm                        ; already at or after the checkpoint
+    push ax                         ; ...moving BACKWARDS, so the deeper of the
+    mov ax, [np_ckpr]               ; two is the row being left
+    mov [np_mvbot], ax
+    pop ax
     cmp byte [np_rowsok], 0
     je .out
     cmp ax, [np_rowsn]
@@ -4282,7 +4297,23 @@ np_move:
     mov [np_ckpi], ax
     pop bx
 .arm:
-    mov byte [np_fast], 3
+    mov byte [np_fast], 4           ; A CARET MOVE, and it used to say 3.
+                                    ; np_fastok*'s contract numbers the kinds
+                                    ; 1 insert, 2 backspace, 3 forward Delete,
+                                    ; 4 a caret move, and they carry different
+                                    ; PERMISSIONS: 1..4 may resume the walk,
+                                    ; but only 1..3 may enter the visual break.
+                                    ; np_move wants the first and never the
+                                    ; second - "a caret move reflowed nothing",
+                                    ; as np_redraw's own comment says - and 3
+                                    ; granted it both. It was invisible in a
+                                    ; 29-column window only because np_brktry
+                                    ; needs NP_BRK_CELLS = 60 cells below the
+                                    ; caret and one row there is 29; widen the
+                                    ; window past 60 columns and Up entered the
+                                    ; break, on a stale [np_ecol] left by some
+                                    ; earlier edit, which is a phantom line
+                                    ; break for as long as the settle takes
 .out:
     mov byte [np_resume], 0
     pop dx
@@ -4584,6 +4615,10 @@ np_fastokr:                         ; Right: it lands one FORWARD, and the cell
     xor cx, cx
     mov ax, [np_cur]
 np_fastcm:
+    mov word [np_mvbot], 0x7FFF ; kind 4 arrives here as well (Left and Right),
+                                ; and neither measures the row it came from -
+                                ; so park the bound at "no idea" and let
+                                ; np_move be the only thing that ever sets it
     cmp byte [np_ckok], 0
     je .out
     cmp ax, [np_ckpi]
@@ -5005,7 +5040,7 @@ np_redraw:
     mov byte [np_sigup], 1
     mov byte [np_clip], 0
     mov ax, [np_vrows]              ; STOP at the bottom of the view, plus the
-    mov [np_lastrow], ax            ; one row past it a caret can wrap onto
+                                    ; one row past it a caret can wrap onto
                                     ; (SPEC.md 27.7). Below that a row has no
                                     ; signature, cannot be dirty and is drawn
                                     ; by nobody - the only thing that ever
@@ -5014,6 +5049,31 @@ np_redraw:
                                     ; the middle of a long note used to walk
                                     ; every row beneath the window on every
                                     ; keystroke: 72% of the work, for a thumb
+
+    ; ...AND A CARET MOVE STOPS SOONER STILL (SPEC.md 27.4.1). Nothing reflowed,
+    ; so the only rows whose signatures can differ are the one the caret left
+    ; and the one it arrived on, and np_move recorded the deeper of them. The
+    ; rest of the view is laid out to be told it did not move: (vrows - row) x
+    ; ~6 ms, which is ~96 ms of the budget with the caret near the top.
+    ;
+    ; Gated on the walk actually RESUMING, and that is not caution about the
+    ; bound - it is about [np_rowsn]. np_walk's bounded stop leaves the table
+    ; alone for a resumed walk and SHRINKS it to where it stopped for one that
+    ; started at the top of the view, which would hand rows this walk skipped
+    ; back to SPEC.md 27.13's index for no reason. Resumed is the normal case
+    ; here anyway: np_seedck seeds at the earlier of the two rows.
+    cmp byte [np_ekind], 4
+    jne .p1bound
+    cmp byte [np_resume], 0
+    je .p1bound
+    mov dx, [np_mvbot]
+    or dx, dx
+    js .p1bound                     ; above the view: let the caret-follow net
+    cmp dx, ax                      ; have it, exactly as before
+    jae .p1bound                    ; never DEEPER than the view: the sentinel
+    mov ax, dx                      ; lands here, and so does a caret one row
+.p1bound:                           ; below the last visible one
+    mov [np_lastrow], ax
     call np_walk
     cmp byte [np_follow], 0         ; the caret has to be somewhere the user
     je .noflw                       ; can see it (SPEC.md 27.7) - but only
@@ -9857,6 +9917,16 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
     NPVAR np_xksh, 1        ; byte: log2 of the stride. A log, because a lookup
                             ; is then a shift and not a 150-clock `div`
     NPVAR np_xpad, 1        ; byte: keep the words that follow even
+
+; --- how deep a caret move can dirty (SPEC.md 27.4.1) ------------------------
+    NPVAR np_mvbot, 2       ; word: the DEEPER of the two visible rows a caret
+                            ; move touched - the one it left and the one it
+                            ; arrived on - or 0x7FFF for "not a caret move, or
+                            ; nowhere in particular". Written by np_move, which
+                            ; is the only caller that knows both; np_fastcm
+                            ; parks it at the sentinel, so Left and Right (kind
+                            ; 4 as well, and adjacent rows they do not measure)
+                            ; can never inherit an Up's bound
 
 %ifdef NPBENCH
 ; --- the walk bench (tests/npbench.inc), in the -DNPBENCH build only ---------

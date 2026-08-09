@@ -109,13 +109,15 @@ and only the 5150 can set it. `make npbench`, boot, double-click README.TXT,
 Ctrl-B. `NP_HCHUNK ≈ (wanted hold in µs) ÷ (measured per-row µs)`, target a
 hold under one 55 ms tick.
 
-### 3.6 docs/NOTEPAD-NOTES.md §5.2.1 — 705 stale pixels
+### 3.6 docs/NOTEPAD-NOTES.md §5.2.1 — 66 stale glyph cells
 
-The first scroll sequence after opening leaves ~11 glyph cells stale until
-something forces a full repaint. **Pre-existing** — the pre-index build shows
-the same 705 pixels in the same state. Reproducible in one run with
-`tools/notepad/pixcheck.py`. The suspicion is an interleaving between the
-background height count and the redraw's signatures.
+Six `ArrowDown`s from a cold boot leave **66 glyph cells** of the content
+disagreeing with a full repaint — 2,743 bytes, full content width, nine rows
+of sixteen, and the view never scrolls. **Pre-existing**: byte-for-byte
+identical on two different builds of the module. Reproducible in three
+commands with `tools/notepad/pixcheck.py`. The suspicion is still an
+interleaving between the background height count and the redraw's signatures,
+and the next step is to hold the worker off and see whether it survives.
 
 ### 3.7 `[np_rowsn]` is not capped to the array it indexes
 

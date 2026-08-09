@@ -11646,6 +11646,46 @@ with a counter in `np_walk`'s loop: at 200 characters a keystroke went from
 the window to the full screen to **4** — bounded by the caret's column
 instead of by the note.
 
+#### 27.4.1 A caret move stops at the deeper of two rows
+
+The checkpoint says where pass 1 may *start*. `[np_mvbot]` says where it may
+**stop**, and only for a caret move: `np_ask` folds the caret into a row's
+signature and a move changes nothing else, so the only rows whose signatures
+can differ are **the one the caret left and the one it arrived on**. Every row
+below them is laid out to be told it did not move — `(vrows − row) × ~6 ms`,
+which is most of the budget with the caret near the top of a 16-row view.
+
+`np_move` is the one place that holds both rows: `[np_ckpr]` is still the row
+the caret came from until the branch that moves it back runs, so the deeper of
+the two is recorded there and nowhere else. `np_fastcm` parks the word at
+`0x7FFF`, because Left and Right are kind 4 as well and measure no rows — so
+they can never inherit an `Up`'s bound.
+
+**Gated on the walk actually resuming**, and that gate is not caution about
+the bound. `np_walk`'s bounded stop leaves `np_rows` alone for a *resumed*
+walk and shrinks `[np_rowsn]` to where it stopped for one that started at the
+top of the view — which would hand rows this walk skipped back to §27.13's
+index for nothing. Resumed is the normal case anyway: `np_seedck` seeds at the
+earlier of the two rows, which is what makes the pair a one-row window for
+`Up` and `Down`.
+
+Measured on a cycle-accurate 4.77MHz 8088, README.TXT in a 16×29 window, the
+same six `ArrowDown` states on both builds (identical `[np_cur]` at each step):
+**pass 1 82–124 ms → 17–27 ms**, and the whole keystroke **191–256 ms →
+103–160 ms**. `draw_ms` is unchanged at every step, which is what says the
+drawing is the same drawing.
+
+**And `np_move` was reporting the wrong kind.** `np_fastok*` numbers them
+1 insert, 2 backspace, 3 forward Delete, 4 a caret move, and they carry
+different permissions: 1..4 may resume the walk, only 1..3 may enter §27.3's
+visual break. `np_move` set **3**, so every `Up`, `Down`, `Home` and `End`
+claimed a permission the routine's own contract denies it — "a caret move
+reflowed nothing", as `np_redraw` says two screens away. It was invisible at
+29 columns only because `np_brktry` needs `NP_BRK_CELLS` = 60 cells below the
+caret and one row there is 29. Widen the window past 60 columns and `Up`
+entered the break on a stale `[np_ecol]` left by some earlier edit: a phantom
+line break for as long as the settle takes.
+
 ### 27.5 Where each row starts — a query about a row costs a row
 
 §27.4 bounded the *keystroke*. It did nothing for the caret keys, and they
