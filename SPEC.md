@@ -22217,6 +22217,81 @@ to run before the first `MENU_SET` reaches the screen or the menu carries three
 empty strings. It also preserves **FLAGS**, not just registers: the entry proc
 calls it between its `jc .out` and its own `ret`, and the loader reads that CF.
 
+### 45.18 The ring is chosen from free RAM, and reserved by ASKING
+
+`TRK_RING` was a flat 16,384 and nothing reserved it: the load path checked
+the module against `OSAPI_MEM_AVAIL`, claimed it, read it off the floppy, and
+the ring grant then came out of whatever happened to be left. When that was
+not enough the module loaded, its title went up, and **Play answered *Out of
+memory*** — the worst available shape, because the expensive half succeeded
+and the cheap half failed after the disk had already turned.
+
+Two halves of one policy.
+
+**The size is picked from free RAM.** `trk_ring_pick` asks
+`OSAPI_MEM_AVAIL`: above `TRK_ROOMYKB` (64) the full 16,384-byte ring and its
+6-half pre-roll, exactly as before; at or below it the 8,192-byte ring and a
+3-half pre-roll. That is a question about **politeness rather than fit** —
+16KB out of a 20KB run is most of a small machine's heap and the app is not
+the only thing that wants it. What it trades is *only* the pre-roll: the
+steady-state lead never drains below its top-up target on either ring
+(PERFORMANCE.md Set 21 measured both), and the pre-roll is what the ring has
+to be big enough to **hold** — 6 halves is 12,288 bytes and does not fit
+8,192, which is why a naive `TRK_RING 8192` reports *Sound open failed*
+instead of playing. Three halves is 1.12 s at the XT rate against the 744 ms
+that produced §45.17.2's field hitch, so a tight machine keeps 1.5x a figure
+already known to be too short. Deliberate: there, the alternative to a
+shorter cushion is no playback at all.
+
+**And the ring is reserved by asking for it**, between the module's claim and
+its read, then handed straight back — `trk_ring_probe`. A load that cannot be
+played is refused **before the floppy turns**, and the module claim comes off
+the heap with it.
+
+#### 45.18.1 Why the reserve asks instead of subtracting
+
+The obvious form is arithmetic: `avail - needk`, refuse if what is left will
+not hold a ring. **It was built that way first and it was wrong**, and the
+reason generalises past this app.
+
+`OSAPI_MEM_AVAIL` walks the claim map through `mem_run`, which counts a
+**purgeable** claim (§50's `0xFExx` tags — the directory read-ahead window is
+63KB of one) as blocking, while an actual `mem_claim` will purge to satisfy a
+request. So the number can be far smaller than what a claim would really get.
+Measured on `os8088_5150_sb_256k`: `mem_avail` answers **21.5KB** on a heap
+from which the unmodified Tracker went on to fund an 18KB module **and** a
+16KB ring. Subtracting from it and refusing turned a module that plays
+perfectly into *Too big for free memory* — a regression caught only because
+the fix was A/B'd against the build it replaced.
+
+So the estimate only ever biases the **choice**, where being pessimistic costs
+a pre-roll and nothing else, and the **refusal** is done by asking the
+allocator, which is the one thing that knows. §50.3 states the same rule for
+`mem_claim_dma` and for the same reason: *the only honest test is the claim
+itself*.
+
+Four things hold the rest up:
+
+- **`trk_ring_set` is the one writer** of `[trk_ring]`, `[trk_rmask]` and
+  `[trk_preroll]`. They are one fact; a mask that disagrees with its ring
+  wraps the stage into the middle of the grant and plays the seam for the
+  rest of the session. The pre-roll is derived — every half bar the one the
+  feed ceiling keeps free — then capped at `TRK_PREROLL`, which is why the
+  full ring's answer is 6 and not 7.
+- **The probe is gated on `SND_CAP_PCM_BG`.** A machine with no Sound
+  Blaster is a *viewer* (`trk_play`'s own gate), and without the gate the
+  probe's refusal would stop it loading modules at all — the whole no-card
+  case, broken by a reservation for a ring it was never going to open.
+- **The entry proc sets the default.** `.bss` arrives zeroed (§20.2), a zero
+  mask wraps every stage onto offset 0, and the pick is skipped when the
+  dialog reports no size (a typed name).
+- **`trk_stream_open` walks the tiers again.** The probe frees its grant —
+  a stopped Tracker deliberately holds no pool (§34.6) — so the heap is free
+  to move before Play either way; a refused grant drops one tier rather than
+  making the user close something and re-load, and `trk_ring_set` is called
+  with what was *actually* granted, never with what was asked for.
+
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
