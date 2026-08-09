@@ -39,7 +39,7 @@ problems — SPEC.md §27.13 removed the last of those.
 |---|---|---|
 | §27.7.9 | a walk that cannot be seeded must still be BOUNDED | matched A/B, 12–19x on `Down` |
 | §27.12 | the buffer move is `rep movsb`, not a byte loop | buffer read back from guest RAM, 0 differing bytes |
-| §27.13 | the row index — a row outside the view without walking to it | content pixel-identical to a full repaint in 3 of 4 states; the 4th is §5.2.1 and predates the work |
+| §27.13 | the row index — a row outside the view without walking to it | content pixel-identical to a full repaint in 3 of 4 states; the 4th is NOTEPAD-NOTES §5.2.1 and predates the work |
 | §50.6 | purgeable claims | builds, boots, no behaviour change with one consumer |
 | §11.96 / §11.96.1 | the raise cache, opt-in via `WF_SAVEU` | zero `W_PAINT` on a covered raise; restore pixel-identical |
 | §13.4 | `OSAPI_EVQ_PENDING` (earlier in the round) | — |
@@ -90,7 +90,7 @@ fill, a band fill, ~4 rows of layout, one row of text (~29 ms at
 PERFORMANCE.md's ~1 ms a cell), two XOR bands and `np_sbar`. The lettering is
 near its floor; **the blit and a full scroll-bar redraw for a one-pixel thumb
 move are not.** Give them breakpoints of their own before attributing further
-(§6.5).
+(NOTEPAD-NOTES §6.5).
 
 ### 3.4 The raise's wall figure
 
@@ -119,7 +119,7 @@ background height count and the redraw's signatures.
 
 ### 3.7 `[np_rowsn]` is not capped to the array it indexes
 
-Latent, documented at §5.3.1. `np_rows` is 60 words; the walk's natural-end
+Latent, documented at NOTEPAD-NOTES §5.3.1. `np_rows` is 60 words; the walk's natural-end
 path stores `np_row+1`, so a 781-row note leaves it at 771. Nothing reaches it
 today because every caller passes a visible row; `np_seedtail` clamps itself
 because it is the first caller that takes its row *from* that word. Settle what
