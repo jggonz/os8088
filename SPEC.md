@@ -3499,9 +3499,9 @@ be one (`wm_fast_ok`): `[wm_fs]` set, or the window itself carrying
 screen. It does not stop describing it — it gets *shorter*. A window shown
 over a fullscreen one reveals nothing, like any other; a fullscreen window
 shown over everything reveals nothing because it covers the screen. Only the
-chrome had to change, and `wm_raise` now **skips** the bar and the dock
-(`wm_fs_vis`) instead of the caller repainting the world in order to avoid
-drawing them.
+chrome had to change, and `wm_raise` **calls the bar and the dock anyway and
+lets each decline for itself** (`wm_fs_vis`, §30.3.2) instead of the caller
+repainting the world in order to avoid drawing them.
 
 What that cost, before: opening the Standard File dialog over a fullscreen
 player repainted the player — its whole `W_PAINT` — to put a small dialog on
@@ -4089,6 +4089,19 @@ chrome is asked, not forced, so on a quiet desktop it costs nothing (§12.9,
 is, through `wm_paint_dmg` (§11.91): what a shrink genuinely owes, and still
 far less than the screen. The union is taken one pixel wide at the far edges,
 which is exactly the drop shadow.
+
+**`wm_draw_win` takes "which window is frontmost" in `BP`, and the cheap path
+has to set it.** It shipped without, and a zoomed window came up with a bare
+white title bar: no pinstripes, and **no close or minimize box** — which
+`wm_hit` still reports from geometry, so both were invisible and clickable,
+`wm_grow_paint`'s warning arriving at the other end of the same window. The
+register is easy to miss because the two paths either side of it look after
+themselves: `wm_paint_all` sets `BP` once before its back-to-front loop and
+`wm_paint_dmg` sets it per window, so the shrink half was always right and
+only the grow half was wrong. On this path the value needs no work to find —
+the branch is taken only after `wm_top` has answered with this very window —
+but it does have to be *written*, and saved, because `wm_rz_paint` preserves
+every register.
 
 Two things are load-bearing.
 
@@ -13573,6 +13586,19 @@ strips are being overwritten continuously and neither module may draw. Setting
 the flag *in the early-out* means the repair is owed from the first moment the
 damage starts, is idempotent for as long as it lasts, and is spent by whatever
 repaints once the window goes — with no caller anywhere having to know.
+
+**Which makes "the caller must still CALL them" a rule, and it was broken on
+the only path that mattered.** An early-out that is never reached records
+nothing. All three chrome painters had a `wm_fs_vis` test of their *own* that
+jumped over `dock_paint` and `menu_draw_bar` — `wm_raise`, `wm_paint_all`'s
+`.fswins` and `wm_paint_dmg` — and `wm_fullscreen`'s claim path goes through
+`wm_raise`, so entering a §11.2 fullscreen told neither module anything. On
+the way out, `wm_paint_all` found both flags clear and drew only the clock and
+the tiles whose keys had moved: the app's own menu bar stayed on screen and
+the dock strip stayed blank, permanently, with the machine otherwise live. The
+skips are gone — each painter calls both and each module answers for itself,
+which is the shape the paragraph above always described. The cost of a call
+that early-outs is one `wm_fs_vis` walk and a flag store.
 
 ### 30.2 A tile's context menu — right-click to Close
 
@@ -24237,13 +24263,58 @@ chunked copy, and the marker technique that found §19.7.1's type bug — a
 temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
 overwritten by the completion message and says nothing.
 
-**And a second thing blocks that work today.** Since the pre-merge safety pass
-the installer stops at `Cannot read the partition table` on MartyPC's
-`os8088_xt_hdd` — on a **pristine** `default_xtide.vhd` as well as on a
-zeroed-table one, and after the slot list has already been drawn from that
-same table, so the scan reads it and the install does not. Nothing above is
-re-testable until that is understood; it is independent of everything in
-§52.10.7 and of §19.7.1's fix.
+**And a second thing blocks that work today: LBA 0 does not read on
+`os8088_xt_hdd`.** The evidence, all on a **pristine** `default_xtide.vhd`
+whose sector 0 has `55 AA` at 510 and a type-04 partition at LBA 26:
+
+- the Control Panel's **Mount** answers `No partition table yet`;
+- the installer's slot list offers **four free slots** on that same disk;
+- **Install** refuses with `Cannot read the partition table` — `HMB_BAD`.
+
+**The safety pass did not break this; it made it visible.** `HMB_BAD` and
+`HMB_NONE` used to be one answer, so a failing read presented as "nobody has
+partitioned this" and the installer formatted straight through it. Every
+install this session that "worked" was writing a fabricated table over a disk
+whose real one had never been read — which is exactly the data-loss shape
+§52.2.1 and `hd_part_load`'s own header describe, and the reason that
+distinction was introduced.
+
+It is a **regression** and not a standing limitation: docs/MARTYPC-DEBUG.md
+records this same machine reading the table, mounting, and listing the DOS
+filesystem on the shipped image (`COMMAND.COM`, `CONFIG.SYS`, `Free
+31760K`). The transport is **rung 0** — int 13h through the XT-IDE ROM
+(§52.1) — so it is one of the BIOS-rung paths.
+
+Ruled out by reading, so the next reader does not repeat it:
+
+- **`hd_geom_push`** returns immediately unless `HDD_KIND == HDK_IDE`, so it
+  issues no task-file command on this rung.
+- **`hd_chs`** translates LBA 0 under 615×4×26 to (0, 0, 1) with no refusal
+  on any of its four `.bad` tests.
+- **The buffer alignment** the new guard depends on does hold:
+  `mem_claim`/`mem_claim_hi` allocate in whole KB from a heap top derived
+  from `int 12h`, so a region base is 1KB-aligned and `align 512` inside the
+  image lands `hd_mbr` on a 512-aligned linear address.
+
+**`hd_bios_run` is ruled out too, by arithmetic.** Its cap is
+`neg(seg*16 + ofs) >> 9`, which for a 512-aligned buffer is at least one
+sector — the refusal it added can only fire on a buffer that is not
+512-aligned, and the bullet above shows this one is. For LBA 0 the track cap
+is `26 - 1 + 1 = 26` and `SI` is 1, so `AX` leaves as 1.
+
+That leaves the `int 13h` in `hd_bios_xfer` itself, and the next step is
+**instrumentation rather than reading**: `hd_bios_xfer` already banks the
+BIOS's own status in `[hd_status]` before it retries, so the question is
+which of `hd_chs`, `hd_bios_run` and the three `int 13h` attempts returns the
+failure, and what status the BIOS gave (0C = media type unidentified, 04 =
+sector not found, 09 = DMA page crossed, 80 = no answer — §18.93's table).
+`[di+HDD_UNIT]` reaching `DL` as 80h is worth confirming in the same pass.
+
+Use the technique that found §19.7.1's bug: a temporary caption that
+**aborts**, one per candidate, because a marker that only sets `[hd_imsg]` is
+overwritten by the completion message and says nothing.
+
+Nothing else in §52.10.7 is re-testable until that is settled.
 
 ## 53. fsx.inc — fullscreen exclusive
 

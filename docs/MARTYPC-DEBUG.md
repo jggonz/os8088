@@ -110,6 +110,79 @@ it. A debugger that attaches to a machine already millions of cycles into its
 boot cannot breakpoint anything it wanted to watch, and "it had already
 happened" is the one failure a debugger must not have.
 
+### From a script: `os88marty.launch`
+
+Do not hand-roll the above in Python. Every scripted session needs a fresh
+emulator, every one of them wrote the same twenty lines, and essentially all
+of this harness's lost time is in those twenty lines — none of whose failures
+announce themselves.
+
+```python
+import os88marty
+from os88mouse import Mouse
+
+with os88marty.launch("build/os8088-360.img",
+                      apps="build/apps360.img",
+                      machine="os8088_5150_cga") as m:
+    mo = Mouse(marty=m)                 # ONE connection, shared
+    mo.dblclick(608, 105)
+    os88marty.settle(m)                 # ...instead of time.sleep(4)
+    m.vram("cga")
+```
+
+- **It kills survivors by PID, out of `/proc`, and waits for the port.** A
+  leftover emulator keeps 9001, the new one cannot bind and says so only in
+  its log, and the client then drives the *stale* machine — a different image
+  at a different point in its boot. It reads as a hang, or as a change that
+  did nothing.
+- **Never `pkill -f martypc_headless` and never `pgrep -f`.** The pattern
+  matches the calling shell's own command line, so `pkill` can kill the
+  caller and `until ! pgrep -f …` never finishes. The `[m]artypc` bracket
+  dodge fixes only the first of those.
+- **It owns the process.** `close()` — or leaving the `with` — kills it, on
+  the failure paths too, so one session cannot leak a survivor onto the next.
+- **It asserts `cycles == 0`** before returning, which is the direct test for
+  "am I attached to the machine I just started".
+- **Each floppy is copied into the run directory first.** The guest WRITES to
+  a mounted image (`SYSTEM.CFG`, saved files), so a run would otherwise dirty
+  `build/`.
+
+`settle(m)` is the wait, and it replaces every `time.sleep(4)`: it returns
+once two rendered frames a second apart are identical, which an os8088 screen
+only is between events. `launch` uses it with a gate for the boot, and the
+gate is not optional — the two obvious ones are both wrong:
+
+- **Stillness alone returns during the BIOS POST**, which sits perfectly
+  still for seconds before the floppy is touched. Measured: an 8.3-second
+  "boot" showing a quarter of the desktop's lit pixels.
+- **"Has the card left text mode" hangs on Hercules.** MartyPC's MDA reports
+  text mode forever, in graphics mode as in any other.
+
+So the gate is the **menu bar's white field**, which neither the POST nor the
+splash has, sampled through `vram` on the 1bpp cards and `fbuf` on VGA —
+because `fbuf` is dead on Hercules (the MDA does not rasterise graphics mode,
+so the rendered buffer sits still while the guest draws) and `vram` is
+impossible on VGA. Measured boots: CGA 17.5s, Hercules 16.1s, VGA 7.1s,
+against the 26-second fixed sleep every script used to carry.
+
+### Naming a kernel flag: `os88sym`
+
+`m.sym("fpg_on")` is the address of a kernel symbol, and `python3
+tools/os88sym.py --all` lists every one. **Do not take an address out of
+`nasm -l`'s listing** — for anything in `.bss` both the address column and
+the bracketed operand bytes are section-relative and fixed up afterwards, so
+`menu_bovr` reads as `0x0879` there and is at `0xCBA4` in the binary. That is
+a plausible small number pointing into `.text`: reading a byte from it
+succeeds, returns something, and means nothing. Two sessions have lost time
+to it, one of them concluding a feature was broken from a flag that was never
+the flag.
+
+`os88sym` uses `nasm`'s `[map]` directive on a *temporary copy* of
+`kernel/kernel.asm` — `kernsize.py`'s idiom — and asserts the result is
+byte-identical to `build/kernel.bin`, so a map describing a different kernel
+is an error rather than a subtly wrong answer. A knob build moves everything:
+pass the same `-D`s (`--define DISKCNT=1`).
+
 ---
 
 ## The machines

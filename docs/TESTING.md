@@ -1348,8 +1348,50 @@ middle of that range.
 >
 > **One connection at a time.** The debug server accepts a single client, so a
 > script that wants both the mouse driver and the framebuffer must share one:
-> build the `Mouse` and use its `.m`, never a second `Marty`. Opening a second
-> one does not error — it *hangs* until the read times out.
+> `Mouse(marty=m)`, never a second `Marty`. Opening a second one does not
+> error — it *hangs* until the read times out.
+
+> **And start the emulator with `os88marty.launch`, wait with `settle`, and
+> name a kernel flag with `m.sym`.** Every scripted session used to hand-roll
+> the same twenty lines, and essentially all of this harness's lost time is in
+> them.
+>
+> ```python
+> with os88marty.launch("build/os8088-360.img", apps="build/apps360.img") as m:
+>     mo = Mouse(marty=m)
+>     mo.dblclick(608, 105)
+>     os88marty.settle(m)              # ...instead of time.sleep(4)
+> ```
+>
+> `launch` kills survivors **by PID out of /proc** and waits for the port —
+> a survivor keeps 9001, the new emulator cannot bind and says so only in its
+> log, and the client then drives the *stale* machine. `pkill -f
+> martypc_headless` and `pgrep -f` both match the calling shell's own command
+> line, so the first can kill the caller and the second makes `until ! pgrep`
+> loop forever. It copies each floppy into the run directory (the guest WRITES
+> to a mounted image), asserts `cycles == 0`, and owns the process so nothing
+> leaks onto the next session.
+>
+> `settle(m)` is two identical rendered frames a second apart, which an os8088
+> screen only is between events. The **boot** needs a gate on top, and the two
+> obvious gates are both wrong: stillness alone returns during the BIOS POST,
+> which sits perfectly still for seconds before the floppy is touched
+> (measured — an 8.3 s "boot" showing a quarter of the desktop's lit pixels),
+> and "has the card left text mode" hangs the full timeout on Hercules, whose
+> MDA reports text mode in every mode. The gate is the **menu bar's white
+> field**, read through `vram` on the 1bpp cards and `fbuf` on VGA. CGA 17.5 s,
+> Hercules 16.1 s, VGA 7.1 s, against the 26 s fixed sleep it replaces.
+>
+> `m.sym("fpg_on")` — or `python3 tools/os88sym.py --all` — is where a kernel
+> symbol lives. **Never take one from `nasm -l`.** For anything in `.bss` the
+> listing's address column *and* its bracketed operand bytes are
+> section-relative and fixed up afterwards: `menu_bovr` reads there as `0x0879`
+> and is at `0xCBA4`. That is a plausible small number pointing into `.text`,
+> so reading a byte from it succeeds and means nothing — two sessions have lost
+> time to it, one concluding a feature was broken from a flag that was never
+> the flag. `os88sym` uses nasm's `[map]` on a temporary copy of `kernel.asm`
+> and asserts byte-identity with `build/kernel.bin`, so a map describing a
+> different kernel is an error rather than a wrong answer.
 
 `make marty`, and the whole recipe is docs/MARTYPC-DEBUG.md. What it gives
 that neither of the others does:
