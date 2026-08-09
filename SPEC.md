@@ -27691,3 +27691,52 @@ spends disk instead of RAM — 50KB for a Bronze save, 13KB for Photopia, 10KB
 for Balances, all of which the disks hold.
 
 The disk has a `SAVES` folder and the file dialog starts in it.
+
+### 59.11 What it does not do
+
+Every one of these is a decision with a reason, taken in the module that owns
+the subject and written down there too. They are collected here because a
+capability list that only says yes is not a specification.
+
+**Timed input is refused, not faked.** Flags 1 bit 7 is left clear, so a v4/v5
+story never asks for a timeout it would wait on forever. §47's rule reaching
+the header.
+
+**Sound is tones.** `@sound_effect` 1 and 2 are exact; a sampled effect gets
+the nearest tone. `OSAPI_SND_PLAY` blocks the whole desktop for the length of
+a clip and is UI-task-only, and `OSAPI_SND_STREAM`'s open verbs are
+UI-callback-only, so neither is reachable from where `@sound_effect` runs — and
+a desktop frozen mid-turn is a worse defect than an approximated effect.
+Standard 9.4.4's completion routine is not called, because there is no sound
+event to hang it on (§34.3: notification is polling).
+
+**Infocom `.mg1` art does not draw** — §59.7 gives the arithmetic. `.PIX`
+pictures do.
+
+**Scrollback history is not re-wrapped when the window is resized.** The ring
+stores lines already wrapped, so narrowing the window shows old lines cut at
+the new width; new output wraps correctly at once. Keeping the pre-wrap
+character stream as well would double the claim, and the claim is what §59.4
+is short of.
+
+**A repainted line carries one style.** The live draw honours a style change
+mid-line, as the Standard permits; the scrollback stores one style byte per
+line, which is the real case — a bold or reverse room name is a whole line —
+and flattens the rest only on a repaint.
+
+**v6 omits four things the Standard permits omitting**: the `[MORE]` prompt (a
+v6 game sets its line counts to place its own pauses), the newline interrupt
+(properties 8 and 9, where the Standard's own note records that Infocom's
+files and interpreters disagree about the ordering), true colour (no adapter
+this kernel drives has any), and `@buffer_screen`, which 8.8.7 explicitly
+allows an interpreter to treat as always-flush. `@get_wind_prop` answers 0 for
+the absent ones rather than pretending.
+
+**Only the default Unicode translation table** (3.8.5.3) is implemented; a
+story with its own gets the default transliteration. The letter-forms do not
+exist in an 8x8 font either way, so the alternative is a different wrong ASCII
+letter rather than a right one.
+
+**`@put_prop` on an absent property does not halt.** The Standard says it
+should; here it does nothing, because the only module that can name the
+offending opcode is `zexec.inc` and the object layer has no error channel.
