@@ -4090,6 +4090,19 @@ is, through `wm_paint_dmg` (§11.91): what a shrink genuinely owes, and still
 far less than the screen. The union is taken one pixel wide at the far edges,
 which is exactly the drop shadow.
 
+**`wm_draw_win` takes "which window is frontmost" in `BP`, and the cheap path
+has to set it.** It shipped without, and a zoomed window came up with a bare
+white title bar: no pinstripes, and **no close or minimize box** — which
+`wm_hit` still reports from geometry, so both were invisible and clickable,
+`wm_grow_paint`'s warning arriving at the other end of the same window. The
+register is easy to miss because the two paths either side of it look after
+themselves: `wm_paint_all` sets `BP` once before its back-to-front loop and
+`wm_paint_dmg` sets it per window, so the shrink half was always right and
+only the grow half was wrong. On this path the value needs no work to find —
+the branch is taken only after `wm_top` has answered with this very window —
+but it does have to be *written*, and saved, because `wm_rz_paint` preserves
+every register.
+
 Two things are load-bearing.
 
 - **The bank must be the TRUE old rect, and `wm_zoom`'s zoom-out is where that
