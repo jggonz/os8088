@@ -16,7 +16,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | document | read it before |
 |---|---|
 | **[SPEC.md](SPEC.md)** — the binding contract | touching any interface. Every symbol name, register contract, constant and layout is pinned there. **Update it *before* the change, not after.** A bare `§` anywhere in this repo means SPEC.md; §4 is the module-ownership table |
-| **[PERFORMANCE.md](PERFORMANCE.md)** | anything that draws, lays out or loops (summarised below) |
+| **[PERFORMANCE.md](PERFORMANCE.md)** | anything that draws, lays out or loops — but the load-bearing ~200 lines are condensed below, and over half the file is a field-measurement log. Open it for the reasons listed at the end of that section, not by default |
 | **[docs/TESTING.md](docs/TESTING.md)** | concluding something is untestable — it is the matrix of what each emulator can and cannot do, with a recipe per capability |
 | **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory |
 | **[docs/HERCULES-TESTING.md](docs/HERCULES-TESTING.md)** | testing on Hercules — it *is* automatable, and all three ways of getting it wrong give you a black image rather than an error |
@@ -153,6 +153,22 @@ Three defects are **invisible in an emulator** and cost this project bug after
 bug: a **visible redraw** (seconds on real hardware), a **double-draw flash**
 (anything drawn twice), and **input overrun**. None showed in a screendump;
 every one was found on hardware or by counting.
+
+That is the whole of it that applies to every change. Open PERFORMANCE.md
+itself for one of four reasons — it is 3,200 lines and over half is a log of
+field measurements:
+
+- **Part 5** before touching a redraw path — the standing budget names the
+  operation, what it used to cost, what it costs now and the § that owns it.
+  If your path is in that table, that row is the bar.
+- **Part 2** when you need a number you are going to quote. It carries the
+  access-shape distinctions this summary flattens (a sector inside a coalesced
+  run vs. an isolated seek; the 8088's `max(clocks, 4.34 × instruction bytes)`
+  fetch floor, which is why a shorter encoding can beat a cheaper instruction).
+- **Part 7** when checking a change, and **Parts 3.1/3.2** when measuring
+  flicker or smoothness — those are the harness manuals.
+- **Part 9** only to find where a number came from, or when taking a new field
+  set. Never as briefing.
 
 ## Testing
 
