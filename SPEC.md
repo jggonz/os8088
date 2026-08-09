@@ -24252,13 +24252,23 @@ Ruled out by reading, so the next reader does not repeat it:
   from `int 12h`, so a region base is 1KB-aligned and `align 512` inside the
   image lands `hd_mbr` on a 512-aligned linear address.
 
-What is left is inside the safety pass's own two changes: `hd_bios_run` now
-**refuses** an unaligned buffer where it used to force a run of one, and
-`hd_part_load` now separates `HMB_BAD` from `HMB_NONE`. One of those is
-turning a read that used to complete into a failure, or reporting a failure
-that was always there — and the second reading is the more likely, since the
-first thing to check is whether `hd_raw` ever succeeded on this rung or
-merely appeared to.
+**`hd_bios_run` is ruled out too, by arithmetic.** Its cap is
+`neg(seg*16 + ofs) >> 9`, which for a 512-aligned buffer is at least one
+sector — the refusal it added can only fire on a buffer that is not
+512-aligned, and the bullet above shows this one is. For LBA 0 the track cap
+is `26 - 1 + 1 = 26` and `SI` is 1, so `AX` leaves as 1.
+
+That leaves the `int 13h` in `hd_bios_xfer` itself, and the next step is
+**instrumentation rather than reading**: `hd_bios_xfer` already banks the
+BIOS's own status in `[hd_status]` before it retries, so the question is
+which of `hd_chs`, `hd_bios_run` and the three `int 13h` attempts returns the
+failure, and what status the BIOS gave (0C = media type unidentified, 04 =
+sector not found, 09 = DMA page crossed, 80 = no answer — §18.93's table).
+`[di+HDD_UNIT]` reaching `DL` as 80h is worth confirming in the same pass.
+
+Use the technique that found §19.7.1's bug: a temporary caption that
+**aborts**, one per candidate, because a marker that only sets `[hd_imsg]` is
+overwritten by the completion message and says nothing.
 
 Nothing else in §52.10.7 is re-testable until that is settled.
 
