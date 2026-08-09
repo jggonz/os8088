@@ -137,7 +137,7 @@ ico_core:
     add ax, si
     mov [ico_datap], ax
 
-    ; --- vertical clip to 0..[vid_hm1] (y is signed here) --------------------
+    ; --- vertical clip to 0..[vid_chm1] (y is signed here) --------------------
     mov bx, [ico_h]             ; BX = rows to draw
     mov ax, [ico_y]
     or  ax, ax
@@ -152,12 +152,12 @@ ico_core:
     mov word [ico_y], 0
 .top_ok:
     mov ax, [ico_y]
-    cmp ax, [vid_h]
+    cmp ax, [vid_ch]
     jae .none                   ; fully below the screen
     add ax, bx
-    cmp ax, [vid_h]
+    cmp ax, [vid_ch]
     jbe .rows_ok
-    mov bx, [vid_h]
+    mov bx, [vid_ch]
     sub bx, [ico_y]             ; hang off the bottom edge: draw what fits
 .rows_ok:
     mov [ico_rows], bx

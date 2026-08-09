@@ -115,9 +115,9 @@ font_char:
     jb .done
     cmp al, FONT_LAST
     ja .done
-    cmp cx, [vid_wm8]           ; unsigned: negative x fails this too
+    cmp cx, [vid_cwm8]          ; unsigned: negative x fails this too
     ja .done
-    cmp dx, [vid_hm8]
+    cmp dx, [vid_chm8]
     ja .done
     cmp word [wm_clip_n], 0     ; the cell whole against the clip region too
     je .noclip                  ; (SPEC.md 11.3)
@@ -644,9 +644,9 @@ font_run_cell:
     push di
     push es
 
-    cmp cx, [vid_wm8]           ; the same whole-cell clipping font_char does,
+    cmp cx, [vid_cwm8]          ; the same whole-cell clipping font_char does,
     ja .out                     ; screen edge and clip region alike - so a run
-    cmp dx, [vid_hm8]           ; clips exactly as its glyphs would, and its
+    cmp dx, [vid_chm8]          ; clips exactly as its glyphs would, and its
     ja .out                     ; background with them
     cmp word [wm_clip_n], 0
     je .noclip

@@ -68,11 +68,17 @@ VID_LIVE_W  equ 9               ; words in the live block below
 ; the last bank. Both rely on the whole intra-bank extent staying under
 ; 0x2000, which the assertion at the bottom of this file proves.
 ; -----------------------------------------------------------------------------
+; THE WIDTH AND HEIGHT ARE LAST, and that is not how this table used to read.
+; They moved to the end so the nine columns land on nine words that a DISPLAY
+; owns (SPEC.md 39.12): with w and h in the middle, the per-display run was
+; broken by the two words that describe the DESKTOP. Here they are vid_cw and
+; vid_ch - the active display's clip extent - and the desktop's own vid_w /
+; vid_h are derived below, out of the run.
 vid_tab:
-    ;    seg     w    h  stride bmask bshift rowadd  wrapbit wrapfix
-    dw VGA_SEG, 640, 480,   80,    0,     0,     80,       0,      0
-    dw VID_HERC_SEG, 720, 348, 90,   3,     2, 0x2000,  0x8000, 0x805A
-    dw  0xB800, 640, 200,   80,    1,     1, 0x2000,  0x4000, 0xC050
+    ;    seg     stride bmask bshift rowadd  wrapbit wrapfix    cw   ch
+    dw VGA_SEG,      80,    0,     0,     80,       0,      0, 640, 480
+    dw VID_HERC_SEG, 90,    3,     2, 0x2000,  0x8000, 0x805A, 720, 348
+    dw  0xB800,      80,    1,     1, 0x2000,  0x4000, 0xC050, 640, 200
 
 ; -----------------------------------------------------------------------------
 ; The live geometry block (SPEC.md 39.2). NINE CONTIGUOUS WORDS, in vid_tab's
@@ -90,8 +96,6 @@ vid_tab:
 ; be one.
 ; -----------------------------------------------------------------------------
 vid_seg     dw VGA_SEG          ; framebuffer segment
-vid_w       dw SCREEN_W         ; visible width, px
-vid_h       dw SCREEN_H         ; visible height, px
 vid_stride  dw ROW_BYTES        ; bytes from a row to the row 1 bank down
 vid_bmask   dw 0                ; y & this = the bank number (0 on VGA)
 vid_bshift  dw 0                ; y >> this = the row within the bank
@@ -101,16 +105,14 @@ vid_wrapfix dw 0                ; last bank; then add this to land on the
                                 ; next row of bank 0. Both 0 on VGA, which
                                 ; makes gfx_nextrow degenerate to `add di,80`
                                 ; with no adapter test - see the routine.
+vid_cw      dw SCREEN_W         ; THE ACTIVE DISPLAY's extent, and what every
+vid_ch      dw SCREEN_H         ; PRIMITIVE clips to (SPEC.md 39.2.1). Not the
+                                ; desktop's - see vid_w / vid_h below.
 
 ; --- derived from the live block by vid_apply (SPEC.md 39.2) -----------------
 ; Precomputed because the sites that want them are inner loops or single
 ; instructions that have no register to spare for the arithmetic.
 vid_bankmask dw 0              ; gfx_prevrow: DI's bank bits, (nbanks-1)<<13
-vid_wm1     dw SCREEN_W-1       ; last legal x
-vid_hm1     dw SCREEN_H-1       ; last legal y
-vid_wm8     dw SCREEN_W-8       ; font_char's whole-cell clip, and the menu
-                                ; bar's right margin
-vid_hm8     dw SCREEN_H-8
 vid_strm1   dw ROW_BYTES-1
 vid_rseg    dw 0                ; the software renderer's target segment:
                                 ; the claimed back buffer on VGA (0 until
@@ -121,6 +123,24 @@ vid_rpara   dw BB_PLANE_PARA    ; paragraphs from one plane to the next.
                                 ; bb_xfer's loop terminates on a segment
                                 ; compare, and a step of 0 never terminates.
 vid_rend    dw 0                ; that loop's exclusive end
+vid_cwm1    dw SCREEN_W-1       ; the display's last legal x and y, and the
+vid_chm1    dw SCREEN_H-1       ; whole-cell limits font_char and ico_core
+vid_cwm8    dw SCREEN_W-8       ; clip against. THE LAST WORD OF THE RUN a
+vid_chm8    dw SCREEN_H-8       ; display owns - vidsel.inc asserts it.
+
+; --- THE VIRTUAL DESKTOP (SPEC.md 39.2.1) ------------------------------------
+; What the WINDOW SYSTEM lays out in, and on a one-display machine identical to
+; the four words above it. The distinction only becomes visible when a desktop
+; spans two cards, and it is drawn HERE - outside the per-display run - because
+; the alternative was renaming these six at sixty-odd call sites across wm.inc,
+; ui.inc, menu.inc, desk.inc and dock.inc. The renderer's side of the same
+; question is twenty-two sites and enumerable, so the renderer is what moved.
+vid_w       dw SCREEN_W         ; desktop width, px
+vid_h       dw SCREEN_H         ; desktop height, px
+vid_wm1     dw SCREEN_W-1       ; last legal x
+vid_hm1     dw SCREEN_H-1       ; last legal y
+vid_wm8     dw SCREEN_W-8       ; the menu bar's right margin
+vid_hm8     dw SCREEN_H-8
 vid_dock_y0 dw SCREEN_H-24      ; dock strip top row (DOCK_H, dock.inc)
 vid_dock_ty0 dw SCREEN_H-24+3   ; dock tile top row
 vid_clk_hx  dw (SCREEN_W-206) & 0FFF8h  ; menu bar clock cell: hit band left
@@ -268,6 +288,24 @@ vid_apply:
     mov cx, VID_LIVE_W
     cld
     rep movsw
+
+    ; --- the DISPLAY's extent first, then the DESKTOP's from it (SPEC.md
+    ; 39.2.1). On one display they are the same numbers, and vid_tab has just
+    ; loaded vid_cw/vid_ch straight out of the adapter's row; a desktop that
+    ; spans two cards computes vid_w/vid_h from the union instead, and only
+    ; these six stores change.
+    mov ax, [vid_cw]
+    mov [vid_w], ax
+    dec ax
+    mov [vid_cwm1], ax
+    sub ax, 7
+    mov [vid_cwm8], ax
+    mov ax, [vid_ch]
+    mov [vid_h], ax
+    dec ax
+    mov [vid_chm1], ax
+    sub ax, 7
+    mov [vid_chm8], ax
 
     mov ax, [vid_w]             ; --- widths
     dec ax

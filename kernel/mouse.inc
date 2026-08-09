@@ -1687,7 +1687,7 @@ cur_geom:
     jb .cols_done
     mov byte [cur_b1ok], 1
 .cols_done:
-    mov ax, [vid_h]             ; UNSIGNED - vid_apply homes the cursor into
+    mov ax, [vid_ch]            ; UNSIGNED - vid_apply homes the cursor into
     sub ax, [cur_drawn_y]       ; the new screen precisely so this cannot
                                 ; borrow. rows on screen at this y (>= 1)
     cmp ax, CUR_GH

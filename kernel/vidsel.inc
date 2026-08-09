@@ -509,8 +509,8 @@ VID_CTX_SZ   equ VID_CTX_W*2+4
 
 ; The live run this copies must be the run viddet.inc lays out, and a reorder
 ; there would be silent here - so it is asserted rather than trusted.
-%if vid_rend - vid_seg != (VID_CTX_W-1)*2
-%error "vid_seg..vid_rend is not VID_CTX_W contiguous words - see viddet.inc"
+%if vid_chm8 - vid_seg != (VID_CTX_W-1)*2
+%error "vid_seg..vid_chm8 is not VID_CTX_W contiguous words - see viddet.inc"
 %endif
 
 ; .text with REAL INITIALISERS, not .bss, and for the reason vid_avail above

@@ -225,9 +225,9 @@ vga_rect_setup:
     jns .y1ok
     xor bx, bx
 .y1ok:
-    cmp dx, [vid_h]             ; y2 past the last row -> the last row
+    cmp dx, [vid_ch]            ; y2 past the last row -> the last row
     jl .y2ok
-    mov dx, [vid_hm1]
+    mov dx, [vid_chm1]
 .y2ok:
     cmp dx, bx
     jl .empty
@@ -235,9 +235,9 @@ vga_rect_setup:
     jns .x1ok
     xor ax, ax
 .x1ok:
-    cmp cx, [vid_w]             ; x2 past the last column -> the last column
+    cmp cx, [vid_cw]            ; x2 past the last column -> the last column
     jl .x2ok
-    mov cx, [vid_wm1]
+    mov cx, [vid_cwm1]
 .x2ok:
     cmp cx, ax
     jl .empty
@@ -709,9 +709,9 @@ gfx_ls_box:
     xor ax, ax
     mov [gfx_ls_bx1], ax
     mov [gfx_ls_by1], ax
-    mov ax, [vid_wm1]
+    mov ax, [vid_cwm1]
     mov [gfx_ls_bx2], ax
-    mov ax, [vid_hm1]
+    mov ax, [vid_chm1]
     mov [gfx_ls_by2], ax
     jmp short .out
 .armed:
@@ -848,9 +848,9 @@ gfx_line:
     xor ax, ax                  ; would move the lattice and the erase would
     mov [gfx_ln_cx1], ax        ; then miss; disarmed, one pass at the screen
     mov [gfx_ln_cy1], ax        ; edge, which is also where this gets its
-    mov ax, [vid_wm1]           ; screen clipping
+    mov ax, [vid_cwm1]          ; screen clipping
     mov [gfx_ln_cx2], ax
-    mov ax, [vid_hm1]
+    mov ax, [vid_chm1]
     mov [gfx_ln_cy2], ax
     call gfx_line_raw
     jmp short .nextpass

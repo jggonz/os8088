@@ -756,7 +756,7 @@ on its own.**
 | 0 | ~~MartyPC dual-card patch; answer §9's three questions~~ **DONE** (§9.1/§9.2) | `tests/dualcheck.py` passes, and fails without patch 02 |
 | 0b | ~~Fix `vid_cga_alias` (§9.3)~~ **DONE** — SPEC.md §39.11.1 | `vid_avail = 0x06` both ways round, `0x02` for a Hercules alone, and still `0x02` for an aliasing one |
 | 1 | Per-display context block + swap; `[vid_ndisp]` = 1 everywhere | **byte-identical** to today on VGA, Hercules and CGA |
-| 2 | `vid_cw`/`vid_ch` split at the ~24 renderer sites | byte-identical again |
+| 2 | ~~`vid_cw`/`vid_ch` split at the ~24 renderer sites~~ **DONE** — SPEC.md §39.2.1 | 22 sites; **0 differing pixels** on CGA, Hercules and VGA, twice |
 | 3 | Bring the second card up at boot; no desktop on it yet | both monitors lit, primary unchanged |
 | 4 | `GFXDISP` at the four rect entries + font/icon/scroll/save/line | secondary shows a desktop dither |
 | 5 | Cursor crossing; mouse clamp to the union | pointer moves between monitors |
@@ -765,6 +765,47 @@ on its own.**
 | 6c | `fsx` on one display, others blanked; `vid_unblank` | Missile Command and Paint unchanged; the dark monitor comes back with a repainted desktop, never a stale one |
 | 7 | Control Panel mode + layout; `VM` key | survives a reboot; refuses on a single-card machine |
 | 8 | Field run on the 5150 | the three things QEMU cannot show |
+
+### 11.2 Step 2, as built
+
+`vid_cw`/`vid_ch` and their four derived limits, split from the desktop's
+`vid_w`/`vid_h` (SPEC.md §39.2.1). **22 renderer sites moved; the ~60 window
+system ones did not.** Cost: **`.text` +44** — the extra derivation in
+`vid_apply` — no rung crossed, and `kern_small` pays the same 44 because this
+is a *shared* refactor rather than an `%ifdef`. That is deliberate: the
+alternative is twenty-two `%ifdef`s inside the renderer's hot paths, which is
+§2's own "hook left outside its `%ifdef`" hazard with more places to get it
+wrong. 44 bytes and no rung is the cheaper mistake.
+
+`vid_tab`'s columns moved with it — width and height are last now — so the
+nine columns land on nine words a display owns and SPEC.md §39.12's run stays
+contiguous.
+
+**What the gate covers, and what it does not.** A settled desktop compared
+byte-for-byte on CGA, Hercules and VGA is **0 differing pixels, twice**, and
+that exercises `vga_rect_setup`, `font_char`/`font_run`, `ico_core` and the
+cursor across a full `wm_paint_all`. It does **not** exercise
+`vga_rect_setup`'s two *clamps*, because nothing at rest is asked to draw past
+a screen edge — and a driven comparison could not be made to cover them
+either: the cursor is erased and redrawn asynchronously by the mouse ISR and
+`gfx_unlock`'s deferred hide, so ~31 bytes at any pointer position differ from
+run to run whatever the kernel does. **A gate that cannot tell its own noise
+from a finding is worse than none**, and the first negative control here was
+exactly that — it reported 43 differing bytes for an injected transposition
+that turned out to be noise, at coordinates a symbol-lookup bug had put at
+432x182 on a 640x200 screen. (That bug is worth its own line: the script
+booted two different kernels and resolved symbols against `build/kernel.bin`,
+so one of the two runs was reading the wrong addresses.)
+
+So the clamps are covered by argument instead, and the argument is narrow
+enough to state. A transposition in a *compare* — `cmp cx, [vid_ch]` where
+`vid_cw` belongs — is caught instantly by the pixel gate, because 640 and 200
+are nothing like each other and every fill on the screen would be cut. A
+transposition in a *clamp value* fires only past an edge. There are four such
+pairs — `vga_rect_setup`'s two, `gfx_ls_box`'s and `gfx_line`'s — and all four
+were read back and confirmed axis-consistent, along with the whole-cell tests
+in `font.inc`, `ico_core`'s vertical clip, `gfx_scroll`'s bounds,
+`wm_su_edge`'s guard and the splash's centring.
 
 Steps 1 and 2 are the ones worth doing even if the feature is abandoned: they
 are pure refactoring toward SPEC.md §39.3's own argument, they are provable by

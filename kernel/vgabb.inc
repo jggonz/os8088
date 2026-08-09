@@ -435,9 +435,9 @@ gfx_scroll:
     ja .no
     cmp bx, dx
     ja .no
-    cmp cx, [vid_w]
+    cmp cx, [vid_cw]
     jae .no                     ; also catches a "negative" x1 via x1 <= x2
-    cmp dx, [vid_h]
+    cmp dx, [vid_ch]
     jae .no
     or si, si
     jz .no

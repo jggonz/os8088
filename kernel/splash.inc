@@ -244,7 +244,7 @@ spl_chrome:
 ; undo the switch three instructions after it happened. Costs nothing: it is
 ; a label, and the geometry below is read live either way.
 spl_rechrome:
-    mov ax, [vid_h]             ; the bar's origin, centred on whatever screen
+    mov ax, [vid_ch]            ; the bar's origin, centred on whatever screen
     shr ax, 1                   ; we got. On VGA this would be row 232, but
     cmp byte [vid_mono], 0      ; the bar has to sit inside the dialog's
     je .barv                    ; trough at 264, so VGA keeps its constant.
@@ -254,7 +254,7 @@ spl_rechrome:
     mov ax, SPL_BAR_Y
 .bary:
     call gfx_rowbase
-    mov bx, [vid_w]             ; x = (width - bar) / 2, in whole bytes: 22 at
+    mov bx, [vid_cw]            ; x = (width - bar) / 2, in whole bytes: 22 at
     sub bx, SPL_BAR_PX          ; 640 (which is what SPL_BAR_ADR always was),
     mov cl, 4                   ; 27 at Hercules' 720
     shr bx, cl

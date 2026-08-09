@@ -17855,6 +17855,50 @@ draw writes past the end of the framebuffer.
 and chrome dimensions, not screen-derived. Only `SCREEN_H - TITLE_H`
 combined them, and that is the precomputed `[vid_ymax]`.
 
+### 39.2.1 The display's extent and the desktop's — `vid_cw` / `vid_w`
+
+**Two questions that were one word each and are now two.** *How big is the
+thing I am clipping to* and *how big is the thing the window system lays out
+in* have the same answer on every machine with one display, and different
+answers the moment a desktop spans two cards (docs/DUAL-DISPLAY-PLAN.md §5.1).
+
+| | the DISPLAY | the DESKTOP |
+|---|---|---|
+| extent | `vid_cw` / `vid_ch` | `vid_w` / `vid_h` |
+| last legal pixel | `vid_cwm1` / `vid_chm1` | `vid_wm1` / `vid_hm1` |
+| whole-cell limit | `vid_cwm8` / `vid_chm8` | `vid_wm8` / `vid_hm8` |
+| read by | every primitive that clips | `wm_fit`, `ui_drag`, the chrome, the drive column |
+| lives in | the per-display context (§39.12) | outside it, published once |
+
+**The renderer moved and the window system did not**, and that is a decision
+about blast radius rather than about which name is nicer. The window system's
+side is ~60 sites spread through `wm.inc`, `ui.inc`, `menu.inc`, `desk.inc` and
+`dock.inc`; the renderer's is **22 and enumerable** —
+`vga_rect_setup`'s four, `gfx_ls_box`'s two, `gfx_line`'s screen clip, the
+`gfx_scroll` bounds, `font_char`/`font_run`'s whole-cell tests, `ico_core`'s
+vertical clip, `cur_geom`'s row count, the splash's centring, and
+`wm_su_edge`'s guard. Renaming the small side is the whole saving.
+
+**`vid_tab`'s columns moved for this.** Width and height are the last two
+columns now rather than the second and third, so the table's nine columns land
+on nine words a *display* owns and the per-display run stays contiguous
+(§39.12). `vid_apply` loads `vid_cw`/`vid_ch` straight out of the row, derives
+the four `c*` limits, and then publishes `vid_w`/`vid_h` from them — which on
+one display is a copy, and on a spanned desktop is where the union goes.
+
+Three sites are worth knowing because they are not obviously renderer:
+
+- **The splash centres on `vid_cw`**, not on the desktop. It runs before any of
+  §39.11's machinery and covers the primary card; on a spanned desktop the
+  desktop's centre is not on any one monitor.
+- **`cur_geom` clips to `vid_ch` and the pointer's POSITION clamps to
+  `vid_hm1`.** The two are genuinely different questions: the arrow's bitmap
+  is cut off by the framebuffer it is being drawn into, and the pointer moves
+  across the whole desktop.
+- **`wm_su_edge`'s guard is `vid_cw`/`vid_ch`**, because what it is guarding
+  against is `vga_rect_setup` clipping — a renderer question wearing a window
+  manager's clothes.
+
 ### 39.3 The parameterized software renderer
 
 **There is no second graphics driver.** `vgabb.inc` (§32) was written as a

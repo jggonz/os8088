@@ -3749,9 +3749,9 @@ wm_su_take:
     ja .out                     ; degenerate content: nothing to bank
     cmp bx, dx
     ja .out
-    cmp cx, [vid_w]
+    cmp cx, [vid_cw]
     jae .out                    ; WHOLLY ON SCREEN or no cache: vga_rect_setup
-    cmp dx, [vid_h]             ; CLIPS, and wm_su_edge's row count and stride
+    cmp dx, [vid_ch]            ; CLIPS, and wm_su_edge's row count and stride
     jae .out                    ; are computed from the rect rather than read
                                 ; back out of it, so a clipped one would index
                                 ; the buffer wrongly. wm_fit keeps a window on
