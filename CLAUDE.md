@@ -34,6 +34,7 @@ make test     # boot headless, QMP socket at build/qmp.sock — this is how you 
 make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndcheck.py)
 make debug    # boot halted, waiting for gdb on :1234
 make bench    # build the tests/ apps — ON DEMAND ONLY; nothing under tests/ ships
+make dos      # build the FreeDOS floppy — ON DEMAND ONLY; fetches a ~148MB toolchain
 make clean
 ```
 
@@ -53,7 +54,10 @@ exactly like the feature being broken.
 
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
 `xt-cga`, `xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`, `386`,
-`386-sound`, `486`, `pentium`; plus `marty` (MartyPC).
+`386-sound`, `486`, `pentium`; plus `marty` (MartyPC). `xt-dos` and `386-dos`
+are the same 8088 and 386DX with the **FreeDOS floppy in the second drive** in
+place of the apps disk (§59) — under QEMU that arrangement is
+`make test TESTAPPS=build/dos360.img`, which needs no target of its own.
 
 **Nothing in `build/` is tracked — never commit a binary.** The toolchain is
 deterministic on purpose (`tools/os88disk.py` pins the volume serial and every

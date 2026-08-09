@@ -16,6 +16,9 @@ IMG360 := $(BUILD)/os8088-360.img
 APPSIMG := $(BUILD)/apps.img
 APPSIMG720 := $(BUILD)/apps720.img
 APPSIMG360 := $(BUILD)/apps360.img
+# The FreeDOS floppy (SPEC.md 59.1). No 720KB variant: nothing uses one.
+DOSIMG := $(BUILD)/dos.img
+DOSIMG360 := $(BUILD)/dos360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
 VM    := $(CURDIR)/vm/xt
 VM640 := $(CURDIR)/vm/xt640
@@ -24,6 +27,14 @@ VMHERC := $(CURDIR)/vm/xt-hercules
 VM286 := $(CURDIR)/vm/286
 VM386SX := $(CURDIR)/vm/386sx
 VM386DX := $(CURDIR)/vm/386dx
+# The two DOS machines (SPEC.md 59.4): the same 8088 and 386DX, with the
+# FreeDOS floppy in the SECOND drive in place of the apps disk. The XT one is
+# `ibmxt86` at 640KB and NOT the 256KB `ibmxt` of `make xt` - FreeDOS plus
+# FreeCOM leave about 130KB free on a 256KB machine, which is a prompt with
+# nothing to run at it. Both drives must be populated or DOS maps A: and B:
+# onto one unit and prompts for a disk swap (SPEC.md 59.4).
+VMXTDOS := $(CURDIR)/vm/xt-dos
+VM386DOS := $(CURDIR)/vm/386-dos
 # ...and the same three machines with a sound card in them (SPEC.md 51.4).
 # QEMU's -device adlib/sb16 is the only other way to give the driver
 # something to attach to, and it is not a real card: these are.
@@ -181,6 +192,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
+        dos xt-dos 386-dos \
         bench field stackprobe trklog npbench clicktest marty comscan \
         checkdocs clean clean-marty distclean
 
@@ -303,6 +315,11 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv
 SYSAPPS := $(BUILD)/taskmgr.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
+# ...and the packages that ship in the ROOT of the system disk rather than
+# in SYSTEM/. FREEDOS is here and not on the apps disk because in a *-dos
+# configuration the second drive holds FreeDOS and the apps disk is not in
+# the machine at all (SPEC.md 59.2).
+SYSPKGS := $(BUILD)/freedos.o88
 
 # ...and MEDIA, which every disk carries and the system disk carries EMPTY:
 # it is where a File Open or File Save starts (SPEC.md 38.10), so it has to
@@ -401,10 +418,10 @@ $(BUILD)/debug.bin: drivers/debug/debug.asm drivers/os88drv.inc apps/os88api.inc
 $(BUILD)/debug.drv: $(BUILD)/debug.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/debug.bin -o $@
 
-$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSPKGS) $(SYSDOC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSPKGS) $(SYSDOC) $(MEDIAFOLDER)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
 # BETWEEN the two shipped ones have: an XT or AT fitted with a 3.5" DD drive,
@@ -415,15 +432,15 @@ $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) to
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSPKGS) $(SYSDOC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSPKGS) $(SYSDOC) $(MEDIAFOLDER)
 
-$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSPKGS) $(SYSDOC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSPKGS) $(SYSDOC) $(MEDIAFOLDER)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
 # apps disks - their directory order is pinned (SPEC.md 24) - so it rides its
@@ -500,6 +517,15 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
 
 $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/hello.bin -o $@
+
+# FREEDOS, the package that hands the machine to FreeDOS (SPEC.md 59.2). It
+# carries none of FreeDOS - that is `make dos` and a floppy of its own.
+$(BUILD)/freedos.bin: apps/freedos/freedos.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/freedos/freedos.asm
+	@echo "freedos: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/freedos.o88: $(BUILD)/freedos.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/freedos.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
 $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
@@ -1455,6 +1481,38 @@ test-snd: $(IMG) $(TESTAPPS)
 # perl -pi behaves identically on GNU and BSD/macOS, unlike sed -i.
 UNPROTECT = perl -pi -e 's{^fdd_01_fn = wp://}{fdd_01_fn = }; s{^fdd_02_fn = wp://}{fdd_02_fn = }'
 
+# --- the FreeDOS disk (ON DEMAND: `make dos`) --------------------------------
+# NOT a dependency of `all`, deliberately: the first build fetches a ~148MB
+# toolchain, and a default target that needs the network is a default target
+# that fails on a train. tools/freedos/README.md is the account of what that
+# build does and why; SPEC.md 59.6 is the contract.
+#
+# KERNEL.SYS goes in through --kernel rather than as a positional, which lays
+# it down from cluster 2 and contiguously (SPEC.md 59.1). --dos stops the
+# system-disk attribute rules applying to somebody else's operating system.
+DOSDIR    := $(BUILD)/dos
+DOSKERNEL := $(DOSDIR)/KERNEL.SYS
+DOSBOOT   := $(DOSDIR)/FAT12CHS.BIN
+DOSFILES  := $(DOSDIR)/COMMAND.COM $(DOSDIR)/OS8088.COM \
+             dos/fdconfig.sys dos/autoexec.bat
+DOSDISK    = python3 tools/os88disk.py --dos --boot $(DOSBOOT) \
+             --kernel $(DOSKERNEL) $(DOSFILES)
+
+dos: $(DOSIMG) $(DOSIMG360)
+
+$(DOSKERNEL) $(DOSBOOT) $(DOSDIR)/COMMAND.COM: tools/build-freedos.sh
+	bash tools/build-freedos.sh
+
+# The way back out of DOS (SPEC.md 59.5). Not EXIT.COM - see that section.
+$(DOSDIR)/OS8088.COM: dos/os8088.asm $(DOSKERNEL)
+	$(NASM) -f bin -o $@ $<
+
+$(DOSIMG): $(DOSBOOT) $(DOSKERNEL) $(DOSFILES) tools/os88disk.py
+	$(DOSDISK) -o $@ --size 1440
+
+$(DOSIMG360): $(DOSBOOT) $(DOSKERNEL) $(DOSFILES) tools/os88disk.py
+	$(DOSDISK) -o $@ --size 360
+
 # Boot the 360KB image on emulated period hardware in 86Box.
 xt: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VM)/86box.cfg
@@ -1510,6 +1568,19 @@ xt-hercules: $(IMG360) $(APPSIMG360)
 386: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386DX)/86box.cfg
 	$(BOX) -P $(VM386DX) -N
+
+# The two DOS machines: os8088 in drive A, FreeDOS in drive B (SPEC.md 59).
+# The apps disk is not in these - there are two floppy drives and DOS wants
+# the second one. Under QEMU the same arrangement is `make test
+# TESTAPPS=build/dos360.img`, which needs no target of its own and is the one
+# to use while developing: 86Box has no automation socket.
+xt-dos: $(IMG360) $(DOSIMG360)
+	@$(UNPROTECT) $(VMXTDOS)/86box.cfg
+	$(BOX) -P $(VMXTDOS) -N
+
+386-dos: $(IMG) $(DOSIMG)
+	@$(UNPROTECT) $(VM386DOS)/86box.cfg
+	$(BOX) -P $(VM386DOS) -N
 
 # The three sound machines: an XT with a Sound Blaster 2.0 (so the OPL2 is
 # the FM tier and the DSP the stream tier on the CPU this OS is FOR), and the

@@ -1506,8 +1506,133 @@ ui_cmd_reboot:
     call gfx_lock               ; never released - the GUI is done
     call vid_text
     call sched_unhook           ; restores int 08h/0Ch (unhooks the mouse too)
+    mov al, [ui_bootunit]       ; a foreign volume to boot? (SPEC.md 59.3)
+    or al, al
+    jz .rom                     ; 0 = nobody posted one: an ordinary restart
+    dec al                      ; stored as unit+1 - see ui_boot_post
+    call ui_handoff             ; does not return if the drive has a boot
+                                ; sector on it; falls through if it does not
+.rom:
     int 0x19
     jmp ui_cmd_reboot           ; unreachable; int 19h does not return
+
+; -----------------------------------------------------------------------------
+; ui_handoff - boot the volume in a foreign drive (SPEC.md 59.3)
+; in:  AL = BIOS drive unit; the machine is already torn down (steps 1-5 above)
+; out: never returns. A drive with no readable boot sector ends in int 19h
+;      inside the stub, which restarts os8088 - the same outcome the caller's
+;      own int 19h would have produced, reached without a stack to return on
+;
+; Two hazards, both of which look like bad media rather than like themselves.
+;
+; ONE: the diskette parameter table. dsk_dpt_init (SPEC.md 18.93) repointed
+; 0000:0078 at KERNEL_SEG:dsk_dpt and saved nothing, and dsk_xfer rewrites that
+; table's EOT before every transfer. That is harmless while WE are the next
+; thing to boot - our own boot sector re-establishes it before it reads. It is
+; fatal here: a FreeDOS boot sector loads a 70KB KERNEL.SYS at 0060:0000 and so
+; overwrites dsk_dpt with kernel bytes WHILE THE BIOS IS STILL READING THROUGH
+; IT. The load fails partway, or succeeds with corrupt geometry. So the table
+; goes back to DPT_AT first - the address boot/boot.asm already reserved for
+; exactly this, below KERNEL_SEG where nothing we can allocate reaches it.
+;
+; TWO: a boot sector must be entered at 0000:7C00, which is KERNEL_SEG:0x7600 -
+; inside our own .text. Whether THIS routine happens to sit in that range is a
+; link-order accident, so the code that does the reading cannot run in place.
+; It is copied to HANDOFF_AT and jumped to. Anyone who later "simplifies" that
+; away will find it works until a build shifts by 512 bytes.
+; -----------------------------------------------------------------------------
+ui_handoff:
+    mov dl, al                  ; DL = the unit. rep movsb below eats CX, SI,
+                                ; DI, DS and ES and leaves DL alone, which is
+                                ; the whole reason it is parked there
+
+    ; --- the DPT, back to a page the incoming kernel cannot land on ----------
+    ; Copied rather than rebuilt: dsk_dpt holds THIS machine's step rate, head
+    ; timings and gap lengths, read from its own BIOS at boot, plus the EOT
+    ; dsk_xfer last wrote. Guesses do not belong in a floppy timing table.
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    xor ax, ax
+    mov es, ax
+    mov si, dsk_dpt
+    mov di, DPT_AT
+    mov cx, DPT_LEN
+    cld
+    rep movsb
+
+    ; --- the stub, out of the landing zone (DS still KERNEL_SEG, ES still 0) -
+    mov si, ui_hstub
+    mov di, HANDOFF_AT
+    mov cx, ui_hstub_end - ui_hstub
+    rep movsb
+    mov [es:HANDOFF_UNIT], dl   ; the stub reads the unit from here, not from a
+                                ; register: it reloads before every int 13h,
+                                ; and a byte at a fixed address costs less than
+                                ; trusting the BIOS to preserve DL
+
+    xor ax, ax                  ; the int 1Eh vector, under cli: it is two words
+    mov ds, ax                  ; and an ISR between them would hand the BIOS
+    pushf                       ; half an address
+    cli
+    mov word [0x0078], DPT_AT
+    mov word [0x007A], 0
+    popf
+
+    jmp 0:HANDOFF_AT            ; ...and it is no longer our machine. Nothing is
+                                ; restored on the way out because there is
+                                ; nothing left to restore it for
+
+; -----------------------------------------------------------------------------
+; ui_hstub - the part that runs at HANDOFF_AT, after everything above is gone
+;
+; Position-independent as written: every data reference is absolute with DS=0
+; and every branch is short-relative, so it needs no patch sites beyond the
+; unit byte ui_handoff pokes into it. tests/chainb/chainb.asm is the same code
+; standing alone, which is how it is tested without a kernel in the way -
+; keep the two in step.
+; -----------------------------------------------------------------------------
+ui_hstub:
+    cli
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00              ; the conventional boot stack: grows down, away
+    cld                         ; from the sector about to land at 0x7C00
+    sti
+
+    mov dl, [HANDOFF_UNIT]
+    xor ax, ax
+    int 0x13                    ; AH=00 reset the controller: this drive has
+                                ; not been touched this power-on, and the first
+                                ; seek on an untouched unit is the one that
+                                ; fails
+
+    mov ax, 0x0201              ; AH=02 read, AL=1 sector
+    mov cx, 0x0001              ; CH=cylinder 0, CL=sector 1
+    xor dh, dh                  ; head 0
+    mov dl, [HANDOFF_UNIT]      ; reloaded: AH=00 above is not required to
+                                ; preserve it
+    mov bx, 0x7C00              ; ES:BX, ES already 0
+    int 0x13
+    jc .rom
+    cmp word [0x7C00 + 510], 0xAA55
+    jne .rom                    ; unformatted, or no disk in the drive
+
+    mov dl, [HANDOFF_UNIT]      ; DL is the whole boot protocol (SPEC.md 59.4)
+    jmp 0:0x7C00
+
+.rom:
+    int 0x19                    ; deliberately benign: an empty or unformatted
+                                ; drive restarts os8088 rather than jumping
+                                ; into whatever was in the buffer. Not a return
+                                ; to the caller - SS:SP were reset above, so
+                                ; there is no stack to return on
+ui_hstub_end:
+
+%if ui_hstub_end - ui_hstub > DPT_AT - HANDOFF_AT - 1
+%error "the handover stub has outgrown the 0x500 page (SPEC.md 59.3)"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ui_reboot_post - API slot 0x0368 (SPEC.md 20.10). No arguments, no answer.
@@ -1525,6 +1650,32 @@ ui_cmd_reboot:
 ; spent is the same restart, which is why this is a flag and not a count.
 ; -----------------------------------------------------------------------------
 ui_reboot_post:
+    mov byte [ui_bootunit], 0   ; a RESTART, not a handover: whatever unit a
+                                ; previous FREEDOS window posted and then
+                                ; cancelled must not ride this one out
+    mov byte [ui_rebootq], 1
+    ret
+
+; -----------------------------------------------------------------------------
+; ui_boot_post - API slot 0x0370 (SPEC.md 59.2). AL = BIOS drive unit.
+;
+; ui_reboot_post's twin, deferred for exactly the reason written above it: a
+; package callback holds the gfx lock, and the path this posts takes that lock
+; and waits on driver workers that need scheduling. Everything the comment
+; above says applies here unchanged.
+;
+; The unit is stored as unit+1, so that 0 - which is what .bss holds before
+; anyone posts anything, and what ui_reboot_post writes - means "no handover,
+; just restart". Without that, drive 0 and "nobody asked" would be the same
+; byte, and the System menu's Restart would chain-boot the system disk instead
+; of going through the ROM. Both writers of this byte are here; there is no
+; initialiser to forget.
+; -----------------------------------------------------------------------------
+ui_boot_post:
+    inc al
+    mov [ui_bootunit], al
+    dec al                      ; the slot preserves every register (SPEC.md
+                                ; 20.3), and AL is one of them
     mov byte [ui_rebootq], 1
     ret
 
@@ -1532,6 +1683,10 @@ ui_reboot_post:
 section .bss
 
 ui_rebootq: resb 1              ; 1 = a restart is owed (SPEC.md 20.10)
+ui_bootunit: resb 1             ; 0 = that restart goes through the ROM;
+                                ; otherwise unit+1 to hand the machine to
+                                ; (SPEC.md 59.2). Both writers are posts, so
+                                ; the .bss zero is already the right default
 
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
 ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,

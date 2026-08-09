@@ -1444,6 +1444,16 @@ and a second opinion on the video probe. `make xt`,
 `xt-640`, `xt-cga`, `xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`,
 `386`, `386-sound`, `486`, `pentium`.
 
+`xt-dos` and `386-dos` are those first two machines with the FreeDOS floppy in
+the second drive instead of the apps disk (SPEC.md 59). **86Box is the only
+place one of them answers a question QEMU cannot**: whether an XT BIOS reports
+two floppy drives in the equipment word. If it does not, FreeDOS marks B:
+single-logical and every access to it raises *"Insert diskette for drive B:"*,
+which makes the whole arrangement unusable — and QEMU always reports two, so
+it can never show this. If it bites, set `fdd_01_type` and `fdd_02_type` to
+`525_2dd` in `vm/xt-dos/86box.cfg`; no other XT config sets a type, so that
+line is a deviation to make on evidence rather than in advance.
+
 The last two are the *fast* end rather than the period end: a 486DX2/66 and a
 Pentium 133, both with an SB16. 8086 real-mode code runs on them verbatim, so
 what they answer is whether the constants sized against a 4.77 MHz 8088 still

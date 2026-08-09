@@ -1691,6 +1691,30 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; the Control Panel's settings are flushed and
                                  ; every driver is detached
 
+%define OSAPI_BOOT_UNIT     KERNEL_SEG:0x0370   ; AL = the BIOS drive unit to
+                                 ; boot (1 = the second floppy). No answer,
+                                 ; every register preserved. POSTS a handover
+                                 ; to whatever operating system is on that
+                                 ; drive (SPEC.md 59.2) - this is how FREEDOS
+                                 ; starts FreeDOS.
+                                 ;
+                                 ; Everything said about OSAPI_REBOOT above
+                                 ; applies unchanged, for the same reason: it
+                                 ; is the same teardown path with a different
+                                 ; last instruction, it takes the gfx lock you
+                                 ; are holding, and so it POSTS. Return from
+                                 ; your callback normally afterwards.
+                                 ;
+                                 ; THIS ENDS THE SESSION. Every window, the
+                                 ; clipboard and anything unsaved are gone, and
+                                 ; the only way back is a reboot (SPEC.md
+                                 ; 59.5). Ask first - FREEDOS does.
+                                 ;
+                                 ; A drive that is empty or unformatted falls
+                                 ; back to a plain restart rather than jumping
+                                 ; into rubble, so a missing disk costs the
+                                 ; session but not the machine.
+
 ; --- listing a directory (SPEC.md 19.7.1) -------------------------------------
 ; The operation this API had no way to express: a package could read a file by
 ; name and never find out what names were there. Everything in the tree that
