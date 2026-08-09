@@ -295,7 +295,7 @@ class Marty:
 
     # --- reproducibility: guest-time positioning (docs/SNAPSHOT-PLAN.md) -----
 
-    def advance(self, frames=None, cycles=None):
+    def advance(self, frames=None, cycles=None, card=None):
         """Run a bounded amount of GUEST time and stop.
 
         USE THIS INSTEAD OF time.sleep FOR ANYTHING THAT MUST REPEAT. The
@@ -303,8 +303,13 @@ class Marty:
         multiple of real time the host manages, so a wall-clock wait lands at a
         different guest position every run - two instances given the same
         sleep(22) were measured 21.7 million cycles apart.
+
+        `frames` is a question about ONE card and the two disagree on a
+        two-card machine - 50Hz Hercules against 60Hz CGA - so `card` picks
+        which one is counting. Absent, it is the primary, which is what it
+        always was.
         """
-        kw = {"cmd": "advance"}
+        kw = {"cmd": "advance", "card": card}
         if frames is not None:
             kw["frames"] = frames
         if cycles is not None:
@@ -525,8 +530,15 @@ def _port_free(host, port, tries=60, gap=0.5):
 MBAR_H = 20                     # SPEC.md 12: the same on every adapter
 
 
-def _sample(m):
+def _sample(m, card=None):
     """The screen as comparable bytes, on whichever card this machine has.
+
+    `card` picks one on a two-card machine, and it is not optional there:
+    os8088 need not be driving MartyPC's PRIMARY. A `make VIDEO=herc` kernel
+    on `os8088_5150_both_gla` draws on the Hercules while the config's first
+    `[[machine.video]]` is the CGA, so a gate that asks the primary watches a
+    card nothing is drawing on and times out - which reads exactly like a
+    machine that never booted.
 
     `vram` on the 1bpp cards and `fbuf` on VGA, which is where the two
     functions already split: mode 12h is four planes behind the Graphics
@@ -540,12 +552,14 @@ def _sample(m):
     it is 720x350 over a 720x348 framebuffer and 16 columns short of it, and a
     gate that counts pixels in a named band wants the band it named.
     """
-    if m.cmd(cmd="video")["type"] in ("cga", "mda", "hercules"):
-        return b"".join(bytes(r) for r in m.vram()[2])
-    return m.fbuf()[2]
+    vt = m.video(card=card)["type"]
+    if vt in ("cga", "mda", "hercules"):
+        return b"".join(bytes(r) for r in
+                        m.vram("cga" if vt == "cga" else "herc")[2])
+    return m.fbuf(card=card)[2]
 
 
-def _bar_up(m):
+def _bar_up(m, card=None):
     """Is the os8088 MENU BAR on screen? - the boot gate, and the only one
     that works on all three adapters.
 
@@ -557,19 +571,26 @@ def _bar_up(m):
     desktop's lit pixels. The bar's white field is the one thing on screen
     that neither the POST nor the splash has.
     """
-    if m.cmd(cmd="video")["type"] in ("cga", "mda", "hercules"):
-        w, _, rows = m.vram()
+    vt = m.video(card=card)["type"]
+    if vt in ("cga", "mda", "hercules"):
+        w, _, rows = m.vram("cga" if vt == "cga" else "herc")
         band = rows[0:MBAR_H - 1]
         return sum(sum(r) for r in band) > 0.8 * w * len(band)
-    w, _, d = m.fbuf()
+    w, _, d = m.fbuf(card=card)
     band = d[0:w * (MBAR_H - 1) * 3]
     return sum(band) > 0.8 * 255 * len(band)
+
+
+# The boot gate under its public name, for a caller that has to run `settle`
+# itself - which on a two-card machine is any caller that must ask `cards()`
+# before it knows which card to watch, and so cannot use `launch(card=...)`.
+bar_up = _bar_up
 
 
 # Wait for a machine that is going to CHANGE THE SCREEN and then stop: a boot,
 # a click, a repaint. Its twin below, `until`, is for work that changes no
 # pixels while it runs - pick by whether the screen is the evidence.
-def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0):
+def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
     """Run until the SCREEN STOPS CHANGING, and answer how long that took.
 
     A fixed sleep is either waste or a lie. A 360KB CGA boot is ~25 s on this
@@ -607,7 +628,7 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0):
     last, run = None, 0
     while time.time() - t0 < limit:
         try:
-            cur = _sample(m)
+            cur = _sample(m, card)
         except MartyError:
             cur = None
         run = run + 1 if (cur is not None and cur == last) else 0
@@ -672,7 +693,8 @@ def until(m, cond, what="that condition", poll=1.0, limit=600.0):
 
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
-           run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=()):
+           run_dir=None, boot=True, timeout=DEFAULT_TIMEOUT, extra=(),
+           card=None):
     """Start a FRESH martypc_headless on `image` and return a booted Marty.
 
     `image` and `apps` are paths to floppy images (fd:0 and fd:1). `boot` is
@@ -685,6 +707,10 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
         with os88marty.launch("build/os8088-360.img",
                               apps="build/apps360.img") as m:
             m.vram("cga")
+
+    `card` is which video card the BOOT GATE watches, and it is needed only
+    where os8088 is not driving MartyPC's primary - a two-card machine plus a
+    `VIDEO=` kernel. Otherwise leave it: the primary is what os8088 picked.
 
     Raises rather than limping: a port that will not go quiet, an emulator
     that never answers, and a machine that is already part-way through its
@@ -760,7 +786,7 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
         try:
             m.run()
             if boot is True:
-                settle(m, gate=_bar_up)
+                settle(m, gate=lambda mm: _bar_up(mm, card), card=card)
             else:
                 time.sleep(boot)
         except BaseException:                    # ...or the caller never gets

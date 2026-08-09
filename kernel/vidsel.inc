@@ -662,4 +662,93 @@ vid_ctx_init:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; vid_disp_init - programme the SECOND card, if this machine has one
+;                 (SPEC.md 39.13)
+;
+; in:       [vid_avail], and the machine running on [vid_kind]
+; out:      a two-card machine has both cards scanning our raster, the second
+;           one black; [vid_ndisp] = 2, [vid_cur] = 0, display 1 banked.
+;           Anything else: untouched, [vid_ndisp] stays 1
+; clobbers: flags
+;
+; TWO DISPLAYS IS [vid_avail] == HERC|CGA EXACTLY, and an equality rather than
+; a bit count for a reason per value. VGA|CGA is ONE CARD - vid_probe_avail
+; sets the CGA bit on every VGA/EGA without probing, mode 6 being a standard
+; BIOS mode there - so a bit count would report two displays on the commonest
+; machine in the tree and programme the VGA twice. VGA|HERC|CGA genuinely IS
+; two cards and is deliberately not taken: the bitmap cannot say whether the
+; CGA bit is that VGA's mode 6 or a third card, and SPEC.md 39.11.4 already
+; accepts that pairing as one nobody built.
+;
+; THE SECONDARY IS BROUGHT UP BY MAKING IT MOMENTARILY CURRENT. vid_apply is
+; the only routine that turns a vid_tab row into the eighteen words a display
+; owns plus everything derived from them, and it writes the LIVE block - so
+; this sets [vid_kind], calls it, and banks the answer. vid_setmode then
+; programmes the right card by construction rather than by argument: it reads
+; [vid_kind] and [vid_seg], and both already describe the secondary.
+;
+; THE WAY BACK IS vid_apply AND NOT vid_ctx_act, which is the design working
+; rather than a shortcut. A swap carries the smallest thing that is genuinely
+; per-display, because it has to be cheap enough to sit under a drawing
+; primitive (SPEC.md 39.12); vid_apply on the way IN also rewrote every desktop
+; word - the dock row, the clock cell, the drive column, the pull-down cap -
+; and only vid_apply puts those back.
+;
+; AND THE PRIMARY'S CARD IS NEVER RE-PROGRAMMED. There is no vid_setmode on the
+; way back: the primary is already in its graphics mode with the loading screen
+; on it (SPEC.md 15.3), and a second mode set would clear it. "Primary
+; unchanged" is this step's literal gate and it holds by construction.
+;
+; STILL OWED: vid_switch does not re-run this, so switching the primary leaves
+; these records describing the arrangement before the switch - and vid_blank
+; darks a card display 1 now owns. Inert while nothing reads either, and it
+; stops being inert the moment a primitive activates a display.
+; -----------------------------------------------------------------------------
+vid_disp_init:
+    push ax
+    push di
+    mov al, [vid_avail]
+    cmp al, VID_A_HERC | VID_A_CGA
+    jne .out                    ; one display - or a pairing we do not take
+
+    mov ah, [vid_kind]          ; bank the primary; the other kind is the one
+    mov al, VID_CGA             ; this machine has and is not running on
+    cmp ah, VID_HERC
+    je .other
+    mov al, VID_HERC
+.other:
+    mov [vid_kind], al
+    call vid_apply              ; the live block is the SECONDARY's now...
+    call vid_setmode            ; ...which is what points this at the right
+                                ; card, and what makes its 32KB/16KB clear
+                                ; land on the right memory
+    mov al, 1
+    call vid_ctx_capture        ; bank it as display 1
+
+    mov [vid_kind], ah          ; ...and back. No vid_setmode: the primary is
+    call vid_apply              ; already in its mode with the splash on it
+    call vid_equip              ; 40:10 back to the primary's KIND, because
+                                ; vid_setmode's CGA path flipped it to colour
+                                ; and nothing else ever would (SPEC.md 39.11.2)
+    xor al, al
+    call vid_ctx_capture        ; a no-op today - vid_apply has just republished
+                                ; what vid_ctx_init banked - and 39.12's rule
+                                ; followed mechanically rather than reasoned
+                                ; about one instance at a time
+
+    mov al, 1                   ; display 1 sits to the RIGHT of display 0.
+    call vid_ctx_ptr            ; Nothing reads this yet; where the two really
+    mov ax, [vid_cw]            ; sit is the Control Panel's question, and this
+    mov [di+VID_CTX_VX], ax     ; is the arrangement its default will be
+    xor ax, ax
+    mov [di+VID_CTX_VY], ax
+
+    mov byte [vid_cur], 0       ; the live block is display 0's again
+    mov byte [vid_ndisp], 2
+.out:
+    pop di
+    pop ax
+    ret
+
 %endif  ; KERN_BIG

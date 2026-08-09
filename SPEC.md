@@ -18484,7 +18484,7 @@ changes** — drawing is spatially coherent, so the steady state is
 
 | symbol | what it does |
 |---|---|
-| `[vid_ndisp]` | displays the desktop spans; **1** until a second card is brought up (docs/DUAL-DISPLAY-PLAN.md §11 step 3), and 1 for ever on a one-card machine |
+| `[vid_ndisp]` | displays the kernel has **brought up** — 2 after §39.13, 1 for ever on a one-card machine. Not the same question as how far the *desktop* spans, which is `[vid_w]`/`[vid_h]` and is still one display's until docs/DUAL-DISPLAY-PLAN.md step 6 |
 | `[vid_cur]` | which display's geometry is in the live block |
 | `vid_ctx_capture` | AL = display; bank the live geometry into that record |
 | `vid_ctx_act` | AL = display; make it current, **returning immediately if it already is** |
@@ -18501,8 +18501,8 @@ Three things are load-bearing:
   garbage `[vid_cur]` is an index past the array. `cur_sptr` and `dsk_fatwc`
   are the two this tree has already been caught by. The records themselves are
   `.bss` — written before they are read.
-- **`vid_ctx_init` is called from `kmain` and from `vid_switch`, never from
-  `vid_apply`.** `vid_apply` runs from the splash on its first tick, while the
+- **`vid_ctx_init` is called from `kmain`, and never from `vid_apply`.**
+  `vid_apply` runs from the splash on its first tick, while the
   rest of the kernel is still coming off the floppy (§15.3), so a call from
   there into `vidsel.inc` executes what has not been loaded yet: black screen,
   no clue. `viddet.inc` carries the same warning about `cur_unlazy`.
@@ -18514,9 +18514,84 @@ Three things are load-bearing:
   the cause.
 
 **Nothing on a drawing path calls any of it yet.** This is step 1 of
-docs/DUAL-DISPLAY-PLAN.md §11 — the state and the swap, with `[vid_ndisp]` = 1
-— so the screen is byte-identical to the build before it on all three
-adapters, by construction rather than by inspection.
+docs/DUAL-DISPLAY-PLAN.md §11 — the state and the swap — so the screen is
+byte-identical to the build before it on all three adapters, by construction
+rather than by inspection. §39.13 raises `[vid_ndisp]` and still draws nothing;
+step 4 is what first activates a display from a primitive.
+
+### 39.13 Bringing the second card up — `vid_disp_init` (`KERN_BIG` only)
+
+**On a machine with a Hercules *and* a CGA, both cards are programmed at boot
+and both monitors scan os8088's own raster.** Nothing is drawn on the second
+one — `vid_setmode` cleared it, so it is black — which is exactly what this
+step is: the card is *ours* from here on, and step 4 of
+docs/DUAL-DISPLAY-PLAN.md is what puts pixels on it.
+
+**Two displays means `[vid_avail]` is `VID_A_HERC | VID_A_CGA` and nothing
+else.** Every other value is one display, and the test is an equality rather
+than a bit count for a reason per value:
+
+- **`VGA | CGA`** is one card. §39.11.1 sets the CGA bit on every VGA/EGA
+  without probing anything, because mode 6 is a standard BIOS mode there — so
+  a bit count would report two displays on the commonest machine in the tree
+  and programme the VGA twice.
+- **`VGA | HERC | CGA`** is a VGA with a real Hercules beside it, which *is*
+  two cards — and is deliberately not taken. The bitmap cannot say whether the
+  CGA bit is that VGA's mode 6 or a third card, and §39.11.4 already accepts
+  that pairing as one nobody built. Treating it as two displays would put the
+  desktop half on a monitor and half on the same monitor.
+- **One bit** is the ordinary machine.
+
+**The secondary is brought up by making it momentarily current.** `vid_apply`
+is the only routine that turns a `vid_tab` row into the eighteen words a
+display owns plus everything derived from them, and it writes the *live*
+block — so `vid_disp_init` sets `[vid_kind]` to the other kind, calls
+`vid_apply`, calls `vid_setmode`, and banks the result with
+`vid_ctx_capture 1`. `vid_setmode` programming the right card falls out of
+that ordering rather than being arranged: it reads `[vid_kind]` and
+`[vid_seg]`, and both already describe the secondary.
+
+**The way back is `vid_apply`, not `vid_ctx_act`, and that asymmetry is the
+design working.** A swap carries the smallest thing that is genuinely
+per-display, because it has to be cheap enough to sit under a drawing
+primitive (§39.12); `vid_apply` on the way in also rewrote every *desktop*
+word — the dock row, the clock cell, the drive column, the pull-down cap
+(§39.2.1) — and only `vid_apply` puts those back.
+
+Three things about the restore are load-bearing:
+
+- **The primary's card is never re-programmed.** There is no `vid_setmode` on
+  the way back. The primary is already in its graphics mode with the loading
+  screen on it (§15.3), and a second mode set would clear it — so "primary
+  unchanged" is the literal gate for this step and it holds by construction.
+- **`vid_equip`, because `vid_cga_equip` is a one-way door** (§39.11.2).
+  Bringing a CGA up as the *secondary* of a Hercules-primary machine goes
+  through `vid_setmode`'s CGA path, which flips 40:10's bits 5:4 to colour so
+  the XT BIOS's equipment-driven mode set can reach the card at all — and
+  nothing puts them back. Left flipped, `CMD_REBOOT`'s `vid_text` (int 10h
+  AX=0007h) programmes the CGA instead of the MDA: a machine that reboots to a
+  dead mono monitor. It is called *after* `[vid_kind]` is restored, because it
+  reads it.
+- **Display 0 is re-captured**, which is a no-op today — `vid_apply` has just
+  republished the same numbers `vid_ctx_init` banked — and is §39.12's own
+  rule followed mechanically rather than reasoned about instance by instance.
+
+**Called from `kmain`, immediately after `vid_probe_avail`**, which is where
+`[vid_avail]` is filled and therefore the earliest this can run. That puts it
+after the mode set for §39.11.1's reason, and before `mem_init` — it claims
+nothing.
+
+**Display 1 sits at `(display 0's width, 0)`: side by side, secondary on the
+right.** Nothing reads that origin yet, and where the two displays actually
+sit is the Control Panel's question (docs/DUAL-DISPLAY-PLAN.md step 7);
+this is the arrangement its default will be.
+
+**What is still owed, and it is one thing: `vid_switch` does not re-run
+this.** Switching the primary from the Control Panel's Display page leaves
+`vid_ctx` describing the arrangement before the switch, and §39.11.4's
+`vid_blank` darks a card display 1 now owns. Inert while nothing reads either
+— but it stops being inert at step 4, so it is that step's or step 7's and not
+a thing to leave for the field to find.
 
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
