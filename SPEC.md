@@ -24784,6 +24784,29 @@ record and `mem_shed_one` refuses when there are none.
 It is on **`mem_claim_hi`'s path too**: a package load is a user action and a
 cache is not, so the cache loses every time.
 
+**And the retry has to re-enter with the same parameters, which it did not.**
+`mem_claim_1` takes its direction in `DI` and its DMA head in `SI`, stages
+both into globals inside its `cli` window, and then reuses both registers as
+scan scratch — while its epilogue restored only `AX` and `CX`. Harmless on
+the first call and wrong on the second: the retry staged a `mem_tab` pointer
+as `[mem_dir]`, so it allocated **top-down instead of bottom-up**, and
+another as `[mem_dma]`, so it invented a **64KB-page constraint nobody asked
+for**. The one path that most needs a shed was the one that could not use it.
+
+Measured on `os8088_5150_sb_256k` with §19.2.3's 63KB read-ahead window
+resident: a 75KB claim failed, shed the window, and **failed again against
+95.5KB of contiguous free heap** — Tracker reporting *Out of memory* over a
+module it now loads at base `0x1AA0`, exactly where the shed opened the run.
+`mem_claim_1` preserves `SI`/`DI` now (`pop` touches no flag, and `CF` is its
+answer).
+
+This was invisible for as long as it existed because **`mem_avail`'s
+under-reporting hid it** (§50.6.3): callers refused before claiming, so the
+shed path was rarely reached, and when it was reached the corrupted
+parameters could still happen to find a fit. Two bugs whose symptoms cancel
+are a shape worth recognising — fixing either one alone leaves the other
+looking like the fix did not work.
+
 This also side-steps a real concurrency trap. A discard is only safe when the
 owner is not mid-use, and `mem_claim` is called from the loader, from `kmain`,
 from drivers and from window callbacks — some holding the gfx lock and some
@@ -24796,7 +24819,7 @@ already serialises a worker against the UI task — and they will need a
 handle-based ABI rather than a bare segment, since a package that keeps a
 discarded segment in its own bss writes into somebody else's memory.
 
-#### 50.6.3 What the Task Manager shows
+#### 50.6.3 What `mem_avail` answers, and what the Task Manager shows
 
 **Purgeable is in nobody's total, not even System's.** It is not memory
 anyone can run out of — the next claim that needs it takes it — so counting it
@@ -24806,10 +24829,52 @@ reads.
 
 It gets **one line of its own**, and that line is a developer instrument: it
 is how you see that a cache was claimed rather than refused, and that a shed
-actually happened. `mem_avail` still reports only genuinely free space, which
-under-reports for a caller that would have succeeded after a shed — a
-conservative direction, and the one that keeps `bb_canfit` and Paint's
-tier-sizing honest.
+actually happened.
+
+**And `mem_avail` counts a cache as FREE, in both of its answers.** It did
+not, and this paragraph used to say so on the reasoning that under-reporting
+was "a conservative direction, and the one that keeps `bb_canfit` and Paint's
+tier-sizing honest". That is exactly backwards, and the argument is worth
+keeping because it is a plausible mistake: **every consumer sizes itself DOWN
+from this number.** Paint's canvas, Tracker's module, ArtfulType's document,
+the recorder's tiers and `bb_canfit`'s greying all ask "how much may I have?"
+and take less when told less — so under-reporting is a feature silently lost,
+a control greyed that would have worked, a canvas smaller than the machine
+can hold. It is not a safe error; it is the *only* direction in which the
+error is invisible.
+
+The size of it is not a rounding difference either, now that
+§19.2.3's directory read-ahead window is 63KB of resident cache. Measured on
+`os8088_5150_sb_256k`, with that window held: `mem_avail` answered **21.5KB**
+on a heap out of which Tracker went on to fund an **18KB module and a 16KB
+ring**. Anything reasoning arithmetically from that figure is reasoning from
+a number the allocator does not agree with — which is how a Tracker change
+built on `avail - needk` came to refuse a module that plays perfectly
+(§45.18.1).
+
+**So `mem_run` — which is `mem_avail`'s helper and nobody else's, the
+allocator scanning with `mem_runfree` — skips purgeable records, and the
+total does too.** That makes the answer the same question `mem_claim` answers,
+because every claim sheds: `mem_claim_1` has exactly one caller, and it is
+`mem_claim`'s unconditional shed-and-retry loop.
+
+#### 50.6.3.1 …except for a comfort, which must not fund itself out of a cache
+
+Two kernel callers want the *other* question, and `mem_avail_ns` is it —
+same body, purgeable counted as occupied. Both are optimisations that allocate
+a cache of their own:
+
+| | wants | because |
+|---|---|---|
+| `dsk_rah_want` (§19.2.3) | no-shed | a mount on a tight machine would take the window raise cache away, **and take it every mount** |
+| `dsk_fatw_want` (§18.8.1) | no-shed | "a machine short of memory should spend what it has on the user's application" |
+
+Both already said so in prose and both were relying on `mem_avail` being
+conservative to enforce it, which stopped being true here. The rule is the
+one the split makes explicit: **ask `mem_avail` when you are about to claim
+something the user asked for, and `mem_avail_ns` when you are about to claim
+a convenience.** A cache that displaces another cache buys nothing and
+thrashes.
 
 ## 51. driver.inc — loadable drivers
 

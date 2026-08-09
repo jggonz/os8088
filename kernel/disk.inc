@@ -3081,8 +3081,12 @@ dsk_fatw_want:
     jc .out
     cmp word [bx+DVOL_MAX*2], 0
     jne .out                    ; it already has one
-    call mem_avail              ; AX = largest run KB, BX = TOTAL free KB -
-    cmp bx, DSK_FATW_MINK       ; and BX is why the slot is read above first
+    call mem_avail_ns           ; AX = largest run KB, BX = TOTAL free KB -
+    cmp bx, DSK_FATW_MINK       ; and BX is why the slot is read above first.
+                                ; The NO-SHED answer (SPEC.md 50.6.3): this is
+                                ; a comfort, and "free" here has to mean free
+                                ; without taking a cache off somebody, or the
+                                ; comfort funds itself out of the raise cache
     jb .out
     mov al, [disk_drive]
     call dsk_fatw_claim         ; a refusal is a normal path (SPEC.md 50) and
@@ -3875,8 +3879,11 @@ dsk_rah_want:
 %endif                          ; exactly the sectors asked for (SPEC.md 18.95)
     cmp word [dsk_rah_seg], 0
     jne .out                    ; already held
-    call mem_avail              ; AX = the largest free run. TWICE what we
-    cmp ax, DSK_RAH_KB * 2      ; want, on fr_cache_row's terms (SPEC.md
+    call mem_avail_ns           ; AX = the largest free run, and the NO-SHED
+    cmp ax, DSK_RAH_KB * 2      ; one (SPEC.md 50.6.3) - the plain answer
+                                ; counts a cache as free, which is exactly
+                                ; what the note below says not to do. TWICE
+                                ; what we want, on fr_cache_row's terms (SPEC.md
     jb .out                     ; 40.1): this is an OPTIMISATION and must not
                                 ; be why something else fails. Asking outright
                                 ; would be worse than a refusal - mem_claim

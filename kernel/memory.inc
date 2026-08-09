@@ -299,9 +299,22 @@ mem_claim:
     ret
 
 ; the scan-and-publish itself; mem_claim above is the retry loop around it
+;
+; SI AND DI ARE PARAMETERS AND ARE PRESERVED, which they were not: both are
+; staged into the globals below and then reused as scan scratch, and the
+; epilogue restored only AX and CX. That is invisible on the first call and
+; wrong on the SECOND - mem_claim's shed-and-retry re-enters with whatever the
+; failed scan left, so the retry stages a record pointer as [mem_dir] (it
+; allocates top-down instead of bottom-up) and another as [mem_dma] (it
+; invents a 64KB-page constraint nobody asked for). The one path that needs
+; the shed most is the one that could not use it: measured on a 256KB
+; machine, a 75KB claim failed, shed the 63KB read-ahead window, and failed
+; again against 95.5KB of contiguous free heap (SPEC.md 50.6.2).
 mem_claim_1:
     push ax
     push cx
+    push si
+    push di
     pushf
     cli                         ; the whole scan-and-publish, one window -
     mov [mem_dma], si           ; the operation's PARAMETERS included. The
@@ -434,7 +447,9 @@ mem_claim_1:
     xor dx, dx
     stc
 .out:
-    pop cx
+    pop di                      ; the parameters, so a RETRY re-enters with
+    pop si                      ; the same ones (pop touches no flag, and CF
+    pop cx                      ; is this routine's answer)
     pop ax
     ret
 
@@ -1014,14 +1029,30 @@ mem_free_rec:
 ; claim's end), measure the distance to the nearest claim that starts above
 ; it. O(MEM_MAX^2) with MEM_MAX = 32 - around a thousand cycles, called at
 ; app startup.
+;
+; **PURGEABLE claims are counted as FREE, in both answers** (SPEC.md 50.6.3).
+; They were counted as occupied, which made this routine answer a different
+; question from the one mem_claim answers: a cache yields to any claim, so it
+; is not in the way of one. With a 63KB directory read-ahead window resident
+; that is not a rounding error - measured on a 256KB machine, this said 21.5KB
+; while a caller went on to fund an 18KB claim AND a 16KB one out of the same
+; heap. Every consumer sizes itself DOWN from this number (Paint's canvas,
+; Tracker's module, ArtfulType's document, the recorder's tiers), so
+; under-reporting is a feature silently lost, not a safe error.
 ; -----------------------------------------------------------------------------
 mem_avail:
+    mov ax, 1                   ; PURGEABLE counts as free: what a claim can
+    jmp short mem_avail_go      ; get, because mem_claim sheds to get it
+mem_avail_ns:
+    xor ax, ax                  ; ...and as occupied: what is free WITHOUT
+mem_avail_go:                   ; taking a cache off somebody
     push cx
     push dx
     push si
     push di
     pushf
     cli
+    mov [mem_av_pg], ax         ; inside the window, with the other three
     mov dx, [mem_base]          ; candidate 0: the bottom of the heap
     call mem_run
     mov ax, cx                  ; AX = largest run, paragraphs
@@ -1042,13 +1073,18 @@ mem_avail:
     cmp di, mem_tab + MEM_MAX*MC_SIZE
     jb .cand
 
-    mov si, mem_tab             ; total free = heap - sum of claims
-    mov bx, [mem_top]
-    sub bx, [mem_base]
-    mov cx, MEM_MAX
-.tot:
+    mov si, mem_tab             ; total free = heap - sum of claims, and a
+    mov bx, [mem_top]           ; PURGEABLE claim is only one of them when the
+    sub bx, [mem_base]          ; caller asked the no-shed question - a total
+    mov cx, MEM_MAX             ; that disagreed with the run scan above would
+.tot:                           ; be the same lie in the other register
     cmp word [ss:si+MC_SEG], 0
     je .tnext
+    cmp byte [ss:si+MC_OWN+1], MEM_PG_HI
+    jne .tsolid
+    cmp word [mem_av_pg], 0
+    jne .tnext
+.tsolid:
     sub bx, [ss:si+MC_PARA]
 .tnext:
     add si, MC_SIZE
@@ -1069,6 +1105,13 @@ mem_avail:
 ; in:  DX = candidate base segment
 ; out: CX = free paragraphs from DX up to the next claim (or mem_top)
 ; clobbers: nothing else (flags)
+;
+; A PURGEABLE claim does not block (SPEC.md 50.6.3). This is mem_avail's
+; helper and nobody else's - the allocator's own scan is mem_runfree - so
+; "free" here means "free to a caller who is willing to shed", and every
+; caller is: mem_claim_1 has exactly one caller, mem_claim's unconditional
+; shed-and-retry loop. Counting a cache as occupied made mem_avail answer a
+; different question from the one mem_claim answers.
 ; -----------------------------------------------------------------------------
 mem_run:
     push ax
@@ -1080,6 +1123,11 @@ mem_run:
 .scan:
     cmp word [ss:si+MC_SEG], 0
     je .next
+    cmp byte [ss:si+MC_OWN+1], MEM_PG_HI
+    jne .solid
+    cmp word [mem_av_pg], 0     ; a cache yields to any claim, so it is not in
+    jne .next                   ; the way of one - unless the caller asked
+.solid:                         ; what is free WITHOUT shedding (50.6.3)
     mov ax, [ss:si+MC_SEG]
     cmp ax, dx
     jb .below
@@ -1665,6 +1713,14 @@ mem_dma:  resw 1                  ; ...and mem_claim_dma's head, in paragraphs,
                                   ; for the same reason: 0 = no page constraint
 mem_base: resw 1                  ; first heap paragraph = HEAP_SEG
 mem_skip:   resw 1              ; mem_runfree: a record to ignore, 0 = none
+mem_av_pg:  resw 1              ; mem_avail's question: 0 = count a PURGEABLE
+                                ; claim as OCCUPIED (mem_avail_ns - what is
+                                ; free without disturbing a cache), 1 = as
+                                ; FREE (mem_avail - what a claim can actually
+                                ; get, since mem_claim sheds). Staged inside
+                                ; mem_avail's own cli window, like the three
+                                ; above, so it is never a parameter channel
+                                ; another task can overwrite in the gap
 mem_top:  resw 1                  ; one past the last, from int 12h
 
 section .text
