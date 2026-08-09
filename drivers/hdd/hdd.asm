@@ -1214,6 +1214,8 @@ hd_services:
     dw hd_s_page                ; DSV_CPNAME  - and so the page exists
     dw hd_page_paint            ; DSV_CPPAINT
     dw hd_page_click            ; DSV_CPCLICK
+    dw hd_tool_reap             ; DSV_CPCLOSE - the panel has gone, so the disk
+                                ; tool's 11KB goes with it (SPEC.md 52.11.4)
 
 hd_s_page:   db 'Hard Drive', 0
 

@@ -143,6 +143,12 @@ pn_entry:
     jc .out                         ; no window: nothing to attach menus to
     mov si, pn_menus
     call OSAPI_MENU_SET             ; BX = window ptr, SI = the set
+    mov al, 1                       ; ...and it PROMISES its content stands
+    call OSAPI_WM_SAVEU             ; still while it is not drawing (SPEC.md
+                                    ; 11.96.1): no worker, and its one polling
+                                    ; loop runs INSIDE a click callback, so
+                                    ; every pixel it changes is a pixel the
+                                    ; user asked for
 .out:
     pop si                          ; pop leaves the flags alone
     ret

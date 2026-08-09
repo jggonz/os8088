@@ -4273,6 +4273,41 @@ flag: `wm_hide` drops the cache, because a hidden window's painter skips
 drawing for the whole time it is down. **A promise about being covered may not
 be assumed across a hide.**
 
+**The test a window has to pass, and it is three questions.** `wm_su_try`
+returning CF = 0 skips *both* the white fill and `W_PAINT`, so anything the
+raise was going to do does not happen:
+
+1. **Does its content change while it is merely covered?** A worker that
+   advances state and skips drawing is the disqualifier — the Timer, a
+   Bounce, a game loop, a player's position readout, a capture's byte count.
+   An app with no worker at all cannot fail this, because the window ABI has
+   no periodic hook: `W_PAINT`, `W_ONKEY` and `W_ONCLICK` are the only ways
+   in, and all three are interaction.
+2. **Does it do work on gaining focus?** That work arrives as `W_PAINT`, and
+   a restored cache is exactly the case where `W_PAINT` does not run. A Disk
+   window is the worked example: §22.8 re-lists a dirtied folder when it comes
+   to the front, and putting old pixels back over a new listing is
+   docs/FIELD-NOTES.md 4's bug with a different cause.
+3. **Is its repaint actually expensive?** The first two are about being
+   *allowed*; this one is about being *worth it*. Paint fails it — 95% of its
+   repaint is one `gfx_blit4` out of a canvas it already holds in RAM — and so
+   does Hello, whose content is a fixed string.
+
+Question 3 matters more than it looks while there is **one cache for the
+machine**: marking a cheap window means covering it takes the cache from an
+expensive one. It is the reason not to bank a screenful to save a blit.
+
+Two things that look like disqualifiers and are not. A **geometry re-read** in
+the paint proc (`pt_track`, `sol_track`) is safe, because `wm_su_ck` compares
+the banked rect with the window's rect now — a change invalidates the cache
+and the full path runs. And a background painter that DRAWS is safe, because
+it must arm `wm_clip_set` first (§11.3) and that drops the cache.
+
+Marked today: **Note Pad** (its worker watches typing), **Minesweeper** (no
+worker, and the only `GET_TICKS` in it seeds the mines), **Piano** (no worker;
+its one polling loop runs inside a click callback) and **Solitaire** (no
+worker, so the table moves only when a card is dragged).
+
 So the flag is a promise only the application can make — *my content does not
 change while I am not drawing* — and the asymmetry settles the default:
 **forgetting to opt in costs speed, and forgetting to invalidate costs
@@ -15789,6 +15824,36 @@ eight. A **third** driver page, or a **seventh** static item, needs the
 window to grow first — `%if CP_ITEMS + 2 > (CP_CH - CP_I0Y) / CP_IROWH` in
 `ctrl.inc` is the guard, and it fails the build rather than the pane.
 
+#### 31.9.1 `DSV_CPCLOSE` — the panel has been closed
+
+A driver's page is drawn while the panel is open and never after it, so a
+driver may want to hold something for exactly that long. `DSV_CPCLOSE` is the
+cell that makes it possible: no arguments, no answer, and **the gfx lock is
+held**, so the driver may draw and may destroy its own windows in it.
+
+It is sent once, from the panel instance's own teardown in `app_close_win` —
+the one place the Control Panel stops existing while the machine keeps running
+— and `drv_cp_closed` walks the classes rather than the page on screen,
+because "the panel is gone" is true for every driver that has one. A class
+with no driver has a zeroed service table, so the published-or-not test is the
+cell itself and there is nothing to keep in step.
+
+**It is not a detach and must not be treated as one.** The driver is still
+loaded, whatever it published is still published, its volumes are still
+mounted, and the panel may be open again a second later. Free what the *page*
+was using, not what you are.
+
+Two orderings are deliberate. It runs **before** `cp_flush_close`, so a driver
+that stages a setting on the way out stages it into the blob that is about to
+be written rather than the one after (§31.8). And it is **not** sent on the
+reboot path, which is the other way `cp_flush_close` is reached: `drv_shutdown`
+detaches every driver a few instructions later, and a detach frees strictly
+more than this does.
+
+The first consumer is `HDD.DRV`, which frees the 11KB disk-tool image here
+(§52.11.4). Cost, measured: `.text` +58, `.bss` +6 — `DSV_SIZE` 24 → 26, which
+is two bytes per class — and no rung crossed.
+
 ### 31.10 Display page — which adapter the machine is driven as
 
 **Last** item in the list, for §31.10.1's reason. One radio row per adapter `vid_probe_avail` found
@@ -22404,6 +22469,81 @@ to run before the first `MENU_SET` reaches the screen or the menu carries three
 empty strings. It also preserves **FLAGS**, not just registers: the entry proc
 calls it between its `jc .out` and its own `ret`, and the loader reads that CF.
 
+### 45.18 The ring is chosen from free RAM, and reserved by ASKING
+
+`TRK_RING` was a flat 16,384 and nothing reserved it: the load path checked
+the module against `OSAPI_MEM_AVAIL`, claimed it, read it off the floppy, and
+the ring grant then came out of whatever happened to be left. When that was
+not enough the module loaded, its title went up, and **Play answered *Out of
+memory*** — the worst available shape, because the expensive half succeeded
+and the cheap half failed after the disk had already turned.
+
+Two halves of one policy.
+
+**The size is picked from free RAM.** `trk_ring_pick` asks
+`OSAPI_MEM_AVAIL`: above `TRK_ROOMYKB` (64) the full 16,384-byte ring and its
+6-half pre-roll, exactly as before; at or below it the 8,192-byte ring and a
+3-half pre-roll. That is a question about **politeness rather than fit** —
+16KB out of a 20KB run is most of a small machine's heap and the app is not
+the only thing that wants it. What it trades is *only* the pre-roll: the
+steady-state lead never drains below its top-up target on either ring
+(PERFORMANCE.md Set 21 measured both), and the pre-roll is what the ring has
+to be big enough to **hold** — 6 halves is 12,288 bytes and does not fit
+8,192, which is why a naive `TRK_RING 8192` reports *Sound open failed*
+instead of playing. Three halves is 1.12 s at the XT rate against the 744 ms
+that produced §45.17.2's field hitch, so a tight machine keeps 1.5x a figure
+already known to be too short. Deliberate: there, the alternative to a
+shorter cushion is no playback at all.
+
+**And the ring is reserved by asking for it**, between the module's claim and
+its read, then handed straight back — `trk_ring_probe`. A load that cannot be
+played is refused **before the floppy turns**, and the module claim comes off
+the heap with it.
+
+#### 45.18.1 Why the reserve asks instead of subtracting
+
+The obvious form is arithmetic: `avail - needk`, refuse if what is left will
+not hold a ring. **It was built that way first and it was wrong**, and the
+reason generalises past this app.
+
+`OSAPI_MEM_AVAIL` walks the claim map through `mem_run`, which counts a
+**purgeable** claim (§50's `0xFExx` tags — the directory read-ahead window is
+63KB of one) as blocking, while an actual `mem_claim` will purge to satisfy a
+request. So the number can be far smaller than what a claim would really get.
+Measured on `os8088_5150_sb_256k`: `mem_avail` answers **21.5KB** on a heap
+from which the unmodified Tracker went on to fund an 18KB module **and** a
+16KB ring. Subtracting from it and refusing turned a module that plays
+perfectly into *Too big for free memory* — a regression caught only because
+the fix was A/B'd against the build it replaced.
+
+So the estimate only ever biases the **choice**, where being pessimistic costs
+a pre-roll and nothing else, and the **refusal** is done by asking the
+allocator, which is the one thing that knows. §50.3 states the same rule for
+`mem_claim_dma` and for the same reason: *the only honest test is the claim
+itself*.
+
+Four things hold the rest up:
+
+- **`trk_ring_set` is the one writer** of `[trk_ring]`, `[trk_rmask]` and
+  `[trk_preroll]`. They are one fact; a mask that disagrees with its ring
+  wraps the stage into the middle of the grant and plays the seam for the
+  rest of the session. The pre-roll is derived — every half bar the one the
+  feed ceiling keeps free — then capped at `TRK_PREROLL`, which is why the
+  full ring's answer is 6 and not 7.
+- **The probe is gated on `SND_CAP_PCM_BG`.** A machine with no Sound
+  Blaster is a *viewer* (`trk_play`'s own gate), and without the gate the
+  probe's refusal would stop it loading modules at all — the whole no-card
+  case, broken by a reservation for a ring it was never going to open.
+- **The entry proc sets the default.** `.bss` arrives zeroed (§20.2), a zero
+  mask wraps every stage onto offset 0, and the pick is skipped when the
+  dialog reports no size (a typed name).
+- **`trk_stream_open` walks the tiers again.** The probe frees its grant —
+  a stopped Tracker deliberately holds no pool (§34.6) — so the heap is free
+  to move before Play either way; a refused grant drops one tier rather than
+  making the user close something and re-load, and `trk_ring_set` is called
+  with what was *actually* granted, never with what was asked for.
+
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
@@ -24896,6 +25036,29 @@ record and `mem_shed_one` refuses when there are none.
 It is on **`mem_claim_hi`'s path too**: a package load is a user action and a
 cache is not, so the cache loses every time.
 
+**And the retry has to re-enter with the same parameters, which it did not.**
+`mem_claim_1` takes its direction in `DI` and its DMA head in `SI`, stages
+both into globals inside its `cli` window, and then reuses both registers as
+scan scratch — while its epilogue restored only `AX` and `CX`. Harmless on
+the first call and wrong on the second: the retry staged a `mem_tab` pointer
+as `[mem_dir]`, so it allocated **top-down instead of bottom-up**, and
+another as `[mem_dma]`, so it invented a **64KB-page constraint nobody asked
+for**. The one path that most needs a shed was the one that could not use it.
+
+Measured on `os8088_5150_sb_256k` with §19.2.3's 63KB read-ahead window
+resident: a 75KB claim failed, shed the window, and **failed again against
+95.5KB of contiguous free heap** — Tracker reporting *Out of memory* over a
+module it now loads at base `0x1AA0`, exactly where the shed opened the run.
+`mem_claim_1` preserves `SI`/`DI` now (`pop` touches no flag, and `CF` is its
+answer).
+
+This was invisible for as long as it existed because **`mem_avail`'s
+under-reporting hid it** (§50.6.3): callers refused before claiming, so the
+shed path was rarely reached, and when it was reached the corrupted
+parameters could still happen to find a fit. Two bugs whose symptoms cancel
+are a shape worth recognising — fixing either one alone leaves the other
+looking like the fix did not work.
+
 This also side-steps a real concurrency trap. A discard is only safe when the
 owner is not mid-use, and `mem_claim` is called from the loader, from `kmain`,
 from drivers and from window callbacks — some holding the gfx lock and some
@@ -24908,7 +25071,7 @@ already serialises a worker against the UI task — and they will need a
 handle-based ABI rather than a bare segment, since a package that keeps a
 discarded segment in its own bss writes into somebody else's memory.
 
-#### 50.6.3 What the Task Manager shows
+#### 50.6.3 What `mem_avail` answers, and what the Task Manager shows
 
 **Purgeable is in nobody's total, not even System's.** It is not memory
 anyone can run out of — the next claim that needs it takes it — so counting it
@@ -24918,10 +25081,117 @@ reads.
 
 It gets **one line of its own**, and that line is a developer instrument: it
 is how you see that a cache was claimed rather than refused, and that a shed
-actually happened. `mem_avail` still reports only genuinely free space, which
-under-reports for a caller that would have succeeded after a shed — a
-conservative direction, and the one that keeps `bb_canfit` and Paint's
-tier-sizing honest.
+actually happened.
+
+**And `mem_avail` counts a cache as FREE, in both of its answers.** It did
+not, and this paragraph used to say so on the reasoning that under-reporting
+was "a conservative direction, and the one that keeps `bb_canfit` and Paint's
+tier-sizing honest". That is exactly backwards, and the argument is worth
+keeping because it is a plausible mistake: **every consumer sizes itself DOWN
+from this number.** Paint's canvas, Tracker's module, ArtfulType's document,
+the recorder's tiers and `bb_canfit`'s greying all ask "how much may I have?"
+and take less when told less — so under-reporting is a feature silently lost,
+a control greyed that would have worked, a canvas smaller than the machine
+can hold. It is not a safe error; it is the *only* direction in which the
+error is invisible.
+
+The size of it is not a rounding difference either, now that
+§19.2.3's directory read-ahead window is 63KB of resident cache. Measured on
+`os8088_5150_sb_256k`, with that window held: `mem_avail` answered **21.5KB**
+on a heap out of which Tracker went on to fund an **18KB module and a 16KB
+ring**. Anything reasoning arithmetically from that figure is reasoning from
+a number the allocator does not agree with — which is how a Tracker change
+built on `avail - needk` came to refuse a module that plays perfectly
+(§45.18.1).
+
+**So `mem_run` — which is `mem_avail`'s helper and nobody else's, the
+allocator scanning with `mem_runfree` — skips purgeable records, and the
+total does too.** That makes the answer the same question `mem_claim` answers,
+because every claim sheds: `mem_claim_1` has exactly one caller, and it is
+`mem_claim`'s unconditional shed-and-retry loop.
+
+#### 50.6.3.1 …except for a comfort, which must not fund itself out of a cache
+
+Two kernel callers want the *other* question, and `mem_avail_ns` is it —
+same body, purgeable counted as occupied. Both are optimisations that allocate
+a cache of their own:
+
+| | wants | because |
+|---|---|---|
+| `dsk_rah_want` (§19.2.3) | no-shed | a mount on a tight machine would take the window raise cache away, **and take it every mount** |
+| `dsk_fatw_want` (§18.8.1) | no-shed | "a machine short of memory should spend what it has on the user's application" |
+
+Both already said so in prose and both were relying on `mem_avail` being
+conservative to enforce it, which stopped being true here. The rule is the
+one the split makes explicit: **ask `mem_avail` when you are about to claim
+something the user asked for, and `mem_avail_ns` when you are about to claim
+a convenience.** A cache that displaces another cache buys nothing and
+thrashes.
+
+#### 50.6.4 A cache has a PRIORITY, because losing one is not like losing another
+
+§50.6 made "purgeable" one bit, so every cache was worth the same as every
+other — and they are not. Losing a **window raise cache** costs one window
+redrawing itself, which is what every window did before it existed. Losing
+the **directory read-ahead window** is the difference between 316 `int 13h`
+calls and 114 on an install (§18.95), which on the target machine is seconds
+the user sits through. With one bit, the trivial one could evict the
+expensive one — and did: `wm_su`'s speculative claim went through
+`mem_claim`'s shed-and-retry like anything else, and the first purgeable
+record in `mem_tab` order is what it took.
+
+**The owner's high byte is the priority.** The word already carried a
+namespace (§50.6: `0..INST_MAX-1` an instance, `0xFFxx` a kernel tag,
+`0xFExx` purgeable), so the change is to spread that one purgeable value into
+a range and let the ORDER mean something:
+
+| high byte | rank | losing it costs |
+|---|---|---|
+| `MEM_PG_TRIV` `0xFB` | trivial | a redraw or a recompute |
+| `MEM_PG_LOW` `0xFC` | low | a little I/O, or a visible pause |
+| `MEM_PG_MED` `0xFD` | medium | seconds of work the user waits through |
+| `MEM_PG_HIGH` `0xFE` | high | a long operation getting much longer |
+| `MEM_LVL_TOP` `0xFF`, and every instance slot | **unpurgeable — the default** | it is not a cache |
+
+Nothing new is stored, no record grows, `osapi_claim_snapshot` is unchanged
+and **no `.o88` is invalidated** — a package cannot make a purgeable claim
+yet (§50.6.2), so the whole ladder is kernel-internal and needs no slot.
+
+**The test is two compares and the scale is what makes it two.** A record is
+takeable by a claimant of rank `L` when its high byte is `>= MEM_PG_MIN` — so
+it is a cache at all — **and `< L`**. Ordinary claims rank `MEM_LVL_TOP` and
+so take any cache; a cache ranks itself and so takes only cheaper ones; and
+nothing takes a non-cache, because `0xFF` and every instance slot fall
+outside the range by construction rather than by a third test.
+
+**The rank comes out of the owner, so there is no parameter.** `mem_claim`
+already says *the tag IS the request*; `mem_shed_one` reads `BX` — which
+`mem_claim` holds across its retry — and needs nothing passed. Only the
+QUERY takes a rank, because a caller may want to know what is free to
+something it is not: `mem_avail` is `mem_avail_lvl` at `MEM_LVL_TOP`, which
+is the published answer and the right one for a package.
+
+**And the shed takes the CHEAPEST block it outranks, not the first.** One
+pass, remembering the lowest-ranked record strictly below the claimant, seeded
+at the claimant's own rank so only strictly cheaper records can win. Shedding
+in `mem_tab` order was a second wrong answer hiding behind the first: given
+two caches it took whichever sat lower in the table.
+
+Two consumers today, and they sit at the ends of the ladder on purpose —
+`MEM_P_WSAVE` trivial, `MEM_P_DIRW` high — so the middle two ranks are
+declared and unused. That is deliberate: the encoding costs nothing to
+reserve, adding a rank later would renumber nothing (there is no ABI here),
+and naming four gives the next cache a scale to be honest against instead of
+a binary choice between "free" and "sacred".
+
+**Cache-versus-cache thrash is bounded by the levels being honest, not by
+this routine.** A mount may now take the raise cache to fund the read-ahead
+window, and the next raise takes it back. That is fine *because* what it
+takes is by definition cheaper to rebuild than what it is taken for — a blit
+against a directory re-read. A ladder with a dishonest rank on it would
+thrash expensively, which makes the rank the thing to argue about in review,
+and the mechanism not.
+
 
 ## 51. driver.inc — loadable drivers
 
@@ -26943,18 +27213,24 @@ copy (`HSV_SYNC`) and the resident's is the real thing.
 
 ### 52.11.4 The image goes back when the tool is finished with
 
-The tool is freed as soon as it has no window on screen, and at detach
-whatever happens. **The trigger is the Hard Drive page's own paint and
-click**, which sounds as though the user would have to come back to the panel
-and does not: closing the tool's window repaints whatever was under it, and
-what was under it is the Control Panel — so shutting the disk tool runs
-`hd_page_paint`, which reaps on the spot.
+The tool is freed **when the Control Panel closes**, and at detach whatever
+happens. §31.9.1's `DSV_CPCLOSE` is the hook and `hd_tool_reap` is what the
+driver publishes in it.
+
+**The panel and not the tool's own window**, deliberately. Loading is ~18
+sectors off the system volume — a second and a bit on the field machine — and
+a user who is partitioning a disk clicks Format, closes it, changes a geometry
+and clicks Format again. Tying the free to the window makes them pay that load
+every time; tying it to the panel makes them pay it once per visit, for the
+same steady state. The first build did tie it to the window, which worked and
+was the wrong trade.
 
 **It cannot be the tool saying it has finished.** That call would be answered
 by freeing the image it has to return into, and there is no way to return from
 a routine whose code segment has just been given away. So the tool is *asked*
-(`HDT_BUSY`) and never volunteers, and the two call sites are both the kernel
-calling the resident.
+(`HDT_BUSY`) and never volunteers — and it is asked even here, because the
+panel can be closed with the disk tool still on screen. Left loaded in that
+case, it goes at the next panel close or at detach.
 
 **`HDT_BUSY` answers on VISIBILITY, not on a handle.** Closing one of these
 windows is a hide, so `[hd_twin]` stays non-zero for the rest of the load;

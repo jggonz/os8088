@@ -130,6 +130,13 @@ mn_entry:
     jc .full
     mov si, mn_menus
     call OSAPI_MENU_SET              ; BX = the window, SI = our set
+    mov al, 1                        ; ...and it PROMISES its content stands
+    call OSAPI_WM_SAVEU              ; still while it is not drawing (SPEC.md
+                                     ; 11.96.1): no worker, and NO GAME CLOCK -
+                                     ; the only OSAPI_GET_TICKS in here seeds
+                                     ; the mine placement. The board changes
+                                     ; when the player clicks it and at no
+                                     ; other time
     pop si
     ret
 .full:

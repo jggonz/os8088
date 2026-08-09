@@ -195,7 +195,21 @@ DSV_CPPAINT equ 20              ; dw: near proc, that page's paint - in
                                 ; DI = pane left, DX = pane top, lock held
 DSV_CPCLICK equ 22              ; dw: near proc, that page's click - in
                                 ; DI/DX as above, CX/BX = pane-relative x/y
-DSV_SIZE    equ 24
+DSV_CPCLOSE equ 24              ; dw: near proc, "the Control Panel has been
+                                ; closed" - no arguments, no answer, and the
+                                ; gfx lock is HELD (app_close_win's contract),
+                                ; so a driver may draw and may destroy its own
+                                ; windows here. 0 = do not tell me.
+                                ;
+                                ; For page-only state that is worth holding
+                                ; while the panel is up and not after it:
+                                ; HDD.DRV frees the 11KB disk-tool image here
+                                ; (SPEC.md 52.11.4). It is NOT a detach and
+                                ; must not be treated as one - the driver is
+                                ; still loaded, its volumes are still mounted,
+                                ; and the panel may be opened again in a
+                                ; second
+DSV_SIZE    equ 26
 
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every
@@ -818,6 +832,55 @@ drv_cp_call:
 .out:
     pop di
     pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_cp_closed - tell every loaded driver the Control Panel has closed
+; in:  nothing; the gfx lock is HELD and this is the UI task
+; out: nothing (all registers preserved)
+;
+; One call, from the panel instance's own teardown (SPEC.md 31.9.1). It walks
+; the classes rather than the selected page, because "the panel is gone" is
+; true for every driver that has one and not only for the row on screen.
+;
+; A class with no driver has a zeroed table, so the published-or-not test is
+; the cell itself and there is no second thing to keep in step.
+;
+; It is deliberately NOT sent on the reboot path, which is the other way
+; cp_flush_close is reached: drv_shutdown detaches every driver a few
+; instructions later, and a detach frees strictly more than this does.
+; -----------------------------------------------------------------------------
+drv_cp_closed:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov cl, 1                   ; classes are 1..DRVC_MAX
+.cls:
+    mov al, cl
+    call drv_cls_svc            ; DI = that class's copied table
+    jc .next
+    mov bp, [di+DSV_CPCLOSE]
+    or bp, bp
+    jz .next                    ; no driver, or one that does not want telling
+    mov al, cl
+    xor di, di                  ; the page ABI's pane origin means nothing
+    xor dx, dx                  ; here, and a driver must not read it
+    call drv_cp_call
+.next:
+    inc cl
+    cmp cl, DRVC_MAX
+    jbe .cls
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
