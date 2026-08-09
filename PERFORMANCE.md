@@ -3402,3 +3402,117 @@ Two fixes, and they are not alternatives:
 And the units are XT mode's own argument for the small ring: 8KB at 5,500 Hz
 is **1.49 s**, exactly what 16KB buys at 11,000. A tier-0 machine's rate is
 half, so its ring may be half for the same seconds of cushion.
+
+### Set 22 — the disk round on the iron: 10x on a read, and the install measured
+
+One `sysbench` run and one install on the 5150 (`herc.img`, Hercules,
+`DISKCNT=1`), after §18.9.2/§18.9.3/§18.95/§18.95.4 and §18.4.3.
+
+#### The read is 10x, and it has passed the BIOS
+
+| 16 KB `FILE_READ` | Set 15 | Set 17 | **now** |
+|---|---|---|---|
+| cold motor | 8.29 s | 2.09 s | **1.21 s** |
+| warm | 8.35 s | 2.20 s | **0.82 s** |
+| throughput | 1,912 B/s | 7,457 B/s | **19,883 B/s** |
+
+**2.7x on this round and 10.4x since Set 15** — and the number that matters
+more than the ratio: **19,883 B/s against the BIOS's own best**, a whole track
+in one `int 13h`, of **11,984**. os8088 now reads its own files 1.66x faster
+than the fastest thing the ROM can do with this drive, because §18.95's cache
+answers a repeat without a revolution. Set 17's "1.55x still on the table
+against 11,570" is spent and then some.
+
+The counter block says how: **one 16 KB read is 18 sectors in 2 `int 13h`**,
+both runs of 9, no mounts, no resets — against Set 15's **148 sectors in 34
+calls** for the same file. Fourteen of the file's 32 sectors were already in
+the cache from the rows above it, which is the feature working rather than a
+measurement artefact; the two 9-sector runs are what is left.
+
+**The calibration is unchanged, which is what licenses the comparison.** Raw
+`int 13h`: one sector **199 ms** (one 300 RPM revolution exactly), a whole
+track in one call **384 ms** = 1.92 revolutions = 11,984 B/s, the same nine
+sectors in nine calls **2.005 s**. Set 14 measured 384 ms and 11,985 B/s on
+the same machine. The drive, the controller and the interleave have not moved.
+
+**The boot has not moved either** — 180 ticks / 9.886 s against Set 18's 181 /
+9.94 s — and should not have: the boot sector's read happens before the kernel
+exists, so nothing in this round can reach it.
+
+#### §18.95.2's cursor, priced on the machine it is for
+
+`int 13h` **in a whole 8-entry directory walk: 0**. That is §18.95.2's entire
+argument, measured on the iron rather than simulated: there are no revolutions
+there for a cursor to save. What is left is CPU, and the field puts it at
+**112.01 us per entry skipped** — against MartyPC's 60.11, so the emulator
+under-states this by 1.9x and a decision taken on its figure alone would have
+been taken on half the real cost. Even so: an 8-entry walk is 37.0 ms and a
+perfect cursor 29.3, so the cursor is worth **7.8 ms**, and **55.6 ms** at 32
+entries. The recommendation stands.
+
+(The walk row carries `!` — one iteration close to the 55 ms wrap — so read
+37 ms as approximate. The slope, taken from two short rows, is not affected.)
+
+#### §18.95.4's capacity is LOWER on the iron: 8, not 12
+
+The cliff is at 10 chunks on the 5150 and at 14 on MartyPC, so the widest
+working set kept free is **8** where the emulator said 12. Same compiled
+`DSK_RAH_RUNS` = 14, different volume: the field disk's root has 12 entries
+against the bench floppy's 7, so resolving `BIGFILE.DAT` by name walks more
+directory sectors and those take more slots. The row is documented as a lower
+bound on the constant and it behaves like one — **and the gap between the two
+machines is the walk's metadata, which is a property of the DISK and not of
+the cache.**
+
+#### The install: 46.2 s, and three quarters of it is the floppy
+
+**IT WORKED.** The ST-225 was partitioned, formatted and written by os8088,
+and the machine then **booted from it and ran**. That is the first end-to-end
+hard-disk install on the hardware SPEC.md §52 was written for, and it is worth
+recording separately from the timings: every figure below is measured on an
+install whose output is a working system, not on one that merely ran to
+completion. It also retires the §52.11.4/§52.11.5/§52.11.6 round — those three
+fences were found on an emulator, and the machine agrees.
+
+`INSTBNCH.TXT` off the machine, onto a pristine ST-225 partition:
+
+| | fC | fS | dC | dS | tk |
+|---|---:|---:|---:|---:|---:|
+| `fmt` | 0 | 0 | 118 | 118 | 43 |
+| `sys` | 82 | 715 | 209 | 818 | **768** |
+| `app` | 5 | 33 | 6 | 6 | 30 |
+| `TOT` | 87 | 748 | 333 | 942 | **841** |
+
+841 ticks is **46.2 s**. Priced against this machine's own measured 384 ms for
+a track in one call, `sys`'s **82 floppy calls are ~31.5 s of its 42.2** —
+about three quarters — leaving ~10.7 s for 209 device commands, ~51 ms each,
+which is what an ST-225 seek-and-write costs.
+
+**The floppy side is already at the ceiling per call**: 715 sectors in 82
+calls is **8.72 sectors a call**, within 3% of the nine a track holds. There
+is nothing left in coalescing.
+
+**What is left is the sector COUNT**: the files that arrived on C: are about
+**290 sectors** of payload and the install read **715**. That is 2.5x, which is
+Set 15's shape in a new place — and unlike Set 15 it is not a contract being
+misread, because the calls are properly batched. It is the next thing to look
+at.
+
+**`fmt` writes one sector per command** — 118 for 118 — which is `hd_fmt`'s
+own loop handing `hd_bios_xfer` a sector at a time. On this drive that is 43
+ticks, **2.4 s**, so it is real and it is small; it would be the obvious win
+on a slower drive and is not the one to spend effort on here.
+
+**`app` did nothing**, and that is the harness rather than the OS: a field disk
+carries the benchmarks in its root and has no `APPS` folder, which is what
+§52.10.5 keys "this is the apps disk" on. The install is the system disk's
+alone, and its 46.2 s is a floor, not the whole job.
+
+#### And MartyPC reproduces the counts, which is what makes the next step cheap
+
+The same install under `os8088_xt_hdd` gives **98 floppy calls / 839 sectors**
+against the field's **87 / 748** — 12% over, in the same regime. So the 2.5x
+above can be diagnosed with §18.94.3's LBA trace on the emulator, where a
+trace costs nothing, and only the ANSWER has to come back to the iron. That is
+the division of labour this document keeps arriving at: counts on MartyPC,
+seconds on the 5150.
