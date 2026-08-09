@@ -373,6 +373,33 @@ ttx_shbuild:
 ; the screen", reached without a second buffer, because the shadow already
 ; holds the rows.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; ttx_shvalid - CF=0 when the shadow already holds what the screen wants
+;
+; Factored out of ttx_draw_dyn so the FRAME test and the ENTRY test (SPEC.md
+; 45.13.6) cannot drift apart: the whole value of skipping a build is that the
+; two agree about what "still current" means.
+;
+; in:  tui_sync has run (this reads tui_a*). out: CF, AL spent.
+; -----------------------------------------------------------------------------
+ttx_shvalid:
+    cmp byte [ttx_shok], 0          ; a position move can change the pattern,
+    je .no                          ; and a pattern is a whole new shadow
+    mov al, [tui_apat]
+    cmp al, [ttx_shpat]
+    jne .no
+    mov al, [mp_ploop]              ; P makes the pattern its own neighbour
+    cmp al, [ttx_shloop]            ; both ways (SPEC.md 45.13.4)
+    jne .no
+    mov al, [tui_apos]              ; the pads are the ORDERS either side, so
+    cmp al, [ttx_shpos]             ; two orders naming the same pattern move
+    jne .no                         ; them without moving the pattern. A Bxx
+    clc                             ; needs no guard here: a stamp carries the
+    ret                             ; position its row belonged to, never the
+.no:                                ; parked one (SPEC.md 45.15)
+    stc
+    ret
+
 ttx_shstart:
     push ax
     push bx                         ; mp_order decodes through it
@@ -1118,15 +1145,21 @@ ttx_draw_all:
     mov cx, TTX_COLS * TTX_ROWS
     mov ax, (TTX_A_NORM << 8) | ' '
     call ttx_fill
-    mov byte [ttx_shok], 0
-    mov byte [ttx_shbusy], 0
+    call ttx_shvalid                ; ...but the SHADOW is package bss, so it
+    mov byte [ttx_shbusy], 0        ; survived the last bracket (SPEC.md
+    jnc .shkeep                     ; 45.13.6): if it still holds this pattern,
+    mov byte [ttx_shok], 0          ; at this order, in this loop mode, then
+.shkeep:                            ; 328 mp_cell2txt calls are already done
     call ttx_name
     call ttx_header
     call ttx_vuframe
     call ttx_readout
     call ttx_status
     call tui_viewrow                ; before the build: ttx_shstart's cursor
-    call ttx_shbuild                ; starts at the visible window
+    cmp byte [ttx_shok], 0          ; starts at the visible window
+    jne .shdone
+    call ttx_shbuild
+.shdone:
     call ttx_blit
     mov al, [tui_cvr]
     mov [tui_lcvr], al
@@ -1173,20 +1206,8 @@ ttx_draw_dyn:
 .noxn:
     cmp byte [ttx_shbusy], 0        ; a spread rebuild continues before
     jne .step                       ; anything looks at the pattern again
-    cmp byte [ttx_shok], 0          ; a position move can change the pattern,
-    je .rebuild                     ; and a pattern is a whole new shadow
-    mov al, [tui_apat]
-    cmp al, [ttx_shpat]
-    jne .rebuild
-    mov al, [mp_ploop]              ; P makes the pattern its own neighbour
-    cmp al, [ttx_shloop]            ; both ways (SPEC.md 45.13.4)
-    jne .rebuild
-    mov al, [tui_apos]              ; the pads are the ORDERS either side, so
-    cmp al, [ttx_shpos]             ; two orders naming the same pattern move
-    je .nosh                        ; them without moving the pattern. A Bxx
-                                    ; needs no guard here: a stamp carries the
-                                    ; position its row belonged to, never the
-                                    ; parked one (SPEC.md 45.15)
+    call ttx_shvalid
+    jnc .nosh
 .rebuild:
     call ttx_shstart                ; TTX_SHCHUNK rows a frame from here on,
 %ifdef TRKLOG

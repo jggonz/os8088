@@ -20000,6 +20000,37 @@ outside 0..63 — which is FT2's own behaviour and, on the machine that reaches
 that surface, sits behind a grid that does not scroll per row in the first
 place (§45.9.1).
 
+#### 45.13.6 The shadow survives the bracket, so re-entering it builds nothing
+
+`ttx_shadow` is package **bss**, not a heap claim — so a bracket exit does not
+take it, and the 82 formatted rows are still sitting there when the user
+presses `F` again. `ttx_draw_all` cleared `[ttx_shok]` and ran `ttx_shbuild`
+unconditionally anyway: 328 `mp_cell2txt` calls, ~420 ms, **synchronously at
+entry**, to produce bytes that were already correct.
+
+The test for "already correct" existed and had one caller. `ttx_shvalid` is
+that four-way test factored out — `[ttx_shok]`, the pattern, `[mp_ploop]` and
+the order position — and `ttx_draw_all` now asks it before deciding to build.
+The two must share one predicate rather than have one each: the whole value of
+skipping the build is that the entry and the frame agree about what "still
+current" means.
+
+**One input is outside the test and had to be handled: a NEW MODULE.** Every
+other thing the shadow depends on is in those four bytes, but a different
+module can name the same pattern *number* with entirely different rows in it —
+and the shadow would pass the test while holding the old song. `mp_load`'s
+success path clears `[ttx_shok]`. Nothing else can change pattern data, a
+module being read-only here.
+
+**A RESUME never rebuilt in the first place**, which is worth stating because
+it is the thing most likely to be "fixed" twice: the frame test already covers
+it, since a stop parks the pattern and the order and §45.17's resume keeps
+them, so all four bytes match and `ttx_draw_dyn` skips. Measured across three
+stop/resume cycles on a cycle-accurate 5150 — the only rebuilds seen were
+genuine pattern boundaries, with `[ttx_shpos]` stepping and `[tui_apat]`
+changing with them; a cycle that crossed no boundary showed **0 of 18 samples**
+with a build in progress.
+
 ### 45.14 The instrumentation is a LOG, and it does not ship
 
 There is no meter on Tracker's status line and no D key in `TRACKER.O88`.
@@ -20438,12 +20469,15 @@ step back and becomes a **0.77 s stall** instead of a ragged-but-moving ramp.
 §45.15.1's own rule decides it: a scroll that stops reads far worse than one
 that is slightly uneven. The quarter-step stands.
 
-**And the third contributor is structural**: a play start formats the text
-screen's shadow from scratch — 82 rows at `TTX_SHCHUNK` = 4 a frame, ~21
-frames ≈ 1.15 s (§45.13) — during which every frame does rebuild work as well
-as its blit. That is why the screen is worse than the sound, it is already
-spread as thinly as the design allows, and there is nothing to carry from at a
-start the way §45.13.5 carries across a boundary.
+**A third contributor was claimed here and MEASURED AWAY.** This section first
+said a play start formats the text screen's shadow from scratch. It does not:
+`ttx_draw_dyn`'s four-way test already covers a resume, because a stop parks
+the pattern and the order and §45.17's resume keeps them. Sampled across three
+stop/resume cycles on the 5150, the only rebuilds were genuine pattern
+boundaries, and a cycle that crossed none showed **0 of 18 samples** building.
+What does build unconditionally is *entering the bracket* — see §45.13.6,
+which is where that cost was found and removed. Read this paragraph as the
+worked example of why a plausible mechanism is not a measured one.
 
 ### 45.16 The text screen's frame clock is measured, not assumed
 

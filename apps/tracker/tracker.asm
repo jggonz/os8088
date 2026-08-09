@@ -994,6 +994,11 @@ trk_fdone:
     mov [mp_blobseg], ax            ; moved is still the one mp_load indexes
     call mp_load                    ; CF=1, AX = offset of a NUL error string
     jc .lderr
+    mov byte [ttx_shok], 0          ; a NEW module can name the same pattern
+                                    ; NUMBER with different rows in it, and
+                                    ; that is the one thing SPEC.md 45.13.6's
+                                    ; carried shadow cannot see - every other
+                                    ; input to it is in the four-way test
     mov si, mp_title                ; the loaded title becomes the status line
     call tui_msg
     mov al, 0
