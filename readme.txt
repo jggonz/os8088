@@ -457,5 +457,16 @@ Never switch off or take a disk out while the drive light is on: that is when it
 
 
 ----------------------------
+17. FREEDOS
+----------------------------
+
+With a FreeDOS disk in drive B, opening FREEDOS on the system disk starts it.
+
+This hands the whole machine to DOS: os8088 closes, and anything unsaved goes with it. Save first.
+
+Type OS8088 at the DOS prompt to come back.
+
+
+----------------------------
 
 os8088 is free software, under the MIT licence. Enjoy it.

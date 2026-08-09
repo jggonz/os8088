@@ -35,6 +35,9 @@ make xt-640   # the same XT with a full 640KB of RAM
 make 286      # 86Box: 286 @ 12.5MHz, 1MB, VGA
 make 386sx    # 86Box: 386SX @ 16MHz, 2MB, VGA
 make 386      # 86Box: 386DX @ 25MHz, 2MB, VGA
+make dos      # build the FreeDOS floppy (on demand: fetches a ~148MB toolchain)
+make xt-dos   # the XT with FreeDOS in drive B instead of the apps disk
+make 386-dos  # the same on the 386DX
 make test     # boot headless with a QMP socket for scripted testing
 make debug    # boot with QEMU halted, waiting for gdb on :1234
 make marty    # a cycle-accurate IBM 5150 (MartyPC) with a debugger attached -
@@ -359,6 +362,25 @@ never leaves real mode. (Not `ibmat` for the 286: 86Box caps the real 5170
 planar at 512KB, the same silent clamp as the XT. And unlike an XT, these
 machines have a CMOS — on the first launch the BIOS stops at its setup
 screen, and picking "EXIT FOR BOOT" once writes `vm/<machine>/nvr/`.)
+
+## FreeDOS
+
+`make dos` builds a FreeDOS floppy — kernel, `COMMAND.COM` and all — from the
+FreeDOS sources next door, and `make xt-dos` / `make 386-dos` boot the machine
+with that floppy in drive B in place of the apps disk. Opening **FREEDOS** on
+the system disk warns you, and then hands the whole machine over: os8088 tears
+itself down and the DOS floppy boots, with B: as the DOS boot drive. Typing
+`OS8088` at the prompt brings the desktop back.
+
+It really is a handover and not a window, and on this hardware it could not be
+anything else — the 8088 has no protection of any kind, so there is no way to
+stop a DOS program writing straight to video memory or reprogramming the
+timer. Giving DOS the entire machine is what makes real DOS software behave
+the way it was written to. SPEC.md §59 has the whole account.
+
+This is on demand because the first build downloads a ~148MB Open Watcom
+toolchain; `tools/freedos/README.md` covers what it does. It needs no Docker
+and no Linux — Open Watcom ships native Apple-Silicon binaries.
 
 ## Scripted testing
 
