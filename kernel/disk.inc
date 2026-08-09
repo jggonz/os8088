@@ -433,9 +433,14 @@ dsk_bpb_bank_get:
 ; out: nothing; every register AND the flags preserved
 ; -----------------------------------------------------------------------------
 dsk_bpb_bank_put:
+    pushf                       ; FIRST, like dsk_bpb_bank_zap's and for its
+                                ; reason: the compare below is this routine's
+                                ; own business, and leaving the caller holding
+                                ; ITS flags is what "the flags preserved" in
+                                ; the line above means. The floppy exit took
+                                ; them out on the one path a floppy reaches
     cmp byte [dsk_vflop], 1
-    je .out
-    pushf
+    je .noflop
     push ax
     push bx
     push cx
@@ -469,8 +474,8 @@ dsk_bpb_bank_put:
     pop cx
     pop bx
     pop ax
+.noflop:
     popf
-.out:
     ret
 
 ; The listing's home. A floppy uses the .lowbss buffers below and a cap of

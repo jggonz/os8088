@@ -3139,8 +3139,14 @@ np_seedck:
 ; The caret is the edit, near enough and always on the safe side: an insert
 ; leaves it one PAST the character it added, a backspace and a Delete leave it
 ; ON the edit, so the earliest index this keystroke can have touched is
-; [np_cur] - 1. Requiring the word to end STRICTLY before the caret is that
-; bound, and it needs no extra state to be recorded and kept in step.
+; [np_cur] - 1. THE BOUND IS THAT INDEX, NOT THE CARET, and the difference is
+; the whole of the case it has to catch: the character an insert added may
+; ITSELF be the space that now ends the word, and then the word was LONGER when
+; the break in front of it was taken - which is precisely the decision the
+; back-up exists to redo. Accepting a terminator AT [np_cur] - 1 seeded the row
+; at a start the insert had just moved. Backspace and Delete touch nothing
+; below [np_cur] and pay one extra row for the shared bound, which is the
+; conservative direction. It needs no extra state kept in step.
 ;
 ; The scan is at most a row's width and stops at the caret, so it is a handful
 ; of byte compares against a row of layout at ~6 ms.
@@ -3150,6 +3156,8 @@ np_ckword:
     push bx
     push cx
     mov cx, [np_cur]
+    jcxz .no                        ; a caret at 0 would decrement to 0xFFFF
+    dec cx                          ; and accept every terminator on the row
     mov al, [es:bx]
     cmp al, ' '                     ; a row that begins on a space or a newline
     je .no                          ; is not a word start, and the reasoning
@@ -3157,9 +3165,9 @@ np_ckword:
     je .no
 .scan:
     cmp bx, cx
-    jae .no                         ; the caret arrived first: the edit is
-                                    ; inside the first word, which is exactly
-                                    ; the case the back-up exists for
+    jae .no                         ; the edit arrived first: it is inside the
+                                    ; first word, or IS the terminator that now
+                                    ; ends it - the case the back-up exists for
     mov al, [es:bx]
     cmp al, ' '
     je .yes
@@ -3556,7 +3564,10 @@ np_xseedi:
     clc
     jmp short .out
 .no:
-    stc
+    mov byte [np_resume], 0         ; a REFUSAL is not a licence to resume at
+    stc                             ; whatever the last caller seeded, which is
+                                    ; what np_seedck and np_seedrow both say by
+                                    ; clearing on entry
 .out:
     pop di
     pop si
@@ -3697,6 +3708,17 @@ np_paint:
                                     ; view, which a raise of a window scrolled
                                     ; halfway down a long note paid in full
     call np_walk                    ; (SPEC.md 27.7/27.2)
+    mov byte [np_resume], 0         ; SPENT HERE, like every other np_walk site
+                                    ; (np_hwalk, np_brkdraw, np_move, np_vmove,
+                                    ; np_onclick, np_dragsel, np_redraw's
+                                    ; .done). np_xseed sets it and np_paint
+                                    ; cleared it only on the way IN, so from
+                                    ; here it stayed set with [np_sdr]/[np_sdi]
+                                    ; still loaded - and the next walk that
+                                    ; seeds nothing of its own resumes at the
+                                    ; top of THIS view. np_measure is that
+                                    ; walk, and np_hmove reaches it bare
+                                    ; whenever [np_ckok] is 0
     mov byte [np_clean], 0          ; ...and because it WAS filled, a row's run
     call np_sigmark                 ; stops at its last character instead of
     mov ax, [np_top]                ; padding to the band's edge to erase with
