@@ -445,6 +445,10 @@ wm_ask_size:
 ; left instead of hanging off it.
 ; -----------------------------------------------------------------------------
 wm_resize:
+    call wm_rz_bank             ; where it was, for the repaint at the end
+wm_resize_nb:                   ; ...and the entry for a caller that has
+                                ; banked it already, because it is about to
+                                ; move the ORIGIN too (wm_zoom's .go)
     push ax
     push cx
     push dx
@@ -490,9 +494,119 @@ wm_resize:
     jle .paint
     mov [bx+W_Y], ax
 .paint:
-    call wm_paint_all
+    call wm_rz_paint            ; ...and only what the move disturbed (11.95.1)
     pop dx
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_rz_bank  - bank BX's rect before a geometry change
+; wm_rz_paint - put back what that change actually disturbed
+; in:  BX = the window; wm_rz_paint also needs [wm_rz_o*] and the gfx lock
+; out: nothing (all registers preserved)
+;
+; **A window that GREW reveals nothing** (SPEC.md 11.95.1). Every pixel it
+; gave up it also covers, so there is no desktop to put back, no drive zone
+; to redraw and no other window to repaint - which is SPEC.md 11.90's whole
+; argument about raising, arriving at a resize. Both of these used to end in
+; wm_paint_all: a screen's worth of dither, every drive zone, both strips and
+; every window's W_PAINT, to enlarge one window over ground it already owned.
+;
+; The test is the four edges plus one question: nothing may be ABOVE us, or it
+; would have to be drawn back on top. That holds by construction for the case
+; this exists for - SPEC.md 11.95's zoom is the SECOND press on a title bar,
+; and the first one raised the window - but it is tested rather than assumed,
+; because wm_resize is a published slot any application may call.
+;
+; Anything else is the union of where it was and where it is, through
+; wm_paint_dmg (SPEC.md 11.91) - which is what a shrink genuinely owes, and
+; still an enormous improvement on the whole screen. The union is computed one
+; pixel wide at the far edges, which is exactly the drop shadow.
+; -----------------------------------------------------------------------------
+wm_rz_bank:
+    push ax
+    mov ax, [bx+W_X]
+    mov [wm_rz_ox], ax
+    mov ax, [bx+W_Y]
+    mov [wm_rz_oy], ax
+    mov ax, [bx+W_W]
+    mov [wm_rz_ow], ax
+    mov ax, [bx+W_H]
+    mov [wm_rz_oh], ax
+    pop ax
+    ret
+
+wm_rz_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ax, [bx+W_X]            ; --- did the new rect swallow the old one?
+    cmp ax, [wm_rz_ox]
+    jg .dmg
+    mov ax, [bx+W_Y]
+    cmp ax, [wm_rz_oy]
+    jg .dmg
+    mov ax, [bx+W_X]
+    add ax, [bx+W_W]
+    mov cx, [wm_rz_ox]
+    add cx, [wm_rz_ow]
+    cmp ax, cx
+    jl .dmg
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]
+    mov cx, [wm_rz_oy]
+    add cx, [wm_rz_oh]
+    cmp ax, cx
+    jl .dmg
+
+    mov si, bx                  ; --- and is there nothing above it?
+    call wm_top                 ; BX = the frontmost visible window
+    cmp bx, si
+    mov bx, si
+    jne .dmg
+    call wm_draw_win            ; then this window is the whole of it
+    call menu_draw_bar          ; (the chrome may still have changed owner)
+    call dock_paint
+    jmp short .out
+
+.dmg:                           ; --- otherwise: where it was, and where it is
+    mov ax, [bx+W_X]
+    cmp ax, [wm_rz_ox]
+    jle .x1
+    mov ax, [wm_rz_ox]
+.x1:
+    mov si, [bx+W_Y]
+    cmp si, [wm_rz_oy]
+    jle .y1
+    mov si, [wm_rz_oy]
+.y1:
+    mov cx, [bx+W_X]
+    add cx, [bx+W_W]
+    mov dx, [wm_rz_ox]
+    add dx, [wm_rz_ow]
+    cmp cx, dx
+    jge .x2
+    mov cx, dx
+.x2:
+    mov dx, [bx+W_Y]
+    add dx, [bx+W_H]
+    mov bx, [wm_rz_oy]
+    add bx, [wm_rz_oh]
+    cmp dx, bx
+    jge .y2
+    mov dx, bx
+.y2:
+    mov bx, si                  ; AX,BX,CX,DX = the union, shadow included
+    call wm_paint_dmg
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -651,6 +765,9 @@ wm_zoom:
     mov ax, dx
 .rxc:
     pop dx
+    call wm_rz_bank             ; the standard state we are LEAVING - what the
+                                ; restore reveals is all of it bar the rect
+                                ; being replayed (SPEC.md 11.95.1)
     mov [bx+W_W], cx
     mov [bx+W_H], dx
     mov [bx+W_X], ax
@@ -659,11 +776,17 @@ wm_zoom:
                                 ; independent of the height (SPEC.md 11.90)
     call wm_snap_win            ; ...and back onto a byte boundary (11.94),
                                 ; which the x clamp above may have taken it off
-    call wm_paint_all           ; the band it is vacating is most of the
-    jmp short .out              ; screen, so this is wm_resize's repaint too
+    call wm_rz_paint            ; the band it is vacating is most of the
+    jmp short .out              ; screen - but only that band, not the whole
+                                ; of it, and not the chrome (SPEC.md 11.95.1)
 .go:
     ; --- it is not: bank where it stands, and go to the standard state -------
     call wm_zoom_slot
+    call wm_rz_bank             ; ...for the REPAINT as well as for the user
+                                ; state - and it has to happen here, before
+                                ; the origin moves, or wm_resize would bank
+                                ; the new x/y with the old w/h and the band
+                                ; the window VACATED would never be redrawn
     push ax                     ; the standard x, which the bank writes over
     mov ax, [bx+W_X]
     mov [si+ZR_X], ax
@@ -678,7 +801,8 @@ wm_zoom:
     mov word [bx+W_Y], MBAR_H   ; wm_resize's y clamp only ever pushes a window
                                 ; UP OFF the dock, never down off the bar, so
                                 ; this is the half it cannot do
-    call wm_resize              ; ...and this is the half it can
+    call wm_resize_nb           ; ...and this is the half it can (the bank is
+                                ; ours, above)
 .out:
     pop si
     pop dx
@@ -3426,6 +3550,10 @@ section .bss
 wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x WIN_SIZE bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
+wm_rz_ox:   resw 1              ; where a window was, banked across ONE
+wm_rz_oy:   resw 1              ; geometry change so the repaint after it can
+wm_rz_ow:   resw 1              ; ask what actually moved (SPEC.md 11.95.1).
+wm_rz_oh:   resw 1              ; Not per-slot: it never outlives the call
 wm_zoomr:   resb MAX_WIN * ZR_SIZE  ; per slot: the USER state a zoomed window
                                     ; goes back to (SPEC.md 11.95). A side
                                     ; table, not four more words in the record,

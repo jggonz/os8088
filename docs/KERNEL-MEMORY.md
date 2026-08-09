@@ -344,21 +344,21 @@ Three things about it:
 <!-- kernsize:begin -->
 ```json
 {
-  "bss": 4048,
+  "bss": 4056,
   "budget": 90112,
   "codemax": 65536,
   "cold": 21759,
   "coldpara": 1376,
   "fatpara": 288,
-  "imgpara": 3360,
-  "kend": 5696,
+  "imgpara": 3392,
+  "kend": 5728,
   "kseg": 96,
-  "ksize": 89600,
+  "ksize": 90112,
   "lowbss": 7748,
   "lowpara": 576,
   "ovl": 2662,
   "stk0": 1024,
-  "text": 49517
+  "text": 49710
 }
 ```
 <!-- kernsize:end -->
@@ -809,14 +809,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 26,535 | 37.2% |
-| the window system and its furniture | 14,204 | 19.9% |
-| drawing: adapters, primitives, glyphs, icons | 9,890 | 13.9% |
+| the file system, end to end | 26,535 | 37.1% |
+| the window system and its furniture | 14,397 | 20.1% |
+| drawing: adapters, primitives, glyphs, icons | 9,890 | 13.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,504 | 13.3% |
 | the kernel proper: API table, heap, scheduler, events | 5,343 | 7.5% |
 | the Control Panel | 4,424 | 6.2% |
 | the three built-in kinds | 1,376 | 1.9% |
-| **total** | **71,276** | |
+| **total** | **71,469** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -824,8 +824,8 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 806 | 7,053 | **7,859** | 337 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 4,653 | — | **4,653** | 211 | 3,584 |
+| `wm.inc` — the window manager (§11) | 4,651 | — | **4,651** | 627 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,626 | **4,646** | 155 | — |
-| `wm.inc` — the window manager (§11) | 4,458 | — | **4,458** | 619 | — |
 | `ctrl.inc` — the Control Panel (§31) | 842 | 3,582 | **4,424** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,668 | — | **3,668** | 118 | — |
@@ -857,7 +857,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,544 | — | **2,544** | — | — |
-| **total** | **49,517** | **21,759** | **71,276** | **4,048** | **7,748** |
+| **total** | **49,710** | **21,759** | **71,469** | **4,056** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it
