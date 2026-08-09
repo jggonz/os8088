@@ -165,6 +165,44 @@ so the rendered buffer sits still while the guest draws) and `vram` is
 impossible on VGA. Measured boots: CGA 17.5s, Hercules 16.1s, VGA 7.1s,
 against the 26-second fixed sleep every script used to carry.
 
+### `until(m, cond, what)` — the wait for work that draws nothing
+
+`settle` watches pixels, so it is **silently wrong for anything that holds
+the gfx lock for its whole run**. A hard-disk install freezes the UI while it
+copies: the screen is *more* still while it is busy than when it is done, so
+`settle` sees stillness about five seconds in and returns — and a
+`with launch(...)` block then kills the emulator mid-copy. Nothing about that
+looks like a wait ending early. It looks like the install stopping halfway,
+which is a bug in the installer, and it is where this call came from.
+
+Ask about the thing instead. `cond` is called with the Marty each round and
+may look wherever the answer actually is — guest memory, or the **host** side
+of a mounted image, which is usually the better one because a commit tends to
+be a single write you can watch for:
+
+```python
+STUB = bytes.fromhex("fa31c08ed88ec08ed0bc007c")   # hd_bootstub's opening
+os88marty.until(m, lambda _: open(vhd, "rb").read(12) == STUB,
+                "the installer to commit the MBR")
+```
+
+SPEC.md §52.10 writes the partition table **last**, as the commit, so that
+one comparison is an exact "the install finished" and needs no offsets and no
+`DISKCNT=1` kernel.
+
+It separates the two ways the wait fails, because they want different fixes.
+A guest that has **stopped executing** can never satisfy any condition, so it
+says which state and where — `the guest is 'breakpoint' at 0060:3C21 and is
+not executing` — rather than blaming the condition. That is the shape a
+still-armed breakpoint takes, and it is exactly what cost a session an
+afternoon above. Everything else is an honest timeout that says the guest is
+still running, so the limit is too short or the condition is asking about the
+wrong thing.
+
+**Pick by whether the screen is the evidence**: `settle` for a boot, a click
+or a repaint; `until` for a format, a copy, an install, a save — anything
+whose progress is on a disk rather than on the glass.
+
 ### Naming a kernel flag: `os88sym`
 
 `m.sym("fpg_on")` is the address of a kernel symbol, and `python3
@@ -388,18 +426,36 @@ Three things about it are load-bearing:
 - **`bp` replaces the whole set.** A debugger that can only add breakpoints
   accumulates them until something stops for a reason nobody remembers asking
   for.
-- **Resuming from a breakpoint takes a `step` FIRST, and `run` on its own
-  wedges the machine.** MartyPC clears the CPU's latched breakpoint flag
-  inside `machine.run()`'s `BreakpointHit → Run` transition, and this
-  server's `run` sets the state to `Running` itself, which skips that
-  transition — so the CPU re-reports `BreakpointHit` at the same address
-  forever, **with an empty breakpoint list and `bp` answering `count: 0`**.
-  `step` goes through the `BreakpointHit → Step` arm, which does clear the
-  flag, so `m.step(); m.run()` resumes. Worth recognising rather than
-  re-deriving: every symptom points at the guest — `status` says
-  `"breakpoint"` at an address nothing is armed on, and a scripted test that
-  polls `state != "running"` reports a *hit* on every later check, so a
-  breakpoint that never fired reads as one that fired every time.
+- **`run` resumes from a breakpoint, and it took a fix in this server to do
+  it.** MartyPC clears the CPU's latched breakpoint flag in exactly one place,
+  `machine.run()`'s `BreakpointHit → Run` arm. `run` used to set the state to
+  `Running` itself, which enters through the `Running` arm instead and skips
+  that clear — so the next step re-reported the same breakpoint and the machine
+  advanced **zero cycles, forever, on the first breakpoint of the session**.
+  Both `run` and `advance` hand the transition to `machine.run()` now, the way
+  `reset` always did; measured, a resumed `int 08h` breakpoint advances ~260k
+  cycles between ticks where it advanced 0 before. **`advance` had the same
+  defect and its own comment said otherwise**: it routed through `Paused`
+  first, and `Paused → Run` does not clear the flag either — only the
+  `BreakpointHit` arms do.
+
+  This is worth keeping in mind even fixed, because of how it FAILED. Every
+  symptom pointed at the guest: `status` answered, `regs` answered, `read`
+  answered, and the guest merely stopped executing — so scripted input went
+  nowhere and read as *the guest ignoring the mouse*. `bp` answered `count: 0`
+  while `status` still said `"breakpoint"` at an address nothing was armed on.
+  A session lost an afternoon to it and wrote the workaround down here instead
+  of fixing it; if a resume ever looks stuck again, check `cycles` across two
+  `status` calls before believing anything about the guest.
+- **A `state` that is not `"running"` is not necessarily `"paused"`.** A
+  breakpoint reports **`"breakpoint"`**, and a poll written as
+  `if state != "paused": keep waiting` therefore spins straight through every
+  hit it was written to catch — the trace looks clean and reports that nothing
+  fired. Test for `state != "running"`, or for the pair.
+- **The `int` breakpoint type catches `INT n` as well as hardware
+  interrupts.** `sw_interrupt` ends in the same `intr_routine` the INTR
+  microcode uses, and that is where the vector's flag is tested — so `int` on
+  13h stops on the guest's own disk calls, not just on IRQs.
 - **`execseg` and `memseg` are folded to flat addresses, because the
   segmented breakpoint types do not work.** `BreakPointType::Execute(seg,
   off)` and `MemAccess(seg, off)` are declared in `breakpoints.rs` and matched
@@ -790,7 +846,8 @@ All of the following was run end to end in the container, against
 - `regs` at the desktop: `cs=0060 ds=0060 ss=1260 sp=2228` — SPEC.md §1's near
   model on screen, CS = DS = `KERNEL_SEG` and SS = `LOW_SEG`.
 - Breakpoints: an `int 08h` breakpoint fired three times in a row at
-  `0060:37F5`, os8088's own tick hook.
+  `0060:37F5`, os8088's own tick hook — and **resumes**, ~260k cycles of guest
+  time between consecutive ticks, against 0 before the `run` fix above.
 - `step 50`: 50 instructions, 719 cycles.
 - `screen`: GLaBIOS's POST panel read back in full, including its
   `RAM [ 256 KB OK ]`, `Video [ CGA ]` and `COM [ 03F8 02F8 ]` lines.
