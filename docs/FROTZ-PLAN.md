@@ -69,13 +69,47 @@ heap after the 92KB kernel        640KB machine   ~549KB
                                   256KB machine   ~165KB
 ```
 
-and the claim we need is `roundup1K(story size) + the working set below`. On a
-640KB machine every story the disk ships fits, Anchorhead's 508KB included,
-with the margin thin enough that it is worth saying out loud. On a 256KB XT
-the v3 stories fit and the big v5/v8 ones do not, and Frotz says which and why
-before it reads a byte — the size is in the directory entry, so the refusal
-costs no disk I/O at all (`OSAPI_FILE_DLG`'s completion hands over `DX:CX` =
-the file's size; the SDK's own note says to refuse from that, before the read).
+…except that is the heap, not what a story gets. `HEAP_SEG` is `0x1640`, i.e.
+linear 91,136, so the heap is 551KB and 167KB respectively — and Frotz's own
+region, about 50KB, is an ordinary claim out of the same heap. What is left
+for the story is **~501KB** and **~117KB**, and the resident set is
+
+```
+  roundup1K(story) + dynamic memory (the save buffer)
+                   + dynamic memory again (undo, OPTIONAL)
+                   + 16KB scrollback
+```
+
+**Two things keep that affordable and both are worth naming.** There is no
+resident pristine copy of the story: `@restart` and a save's compression
+baseline both want the original bytes, and `OSAPI_FILE_READ_AT` reads them
+back off the floppy on the UI task instead — a restart is rare, and a second
+buffer the size of dynamic memory is not. And the undo snapshot is claimed
+only if there is room: `@save_undo` is allowed to answer "cannot", and a story
+that loses UNDO on a small machine is better than one that will not start.
+
+Measured against that, on a 640KB machine:
+
+| story | resident | fits |
+|---|---|---|
+| Bronze | 417KB (467 with undo) | yes |
+| The Dreamhold | 434KB (474 with undo) | yes |
+| Lost Pig | 337KB | yes |
+| Curses / ZTUU / Photopia | 295 / 271 / 263KB | yes |
+| **Anchorhead** | **565KB** | **no — on any real-mode machine** |
+
+Anchorhead is why this table exists. It was on the disk until the arithmetic
+was done, and 508KB of story plus a 41KB save buffer does not fit in 501KB.
+No amount of 386 helps: extended memory is a data store no `CS:IP` can reach
+(`OSAPI_XMEM_*` is explicit) and a story has to be directly addressable. So it
+is not shipped — a file that could only ever produce a refusal is not a
+feature, and the honest version of "we support Anchorhead" is this paragraph.
+
+On a 256KB XT the four stories the 360KB disk carries all run — Mini-Zork
+76KB, Zork 285 63KB, Adventure 92KB, Balances 100KB, against ~117KB — and
+everything larger does not. Frotz says which and why **before it reads a
+byte**: the size is in the directory entry, so `OSAPI_FILE_DLG`'s completion
+hands over `DX:CX` and the refusal costs no disk I/O at all.
 
 ### 3.1 Addressing 512KB from 16-bit registers
 
@@ -242,11 +276,20 @@ so this follows Arkanoid rather than inventing a second answer.
 
 ## 8. Saves
 
-**Quetzal** (the IFF `IFZS` standard), with `CMem` compression of dynamic
-memory. A raw dump would have been smaller to write, and Quetzal is worth the
-difference for one reason: a save written on an XT in 1985's clothes opens in
-Frotz on a laptop, and vice versa. The disk has a `SAVES` folder and the file
-dialog starts there.
+**Quetzal** (the IFF `IFZS` standard), because a save written on an XT in
+1985's clothes then opens in Frotz on a laptop, and one written there opens
+here. A raw dump would have been less work and buys nothing.
+
+Dynamic memory goes in as **`UMem`, uncompressed**, and that is a memory
+decision rather than a lazy one. `CMem` is a run-length encoding of the
+current dynamic memory XORed against the *original* — so it needs both
+resident at once, and §3 has just spent the second copy on not existing.
+`UMem` is a legal Quetzal alternative that every interpreter reads, and it
+costs disk rather than RAM: a Bronze save is 50KB, a Photopia save 13KB, a
+Balances save 10KB, all of which the disks have room for. If the pristine copy
+ever comes back for another reason, `CMem` is a small change on top.
+
+The disk has a `SAVES` folder and the file dialog starts there.
 
 ## 9. The disk
 

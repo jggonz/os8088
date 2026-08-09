@@ -1488,7 +1488,15 @@ the sound cards: **a machine that is not an 8088** (the 286, 386, 486 and
 Pentium targets), a **period bus** under a card rather than a modelled one,
 and a second opinion on the video probe. `make xt`,
 `xt-640`, `xt-cga`, `xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`,
-`386`, `386-sound`, `486`, `pentium`.
+`386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`.
+
+The last pair are the Frotz machines (SPEC.md 59.9) and are the only targets
+that put something other than the apps disk in B:. They also cover a drive
+geometry nothing else does — `xt-z` gives the XT a 720KB 3.5" DD drive as B:,
+because a 360KB disk does not hold a story library and DOS 3.2 supported one
+on an XT. 86Box takes it as `fdd_02_type = 35_2dd`, and that was established
+the way every other machine setting in this file was: launch a throwaway copy
+of the config, `kill -TERM`, read the file back and see what it kept.
 
 The last two are the *fast* end rather than the period end: a 486DX2/66 and a
 Pentium 133, both with an SB16. 8086 real-mode code runs on them verbatim, so

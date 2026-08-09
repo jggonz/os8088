@@ -27497,9 +27497,32 @@ outcome on a small machine, not an error:
 Anchorhead needs 508K and this machine has 149K free.
 ```
 
-After the 92KB kernel a 640KB machine has about 549KB of heap and a 256KB one
-about 165KB — so the v3 stories run everywhere and the large v5/v8 ones need
-the bigger machine. `make xt` is a 256KB XT and is where the refusal is tested.
+`HEAP_SEG` is `0x1640`, so the heap is 551KB on a 640KB machine and 167KB on a
+256KB one — and Frotz's own region, about 50KB, is an ordinary claim out of the
+same heap. **What a story actually gets is ~501KB and ~117KB**, against a
+resident set of
+
+```
+  roundup1K(story) + dynamic memory (the save buffer)
+                   + dynamic memory again (undo, OPTIONAL)
+                   + 16KB scrollback
+```
+
+There is **no resident pristine copy of the story**. `@restart` and a save's
+compression baseline both want the original bytes and `OSAPI_FILE_READ_AT`
+reads them back off the floppy on the UI task instead: a restart is rare, and a
+second buffer the size of dynamic memory is not. The undo snapshot is claimed
+only when there is room for it — `@save_undo` is allowed to answer "cannot",
+and a story that loses UNDO on a small machine beats one that will not start.
+
+That arithmetic decides what ships. Anchorhead needs 565KB resident and does
+not fit 501KB; extended memory does not help, because no `CS:IP` can reach it
+(`OSAPI_XMEM_*`) and a story must be directly addressable. **So Anchorhead is
+not on the disk**, on any geometry: a file that could only ever produce a
+refusal is not a feature. Bronze (417KB), The Dreamhold (434KB) and Lost Pig
+(337KB) are the largest that do fit, and the four stories on the 360KB disk —
+Mini-Zork, Zork 285, Adventure and Balances, 63–100KB — all run on a 256KB XT,
+which is what `make xt` is for and where the refusal is tested.
 
 ### 59.5 Windows and text
 
@@ -27647,8 +27670,14 @@ of the config, terminate, and read the file back.
 
 ### 59.10 Saves
 
-**Quetzal** (`FORM....IFZS`), with `CMem` compression of dynamic memory against
-the original story image. A raw dump would have been less work and Quetzal is
-worth the difference for one reason: a save written here opens in Frotz on a
-laptop, and one written there opens here. The disk has a `SAVES` folder and the
-file dialog starts in it.
+**Quetzal** (`FORM....IFZS`) — a save written here opens in Frotz on a laptop
+and one written there opens here, which a raw dump would not buy.
+
+Dynamic memory goes in as **`UMem`, uncompressed**, and that follows from
+§59.4 rather than from laziness: `CMem` XORs the current dynamic memory against
+the *original*, so it needs both resident, and there is no resident pristine
+copy. `UMem` is a legal Quetzal alternative every interpreter reads, and it
+spends disk instead of RAM — 50KB for a Bronze save, 13KB for Photopia, 10KB
+for Balances, all of which the disks hold.
+
+The disk has a `SAVES` folder and the file dialog starts in it.

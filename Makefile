@@ -813,7 +813,7 @@ ZS_1440 := INFOCOM:$(STORYDIR)/MINIZORK.Z3 INFOCOM:$(STORYDIR)/SAMPLER1.Z3 \
 # Disk 2: the big ones, and it carries NO interpreter on purpose - it is a
 # library disk you swap into B: while Frotz is already running, and the 100
 # clusters a second copy would cost are 50KB of story.
-ZS_DISK2 := MODERN:$(STORYDIR)/ANCHOR.Z8 MODERN:$(STORYDIR)/BRONZE.Z8 \
+ZS_DISK2 := MODERN:$(STORYDIR)/BRONZE.Z8 MODERN:$(STORYDIR)/DREAMHLD.Z8 \
             MODERN:$(STORYDIR)/LOSTPIG.Z8 CLASSIC:$(STORYDIR)/CURSES.Z5
 
 STORIES ?=
@@ -829,7 +829,7 @@ $(BUILD)/zcat.txt: tools/getstories.py | $(BUILD)
 	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 SAMPLER1.Z3 SAMPLER2.Z3 ZTUU.Z5 \
 		ADVENT.Z3 ADVENT5.Z5 ZORK285.Z5 BALANCES.Z5 PHOTOPIA.Z5 905.Z5 BEAR.Z5
 $(BUILD)/zcat2.txt: tools/getstories.py | $(BUILD)
-	python3 tools/getstories.py --catalog $@ ANCHOR.Z8 BRONZE.Z8 LOSTPIG.Z8 CURSES.Z5
+	python3 tools/getstories.py --catalog $@ BRONZE.Z8 DREAMHLD.Z8 LOSTPIG.Z8 CURSES.Z5
 
 $(BUILD)/zork.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat.txt \
                    tools/os88disk.py

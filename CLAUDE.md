@@ -53,7 +53,10 @@ exactly like the feature being broken.
 
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
 `xt-cga`, `xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`, `386`,
-`386-sound`, `486`, `pentium`; plus `marty` (MartyPC).
+`386-sound`, `486`, `pentium`, `xt-z`, `386-z`; plus `marty` (MartyPC). The
+last two are the Frotz machines (§59.9) and the only ones that put a story
+floppy in B: instead of the apps disk — `make zdisk` builds it, and
+`tools/getstories.py` fetches the stories, which are never committed.
 
 **Nothing in `build/` is tracked — never commit a binary.** The toolchain is
 deterministic on purpose (`tools/os88disk.py` pins the volume serial and every

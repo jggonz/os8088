@@ -137,11 +137,15 @@ MANIFEST = [
           "The game Inform was written to produce."),
 
     # --- MODERN: the authors' own freeware releases -------------------------
-    # Nothing is fetched that does not ship. The Dreamhold (Andrew Plotkin,
-    # 386KB) was here and came out again for exactly that reason: with
-    # Anchorhead, Bronze, Lost Pig and Curses on the second 1.44MB disk it
-    # fits on no geometry, and a download the build never uses is a download
-    # that rots. Add it back with STORIES= if you want it.
+    # Nothing is fetched that does not ship, and nothing ships that cannot
+    # RUN. Anchorhead was here and came out again on the second count: 508KB
+    # of story plus a 41KB save buffer needs 565KB resident, and the largest
+    # claim a 640KB machine can offer is about 501KB once the kernel and the
+    # interpreter have taken theirs (SPEC.md 59.4). No real-mode machine has
+    # the memory, so shipping it would have shipped a file that only ever
+    # produces a refusal. getstories.py can still fetch it for you --
+    # `--only ANCHOR.Z8` is gone with the entry, so use STORIES= with your
+    # own copy if you want to watch the refusal path work.
     Story("PHOTOPIA.Z5", "MODERN", "games/zcode/photopia.z5",
           "ba14a14dfdede4b7ad97846c13ca0ea07048334ac767649d9aa84add7fae20a5",
           "ba14a14dfdede4b7ad97846c13ca0ea07048334ac767649d9aa84add7fae20a5",
@@ -167,13 +171,12 @@ MANIFEST = [
           "Beauty and the Beast, and the one bundled game that carries cover "
           "art - the Blorb's JPEG becomes BRONZE.PIX (SS 59.7).",
           blorb=True),
-    Story("ANCHOR.Z8", "MODERN", "games/zcode/anchor.z8",
-          "c2f28a4ddd9367c260946926a33c73a4b0cc38b1f327646cc1202182a28a10ff",
-          "c2f28a4ddd9367c260946926a33c73a4b0cc38b1f327646cc1202182a28a10ff",
-          520192, 8, "Anchorhead", "Michael Gentry",
-          "Lovecraftian horror, and the largest story here: 508KB of it has "
-          "to be resident, so it needs a 640KB machine and refuses on a 256KB "
-          "one (SS 59.4)."),
+    Story("DREAMHLD.Z8", "MODERN", "games/zcode/dreamhold.z8",
+          "399dbfb92024d2a702029dd1921a1023569888941683d953d3755d6856ce2941",
+          "399dbfb92024d2a702029dd1921a1023569888941683d953d3755d6856ce2941",
+          386560, 8, "The Dreamhold", "Andrew Plotkin",
+          "Written as a tutorial game, with a built-in hint system - and the "
+          "largest story that still fits a 640KB machine after Bronze."),
 ]
 
 BY_NAME = {s.name: s for s in MANIFEST}
