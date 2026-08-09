@@ -923,13 +923,38 @@ kbm_slock:
     pop ax
     ret
 
-; --- a direction: step, clamp, and move the arrow ----------------------------
-kbm_move:
-    call kbm_accel              ; DL = px this press is worth, and imul does
-    mov al, [bx+1]              ; not disturb it, so it serves both axes
-    imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
-    add ax, [mouse_x]
-    or  ax, ax                  ; clamp 0..[vid_wm1], exactly as the ISR does
+; -----------------------------------------------------------------------------
+; mou_clamp - the nearest legal pointer position (SPEC.md 39.15.4)
+;
+; in:       AX = x, BX = y, virtual, possibly outside every display
+; out:      AX/BX legal
+; clobbers: AX, BX, flags. CX and DX SURVIVE - mou_isr still has the staged
+;           button byte in DX and kbm_move its step in DL.
+;
+; ONE DISPLAY IS THE OLD PER-AXIS CLAMP, unchanged: [vid_wm1]/[vid_hm1] are
+; display 0's extent there, and this is the same six compares the two callers
+; used to carry inline.
+;
+; TWO IS NOT A RECTANGLE. The virtual desktop is a union (SPEC.md 39.2.1), so
+; clamping each axis independently would walk the pointer into the DEAD ZONE
+; and lose it. The rule instead:
+;
+;     inside SOME display -> take it
+;     otherwise           -> clamp into the display the arrow is on
+;
+; which produces every behaviour the seam needs without naming any of them.
+; Off display 0's right edge at a y both cover is inside display 1, so the
+; pointer CROSSES. Off display 1's outer edge is inside nothing, so it stops
+; there. Down off display 0 beside display 1's left edge is inside nothing
+; either, so it stops at display 0's last row rather than vanishing into the
+; gap. And back left from display 1 at a y display 0 covers crosses home.
+; -----------------------------------------------------------------------------
+mou_clamp:
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja .multi
+%endif
+    or ax, ax                   ; x into 0..[vid_wm1]
     jns .xlo
     xor ax, ax
 .xlo:
@@ -937,20 +962,45 @@ kbm_move:
     jle .xok
     mov ax, [vid_wm1]
 .xok:
-    mov [mouse_x], ax
+    or bx, bx                   ; ...and y into 0..[vid_hm1]
+    jns .ylo
+    xor bx, bx
+.ylo:
+    cmp bx, [vid_hm1]
+    jle .yok
+    mov bx, [vid_hm1]
+.yok:
+    ret
+%ifdef KERN_BIG
+.multi:
+    push cx
+    push ax                     ; vid_disp_find answers in AL
+    call vid_disp_find
+    pop ax
+    jnc .mout                   ; inside a display already: nothing to correct
+    mov cl, [cur_disp]
+    call vid_pt_clamp
+.mout:
+    pop cx
+    ret
+%endif
 
+; --- a direction: step, clamp, and move the arrow ----------------------------
+kbm_move:
+    call kbm_accel              ; DL = px this press is worth, and imul does
+    mov al, [bx+1]              ; not disturb it, so it serves both axes
+    imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
+    add ax, [mouse_x]
+    mov [mou_nx], ax            ; staged, exactly as the ISR does, and for
+                                ; mou_clamp's 2-D reason (SPEC.md 39.15.4)
     mov al, [bx+2]              ; dy, the same way
     imul dl
     add ax, [mouse_y]
-    or  ax, ax
-    jns .ylo
-    xor ax, ax
-.ylo:
-    cmp ax, [vid_hm1]
-    jle .yok
-    mov ax, [vid_hm1]
-.yok:
-    mov [mouse_y], ax
+    mov bx, ax
+    mov ax, [mou_nx]
+    call mou_clamp
+    mov [mouse_x], ax
+    mov [mouse_y], bx
     call kbm_paint
     pop dx
     pop cx
@@ -1380,15 +1430,9 @@ mou_byte:
     or  al, ah
     cbw                         ; AX = dx, signed
     add ax, [mouse_x]
-    or  ax, ax                  ; clamp 0..[vid_wm1]
-    jns .xlo
-    xor ax, ax
-.xlo:
-    cmp ax, [vid_wm1]
-    jle .xok
-    mov ax, [vid_wm1]
-.xok:
-    mov [mouse_x], ax
+    mov [mou_nx], ax            ; STAGED, not stored: the clamp is 2-D on a
+                                ; machine with two displays (SPEC.md 39.15.4)
+                                ; and cannot answer about x until y is known
 
     ; --- dy = sign-extended {Y7Y6 from b0, Y5..Y0 from b2}; positive = down --
     mov al, dh
@@ -1399,15 +1443,11 @@ mou_byte:
     or  al, bl
     cbw                         ; AX = dy, signed
     add ax, [mouse_y]
-    or  ax, ax                  ; clamp 0..[vid_hm1]
-    jns .ylo
-    xor ax, ax
-.ylo:
-    cmp ax, [vid_hm1]
-    jle .yok
-    mov ax, [vid_hm1]
-.yok:
-    mov [mouse_y], ax
+    mov bx, ax
+    mov ax, [mou_nx]
+    call mou_clamp              ; ...and DX is untouched by it, which the
+    mov [mouse_x], ax           ; button decode below relies on
+    mov [mouse_y], bx
 
     ; --- buttons: b0 bit 5 = left, bit 4 = right -----------------------------
     mov al, dh                  ; ...still the staged b0: nothing between here
@@ -1523,6 +1563,12 @@ cursor_show:
     mov bx, [mouse_y]           ; clipped at the screen edges in cur_draw
     mov [cur_drawn_x], ax
     mov [cur_drawn_y], bx
+%ifdef KERN_BIG
+    push ax                     ; ...and WHICH display that is (SPEC.md
+    call vid_disp_of            ; 39.15.2) - the one place besides cur_move's
+    mov [cur_disp], al          ; jump where the arrow can change display
+    pop ax
+%endif
     mov byte [cur_dirty], 0
     call cur_put
 .done:
@@ -1593,13 +1639,58 @@ cursor_hide:
 ; Internal; the caller guarantees IF = 0 or the gfx lock.
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; --- the display bracket (SPEC.md 39.15.2) -----------------------------------
+; cur_put/cur_get/cur_move own this themselves rather than inheriting it,
+; because cur_get is reached from gfx_lock's deferred hide AND from the mouse
+; ISR - neither of which is inside a 39.14 drawing hook, so the display live at
+; either moment is whatever the last primitive left.
+;
+; CUR_DBEGIN banks the outgoing display on the stack and makes [cur_disp]
+; current; CUR_DEND puts it back, preserving every register and the flags.
+%macro CUR_DBEGIN 0
+    push ax
+    mov al, [vid_cur]
+    mov [cur_dprev], al
+    mov al, [cur_disp]
+    call vid_ctx_act
+    pop ax
+%endmacro
+
+%macro CUR_DEND 0
+    pushf
+    push ax
+    mov al, [cur_dprev]
+    call vid_ctx_act
+    pop ax
+    popf
+%endmacro
+%else
+%macro CUR_DBEGIN 0
+%endmacro
+%macro CUR_DEND 0
+%endmacro
+%endif
+
 cur_put:
+    CUR_DBEGIN
+    call cur_put_1
+    CUR_DEND
+    ret
+
+cur_put_1:
     cmp byte [vid_mono], 0
     jne cur_put_mono
     call cur_saveu
     jmp cur_draw
 
 cur_get:
+    CUR_DBEGIN
+    call cur_get_1
+    CUR_DEND
+    ret
+
+cur_get_1:
     cmp byte [vid_mono], 0
     jne cur_get_mono
     ; fall through to cur_restoreu
@@ -1646,6 +1737,12 @@ cur_saveu:
 cur_rect:
     mov ax, [cur_drawn_x]
     mov bx, [cur_drawn_y]
+%ifdef KERN_BIG
+    sub ax, [vid_ox]            ; ...into the ACTIVE display's own coordinates
+    sub bx, [vid_oy]            ; (SPEC.md 39.15.1). Unconditional rather than
+%endif                          ; gated on [vid_ndisp]: display 0 is always at
+                                ; the virtual origin, so on a one-card machine
+                                ; this subtracts zero
     mov cx, ax
     add cx, CUR_GW-1
     mov dx, bx
@@ -1666,9 +1763,16 @@ cur_rect:
 ; -----------------------------------------------------------------------------
 cur_geom:
     mov ax, [cur_drawn_y]       ; DI = rowbase(y) + x/8
+%ifdef KERN_BIG
+    sub ax, [vid_oy]            ; cur_rect's subtraction, and for cur_rect's
+%endif                          ; reason: these two are the ONLY places a
+                                ; position becomes an ADDRESS (SPEC.md 39.15.1)
     call gfx_rowbase
     mov di, ax
     mov bx, [cur_drawn_x]
+%ifdef KERN_BIG
+    sub bx, [vid_ox]
+%endif
     mov ax, bx
     mov cl, 3
     shr ax, cl
@@ -1689,6 +1793,9 @@ cur_geom:
 .cols_done:
     mov ax, [vid_ch]            ; UNSIGNED - vid_apply homes the cursor into
     sub ax, [cur_drawn_y]       ; the new screen precisely so this cannot
+%ifdef KERN_BIG
+    add ax, [vid_oy]            ; ...and [vid_ch] is this DISPLAY's, so the y
+%endif                          ; it is measured against has to be too
                                 ; borrow. rows on screen at this y (>= 1)
     cmp ax, CUR_GH
     jbe .rows_set
@@ -1962,7 +2069,76 @@ cur_lazyend:
 ;           still describe where the cursor IS. IF = 0 (ISR, or the gfx lock).
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cur_move_multi - the same move, on a machine with more than one display
+;
+; in:       AX = new x, BX = new y, VIRTUAL; [cur_disp] and [cur_drawn_x/y]
+;           still describe where the arrow IS. IF = 0.
+; out:      as cur_move
+; clobbers: as cur_move
+;
+; SPEC.md 39.15.3. cur_move_mono writes every framebuffer byte exactly once by
+; walking the old cell and the new one together and taking the overlap's
+; background from the save buffer (7.1.2) - and a cell straddling the seam
+; would span two cards with two strides and two segments, and would need that
+; loop rewritten. So it does not straddle: the arrow leaves the old display
+; WHOLE and arrives on the new one WHOLE, one cell in flight at a time.
+;
+; Same display, which is nearly every packet, is the fused pass unchanged -
+; made current first, because the display live when the ISR fires is whatever
+; the last primitive left (39.15.2).
+; -----------------------------------------------------------------------------
+cur_move_multi:
+    push cx
+    push dx
+    mov dl, [vid_cur]           ; the display to come back to...
+    mov dh, [cur_disp]          ; ...and the one the arrow is on
+    mov [cur_dprev], dl
+    push ax
+    call vid_disp_of            ; AL = the display the NEW position is on
+    mov cl, al
+    pop ax
+    cmp cl, dh
+    jne .jump
+
+    push ax                     ; --- same display: the fused pass ----------
+    mov al, dh
+    call vid_ctx_act
+    pop ax
+    call cur_move_1
+    jmp short .out
+
+.jump:                          ; --- erase whole, then draw whole ----------
+    push ax
+    push bx
+    push cx
+    mov al, dh
+    call vid_ctx_act
+    call cur_get_1              ; the arrow leaves the display it was on...
+    pop cx
+    pop bx
+    pop ax
+    mov [cur_disp], cl
+    mov [cur_drawn_x], ax
+    mov [cur_drawn_y], bx
+    mov al, cl
+    call vid_ctx_act
+    call cur_put_1              ; ...and arrives on the one it crossed onto
+.out:
+    mov al, [cur_dprev]
+    call vid_ctx_act
+    pop dx
+    pop cx
+    ret
+%endif
+
 cur_move:
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja cur_move_multi           ; SPEC.md 39.15.3: it does not straddle
+%endif
+cur_move_1:
     cmp byte [vid_mono], 0
     jne cur_move_mono
     push ax                     ; planar: the save is four planes through Read
@@ -2365,8 +2541,25 @@ cur_sptr    dw cur_save         ; -> whichever save buffer is live. In .text
                                 ; at the API jump table
 cur_level   db -1               ; refcount; < 0 = hidden (boot state)
 cur_dirty   db 0                ; set when the ISR could not move the cursor
-cur_drawn_x dw 0                ; where the cursor pixels actually are
-cur_drawn_y dw 0                ; (valid only while cur_level >= 0)
+cur_drawn_x dw 0                ; where the cursor pixels actually are, in
+cur_drawn_y dw 0                ; VIRTUAL coordinates (SPEC.md 39.15) - the
+                                ; same space as mouse_x/mouse_y, so every
+                                ; comparison in this file is between two
+                                ; positions of the same kind. cur_rect and
+                                ; cur_geom are the only two places that turn
+                                ; one into an ADDRESS, and the only two that
+                                ; subtract a display's origin.
+                                ; (valid only while cur_level >= 0)
+mou_nx      dw 0                ; the candidate x, staged across the y decode
+                                ; because mou_clamp is 2-D (SPEC.md 39.15.4)
+%ifdef KERN_BIG
+cur_disp    db 0                ; which display the arrow is ON, and cur_dprev
+cur_dprev   db 0                ; the one to put back afterwards (39.15.2).
+                                ; .text with real initialisers, like cur_sptr
+                                ; above and for its reason: -f bin zeroes
+                                ; nothing, and a garbage display index indexes
+                                ; past vid_ctx
+%endif
 
 mou_old_off dw 0, 0             ; the vectors we displaced, per port row
 mou_old_seg dw 0, 0

@@ -18751,7 +18751,12 @@ nobody, and there is no test for it anywhere.
 `vid_disp_of` answers which display contains a virtual point, falling back to
 display 0 rather than failing — a point in the dead zone maps to the primary,
 where the primitive's own edge clip discards it. That is what keeps every hook
-below free of a CF to test.
+below free of a CF to test. **Its loop walks `vid_ctx` with a pointer rather
+than calling `vid_ctx_ptr`**, and that is a fix rather than a style: the index
+goes to `vid_ctx_ptr` in `AL`, and `AL` is the low byte of the x being tested.
+`mov al, cl` zeroed it, so a point at 1300 was tested as 1280 — which lands on
+the right display nearly always, and moved a pointer stepping across the seam
+onto the wrong side of it (§39.15.4's gate is what found it).
 
 #### 39.14.1 `GFXDISP`, and why it is BELOW `GFXCLIP` and not above
 
@@ -18843,6 +18848,100 @@ The dither itself is one `gfx_fill_gray` per display, each in virtual
 coordinates: display 0's is the call that was always there (menu bar to dock),
 and every other display's is its whole extent, since §39.14's chrome lives on
 the primary alone.
+
+### 39.15 The pointer crosses; the arrow jumps (`KERN_BIG` only)
+
+**`[mouse_x]`/`[mouse_y]` are VIRTUAL desktop coordinates** — they always
+were, on a machine whose desktop was one display — and that is what keeps
+`OSAPI_MOUSE`, §57's `'MO'` block and `tools/os88mouse.py` meaning exactly
+what they meant. **`[cur_drawn_x]`/`[cur_drawn_y]` are virtual too**, which is
+the decision that made this small: every comparison in `mouse.inc` is between
+two virtual positions, and only the two routines that turn a position into a
+framebuffer *address* have to know about displays at all.
+
+#### 39.15.1 Two subtractions, in `cur_rect` and `cur_geom`
+
+Those two are the whole translation. `cur_geom` computes the cell's offset,
+shift and edge clip; `cur_rect` gives the save-under its rect — and §7.1's own
+rule is that they are ONE place each, because a save and a restore that
+disagree by a byte smear the arrow permanently. Each subtracts
+`[vid_ox]`/`[vid_oy]`, the active display's origin (§39.14.3), and everything
+else in the module keeps working in virtual space untouched:
+
+- `cur_move_mono` banks `d = newcol - oldcol` and `mv_oy - cur_drawn_y` — both
+  **differences**, so an origin cancels out of them;
+- `mou_isr` and `cur_lazyend` ask "has the pointer moved since the arrow was
+  drawn", which is a comparison of two virtual positions;
+- the fused 1bpp cursor (§7.1), both save buffers and §7.1.2's
+  write-every-byte-once pass are unchanged, line for line.
+
+The subtraction is unconditional rather than gated on `[vid_ndisp]`, because
+**display 0 is always at the virtual origin** — so on every machine with one
+card it subtracts zero.
+
+#### 39.15.2 `[cur_disp]`, and the bracket that makes it true
+
+The arrow is on one display, named by `[cur_disp]`, and `cur_put`, `cur_get`
+and `cur_move` each make it current before touching a framebuffer and put the
+previous one back. They have to own that themselves: `cur_get` is reached from
+`gfx_lock`'s deferred hide and from the **mouse ISR**, neither of which is
+inside a §39.14 drawing hook, and the display live at either moment is
+whatever the last primitive left.
+
+That also retires §39.14.3's reason for every rect hook restoring the display
+it entered from. The optimisation — leave the last-drawn display current and
+restore once at `gfx_unlock` — is available now and is deliberately not taken
+in the same change that makes it safe.
+
+#### 39.15.3 It does not straddle; it jumps
+
+§7.1.2's move writes every framebuffer byte exactly once by walking the old
+cell and the new cell together, taking the overlap's background from the save
+buffer. A cell straddling the seam would span two cards with two strides and
+two segments and would need that loop rewritten.
+
+**So `cur_move` asks which display the new position is on first.** Same
+display: the fused pass, unchanged. Different: `cur_get` on the display being
+left and `cur_put` on the one being arrived at — the arrow erased whole and
+drawn whole, one cell in flight at a time. The visible cost is that the 8x12
+cell does not bleed across the seam, and on two monitors with a bezel between
+them there is nothing there to bleed onto.
+
+#### 39.15.4 The clamp is not a rectangle
+
+The virtual desktop is not a rectangle (§39.2.1), so `0..[vid_wm1]` is the
+wrong shape as soon as there are two displays: it would let the pointer walk
+into the dead zone and vanish. `mou_clamp` is the rule instead, and it is two
+lines:
+
+> **If the new position is inside SOME display, take it. Otherwise clamp it
+> into the display the arrow is currently on.**
+
+That gives every behaviour the seam needs without naming any of them. Walking
+right off display 0's edge at a y both displays cover lands inside display 1
+and is accepted — the pointer crosses. Walking right off display 1's *outer*
+edge is inside nothing, so it clamps to display 1. Walking down off display 0
+below display 1's left edge is inside nothing, so it clamps to display 0's
+last row rather than disappearing into the gap. And walking left from display
+1 at a y display 0 covers crosses back.
+
+Both the serial ISR and §9.6's keyboard pointer go through it, because they
+are the same question asked twice. **On one display it is the old per-axis
+clamp**, unchanged: `[vid_wm1]`/`[vid_hm1]` are display 0's extent there.
+
+The clamp is 2-D, so the ISR stages the new x rather than storing it before y
+is known — the one structural change to `mou_isr`, and the reason a
+per-axis clamp could not simply be replaced in place.
+
+#### 39.15.5 What a click on the second display does, which is nothing yet
+
+The event records carry the virtual position, `wm_hit` walks window rects, and
+every window is still on display 0 — so a press over the second display finds
+no window and reaches the bare desktop, which hands the menu bar to Locator.
+That is correct rather than temporary: it is what clicking empty desktop has
+always done. Windows reach the second display at docs/DUAL-DISPLAY-PLAN.md
+step 6, and `wm_hit` needs nothing then either, because it has been comparing
+virtual coordinates all along.
 
 ## 40. apps/fractal — the progressive renderer and its restore cache
 

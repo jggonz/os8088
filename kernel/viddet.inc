@@ -384,6 +384,19 @@ vid_apply:
     mov ax, [vid_h]
     shr ax, 1
     mov [mouse_y], ax
+%ifdef KERN_BIG
+    mov byte [cur_disp], 0      ; ...onto display 0, which is where the middle
+                                ; of the desktop is. Saying so matters: a stale
+                                ; [cur_disp] sends cur_move's jump path to
+                                ; ERASE a cell on a display the arrow was never
+                                ; drawn on, and a save-under put back in the
+                                ; wrong place smears (SPEC.md 39.15.2/7.1.2).
+                                ; A store to a label in mouse.inc, never a call
+                                ; into it - this routine runs from the splash
+                                ; while the rest of the kernel is still coming
+                                ; off the floppy, which is what the header
+                                ; above says about cur_unlazy
+%endif
 
     pop es
     pop di

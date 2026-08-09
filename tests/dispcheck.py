@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Did os8088 bring the SECOND card up, and can it DRAW on it?
-   (SPEC.md 39.13/39.14)
+"""Did os8088 bring the SECOND card up, can it DRAW on it, and does the
+   POINTER cross? (SPEC.md 39.13/39.14/39.15)
 
     python3 tests/dispcheck.py                        # the machine's own answer
     python3 tests/dispcheck.py --primary herc         # ...with make VIDEO=herc
@@ -42,6 +42,15 @@ three assertions instead:
      tens. Nothing else in this file can tell a glyph from a fill, and this
      does not have to - what it asserts is that whole shapes reached the
      second card at all.
+  5. THE POINTER CROSSES, AND LEAVES NOTHING BEHIND (SPEC.md 39.15). Driven
+     with real Microsoft packets through the real UART, out onto the second
+     display and back: `cur_disp` must follow, and the ROUND TRIP must leave
+     both framebuffers exactly as they were - a save-under put back in the
+     wrong place smears, and a smear is permanent. Then the pointer is PUSHED
+     AT TWO WALLS, because the clamp is the part a rectangle gets wrong: left
+     from below the primary must stop at the second display's left edge rather
+     than walking into the dead zone, and the far corner must be the union's.
+     That second pair is what caught vid_disp_of testing a corrupted x.
 
 WHICH CARD IS PRIMARY IS THE KERNEL'S ANSWER, never MartyPC's `primary` flag.
 A `make VIDEO=herc` kernel on os8088_5150_both_gla draws on the Hercules while
@@ -54,10 +63,12 @@ import argparse
 import hashlib
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 import os88marty                                            # noqa: E402
+import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 
 # vid_kind -> the MartyPC card type that kind IS, and what that card's
@@ -233,6 +244,7 @@ def main(argv):
         for b in range(banks):
             m.write((base << 4) + b * 0x2000 + b * 10 + 4, bytes([0xFF]))
         m.advance(frames=2, card=sec["idx"])
+        m.run()                     # advance() leaves it PAUSED
         w, h, px = m.fbuf(card=sec["idx"])
         pts = [(y, x) for y in range(h) for x in range(w)
                if px[(y * w + x) * 3] != secpx[(y * w + x) * 3]]
@@ -264,7 +276,109 @@ def main(argv):
         else:
             say("primary unchanged by the secondary's writes")
 
-        # --- 4: can the KERNEL draw a whole shape there? (SPEC.md 39.14.2) --
+        # --- 4: does the POINTER cross, and does it leave nothing behind?
+        # (SPEC.md 39.15). os88mouse drives real Microsoft packets through the
+        # real UART and closes the loop on the kernel's own published
+        # mouse_x - which is VIRTUAL, so a target on the second display is
+        # simply a bigger x, and reaching one at all is the assertion.
+        #
+        # The strong half is the ROUND TRIP: out onto the second display and
+        # back to where it started must leave BOTH framebuffers exactly as
+        # they were. A save-under that put a byte back in the wrong place
+        # smears, and a smear is permanent - which is the whole reason 7.1.2's
+        # move is written the way it is, and the reason 39.15.3 makes the
+        # crossing a jump rather than a straddle.
+        mo = os88mouse.Mouse(marty=m)
+        home = (ctx[0][7] // 4, ctx[0][8] // 2)     # NOT the boot position,
+                                                    # or `to` is a no-op and
+                                                    # proves nothing
+        mo.to(*home)
+        m.advance(frames=4, card=pri["idx"])
+        m.run()                     # advance() leaves it PAUSED
+        pri_before = m.fbuf(card=pri["idx"])[2]
+        sec_before = m.fbuf(card=sec["idx"])[2]
+        cd0 = m.read(S("cur_disp"), 1)[0]
+
+        away = (ctx[1][18] + ctx[1][7] // 2, ctx[1][8] // 2)
+        mo.to(*away)
+        m.advance(frames=4, card=sec["idx"])
+        m.run()                     # advance() leaves it PAUSED
+        cd1 = m.read(S("cur_disp"), 1)[0]
+        mx = u16(m.read(S("mouse_x"), 2))
+        my = u16(m.read(S("mouse_y"), 2))
+        say("pointer %s -> %s, cur_disp %d -> %d, mouse now (%d,%d)"
+            % (home, away, cd0, cd1, mx, my))
+        if (mx, my) != away:
+            fail.append("the pointer would not go to %s - it is at (%d,%d), "
+                        "so the clamp is still a rectangle" % (away, mx, my))
+        if cd0 != 0 or cd1 != 1:
+            fail.append("cur_disp went %d -> %d, wanted 0 -> 1" % (cd0, cd1))
+        pri_away = m.fbuf(card=pri["idx"])[2]
+        sec_away = m.fbuf(card=sec["idx"])[2]
+        if pri_away == pri_before:
+            fail.append("the primary is unchanged with the pointer away - "
+                        "the arrow never left it")
+        if sec_away == sec_before:
+            fail.append("the secondary is unchanged with the pointer on it - "
+                        "the arrow never arrived")
+
+        mo.to(*home)
+        m.advance(frames=4, card=pri["idx"])
+        m.run()                     # advance() leaves it PAUSED
+        pri_back = m.fbuf(card=pri["idx"])[2]
+        sec_back = m.fbuf(card=sec["idx"])[2]
+        cd2 = m.read(S("cur_disp"), 1)[0]
+        if cd2 != 0:
+            fail.append("cur_disp is %d after coming home, wanted 0" % cd2)
+        # The primary's menu bar carries a CLOCK, which changes on a schedule
+        # of its own; everything below MBAR_H is ours.
+        skip = os88marty.MBAR_H * m.fbuf(card=pri["idx"])[0] * 3
+        dpri = sum(1 for i in range(skip, len(pri_back), 3)
+                   if pri_back[i] != pri_before[i])
+        dsec = sum(1 for i in range(0, len(sec_back), 3)
+                   if sec_back[i] != sec_before[i])
+        say("round trip: %d differing px on the primary (below the bar), "
+            "%d on the secondary" % (dpri, dsec))
+        if dpri or dsec:
+            fail.append("the round trip left %d/%d differing pixels - a "
+                        "save-under went back in the wrong place" % (dpri, dsec))
+
+        # --- the clamp is not a rectangle (SPEC.md 39.15.4) ----------------
+        # Two cases a per-axis clamp gets wrong, driven the only way that
+        # means anything: push the pointer at a wall and see where it stops.
+        def push(dx, dy, n=14):
+            for _ in range(n):
+                mo.m.mouse(dx, dy)
+                time.sleep(0.12)
+            time.sleep(0.4)
+            return mo.where()[:2]
+
+        # The dead zone is the rows the TALLER display has and the shorter
+        # one does not, so which display to stand on and which way to push
+        # depends on which is taller - it is the Hercules either way, and it
+        # is the primary or the secondary depending on the machine.
+        tall, short = (1, 0) if ctx[1][8] > ctx[0][8] else (0, 1)
+        y = ctx[short][8] + 40                  # inside `tall`, outside `short`
+        mo.to(ctx[tall][18] + 40 if tall else ctx[0][7] - 40, y)
+        dx, edge = ((-100, ctx[1][18]) if tall == 1
+                    else (100, ctx[0][7] - 1))
+        got = push(dx, 0)
+        say("pushed %s along the row only display %d has: stopped at %s"
+            % ("LEFT" if dx < 0 else "RIGHT", tall, got))
+        if got[0] != edge:
+            fail.append("pushed at the dead zone the pointer reached x=%d, "
+                        "wanted %d - it walked into the gap"
+                        % (got[0], edge))
+        far = (ctx[1][18] + ctx[1][7] - 1, ctx[1][19] + ctx[1][8] - 1)
+        mo.to(ctx[1][18] + 40, ctx[1][19] + 40)     # ...on display 1, then out
+        got = push(100, 100)
+        say("pushed to the OUTER corner: stopped at %s, display ends %s"
+            % (got, far))
+        if got != far:
+            fail.append("the outer corner clamp answered %s, wanted %s"
+                        % (got, far))
+
+        # --- 5: can the KERNEL draw a whole shape there? (SPEC.md 39.14.2) --
         # Move the drive column into the second display's half of the virtual
         # desktop and post [cp_dirty]; ui_task's step 3 is a wm_paint_all, and
         # desk_paint then draws every volume's icon and label at the new x.
@@ -274,6 +388,7 @@ def main(argv):
         m.write(S("vid_desk_zr"), bytes([(zx + 50) & 255, (zx + 50) >> 8]))
         m.write(S("cp_dirty"), bytes([1]))
         m.advance(frames=90, card=pri["idx"])
+        m.run()                     # advance() leaves it PAUSED
         os88marty.settle(m, gate=lambda mm: os88marty.bar_up(mm, gate_card),
                          card=gate_card)
         w, h, px = m.fbuf(card=sec["idx"])

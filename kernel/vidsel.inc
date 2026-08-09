@@ -760,14 +760,39 @@ vid_disp_dither:
 ; handle it by discarding the shape anyway.
 ; -----------------------------------------------------------------------------
 vid_disp_of:
+    call vid_disp_find
+    jnc .out
+    xor al, al                  ; nowhere: the dead zone, and the primary is
+.out:                           ; where a shape goes to be clipped away
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_disp_find - the same question, allowed to answer NO
+; in:       AX = x, BX = y, virtual
+; out:      CF = 0 and AL = the display holding it; CF = 1 = no display does
+; clobbers: AX, flags
+;
+; Separate from vid_disp_of because the two callers want opposite things from
+; a miss. A drawing hook wants somewhere to send a shape that will then be
+; clipped away; mou_clamp (SPEC.md 39.15.4) wants to KNOW, because "inside no
+; display" is exactly the case it exists to correct.
+; -----------------------------------------------------------------------------
+vid_disp_find:
     push bx
     push cx
     push dx
     push di
-    xor cl, cl                  ; CL = the display being tested
-.next:
-    mov al, cl
-    call vid_ctx_ptr            ; DI = its record
+    xor cl, cl                  ; CL = the display being tested, and DI walks
+    mov di, vid_ctx             ; the records rather than vid_ctx_ptr deriving
+.next:                          ; them - because THAT takes its index in AL,
+                                ; and AL is the low byte of the x being tested.
+                                ; It cost a real bug: `mov al, cl` zeroed the
+                                ; low byte of x, so a point at 1300 was tested
+                                ; as 1280 and one at 660 as 640+1 - which lands
+                                ; on the right display nearly always, and moved
+                                ; a pointer stepping across the seam onto the
+                                ; wrong side of it. Walking the array needs no
+                                ; register at all
     mov dx, [di+VID_CTX_VX]
     cmp ax, dx
     jb .no                      ; left of it
@@ -781,16 +806,84 @@ vid_disp_of:
     cmp bx, dx
     jb .hit
 .no:
+    add di, VID_CTX_SZ
     inc cl
     cmp cl, [vid_ndisp]
     jb .next
-    xor cl, cl                  ; nowhere: the dead zone, and the primary is
-.hit:                           ; where a shape goes to be clipped away
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+.hit:
     mov al, cl
     pop di
     pop dx
     pop cx
     pop bx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_pt_local - a virtual point in the display holding it (SPEC.md 39.15)
+; in:       AX = x, BX = y, virtual
+; out:      CL = the display, AX/BX its own coordinates
+; clobbers: AX, BX, CL, flags
+; -----------------------------------------------------------------------------
+vid_pt_local:
+    push dx
+    push di
+    push ax                     ; vid_disp_of ANSWERS in AL, so x is banked
+    call vid_disp_of
+    mov cl, al
+    call vid_ctx_ptr            ; DI = its record; AX preserved
+    pop ax
+    sub ax, [di+VID_CTX_VX]
+    sub bx, [di+VID_CTX_VY]
+    pop di
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_pt_clamp - the nearest virtual point inside display CL (SPEC.md 39.15.4)
+; in:       AX = x, BX = y virtual, CL = the display to clamp into
+; out:      AX/BX inside it
+; clobbers: AX, BX, flags
+; -----------------------------------------------------------------------------
+vid_pt_clamp:
+    push cx
+    push dx
+    push di
+    push ax
+    mov al, cl
+    call vid_ctx_ptr
+    pop ax
+    mov dx, [di+VID_CTX_VX]     ; x into [vx, vx + cw - 1]
+    cmp ax, dx
+    jge .xlo
+    mov ax, dx
+.xlo:
+    add dx, [di+VID_CTX_CW]
+    dec dx
+    cmp ax, dx
+    jle .xok
+    mov ax, dx
+.xok:
+    mov dx, [di+VID_CTX_VY]
+    cmp bx, dx
+    jge .ylo
+    mov bx, dx
+.ylo:
+    add dx, [di+VID_CTX_CH]
+    dec dx
+    cmp bx, dx
+    jle .yok
+    mov bx, dx
+.yok:
+    pop di
+    pop dx
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------

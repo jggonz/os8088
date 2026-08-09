@@ -761,12 +761,71 @@ on its own.**
 | 2 | ~~`vid_cw`/`vid_ch` split at the ~24 renderer sites~~ **DONE** — SPEC.md §39.2.1 | 22 sites; **0 differing pixels** on CGA, Hercules and VGA, twice |
 | 3 | ~~Bring the second card up at boot; no desktop on it yet~~ **DONE** — SPEC.md §39.13 | both cards scanning our raster, primary framebuffer **byte-identical**, both directions |
 | 4 | ~~`GFXDISP` at the four rect entries + font/icon/scroll/line~~ **DONE** — SPEC.md §39.14 | secondary shows a desktop dither; **0 differing pixels** on all three single-card adapters. `gfx_save`/`gfx_restore` deferred to step 5, §11.4 |
-| 5 | Cursor crossing; mouse clamp to the union | pointer moves between monitors |
+| 5 | ~~Cursor crossing; mouse clamp to the union~~ **DONE** — SPEC.md §39.15 | the pointer crosses, and a round trip leaves **0 differing pixels** on both cards |
 | 6 | `wm_fit`, `ui_drag`, `wm_paint_all` per display | a window drags across the seam |
 | 6b | `wm_disp_of`, then §11.2 fullscreen on one display | fullscreen on the secondary leaves the menu bar reachable on the primary |
 | 6c | `fsx` on one display, others blanked; `vid_unblank` | Missile Command and Paint unchanged; the dark monitor comes back with a repainted desktop, never a stale one |
 | 7 | Control Panel mode + layout; `VM` key | survives a reboot; refuses on a single-card machine |
 | 8 | Field run on the 5150 | the three things QEMU cannot show |
+
+### 11.5 Step 5, as built
+
+The pointer crosses (SPEC.md §39.15). **Cost: `.text` +286 for `kern_big`, one
+image rung crossed, and `kern_small` +6** — the first non-zero small delta in
+this work, and it is the clamp refactor being *shared* rather than an `%ifdef`
+being missed: two inline per-axis clamps became one `mou_clamp`, which both
+variants call. No rung crossed there; 440 bytes still free.
+
+**§5.1's decision paid off again here, in a place §4 did not list.** Keeping
+`[cur_drawn_x]`/`[cur_drawn_y]` in the same coordinate space as
+`[mouse_x]`/`[mouse_y]` — virtual — meant the translation landed in exactly
+**two routines**, `cur_rect` and `cur_geom`, which are the only two that turn
+a position into an address. Everything else in `mouse.inc` compares two
+virtual positions or works in *differences* (`cur_move_mono`'s `d = newcol -
+oldcol`, its `mv_oy - cur_drawn_y`), and an origin cancels out of a
+difference. §7.1's fused 1bpp cursor and §7.1.2's write-every-byte-once pass
+did not change by a line.
+
+**The clamp is where the design had to change shape**, and §6's one-line entry
+("clamp to the union, not a bounding box") understates it: the union is not a
+rectangle, so there is no per-axis clamp that is right. The rule that works is
+*"inside some display, take it; otherwise clamp into the display the arrow is
+on"*, and it produces every seam behaviour without naming any of them. It also
+forced the one structural change to `mou_isr`: the clamp is 2-D, so x has to
+be staged rather than stored before y is decoded.
+
+**The gate found a real bug, which is the whole reason it was written to push
+the pointer at walls rather than just move it.** `vid_disp_of`'s loop passed
+the display index to `vid_ctx_ptr` in `AL` — and `AL` is the low byte of the
+x being tested. `mov al, cl` zeroed it, so a point at 1300 was tested as 1280.
+That lands on the right display *nearly always*, which is why step 4's gates
+all passed with it in place; what it broke was a pointer stepping across the
+seam, which stopped dead at display 0's corner. The loop walks the array with
+a pointer now and needs no register at all.
+
+Measured on `os8088_5150_both_gla`, both primaries:
+
+| | CGA primary | Hercules primary |
+|---|---|---|
+| crossing | (160,100) → (1000,174), `cur_disp` 0 → 1 | (180,174) → (1040,100), 0 → 1 |
+| **round trip** | **0 differing pixels**, both cards | **0**, both cards |
+| pushed at the dead zone | left along a row only display 1 has → stops at **640** | right along a row only display 0 has → stops at **719** |
+| pushed at the outer corner | (1359, 347) | (1359, 199) |
+
+and byte identity on the three single-card adapters, as before.
+
+The dead-zone row is mirrored on purpose: the gap is the rows the **taller**
+display has and the shorter one does not, and the Hercules is the taller one
+either way — so which display you stand on and which way you push depends on
+the machine, and a test that hard-codes one direction passes on one primary
+and cannot even reach the wall on the other.
+
+**One thing step 5 makes available and does not take.** §39.14.3 had every
+rect hook restore the display it entered from *because* `cur_unlazy` runs
+above them and erases the arrow through whatever display is live. The cursor
+brackets itself now, so that reason is gone and the cheaper arrangement —
+leave the last-drawn display current, restore once at `gfx_unlock` — is safe.
+It is deliberately not taken in the same change that makes it safe.
 
 ### 11.4 Step 4, as built
 
