@@ -298,6 +298,16 @@ mem_claim:
 mem_claim_1:
     push ax
     push cx
+    push si                     ; THE STAGED PARAMETERS, and they are staged in
+    push di                     ; REGISTERS on purpose (see the cli below), so
+                                ; the retry above re-reads them from here. The
+                                ; scan owns both - DI walks mem_tab, SI counts
+                                ; this owner then walks it again - so without
+                                ; this a shed-and-retry restages a mem_tab
+                                ; OFFSET as [mem_dma] and a non-zero [mem_dir]:
+                                ; a phantom DMA head measured in KB, and a
+                                ; bottom-up data claim placed top down, in the
+                                ; region arena mem_pg_ceil exists to keep whole
     pushf
     cli                         ; the whole scan-and-publish, one window -
     mov [mem_dma], si           ; the operation's PARAMETERS included. The
@@ -430,6 +440,8 @@ mem_claim_1:
     xor dx, dx
     stc
 .out:
+    pop di
+    pop si
     pop cx
     pop ax
     ret
@@ -524,6 +536,23 @@ mem_pg_own:
 ; mem_shed_one - give up one purgeable block
 ; out: CF = 0 one was shed, CF = 1 there was nothing to shed
 ; clobbers: flags
+;
+; ONE CALLER, AND THAT IS LOAD-BEARING - it is mem_claim's retry, above, and
+; nothing else in the tree sheds. "Zeroing the word IS the notice" holds only
+; while that word is the ONLY reference to the block, and there are two spans
+; where it is not: wm_su_take publishes [wm_su_seg] LAST, so the word is still
+; 0 for the whole of gfx_save, and wm_su_try holds the segment in ES across
+; gfx_restore. A shed inside either would be written into, or read out of,
+; memory another owner already holds - tens of milliseconds each, with IF = 1.
+;
+; What makes that unreachable is not the gfx lock (a task_yield spin mutex
+; excludes other DRAWING, not preemption). It is that EVERY mem_claim in the
+; tree is either a UI-task action or made under the gfx lock, and a raise is a
+; UI-task action under that same lock - so no second task is inside mem_claim
+; while the first is inside gfx_save. A package worker that claims memory
+; directly would break it. That is the rule to keep, and it is why a worker
+; grows through OSAPI_MEM_REGROW (which never sheds) rather than claim-copy-
+; free: SPEC.md 50.6's contract rests on it.
 ; -----------------------------------------------------------------------------
 mem_shed_one:
     push ax
