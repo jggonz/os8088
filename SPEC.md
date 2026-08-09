@@ -8099,6 +8099,21 @@ at §52.10.4: an installer must copy *whatever is on the disk*, and a baked
 list of the shipped layout goes stale in silence the moment a user's floppy
 differs from it.
 
+**The type word is `OSAPI_FT_*`, and TYPE 1 IS NOT "A FILE".** `dsk_synth`
+(§19) gives 1 only to a file the *loader* would accept — extension `O88`,
+size inside 16 bits, first cluster in range — because the listing's consumers
+are the Disk window and the loader. Every other ordinary file is **type 0**.
+So the question "is this a file" is `type < OSAPI_FT_DIR`, never `type == 1`,
+and the raw FAT attribute is at +13 for a caller that wants the byte itself.
+
+This is written down because it has already cost a bug, and a quiet one: the
+installer's sub-folder walk (§52.10.4) copied "type 1", which took every
+`.O88` out of `APPS` and `GAMES` and silently left `BEVERLY.MOD` behind — an
+installed machine with an empty `MEDIA` folder, no error anywhere, and the
+same fate waiting for any document a user had put in a folder of their own.
+The SDK's own comment said `1 = file`, which is where the mistake came from,
+so the constants exist now and the comment points at them.
+
 **It is by ORDINAL and the kernel keeps no cursor**, which is the design
 rather than an economy. Find-first / find-next would need kernel state, and
 `dsk_dirw_start`'s cursor is three module words already shared with
