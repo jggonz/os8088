@@ -242,9 +242,25 @@ the opcode layer selecting between them on `[zf_ver]`.
 Two sources, one drawing path:
 
 - **`.mg1`/`.mg2`** — Infocom's own picture files, as shipped beside the v6
-  games. RLE over a 4-bit palette; the decoder is small and the format is
-  documented. Nothing legal to ship exercises it, so it is verified against
-  fixtures built by `tools/os88pix.py --synth`.
+  games. **This plan said "RLE over a 4-bit palette; the decoder is small" and
+  both halves of that were wrong.** It is an LZW variant with 9-to-12-bit
+  codes and a 3,840-entry value/back-reference table, and the arithmetic does
+  not fit the machine:
+
+  - 11,520 bytes of LZW tables live for the whole decode;
+  - the decoder emits one byte per pixel and cannot pack to 4bpp until a whole
+    row exists, so a 320x200 Infocom picture wants a 64,000-byte canvas;
+  - and the stream is read *at draw time*, which is worker time, where there
+    is no file slot and no `OSAPI_MEM_*` — so the whole `.mg1`, 200–400KB,
+    would have to be resident beside a 300KB v6 story on a 640KB machine.
+
+  So `zpic.inc` parses the container and the directory — cheap, and it proves
+  the file really is picture art and how much of it there is — then reports
+  **no drawable pictures** and says why. That is the right answer rather than
+  a cop-out: `@picture_data` is required to be able to answer "unavailable"
+  (Standard 8.8.6.1) and stories handle it, whereas a story told a picture is
+  200 pixels tall and then never shown it will lay a graphical interface out
+  around blank space. Truthful and useless beats plausible and wrong.
 - **`.PIX`** — a native archive built on the host by `tools/os88pix.py` from
   PNG, JPEG or a Blorb's picture chunks: a directory of numbered pictures in
   exactly the packed-4bpp layout `OSAPI_GFX_BLIT4` wants, so drawing one is a

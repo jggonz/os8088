@@ -856,9 +856,22 @@ $(BUILD)/zork360.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/36
 		$(BUILD)/frotz.o88 $(BUILD)/zcat/360/CATALOG.TXT $(ZS_360) $(STORIES) \
 		--folder SAVES
 
-$(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat/disk2/CATALOG.TXT tools/os88disk.py
+# BRONZE.PIX - the one picture archive a legally shippable game provides
+# (SPEC.md 59.7). Bronze arrives as a Blorb carrying both its Z-code and a
+# JPEG cover; tools/getstories.py takes the ZCOD chunk and this takes the
+# picture, so the v6 picture path is exercised by a real game rather than only
+# by a fixture. The Blorb is getstories' cached artifact, which is why the
+# stamp is the prerequisite: it is what guarantees the file is there and
+# hash-verified.
+$(BUILD)/BRONZE.PIX: $(BUILD)/stories.stamp tools/os88pix.py
+	python3 tools/os88pix.py -o $@ --release 3 \
+		--blorb $(STORYDIR)/.artifacts/Bronze.zblorb
+
+$(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat/disk2/CATALOG.TXT \
+                    $(BUILD)/BRONZE.PIX tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
-		$(BUILD)/zcat/disk2/CATALOG.TXT $(ZS_DISK2) --folder SAVES
+		$(BUILD)/zcat/disk2/CATALOG.TXT $(ZS_DISK2) \
+		ART:$(BUILD)/BRONZE.PIX --folder SAVES
 
 # --- the Frotz gate (ON DEMAND: `make ztest`) --------------------------------
 # tests/frotz/zopstest.inf is a STORY, not a package, because the thing under

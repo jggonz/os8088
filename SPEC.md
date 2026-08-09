@@ -27605,7 +27605,17 @@ Every picture block is 16-byte aligned so it can be addressed as a segment with
 a zero offset. `apps/frotz/zpic.inc` carries the byte-level layout and is the
 authority on it; the host tool is written to match.
 
-**`.mg1`/`.mg2`** are Infocom's own, as shipped beside the v6 games.
+**`.mg1`/`.mg2`** are Infocom's own, as shipped beside the v6 games. Frotz
+parses the container and the directory and then **reports no drawable
+pictures**, which is a measured refusal and not a gap. The pixel data is an
+LZW variant, not the RLE the plan first assumed: 11,520 bytes of live tables,
+a decoder that emits one byte per pixel and so wants a 64,000-byte canvas for
+a 320x200 picture, and a stream read at *draw* time — which is worker time,
+where there is no file slot and no `OSAPI_MEM_*`, so the whole 200–400KB file
+would have to be resident beside a 300KB v6 story. It does not fit by a margin
+no tuning closes. `@picture_data` may answer "unavailable" (Standard 8.8.6.1)
+and stories handle that; what a story cannot handle is being promised a
+picture it never sees, because it will lay its interface out around the space.
 
 Blorb (`FORM....IFRS`) is handled entirely on the host: `tools/getstories.py`
 takes the `ZCOD` chunk and `tools/os88pix.py` takes the picture chunks. That is
