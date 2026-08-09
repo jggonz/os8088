@@ -145,25 +145,61 @@ the UI task.
 ### 3.3 Where they should live in the heap
 
 Data claims grow up from the bottom; regions come down from the top (§50.3),
-because a region's base is its CS and can never move.
+because a region's base is its CS and can never move — and the rule exists
+precisely because "from one end they interleave and a long-lived data claim
+mid-heap permanently splits the space a package can load into".
 
-**Put discardable claims at the top end, below the regions.** The hole a
-discard leaves is then adjacent to the zone where contiguity is worth most —
-a package region needs one run, and data claims are mostly small. It costs one
-extra scan direction and it is the difference between "a discard helps the next
-package load" and "a discard leaves a hole in the middle of the data arena".
-Compaction is out of scope, as agreed, and this is the cheap way to need it
+**An earlier draft of this document said to put purgeable claims at the top
+end with the regions. That was wrong, and it was wrong for the reason §50.3
+was written down.** A purgeable block in the region arena is indistinguishable
+from a region to the placement scan while it is live, so it splits exactly the
+run a package needs — and shed-and-retry does not save it, because that fires
+only on *failure*. A region that still fits, but fits worse, has been
+fragmented without anything noticing. The saving grace, that a purgeable block
+can always be removed, only pays out when something has already been refused.
+
+The deciding question is **which allocation a cache should be traded against**,
+and the answer is: whichever one is short of the free run in the middle. Both
+arenas grow toward that one run, so it is the thing everything actually
+competes for.
+
+**So: purgeable claims are HIGHEST-FIT WITHIN THE DATA ARENA.** Not a third
+zone, and not the region zone — the top of the arena they already belong to.
+That gets three things at once:
+
+- The region arena keeps §50.3's property: everything in it is a region.
+- A purgeable block always sits against the free middle, so **shedding it
+  always enlarges the one run everything competes for**, rather than punching
+  an isolated hole among the data claims.
+- Data claims below it are unaffected, and their own churn stays where it was.
+
+`mem_dir` is already a word and already carries 0 = bottom-up, 1 = top-down
+(`mem_claim_hi`), so this is a third value on an existing knob rather than a
+new mechanism.
+
+Two consequences to write down with it: `mem_claim_hi` must shed-and-retry too
+(a package load is a user action, a cache is not, and the cache should lose
+every time), and a purgeable claim must not be a `mem_regrow` candidate —
+regrowing the block that is meant to be against the free middle is how it ends
+up in the middle of the arena instead.
+
+Compaction stays out of scope, as agreed. This is the cheap way to need it
 later rather than sooner.
 
 ### 3.4 What the Task Manager should say
 
-Agreed that discardable memory must not count as used — it is not memory the
-user can run out of. **But do not make it invisible.** Memory that is spent
-and not shown is how "where did my RAM go" reports start, and §41.6 already
-has the precedent for a figure that belongs to neither map (the XMS line).
+Out of the bar and out of the used total. **And the reason is stronger than
+"do not hide things from the user": from the user's point of view it is not
+taken at all.** They can have it back the instant anything needs it, so
+counting it as used would be the misleading choice, not the honest one — a
+full bar that is not full is worse than a line nobody reads.
 
-Recommend: keep it out of the bar and out of the used total, and show one
-extra line — `Cache 21K` — so the number is findable when somebody asks.
+**One `Purgeable 21K` line all the same, and it is for US.** It is a developer
+instrument: it is how you see that a save-under was claimed rather than
+refused, that a shed actually happened, and that a cache is not quietly being
+re-claimed on every pass. Nobody needs to act on it and the number moving is
+not a problem — which is exactly why it belongs on its own line and not in the
+bar. §41.6's XMS line is the precedent for a figure that is in neither map.
 
 ### 3.5 Cost of the mechanism itself
 
@@ -186,9 +222,12 @@ places and a masked compare is a trap for later; take the 64 bytes.
    notification protocol, first consumers the three caches that already
    survive not existing, plus (1)'s save-under, which is the perfect fit
    because its fallback is the shipping code path.
-3. **Task Manager: out of the bar, onto its own line.**
-4. **Allocate discardable top-down, below the regions**, to keep the holes
-   where contiguity matters.
+3. **Task Manager: out of the bar and out of the total, one `Purgeable` line**
+   — a developer instrument, because from the user's side it is not taken.
+4. **Allocate purgeable HIGHEST-FIT WITHIN THE DATA ARENA** (§3.3), never in
+   the region arena, so a shed always enlarges the free middle and §50.3's
+   "everything in the region zone is a region" survives. `mem_claim_hi` sheds
+   and retries too; purgeable claims never `mem_regrow`.
 5. **A package-visible discardable ABI — later, and only after (2) has run.**
    Handle-based, gfx-lock-only, and worth it mainly for Paint's undo image and
    Tracker's sample buffers, which are the two large app allocations that
