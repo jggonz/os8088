@@ -98,3 +98,12 @@ Written up in full as docs/NOTEPAD-NOTES.md §6; the short form:
 | `state.py` | Note Pad's bss, with the guard that refuses stale offsets |
 | `trace.py` | the breakpoint tracer |
 | `drive.py` | cold boot, and the mouse work to get README.TXT open |
+| `pixcheck.py` | is the incrementally-drawn content the same pixels a FULL repaint makes? Covers the window and raises it to force one, then diffs the content rect. The check that cleared SPEC.md §27.13 and found docs/NOTEPAD-NOTES.md §5.2.1 |
+| `notecheck.py` | is the document BUFFER right? Reads the claim out of guest RAM and diffs it against README.TXT with the session's edits applied on the host. What cleared §27.12's `rep movsb` |
+
+**Crop, and settle, before believing a diff.** An uncropped framebuffer diff is
+dominated by the menu-bar clock and the other window's title bar; an unsettled
+one is dominated by a toast expiring. Both produced a confident wrong "regression"
+in one session. `pixcheck.py` crops to `np_tx-8 .. np_rgt` by construction, and
+an idle screen sampled twice must read 0 differing pixels before any other
+number from it means anything.
