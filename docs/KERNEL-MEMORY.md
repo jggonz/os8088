@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52637
+    "text": 52689
   },
   "small": {
     "bss": 4654,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52499
+    "text": 52551
   }
 }
 ```
@@ -406,7 +406,7 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 52,637 + `.bss` 4,734) | 57,856 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| image (`.text` 52,689 + `.bss` 4,734) | 57,856 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
 | cold code | 22,016 B | 21,664 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,748 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
@@ -865,14 +865,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 27,391 | 36.9% |
+| the file system, end to end | 27,391 | 36.8% |
 | the window system and its furniture | 15,809 | 21.3% |
 | drawing: adapters, primitives, glyphs, icons | 10,041 | 13.5% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,538 | 12.8% |
-| the kernel proper: API table, heap, scheduler, events | 5,720 | 7.7% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,560 | 12.9% |
+| the kernel proper: API table, heap, scheduler, events | 5,750 | 7.7% |
 | the Control Panel | 4,426 | 6.0% |
 | the three built-in kinds | 1,376 | 1.9% |
-| **total** | **74,301** | |
+| **total** | **74,353** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -888,10 +888,10 @@ generated in the first place.
 | `mouse.inc` — serial mouse and the cursor (§9) | 2,991 | — | **2,991** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 84 |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,508 | — | **2,508** | 246 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,530 | — | **2,530** | 246 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,361 | — | **2,361** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
-| `memory.inc` — the claim heap (§50) | 1,830 | — | **1,830** | 12 | 256 |
+| `memory.inc` — the claim heap (§50) | 1,860 | — | **1,860** | 12 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,825 | — | **1,825** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
 | `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,649 | — | **1,649** | 27 | — |
@@ -914,7 +914,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,664 | — | **2,664** | — | — |
-| **total** | **52,637** | **21,664** | **74,301** | **4,734** | **7,748** |
+| **total** | **52,689** | **21,664** | **74,353** | **4,734** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it
