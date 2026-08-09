@@ -237,6 +237,22 @@ endif
 # about a file that recipe just removed, and then build the floppy image from
 # a kernel that is not there. Doing it here means the file is simply gone
 # before make builds its graph.
+#
+# ...and $(KNOBS) is WHICH ONES WERE ASKED FOR, for the banner the kernel rule
+# prints. It cannot be "is $(VIDDEF) non-empty", which is what it used to be:
+# VIDDEF always carries -DKERN_BIG or -DKERN_SMALL (exactly one is always
+# defined, see the block above), so that test was true on every build ever
+# made and the alarm fired on a plain `make`. A warning that always fires is
+# one nobody reads - and this one exists to stop a knob kernel being tested
+# for detection or cut into a release.
+#
+# The variant is deliberately NOT in this list, which is tools/kernsize.py's
+# distinction and worth keeping the two files agreed on: KERN_BIG/KERN_SMALL
+# are two SHIPPED PRODUCTS (docs/KERN-SPLIT-PLAN.md) and everything else here
+# produces a kernel nobody ships.
+KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
+                             DIRW1 REDRAWFULL SNDSNIFF RAMKB FONT,\
+                             $(if $($(k)),$(k)=$($(k)))))
 VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
@@ -316,10 +332,8 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) tools/os
 # above: -w+error would turn its %warning into an error, and relaxing that
 # for every build would silence a %warning somebody meant as an alarm.
 	@python3 tools/kernsize.py --build $(BUILD) $(VIDDEF) || true
-ifneq ($(VIDDEF),)
-	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC) DISKCNT=$(DISKCNT) FLOPPY1=$(FLOPPY1) FONT=$(FONT): ***"
-	@echo "  *** kernel is                                                  ***"
-	@echo "  *** BUILT WITH A KNOB - a forced probe and/or disk counters.   ***"
+ifneq ($(KNOBS),)
+	@echo "  *** BUILT WITH A KNOB: $(KNOBS)"
 	@echo "  *** It boots that way on every machine. Rebuild with a plain   ***"
 	@echo "  *** \`make\` before testing detection or cutting a release.      ***"
 	@echo "  *** DISKCNT=1 ALONE is expected: it is in every field kernel   ***"
