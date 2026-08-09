@@ -717,6 +717,15 @@ emulator, builds an image or checks a document. Most of it is one file doing
 one job and belongs at the top level, which is where `os88marty.py`,
 `os88disk.py`, `mouse.py` and the rest are.
 
+A few of them are **gates in their own right**, and are run the same way the
+`tests/` packages are — `python3 tools/<x>.py [machine]` against a built tree:
+`sucheck.py` (the raise cache, SPEC.md §11.96 — see "Prefer a self-checking
+harness" below for the way it once passed without testing anything) and
+`tools/notepad/pixcheck.py` (Note Pad's incremental redraw against a forced
+full repaint). `tests/dualcheck.py` is the same species living on the other
+side of the line, because what it drives is a machine rather than a program
+(two adapters in one box, §39.11.1).
+
 **A tool that grows into several files gets a directory, and the directory is
 named for WHAT IT DRIVES**, not for what it does:
 
@@ -1273,6 +1282,25 @@ So put **redundant quantities on the screen**: a raw count *and* a derived
 time, two rows whose relative sizes are known in advance, a ratio you can
 recompute by hand from the columns next to it. A harness that reports one
 number per run is one you have to trust.
+
+**And the sharper form of the same rule: a gate must not be able to pass by
+doing nothing.** `tools/sucheck.py` — the raise cache's gate (SPEC.md §11.96)
+— covered Solitaire by clicking a hard-coded (300, 40) on the Disk window's
+title bar, and on the geometry it actually produces that point is **inside
+Solitaire's own rect**. So the click went to the window that was already
+frontmost, nothing was raised, nothing was covered, `wm_su_take` was never
+entered — and the run reported *78 differing bytes of 128,000* and PASS,
+because comparing the screen with itself is the best possible score. A healthy
+run reports 124. **The vacuous figure was better than the real one**, which is
+the failure mode to design against: a number in the right range is not
+evidence that the thing under test ran. Two fixes, and it wants both — the
+click point is now computed from the window rects read out of the guest and
+asserts that an uncovered strip exists, and the claim map is an assertion
+rather than a note, so "the cache was never taken" fails instead of
+explaining itself away. It cost a session's worth of counters in `wm_su_take`
+to find, and the counters were only reached for because the claim map was
+empty; had the cache been small enough to miss, the gate would still be
+green and still be testing nothing.
 
 ### What the emulator cannot show at all
 
