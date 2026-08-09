@@ -22,13 +22,28 @@ of the code.
 | §3 | deliberately rejected, with the reason |
 | §4 | what shipped, and where each piece lives |
 | §5 | open field reports, with the diagnosis so far |
-| §6 | measuring Note Pad, and the four ways the apparatus lied |
+| §6 | measuring Note Pad, and the six ways the apparatus lied |
+| §7 | the latency budget: one typematic repeat, and what is still over it |
 
 ---
 
-## 1. The row index — random access to a row without walking to it
+## 1. The row index — BUILT (SPEC.md §27.13)
 
-**Status: designed, not built. Build it when any of §1.3's triggers lands.**
+**Status: built, measured and shipped.** What follows is the design as it was
+argued before it existed, kept because every claim in it was tested and two
+were wrong in ways worth knowing:
+
+- **§1.2's sizing was too frugal.** 64 entries decimates a 781-row note to a
+  stride of 16, and one keystroke runs FOUR walks that each pay that stride —
+  68 rows walked for one row of new text. `NP_XN` is 256.
+- **§1.3's "a page click costs the same at every depth" is still true and
+  still not the point.** The trigger that mattered was not a jump the UI
+  offers; it was `Up` out of the top of the view, which §1.4 half-identified
+  and filed under the *net* rather than under the four separate walks that
+  each needed it.
+
+SPEC.md §27.13 is the implementation; §7 below is what it did and did not
+buy.
 
 ### 1.1 What it is
 
@@ -305,14 +320,14 @@ routine that is not itself traced has its cost billed to whatever is traced
 after it. `np_move` wore `np_vmove`'s 4,664 ms until `np_move` was given a
 breakpoint of its own.
 
-### 5.1.1 Up out of the top of the view — ~5.2 s, and it was ~20 s and WRONG
+### 5.1.1 Up out of the top of the view — 5.2 s → 380 ms (SPEC.md §27.13)
 
-Still open, and now the largest single latency left in the editor.
+The row index was built for this and it is what fixed it. Four separate walks
+per press each needed a row above the view — `np_vmove`'s, `np_move`'s, the
+caret-follow net's and `np_scrollpaint`'s — and every one of them fell back to
+laying out the note from index 0.
 
-The row wanted is above the view, `np_rows` describes visible rows only, so
-nothing can seed it and `np_redraw`'s caret-follow net walks unbounded by
-§27.7.7's own design. **This is the case §1's row index was designed for**,
-and it is the strongest argument for building it.
+Still **3.8x over budget** at 380 ms; §7 is the accounting.
 
 What §27.7.9 did reach here was the correctness half. Before it, `Up` was
 **14.9–20.4 s** and the view *flew to the end of the note* — `[np_top]` going
@@ -384,6 +399,29 @@ the package's own dispatcher `retf` (SPEC.md §20.2, offset 14). Without that
 terminator the same click reads **445 ms**, because the trace ends at the last
 label inside the callback and §6.5's rule bills `np_paint`'s own 578 ms to
 nobody. The first number this measurement produced was that 445.
+
+### 5.2.1 The first scroll after opening leaves ~11 cells stale
+
+**Found while pixel-verifying §27.13, and it PREDATES all of this work** — the
+A/B is what says so, and it is the reason this is a report rather than a
+regression. Open README.TXT, press Down 24 times, then force a full repaint by
+covering the window and raising it: **705 content pixels change**, about
+eleven glyph cells. Every later state in the same session is pixel-identical.
+
+Both builds show it, in the same state (`top` = 9, `cur` = 482), at the same
+705 pixels — the pre-index build and the post-index one alike. The index build
+is strictly better either side of it: the baseline diverges again on the next
+check (3,422 pixels) where the index build is 0.
+
+What is special about the first sequence is that §27.7.3's background height
+count is still running through it, so the suspicion is an interleaving between
+the worker's chunk and the redraw's signatures rather than anything about
+seeding. **Ruled out:** it is not the row index (it predates it), and it is
+not the caret or a toast (an idle screen sampled twice is 0 differing pixels,
+so the instrument is not manufacturing it).
+
+`tools/notepad` + the crop-to-content diff in this entry reproduces it in one
+run; that harness is the thing to start from.
 
 ### 5.3.1 `[np_rowsn]` is not capped to the array it indexes
 
@@ -530,3 +568,87 @@ real unbounded walk, and does nothing at all for the report it was written for
 §27.7.3 was lost the same way, to a diagnosis (`[np_lastrow]` clobbered at
 `notepad.asm:1050`) that named a line inside a routine which never runs on
 that path.
+
+---
+
+## 7. The latency budget
+
+**The target is one typematic repeat — ~100 ms (SPEC.md §2951).** It is the
+right target and not an arbitrary one: below it, a held key cannot outrun the
+editor, so nothing the user does by leaning on a key can build a backlog. It
+applies to every user-triggered interaction *except* opening a document, which
+is disk-bound.
+
+Measured on MartyPC's cycle-accurate 4.77MHz 8088, README.TXT (15,428
+characters, 781 rows) in a 16-row × 29-column window — the smallest realistic
+case, and a wider window is worse:
+
+| interaction | at the start of this round | now | budget |
+|---|---|---|---|
+| `Up` that scrolls | 5,150 ms | **380 ms** | 100 |
+| `Down` that scrolls | 4,802–5,088 ms | **250–410 ms** | 100 |
+| `Down`/`Up` inside the view | 104–252 ms | **104–252 ms** | 100 |
+| typing at the front | 414 ms | **257 ms** | 100 |
+| raise of an obscured window | 1,026 ms | 1,026 ms | 100 |
+| `Up`/`Down` with nothing to do | 4,956 ms | **145 ms** | 100 |
+
+**Nothing is at budget yet.** Two costs remain and neither is a seeding
+problem any more — §27.13 removed the last of those.
+
+### 7.1 Pass 1 walks the view to find out what changed — ~155 ms
+
+`np_redraw`'s first pass lays out from the caret's row to the bottom of the
+view to discover which rows' signatures moved. That is ~6 ms a row (§2), so it
+is `(vrows − caret row) × 6` and hits ~96 ms with the caret at the top of a
+16-row view — the whole budget, before anything is drawn.
+
+**For a CARET MOVE it is provably unnecessary.** No character moved, so the
+only rows whose signatures can differ are the one the caret left and the one
+it arrived on; `np_ask` folds the caret into a row's signature and nothing
+else about those rows changed. `np_move` already knows both rows —
+`[np_ckpr]` is the new one — so the walk could be bounded to `max(old, new)`
+instead of `[np_vrows]`.
+
+Not attempted here, and the reason is worth stating: pass 1 also sets
+`[np_rowsn]`/`[np_rowsok]` from where it stopped, so a shorter walk shrinks
+what `np_rows` describes and pushes more traffic onto §27.13's index. That is
+probably fine — the index exists now — but it is a change to the invariant two
+other sections rest on, and it wants its own round and its own A/B rather
+than being bolted onto this one.
+
+### 7.2 A one-row scroll draws ~186 ms
+
+`np_scrollpaint` after §27.13's band bound is: one `OSAPI_GFX_SCROLL` over the
+content, a strip fill, a band fill, ~4 rows of layout from the checkpoint, one
+row of text (29 cells ≈ 29 ms at PERFORMANCE.md's ~1 ms a cell), two XOR
+selection bands and `np_sbar`.
+
+The lettering is near its floor. The blit is not obviously so — it moves the
+whole content rect to shift it one row — and `np_sbar` redraws the whole
+scroll bar for a thumb that moved a pixel. Those two are where the next
+measurement should go, and `tools/notepad/lab.py trace` will attribute them
+once they have breakpoints of their own (§6.5).
+
+### 7.3 The raise is the glyph floor and needs a different idea
+
+§5.3: 1,026 ms, of which 578 ms is `np_paint` lettering 464 cells that were
+genuinely overwritten while the window was covered. No walk is involved any
+more — §27.13 seeds it — so there is nothing left to make cheaper except
+drawing fewer glyphs, and every one of them is a glyph the user needs to see.
+Getting a raise under 100 ms means not repainting at all: a save-under, or a
+window that keeps its own back buffer. Both cost RAM this machine does not
+obviously have (§50), and both are a window-manager change rather than a Note
+Pad one.
+
+### 7.4 What the budget would need
+
+Honest arithmetic, on the 16-row window and the ~1 ms glyph cell:
+
+- a keystroke that changes one row: 1 row of layout (6 ms) + 1 row of glyphs
+  (29 ms) ≈ **35 ms**. Reachable, and §7.1 is what stands in the way.
+- a one-row scroll: the blit + 1 row of glyphs ≈ **50–60 ms** if the blit and
+  the bar come down. Reachable.
+- a raise: **464 ms of glyphs, or a repaint that does not happen.** Not
+  reachable by making the existing path faster.
+
+So two of the three are in range and the third needs a different mechanism.

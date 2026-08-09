@@ -11712,6 +11712,86 @@ is above the view, no table entry can seed it, and `np_redraw`'s net then
 walks unbounded by §27.7.7's own design — so it stays ~5.2 s and is the case
 docs/NOTEPAD-NOTES.md 1's row index was designed for.
 
+### 27.13 The row index — a row outside the view without walking to it
+
+`np_rows` (§27.5) describes the VIEW and nothing else, so every question about
+a row outside it fell back to laying the note out from index 0. That is `Up`
+out of the top of the view, and it measured **5.2 s a press** on a 781-row
+note — the other half of the most-used pair of keys in the editor, and the
+case §27.7.9's `np_seedtail` explicitly cannot reach because the deepest row
+a table holds is no seed for a row *above* it.
+
+`np_xi` is a sparse table of the character index at which every Kth
+**absolute** row begins: entry n describes row `n << [np_xksh]`. **It costs no
+walking at all** — §27.7.3's background count already visits every row in
+order and already computes exactly this, so `np_xnote` keeps what was being
+thrown away. It hangs off `np_rstart`, which runs once per row of every walk,
+and is one compare against `[np_xnext]` unless that row is wanted.
+
+**Bounded by decimation, not by growing.** A note of nothing but newlines is
+one row per character, so at `NP_MAXKB` the worst case is 16,384 rows.
+`np_xhalve` keeps every second entry and doubles the stride: the table then
+always spans the whole note, always costs `NP_XN` entries, and the walk from
+the nearest checkpoint is at most K rows — which grows only logarithmically in
+the note's length. `[np_xnext]` is deliberately not recomputed by a halving,
+because it is `xn * K` and halving one while doubling the other leaves that
+product exactly where it was.
+
+Five consumers, and between them they cover every "where is a row I cannot
+see" in the module: `np_vmove` and `np_move` (the caret leaving the top of the
+view), `np_redraw`'s caret-follow net through `np_xseedi`, `np_redraw`'s pass 1
+and `np_scrollpaint` (both of which lose `np_rows` to `np_scrollto` on every
+scroll), and `np_paint`, whose full repaint otherwise walks to the view before
+it can draw it.
+
+**`np_xseedi` is the one that retires §27.7.7's last sentence.** The net has
+the caret's index and wants its row, so a binary search finds the checkpoint
+below it — and if a *later* checkpoint exists, the caret's row is provably
+above that one, so the walk gets a bound. "The walk is still unbounded, and
+has to be" was true only while the table did not exist.
+
+Four things are load-bearing:
+
+- **The stored row is ABSOLUTE.** `[np_top]` moves under the table;
+  `[np_sdr]` is a visible row and is derived at seed time.
+- **Only the next entry owed is ever taken.** A seeded walk skips the rows
+  above its seed, so a table recording whatever it happened to pass would have
+  holes — and a lookup landing in one answers for a row nobody walked, which
+  is docs/FIELD-NOTES.md 4's shape. Contiguous or nothing.
+- **The table describes ONE layout**, so `np_hmark` drops it. That is the same
+  event, not two: a table of where rows begin means nothing under a layout
+  where they begin somewhere else, and keeping them one call is what stops a
+  later edit raising the height debt and forgetting the index.
+- **The stride is a power of two, kept as its log.** Every lookup would
+  otherwise be a `div` — 150 clocks against a shift's 10, once per row.
+
+**`NP_XN` is the whole cost model, and being frugal with it was the first
+cut's mistake.** A lookup lands at or *before* the row wanted, so the walk
+after it is up to K rows — and one keystroke runs FOUR walks, each paying that
+K. At 64 entries a 781-row note decimates to K = 16 and an `Up` walked 68 rows
+for one row of new text. 256 entries hold the same note at K = 4, for 512
+bytes of a package's own bss.
+
+Measured on a cycle-accurate 4.77MHz 8088, README.TXT, 16-row view:
+
+| `Up` that scrolls | |
+|---|---|
+| before the index | 5,150 ms |
+| index at `NP_XN` = 64 | 644 ms |
+| ...at 256 (K = 4 here) | 520 ms |
+| ...and `np_scrollpaint` bounded to its band | **380 ms** |
+
+That last one is not the index but it was hidden behind it: the exposed-row
+walk ran to the bottom of the view when only the band is drawn. Nothing below
+`[np_bd1]` needs laying out either — `OSAPI_GFX_SCROLL` moved those pixels and
+`np_shiftrows` moved `np_sig` and `np_rows` by the same `d`, so their
+descriptions already match the glass.
+
+**It is 13.6x and it is still 3.8x over budget**, the target being one
+typematic repeat (~100 ms, §2951) so that no held key can outrun the editor.
+What is left is 155 ms of pass 1 and 186 ms of drawing, and neither is a
+seeding problem — see docs/NOTEPAD-NOTES.md §7.
+
 ### 27.8 A selection, and the two things a drag can mean
 
 The selection is a **pair of character indices**, `[np_sel0]`..`[np_sel1)`,

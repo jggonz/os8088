@@ -50,12 +50,18 @@ def offsets(bin_path, asm=ASM):
         if v is not None:
             out[m.group(1)] = base + v
 
-    # NPVAR runs sequentially from whatever NPB was last %assign'd.
+    # NPVAR runs sequentially from whatever NPB was last %assign'd - and that
+    # start is an EXPRESSION, `508 + NP_MAXROWS*2`. Matching only its leading
+    # digits put every NPVAR-declared field 120 bytes out, which read as the
+    # row index holding impossible values and sent a whole diagnosis at the
+    # code instead of at this line (docs/NOTEPAD-NOTES.md 6.3, in the probe).
     npb = None
     for line in src.splitlines():
-        m = re.match(r"^\s*%assign\s+NPB\s+(\d+)", line)
-        if m:
-            npb = int(m.group(1))
+        m = re.match(r"^\s*%assign\s+NPB\s+([^;\n]+)", line)
+        if m and "NPB +" not in m.group(1):     # not the macro's own bump
+            v = val(m.group(1).strip())
+            if v is not None:
+                npb = v
             continue
         m = re.match(r"^\s*NPVAR\s+(np[a-z0-9_]*)\s*,\s*([0-9A-Za-z_*+ ]+)", line)
         if m and npb is not None:

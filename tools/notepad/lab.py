@@ -65,7 +65,9 @@ TRACE_LABELS = PRESS_LABELS + ["np_seedck", "np_seedrow", "np_seedtail",
                                "np_scrollto", "np_scrollpaint", "np_walk",
                                # the edit path, for a typing question
                                "np_ins", "np_room", "np_urec_ins", "np_hmark",
-                               "np_delspan", "np_reconcile", "np_brkdraw"]
+                               "np_delspan", "np_reconcile", "np_brkdraw",
+                               # the row index (SPEC.md 27.13)
+                               "np_xseed", "np_xseedi", "np_xnote", "np_xhalve"]
 
 
 # SPEC.md 20.2's dispatcher: `call bp` at PKG_DISP=12, `retf` at 14. EVERY
