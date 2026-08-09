@@ -24215,62 +24215,87 @@ What is known:
   in the system alternates volumes that often mid-write.
 
 Where to start: `make DISKCNT=1` and read §18.94's counters either side of one
-chunked copy, and the marker technique that found §19.7.1's type bug — a
-temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
-overwritten by the completion message and says nothing.
+chunked copy. Two in-guest markers are worth knowing about and **neither is
+the first thing to reach for any more**: a temporary caption that *aborts*
+(one that only sets `[hd_imsg]` is overwritten by the completion message and
+says nothing), and, better, an exec breakpoint on `hd_isrc_sub` with the
+MartyPC stepper — which is what §52.10.7.1 turned out to need and what a
+marker could not have shown, the defect there being a flag rather than a
+value. `drv_tab` at the kernel offset a listing gives, `DRVR_SEG` at +2, is
+how you turn a driver's listing offsets into the flat addresses `bp` wants.
 
-**And a second thing blocks that work today: LBA 0 does not read on
-`os8088_xt_hdd`.** The evidence, all on a **pristine** `default_xtide.vhd`
-whose sector 0 has `55 AA` at 510 and a type-04 partition at LBA 26:
+#### 52.10.7.1 CLOSED: `hd_bios_run` answered CF = 1 on success
 
-- the Control Panel's **Mount** answers `No partition table yet`;
-- the installer's slot list offers **four free slots** on that same disk;
-- **Install** refuses with `Cannot read the partition table` — `HMB_BAD`.
+This blocked everything above for a session, and it is worth keeping because
+of **how the search went wrong**, not because the fix is interesting: the fix
+is one `clc`.
 
-**The safety pass did not break this; it made it visible.** `HMB_BAD` and
-`HMB_NONE` used to be one answer, so a failing read presented as "nobody has
-partitioned this" and the installer formatted straight through it. Every
-install this session that "worked" was writing a fabricated table over a disk
-whose real one had never been read — which is exactly the data-loss shape
-§52.2.1 and `hd_part_load`'s own header describe, and the reason that
-distinction was introduced.
+`hd_bios_run` gained a CF contract in the safety pass — `CF = 1` meaning "this
+buffer cannot be transferred at all" — and `hd_bios_xfer` gained the matching
+`jc .fail`. The refusal path got its `stc`. **The success path was never given
+a `clc`**, and it ends:
 
-It is a **regression** and not a standing limitation: docs/MARTYPC-DEBUG.md
-records this same machine reading the table, mounting, and listing the DOS
-filesystem on the shipped image (`COMMAND.COM`, `CONFIG.SYS`, `Free
-31760K`). The transport is **rung 0** — int 13h through the XT-IDE ROM
-(§52.1) — so it is one of the BIOS-rung paths.
+```
+.cap:
+    cmp ax, 127         ; AX = 1 here, so this BORROWS
+    jbe .done
+    mov ax, 127         ; ...and neither `mov`
+.done:
+    pop dx              ; ...nor `pop`
+    pop cx              ; ...touches the flags
+    ret                 ; CF = 1, straight into the caller's `jc .fail`
+```
 
-Ruled out by reading, so the next reader does not repeat it:
+Every run this driver issues is below 127 — a partition-table read is one
+sector — so from that commit onward **every transfer on the BIOS rung was
+refused before an `int 13h` was issued**. All three reported symptoms are that
+one flag: Mount answering `No partition table yet`, the installer offering four
+free slots on a partitioned disk, and Install refusing with `HMB_BAD`.
 
-- **`hd_geom_push`** returns immediately unless `HDD_KIND == HDK_IDE`, so it
-  issues no task-file command on this rung.
-- **`hd_chs`** translates LBA 0 under 615×4×26 to (0, 0, 1) with no refusal
-  on any of its four `.bad` tests.
-- **The buffer alignment** the new guard depends on does hold:
-  `mem_claim`/`mem_claim_hi` allocate in whole KB from a heap top derived
-  from `int 12h`, so a region base is 1KB-aligned and `align 512` inside the
-  image lands `hd_mbr` on a 512-aligned linear address.
+**Three suspects had been ruled out by arithmetic, and the arithmetic was
+right every time.** `hd_chs` does translate LBA 0 under 615×4×26 to (0, 0, 1);
+the buffer is 512-aligned (`hd_mbr` at `0x3400` of a region based at `0x9C40`,
+so linear `0x9F800`, four sectors clear of its DMA page); `hd_bios_run` does
+compute `AX = 1`. Every one of those checks is about **the value in a
+register**, and the defect was in **a flag** — so no amount of re-checking the
+value could ever have found it, and each correct answer made the next reader
+more confident the fault was further down, in the `int 13h` and the BIOS.
 
-**`hd_bios_run` is ruled out too, by arithmetic.** Its cap is
-`neg(seg*16 + ofs) >> 9`, which for a 512-aligned buffer is at least one
-sector — the refusal it added can only fire on a buffer that is not
-512-aligned, and the bullet above shows this one is. For LBA 0 the track cap
-is `26 - 1 + 1 = 26` and `SI` is 1, so `AX` leaves as 1.
+What found it in one run was a **single-step trace of the guest**: break at
+`hd_bios_xfer`, step, and print CF beside each instruction. `cmp ax, 127` /
+`jbe .done` / `pop` / `pop` / `ret` / `jc .fail` is the whole bug, visible on
+six consecutive lines. The lesson generalises past this driver: **a routine
+whose contract is a flag must SET that flag on every exit** — a flag left over
+from the last compare is not an answer — and when a value-level audit keeps
+coming back clean, the next instrument is a stepper and not another read.
 
-That leaves the `int 13h` in `hd_bios_xfer` itself, and the next step is
-**instrumentation rather than reading**: `hd_bios_xfer` already banks the
-BIOS's own status in `[hd_status]` before it retries, so the question is
-which of `hd_chs`, `hd_bios_run` and the three `int 13h` attempts returns the
-failure, and what status the BIOS gave (0C = media type unidentified, 04 =
-sector not found, 09 = DMA page crossed, 80 = no answer — §18.93's table).
-`[di+HDD_UNIT]` reaching `DL` as 80h is worth confirming in the same pass.
+An audit of every CF-answering routine in `drivers/hdd/` found no second
+instance; the other candidates all tail-call something that sets CF explicitly
+(`hd_ide_select` through `hd_ide_wait`, `hd_fmt_wr` and `hd_part_write`
+through `hd_raw`, `hd_iread_chunk` through `OSAPI_FILE_READ_AT`).
 
-Use the technique that found §19.7.1's bug: a temporary caption that
-**aborts**, one per candidate, because a marker that only sets `[hd_imsg]` is
-overwritten by the completion message and says nothing.
+**The safety pass's `HMB_BAD`/`HMB_NONE` split is what made this visible at
+all**, and it should stay: the two used to be one answer, so a failing read
+presented as "nobody has partitioned this" and the installer formatted
+straight through it — writing a fabricated table over a live one, which is
+exactly the data-loss shape §52.2.1 describes.
 
-Nothing else in §52.10.7 is re-testable until that is settled.
+Verified on `os8088_xt_hdd` against a pristine `default_xtide.vhd`: the page
+reports `BIOS0  615x 4x 26  31M`, Mount answers `Mounted 1 volume` and puts an
+`HDD C` zone on the desktop, the volume opens on the image's DOS filesystem
+(`AUTOEXEC.BAT`, `COMMAND.COM`, `CONFIG.SYS`, `CTMOUSE.EXE`, `LTEMM.EXE`,
+`Size 43K  Free 31760K`), the installer lists `Slot 1  31M  Ready` with the
+other three `No Room`, and the VHD is byte-identical to the pristine copy
+afterwards.
+
+**One harness fix was needed first, and it is its own trap**
+(docs/MARTYPC-DEBUG.md): the MartyPC debug server could not *resume* from a
+breakpoint — `run` set `ExecutionState::Running` itself, skipping the only arm
+that clears the CPU's latched breakpoint flag, so the first breakpoint of a
+session wedged the machine at zero cycles. Nothing looked broken from the
+host: `status`, `regs` and `read` all answered, and the guest merely stopped
+executing, so scripted mouse packets went nowhere and read as *the guest
+ignoring input*.
 
 ## 53. fsx.inc — fullscreen exclusive
 
