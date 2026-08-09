@@ -307,6 +307,15 @@ make field    # ...and the FIELD disks: herc, cga, cga720, flop1 and cqdiag,
               # KIMG_PARA rung - same rung, exactly comparable - and never
               # fails the build, since growing is allowed and only has to be
               # known about
+make fontlist # the TYPEFACES in fonts/ (SPEC.md 6.2.1) and what each is;
+              # `make font-<name>` builds 360KB + 1.44MB system disks in one,
+              # `make fonts` all of them, `make fontsheet-<name>` a proof
+              # sheet. The rules are GENERATED from the directory, so adding a
+              # face is adding a file. None of it is in `all` and none of it
+              # touches the shipped images: the default is still the machine's
+              # own ROM font, because FONT= goes to a sub-make and not to this
+              # one, and each face's kernel is built in build/fontk-<name>/
+              # for the reason the cgak note below gives
               # --- THE DEFAULT. Everything above this line is the fallback ---
 make marty    # the MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug
               # server bolted into MartyPC's headless frontend, pinned to one
@@ -615,9 +624,34 @@ what ships when it is asked for — and it is off by default, so a plain `make`
 is byte-identical with or without it:
 
 ```
-make FONT=os8088       # bake fonts/os8088.f8 in; no int 10h, no F000:FA6E
-python3 tools/os88font.py fonts/os8088.f8 --preview /tmp/sheet.png --cga
+make fontlist          # the faces in fonts/, and what each one is
+make font-stencil      # 360KB + 1.44MB system disks in that face, built in
+                       # build/fontk-stencil/ and named build/font-stencil-360.img
+make fonts             # ...all of them
+make fontsheet-thin    # proof sheets, VGA pixels and the CGA's 2.4:1
+make FONT=os8088       # the raw knob: bake it into build/ - no int 10h, no F000:FA6E
 ```
+
+**`fonts/` holds four faces and the target list is the DIRECTORY, not a list
+anybody maintains** (SPEC.md §6.2.1): `os8088` (the house face), `thin`,
+`smallcap` and `stencil`. Drop a `.f8` in and `make font-<name>` exists on the
+next run. **Prefer `make font-<name>` over `make FONT=<name>`** — the knob
+lands its kernel in `build/` on top of the shipped one, which is the mistake
+the `cgak` note is about, while the target builds in `build/fontk-<name>/` and
+names its disks for the face. Neither is in `all`; `FONT=` is passed to a
+sub-make and never to the top one, which is *why* the default stays the
+machine's ROM set rather than a promise that it does.
+
+**The stencil is where the grid pushed back and it is worth knowing before
+drawing another display face.** A stencil is defined by its enclosed counters
+— the piece of plate that would fall out — so the face differs from the house
+one in exactly the 22 glyphs that HAVE a counter, in 28 pixels. The breaks are
+**one pixel**, which is a legibility finding and not a preference: at 6px wide
+a letter's sides are 2px, so breaking a side removes it and `o` reads as `c`,
+`B` as `H`, `8` as `3`; a 2px break in the top arch turns `Locator` into
+`Lccatcr`. Both were drawn, looked at, and thrown away. The smallest cut that
+frees the counter is a nick in a horizontal bar, and it is plainly visible at
+8x8 without taking anything with it.
 
 **The default path depends on an address that is IBM's, not the
 architecture's.** On an EGA/VGA, int 10h AH=11h answers and the typeface is
@@ -631,10 +665,11 @@ address, and MartyPC's VGA BIOS answers AH=11h with the same 760 bytes.
 
 **The bytes ride in the boot overlay, so the cost is one floppy sector.**
 `.ovl` lands in the FAT window and dies at the first mount: footprint
-unchanged at `KERN_SIZE` 92,160, `.text` 77 bytes *smaller* (the probe is not
-assembled), `kernel.bin` 80,998 → 81,800 = 159 → 160 sectors, ~65 ms of a ~10 s
+unchanged at `KERN_SIZE` 93,696, `.text` 78 bytes *smaller* (the probe is not
+assembled), `kernel.bin` 82,534 → 83,336 = 162 → 163 sectors, ~65 ms of a ~10 s
 boot on the 5150. The overlay is 75% full afterwards — 1,144 bytes left — and
-that is the number to watch before putting anything else in there.
+that is the number to watch before putting anything else in there. Every face
+costs the same, the table being 760 bytes whatever is in it.
 
 Two things do not follow the baked font and one of them cannot. A package
 that asks `OSAPI_FONT_GLYPHS` gets whatever was loaded (apps/artful was the

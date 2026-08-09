@@ -205,6 +205,11 @@ endif
 #
 # The generated include goes in $(BUILD) and is never tracked, like every
 # other artifact; -I $(BUILD)/ on the kernel rule is what finds it.
+#
+# $(FONTS) is the fonts/ DIRECTORY and not a list anybody maintains - drop a
+# .f8 in and it is a build target on the next run (see the font-<name> block
+# further down, which is generated from this).
+FONTS := $(sort $(patsubst fonts/%.f8,%,$(wildcard fonts/*.f8)))
 ifneq ($(FONT),)
 FONTSRC := fonts/$(FONT).f8
 FONTINC := $(BUILD)/font8x8.inc
@@ -213,8 +218,7 @@ VIDDEF  += -DBAKED_FONT
 # fonts/x.f8", which says nothing about the knob that asked for it or about
 # what else there is to ask for.
 ifeq ($(wildcard $(FONTSRC)),)
-$(error FONT=$(FONT): there is no $(FONTSRC). Available: \
-        $(patsubst fonts/%.f8,%,$(wildcard fonts/*.f8)))
+$(error FONT=$(FONT): there is no $(FONTSRC). Available: $(FONTS))
 endif
 endif
 # ...and the rule that builds it is DOWN with the kernel's, not here. A target
@@ -233,6 +237,25 @@ endif
 # about a file that recipe just removed, and then build the floppy image from
 # a kernel that is not there. Doing it here means the file is simply gone
 # before make builds its graph.
+#
+# ...and $(KNOBS) is WHICH ONES WERE ASKED FOR, for the banner the kernel rule
+# prints. It cannot be "is $(VIDDEF) non-empty", which is what it used to be.
+# That test WORKED until the kern_small/kern_big split, which started putting
+# -DKERN_BIG in VIDDEF unconditionally - exactly one of the two is always
+# defined (see the block above) - and from then on the alarm fired on every
+# build ever made, naming a row of blank assignments. A warning that is always
+# on is a warning nobody reads, and this one exists to stop a knob kernel being
+# tested for detection or cut into a release. Worth noticing as a shape: a
+# change somewhere else silenced a guard by making it shout.
+#
+# The variant is deliberately NOT in this list, which is tools/kernsize.py's
+# distinction and worth keeping the two files agreed on: KERN_BIG/KERN_SMALL
+# are two SHIPPED PRODUCTS (docs/KERN-SPLIT-PLAN.md), `make small` builds one
+# into a directory of its own and it forces no probe; everything else here
+# produces a kernel nobody ships.
+KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
+                             DIRW1 REDRAWFULL SNDSNIFF RAMKB FONT,\
+                             $(if $($(k)),$(k)=$($(k)))))
 VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
@@ -251,6 +274,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field stackprobe trklog npbench clicktest marty comscan \
+        fonts fontsheets fontlist \
         checkdocs clean clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -310,17 +334,12 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) tools/os
 # extra assembly of the kernel, which is why it is not folded into the line
 # above: -w+error would turn its %warning into an error, and relaxing that
 # for every build would silence a %warning somebody meant as an alarm.
-	@python3 tools/kernsize.py $(VIDDEF) || true
-# ...and this tests the KNOBS, not $(VIDDEF). It used to test VIDDEF, which was
-# empty on a plain build until the kern_small/kern_big split started putting
-# -DKERN_BIG in it unconditionally - after which the alarm fired on every
-# build, with every knob it names blank. A warning that is always on is a
-# warning nobody reads. The variant is not a knob: it is which PRODUCT this is,
-# `make small` builds it into a directory of its own, and it forces no probe.
-ifneq ($(VIDEO)$(HERCSEG)$(RTC)$(DISKCNT)$(DISKAL)$(BOOTDIAG)$(FLOPPY1)$(DIRW1)$(REDRAWFULL)$(SNDSNIFF)$(RAMKB)$(FONT),)
-	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC) DISKCNT=$(DISKCNT) FLOPPY1=$(FLOPPY1) FONT=$(FONT): ***"
-	@echo "  *** kernel is                                                  ***"
-	@echo "  *** BUILT WITH A KNOB - a forced probe and/or disk counters.   ***"
+	@python3 tools/kernsize.py --build $(BUILD) $(VIDDEF) || true
+# ...and this tests the KNOBS, not $(VIDDEF), and NAMES them: the banner used
+# to be a row of blank assignments, which says no more than the alarm itself.
+# Both halves of that were the same bug and $(KNOBS) is where it is explained.
+ifneq ($(KNOBS),)
+	@echo "  *** BUILT WITH A KNOB: $(KNOBS)"
 	@echo "  *** It boots that way on every machine. Rebuild with a plain   ***"
 	@echo "  *** \`make\` before testing detection or cutting a release.      ***"
 	@echo "  *** DISKCNT=1 ALONE is expected: it is in every field kernel   ***"
@@ -1270,6 +1289,81 @@ kernsplit:
 	@$(MAKE) $(BUILD)/kernel.bin
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/kernel.bin
 	@python3 tools/kernsplit.py $(SMALLDIR)/kernel.bin $(BUILD)/kernel.bin
+
+# --- a build target per TYPEFACE (SPEC.md 6.2) -------------------------------
+#
+# `make font-stencil` is a pair of system disks in that face; `make fonts` is
+# all of them; `make fontsheet-<name>` is the proof sheet, on VGA pixels and
+# on the CGA's 2.4:1 ones. None of it is in `all` and none of it changes a
+# shipped byte - THE DEFAULT IS STILL THE MACHINE'S OWN ROM FONT, because
+# these rules pass FONT= to a sub-make and never to this one.
+#
+# The rules are GENERATED from $(FONTS), which is the fonts/ directory read at
+# parse time, so adding a face is adding a file: `make fontlist` will list it,
+# `make fonts` will build it, and nothing here has to be edited. That is the
+# whole point - the knob could always name any face, but only one existed and
+# only one thing could be built with it.
+#
+# Each face's kernel goes in a directory of ITS OWN, build/fontk-<name>/, for
+# the reason `small` and the field kernels do (the cgak note above): a kernel
+# built with a knob that reaches build/ is one somebody boots by accident
+# believing it is the shipped one, and that mistake has been made here. The
+# finished disks are named for the face and sit in build/ like the field
+# disks, because a disk says which face it carries in its own file name.
+#
+# The APPS disks are NOT rebuilt and must not be, which is `small`'s argument
+# exactly: a package reaches text through OSAPI_FONT_* and carries no glyphs
+# of its own, so build/apps360.img pairs with every one of these.
+FONTDIR = $(BUILD)/fontk-$(1)
+
+define FONT_TARGETS
+$$(BUILD)/font-$(1)-360.img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $$(SYSDOC) \
+                             tools/os88font.py tools/os88disk.py
+	@$$(MAKE) BUILD=$$(call FONTDIR,$(1)) FONT=$(1) $$(call FONTDIR,$(1))/boot360.bin
+	python3 tools/os88disk.py -o $$@ --size 360 \
+		--boot $$(call FONTDIR,$(1))/boot360.bin \
+		--kernel $$(call FONTDIR,$(1))/kernel.bin \
+		$$(DRIVERS) $$(SYSAPPSARGS) $$(SYSDOC) $$(MEDIAFOLDER)
+	@echo "font: $$@ - a 360KB system disk set in $(1)"
+
+$$(BUILD)/font-$(1).img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $$(SYSDOC) \
+                         tools/os88font.py tools/os88disk.py
+	@$$(MAKE) BUILD=$$(call FONTDIR,$(1)) FONT=$(1) $$(call FONTDIR,$(1))/boot.bin
+	python3 tools/os88disk.py -o $$@ --size 1440 \
+		--boot $$(call FONTDIR,$(1))/boot.bin \
+		--kernel $$(call FONTDIR,$(1))/kernel.bin \
+		$$(DRIVERS) $$(SYSAPPSARGS) $$(SYSDOC) $$(MEDIAFOLDER)
+	@echo "font: $$@ - the same disk on 1.44MB, for \`make run\`"
+
+$$(BUILD)/fontsheet-$(1).png: fonts/$(1).f8 tools/os88font.py | $$(BUILD)
+	python3 tools/os88font.py $$< --preview $$@ --zoom 3
+$$(BUILD)/fontsheet-$(1)-cga.png: fonts/$(1).f8 tools/os88font.py | $$(BUILD)
+	python3 tools/os88font.py $$< --preview $$@ --zoom 3 --cga
+
+font-$(1): $$(BUILD)/font-$(1)-360.img $$(BUILD)/font-$(1).img
+fontsheet-$(1): $$(BUILD)/fontsheet-$(1).png $$(BUILD)/fontsheet-$(1)-cga.png
+.PHONY: font-$(1) fontsheet-$(1)
+endef
+$(foreach f,$(FONTS),$(eval $(call FONT_TARGETS,$(f))))
+
+fonts:      $(addprefix font-,$(FONTS))
+fontsheets: $(addprefix fontsheet-,$(FONTS))
+
+# What is there to ask for, and what each one is - read out of the face's own
+# first comment line, so a new .f8 describes itself here and cannot go stale.
+fontlist:
+	@echo "typefaces in fonts/ (SPEC.md 6.2):"
+	@for f in $(FONTS); do \
+		printf '  %-10s %s\n' "$$f" \
+		  "$$(sed -n '1s/^# *//p' fonts/$$f.f8)"; \
+	done
+	@echo
+	@echo "  make FONT=<name>       bake one into build/ (a KNOB build)"
+	@echo "  make font-<name>       ...or into disks of its own, safely"
+	@echo "  make fontsheet-<name>  proof sheet, VGA and CGA aspect"
+	@echo "  make fonts             every face above"
+	@echo
+	@echo "  the DEFAULT is no FONT= at all: the machine's own ROM 8x8 set."
 
 field: $(BUILD)/herc.img $(BUILD)/cga.img $(BUILD)/cga720.img $(BUILD)/flop1.img \
        $(BUILD)/cqdiag.img

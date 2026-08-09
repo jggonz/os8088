@@ -1458,6 +1458,9 @@ and the Timer (§14.1).
 rather than whatever the machine's ROM holds. **It is off by default and the
 shipped images do not use it**: the ROM probe above is still what a plain
 `make` assembles, so this changes no released byte until somebody asks for it.
+`fonts/` holds four faces — `os8088`, `smallcap`, `stencil` and `thin` — and
+§6.2.1 is how a build target exists for each of them without anybody
+maintaining a list.
 
 **What the probe actually depends on.** On a VGA or EGA machine int 10h
 AH=11h answers and the typeface is that *card's*. On everything else — which
@@ -1490,13 +1493,17 @@ lands in the FAT window, so those bytes cost **no `KERN_BUDGET` and no
 `KERN_CODE_MAX` at all**; and because the probe is not assembled in a baked
 build, `.text` gets *smaller*. Measured, against the same tree:
 
-| | ROM probe | `FONT=os8088` |
+| | ROM probe | `FONT=<name>` |
 |---|---|---|
-| `.text` | 51,686 | 51,609 (**−77**) |
+| `.text` | 52,836 | 52,758 (**−78**) |
 | `.ovl` | 2,662 of 4,608 | 3,464 of 4,608 |
-| image rung slack | 122 | 199 |
-| `KERN_SIZE` footprint | 92,160 | **92,160 — unchanged** |
-| `kernel.bin` | 80,998 | 81,800 (159 → **160 sectors**) |
+| image rung slack | 284 | 362 |
+| `KERN_SIZE` footprint | 93,696 | **93,696 — unchanged** |
+| `kernel.bin` | 82,534 | 83,336 (162 → **163 sectors**) |
+
+Every face costs exactly the same, because the table is 760 bytes whatever is
+in it — the figures above are `FONT=stencil` and the other three are
+byte-for-byte the same sizes.
 
 So the whole cost is **one floppy sector**, ~65 ms of a ~10 s boot on the
 5150 (PERFORMANCE.md Part 2). The one number worth watching is the overlay's
@@ -1522,13 +1529,40 @@ wrong.) And the blank-row fraction has to stay near the ROM's 25%: the
 renderer skips a blank glyph row whole, so an inkier face is a slower one at
 PERFORMANCE.md's ~1 ms a cell.
 
-**`fonts/os8088.f8` is the shipped example**, drawn for this OS rather than
+**`fonts/os8088.f8` is the house face**, drawn for this OS rather than
 adapted from anything: square bowls and flat terminals where the ROM font
 chamfers its corners, six columns for the round capitals where the ROM font
 takes seven, and the 2-pixel stems kept, because on CGA's 640x200 a
 one-pixel vertical stroke reads far thinner than a one-pixel horizontal one
 and a light face is a spindly face there. The marks with only one sensible
 8x8 solution — space, `-`, `|`, `.`, `_` — are the same as everyone's.
+
+**The other three are variations on it, and each was drawn against a rule the
+grid imposes.** `thin` is the house skeleton with every 2px stem eroded to
+1px — the light weight the paragraph above says will be spindly on a CGA,
+which is now a thing that can be looked at rather than argued about.
+`smallcap` replaces `a`..`z` with 5-row capitals on the x-height, same
+strokes and widths as the caps, so a line of text has one colour. `stencil`
+is the one with a rule worth writing down.
+
+**A stencil is defined by its counters, not by its breaks.** The plate is the
+background and the letter is the aperture, so the piece that would fall out
+is an *enclosed counter* — the inside of an `o`, both bowls of a `B` — and
+the face's whole job is that no glyph has one. `stencil.f8` therefore differs
+from the house face in exactly the **22 glyphs that have a counter**
+(`#&04689ABDOPQRabdegopq`) and in **28 pixels** all told; every other glyph is
+the house face untouched, which is what keeps it readable at this size.
+
+**The breaks are one pixel, and that is a legibility finding rather than a
+preference.** Two bolder schemes were drawn first and both failed on the
+glass. Breaking the *side* of a bowl is what a stencil looks like at a
+display size, and here a 6px-wide letter has 2px sides, so removing one
+removes the side entirely: `o` read as `c`, `B` as `H`, `8` as `3`. Breaking
+the top with a 2px gap was worse in a different way — it takes the arch that
+distinguishes a round letter, and `Locator` came out as `Lccatcr`. What works
+is the *smallest* cut that frees the counter, which at 8x8 is almost always a
+single pixel out of a horizontal bar: plainly visible as a nick, and it takes
+nothing with it. A face this size has no room for a gesture.
 
 **Nothing else in the system follows it.** `osapi_font_glyphs` hands out
 whichever table was loaded, so a package that asks gets the baked face for
@@ -1540,6 +1574,52 @@ character cells drawn by the *card's* own ROM font, so on a baked build that
 screen is in the machine's typeface and the rest of the OS is in ours. That
 is a property of borrowing the hardware's rasterizer and there is no fix
 short of not doing it.
+
+#### 6.2.1 A build target per typeface, generated from the directory
+
+`FONT=` could always name any face; for a long time only one existed, and
+there was only one thing to build with it — a `make FONT=<name>` that lands
+its kernel in `build/` on top of the shipped one. Both halves of that are
+fixed here, and neither changes a released byte.
+
+**The list is the directory.** `FONTS := $(patsubst fonts/%.f8,%,$(wildcard
+fonts/*.f8))` is read at parse time and `$(foreach)`/`$(eval)` emits the
+rules, so **adding a face is adding a file**: drop `fonts/gothic.f8` in and
+`make font-gothic`, `make fontsheet-gothic` and a row in `make fontlist`
+exist on the next run with nothing edited. `fontlist` reads each face's
+one-line description out of its own first comment, so the listing cannot go
+stale either.
+
+| target | what it is |
+|---|---|
+| `make fontlist` | the faces, with what each one is |
+| `make font-<name>` | system disks in that face, 360KB **and** 1.44MB |
+| `make fonts` | all of them |
+| `make fontsheet-<name>` | the proof sheet, VGA pixels and the CGA's 2.4:1 |
+| `make FONT=<name>` | the raw knob, unchanged — a `build/` kernel |
+
+**Each face's kernel is built in `build/fontk-<name>/`**, which is `small`'s
+rule and the field kernels' (§39.9): a kernel built with a knob that reaches
+`build/` is one somebody boots by accident believing it is the shipped one,
+and that mistake has been made in this tree. The finished disks are named for
+the face — `build/font-stencil-360.img` — the way the field disks are, so a
+disk says what it carries. **The apps floppy is not rebuilt and must not be**:
+a package reaches text through `OSAPI_FONT_*` (§20.3) and carries no glyphs,
+so one `build/apps360.img` pairs with every one of these.
+
+**Nothing here is in `all`, and `FONT=` is passed to a sub-make and never to
+the top one** — which is the mechanism, not a promise, behind the default
+staying the machine's own ROM set. Verified both ways on a cycle-accurate
+5150 with a CGA: each face's disk boots with `font_glyphs` **byte-identical
+to its `.f8`**, and the shipped `os8088-360.img` boots with `font_glyphs`
+byte-identical to the ROM at `F000:FA6E` and differing from all four faces.
+The six shipped images are md5-identical before and after this work.
+
+**`tools/kernsize.py` takes `--build DIR`** because of this. It re-assembles
+the kernel to measure it and had `build/` hard-coded, so it could not find
+`font8x8.inc` in a sub-make's directory and reported "could not measure" on
+every baked build. It was also quietly wrong for `small`, measuring that
+kernel against `build/`'s `associco.inc` rather than `smallk`'s.
 
 ## 7. Concurrency model (read carefully — this is the crux)
 
