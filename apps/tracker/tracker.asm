@@ -157,10 +157,24 @@ TRK_PREROLL equ 6                   ; ring halves staged before the stream is
                                     ; wide-rate special case was for: above
                                     ; 22 kHz the kernel plays 4KB halves and
                                     ; an odd pre-roll covers one of them.
-                                    ; The cost is four more halves mixed on
-                                    ; the UI task inside the Play handler -
-                                    ; a tenth of a second on an XT, paid
-                                    ; where the user is already waiting
+                                    ; The cost is six halves mixed on the UI
+                                    ; task inside the Play handler, and this
+                                    ; comment used to say "a tenth of a second
+                                    ; on an XT". MEASURED on a cycle-accurate
+                                    ; 5150 it is 0.8 SECONDS - 12,288 bytes is
+                                    ; 2.23 s of audio at the XT rate and the
+                                    ; mixer runs at about a third of real time
+                                    ; (PERFORMANCE.md Set 20), so the estimate
+                                    ; was out by 8x. It is the longest thing
+                                    ; this app does with the gfx lock held, it
+                                    ; is why playback LOOKS jerky before it
+                                    ; looks smooth, and it is announced rather
+                                    ; than shortened: the ring never starves
+                                    ; (lead measured at 14,336+ of 16,384
+                                    ; throughout), so a smaller pre-roll would
+                                    ; move the cost onto the worker and back
+                                    ; towards the hitch it was raised to fix
+                                    ; (SPEC.md 45.17.2)
 TRK_MAXFEED equ 6                   ; halves mixed per worker wake, at most -
                                     ; bounds the lock-free burst so a wake
                                     ; never mixes more than ~1.1s of audio
@@ -980,6 +994,11 @@ trk_fdone:
     mov [mp_blobseg], ax            ; moved is still the one mp_load indexes
     call mp_load                    ; CF=1, AX = offset of a NUL error string
     jc .lderr
+    mov byte [ttx_shok], 0          ; a NEW module can name the same pattern
+                                    ; NUMBER with different rows in it, and
+                                    ; that is the one thing SPEC.md 45.13.6's
+                                    ; carried shadow cannot see - every other
+                                    ; input to it is in the four-way test
     mov si, mp_title                ; the loaded title becomes the status line
     call tui_msg
     mov al, 0
@@ -1527,6 +1546,9 @@ trk_play:
     mov word [tui_sub], 0           ; a tick (SPEC.md 45.15.2), which IS the
     mov byte [tui_fpt], 1           ; old per-tick staircase - the first tick
     mov byte [tui_fcnt], 0          ; measured replaces it
+    mov si, trk_s_buffer            ; ...and SAY SO, because the loop below is
+    call tui_msg                    ; the longest thing this app ever does with
+    call trk_say                    ; the gfx lock held (SPEC.md 45.17.2)
     mov cx, TRK_PREROLL             ; stage the cushion before the open, so
 .pre:                               ; the stream starts TRK_PREROLL halves
     call trk_mix_stage              ; ahead of the DSP instead of two
@@ -1719,6 +1741,23 @@ trk_play_stop:
 ; since before playback started - so stopping jumped the pattern back to
 ; where you pressed play. mp_stop leaves [mp_row] alone, which is what makes
 ; this a copy rather than a snapshot taken earlier.
+; -----------------------------------------------------------------------------
+; trk_say - put [tui_msgp] on the glass NOW, on whichever surface is up
+;
+; tui_msg only records; the pixels are the next frame's, and the next frame
+; belongs to the worker - which cannot run while this callback holds the gfx
+; lock. So a message set immediately before a long lock-held stretch would
+; appear when the stretch ENDED, which is the one moment it is no useless.
+; -----------------------------------------------------------------------------
+trk_say:
+    cmp byte [trk_tx], 0
+    jne .tx
+    call tui_msg_draw               ; windowed splash or the graphics FT2 frame
+    ret
+.tx:
+    call ttx_status                 ; the XT text screen owns the adapter, so
+    ret                             ; no kernel drawing slot may be used here
+
 ; -----------------------------------------------------------------------------
 ; trk_legend - the surface changed under a legend that was chosen FOR a
 ;              surface. Re-run trk_transport, but only if what is on the
@@ -2292,6 +2331,7 @@ trk_s_xtmon:  db 'XT mode on - Enter plays', 0
 trk_s_xtmoff: db 'XT mode off - Enter plays', 0
 trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
 trk_s_ratext: db 'Xt mode sets the rate - X first', 0
+trk_s_buffer: db 'Buffering...', 0
 trk_s_smmon:  db 'Smooth on', 0
 trk_s_smmoff: db 'Smooth off', 0
 trk_s_txxt:   db 'XT off is windowed: Esc first', 0
