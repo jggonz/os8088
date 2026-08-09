@@ -24185,13 +24185,48 @@ chunked copy, and the marker technique that found §19.7.1's type bug — a
 temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
 overwritten by the completion message and says nothing.
 
-**And a second thing blocks that work today.** Since the pre-merge safety pass
-the installer stops at `Cannot read the partition table` on MartyPC's
-`os8088_xt_hdd` — on a **pristine** `default_xtide.vhd` as well as on a
-zeroed-table one, and after the slot list has already been drawn from that
-same table, so the scan reads it and the install does not. Nothing above is
-re-testable until that is understood; it is independent of everything in
-§52.10.7 and of §19.7.1's fix.
+**And a second thing blocks that work today: LBA 0 does not read on
+`os8088_xt_hdd`.** The evidence, all on a **pristine** `default_xtide.vhd`
+whose sector 0 has `55 AA` at 510 and a type-04 partition at LBA 26:
+
+- the Control Panel's **Mount** answers `No partition table yet`;
+- the installer's slot list offers **four free slots** on that same disk;
+- **Install** refuses with `Cannot read the partition table` — `HMB_BAD`.
+
+**The safety pass did not break this; it made it visible.** `HMB_BAD` and
+`HMB_NONE` used to be one answer, so a failing read presented as "nobody has
+partitioned this" and the installer formatted straight through it. Every
+install this session that "worked" was writing a fabricated table over a disk
+whose real one had never been read — which is exactly the data-loss shape
+§52.2.1 and `hd_part_load`'s own header describe, and the reason that
+distinction was introduced.
+
+It is a **regression** and not a standing limitation: docs/MARTYPC-DEBUG.md
+records this same machine reading the table, mounting, and listing the DOS
+filesystem on the shipped image (`COMMAND.COM`, `CONFIG.SYS`, `Free
+31760K`). The transport is **rung 0** — int 13h through the XT-IDE ROM
+(§52.1) — so it is one of the BIOS-rung paths.
+
+Ruled out by reading, so the next reader does not repeat it:
+
+- **`hd_geom_push`** returns immediately unless `HDD_KIND == HDK_IDE`, so it
+  issues no task-file command on this rung.
+- **`hd_chs`** translates LBA 0 under 615×4×26 to (0, 0, 1) with no refusal
+  on any of its four `.bad` tests.
+- **The buffer alignment** the new guard depends on does hold:
+  `mem_claim`/`mem_claim_hi` allocate in whole KB from a heap top derived
+  from `int 12h`, so a region base is 1KB-aligned and `align 512` inside the
+  image lands `hd_mbr` on a 512-aligned linear address.
+
+What is left is inside the safety pass's own two changes: `hd_bios_run` now
+**refuses** an unaligned buffer where it used to force a run of one, and
+`hd_part_load` now separates `HMB_BAD` from `HMB_NONE`. One of those is
+turning a read that used to complete into a failure, or reporting a failure
+that was always there — and the second reading is the more likely, since the
+first thing to check is whether `hd_raw` ever succeeded on this rung or
+merely appeared to.
+
+Nothing else in §52.10.7 is re-testable until that is settled.
 
 ## 53. fsx.inc — fullscreen exclusive
 
