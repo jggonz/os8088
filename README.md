@@ -67,130 +67,85 @@ strip](docs/screenshot.png)
 
 ## What it does
 
-Boots straight into the GUI, and boots *clean*: a 50%-dither gray desktop, a
-menu bar carrying Locator's menus, an icon per floppy drive, an empty dock
-strip along the bottom — and nothing running. Everything is launched from
-the menus. All of classic Mac's core interactions work:
+Boots straight into the GUI, and boots *clean* — nothing is running, and
+everything is launched from the menus. The classic Mac interactions are all
+here: windows you drag, raise, close and minimize; pull-down menus that
+belong to whichever application is in front; desktop drive icons; a dock; and
+a Standard File dialog for opening and saving.
 
-- **Windows** — title bars with pinstripes, a close box and a minimize box on
-  the frontmost, 1px drop shadows, drag by title bar (XOR outline, Mac-style),
-  click to raise. The close box *quits* the app; the minimize box sends it to
-  the dock.
-- **Apps as instances** — every running thing, built-in or loaded from disk,
-  is a record in one instance table (12 slots). Launching from the menu opens
-  a *new* instance up to that app's cap — two Note Pads, ten Timers — and at
-  the cap it fronts the one already open instead. Closing frees the slot, the
-  task and the memory.
-- **Dock** — the bottom strip carries one tile per live instance. Click a
-  tile to bring that window up; minimized instances show inverted until you
-  restore them.
-- **Menu bar clock** — the right end of the bar carries the date and the time
-  of day. It can show 12- or 24-hour time and, optionally, seconds; seconds
-  are **off by default**, and that is not just taste — with them hidden the
-  UI task doesn't take the drawing lock 59 seconds out of 60, so the bar
-  doesn't repaint and the cursor doesn't blink for it. At boot the kernel
-  reads the hardware RTC
-  through int 1Ah — and is fussy about it, because half these machines have
-  no CMOS clock at all: the call is poisoned and CF-guarded, every byte must
-  be valid BCD and in range, and anything short of that falls back to
-  **4 July 2026, 00:00:00**. From then on the PIT is the clock, exactly as
-  DOS does it on the same hardware. Click the cell to set it.
-- **Menus, and the app that owns them** — press in the bar, drag through
-  pull-downs with live highlight, release to choose. The chip menu on the
-  left is the same in every application (About os8088 / Control Panel /
-  Task Manager); **everything to its right belongs to whatever application
-  is in front** — its name, then its own menus. Bring another window
-  forward and the bar swaps to that app; click the bare desktop and it
-  swaps back to **Locator**, which is what the OS itself is called when it
-  is acting as an application (the desktop, the drive icons, the Disk
-  browser, and the menus that launch everything else): Locator →
-  File → Timer / Bounce / Disk / Close Window, Special → Restart. Apps get
-  their menus from one SDK call, so a loaded `.o88` from the software
-  floppy takes over the bar exactly like a built-in.
-- **Note Pad** — a loadable package on the software floppy. Type; it wraps
-  lines, Backspace and Return work, and every instance has its own buffer.
-  Its **File menu** opens and saves files on the data floppy — Open… and
-  Save As… put up the kernel's **Standard File dialog** (a modal window
-  that lists the disk, walks into folders and takes a typed 8.3 name), F2
-  saves to the current document and F3 asks. DOS line endings both ways:
-  the file opens straight up in Windows Notepad, and one written there
-  opens here.
-- **Disk icons** — the desktop shows an icon per floppy drive the BIOS
-  reports (int 11h). Click to select, double-click to open that drive in
-  the Disk window, freshly mounted.
-- **Disk** — a file manager (File → Disk, or a desktop disk icon).
-  Mounts the software floppy, lists each file with its icon, and
-  double-clicking a program loads it from disk and runs it. Yes:
-  loadable software, from a second floppy, on an 8086. A Refresh button
-  re-reads the directory after you swap disks; A/B/R keys switch drives.
-- **Icons** — a 1-bit icon system, classic Mac style: a built-in library
-  (32×32 floppy, 16×16 generic application) plus per-application icons
-  that ship inside each `.o88` package; when a disk is mounted the kernel
-  harvests them by peeking each package's first sector. Minesweeper
-  carries a mine glyph; packages without one — and any file that isn't a
-  package at all — fall back to the generic icon.
-- **Minesweeper** — the first software package: a colorful 9×9
-  minesweeper that ships on `build/apps.img`, loaded through the Disk
-  window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
-  flood fill; `F` toggles flag mode, `N` starts a new game.
-- **Timer** and **Bounce** — each instance runs as its *own pre-empted task*,
-  up to ten of each. The Timer is a stopwatch: it starts counting the moment
-  you open it, and **Start · Stop · Reset** sit under the digits — Start greys
-  out while it runs and Stop while it does not, so a button never looks
-  available and then refuses. Stopping throws its interval away rather than
-  owing it, so Start picks up where the digits stand; Reset zeroes them
-  without stopping the count. The timers tick and the balls bounce while you
-  type or
-  hold a drag: that is the PIT timer interrupt switching tasks out from under
-  each other, on an 8086. Cover half of one and it keeps going in the half
-  you can see — the kernel hands a background task the *visible region* of
-  its window and clips every draw to it. Cover it entirely and the ball still
-  steps, invisibly, so it turns up where it now is rather than where it was
-  buried.
-- **Fractal** — five fractals, four palettes, five zoom levels, rendered by
-  a package's own background task while the rest of the desktop stays live.
-  It renders in three progressive passes, so a coarse full image lands after
-  a quarter of the work, and it keeps a run-length copy of that first pass:
-  move the window and the picture is back instantly and the render *resumes*
-  instead of starting over. On a 4.77MHz XT a frame takes about two minutes,
-  which is exactly why that matters.
-- **Task Manager** — System → Task Manager: a live CPU load gauge with a
-  scrolling history graph, a RAM readout with a usage bar, and one row per
-  instance with its state, CPU share and memory. Apps with no task of their own
-  only ever run inside their window callbacks, so those callbacks are timed at
-  the dispatch site and billed to the instance; an app that *does* own a task
-  adds that task's time to the same row — the rows still add up to one total.
-- **Control Panel** — System → Control Panel: a two-pane browser, the item
-  list on the left and the selected item's settings on the right. It opens
-  on **Scheduler**, a two-way toggle between **Pre-emptive** (the boot
-  default) and **Cooperative**. Flipping it takes effect on the very next
-  timer tick — the About box's third line and the Task Manager's SCH field
-  follow — and cooperative mode still can't hang the machine: the timer keeps
-  a watchdog on the running task and forces a switch if one holds the CPU for
-  a second without yielding. The other pages: **Display** (double buffering
-  on machines with the RAM for it), **Sound**, and **Date/Time** — click a
-  field of the date or the time, then `+` / `-` to set it, with the month
-  lengths and leap years honored (31 March minus a month is 28 February) and
-  the new time written back to the hardware RTC if the machine has one. The
-  same page carries the clock's two display options — **12-hour clock**
-  (which adds an AM/PM field you can click and step, since the hour itself
-  is always kept 0..23) and **seconds in menu bar**.
+**System**
+
+- **Pre-emptive multitasking** off the 18.2Hz PIT tick — 12 task slots. The
+  Control Panel switches it to cooperative, with a watchdog so a task that
+  never yields still can't take the machine.
+- **Apps as instances**: up to 12 live at once, several copies of one app
+  included, each with its own window, task and memory. The dock carries a
+  tile per instance.
+- **Task Manager** — live CPU and RAM, one row per instance, with the work
+  done inside an app's window callbacks billed to that app.
+- **Control Panel** — Scheduler, Buffer, Display, Sound and Date/Time.
+- **Menu bar clock** — read from the hardware RTC at boot if the machine has
+  one, kept from the PIT after that, and settable.
+- **A system clipboard**, shared across apps.
+
+**Disks and files**
+
+- **FAT12 and FAT16, read and write.** The disks are ordinary volumes, so any
+  PC, Mac or Linux box mounts them — and every byte read off one is still
+  treated as hostile.
+- **Hard disks** — mounts every FAT partition it finds, installs os8088 onto
+  a drive, and boots from that partition.
+- **A file manager per volume** — open, rename, delete, make folders, and
+  Cut/Copy/Paste with drag and drop. Copies stream rather than having to fit
+  in memory.
+- **File associations** — double-click a document and it opens in its
+  program, on any volume.
+
+**Software**
+
+Fifteen loadable packages ship on the software disk, all closable and most
+multi-instance:
+
+- **Apps** — Note Pad (word wrap, DOS-readable text files), Paint,
+  ArtfulType, Fractal, Piano, Recorder, Tracker and ModPlug Player (both play
+  Amiga MOD files).
+- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command and TameGram.
+- ...plus the Task Manager itself, and HELLO, a minimal package that exists to
+  be the smallest thing the SDK can build.
+
+Timer and Bounce are built into the kernel rather than loaded. **Drivers**
+load the same way packages do — hard disk, sound, and a serial debug
+monitor.
+
+**Hardware**
+
+- **One binary drives three adapters**, picked at boot: VGA (640x480, 16
+  colors), CGA, and the Hercules mono card.
+- **Microsoft serial mouse** on COM1 or COM2 — both are probed, so the port
+  the modem is usually on stays free.
+- **Sound** — PC speaker, AdLib/OPL2, and Sound Blaster.
+- **8086 real mode throughout**, so everything from a 4.77MHz IBM PC/XT to a
+  Pentium runs the same image.
 
 ## How
 
 | piece         | how it works on an XT                                       |
 |---------------|--------------------------------------------------------------|
-| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly by default (the real Mac drew directly too). A 150KB back buffer is available as a runtime option on machines with the heap for it — it is a claim, not a reservation, so a small machine never pays for it. Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. |
+| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly by default (the real Mac drew directly too). Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. A 150KB back buffer is available as a runtime option on machines with the heap for it — it is a claim, not a reservation, so a small machine never pays for it. **CGA and Hercules are the same binary**: the adapter is probed at boot, a 1bpp renderer takes over, and the live screen size is read at runtime rather than assumed — so anything that clips or anchors to an edge is right on all three. |
 | multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 12 task slots, 512-byte stacks (sized against a measured 150-byte high-water mark). Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
 | mouse         | Microsoft serial mouse on **COM1 or COM2** (IRQ4 / IRQ3), 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. The port is neither asked nor configured: both are probed for a UART, every one that answers is listened to at once, and the first to deliver a run of clean packets wins — so the other port stays free for the modem that is usually on it. QEMU emulates a mouse natively (`-chardev msmouse`); `make run MOUSEPORT=com2` puts it on the second port. |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
-| floppy        | BIOS int 13h, one sector per call with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart; task switching pauses during a transfer (the tick still runs — the floppy motor needs it). |
-| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad saves and loads DOS-readable text files, named through the kernel's Standard File dialog). A package is a flat binary assembled at org 0 and loaded into a first-fit region of a 60KB pool that is **its own address space**, one segment per package, so there are no relocations at all: it calls the kernel through a fixed table of far-call cells at 0060:0010, and the kernel calls back through a three-byte dispatcher in the package's header. Several packages, or several copies of one, run at once. |
+| disks         | BIOS int 13h, with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart, and contiguous clusters coalesce into one transfer because a call costs roughly a disk revolution whatever it moves. Task switching pauses during a transfer (the tick still runs — the floppy motor needs it). FAT12 and FAT16, on floppies and on hard-disk partitions. |
+| software      | `.o88` packages on plain FAT volumes — any PC, Mac or Linux box can read and write the disks, and so can os8088: apps create, replace, rename and delete files through the API, and the kernel validates every byte it reads off a disk before any of it becomes an address. A package is a flat binary assembled at `org 0` and loaded into a paragraph-aligned **claim off the heap**, which is **its own address space**, one segment per package — so there are no relocations of any kind, and `tools/os88pkg.py` is a validator rather than a generator. It calls the kernel through a fixed table of far-call cells at 0060:0010, and the kernel calls back through a three-byte dispatcher in the package's header. Several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock and then arm a clip region — their window's content rect less every window above it — so a covered window draws the part that shows instead of skipping the frame; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
-The kernel is ~44KB of code and data, 63.5KB with its buffers. Kernel code is
+The kernel is ~54KB of code and data, and 89.5KB all in — buffers, stacks,
+the mount-time FAT snapshot and the boot-time code it later hands back.
+`tools/kernsize.py` prints both for the build in front of you, and attributes
+every byte to the module that emitted it, so prefer it to any figure written
+down here. Kernel code is
 near-model — CS = DS = `KERNEL_SEG` (0x0060) — with SS pointed at the task
 stacks just above it, and no linker anywhere: NASM `-f bin` flat binaries only, which keeps Apple's
 Mach-O-only toolchain out of the picture.
@@ -221,7 +176,7 @@ kernel does. There is no package pool — a 60KB reservation that every machine
 paid for whether or not anything was loaded — and retiring it is what returned
 that memory to the heap. `docs/KERNEL-MEMORY.md` is the standing account of what the budget is spent
 on, and of the measured RAM floor. The heap is simply whatever int 12h
-reports minus **89.0KB** — `tools/kernsize.py` prints that figure for the
+reports minus **91.0KB** — `tools/kernsize.py` prints that figure for the
 build in front of you, and it moves whenever the kernel does, so prefer it to
 any number written down here.
 
@@ -242,72 +197,79 @@ docs/MARTYPC-DEBUG.md a cycle-accurate 5150 with a debugger attached, and the
                      accurate
 docs/KERNEL-MEMORY.md what the kernel's byte budget is spent on, and the
                      measured RAM floor
-boot/boot.asm        512-byte boot sector: LBA->CHS, retrying reads
-kernel/kernel.asm    constants, boot sequence, includes, size assertion
-kernel/vga12.inc     mode 12h planar primitives, save/restore, gfx lock
-kernel/font.inc      ROM font grab + transparent text drawing
-kernel/mouse.inc     COM1/COM2 UARTs, IRQ4+IRQ3 ISRs, packet decode, cursor
-kernel/sched.inc     PIT hook, context switch, spawn/yield/sleep,
-                     pre-emptive/cooperative mode + watchdog
-kernel/events.inc    ISR-safe event ring queue
-kernel/clock.inc     the system clock: RTC probe/read/write, date + time
-                     kept from the PIT, formatting for the bar and the panel
-kernel/wm.inc        window records, z-order, frames, hit test, painter
-kernel/instance.inc  the instance table: app kinds, launch, close, billing
-kernel/menu.inc      menu bar: the active app's name + menus, runtime bar
-                     layout, pull-down tracking, Locator's own menu set
-kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
-kernel/apps.inc      About, Timer task, Bounce task
-kernel/disk.inc      int 13h floppy transfers, FAT12/16 mount + chain walk
-kernel/diskw.inc     the FAT write path: allocate, flush, directory entries
-kernel/loader.inc    .o88 package validation, region alloc, relocate, launch
-kernel/files.inc     the Disk window (file manager)
-kernel/icons.inc     1-bit icon format, draw routine, built-in library
-kernel/desk.inc      desktop drive icons: detect, paint, click to open
-kernel/dock.inc      the bottom dock strip: one tile per live instance
-kernel/taskmgr.inc   the Task Manager window: CPU, RAM, instance list
-kernel/ctrl.inc      the Control Panel window: item list + settings pages
-apps/os88api.inc      the package SDK: API offsets, header + icon macros
-apps/mines/          Minesweeper, the first software package
-apps/hello/          HELLO, a minimal second package (no icon)
-tools/os88pkg.py       package validator/stamper (.bin -> .o88)
-tools/os88disk.py     FAT12 data floppy builder (+ --verify fsck)
+docs/HERCULES-TESTING.md  testing on Hercules - it IS automatable, and all
+                     three ways of getting it wrong give a black image
+                     rather than an error
+boot/boot.asm        512-byte boot sector: LBA->CHS, retrying reads. It
+                     relocates itself, because the kernel lands where it runs
+kernel/kernel.asm    constants, the memory ladder and its guards, boot
+                     sequence, the API jump table, the %includes of every
+                     module, size assertions
+kernel/*.inc         34 modules. SPEC.md section 4 is the ownership table and
+                     the authority on which one owns what - a copy of that
+                     list here is a copy that goes stale. The load-bearing
+                     ones: vga12 (planar primitives + the drawing lock),
+                     vgabb (the software renderer and the 1bpp driver),
+                     viddet (which adapter is fitted, and the live geometry),
+                     sched (the PIT hook and the context switch), wm
+                     (windows, z-order, damage rects), memory (the claim
+                     heap), disk/diskw (int 13h, FAT read and write),
+                     loader (package validation and launch), driver
+                     (loadable drivers), assoc (file associations)
+apps/os88api.inc     the package SDK: API offsets, header + icon macros
+apps/<name>/         the fifteen shipped packages, one directory each. Each
+                     one's design notes are its own SPEC.md section
+drivers/<name>/      loadable drivers (.DRV): hard disk, sound, and the
+                     serial debug monitor
+tests/               every package that is NOT shipped - capability gates
+                     and benchmarks. Built only by their own make targets
+tools/os88pkg.py     package validator/stamper (.bin -> .o88)
+tools/os88disk.py    FAT12 image builder (+ --verify, a structural fsck)
+tools/kernsize.py    where the kernel's bytes went, per module, against the
+                     budget guards
+tools/checkdocs.py   the documentation gate that every `make` runs
 tools/qmp.py         QMP client for scripted control of a test boot
 tools/mouse.py       absolute mouse positioning over the QMP socket
 ```
 
 ## Software packages
 
-Programs live on a second floppy (drive B:) that is a plain **FAT12**
-volume — DOS, Windows, macOS and Linux can all mount it, read it and
-write files onto it. os8088 only ever reads the disk, and treats
-everything on it as untrusted: the boot sector's BPB is validated rule by
-rule before any number off it is used, and files are read by walking
-their real FAT cluster chains, so a `.o88` a host OS wrote back
-fragmented still loads. Files that aren't packages just list with a
-generic icon. The build:
+Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is
+installed on one, on a hard-disk partition. Either way it is an ordinary
+volume that DOS, Windows, macOS and Linux can all mount, read and write.
+os8088 reads and writes them too, and treats every byte on them as untrusted:
+the boot sector's BPB is validated rule by rule before any number off it is
+used, and files are read by walking their real FAT cluster chains, so a
+`.o88` a host OS wrote back fragmented still loads. Files that aren't
+packages list with a generic icon, or open in whatever program claims their
+extension. The build:
 
 ```
-apps/mines/mines.asm --nasm x2--> build/mines.bin      org 0xB000, header baked in
-                                  build/mines.alt.bin  the same source at org 0xB800
-build/mines.bin + .alt --os88pkg.py--> build/mines.o88   package + relocation table
-build/*.o88 --tools/os88disk.py--> build/apps.img       FAT12 floppy (and apps360.img)
+apps/mines/mines.asm --nasm--> build/mines.bin    org 0, header baked in
+build/mines.bin --os88pkg.py--> build/mines.o88   validated and stamped
+build/*.o88 --tools/os88disk.py--> build/apps.img FAT12 floppy (and apps360.img)
 ```
 
 A package is written against `apps/os88api.inc`: `OS88_HEADER 'NAME', entry`
 emits the header, `OSAPI_*` constants name the kernel's jump-table entries
-(gfx primitives, fonts, windows, ticks, a PRNG), and `OS88_IMAGE_END`
-seals the image with its size and loader-zeroed bss.
+(gfx primitives, fonts, windows, files, sound, ticks, a PRNG), and
+`OS88_IMAGE_END` seals the image with its size and loader-zeroed bss.
 
-Packages are **relocatable**, which is what lets several run at once. Each is
-assembled twice, at two different link bases; `os88pkg.py` diffs the two
-binaries to recover exactly which words are addresses, and ships that as a
-relocation table. At load time the kernel picks a free region out of the
-`0xB000..0xFDFF` pool, reads the file in, walks the table adding the load
-delta, zeroes bss, and calls the entry, which registers a window and returns;
-from then on the program is event-driven — its paint/key/click procs are
-called like any built-in window's — and from one of those it can claim a
-single pre-empted worker task of its own. Closing a package frees its region.
+**There is no relocation of any kind**, and that is what lets several run at
+once: a package is assembled once at `org 0` and loaded into a
+paragraph-aligned claim off the heap, which becomes its own CS = DS. Nothing
+in the image depends on where it landed, so `os88pkg.py` is a validator
+rather than a generator. The ceiling on one package is 60KB — that is the
+*segment*, not a pool; the pool it used to be allocated from was retired, and
+deleting it is what returned 60KB to every machine and made a 128KB machine
+viable at all.
+
+At load time the kernel reads the file in, zeroes bss and calls the entry,
+which registers a window and returns; from then on the program is
+event-driven — its paint/key/click procs are called like any built-in
+window's — and from one of those it can claim a single pre-empted worker task
+of its own. Closing a package frees its claim, its task and its instance
+slot.
 
 ## Three geometries of everything
 
