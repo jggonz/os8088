@@ -16,7 +16,7 @@ in the guest at all**.
 | `debug_server.rs` | the new module, copied in whole |
 | `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have |
 | `configs/` | five IBM 5150 machine configs shaped after docs/FIELD-MACHINES.md |
-| `roms/` | the 27 OCT 82 IBM 5150 BIOS — the ROM the calibration machine has |
+| `roms/` | **gitignored, and you supply it** — see the note at the bottom |
 | `build.sh` | clone at the pin, patch, stage a run tree, build |
 
 **Reach for this first** when what you are testing runs on an 8088 — all
@@ -29,5 +29,21 @@ floppy is 30x fast, so no figure with a disk in its path means anything here,
 and it would not have caught SPEC.md §18.91's `AL` bug any more than QEMU did.
 docs/MARTYPC-DEBUG.md has the long version of both.
 
-*The BIOS in `roms/` is IBM's, and is the one file in this tree not covered by
-the project's own licence.*
+## The IBM BIOS is not in this tree
+
+`roms/` is gitignored and ships empty. The BIOS is IBM's, IBM has never licensed
+it for redistribution, and CONTRIBUTING.md puts the whole tree under one MIT
+file — which is a grant this project cannot make for someone else's ROM. The
+same reasoning already kept the IBM/Xebec hard disk controller out
+(docs/MARTYPC-DEBUG.md).
+
+Three of the eight machines use **GLaBIOS**, which MartyPC bundles, and they
+build and run with nothing added. The five period-accurate ones
+(`rom_set = "ibm5150_82_v4"`) need your own dump of the 27 OCT 82 5150 BIOS:
+
+```
+tools/martypc/roms/BIOS_IBM5150_27OCT82_1501476_U33.BIN
+8192 bytes, md5 f453eb2df6daf21ec644d33663d85434
+```
+
+`build.sh` names the file and this checksum if it does not find one.

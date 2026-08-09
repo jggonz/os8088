@@ -1710,12 +1710,31 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
 ; The buffer is DSK_FIND_SZ bytes:
 ;   +0   char[13]  the display name, NUL-terminated (SPEC.md 19's 8.3 form)
 ;   +13  byte      the raw attribute
-;   +14  word      type: 1 = file, 2 = folder, 3 = the synthesized '..'
+;   +14  word      type: OSAPI_FT_* below. READ THAT LIST BEFORE USING IT -
+;                  type 1 is not "a file", it is a PACKAGE, and "is this a
+;                  file" is `type < OSAPI_FT_DIR`
 ;   +16  word      first cluster - what OSAPI_FILE_GOTO takes for a folder
 ;   +18  dword     the size in bytes, all 32 bits (unlike the listing's, which
 ;                  is clamped to a word)
 ;   +22  word      reserved, currently 0
 OSAPI_FIND_SZ equ 24
+
+; The type word at +14, and the one thing about this record that has already
+; been got wrong: TYPE 1 IS NOT "A FILE". dsk_synth (SPEC.md 19) gives 1 only
+; to a file the LOADER could run - extension O88, size inside 16 bits, first
+; cluster in range - because the listing's consumers are the Disk window and
+; the loader. Every other ordinary file is type 0, so a walk that copies
+; "type 1" copies the packages and silently skips the documents.
+;
+; Ask the question you mean:
+;   a file   -> type <  OSAPI_FT_DIR
+;   a folder -> type == OSAPI_FT_DIR   (and +16 is what FILE_GOTO takes)
+;   skip '..'-> type == OSAPI_FT_UP
+; The raw attribute is at +13 if you want the FAT byte itself.
+OSAPI_FT_FILE equ 0             ; an ordinary file
+OSAPI_FT_PKG  equ 1             ; ...that the loader would accept: *.O88
+OSAPI_FT_DIR  equ 2             ; a subdirectory
+OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
 %define OSAPI_FILE_FIND     KERNEL_SEG:0x0348   ; CX = ordinal (0 to start),
                                  ; ES:DI = an OSAPI_FIND_SZ buffer; out CF=0
                                  ; filled with CX = the next ordinal, else

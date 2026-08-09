@@ -4015,6 +4015,53 @@ already does with every mouse-up. On a machine with no mouse (§9.6) the same
 press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
 exactly this case — a pass that dispatched a press and did not track it.
 
+### 11.95.1 A window that GREW reveals nothing
+
+Both halves of the zoom used to end in `wm_paint_all` — a whole-screen dither,
+every drive zone, both strips and every visible window's `W_PAINT` — to change
+the size of one window. On the way OUT that is simply wrong: the standard
+state contains the state it left, so **every pixel the window gave up it also
+covers**. Nothing is revealed, so there is nothing to put back but the window
+itself. That is §11.90's argument about raising, arriving at a resize.
+
+`wm_rz_bank` records where a window was, immediately before a geometry change;
+`wm_rz_paint` is the repaint after it and asks what actually moved.
+
+| symbol | contract |
+|---|---|
+| `wm_rz_bank` | in: BX = window. Banks its rect into `[wm_rz_o*]`. Preserves all registers. |
+| `wm_rz_paint` | in: BX = window, `[wm_rz_o*]` = where it was, gfx lock held. Draws the least that is correct. Preserves all registers. |
+| `wm_resize` | unchanged contract; banks and repaints through the pair. |
+| `wm_resize_nb` | the same body for a caller that has banked already — `wm_zoom`'s zoom-out, which moves the ORIGIN before calling in. |
+
+The cheap path needs both of:
+
+- **the new rect contains the old one**, on all four edges; and
+- **nothing is above it in `wm_zord`**, or that would have to be drawn back on
+  top of what we just drew.
+
+Then the repaint is `wm_draw_win` on that window plus the chrome — and the
+chrome is asked, not forced, so on a quiet desktop it costs nothing (§12.9,
+§30.3.2). Anything else is the **union** of where the window was and where it
+is, through `wm_paint_dmg` (§11.91): what a shrink genuinely owes, and still
+far less than the screen. The union is taken one pixel wide at the far edges,
+which is exactly the drop shadow.
+
+Two things are load-bearing.
+
+- **The bank must be the TRUE old rect, and `wm_zoom`'s zoom-out is where that
+  is easy to lose.** That path writes `W_X`/`W_Y` itself — `wm_resize`'s y
+  clamp only ever pushes a window *up off the dock*, never *down off the bar*
+  — and only then calls in. Had `wm_resize` banked at its own entry it would
+  have recorded the NEW origin with the OLD size: a rect the new one contains,
+  so the grow test passes, and **the band the window actually vacated is never
+  repainted**. Hence `wm_resize_nb`.
+- **The "nothing above it" test is made, not assumed.** It holds by
+  construction for the case this exists for — §11.95's zoom is the *second*
+  press on a title bar and the first one raised the window — but `wm_resize`
+  is a published slot (§20) that any application may call at any depth of the
+  z-order.
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -8098,6 +8145,21 @@ was survivable while every consumer was in the kernel, and stopped being so
 at §52.10.4: an installer must copy *whatever is on the disk*, and a baked
 list of the shipped layout goes stale in silence the moment a user's floppy
 differs from it.
+
+**The type word is `OSAPI_FT_*`, and TYPE 1 IS NOT "A FILE".** `dsk_synth`
+(§19) gives 1 only to a file the *loader* would accept — extension `O88`,
+size inside 16 bits, first cluster in range — because the listing's consumers
+are the Disk window and the loader. Every other ordinary file is **type 0**.
+So the question "is this a file" is `type < OSAPI_FT_DIR`, never `type == 1`,
+and the raw FAT attribute is at +13 for a caller that wants the byte itself.
+
+This is written down because it has already cost a bug, and a quiet one: the
+installer's sub-folder walk (§52.10.4) copied "type 1", which took every
+`.O88` out of `APPS` and `GAMES` and silently left `BEVERLY.MOD` behind — an
+installed machine with an empty `MEDIA` folder, no error anywhere, and the
+same fate waiting for any document a user had put in a folder of their own.
+The SDK's own comment said `1 = file`, which is where the mistake came from,
+so the constants exist now and the comment points at them.
 
 **It is by ORDINAL and the kernel keeps no cursor**, which is the design
 rather than an economy. Find-first / find-next would need kernel state, and

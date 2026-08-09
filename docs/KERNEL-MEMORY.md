@@ -219,8 +219,8 @@ Move 9 made that lopsided:
 
 | | headroom |
 |---|---:|
-| `KERN_CODE_MAX`, the segment | **13,903 B** for `.text` + `.bss` |
-| **`KERN_BUDGET`, the footprint** | **3,584 B** for the whole span — seven steps |
+| `KERN_CODE_MAX`, the segment | **11,920 B** for `.text` + `.bss` |
+| **`KERN_BUDGET`, the footprint** | **512 B** for the whole span — one step |
 | guard 5, the smallest supported machine | **40,448 B** for the whole span |
 
 The budget is still the tighter of the three and is meant to be. What changed
@@ -344,21 +344,21 @@ Three things about it:
 <!-- kernsize:begin -->
 ```json
 {
-  "bss": 4048,
+  "bss": 4056,
   "budget": 90112,
   "codemax": 65536,
   "cold": 21759,
   "coldpara": 1376,
   "fatpara": 288,
-  "imgpara": 3360,
-  "kend": 5696,
+  "imgpara": 3392,
+  "kend": 5728,
   "kseg": 96,
-  "ksize": 89600,
+  "ksize": 90112,
   "lowbss": 7748,
   "lowpara": 576,
   "ovl": 2662,
   "stk0": 1024,
-  "text": 49517
+  "text": 49710
 }
 ```
 <!-- kernsize:end -->
@@ -377,19 +377,24 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,748 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
 | the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **86,528 B** | of a 90,112-byte budget — **3,584 B spare**, seven steps: move 12's granted headroom |
+| **total** | **89,600 B** | of a 90,112-byte budget — **512 B spare, ONE step**. Move 12's granted headroom is very nearly spent |
 
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
-are the only slack anywhere in the ladder: **79 bytes on the image, 153 on
+are the only slack anywhere in the ladder: **144 bytes on the image, 196 on
 the cold segment, 444 on `.lowbss`**. They are rounding artefacts, not
 reservations — and per the accounting section above they are also the whole
 of what the next feature can spend without moving the machine's RAM. The
-image rung has **79 bytes** in it: the next feature of any size at all takes
-one of move 12's seven steps, and that is the number to quote when asking.
+image rung has **144 bytes** in it: the next feature of any size at all takes
+move 12's LAST step, and that is the number to quote when asking.
 
-The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0D00,
-`FAT_SEG` 0x1220, `LOW_SEG` 0x1340, `HEAP_SEG` 0x1580. `tools/kernsize.py`
+The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0D80,
+`FAT_SEG` 0x12E0, `LOW_SEG` 0x1400, `HEAP_SEG` 0x1640. `tools/kernsize.py`
 prints that line, so it need never be derived by hand again.
+
+**Run `python3 tools/kernsize.py` rather than trusting the numbers in this
+paragraph.** It reads the build; this prose does not, and `--bless` rewrites
+only what sits between its own markers, so everything outside them — this
+sentence included — goes stale silently and has done so before.
 
 **`.lowbss` is where the rounding last bit**, and SPEC.md §14.1 is the worked
 example of the warning above it: the Timer's per-instance state grew 8 bytes
@@ -405,9 +410,9 @@ Everything above `KERN_END` is the claim heap, up to whatever int 12h
 reports. The arithmetic is exact and worth writing down, because every RAM
 figure in this project falls out of it:
 
-> **heap KB = what int 12h reports − 86.0**
+> **heap KB = what int 12h reports − 89.0**
 
-`KERN_END` is 5,504 paragraphs = 88,064 bytes = **exactly 86.0 KB**, and the
+`KERN_END` is 5,696 paragraphs = 91,136 bytes = **exactly 89.0 KB**, and the
 heap starts there. It was a round 80.0 for the whole of moves 1..10, and a
 `.lowbss` step took it to the awkward 80.5 that is easy to drop from a mental
 sum. **Do not re-derive it by hand**: it moves with every rung crossing, and
@@ -419,7 +424,9 @@ subtraction, which is the point of the tool.
 The **heap** column is the property that decides behaviour, and it is
 measured — by clamping what `mem_init` believes int 12h said and booting each
 size under QEMU. (The clamp is a throwaway; it is not in the tree.) The RAM
-column is that heap plus `KERN_END`'s 80KB.
+column is that heap plus `KERN_END`'s 89.0KB. **The two rows marked *measured*
+were measured against an earlier, smaller `KERN_END` and are therefore
+optimistic by the difference — re-measure before quoting the floor.**
 
 The two rows marked *measured* were re-run for this edition, because the low
 end is where `KERN_END`'s growth actually changes the answer. The rest keep
@@ -445,7 +452,7 @@ Paint declines.
 **The boot floor and the useful floor have come apart**, and that is the one
 qualitative change here. They used to coincide — the first machine that could
 boot at all had 14KB of heap and ran packages fine. `KERN_END` has since
-risen to 80KB, so the smallest machine that gets to a desktop has a heap too
+risen to 89.0KB, so the smallest machine that gets to a desktop has a heap too
 small to load anything. Two machines that both "run os8088" are a few
 kilobytes apart and do different things.
 
@@ -809,14 +816,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 26,535 | 37.2% |
-| the window system and its furniture | 14,204 | 19.9% |
-| drawing: adapters, primitives, glyphs, icons | 9,890 | 13.9% |
+| the file system, end to end | 26,535 | 37.1% |
+| the window system and its furniture | 14,397 | 20.1% |
+| drawing: adapters, primitives, glyphs, icons | 9,890 | 13.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,504 | 13.3% |
 | the kernel proper: API table, heap, scheduler, events | 5,343 | 7.5% |
 | the Control Panel | 4,424 | 6.2% |
 | the three built-in kinds | 1,376 | 1.9% |
-| **total** | **71,276** | |
+| **total** | **71,469** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -824,8 +831,8 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 806 | 7,053 | **7,859** | 337 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 4,653 | — | **4,653** | 211 | 3,584 |
+| `wm.inc` — the window manager (§11) | 4,651 | — | **4,651** | 627 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,626 | **4,646** | 155 | — |
-| `wm.inc` — the window manager (§11) | 4,458 | — | **4,458** | 619 | — |
 | `ctrl.inc` — the Control Panel (§31) | 842 | 3,582 | **4,424** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,668 | — | **3,668** | 118 | — |
@@ -857,7 +864,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,544 | — | **2,544** | — | — |
-| **total** | **49,517** | **21,759** | **71,276** | **4,048** | **7,748** |
+| **total** | **49,710** | **21,759** | **71,469** | **4,056** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it

@@ -389,6 +389,15 @@ gfx_linit:
 ; whole contract.
 ; -----------------------------------------------------------------------------
 gfx_lstep:
+    call cur_unlazy             ; ...and so does the SCALAR walk. gfx_lstepv had
+                                ; this and the twin below it did not, over the
+                                ; same gfx_ls_one body: on mono the walk
+                                ; read-modify-writes the framebuffer directly,
+                                ; so with the region disarmed there is nothing
+                                ; else in the path that could spend gfx_lock's
+                                ; promise - the line draws over an arrow still
+                                ; on screen and gfx_unlock then paints the
+                                ; stale save-under back over it (SPEC.md 7.1.4)
     push ax
     push bx
     push cx

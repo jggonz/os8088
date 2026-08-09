@@ -1350,13 +1350,36 @@ middle of that range.
 > ```sh
 > python3 tools/os88mouse.py 127.0.0.1:9001 where
 > python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
-> python3 tools/os88mouse.py 127.0.0.1:9001 menu 12 8 40 45   # NOT click
+> python3 tools/os88mouse.py 127.0.0.1:9001 dblclick 150 90    # NOT two clicks
+> python3 tools/os88mouse.py 127.0.0.1:9001 menu 12 8 40 45    # NOT click
 > python3 tools/os88mouse.py 127.0.0.1:9001 drag 200 78 200 120
 > ```
 >
 > `menu` is its own verb because a menu **cannot** be opened with a click —
 > `menu_track` draws the pull-down and then polls a level, so press-and-release
 > in place opens and closes it in one breath.
+>
+> **`dblclick` is its own verb for the same kind of reason, and it is the one
+> that has cost the most time.** Two `click`s are not a double-click: `click`
+> ends in a 1.5 s settle and every detector in the system (SPEC.md §22/§26/§38
+> and `ui_tdbl`'s title bar) compares the two presses' BIRTH TICKS against a
+> **9-tick** window. Take the sleep out and the opposite trap closes: packets
+> sent faster than the 1200-baud UART can carry them are **dropped**, so the
+> guest decodes one press instead of two. Either way the guest sees a single
+> click — a file row *selects* instead of launching, a title bar *drags*
+> instead of zooming — and nothing anywhere says so.
+>
+> So `dblclick` proves all four button edges against the published `mouse_btn`
+> (the same discipline `to` applies to the position) and then measures the gap
+> between the two presses in the guest's own 18.2 Hz ticks, read from the BIOS
+> counter at `0040:006C` — the kernel's clock and the kernel's units, not a
+> guess about host timing. It prints the span, and **raises** if an edge never
+> arrived or the window was missed. A healthy double-click reads 2–4 ticks.
+>
+> **One connection at a time.** The debug server accepts a single client, so a
+> script that wants both the mouse driver and the framebuffer must share one:
+> build the `Mouse` and use its `.m`, never a second `Marty`. Opening a second
+> one does not error — it *hangs* until the read times out.
 
 `make marty`, and the whole recipe is docs/MARTYPC-DEBUG.md. What it gives
 that neither of the others does:
