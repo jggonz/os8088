@@ -4150,11 +4150,52 @@ window's rect now**, so a move, a resize, a `wm_fit` and an adapter change all
 invalidate by disagreeing rather than by being hooked; and `wm_destroy` drops
 it, because a reused slot would otherwise alias the window pointer.
 
-Two orderings are load-bearing. The take happens **after `wm_draw_title` and
-before the incoming window draws**, which is the last moment the outgoing
-window's pixels are both correct and still on the glass. And `wm_su_win` is
-**published last**, so a cache whose claim succeeded but whose `gfx_save` did
-not can never be tried.
+**`OSAPI_WM_OBSCURED` (0x0338) drops it too, and it has to.** §11.3 offers a
+painter two ways to be correct — arm a clip region, or *ask* and decline — and
+only the first came through `wm_clip_set`. A painter that asks and is told
+"nothing is over you" then draws **unclipped and unannounced**, which is
+precisely the state the cache is a promise about. Note Pad's worker takes that
+route for all four of its background draws. So the question itself is the
+notice: the wrapper drops the cache for the window being asked about, before
+answering. This is conservative — a painter that asks and then declines has
+dropped a cache it need not have — and conservative is the only safe direction.
+
+Three orderings are load-bearing.
+
+The take happens **before anything else in `wm_raise` can draw a window**, not
+merely before the incoming one is drawn last. It sat after `menu_draw_bar` and
+`wm_dock_under` on the reading that neither draws a window, and `wm_dock_under`
+does: a window hanging over the dock strip (which `ui_grow`'s clamp permits and
+`wm_dock_clear` reports) sends it through `wm_dmg_wins`, which redraws every
+marked window **whole and unclipped** — and `wm_lift` has already made the
+incoming window the front one, so it is drawn last, over the outgoing one. A
+bank taken afterwards holds the coverer's pixels inside the covered window's
+rect, and `wm_su_ck` cannot see it: the four rect words still agree. The take
+is therefore hoisted above both chrome calls. `wm_su_rect` excludes the title
+bar, so it records the same rect wherever in the routine it runs.
+
+`wm_su_win` is **published last**, so a cache whose claim succeeded but whose
+`gfx_save` did not can never be tried.
+
+And **`gfx_save` takes `ES:DI` while `gfx_restore` takes `ES:SI`** — the one
+place the two primitives disagree. `wm_su_try` must set up SI; setting up DI
+reads the buffer from wherever SI happened to point and blits it to the glass,
+and because the restore then reports success `wm_draw_win` skips both the white
+fill and `W_PAINT`, so nothing repairs it.
+
+**A rect too big to address is refused, not clamped.** `wm_su_kb` is
+`menu_save_kb`'s arithmetic without `menu_save_kb`'s clamps — there, every
+factor is bounded by `MENU_MAXW`/`MENU_POPMAX`/`[vid_popmax]` and the build-time
+assert proves the multiplies stay inside 16 bits; a *window* rect has no such
+bound. A zoomed Note Pad on VGA is 81 byte-columns × ~398 rows × 4 planes =
+128,952 bytes. So both multiplies are checked and **64KB or more is a refusal**:
+`gfx_save` advances DI contiguously across the whole buffer and DI is 16 bits,
+so a save that size does not exist to be asked for at any price. The refusal
+path is the one that was already there — the raise repaints, exactly as on a
+machine with no room. *(Consequence worth knowing: on VGA a window much past
+half the screen gets no raise cache. Lifting that means teaching `gfx_save` to
+cross a segment, which is a change to a core primitive and not a bound to
+raise here.)*
 
 The chrome is redrawn either way: it is cheap, and a raise changes the title
 bar's pinstripes, so banking it would be banking the wrong picture.
@@ -11935,9 +11976,18 @@ the row** — and an edit past the end of that word cannot have moved it.
 caret is the edit, near enough and always on the safe side, because an insert
 leaves it one *past* the character it added while a backspace and a Delete
 leave it *on* the edit. So the earliest index a keystroke can have touched is
-`[np_cur] - 1`, and requiring the row's first word to end **strictly before**
-the caret is exactly that bound. The scan is at most a row's width, stops at
-the caret, and is a handful of byte compares against a row of layout at ~6 ms.
+`[np_cur] - 1`, and **that index is the bound — not the caret.** The difference
+is the whole of the case the test has to catch: the character an insert added
+may *itself* be the space that now ends the word, and then the word was
+**longer** when the break in front of it was taken, which is exactly the
+decision the back-up exists to redo. Typing a space into the middle of the long
+word on a wrapped row is the repro. Requiring the row's first word to end
+strictly before `[np_cur] - 1` is the bound; backspace and Delete touch nothing
+below `[np_cur]` and pay one extra row for sharing it, which is the
+conservative direction. A caret at index 0 refuses outright, because the
+decrement would otherwise wrap to `0xFFFF` and accept every terminator on the
+row. The scan is at most a row's width and is a handful of byte compares
+against a row of layout at ~6 ms.
 
 **A hard newline is not a wrap decision at all**, and that case skips
 unconditionally: the row above ended because the note said so, no word can
@@ -23461,6 +23511,30 @@ names memory somebody else holds — and the consumer's existing refusal path
 is the notification. `menu_drop`'s `or ax, ax` / `jz .nosave` is the shape
 every purgeable consumer must already have.
 
+**And that contract rests on a second rule, which is easy to break by
+accident: no task may claim memory except on the UI task or under the gfx
+lock.** "The word is the notice" holds only while that word is the *only*
+reference to the block, and there are two spans where it is not — `wm_su_take`
+publishes `[wm_su_seg]` last, so it is still 0 for the whole of `gfx_save`, and
+`wm_su_try` holds the segment in `ES` across `gfx_restore`. Each is tens of
+milliseconds with `IF = 1`. A shed inside the first would be *written into*
+after it was handed to somebody else; a shed inside the second would be *read
+out of* memory another owner already holds. The gfx lock does not exclude that
+by itself — it is a `task_yield` spin mutex, so it excludes other **drawing**,
+not preemption. What excludes it is that `mem_shed_one` has exactly one caller
+(`mem_claim`'s retry) and every `mem_claim` in the tree is a UI-task action or
+made under the lock, while a raise is both. **A package worker that claims
+memory directly would break this**, which is the deeper reason a worker grows
+through `OSAPI_MEM_REGROW` — which never sheds — rather than claim-copy-free.
+
+`mem_claim_1` **preserves SI and DI**, because they are the staged parameters
+(`[mem_dma]`, `[mem_dir]`) and the retry loop above re-reads them from the
+registers on every pass. The scan owns both — DI walks `mem_tab`, SI counts the
+owner's claims and then walks it again — so leaving them clobbered makes a
+shed-and-retry restage a `mem_tab` *offset* as a DMA head and a non-zero
+direction: a bottom-up data claim placed top-down, in the region arena §50.6.1
+exists to keep whole.
+
 #### 50.6.1 Where they are placed
 
 `mem_pg_ceil` bounds the scan at **the lowest region base**, so a purgeable
@@ -25026,6 +25100,29 @@ The **button band is the one thing still erased before it is drawn**, and
 that is the stated exception rather than an oversight: a frame cannot be
 drawn opaquely, so a dithered frame over a solid one leaves the solid one's
 pixels behind. It is a single 16px fill, and only on a state change.
+
+#### 52.10.6.1 The format may not begin until the buffer is big enough
+
+`hd_inst_sys` takes the copy buffer **before** it formats, and says why: "a
+format we cannot follow with a copy is a wiped partition". That was only half
+the test. `hd_ibuf_get` asks for `HIW_KMAXKB` (96KB) and, when the heap cannot
+supply it contiguously, **silently falls back to `HIW_CHUNKKB`** (32KB) and
+returns success — which is right for `hd_inst_apps`, where every file is an
+ordinary one and chunks, and wrong for `KERNEL.SYS`, which is written whole
+because §18.4.4 refuses a chunked path to a protected file and §52.10.2 needs
+it contiguous from cluster 2.
+
+So the install proceeded on the small buffer: `hd_inst_fmt` wrote the partition
+entry, the FAT and the root — **the disk the user pointed at is gone at this
+point** — and only then did `hd_icopy_one` reach its `.toobig` arm and refuse.
+The result is a wiped partition, a failed install, and a machine where every
+retry wipes it again. A fragmented 640KB heap reaches it as easily as a small
+machine does, because Install is a Control Panel click with the desktop live.
+
+`hd_inst_sys` now requires `[hd_ibufkb] == HIW_KMAXKB` before the format and
+refuses with `hd_icopy_one`'s own message if it is short: **the same sentence,
+said before the damage instead of after it.** The `.toobig` arm stays where it
+is. `hd_inst_apps` keeps the fallback and needs it.
 
 ### 52.10.7 CLOSED: the chunked copy, and a read one byte past the end
 
