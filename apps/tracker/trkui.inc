@@ -583,7 +583,9 @@ tui_dec3:
 ; 38 clears the splash at every geometry this window has (ch = 136 puts it at
 ; 98..105, against a keys line ending at 95) and still clears the status line.
 TUI_WPOSY   equ 38
-TUI_WPOSW   equ 17                  ; 'Pos xx/yy  Row zz'
+TUI_WPOSW   equ 9                   ; 'Pos xx/yy' - SPEC.md 45.16.6: the ROW is
+                                    ; NOT here, because windowed it cannot be
+                                    ; right and the position always is
 
 TUI_RDCELLS equ 56                  ; the widest field is [tui_cw]/8 and the
                                     ; frame is TRK_WINW = 420, so 52 cells;
@@ -2597,6 +2599,11 @@ tui_draw_all:
     jmp .about
 .win:
     TSETC TC_WBG                    ; the windowed splash card
+    mov byte [tui_wdrawn], 0        ; ...which covers the readout, and the
+%ifdef TRKLOG                       ; position may not move again for nine
+    mov byte [tlog_llbl], 0         ; seconds, so the marker alone would leave
+    mov byte [tlog_tkey], 0xFF      ; the line blank until it did
+%endif
     xor ax, ax
     xor bx, bx
     mov cx, [tui_cw]
@@ -2841,15 +2848,21 @@ tui_draw_dyn:
     cmp byte [mp_playing], 0        ; windowed: a live position line on the
     je .out                         ; splash while something plays
 %ifndef TRKLOG
-    mov al, [tui_arow]
-    cmp al, [tui_lrow]
-    jne .wupd
+    ; ONLY when it changes - and what changes is the POSITION alone, once every
+    ; 64 rows. It used to compare the row too, so this drew a 17-cell run seven
+    ; times a second on Beverly, a millisecond a cell (SPEC.md 6.1.1), for a
+    ; number that windowed cannot be right anyway (SPEC.md 45.16.5/45.16.6).
+    ; [tui_wdrawn] is the "is it on screen" half, because a repaint fills the
+    ; card and the position may not move again for nine seconds - the same trap
+    ; a zeroed bss marker sets, one step further along: here the marker is
+    ; correct and the PIXELS are gone.
+    cmp byte [tui_wdrawn], 0
+    je .wupd
     mov al, [tui_apos]
     cmp al, [tui_lpos]
     je .out
 .wupd:
-    mov al, [tui_arow]
-    mov [tui_lrow], al
+    mov byte [tui_wdrawn], 1
     mov al, [tui_apos]
     mov [tui_lpos], al
     mov di, tui_pbuf
@@ -2920,16 +2933,14 @@ tui_draw_dyn:
     jne .wupd
     jmp .out
 .ntext:
-    mov al, [tui_arow]
-    cmp al, [tui_lrow]
-    jne .wupd
+    cmp byte [tui_wdrawn], 0        ; the text body is the POSITION alone now,
+    je .wupd                        ; so the row is not what dirties it
     mov al, [tui_apos]
     cmp al, [tui_lpos]
     jne .wupd
     jmp .out
 .wupd:
-    mov al, [tui_arow]
-    mov [tui_lrow], al
+    mov byte [tui_wdrawn], 1
     mov al, [tui_apos]
     mov [tui_lpos], al
     mov al, [tlog_sweep]
@@ -2982,16 +2993,12 @@ tui_wpos:
     call tui_scpy
     mov al, [tui_apos]
     call tui_hexb
-    mov byte [di], '/'              ; ...OF the song's length, because a bare
-    inc di                          ; 'Pos 09' beside a row counter running at
-    mov al, [mp_songlen]            ; eight a second reads as a dead field -
-    call tui_hexb                   ; it steps once every 64 rows, which at
-    mov si, tui_s_rowl              ; Beverly's tempo is 8.9 SECONDS, and the
-    call tui_scpy                   ; denominator is what says so
-    mov al, [tui_arow]
-    call tui_hexb
-    pop si
-    pop ax
+    mov byte [di], '/'              ; ...OF the song's length. A bare 'Pos 09'
+    inc di                          ; steps once every 64 rows, which at
+    mov al, [mp_songlen]            ; Beverly's tempo is 8.9 SECONDS, and with
+    call tui_hexb                   ; no row counter beside it the denominator
+    pop si                          ; is the only thing saying the field is
+    pop ax                          ; alive rather than stuck
     ret
 
 tui_wfld:
@@ -3128,7 +3135,11 @@ tui_s_spdc:  db 'SPD:', 0
 tui_s_posc:  db 'POS:', 0
 tui_s_ptnc:  db 'PTN:', 0
 tui_s_posl:  db 'Pos ', 0
-tui_s_rowl:  db '  Row ', 0
+
+; "is the windowed readout on the glass" - .text, not bss, because it wants a
+; real initialiser and every launch reloads the image (SPEC.md 20.1), so a
+; fresh instance starts owing the line rather than believing it drew one.
+tui_wdrawn:  db 0
 
 ; the FT2 button stacks (decorative in v1; each names its key)
 tui_mbl:     dw tui_b_about, tui_b_mute, tui_b_scroll, tui_b_pos, tui_b_exit, 0

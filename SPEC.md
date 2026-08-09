@@ -20313,6 +20313,40 @@ displaying. And **this is exactly why the text screen exists** (§45.13): in
 `FSXM_TEXT80` a row change is a `rep movsw` rather than 2,567 glyph cells a
 second, which is what buys the frames back on the module that needs them.
 
+#### 45.16.6 So the windowed readout shows the POSITION and no row at all
+
+The conclusion §45.16.5 forces. A row counter windowed is a number that
+**cannot be right** — the display gets fewer frames than the music has rows,
+so whatever it shows was true a moment ago and the next value is not the next
+row — and it cost a **17-cell `font_run` about seven times a second** on
+Beverly to say so, a millisecond a cell (§6.1.1). The readout is `Pos xx/yy`,
+nine cells, and it redraws **once per order** — every 64 rows, which at
+Beverly's tempo is 8.9 seconds.
+
+That is not a smaller version of the same defect. The position is the one
+figure on that line whose update rate the machine can actually meet, so it is
+never visibly stale; the row was the only thing asking for frames that do not
+exist. Everything §45.16.2–§45.16.4 was reaching for — an even grid, a bang,
+a burst covering the resync — was reaching for a way to make a
+faster-than-the-machine field *read* as smooth. Not drawing it is the version
+that needs no cadence at all.
+
+**The denominator is load-bearing.** A bare `Pos 09` that steps once every
+nine seconds reads as a dead field; `Pos 09/53` says what it is counting
+towards, so standing still looks like progress rather than a hang. It is the
+same argument that put it there when there *was* a row counter beside it, and
+it matters more now that there is not.
+
+**Two markers, and the second is the one that is easy to miss.**
+`[tui_lpos]` is the value last drawn — the ordinary "only draw when it
+changed" test. `[tui_wdrawn]` is whether those pixels are still on the glass,
+and it exists because the windowed splash repaint fills the whole card: with
+the marker alone, a repaint would leave the line **blank until the position
+next moved**, which is up to nine seconds. It lives in `.text` with a real
+initialiser rather than in bss, so a fresh instance starts owing the line
+(§20.1 — every launch reloads the image). The row counter used to hide both
+problems by changing often enough to paper over them.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
