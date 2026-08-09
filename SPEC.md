@@ -20389,6 +20389,62 @@ which is MartyPC's figure at every rate. The one-DMA-block hypothesis that
 and it survived a capture, a mechanism and a designed experiment before the
 experiment killed it.
 
+#### 45.17.2 The start-up jerk is the PRE-ROLL, and the ring never starves
+
+The field reports playback as "very jerky at the start, screen especially,
+smooth once it gets going", and asks whether something is filling a buffer and
+whether it could say `Buffering...` first. The instinct is right about the
+shape and wrong about the mechanism, and the difference matters because the
+obvious fix would have been to fill a buffer that is already full.
+
+**Measured on a cycle-accurate 5150 with a Sound Blaster**, sampling
+`[trk_total] - [trk_consumed]` across a stop and a resume: the ring lead is
+**14,336 to 16,384 of 16,384 throughout**, in steady state and from half a
+second after the resume onwards. It never dips. `TRK_PREROLL` is 6 of the 7
+halves the feed's own ceiling allows, staged **before** the stream is opened,
+so by the time the DSP is playing at all the ring is essentially full. There
+is no buffer to wait for; the waiting is already done.
+
+**What the display does over the same window**, sampled in guest cycles:
+
+| | |
+|---|---|
+| 0 → 0.8 s | **nothing moves at all** |
+| ~1.2 s | the row jumps 6–7 at once |
+| 1.5 → 4 s | a ragged ramp, 3/0/1/2/1/2/2 rows a sample |
+| after | a steady 7.2 rows/s, which is Beverly's own 7.14 |
+
+**The 0.8 s is `trk_play` itself.** Those six halves are 12,288 bytes = 2.23
+seconds of audio, mixed on the **UI task inside the keypress, under the gfx
+lock** — and the mixer runs at about a third of real time on that machine even
+after PERFORMANCE.md Set 20 took its inner loops from 45% to 29.6%. The
+source comment claimed "a tenth of a second on an XT"; it is eight times that.
+Nothing can draw, the cursor is down, and the worker cannot run: it is the
+longest lock-held stretch this application has.
+
+So it is **announced rather than shortened**. `Buffering...` goes up before
+the loop and `trk_say` puts it on the glass *synchronously* — `tui_msg` only
+records, and the frame that would show it belongs to the worker, which cannot
+run until the lock is released, so an ordinary message would appear exactly
+when it stopped being true. Shortening the pre-roll instead would move the
+cost onto the worker and back toward the hitch `TRK_PREROLL` was raised from 2
+to 6 to fix (docs/FIELD-NOTES.md).
+
+**The ragged ramp after it is the display model converging** (§45.15.1–§45.15.3),
+and a full-error first correction was tried and REJECTED. Taking the whole
+phase error on a stream's first report edge does settle sooner — 2.7 s against
+4.2 — but the model is monotone by construction, so an over-correction cannot
+step back and becomes a **0.77 s stall** instead of a ragged-but-moving ramp.
+§45.15.1's own rule decides it: a scroll that stops reads far worse than one
+that is slightly uneven. The quarter-step stands.
+
+**And the third contributor is structural**: a play start formats the text
+screen's shadow from scratch — 82 rows at `TTX_SHCHUNK` = 4 a frame, ~21
+frames ≈ 1.15 s (§45.13) — during which every frame does rebuild work as well
+as its blit. That is why the screen is worse than the sound, it is already
+spread as thinly as the design allows, and there is nothing to carry from at a
+start the way §45.13.5 carries across a boundary.
+
 ### 45.16 The text screen's frame clock is measured, not assumed
 
 `fsx_wait` takes a **tick** (18.2065 Hz), a **vertical retrace**, or the
