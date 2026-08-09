@@ -787,6 +787,22 @@ zi_load:
     mov byte [zf_state], ZFS_RUN
     call zw_clear
     call zw_paint
+
+    ; HIRE THE WORKER HERE, not only from W_PAINT. A story loaded into a
+    ; window that is ALREADY ON SCREEN gets no repaint from the kernel - and
+    ; zf_hire lives in zf_paint, so nothing ever started the VM and the story
+    ; sat there fully loaded with a blank window and a correct status line.
+    ;
+    ; It looked story-specific for a while because the other two ways in do
+    ; get a paint: a fresh instance is shown by the loader after the entry
+    ; proc returns (SPEC.md 21 step 9), and an association hands its name to
+    ; the first W_PAINT (zi_openpend). Only File > Open Story into a live
+    ; window missed, which is the ordinary way to open a story.
+    ;
+    ; Safe to call twice - zf_hire is idempotent on [zf_hired] - and safe if
+    ; it is refused, because a full task table is transient and every later
+    ; repaint retries (SPEC.md 20.6).
+    call zf_hire
     clc
     ret
 

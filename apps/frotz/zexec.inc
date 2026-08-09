@@ -66,11 +66,7 @@ ZX_STKBYTES equ ZI_STKKB * 1024
 
 ; What a halt reports. A %define expands at the use site but NASM still reads
 ; this file top to bottom, so these have to precede zx_bad.
-%define zx_badop   (os88_image_end + ZEXEC_SLACK + 406)  ; byte: the opcode
-%define zx_badpc_l (os88_image_end + ZEXEC_SLACK + 408)  ; word: and where
-%define zx_badpc_h (os88_image_end + ZEXEC_SLACK + 410)
 %define zx_prevop  (os88_image_end + ZEXEC_SLACK + 412)  ; byte: the last opcode
-%define zx_badseg  (os88_image_end + ZEXEC_SLACK + 416)  ; word: ES at the fault
 %define zx_seglim  (os88_image_end + ZEXEC_SLACK + 414)  ; word: last valid ES
 
 ; --- call frame layout, in the [zf_stkseg] claim ------------------------------
@@ -276,19 +272,21 @@ zx_run:
     call zx_lock
     jcxz .stop
 .next:
+    mov es, [zf_pcseg]              ; THE SEGMENT COMES FROM MEMORY, EVERY
+                                    ; INSTRUCTION. The offset is fine in SI -
+                                    ; an OSAPI slot preserves it - but ES is
+                                    ; the one register the OS does not preserve,
+                                    ; so a handler that draws or reads a file
+                                    ; could lose the program counter and the
+                                    ; interpreter would carry on executing a
+                                    ; font. Asking sixty handlers to preserve
+                                    ; ES was losing whack-a-mole; this makes it
+                                    ; structurally impossible.
     push cx
     call zx_step
     pop cx
-    mov es, [zm_pcseg]              ; ES IS RESTORED FROM THE AUTHORITY, not
-                                    ; trusted from the handler. Every OSAPI
-                                    ; call is free to clobber ES and only an
-                                    ; X-stubbed slot puts it back, so asking
-                                    ; sixty handlers to preserve it was losing
-                                    ; whack-a-mole - four separate bugs, each
-                                    ; one a story that ran correctly for
-                                    ; thousands of instructions and then
-                                    ; executed a font. The three routines whose
-                                    ; job is to MOVE the PC record it instead.
+    mov [zf_pcoff], si              ; ...and the offset goes back, so a jump
+                                    ; taken inside the handler survives too
     cmp byte [zf_err], 0
     jne .stop
     cmp byte [zf_dead], 0
@@ -334,16 +332,14 @@ zx_unlock:
 ; in/out: as named; preserve every other register
 ; -----------------------------------------------------------------------------
 zx_spill:
-    push ax
-    mov ax, es
-    mov [zf_pcseg], ax
-    mov [zf_pcoff], si
-    pop ax
-    ret
+    mov [zf_pcoff], si              ; the OFFSET only. [zf_pcseg] is written by
+    ret                             ; the PC movers and by nobody else - ES at
+                                    ; this point may be whatever the last OSAPI
+                                    ; call left behind, which is exactly the
+                                    ; thing this arrangement stops trusting.
 zx_load:
     mov es, [zf_pcseg]
     mov si, [zf_pcoff]
-    mov [zm_pcseg], es
     ret
 
 ; =============================================================================
@@ -899,7 +895,7 @@ zx_jrel:
     mov ax, es
     sub ax, 0x1000
     mov es, ax
-    mov [zm_pcseg], ax              ; the third PC mover; see zmem.inc
+    mov [zf_pcseg], ax              ; a PC mover; see zm_seek in zmem.inc
     pop ax
 .ok:
     ret
@@ -1088,6 +1084,21 @@ zx_call:
 ; by setting the stack pointer back to the frame base, so there is no unwind
 ; loop and no way for a routine to leak stack into its caller.
 ; -----------------------------------------------------------------------------
+; zx_inimage - is DX:AX inside the story image?
+; out: CF=0 yes; preserves every register
+zx_inimage:
+    cmp dx, [zf_slen_h]
+    jb .ok
+    ja .no
+    cmp ax, [zf_slen_l]
+    jb .ok
+.no:
+    stc
+    ret
+.ok:
+    clc
+    ret
+
 zx_ret:
     push ax
     push bx
@@ -1120,12 +1131,25 @@ zx_ret:
     mov cx, ax
     or cx, dx
     jz .fell                        ; v6's main routine returned: that is @quit
+    ; The frame's saved PC is checked before it becomes the PC. A frame that
+    ; has been overwritten sends the interpreter to an address with no story
+    ; at it, and the halt that follows names an innocent opcode several
+    ; instructions later; caught HERE it names the return itself.
+    call zx_inimage
+    jc .badret
     call zm_seek
     mov al, [zx_tmp3]
     cmp al, 0xFF
     je .done
     mov bx, [zx_tmp0]
     call zx_store
+    jmp short .done
+.badret:
+    mov [zx_badpc_l], ax            ; the address the frame asked to return to
+    mov [zx_badpc_h], dx
+    mov byte [zx_badop], 0xFE       ; 0xFE = "a return, not an opcode"
+    mov al, ZXE_BADOP
+    call zx_halt
 .done:
     pop di
     pop dx
@@ -1986,7 +2010,7 @@ zx_verify:
 .full:
     mov ax, [zx_tmp0]
     mov dx, [zx_tmp1]
-    call zm_seek                    ; ES:SI = the chunk
+    call zm_addr                    ; ES:SI = the chunk, and NOT the PC
     mov di, [zx_sum]
     xor bh, bh
 .byte:

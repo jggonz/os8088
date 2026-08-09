@@ -27766,18 +27766,31 @@ one funnel from the VM to the window — preserving every register but that one;
 correct and none of them was the last one, which is the signature of a wrong
 invariant rather than a bug.
 
-The PC's segment is therefore recorded by the three routines whose job is to
-*move* the PC (`zm_seek`, `zm_norm`, `zx_jrel`) and restored by `zx_run` after
-every instruction, so a handler's clobbered ES is meant to be harmless. That
-did not close it either — `zm_seek` is also used to walk things that are not
-the PC, so the authority it maintains is not always the PC's.
+**That refactor has since been done.** The PC's segment lives in
+`[zf_pcseg]`, only the movers write it (`zm_seek`, `zm_norm`, `zx_jrel`),
+`zm_addr` exists for walks that are *not* the PC, and `zx_run` reloads ES from
+memory before every instruction and stores SI back after it. A handler that
+clobbers ES can no longer lose the program counter.
 
-**The fix is to stop keeping the PC in a segment register**: hold it in
-`[zf_pcseg]`/`[zf_pcoff]` and load `ES:SI` per instruction inside `zx_step`,
-with the PC-movers writing memory rather than registers. That is contained —
-`zx_step`, `zx_call`, `zx_ret`, `zx_jrel` and `zm_seek` — but it re-times the
-fetch path that §59.3 was designed around, so it wants doing deliberately and
-re-measuring, not at the end of a session.
+**And the halt did not move.** Same story, same address, same segment. Three
+guards were added on the way and none of them fires:
+
+- `zm_seek` refuses a seek outside the story image and reports the address
+  asked for (`0xFD`);
+- `zx_ret` validates a frame's saved return address before it becomes the PC
+  (`0xFE`);
+- `zx_step` range-checks the PC's segment every instruction.
+
+So the PC's segment is not being clobbered in a register and no PC-mover is
+asking for a bad address: **`[zf_pcseg]` is being overwritten in memory by
+something that is not a PC-mover at all.** It is a stray write into the bss,
+and the value that lands there looks like a kernel segment.
+
+That is a different defect from the one this section originally described, and
+a narrower one. The next step is to move `[zf_pcseg]` somewhere isolated and
+see whether the symptom follows it — if it does, the writer is found by
+elimination; if it does not, the corruption is of the object it points at
+rather than of the pointer.
 
 `zx_step` range-checks the PC's segment on every instruction and names the
 last opcode that ran, which is what turned this from "a story stops" into a

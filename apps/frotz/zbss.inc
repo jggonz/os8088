@@ -182,6 +182,17 @@ ZI_RING_N   equ 32
 ; assembling, and OS88_BSS needs it before that (SPEC.md 20.5). A module that
 ; overruns its range must come back HERE and say so in the same edit that
 ; raises ZF_BSS_TOTAL, which is exactly the review this arrangement is for.
+; What a halt reports. Shared, because zmem.inc refuses a seek off the end of
+; the story and zexec.inc refuses an opcode it does not know, and zmem is
+; included first - a %define must precede its use even though it expands at
+; the use site.
+%define zx_badop   (os88_image_end + 1174)          ; byte: the opcode, or
+                                                    ;   0xFD a bad seek
+                                                    ;   0xFE a bad return
+%define zx_badpc_l (os88_image_end + 1176)          ; word: and the address
+%define zx_badpc_h (os88_image_end + 1178)
+%define zx_badseg  (os88_image_end + 1172)          ; word: ES at the fault
+
 ZMEM_SLACK   equ 1180                         ; 64
 ZTEXT_SLACK  equ 1244                         ; 128
 ZOBJ_SLACK   equ 1372                         ; 64

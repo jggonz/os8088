@@ -364,13 +364,13 @@ print their banners, status lines and room descriptions; Adventure accepts a
 typed line, tokenises it and replies. It is a command or two later that it
 stops, with `unknown opcode ... es=<a kernel segment>`.
 
-SPEC.md §59.12 is the diagnosis and it is worth reading before touching this
-code, because the conclusion is that **§3.1's decision to keep the PC in ES:SI
-was wrong** — not slow, wrong. ES is the one register the OS does not
-preserve, so every drawing or file call is a chance to lose the program
-counter, and four separate fixes each looked like the last one. The remedy is
-to hold the PC in memory and load ES:SI per instruction; it is contained but
-it re-times the fetch path this design was built around.
+SPEC.md §59.12 is the diagnosis. The ES-as-program-counter problem it
+describes has been fixed — the segment lives in `[zf_pcseg]`, only the movers
+write it, and `zx_run` reloads ES every instruction — and **the halt did not
+move**, which is the useful part. With three guards in place and none of them
+firing, what is left is a stray write into the bss corrupting `[zf_pcseg]`
+itself, which is a narrower thing to hunt than a register discipline spread
+over sixty handlers.
 
 ## 11. Verification
 

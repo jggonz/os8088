@@ -104,13 +104,6 @@ ZM_COL_WHITE equ 9
 %define zm_ckhdr  (os88_image_end + ZMEM_SLACK + 4)   ; word: header's checksum
 %define zm_lsc    (os88_image_end + ZMEM_SLACK + 6)   ; byte: file-length shift
 %define zm_bpp    (os88_image_end + ZMEM_SLACK + 7)   ; byte: OSAPI_VIDEO's DH
-; THE PC'S SEGMENT, AUTHORITATIVELY. ES holds it while the VM runs, but ES is
-; also what every OSAPI call is free to clobber - the X stub hands the callee
-; the caller's DS in ES, and only an X-stubbed slot puts it back. Rather than
-; ask sixty opcode handlers to preserve a register the OS does not preserve,
-; the three routines whose job IS to move the PC record it here, and zx_run
-; puts ES back from it after every instruction (SPEC.md 59.3).
-%define zm_pcseg  (os88_image_end + ZMEM_SLACK + 8)   ; word
 
 ; =============================================================================
 ; zm_map - the 20-bit address decoder (INTERNAL)
@@ -299,7 +292,10 @@ zm_pw:
 ; walks forward with `lods` and wants the whole 32KB window ahead of it before
 ; zm_norm has to do anything.
 ; =============================================================================
-zm_seek:
+; zm_addr sets ES:SI to an address WITHOUT claiming it is the program counter.
+; Walking a Quetzal chunk or checksumming the image needs the arithmetic and
+; must not disturb the PC (SPEC.md 59.3).
+zm_addr:
     push ax
     push cx
     push dx
@@ -312,10 +308,52 @@ zm_seek:
     or ax, dx
     add ax, [zf_sseg]
     mov es, ax
-    mov [zm_pcseg], ax              ; the PC moved; record it (see zm_pcseg)
     pop dx
     pop cx
     pop ax
+    ret
+
+; zm_seek IS the PC mover, and it writes [zf_pcseg]/[zf_pcoff] as well as the
+; registers. That memory pair is the AUTHORITY on where the program counter is
+; (SPEC.md 59.3): ES is reloaded from it before every instruction, so a handler
+; that clobbers ES - and every OSAPI call is free to, because the X stub hands
+; the callee the caller's DS in ES - can no longer lose the program counter.
+zm_seek:
+    ; A SEEK OUTSIDE THE STORY IS REFUSED, not performed. Every way the PC can
+    ; move - a call, a return, a jump, a branch - comes through here, so this
+    ; is the one place that can name the address a mover actually asked for
+    ; instead of the innocent opcode that runs afterwards at a nonsense PC.
+    call zm_inimg
+    jc .bad
+    call zm_addr
+    push ax
+    mov ax, es
+    mov [zf_pcseg], ax
+    mov [zf_pcoff], si
+    pop ax
+    ret
+.bad:
+    mov [zx_badpc_l], ax
+    mov [zx_badpc_h], dx
+    mov byte [zx_badop], 0xFD       ; 0xFD = "a seek off the end of the story"
+    push ax
+    mov al, ZXE_BADOP
+    call zx_halt
+    pop ax
+    ret
+
+; zm_inimg - is DX:AX inside the story image?  out: CF=0 yes; preserves all
+zm_inimg:
+    cmp dx, [zf_slen_h]
+    jb .yes
+    ja .no
+    cmp ax, [zf_slen_l]
+    jb .yes
+.no:
+    stc
+    ret
+.yes:
+    clc
     ret
 
 ; =============================================================================
@@ -332,7 +370,8 @@ zm_norm:
     mov ax, es
     add ax, 0x800                   ; 0x8000 bytes = 0x800 paragraphs
     mov es, ax
-    mov [zm_pcseg], ax
+    mov [zf_pcseg], ax              ; a PC mover: keep the authority current
+    mov [zf_pcoff], si
     pop ax
 .out:
     ret
@@ -848,7 +887,7 @@ zm_checksum:
     push dx
     mov ax, 0x40
     xor dx, dx
-    call zm_seek                    ; ES:SI = byte $40
+    call zm_addr                    ; ES:SI = byte $40, and NOT the PC
     pop dx
     pop ax
 .loop:
