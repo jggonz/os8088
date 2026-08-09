@@ -20,11 +20,36 @@ difference is in the *BIOS*, not in the timing.
 
 ---
 
-## 1. Audio tails off for ~1/3 second, every few seconds (Tracker)
+## 1. Audio tails off for ~1/3 second, every few seconds (Tracker) (FIXED — and it was never a field report)
+
+> **CLOSED on two counts, and the second is the one worth reading.**
+>
+> **It is fixed.** The owner reports the audio smooth, and smoother again
+> after PERFORMANCE.md Set 20 took the mixer's inner loops from 45% of the
+> machine to 29.6%. Which change fixed it is not established — this entry
+> outlived several rounds of work on the replayer, the ring and the feed —
+> so it is closed on the symptom being gone rather than on a diagnosis.
+>
+> **AND IT WAS NEVER MEASURED ON THE FIELD MACHINE.** The 5150 this project
+> is calibrated against **has no sound card at all**
+> (docs/FIELD-MACHINES.md), so no report about audio can have come off it.
+> This one came from **PCem** — which models period hardware at period
+> speed, so its figures are in the right units and do not announce
+> themselves. That is exactly the rule FIELD-MACHINES.md's last section
+> states: *a number is not a field number because a human handed it to you*,
+> **ASK which machine a report came from** — and this entry sat here for
+> months saying "Reported on a real 8088 at 4.77 MHz", which was read as the
+> 5150 by everyone who came after, including the sessions that spent time on
+> it. The rule exists because of cases like this one; it was written down and
+> then not applied.
+>
+> Kept rather than deleted for that reason. The ruled-out list below is still
+> sound and still useful if anything like it returns.
 
 **Observed.** A MOD plays normally for a few seconds, then the sound "slows
 down" or tails off for about a third of a second, then continues normally.
-The cycle repeats. Reported on a real 8088 at 4.77 MHz.
+The cycle repeats. Reported on a real 8088 at 4.77 MHz — **on PCem, not on
+the 5150**; see the note above.
 
 **Ruled out — this is NOT the fsx work.** The reporter A/B'd the shipped
 images against `a4facf0`, the commit immediately *before* Tracker moved onto

@@ -2600,10 +2600,9 @@ tui_draw_all:
 .win:
     TSETC TC_WBG                    ; the windowed splash card
     mov byte [tui_wdrawn], 0        ; ...which covers the readout, and the
-%ifdef TRKLOG                       ; position may not move again for nine
-    mov byte [tlog_llbl], 0         ; seconds, so the marker alone would leave
-    mov byte [tlog_tkey], 0xFF      ; the line blank until it did
-%endif
+                                    ; position may not move again for nine
+                                    ; seconds, so the marker alone would leave
+                                    ; the line blank until it did
     xor ax, ax
     xor bx, bx
     mov cx, [tui_cw]
@@ -2847,7 +2846,6 @@ tui_draw_dyn:
 .win:
     cmp byte [mp_playing], 0        ; windowed: a live position line on the
     je .out                         ; splash while something plays
-%ifndef TRKLOG
     ; ONLY when it changes - and what changes is the POSITION alone, once every
     ; 64 rows. It used to compare the row too, so this drew a 17-cell run seven
     ; times a second on Beverly, a millisecond a cell (SPEC.md 6.1.1), for a
@@ -2871,103 +2869,6 @@ tui_draw_dyn:
     mov byte [di], 0
     mov cx, 8
     call tui_wfld
-%else
-; --- the bench readout: a fixed LABEL and a BODY the hold takes over --------
-;
-;   LABEL  'PACE every  '          TLOG_PACEW cells at x = 8
-;   BODY   'Pos 01/04  Row 12'      TLOG_BODYW cells, beyond it
-;
-; The label is NEVER blanked and changes only when the mode does: it is the one
-; thing on the line that is not part of the experiment, and a label blinking
-; once a second competes with the animation it is labelling.
-;
-; The body is everything that is part of it - the position and the row - and
-; in a burst mode the hold REPLACES it, whole. That is the
-; point rather than a saving: a frozen row number beside a moving animation is
-; a frozen row number, so there is no number, and the animation is where the
-; numbers were rather than off to one side of them.
-;
-; [tlog_tkey] is what the body is currently SHOWING - 0 an animation, 0FFh the
-; text, 1..TLOG_REVN a `hide` reveal in progress - so it redraws only when its
-; own content moved.
-    cmp byte [tlog_pace], TLOG_PACE_BURST
-    jb .nob
-    call tlog_burst                 ; the burst grid: rewrites [tui_arow] and
-.nob:                               ; steps [tlog_sweep]/[tlog_rev]
-    mov al, [tlog_pace]             ; --- the LABEL, on a mode change alone ---
-    inc al                          ; ...stored PLUS ONE, because a package's
-    cmp al, [tlog_llbl]             ; bss arrives zeroed and mode 0 is a real
-    je .body                        ; mode: at 0 == 0 the label would match
-    mov [tlog_llbl], al             ; before it had ever been drawn and never
-    dec al                          ; be drawn at all
-    mov di, tui_pbuf
-    call tlog_pace_draw
-    mov byte [di], 0
-    mov bx, TLOG_PACEW * 8
-    mov cx, 8
-    call tui_wfld
-.body:
-    mov ah, 0xFF                    ; AH = the body state this frame wants
-    cmp byte [tlog_pace], TLOG_PACE_BURST
-    jb .tk
-    cmp byte [tlog_sweep], TLOG_NOBAR
-    jne .hold
-    cmp byte [tlog_pace], TLOG_PACE_HIDE
-    jne .tk                         ; the other four come straight back to the
-    mov al, [tlog_rev]              ; text; only `hide` reveals it
-    cmp al, TLOG_REVN
-    jae .tk
-    mov ah, al
-    inc ah                          ; 1..TLOG_REVN, never 0 (that is the
-    jmp short .tk                   ; animation)
-.hold:
-    xor ah, ah
-.tk:
-    mov [tlog_wtk], ah
-    cmp ah, [tlog_tkey]
-    jne .wupd                       ; the state moved
-    or ah, ah
-    jnz .ntext
-    mov al, [tlog_sweep]            ; an animation: redraw when its frame moved
-    cmp al, [tlog_lsweep]
-    jne .wupd
-    jmp .out
-.ntext:
-    cmp byte [tui_wdrawn], 0        ; the text body is the POSITION alone now,
-    je .wupd                        ; so the row is not what dirties it
-    mov al, [tui_apos]
-    cmp al, [tui_lpos]
-    jne .wupd
-    jmp .out
-.wupd:
-    mov byte [tui_wdrawn], 1
-    mov al, [tui_apos]
-    mov [tui_lpos], al
-    mov al, [tlog_sweep]
-    mov [tlog_lsweep], al
-    mov al, [tlog_wtk]
-    mov [tlog_tkey], al
-    mov di, tui_pbuf
-    or al, al
-    jnz .thave
-    call tlog_hold_draw             ; the hold owns the whole body
-    jmp short .tdraw
-.thave:
-    call tui_wpos
-    mov al, [tlog_tkey]
-    cmp al, 0xFF
-    je .tdraw
-    mov di, tui_pbuf                ; a `hide` reveal: star everything outside
-    mov cx, TLOG_BODYW              ; the middle, widening each frame
-    call tlog_mask
-.tdraw:
-    mov di, tui_pbuf
-    add di, TLOG_BODYW
-    mov byte [di], 0
-    mov bx, TLOG_BODYW * 8
-    mov cx, 8 + TLOG_PACEW * 8
-    call tui_wfld
-%endif
 .out:
     pop di
     pop si
@@ -3167,7 +3068,7 @@ tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt', 0
                                     ; this line said 'P pattern' one row above
                                     ; it and P was reached for as the pace
                                     ; cycler for a whole round of testing
-tui_s_anykey:  db 'F full  E pace ABCD  K rate  D log  W write  M mark', 0
+tui_s_anykey:  db 'F full  K rate  D log  W write  M mark', 0
 %else
 tui_s_anykey:  db 'Press F or click for fullscreen', 0
 %endif

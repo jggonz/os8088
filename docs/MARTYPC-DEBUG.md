@@ -167,7 +167,9 @@ number may be taken off it**: 7.16MHz is not a machine anybody in
 docs/FIELD-MACHINES.md owns, and GLaBIOS is not a period ROM.
 
 Its first use is the worked example of what a control is for. SPEC.md
-§45.16.4's mode-C burst was designed to hold a row for one system tick and
+§45.16.4's mode-C burst (since removed — §45.16.3; the reasoning below is
+what a control machine is FOR and does not depend on the mode still
+existing) was designed to hold a row for one system tick and
 measured ~700 ms for eight rows against a designed 385 — and the question
 "is that the design or is that the 5150 being slow" is exactly the question a
 faster machine answers. It was the latter: on the 5150 **99%** of the

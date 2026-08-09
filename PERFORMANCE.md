@@ -3287,9 +3287,17 @@ all ten patched immediates equal to `[mp_cstepi]`**.
 frames a second becomes roughly 7, against 7.14 rows — better everywhere and
 still not enough for a display that has to show every row. The only large
 lever left is the SAMPLE RATE, because the work is `channels × rate` and
-nothing else: 5,500 → 4,000 Hz is 27% fewer channel-samples and takes the
-mixer to 23.5% with the loop fix. That is a trade against audio quality, and
-it is a decision rather than an optimisation.
+nothing else: 5,500 → 4,000 Hz is 27% fewer channel-samples. That is a trade
+against audio quality, and it is a decision rather than an optimisation.
+
+**That decision has been taken, and the answer is NO.** 4,000 Hz was built
+onto the bench build's `K` key and listened to on the field owner's hardware:
+*"4,000 Hz sounds terrible."* The option is **closed** — not deferred — so
+nothing downstream should re-propose it, and the arithmetic above is kept
+only to say what was on offer and what it would have cost. 5,500 Hz is XT
+mode's rate and stays. The windowed display's answer is not a cheaper mixer
+at all: it is **drawing less**, which is §45.16.6 — the readout is the
+position alone, which the machine can always keep up with.
 
 **Three things NOT worth doing, costed and rejected.** Moving the sample to
 `DS` to drop the `26` override needs `es: xlat` instead, which is the same

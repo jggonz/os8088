@@ -784,45 +784,15 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      sets the clock back, so pressing it inside fullscreen changes nothing
 #      until the next F. Press it, then F.
 #
-# E    the WINDOWED pacing experiment, seven modes (SPEC.md 45.16.3/45.16.4).
-#      Windowed-only - the bracket has a 54.6 Hz clock of its own and nothing
-#      to fix. The live mode is named on screen ('PACE C bar'), because what
-#      is being judged is what the line does over a minute and the key's own
-#      message has gone by then.
-#        every  the shipped cadence - an irregular 110/165
-#        out    burst, then stars OUT from the centre to the edges
-#        hide   burst, ALL stars for the whole wait, then the letters
-#               revealed from the centre once the display is back in step
-#      (bar, sweep and in were built, judged and dropped; so was the beat
-#      ruler, which made the animation sixteen cells wider than it needed to
-#      be - see SPEC.md 45.16.4.)
-#      In every mode but the first the BODY - the position, the row and the
-#      ruler - is REPLACED by the animation for the whole hold. A frozen row
-#      number beside a moving animation is a frozen row number, which is what
-#      the first two builds got wrong. The LABEL is never blanked, for the
-#      other half of the same reason: it is not part of the experiment, and
-#      one blinking once a second competes with what it is labelling.
-#      (The every-other-frame grid was here as 'B' and is GONE - measurably
-#      the widest spread of the lot, and it read as the worst.)
-#
-#          PACE every  Pos 01/04  Row 02
-#          BURST out   Pos 01/04       *         <- the hold, in place of them
-#
-#      'Pos xx/yy' is the ORDER POSITION out of the song's length - which
-#      entry of the arrangement is playing, not a row. It steps once every 64
-#      rows, which is 8 s on CLICK.MOD and 8.9 on BEVERLY.MOD, so beside a row
-#      counter running at eight a second it looks dead; the denominator is
-#      there to say that it is a different kind of number.
-#
-#      A number answers "which row" and the question here is "are the rows
-#      EVENLY spaced", which only a moving marker answers. Even walk plus a
-#      click on the wrap is the whole of "smooth and in time".
-#
-#      JUDGE THESE ON CLICK.MOD, NOT ON BEVERLY.MOD (SPEC.md 45.16.5). The
-#      mixer eats the drawing: windowed on a 4.77MHz machine CLICK.MOD gets
-#      16.8 frames/s against 8.00 rows/s, and BEVERLY.MOD gets 6.0 against
-#      7.14 - so on a real module the display cannot show every row at all,
-#      C and D never complete a burst, and there is no bang or sweep to see.
+# E    GONE. The windowed pacing experiment (SPEC.md 45.16.3/45.16.4) - seven
+#      cadences for a windowed ROW counter - is concluded, and its key, its
+#      three surviving modes, both hold animations and the reveal have been
+#      removed from tests/trklog.inc. SPEC.md 45.16.6 is the outcome: the
+#      windowed readout is 'Pos xx/yy' and there is no row on it, so there
+#      is no cadence left to pace. Judging it needed CLICK.MOD, because on a
+#      real module the mixer eats the drawing (BEVERLY.MOD gets 6.0 frames/s
+#      against 7.14 rows/s) - which is what the experiment found and why it
+#      ended in not drawing the field rather than in a better cadence.
 #
 # K    XT mode's SAMPLE RATE - 4,000 / 5,500 / 11,000 Hz - WITHOUT leaving XT
 #      mode (docs/FIELD-NOTES.md 16). Windowed-only, takes effect at the next

@@ -478,10 +478,6 @@ trk_onkey:
     je .clkt
     cmp bl, 'T'
     je .clkt
-    cmp bl, 'e'
-    je .event
-    cmp bl, 'E'
-    je .event
     cmp bl, 'k'
     je .xrate
     cmp bl, 'K'
@@ -531,9 +527,6 @@ trk_onkey:
 .clkt:
     call tlog_clk_key               ; T: SPEC.md 45.16 off, likewise
     jmp .out
-.event:
-    call tlog_even_key              ; E: the windowed readout on an EVEN
-    jmp .out                        ; two-frame grid (SPEC.md 45.16.3)
 .xrate:
     call tlog_rate_key              ; K: XT mode's sample rate, WITHOUT
     jmp .out                        ; leaving XT mode (FIELD-NOTES.md 16)

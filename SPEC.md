@@ -20241,7 +20241,22 @@ frame, so the intervals must alternate two frames and three: **110 ms and
 ±20% the graphics bracket had before §45.15.2, and it is why the *fullscreen*
 answer was a finer clock rather than a cleverer schedule.
 
-#### 45.16.3 `E` — the even-grid experiment, and why arithmetic could not settle it
+#### 45.16.3 `E` — the even-grid experiment, and why arithmetic could not settle it (CONCLUDED — the key and its code are GONE)
+
+> **The experiment is over and its apparatus has been removed from
+> `tests/trklog.inc`.** §45.16.6 is the outcome: the windowed readout shows
+> the POSITION and no row at all, so there is no row cadence left to pace
+> and nothing for `E` to switch between. What went with it: the three pace
+> modes, the burst grid, both hold animations, the reveal, the mode label,
+> and eight bench-only state bytes — 683 bytes of `TRKLOG.O88`, and **zero**
+> of the shipped `TRACKER.O88`, which is byte-identical across the removal.
+>
+> §45.16.3 and §45.16.4 are kept as the RECORD of what was tried, because
+> the conclusion only makes sense next to the seven cadences that failed to
+> reach it. A dead tool in the tree is a different thing from a dead end
+> written down: the first misleads the next session into using it, the
+> second stops them rebuilding it.
+
 
 §45.16.2's floor is that a 125 ms row on a 55 ms frame must alternate two
 frames and three. The obvious next question is whether making every interval
@@ -20266,7 +20281,7 @@ of its own (§53.5.1) and nothing to fix.
 If it wins, it stops being a key and becomes the windowed path. If it loses,
 the arithmetic was right and this section is the record of having checked.
 
-#### 45.16.4 `C` — stop trying to be right, and hide the resync behind a bang
+#### 45.16.4 `C` — stop trying to be right, and hide the resync behind a bang (CONCLUDED — see §45.16.3)
 
 Modes A and B both try to be **accurate**: show each row as near to when it
 is played as a 55 ms frame allows. §45.16.2 proves that lands on an
@@ -20400,7 +20415,10 @@ is the only thing under test. **A real module windowed on a floor machine is
 a different problem** — not "which of four cadences reads best" but "the
 drawing gets a third of the frames it is being modelled with" — and no
 pacing scheme can fix a display that is slower than the thing it is
-displaying. And **this is exactly why the text screen exists** (§45.13): in
+displaying. **The sample rate was the one other lever, and it is
+CLOSED**: 4,000 Hz was built onto the bench build's `K` key and listened to
+on the field owner's hardware — *"4,000 Hz sounds terrible"* — so 5,500 Hz,
+XT mode's own rate, stands (PERFORMANCE.md Set 20). And **this is exactly why the text screen exists** (§45.13): in
 `FSXM_TEXT80` a row change is a `rep movsw` rather than 2,567 glyph cells a
 second, which is what buys the frames back on the module that needs them.
 
