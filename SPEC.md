@@ -24231,15 +24231,51 @@ name to the generic string at the third. **A message that is overwritten on
 the way out is worse than no message**, because it is evidence and it is
 false.
 
-**`OSAPI_FILE_GOTO_Q` (§19.2.2) is still unwired, and it is still not the
-bug** — it was blamed once and reverting it changed nothing. That remains
-true; it is now an optimisation with nothing in front of it. Every
-`hd_isrc`/`hd_isrc_sub`/`hd_idst`/`hd_idst_sub` is a full `dsk_chdir` bought
-for nothing, twice per file and twice per chunk, and this file never shows a
-folder. Wire it in and measure with `make DISKCNT=1`. One related saving,
-also unmade: `hd_icopy_one`'s chunk loop always makes one extra pass to be
-told the file is finished, which costs a source remount; comparing
-`[hd_ioff]` with `[hd_isize]` would skip it.
+#### 52.10.7.2 The copy engine takes the quiet goto
+
+`OSAPI_FILE_GOTO_Q` (§19.2.2) had been published, unused, and blamed once for
+the fault above — reverting it changed nothing, because the fault was
+`dskw_read_at`. With that fixed it is an ordinary optimisation, and all four
+copy-engine helpers (`hd_isrc`, `hd_isrc_sub`, `hd_idst`, `hd_idst_sub`) use
+it now.
+
+**What licenses it is that nothing in `inst.inc` ever SHOWS a folder.** It
+reads and writes by name, and `OSAPI_FILE_FIND` walks raw directory sectors
+(`dsk_find`, stateless by ordinal, written for exactly this caller) rather
+than the mount listing — so the directory scan, the sort and the icon harvest
+a full `dsk_chdir` pays for are bought for nothing here, twice per file and
+twice per chunk. **The write gate survives**, which is the thing that could
+have made this fail confusingly: `dsk_chdir_q` sets `[dsk_quiet]` and calls
+the *real* `dsk_chdir`, so `[dsk_mntok]` is set exactly as before and only
+the listing publish is skipped.
+
+**The boundary keeps the full `GOTO`, and that is the rule rather than an
+omission.** `hd_ivol_back` hands the machine back to the user; a quiet mount
+there leaves the global listing empty with `[dsk_lstale]` owed for whatever
+they do next, and it is called once per install so it buys nothing.
+`hd_iapps_find`'s probe keeps it for the same reason. **Quiet inside the
+loop, full at the boundary.**
+
+The second saving is in `hd_icopy_one`: the chunk loop always made one extra
+pass to be told the file was finished, which costs a source remount and a
+directory walk to answer 0 bytes that `hd_istat` had already answered at the
+top. It stops when `[hd_ioff]` reaches `[hd_isize]`.
+
+**Measured together, `make DISKCNT=1` and §18.94's counters across one whole
+install** (both disks, 22 files onto a pristine 31M partition):
+
+| | mounts | sectors | int 13h calls |
+|---|---|---|---|
+| before | 128 | 1,372 | 638 |
+| after | **76** | **971** | **354** |
+
+— 41%, 29% and 45%. **The counts are the claim and the seconds are not**:
+these were taken on MartyPC, which is cycle-accurate and 30x fast on a disk,
+so what a saved mount is worth in *time* has to come off the 5150. Both runs
+produced the same 22 files at the same clusters with `BEVERLY.MOD`
+byte-identical, `FAT1 == FAT2`, 191 clusters allocated and 191 reachable, no
+orphans and no cross-links — which is the check that matters, because an
+install that got faster and quietly wrong is the worst available outcome.
 
 Verified end to end on `os8088_xt_hdd` with the system disk in A:, the apps
 disk in B: and a pristine `default_xtide.vhd`: one confirm installs both

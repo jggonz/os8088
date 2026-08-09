@@ -1248,34 +1248,39 @@ hd_iapps_find:
 ; there. Each is a REMOUNT, which is why the copy is structured to make as
 ; few of them as it can - one per file, not one per chunk.
 ; -----------------------------------------------------------------------------
-; THESE WANT THE QUIET GOTO (SPEC.md 19.2.2) AND DO NOT YET USE IT, which is
-; recorded here rather than left as an obvious improvement nobody tried.
-; Nothing in this file ever SHOWS a folder - it reads and writes by name, and
-; OSAPI_FILE_FIND walks raw directory sectors - so every one of these is a
-; full dsk_chdir (BPB, FAT window, directory scan, sort, one icon harvest per
-; file) bought for nothing, twice per file and twice per CHUNK.
+; ALL FOUR TAKE THE QUIET GOTO (SPEC.md 19.2.2), and the reason they may is
+; that nothing in this file ever SHOWS a folder: it reads and writes by name,
+; and OSAPI_FILE_FIND walks raw directory sectors (dsk_find) rather than the
+; mount listing. So the directory scan, the sort and the icon harvest a full
+; dsk_chdir pays for are all bought for nothing here - twice per file and
+; twice per CHUNK. The write gate survives, which is the thing that could
+; have made this fail confusingly: dsk_chdir_q sets [dsk_quiet] and calls the
+; REAL dsk_chdir, so [dsk_mntok] is set exactly as before and only the
+; listing publish is skipped.
 ;
-; Switching all four to OSAPI_FILE_GOTO_Q was tried and reverted, and the
-; reason is worth keeping because the first diagnosis was WRONG: the copy
-; failed at the end, the quiet goto was blamed, and reverting it changed
-; nothing at all. What actually broke was dskw_read_at refusing the very call
-; that should have answered "finished" - it tested the offset's cluster
-; alignment BEFORE testing for end of file, and the final short chunk is
-; exactly what leaves the offset mid-cluster (SPEC.md 52.10.7).
+; Measured over one whole install (make DISKCNT=1, SPEC.md 18.94, both disks,
+; 22 files onto a pristine 31M partition), together with hd_icopy_one's
+; dropped terminating pass: 128 mounts -> 76, 1,372 sectors -> 971, 638
+; int 13h calls -> 354. Same 22 files at the same clusters, BEVERLY.MOD
+; byte-identical, FAT1 == FAT2, no orphans and no cross-links.
 ;
-; THAT IS FIXED, so nothing stands in front of this any more: it is now an
-; ordinary optimisation with a measurement owed. Wire the quiet slot in and
-; read 18.94's counters either side. The other saving in the same place is
-; hd_icopy_one's chunk loop, which always makes one extra pass to be told the
-; file is finished - a source remount that comparing [hd_ioff] with
-; [hd_isize] would skip.
+; It was once tried and reverted, and that is worth keeping because the
+; diagnosis was WRONG: the copy failed at the end, the quiet goto was blamed,
+; and reverting it changed nothing at all. What actually broke was
+; dskw_read_at refusing the very call that should have answered "finished".
+;
+; THE BOUNDARY KEEPS THE FULL GOTO, and that is the rule rather than an
+; omission: hd_ivol_back hands the machine back to the user, and a quiet
+; mount there would leave the global listing empty with [dsk_lstale] owed for
+; whatever they do next. Quiet inside the loop, full at the boundary.
+; hd_iapps_find's probe keeps it too - it runs once, so it buys nothing.
 hd_isrc:
     push ax
     push bx
     push dx
     mov bl, [hd_isrcdrv]        ; the source is where the user was: A: on a
     xor dx, dx                  ; one-floppy machine, at its ROOT
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
     pop ax
@@ -1287,7 +1292,7 @@ hd_isrc_sub:
     push dx
     mov bl, [hd_isrcdrv]
     mov dx, [hd_isubc]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
     pop ax
@@ -1299,7 +1304,7 @@ hd_idst:
     push dx
     mov bl, [hd_idrv]
     xor dx, dx
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
     pop ax
@@ -1311,7 +1316,7 @@ hd_idst_sub:
     push dx
     mov bl, [hd_idrv]
     mov dx, [hd_idsubc]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
     pop ax
@@ -1561,7 +1566,14 @@ hd_icopy_one:
     mov ax, [hd_itake]          ; the offset advances by what was TAKEN, and
     add [hd_ioff], ax           ; the next read starts exactly there
     adc word [hd_ioff+2], 0
-    jmp short .chunk
+
+    mov ax, [hd_ioff+2]         ; ...and STOP when that is the whole file,
+    cmp ax, [hd_isize+2]        ; instead of going round to be told so. The
+    jb .chunk                   ; extra pass costs a source remount and a
+    ja .ok                      ; directory walk to answer 0 bytes, which
+    mov ax, [hd_ioff]           ; hd_istat already told us at the top - the
+    cmp ax, [hd_isize]          ; loop knows it is finished the moment the
+    jb .chunk                   ; offset reaches the size (SPEC.md 52.10.7)
 .ok:
     clc
     jmp short .out
