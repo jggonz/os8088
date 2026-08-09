@@ -360,7 +360,7 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4734,
+    "bss": 4742,
     "budget": 96256,
     "codemax": 65536,
     "cold": 21664,
@@ -374,24 +374,24 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52824
+    "text": 52969
   },
   "small": {
-    "bss": 4654,
+    "bss": 4662,
     "budget": 94208,
     "codemax": 65536,
     "cold": 21664,
     "coldpara": 1376,
     "fatpara": 288,
-    "imgpara": 3584,
-    "kend": 5920,
+    "imgpara": 3616,
+    "kend": 5952,
     "kseg": 96,
-    "ksize": 93184,
+    "ksize": 93696,
     "lowbss": 7748,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52603
+    "text": 52748
   }
 }
 ```
@@ -865,21 +865,21 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 27,391 | 36.8% |
-| the window system and its furniture | 15,809 | 21.2% |
+| the file system, end to end | 27,395 | 36.7% |
+| the window system and its furniture | 15,812 | 21.2% |
 | drawing: adapters, primitives, glyphs, icons | 10,165 | 13.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,560 | 12.8% |
-| the kernel proper: API table, heap, scheduler, events | 5,761 | 7.7% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,607 | 12.9% |
+| the kernel proper: API table, heap, scheduler, events | 5,852 | 7.8% |
 | the Control Panel | 4,426 | 5.9% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **74,488** | |
+| **total** | **74,633** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 806 | 6,930 | **7,736** | 335 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,514 | — | **5,514** | 758 | 3,584 |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `wm.inc` — the window manager (§11) | 5,494 | — | **5,494** | 635 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,676 | **4,696** | 155 | — |
 | `ctrl.inc` — the Control Panel (§31) | 877 | 3,549 | **4,426** | — | — |
@@ -887,12 +887,12 @@ generated in the first place.
 | `vga12.inc` — the VGA planar primitives (§5) | 3,676 | — | **3,676** | 118 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 2,991 | — | **2,991** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,577 | — | **2,577** | 252 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 84 |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,530 | — | **2,530** | 246 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,361 | — | **2,361** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
-| `memory.inc` — the claim heap (§50) | 1,860 | — | **1,860** | 12 | 256 |
-| `instance.inc` — instances and the built-in kinds (§29) | 1,825 | — | **1,825** | 673 | — |
+| `memory.inc` — the claim heap (§50) | 1,951 | — | **1,951** | 14 | 256 |
+| `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
 | `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,649 | — | **1,649** | 27 | — |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
@@ -914,7 +914,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,675 | — | **2,675** | — | — |
-| **total** | **52,824** | **21,664** | **74,488** | **4,734** | **7,748** |
+| **total** | **52,969** | **21,664** | **74,633** | **4,742** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it
