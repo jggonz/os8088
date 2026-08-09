@@ -1163,7 +1163,7 @@ hd_iapps_find:
                                 ; FILE_FIND sees hidden and system entries
                                 ; (SPEC.md 19.7.1's fence), which is what makes
                                 ; it able to ask at all
-    cmp word [hd_ifind+14], 2   ; a folder, and not the synthesized '..' (3)
+    cmp word [hd_ifind+14], OSAPI_FT_DIR    ; a folder ('..' is FT_UP)
     jne .scan
     mov si, hd_ifind
     mov di, hd_s_iapps
@@ -1202,8 +1202,9 @@ hd_iapps_find:
     call OSAPI_FILE_FIND
     pop es
     jc .refuse                  ; walked the whole folder and found no package
-    cmp word [hd_ifind+14], 1   ; a FILE (2 = folder, 3 = the synthesized '..')
-    jne .pscan
+    cmp word [hd_ifind+14], OSAPI_FT_PKG    ; a PACKAGE, which is what type 1
+    jne .pscan                  ; actually means and exactly what is wanted
+                                ; here - hd_io88 below then confirms the name
     mov si, hd_ifind
     call hd_io88
     jnc .pscan
@@ -1309,10 +1310,12 @@ hd_icopy_tree:
     jc .done                    ; FERR_NOENT: the end of the directory
     mov [hd_iord], cx
     mov ax, [hd_ient+14]
-    cmp ax, 3
+    cmp ax, OSAPI_FT_UP
     je .entry                   ; the synthesized '..' is not ours to copy
-    cmp ax, 2
-    je .folder
+    cmp ax, OSAPI_FT_DIR
+    je .folder                  ; ...and anything else is a file, package or
+                                ; not: this loop had that right and the
+                                ; sub-folder one did not
     mov si, hd_ient             ; ...and NEITHER IS KERNEL.SYS, which
     mov di, hd_s_kernel         ; hd_inst_sys has already written FIRST so
     call hd_iname_same          ; that it lands on cluster 2 (SPEC.md
@@ -1389,9 +1392,17 @@ hd_icopy_sub:
     pop es
     jc .done
     mov [hd_isord], cx
-    mov ax, [hd_ient+14]
-    cmp ax, 1
-    jne .entry                  ; FILES only one level down - see the header
+    mov ax, [hd_ient+14]        ; FILES only one level down - see the header -
+    cmp ax, OSAPI_FT_DIR        ; and a FILE is "not a folder and not '..'",
+    je .entry                   ; NEVER "type 1". Type 1 is a PACKAGE: dsk_synth
+    cmp ax, OSAPI_FT_UP         ; gives it only to an .O88 whose size fits a
+    je .entry                   ; word and whose first cluster is in range, and
+                                ; every other plain file is type 0 (SPEC.md
+                                ; 19.7.1). Testing for 1 copied the packages out
+                                ; of APPS and GAMES and silently left BEVERLY.MOD
+                                ; behind, which is how an installed machine got
+                                ; an empty MEDIA folder - and would have left
+                                ; behind any document a user had put in one
     mov byte [hd_iinsub], 1
     mov si, hd_ient
     call hd_icopy_one

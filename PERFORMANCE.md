@@ -3182,3 +3182,73 @@ the gap look like 1.49x and nearly closed, and the same code on a
 better-interleaved disk is 2.03x. **A single calibration machine can flatter
 a latency bug**, because how much a fixed delay costs depends on how fast the
 thing you are delaying would otherwise have gone.
+
+### Set 20 — Tracker's mixer is 45% of the machine, and it is BUS-bound
+
+**How it was found, and the instrument is worth as much as the answer.**
+MartyPC's `status` returns `flat_ip`, so sampling it from the host and
+bucketing by the nearest preceding label out of the NASM listing **is a
+profiler that costs the guest nothing** — no counters, no instrumentation, no
+guest cycles, and a sample rate uncorrelated with anything the guest does
+because it is driven from outside. `tools/`-side, ~150 samples a second, and
+it needs the listing parsed properly: a label line in a NASM listing carries
+no address (the address turns up on the next line that emits a byte), and
+getting that wrong buckets everything into the nearest *data* label — the
+first run of it put 41% of the guest in `mp_ntab`.
+
+Windowed, `BEVERLY.MOD`, XT mode (5,500 Hz, 4 channels), on a cycle-accurate
+4.77MHz 8088:
+
+| | % of the whole machine |
+|---|---|
+| `mp_mixch_xt.addl` — the add-pass inner loop | **31.7%** |
+| `mp_mixch_xt.stl` — the store-pass inner loop | **13.5%** |
+| the rest of `mp_mixch_xt` (setup, run split, edges) | 6.3% |
+| `mp_chupd` | 3.7% |
+| everything outside the package (kernel, BIOS, idle) | 35% |
+
+**45% of the machine is in two seven-instruction loops**, which agrees with
+the independent measurement that the worker is `[trk_mixing]` for **65% of
+wall time** and the windowed display gets **5.8 frames a second against 7.14
+rows** (SPEC.md §45.16.5).
+
+**Why it costs what it costs, and this is the general lesson.** The 8088 has
+an **8-bit** bus: every byte fetched *or* accessed is 4 clocks, and they
+serialise. So the cost of a loop is its BYTE TRAFFIC, instruction bytes and
+data bytes together — not its instruction count and not its "complexity".
+
+| | instr | data | |
+|---|---|---|---|
+| `mov al,[es:si]` | 3 | 1 | the sample; the `26` override is a byte |
+| `xlat` | 1 | 1 | the volume table — already no multiply |
+| `add [di],al` | 2 | 2 | accumulate: a read AND a write |
+| `inc di` | 1 | 0 | |
+| `add dx,bp` | 2 | 0 | the fractional accumulator |
+| `adc si,[mp_cstepi]` | 4 | 2 | **a loop-INVARIANT memory read** |
+| `loop` | 2 | 0 | |
+| | **15** | **6** | = 21 bytes = **84 clocks** |
+
+84 × 4 channels × 5,500 Hz = 1.85M clocks/s = **38.7%** of 4.77MHz, against
+45.2% profiled with the setup and edges in it. The model is the machine.
+
+**What is actually removable is 3.5 of those 21 bytes.** `adc si, imm16`
+patched in place instead of a loop-invariant memory read is −2; unrolling 4x
+amortises `loop` to −1.5. That is 84 → 70 clocks, **38.7% → 32.3%** — about
+**6 points of the whole machine**, given back to everything, forever.
+
+**And that is the honest ceiling: it does not fix windowed Beverly.** 5.8
+frames a second becomes roughly 7, against 7.14 rows — better everywhere and
+still not enough for a display that has to show every row. The only large
+lever left is the SAMPLE RATE, because the work is `channels × rate` and
+nothing else: 5,500 → 4,000 Hz is 27% fewer channel-samples and takes the
+mixer to 23.5% with the loop fix. That is a trade against audio quality, and
+it is a decision rather than an optimisation.
+
+**Three things NOT worth doing, costed and rejected.** Moving the sample to
+`DS` to drop the `26` override needs `es: xlat` instead, which is the same
+byte back. Transposing the mix to per-sample-across-channels puts the
+accumulator in a register and saves the read-modify-write — but four
+channels' worth of position, step and table pointer cannot live in an 8086's
+registers, so it buys one byte and spends four reloading state. And filling
+the buffer with 0x80 to make every channel an add pass costs a whole extra
+`rep stosb` pass to save the store pass's two bytes.
