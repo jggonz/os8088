@@ -85,8 +85,11 @@ by the time one is being built, the change it carries has almost always just
 been driven as part of the work, so a second cycle re-establishes what the
 first already did - the owner asks when they want one exercised harder. It
 relaxes neither the testing that earns a commit nor the rule that a MERGE
-onto the integration branch rebuilds and boots first, a merge being two trees
-that were never tested together.
+onto the integration branch rebuilds and boots first **when that merge could
+change a shipped byte** - a merge being two trees that were never tested
+together. A merge that could not, because it touches only documentation and
+harness code, needs no build and no boot: see the next paragraph for where
+that line actually falls, because it is NOT "is it under `tools/`".
 
 **"Merge to elendilon" means the BRANCH, not the repository.** `elendilon` is
 the integration branch this work lands on — feature branches merge into it and
@@ -95,10 +98,38 @@ The name collides with the fork's (`Elendilon/os8088`) and with the owner's
 GitHub handle, which is exactly why it needs writing down: a session reading
 "push to elendilon" can plausibly hear "push to that person's repository",
 which is where the branch already lives, and do nothing. `git ls-remote
---heads origin` settles it in one call. A merge there rebuilds and boots
-before it is pushed — but it commits nothing under `build/`, which is
-gitignored outright (see below): the two "Rebuild the shipped images" commits
-in this history are what that policy exists to make impossible.
+--heads origin` settles it in one call.
+
+**A merge there rebuilds and boots before it is pushed IF it could change a
+shipped byte, and otherwise does neither.** The reason for the rebuild is that
+a merge combines two trees nothing has run together, so no earlier test covers
+the result — and that reason simply does not apply to a merge that cannot
+reach the images. Documentation, notes, and harness code `make` never invokes
+(`os88marty.py`, `os88mouse.py`, `qmp.py`, `mouse.py`, `shot.py`,
+`os88dbg.py`, `sndcheck.py`, anything under `tools/notepad/`) are all in that
+class. Merge them and push. **Prose is not entirely free of the build, so run
+the one command that covers it**: `make` runs `tools/checkdocs.py` over the
+cross-references, and a merge that leaves a §-number pointing at nothing fails
+`all` on the next person's machine rather than yours. `python3
+tools/checkdocs.py` is that gate on its own, in a second.
+
+**The test is "could this change a byte under `build/`", and it is NOT "is it
+under `tools/`".** Four tools write shipped bytes and a merge touching any of
+them needs the full treatment: **`os88disk.py`** (builds every FAT12 image),
+**`os88pkg.py`** (stamps each `.o88`), **`os88drv.py`** (stamps each `.drv`)
+and **`os88mini.py`** — the least obvious of the four, because it generates
+`$(ASSOCICO)`, which is a *prerequisite of the kernel*. Several others are
+build GATES rather than producers (`os88ovlchk.py`, `checkdocs.py`,
+`checkreadme.py`), and a change there can turn a tree that built into one that
+does not, so run `make` for those too — it is the boot they do not need.
+
+When in doubt the cheap resolution is not an argument: the toolchain is
+deterministic on purpose, so build, `md5sum` the six images against the ones
+you already had, and the answer is a yes or a no rather than a judgement.
+
+**Either way the merge commits nothing under `build/`**, which is gitignored
+outright (see below): the two "Rebuild the shipped images" commits in this
+history are what that policy exists to make impossible.
 
 **THE CLONE IN A FRESH SESSION IS SHALLOW, AND GIT WILL LIE TO YOU ABOUT
 ANCESTRY.** This has now cost one whole piece of work, so it is a rule rather

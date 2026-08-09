@@ -699,6 +699,16 @@ Two things this does **not** relax. A change is still tested before it is
 committed — the rule removes a redundant boot after the build, not the
 verification that earned the commit (docs/TESTING.md is still the matrix, and
 `make marty` is still the default instrument). And a **merge** onto the
-integration branch still rebuilds and boots before it is pushed, because a
-merge combines two trees that were never tested together, so no earlier run
-covers the result.
+integration branch still rebuilds and boots before it is pushed *when it could
+change a shipped byte*, because a merge combines two trees that were never
+tested together, so no earlier run covers the result.
+
+That last one has a stated exemption, and it follows from the same reasoning
+rather than softening it: **a merge that cannot reach the images needs neither
+the build nor the boot.** Documentation and harness code `make` never invokes
+produce an identical set of six images by construction, so there is nothing
+for a boot to cover. The line is "could this change a byte under `build/`" and
+**not** "is it under `tools/`" — `os88disk.py`, `os88pkg.py`, `os88drv.py` and
+`os88mini.py` all write shipped bytes, the last by generating a prerequisite
+of the kernel. CLAUDE.md carries the full list and the md5 check that settles
+a doubtful case.
