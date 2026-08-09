@@ -54,7 +54,27 @@ rm -rf "$RUN"
 cp -r "$SRC/install" "$RUN"
 mkdir -p "$RUN/media/roms" "$RUN/media/floppies"
 cat "$HERE/configs/os8088_machines.toml" >> "$RUN/configs/machines/ibm5150.toml"
-cp "$HERE"/roms/*.BIN "$RUN/media/roms/" 2>/dev/null || true
+
+# The IBM BIOS is IBM's. It is not in this tree and cannot be - CONTRIBUTING.md
+# puts the whole tree under one MIT file, and IBM has never licensed this ROM
+# for redistribution. Supply your own copy; the five os8088_5150_* machines that
+# ask for rom_set = "ibm5150_82_v4" need it, and the three glabios_* ones do not.
+IBM_ROM=BIOS_IBM5150_27OCT82_1501476_U33.BIN
+IBM_MD5=f453eb2df6daf21ec644d33663d85434
+if [ -d "$HERE/roms" ] && ls "$HERE"/roms/*.BIN >/dev/null 2>&1; then
+    cp "$HERE"/roms/*.BIN "$RUN/media/roms/"
+else
+    cat >&2 <<EOF
+build.sh: note - no BIOS ROM in $HERE/roms/
+    The GLaBIOS machines (os8088_5150_fast, os8088_5150_vga, os8088_5150_hd)
+    will run. The period-accurate ones (rom_set = "ibm5150_82_v4") will not
+    start until you drop in your own dump of the 27 OCT 82 IBM 5150 BIOS:
+
+        $HERE/roms/$IBM_ROM
+        8192 bytes, md5 $IBM_MD5
+
+EOF
+fi
 
 # The stock martypc.toml automounts a VHD into a machine that has no hard disk
 # controller, which is a startup error on every one of our configs.

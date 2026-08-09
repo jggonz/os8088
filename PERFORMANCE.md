@@ -3185,7 +3185,7 @@ better-interleaved disk is 2.03x. **A single calibration machine can flatter
 a latency bug**, because how much a fixed delay costs depends on how fast the
 thing you are delaying would otherwise have gone.
 
-### Set 20 — Tracker's mixer is 45% of the machine, and it is BUS-bound
+### Set 20 — Tracker's mixer was 45% of the machine, and it is BUS-bound
 
 **How it was found, and the instrument is worth as much as the answer.**
 MartyPC's `status` returns `flat_ip`, so sampling it from the host and
@@ -3236,7 +3236,52 @@ data bytes together — not its instruction count and not its "complexity".
 **What is actually removable is 3.5 of those 21 bytes.** `adc si, imm16`
 patched in place instead of a loop-invariant memory read is −2; unrolling 4x
 amortises `loop` to −1.5. That is 84 → 70 clocks, **38.7% → 32.3%** — about
-**6 points of the whole machine**, given back to everything, forever.
+**6 points of the whole machine**, given back to everything, forever. That
+was the PREDICTION; the next paragraph is what the machine actually did.
+
+**Measured after: 45.2% → 29.6%, which is 16 points and not 6.** Same
+machine, same module, same windowed XT mode, 60-second samples:
+
+| | before | after |
+|---|---|---|
+| the add-pass inner loop | `.addl` **31.7%** | `.addq1` **20.2%** + `.addl` 0.5% |
+| the store-pass inner loop | `.stl` **13.5%** | `.stq` **8.9%** + `.stl` ~0 |
+| the rest of `mp_mixch_xt` | 6.3% | 4.7% + `mp_stepi_set` 0.9% |
+| outside the package (kernel, BIOS, **idle**) | 42% | **49%** |
+
+The last row is the one that says it is real: nothing else changed, so the
+machine got its time back as idle.
+
+**The byte model under-predicted by 10 points, and the reason is worth
+keeping.** It priced only bus traffic, which is the right first-order model
+on an 8-bit bus and is not the whole cost: `adc si, [disp16]` also pays an
+effective-address calculation and the 8086's memory-operand penalty, and
+`loop` is 17 clocks *taken* where the model charged it 2 bytes = 8. Both of
+those are execution clocks the fetch model cannot see. **A byte-traffic model
+is a floor, not an estimate** — when it says an optimisation is worth 6
+points, the machine may hand back more, and it will not hand back less.
+
+**Two bugs on the way, both of which measured as successes.** The first is
+CLAUDE.md's own warning arriving in person: a stale `cmp byte [mp_first], 0 /
+je .addl` left from the pre-unrolled structure sent the **add pass** — 70% of
+the work — straight past the unrolled loop to the one-sample-at-a-time
+remainder. It assembled, it ran, the output was correct, an amplitude-envelope
+comparison against the old build matched on 90.2% of 876 windows, and the
+build was 241 bytes bigger for nothing. **Only the profile could see it**, as
+`.addl` 25.2% with `.addq1` at zero — the optimisation had kept its shape and
+lost its substance. The second: `mp_stepi_set` as a table walk over
+`mp_steppatch` profiled at **3.1% of the whole machine** on its own, because
+it runs once per channel per chunk. Straight-line `mov [imm16], ax` — the
+accumulator-direct form, 3 instruction bytes and a 2-byte write, and no
+register but AX, so the three pushes go too — is 200 clocks against ~480, and
+it profiles at 0.9%.
+
+**Verified on the running binary rather than by reading it**, because the only
+new failure mode an unrolled run split has is dropping or duplicating a
+sample. Breakpoints at `mp_mixch_xt` and its `.fin`, walked in alternation:
+**58 of 58 calls advanced DI by exactly `[mp_chunk]`**, 15 of them the store
+pass and 43 the add pass. And the self-modifying half: **20 of 20 mixes had
+all ten patched immediates equal to `[mp_cstepi]`**.
 
 **And that is the honest ceiling: it does not fix windowed Beverly.** 5.8
 frames a second becomes roughly 7, against 7.14 rows — better everywhere and

@@ -3075,7 +3075,9 @@ dsk_dirw_next:
 ; out: CF=0 and the buffer filled, CX = the ordinal to ask for next;
 ;      CF=1 and AX = FERR_NOENT at the end of the directory, or FERR_* on a
 ;      read that failed
-; clobbers: AX, CX (the outputs), flags
+; clobbers: AX, CX (the outputs), flags. ES:DI comes back UNCHANGED, which is
+;      what makes SPEC.md 19.7.1's loop - set the buffer once, iterate on CX -
+;      correct rather than a walk through the caller's segment
 ;
 ; **STATELESS BETWEEN CALLS, AND THAT IS THE WHOLE DESIGN.** The obvious
 ; shape is find-first / find-next over dsk_dirw_start's cursor, and it would
@@ -3104,6 +3106,15 @@ dsk_find:
     push dx
     push si
     push bp
+    push di                     ; DI is the caller's BUFFER and not a cursor.
+                                ; The .name loop below walks it 14 bytes
+                                ; forward, and SPEC.md 19.7.1's published loop
+                                ; sets ES:DI once and iterates on CX - so a
+                                ; returned DI+14 makes the write cursor march
+                                ; through the package's own segment. Every
+                                ; in-tree caller reloads DI and so is unharmed;
+                                ; this slot's contract freezes at merge, and no
+                                ; caller can depend on RECEIVING DI+14
     mov [dsk_fdhid], al
     mov [dsk_fdord], cx
     mov bp, cx                  ; BP counts the ordinals still to skip
@@ -3201,6 +3212,7 @@ dsk_find:
                                 ; caller that ignores it today still works
     mov cx, [dsk_fdord]
     inc cx                      ; the ordinal to ask for next
+    pop di
     pop bp
     pop si
     pop dx
@@ -3213,6 +3225,7 @@ dsk_find:
 .end:
     mov ax, FERR_NOENT
 .fail:
+    pop di
     pop bp
     pop si
     pop dx

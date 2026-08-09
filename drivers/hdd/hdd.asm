@@ -71,6 +71,13 @@ HDK_NONE     equ 0
 HDK_BIOS     equ 1              ; int 13h (an ST-11M's ROM, or an AT BIOS)
 HDK_IDE      equ 2              ; the task file, directly
 
+; What [hd_mbrok] says about hd_mbr. HMB_BAD and HMB_NONE are NOT the same
+; answer: one means the disk has no partitions, the other means we do not know
+; what it has, and only the first makes writing a blank table safe.
+HMB_BAD      equ 0              ; the read failed - hd_mbr is a fabrication
+HMB_OK       equ 1              ; it came off the disk with a signature
+HMB_NONE     equ 2              ; it read fine and is unpartitioned
+
 ; --- one mounted volume, stride HDV_SIZE ------------------------------------
 HDV_USED     equ 0              ; db: 1 = live
 HDV_DEV      equ 1              ; db: which device row
@@ -95,6 +102,7 @@ IDE_STAT     equ 7              ; read: status; write: command
 IDE_ST_BSY   equ 0x80
 IDE_ST_DRDY  equ 0x40
 IDE_ST_DRQ   equ 0x08
+IDE_ST_DWF   equ 0x20             ; drive write fault: only a write can set it
 IDE_ST_ERR   equ 0x01
 IDE_C_READ   equ 0x20
 IDE_C_WRITE  equ 0x30
@@ -490,6 +498,12 @@ hd_geom_ok:
     jz .no
     cmp ax, 255
     ja .no
+    cmp byte [di+HDD_KIND], HDK_IDE
+    jne .spt
+    cmp ax, 16                  ; the task file has four bits of head, so an
+    ja .no                      ; IDE row carrying more is not a drive we can
+.spt:                           ; address at all - refuse the GEOMETRY rather
+                                ; than truncate it at the port (SPEC.md 52.1)
     mov ax, [di+HDD_SPT]
     test ax, ax
     jz .no
@@ -710,7 +724,8 @@ hd_bios_xfer:
     call hd_chs
     jc .fail
     call hd_bios_run            ; AX = sectors this one int 13h may carry
-    mov [hd_run], ax
+    jc .fail                    ; ...or none of them can: an unaligned buffer
+    mov [hd_run], ax            ; whose next sector would straddle a DMA page
     mov bp, 3
 .attempt:
     mov es, [hd_bseg]           ; reloaded per attempt: the buffer walks a
@@ -762,7 +777,7 @@ hd_bios_xfer:
 ; hd_bios_run - how many sectors one int 13h may carry from here (internal)
 ; in:  DI = the device row, SI = sectors still wanted, [hd_sec], [hd_bseg],
 ;      [hd_bofs]
-; out: AX = 1..127
+; out: CF = 0 and AX = 1..127; CF = 1 = this buffer cannot be transferred at all
 ; clobbers: AX (the output), flags
 ;
 ; Rung 0 batches too, but it has two bounds the task file does not, and both
@@ -776,9 +791,12 @@ hd_bios_xfer:
 ;     because the kernel bounds only the runs IT issues and this rung splits
 ;     them again.
 ;
-; One sector always fits both: hd_buf_step keeps the offset carried into the
-; segment, so a 512-byte transfer starts at most 15 bytes into a paragraph
-; and 64KB is a whole number of sectors.
+; One sector always fits both PROVIDED the buffer is 512-aligned, which is what
+; guard 6 is for and what the `align 512` on hd_mbr/hd_sec0 buys. hd_raw stores
+; ES:BX verbatim and hd_buf_step carries only at 16-bit overflow, so nothing
+; here folds an offset into its segment the way dskw_norm does - the caller's
+; alignment IS the guarantee. An unaligned buffer can leave zero sectors before
+; the page boundary, and that is a refusal (CF=1), not a forced run of one.
 ; -----------------------------------------------------------------------------
 hd_bios_run:
     push cx
@@ -802,9 +820,18 @@ hd_bios_run:
     jbe .out
     mov ax, dx
 .out:
-    or ax, ax                   ; a bound of zero cannot happen (see above),
-    jnz .cap                    ; but a run of zero would spin forever
-    mov ax, 1
+    or ax, ax                   ; A bound of zero cannot happen for a buffer
+    jnz .cap                    ; that is 512-aligned, which every int 13h
+                                ; target in this driver now is. It CAN happen
+                                ; for one that is not, and forcing a run of 1
+                                ; there issues exactly the straddling transfer
+                                ; the cap exists to prevent - so this is a
+                                ; refusal now, and a future misalignment fails
+                                ; visibly instead of one heap layout in 64
+    stc
+    pop dx
+    pop cx
+    ret
 .cap:
     cmp ax, 127
     jbe .done
@@ -949,8 +976,12 @@ hd_ide_select:
     shl al, 1                   ; drive into bit 4
     and al, 0x10
     or al, 0xA0                 ; the two bits ATA-1 pins high
-    or al, ch                   ; ...and the head in bits 0..3
-    out dx, al
+    mov ah, ch
+    and ah, 0x0F                ; ...and the head in bits 0..3. MASKED: head 16
+    or al, ah                   ; would set bit 4 and address the OTHER drive on
+    out dx, al                  ; the channel, and head 64 would set LBA mode.
+                                ; hd_chs refuses such a geometry before we get
+                                ; here - this is the last line, not the only one
     pop dx
     call hd_ide_wait
     ret
@@ -1019,6 +1050,41 @@ hd_ide_ident:
 ; NOT OPTIONAL. The geometry a drive is addressed with has to be the geometry
 ; it was told about, or every read lands somewhere else.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; hd_geom_push - re-teach an IDE drive a geometry that changed after the probe
+; in:  DI = the device row
+; clobbers: flags
+;
+; INITIALIZE DEVICE PARAMETERS is issued once, from hd_ide_channel, with the
+; geometry IDENTIFY reported. Anything that overwrites HDD_HEADS/HDD_SPT
+; afterwards - the Control Panel's fields, or a geometry restored out of
+; SYSTEM.CFG before the first paint - leaves the drive translating with one
+; geometry while hd_chs translates with another, and every later transfer then
+; addresses a physical sector nobody asked for. So a write of the geometry is
+; a write to the DRIVE too, and a drive that refuses the parameters loses its
+; usable bit rather than being addressed with a translation it rejected.
+;
+; A cylinder-only edit is harmless - 91h carries heads-1 and SPT and nothing
+; else - but re-issuing on one costs a command and keeps the rule simple.
+; -----------------------------------------------------------------------------
+hd_geom_push:
+    cmp byte [di+HDD_KIND], HDK_IDE
+    jne .out                    ; the BIOS rung translates for us
+    test byte [di+HDD_FLAGS], 1
+    jz .out                     ; the geometry was refused already
+    push ax
+    call hd_ide_setparams
+    jc .bad
+    test al, IDE_ST_ERR
+    jnz .bad
+    pop ax
+.out:
+    ret
+.bad:
+    and byte [di+HDD_FLAGS], 0xFE   ; unusable: better no disk than the wrong
+    pop ax                          ; sectors on a real one
+    ret
+
 hd_ide_setparams:
     push bx
     push cx
@@ -1080,6 +1146,10 @@ hd_ide_xfer:
     push si
     push di
     push es
+    push bp                     ; BP is NOT in this routine's clobber list, and
+                                ; hd_bios_xfer saves it - the two rungs have to
+                                ; agree or a caller holding a pointer in BP
+                                ; across a mount gets it back as a device row
     mov si, [hd_bcnt]
     mov bp, di                  ; BP = the device row: DI is the PIO loop's
     mov bx, [di+HDD_BASE]
@@ -1090,6 +1160,12 @@ hd_ide_xfer:
     pop di                      ; DI = the row again, for hd_chs
     call hd_chs                 ; the CHS of the run's FIRST sector
     jc .fail
+    cmp word [hd_head], 15      ; the task file has FOUR bits of head, and
+    ja .fail                    ; hd_chs is shared with the BIOS rung, which
+                                ; legitimately carries 255 of them in DH. An
+                                ; IDE geometry that cannot be expressed is a
+                                ; refusal here, not a silent truncation into
+                                ; the drive-select bit (SPEC.md 52.1)
     mov cl, [di+HDD_UNIT]
     mov ch, [hd_head]
     call hd_ide_select
@@ -1146,8 +1222,24 @@ hd_ide_xfer:
     dec si
     dec word [hd_run]
     jnz .sector
+                                ; The command is finished. hd_ide_drq tests ERR
+                                ; at the TOP of each sector, which catches a
+                                ; READ (a failed read never asserts DRQ) and
+                                ; catches NOTHING on a WRITE: the last sector's
+                                ; data is already shifted out and its completion
+                                ; status has never been looked at. Every write
+                                ; in this driver is one sector, so without this
+                                ; a write fault is reported to the kernel as
+                                ; success - and the commit order in SPEC.md
+                                ; 18.4.1 is only safe while a failed data write
+                                ; comes back as a failure.
+    call hd_ide_wait
+    jc .fail
+    test al, IDE_ST_ERR | IDE_ST_DWF
+    jnz .failst
     jmp .run
 .ok:
+    pop bp
     pop es
     pop di
     pop si
@@ -1156,8 +1248,13 @@ hd_ide_xfer:
     pop bx
     clc
     ret
+.failst:
+    mov al, 0x0A                ; "bad sector detected" - the drive said so,
+    jmp short .failout          ; rather than our own generic 04h
 .fail:
     mov al, 0x04
+.failout:
+    pop bp
     pop es
     pop di
     pop si
@@ -1211,13 +1308,23 @@ hd_cyl:      dw 0               ; hd_chs's answer
 hd_head:     dw 0
 hd_sec:      dw 0
 
-hd_idbuf:    times 512 db 0     ; IDENTIFY's 256 words
+hd_idbuf:    times 512 db 0     ; IDENTIFY's 256 words (PIO, never DMA)
 hd_rawop:    db 0               ; hd_raw's direction: the LBA needs DX:AX and
                                 ; the buffer ES:BX, so there is no register
                                 ; left for it (SPEC.md 51.8's own reason)
+
+; ALIGNED, and the alignment is guard 6's, not tidiness. Both of these are
+; int 13h transfer targets on the HDK_BIOS rung, and int 13h moves one sector
+; per call but does NOT stop that sector straddling a 64KB physical boundary -
+; only starting 512-aligned does, and the DMA controller answers a straddle
+; with error 09h. hd_raw stores ES:BX verbatim with no dskw_norm-style fold,
+; and a driver's image is an ordinary heap claim whose base is 1KB-aligned,
+; so the residue these offsets carry is the whole of the protection.
+    align 512
 hd_mbr:      times 512 db 0     ; the partition table being edited
-hd_mbrok:    db 0               ; 1 = it came off the disk with a signature
+    align 512
 hd_sec0:     times 512 db 0     ; the formatter's sector under construction
+hd_mbrok:    db 0               ; HMB_*: whether hd_mbr is the DISK's table
 hd_line:     times 64 db 0      ; one line of text under construction
 hd_lineptr:  dw 0               ; ...and where hd_scat/hd_utoa left off
 hd_rowslot:  db 0               ; the page's and the partitioner's loop index
@@ -1241,6 +1348,14 @@ hd_fldx:     dw 0
 hd_clx:      dw 0               ; the click being dispatched
 hd_cly:      dw 0
 hd_twin:     dw 0               ; the disk tool's window, 0 = never opened
+hd_idev:     db 0               ; ...and the installer's, for the same reason
+hd_tdev:     db 0               ; the DEVICE the tool is bound to, banked when
+                                ; it opened. hd_mbr and hd_tstate describe THIS
+                                ; device; [hd_sel] is the Control Panel's
+                                ; highlight and the panel stays clickable
+                                ; underneath, so a write that reads [hd_sel]
+                                ; can commit one disk's table to another's
+                                ; LBA 0. Everything destructive reads this
 hd_tsel:     db 0               ; ...the slot it has selected,
 hd_tarm:     db 0               ; the ARMED ACTION when a destructive button is
                                 ; one click from happening, 0 when none is:
