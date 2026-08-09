@@ -2661,8 +2661,15 @@ np_worker:
     cmp byte [np_sowed], 0          ; a scroll whose repaint was dropped because
     je .nosowed                     ; another click was right behind it
     mov byte [np_sowed], 0          ; (SPEC.md 27.7.8). Cleared FIRST: a repaint
-    mov si, [np_win]                ; that faults must not leave the debt to be
-    call np_redraw                  ; paid again forever
+                                    ; that faults must not leave the debt to be
+                                    ; paid again forever
+    mov bx, [np_win]                ; ...and ASKED, like the three draws below
+    call OSAPI_WM_OBSCURED          ; it. This one drew unconditionally: covered,
+    jc .nosowed                     ; it painted over the window on top of it
+                                    ; (SPEC.md 11.3), and it was the one path
+    mov si, [np_win]                ; that changed this window's pixels without
+    call np_redraw                  ; telling the kernel - which is what the
+                                    ; raise cache's promise rests on (11.96)
 .nosowed:
     call np_uclose                  ; half a second without an edit is what a
                                     ; user means by ONE edit, and this is the

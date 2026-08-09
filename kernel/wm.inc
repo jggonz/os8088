@@ -1125,6 +1125,32 @@ wm_raise:
     push ax
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
     call wm_lift                ; ...and the top of the z-order
+
+    ; THE OUTGOING WINDOW IS DEALT WITH FIRST, and the bank is why. It used to
+    ; sit after the two chrome calls below, on the reading that nothing between
+    ; here and there draws a window - but wm_dock_under does, whenever a window
+    ; hangs over the dock strip (ui_grow's clamp allows it, wm_dock_clear
+    ; reports it): it runs wm_dmg_wins, which redraws every marked window WHOLE
+    ; and unclipped, and wm_lift has already made US the front one, so the
+    ; incoming window is drawn LAST - over the outgoing one. A bank taken
+    ; afterwards held the coverer's pixels inside the covered window's rect,
+    ; and wm_su_ck cannot see that: it compares four rect words, which still
+    ; agree. Taken here it is the outgoing window's own content, which is the
+    ; only thing SPEC.md 11.96 promises to put back.
+    cmp bp, di
+    je .self                    ; already the front window: no outgoing one
+    or bp, bp
+    jz .self
+    test word [di+W_FLAGS], WF_FULL
+    jnz .self                   ; we are about to cover the whole screen: the
+                                ; outgoing window's title bar is a strip drawn
+                                ; only to be painted over
+    xchg bp, di                 ; DI = the outgoing front, BP = the incoming
+    call wm_su_take             ; banked while it is still the only thing on
+                                ; its own rect (SPEC.md 11.96)
+    call wm_draw_title          ; DI != BP now, so it loses its stripes
+    xchg bp, di
+.self:
     call menu_draw_bar          ; BOTH guard themselves on wm_fs_vis, and that
     call wm_dock_under          ; is the point: under a fullscreen window each
                                 ; draws nothing AND records that its pixels are
@@ -1135,21 +1161,6 @@ wm_raise:
                                 ; wm_fullscreen's own raise, neither module was
                                 ; ever told, and quitting a 11.2 app left its
                                 ; bar and a blank strip on screen for good
-    cmp bp, di
-    je .self                    ; already the front window: no outgoing one
-    or bp, bp
-    jz .self
-    test word [di+W_FLAGS], WF_FULL
-    jnz .self                   ; we are about to cover the whole screen: the
-                                ; outgoing window's title bar is a strip drawn
-                                ; only to be painted over
-    xchg bp, di                 ; DI = the outgoing front, BP = the incoming
-    call wm_draw_title          ; DI != BP now, so it loses its stripes
-    call wm_su_take             ; ...and its content is banked HERE, while it
-                                ; is still on the glass and before the window
-                                ; going over it has drawn (SPEC.md 11.96)
-    xchg bp, di
-.self:
     mov bx, di
     mov bp, di                  ; we ARE the front window now
     pop ax
@@ -3745,6 +3756,7 @@ wm_su_take:
     mov [wm_su_x2], cx
     mov [wm_su_y2], dx
     call wm_su_kb               ; AX = KB for the rect just recorded
+    jc .out                     ; ...or a rect gfx_save cannot address at all
     mov bx, MEM_P_WSAVE
     call mem_claim              ; DX = segment
     jc .out                     ; refused: no cache, and the raise repaints -
@@ -3771,7 +3783,22 @@ wm_su_take:
     ret
 
 ; wm_su_kb - KB for the banked rect, menu_save_kb's arithmetic
-; in: the four wm_su_* rect words; out: AX = KB (never 0)
+; in:  the four wm_su_* rect words
+; out: CF = 0 and AX = KB (never 0); CF = 1 = this rect cannot be banked
+;
+; IT IS menu_save_kb's ARITHMETIC WITHOUT menu_save_kb's CLAMPS, and that is
+; the whole of the difference. There, "every factor is clamped (MENU_MAXW,
+; MENU_POPMAX, [vid_popmax]), so the multiplies cannot leave 16 bits - the
+; assert is the proof of that". A WINDOW rect has no such bound: a zoomed Note
+; Pad on VGA is 81 byte-columns x ~398 rows x 4 planes = 128,952 bytes, and the
+; second `mul` discards DX, so the old code asked mem_claim for 62KB and then
+; let gfx_save write 128,952 bytes into it.
+;
+; So the multiplies are checked, and 64KB is a REFUSAL rather than a bigger
+; claim: gfx_save advances DI contiguously across the whole buffer (see
+; vga12.inc) and DI is 16 bits, so a save that size does not exist to be asked
+; for at any price. A refusal here is the path that was already there - the
+; raise repaints, exactly as it did before the cache existed (SPEC.md 11.96).
 wm_su_kb:
     push bx
     push cx
@@ -3786,16 +3813,31 @@ wm_su_kb:
     mov bx, [wm_su_y2]
     sub bx, [wm_su_y1]
     inc bx
-    mul bx
+    mul bx                      ; DX:AX = bytes for one plane
+    or dx, dx
+    jnz .big
     mov bx, [vid_planes_w]      ; 4 on VGA, 1 on the mono adapters - the _w
     mul bx                      ; twin, for menu_save_kb's reason
-    add ax, 1023
+    or dx, dx
+    jnz .big                    ; 64KB or more: gfx_save's DI cannot reach it
+    add ax, 1023                ; ...as KB, rounded UP - in 32 bits, because
+    adc dx, 0                   ; the round-up itself can be the carry
     mov cl, 10
     shr ax, cl
-    or ax, ax
+    mov cl, 6
+    shl dx, cl                  ; DX is 0 or 1 here, so this is 0 or 64
+    or ax, dx
     jnz .out
-    inc ax
+    inc ax                      ; a 0 KB claim is refused, and a rect this
+                                ; small still needs somewhere to go
 .out:
+    clc
+    pop dx
+    pop cx
+    pop bx
+    ret
+.big:
+    stc
     pop dx
     pop cx
     pop bx
@@ -3814,9 +3856,17 @@ wm_su_try:
     push es
     call wm_su_ck
     jc .no
-    mov si, di                  ; DI is the buffer offset from here
-    mov es, [wm_su_seg]
-    xor di, di
+    mov es, [wm_su_seg]         ; ES:SI, and the SI is the whole of it: this is
+    xor si, si                  ; the ONE place the two primitives disagree -
+                                ; gfx_save takes ES:DI and gfx_restore takes
+                                ; ES:SI (vga12.inc, and bb_restore the same on
+                                ; the mono adapters). wm_su_take's idiom copied
+                                ; into here zeroed DI and left SI holding the
+                                ; WINDOW POINTER, so every cache hit blitted
+                                ; the heap tens of KB past the buffer onto the
+                                ; glass - and returned CF = 0, so wm_draw_win
+                                ; skipped the white fill and W_PAINT and left
+                                ; it there. menu.inc's restore is the model
     mov ax, [wm_su_x1]
     mov bx, [wm_su_y1]
     mov cx, [wm_su_x2]

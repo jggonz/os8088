@@ -2216,8 +2216,20 @@ cw_wm_hit:              call wm_hit
                     retf
 cw_wm_idx2ptr:          call wm_idx2ptr
                     retf
-cw_wm_obscured:         call wm_obscured
-                    retf
+cw_wm_obscured:         cmp bx, [wm_su_win]   ; "AM I COVERED?" IS A BACKGROUND
+                        jne .ask              ; PAINTER CLEARING ITS THROAT. On
+                        call wm_su_drop       ; CF = 0 it draws, and 11.3 lets
+.ask:                   call wm_obscured      ; it draw UNCLIPPED because it has
+                        retf                  ; just been told nothing is over
+                                              ; it - so it never reaches
+                                              ; wm_clip_set and never drops the
+                                              ; raise cache the way every other
+                                              ; painter does (SPEC.md 11.96).
+                                              ; Note Pad's worker takes exactly
+                                              ; this route. The compare goes
+                                              ; FIRST because it would destroy
+                                              ; wm_obscured's CF; wm_su_drop
+                                              ; preserves the flags either way
 cw_wm_paint_all:        call wm_paint_all
                     retf
 cw_wm_pkgcall:          call wm_pkgcall
