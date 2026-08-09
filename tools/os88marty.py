@@ -530,8 +530,22 @@ def _port_free(host, port, tries=60, gap=0.5):
 MBAR_H = 20                     # SPEC.md 12: the same on every adapter
 
 
-def _sample(m, card=None):
-    """The screen as comparable bytes, on whichever card this machine has.
+DOCK_H = 24                     # SPEC.md 30: the strip, on every adapter
+
+
+class _Screen(object):
+    """One reading of the screen: comparable bytes, and the three bands the
+    boot gate asks about, all taken from THE SAME FRAME.
+
+    That last part is the point of the class. The gate and the stillness test
+    used to read the screen independently, a round trip apart - and this
+    emulator runs the guest several times faster than real time, so "a round
+    trip apart" is tens of milliseconds of GUEST time, which is most of a
+    desktop paint on a 4.77MHz machine. Two reads can therefore report a state
+    that never existed: measured, a probe built that way reported the menu bar
+    up while the same screen was 26% lit, on a machine whose desktop is 56%
+    and whose bar goes up last. One read, two questions - and one `video` call
+    rather than three, which is the same economy.
 
     `card` picks one on a two-card machine, and it is not optional there:
     os8088 need not be driving MartyPC's PRIMARY. A `make VIDEO=herc` kernel
@@ -548,43 +562,72 @@ def _sample(m, card=None):
     given here used to be wrong. `fbuf` is NOT dead on Hercules - measured, a
     live desktop is 54.2% lit through it against 55.7% through `vram`
     (docs/MARTYPC-DEBUG.md). `vram` is still the right one for a boot gate
-    because it is EXACT: `fbuf` comes back cropped to a display aperture, so
-    it is 720x350 over a 720x348 framebuffer and 16 columns short of it, and a
-    gate that counts pixels in a named band wants the band it named.
+    because it is EXACT: the card's rendered frame is not in the GUEST's
+    coordinate system - 720x350 over a 720x348 framebuffer, at dx = -16,
+    dy = +2 - and a gate that counts pixels in a named band wants the band it
+    named.
     """
-    vt = m.video(card=card)["type"]
-    if vt in ("cga", "mda", "hercules"):
-        return b"".join(bytes(r) for r in
-                        m.vram("cga" if vt == "cga" else "herc")[2])
-    return m.fbuf(card=card)[2]
+
+    def __init__(self, m, card=None):
+        vt = m.video(card=card)["type"]
+        if vt in ("cga", "mda", "hercules"):
+            w, h, rows = m.vram("cga" if vt == "cga" else "herc")
+            lit = [sum(r) for r in rows]
+            self.bytes = b"".join(bytes(r) for r in rows)
+        else:
+            w, h, d = m.fbuf(card=card)
+            self.bytes = d
+            lit = [sum(1 for x in range(w) if d[(y * w + x) * 3])
+                   for y in range(h)]
+        self.w, self.h = w, h
+        self.field = sum(lit[0:MBAR_H - 1]) / float(w * (MBAR_H - 1))
+        self.rule = lit[MBAR_H - 1] / float(w)
+        self.dock = sum(lit[h - DOCK_H:]) / float(w * DOCK_H)
+
+    def __repr__(self):
+        return ("menu field %.0f%% lit, its rule %.0f%%, dock strip %.0f%%"
+                % (100 * self.field, 100 * self.rule, 100 * self.dock))
 
 
-def _bar_up(m, card=None):
-    """Is the os8088 MENU BAR on screen? - the boot gate, and the only one
-    that works on all three adapters.
+def desktop_up(s):
+    """Is the os8088 DESKTOP on screen? - the boot gate, and the only one that
+    works on all three adapters.
 
     Not "has the card left text mode": MartyPC's MDA answers text forever, in
     graphics mode as in any other, so that gate hangs the whole 120 s on the
     Hercules machine. Not stillness on its own either: the BIOS POST sits
     PERFECTLY still for seconds before the floppy is touched, and a settle
     that accepted it returned an 8.3s "boot" showing a quarter of the
-    desktop's lit pixels. The bar's white field is the one thing on screen
-    that neither the POST nor the splash has.
+    desktop's lit pixels.
+
+    THREE FACTS, because one band is a thing another screen can imitate and
+    the whole desktop is not. It used to be the menu bar's white field alone,
+    which is *nearly* enough - `wm_paint_all` draws the dither, the drive
+    zones and the dock BEFORE the bar, so the bar going up means the rest is
+    already there - but "nearly" is carrying the argument, and the failure
+    mode of a boot gate is that everything after it is measuring a machine
+    that was not ready. So the bar is now tested as SPEC.md 12 defines it,
+    white field AND the 1px black rule under it, and the dock strip is tested
+    too: the first thing on the screen and the last.
+
+    Measured from reset at 8 Hz, field / rule / dock:
+
+        POST text     0.26  0.25  0.25      (the rule is what rejects this)
+        splash        0.00  0.00  0.00
+        CGA desktop   0.93  0.00  0.96
+        Herc desktop  0.94  0.00  0.96
+        VGA desktop   1.00  0.00  0.96
     """
-    vt = m.video(card=card)["type"]
-    if vt in ("cga", "mda", "hercules"):
-        w, _, rows = m.vram("cga" if vt == "cga" else "herc")
-        band = rows[0:MBAR_H - 1]
-        return sum(sum(r) for r in band) > 0.8 * w * len(band)
-    w, _, d = m.fbuf(card=card)
-    band = d[0:w * (MBAR_H - 1) * 3]
-    return sum(band) > 0.8 * 255 * len(band)
+    return s.field > 0.8 and s.rule < 0.1 and s.dock > 0.8
 
 
-# The boot gate under its public name, for a caller that has to run `settle`
-# itself - which on a two-card machine is any caller that must ask `cards()`
-# before it knows which card to watch, and so cannot use `launch(card=...)`.
-bar_up = _bar_up
+# `desktop_up` IS the public name - it was `bar_up`, and it is a predicate
+# over a _Screen now rather than over a Marty, because the gate and the
+# stillness test have to be two questions about ONE reading (see _Screen).
+# A caller running `settle` itself - on a two-card machine, anything that must
+# ask `cards()` before it knows which card to watch, and so cannot use
+# `launch(card=...)` - passes `gate=desktop_up, card=<idx>`; the card belongs
+# to `settle` now, so there is no lambda to close over it.
 
 
 # Wait for a machine that is going to CHANGE THE SCREEN and then stop: a boot,
@@ -605,11 +648,17 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
     something is clicked. The clock is the one exception and it changes once a
     MINUTE, so at worst it costs one more round.
 
-    `gate` is a predicate that must answer True BEFORE stillness is believed -
-    `_bar_up` for a boot, nothing for an action. Without one this returns
-    during the BIOS's own POST, which sits perfectly still for seconds before
-    the floppy is touched: measured, and it looked exactly like a booted
-    machine (an 8.3s "boot" showing a quarter of the desktop's lit pixels).
+    `gate` is a predicate over a `_Screen` that must answer True BEFORE
+    stillness is believed - `desktop_up` for a boot, nothing for an action.
+    Without one this returns during the BIOS's own POST, which sits perfectly
+    still for seconds before the floppy is touched: measured, and it looked
+    exactly like a booted machine (an 8.3s "boot" showing a quarter of the
+    desktop's lit pixels).
+
+    ONE READ SERVES BOTH QUESTIONS. The gate and the stillness test used to
+    read the screen separately, which on an emulator running the guest faster
+    than real time means they can see different frames and answer about a
+    state that never existed - see `_Screen`.
 
     It is equally the right wait AFTER an action: `settle(m)` in place of the
     `time.sleep(4)` every script in this tree has after a click, which is the
@@ -617,25 +666,28 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
     """
     import time
     t0 = time.time()
-    if gate is not None:
-        while not gate(m):
-            if time.time() - t0 > limit:
-                raise MartyError(
-                    "the os8088 menu bar never appeared in %.0fs: this "
-                    "machine never finished booting, so nothing below would "
-                    "mean what it says. See the MartyPC log." % limit)
-            time.sleep(quiet)
-    last, run = None, 0
+    last, run, seen = None, 0, None
     while time.time() - t0 < limit:
         try:
-            cur = _sample(m, card)
+            cur = _Screen(m, card)
         except MartyError:
             cur = None
-        run = run + 1 if (cur is not None and cur == last) else 0
+        if cur is not None and gate is not None and not gate(cur):
+            seen, last, run = cur, None, 0       # not up yet: stillness before
+            time.sleep(quiet)                    # the gate means nothing
+            continue
+        run = run + 1 if (cur is not None and last is not None
+                          and cur.bytes == last.bytes) else 0
         if run >= stable:
             return time.time() - t0
         last = cur
         time.sleep(quiet)
+    if gate is not None and seen is not None and not gate(seen):
+        raise MartyError(
+            "the os8088 desktop never appeared in %.0fs - the last screen was "
+            "%s, against a desktop's 93+/0/96. This machine never finished "
+            "booting, so nothing below would mean what it says. See the "
+            "MartyPC log." % (limit, seen))
     raise MartyError(
         "the screen was still changing after %.0fs: the machine never "
         "finished booting (or something on it is animating, in which case "
@@ -786,7 +838,7 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
         try:
             m.run()
             if boot is True:
-                settle(m, gate=lambda mm: _bar_up(mm, card), card=card)
+                settle(m, gate=desktop_up, card=card)
             else:
                 time.sleep(boot)
         except BaseException:                    # ...or the caller never gets

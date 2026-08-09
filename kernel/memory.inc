@@ -103,7 +103,10 @@ MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
 ;     ordinary one, because the tag IS the request.
 ;
 ; TO BE PURGEABLE A CLAIM MUST HAVE EXACTLY ONE KERNEL WORD NAMING IT, and a
-; zero in that word must ALREADY mean "no buffer, do it the slow way". That is
+; zero in that word must ALREADY mean "no buffer, do it the slow way" - "one
+; word" being per BLOCK, not per tag: a tag may name an ARRAY of them and add
+; an ordinal to itself, which is how there is one raise cache per window
+; rather than one for the machine (SPEC.md 11.96.3). That is
 ; the whole contract, and it is what lets the shed skip a notification
 ; protocol entirely: mem_shed_one zeroes the word through mem_pg_own before it
 ; frees the block, so the consumer's existing refusal path is the notice.
@@ -131,10 +134,16 @@ MEM_PG_MAX  equ MEM_PG_HIGH
 MEM_LVL_TOP equ 0xFF            ; an ordinary claim: UNPURGEABLE, the default,
                                 ; and the only rank that outranks every cache
 
-MEM_P_WSAVE equ MEM_PG_TRIV<<8 | 0x01   ; a window's raise cache (SPEC.md
+MEM_P_WSAVE equ MEM_PG_TRIV<<8 | 0x10   ; a window's raise cache (SPEC.md
                                 ; 11.96): TRIVIAL, because what it costs to
                                 ; lose is one window redrawing itself, which
-                                ; is what every window did before it existed
+                                ; is what every window did before it existed.
+                                ; IT IS A RANGE, not a tag - the window's slot
+                                ; is added to it, so there is one cache per
+                                ; window and 0x10..0x1F is reserved for them
+                                ; (SPEC.md 11.96.3). Low bytes are per-rank,
+                                ; so a future TRIVIAL tag must avoid that
+                                ; block; the ranks below are free of it
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window:
                                 ; HIGH, because it is the difference between
                                 ; 316 int 13h calls and 114 on an install
@@ -558,18 +567,33 @@ mem_pg_ceil:
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_pg_own - tag -> the ONE kernel word that names that purgeable block
+; mem_pg_own - owner -> the ONE kernel word that names that purgeable block
 ;
 ; The whole notification protocol (SPEC.md 50.6). Zeroing this word IS the
 ; notice, because a purgeable consumer's contract is that zero there already
 ; means "no buffer, do it the slow way" - a path it must already have and
-; already test. A tag missing from this table simply keeps its block until it
+; already test. An owner matching no row here simply keeps its block until it
 ; is freed properly, which is safe and is why the list ends in a 0 rather than
 ; an assertion.
+;
+; A ROW IS A RANGE, and that is what makes one cache per WINDOW possible
+; (SPEC.md 11.96.3): the tag is a base, the consumer adds an ordinal to it,
+; and the words it names are an array of that many. The lookup is therefore
+; `d = owner - tag; if d < count then word = base + d*2` rather than an
+; equality - unsigned, so a row whose tag is ABOVE the owner wraps high and
+; fails the compare rather than matching backwards into somebody else's array.
+;
+; The stride is not a column because there is nothing for it to be: every
+; purgeable owner word is a WORD, by the contract above.
 ; -----------------------------------------------------------------------------
+PGO_TAG   equ 0                 ; word: the first owner this row answers for
+PGO_BASE  equ 2                 ; word: -> its array of naming words
+PGO_CNT   equ 4                 ; word: how many (1 = a plain tag)
+PGO_SIZE  equ 6
+
 mem_pg_own:
-    dw MEM_P_WSAVE, wm_su_seg
-    dw MEM_P_DIRW,  dsk_rah_seg
+    dw MEM_P_WSAVE, wm_su_segs,  MAX_WIN
+    dw MEM_P_DIRW,  dsk_rah_seg, 1
     dw 0
 
 ; -----------------------------------------------------------------------------
@@ -649,27 +673,33 @@ mem_shed_one:
     pop ax
     ret
 
-; mem_pg_forget - zero the word mem_pg_own names for tag BX
+; mem_pg_forget - zero the word mem_pg_own names for owner BX
 ; preserves every register and the flags
 mem_pg_forget:
     pushf
     push ax
     push bx
+    push cx
     push si
     mov si, mem_pg_own
 .lp:
-    mov ax, [si]
+    mov ax, [si+PGO_TAG]
     or ax, ax
     jz .out
-    cmp ax, bx
-    je .hit
-    add si, 4
+    mov cx, bx
+    sub cx, ax                  ; d = owner - tag, UNSIGNED: a row above the
+    cmp cx, [si+PGO_CNT]        ; owner wraps high and fails this compare
+    jb .hit
+    add si, PGO_SIZE
     jmp short .lp
 .hit:
-    mov bx, [si+2]
-    mov word [bx], 0
+    shl cx, 1                   ; a word per entry (see the header: there is
+    add cx, [si+PGO_BASE]       ; no stride column because there is nothing
+    mov si, cx                  ; for it to be)
+    mov word [si], 0
 .out:
     pop si
+    pop cx
     pop bx
     pop ax
     popf

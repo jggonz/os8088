@@ -249,27 +249,68 @@ gate is not optional — the two obvious ones are both wrong:
 - **"Has the card left text mode" hangs on Hercules.** MartyPC's MDA reports
   text mode forever, in graphics mode as in any other.
 
-So the gate is the **menu bar's white field**, which neither the POST nor the
-splash has, sampled through `vram` on the 1bpp cards and `fbuf` on VGA —
-because `vram` is impossible on VGA and is the *exact* answer on the other two,
-where `fbuf` comes back cropped to a display aperture. **On a Hercules that
-crop is `(−16, +2)`: guest (x, y) renders at `fbuf` (x−16, y+2)**, over a
-720x350 window on a 720x348 framebuffer. Measured, not assumed — `fbuf` scanned
-against `vram` over one desktop agrees on **2,280 of 2,280** sampled pixels at
-that offset and at no other. The horizontal half of it has been written down
-here for a while; the vertical half had not, and a pixel gate that compares
-`fbuf` against anything else needs both. Measured boots: CGA 17.5s, Hercules
-16.1s, VGA 7.1s, against the 26-second fixed sleep every script used to carry.
+So the gate is the **desktop**, sampled through `vram` on the 1bpp cards and
+`fbuf` on VGA — because `vram` is impossible on VGA and is the *exact* answer
+on the other two, where `fbuf` comes back cropped to a display aperture. **On a
+Hercules that crop is `(−16, +2)`: guest (x, y) renders at `fbuf` (x−16,
+y+2)**, over a 720x350 window on a 720x348 framebuffer. Measured, not assumed,
+and measured twice independently — `fbuf` scanned against `vram` over one
+desktop agrees on **2,280 of 2,280** sampled pixels at that offset and at no
+other, and a second correlation over a different desktop put the mismatch at
+**0.0000 at dx = −16, dy = +2** across 4,992 samples. The horizontal half of it
+had been written down here for a while; the vertical half had not, and a pixel
+gate that compares `fbuf` against anything else needs both.
 
-**`card=` is not optional on a two-card machine.** `settle`, `launch`,
-`_sample` and `_bar_up` ask `video` with no card by default, which answers
-MartyPC's **primary** — and os8088 need not be driving it: a `make VIDEO=herc`
-kernel on `os8088_5150_both_gla` draws on the Hercules while the config's
-first `[[machine.video]]` is the CGA. The boot gate then watches a card
-nothing is drawing on and times out after 120 seconds saying *"this machine
-never finished booting"*, about a machine that booted fine. Pass
-`launch(..., card=1)`. `advance(frames=…)` takes it too, and there it decides
-which card's 50Hz or 60Hz is being counted.
+**It is THREE facts, and it was one.** The gate used to be the menu bar's
+white field alone, which is *nearly* enough — `wm_paint_all` draws the
+dither, the drive zones and the dock **before** the bar, so the bar going up
+means the rest is already there — but "nearly" was carrying the whole
+argument, and everything after a boot gate is measuring a machine it believed
+was ready. So the bar is tested the way SPEC.md §12 defines it, white field
+**and** the 1px black rule under it, and the **dock strip** as well: the first
+thing on the screen and the last. Measured from reset at 8 Hz, field / rule /
+dock —
+
+| | field | rule | dock |
+|---|---|---|---|
+| POST text | 0.26 | **0.25** | 0.25 |
+| splash | 0.00 | 0.00 | 0.00 |
+| CGA desktop | 0.93 | 0.00 | 0.96 |
+| Hercules desktop | 0.94 | 0.00 | 0.96 |
+| VGA desktop | 1.00 | 0.00 | 0.96 |
+
+— and the rule is what rejects POST text, which is the one screen here whose
+top band is genuinely lit.
+
+**And the gate and the stillness test read the screen ONCE, together.** They
+used to read it independently, one round trip apart — and this emulator runs
+the guest **several times faster than real time** (measured: a CGA boot is
+25.8M cycles, 5.4 guest seconds, in 1.25 s of host), so a round trip is tens
+of milliseconds of *guest* time, which is most of a desktop paint on a 4.77MHz
+machine. Two reads can therefore report a state that never existed: a probe
+built that way reported the menu bar up while the same screen was 26% lit, on
+a machine whose desktop is 56% and whose bar goes up last. That is a lie about
+the guest produced entirely by the instrument, and it is the same family as
+the offset crop above — **when the host is fast, two questions asked
+separately are two questions asked about different machines.**
+
+Measured boots: **CGA 4.6 s, Hercules 4.7 s, VGA 7.1 s** on this container,
+against 17.5 / 16.1 / 7.1 on the one those figures were first taken on and a
+26-second fixed sleep before that. The spread between the two containers is
+the point: a number that is a property of the HOST is exactly what `settle`
+exists so that nothing has to hard-code.
+
+**`card=` is not optional on a two-card machine.** `settle`, `launch` and
+`_Screen` ask `video` with no card by default, which answers MartyPC's
+**primary** — and os8088 need not be driving it: a `make VIDEO=herc` kernel on
+`os8088_5150_both_gla` draws on the Hercules while the config's first
+`[[machine.video]]` is the CGA. The boot gate then watches a card nothing is
+drawing on and times out after 120 seconds saying *"this machine never
+finished booting"*, about a machine that booted fine. Pass
+`launch(..., card=1)`; a caller running `settle` itself passes
+`gate=desktop_up, card=<idx>`, the card belonging to `settle` rather than to
+the predicate. `advance(frames=…)` takes it too, and there it decides which
+card's 50Hz or 60Hz is being counted.
 
 This paragraph used to say `fbuf` was **dead** on Hercules — that the MDA does
 not rasterise graphics mode at all — and that is not true at the pinned build:
@@ -859,6 +900,31 @@ the wrong one does not error; it produces a plausible picture of nothing.
 | `shot` (VRAM) | decodes SPEC.md §39.3's banked **graphics** framebuffer out of guest memory | CGA mode 6, Hercules graphics |
 | `shot --rendered` (`fbuf`) | asks the CARD what it rasterised, as rgb24 | **every mode**, CGA and VGA (see the Hercules note) |
 | `screen` | the card's text rows as **characters** | text modes |
+
+**THE RENDERED FRAME IS NOT IN THE GUEST'S COORDINATE SYSTEM, and nothing
+says so.** A whole-screen capture does not care; **a CROP does**, and this is
+the trap that costs a session. Measured by correlating `fbuf` against the
+guest's own framebuffer on a Hercules desktop, the card's frame is **720x350
+for a 720x348 screen and sits at dx = −16, dy = +2** — a perfect match at
+that alignment and at no other. VGA mode 12h happens to come back 640x480 at
+(0, 0), and CGA at (0, 0) too, so two adapters out of three encourage the
+assumption the third breaks. There is no correction to apply blind: the
+offset is the card's raster phase, not a constant of the tool.
+
+What it looks like when it bites: a crop taken at a window's guest rect is
+sampling 16 columns to the *right* of that window, so the middle of the
+window still compares perfectly and only the edges disagree — 1,670 differing
+pixels of a Minesweeper window, all of them in the rightmost 14 columns, and
+every one of them showing the window *behind* it. That reads as a smeared
+restore, which is exactly the defect `tools/sucheck.py` exists to detect, and
+it survived a forced-full-repaint control (which agreed with the "broken"
+capture to 0 pixels, because both were mis-cropped identically).
+
+So: **crop with `vram` on the 1bpp adapters** — it decodes SPEC.md §39.3's
+banked layout out of guest memory and is in guest coordinates by
+construction — and on VGA, where there is no flat framebuffer to read, at
+least **assert `fbuf`'s dimensions against `[vid_w]`/`[vid_h]`** before
+believing a crop. `tools/sucheck.py`'s `fb()` is the worked example of both.
 
 **`video` reports `mode` and `text`, and that is the discriminator to use.**
 It comes from the card's `display_mode()`, derived from its actual registers —

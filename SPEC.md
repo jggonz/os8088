@@ -4497,6 +4497,73 @@ value a forgotten path inherits has to be the safe one** — `wm_dmg_wins`
 clearing `[wm_dmg_dk]` for its callers is the precedent (§11.91), and so is
 `fdlg_gate` living in `.text` as a `dw 0`.
 
+#### 11.96.3 One cache per window, because the bound stopped earning its keep
+
+§11.96 says "one cache for the machine, like the menu's save-under… it bounds
+the memory at one block rather than one per window", and that was the right
+trade **while every cache cost the same as every other**. §50.6.4's priority
+ladder ended that: a raise cache is `MEM_PG_TRIV`, the cheapest rank there is,
+so anything that wants the room takes it and the memory is genuinely free. A
+bound on free memory buys nothing, and it was being paid for in
+**last-covered-wins** — covering a cheap window took the cache from an
+expensive one, which is why §11.96.1's third question ("is its repaint
+actually expensive?") had to be asked at all. It is now a question about
+whether the *claim* is worth making, not about who else it robs.
+
+**The slot is the window, so `wm_su_win` is gone.** `wm_su_segs` is one word
+per record and `wm_su_slot` maps a window pointer to its word and to its
+owner tag in one place. The four hooks that used to read
+`cmp bx, [wm_su_win] / jne` — `wm_destroy`, `wm_hide`, `wm_clip_set` and
+`wm_saveu`'s clear — are a bare `call wm_su_drop` now, and each got *more*
+precise as well as shorter: `wm_clip_set` drops the cache of the window that
+is about to draw, where it used to drop whoever happened to hold the single
+one.
+
+**The rect lives in the claim.** `WSU_X1..WSU_Y2` are a four-word header and
+`WSU_IMG` is where the image starts; `wm_su_take` writes the header with one
+`rep movsw` before `gfx_save`, and `wm_su_ck` compares the window's rect *now*
+against the header rather than against four kernel words. This was reached for
+as the cheap answer — four more `MAX_WIN` arrays is 96 bytes, which on the
+slack at the time meant a 512-byte step of `KERN_BUDGET` for bookkeeping — and
+it is the better shape independently: **the rect travels with the pixels it
+describes and cannot get out of step with them.** `wm_su_x1..y2` survive as
+the working rect for one operation, because `wm_su_kb` has to size the claim
+before the claim exists.
+
+**A `mem_pg_own` row is a RANGE.** The tag is a base and the consumer adds an
+ordinal, so the lookup is `d = owner - tag; if d < count then word = base +
+d*2` instead of an equality — unsigned, so a row whose tag is above the owner
+wraps high and fails rather than matching backwards into somebody else's
+array. There is no stride column because there is nothing for it to be: §50.6
+already requires every purgeable block to be named by exactly one **word**.
+`MEM_P_WSAVE`'s low byte moved to `0x10` and `0x10..0x1F` is reserved for the
+range; low bytes are per-rank, so only a future `MEM_PG_TRIV` tag has to avoid
+that block.
+
+Three things are worth knowing before touching it.
+
+**`wm_su_take` still drops first, and now it means something different.** It
+used to mean "one cache for the machine"; it means "this window's previous
+claim, if any" — one window, one claim, or the old block is leaked with
+nothing naming it.
+
+**The shed is not LRU and does not need to be.** `mem_shed_one` takes the
+cheapest record it outranks and, among equals, the lowest in `mem_tab` — so
+with several window caches live it will keep taking the same one. That is
+defensible by construction rather than by luck: they are all `MEM_PG_TRIV`,
+and the rank is the claim that they cost the same to lose.
+
+**The divide is not worth guarding.** `wm_su_drop` runs unconditionally at
+every `wm_clip_set`, so every background painter now pays `wm_ptr2idx`'s 8-bit
+`div` — about 18us on a 4.77MHz 8088, against the two instructions the old
+`cmp` cost. It was left alone deliberately: `wm_clip_set` exists to be
+followed by drawing, and PERFORMANCE.md Part 2 prices the *arrival* of one
+`gfx_*` call at ~756us, so this is 2.4% of the cheapest thing that can happen
+next. A `[wm_su_live]` counter would short-circuit it, and it would drift —
+`mem_pg_forget` zeroes the word on a shed without coming through
+`wm_su_drop`, so the count would only ever read high and the guard would stop
+firing.
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its

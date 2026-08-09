@@ -445,8 +445,11 @@ os8088 screen only is between events. The boot needs a GATE on top of it and
 the two obvious gates are both wrong — stillness alone returns during the
 BIOS POST (measured: an 8.3 s "boot" showing a quarter of the desktop's lit
 pixels) and "has the card left text mode" hangs on Hercules, whose MDA
-reports text mode forever — so it gates on the menu bar's white field, read
-through `vram` on 1bpp and `fbuf` on VGA. CGA 17.5 s, Hercules 16.1 s, VGA
+reports text mode forever — so it gates on the DESKTOP: the menu bar's white
+field, the black rule under it and the dock strip, three facts from ONE read
+(two reads can answer about a state that never existed, because the emulator
+runs the guest faster than real time), through `vram` on 1bpp and `fbuf` on
+VGA. CGA 4.6 s, Hercules 4.7 s, VGA
 7.1 s, against a 26 s fixed sleep. And **`m.sym('fpg_on')` / `python3
 tools/os88sym.py --all`** is where a kernel symbol actually lives: `nasm -l`'s
 listing is SECTION-RELATIVE for anything in `.bss`, so `menu_bovr` reads
