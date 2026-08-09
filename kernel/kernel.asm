@@ -131,10 +131,10 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
-KERN_BUDGET equ 90112           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 92160           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
-                                ; It has moved twelve times, every raise asked
+                                ; It has moved thirteen times, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
                                 ; SPEC.md 41 store and the two API surfaces
                                 ; that came with it (wm_geom, wm_about_set);
@@ -392,6 +392,26 @@ KERN_BUDGET equ 90112           ; the whole kernel's FOOTPRINT. Growing past
                                 ; rule stands unchanged: this is headroom for
                                 ; ordinary growth, not an invitation to spend
                                 ; 4KB without a conversation.
+                                ;
+                                ; The thirteenth move, 90,112 -> 92,160, is
+                                ; 2KB and the twelfth's story again: the
+                                ; spare hit EXACTLY ZERO, and this time from
+                                ; two directions at once - SPEC.md 52's
+                                ; hard-disk installer arriving on the
+                                ; integration branch, and 11.95.1's
+                                ; "a window that grew reveals nothing", which
+                                ; is 193 bytes of .text and 8 of .bss. Asked
+                                ; for and granted at 2KB rather than 4: the
+                                ; project is still in active development, so
+                                ; the answer is headroom, but half a step of
+                                ; it, which puts the guard back within reach
+                                ; of ordinary growth (four steps) without
+                                ; pre-authorising another feature's worth.
+                                ; The fifth move's rule stands, and so does
+                                ; the twelfth's note about kern_small: the
+                                ; day that second build exists, this figure
+                                ; is kern_big's and stops being the one that
+                                ; has to be defended.
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
                                 ; must fit one 64KB window. Unlike KERN_BUDGET
