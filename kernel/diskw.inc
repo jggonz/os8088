@@ -408,7 +408,15 @@ dskw_mkbody:
     je .dirfull                 ; scanned to the end with no reusable slot
 
     call dskw_alloc             ; AX = cluster, already marked end-of-chain
-    jc .nospace
+    jnc .haveclus
+    inc ax                      ; 0xFFFF -> 0: the mark could not be written,
+    jz .allocio                 ; which is an I/O failure and not a full disk
+    jmp .nospace
+.allocio:
+    jmp .wfail                  ; ...and it takes the ROLLBACK path, because a
+                                ; half-marked cluster must not survive in RAM
+                                ; to be flushed by a later unrelated write
+.haveclus:
     mov [dskw_first], ax
     call KERNEL_SEG:cw_dsk_clus2lba ; AX = its first LBA
     jc .badclus
@@ -1340,7 +1348,11 @@ dskw_wdata:
     ret
 .clus:
     call dskw_alloc             ; AX = a cluster, already marked EOC
-    jc .full
+    jnc .haveclus
+    inc ax                      ; 0xFFFF -> 0: an I/O failure wearing the
+    jz .ioerr                   ; allocator's refusal, and 'Disk full' is the
+    jmp short .full             ; one thing it certainly is not
+.haveclus:
     mov [dskw_cur], ax
     mov dx, ax
     cmp word [dskw_first], 0
@@ -2811,12 +2823,16 @@ dskw_ent_store:
 ; dskw_alloc - claim one free cluster (SPEC.md 18.4)
 ; in:  nothing ([dsk_rover] is the scan hint)
 ; out: CF=0, AX = the cluster, ALREADY marked end-of-chain in the snapshot;
-;      CF=1 = no free cluster
+;      CF=1 and AX = 0 = no free cluster; CF=1 and AX = 0xFFFF = the mark could
+;      not be written, which is an I/O failure and not a full disk
 ; clobbers: AX (the output), CF
 ;
 ; Marking it on the spot is what makes a multi-cluster chain safe to build:
 ; the next call cannot hand the same cluster out again, whatever happens in
-; between.
+; between. It also means allocation can fail for a REASON OTHER THAN SPACE,
+; and the two must not be reported as one: a disk that answered an I/O error
+; while there were thousands of free clusters on it used to say 'Disk full',
+; which sends the user to delete files that were never the problem.
 ; -----------------------------------------------------------------------------
 dskw_alloc:
     push bx
@@ -2843,8 +2859,7 @@ dskw_alloc:
     pop ax
     inc ax
     loop .try
-    stc
-    jmp short .out
+    jmp short .nospace
 .got:
     pop ax                      ; AX = the free cluster
     mov dx, DSKW_EOC16
@@ -2853,7 +2868,7 @@ dskw_alloc:
     mov dx, DSKW_EOC12
 .mark:
     call dskw_setfat            ; the EOC mark. A cluster we could not MARK is
-    jc .out                     ; not a cluster we have taken - reporting it as
+    jc .iofail                  ; not a cluster we have taken - reporting it as
                                 ; allocated hands the same one out again on the
                                 ; next call, which is the cross-link the commit
                                 ; order exists to make impossible
@@ -2861,6 +2876,14 @@ dskw_alloc:
     inc bx
     mov [dsk_rover], bx         ; next search starts past it
     clc
+    jmp short .out
+.iofail:
+    mov ax, 0xFFFF              ; ...and say WHICH failure it was
+    stc
+    jmp short .out
+.nospace:
+    xor ax, ax
+    stc
 .out:
     pop dx
     pop cx
