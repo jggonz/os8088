@@ -3508,11 +3508,19 @@ carries the benchmarks in its root and has no `APPS` folder, which is what
 §52.10.5 keys "this is the apps disk" on. The install is the system disk's
 alone, and its 46.2 s is a floor, not the whole job.
 
-#### And MartyPC reproduces the counts, which is what makes the next step cheap
+#### The correction, and how it was caught
 
-The same install under `os8088_xt_hdd` gives **98 floppy calls / 839 sectors**
-against the field's **87 / 748** — 12% over, in the same regime. So the 2.5x
-above can be diagnosed with §18.94.3's LBA trace on the emulator, where a
-trace costs nothing, and only the ANSWER has to come back to the iron. That is
-the division of labour this document keeps arriving at: counts on MartyPC,
-seconds on the 5150.
+**This set claimed a 2.5x surplus in the install's reads and there is none.**
+The error was not in the measurement but in the denominator: a payload guessed
+from what lands on C: rather than read off the disk being copied. The lesson
+is the one Part 4 keeps restating in other words — *a ratio is only as good as
+the quantity underneath it*, and the quantity here was available from one
+`os88disk` line that the write-up did not go and look at.
+
+What caught it was §18.94.3's trace, on MartyPC, at no cost to anyone's
+morning: the same install there gives **118 calls / 946 sectors** against the
+field's **87 / 748** — the emulator copies a second floppy the field run had
+no `APPS` folder for — and the distinct-sector count is what settles the
+question. That division of labour is worth stating on its own: **counts and
+traces on MartyPC, seconds on the 5150**, and a claim that needs both should
+not be made from either alone.
