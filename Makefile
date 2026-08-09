@@ -191,7 +191,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 .PHONY: all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field stackprobe trklog npbench clicktest marty comscan \
-        stories zdisk xt-z 386-z \
+        stories zdisk ztest xt-z 386-z \
         checkdocs clean clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -821,37 +821,86 @@ STORIES ?=
 zdisk: $(BUILD)/zork.img $(BUILD)/zork720.img $(BUILD)/zork360.img \
        $(BUILD)/zork2.img
 
-$(BUILD)/zcat360.txt: tools/getstories.py | $(BUILD)
+# The catalogue is CATALOG.TXT on every disk - os88disk.py takes the 8.3 name
+# from the file's BASENAME, so the four of them need four directories rather
+# than four names. `make -j` safe: each rule creates only its own.
+$(BUILD)/zcat/360/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
 	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 ADVENT.Z3 ZORK285.Z5 BALANCES.Z5
-$(BUILD)/zcat720.txt: tools/getstories.py | $(BUILD)
+$(BUILD)/zcat/720/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
 	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 ZTUU.Z5 ADVENT.Z3 ZORK285.Z5 PHOTOPIA.Z5
-$(BUILD)/zcat.txt: tools/getstories.py | $(BUILD)
+$(BUILD)/zcat/1440/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
 	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 SAMPLER1.Z3 SAMPLER2.Z3 ZTUU.Z5 \
 		ADVENT.Z3 ADVENT5.Z5 ZORK285.Z5 BALANCES.Z5 PHOTOPIA.Z5 905.Z5 BEAR.Z5
-$(BUILD)/zcat2.txt: tools/getstories.py | $(BUILD)
+$(BUILD)/zcat/disk2/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
 	python3 tools/getstories.py --catalog $@ BRONZE.Z8 DREAMHLD.Z8 LOSTPIG.Z8 CURSES.Z5
 
-$(BUILD)/zork.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat.txt \
+$(BUILD)/zork.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/1440/CATALOG.TXT \
                    tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
-		$(BUILD)/frotz.o88 $(BUILD)/zcat.txt $(ZS_1440) $(STORIES) \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat/1440/CATALOG.TXT $(ZS_1440) $(STORIES) \
 		--folder SAVES --folder ART
 
-$(BUILD)/zork720.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat720.txt \
+$(BUILD)/zork720.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/720/CATALOG.TXT \
                       tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
-		$(BUILD)/frotz.o88 $(BUILD)/zcat720.txt $(ZS_720) $(STORIES) \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat/720/CATALOG.TXT $(ZS_720) $(STORIES) \
 		--folder SAVES
 
-$(BUILD)/zork360.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat360.txt \
+$(BUILD)/zork360.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/360/CATALOG.TXT \
                       tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
-		$(BUILD)/frotz.o88 $(BUILD)/zcat360.txt $(ZS_360) $(STORIES) \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat/360/CATALOG.TXT $(ZS_360) $(STORIES) \
 		--folder SAVES
 
-$(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat2.txt tools/os88disk.py
+$(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat/disk2/CATALOG.TXT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
-		$(BUILD)/zcat2.txt $(ZS_DISK2) --folder SAVES
+		$(BUILD)/zcat/disk2/CATALOG.TXT $(ZS_DISK2) --folder SAVES
+
+# --- the Frotz gate (ON DEMAND: `make ztest`) --------------------------------
+# tests/frotz/zopstest.inf is a STORY, not a package, because the thing under
+# test is an interpreter: the only way to ask whether @div truncates toward
+# zero is to make a Z-machine execute @div. It prints one "PASS name" or "FAIL
+# name got <n> want <n>" per check, so the transcript is a RESULT rather than
+# prose to eyeball, and the two interpreters are comparable by diff.
+#
+# The GOLD side is generated, never hand-written: dfrotz (Frotz 2.55) runs the
+# same story and its transcript is what os8088's has to match. A check that
+# fails on dfrotz is a bug in the .inf, which is exactly how three of them were
+# found - Inform folds constant comparisons UNSIGNED, so `(-4 < 3)` compiled to
+# a false the reference duly reported.
+#
+# Needs `inform` and `dfrotz`: `brew install inform6 frotz`. Both are host-side
+# only and nothing shipped depends on them.
+#
+#   make ztest                                  # build stories + gold
+#   make test TESTAPPS=build/ztest/ztest.img    # ...and boot it
+ZTESTDIR := $(BUILD)/ztest
+ZTESTVERS := 3 5 8
+
+ztest: $(ZTESTDIR)/gold3.txt $(ZTESTDIR)/gold5.txt $(ZTESTDIR)/gold8.txt \
+       $(ZTESTDIR)/ztest.img
+
+$(ZTESTDIR)/zopstest.z%: tests/frotz/zopstest.inf
+	@mkdir -p $(ZTESTDIR)
+	inform -v$* $< $@
+
+$(ZTESTDIR)/gold%.txt: $(ZTESTDIR)/zopstest.z%
+	dfrotz -w 80 -h 200 -p $< | grep -E '^(PASS|FAIL|TEXT|RESULT)' > $@
+	@grep -q '^RESULT pass .* fail 0$$' $@ || \
+		{ echo "ztest: the REFERENCE interpreter failed a check - the bug is in tests/frotz/zopstest.inf"; \
+		  grep '^FAIL' $@; false; }
+	@echo "ztest: v$* gold $$(grep -c . $@) lines, $$(grep -c '^PASS' $@) passing"
+
+$(ZTESTDIR)/ztest.img: $(BUILD)/frotz.o88 $(ZTESTDIR)/zopstest.z3 \
+                       $(ZTESTDIR)/zopstest.z5 $(ZTESTDIR)/zopstest.z8 \
+                       tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/frotz.o88 $(ZTESTDIR)/zopstest.z3 $(ZTESTDIR)/zopstest.z5 \
+		$(ZTESTDIR)/zopstest.z8 --folder SAVES
 
 # --- the tracker log disk (ON DEMAND: `make trklog`) -------------------------
 # TRKLOG.O88 is apps/tracker built with -DTRKLOG, which is the ONLY difference:
