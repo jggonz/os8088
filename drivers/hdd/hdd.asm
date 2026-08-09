@@ -837,6 +837,16 @@ hd_bios_run:
     jbe .done
     mov ax, 127
 .done:
+    clc                         ; NOT OPTIONAL, and its absence made every
+                                ; transfer on this rung fail. `cmp ax, 127`
+                                ; borrows for every AX below 127 - which is
+                                ; every run this driver ever issues - and
+                                ; neither `mov` nor `pop` touches the flags,
+                                ; so CF walked out of here set and the `jc`
+                                ; this routine's own CF contract added at the
+                                ; call site refused the read. The success path
+                                ; has to SAY it succeeded; a flag left over
+                                ; from the last compare is not an answer
     pop dx
     pop cx
     ret
