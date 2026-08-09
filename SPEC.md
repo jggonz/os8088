@@ -15824,6 +15824,36 @@ eight. A **third** driver page, or a **seventh** static item, needs the
 window to grow first — `%if CP_ITEMS + 2 > (CP_CH - CP_I0Y) / CP_IROWH` in
 `ctrl.inc` is the guard, and it fails the build rather than the pane.
 
+#### 31.9.1 `DSV_CPCLOSE` — the panel has been closed
+
+A driver's page is drawn while the panel is open and never after it, so a
+driver may want to hold something for exactly that long. `DSV_CPCLOSE` is the
+cell that makes it possible: no arguments, no answer, and **the gfx lock is
+held**, so the driver may draw and may destroy its own windows in it.
+
+It is sent once, from the panel instance's own teardown in `app_close_win` —
+the one place the Control Panel stops existing while the machine keeps running
+— and `drv_cp_closed` walks the classes rather than the page on screen,
+because "the panel is gone" is true for every driver that has one. A class
+with no driver has a zeroed service table, so the published-or-not test is the
+cell itself and there is nothing to keep in step.
+
+**It is not a detach and must not be treated as one.** The driver is still
+loaded, whatever it published is still published, its volumes are still
+mounted, and the panel may be open again a second later. Free what the *page*
+was using, not what you are.
+
+Two orderings are deliberate. It runs **before** `cp_flush_close`, so a driver
+that stages a setting on the way out stages it into the blob that is about to
+be written rather than the one after (§31.8). And it is **not** sent on the
+reboot path, which is the other way `cp_flush_close` is reached: `drv_shutdown`
+detaches every driver a few instructions later, and a detach frees strictly
+more than this does.
+
+The first consumer is `HDD.DRV`, which frees the 11KB disk-tool image here
+(§52.11.4). Cost, measured: `.text` +58, `.bss` +6 — `DSV_SIZE` 24 → 26, which
+is two bytes per class — and no rung crossed.
+
 ### 31.10 Display page — which adapter the machine is driven as
 
 **Last** item in the list, for §31.10.1's reason. One radio row per adapter `vid_probe_avail` found
@@ -27108,18 +27138,24 @@ copy (`HSV_SYNC`) and the resident's is the real thing.
 
 ### 52.11.4 The image goes back when the tool is finished with
 
-The tool is freed as soon as it has no window on screen, and at detach
-whatever happens. **The trigger is the Hard Drive page's own paint and
-click**, which sounds as though the user would have to come back to the panel
-and does not: closing the tool's window repaints whatever was under it, and
-what was under it is the Control Panel — so shutting the disk tool runs
-`hd_page_paint`, which reaps on the spot.
+The tool is freed **when the Control Panel closes**, and at detach whatever
+happens. §31.9.1's `DSV_CPCLOSE` is the hook and `hd_tool_reap` is what the
+driver publishes in it.
+
+**The panel and not the tool's own window**, deliberately. Loading is ~18
+sectors off the system volume — a second and a bit on the field machine — and
+a user who is partitioning a disk clicks Format, closes it, changes a geometry
+and clicks Format again. Tying the free to the window makes them pay that load
+every time; tying it to the panel makes them pay it once per visit, for the
+same steady state. The first build did tie it to the window, which worked and
+was the wrong trade.
 
 **It cannot be the tool saying it has finished.** That call would be answered
 by freeing the image it has to return into, and there is no way to return from
 a routine whose code segment has just been given away. So the tool is *asked*
-(`HDT_BUSY`) and never volunteers, and the two call sites are both the kernel
-calling the resident.
+(`HDT_BUSY`) and never volunteers — and it is asked even here, because the
+panel can be closed with the disk tool still on screen. Left loaded in that
+case, it goes at the next panel close or at detach.
 
 **`HDT_BUSY` answers on VISIBILITY, not on a handle.** Closing one of these
 windows is a hide, so `[hd_twin]` stays non-zero for the rest of the load;

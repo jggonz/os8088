@@ -190,7 +190,19 @@ DSV_CPNAME   equ 18             ; -> a NUL Control Panel page name, in YOUR
                                 ; font_str reads through DS
 DSV_CPPAINT  equ 20             ; near proc: that page's paint
 DSV_CPCLICK  equ 22             ; near proc: that page's click
-DSV_SIZE     equ 24
+DSV_CPCLOSE  equ 24             ; near proc: "the Control Panel has been
+                                ; closed" (SPEC.md 31.9.1). No arguments, no
+                                ; answer, gfx lock HELD - so you may draw, and
+                                ; you may destroy your own windows. 0 = do not
+                                ; tell me.
+                                ;
+                                ; For state worth holding while the panel is up
+                                ; and not after it. It is NOT a detach: you are
+                                ; still loaded, whatever you published is still
+                                ; published, and the panel may be back in a
+                                ; second - so free what the PAGE was using, not
+                                ; what you are
+DSV_SIZE     equ 26
 
 ; --- DSV_BLK: one driver-backed volume's sectors (SPEC.md 51.8) -------------
 ;   in   AL = 0 read / 1 write

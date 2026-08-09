@@ -31,16 +31,21 @@
 ; failure is clean: the GOTO or the read fails, the page says so, and nothing
 ; is claimed.
 ;
-; WHEN THE MEMORY GOES BACK (SPEC.md 52.11.4). As soon as the tool has no
-; window on screen, and at detach whatever happens. The trigger is this page's
-; own paint and click, which sounds like it would need the user to come back
-; and does not: closing the tool's window REPAINTS what was under it, and what
-; was under it is the Control Panel - so shutting the disk tool runs
-; hd_page_paint, which reaps on the spot.
+; WHEN THE MEMORY GOES BACK (SPEC.md 52.11.4): when the CONTROL PANEL closes,
+; and at detach whatever happens. DSV_CPCLOSE is the hook (SPEC.md 31.9.1) and
+; hd_tool_reap is what the driver publishes in it.
+;
+; The panel and not the tool's own window, deliberately. Loading is ~18 sectors
+; off the system volume - a second and a bit on the field machine - and a user
+; who is partitioning a disk clicks Format, closes it, changes a geometry and
+; clicks Format again. Tying the free to the window makes them pay that load
+; every time; tying it to the panel makes them pay it once per visit, which is
+; the same steady state and a quarter of the waiting.
 ;
 ; It cannot be the tool telling us it has finished. That call would be
 ; answered by freeing the image it has to return into, so the tool is ASKED
-; (HDT_BUSY) and never volunteers.
+; (HDT_BUSY) and never volunteers - and it is asked even here, because the
+; panel can be closed with the disk tool still on screen.
 ;
 ; This needed the one kernel byte-count the split had otherwise avoided:
 ; OSAPI_WM_DESTROY, slot 0x0398, 8 bytes of jump table. Closing an unowned
@@ -300,18 +305,21 @@ hd_tool_open:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_tool_reap - give the tool's memory back once its windows are gone
-; in:  nothing; the gfx lock is HELD (a Control Panel page callback)
+; hd_tool_reap - give the tool's memory back (DSV_CPCLOSE, SPEC.md 31.9.1)
+; in:  nothing; the gfx lock is HELD, which is that cell's contract
 ; out: nothing (all registers preserved)
 ; clobbers: flags
 ;
-; Called from the page's paint and its click - the two moments the user is
-; demonstrably finished with the tool, because closing its window repaints the
-; panel underneath and that IS the paint. Cheap when there is nothing to do:
-; one compare while the tool is not loaded, one far call while it is.
+; The Control Panel has closed, so everything the PAGE was using can go. Not a
+; detach: we are still loaded, our volumes are still mounted, and the panel may
+; be back in a second.
 ;
-; It must never run from inside the tool, and cannot: both call sites are the
-; kernel calling US.
+; HDT_BUSY is still asked, because the panel can be closed while the disk tool
+; is still on screen - and a tool window whose image had been freed under it is
+; a paint into whatever claims that memory next. Left loaded in that case, it
+; goes at the next panel close or at detach.
+;
+; It must never run from inside the tool, and cannot: the caller is the kernel.
 ; -----------------------------------------------------------------------------
 hd_tool_reap:
     push ax
