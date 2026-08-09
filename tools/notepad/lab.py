@@ -68,6 +68,21 @@ TRACE_LABELS = PRESS_LABELS + ["np_seedck", "np_seedrow", "np_seedtail",
                                "np_delspan", "np_reconcile", "np_brkdraw"]
 
 
+# SPEC.md 20.2's dispatcher: `call bp` at PKG_DISP=12, `retf` at 14. EVERY
+# callback the kernel makes returns through that one instruction, so it is the
+# terminator for "the package has finished" - which no label inside the module
+# can be, because W_PAINT and W_ONCLICK end in different places and a raise
+# may call back zero times. Synthesised into the label map because it is a
+# property of the format rather than of this build.
+PKG_RETF = 14
+
+
+def labels_for(args):
+    L = Labels(args.lst)
+    L.addr["pkg_retf"] = PKG_RETF
+    return L
+
+
 def attach(args, want_len=None):
     lab = Lab(args.addr)
     lab.find_pkg(name=args.pkg.encode())
@@ -111,7 +126,7 @@ def cmd_state(args):
 
 def cmd_press(args):
     lab, st = attach(args, args.len)
-    labels = Labels(args.lst)
+    labels = labels_for(args)
     t = tr.Tracer(lab, labels, [n for n in PRESS_LABELS if n in labels])
     print("seg 0x%04x  len %d  vrows %d  rcols %d  drows %d"
           % (lab.seg, st.w("np_len"), st.w("np_vrows"), st.w("np_rcols"),
@@ -131,9 +146,27 @@ def cmd_press(args):
                  "YES" if st.w("np_top") != top0 else ""))
 
 
+def cmd_click(args):
+    """Price a click - a raise, a scroll-bar hit, a caret placement.
+
+    docs/NOTEPAD-NOTES.md 5.3: bringing Note Pad to the front was reported as
+    pausing about half a second, and SPEC.md 11.90 says an UNOBSCURED raise
+    should cost a title bar and nothing else - so the first thing to establish
+    is whether the window was covered at all.
+    """
+    lab, st = attach(args, args.len)
+    labels = labels_for(args)
+    names = [n for n in TRACE_LABELS + ["np_paint", "pkg_retf"] if n in labels]
+    t = tr.Tracer(lab, labels, names)
+    for i in range(args.n):
+        t0, hits = t.click(args.x, args.y, settle=args.settle)
+        tr.report(t0, hits, "click (%d,%d) #%d" % (args.x, args.y, i))
+        print("    top=%d cur=%d" % (st.w("np_top"), st.w("np_cur")))
+
+
 def cmd_trace(args):
     lab, st = attach(args, args.len)
-    labels = Labels(args.lst)
+    labels = labels_for(args)
     t = tr.Tracer(lab, labels, [n for n in TRACE_LABELS if n in labels])
     for i in range(args.n):
         before = st.dump()
@@ -164,6 +197,9 @@ def main():
     p.add_argument("key"); p.add_argument("n", type=int, nargs="?", default=10)
     p = sub.add_parser("trace"); p.set_defaults(fn=cmd_trace)
     p.add_argument("key"); p.add_argument("n", type=int, nargs="?", default=1)
+    p = sub.add_parser("click"); p.set_defaults(fn=cmd_click)
+    p.add_argument("x", type=int); p.add_argument("y", type=int)
+    p.add_argument("n", type=int, nargs="?", default=1)
 
     args = ap.parse_args()
     if args.len == 0:

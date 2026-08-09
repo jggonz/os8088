@@ -71,6 +71,26 @@ class Tracer:
                 break
         return hits
 
+    def click(self, x, y, budget=DEFAULT_BUDGET, settle=60, stop_at=None):
+        """Arm, click at an absolute point, collect, disarm, settle.
+
+        `stop_at` defaults to None and not to np_redraw.out, because a click
+        that RAISES a window goes through W_PAINT (np_paint) and never touches
+        np_redraw at all - SPEC.md 11.90's cheap path may draw only a title
+        bar, in which case the package is not called back even once.
+        """
+        import drive
+        drive.goto(self.m, x, y)
+        self.arm()
+        t0 = self.m.status()["cycles"]
+        self.m.mouse(0, 0, l=True)
+        self.m.mouse(0, 0)
+        self.m.step(1)                      # deliver it: see drive.tap
+        hits = self.collect(budget=budget, stop_at=stop_at)
+        self.disarm()
+        self.m.advance(frames=settle)
+        return t0, hits
+
     def press(self, key, budget=DEFAULT_BUDGET, settle=60,
               stop_at="np_redraw.out"):
         """Arm, inject one key, collect to the end of the dispatch, settle.

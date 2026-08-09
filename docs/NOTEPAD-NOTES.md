@@ -354,14 +354,36 @@ layout walk is seeded differently, and §27.3's visual break is in play. Drive
 it with `tools/notepad/lab.py trace` after scrolling in, and read §6.6 before
 believing the first number.
 
-### 5.3 Bringing Note Pad to the front pauses ~half a second
+### 5.3 Bringing Note Pad to the front pauses ~half a second — MEASURED, and it is not a bug
 
-**Not investigated.** The hypothesis to test first is that it is simply a full
-content repaint: ~18 rows × ~29 cells at PERFORMANCE.md's ~1 ms a glyph cell is
-~400–500 ms, which matches the report. §11.90 means a window that was NOT
-covered costs only its title bar, so **the first thing to establish is whether
-the window was actually obscured** — if an unobscured raise is repainting the
-content, that is a bug in the cheap-path test rather than a cost.
+**The hypothesis was right and the window manager is exonerated.** Both halves
+were tested rather than one:
+
+- **Obscured raise** (Note Pad almost entirely behind a Disk window, clicked
+  on its title bar): **1,026 ms** — 447 ms of kernel-side compositing before
+  the package is called at all, then **578 ms inside `np_paint`**.
+- **Unobscured raise** (already frontmost, clicked again): **not one package
+  callback**, twice in a row. §11.90's cheap path does exactly what it says.
+
+So the pause is a legitimate full repaint of a window that really was covered,
+and there is no cheap-path test to fix. What is left is the **glyph floor**:
+`np_paint` fills the content and letters 16 rows of 29 cells, and 464 cells at
+PERFORMANCE.md's ~1 ms a cell is ~464 ms of the 578. The layout walk is the
+rest.
+
+That makes it the one open report here with **no structural fix behind it** —
+§1's row index does not help, because a full repaint has to visit every
+visible row whatever it costs to find them. Drawing fewer glyphs is the only
+lever, and the tree already has the tool for it: `np_rflush` skips a row whose
+signature is unchanged (§27.2), which a repaint deliberately cannot use
+because the content was just filled over. Anyone picking this up should start
+by asking whether a raise must fill first — not by looking at the walk.
+
+Measured with `python3 tools/notepad/lab.py click 80 30`, which terminates on
+the package's own dispatcher `retf` (SPEC.md §20.2, offset 14). Without that
+terminator the same click reads **445 ms**, because the trace ends at the last
+label inside the callback and §6.5's rule bills `np_paint`'s own 578 ms to
+nobody. The first number this measurement produced was that 445.
 
 ### 5.3.1 `[np_rowsn]` is not capped to the array it indexes
 

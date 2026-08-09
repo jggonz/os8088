@@ -31,11 +31,19 @@ python3 tools/notepad/lab.py boot                # cold boot, open README.TXT
 python3 tools/notepad/lab.py verify              # guest memory == the build?
 python3 tools/notepad/lab.py press ArrowDown 20  # one line per keystroke
 python3 tools/notepad/lab.py trace ArrowDown 3   # the breakdown
+python3 tools/notepad/lab.py click 80 30         # price a raise or a bar hit
 python3 tools/notepad/lab.py state --rows
 ```
 
 `press` is the summary and `trace` is what to reach for when `press` reports
 a number you cannot place.
+
+**Where a trace ENDS decides what it measures.** A keystroke ends at
+`np_redraw.out`; a click may not reach `np_redraw` at all, so it ends at
+`pkg_retf` — the `retf` at offset 14 of the package header (SPEC.md §20.2),
+which every callback in the format returns through. Terminating anywhere
+inside the module bills the last routine's own cost to nobody: the same raise
+reads 445 ms ending at `np_walk` and 1,026 ms ending at the dispatcher.
 
 ## After every rebuild, re-cut the listing and verify
 
