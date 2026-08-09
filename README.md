@@ -1,5 +1,9 @@
 # os8088
 
+This is a hobby project. I rely on AI to speed up the work (including the
+writing and maintenance of the webpage and the markdown files you see here).
+If you spot a mistake, you're welcome to contribute a fix in the form of a PR.
+
 ## Contributing
 
 Patches welcome — and you do not need to already know 8086 assembly.
