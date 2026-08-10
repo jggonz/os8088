@@ -172,7 +172,10 @@ marking on each window's *redrawn region* is a real change to the marking pass.
 
 ## Before you write any code
 
-**Footprint spare is 2,560 bytes — FIVE 512-byte steps, on BOTH builds.** That
+**Footprint spare is 2,560 bytes on `kern_big` — FIVE 512-byte steps — and
+3,584 on `kern_small`, which is seven and owes a conversation** (the raise met
+SPEC.md §41.11's removal on the integration branch; docs/KERNEL-MEMORY.md's
+"Where it goes" states the choice). That
 is `KERN_BUDGET`'s **seventeenth move**, asked for and granted for this work
 (2KB on `kern_big` and 2KB on `kern_small`, docs/KERNEL-MEMORY.md's table row
 17): §11.96.9's fix had spent the step the image rung had 15 bytes left of and

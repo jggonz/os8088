@@ -277,6 +277,23 @@ KERN_BUDGET equ 96256           ; the whole kernel's FOOTPRINT. Growing past
                                 ; fifth move's rule still binds it: headroom
                                 ; for ordinary growth, not an invitation.
                                 ;
+                                ; AND ON THE INTEGRATION BRANCH IT LANDED ON
+                                ; TOP OF A REMOVAL IT DID NOT KNOW ABOUT.
+                                ; SPEC.md 41.11 had just taken the store above
+                                ; 1MB out of this build - .text -1,035, .bss
+                                ; -124, .ovl -386, two whole rungs - so the
+                                ; raise was granted against a one-step figure
+                                ; that had already moved. Small comes out at
+                                ; SEVEN steps, three over the standard, which
+                                ; is the fifth move's "guard switched off" and
+                                ; owes a decision: hand a step or two back on
+                                ; the eleventh move's terms, or spend it on the
+                                ; round the raise was granted for.
+                                ; docs/KERNEL-MEMORY.md's "Where it goes"
+                                ; carries it, because a figure nobody re-asks
+                                ; about is exactly how the fifth move's 2,048
+                                ; became 512.
+                                ;
                                 ; It had moved fourteen times before that, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
                                 ; SPEC.md 41 store and the two API surfaces
