@@ -141,6 +141,17 @@ vid_wm1     dw SCREEN_W-1       ; last legal x
 vid_hm1     dw SCREEN_H-1       ; last legal y
 vid_wm8     dw SCREEN_W-8       ; the menu bar's right margin
 vid_hm8     dw SCREEN_H-8
+; --- THE CHROME's extent (SPEC.md 39.16) -------------------------------------
+; The menu bar, the dock and the drive column are full-width strips on the
+; PRIMARY display, not across the desktop - spanning them over a union would
+; put the clock and half the dock on the other monitor. So they measure
+; themselves against these four rather than against vid_w/vid_h, which are the
+; desktop's. On a machine with one display the two sets are the same numbers.
+vid_pw      dw SCREEN_W
+vid_ph      dw SCREEN_H
+vid_pwm1    dw SCREEN_W-1
+vid_phm1    dw SCREEN_H-1
+
 vid_dock_y0 dw SCREEN_H-24      ; dock strip top row (DOCK_H, dock.inc)
 vid_dock_ty0 dw SCREEN_H-24+3   ; dock tile top row
 vid_clk_hx  dw (SCREEN_W-206) & 0FFF8h  ; menu bar clock cell: hit band left
@@ -307,6 +318,15 @@ vid_apply:
     sub ax, 7
     mov [vid_chm8], ax
 
+    mov ax, [vid_w]             ; --- the CHROME's extent (SPEC.md 39.16): the
+    mov [vid_pw], ax            ; display this call is publishing, which for
+    dec ax                      ; the primary is what every strip measures
+    mov [vid_pwm1], ax          ; itself against. vid_disp_init applies the
+    mov ax, [vid_h]             ; PRIMARY last, so these end up its numbers,
+    mov [vid_ph], ax            ; and vid_desk_union then grows vid_w/vid_h
+    dec ax                      ; past them without touching these
+    mov [vid_phm1], ax
+
     mov ax, [vid_w]             ; --- widths
     dec ax
     mov [vid_wm1], ax
@@ -384,6 +404,19 @@ vid_apply:
     mov ax, [vid_h]
     shr ax, 1
     mov [mouse_y], ax
+%ifdef KERN_BIG
+    mov byte [cur_disp], 0      ; ...onto display 0, which is where the middle
+                                ; of the desktop is. Saying so matters: a stale
+                                ; [cur_disp] sends cur_move's jump path to
+                                ; ERASE a cell on a display the arrow was never
+                                ; drawn on, and a save-under put back in the
+                                ; wrong place smears (SPEC.md 39.15.2/7.1.2).
+                                ; A store to a label in mouse.inc, never a call
+                                ; into it - this routine runs from the splash
+                                ; while the rest of the kernel is still coming
+                                ; off the floppy, which is what the header
+                                ; above says about cur_unlazy
+%endif
 
     pop es
     pop di

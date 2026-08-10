@@ -93,7 +93,16 @@ MB_SEG      equ 12              ; word: the SEGMENT this cell's title and
                                 ; them through a package's segment lands on
                                 ; the .o88 header and every item draws "O8"
 MB_ENTSZ    equ 14
-MENU_APPMAX equ 4               ; app menus the bar can host
+MENU_APPMAX equ 5               ; app menus the bar can host. It was 4 until
+                                ; SPEC.md 22.12 split the Disk window's File
+                                ; menu and gave Cut/Copy/Paste an Edit menu -
+                                ; a WIDENING, so no package that assembled
+                                ; against 4 changed, and the clamp below is
+                                ; still what an untrusted count meets.
+                                ; Nothing had to be re-measured for it: the
+                                ; layout is bounded per CELL by [vid_clk_hx]
+                                ; and never by the count, so a fifth title
+                                ; that would not fit simply is not laid out
 MENU_BARMAX equ MENU_APPMAX + 2 ; + the System cell, which is always cell 0,
                                 ; + the app-NAME cell, which exists for every
                                 ; application (SPEC.md 12.7) and is APPENDED
@@ -815,13 +824,13 @@ menu_furniture:
     mov byte [gfx_color], CWHITE
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
     xor bx, bx
-    mov cx, [vid_wm1]
+    mov cx, [vid_pwm1]
     mov dx, MBAR_H - 2
     call gfx_fill
 
     mov byte [gfx_color], CBLACK
     xor ax, ax                  ; the black rule along the bottom
-    mov bx, [vid_wm1]
+    mov bx, [vid_pwm1]
     mov dx, MBAR_H - 1
     call gfx_hline
 
@@ -1411,7 +1420,7 @@ menu_popup:
     pop cx                      ; CX = anchor x again
 
     mov bx, cx                  ; BX = candidate x1
-    mov si, [vid_w]
+    mov si, [vid_pw]
     sub si, ax                  ; SI = rightmost x1 that still fits
     cmp bx, si
     jle .x_hi
@@ -1432,7 +1441,7 @@ menu_popup:
     shl ax, cl                  ; count * 16 ...
     add ax, 2                   ; ... + the top and bottom frame rows
     mov bx, dx                  ; BX = candidate y1 (DX = anchor y)
-    mov cx, [vid_h]
+    mov cx, [vid_ph]
     sub cx, ax                  ; CX = lowest y1 that still fits
     cmp bx, cx
     jle .y_hi
@@ -2067,9 +2076,11 @@ section .lowbss                 ; LOW_SEG (SPEC.md 2.1): the runtime bar is
                                 ; never addressed by name outside this module,
                                 ; so it costs one ss: prefix per field access
                                 ; and nothing in the kernel's 64KB segment
-menu_bar:   resb 84             ; MENU_BARMAX x MB_ENTSZ (6 x 14; a literal
+menu_bar:   resb 98             ; MENU_BARMAX x MB_ENTSZ (7 x 14; a literal
                                 ; per the no-forward-ref-in-bss rule; guard 3b
-                                ; in kernel.asm catches the next cell)
+                                ; in kernel.asm catches the next cell - and
+                                ; caught THIS one, when MENU_APPMAX went 4 to
+                                ; 5 for SPEC.md 22.12's Edit menu)
 
 section .bss
 

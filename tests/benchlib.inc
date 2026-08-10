@@ -125,7 +125,7 @@ BL_MAXROWS  equ 380             ; report lines. Sized for the longest suite,
                                 ; else's machine, and it happened a THIRD
                                 ; time at 300 when SPEC.md 18.4's write block
                                 ; landed. 380 for 305.
-BL_ARENA    equ 18000           ; bytes of packed NUL-terminated line text
+BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text
 BL_OUTSZ    equ BL_ARENA + BL_MAXROWS * 2 + 64   ; ...plus a CR LF each
 BL_BASE_N   equ 400             ; iterations of the empty body, for the
                                 ; overhead every method-P row is net of

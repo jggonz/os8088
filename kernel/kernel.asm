@@ -170,11 +170,32 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 96256           ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE SIXTEENTH MOVE, 96,256 -> 98,304, ASKED
+                                ; FOR AND GRANTED, and the second that is
+                                ; kern_big's alone. 2KB again, for the rest of
+                                ; SPEC.md 39's dual display - 39.16's union
+                                ; and what follows it - on the fifteenth
+                                ; move's terms.
+                                ;
+                                ; WHAT SPENT THE FIFTEENTH IS WORTH RECORDING,
+                                ; because the two rounds landed in the same
+                                ; week and the arithmetic reads as one. Dual
+                                ; display took 39.12's context, 39.13's second
+                                ; card, 39.14's split, 39.15's cursor and
+                                ; 39.16's union; the spare it left went to
+                                ; SPEC.md 18.96/22.12's floppy FORMAT and
+                                ; 11.96.3's per-window raise cache, which are
+                                ; other work and are what took the guard from
+                                ; two steps to one. A raise is granted for a
+                                ; feature, so which feature spent the last one
+                                ; is the question the next request has to
+                                ; answer, and it is not always the one asking.
                                 ;
                                 ; THE FIFTEENTH MOVE, 94,208 -> 96,256, AND
                                 ; THE FIRST THAT IS kern_big's ALONE. 2KB,
@@ -763,6 +784,7 @@ section .text
 DBG_TAG_MOUSE equ 0x4F4D          ; 'MO' - SPEC.md 9.4.2
 DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92
+DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4
 
 ; =============================================================================
 ; Fixed entry points
@@ -1374,6 +1396,11 @@ dbg_reg:
                                     ; about silicon nobody here has, and the
                                     ; one machine that has it is sent a
                                     ; knob-free kernel by handover rule
+    dw DBG_TAG_VIDEO, vid_dbg_blk   ; SPEC.md 57.4 - and unconditional for the
+                                    ; THIRD time for the same reason: whether
+                                    ; a second monitor is plugged into a
+                                    ; second card is the one question in
+                                    ; SPEC.md 39 no emulator can be asked
 %ifdef DISK_COUNTERS
     dw DBG_TAG_DISK, dsk_dbg_blk    ; SPEC.md 18.94 - `make DISKCNT=1` only
 %endif
@@ -1741,6 +1768,14 @@ kmain:
                                 ; came up in mono text answers at B000 as
                                 ; ITSELF and reports a Hercules that is not
                                 ; there
+%ifdef KERN_BIG
+    call vid_disp_init          ; ...and if it has BOTH mono cards, programme
+                                ; the second one too (SPEC.md 39.13). Here
+                                ; because [vid_avail] is what decides, so this
+                                ; is the earliest it can run; it claims nothing
+                                ; and draws nothing, so the second monitor comes
+                                ; up scanning our raster and black
+%endif
     call mem_init               ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
@@ -2248,6 +2283,8 @@ cw_dsk_relist:          call dsk_relist
                     retf
 cw_dsk_synth:           call dsk_synth
                     retf
+cw_dsk_vol_row:         call dsk_vol_row
+                    retf
 cw_evq_pop:             call evq_pop
                     retf
 cw_font_str:            call font_str
@@ -2344,6 +2381,12 @@ cw_vid_avail_test:      call vid_avail_test
                     retf
 cw_vid_switch:          call vid_switch
                     retf
+%ifdef KERN_BIG
+cw_vid_dual_ok:         call vid_dual_ok
+                    retf
+cw_vid_disp_relay:      call vid_disp_relayout
+                    retf
+%endif
 cw_wm_clip_set:         call wm_clip_set
                     retf
 cw_wm_clip_test:        call wm_clip_test
@@ -2439,6 +2482,10 @@ files_poster:         call COLD_SEG:fmf_files_poster
                     ret
 files_refresh:        call COLD_SEG:fmf_files_refresh
                     ret
+%ifndef KERN_SMALL
+fm_bar_gate:          call COLD_SEG:fmf_fm_bar_gate
+                    ret
+%endif
 fm_focus:             call COLD_SEG:fmf_fm_focus
                     ret                 ; CF out (SPEC.md 22.8): a near ret
                                         ; over a far one, neither of which
@@ -2605,7 +2652,7 @@ KERN_CEIL equ KERN_BUDGET           ; become the reason the kernel grew
 ; 3b. menu_bar is a LITERAL byte count (.bss may not forward-reference), so
 ;    nothing makes it follow MENU_BARMAX. It gained a cell the day the app
 ;    name became a pull-down (SPEC.md 12.2); this is what catches the next one.
-%if MENU_BARMAX * MB_ENTSZ > 84
+%if MENU_BARMAX * MB_ENTSZ > 98
 %error "menu_bar is too small for MENU_BARMAX cells - raise the resb in menu.inc"
 %endif
 ; 4. the menu save-under (SPEC.md 2.2/12.4) must fit MENU_SAVE_KB. gfx_save

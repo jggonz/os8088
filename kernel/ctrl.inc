@@ -265,16 +265,49 @@ cp_s_vact:  db 'Activate Mode', 0
 cp_s_vcap:  db 'Switches now, and is kept', 0
 cp_s_vnow:  db 'This adapter is running', 0
 
+%ifdef KERN_BIG
+; The DESKTOP line (SPEC.md 31.10.2): one row of three radios under the button.
+; ONE choice and not two controls - a single display has no layout, so a
+; checkbox plus a direction would carry a fourth state that means nothing.
+;
+; It is not drawn at all on a machine vid_dual_ok refuses, which is SPEC.md
+; 31.10.1's own answer one level down: that page stopped being drawn on a
+; single-adapter machine rather than carrying a caption apologising for
+; itself, and a permanently greyed control here would have to displace the
+; Activate button's say-why-not on the one page where that button is the
+; main control.
+cp_s_vsing: db 'Single', 0
+cp_s_vrgt:  db 'Right', 0
+cp_s_vblw:  db 'Below', 0
+cp_vmodnam: dw cp_s_vsing, cp_s_vrgt, cp_s_vblw
+%endif
+
 ; Display page geometry, PANE-relative. The Sound page's tighter 16px row
-; pitch rather than the two-row pages' 20, because three rows plus a button
-; plus a caption have to fit CP_CH.
+; pitch rather than the two-row pages' 20, because three adapter rows, a
+; button, SPEC.md 31.10.2's desktop row and a caption all have to fit CP_CH -
+; and the two %if guards below are what say so rather than a comment claiming
+; it. 121 rows: adapters at 20/36/52, button 72..89, desktop row 96..107,
+; caption 112..119.
 CPV_R0Y   equ 20                ; row 0 glyph top
 CPV_ROWH  equ 16                ; row pitch: rows at 20, 36, 52
 CPV_BTNX  equ CP_PMX            ; the Activate button, under the rows
 CPV_BTNY  equ 72
 CPV_BTNW  equ 116               ; 'Activate Mode' is 13 glyphs = 104px
 CPV_BTNH  equ 18
-CPV_CAPY  equ 96                ; caption row, below the button
+CPV_MY    equ 96                ; SPEC.md 31.10.2's desktop row: glyph top
+CPV_MSTEP equ 74                ; ...and its radio pitch, so the hit test is
+                                ; one divide like the adapter rows'. Glyphs at
+                                ; 4/78/152, labels at 22/96/170, and the last
+                                ; label ends at 210 inside a CP_PRGT of 221
+CPV_CAPY  equ 112               ; caption row, LAST as it is on every page -
+                                ; which is why the new control went above it
+                                ; rather than below (it was 96)
+%if CPV_CAPY + 8 > CP_CH
+%error "ctrl: the Display page's caption runs past the pane (SPEC.md 31.10.2)"
+%endif
+%if CP_PLX + 2*CPV_MSTEP + 5*8 > CP_PRGT
+%error "ctrl: the Display page's desktop radios run past the pane"
+%endif
 ; Row hit bands: generous and contiguous, like every other page's (31.2). The
 ; bands are laid out for THREE rows whatever the machine has - a row that is
 ; not drawn is refused by cp_vid_row, not by the geometry.
@@ -284,6 +317,14 @@ CPV_B2Y2  equ CPV_R0Y + 2*CPV_ROWH + CP_GW - 1   ; 63: row 2 bottom
 ; ...and the button's, which must start below them
 CPV_BB1   equ CPV_BTNY - 4
 CPV_BB2   equ CPV_BTNY + CPV_BTNH + 3
+; ...and the desktop row's, which must start below THAT: generous and
+; contiguous like every other band on the page (SPEC.md 31.2), so a press
+; between two radios lands on one of them rather than on nothing.
+CPV_MB1   equ CPV_BB2 + 1
+CPV_MB2   equ CPV_MY + CP_GW + 3
+%if CPV_MB1 > CPV_MY
+%error "ctrl: the Display page's desktop band starts below its own glyphs"
+%endif
 
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
@@ -1541,6 +1582,92 @@ cp_vid_rows:
     pop ax
     ret
 
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_vid_msel - which of the three desktop radios is on (module internal)
+; in:  nothing
+; out: AL = 0 Single, 1 Right, 2 Below
+; clobbers: AL, flags
+;
+; DERIVED from SPEC.md 39.19's two bytes every time it is asked - there is no
+; page-local copy of the choice, the way the Scheduler page has none of the
+; scheduler mode. A page that kept one would be a second opinion about a
+; setting the kernel already holds.
+; -----------------------------------------------------------------------------
+cp_vid_msel:
+    mov al, [vid_dmode]
+    or al, al
+    jz .out                     ; Single: no layout, and radio 0
+    mov al, [vid_dlay]
+    inc al
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_mode - the desktop row: Single / Right / Below (SPEC.md 31.10.2)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; Drawn only where there is a choice - see the strings above. cp_vid_rows'
+; label-before-glyph order, for its reason: both want SI, and cp_glyph fills
+; its own box white first so nothing is left half-erased between the two.
+; -----------------------------------------------------------------------------
+cp_vid_mode:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call KERNEL_SEG:cw_vid_dual_ok
+    jc .done
+    call cp_vid_msel
+    mov bh, al                  ; BH = the radio that is on
+    xor bl, bl                  ; BL = the radio being drawn
+.r:
+    mov al, bl                  ; --- SI = this radio's name, BEFORE AX becomes
+    xor ah, ah                  ; the x offset: both want it
+    shl ax, 1
+    mov si, ax
+    mov si, [si + cp_vmodnam]
+
+    mov al, bl                  ; AX = this radio's x offset within the pane
+    mov cl, CPV_MSTEP
+    mul cl                      ; mul r/m8: AX = AL * op
+
+    mov cx, di                  ; --- the label
+    add cx, CP_PLX
+    add cx, ax
+    mov dx, bp
+    add dx, CPV_MY + CP_PLDY
+    mov byte [gfx_color], CBLACK
+    push ax
+    call KERNEL_SEG:cw_font_str
+    pop ax
+
+    mov si, cp_radio_off        ; --- the glyph
+    cmp bl, bh
+    jne .g
+    mov si, cp_radio_on
+.g:
+    mov cx, di
+    add cx, CP_PGX
+    add cx, ax
+    mov dx, bp
+    add dx, CPV_MY
+    call cp_glyph
+
+    inc bl
+    cmp bl, 3
+    jb .r
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; cp_vid_btn - the Activate button, greyed when there is nothing to activate
 ; in:  DI = pane left, BP = pane top; gfx lock held
@@ -1660,6 +1787,9 @@ cp_vid_paint:
 
     call cp_vid_rows
     call cp_vid_btn
+%ifdef KERN_BIG
+    call cp_vid_mode
+%endif
     call cp_vid_cap
 
     pop si
@@ -1695,7 +1825,8 @@ cp_vid_click:
     cmp dx, CPV_BB1             ; --- the Activate button ---
     jl .rows
     cmp dx, CPV_BB2
-    jg .done
+    jg .mode                    ; ...and BELOW it is the desktop row now, not
+                                ; the bottom of the page
     cmp cx, CPV_BTNX
     jl .done
     cmp cx, CPV_BTNX + CPV_BTNW - 1
@@ -1707,6 +1838,46 @@ cp_vid_click:
     jc .done                    ; refused: the adapter went away under us
     mov byte [cp_wdirty], 1     ; ...remembered on close (SPEC.md 31.8)
     mov byte [cp_dirty], 1      ; ...and the whole screen is a new shape
+    jmp short .done
+
+.mode:                          ; --- the desktop row (SPEC.md 31.10.2) ---
+%ifdef KERN_BIG
+    cmp dx, CPV_MB1
+    jl .done
+    cmp dx, CPV_MB2
+    jg .done
+    call KERNEL_SEG:cw_vid_dual_ok
+    jc .done                    ; not drawn on this machine, so not clickable
+    mov ax, cx                  ; AH = 0: cx is pane-relative and CP_PRGT is
+    sub ax, CP_PGX              ; 221, so this cannot carry
+    jl .done
+    mov cl, CPV_MSTEP
+    div cl                      ; AL = which radio, AH = the remainder
+    cmp al, 3
+    jae .done
+    mov ah, al                  ; ...and is it the one already on?
+    call cp_vid_msel
+    cmp al, ah
+    je .done                    ; draw nothing, exactly like the rows above
+
+    mov al, ah                  ; SPEC.md 39.19's two bytes, from the three
+    or al, al                   ; arrangements: Single has no layout
+    jz .msing
+    dec al
+    mov [vid_dlay], al
+    mov byte [vid_dmode], 1
+    jmp short .mgo
+.msing:
+    mov byte [vid_dmode], 0
+.mgo:
+    ; ...and it takes effect NOW, with only the record of it waiting for the
+    ; close (SPEC.md 31.8). NOTHING IS REDRAWN, for the Activate button's
+    ; reason one screen up: vid_disp_init moves the desktop and re-fits every
+    ; window, so DI/BP describe a rectangle that may no longer exist.
+    call KERNEL_SEG:cw_vid_disp_relay
+    mov byte [cp_wdirty], 1
+    mov byte [cp_dirty], 1
+%endif
     jmp short .done
 
 .rows:                          ; --- the radio rows ---

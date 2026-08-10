@@ -176,54 +176,254 @@ wm_init:
 ; out:      W_X/W_Y/W_W/W_H clamped
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
+; THE BOX A FRAME MUST FIT IN is AX/CX = x0 and xe, SI/DI = y0 and ye, and it
+; is a DISPLAY's rather than the desktop's (SPEC.md 39.16.1). Against a union
+; the old bounds were the wrong shape twice: they would allow a window in the
+; dead zone, and they would apply the PRIMARY's dock row to a display that has
+; no dock. Four registers rather than four variables because that is all it
+; is - and on a machine with one display wm_fit_box does not exist and the
+; three loads below are the numbers this routine always used.
 wm_fit:
     push ax
-    mov ax, [vid_w]             ; w = min(w, screen width)
-    cmp [bx+W_W], ax
+    push cx
+    push si
+    push di
+    xor ax, ax                  ; x0
+    mov cx, [vid_pw]            ; xe
+    mov si, MBAR_H              ; y0
+    mov di, [vid_dock_y0]       ; ye
+%ifdef KERN_BIG
+    call wm_fit_box             ; ...unless the window is on another display
+%endif
+    push cx                     ; w = min(w, xe - x0)
+    sub cx, ax
+    cmp [bx+W_W], cx
     jle .wok
-    mov [bx+W_W], ax
+    mov [bx+W_W], cx
 .wok:
-    mov ax, [vid_dock_y0]       ; h = min(h, desktop height) - and ONE PIXEL
-    sub ax, MBAR_H + 1          ; SHORT of the dock, because the drop shadow
-                                ; lives on row y+h and wm_dock_clear tests
-                                ; y+h with `jae`. Clamping to exactly the
-                                ; band handed out a window flush against the
-                                ; strip, which then made every window opened
-                                ; over it pay a dock-under repaint (SPEC.md
-                                ; 11.90). This is the one place that decides
-                                ; it for every fixed-size package at once
-    cmp [bx+W_H], ax
+    pop cx
+    push di                     ; h = min(h, ye - y0) - and ONE PIXEL SHORT,
+    sub di, si                  ; because the drop shadow lives on row y+h and
+    dec di                      ; wm_dock_clear tests y+h with `jae`. Clamping
+                                ; to exactly the band handed out a window flush
+                                ; against the strip, which then made every
+                                ; window opened over it pay a dock-under
+                                ; repaint (SPEC.md 11.90). This is the one
+                                ; place that decides it for every fixed-size
+                                ; package at once
+    cmp [bx+W_H], di
     jle .hok
-    mov [bx+W_H], ax
+    mov [bx+W_H], di
 .hok:
-    mov ax, [vid_w]             ; x = min(x, screen width - w), floor 0
-    sub ax, [bx+W_W]
-    cmp [bx+W_X], ax
+    pop di
+    push cx                     ; x = min(x, xe - w), floor x0
+    sub cx, [bx+W_W]
+    cmp [bx+W_X], cx
     jle .xok
-    mov [bx+W_X], ax
+    mov [bx+W_X], cx
 .xok:
-    cmp word [bx+W_X], 0
+    pop cx
+    cmp [bx+W_X], ax
     jge .xfl
-    mov word [bx+W_X], 0
+    mov [bx+W_X], ax
 .xfl:
     call wm_snap_win            ; ...and back onto a multiple of 8 if this
                                 ; window asked for it (SPEC.md 11.94). After
                                 ; both clamps, never before: it moves left,
                                 ; which only stays legal once the right edge
                                 ; has been dealt with
-    mov ax, [vid_dock_y0]       ; y = min(y, dock top - h - 1), floor MBAR_H
-    sub ax, [bx+W_H]            ; - the same pixel, for the same reason
-    dec ax
-    cmp [bx+W_Y], ax
+    push di                     ; y = min(y, ye - h - 1), floor y0 - the same
+    sub di, [bx+W_H]            ; pixel, for the same reason
+    dec di
+    cmp [bx+W_Y], di
     jle .yok
-    mov [bx+W_Y], ax
+    mov [bx+W_Y], di
 .yok:
-    cmp word [bx+W_Y], MBAR_H
+    pop di
+    cmp [bx+W_Y], si
     jge .out
-    mov word [bx+W_Y], MBAR_H
+    mov [bx+W_Y], si
 .out:
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; wm_disp_of - which display is this window primarily ON? (SPEC.md 39.17)
+; in:       BX = the window
+; out:      AL = the display index
+; clobbers: AX, flags
+;
+; THE CENTRE, then the ORIGIN, then the primary. Overlap area is the intuitive
+; answer and needs a 32-bit multiply - 720 x 348 is 250,560 and overflows a
+; word - so "which display does more of this window touch" costs a mul pair
+; per display on a machine whose whole design is about not paying for
+; arithmetic. The centre is one point-in-rect test per display and lands on
+; the same answer in every case anybody will construct. Three rungs because
+; the virtual desktop is not a rectangle (39.2.1): a centre can fall in the
+; dead zone, and so can an origin.
+;
+; ONE RULE, not two: both fullscreens, wm_zoom and eventually fsx all ask it,
+; so none of them can drift about which monitor an app is on.
+; -----------------------------------------------------------------------------
+wm_disp_of:
+    push bx
+    push si
+    mov si, bx                  ; SI, because vid_disp_find wants BX = y
+    mov ax, [si+W_W]
+    shr ax, 1
+    add ax, [si+W_X]
+    mov bx, [si+W_H]
+    shr bx, 1
+    add bx, [si+W_Y]
+    call vid_disp_find          ; the CENTRE
+    jnc .out
+    mov ax, [si+W_X]            ; ...else the ORIGIN
+    mov bx, [si+W_Y]
+    call vid_disp_find
+    jnc .out
+    xor al, al                  ; ...else the primary
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_disp_span - that display's x origin and width (SPEC.md 39.17.2)
+; in:       BX = the window; AX/CX = the primary's, already loaded
+; out:      AX = x0, CX = width
+; clobbers: AX, CX, flags
+; -----------------------------------------------------------------------------
+wm_disp_span:
+    cmp byte [vid_ndisp], 1
+    jbe .out                    ; one display: the caller's numbers stand
+    push di
+    call wm_disp_of
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    mov cx, [di+VID_CTX_CW]
+    pop di
+.out:
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
+; wm_zoom_xmax - the largest x a window of width CX may have on ITS display
+;                (SPEC.md 39.17.2)
+; in:       BX = the window, CX = the width
+; out:      DX = that x, floored at the display's left edge
+; clobbers: DX, flags
+; -----------------------------------------------------------------------------
+wm_zoom_xmax:
+    push ax
+    push di
+    xor ax, ax                  ; the primary's left edge...
+    mov dx, [vid_pw]            ; ...and one past its right
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    jbe .have
+    call wm_disp_of
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    mov dx, ax
+    add dx, [di+VID_CTX_CW]
+.have:
+%endif
+    sub dx, cx
+    cmp dx, ax                  ; ...floored at THAT edge, not at 0
+    jge .out
+    mov dx, ax
+.out:
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_fs_setrect - a fullscreen window's rect: the display it is ON
+;                 (SPEC.md 39.17.1)
+; in:       BX = the window
+; out:      W_X/W_Y/W_W/W_H filled
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_fs_setrect:
+    push ax
+%ifdef KERN_BIG
+    push di
+    cmp byte [vid_ndisp], 1
+    jbe .one
+    call wm_disp_of
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    mov [bx+W_X], ax
+    mov ax, [di+VID_CTX_VY]
+    mov [bx+W_Y], ax
+    mov ax, [di+VID_CTX_CW]
+    mov [bx+W_W], ax
+    mov ax, [di+VID_CTX_CH]
+    mov [bx+W_H], ax
+    jmp short .out
+.one:
+%endif
+    xor ax, ax
+    mov [bx+W_X], ax
+    mov [bx+W_Y], ax
+    mov ax, [vid_pw]
+    mov [bx+W_W], ax
+    mov ax, [vid_ph]
+    mov [bx+W_H], ax
+%ifdef KERN_BIG
+.out:
+    pop di
+%endif
+    pop ax
+    ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; wm_fit_box - the box for the display this window's ORIGIN is on
+;              (SPEC.md 39.16.1)
+; in:       BX = the window; AX/CX/SI/DI = the primary's box
+; out:      the same four, for that display
+; clobbers: AX, CX, SI, DI, flags
+;
+; The ORIGIN and not the centre, deliberately: wm_disp_of's centre test is for
+; deciding which monitor an app OWNS (docs/DUAL-DISPLAY-PLAN.md 6.5.1), and
+; this is deciding which edges a frame may not pass - which is a question
+; about the corner the clamps are written from. A window whose origin is in
+; the dead zone gets the primary, the only answer that cannot leave it
+; unreachable.
+; -----------------------------------------------------------------------------
+wm_fit_box:
+    cmp byte [vid_ndisp], 1
+    jbe .out
+    push bx
+    push dx
+    mov ax, [bx+W_X]
+    mov bx, [bx+W_Y]
+    call vid_disp_of            ; AL = the display holding the origin
+    mov dl, al
+    call vid_ctx_ptr            ; DI = its record
+    mov ax, [di+VID_CTX_VX]
+    mov cx, ax
+    add cx, [di+VID_CTX_CW]
+    mov si, [di+VID_CTX_VY]
+    add si, [di+VID_CTX_CH]     ; ...ye first, while DI is still the record
+    push si
+    mov si, [di+VID_CTX_VY]
+    pop di                      ; DI = ye, SI = y0
+    or dl, dl
+    jnz .done                   ; a secondary has no menu bar and no dock, so
+    mov si, MBAR_H              ; its whole height is desktop
+    mov di, [vid_dock_y0]
+.done:
+    pop dx
+    pop bx
+.out:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; wm_refit - clamp EVERY live window back onto the screen (SPEC.md 39.11.2)
@@ -706,7 +906,11 @@ wm_zoom:
     push dx
     push si
     xor ax, ax                  ; the standard state: x = the left edge...
-    mov cx, [vid_w]             ; ...and w = the whole live screen (SPEC 39.2)
+    mov cx, [vid_pw]            ; ...and w = the whole live screen (SPEC 39.2)
+%ifdef KERN_BIG
+    call wm_disp_span           ; ...of the DISPLAY this window is on, or a
+                                ; zoom would move it to the other monitor
+%endif
     call wm_snap_want
     jnc .nosnap
     mov ax, 7                   ; WF_SNAP: the leftmost frame x whose CONTENT
@@ -771,11 +975,11 @@ wm_zoom:
     je .out                     ; partial restore, and it travels
 .rgo:
     push dx                     ; x is replayed and then CLAMPED, because on
-    mov dx, [vid_w]             ; that partial path the size is not the one it
-    sub dx, cx                  ; was banked with - a negotiator refusing to
-    jns .rx                     ; shrink hands back the STANDARD width, and
-    xor dx, dx                  ; the banked x plus that runs off the right
-.rx:                            ; edge
+    call wm_zoom_xmax           ; that partial path the size is not the one it
+                                ; was banked with - a negotiator refusing to
+                                ; shrink hands back the STANDARD width, and
+                                ; the banked x plus that runs off the right
+                                ; edge of its display (SPEC.md 39.17.2)
     cmp ax, dx
     jle .rxc
     mov ax, dx
@@ -860,10 +1064,8 @@ wm_destroy:
     push dx
     push si
     push di
-    cmp bx, [wm_su_win]         ; the slot is about to be reusable, and a new
-    jne .nosu                   ; window in it would alias this pointer
-    call wm_su_drop
-.nosu:
+    call wm_su_drop             ; the slot is about to be reusable, and a new
+                                ; window in it would inherit this cache
     mov si, bx                  ; the rect it is vacating, banked before the
     call wm_win_rect            ; record is cleared out from under us
     test word [si+W_FLAGS], 2
@@ -876,10 +1078,14 @@ wm_destroy:
 .vis:
     test word [si+W_FLAGS], WF_FULL
     jz .bank
-    xor ax, ax                  ; fullscreen: the whole screen was its rect
-    xor bx, bx
-    mov cx, [vid_wm1]
-    mov dx, [vid_hm1]
+    mov ax, [si+W_X]            ; fullscreen: its rect WITHOUT the shadow -
+    mov bx, [si+W_Y]            ; the record still holds it, wm_fs_drop not
+    mov cx, ax                  ; having run yet. A constant screen rect here
+    add cx, [si+W_W]            ; would repaint the PRIMARY because a window
+    dec cx                      ; on the other display went away (39.17.1)
+    mov dx, bx
+    add dx, [si+W_H]
+    dec dx
 .bank:
     mov [wm_hide_r], ax
     mov [wm_hide_r+2], bx
@@ -1051,6 +1257,16 @@ wm_fs_vis:
     jz .no
     test word [bx+W_FLAGS], 2
     jz .no
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    jbe .yes
+    push ax                     ; ...and is it on the display the CHROME is
+    call wm_disp_of             ; on? A fullscreen window covering the second
+    or al, al                   ; monitor covers no bar, no dock and no drive
+    pop ax                      ; column, and all four painters below have to
+    jnz .no                     ; draw them (SPEC.md 39.17.1). `pop` leaves
+%endif                          ; the flags alone
+.yes:
     pop bx
     stc
     ret
@@ -1224,10 +1440,10 @@ wm_hide:
     push cx
     push dx
     push si
-    cmp bx, [wm_su_win]         ; MINIMIZING IS NOT COVERING (SPEC.md 11.96.1).
-    jne .nosu                   ; A hidden window's background painter finds
-    call wm_su_drop             ; itself invisible and SKIPS drawing, so it
-.nosu:                          ; never reaches wm_clip_set and never drops the
+    call wm_su_drop             ; MINIMIZING IS NOT COVERING (SPEC.md 11.96.1).
+                                ; A hidden window's background painter finds
+                                ; itself invisible and SKIPS drawing, so it
+                                ; never reaches wm_clip_set and never drops the
                                 ; cache - while its state goes on changing. The
                                 ; promise in WF_SAVEU is about a window that is
                                 ; merely covered; nothing may assume it across
@@ -1236,10 +1452,14 @@ wm_hide:
     call wm_win_rect            ; AX,BX,CX,DX = the rect it is vacating
     test word [si+W_FLAGS], WF_FULL
     jz .drop
-    xor ax, ax                  ; ...so that is the damage, whatever wm_fs_drop
-    xor bx, bx                  ; is about to put back in the record
-    mov cx, [vid_wm1]
-    mov dx, [vid_hm1]
+    mov ax, [si+W_X]            ; ...so that is the damage, whatever wm_fs_drop
+    mov bx, [si+W_Y]            ; is about to put back in the record - and it
+    mov cx, ax                  ; is that window's DISPLAY, not the machine's
+    add cx, [si+W_W]            ; screen (SPEC.md 39.17.1)
+    dec cx
+    mov dx, bx
+    add dx, [si+W_H]
+    dec dx
 .drop:
     mov [wm_hide_r], ax
     mov [wm_hide_r+2], bx
@@ -1468,13 +1688,9 @@ wm_fullscreen:
     mov [wm_fs_save+4], ax
     mov ax, [bx+W_H]
     mov [wm_fs_save+6], ax
-    xor ax, ax
-    mov [bx+W_X], ax
-    mov [bx+W_Y], ax
-    mov ax, [vid_w]
-    mov [bx+W_W], ax
-    mov ax, [vid_h]
-    mov [bx+W_H], ax
+    call wm_fs_setrect          ; the display this window is primarily ON
+                                ; (SPEC.md 39.17.1), which is the primary on a
+                                ; machine with one
     or word [bx+W_FLAGS], WF_FULL
                                 ; Raise it AND draw it WHOLE. Not wm_front:
                                 ; that asks wm_obscured whether anything was
@@ -2256,9 +2472,9 @@ wm_dock_under:
     mov [wm_dmg_x1], ax
     mov ax, [vid_dock_y0]
     mov [wm_dmg_y1], ax
-    mov ax, [vid_wm1]
+    mov ax, [vid_pwm1]
     mov [wm_dmg_x2], ax
-    mov ax, [vid_hm1]
+    mov ax, [vid_phm1]
     mov [wm_dmg_y2], ax
     mov byte [wm_dmg_dk], 1     ; dock_paint said CF = 1 above, so the strip
     call wm_dmg_wins            ; really was drawn (the rect covers it anyway,
@@ -2287,11 +2503,17 @@ wm_paint_all:
                                 ; them under it is pure waste (SPEC.md 11.2)
     xor ax, ax                  ; desktop: 50% dither under the bar, and
     mov bx, MBAR_H              ; STOPPING ABOVE THE DOCK (SPEC.md 30.3.2) -
-    mov cx, [vid_wm1]           ; dock_paint is the next call but one and owns
+    mov cx, [vid_pwm1]           ; dock_paint is the next call but one and owns
     mov dx, [vid_dock_y0]       ; every row from here down, so dithering them
     dec dx                      ; was a full-width band drawn to be painted
     call gfx_fill_gray          ; over: the double-draw flash, and the reason
                                 ; every tile had to be rebuilt afterwards
+%ifdef KERN_BIG
+    call vid_disp_dither        ; ...and every OTHER display, whole (SPEC.md
+                                ; 39.14.4): the chrome is the primary's, so a
+                                ; second monitor is pure desktop. One compare
+                                ; on a machine with one card
+%endif
     call desk_paint             ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)
     call dock_paint             ; ...so the strip is UNTOUCHED and usually has
@@ -2599,13 +2821,16 @@ wm_clip_set:
     push cx
     push dx
     push si
-    cmp bx, [wm_su_win]         ; THIS WINDOW IS ABOUT TO DRAW, so whatever the
-    jne .nosu                   ; raise cache holds for it is now a picture of
-    call wm_su_drop             ; the past (SPEC.md 11.96). Every background
-.nosu:                          ; painter comes through here - 11.3 makes it
+    call wm_su_drop             ; THIS WINDOW IS ABOUT TO DRAW, so whatever the
+                                ; raise cache holds for it is now a picture of
+                                ; the past (SPEC.md 11.96). Every background
+                                ; painter comes through here - 11.3 makes it
                                 ; arm a region or paint over the window on top
-                                ; of it - so this one test covers every app at
-                                ; once, with no rule for an app to remember
+                                ; of it - so this one call covers every app at
+                                ; once, with no rule for an app to remember.
+                                ; Per window (11.96.3) it drops only the
+                                ; drawer's own, where it used to drop whoever
+                                ; happened to hold the single cache
     mov [wm_clipwin], bx        ; for cur_lazyck at .done (SPEC.md 7.1.4) -
     mov word [wm_clip_n], 0     ; BX does not survive the fragment loop
 
@@ -3232,7 +3457,29 @@ wm_clip_ptr:
 ; -----------------------------------------------------------------------------
 wm_clip_test:
     cmp word [wm_clip_n], 0
-    je .free
+    je wm_clip_free             ; ...NOT a local label: the walk below is its
+                                ; own symbol now, so this one would belong to
+                                ; it rather than to the entry above
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; SPEC.md 39.14.4: inside a whole-shape hook
+    je wm_clip_walk             ; the caller's rect has already been moved into
+                                ; its display, and wm_clip_tab is VIRTUAL. One
+                                ; rect translated here beats sixteen there,
+                                ; and it is the only place the two spaces meet
+    add ax, [vid_ox]
+    add cx, [vid_ox]
+    add bx, [vid_oy]
+    add dx, [vid_oy]
+    call wm_clip_walk
+    pushf                       ; ...and back, because font_char takes its
+    sub ax, [vid_ox]            ; CX/DX from AX/BX after this returns - and
+    sub cx, [vid_ox]            ; `sub` sets the flags this routine answers in
+    sub bx, [vid_oy]
+    sub dx, [vid_oy]
+    popf
+    ret
+%endif
+wm_clip_walk:
     push si
     push di
     mov si, wm_clip_tab
@@ -3258,7 +3505,7 @@ wm_clip_test:
     pop di
     pop si
     ret
-.free:
+wm_clip_free:
     clc
     ret
 
@@ -3595,11 +3842,8 @@ wm_saveu:
     ret
 .clear:
     and word [bx+W_FLAGS], ~WF_SAVEU & 0xFFFF
-    cmp bx, [wm_su_win]         ; ...and a promise withdrawn takes any cache
-    jne .out                    ; made under it with it
-    call wm_su_drop
-.out:
-    popf
+    call wm_su_drop             ; ...and a promise withdrawn takes any cache
+    popf                        ; made under it with it
     ret
 
 ; =============================================================================
@@ -3632,9 +3876,20 @@ wm_saveu:
 ; drops the cache and the raise puts back pixels that stopped being true. Only
 ; the application knows which of those it is (SPEC.md 11.96.1).
 ;
-; ONE CACHE FOR THE MACHINE, like the menu's save-under. It covers the case
-; that was reported - two windows alternating - and it bounds the memory at
-; one block rather than one per window.
+; ONE CACHE PER WINDOW (SPEC.md 11.96.3), and it was one for the machine. The
+; bound was worth having while every cache cost the same as every other; the
+; PRIORITY LADDER (SPEC.md 50.6.4) retired that, because a cache at the
+; trivial rank is given up by anything that wants the room - so bounding it
+; at one block bought nothing and cost last-covered-wins, where covering a
+; cheap window took the cache from an expensive one.
+;
+; The slot IS the window, so wm_su_win is gone: wm_su_segs is a word per
+; window record and the owner tag carries the slot in its low byte, which is
+; the only part of the memory manager that had to learn anything (mem_pg_own
+; rows are ranges now). AND THE RECT LIVES IN THE CLAIM, in a four-word
+; header the image starts after. That is not only cheaper than four more
+; arrays - it is the better shape, because the rect travels with the pixels
+; it describes and cannot get out of step with them.
 ;
 ; WHAT MAKES IT SAFE is that a covered window cannot change its pixels without
 ; the kernel finding out. SPEC.md 11.3: a background painter arms a clip
@@ -3646,14 +3901,21 @@ wm_saveu:
 ; refit and an adapter change all invalidate by disagreeing, and wm_destroy
 ; drops it because a reused slot would otherwise alias the pointer.
 ; =============================================================================
-wm_su_seg: dw 0                 ; the banked content, 0 = none. In .text with a
-                                ; real initialiser: -f bin zeroes nothing and
-                                ; wm_su_try reads this before anything sets it
-wm_su_win: dw 0                 ; whose it is
-wm_su_x1:  dw 0                 ; ...and the rect it was taken over, compared
-wm_su_y1:  dw 0                 ; rather than trusted (see above)
-wm_su_x2:  dw 0
-wm_su_y2:  dw 0
+; --- the claim's own header, ahead of the image gfx_save writes -------------
+WSU_X1  equ 0                   ; word: the rect the pixels behind it were
+WSU_Y1  equ 2                   ; taken over, COMPARED against the window's
+WSU_X2  equ 4                   ; rect now rather than trusted (see above)
+WSU_Y2  equ 6
+WSU_IMG equ 8                   ; ...and the image starts here
+
+wm_su_segs: times MAX_WIN dw 0  ; the banked content, one word per window
+                                ; record, 0 = none. In .text with real
+                                ; initialisers: -f bin zeroes nothing and
+                                ; wm_su_try reads one before anything sets it
+wm_su_x1:  dw 0                 ; the rect the operation in hand is working
+wm_su_y1:  dw 0                 ; on - written by wm_su_take before the claim
+wm_su_x2:  dw 0                 ; that will hold it exists, and read back out
+wm_su_y2:  dw 0                 ; of that claim's header by wm_su_ck
 
 ; wm_su_rect - DI = window -> AX/BX/CX/DX = its content rect, the same four
 ; numbers wm_draw_win's white fill uses
@@ -3670,37 +3932,57 @@ wm_su_rect:
     sub dx, 2
     ret
 
-; wm_su_drop - forget the cache and give the memory back
+; wm_su_slot - which cache belongs to a window
+; in:  BX = window ptr
+; out: SI = -> its wm_su_segs word, BX = its owner tag (the base plus the
+;      slot, SPEC.md 11.96.3); clobbers nothing else (flags)
+wm_su_slot:
+    push ax
+    call wm_ptr2idx             ; AL = slot, AH = 0
+    mov si, ax
+    add si, ax                  ; a word per slot
+    add si, wm_su_segs
+    add ax, MEM_P_WSAVE         ; ...and the tag carries it too, so the shed
+    mov bx, ax                  ; can find the word again (mem_pg_own)
+    pop ax
+    ret
+
+; wm_su_drop - forget window BX's cache and give the memory back
 ; preserves every register and the flags
 wm_su_drop:
     pushf
     push ax
     push bx
     push dx
-    mov dx, [wm_su_seg]
+    push si
+    call wm_su_slot             ; SI = its word, BX = its tag
+    mov dx, [si]
     or dx, dx
     jz .out
-    mov word [wm_su_seg], 0
-    mov bx, MEM_P_WSAVE
+    mov word [si], 0
     call mem_free
 .out:
-    mov word [wm_su_win], 0
+    pop si
     pop dx
     pop bx
     pop ax
     popf
     ret
 
-; wm_su_ck - CF=0 if the cache describes window DI as it is right now
+; wm_su_ck - CF=0 if the cache describes window DI as it is right now, and
+;            then AX = the claim's segment and wm_su_x1..y2 hold the rect it
+;            was taken over. AX is scratch on CF=1.
 wm_su_ck:
-    push ax
     push bx
     push cx
     push dx
-    cmp word [wm_su_seg], 0
-    je .no
-    cmp [wm_su_win], di
-    jne .no
+    push si
+    push es
+    mov bx, di
+    call wm_su_slot
+    mov si, [si]                ; SI = the claim, 0 = no cache for this window
+    or si, si
+    jz .no
     test word [di+W_FLAGS], WF_SAVEU
     jz .no                      ; THE PROMISE IS TESTED AT THE RESTORE TOO, not
                                 ; only at the take. wm_saveu_set drops the cache
@@ -3710,24 +3992,31 @@ wm_su_ck:
                                 ; for a flag cleared any OTHER way, which is
                                 ; exactly what tools/notepad/pixcheck.py does to
                                 ; force a full repaint (SPEC.md 11.96.2)
-    call wm_su_rect
-    cmp ax, [wm_su_x1]
+    mov es, si                  ; the rect is the CLAIM's, not a fifth array:
+    call wm_su_rect             ; it travels with the pixels it describes
+    cmp ax, [es:WSU_X1]
     jne .no
-    cmp bx, [wm_su_y1]
+    cmp bx, [es:WSU_Y1]
     jne .no
-    cmp cx, [wm_su_x2]
+    cmp cx, [es:WSU_X2]
     jne .no
-    cmp dx, [wm_su_y2]
+    cmp dx, [es:WSU_Y2]
     jne .no
+    mov [wm_su_x1], ax          ; they agree, so either is the rect - taken
+    mov [wm_su_y1], bx          ; from the header, which is what the buffer
+    mov [wm_su_x2], cx          ; behind it was actually laid out for
+    mov [wm_su_y2], dx
+    mov ax, si                  ; ...and the segment, for wm_su_try
     clc
     jmp short .out
 .no:
     stc
 .out:
+    pop es                      ; a pop touches no flag, so CF survives
+    pop si
     pop dx
     pop cx
     pop bx
-    pop ax
     ret
 
 ; wm_su_take - bank window DI's content, because it is about to be covered
@@ -3749,8 +4038,9 @@ wm_su_take:
     jnz .out                    ; a fullscreen window is not usefully covered
                                 ; by what is being raised over it, and it is
                                 ; the biggest block there is
-    mov si, di                  ; bank the WINDOW: DI is gfx_save's buffer
-    call wm_su_drop             ; one cache for the machine
+    mov bx, di
+    call wm_su_drop             ; whatever THIS window banked before: one
+                                ; window, one claim, or the old one leaks
     call wm_su_rect             ; DI is still the window for this
     cmp ax, cx
     ja .out                     ; degenerate content: nothing to bank
@@ -3767,22 +4057,30 @@ wm_su_take:
     mov [wm_su_y1], bx
     mov [wm_su_x2], cx
     mov [wm_su_y2], dx
-    call wm_su_kb               ; AX = KB for the rect just recorded
-    jc .out                     ; ...or it does not fit one segment at all
-    mov bx, MEM_P_WSAVE
+    call wm_su_kb               ; AX = KB for the rect just recorded, the
+    jc .out                     ; header below included - or it does not fit
+                                ; one segment at all
+    mov bx, di
+    call wm_su_slot             ; SI = its wm_su_segs word, BX = its own tag
     call mem_claim              ; DX = segment
     jc .out                     ; refused: no cache, and the raise repaints -
                                 ; which is what it did before this existed
     mov es, dx
-    xor di, di
+    push si                     ; the four-word header first: the rect goes
+    mov si, wm_su_x1            ; WITH the pixels, so nothing outside the
+    xor di, di                  ; claim has to be kept in step with them
+    mov cx, 4
+    cld
+    rep movsw
+    pop si
+    mov di, WSU_IMG             ; ...and the image starts after it
     mov ax, [wm_su_x1]
     mov bx, [wm_su_y1]
     mov cx, [wm_su_x2]
     mov dx, [wm_su_y2]
     call gfx_save
     mov ax, es
-    mov [wm_su_seg], ax
-    mov [wm_su_win], si         ; PUBLISHED LAST, so a cache that was only
+    mov [si], ax                ; PUBLISHED LAST, so a cache that was only
                                 ; half taken can never be tried
 .out:
     pop es
@@ -3798,9 +4096,9 @@ wm_su_take:
 ; in: the four wm_su_* rect words
 ; out: CF=0, AX = KB (never 0); CF=1 = it cannot be banked at all
 ;
-; The block is (bytes per row + 2) x rows x planes: the image gfx_save writes,
-; and behind it wm_su_edge's two one-byte-wide screen columns, which are
-; rows x planes each.
+; The block is WSU_IMG + (bytes per row + 2) x rows x planes: the four-word
+; header, the image gfx_save writes, and behind it wm_su_edge's two
+; one-byte-wide screen columns, which are rows x planes each.
 ;
 ; IT REFUSES OVER 64KB rather than wrapping. gfx_save advances a 16-bit DI
 ; inside one segment, so a rect needing more than a segment cannot be banked
@@ -3829,6 +4127,8 @@ wm_su_kb:
     mul bx                      ; twin, for menu_save_kb's reason
     or dx, dx
     jnz .big                    ; past a segment: gfx_save's DI cannot reach it
+    add ax, WSU_IMG             ; ...and the header sits in front of all of it
+    jc .big
     cmp ax, 0xFC00
     ja .big                     ; ...nor could the rounding below survive it
     add ax, 1023
@@ -3895,7 +4195,8 @@ wm_su_edge:
     mov [wm_su_bpr], bx
     mov ax, [wm_su_nrow]
     mul bx
-    mov [wm_su_scr], ax         ; ...so the scratch starts past the image
+    add ax, WSU_IMG             ; ...so the scratch starts past the header
+    mov [wm_su_scr], ax         ; AND past the image
 
     mov bx, [wm_su_x1]          ; the masks, from the rect primitives' tables
     and bx, 7
@@ -3926,7 +4227,7 @@ wm_su_edge:
     and [wm_su_lm], al          ; so it keeps only the bits between them
 .two:
     mov si, [wm_su_scr]         ; left: buffer byte 0 of every row
-    xor di, di
+    mov di, WSU_IMG
     mov dl, [wm_su_lm]
     call wm_su_merge
     cmp word [wm_su_bpr], 1
@@ -3935,6 +4236,7 @@ wm_su_edge:
     add si, [wm_su_nrow]        ; right: buffer byte bpr-1 of every row
     mov di, [wm_su_bpr]
     dec di
+    add di, WSU_IMG
     mov dl, [wm_su_rm]
     call wm_su_merge
 .out:
@@ -3980,13 +4282,13 @@ wm_su_try:
     push si
     push di
     push es
-    call wm_su_ck
-    jc .no
-    mov es, [wm_su_seg]
+    call wm_su_ck               ; ...which loads wm_su_x1..y2 out of the
+    jc .no                      ; claim's own header, and answers AX = it
+    mov es, ax
     call wm_su_edge             ; the two edge bytes overhang the window, so
                                 ; they are merged with the screen as it is
                                 ; NOW before any of this goes back (11.96.2)
-    xor si, si                  ; GFX_RESTORE'S BUFFER IS ES:SI, NOT ES:DI -
+    mov si, WSU_IMG             ; GFX_RESTORE'S BUFFER IS ES:SI, NOT ES:DI -
                                 ; the twin of gfx_save's, because one advances
                                 ; a movsb source and the other its destination.
                                 ; Handed DI, the restore read from the buffer
@@ -3999,6 +4301,7 @@ wm_su_try:
     mov cx, [wm_su_x2]
     mov dx, [wm_su_y2]
     call gfx_restore
+    mov bx, di
     call wm_su_drop             ; SPENT: the pixels are on screen and this
     clc                         ; window is about to be the front one, so the
     jmp short .out              ; next thing it does is change them

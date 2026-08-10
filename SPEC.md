@@ -1458,6 +1458,9 @@ and the Timer (§14.1).
 rather than whatever the machine's ROM holds. **It is off by default and the
 shipped images do not use it**: the ROM probe above is still what a plain
 `make` assembles, so this changes no released byte until somebody asks for it.
+`fonts/` holds four faces — `os8088`, `smallcap`, `stencil` and `thin` — and
+§6.2.1 is how a build target exists for each of them without anybody
+maintaining a list.
 
 **What the probe actually depends on.** On a VGA or EGA machine int 10h
 AH=11h answers and the typeface is that *card's*. On everything else — which
@@ -1490,13 +1493,17 @@ lands in the FAT window, so those bytes cost **no `KERN_BUDGET` and no
 `KERN_CODE_MAX` at all**; and because the probe is not assembled in a baked
 build, `.text` gets *smaller*. Measured, against the same tree:
 
-| | ROM probe | `FONT=os8088` |
+| | ROM probe | `FONT=<name>` |
 |---|---|---|
-| `.text` | 51,686 | 51,609 (**−77**) |
+| `.text` | 52,836 | 52,758 (**−78**) |
 | `.ovl` | 2,662 of 4,608 | 3,464 of 4,608 |
-| image rung slack | 122 | 199 |
-| `KERN_SIZE` footprint | 92,160 | **92,160 — unchanged** |
-| `kernel.bin` | 80,998 | 81,800 (159 → **160 sectors**) |
+| image rung slack | 284 | 362 |
+| `KERN_SIZE` footprint | 93,696 | **93,696 — unchanged** |
+| `kernel.bin` | 82,534 | 83,336 (162 → **163 sectors**) |
+
+Every face costs exactly the same, because the table is 760 bytes whatever is
+in it — the figures above are `FONT=stencil` and the other three are
+byte-for-byte the same sizes.
 
 So the whole cost is **one floppy sector**, ~65 ms of a ~10 s boot on the
 5150 (PERFORMANCE.md Part 2). The one number worth watching is the overlay's
@@ -1522,13 +1529,40 @@ wrong.) And the blank-row fraction has to stay near the ROM's 25%: the
 renderer skips a blank glyph row whole, so an inkier face is a slower one at
 PERFORMANCE.md's ~1 ms a cell.
 
-**`fonts/os8088.f8` is the shipped example**, drawn for this OS rather than
+**`fonts/os8088.f8` is the house face**, drawn for this OS rather than
 adapted from anything: square bowls and flat terminals where the ROM font
 chamfers its corners, six columns for the round capitals where the ROM font
 takes seven, and the 2-pixel stems kept, because on CGA's 640x200 a
 one-pixel vertical stroke reads far thinner than a one-pixel horizontal one
 and a light face is a spindly face there. The marks with only one sensible
 8x8 solution — space, `-`, `|`, `.`, `_` — are the same as everyone's.
+
+**The other three are variations on it, and each was drawn against a rule the
+grid imposes.** `thin` is the house skeleton with every 2px stem eroded to
+1px — the light weight the paragraph above says will be spindly on a CGA,
+which is now a thing that can be looked at rather than argued about.
+`smallcap` replaces `a`..`z` with 5-row capitals on the x-height, same
+strokes and widths as the caps, so a line of text has one colour. `stencil`
+is the one with a rule worth writing down.
+
+**A stencil is defined by its counters, not by its breaks.** The plate is the
+background and the letter is the aperture, so the piece that would fall out
+is an *enclosed counter* — the inside of an `o`, both bowls of a `B` — and
+the face's whole job is that no glyph has one. `stencil.f8` therefore differs
+from the house face in exactly the **22 glyphs that have a counter**
+(`#&04689ABDOPQRabdegopq`) and in **28 pixels** all told; every other glyph is
+the house face untouched, which is what keeps it readable at this size.
+
+**The breaks are one pixel, and that is a legibility finding rather than a
+preference.** Two bolder schemes were drawn first and both failed on the
+glass. Breaking the *side* of a bowl is what a stencil looks like at a
+display size, and here a 6px-wide letter has 2px sides, so removing one
+removes the side entirely: `o` read as `c`, `B` as `H`, `8` as `3`. Breaking
+the top with a 2px gap was worse in a different way — it takes the arch that
+distinguishes a round letter, and `Locator` came out as `Lccatcr`. What works
+is the *smallest* cut that frees the counter, which at 8x8 is almost always a
+single pixel out of a horizontal bar: plainly visible as a nick, and it takes
+nothing with it. A face this size has no room for a gesture.
 
 **Nothing else in the system follows it.** `osapi_font_glyphs` hands out
 whichever table was loaded, so a package that asks gets the baked face for
@@ -1540,6 +1574,52 @@ character cells drawn by the *card's* own ROM font, so on a baked build that
 screen is in the machine's typeface and the rest of the OS is in ours. That
 is a property of borrowing the hardware's rasterizer and there is no fix
 short of not doing it.
+
+#### 6.2.1 A build target per typeface, generated from the directory
+
+`FONT=` could always name any face; for a long time only one existed, and
+there was only one thing to build with it — a `make FONT=<name>` that lands
+its kernel in `build/` on top of the shipped one. Both halves of that are
+fixed here, and neither changes a released byte.
+
+**The list is the directory.** `FONTS := $(patsubst fonts/%.f8,%,$(wildcard
+fonts/*.f8))` is read at parse time and `$(foreach)`/`$(eval)` emits the
+rules, so **adding a face is adding a file**: drop `fonts/gothic.f8` in and
+`make font-gothic`, `make fontsheet-gothic` and a row in `make fontlist`
+exist on the next run with nothing edited. `fontlist` reads each face's
+one-line description out of its own first comment, so the listing cannot go
+stale either.
+
+| target | what it is |
+|---|---|
+| `make fontlist` | the faces, with what each one is |
+| `make font-<name>` | system disks in that face, 360KB **and** 1.44MB |
+| `make fonts` | all of them |
+| `make fontsheet-<name>` | the proof sheet, VGA pixels and the CGA's 2.4:1 |
+| `make FONT=<name>` | the raw knob, unchanged — a `build/` kernel |
+
+**Each face's kernel is built in `build/fontk-<name>/`**, which is `small`'s
+rule and the field kernels' (§39.9): a kernel built with a knob that reaches
+`build/` is one somebody boots by accident believing it is the shipped one,
+and that mistake has been made in this tree. The finished disks are named for
+the face — `build/font-stencil-360.img` — the way the field disks are, so a
+disk says what it carries. **The apps floppy is not rebuilt and must not be**:
+a package reaches text through `OSAPI_FONT_*` (§20.3) and carries no glyphs,
+so one `build/apps360.img` pairs with every one of these.
+
+**Nothing here is in `all`, and `FONT=` is passed to a sub-make and never to
+the top one** — which is the mechanism, not a promise, behind the default
+staying the machine's own ROM set. Verified both ways on a cycle-accurate
+5150 with a CGA: each face's disk boots with `font_glyphs` **byte-identical
+to its `.f8`**, and the shipped `os8088-360.img` boots with `font_glyphs`
+byte-identical to the ROM at `F000:FA6E` and differing from all four faces.
+The six shipped images are md5-identical before and after this work.
+
+**`tools/kernsize.py` takes `--build DIR`** because of this. It re-assembles
+the kernel to measure it and had `build/` hard-coded, so it could not find
+`font8x8.inc` in a sub-make's directory and reported "could not measure" on
+every baked build. It was also quietly wrong for `small`, measuring that
+kernel against `build/`'s `associco.inc` rather than `smallk`'s.
 
 ## 7. Concurrency model (read carefully — this is the crux)
 
@@ -4417,6 +4497,73 @@ value a forgotten path inherits has to be the safe one** — `wm_dmg_wins`
 clearing `[wm_dmg_dk]` for its callers is the precedent (§11.91), and so is
 `fdlg_gate` living in `.text` as a `dw 0`.
 
+#### 11.96.3 One cache per window, because the bound stopped earning its keep
+
+§11.96 says "one cache for the machine, like the menu's save-under… it bounds
+the memory at one block rather than one per window", and that was the right
+trade **while every cache cost the same as every other**. §50.6.4's priority
+ladder ended that: a raise cache is `MEM_PG_TRIV`, the cheapest rank there is,
+so anything that wants the room takes it and the memory is genuinely free. A
+bound on free memory buys nothing, and it was being paid for in
+**last-covered-wins** — covering a cheap window took the cache from an
+expensive one, which is why §11.96.1's third question ("is its repaint
+actually expensive?") had to be asked at all. It is now a question about
+whether the *claim* is worth making, not about who else it robs.
+
+**The slot is the window, so `wm_su_win` is gone.** `wm_su_segs` is one word
+per record and `wm_su_slot` maps a window pointer to its word and to its
+owner tag in one place. The four hooks that used to read
+`cmp bx, [wm_su_win] / jne` — `wm_destroy`, `wm_hide`, `wm_clip_set` and
+`wm_saveu`'s clear — are a bare `call wm_su_drop` now, and each got *more*
+precise as well as shorter: `wm_clip_set` drops the cache of the window that
+is about to draw, where it used to drop whoever happened to hold the single
+one.
+
+**The rect lives in the claim.** `WSU_X1..WSU_Y2` are a four-word header and
+`WSU_IMG` is where the image starts; `wm_su_take` writes the header with one
+`rep movsw` before `gfx_save`, and `wm_su_ck` compares the window's rect *now*
+against the header rather than against four kernel words. This was reached for
+as the cheap answer — four more `MAX_WIN` arrays is 96 bytes, which on the
+slack at the time meant a 512-byte step of `KERN_BUDGET` for bookkeeping — and
+it is the better shape independently: **the rect travels with the pixels it
+describes and cannot get out of step with them.** `wm_su_x1..y2` survive as
+the working rect for one operation, because `wm_su_kb` has to size the claim
+before the claim exists.
+
+**A `mem_pg_own` row is a RANGE.** The tag is a base and the consumer adds an
+ordinal, so the lookup is `d = owner - tag; if d < count then word = base +
+d*2` instead of an equality — unsigned, so a row whose tag is above the owner
+wraps high and fails rather than matching backwards into somebody else's
+array. There is no stride column because there is nothing for it to be: §50.6
+already requires every purgeable block to be named by exactly one **word**.
+`MEM_P_WSAVE`'s low byte moved to `0x10` and `0x10..0x1F` is reserved for the
+range; low bytes are per-rank, so only a future `MEM_PG_TRIV` tag has to avoid
+that block.
+
+Three things are worth knowing before touching it.
+
+**`wm_su_take` still drops first, and now it means something different.** It
+used to mean "one cache for the machine"; it means "this window's previous
+claim, if any" — one window, one claim, or the old block is leaked with
+nothing naming it.
+
+**The shed is not LRU and does not need to be.** `mem_shed_one` takes the
+cheapest record it outranks and, among equals, the lowest in `mem_tab` — so
+with several window caches live it will keep taking the same one. That is
+defensible by construction rather than by luck: they are all `MEM_PG_TRIV`,
+and the rank is the claim that they cost the same to lose.
+
+**The divide is not worth guarding.** `wm_su_drop` runs unconditionally at
+every `wm_clip_set`, so every background painter now pays `wm_ptr2idx`'s 8-bit
+`div` — about 18us on a 4.77MHz 8088, against the two instructions the old
+`cmp` cost. It was left alone deliberately: `wm_clip_set` exists to be
+followed by drawing, and PERFORMANCE.md Part 2 prices the *arrival* of one
+`gfx_*` call at ~756us, so this is 2.4% of the cheapest thing that can happen
+next. A `[wm_su_live]` counter would short-circuit it, and it would drift —
+`mem_pg_forget` zeroes the word on a shed without coming through
+`wm_su_drop`, so the count would only ever read high and the guard would stop
+firing.
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -4450,7 +4597,18 @@ active**, so the bar is rebuilt whenever the active application changes —
 own segment) is a *runtime* table, not static data.
 
 ```nasm
-MENU_APPMAX  equ 4              ; app menus the bar can host
+MENU_APPMAX  equ 5              ; app menus the bar can host (was 4 until
+                                ; §22.12 split the Disk window's File menu
+                                ; and gave Cut/Copy/Paste an Edit menu of
+                                ; their own; a WIDENING, so no package that
+                                ; assembled against 4 is affected, and
+                                ; menu_relayout's own `cmp cx, MENU_APPMAX`
+                                ; is still what a package's count is clamped
+                                ; to). Raising it does not need the bar to
+                                ; be re-measured, because the layout is
+                                ; bounded by [vid_clk_hx] per CELL and never
+                                ; by the count: a title that would reach the
+                                ; clock's band stops the walk (§12.2's .full)
 MENU_BARMAX  equ MENU_APPMAX+2  ; + the System cell, which is always cell 0,
                                 ; + the app-NAME cell (§12.7), which is
                                 ; APPENDED last so the app's own menus keep
@@ -8181,6 +8339,125 @@ simulation needs beyond the LBA: the run is at most 128, so `AL` holds it and
 simulation that cannot tell a read from a write, or one volume's LBA 5 from
 another's, is answering about a disk that does not exist.
 
+### 18.96 Formatting a floppy — the mount's verdict, run backwards
+
+A disk that reads perfectly and is not a FAT12 volume had exactly one thing
+the OS could say about it: `No os8088 disk (A:)`, in the Disk window's header,
+for ever. Every other operating system these machines ever ran could make one.
+`dskw_format` is that, and it is a **high-level format only** — the same line
+§52.3's hard-disk formatter draws, and for a sharper reason here: writing
+sector ID fields is `int 13h AH=05h`, one call per track with a four-byte
+descriptor per sector, and it is the operation that turns a disk this OS
+merely cannot read into one *nothing* can read. What is written is the boot
+sector, both FATs and the root directory: **12 sectors on a 360KB disk and 33
+on a 1.44MB one**, all of them metadata, and the data area is not touched.
+
+| routine | contract |
+|---------|----------|
+| `dskw_fmt_probe` | in: `[disk_drive]` = the volume. Out: CF=0 with AL = a row of `dskw_fmt_tab`; CF=1 with AX = `FERR_*` — the medium could not be read at all (`FERR_IO`), or the volume is not a floppy (`FERR_PROT`). Clobbers AX, flags. **Reads only**, so it is safe to call before the user has agreed to anything, and that is the point: the confirmation names the size it is about to make. |
+| `dskw_format` | in: AL = a `dskw_fmt_tab` row, `[disk_drive]` = the volume. Out: CF=0; CF=1 with AX = `FERR_IO` / `FERR_WPROT` / `FERR_PROT`. Clobbers flags. Writes the boot sector **first** and the root directory last. |
+
+**The geometry is two questions and they have two different answers.** How
+many sectors a track holds is a property of the MEDIUM and is read off it —
+one `disk_read` of CHS (0,0,N) descending from the drive's own figure through
+18, 15, 9, first success wins, which works because `disk_read` derives CHS
+from `[disk_spt]`/`[disk_heads]` and those are ours to set. How many cylinders
+it has is a property of the DRIVE, and it comes from `int 13h AH=08h` — the
+same question DOS's own FORMAT asks.
+
+**A BIOS that will not answer AH=08h is a 360KB machine, and that inference is
+load-bearing.** AH=08h *for floppies* arrived with the AT, which is also when
+1.2MB and 1.44MB arrived — so a ROM old enough to refuse it is a ROM driving
+40-cylinder 5.25" drives, and 9/40 is not a guess but the only thing such a
+machine can be. Measured: neither GLaBIOS nor the 27 Oct 1982 IBM ROM answers
+it, and the 1982 ROM supports no other format anyway. The one genuinely
+undecidable case — 9-sector media in a 1.2MB drive, where 360KB and 720KB are
+indistinguishable — is resolved **downward, to 360KB**, because a 360KB layout
+on 720KB media wastes half a disk and a 720KB layout on 360KB media is a
+volume whose second half does not exist.
+
+#### 18.96.1 Reading cylinder 40 to settle it is WRONG — the negative result
+
+The obvious refinement is to stop asking the drive and read CHS (40,0,1): a
+40-cylinder drive cannot seek there, so the read fails, and a 3.5" drive
+holding 720KB media reads it. It was built, and it fails **two ways at once**.
+
+The lesser one is the case the veto above already names: 5.25" 360KB media in
+a 1.2MB drive, where physical track 40 is inside the 40-track disk's written
+area and answers with logical track 20's data — a confident wrong answer.
+
+The greater one is that it **rests on a read FAILING**, and that is the least
+portable thing there is to depend on across a BIOS, a controller and an
+emulator. Measured: MartyPC's FDC reads sector 18 of a 9-sector track quite
+happily, so a probe built this way reported a 360KB disk in a 360KB drive as
+**1.44MB** — the format that would have been written is 2,880 sectors onto a
+720-sector medium. Every test in `dskw_fmt_probe` is a read **succeeding** for
+exactly that reason, and the descent only ever steps DOWN from what the drive
+says it can do.
+
+The same measurement is why the probe is not simply widened when AH=08h
+refuses: widening searches upward, and upward is the direction whose negative
+cannot be trusted.
+
+| row | media spt | cyl | total | spc | FATsz | root | media byte |
+|-----|-----------|-----|-------|-----|-------|------|------------|
+| 0 | 18 | 80 | 2880 | 1 | 9 | 224 | F0 |
+| 1 | 15 | 80 | 2400 | 1 | 7 | 224 | F9 |
+| 2 | 9 | 80 | 1440 | 2 | 3 | 112 | F9 |
+| 3 | 9 | 40 | 720 | 2 | 2 | 112 | FD |
+
+The four rows are the four standard IBM formats and the table is **not
+computed**: `tools/os88disk.py`'s `GEOMETRY` already pins three of them, this
+is the same arithmetic, and a formatter that re-derives a layout DOS has had
+since 1983 can only differ from it. 1.44MB's FAT is 9 sectors, which is
+`DSK_FAT_SECS` exactly — §18.2 rule 10 refuses a floppy whose FAT is larger,
+so the largest format this can write is the largest one that can be mounted,
+by construction rather than by coincidence.
+
+Four things are load-bearing:
+
+- **The boot sector is written first and the root directory last**, which is
+  the OPPOSITE of §52.3's order and is right for the same reason that one is.
+  There the tool is laying a volume into a partition table that already
+  describes it, so the commit must come last; here the volume being replaced
+  is one nothing could mount anyway, and what an interruption must not leave
+  is a valid BPB over a FAT that was never written. Writing the BPB first
+  means an interrupted format leaves a volume that still fails to mount —
+  and so still offers Format, which is the state the user was already in.
+- **The FAT's first sector is the only one with content**: media byte, then
+  `FF FF`, then zeros. Every other FAT sector and every root sector is a
+  zeroed `dsk_secbuf`, written one sector per call, because `disk_write`
+  advances `ES:BX` per sector and one buffer cannot cover a run.
+- **No volume label entry is written.** It is legal to have none, `disk_mount`
+  filters labels out of the listing anyway, and the alternative is a name the
+  user was never asked for.
+- **`[disk_spt]`/`[disk_heads]` are the format's, not the failed mount's.** A
+  failed mount leaves the 9/2 fallback behind (§18.3), so the writer sets both
+  from its row before the first write, and the full remount afterwards
+  re-reads them off the BPB it has just written — which is also what
+  re-validates the whole thing through the one hostile-BPB pipeline (§18.2)
+  rather than trusting the formatter's own arithmetic.
+
+**It cannot be reached with a mountable volume under it.** `dskw_format` is
+not on the API table and has no `OSAPI_*` slot: the only caller is §22.12's
+menu command, whose predicate is that this window's last mount FAILED. That
+is deliberate and is the same judgement §19.6 makes about `dskw_write_sys` —
+"erase this disk" is not a thing a package should be able to do to the disk
+it happens to be sitting on, and a formatter reachable from a package is one
+`FERR_*` away from being one that is reachable by accident.
+
+**`kern_big` only, and it is the first thing through that seam**
+(docs/KERN-SPLIT-PLAN.md). It costs 1,024 bytes of footprint — one 512-byte
+rung on the image and one on the cold segment — and `kern_small` stood at 512
+bytes of spare, so the alternative was a second raise of the guard the 128KB
+machine lives under. It needs **no ABI parity work**, which is the whole
+reason it can go through the seam cheaply: having no API slot, there is
+nothing for a package to find missing and one `.o88` still serves both
+kernels. What `kern_small` loses is two items on one menu — the rule and
+`Format Disk…` — and its `FMC_*` ids do **not** renumber: the two ids stay
+and both point at `fm_c_nop`, so the two kernels differ by what a user can
+see rather than by a numbering nobody can.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
@@ -10660,14 +10937,24 @@ cells are `font_width + MENU_TITLE_PAD`:
 
 | menu | width | x range | items |
 |------|-------|---------|-------|
-| **File** | 44 | 110..153 | Open · New Folder… · Rename… · Delete · Close Window |
-| **Folder** | 60 | 154..213 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
-| **View** | 44 | 214..257 | as List · as Icons |
-| **Special** | 68 | 258..325 | Timer · Bounce · Restart |
+| **File** | 48 | 112..159 | Open · New Folder… · Rename… · Delete · ──── · Format Disk… |
+| **Edit** | 48 | 160..207 | Cut · Copy · Paste |
+| **Folder** | 64 | 208..271 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **View** | 48 | 272..319 | as List · as Icons |
+| **Special** | 72 | 320..391 | Timer · Bounce · Restart |
 
-325 against a 434 limit is 108px of slack — enough that a longer item
+391 against a 432 limit is 41px of slack — enough that a longer item
 string can never push a *title* off the bar, since item widths do not enter
-the layout at all. `MENU_APPMAX` is 4 and all four are used.
+the layout at all. `MENU_APPMAX` is 5 and all five are used; it was 4 and
+File carried Cut/Copy/Paste as well, until §22.12 needed a sixth item and a
+seven-item File menu stopped being a menu and started being a list.
+
+The slack is 41px rather than 108 because §12.9 snapped the bar to 8px cells
+and widened `MENU_TITLE_PAD`, and because a fifth title costs its own width
+plus that padding. It is still slack in the direction that matters: nothing
+here is measured against the number of menus, only against where the next
+cell's right edge lands, so the fifth title is laid out or it is not and no
+other cell is affected either way.
 
 **Dispatch.** `fm_oncmd` turns (menu, item) into one `FMC_*` id —
 `bl = fm_menu_base[ah] + al`, bounds-checked, then `shl bx,1` and
@@ -11205,6 +11492,60 @@ at the three columns a 320px window fits that is two thirds of the grid: the
 blit would be buying a third of the work at the price of a second exposed-cell
 painter. So the grid stops at `fm_rows_only`, which still leaves the header,
 both buttons and the status line alone, and the blit is the list view's.
+
+### 22.12 Formatting the disk in the window
+
+A floppy that reads and is not FAT12 shows `No os8088 disk (A:)` and nothing
+else — the window is a dead end with a perfectly good disk in it. **File ▸
+Format Disk…** is the way out, and the whole of it is §18.96's two routines
+behind §22's existing confirmation line.
+
+**The predicate is the mount's own verdict**, `FS_MOK == 0` on the acting
+window plus "this volume is a floppy", and both are stable, cheap facts the
+window already carries — §47 rule 5's own test, so `Format Disk…` is
+**greyed** rather than refusing a click. `fm_bar_gate` points the item at its
+`MENU_DIS` twin on the press that opens the bar, which is `ui_loc_gate`'s
+idiom exactly and for `ui_loc_gate`'s reason: nothing relays the bar out when
+a window's mount verdict changes, so a layout-time swap would keep whatever
+it last held.
+
+**What is NOT in the predicate is whether the disk can be read**, and that is
+§47 rule 3 rather than an oversight: the only test is doing the thing, so the
+thing is done and reported. `fm_c_format` calls `dskw_fmt_probe` on the spot —
+reads only — and a medium that answers nothing gets `Disk error` as a toast
+and no armed confirmation. A medium that answers gets a confirmation naming
+the size the probe chose:
+
+```
+Format A: as 360K? Enter=yes Esc=no
+```
+
+which is the one place the user can catch §18.96's undecidable case before it
+costs them anything.
+
+**The confirmation is `FS_EDIT = 5` and it is Delete's, not Rename's.** Enter
+says yes and *every other key* says no — the asymmetry §22 already argues
+for, and this is the strongest case of it in the system: there is no undo, no
+trash, and the operation is not one file but all of them. The probe's chosen
+row is banked at arm time (`fm_fmtrow`) and not re-derived at commit, for the
+reason Rename and Delete work from `fm_onam` rather than from `FS_SEL`: what
+the line asked about must be what happens.
+
+On success the window is re-listed with `fmv_load` at the new volume's root
+and `fmv_bcast` pushes it into any sibling window on the same drive — the
+same pair `fm_edit_commit` ends with, and for the same reason. On failure the
+`FERR_*` is said as a toast (§59.5) and the window is left showing exactly
+what it showed before, which is the disk it still cannot mount.
+
+Two things are worth knowing before touching it. On the machine this project
+is calibrated against the probe costs **no doomed read at all** — `AH=08h`
+refuses, which §18.96 reads as a 360KB drive, so the descent starts at 9 and
+the first candidate answers. A drive that reports 18 pays one doomed read to
+find 720KB media, which is bounded and once per format. And **the separator is a
+`MENU_DIS` item**, so it occupies an item index and therefore an `FMC_*` id:
+`FMC_FMTSEP` maps to a `ret` in `fm_jmp`, because `menu_hover` can never land
+on it but a body may not assume which surface picked it (§22's rule for every
+handler in that table).
 
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
@@ -15953,6 +16294,40 @@ rather than losing a row belonging to something else.
 The pane assertion still uses `CP_ITEMS` rather than the byte, because the
 guard has to hold on the machine that shows every row.
 
+#### 31.10.2 The desktop line — Single, Right, Below
+
+One row of three radios below the Activate button, and it is **one choice,
+not two controls**: a single display has no layout, so a checkbox plus a
+direction would have a fourth state that means nothing. `Single` /
+`Right` / `Below` is §39.19's two bytes as the three arrangements a user can
+actually be in.
+
+It reads the two bytes **live**, the way the Scheduler page reads
+`sched_mode_get` — there is no page-local copy to fall out of step — and a
+click **applies on the spot** and sets `[cp_wdirty]`, which is §31.8 as
+written: the thing happens now, only the record of it waits for the close.
+
+**A machine that cannot extend does not get the line at all**, which is
+§31.10.1's answer one level down. That page stopped being drawn on a
+single-adapter machine rather than carrying a caption apologising for itself;
+a pairing `vid_dual_ok` refuses (§39.19) is the same shape, and the
+alternative here is worse than an apology — it is a *permanently greyed*
+control whose say-why-not (§47 rule 6) would have to displace the Activate
+button's caption, on the one page where the Activate button is the main
+control.
+
+**Nothing is redrawn after a click that took**, exactly as the Activate
+button already documents: `vid_disp_init` re-fits every window and moves the
+desktop, so the `DI`/`BP` this page was handed describe a rectangle that may
+no longer exist. `[cp_dirty]` hands the screen to `ui_task` outside the lock.
+
+**The geometry that had to move is the caption**, from y 96 to 112, with the
+radio row at 96 — the pane is `CP_CH` = 121 tall and the caption is the
+lowest thing on every page by convention, so the new control goes above it
+rather than below. The three radios are on a uniform 74px pitch so the hit
+test is one divide, like the adapter rows above them, and their bands are
+contiguous across the pane's full width.
+
 ## 32. vgabb.inc — the software renderer (double buffering, and §39's 1bpp driver)
 
 **Why it exists.** The original design drew straight into VRAM because
@@ -18467,10 +18842,27 @@ far-calls it through `ovw_desk_rowcalc` like any other overlay→text step.
 
 #### 39.11.3 Remembering it — the `VM` key
 
-`SYSTEM.CFG` gains one byte, key `VM` (§51.5's keyed container), holding a
-`VID_*` kind. `drv_cfg_pack` records `[vid_kind]` — the adapter actually
-running — so on a machine that has never been asked, the file records the
-probe's own answer and a first save changes nothing about the next boot.
+`SYSTEM.CFG` gains **three** bytes, key `VM` (§51.5's keyed container): a
+`VID_*` kind, then §39.19's `[vid_dmode]` and `[vid_dlay]`. `drv_cfg_pack`
+records `[vid_kind]` — the adapter actually running — so on a machine that
+has never been asked, the file records the probe's own answer and a first
+save changes nothing about the next boot.
+
+**It was one byte and the widening bumped the key's `ver` to 2**, which is
+that table's whole compatibility story used as written: an old record's `VM`
+stops matching, the defaults stand — the probe's adapter and Single — and
+every *other* key in the file still loads, because keys are matched by name
+one at a time. A settings disk written by an older kernel therefore loses its
+adapter choice and nothing else, which is a smaller loss than the alternative
+of reading two bytes that were never written.
+
+**The mode and layout are applied before the kind, and survive its refusal.**
+`vid_switch` calls `vid_disp_init`, so a successful switch carries them for
+free; a *refused* switch — the settings disk carried to a machine without
+that card — must still honour them, so `drv_boot` calls `vid_disp_init`
+itself on that path. Both bytes are range-checked before they are stored, on
+`CFG_SCH`'s terms: a value from a future version leaves the default alone
+rather than selecting nonsense.
 
 **It is applied by `drv_boot` and not by `drv_cfg_unpack`**, for the back
 buffer's reason: it is not a store. It sets a video mode.
@@ -18549,7 +18941,7 @@ changes** — drawing is spatially coherent, so the steady state is
 
 | symbol | what it does |
 |---|---|
-| `[vid_ndisp]` | displays the desktop spans; **1** until a second card is brought up (docs/DUAL-DISPLAY-PLAN.md §11 step 3), and 1 for ever on a one-card machine |
+| `[vid_ndisp]` | displays the kernel has **brought up** — 2 after §39.13, 1 for ever on a one-card machine. Not the same question as how far the *desktop* spans, which is `[vid_w]`/`[vid_h]` and is still one display's until docs/DUAL-DISPLAY-PLAN.md step 6 |
 | `[vid_cur]` | which display's geometry is in the live block |
 | `vid_ctx_capture` | AL = display; bank the live geometry into that record |
 | `vid_ctx_act` | AL = display; make it current, **returning immediately if it already is** |
@@ -18566,8 +18958,8 @@ Three things are load-bearing:
   garbage `[vid_cur]` is an index past the array. `cur_sptr` and `dsk_fatwc`
   are the two this tree has already been caught by. The records themselves are
   `.bss` — written before they are read.
-- **`vid_ctx_init` is called from `kmain` and from `vid_switch`, never from
-  `vid_apply`.** `vid_apply` runs from the splash on its first tick, while the
+- **`vid_ctx_init` is called from `kmain`, and never from `vid_apply`.**
+  `vid_apply` runs from the splash on its first tick, while the
   rest of the kernel is still coming off the floppy (§15.3), so a call from
   there into `vidsel.inc` executes what has not been loaded yet: black screen,
   no clue. `viddet.inc` carries the same warning about `cur_unlazy`.
@@ -18579,9 +18971,538 @@ Three things are load-bearing:
   the cause.
 
 **Nothing on a drawing path calls any of it yet.** This is step 1 of
-docs/DUAL-DISPLAY-PLAN.md §11 — the state and the swap, with `[vid_ndisp]` = 1
-— so the screen is byte-identical to the build before it on all three
-adapters, by construction rather than by inspection.
+docs/DUAL-DISPLAY-PLAN.md §11 — the state and the swap — so the screen is
+byte-identical to the build before it on all three adapters, by construction
+rather than by inspection. §39.13 raises `[vid_ndisp]` and still draws nothing;
+step 4 is what first activates a display from a primitive.
+
+### 39.13 Bringing the second card up — `vid_disp_init` (`KERN_BIG` only)
+
+**On a machine with a Hercules *and* a CGA, both cards are programmed at boot
+and both monitors scan os8088's own raster.** Nothing is drawn on the second
+one — `vid_setmode` cleared it, so it is black — which is exactly what this
+step is: the card is *ours* from here on, and step 4 of
+docs/DUAL-DISPLAY-PLAN.md is what puts pixels on it.
+
+**Two displays means `[vid_avail]` is `VID_A_HERC | VID_A_CGA` and nothing
+else.** Every other value is one display, and the test is an equality rather
+than a bit count for a reason per value:
+
+- **`VGA | CGA`** is one card. §39.11.1 sets the CGA bit on every VGA/EGA
+  without probing anything, because mode 6 is a standard BIOS mode there — so
+  a bit count would report two displays on the commonest machine in the tree
+  and programme the VGA twice.
+- **`VGA | HERC | CGA`** is a VGA with a real Hercules beside it, which *is*
+  two cards — and is deliberately not taken. The bitmap cannot say whether the
+  CGA bit is that VGA's mode 6 or a third card, and §39.11.4 already accepts
+  that pairing as one nobody built. Treating it as two displays would put the
+  desktop half on a monitor and half on the same monitor.
+- **One bit** is the ordinary machine.
+
+**The secondary is brought up by making it momentarily current.** `vid_apply`
+is the only routine that turns a `vid_tab` row into the eighteen words a
+display owns plus everything derived from them, and it writes the *live*
+block — so `vid_disp_init` sets `[vid_kind]` to the other kind, calls
+`vid_apply`, calls `vid_setmode`, and banks the result with
+`vid_ctx_capture 1`. `vid_setmode` programming the right card falls out of
+that ordering rather than being arranged: it reads `[vid_kind]` and
+`[vid_seg]`, and both already describe the secondary.
+
+**The way back is `vid_apply`, not `vid_ctx_act`, and that asymmetry is the
+design working.** A swap carries the smallest thing that is genuinely
+per-display, because it has to be cheap enough to sit under a drawing
+primitive (§39.12); `vid_apply` on the way in also rewrote every *desktop*
+word — the dock row, the clock cell, the drive column, the pull-down cap
+(§39.2.1) — and only `vid_apply` puts those back.
+
+Three things about the restore are load-bearing:
+
+- **The primary's card is never re-programmed.** There is no `vid_setmode` on
+  the way back. The primary is already in its graphics mode with the loading
+  screen on it (§15.3), and a second mode set would clear it — so "primary
+  unchanged" is the literal gate for this step and it holds by construction.
+- **`vid_equip`, because `vid_cga_equip` is a one-way door** (§39.11.2).
+  Bringing a CGA up as the *secondary* of a Hercules-primary machine goes
+  through `vid_setmode`'s CGA path, which flips 40:10's bits 5:4 to colour so
+  the XT BIOS's equipment-driven mode set can reach the card at all — and
+  nothing puts them back. Left flipped, `CMD_REBOOT`'s `vid_text` (int 10h
+  AX=0007h) programmes the CGA instead of the MDA: a machine that reboots to a
+  dead mono monitor. It is called *after* `[vid_kind]` is restored, because it
+  reads it.
+- **Display 0 is re-captured**, which is a no-op today — `vid_apply` has just
+  republished the same numbers `vid_ctx_init` banked — and is §39.12's own
+  rule followed mechanically rather than reasoned about instance by instance.
+
+**Called from `kmain`, immediately after `vid_probe_avail`**, which is where
+`[vid_avail]` is filled and therefore the earliest this can run. That puts it
+after the mode set for §39.11.1's reason, and before `mem_init` — it claims
+nothing.
+
+**Display 1 sits at `(display 0's width, 0)`: side by side, secondary on the
+right.** Nothing reads that origin yet, and where the two displays actually
+sit is the Control Panel's question (docs/DUAL-DISPLAY-PLAN.md step 7);
+this is the arrangement its default will be.
+
+**What is still owed, and it is one thing: `vid_switch` does not re-run
+this.** Switching the primary from the Control Panel's Display page leaves
+`vid_ctx` describing the arrangement before the switch, and §39.11.4's
+`vid_blank` darks a card display 1 now owns. Inert while nothing reads either
+— but it stops being inert at step 4, so it is that step's or step 7's and not
+a thing to leave for the field to find.
+
+### 39.14 Drawing on more than one display (`KERN_BIG` only)
+
+**Every drawing primitive takes VIRTUAL desktop coordinates, and the split
+happens inside the renderer.** A rect is intersected with each display's
+virtual rect, and the survivor is translated into that display's own
+coordinates and drawn there — which is §11.3's clip arithmetic with a
+*geometry* attached to each rect rather than only a rect. **The dead zone
+(§39.2.1) costs nothing**: a fragment that lands in no display is drawn by
+nobody, and there is no test for it anywhere.
+
+`vid_disp_of` answers which display contains a virtual point, falling back to
+display 0 rather than failing — a point in the dead zone maps to the primary,
+where the primitive's own edge clip discards it. That is what keeps every hook
+below free of a CF to test. **Its loop walks `vid_ctx` with a pointer rather
+than calling `vid_ctx_ptr`**, and that is a fix rather than a style: the index
+goes to `vid_ctx_ptr` in `AL`, and `AL` is the low byte of the x being tested.
+`mov al, cl` zeroed it, so a point at 1300 was tested as 1280 — which lands on
+the right display nearly always, and moved a pointer stepping across the seam
+onto the wrong side of it (§39.15.4's gate is what found it).
+
+#### 39.14.1 `GFXDISP`, and why it is BELOW `GFXCLIP` and not above
+
+```
+gfx_fill:        GFXCLIP gfx_fill_d       ; clip, in VIRTUAL space
+gfx_fill_d:      GFXDISP gfx_fill_raw     ; split by display, then translate
+gfx_fill_raw:    ...
+```
+
+The four rect entries that already carry `GFXCLIP` — `gfx_fill`,
+`gfx_fill_gray`, `gfx_fill_pat`, `gfx_xor_fill` — carry `GFXDISP` immediately
+under it, and that covers roughly ten public entries and the whole of
+blitting, because `gfx_pixel`/`gfx_hline`/`gfx_vline` are `gfx_fill` with the
+arguments rearranged, `gfx_frame` is four fills, `gfx_xor_rect` decomposes
+into four `gfx_xor_fill` strips, and **`gfx_blit4` emits one `gfx_hline` per
+run** (§5.4).
+
+**The order is the correctness argument.** `wm_clip_tab` holds *virtual*
+rects, so the clip has to be applied before anything is translated; a split
+above it would hand `gfx_clip_run` local coordinates to compare against
+virtual rects. Docs that predate this said "above" — they were written before
+the clip's coordinate space had been thought about.
+
+**Cost when there is one display: `cmp byte [vid_ndisp], 1` and a taken
+branch**, then fall straight through into the body. Nothing else changes on
+any machine that is not the two-card 5150, which is the same bargain
+`[bb_on]` and `[wm_clip_n]` already make. On `kern_small` the macro expands to
+**nothing at all**.
+
+#### 39.14.2 The shapes that are not rects
+
+`font_char`, `font_run`, `ico_core`, `gfx_scroll`, `gfx_save`/`gfx_restore`
+and `gfx_line` cannot be split into rect fragments — they clip per whole cell,
+per whole shape, or per pixel — so each takes `GFXDENTER`/`GFXDLEAVE` at its
+public entry instead: the display containing the shape's **anchor** is made
+current, the coordinates are translated into it, and the routine's existing
+edge clip does the rest.
+
+**A shape that straddles the seam is therefore drawn on one display and cut at
+its edge**, exactly as it is cut at a screen edge today. That is a decision,
+not an oversight: it is §39.14.3's rule for the cursor applied to every other
+whole-shape primitive, and on two physically separate monitors with a bezel
+between them there is nothing to see. It also makes `gfx_scroll`'s refusal of
+a straddling blit free — the existing `cmp cx, [vid_cw] / jae .no` is that
+test once the rect is local.
+
+**`[gfx_dnest]` is what makes the two hooks compose.** `font_run`'s fallback
+path is `gfx_fill` + `font_str`, and `gfx_line`'s axis-aligned cases are
+`gfx_hline`/`gfx_vline`: a translated caller reaching a hooked callee would
+translate twice. So the outermost hook raises a nesting count and every hook
+under it is a compare and a branch. It is a count rather than a flag because
+`GFXDLEAVE` has to know whether it is the one that owes the restore.
+
+#### 39.14.3 Nothing restores the display; the LOCK HOLD bounds it
+
+The last display drawn on stays current, and `gfx_unlock` puts display 0
+back — beside the two stores that already retire the clip region and the
+disabled pen, and for their reason. **A window's repaint therefore pays one
+swap and not two per primitive**: drawing is spatially coherent, so the
+steady state inside a burst is `vid_ctx_act`'s two compares.
+
+This is safe only because **the cursor brackets itself** (§39.15.2).
+`cur_unlazy` runs at the top of `GFXCLIP`, above every hook here, and the
+deferred hide (§7.1.4) reads `[vid_rseg]` and the display's stride to erase
+the arrow — through whatever display happened to be live. While that was the
+danger, each hook restored what it entered from; once `cur_put`/`cur_get`/
+`cur_move` name their own display, the restores were pure cost.
+
+`vid_ctx_act` publishes the active display's origin as `[vid_ox]`/`[vid_oy]`,
+which is what every hook subtracts. They are outside §39.12's eighteen-word
+run on purpose — the run is asserted contiguous and is what the *renderer*
+reads, and an origin is not renderer state.
+
+#### 39.14.4 What still draws in display 0's coordinates, and why that is safe
+
+**Only `wm_paint_all`'s desktop dither is issued in virtual coordinates
+today.** Every other caller in the kernel draws inside the chrome or inside a
+window, and both are on the primary — `[vid_w]`/`[vid_h]` are still display
+0's extent, so the window manager, the menu bar, the dock and the drive
+column all place things exactly where they placed them before. Virtual and
+display-0 coordinates are the same numbers, so those paths pass through
+`GFXDISP` and come out unchanged, byte for byte.
+
+That is also the one caveat worth writing down: **`wm_clip_tab` is virtual and
+is not translated**, which is correct only while every window is on display 0.
+Growing `[vid_w]`/`[vid_h]` to the union — docs/DUAL-DISPLAY-PLAN.md step 6 —
+is what makes a window's clip region reach the second display, and that step
+owes the translation.
+
+The dither itself is one `gfx_fill_gray` per display, each in virtual
+coordinates: display 0's is the call that was always there (menu bar to dock),
+and every other display's is its whole extent, since §39.14's chrome lives on
+the primary alone.
+
+### 39.15 The pointer crosses; the arrow jumps (`KERN_BIG` only)
+
+**`[mouse_x]`/`[mouse_y]` are VIRTUAL desktop coordinates** — they always
+were, on a machine whose desktop was one display — and that is what keeps
+`OSAPI_MOUSE`, §57's `'MO'` block and `tools/os88mouse.py` meaning exactly
+what they meant. **`[cur_drawn_x]`/`[cur_drawn_y]` are virtual too**, which is
+the decision that made this small: every comparison in `mouse.inc` is between
+two virtual positions, and only the two routines that turn a position into a
+framebuffer *address* have to know about displays at all.
+
+#### 39.15.1 Two subtractions, in `cur_rect` and `cur_geom`
+
+Those two are the whole translation. `cur_geom` computes the cell's offset,
+shift and edge clip; `cur_rect` gives the save-under its rect — and §7.1's own
+rule is that they are ONE place each, because a save and a restore that
+disagree by a byte smear the arrow permanently. Each subtracts
+`[vid_ox]`/`[vid_oy]`, the active display's origin (§39.14.3), and everything
+else in the module keeps working in virtual space untouched:
+
+- `cur_move_mono` banks `d = newcol - oldcol` and `mv_oy - cur_drawn_y` — both
+  **differences**, so an origin cancels out of them;
+- `mou_isr` and `cur_lazyend` ask "has the pointer moved since the arrow was
+  drawn", which is a comparison of two virtual positions;
+- the fused 1bpp cursor (§7.1), both save buffers and §7.1.2's
+  write-every-byte-once pass are unchanged, line for line.
+
+The subtraction is unconditional rather than gated on `[vid_ndisp]`, because
+**display 0 is always at the virtual origin** — so on every machine with one
+card it subtracts zero.
+
+#### 39.15.2 `[cur_disp]`, and the bracket that makes it true
+
+The arrow is on one display, named by `[cur_disp]`, and `cur_put`, `cur_get`
+and `cur_move` each make it current before touching a framebuffer and put the
+previous one back. They have to own that themselves: `cur_get` is reached from
+`gfx_lock`'s deferred hide and from the **mouse ISR**, neither of which is
+inside a §39.14 drawing hook, and the display live at either moment is
+whatever the last primitive left.
+
+That is also what lets §39.14.3 leave the last-drawn display current instead
+of restoring it per primitive: with the cursor naming its own display, the
+only reader that could be caught out by a stale one is no longer a reader of
+it at all.
+
+#### 39.15.3 It does not straddle; it jumps
+
+§7.1.2's move writes every framebuffer byte exactly once by walking the old
+cell and the new cell together, taking the overlap's background from the save
+buffer. A cell straddling the seam would span two cards with two strides and
+two segments and would need that loop rewritten.
+
+**So `cur_move` asks which display the new position is on first.** Same
+display: the fused pass, unchanged. Different: `cur_get` on the display being
+left and `cur_put` on the one being arrived at — the arrow erased whole and
+drawn whole, one cell in flight at a time. The visible cost is that the 8x12
+cell does not bleed across the seam, and on two monitors with a bezel between
+them there is nothing there to bleed onto.
+
+#### 39.15.4 The clamp is not a rectangle
+
+The virtual desktop is not a rectangle (§39.2.1), so `0..[vid_wm1]` is the
+wrong shape as soon as there are two displays: it would let the pointer walk
+into the dead zone and vanish. `mou_clamp` is the rule instead, and it is two
+lines:
+
+> **If the new position is inside SOME display, take it. Otherwise clamp it
+> into the display the arrow is currently on.**
+
+That gives every behaviour the seam needs without naming any of them. Walking
+right off display 0's edge at a y both displays cover lands inside display 1
+and is accepted — the pointer crosses. Walking right off display 1's *outer*
+edge is inside nothing, so it clamps to display 1. Walking down off display 0
+below display 1's left edge is inside nothing, so it clamps to display 0's
+last row rather than disappearing into the gap. And walking left from display
+1 at a y display 0 covers crosses back.
+
+Both the serial ISR and §9.6's keyboard pointer go through it, because they
+are the same question asked twice. **On one display it is the old per-axis
+clamp**, unchanged: `[vid_wm1]`/`[vid_hm1]` are display 0's extent there.
+
+The clamp is 2-D, so the ISR stages the new x rather than storing it before y
+is known — the one structural change to `mou_isr`, and the reason a
+per-axis clamp could not simply be replaced in place.
+
+#### 39.15.5 What a click on the second display does, which is nothing yet
+
+The event records carry the virtual position, `wm_hit` walks window rects, and
+every window is still on display 0 — so a press over the second display finds
+no window and reaches the bare desktop, which hands the menu bar to Locator.
+That is correct rather than temporary: it is what clicking empty desktop has
+always done. Windows reach the second display at docs/DUAL-DISPLAY-PLAN.md
+step 6, and `wm_hit` needs nothing then either, because it has been comparing
+virtual coordinates all along.
+
+### 39.16 The desktop spans both; the chrome does not (`KERN_BIG` only)
+
+**`[vid_w]`/`[vid_h]` become the UNION of the display rects**, so a window may
+be placed, dragged and grown anywhere on the virtual desktop — and every UI
+site that already read them keeps working, because the question it was asking
+("how big is the desktop") is the one it is still being answered.
+
+**The chrome does not span it, and asking it to would be wrong rather than
+hard.** The menu bar, the dock strip and the drive column are full-width
+strips whose geometry comes from `[vid_w]`; spread over 1360 virtual pixels
+they would put the clock and half the dock on the other monitor, split across
+two cards with two strides. So they measure themselves against
+`[vid_pw]`/`[vid_ph]`/`[vid_pwm1]`/`[vid_phm1]` — the **primary's** extent —
+and a second monitor is pure desktop and windows, which is what a second
+monitor is *for*.
+
+**`vid_apply` publishes those four for whichever display it is applying, and
+`vid_disp_init` applies the primary LAST**, so they end up the primary's
+without a special case anywhere. `vid_desk_union` then grows `[vid_w]`,
+`[vid_h]`, `[vid_wm1]` and `[vid_hm1]` past them and touches nothing else —
+which is why every derived chrome word (`[vid_dock_y0]`, `[vid_clk_hx]`,
+`[vid_ymax]`, `[vid_popmax]`, `[vid_desk_z*]`) is already right: `vid_apply`
+computed them before the desktop grew. On a machine with one display the two
+sets are the same numbers and nothing above happens at all.
+
+**§11.2's fullscreen surface takes the primary too**, for now: `wm_fullscreen`
+sizes a window to `[vid_pw]`/`[vid_ph]` rather than the union, so an app that
+goes fullscreen covers one monitor and behaves exactly as it does today.
+Choosing *which* display by `wm_disp_of` is docs/DUAL-DISPLAY-PLAN.md step 6b.
+
+#### 39.16.1 A window is fitted into a DISPLAY, not into the desktop
+
+`wm_fit` clamped a frame into `[vid_w]` × `[vid_dock_y0]`. Against a union
+that is the wrong shape twice: it would allow a window in the dead zone, and
+it would apply the **primary's dock row** to a display that has no dock.
+
+So `wm_fit` picks the display the window's origin is on (`vid_disp_find`,
+falling back to the primary) and clamps into *that* — its own width, its own
+height, and `[vid_dock_y0]` only when it is the primary. A window whose origin
+is in the dead zone is moved to the primary, which is the only answer that
+cannot leave it unreachable.
+
+`ui_drag` and `ui_grow` end in `wm_fit`'s rule for the same reason, so the
+one place that knows how a window meets a display edge stays one place. **A
+drag therefore crosses the seam** — the frame is clamped only when the origin
+lands somewhere no display has — and a window straddling the two cards is
+drawn by §39.14's split, one fragment per display, with no code in the window
+manager aware of it.
+
+### 39.17 A window belongs to ONE display — `wm_disp_of` (`KERN_BIG` only)
+
+**The test is the window's CENTRE, then its ORIGIN, then the primary.** Overlap
+area is the intuitive answer and it needs a 32-bit multiply — 720 × 348 is
+250,560 and overflows a word — so "which display does more of this window
+touch" costs a `mul` pair per display on a machine whose whole design is about
+not paying for arithmetic. The centre is one point-in-rect test per display and
+lands on the same answer in every case anybody will construct. The ladder has
+three rungs because the virtual desktop is not a rectangle (§39.2.1): a centre
+can fall in the dead zone, and so can an origin.
+
+**It is one rule and not two, which is the point.** Both fullscreens use it,
+`wm_zoom` uses it, and `fsx` will — so they cannot drift about which monitor an
+app is on.
+
+#### 39.17.1 §11.2's fullscreen takes that display, and the chrome survives
+
+`wm_fullscreen` sizes the window to `wm_disp_of`'s answer rather than to the
+primary, so an app that goes fullscreen covers **one monitor**. On the second
+one, the menu bar, the dock and the drive column are all still on screen and
+still clickable — which is the whole of what a second monitor buys a
+fullscreen app.
+
+**`wm_fs_vis` is what makes that true, in one place.** It answers *"is a
+visible fullscreen window covering the chrome"*, and the chrome is the
+primary's — so a fullscreen window on any other display answers **no**, and
+the four painters that ask (`menu_draw_bar`, `dock_paint`, `fprog`,
+`wm_paint_all`) draw the bar and the strip exactly as they would with no
+fullscreen window at all. `wm_paint_all`'s "start the walk AT the fullscreen
+window, everything below is covered" follows for free, because that
+optimisation is gated on the same answer and is only sound when the cover is
+total.
+
+**`ui.inc`'s three input sites ask it too**, where they used to test
+`[wm_fs] != 0`: a press in rows 0..19 goes to the menu bar unless something is
+actually over it. That is the same correction, and testing the latch instead
+of the predicate is what would have made the bar unreachable on a machine
+where it is plainly visible.
+
+**The damage a fullscreen window leaves is its own rect**, read out of the
+record, rather than `0,0`..`[vid_pwm1]`,`[vid_phm1]`. On one display those are
+the same four numbers; on two, the constant would repaint the primary because
+a window on the secondary went away. The record still holds the fullscreen
+rect at both sites — `wm_fs_drop` has not run yet — so it is the shadow-free
+rect and nothing else.
+
+#### 39.17.2 Zoom follows the window, not the machine
+
+§11.95's "standard state" is *the whole live screen*, and on a virtual desktop
+that has to mean the display the window is on: zooming a window on the second
+monitor must not move it to the first. `wm_disp_span` answers the origin and
+width, `wm_zoom_xmax` the largest legal x for a given width, and both are
+`wm_disp_of` again. The restore path's clamp floors at that display's left
+edge rather than at 0, for the same reason.
+
+### 39.18 Inside an fsx bracket the machine is single-display again
+
+**That is the whole design of §53 on two monitors, and it is what makes it
+nearly free.** `fsx_run` picks the display with `wm_disp_of` (§39.17), makes it
+the *only* display at the virtual origin, and every §53 contract is then
+exactly what it is today — `fsx_mode`, the FSI block, `fsx_wait`,
+`FSXF_KEEPWORKER`, `FSXF_FASTTICK`. **No fsx app needs a line.**
+
+**`[vid_kind]` moves to that display's adapter**, which is what makes it work
+rather than merely look right: `fsx_caps`, `fsx_mode` and `vid_setmode` all
+read it, and `vid_apply` then republishes the live block, the desktop words
+and §39.16's chrome extent out of `vid_tab` in one call, with no second
+opinion. The context record carries the kind for exactly this — outside the
+eighteen-word run, because the run is what the *renderer* reads and an adapter
+kind is not renderer state.
+
+**The other displays blank.** Nothing can maintain them: the kernel does not
+run inside the bracket (§53.1), so a live card would show a frozen desktop.
+§39.11.4's argument unchanged, and it costs two `out`s with the card's sync
+preserved.
+
+**A SAME-MODE bracket still changes the geometry**, which is the trap §53.7
+does not lead you to expect. Paint (§42.7) sets no mode at all and takes the
+bracket purely for the lock — and on two displays its content origin still
+moves from virtual (720, 0) to (0, 0), because the machine it is running on
+became a different shape. Entering a bracket may change the geometry even when
+it does not change the mode; `OSAPI_VIDEO` answers the bracket's display while
+one is live, so an app that reads the screen size the ordinary way keeps
+working.
+
+#### 39.18.1 Unblank AFTER the repaint, and not with `vid_setmode`
+
+Two orderings, both §39.11.2's species.
+
+**The repaint comes first.** Blanking gates the video *signal* and not memory,
+so a blanked card's framebuffer still holds the desktop as it was when the
+bracket started — minutes stale, on a monitor the user has not been looking
+at. Unblanking first shows that frame and then paints over it. Restore order
+is therefore: the desktop's geometry back → `wm_paint_all` → unblank.
+
+**And unblanking is not `vid_setmode`.** Re-running the mode set on a card
+whose mode never changed buys a 32KB clear nobody asked for and a 6845 sync
+transient somebody might see. `vid_unblank_kind` is the exact inverse instead:
+the Hercules' pair is the two writes `vid_setmode` itself makes (3BFh graphics
+allowed, then 3B8h graphics + page 0 + video), and the CGA's comes from the
+BIOS's own shadow of 3D8h at **40:65h** — that register is write-only on the
+card, so the ROM's record is the only honest source for what its mode set
+left there.
+
+**The two cards go dark differently, and both are correct.** A Hercules with
+3B8h bit 3 clear **stops scanning** — the CRTC is held and the card produces
+no frames at all; a CGA with 3D8h bit 3 clear **keeps scanning and gates its
+output**, so it still drives sync and shows black. Nothing in the kernel
+depends on the distinction, and any instrument aimed at this does: measured
+on a cycle-accurate 5150, the Hercules goes 163 frames/s → 0 while `fbuf`
+keeps handing back the frame it last rasterised, and the CGA holds ~187
+frames/s while its lit pixels go 64,000 → 0. So *dark* here is **stopped
+scanning or scanning nothing**, and a test that asks only one of those passes
+a kernel that never wrote the other card's port (`tests/fsxdisp.py`, which had
+exactly that bug and could only see it on a Hercules-primary build).
+
+**`fsx_caps` answers for the display the asking window is on.** Inside a
+bracket that is `[vid_kind]`, which §39.18 has already moved; outside one it
+is the frontmost window's display, because an app greying its own mode menu
+(§47) is frontmost by construction. On a Hercules+CGA machine that is `0x011`
+or `0x00F`, so Mode X is refused either way — and `fsx_mode` re-checks the
+same bit against the live `[vid_kind]` once the bracket has been entered,
+which is the answer that binds.
+
+### 39.19 Single or Extend, and where the second display sits
+
+Two bytes, `[vid_dmode]` (0 = Single, 1 = Extend) and `[vid_dlay]`
+(`VID_L_RIGHT` = 0, `VID_L_BELOW` = 1), and one routine reads them:
+`vid_disp_init`, which is the only thing in the kernel that ever writes a
+`vid_ctx` origin or `[vid_ndisp]`. Everything §39.13–§39.18 built is downstream
+of those two bytes and none of it knows they exist.
+
+`vid_disp_init` is therefore **re-runnable**, not a boot-time one-shot. Going
+to Extend brings the second card up, places display 1 and grows the desktop to
+the union; going to Single blanks it, sets `[vid_ndisp]` = 1 and shrinks the
+desktop back to the primary. Both ends run `vid_apply` on the primary, which
+is what re-homes the pointer and re-publishes §39.16's chrome extent, and both
+leave the caller owing a repaint — the Control Panel posts `[cp_dirty]`,
+because the geometry it was drawn against no longer exists (§31.10's rule for
+the Activate button, unchanged and now shared).
+
+**`vid_dual_ok` is the predicate**, and it is the §31.3 idiom rather than a
+test written out three times — `vid_disp_init` acts on it, §31.10.2's row is
+drawn only when it says yes, and a click in that row's band is refused when it
+says no. `[vid_avail] == VID_A_HERC | VID_A_CGA` exactly.
+A VGA machine's CGA row *is* the VGA doing mode 6 (§39.11.1) and cannot be a
+second display; a VGA + Hercules pairing is a real machine this build does not
+extend. The renderer split is general and this gate is not, deliberately —
+what is missing for VGA is the mode set ordering and a second `vid_ctx` kind
+that decodes A000, not anything in §39.14.
+
+#### 39.19.1 The default is Single, because a card is not a monitor
+
+A machine that has never been asked comes up on one display, and that is the
+conservative answer rather than the timid one. The kernel can detect a second
+*card*; nothing it can do detects a second *monitor*, and a Hercules card
+with nothing plugged into it is an ordinary thing to find in a 5150. Extending
+onto it puts half the desktop, and every pointer position in that half, on
+glass that does not exist — and the pointer is how the user would reach the
+control that turns it off.
+
+That is §39.11.3's own reasoning about a settings disk carried between
+machines: *a machine must not boot to a dead monitor*. The refusal there is
+made on a fact the kernel has; here there is no such fact, so the default is
+made on the recoverable side and the Control Panel is where the user says yes.
+
+It costs the one thing a default can cost — a two-monitor machine has to be
+told once — and that once is recorded in `SYSTEM.CFG` like every other
+setting.
+
+#### 39.19.2 Right or Below, and why that is the whole of it
+
+The layout offers two placements for the second display and not four, because
+the other two are already reachable: **the primary is always at the virtual
+origin**, so which monitor is on the left is answered by which card is
+primary — the choice sitting directly above it on the same page.
+
+| want | primary | layout |
+|---|---|---|
+| Hercules left, CGA right | Hercules | Right |
+| CGA left, Hercules right | CGA | Right |
+| Hercules top, CGA bottom | Hercules | Below |
+| CGA top, Hercules bottom | CGA | Below |
+
+All four arrangements, and the degree of freedom given up is *which monitor
+carries the menu bar* — always the left or top one. That is not an oversight
+being rationalised: the chrome measures itself against the display it is drawn
+on (§39.16) and reaches it by drawing at x = 0, so a primary anywhere but the
+origin means every strip, zone and dock tile in the machine carries the
+primary's virtual origin. Buying the fourth degree of freedom costs an
+addition at every chrome site, and the thing it buys is the Macintosh
+convention already being violated.
+
+**Both origins stay non-negative by construction**, which is the property
+`vid_disp_find`'s unsigned compares, `vid_desk_union`'s bounding box from
+(0,0) and `mou_clamp` all rest on. There is no signed virtual coordinate
+anywhere and this is why.
 
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
@@ -29221,8 +30142,35 @@ Everything past that first word belongs to the section owning the block
    call (docs/FIELD-NOTES.md 10). Anything with that shape belongs here rather
    than in the package.
 6. **Prefer publishing a POINTER to state that already exists** over copying
-   it. Both current blocks are three or four words of descriptor naming spans
-   the kernel already keeps; neither costs a byte of `.bss`.
+   it. Every current block is three or four words of descriptor naming spans
+   the kernel already keeps; not one costs a byte of `.bss`.
+
+### 57.4 `VD` — the display block (§39.11–§39.19)
+
+Nine words: the tag, then a pointer each to `[vid_kind]`, `[vid_avail]`, the
+`[vid_ndisp]` run (`ndisp`, `cur`, `ox`, `oy`, `dmode`, `dlay` — six bytes
+under one pointer, which is *why* `[vid_dmode]` and `[vid_dlay]` sit after
+`[vid_oy]` rather than beside `[vid_avail]`), `[cur_disp]`, the `vid_ctx`
+array and its stride, and finally `vid_w`/`vid_h` and `vid_pw`/`vid_ph` — the
+desktop against the chrome extent, which is §39.16's own assertion in two
+words. Rule 6 throughout: nothing is copied and the block costs no `.bss`.
+
+**A `kern_small` kernel publishes the first three and zeroes the rest**, and
+that is the honest answer rather than a gap: it is single-display by
+*construction*, not by setting, so there is no arrangement byte to report and
+a reader that invented a 1 would be quoting memory that is not there.
+
+**It is unconditional, for the mouse and clock blocks' reason.** A dual-display
+arrangement is a question about two real cards and two real monitors, so it has
+to be answerable in the build the field machine is actually sent — and it is
+the one part of §39 no emulator can settle, because what an emulator cannot
+show is a monitor that is not plugged in.
+
+`sysbench` prints it as one section per display: the adapter, the virtual
+origin, the content size, the stride and bank count, and the framebuffer
+segment — plus the desktop union against the chrome extent, which is the pair
+that says whether §39.16 is intact, and the dead zone's size, which is the
+question `ui_drag_dead` exists to answer.
 
 ## 58. debug.inc — DEBUG.DRV, the serial monitor (`drivers/debug/debug.asm`)
 

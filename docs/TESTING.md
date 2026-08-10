@@ -717,6 +717,15 @@ emulator, builds an image or checks a document. Most of it is one file doing
 one job and belongs at the top level, which is where `os88marty.py`,
 `os88disk.py`, `mouse.py` and the rest are.
 
+A few of them are **gates in their own right**, and are run the same way the
+`tests/` packages are — `python3 tools/<x>.py [machine]` against a built tree:
+`sucheck.py` (the raise cache, SPEC.md §11.96 — see "Prefer a self-checking
+harness" below for the way it once passed without testing anything) and
+`tools/notepad/pixcheck.py` (Note Pad's incremental redraw against a forced
+full repaint). `tests/dualcheck.py` is the same species living on the other
+side of the line, because what it drives is a machine rather than a program
+(two adapters in one box, §39.11.1).
+
 **A tool that grows into several files gets a directory, and the directory is
 named for WHAT IT DRIVES**, not for what it does:
 
@@ -1274,6 +1283,25 @@ time, two rows whose relative sizes are known in advance, a ratio you can
 recompute by hand from the columns next to it. A harness that reports one
 number per run is one you have to trust.
 
+**And the sharper form of the same rule: a gate must not be able to pass by
+doing nothing.** `tools/sucheck.py` — the raise cache's gate (SPEC.md §11.96)
+— covered Solitaire by clicking a hard-coded (300, 40) on the Disk window's
+title bar, and on the geometry it actually produces that point is **inside
+Solitaire's own rect**. So the click went to the window that was already
+frontmost, nothing was raised, nothing was covered, `wm_su_take` was never
+entered — and the run reported *78 differing bytes of 128,000* and PASS,
+because comparing the screen with itself is the best possible score. A healthy
+run reports 124. **The vacuous figure was better than the real one**, which is
+the failure mode to design against: a number in the right range is not
+evidence that the thing under test ran. Two fixes, and it wants both — the
+click point is now computed from the window rects read out of the guest and
+asserts that an uncovered strip exists, and the claim map is an assertion
+rather than a note, so "the cache was never taken" fails instead of
+explaining itself away. It cost a session's worth of counters in `wm_su_take`
+to find, and the counters were only reached for because the claim map was
+empty; had the cache been small enough to miss, the gate would still be
+green and still be testing nothing.
+
 ### What the emulator cannot show at all
 
 Not "shows inaccurately" — cannot show. **Do not call all of these
@@ -1413,9 +1441,13 @@ middle of that range.
 > which sits perfectly still for seconds before the floppy is touched
 > (measured — an 8.3 s "boot" showing a quarter of the desktop's lit pixels),
 > and "has the card left text mode" hangs the full timeout on Hercules, whose
-> MDA reports text mode in every mode. The gate is the **menu bar's white
-> field**, read through `vram` on the 1bpp cards and `fbuf` on VGA. CGA 17.5 s,
-> Hercules 16.1 s, VGA 7.1 s, against the 26 s fixed sleep it replaces.
+> MDA reports text mode in every mode. The gate is the **desktop** — the menu
+> bar's white field, the 1px black rule under it and the dock strip, three
+> facts from ONE read of the screen, because a gate and a stillness test that
+> read it separately can answer about a state that never existed on an
+> emulator running the guest faster than real time (docs/MARTYPC-DEBUG.md).
+> Read through `vram` on the 1bpp cards and `fbuf` on VGA. CGA 4.6 s,
+> Hercules 4.7 s, VGA 7.1 s, against the 26 s fixed sleep it replaces.
 >
 > `m.sym("fpg_on")` — or `python3 tools/os88sym.py --all` — is where a kernel
 > symbol lives. **Never take one from `nasm -l`.** For anything in `.bss` the

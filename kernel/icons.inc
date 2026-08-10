@@ -48,7 +48,9 @@ icon_draw:
     mov al, [si+1]              ; AH still 0
     mov [ico_h], ax
     add si, 2                   ; SI -> body (mask rows first)
+    GFXDENTERCD                 ; whole-shape, like a glyph (SPEC.md 39.14.2)
     call ico_core
+    GFXDLEAVE
     pop es
     pop bp
     pop di
@@ -78,7 +80,9 @@ icon_draw16:
     push es
     mov word [ico_ww], 1
     mov word [ico_h], 16
+    GFXDENTERCD                 ; whole-shape, like a glyph (SPEC.md 39.14.2)
     call ico_core
+    GFXDLEAVE
     pop es
     pop bp
     pop di

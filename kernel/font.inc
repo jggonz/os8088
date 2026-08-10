@@ -110,6 +110,9 @@ font_char:
     push si
     push di
     push es
+    GFXDENTERCD                 ; the cell goes WHOLE onto the display holding
+                                ; its top-left corner (SPEC.md 39.14.2), and
+                                ; the two edge tests below are that display's
 
     cmp al, FONT_FIRST          ; unprintable -> space -> nothing to draw
     jb .done
@@ -206,6 +209,7 @@ font_char:
     mov ax, 0xFF08
     out dx, ax                  ; GC8 Bit Mask = FF (default)
 .done:
+    GFXDLEAVE
     pop es
     pop di
     pop si
@@ -529,6 +533,9 @@ font_run_x:
     push dx
     push si
     push di
+    GFXDENTERCD                 ; ...and a run with it - its .slow path is
+                                ; gfx_fill + font_str, which the nesting count
+                                ; keeps from translating a second time
 
     mov [font_rn_fg], al
     mov [font_rn_bg], ah
@@ -616,6 +623,7 @@ font_run_x:
     add cx, 8
     jmp short .cells
 .out:
+    GFXDLEAVE
     pop di
     pop si
     pop dx

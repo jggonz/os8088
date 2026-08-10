@@ -287,7 +287,21 @@ byte.
 overlay/cold boundary is checked on both. `checkdocs`, `checkreadme` and the
 `%error` guards inside `kernel.asm` are all per-build and need nothing.
 
-**Neither baseline is blessed in this round**, deliberately: big's is stale by
+**Both are blessed now, and the first thing the pair reported is the thing one
+baseline could not.** The dual-display round merged with a round of
+sound/memory work that landed **+145 bytes of `.text` in BOTH** — shared code,
+so neither variant escapes it — and the two answered differently: big had 298
+bytes of image-rung slack and absorbed it, while **small crossed a rung**
+(112 → 113 steps of 512) and now stands at **512 spare, one step**, against
+big's 2,560. That is the split working as designed rather than a problem with
+it: *small is the tighter product and shared growth is what squeezes it*, and
+`kernsplit` at the same moment went from "big costs +512 over small" to **"same
+size, DIFFERENT BYTES"** — both at 162 sectors, big's `%ifdef KERN_BIG` code
+now fitting inside the padding small's own growth opened up. Neither figure
+would have been visible with one flat baseline.
+
+**Neither baseline was blessed in the round that built this**, deliberately:
+big's was stale by
 the toast round's +885 bytes (it predates that merge, which should have blessed
 and did not), and `--bless` regenerates the module and theme tables as well — a
 large mechanical diff that would swamp the review of the split itself. `make`
