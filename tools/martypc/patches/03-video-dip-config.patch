@@ -1,0 +1,138 @@
+Add `video_dip` to the machine config: SW1-5/6 as a SETTING
+
+The 5150's SW1-5/6 pair tells the BIOS which display is PRIMARY, and it is
+independent of what is installed - a machine can hold an MDA and a CGA at once
+and the switches still name one of them. Upstream derives those bits from the
+card list ("any CGA present -> CGA hires"), so a two-card machine always
+reports colour whatever order the cards are in, and a mono-primary two-card
+5150 cannot be expressed at all.
+
+os8088 needs it because SPEC.md 39.1's vid_detect reads exactly these bits back
+out of int 11h to choose its adapter, and the machine the project is
+calibrated against holds a Hercules AND a CGA with the switches set to mono -
+so every emulated two-card machine booted the OS on the wrong card. SPEC.md
+39.11.1's vid_cga_alias runs ONLY when the mono card is primary, which is why
+its bug survived: the direction the emulator could reproduce was the one where
+the routine never runs.
+
+  video_dip = "mda" | "cga_lores" | "cga_hires" | "expansion"
+
+Optional; absent means derive it as before, so every existing config is
+unaffected.
+diff --git a/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs b/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
+index 067d3178..d74d6ff2 100644
+--- a/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
++++ b/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
+@@ -52,6 +52,7 @@ use marty_core::{
+         SerialMouseConfig,
+         SoundDeviceConfig,
+         VideoCardConfig,
++        VideoDipSetting,
+     },
+     machine_types::{HardDiskControllerType, MachineType},
+ };
+@@ -86,6 +87,9 @@ pub struct MachineConfigFileEntry {
+     #[serde(default)]
+     speaker: bool,
+     ppi_turbo: Option<bool>, // This bool is an option so that it is tri-state - missing means no turbo feature, true means ppi high = turbo, false means ppi low = turbo.
++    // Which display SW1-5/6 claims is primary. Missing = derive it from the
++    // installed cards, which is the behaviour this replaces.
++    video_dip: Option<VideoDipSetting>,
+     fdc: Option<FloppyControllerConfig>,
+     hdc: Option<HardDriveControllerConfig>,
+     serial: Option<Vec<SerialControllerConfig>>,
+@@ -461,6 +465,7 @@ impl MachineConfigFileEntry {
+     pub fn to_machine_config(&self) -> MachineConfiguration {
+         MachineConfiguration {
+             speaker: self.speaker,
++            video_dip: self.video_dip,
+             ppi_turbo: self.ppi_turbo,
+             machine_type: self.machine_type,
+             cpu: self.cpu.clone(),
+diff --git a/crates/marty_core/src/bus/mod.rs b/crates/marty_core/src/bus/mod.rs
+index b52c67bf..39d5182b 100644
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -1002,6 +1002,7 @@ impl BusInterface {
+                 false,
+                 video_types,
+                 num_floppies,
++                machine_config.video_dip,
+             )));
+             // Add PPI ports to io_map
+ 
+diff --git a/crates/marty_core/src/devices/ppi.rs b/crates/marty_core/src/devices/ppi.rs
+index d34c1956..fc5fc098 100644
+--- a/crates/marty_core/src/devices/ppi.rs
++++ b/crates/marty_core/src/devices/ppi.rs
+@@ -42,6 +42,7 @@ use crate::{
+     cpu_common::LogicAnalyzer,
+     device_traits::videocard::VideoType,
+     devices::pic,
++    machine_config::VideoDipSetting,
+     machine_types::MachineType,
+     syntax_token::SyntaxToken,
+     updatable::Updatable,
+@@ -439,6 +440,7 @@ impl Ppi {
+         have_expansion: bool,
+         video_types: Vec<VideoType>,
+         num_floppies: u32,
++        video_dip: Option<VideoDipSetting>,
+     ) -> Self {
+         #[allow(unused_mut)]
+         let mut have_expansion = have_expansion;
+@@ -467,7 +469,21 @@ impl Ppi {
+             have_expansion |= video_types.contains(&VideoType::VGA);
+         }
+ 
+-        let sw1_video_bits = if have_expansion {
++        // SW1-5/6 is a SETTING, not a description of what is installed: a
++        // 5150 can hold an MDA and a CGA at once and the switches still say
++        // which one the BIOS brings up. The derivation below cannot express
++        // that - "any CGA present -> CGA hires" makes a two-card machine
++        // report colour whatever order the cards are in - so an explicit
++        // `video_dip` in the machine config wins when it is given.
++        let sw1_video_bits = if let Some(dip) = video_dip {
++            match dip {
++                VideoDipSetting::Mda => SW1_HAVE_MDA,
++                VideoDipSetting::CgaLores => SW1_HAVE_CGA_LORES,
++                VideoDipSetting::CgaHires => SW1_HAVE_CGA_HIRES,
++                VideoDipSetting::Expansion => SW1_HAVE_EXPANSION,
++            }
++        }
++        else if have_expansion {
+             // We have a card that requires an expansion BIOs.
+             SW1_HAVE_EXPANSION
+         }
+diff --git a/crates/marty_core/src/machine_config.rs b/crates/marty_core/src/machine_config.rs
+index a81c85ca..c34206ac 100644
+--- a/crates/marty_core/src/machine_config.rs
++++ b/crates/marty_core/src/machine_config.rs
+@@ -291,9 +291,27 @@ pub struct ConventionalExpansionConfig {
+     pub wait_states: u32,
+ }
+ 
++/// Which display the machine's SW1-5/6 pair claims is PRIMARY.
++///
++/// It is a SETTING and not a description of what is installed: a 5150 can hold
++/// an MDA and a CGA at once, and the switches still say which one the BIOS
++/// brings up. Without this, `Ppi::new` derives the bits from the card list -
++/// "any CGA present -> CGA hires" - which cannot express a two-card machine
++/// whose switches say mono.
++#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq)]
++#[serde(rename_all = "snake_case")]
++pub enum VideoDipSetting {
++    Mda,
++    CgaLores,
++    CgaHires,
++    Expansion,
++}
++
+ #[derive(Clone, Debug, Default)]
+ pub struct MachineConfiguration {
+     pub speaker: bool,
++    /// Override for the SW1 display bits; None = derive them from `video`.
++    pub video_dip: Option<VideoDipSetting>,
+     pub ppi_turbo: Option<bool>,
+     pub machine_type: MachineType,
+     pub cpu: Option<CpuConfig>,

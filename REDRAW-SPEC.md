@@ -16,8 +16,9 @@ no way to draw part of a window.**
 |------|--------|--------|
 | 1 | A repaint destroyed the content; the app had to recompute it | **landed** — option A, SPEC.md §40.1 |
 | 2 | A window that was even 1px covered could not draw at all | **landed** — SPEC.md §11.3 |
+| 3 | A window in the background is redrawn whole for a sliver | **part landed** — see Part 3 below |
 | 1B | `FT_SYM` declared but not exploited | not started |
-| 1C | Non-destructive window moves, kernel-wide | not started |
+| 1C | Non-destructive window moves, kernel-wide | superseded by Part 3 |
 
 ---
 
@@ -199,7 +200,197 @@ the plan as originally written:
 
 ---
 
-## How the two parts interact
+## Part 3 — a background window is redrawn whole to put a sliver back
+
+### Where this came from
+
+Reported from the field as *"File Manager redraws continually when you take
+actions on windows in front of it"*, and isolated by the reporter with the
+comparison that settles it: two windows side by side, drag the right one left
+over the left one. If the left one is a Note Pad it does not redraw; if it is
+a Disk window it repaints in full.
+
+### What has landed
+
+| | what | SPEC | measured |
+|---|---|---|---|
+| a | a Disk-window menu command that changes nothing draws nothing | §22.13 | `Builtins > Timer` 1 → 0 `fm_repaint` |
+| b | `fm_status_only` puts the grow box back | §22.13 | 28 px, wrong since §22.9 |
+| c | the Disk window joins the raise cache | §22.14 | `SU_MISS` → `SU_HIT`, no `W_PAINT` |
+| d | the grow box comes off a window that loses the front | §11.1.1 | was permanent once (c) stopped repainting |
+| e | dragging across a window marks it on the rect the mover LEFT | §11.91.2 | 4 windows → 1 on 3 of 5 drags |
+| f | the cache is taken wherever a window is drawn, not only at a raise | §11.96.4 | drags 2-5 `SU_HIT` instead of full repaints |
+| g | minimizing banks instead of dropping | §11.96.5 | restore-from-dock is a blit |
+| h | the vacated test is `old` minus the mover's new FRAME | §11.91.2 | see the table below |
+
+### What is left, and it is ONE primitive
+
+**A blit that can draw a sub-rect of its source.** `gfx_restore` and
+`gfx_blit4` are both off §11.3's clipped list for the same stated reason —
+*"a blit cannot take a sub-rect without advancing its source to match"* — and
+that one sentence is the whole of what stands between here and two separate
+wins:
+
+- **the raise cache putting back only the part that was uncovered**, instead
+  of the whole window (`gfx_restore`), and
+- **Paint repainting only the uncovered part of its canvas** (`gfx_blit4`).
+
+Build it once and both follow. It is the same arithmetic in two places.
+
+#### The buffer layout it has to walk
+
+`gfx_save` writes **all plane-0 rows, then plane 1, 2, 3**; each row is
+`(x2/8) - (x1/8) + 1` bytes, rows top to bottom, `x1` rounded down and `x2`
+up. So for a saved rect `B` and a sub-rect `S` inside it:
+
+```
+full_row = (B.x2/8) - (B.x1/8) + 1        ; bytes per saved row
+full_rows = B.y2 - B.y1 + 1
+sub_row  = (S.x2/8) - (S.x1/8) + 1        ; bytes to move per row
+start    = (S.y1 - B.y1) * full_row + (S.x1/8 - B.x1/8)
+row_skip   = full_row - sub_row           ; step the BUFFER past each row
+plane_skip = (full_rows - sub_rows) * full_row
+```
+
+Both skips are **0 today**, which is what makes this additive: the cursor's
+own path (`vga_save_vram` / `vga_restore_vram` called directly from IRQ4)
+is byte-identical with them zeroed.
+
+#### The two insertion points
+
+- **`sw_xfer`** (`kernel/softgfx.inc`), the 1bpp body, restore branch
+  `.rst`/`.rrow`: `add si, [cs:sw_bskip]` after the `rep movsb`, and the
+  plane skip after `pop di`. **`cs:` is mandatory** — DS is the buffer inside
+  that loop, which is why the existing code already reads `[cs:vid_rowadd]`.
+- **`vga_restore_vram`** (`kernel/vga12.inc`), `.row`: the same two adds. DS
+  is the buffer there too.
+
+`vga_rect_setup` recomputes the SCREEN geometry from whatever rect it is
+handed, so the screen side needs nothing: pass the sub-rect and it lands in
+the right place.
+
+#### The trap that is already paid for once — byte columns
+
+A sub-rect's left and right **byte columns** contain pixels outside the
+sub-rect. Restoring them writes the cache's version of pixels that may have
+changed. This is the same hazard §11.96.2 solved for the whole-window case,
+and the same answer works: `wm_su_edge` reads those two columns off the
+screen **as they are now** and patches the bits outside the rect into the
+buffer before the restore. Reuse it; do not invent a masked write, for
+§11.96.2's reason (it would slow the cursor's primitive for one caller).
+
+### Then the two consumers
+
+#### Consumer 1 — the raise cache restores only the uncovered part
+
+`wm_dmg_wins` knows the uncovered rect: it is `(W n old) \ new_frame`, which
+§11.91.2 already computes to decide whether to mark at all. Hand it to
+`wm_su_try` as a one-shot (`wm_dmg_dk`'s rule: a caller that forgets inherits
+"whole", the safe value).
+
+**And there is a third part nobody should discover the hard way.** Today
+`wm_draw_win` drawing a window *whole* is exactly what makes it safe to paint
+over the window above it — the cascade marks that one and redraws it
+afterwards. Restore only a strip and that guarantee is gone: either the
+cascade stays (and the redraws it causes stay with it, which is half the win)
+or **the marking pass has to key on each window's REDRAWN REGION rather than
+its rect.** That is a real change to §11.91's marking and it is the piece to
+scope honestly before starting.
+
+A safe intermediate exists and is worth landing on its own: keep the cascade
+exactly as it is and shrink only the blit. Every marked window still gets
+marked, but each costs a strip instead of a screenful.
+
+#### Consumer 2 — Paint, which cannot use the cache and should not
+
+Paint holds a canvas, an undo image and a clipboard. A raise cache would be a
+fourth copy of pixels it already has, and on the machine this is written for
+that displaces things that matter more. §11.96.1's question 3 asked "is its
+repaint expensive?" and answered "no, it is one `gfx_blit4`" — the better
+question is **who already holds the pixels**:
+
+> If only the kernel can hold them, that is `WF_SAVEU`. If the application
+> already holds them, it does not need a cache — it needs to be told **which
+> part to put back**.
+
+Two answers to one question, picked by ownership. Paint is the second answer
+and it is the most expensive repaint in the system.
+
+**And §11.3's granularity rule does not bite here**, which is why this is not
+the general "clip every `W_PAINT`" work: the rule is about a *fill and a
+glyph* disagreeing, and 95% of Paint's repaint is a **blit**, which clips per
+pixel like a fill. Its chrome — tool palette, colour strip, W/H boxes, Apply
+— is fills and glyphs, but each element is small and self-contained, so it
+takes `tm_row_draw`'s answer: redraw whole elements the region touches.
+
+What is missing on the app side is an **API**: a package can ask
+`OSAPI_WM_OBSCURED` (a boolean) and `wm_clip_test` (does a rect cross a clip
+edge). Neither says *"here is the rect you owe"*.
+
+### Measured, so the next session does not have to re-derive it
+
+A busy VGA desktop — a Disk window, Piano, Hello and Note Pad, all
+overlapping — driven by reading the window table and z-order out of the guest
+and computing what each drag genuinely uncovered:
+
+| drag | windows redrawn (before → after (h)) | uncovered |
+|---|---|---|
+| −60,+20 | 4 → 3 | 1,220 px of 126,502 (1.0%) |
+| +50,−15 | 4 → 4 | 6,050 px (4.8%) |
+| −40,−25 | **4 → 1** | 0 px |
+| +70,+30 | 4 → 4 | 11,190 px (8.8%) |
+| −90,0 | **4 → 1** | 0 px |
+
+So after (h), a window is redrawn only when something of it really was
+uncovered — and when it is, **between 91% and 99% of what is drawn was not
+uncovered.** That is the whole of what the sub-rect blit is for.
+
+Raising a covered Disk window on a cycle-accurate 5150/CGA, by
+PERFORMANCE.md Part 3.1's instrument: **644 ms without the raise cache, 215
+ms with it.** The residual is chrome plus a whole-content restore; on CGA the
+content is ~5.7KB of `rep movsb`, on VGA four planes of it. **Do not spend
+the sub-rect work on the strength of the 644 → 215 figure** — that is the
+cache's win and it is already banked. Measure the restore itself first; an
+attempt via `flicker` could not attribute it (a raise also repaints the bar,
+the dock and the outgoing title bar), and a breakpoint-and-step attempt was
+too slow through the debug server. A breakpoint at `gfx_restore` and another
+at `wm_grow_paint`, reading `cycles` at each, is the measurement that was
+being set up when the session ended.
+
+### How to verify any of it
+
+`make REDRAWFULL=1` is the reference: it puts the Disk window off the raise
+cache, `wm_dmg_stale` back on the whole damage rect, `wm_su_bank` back to
+one-shot, `wm_hide` back to dropping, and `fm_docmd` back to a whole-window
+repaint. Drive the identical scripted session through both kernels and
+compare framebuffers step by step; **0 differing pixels is the standard**, on
+VGA mode 12h, CGA and Hercules.
+
+Four things cost a run each and are worth reading before the first one:
+
+- **No animating window in the session.** A Timer's digits and a Fractal's
+  render differ between two passes and read as a redraw defect. Use
+  `Builtins > Disk`, which exercises the same paths and stands still.
+- **Mask the mouse arrow and the menu-bar clock**, or a run a minute apart
+  reports a defect at the clock cell. The bar is a row taller on some
+  builds — mask `y < 18` rather than a tighter bound.
+- **Rebuild the reference** after any change to a path the session touches.
+  A stale reference reports the difference between yesterday's kernel and
+  today's.
+- **Read the window rects out of the guest** rather than eyeballing
+  coordinates from a screenshot: `wm_wins` (stride `WIN_SIZE` = 26,
+  `W_FLAGS`/`W_X`/`W_Y`/`W_W`/`W_H` at 0/2/4/6/8), `wm_zord` and `wm_zn`.
+  Half the harness time in this round went on clicks that missed.
+
+### Budget
+
+The image rung has **167 bytes** of slack and the cold rung **86**
+(`kern_big`, after (h)). The next `.text` byte anywhere costs a 512-byte
+step, so the sub-rect work should expect to ask for one.
+
+---
+
+## How Parts 1 and 2 interact
 
 They are complementary, not alternatives. Part 2 lets a partly covered
 window keep drawing; it does **not** help the move case, because uncovering

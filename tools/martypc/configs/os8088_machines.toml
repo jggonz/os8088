@@ -18,7 +18,7 @@
 # GLaBIOS machine given 2:1 media cannot finish reading one and the boot ends
 # in `os8088: disk error`, status 80. The IBM ROM has no such limit, and that
 # is measured rather than assumed: os8088_5150_herc boots this exact 2:1
-# configuration in 211 ticks against the field machine's 180 (Set 24), and
+# configuration in 211 ticks against the field machine's 180 (Set 30), and
 # docs/FIELD-MACHINES.md's 5150 runs that ROM and reads a whole 2:1 track in
 # one `int 13h` in 384 ms every time it boots (Set 14).
 # So 2:1 goes on the machines that model that 5150, and the GLaBIOS twins -
@@ -587,3 +587,110 @@ overlays = [
     io_base = 0x220
     irq = 7
     dsp_version = [2, 1]
+
+# --- SPEC.md 18.97's case: ONE drive, which is what the field 5150 has -------
+# The probe exists because the int 11h equipment word is a CLAIM. MartyPC has
+# no DIP override, so it derives the word from the drive list - which means
+# this machine reports ONE and the probe correctly declines to run on it. That
+# makes it the REGRESSION half of the test (an uncontested machine must be
+# untouched); the ABSENT half is this machine with a scratch kernel whose
+# count gate is forced, so that unit 1 is really not there when it is asked
+# about. docs/TESTING.md has the recipe.
+[[machine]]
+name = "os8088_5150_cga_1fd"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_1_360k_floppy",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...and the one-drive overlay itself, which upstream does not carry: every
+# stock profile is a two-floppy machine.
+[[overlay]]
+name = "pcxt_1_360k_floppy"
+    [overlay.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+        [[overlay.fdc.drive]]
+        type  = "360k"
+
+# --- WHY THERE IS NO MONO-PRIMARY TWO-CARD MACHINE HERE ------------------
+#
+# The field 5150 boots on its HERCULES, because SW1-5/6 say 11b = 80x25 mono
+# and vid_detect's last rung is int 11h bits 5:4 (SPEC.md 39.1). None of the
+# two-card machines above does, and it CANNOT BE FIXED FROM THIS FILE:
+# measured, os8088_5150_both_gla reports bits 5:4 = 0x20 (80x25 colour), and
+# so does the same machine with the MDA listed FIRST - MartyPC derives the
+# 5150's display switches from whether a CGA is in the config at all, not
+# from card order, and exposes no DIP override. Listing the MDA first only
+# moves MARTYPC's primary to it, which os8088 then does not drive (the DIP
+# still says colour), so the boot gate watches a blank card and `launch`
+# times out. os8088_5150_herc_gla reads 0x30 only because it has no CGA.
+#
+# The consequence is worth stating rather than rediscovering: SPEC.md
+# 39.11.1's vid_cga_alias runs ONLY when the mono card is primary, and that
+# is still exactly the direction no emulator here can produce - which is the
+# same reason its bug survived in the first place. It is a 5150 question.
+
+# --- the two-card 5150 WITH ITS DISPLAY SWITCHES SET THE WAY THE FIELD ONE'S
+# --- ARE (SPEC.md 39.1, docs/FIELD-MACHINES.md)
+#
+# `video_dip` is OURS - patches/03 - and it exists because SW1-5/6 is a
+# SETTING and not a description of what is installed. Upstream derives those
+# bits from the card list ("any CGA present -> CGA hires"), which cannot
+# express a machine that holds BOTH cards with the switches set to mono, and
+# that is exactly the arrangement the calibration 5150 has: os8088 boots on
+# its Hercules there and on the CGA in every emulated two-card machine.
+#
+# It is the direction that MATTERS rather than a curiosity: SPEC.md 39.11.1's
+# vid_cga_alias runs ONLY when the mono card is primary, which is precisely
+# why its bug survived - "the direction the old emulator could reproduce was
+# CGA-primary, where the routine never runs". This machine reproduces it.
+[[machine]]
+name = "os8088_5150_both_gla_mono"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+video_dip = "mda"
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    # THE MDA IS LISTED FIRST, and that is about the HARNESS rather than the
+    # guest: MartyPC's own primary card is the first in this list, `fbuf` and
+    # the os88marty boot gate read the primary, and os8088 is driving the MDA
+    # here - so with the CGA first the gate watches an unprogrammed card,
+    # never sees a desktop, and `launch` times out on a machine that booted
+    # perfectly. The DIP above is what decides which card the GUEST picks;
+    # this order is what decides which one the TOOLING looks at, and on this
+    # machine they have to agree.
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"

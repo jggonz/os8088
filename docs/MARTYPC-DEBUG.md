@@ -554,6 +554,33 @@ instead (a write to one card's memory must change **that** card's rendered
 output and not the other's), parks the CPU so no guest contributes, and is
 verified to **fail** — revert patch 02 and it exits 1 naming the check.
 
+**And a third patch was needed to make a two-card machine boot the card the
+field one does.** SPEC.md §39.1's `vid_detect` chooses its adapter from
+`int 11h` bits 5:4 — SW1-5/6 on a 5150 — and upstream *derives* those bits
+from the card list: `have_expansion` first, then "any CGA present → CGA
+hires", then MDA. So every two-card machine reported colour whatever order the
+blocks were in, os8088 booted on the CGA, and the calibration machine's
+arrangement — both cards, switches set to mono, boots Hercules — could not be
+expressed at all. `patches/03-video-dip-config.patch` adds an optional
+`video_dip` to the machine config (`"mda"` / `"cga_lores"` / `"cga_hires"` /
+`"expansion"`); absent, the derivation runs exactly as before, so no existing
+machine moved. **`os8088_5150_both_gla_mono` is the result**, and it is the
+only machine here that reaches SPEC.md §39.11.1's `vid_cga_alias` — the
+routine that finds a CGA hiding behind a Hercules-primary machine, whose bug
+survived precisely because "the direction the old emulator could reproduce was
+CGA-primary, where the routine never runs". Verified: `avail = 0x06`, both
+cards seen, os8088 running Hercules, desktop rendered at 720×348.
+
+**Its `[[machine.video]]` blocks list the MDA FIRST, and that is about the
+harness rather than the guest.** MartyPC's own primary card is the first in
+that list, and `fbuf` — which `os88marty.launch`'s boot gate reads — reports
+the primary. With the CGA first the gate watches an unprogrammed card, never
+sees a desktop and times out on a machine that booted perfectly (measured:
+`fbuf` returns *3 bytes*). The DIP decides which card the **guest** picks; the
+order decides which one the **tooling** looks at, and on a two-card machine
+they have to agree. `launch(..., card="herc")` does not rescue it, so put the
+card os8088 will drive first.
+
 The first five are shaped after docs/FIELD-MACHINES.md's calibration machine,
 as closely as MartyPC allows.
 

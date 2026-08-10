@@ -680,7 +680,7 @@ index fc9ee6db..9a4717a3 100644
          if let Some(next_sector) = self.get_next_sector(self.chsn.into()) {
              log::warn!(
 diff --git a/crates/marty_core/src/machine_config.rs b/crates/marty_core/src/machine_config.rs
-index a81c85ca..481d1452 100644
+index c34206ac..15a686b1 100644
 --- a/crates/marty_core/src/machine_config.rs
 +++ b/crates/marty_core/src/machine_config.rs
 @@ -244,11 +244,25 @@ pub struct FloppyControllerConfig {

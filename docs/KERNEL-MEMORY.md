@@ -360,38 +360,38 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4736,
+    "bss": 4916,
     "budget": 98304,
     "codemax": 65536,
-    "cold": 22331,
+    "cold": 22463,
     "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3744,
-    "kend": 6112,
+    "imgpara": 3776,
+    "kend": 6144,
     "kseg": 96,
-    "ksize": 96256,
+    "ksize": 96768,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 2662,
+    "ovl": 3067,
     "stk0": 1024,
-    "text": 54694
+    "text": 55332
   },
   "small": {
     "bss": 4651,
     "budget": 94208,
     "codemax": 65536,
-    "cold": 21250,
+    "cold": 21382,
     "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3552,
-    "kend": 5856,
+    "imgpara": 3584,
+    "kend": 5888,
     "kseg": 96,
-    "ksize": 92160,
+    "ksize": 92672,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52099
+    "text": 52447
   }
 }
 ```
@@ -874,39 +874,39 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,523 | 37.0% |
-| the window system and its furniture | 16,326 | 21.2% |
-| drawing: adapters, primitives, glyphs, icons | 10,981 | 14.3% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,813 | 12.7% |
-| the kernel proper: API table, heap, scheduler, events | 5,886 | 7.6% |
+| the file system, end to end | 28,666 | 36.8% |
+| the window system and its furniture | 16,627 | 21.4% |
+| drawing: adapters, primitives, glyphs, icons | 11,256 | 14.5% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.6% |
+| the kernel proper: API table, heap, scheduler, events | 5,935 | 7.6% |
 | the Control Panel | 4,120 | 5.3% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,025** | |
+| **total** | **77,795** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 917 | 7,193 | **8,110** | 336 | — |
-| `wm.inc` — the window manager (§11) | 5,884 | — | **5,884** | 635 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
+| `files.inc` — the Disk window (§22) | 917 | 7,304 | **8,221** | 336 | — |
+| `wm.inc` — the window manager (§11) | 6,148 | — | **6,148** | 635 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,529 | — | **5,529** | 758 | 3,584 |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,298 | **5,471** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,542 | — | **4,542** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,589 | — | **2,589** | 250 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,591 | — | **2,591** | 250 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,456 | — | **2,456** | 37 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,493 | — | **2,493** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
+| `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `icons.inc` — the icon renderer (§10) | 1,342 | — | **1,342** | 34 | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,336 | — | **1,336** | 84 | — |
-| `font.inc` — the 8x8 text renderers (§6) | 1,252 | — | **1,252** | 17 | 768 |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
@@ -922,8 +922,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,694 | — | **2,694** | — | — |
-| **total** | **54,694** | **22,331** | **77,025** | **4,736** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,743 | — | **2,743** | — | — |
+| **total** | **55,332** | **22,463** | **77,795** | **4,916** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1109,7 +1109,7 @@ It works because of what the `FAT_SEG` window is doing at boot: nothing.
 `drv_boot` — the *last* thing `kmain` does before the first paint. So there
 is a 4,608-byte hole in the middle of the kernel's own ladder that is live
 for the whole of start-up and dead the instant the first volume mounts. The
-overlay is **2,504 bytes** of it, with 2,104 spare:
+overlay is **3,067 bytes** of it, with 1,541 spare:
 
 | | bytes | |
 |---|---:|---|
@@ -1117,8 +1117,30 @@ overlay is **2,504 bytes** of it, with 2,104 spare:
 | `cpudet.inc` minus `cpu_info` | 314 | the tier test and the whole A20 gate. `cpu_info` stays: it is API slot 0x0188 and answers all session long |
 | `xmem.inc` — `xm_init` | 123 | sizing the store is a once. `xm_arm` stays resident — `xm_copy` re-arms unreal mode inside the window that uses it — so it gets a shim |
 | `snd.inc` — `snd_init` | 107 | saving the boot 61h bits and publishing `snd_live`. `snd_unhook` is the shutdown path and stays |
-| `desk.inc` — `desk_init` | 97 | counting volumes and laying out their zones. `desk_ord` and `desk_zone_label` are called by the runtime painters and stay |
+| `disk.inc` — `dsk_fdd_probe` | 380 | asking the FDC whether drive B is really there (SPEC.md §18.97), and retiring its volume row if not. `make FDDPROBE=0` takes it out |
+| `desk.inc` — `desk_init` | 122 | counting volumes and laying out their zones, and the 21 bytes that contest the count against the probe above. `desk_ord` and `desk_zone_label` are called by the runtime painters and stay |
 | `kernel.asm` — the entry stubs | 24 | |
+
+**The rows are hand-kept and the total is measured, so they do not sum** —
+they are short by ~158 bytes that predate this note. Trust the total and the
+spare; treat a row as "roughly what this module put here".
+
+**The number to watch is NOT the 1,541 spare, it is the IMAGE's last sector.**
+`kernel.bin` is **86,011 bytes** and the boot sector reads
+`(size + 511) / 512` = **168** of them, which hold 86,016 — so there are
+**5 bytes** of slack in the file, and the next thing added to `.ovl`, however
+small, costs a whole sector of boot read (~65 ms on the field machine).
+`tools/kernsize.py` reports the three *rungs* and not this, because the rungs
+are what the RAM ladder is built from; the file's tail is a separate question
+and this is where it is written down.
+
+It has been under 100 bytes twice in one round now — 8 before §18.97's probe,
+5 after it, and 5 again after the `font_run` work crossed an image rung
+underneath it — which is worth reading as a pattern rather than as two
+coincidences: **`.text` and `.ovl` land in the same file and round at
+different places**, so the tail's slack is not a budget anyone is steering
+and it can be spent to nearly nothing by a change that never touches the
+overlay at all. Re-measure it; do not carry a figure from a commit message.
 
 `.ovl` is declared `start=OVL_START vstart=0`, and both halves matter.
 `start=` is the *file* offset, so NASM emits the gap as zeros and the boot
