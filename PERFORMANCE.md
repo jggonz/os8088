@@ -3784,6 +3784,10 @@ since there the padding IS the erase. It needs a per-run array of glyph
 pointers (80 cells × 2 bytes of `.bss`) or 8x the glyph-address lookups, so it
 is a real trade rather than a free one.
 
+**docs/LAST-DROP.md carries the rejected one in full** — the patch, the
+figures, the price and what would have to change for the answer to flip — so
+the next session that has this idea can read it instead of building it.
+
 ### Set 27 — the run is drawn a ROW at a time: `FONT_RUN` is 2.84x (SPEC.md §6.1.7)
 
 Set 26 named what it had left: the row body was 27 bytes of which **12 were the
@@ -3897,11 +3901,27 @@ counters in a scratch kernel, two scripted sessions: **34%** of the cells
 `font_run` drew were inside a span (42 of 124), and **28%** in the other (53 of
 187); half the runs had one.
 
-**And the probe found something worth more than the number.** In a 40-second
-session with the Task Manager open, unoccluded and refreshing, `font_run` was
-called **four times**. Not four hundred. Every consumer is change-gated —
-§12.9's bar composes a diff, §28's rows skip what has not moved, §22.11 scrolls
-instead of redrawing — so **`FONT_RUN` is a BURST cost, not a steady-state
-one**: it is what a keystroke, a full bar redraw or a Tracker screen pays, and
-an idle desktop does not call it at all. That is the context for all of Sets
-25–28: 2.84x on a path that is already, by design, not running most of the time.
+**The probe also produced a claim that was WRONG, and correcting it is worth
+more than the original number.** In a 40-second session with the Task Manager
+open, unoccluded and refreshing, `font_run` was called **four times** — from
+which this entry first concluded that `FONT_RUN` is a burst cost that an idle
+system barely pays. **That generalises from the single most change-gated
+consumer in the tree.** §28 is the app that had `tm_rowok`, `tm_chunksum` and
+the per-chunk cell walk built for it precisely so that a refresh which changes
+nothing draws nothing; measuring text frequency with it is measuring how well
+§28 was optimised, not how often os8088 draws text.
+
+**The survey says the opposite.** Of fifteen shipped packages, **nine call
+`OSAPI_FONT_STR` and never `FONT_RUN` at all** — Paint, ArtfulType, Solitaire,
+Arkanoid, Fractal, Recorder, Piano, Minesweeper, Tamegram — so most of the
+system's text does not reach this path yet, and the apps that *have* converted
+are the ones that draw **long runs continuously while the user works**: Note
+Pad's `np_rflush` letters a row space-padded to the whole band (§27.2),
+Tracker's `tui_str` draws the FT2 screen, ModPlug composes four LCD lines an
+18 Hz frame (§56.12).
+
+So the right reading of Sets 25–28 is the reverse of the first one: **the 2.84x
+lands on the paths that are least gated and longest-running**, and §6.1.8's
+span is worth having for the same reason — a padded Note Pad row is exactly the
+shape it collapses. The Task Manager is the one consumer that had already
+solved the problem a different way.

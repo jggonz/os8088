@@ -1653,6 +1653,14 @@ padded 20-cell run, **+1.4% on a run with no span at all** — the fixed cost of
 deciding. Measured over two scripted sessions, 34% and 28% of the cells
 `font_run` drew were inside a span.
 
+**The consumers it is for are the long-running ones**, which is the same reason
+§6.1.7 matters: `np_rflush` letters a Note Pad row padded to the whole band
+(§27.2), `tui_str` draws Tracker's FT2 screen, ModPlug composes four LCD lines
+a frame (§56.12). §28's Task Manager is the one that will show it least — it
+already skips rows that have not moved — and most packages have not been
+converted to `font_run` at all. docs/LAST-DROP.md records the candidate that
+was measured against this one and shelved.
+
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
 `make FONT=<name>` builds a kernel whose 8x8 typeface is `fonts/<name>.f8`
