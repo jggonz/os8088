@@ -26572,6 +26572,30 @@ page. The `[cp_sel]`-before-`KIND_CTRL` precedent is the menu bar clock's
 A machine with **no system disk at all** is not told about drivers it never
 enabled: only a row whose `DRVR_WANT` is set counts as a failure.
 
+**`.nodisk` sits below the load loop, so the loop must JUMP OVER IT**, and
+for one release it did not. §32's double-buffering removal deleted a
+`bb_set` call from the end of `drv_boot` — and the `jmp short .out` on the
+line after it, which was the statement that skipped the failure path. Every
+successful boot then walked out of the load loop straight into `.nodisk`,
+which stamps `DRVE_DISK` on every **wanted** row and raises `[drv_nerr]`. So
+a driver that had loaded and attached perfectly was reported as
+`No system disk in A:`, and `drv_notice` opened the Control Panel to say so.
+
+Two things kept it hidden for a release, and both are worth knowing. **It
+needs a row that is WANTED**, and §51.3 made nothing wanted by default — so
+the only machine that hits it out of the box is one where §51.3.1's sniff
+finds an FM chip, i.e. **a fresh image on a machine with a sound card**, with
+no `SYSTEM.CFG` yet to say otherwise. And **the row it lands on is a
+contradiction rather than a plain failure**: `DRVR_SEG` is non-zero and
+`DRVR_ERR` is `DRVE_DISK` at the same time, which is a state no ordinary path
+can produce — a load that got far enough to claim a segment has already
+passed the mount that error is about. Reading those two bytes out of the
+guest is what identified it; the screen alone says only that the driver did
+not load, which sends you to the mount and the disk, where nothing is wrong.
+The orphaned comment left above `.nodisk` — about a 150 KB buffer seeded from
+VRAM, describing code that no longer existed — was the other half of the same
+deletion.
+
 ### 51.3.1 The first boot asks the hardware, once
 
 §51.3's rule is that nothing loads that `SYSTEM.CFG` did not ask for, and it

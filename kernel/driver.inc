@@ -2658,14 +2658,18 @@ drv_boot:
     inc cl
     cmp cl, DRV_MAX
     jb .next
+    jmp short .out              ; THE LOADS ARE DONE - and .nodisk is below,
+                                ; so without this the successful path walks
+                                ; straight into the failure path and stamps
+                                ; DRVE_DISK over every row it just loaded.
+                                ; That is exactly what happened: SPEC.md 32's
+                                ; double-buffering removal took out a bb_set
+                                ; call whose `jmp short .out` was this one,
+                                ; and the orphaned comment it left behind -
+                                ; about a 150KB buffer seeded from VRAM - was
+                                ; the tell. Anything added between the loop
+                                ; and .nodisk needs this to stay last
 
-    ; It is the one setting that is not a store: it claims 150KB and SEEDS
-    ; ITSELF FROM VRAM. Until this line VRAM holds the loading screen, whose
-    ; bar is still being ticked one notch per sector by everything above
-    ; (SPEC.md 15.3) - a buffer armed ahead of the reads would swallow every
-    ; notch after it, because a direct VRAM write is exactly what the next
-    ; flush undoes. The heap does not care which end of this routine it
-    ; happens at: data claims grow up and a driver's region down (SPEC 50.3).
 .nodisk:
     ; No system disk at all. Only a row the user actually wanted counts as a
     ; failure: a machine that has never enabled a driver must not be told
