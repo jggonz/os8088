@@ -8520,6 +8520,68 @@ that sector back and compares. Four things about it:
 The cost on the honest path is **two `int 13h` calls**, once per 720KB
 format, against a format that is already 7 writes and a remount.
 
+### 18.97 The third and fourth floppy — a row, and nothing else
+
+The IBM 5.25" Diskette Drive Adapter has an **external 37-pin D connector**
+(J1) beside its internal edge connector, and it carries two more drives —
+physical **#2 and #3**, same twisted cable and termination as the internal
+pair, no power, and no booting from them. An IBM 4865 lives there. DOS 4 and
+earlier lettered them C: and D: ahead of any hard disk.
+
+**The BIOS has always supported them.** `DISKETTE_IO` in the 27 Oct 82 ROM
+gates the drive number at `cmp dl,4 / jae <invalid>`, and its motor and select
+path is generic over `DL` — `mov cl,dl / mov al,1 / shl al,cl` for the
+`0040:003F` motor bit, then `mov al,0x10 / shl al,cl / or al,dl` for the DOR
+at 3F2h, whose bits 4..7 are motor-enable for drives A..D. It clears the other
+motor bits as it goes, so **one motor spins at a time** — which is the fact
+`dsk_here_ok` was already relying on.
+
+**And almost nothing in this kernel had to change**, because the volume layer
+never encoded "a floppy is row 0 or row 1". A floppy is *a `DVK_BIOS` row whose
+unit is below 80h* at every site that asks — `disk_mount`'s medium test,
+`dsk_geom_pick`'s cylinder bound, `dsk_here_ok`'s motor test, `dskw_fmt_probe`'s
+refusal, `fm_fmt_ok`'s greying — and `dsk_mbit` has held four entries since
+§18.9.1. What was missing was a **row**: `dsk_flop_add` takes the first free
+one per drive the machine claims, and everything above follows.
+
+**Detection is `int 11h` and there is nothing to add to it.** Bits 6–7 of the
+equipment word are the drive count less one, and on a 5150/5160 that word is
+the motherboard's **SW1** — so it is already the user's assertion, delivered
+by the hardware, and it is the same source DOS reads. Measured on the 1982 ROM
+under MartyPC: a two-drive machine answers `046F` (bits 6–7 = 1) and a
+four-drive machine `04EF` (= 3). `desk_init` had read this since the beginning
+and then clamped the answer to 2, because there was no row to give the other
+two; the clamp is what went.
+
+Three things follow, and the first is the one that decides the letters:
+
+- **The rows are claimed AFTER `dsk_boot_from` and before `drv_boot`.** That
+  ordering is the whole of §52.10.3's boot partition keeping C: on an installed
+  machine: `dsk_boot_from` has already taken row 2 there, so the externals land
+  at D: and E: and `dsk_bootltr`'s three messages still name the right disk. On
+  a floppy machine nothing has taken a row yet, so they are C: and D: — DOS 4's
+  own answer. `desk_init` is where that falls out for free, which is why the
+  code is there rather than beside `dsk_boot_from` where it reads as belonging.
+- **A count is not a map, and it does not need to be.** The equipment word says
+  *how many*, not *which*, so there is no drive 3 without a drive 2 — and drive
+  selects are ordered, so that is a fact about the cable rather than a
+  limitation of the encoding. A machine that claims fewer drives gets fewer
+  rows and therefore no zone, with nothing to hide afterwards.
+- **Probing the drives instead would cost the boot and answer no better.**
+  `AH=08h` is refused by this ROM for floppies (§18.96), and the honest
+  alternative — recalibrate each absent unit and wait for the failure — is
+  seconds of timeout on a real machine for a question the switches have already
+  answered. §51.3's reasoning exactly: nothing probes hardware that was not
+  asked about.
+
+`DVOL_MAX` went 6 → 8 for this. At 6 the external pair would have eaten two of
+the four partition rows, so a machine with four floppies could not reach all of
+a four-partition disk at once; the eighth row costs 54 bytes of `.text` and 2
+of `.bss`, every one of them scaling off the constant.
+
+**What this does not do is boot from one** — the adapter cannot, and neither
+can the BIOS.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and

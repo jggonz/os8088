@@ -1648,6 +1648,8 @@ ovw_xm_arm:         call xm_arm
                     retf
 ovw_dsk_vol_slot:   call dsk_vol_slot
                     retf
+ovw_dsk_flop_add:   call dsk_flop_add
+                    retf
 ovw_desk_rowcalc:   call desk_rowcalc
                     retf
 

@@ -360,7 +360,7 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4751,
+    "bss": 4885,
     "budget": 98304,
     "codemax": 65536,
     "cold": 22911,
@@ -372,9 +372,9 @@ Three things about it:
     "ksize": 97280,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 2662,
+    "ovl": 2676,
     "stk0": 1024,
-    "text": 55248
+    "text": 55368
   },
   "small": {
     "bss": 4666,
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,752 | 36.8% |
+| the file system, end to end | 28,868 | 36.9% |
 | the window system and its furniture | 16,254 | 20.8% |
-| drawing: adapters, primitives, glyphs, icons | 11,378 | 14.6% |
+| drawing: adapters, primitives, glyphs, icons | 11,378 | 14.5% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,848 | 12.6% |
-| the kernel proper: API table, heap, scheduler, events | 5,889 | 7.5% |
+| the kernel proper: API table, heap, scheduler, events | 5,893 | 7.5% |
 | the Control Panel | 4,662 | 6.0% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **78,159** | |
+| **total** | **78,279** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -889,8 +889,8 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 974 | 7,259 | **8,233** | 336 | — |
 | `wm.inc` — the window manager (§11) | 5,840 | — | **5,840** | 635 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,634 | — | **5,634** | 892 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,383 | **5,556** | 155 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `ctrl.inc` — the Control Panel (§31) | 902 | 3,760 | **4,662** | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,057 | — | **4,057** | 118 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
@@ -922,8 +922,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,697 | — | **2,697** | — | — |
-| **total** | **55,248** | **22,911** | **78,159** | **4,751** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,701 | — | **2,701** | — | — |
+| **total** | **55,368** | **22,911** | **78,279** | **4,885** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

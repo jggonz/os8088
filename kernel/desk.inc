@@ -45,8 +45,10 @@ DESK_DBLT   equ 9               ; double-click window, ticks
 
 ; -----------------------------------------------------------------------------
 ; desk_init - count floppy drives from the int 11h equipment word: if bit 0
-;             is set, drives = ((AX >> 6) & 3) + 1, else 0; clamp to 2.
-;             Initializes all module state (.bss is not auto-zeroed).
+;             is set, drives = ((AX >> 6) & 3) + 1, else 0. Rows 0 and 1 get
+;             a zone flag; anything past them gets a volume ROW of its own
+;             (SPEC.md 18.97). Initializes all module state (.bss is not
+;             auto-zeroed).
 ; ins:  none
 ; outs: none (all registers preserved)
 
@@ -68,14 +70,21 @@ desk_init:
     shr ax, cl
     and ax, 3                   ; 0..3 = 1..4 drives
     inc ax
-    cmp al, 2
-    jbe .store
-    mov al, 2                   ; clamp: the desktop shows at most A: and B:
-.store:
-    mov ah, al
+    mov dh, al                  ; ...and no clamp: it was 2, because the two
+                                ; on the 5.25" adapter's external connector
+                                ; had no volume row to be given (SPEC.md
+                                ; 18.97). The COUNT is all the machine can
+                                ; tell us and all it needs to: drive selects
+                                ; are ordered, so 3 means 0,1,2 and there is
+                                ; no drive 3 without a drive 2 to answer for
+                                ;
+                                ; DH and not AH: dsk_flop_add below ANSWERS in
+                                ; AX, so a count kept there survives exactly
+                                ; one call - which registered drive 2, lost
+                                ; the count to 0, and left drive 3 with no row
     jmp .flags
 .none:
-    xor ah, ah
+    xor dh, dh
 .flags:
     ; A floppy the machine does not have gets no zone - but its VOLUME ROW
     ; stays live, because [disk_drive] may still name it and a mount of an
@@ -85,13 +94,32 @@ desk_init:
     mov bl, cl
     call KERNEL_SEG:ovw_dsk_vol_slot  ; FAR: overlay -> resident
     mov byte [bx+DV_FLAGS], 0
-    cmp cl, ah
+    cmp cl, dh
     jae .zskip
     mov byte [bx+DV_FLAGS], 1
 .zskip:
     inc cl
     cmp cl, 2
     jb .zloop
+
+    ; --- and the EXTERNAL pair, which needs a ROW and not just a flag -------
+    ; Units 2 and 3 have no row in dsk_vtab to turn on: rows 0 and 1 are the
+    ; internal drives and everything above them is free for whoever asks first
+    ; (SPEC.md 18.97). HERE, and not beside dsk_boot_from in kmain, precisely
+    ; so that a hard-disk boot has already taken row 2 - which is what leaves
+    ; the boot partition at C: and puts the externals after it.
+    mov cl, 2
+.eloop:
+    cmp cl, dh
+    jae .edone                  ; the machine does not claim this many drives,
+                                ; so it gets no row and therefore no zone -
+                                ; there is nothing here to hide afterwards
+    mov al, cl
+    call KERNEL_SEG:ovw_dsk_flop_add    ; FAR: overlay -> resident
+    inc cl
+    cmp cl, 4
+    jb .eloop
+.edone:
 
     call KERNEL_SEG:ovw_desk_rowcalc  ; FAR: overlay -> resident. The row
                                 ; count is geometry, and geometry can change
