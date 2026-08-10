@@ -20741,6 +20741,21 @@ entry covers — so a freed block merges with its neighbours for nothing.
 `xm_copy` carries **one ABI over two transports**: `int 15h AH=87h` on tier
 1, unreal mode on tier 2. The caller cannot tell which ran and must not care.
 
+**Nothing allocates out of this pool today, and the teardown leg is not
+wired.** Exactly one consumer has ever existed — §53.6.1's fullscreen desktop
+stash, kernel-side, 286+/VGA — and it was removed. `xm_release_inst` /
+`xm_release_rec` are correct and are called from nowhere: they had three call
+sites in `instance.inc`, beside each `snd_release_rec`, from the commit that
+introduced them until the **#51 integration merge dropped all three** — which
+is docs/UPSTREAM.md's hazard exactly, a merge that assembles, boots and says
+nothing, because a call that is simply absent breaks no build. It has cost
+nothing, and not by luck: the stash arrived *after* that merge and no instance
+has ever held a block. **So the paragraph above states the design and not the
+present behaviour, and the first consumer's first job is to wire those three
+sites back** rather than write the release again. Recorded here rather than
+fixed because a call that can only ever scan a table of zeroes is not worth
+three instructions until something fills it.
+
 ### 41.6 What the Task Manager reports
 
 One line, `CPU 8086  XMS used/sizedK`, directly **below** the package-pool map
@@ -20810,8 +20825,8 @@ Five slots: `OSAPI_CPU_INFO` (0x0188), `OSAPI_XMEM_CAPS`
 `OSAPI_XMEM_COPY` (0x01A8). What ALLOC returns is an **opaque 32-bit token**,
 not a pointer: every byte crosses through COPY. UI-task context — the entry
 proc or any window callback, **and the gfx lock may be held** (a callback
-always holds it, and copying a render buffer to or from the store is exactly
-what a callback does). COPY touches no VRAM and takes no drawing lock of its
+always holds it, and a callback copying a buffer to or from the store is the
+case that permission was written for). COPY touches no VRAM and takes no drawing lock of its
 own, so the lock is orthogonal to it: on tier 2 it is a pure unreal-mode move
 (§41.4), and on tier 1 it is `int 15h AH=87h`, bounded to 32KB a call so its
 interrupts-off window is short — and where a 286 BIOS implements that by a

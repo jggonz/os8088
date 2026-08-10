@@ -8,6 +8,17 @@
 ; nothing else, ever. xm_init stores its zeroes and returns before the first
 ; BIOS call; every other entry point refuses on [xm_kb] = 0.
 ;
+; NOTHING IN THE TREE ALLOCATES OUT OF THIS POOL TODAY, and that is worth
+; knowing before reading any comment below as a description of live behaviour.
+; Exactly one consumer has ever existed - SPEC.md 53.6.1's fullscreen desktop
+; stash, kernel-side, on a 286+ with a VGA - and it was removed. What remains
+; is a published package ABI (SPEC.md 20.8 rule 4: the four slots are shipped
+; and keep their contracts) with no caller inside the kernel, which is a
+; deliberate state and not an oversight. The practical consequence is that
+; every path here is exercised only by tests/sysbench asking for the KB figure
+; and by the Task Manager's XMS line, so anything relying on a second reader
+; having checked it is relying on nothing.
+;
 ; THE HARD CEILING, because it is the rule most likely to be violated later:
 ; real mode forms an address as seg<<4 + off, so the highest byte any CS:IP
 ; can name is 0x10FFEF. Everything this module hands out is a DATA STORE
@@ -45,9 +56,10 @@
 ;
 ; Context (SPEC.md 41.8): the allocator and the copy are UI-task context -
 ; the entry proc or any window callback, and the gfx lock MAY be held (a
-; callback always holds it; stashing a render buffer to/from the store is the
-; intended use). They touch no VRAM and hold no drawing lock, so the gfx lock
-; is orthogonal. NOT from a worker: on tier 1 xm_copy goes through int 15h
+; callback always holds it, and a callback copying a buffer to or from the
+; store is what the permission was written for). They touch no VRAM and hold
+; no drawing lock, so the gfx lock is orthogonal. NOT from a worker: on tier 1
+; xm_copy goes through int 15h
 ; AH=87h (a BIOS call the kernel keeps on the UI task per SPEC.md 7; some 286
 ; BIOSes implement it by a transparent CPU reset), and the scratch it shares
 ; is serialized against a switch, not against re-entry.
@@ -564,12 +576,27 @@ xm_free:
 ; clobbers: nothing (flags)
 ;
 ; The SPEC.md 41.5 teardown leg, and the exact shape of snd_release_inst -
-; INCLUDING ITS pushf/cli, which is not decoration. This runs on the dying
-; task (inst_task_die, gfx lock NOT held) while the UI task may be inside
-; xm_alloc or xm_free, and a scan interleaved with either mutator reads a
-; half-published entry. Call it from both SPEC.md 29.4 paths so a package
-; that exits without freeing does not strand its claim for the session. Safe
-; on a slot that holds nothing, and safe on tier 0 (the table is all zeroes).
+; INCLUDING ITS pushf/cli, which is not decoration. It runs on the dying task
+; (inst_task_die, gfx lock NOT held) while the UI task may be inside xm_alloc
+; or xm_free, and a scan interleaved with either mutator reads a half-published
+; entry. Safe on a slot that holds nothing, and safe on tier 0 (the table is
+; all zeroes).
+;
+; NOTHING CALLS IT TODAY, and the comment here said otherwise for a year.
+; It had three call sites in instance.inc - beside each snd_release_rec - from
+; the commit that introduced it until the #51 integration merge dropped all
+; three, which is docs/UPSTREAM.md's own hazard in its purest form: the merge
+; assembled, booted and said nothing, because a call that is simply absent
+; breaks no build. The comment describing them survived the code.
+;
+; It has never cost anything, and that is a fact about the CONSUMERS rather
+; than luck: the only thing that ever allocated out of this pool was SPEC.md
+; 53.6.1's fullscreen desktop stash, which arrived two days AFTER that merge
+; and has itself since been removed. So no instance has ever held a block for
+; this to release. That is also why it is left in place rather than deleted -
+; it is the teardown leg SPEC.md 41.5 specifies, it is correct, and the first
+; consumer needs it wired back into the three SPEC.md 29.4 sites rather than
+; written again.
 ; -----------------------------------------------------------------------------
 xm_release_inst:
     push cx
@@ -603,10 +630,15 @@ xm_release_inst:
 ; snd_release_rec's shape, byte for byte, and for the same reason: the
 ; SPEC.md 29.4 teardown sites hold the record, the release wants the slot,
 ; and the conversion belongs beside the release rather than at three call
-; sites. Called from all three of them - app_close_win's synchronous leg,
-; inst_task_die, and inst_pkg_alive's winless leg - immediately beside the
-; sound release, so a package that exits without freeing does not strand its
-; claim for the session.
+; sites.
+;
+; ALSO UNCALLED - see xm_release_inst above for the whole story. It belongs at
+; the three sites snd_release_rec is called from (app_close_win's synchronous
+; leg, inst_task_die, and inst_pkg_alive's winless leg), and `git grep
+; snd_release_rec kernel/instance.inc` is the list. Wiring it back is the
+; first job of whatever next allocates out of this pool - and until something
+; does, adding the calls would be three instructions that can only ever scan a
+; table of zeroes.
 ; -----------------------------------------------------------------------------
 xm_release_rec:
     push ax
@@ -720,8 +752,10 @@ xm_chk:
 ; clobbers: nothing else (ES restored per SPEC.md 1; flags)
 ;
 ; UI-TASK CONTEXT (SPEC.md 41.8): the entry proc or any window callback, and
-; THE GFX LOCK MAY BE HELD - a callback always holds it, and stashing a render
-; buffer to/from the store is the intended use. This routine touches no VRAM
+; THE GFX LOCK MAY BE HELD - a callback always holds it, and a callback moving
+; a buffer to or from the store is the case that permission was written for
+; (SPEC.md 41.8; the one consumer that ever exercised it, SPEC.md 53.6.1's
+; fullscreen desktop stash, has since been removed). This routine touches no VRAM
 ; and takes no drawing lock of its own, so the gfx lock is orthogonal to it.
 ; NOT from an ISR and NOT from a worker task: on tier 1 this enters int 15h
 ; AH=87h (a BIOS call, kept on the UI task per SPEC.md 7; some 286 BIOSes
