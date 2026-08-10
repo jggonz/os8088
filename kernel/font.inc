@@ -533,6 +533,51 @@ font_run_x:
     push dx
     push si
     push di
+%ifdef KERN_BIG
+    ; --- SPEC.md 39.14.6: A RUN IS NOT A SHAPE. font_char is whole-cell
+    ; because a cell is 8x8 and goes wholly onto one display; a run is up to a
+    ; window wide, and treating it the same way cuts a line of text dead at
+    ; the seam. A straddled Note Pad showed exactly that in the field: typing
+    ; landed on one card only, and because SPEC.md 27.2 makes the run's own
+    ; padding the ERASE, backspace did not erase on the other.
+    ;
+    ; So a run that does not fit one display goes PER CELL, untranslated -
+    ; each font_char then picks its own display, which is the machinery
+    ; SPEC.md 6.1.2 already built for a clip edge crossing a run. It skips the
+    ; enter entirely, so it must skip the leave as well: .cells_nx has its own
+    ; tail rather than a flag for .out to test.
+    cmp byte [vid_ndisp], 1
+    jbe .nosplit
+    cmp byte [gfx_dnest], 0
+    jne .nosplit                ; an outer hook already chose a display
+    push ax
+    push bx
+    push cx
+    push dx
+    call font_width_x           ; AX = 8 * length (CX/DX/SI preserved)
+    or ax, ax
+    jz .spanok                  ; empty: nothing to cross
+    add ax, cx
+    dec ax
+    xchg ax, cx                 ; AX = x1, CX = x2
+    mov bx, dx                  ; BX = y1
+    add dx, 7                   ; DX = y2
+    call vid_span_one
+    jnc .spanok
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov [font_rn_fg], al
+    mov [font_rn_bg], ah
+    jmp .cells_nx
+.spanok:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.nosplit:
+%endif
     GFXDENTERCD                 ; ...and a run with it - its .slow path is
                                 ; gfx_fill + font_str, which the nesting count
                                 ; keeps from translating a second time
@@ -631,6 +676,24 @@ font_run_x:
     pop bx
     pop ax
     ret
+%ifdef KERN_BIG
+.cells_nx:                      ; SPEC.md 39.14.6: per cell and UNTRANSLATED,
+    mov al, [es:si]             ; so each font_char resolves its own display -
+    or al, al                   ; and no GFXDLEAVE, because no enter was taken
+    jz .out_nx
+    inc si
+    call font_run_scell
+    add cx, 8
+    jmp short .cells_nx
+.out_nx:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; font_run_cell - internal: one opaque 8x8 cell, byte-aligned, [bb_on] path

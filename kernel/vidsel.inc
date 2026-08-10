@@ -1317,6 +1317,58 @@ vid_disp_init:
     ret
 
 ; -----------------------------------------------------------------------------
+; vid_span_one - is this whole rect inside ONE display? (SPEC.md 39.14.6)
+;
+; in:       AX = x1, BX = y1, CX = x2, DX = y2, all VIRTUAL and inclusive
+; out:      CF = 0 the rect lies wholly inside one display, CF = 1 it does not
+;           (it crosses a seam, or reaches into the dead zone)
+; clobbers: flags
+;
+; The question a WHOLE-SHAPE primitive has to ask before it treats itself as
+; one shape. font_char never asks it - an 8x8 cell that crossed would be four
+; pixels on the wrong card and the rule that a cell goes whole is worth more
+; than that - but a RUN is up to a window wide and a BLIT up to a canvas, and
+; for those the answer changes what they do.
+;
+; Resolving the top-left and testing the far corner against THAT display is
+; the whole of it: displays do not overlap (SPEC.md 39.19.2 places them edge
+; to edge), so a rect inside one of them is inside the one holding its origin.
+; -----------------------------------------------------------------------------
+vid_span_one:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, ax                  ; SI = x1; vid_disp_of ANSWERS in AL
+    call vid_disp_of            ; AL = the display holding (x1, y1)...
+    call vid_ctx_ptr            ; DI = its record
+    mov ax, [di+VID_CTX_VX]
+    cmp si, ax
+    jb .no                      ; ...and these two are what catch the DEAD
+    cmp bx, [di+VID_CTX_VY]     ; ZONE: vid_disp_of falls back to the primary
+    jb .no                      ; for a point no display covers, and the
+    add ax, [di+VID_CTX_CW]     ; origin then fails its own display's bounds
+    cmp cx, ax
+    jae .no                     ; x2 past this display's right edge
+    mov ax, [di+VID_CTX_VY]
+    add ax, [di+VID_CTX_CH]
+    cmp dx, ax
+    jae .no                     ; ...or y2 past its bottom
+    pop di
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; vid_disp_relayout - vid_disp_init, plus the two things a moved desktop owes
 ;                     the rest of the machine (SPEC.md 39.19)
 ;

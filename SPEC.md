@@ -19294,6 +19294,50 @@ passing a public entry is a hole**, and it is exactly §11.3's rule about
 `gfx_fill_pat` being off the clip list for as long as it existed. The audit
 that finds them is by WRITER and not by entry point.
 
+#### 39.14.6 A RUN is not a shape — what a straddled Note Pad showed
+
+§39.14.2 made the whole-shape primitives take one display each, and that is
+right for a glyph: a cell is 8x8, and a cell split down the middle is four
+pixels on the wrong card against a rule worth more than they are. **`font_run`
+was given the same treatment and it is up to a window wide.** So on a window
+straddling the seam every line of text was cut dead at it — and because §27.2
+makes the run's own space padding the ERASE, with no band fill behind it, the
+erase was cut too.
+
+From the field, on a Hercules+CGA 5150 with Note Pad straddling: *typing
+lands on one display, only the drag selection draws on the other, the window
+redraw is one-sided, and backspace does not erase.* Every one of those follows
+from that single fact — the selection is `gfx_xor_fill`, which is a RECT and
+splits per display (§39.14.1), and everything else in Note Pad's drawing is
+`font_run`.
+
+**A run that does not fit one display goes per CELL and untranslated**, so
+each `font_char` resolves its own display. That is not new machinery: §6.1.2
+already falls back to per-cell drawing when a *clip* edge crosses a run, for
+the same reason in a different dimension — the pair clips at two
+granularities and the run would go blank rather than stale. A seam is a third
+edge with the same shape.
+
+**`vid_span_one` is the predicate**, and it is worth having by name because
+three primitives want it: does this whole rect lie inside one display?
+Resolving the top-left and testing the far corner against *that* display is
+the whole of it, since §39.19.2 places displays edge to edge and they never
+overlap — and the two origin tests are what catch the **dead zone**, because
+`vid_disp_of` falls back to the primary for a point no display covers and the
+origin then fails its own display's bounds.
+
+**The cost is paid only by a run that actually crosses.** One display, or a
+run inside one, is two compares and the fast path exactly as before; the
+per-cell path is what a caller doing `gfx_fill` + `font_str` by hand would
+have cost anyway.
+
+`gfx_scroll` and `gfx_blit4` keep REFUSING rather than falling back, and that
+stays right: a blit cannot take a sub-rect without advancing its source to
+match (§11.3), so there is no per-cell equivalent to fall back to — the
+caller repaints instead. `gfx_scroll` says so in `CF` and its callers already
+handle it; that a straddled `gfx_scroll` costs 368us instead of 48,817 in a
+field `gfxbench` is that refusal being measured, not a fault.
+
 ### 39.15 The pointer crosses; the arrow jumps (`KERN_BIG` only)
 
 **`[mouse_x]`/`[mouse_y]` are VIRTUAL desktop coordinates** — they always
