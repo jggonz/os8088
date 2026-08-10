@@ -1384,7 +1384,39 @@ wm_raise:
 .listed:                        ; whole-window one - the CONTENT changed too
     push ax
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
-    call wm_lift                ; ...and the top of the z-order
+
+    ; --- the OUTGOING front window is finished with first (SPEC.md 11.96.7) --
+    ; This block used to sit below the three calls that follow it, and
+    ; wm_su_take's own comment claimed it ran "before the window going over it
+    ; has drawn". That was false whenever wm_dock_under actually drew: it is
+    ; wm_dmg_wins, so a window on the dock strip is REDRAWN there - over this
+    ; one - and the bank then read the covering window's pixels off the glass
+    ; and stored them as this window's content. Nothing detected it, because a
+    ; cache is only wrong when it is USED: the ghost appeared on the next
+    ; restore, one operation later and somewhere else.
+    ;
+    ; So the bank happens while the window is genuinely still on top - before
+    ; wm_lift, so the z-order still agrees with the glass as well.
+    cmp bp, di
+    je .lift                    ; already the front window: no outgoing one
+    or bp, bp
+    jz .lift
+    test word [di+W_FLAGS], WF_FULL
+    jnz .lift                   ; we are about to cover the whole screen: the
+                                ; outgoing window's title bar is a strip drawn
+                                ; only to be painted over
+    xchg bp, di                 ; DI = the outgoing front, BP = the incoming
+    call wm_draw_title          ; DI != BP now, so it loses its stripes
+    call wm_grow_erase          ; ...and its grow box, which belongs to the
+                                ; front window just as its two title-bar
+                                ; boxes do (SPEC.md 11.1.1) - BEFORE the bank
+                                ; below, so the cache holds the window as it
+                                ; now looks
+    call wm_su_take             ; ...and its content is banked HERE, which is
+                                ; the last moment it is both correct and whole
+    xchg bp, di
+.lift:
+    call wm_lift                ; the top of the z-order
     call menu_draw_bar          ; BOTH guard themselves on wm_fs_vis, and that
     call wm_dock_under          ; is the point: under a fullscreen window each
                                 ; draws nothing AND records that its pixels are
@@ -1395,26 +1427,6 @@ wm_raise:
                                 ; wm_fullscreen's own raise, neither module was
                                 ; ever told, and quitting a 11.2 app left its
                                 ; bar and a blank strip on screen for good
-    cmp bp, di
-    je .self                    ; already the front window: no outgoing one
-    or bp, bp
-    jz .self
-    test word [di+W_FLAGS], WF_FULL
-    jnz .self                   ; we are about to cover the whole screen: the
-                                ; outgoing window's title bar is a strip drawn
-                                ; only to be painted over
-    xchg bp, di                 ; DI = the outgoing front, BP = the incoming
-    call wm_draw_title          ; DI != BP now, so it loses its stripes
-    call wm_grow_erase          ; ...and its grow box, which belongs to the
-                                ; front window just as its two title-bar
-                                ; boxes do (SPEC.md 11.1.1) - BEFORE the bank
-                                ; below, so the cache holds the window as it
-                                ; now looks
-    call wm_su_take             ; ...and its content is banked HERE, while it
-                                ; is still on the glass and before the window
-                                ; going over it has drawn (SPEC.md 11.96)
-    xchg bp, di
-.self:
     mov bx, di
     mov bp, di                  ; we ARE the front window now
     pop ax

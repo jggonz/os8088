@@ -5110,6 +5110,43 @@ disqualified from the flag at all (§11.96.1's question 1), minimized or not.
 The ordering is load-bearing: it runs **before the visible bit drops**, because
 `wm_su_take` refuses an invisible window — it would have no pixels to read.
 
+#### 11.96.7 A bank is only worth what was on the glass when it was taken
+
+`wm_su_take` reads the window's content **off the screen**, so it is valid only
+while nothing is on top of that rect. `wm_raise` said it honoured that —
+*"banked HERE, while it is still on the glass and before the window going over
+it has drawn"* — and the call sat **below** `wm_lift`, `menu_draw_bar` and
+`wm_dock_under`. The last of those is `wm_dmg_wins` (§11.91), so when any window
+sits on the dock strip it **redraws that window — over this one** — and the bank
+then stored the covering window's pixels as this window's content.
+
+Measured on a cycle-accurate 5150/CGA: two Disk windows, the front one dragged
+until it overhangs the strip, then raised. The outgoing window's cache comes
+back holding a complete picture of the window that covered it, and the ghost
+appears on the **next** restore — a minimize or a close, one operation later and
+somewhere else on screen — as 3,876 pixels of a window that is no longer there.
+
+Two properties made it survive this long. **A wrong cache is invisible until it
+is used**, so nothing near the ordering ever looked wrong; and the pollution
+needs a window *on the dock strip*, because `wm_dock_under`'s two gates
+(`dock_paint` drew something, and a window is sitting on the strip) are both
+`no` on an ordinary desktop.
+
+The fix is the order: the outgoing front window loses its stripes, loses its
+grow box and **is banked** before `wm_lift` runs, so both the glass and the
+z-order still agree that it is the top window. `wm_grow_erase` must still
+precede the bank — the grow box is inside the content rect — and the title bar
+is not in that rect at all, so it may be drawn on either side of it.
+
+**The guard cannot live in `wm_su_take` instead, and that is worth writing down
+because it is the obvious fix.** A `wm_obscured` test there would be right for
+this caller and wrong for `wm_su_bank` (§11.96.4), whose whole job is to bank a
+window the pass has *just drawn* while windows above it are still above it in
+`wm_zord` and have not been redrawn yet: the z-order says obscured, the glass
+says clean, and the glass is right. The invariant is a fact only the caller
+knows — *nothing has drawn over this window's content since it was last drawn* —
+so it is stated here and owed there.
+
 ### 12.05 The bar is redrawn only when its contents changed
 
 `menu_draw_bar` is on the same hot path as `dock_paint` — every window
