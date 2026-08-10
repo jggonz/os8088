@@ -3576,5 +3576,19 @@ OLD kernel diffed against ITSELF reported the identical 31 in the identical
 box. `settle` before each grab; the control is what said which of the two
 kernels was lying, and the answer was neither.
 
+**Two more apparatus traps, both found re-running this at the merge onto
+`elendilon`, and both worth knowing before trusting any framebuffer diff
+here.** `vram` hands back **one value per pixel** with the banks already
+resolved — it is not packed — so a bbox computed as though it were reports
+an x scaled by 8 and a y eight times too large, which put a menu-bar
+difference in the middle of the desktop and sent the first reading of it
+looking at the wrong subsystem entirely. And **the menu bar CLOCK is a
+difference the kernel is right to make**: with no RTC the fallback starts at
+`Jul 04 2026 00:00`, a VGA session runs about 50 s of guest time, and a run
+that crosses the minute shows `00:01` against the other's `00:00` — 93
+pixels in one 8x8 cell at (624,6), reproducing exactly because it is
+systematic rather than random, which is precisely what a real defect looks
+like. Crop the cell and read it before believing it.
+
 Cost: `.text` +13 bytes (the per-row saving is 2–4 bytes, the once-per-call
 setup 2–9), no rung crossed, `KERN_SIZE` unchanged.
