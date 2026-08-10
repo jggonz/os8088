@@ -20696,7 +20696,8 @@ this*, in both builds, and this one is purely *the store*, in `kern_big`
 **None of it exists on tier 0, which is the target machine.** An 8088 has no
 A20 line and nothing above linear 0x0FFFFF; `xm_init` publishes zero KB and
 every entry point below refuses having touched no port. The Task Manager reads
-`XMS 0/0K` there (§28). **And nothing in the tree allocates from the pool on
+no XMS bar and no XMS figures at all there (§41.6.1) — only the tier, which is
+what explains the absence. **And nothing in the tree allocates from the pool on
 any tier** — see §41.5.
 
 ### 41.1 The three tiers — MOVED to §60
@@ -20781,20 +20782,67 @@ three instructions until something fills it.
 
 ### 41.6 What the Task Manager reports
 
-One line, `CPU 8086  XMS used/sizedK`, directly **below** the package-pool map
+One line, `CPU 386+  XMS used/sizedK`, directly **below** the package-pool map
 and above the process list (§28), with a **bar** under it: `used/sized` of the
 bar's interior black, the rest white — the same shape and the same
 element-check discipline as the performance view's RAM bar, because it answers
 the same question about a different pool.
 
 **The tier shares this line rather than taking one of its own**, because it is
-the same fact: what the CPU is (§41.1) is what decides whether there can be any
+the same fact: what the CPU is (§60) is what decides whether there can be any
 memory above 1MB at all, and on the machine this OS is written for the honest
 reading of the whole line is "an 8086, so none". Nothing else in the UI ever
 said which tier `cpu_detect` settled on. The three names are padded to the same
 six columns so the figures beside them do not shuffle between machines, and the
 line needs no check word of its own — `tm_rowsum` hashes the composed string,
 so the tier folds into the XMS line's.
+
+### 41.6.1 On a machine with no store, none of it is drawn
+
+**No pool means no bar, no figures, and the list moves up.** The window used
+to show `CPU 8086  XMS 0/ 0K` over an empty rectangle on every machine this OS
+is actually written for — twenty-two pixels saying that a thing which cannot
+exist here does not exist, and an empty frame reads as *a reading of zero*
+rather than as an absence. So when the pool is 0 KB the bar is not drawn, the
+`XMS n/nK` figures come off the caption, and the header and the process rows
+rise by `TMM_XSHIFT`.
+
+**The tier stays**, and that is the point of taking the figures off rather
+than the line: `CPU 8086` is the only place the UI names it, and it is
+precisely the fact that *explains* the absence (§60.2).
+
+Four things hold it up:
+
+- **The question is the pool's SIZE, not `xm_caps`' free figure.** A full pool
+  answers 0 free and still exists — and the distinction is now visible on
+  screen, because an empty bar means "0 of 64,448 KB used" while no bar at all
+  means "there is no such memory".
+- **It is asked ONCE, in `tm_init`**, and never from a draw. The frame is
+  *sized* from the answer, so a value that could change under a live window
+  would leave the height and the row placement disagreeing. It cannot change
+  anyway — `xm_init` sizes the pool at boot and nothing resizes it.
+- **`TMM_XSHIFT` is `TM_ROW_H` exactly**, asserted at assembly time. The space
+  the bar gave back is one process row, so on a short screen the list gets
+  longer rather than the window getting shorter; where the list is already
+  bounded by its data, the window shrinks instead and the blank space goes.
+  Both are the same rule — do not leave a hole where the feature was.
+- **This is §31.10.1's rule, not §47's.** Greying says "this control is
+  unavailable"; there is no control here and nothing is unavailable. A Display
+  page with one adapter on it is not drawn either.
+
+It needs no build-time test to get `kern_small` right: that build's slots
+answer tier 0's answers (§41.11), so the same package does the same thing on
+both kernels for the same reason it does it on an 8088.
+
+**The second column follows for free, and that is the part worth checking on
+CGA.** A later column is top-anchored (`TM_C2_ROW_Y`) with a header of its
+own, so nothing about it moves; what changes is `tm_colrows`, the depth at
+which column 0 wraps into it — one row deeper, so one row fewer wraps.
+Measured on CGA: column 0 went from 5 rows to 6 and column 1 from 3 to 2, the
+window the same size, no blank strip. The **heap page is untouched** — it has
+neither map nor bar and starts at `TMH_ROW_Y` — and the **performance view**
+keeps its rows where they were, its list being bounded by `tm_ylim` on a short
+screen and by `TM_ROWS` = 13 against a frame that still holds 15 on a tall one.
 
 `TM_STRMAX` now takes the **maximum** of its two candidate longest lines rather
 than naming the winner. Which line is longest has already changed twice — the
@@ -20810,12 +20858,12 @@ addresses, so a bar is what it gets.
 
 Two things about the bar are load-bearing:
 
-- **Its frame is drawn by `tm_draw_mem`, not by `tm_xbar`.** On tier 0 the
-  width is 0, which is exactly the value `tm_rowck_clear` leaves in the check
-  word, so the body skips itself on the very first paint — a frame inside that
-  gate would never be drawn at all. An empty bar beside `XMS 0/0K` is
-  deliberate: an absent one reads as a missing feature rather than an empty
-  pool.
+- **Its frame is drawn by `tm_draw_mem`, not by `tm_xbar`.** The width is 0
+  on a pool nothing has taken from, which is exactly the value
+  `tm_rowck_clear` leaves in the check word, so the body skips itself on the
+  very first paint — a frame inside that gate would never be drawn at all.
+  Both carry §41.6.1's test, because on a machine with NO pool neither is
+  drawn at all and the rows are where the bar used to be.
 - **The figures need five digits.** `tm_put3` emits one character per hardcoded
   place, so 64,448 KB came out as a plausible-looking `48K`. Every other figure
   in this window is bounded by 640K and fits; this one is bounded by `int 15h
@@ -20837,7 +20885,8 @@ Tier 1 belongs to `make 286`, tier 0 to `make xt` / `xt-640` / `xt-cga` /
 Two branches are cheap to reach under the harness and must both be checked:
 run the `test` recipe by hand with `-m 1M` for **no extended memory at all**
 (AH=88h answers 0 — the claim refuses, the caps slot reports 0, the three
-allocator slots refuse, and the Task Manager line reads `0/0K`) and with
+allocator slots refuse, and the Task Manager shows the tier alone with no bar
+under it — §41.6.1) and with
 `-m 2M` for a small non-zero store, where an allocator that gets its
 subtraction wrong will hand out a base past the top of RAM.
 
@@ -20873,11 +20922,12 @@ changes no code: COPY never reads `gfx_lock_flag`.)
 
 - `make xt` and `make xt-640`: identical boot, identical desktop, identical
   Task Manager figures except the tier/XMS line, which reads
-  `CPU 8086  XMS     0/    0K`. This is the regression that matters most —
-  tier 0 is the target machine.
+  `CPU 8086` with **no XMS figures and no bar**, and the process list one row
+  longer for it (§41.6.1). This is the regression that matters most — tier 0
+  is the target machine.
 - `make test`: the line reads `386+` with five-digit KB figures; allocate,
   copy out, copy back and compare, and the bytes match.
-- The same `test` recipe with `-m 1M`: `386+` and `0/0K`, and every allocator
+- The same `test` recipe with `-m 1M`: `386+` alone, no bar, and every allocator
   slot refuses cleanly rather than handing out a base above the top of RAM.
 - `make 286` on a VM with more than 1MB: the line reads `286`, the HMA claim
   succeeds, the AH=87h transport round-trips the same buffer the tier-2 path
@@ -20953,8 +21003,8 @@ the codes differ and callers read them (§41.5) — ALLOC's "no store" is AX = 0
 COPY's is AX = 1, and FREE answers CF alone with DX:AX preserved.
 
 `SK_XMS` out of `OSAPI_SYS_KB` is 0 for the same reason, so the Task
-Manager's line reads `XMS 0/0K` — the same words on the same build for the
-same reason it reads them on an 8088.
+Manager draws no XMS bar and no XMS figures (§41.6.1) — the same window on
+the same build for the same reason it draws that on an 8088.
 
 **Cost, measured** (`make kernsplit`, and the figures are the change's own
 before/after rather than a doc baseline): `kern_big` is **byte-identical** —
