@@ -85,6 +85,17 @@ VIDDEF += -DDISK_COUNTERS
 DRVDEF += -DINSTBENCH
 endif
 
+# INSTCHUNK=1 puts the TOP of the hard-disk installer's copy-buffer ladder at
+# 32KB, so KERNEL.SYS - the biggest file it moves, and a hidden+system one -
+# goes down as a run of OSAPI_FILE_APPEND_SYS calls instead of a single write
+# (SPEC.md 18.4.4/52.10.11). That path only happens on a machine too short of
+# heap to fund 96KB, which is no machine here, so without this knob the one
+# code path that carries a system file across several writes is never run.
+# It touches the DRIVER only; the kernel is byte-identical either way.
+ifneq ($(INSTCHUNK),)
+DRVDEF += -DHIW_KMAXKB=32
+endif
+
 # FLOPPY1=1 puts the floppy transfer back to one sector per int 13h - the
 # pre-SPEC.md-18.91 loop, with nothing else changed. It exists so that the
 # batching can be A/B'd on real hardware without a source edit, which is the
@@ -264,9 +275,9 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 REDRAWFULL SNDSNIFF RAMKB FONT,\
+                             DIRW1 REDRAWFULL SNDSNIFF RAMKB FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \

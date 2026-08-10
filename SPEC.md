@@ -8163,13 +8163,49 @@ end of the file is **not** an error — it answers zero bytes, which is how the
 caller's loop terminates.
 
 `dskw_append` also refuses a **protected** file with `FERR_PROT`, `DSKW_PROT`
-being read-only|hidden|system|label|directory — so there is no chunked path
-to a system file and §19.6.1's slot is the only way to write one. That is a
-constraint on §52.10.4 rather than an oversight: the installer writes
-`KERNEL.SYS` **whole**, in one `OSAPI_FILE_WRITE_SYS` call, which is also the
-strongest guarantee that it lands contiguously from cluster 2 the way
-§52.10.2 requires. Chunked I/O is for the *application* files, which are the
-big ones and are not protected.
+being read-only|hidden|system|label|directory. That is right for a package
+and it was **wrong for the one caller that can legitimately make a system
+file**, which is §19.6.1's — so `OSAPI_FILE_APPEND_SYS` is the other half of
+that fence and §18.4.4.1 is why it had to exist.
+
+#### 18.4.4.1 A system file could be created and never finished
+
+The pairing is what was missing. `OSAPI_FILE_WRITE_SYS` stamps hidden +
+system on the file it makes; `dskw_append` then met those exact bits in
+`DSKW_PROT` and answered `FERR_PROT`. So a system file **larger than the
+caller's buffer could not be written at all** — created, and then unable to
+be extended by the only verb that extends anything.
+
+Nothing looked broken, because the only writer of system files is the
+installer and it had been given a way around it: claim a buffer big enough
+for the whole of `KERNEL.SYS` and write it in one call (§52.10.4). The
+round-number ceiling in `hd_ibuf_get` — 96KB, against a kernel of 86,118
+bytes — was the *capability*, not a tuning, and its fallback path said so in
+its own comment: "let `hd_icopy_one` refuse the one file that needs more".
+Spelled out, that is **a machine short of heap cannot install os8088**, and
+**a kernel that grows past 96KB cannot be installed on any machine** — with
+the same sentence for both, `A file is too big for this machine`, about a
+file the disk it booted from is carrying.
+
+`OSAPI_FILE_APPEND_SYS` (slot 0x03A0) is `dskw_append` with `DSKW_SPROT` in
+place of `DSKW_PROT` — the identical relaxation `dskw_write_sys`'s replace
+already takes, keyed off the identical `[dskw_syswr]` byte, one shot and
+cleared on the way out. **Read-only, a volume label and a subdirectory still
+refuse**, and the cluster-multiple precondition is untouched.
+
+Three things keep §19.6's rule where it was. It is behind the **same fence**
+— `drv_owns_seg`, the caller's segment being a loaded driver's — and shares
+`api_file_write_sys`'s body rather than copying it, because a fence written
+twice is a fence that can be got wrong once. It **cannot create** anything:
+an append needs a directory entry that is already there, so the only way to
+make a file the user can neither see nor delete is still the write cell. And
+a package that calls it gets the answer it has always had, `FERR_PROT`.
+
+What it buys: the installer's copy has **no size limit left in it**,
+`HIW_KMAXKB` becomes a speed choice (one write instead of three), and
+`make INSTCHUNK=1` builds the driver at the fallback size so the chunked
+system-file path is exercised on a machine that has plenty of heap — which
+is every machine here, and is why that path had never run.
 
 ### 18.94 The transfer instrument, published at a fixed offset
 
@@ -9694,6 +9730,18 @@ Two consequences worth stating, because both are load-bearing for §52.10:
   in the calling instance's own directory; this one must not, because the
   installer is naming files on the volume it is building and a folder put
   underneath it would scatter them.
+
+**There are TWO cells behind this fence, and the second is what lets the
+first finish its job.** `OSAPI_FILE_APPEND_SYS` (slot 0x03A0) is
+`dskw_append` with the same `DSKW_SPROT` relaxation, and §18.4.4.1 is the
+whole argument: without it a system file could be *created* and never
+*extended*, so one bigger than the caller's buffer could not be written at
+all. It shares `api_file_write_sys`'s body — one fence, a byte
+(`[api_sysap]`, `.text` with a real initialiser, written through `CS`
+because the stub still holds the caller's `DS` when it lands) picking which
+`dskw_` verb runs at the end — because two copies of a fence is one that can
+be got wrong. It cannot **create** anything, an append needing an entry that
+is already there, so §19.6's rule is unmoved by it.
 
 ### 19.7 `README.TXT` — the manual is on the disk, and the reader sets its shape
 
@@ -15684,19 +15732,58 @@ real memory at a real address whoever owns it.
 where a cache is the subject. Three caption lines, one question each:
 
 ```
-HEAP 545K   8 clm          the SIZE of the heap, and how many records are live
-HELD  37K  PURGE  63K      what is claimed, and on what terms
-FREE 508K   MAX 508K       what is left, and the largest single run
+HEAP 544K  AVAIL 519K      the heap, and what a claim can GET out of it
+HELD 25K(5)  PURGE 69K(2)  what is claimed, on what terms, and how many records
+MAX  515K   FRAG    4K     how that AVAIL is SHAPED
 ```
+
+**Every line is a pair that closes**, and that is the layout's whole rule:
+`HEAP − AVAIL = HELD`, and `MAX + FRAG = AVAIL`. A figure the reader cannot
+reconcile against its neighbours reads as a bug however sound the model
+behind it is — which is what `AVAIL 519K` beside `MAX 515K` did before `FRAG`
+existed, since "519K available, 515K maximum" is arithmetic nobody can close.
+`FRAG` is everything available *outside* the largest run: memory that is
+genuinely there and genuinely unclaimable in one piece, which is the number a
+refused claim wants and the only one that makes the pair add up. It reads
+`0K` on an unfragmented heap, which is a positive statement rather than a
+missing one.
 
 `HELD` and `PURGE` are **never added together anywhere the user can see**,
 and that is the point rather than a layout accident: their sum answers no
 question. `HELD` is memory nothing can get back; `PURGE` is memory the next
-claim can have for the price in the TIER column. `FREE` already includes
-`PURGE` (§50.6.3), so the three lines are readable together —
-`HEAP = HELD + FREE`, and `PURGE` says how much of that `FREE` is currently
-doing something useful. Total heap gets a line of its own because it is a
-property of the machine and the other two are properties of the moment.
+claim can have for the price in the TIER column. **The record count is split
+with them** for the same reason — one `8 clm` was a sum across the only
+distinction this page exists to draw — and it is `tm_putn` rather than
+`tm_put3` because a parenthesised count wants its own width: `(5)`, not
+`(  5)`. At two-digit counts the line is exactly 27 characters, which is
+`TM_STRMAX`'s limit.
+
+**`AVAIL`, never `FREE`.** It counts the purgeables (§50.6.3), so it is what a
+claim can *get* rather than what is unused, and the two differ by `PURGE`
+exactly. Labelled `FREE` it read as a contradiction: `HELD 37` + `PURGE 63`
+against `FREE 508` out of `HEAP 545` does not balance, because 63 of that
+"free" is holding a cache. `AVAIL` is also the kernel's own name for the
+quantity (`mem_avail`, `OSAPI_MEM_AVAIL`), and the same distinction Linux's
+`free(1)` draws between *free* and *available* for exactly this reason. The
+four figures then read as one statement: **`HEAP = HELD + AVAIL`**, with
+`PURGE` naming the part of `AVAIL` that is currently doing something useful.
+Total heap gets a line of its own because it is a property of the machine and
+the rest are properties of the moment.
+
+**`AVAIL` equal to `MAX` — so `FRAG 0K` — is the normal reading, not a
+fault.** They
+differ only when the heap is fragmented, and on a lightly loaded machine it
+is not: data claims pack up from the bottom, regions down from the top, and
+a purgeable block does not divide a run because `mem_run` steps over it. A
+worked example, measured — close an app whose region sits *above* another
+one and the hole it leaves is cut off from the main span by the survivor:
+
+```
+mem_base 17E0  mem_top A000  span 544K
+  17E0 +0140 held   19E0 +0140 held   2000 +0FC0 PURGE
+  1920 +00C0 held   1B20 +00C0 held   9CC0 +0240 held
+                    -> AVAIL 519K, MAX 515K, FRAG 4K   (the 4K above 9F00)
+```
 
 **`TIER` reads `HELD` for an unpurgeable claim, never a dash.** The column
 answers what LOSING a block costs, and a dash in a list under `TRIV` reads as
@@ -28582,6 +28669,88 @@ by then the install is done and the click adds software. Nine characters is
 72px and the button was 72px, so it is 88 now and the other two moved right
 by 16 — `HIW_B0X`/`HIW_BW0` drive the hit test as well as the drawing, so
 that is one change and not two.
+
+### 52.10.11 No file is too big for this machine any more
+
+`hd_icopy_one` had one refusal in it and it is gone. The chunked shape began
+`cmp byte [hd_isys], 0 / jne .toobig` — *a system file cannot be appended
+to*, which was a true statement about the kernel it was written against
+(§18.4.4) and which made the whole install rest on `hd_ibuf_get` winning its
+96KB claim. The fallback claim of 32KB was therefore not a fallback at all:
+on a machine that took it, the installer reported **`A file is too big for
+this machine`** about `KERNEL.SYS`, the file on the disk it had just booted
+from. The same sentence was waiting for every machine on the day the kernel
+passed 96KB; it stands at 86,118 bytes.
+
+§18.4.4.1's `OSAPI_FILE_APPEND_SYS` removes the constraint rather than
+widening the buffer, so `hd_iwrite_chunk` takes the `_SYS` twin of both
+verbs when `[hd_isys]` is set — created hidden + system, then extended past
+those bits — and `HIW_KMAXKB` is a **speed** choice: one write instead of
+three, and the strongest guarantee that `KERNEL.SYS` lands contiguously from
+cluster 2 (§52.10.2), which is why it is still asked for first.
+
+**`make INSTCHUNK=1` is how that path is tested at all.** It builds the
+driver with the buffer at its fallback size and touches nothing else — the
+kernel is byte-identical — so the run that carries a system file across
+several writes happens on a machine with plenty of heap, which is every
+machine anyone develops on. A path that only executes on hardware nobody has
+is a path that has never executed.
+
+### 52.10.12 The apps phase never writes a system file
+
+`hd_icopy_one` asks whose file it is before it copies one, and in the **apps
+phase** anything hidden + system on the source is skipped — silently, with
+`CF = 0`, because a system file on the apps disk is not a failure, it is a
+file that is not the apps disk's business.
+
+The phases mean different things and this is the line between them. The
+system phase *is* the system files: `KERNEL.SYS` at cluster 2, every `*.DRV`,
+whatever `SYSTEM.CFG` and `ASSOC.DAT` the source carries. The apps phase adds
+**software to a machine that already boots** (§52.10.10), and everything
+hidden + system on that machine was put there by the phase before it and
+belongs to the volume rather than to the disk currently in the drive.
+
+Three things it prevents, in rising order of how much they cost:
+
+- **A stale driver over a fresh one.** Nothing says the disk offered as the
+  apps disk was built from the same tree as the one that was offered as the
+  system disk.
+- **A floppy's `ASSOC.DAT` on a hard disk.** §54.7's rows carry
+  `ASC_ROWCLUS`, the directory the program lives in — a **source** cluster
+  number, meaningless on the destination. The hint loses to a real lookup
+  (§54.7.2), so this costs searches rather than correctness, but writing it
+  is still writing a lie.
+- **`KERNEL.SYS` relocated off cluster 2.** A replace allocates a fresh chain
+  at the end of the volume and frees the one at the front, which is exactly
+  the failure §52.10.2's tree-walk skip exists to prevent — *and that skip is
+  by NAME*, so it protects one file and nothing else.
+
+**It is a species test rather than a name list**, so it needs no maintenance
+as files are added and it reads the same two bits every other boundary in
+this system reads (§19.6). The name skip in `hd_icopy_tree` stays: that one is
+about the system phase not copying, in its walk, the file it has already
+written first and alone.
+
+**And it is what a consolidated install disk needs.** On the larger floppy
+geometries a single disk can carry the system and the applications, so the
+"apps disk" may legitimately *be* a system disk — offered as the second half
+of a split install, or simply left in the drive because there is only one. A
+copy that then rewrote the system files would be doing the wrong thing in
+the normal case rather than in a mistake, which is why this is a protection
+in the installer and not advice in a document.
+
+`INSTBNCH.TXT` also names the **copy buffer's KB** now. Which size the claim
+got is invisible from outside and changes how every large file is written, and
+a field report that cannot say which one was in play cannot settle an argument
+about the heap. One has already had to be settled by guessing.
+
+**And `hd_ibuf_get` walks a LADDER rather than asking twice.** 96KB then 32
+is a cliff, and the heap is a continuum: a machine that could spare 64 was
+copied at 32 — three times the `int 13h` calls for nothing. It tries
+96, 64, 48, 32, 16, 8 and takes the first that answers, which costs a table
+and a loop and makes the installer degrade smoothly on exactly the small
+machines this OS is for. The top rung is `HIW_KMAXKB`, so where the heap
+allows it `KERNEL.SYS` still goes down in one write.
 
 
 ## 52.11 Two images: the transport, and the tool
