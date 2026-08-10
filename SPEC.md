@@ -1173,6 +1173,76 @@ mostly irreducible: the far-call cell is the package ABI (§20.1), the eight
 push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract, and
 `vga_rect_setup`'s clipping is the clipping.
 
+### 5.7.1 A string op already advanced DI — do not pay to undo it
+
+**A rect's interior walk must not bank DI around its own `rep`.** §5.7's
+rule 5 retired the push/pops that `sw_col` paid on the *call* boundary and
+left the ones the row loops paid on every *scan line*, which is the same
+mistake one level in. All six interior walks in the two renderers were
+written as
+
+```
+.irow:  mov cx, <count>
+        push di
+        rep stosb               ; ...which advances DI by exactly <count>
+        pop di
+        add di, <row step>
+```
+
+and a `push`+`pop` pair is **29.7 clocks** on the target machine
+(PERFORMANCE.md Part 2's measured table), paid once per row per plane. The
+walk has already computed the number the pop is throwing away: after a
+`rep stos` of *n* bytes, DI *is* the row start plus *n*. So the row step
+**absorbs the count** — hold `rowstep - n` in a register and one `add di`
+ends the row:
+
+```
+        mov dx, ROW_BYTES       ; once, outside the loop
+        sub dx, <count>
+.irow:  mov cx, <count>
+        rep stosb
+        add di, dx
+```
+
+Three properties make that exact rather than approximately right, and a new
+walk has to keep all three:
+
+1. **DF is clear.** `rep stos` only advances DI forward with DF = 0, which
+   every one of these loops already required to write the right bytes at
+   all — this adds no dependency, it inherits one.
+2. **The count is non-zero, or the fold is still exact.** Each of these
+   loops is reached past a `dec`/`jz` on the interior width, and where the
+   `rep` itself can take a zero count (`sw_plane_op` at width 1, where
+   `shr cx,1` leaves CX = 0) the `stosb` tail runs off the carry, so DI
+   advances by the width either way. A walk whose write can be skipped
+   *entirely* may not fold.
+3. **The value handed to the next row is unchanged.** `sw_plane_op`'s
+   inlined `gfx_nextrow` tests the wrap bit against the new row start
+   (§39.3); folding produces that identical address, so the bank test is
+   untouched.
+
+**Where no register is free, unwind rather than bank.** `gfx_fill_pat` must
+leave BP alone and `sw_fill_pat` has all eight registers spoken for, so
+those two do `sub di, <count reg>` — 8.69 clocks against the pair's 29.7 —
+and keep the row step they had. The rule is the same one either way: the
+count is in a register already, so *nothing* need be pushed.
+
+**What it is worth, and what it is not.** Measured, not modelled
+(PERFORMANCE.md Part 9, Set 23 — `gfxbench` on all three adapters):
+`GFX_FILL 64x64` is **−3.26% on CGA, −4.02% on Hercules and −10.75% on
+VGA**, `GFX_FILL_GRAY` −14.75% on VGA where two pairs went, and every fill
+row moves in the same direction on every adapter. VGA gains the most because
+its interior `rep` covers four planes at once through Set/Reset, so the loop
+is short and its overhead a larger share of it.
+
+**`GFX_FILL 8x8` and `GFX_FILL 256x1` do not move at all, and that is the
+other half of the result.** This is a per-**scan-line** cost, so it does not
+touch §5.7's ~756 µs per-CALL floor: a one-row fill gains nothing, and the
+whole win is proportional to height. It is the *opposite* lever from
+§11.90/§11.91, which cut calls because calls are where the money is — worth
+having because a fill is usually tall, and not worth quoting as a figure for
+drawing in general.
+
 ## 6. font.inc
 
 `font_init` runs **after** `vid_setmode` (§39.6): zero ES:BP, then int 10h
@@ -19009,7 +19079,7 @@ handful of pixels, and the erase — a replay whose call boundaries need not
 match the draw's — can strand that handful rather than clearing it.
 
 **`gfx_xor_rect`'s unclipped path on a 1bpp adapter.** `gfx_xor_rect` with no
-clip region jumps to `bb_xor_rect`, which decomposes into `bb_xor_fill` —
+clip region jumps to `sw_xor_rect`, which decomposes into `sw_xor_fill` —
 the software renderer's body, *below* the public `gfx_xor_fill` where the hook
 sits. So the drag outline and Missile's crosshair drew into the primary at the
 other display's coordinates. The clipped path was always safe, because it

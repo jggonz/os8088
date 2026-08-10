@@ -1837,12 +1837,12 @@ gfx_fill_raw:
     mov di, [vga_off]
     inc di
     mov si, [vga_rows]
+    mov dx, ROW_BYTES           ; DX = the row step LESS what the rep advances
+    sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
 .irow:
     mov cx, bx
-    push di
     rep stosb
-    pop di
-    add di, ROW_BYTES
+    add di, dx
     dec si
     jnz .irow
 .reset:
@@ -1960,15 +1960,16 @@ gfx_fill_gray_raw:
     mov di, [vga_off]
     inc di
     mov si, [vga_rows]
+    mov ah, bl                  ; the row pattern moves to AH so BX can carry
+    mov bx, cx                  ; the count the rep destroys, and DX the row
+    mov dx, ROW_BYTES           ; step less that count (SPEC.md 5.7.1)
+    sub dx, bx
 .irow:
-    mov al, bl
-    push cx
-    push di
+    mov al, ah
+    mov cx, bx
     rep stosb
-    pop di
-    pop cx
-    add di, ROW_BYTES
-    not bl
+    add di, dx
+    not ah
     dec si
     jnz .irow
 .reset:
@@ -2105,15 +2106,14 @@ gfx_fill_pat_raw:
     mov di, [vga_off]
     inc di
     mov si, [vga_rows]
-    mov bx, [vga_y1]
-    and bx, 7
+    mov dx, cx                  ; DX = the count, which the rep destroys; BX is
+    mov bx, [vga_y1]            ; the pattern row and BP is not ours to spend,
+    and bx, 7                   ; so the row start is unwound (SPEC.md 5.7.1)
 .irow:
     mov al, [vga_patbuf+bx]
-    push cx
-    push di
+    mov cx, dx
     rep stosb
-    pop di
-    pop cx
+    sub di, dx
     add di, ROW_BYTES
     inc bx
     and bx, 7
@@ -2435,15 +2435,15 @@ vga_xor_fill_vram:
     mov di, [vga_off]
     inc di
     mov si, [vga_rows]
+    mov dx, ROW_BYTES           ; the row step less what the byte loop advances
+    sub dx, bx                  ; DI by (SPEC.md 5.7.1)
 .irow:
     mov cx, bx
-    push di
 .ibyte:
     mov al, [es:di]             ; every interior byte too
     stosb
     loop .ibyte
-    pop di
-    add di, ROW_BYTES
+    add di, dx
     dec si
     jnz .irow
 .reset:

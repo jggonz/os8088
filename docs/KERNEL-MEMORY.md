@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54584
+    "text": 54597
   },
   "small": {
     "bss": 4651,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52073
+    "text": 52086
   }
 }
 ```
@@ -876,12 +876,12 @@ generated in the first place.
 |---|---:|---:|
 | the file system, end to end | 28,523 | 37.1% |
 | the window system and its furniture | 16,229 | 21.1% |
-| drawing: adapters, primitives, glyphs, icons | 10,968 | 14.3% |
+| drawing: adapters, primitives, glyphs, icons | 10,981 | 14.3% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,813 | 12.8% |
 | the kernel proper: API table, heap, scheduler, events | 5,886 | 7.7% |
 | the Control Panel | 4,120 | 5.4% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **76,915** | |
+| **total** | **76,928** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -891,7 +891,7 @@ generated in the first place.
 | `wm.inc` — the window manager (§11) | 5,840 | — | **5,840** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,527 | — | **4,527** | 132 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,542 | — | **4,542** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
@@ -916,14 +916,14 @@ generated in the first place.
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
-| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 735 | — | **735** | 4 | — |
+| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 733 | — | **733** | 4 | — |
 | `toast.inc` — **(undescribed)** | 435 | — | **435** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,694 | — | **2,694** | — | — |
-| **total** | **54,584** | **22,331** | **76,915** | **4,736** | **7,762** |
+| **total** | **54,597** | **22,331** | **76,928** | **4,736** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

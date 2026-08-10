@@ -208,19 +208,20 @@ sw_plane_op:
     mov si, [vga_rows]
     mov ah, [sw_pat]
     mov bx, [cs:vid_rowadd]     ; gfx_nextrow's two parameters, hoisted out of
-    mov dx, [cs:vid_wrapbit]    ; the row loop and inlined below
+    sub bx, bp                  ; the row loop and inlined below - the step
+                                ; carrying the interior walk's own advance, so
+                                ; neither loop banks DI (SPEC.md 5.7.1)
+    mov dx, [cs:vid_wrapbit]
     cmp byte [sw_mode], SWM_XOR
     je .xrow
 .irow:
     mov al, ah                  ; AX = pattern:pattern, so stosw is safe for
     mov cx, bp                  ; both the solid 00/FF and the AA/55 dither
     shr cx, 1
-    push di
     rep stosw                   ; string ops leave the shr's CF alone
     jnc .ieven
     stosb                       ; odd interior width: one tail byte
 .ieven:
-    pop di
     add di, bx                  ; gfx_nextrow, inlined (see the note above)
     test di, dx
     jz .inw
@@ -232,12 +233,10 @@ sw_plane_op:
     jmp .out
 .xrow:
     mov cx, bp
-    push di
 .xbyte:
     not byte [es:di]
     inc di
     loop .xbyte
-    pop di
     add di, bx
     test di, dx
     jz .xnw
