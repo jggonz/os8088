@@ -360,38 +360,38 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4742,
+    "bss": 4743,
     "budget": 96256,
     "codemax": 65536,
-    "cold": 21664,
-    "coldpara": 1376,
+    "cold": 22477,
+    "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3680,
-    "kend": 6016,
+    "imgpara": 3712,
+    "kend": 6080,
     "kseg": 96,
-    "ksize": 94720,
-    "lowbss": 7748,
+    "ksize": 95744,
+    "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 53957
+    "text": 54222
   },
   "small": {
     "bss": 4662,
     "budget": 94208,
     "codemax": 65536,
-    "cold": 21664,
+    "cold": 21656,
     "coldpara": 1376,
     "fatpara": 288,
     "imgpara": 3616,
     "kend": 5952,
     "kseg": 96,
     "ksize": 93696,
-    "lowbss": 7748,
+    "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52823
+    "text": 52841
   }
 }
 ```
@@ -406,28 +406,37 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 52,741 + `.bss` 4,734) | 57,856 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
-| cold code | 22,016 B | 21,664 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
+| image (`.text` 54,222 + `.bss` 4,743) | 59,392 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| cold code | 22,528 B | 22,477 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
-| `.lowbss` + task 0's stack | 9,216 B | 7,748 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
+| `.lowbss` + task 0's stack | 9,216 B | 7,762 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
 | the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **93,696 B** | of a 96,256-byte budget — **2,560 B spare, FIVE steps**, which is the fifth move's standard exactly. Move 14's grant is part spent: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, and the toast and baked-typeface rounds a third |
+| **total** | **95,744 B** | of a 96,256-byte budget — **512 B spare, ONE step**. Move 14's grant is spent and then some: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, the toast and baked-typeface rounds a third, §39.14/§39.15's per-display split two more, and SPEC.md §18.96's floppy formatter two |
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
-(docs/KERN-SPLIT-PLAN.md). `kern_small` is byte-identical today — nothing has
-gone through the seam — so the table describes both; when they diverge this
-one stays big's and `make kernsplit` is what prices the difference.
+(docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — SPEC.md §18.96's
+floppy formatter is the first thing through the seam — so this table is big's
+alone and `make kernsplit` is what prices the difference. `kern_small` stands
+at **93,696 B of its own 94,208-byte budget, 512 B spare, one step**, which is
+exactly where it stood before the formatter landed: the whole of that feature
+is behind `%ifndef KERN_SMALL`, and the Edit-menu split that came with it
+(SPEC.md §22.12) fits in slack the small build already had.
+
+**Both variants now stand at one step, and that is the number to quote.** The
+two got there independently — big by spending §39's dual-display round and the
+formatter, small by spending nothing at all since its own budget was set — so
+the next feature of any size has to ask, on either build.
 
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
-are the only slack anywhere in the ladder: **144 bytes on the image, 196 on
-the cold segment, 444 on `.lowbss`**. They are rounding artefacts, not
+are the only slack anywhere in the ladder: **427 bytes on the image, 51 on
+the cold segment, 430 on `.lowbss`**. They are rounding artefacts, not
 reservations — and per the accounting section above they are also the whole
 of what the next feature can spend without moving the machine's RAM. The
-image rung has **144 bytes** in it: the next feature of any size at all takes
-move 12's LAST step, and that is the number to quote when asking.
+**cold segment has 51 bytes** in it, which is the one to watch: anything added
+there at all takes a whole step, and the footprint has only one left.
 
-The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0D80,
-`FAT_SEG` 0x12E0, `LOW_SEG` 0x1400, `HEAP_SEG` 0x1640. `tools/kernsize.py`
+The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0EE0,
+`FAT_SEG` 0x1460, `LOW_SEG` 0x1580, `HEAP_SEG` 0x17C0. `tools/kernsize.py`
 prints that line, so it need never be derived by hand again.
 
 **Run `python3 tools/kernsize.py` rather than trusting the numbers in this
@@ -865,31 +874,31 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 27,395 | 36.2% |
-| the window system and its furniture | 15,869 | 21.0% |
-| drawing: adapters, primitives, glyphs, icons | 10,887 | 14.4% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,801 | 13.0% |
-| the kernel proper: API table, heap, scheduler, events | 5,867 | 7.8% |
-| the Control Panel | 4,426 | 5.9% |
+| the file system, end to end | 28,460 | 37.1% |
+| the window system and its furniture | 15,872 | 20.7% |
+| drawing: adapters, primitives, glyphs, icons | 10,887 | 14.2% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,801 | 12.8% |
+| the kernel proper: API table, heap, scheduler, events | 5,877 | 7.7% |
+| the Control Panel | 4,426 | 5.8% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **75,621** | |
+| **total** | **76,699** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 806 | 6,930 | **7,736** | 335 | — |
+| `files.inc` — the Disk window (§22) | 905 | 7,142 | **8,047** | 336 | — |
 | `wm.inc` — the window manager (§11) | 5,551 | — | **5,551** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,676 | **4,696** | 155 | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
 | `ctrl.inc` — the Control Panel (§31) | 877 | 3,549 | **4,426** | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,037 | — | **4,037** | 118 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,577 | — | **2,577** | 252 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 84 |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,361 | — | **2,361** | 37 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 98 |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,364 | — | **2,364** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
@@ -913,8 +922,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,675 | — | **2,675** | — | — |
-| **total** | **53,957** | **21,664** | **75,621** | **4,742** | **7,748** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,685 | — | **2,685** | — | — |
+| **total** | **54,222** | **22,477** | **76,699** | **4,743** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
