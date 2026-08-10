@@ -20,14 +20,14 @@
 ;
 ;   adapter            PAIR    PAIR    RUN     RUN
 ;                      aligned x+5     aligned x+5
-;   VGA ([bb_on] = 0)   2694   2957     2763   3023
+;   VGA ([vid_mono] = 0) 2694  2957     2763   3023
 ;   CGA 640x200         3400   3513     2695   3580
 ;   Hercules 720x348    3369   3483     2673   3548
 ;
 ; The SKEWED pair is the status quo - ui_drag writes W_X straight from the
 ; mouse, so a draggable window's content x is arbitrary mod 8 - and the
 ; aligned RUN is what a window would cost if something guaranteed alignment.
-; 1.30x on mono; 2.4-2.5% AGAINST on VGA, where [bb_on] is 0 and every row
+; 1.30x on mono; 2.4-2.5% AGAINST on VGA, where [vid_mono] is 0 and every row
 ; takes the fallback whatever the alignment.
 ;
 ; --- how it is timed ---------------------------------------------------------

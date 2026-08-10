@@ -730,7 +730,7 @@ $(BUILD)/fractal.o88: $(BUILD)/fractal.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/fractal.bin -o $@
 
 # Paint, the seventh shipped package: a bitmap editor - eight tools, a 4bpp
-# offscreen canvas above BB_SEG, one-level undo/redo, an internal clipboard and
+# offscreen canvas, one-level undo/redo, an internal clipboard and
 # BMP load/save through the Standard File dialog. Needs ~620KB of conventional
 # memory for its canvas (int 12h decides; a smaller machine gets a notice
 # window instead), so `make run-640` is the way to exercise it.

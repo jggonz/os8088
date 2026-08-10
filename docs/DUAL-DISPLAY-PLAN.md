@@ -126,9 +126,8 @@ driving two monitors; nothing is shared. This is the classic period
 configuration — it is how dual-monitor debugging worked on these machines, and
 it is why the field 5150 is wired the way it is.
 
-**Nothing costs conventional RAM.** Both framebuffers are card memory. Unlike
-SPEC.md §32's back buffer, which is a 150KB heap claim, a second display is
-**free in RAM terms**. On a 128KB machine that is the difference between
+**Nothing costs conventional RAM.** Both framebuffers are card memory, so a
+second display is **free in RAM terms**. On a 128KB machine that is the difference between
 possible and not.
 
 Three things are *not* free, and each is a real ordering trap of exactly the
@@ -241,8 +240,8 @@ entries and the whole of blitting.
 | `gfx_line_mono` / `gfx_lstep*` | display of each endpoint | walks pixels, not rects |
 | `cur_*` | see §4.1 | its own fused single-pass path (SPEC.md §7.1) |
 
-**`gfx_flush` needs nothing** — it is VGA-only and a Herc+CGA machine has no
-back buffer at all (SPEC.md §39.5).
+(`gfx_flush` used to need a line here; SPEC.md §32's back buffer is gone and
+so is the routine.)
 
 ### 4.1 The cursor does not straddle — it jumps
 
@@ -337,7 +336,7 @@ row is one call, a desktop dither is one call per display. The steady state is
 against 756 us — under half a percent.
 
 **On a single-display machine the whole mechanism is one compare on
-`[vid_ndisp]` and a taken branch**, which is how `[bb_on]` and `[wm_clip_n]`
+`[vid_ndisp]` and a taken branch**, which is how `[vid_mono]` and `[wm_clip_n]`
 already pay for themselves. That property is not negotiable: every machine
 that is not the 5150 must measure exactly as it does today.
 
@@ -543,7 +542,7 @@ line and per glyph cell.
 Against that saving, a driver buys three new problems:
 
 - **The desktop cannot extend until `drv_boot` runs**, which is after
-  `mem_init`, `bb_init`, `font_init` and every splash notch. So the first
+  `mem_init`, `font_init` and every splash notch. So the first
   `wm_paint_all` is single-display and everything must re-fit afterwards — a
   second `wm_refit` + full repaint on every boot of a dual machine.
 - **A driver that fails to attach must leave nothing behind** (SPEC.md §51.2's
@@ -1141,7 +1140,7 @@ the arrow through whatever display is live. Step 5 makes the cursor
 display-aware and the optimisation is available then.
 
 **`gfx_save`/`gfx_restore` are deferred to step 5 and that is a scope call,
-not an oversight.** `gfx_save` tail-*jumps* into `bb_save`, so bracketing it
+not an oversight.** `gfx_save` tail-*jumps* into `sw_save`, so bracketing it
 means restructuring a path the cursor is on; and its only caller today is the
 menu save-under, which hangs off the menu bar and so is on the primary by
 §3.1. The cursor's save-under calls `vga_save_vram` directly, below any hook.

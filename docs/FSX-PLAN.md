@@ -248,10 +248,8 @@ When the app's proc returns (the only exit):
    clicks queued at the game must not land in the desktop ladder; the
    `snd.inc` click-abort drain is the precedent.
 3. Disarm: `[fsx_task]` = 0xFF under `cli`.
-4. Repaint under the still-held lock: if `[bb_dbl]` is armed the back buffer
-   still holds the desktop pixel-perfect — full-region flush, cheap. Else
-   `wm_paint_all` with `[menu_bdirty]` forced (the save-under-overdraw
-   precedent).
+4. Repaint under the still-held lock: `wm_paint_all` with `[menu_bdirty]`
+   forced (the save-under-overdraw precedent).
 5. Return to the callback; its dispatch epilogue's `gfx_unlock` brings the
    cursor back with a fresh save-under.
 
@@ -269,17 +267,13 @@ that never changes on a machine where every read is 0FFh. Retrace is what
 makes palette animation and tear-free page flips possible, and — on a real
 CGA in 80-column text — it is the snow-avoidance window.
 
-**It is also the present, and that is Tracker's requirement designed in
-now.** The bracket never calls `gfx_unlock`, and the unlock is where the
-§32 back-buffer flush lives — so a §45.11-style renderer (Tracker's smooth
-fullscreen redraw rides the buffer) would draw frames nobody ever sees.
-`FSX_WAIT` therefore runs `gfx_flush` **before** waiting whenever
-`[bb_dbl]` is armed and the mode is unswitched: draw into the buffer,
-`FSX_WAIT`, repeat — a complete frame loop in one slot. Two edges pinned
-with it: **`FSX_MODE` refuses (CF=1) while the caller's back buffer is
-armed** — the buffer describes desktop geometry and nothing else, so
-dbuf-off comes first (one predicate, §47 style); and after a mode switch
-the flush clause is dead by construction, `FSX_WAIT` is pure clock.
+**It was also the present, and that half has been removed.** The bracket
+never calls `gfx_unlock`, and the unlock is where §32's back-buffer flush
+lived — so `FSX_WAIT` ran `gfx_flush` before waiting whenever a buffer was
+armed and the mode unswitched, and `FSX_MODE` refused while one was, the
+buffer describing desktop geometry and nothing else. SPEC.md §32 removed the
+buffer; `FSX_WAIT` is pure clock on every path now, and Tracker's Smooth
+(§45.11) went with it.
 
 ## 7. Lifecycle, refusals, and the forbidden list
 

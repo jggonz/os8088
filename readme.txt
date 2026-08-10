@@ -238,9 +238,6 @@ System menu > Control Panel. The list on the left picks a page.
 SCHEDULER
 How the machine shares time between programs. Leave it on Pre-emptive. Cooperative lets one program hold the machine until it gives way: a little faster, much less smooth.
 
-DISPLAY
-Direct to screen, or Double buffered. Double buffered draws more smoothly but needs 150K of spare memory and a VGA card, so it is greyed out on a smaller machine. Close a program and it may come back.
-
 DATE/TIME
 See section 11.
 
@@ -249,6 +246,9 @@ Optional extras, off until you switch them on. Tick a box to load one now. Under
 
 SOUND
 Which sound hardware to use: PC Speaker, AdLib or Sound Blaster. Hardware the machine does not have is greyed out. The Test button plays a tone through whatever is picked, so you can hear whether it works.
+
+DISPLAY
+Only on a machine with two video cards in it. One row per card, and Activate Mode moves the machine onto the one you pick. Below that, Single uses just that card; Right and Below put the second screen beside or under the first and let the desktop span both.
 
 *** IMPORTANT ***
 Settings are written to the system disk when you CLOSE the Control Panel - the box at the LEFT of its title bar. Putting it away into the dock does not save them. If the system disk is not in drive A:, or it is write-protected, nothing is remembered and the machine starts up with the old settings.

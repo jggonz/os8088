@@ -1044,7 +1044,7 @@ gb_prims:
     ; ~756 us"; it measures 118 in instructions, and ~36 instructions removed
     ; per arrival rather than 5.7's 196. The reason is structural and worth
     ; knowing: gfx_lstep is NOT a rect primitive - it never goes near
-    ; vga_rect_setup or bb_rect - so its arrival is the far-call cell and a
+    ; vga_rect_setup or sw_rect - so its arrival is the far-call cell and a
     ; prologue, not the rect machinery 5.7 measured. 5.6.8 borrowed a floor
     ; that does not apply to it.
     ;
@@ -1359,15 +1359,12 @@ gb_composite:
 ; the content, so wm_title_set would letter a title bar over the app's own top
 ; 18 rows - a question about the kernel, not a measurement of it.
 ;
-; ONE CAVEAT ON READING THE PRIMITIVE PAIRS, and it is a VGA one. [bb_mono]
-; (SPEC.md 32) is a ONE-WAY flag, and bb_mono_chk is five instructions cheaper
-; once it has retired - so if anything drawn between the two passes used a
-; colour other than 0 or 15, every fullscreen row comes in slightly under its
-; twin for a reason that has nothing to do with fullscreen. It shows as a FLAT
-; few instructions per drawing call rather than a proportional gap. On the two
-; 1bpp adapters - the machine this suite is for - bb_init retires the flag at
-; boot (SPEC.md 39.5), so the mono columns are a clean A/B and measured
-; identical under -icount on a CGA.
+; A CAVEAT ON READING THE PRIMITIVE PAIRS USED TO LIVE HERE, and SPEC.md 32's
+; removal retired it: [bb_mono] was a one-way flag that made every fullscreen
+; row come in slightly under its twin whenever something drawn between the two
+; passes used a colour other than 0 or 15. Neither the flag nor its check
+; exists now, and the pairs are a clean A/B on every adapter. Figures in this
+; file taken before that removal were measured while it did.
 ;
 ; And the entering and leaving is itself a measurement nothing else here can
 ; reach. wm_fullscreen is the ONE window-composition call a package may make

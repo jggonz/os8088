@@ -14,8 +14,8 @@ for them are marked **RESOLVED** where that is so. In short:
 
 | asked for | shipped as |
 |-----------|------------|
-| `alloc(paragraphs)`/`free`, a `largest_free` query, and the same map governing the kernel's own speculative RAM | the **claim heap**, SPEC.md §50 — `OSAPI_MEM_CLAIM` / `OSAPI_MEM_FREE` / `OSAPI_MEM_AVAIL`, freed at instance teardown, billed by the Task Manager, and `bb_set` asking it for the back buffer like anyone else |
-| a `gfx_blit4` slot | SPEC.md §5.4 — packed 4bpp, adapter- and back-buffer- and clip-aware |
+| `alloc(paragraphs)`/`free`, a `largest_free` query, and the same map governing the kernel's own speculative RAM | the **claim heap**, SPEC.md §50 — `OSAPI_MEM_CLAIM` / `OSAPI_MEM_FREE` / `OSAPI_MEM_AVAIL`, freed at instance teardown, billed by the Task Manager, and the kernel's own speculative claims going through it like anyone else |
+| a `gfx_blit4` slot | SPEC.md §5.4 — packed 4bpp, adapter- and clip-aware |
 | the kernel's glyph table | `OSAPI_FONT_GLYPHS`, SPEC.md §6 |
 | `wm_resize(BX, w, h)`, and a resize callback whose refusal `ui_grow` honours | `OSAPI_WM_RESIZE` and `W_ONSIZE`/`OSAPI_WM_ONSIZE`, SPEC.md §11.1 |
 | a way to stop paying the drawing lock on every mouse sample of a stroke | **fullscreen exclusive**, SPEC.md §53 — and Paint is its same-mode consumer (SPEC.md §42.7): `OSAPI_FSX_RUN` holds the lock for the whole session, so `pt_wait` stops being an unlock/yield/lock round trip and becomes `OSAPI_FSX_WAIT`. It takes the bracket *without* the §11.2 surface, because for an app this expensive to repaint the surface costs a spare full-canvas draw on the way home |
@@ -509,7 +509,7 @@ Two things worth knowing before adding another message here:
   thing it announced; SPEC.md §59.4's `toast_now` draws on the spot when the
   caller provably holds the gfx lock, which a menu command always does. The
   `pt_wait` that used to exist to flush it on a double-buffered machine is
-  no longer needed for that reason — `toast_now` calls `gfx_flush` itself.
+  no longer needed for that reason — `toast_now` draws on the spot itself.
 - **A file operation retires it.** `fpg_begin` (SPEC.md §12.8) is in the same
   pixels and is a live progress bar rather than a static line, so it wins.
   That is why `Saving...` before a `pt_save` is redundant with the widget and

@@ -1168,8 +1168,9 @@ because they are still quoted in old commit messages: a framebuffer
 read-modify-write is **79.6 clocks, not ~30**, and only about 7 of those are
 the bus; and the "add 20–40% for the 8088" rule of thumb was replaced by the
 instruction floor above. The back buffer's ~24× flush-to-render ratio was
-never measured on hardware and cannot be — double buffering is VGA-only
-(SPEC.md §32) and this machine has no VGA.
+never measured on hardware and never could be — double buffering was VGA-only
+and this machine has no VGA, which is a large part of why SPEC.md §32 removed
+the feature outright.
 
 The full table is [PERFORMANCE.md Part 2](../PERFORMANCE.md), together with the
 standing budget every redraw path in the tree has already been measured down

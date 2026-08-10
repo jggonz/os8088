@@ -9,32 +9,12 @@
 ;
 ; THE CANVAS LIVES OUTSIDE THE PACKAGE REGION. A 448x280 image at 4bpp is
 ; 62,720 bytes against a 19.5KB region (SPEC.md 20.1), so the pixels cannot
-; be here. They sit in four 64KB windows starting at linear 0x66000 - the
-; first paragraph above BB_SEG's four planes (SPEC.md 2: BB_SEG's 4 x 0x9600
-; bytes end at 0x657FF), which is the lowest address in the machine that no
-; kernel structure can ever reach:
-;
-;   0x66000  PT_CVSEG   canvas      118-byte BMP header + rows, bottom-up
-;   0x76000  PT_UNSEG   undo image  same layout, row-granular (see pt_umark)
-;   0x86000  PT_CBSEG   clipboard   also the load staging buffer (64KB)
-;   0x96000  PT_SCSEG   scratch     the claim record + the flood-fill stack
-;
-; That is memory nobody granted us, and it is the ONE thing here that a
-; kernel service should own instead (see the notes in docs/PAINT-NOTES.md).
-; Three consequences are handled rather than hoped about:
-;
-;  1. The region only exists on a machine with ~620KB of conventional RAM,
-;     so pt_entry asks int 12h first and puts up "Not enough memory" instead
-;     of a canvas when the answer is short. A 256KB or 512KB machine gets a
-;     window that explains itself and touches nothing.
-;  2. Two instances would share one canvas, so the SECOND one refuses. The
-;     claim record at PT_SCSEG:0 carries a magic pair and the owner's window
-;     pointer; pt_dupchk trusts it only if that record is still a used
-;     window whose title string is ours (SPEC.md 11's W_FLAGS bit 0 and
-;     W_TITLE, read through DS = KERNEL_SEG). A closed Paint leaves a stale
-;     magic behind - there is no close hook for a task-less package - and
-;     that test is what makes the staleness harmless.
-;  3. BB_SEG is never touched, so the Control Panel's Display page can arm
+; be here. They come from the claim heap (SPEC.md 50): one contiguous block
+; asked for at startup and carved into four - canvas, undo image, clipboard,
+; scratch - with the sizes tiered off OSAPI_MEM_AVAIL, so a small machine
+; gives up features one at a time and finally gets a notice window instead of
+; a canvas. See the block above PT_GIF_MAX_KB below for what this used to be
+; and why none of it is a fixed address any more.
 ;
 ; PERFORMANCE. Two decisions carry the whole app:
 ;
