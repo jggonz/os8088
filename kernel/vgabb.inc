@@ -867,19 +867,20 @@ bb_plane_op:
     mov si, [vga_rows]
     mov ah, [bb_pat]
     mov bx, [cs:vid_rowadd]     ; gfx_nextrow's two parameters, hoisted out of
-    mov dx, [cs:vid_wrapbit]    ; the row loop and inlined below
+    sub bx, bp                  ; the row loop and inlined below - the step
+                                ; carrying the interior walk's own advance, so
+                                ; neither loop banks DI (SPEC.md 5.7.1)
+    mov dx, [cs:vid_wrapbit]
     cmp byte [bb_mode], BBM_XOR
     je .xrow
 .irow:
     mov al, ah                  ; AX = pattern:pattern, so stosw is safe for
     mov cx, bp                  ; both the solid 00/FF and the AA/55 dither
     shr cx, 1
-    push di
     rep stosw                   ; string ops leave the shr's CF alone
     jnc .ieven
     stosb                       ; odd interior width: one tail byte
 .ieven:
-    pop di
     add di, bx                  ; gfx_nextrow, inlined (see the note above)
     test di, dx
     jz .inw
@@ -891,12 +892,10 @@ bb_plane_op:
     jmp .out
 .xrow:
     mov cx, bp
-    push di
 .xbyte:
     not byte [es:di]
     inc di
     loop .xbyte
-    pop di
     add di, bx
     test di, dx
     jz .xnw
@@ -1008,12 +1007,14 @@ bb_fill_pat:
     mov ah, al                  ; byte uniform across the row: stosw + odd
     mov cx, si                  ; tail via the shr carry, like bb_plane_op
     shr cx, 1
-    push di
     rep stosw
     jnc .ieven
     stosb
 .ieven:
-    pop di
+    sub di, si                  ; back to the row start - the walk advanced DI
+                                ; by exactly SI. Every register is spoken for
+                                ; here, so this is the unwind rather than the
+                                ; folded step the others take (SPEC.md 5.7.1)
     call gfx_nextrow
     inc bx
     and bx, 7

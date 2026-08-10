@@ -3524,3 +3524,57 @@ no `APPS` folder for — and the distinct-sector count is what settles the
 question. That division of labour is worth stating on its own: **counts and
 traces on MartyPC, seconds on the 5150**, and a claim that needs both should
 not be made from either alone.
+
+### Set 23 — the interior row walk stops banking DI (SPEC.md §5.7.1)
+
+`tests/gfxbench` on MartyPC, all three adapters, the same kernel before and
+after the change and nothing else different. Reported by a **forum reader**
+(`raphlinus`) reading `gfx_fill`'s `.irow` on GitHub — the loop banked DI
+around a `rep stosb` that had already advanced it — which §5.7's own pass had
+walked past three times.
+
+| `GFX_*` row, counts | CGA | Hercules | VGA (12h) |
+|---|---|---|---|
+| `GFX_FILL 64x64` | **−3.26%** | **−4.02%** | **−10.75%** |
+| `GFX_FILL 64x64 clipped` | −3.08% | −3.79% | −9.22% |
+| `GFX_FILL 256x128` | −2.57% | −2.98% | −5.21% |
+| `GFX_FILL_GRAY 64x64` | −3.27% | −4.02% | **−14.75%** |
+| `GFX_FILL_PAT 64x64` | −1.76% | −2.24% | −9.04% |
+| `GFX_XOR_FILL 64x64` | −3.95% | −4.17% | −5.73% |
+| `GFX_FILL 8x8` | **+0.00%** | +0.00% | +0.00% |
+| `GFX_FILL 256x1` (ONE row) | −0.09% | −0.78% | +0.00% |
+| `fill ns per row` | 187,091 → **182,109** | — | — |
+
+**The last two rows are the result, as much as the first one.** A one-row
+fill does not move, because what this removes is per scan LINE and §5.7's
+~756 µs floor is per CALL — so the lever is exactly where §11.90/§11.91 said
+the money is not, and it is worth having only because a fill is usually tall.
+VGA gains 2–4x what the mono adapters do: its interior `rep` covers four
+planes at once through Set/Reset, so the loop is short and its overhead a
+larger share, where `bb_plane_op` walks a plane with `stosw` and does more
+work per turn.
+
+**Two rows moved the wrong way and neither is a regression**, which is worth
+recording because both look alarming and both are the instrument. `GFX_BLIT4
+4px runs` (+0.99%) and `one full-width row` (+6.67%) are exact multiples of
+65,536 and carry gfxbench's own `w` flag — *an iteration LAPPED the counter,
+so that row is tick-timed and coarse* — so they moved by one tick, which is
+their resolution. And `GFX_UNLOCK+LOCK pair` read −3.27% on CGA and −3.20% on
+Hercules against untouched code: **the same kernel measured twice moves it
++3.31%**, because it is the one row whose span cannot be interrupt-free
+(`gfx_lock` ends with `sti` by contract). Every other finely-measured row
+repeats inside 0.5%, which is what makes the fill column above mean anything.
+
+**Correctness is the byte-identity, not the picture.** A seven-step scripted
+session — desktop, a menu HELD open over its save-under, the item picked, a
+Disk window, an XOR selection band, that band moved, and a window dragged —
+captured through `vram` on the two 1bpp cards (one value per pixel, banks
+resolved) and `fbuf` on VGA: **21 of 21 steps, 0 differing pixels.** The
+apparatus needed one correction first, and it is Part 4's rule again: a
+capture taken mid-repaint reported 31 differing pixels on Hercules, and the
+OLD kernel diffed against ITSELF reported the identical 31 in the identical
+box. `settle` before each grab; the control is what said which of the two
+kernels was lying, and the answer was neither.
+
+Cost: `.text` +13 bytes (the per-row saving is 2–4 bytes, the once-per-call
+setup 2–9), no rung crossed, `KERN_SIZE` unchanged.
