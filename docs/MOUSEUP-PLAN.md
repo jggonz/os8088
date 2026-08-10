@@ -337,10 +337,23 @@ same for cases 2/3/6 and is *supposed* to differ for case 1.
 
 ## 11. Proposed SPEC.md text
 
-§13 currently carries one subsection heading (§13.4). **§13.5 is free** —
+§13 currently carries one subsection heading (§13.4). **13.5 is free** —
 checked against SPEC.md, CLAUDE.md and the kernel sources. Draft, to land
 *with* the implementation per CLAUDE.md's "update SPEC.md before changing any
 interface":
+
+> **Why 13.5 and 13.6 are written here without a `§`.** `tools/checkdocs.py`
+> resolves every `§n.n` against SPEC.md's real headings and fails `make` on
+> one that does not resolve — which is correct, and which a plan document
+> proposing a *new* section trips by construction. So a section that does not
+> exist yet is named bare, and **the `§` goes on when the text lands.** The
+> same applies to `slot 0xNNNN`, which is checked against `os88api.inc` the
+> same way; write `cell 0xNNNN` until the cell is real.
+>
+> Note also that checkdocs takes its file list from `git ls-files`, so it
+> **cannot see an untracked file**. Running it on a plan document before the
+> first `git add` reports a clean tree it never opened. `git add` first, then
+> run the gate.
 
 > ### 13.5 The chrome boxes fire on the release, over the same box
 >
@@ -367,10 +380,10 @@ interface":
 >
 > **`[ui_click_t]` is stamped on the DOWN edge only.** The `EVT_MUP` branch
 > must not touch it: §22/§26/§38's four detectors compare birth ticks and
-> double-click stays on the press (§13.6), so stamping here would silently
+> double-click stays on the press (13.6), so stamping here would silently
 > make double-click spacing release-to-release.
 
-And a §13.6 for the boundary rule of §5, which is worth pinning because it is
+And a 13.6 for the boundary rule of §5, which is worth pinning because it is
 what keeps this work and the double-click work from ever meeting:
 
 > ### 13.6 Which edge an element fires on
