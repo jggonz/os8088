@@ -546,6 +546,10 @@ font_run_x:
     ; SPEC.md 6.1.2 already built for a clip edge crossing a run. It skips the
     ; enter entirely, so it must skip the leave as well: .cells_nx has its own
     ; tail rather than a flag for .out to test.
+%ifndef NOSPLIT                 ; `make NOSPLIT=1` is the A/B: the same session
+                                ; through the kernel that has no split, which
+                                ; is the only way to show that the pixels the
+                                ; second card gets are THIS change's doing
     cmp byte [vid_ndisp], 1
     jbe .nosplit
     cmp byte [gfx_dnest], 0
@@ -577,6 +581,7 @@ font_run_x:
     pop bx
     pop ax
 .nosplit:
+%endif
 %endif
     GFXDENTERCD                 ; ...and a run with it - its .slow path is
                                 ; gfx_fill + font_str, which the nesting count

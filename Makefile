@@ -158,6 +158,15 @@ endif
 #
 # Verified that way on all three adapters (SPEC.md 12.9): 15 scripted steps
 # on CGA and 10 on Hercules and VGA mode 12h, 0 differing pixels each.
+# NOSPLIT=1 is SPEC.md 39.14.6's A/B: the same kernel with font_run's
+# display split removed, so a straddled window's second half is drawn by the
+# one-display path it used to take. The picture is the claim - a run that
+# crosses a seam either lands on both cards or it does not - and only the
+# pair of builds can show that, which is REDRAWFULL's own reasoning.
+ifneq ($(NOSPLIT),)
+VIDDEF += -DNOSPLIT
+endif
+
 ifneq ($(REDRAWFULL),)
 VIDDEF += -DREDRAWFULL
 endif

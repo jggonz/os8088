@@ -19331,6 +19331,32 @@ run inside one, is two compares and the fast path exactly as before; the
 per-cell path is what a caller doing `gfx_fill` + `font_str` by hand would
 have cost anyway.
 
+**Measured, and `make NOSPLIT=1` is the A/B** — the same kernel with the
+split removed, `REDRAWFULL=1`'s reasoning, because the claim is about a
+picture. A straddled Note Pad on a Hercules+CGA machine, 34 characters typed
+so the row crosses, then a forced repaint:
+
+| secondary, lit pixels | split | `NOSPLIT=1` |
+|---|---|---|
+| after typing | 73,412 | 73,412 |
+| **after a repaint** | **73,412** | **73,818** |
+| backspace reaches it | +153 px | +16 px |
+
+73,818 is the *empty desktop* figure: without the split the repaint wipes the
+second card's half of the window and letters none of it back. The counters
+say why the two agree on TYPING and disagree on the REPAINT — Note Pad emits
+a short run at the caret per keystroke (48 fast, 1 split, and the one is the
+keystroke whose caret crossed), while a repaint letters every row full width
+and crosses on all of them.
+
+**That measurement took three attempts and the first two were null**, which
+is worth recording because the failure was the same both times: the case that
+crosses was never in the test. Ten characters end *at* the seam and cross
+nothing; and an empty Note Pad repaints no text at all, so a session that
+never types before forcing the repaint measures a window with nothing in it.
+A null A/B is evidence about the test until the test is shown to contain the
+case.
+
 `gfx_scroll` and `gfx_blit4` keep REFUSING rather than falling back, and that
 stays right: a blit cannot take a sub-rect without advancing its source to
 match (§11.3), so there is no per-cell equivalent to fall back to — the
