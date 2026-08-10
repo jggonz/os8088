@@ -80,11 +80,35 @@ about to cover, and the mover, being frontmost, is drawn last.
 2x faster, so the chrome draw is now a larger share of the window in which the
 lower window is wrong.
 
-The fix is to stop drawing chrome that something above will cover. `wm_covered`
-(§11.91) already answers "is every pixel of this window written again above it";
-what is wanted is the same question per chrome element. Price it with
-`os88marty.py flicker` first (PERFORMANCE.md Part 3.1) — it counts exactly this
-defect, and the number goes in a Set.
+The fix is to stop drawing chrome that something above will cover — and **the
+obvious shape of that is wrong, so read this before writing it.** "Ask
+`wm_covered`'s question per chrome element" is what this section said first, and
+a desk check says it would barely help: `wm_covered` answers *wholly* covered,
+the outline is a ring spanning the whole window, and the pixels that flash are
+by definition the ones the mover covers — so the element is nearly always
+PARTLY covered, the whole-element test says "draw it", and the flash stays
+exactly where it was.
+
+**What is wanted is the region, not the boolean.** `wm_covered` already seeds an
+arbitrary rect (`wm_clip_seed`) and subtracts the windows above it
+(`wm_clip_occl`); arming that over the **frame** rect — where `wm_clip_set`
+(§11.3) arms it over the *content* rect — makes the outline, the drop shadow and
+the title bar clipped draws, so each puts down only the fragments nothing above
+will cover. Two things make it sound: a pixel the region drops is a pixel some
+visible window above owns, and that window is either redrawn whole later in this
+pass (§11.91 marks transitively) or was never disturbed; and §11.3's granularity
+trap does not bite for the same reason — a title glyph dropped at a cut is a
+glyph inside somebody else's window.
+
+Hazards, all of them things this round has already been caught by: `wm_draw_title`
+is **also called standalone** from `wm_raise` (§11.96.7's ordering), where the
+z-order may not yet be what the glass shows; `gfx_unlock` clears the clip, so the
+arm is valid for exactly one lock hold; the drag outline is XOR and must stay
+unclipped (§11.3 rule 2); and `WF_FULL` has no shadow. **Price it with
+`os88marty.py flicker` first** (PERFORMANCE.md Part 3.1) — it counts exactly this
+defect and the number goes in a Set — and note that the region arithmetic is the
+same arithmetic item A needs, so **doing A first may make this a call-site
+change rather than a mechanism**.
 
 ### 3. Paint's `W_PAINT` runs twice per raise
 
@@ -148,12 +172,19 @@ marking on each window's *redrawn region* is a real change to the marking pass.
 
 ## Before you write any code
 
-**Footprint spare is 512 bytes — ONE 512-byte step, against a documented
-standard of four.** §11.96.9's fix spent the step the rung had 15 bytes left of,
-so the next `.text` byte anywhere crosses again. Item A will need some. So either
-fund it out of item B's savings, or open the `KERN_BUDGET` conversation first — it has moved
-eleven times and every raise was asked for and granted, but it is a decision to
-take with the owner and not a build fix. `docs/KERNEL-MEMORY.md` has the accounting
+**Footprint spare is 2,560 bytes — FIVE 512-byte steps, on BOTH builds.** That
+is `KERN_BUDGET`'s **seventeenth move**, asked for and granted for this work
+(2KB on `kern_big` and 2KB on `kern_small`, docs/KERNEL-MEMORY.md's table row
+17): §11.96.9's fix had spent the step the image rung had 15 bytes left of and
+taken the spare to one step against a standard of four. **It moves both guards
+because a redraw optimisation is worth most on the slowest machine** — the
+machine that feels a 49 ms restore is the 4.77MHz one at the RAM floor — so
+nothing in this round may be put behind `%ifndef KERN_SMALL`.
+
+Item A is what the raise was granted for; spend it there. **Re-bless after every
+change** — `python3 tools/kernsize.py --bless` and, because the two builds have
+separate baselines, `python3 tools/kernsize.py --build build/smallk --bless
+-DKERN_SMALL` after `make kernsplit`. `docs/KERNEL-MEMORY.md` has the accounting
 rule: report both numbers and never call a change that crossed no rung "free".
 
 **Verify by pixel diff, on all three adapters, or not at all.** `make

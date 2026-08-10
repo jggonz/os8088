@@ -173,13 +173,17 @@ with the bisect above, not inferred.
 **Recommend it; do not remove it unasked.** On a machine with no working
 mouse, taking it out means the desktop cannot be clicked at all.
 
-### The twelve moves
+### The seventeen moves
 
 `KERN_BUDGET` was 65,536 — the first 64KB above the BIOS data area, which is
-where the "one region" rule came from. It has moved twelve times; the raises
+where the "one region" rule came from. It has moved seventeen times; the raises
 were each asked for and granted, and moves 5 and 11 are the two downward.
 The constant's own comment in `kernel/kernel.asm` is the long form of every
 row below, and it is the copy to trust if the two ever disagree.
+
+**From move 15 the table is about TWO figures.** The guards split at
+docs/KERN-SPLIT-PLAN.md, so a row says which of them moved: 15 and 16 are
+`kern_big`'s alone, and 17 moves both by the same 2KB.
 
 | | budget | bought |
 |---|---:|---|
@@ -197,6 +201,9 @@ row below, and it is the copy to trust if the two ever disagree.
 | 12 | 86,016 → **90,112** | 4KB asked for and granted **in advance**, on move 7's terms: SPEC.md §39.11's adapter switching took the spare to EXACTLY ZERO — 6 bytes left in the image rung and 155 in the cold one — and what the headroom buys immediately is §39.11.4 (blanking the card the machine has just left, so a two-monitor 5150 does not sit with a frozen desktop on the tube nobody is using) and §31.10's hiding of a Display page with nothing to choose between. Granted WITHOUT the usual "hand back what the optimisation pass saves", because the 128KB floor is to be met by a SECOND BUILD of this kernel rather than by holding one build to a figure both machines can live with. Until that exists this is still the only guard there is, so move 5's rule stands: headroom for ordinary growth, not an invitation to spend it |
 | 13 | 90,112 → **92,160** | 2KB, and move 12's story again: the spare hit EXACTLY ZERO, this time from two directions at once — SPEC.md §52's hard-disk installer arriving on the integration branch, and §11.95.1's "a window that grew reveals nothing" (193 B of `.text`, 8 of `.bss`). Granted at 2KB rather than 4, which puts the guard back within reach of ordinary growth without pre-authorising another feature's worth |
 | 14 | 92,160 → **94,208** | 2KB granted **in advance** for SPEC.md §18.94.2's finding: a file operation spends over half its disk TIME on work the progress widget never shows, because the kernel optimised for SECTORS where the media charges for REVOLUTIONS. Measured over one install, the payload streams at **5.78 sectors per `int 13h` call and every other phase runs at exactly 1.00** — `dsk_dirw_next` hands out one LBA at a time and every caller reads it with `cx = 1` into a single 512-byte buffer. What it funds: a per-volume banked BPB (a fixed disk cannot be swapped, so it revalidates once ever) and coalescing the directory walks into runs, which needs somewhere bigger than `dsk_secbuf`. The batch bracket and its sector cache still to come cost this figure **nothing** — that one is a refusable heap claim by explicit decision, so a 128KB machine can still install, just slowly |
+| 15 | **big** 94,208 → **96,256** | 2KB for the rest of SPEC.md §39's dual display (docs/DUAL-DISPLAY-PLAN.md): estimated at 1,400–1,900 bytes against a spare that had fallen to 1,024. **The first move that is one build's alone** — `kern_small` stayed at 94,208, which is the whole reason the split exists |
+| 16 | **big** 96,256 → **98,304** | 2KB again, on move 15's terms, for §39.16's union and what follows it |
+| 17 | **both** big 98,304 → **100,352**, small 94,208 → **96,256** | 2KB each for **window drawing optimizations** — SPEC.md §5.8's partial restore, §11.96.6's cache restoring only what the pass painted, §11.96.8's bounded edge merge, §11.90.1's opt-out fill and §11.90.2's damage rect. One window restore went **49.22 → 23.36 ms (2.11x)**, a raise's white flash disappeared, and Paint's canvas 8,670 → 6,759 ms. **It moves BOTH guards, and that is the argument rather than a convenience**: a redraw optimisation is worth most on the slowest machine, and the machine that feels a 49 ms restore is the 4.77MHz one at the RAM floor — so this is not work `kern_small` may be kept out of, and move 15's "small should drift tighter" does not apply in this direction. What spent the PRIOR step is the same round: §11.96.9's fix (a partial draw may not re-bank — the field bug §11.96.6 introduced) crossed the rung the image had 15 bytes left of, taking the spare to ONE step against a standard of four. Granted at 2KB on move 13's terms, with the round's biggest item still to come — a raise restoring only what was **covered** (docs/HANDOFF-REDRAW.md item A), which is a `wm_raise` change and not a new mechanism |
 
 **`BOOT_RELOC` moved with the first five** — 0x0940 → 0x0AA0 → 0x0B80 →
 0x0C00 → **0x0D40** (linear 0x11000 → 0x12600 → 0x13400 → 0x13C00 →
@@ -361,7 +368,7 @@ Three things about it:
 {
   "big": {
     "bss": 4926,
-    "budget": 98304,
+    "budget": 100352,
     "codemax": 65536,
     "cold": 22463,
     "coldpara": 1408,
@@ -377,21 +384,21 @@ Three things about it:
     "text": 56012
   },
   "small": {
-    "bss": 4651,
-    "budget": 94208,
+    "bss": 4841,
+    "budget": 96256,
     "codemax": 65536,
     "cold": 21382,
     "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3584,
-    "kend": 5888,
+    "imgpara": 3648,
+    "kend": 5952,
     "kseg": 96,
-    "ksize": 92672,
+    "ksize": 93696,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 2662,
+    "ovl": 3067,
     "stk0": 1024,
-    "text": 52447
+    "text": 53416
   }
 }
 ```
@@ -406,24 +413,25 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 55,194 + `.bss` 4,751) | 60,416 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
-| cold code | 23,040 B | 22,739 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
+| image (`.text` 56,012 + `.bss` 4,926) | 61,440 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| cold code | 22,528 B | 22,463 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,762 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
-| the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **97,280 B** | of a 98,304-byte budget — **1,024 B spare, TWO steps** |
+| the boot overlay | 0 B | 3,067 bytes of code inside the FAT window, gone by the first mount |
+| **total** | **97,792 B** | of a 100,352-byte budget — **2,560 B spare, FIVE steps** |
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
 (docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — SPEC.md §18.96's
 floppy formatter is the first thing through the seam — so this table is big's
 alone and `make kernsplit` is what prices the difference. `kern_small` stands
-at **93,696 B of its own 94,208-byte budget, 512 B spare, one step**, which is
-exactly where it stood before the formatter landed: the whole of that feature
-is behind `%ifndef KERN_SMALL`, and the Edit-menu split that came with it
-(SPEC.md §22.12) fits in slack the small build already had.
+at **93,696 B of its own 96,256-byte budget, 2,560 B spare, five steps**: move
+17 raised both guards by 2KB, so the two builds have the same headroom, and
+big costs +4,096 bytes over small — a different image rung and eight more boot
+sectors, which is why `boot ticks` and every heap row are incomparable across
+the two.
 
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
-are the only slack anywhere in the ladder: **471 bytes on the image, 301 on
+are the only slack anywhere in the ladder: **502 bytes on the image, 65 on
 the cold segment, 430 on `.lowbss`**. They are rounding artefacts, not
 reservations — and per the accounting section above they are also the whole
 of what the next feature can spend without moving the machine's RAM.
