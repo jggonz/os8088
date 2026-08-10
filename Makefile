@@ -223,7 +223,7 @@ endif
 endif
 # ...and the rule that builds it is DOWN with the kernel's, not here. A target
 # defined before `all` becomes make's default goal, so a plain `make
-# FONT=os8088` built the include and stopped.
+# FONT=tallx` built the include and stopped.
 # ...and a stamp so that CHANGING A KNOB rebuilds what it affects. Without it
 # make sees an up-to-date kernel.bin, skips it, and boots the PREVIOUS
 # adapter - which reads exactly like the probe or the renderer being broken.
@@ -1314,7 +1314,7 @@ kernsplit:
 
 # --- a build target per TYPEFACE (SPEC.md 6.2) -------------------------------
 #
-# `make font-stencil` is a pair of system disks in that face; `make fonts` is
+# `make font-tallx` is a pair of system disks in that face; `make fonts` is
 # all of them; `make fontsheet-<name>` is the proof sheet, on VGA pixels and
 # on the CGA's 2.4:1 ones. None of it is in `all` and none of it changes a
 # shipped byte - THE DEFAULT IS STILL THE MACHINE'S OWN ROM FONT, because

@@ -1529,9 +1529,13 @@ and the Timer (§14.1).
 rather than whatever the machine's ROM holds. **It is off by default and the
 shipped images do not use it**: the ROM probe above is still what a plain
 `make` assembles, so this changes no released byte until somebody asks for it.
-`fonts/` holds four faces — `os8088`, `smallcap`, `stencil` and `thin` — and
-§6.2.1 is how a build target exists for each of them without anybody
-maintaining a list.
+`fonts/` holds one face, `tallx`, and §6.2.1 is how a build target exists for
+it — and for the next one — without anybody maintaining a list. There were
+five: a house face and three variations on it (`os8088`, `thin`, `smallcap`,
+`stencil`) were removed once `tallx` existed, on the grounds that a directory
+of near-identical skeletons is a menu nobody picks from. What their drawing
+taught about the grid is kept below, because that is a property of 8x8 and
+not of any file.
 
 **What the probe actually depends on.** On a VGA or EGA machine int 10h
 AH=11h answers and the typeface is that *card's*. On everything else — which
@@ -1573,8 +1577,11 @@ build, `.text` gets *smaller*. Measured, against the same tree:
 | `kernel.bin` | 82,534 | 83,336 (162 → **163 sectors**) |
 
 Every face costs exactly the same, because the table is 760 bytes whatever is
-in it — the figures above are `FONT=stencil` and the other three are
-byte-for-byte the same sizes.
+in it, and the **delta has held while the tree grew around it**: those figures
+were taken against a 82,534-byte kernel and `FONT=tallx` measures
+86,118 → 86,920 today, the same **+802** — the 760-byte table plus the
+overlay's init, less the 78 bytes of ROM probe a baked build does not
+assemble.
 
 So the whole cost is **one floppy sector**, ~65 ms of a ~10 s boot on the
 5150 (PERFORMANCE.md Part 2). The one number worth watching is the overlay's
@@ -1600,40 +1607,72 @@ wrong.) And the blank-row fraction has to stay near the ROM's 25%: the
 renderer skips a blank glyph row whole, so an inkier face is a slower one at
 PERFORMANCE.md's ~1 ms a cell.
 
-**`fonts/os8088.f8` is the house face**, drawn for this OS rather than
-adapted from anything: square bowls and flat terminals where the ROM font
-chamfers its corners, six columns for the round capitals where the ROM font
-takes seven, and the 2-pixel stems kept, because on CGA's 640x200 a
-one-pixel vertical stroke reads far thinner than a one-pixel horizontal one
-and a light face is a spindly face there. The marks with only one sensible
-8x8 solution — space, `-`, `|`, `.`, `_` — are the same as everyone's.
+**`fonts/tallx.f8` is the one face, it is Mac-like, and what it takes is the
+PROPORTIONS rather than the outlines** — which is what it is named for. This
+OS is modelled on the Macintosh and its typeface was not, so the face is
+worth having; but the thing that makes a line of System 1 read as a Macintosh
+at a glance is not any individual letter, it is that the lowercase is
+enormous relative to the capitals. So `tallx` gives the capital **6 rows**
+where the ROM font gives it 7, keeps the x-height at 5, and puts the
+ascenders one row **above** the caps — `d` is taller than `D`, which is the
+original's arrangement. Menu bars, window titles and file names are mostly
+lowercase, so that ratio is what the eye actually reads.
 
-**The other three are variations on it, and each was drawn against a rule the
-grid imposes.** `thin` is the house skeleton with every 2px stem eroded to
-1px — the light weight the paragraph above says will be spindly on a CGA,
-which is now a thing that can be looked at rather than argued about.
-`smallcap` replaces `a`..`z` with 5-row capitals on the x-height, same
-strokes and widths as the caps, so a line of text has one colour. `stencil`
-is the one with a rule worth writing down.
+**The strokes are the removed house face's, and that reasoning is kept here
+because it is about the ADAPTER rather than about a style.** Square bowls and
+flat terminals where the ROM font chamfers its corners; six columns for the
+round capitals where the ROM font takes seven; and **2-pixel stems
+throughout, because on CGA's 640x200 a one-pixel vertical stroke reads far
+thinner than a one-pixel horizontal one** — the pixels are 2.4:1 tall, so a
+1px face is a spindly face there and `--preview --cga` is what makes that
+arguable rather than asserted. (A `thin` face, the house skeleton with every
+stem eroded to 1px, existed to demonstrate exactly that and was removed with
+the rest.) The dots on `i`, `j` and the punctuation are square, because the
+original's are and because a 2x2 block is the smallest mark that survives the
+mono reduction. The marks with only one sensible 8x8 solution — space, `-`,
+`|`, `.`, `_` — are the same as everyone's.
 
-**A stencil is defined by its counters, not by its breaks.** The plate is the
-background and the letter is the aperture, so the piece that would fall out
-is an *enclosed counter* — the inside of an `o`, both bowls of a `B` — and
-the face's whole job is that no glyph has one. `stencil.f8` therefore differs
-from the house face in exactly the **22 glyphs that have a counter**
-(`#&04689ABDOPQRabdegopq`) and in **28 pixels** all told; every other glyph is
-the house face untouched, which is what keeps it readable at this size.
+**It is not a copy and could not be one**, which is worth stating rather than
+implying: the Macintosh face is a **proportional** 12pt bitmap and this is a
+fixed 8x8 cell, so there is no glyph either could lend the other — every
+letter here is redrawn to the same six-column skeleton described above.
+Two places it parts company with the original on purpose, and both are a file
+manager's problem rather than a typographer's. The capital `I` keeps its
+serifs: a plain stem is what the Mac draws, and a plain stem at 8x8 is
+pixel-identical to `l`, which is a coin toss in the middle of a file name.
+And the digit zero is **five columns against the capital `O`'s six** — the
+narrow-figure convention doing the work a slash usually does — which is why
+every *other* digit is five columns too, since a figure that is the odd one
+out in a column of numbers is worse than the ambiguity it fixes.
 
-**The breaks are one pixel, and that is a legibility finding rather than a
-preference.** Two bolder schemes were drawn first and both failed on the
-glass. Breaking the *side* of a bowl is what a stencil looks like at a
-display size, and here a 6px-wide letter has 2px sides, so removing one
-removes the side entirely: `o` read as `c`, `B` as `H`, `8` as `3`. Breaking
-the top with a 2px gap was worse in a different way — it takes the arch that
-distinguishes a round letter, and `Locator` came out as `Lccatcr`. What works
-is the *smallest* cut that frees the counter, which at 8x8 is almost always a
-single pixel out of a horizontal bar: plainly visible as a nick, and it takes
-nothing with it. A face this size has no room for a gesture.
+It is also **cheaper to draw than the ROM's**, which is the one property here
+that is measured rather than looked at: **31%** of its glyph rows are blank
+against the ROM's 25%, and against the 26–28% the four removed faces managed.
+A blank row is the one the renderer skips whole (§6.1), so the row the
+capitals gave back is returned again at every cell drawn.
+
+**What the removed faces taught about the grid, which outlives them.** They
+were `os8088` (the house face), `thin`, `smallcap` and `stencil`, and two of
+the three variations existed to answer a question rather than to be picked:
+`thin` priced a 1px stem on a CGA, which is why the stems here are 2px, and
+`stencil` produced the finding below. `smallcap` — `a`..`z` redrawn as 5-row
+capitals on the x-height, so a line has one colour — is the only one that was
+purely a style, and it is the one whose removal costs nothing to know.
+
+**A cut in a glyph at this size can only be ONE pixel, and that is a
+legibility finding rather than a preference.** It came out of the stencil,
+whose whole job was that no glyph keeps an enclosed counter — the piece of
+plate that would fall out — but it is really a fact about a six-column
+letter. Two bolder schemes were drawn first and both failed on the glass.
+Breaking the **side** of a bowl is what a stencil looks like at a display
+size, and here a 6px-wide letter has 2px sides, so removing one removes the
+side entirely: `o` read as `c`, `B` as `H`, `8` as `3`. Breaking the top with
+a 2px gap was worse in a different way — it takes the arch that distinguishes
+a round letter, and `Locator` came out as `Lccatcr`. What works is the
+*smallest* cut, which at 8x8 is almost always a single pixel out of a
+horizontal bar: plainly visible as a nick, and it takes nothing with it. **A
+face this size has no room for a gesture** — which is the sentence to
+remember before drawing the next one.
 
 **Nothing else in the system follows it.** `osapi_font_glyphs` hands out
 whichever table was loaded, so a package that asks gets the baked face for
@@ -1673,7 +1712,7 @@ stale either.
 rule and the field kernels' (§39.9): a kernel built with a knob that reaches
 `build/` is one somebody boots by accident believing it is the shipped one,
 and that mistake has been made in this tree. The finished disks are named for
-the face — `build/font-stencil-360.img` — the way the field disks are, so a
+the face — `build/font-tallx-360.img` — the way the field disks are, so a
 disk says what it carries. **The apps floppy is not rebuilt and must not be**:
 a package reaches text through `OSAPI_FONT_*` (§20.3) and carries no glyphs,
 so one `build/apps360.img` pairs with every one of these.
@@ -1681,10 +1720,13 @@ so one `build/apps360.img` pairs with every one of these.
 **Nothing here is in `all`, and `FONT=` is passed to a sub-make and never to
 the top one** — which is the mechanism, not a promise, behind the default
 staying the machine's own ROM set. Verified both ways on a cycle-accurate
-5150 with a CGA: each face's disk boots with `font_glyphs` **byte-identical
-to its `.f8`**, and the shipped `os8088-360.img` boots with `font_glyphs`
-byte-identical to the ROM at `F000:FA6E` and differing from all four faces.
-The six shipped images are md5-identical before and after this work.
+5150, with a CGA and again with a Hercules: `build/font-tallx-360.img` boots
+with the 760 bytes of `fonts/tallx.f8` **byte-identical in guest RAM**, the
+desktop comes up at the CGA's usual 60.1% lit and a Disk window lists and
+letters correctly; the shipped `os8088-360.img` boots with `font_glyphs`
+byte-identical to the ROM at `F000:FA6E` instead. The six shipped images are
+md5-identical before and after — checked by stashing the change and
+rebuilding, not by reasoning about it.
 
 **`tools/kernsize.py` takes `--build DIR`** because of this. It re-assembles
 the kernel to measure it and had `build/` hard-coded, so it could not find

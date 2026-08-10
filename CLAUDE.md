@@ -639,33 +639,38 @@ is byte-identical with or without it:
 
 ```
 make fontlist          # the faces in fonts/, and what each one is
-make font-stencil      # 360KB + 1.44MB system disks in that face, built in
-                       # build/fontk-stencil/ and named build/font-stencil-360.img
+make font-tallx        # 360KB + 1.44MB system disks in that face, built in
+                       # build/fontk-tallx/ and named build/font-tallx-360.img
 make fonts             # ...all of them
-make fontsheet-thin    # proof sheets, VGA pixels and the CGA's 2.4:1
-make FONT=os8088       # the raw knob: bake it into build/ - no int 10h, no F000:FA6E
+make fontsheet-tallx   # proof sheets, VGA pixels and the CGA's 2.4:1
+make FONT=tallx        # the raw knob: bake it into build/ - no int 10h, no F000:FA6E
 ```
 
-**`fonts/` holds four faces and the target list is the DIRECTORY, not a list
-anybody maintains** (SPEC.md §6.2.1): `os8088` (the house face), `thin`,
-`smallcap` and `stencil`. Drop a `.f8` in and `make font-<name>` exists on the
-next run. **Prefer `make font-<name>` over `make FONT=<name>`** — the knob
+**`fonts/` holds ONE face and the target list is still the DIRECTORY, not a
+list anybody maintains** (SPEC.md §6.2.1): `tallx`, the Mac-like one, named
+for the thing it takes — the System 1 face's PROPORTIONS rather than its
+outlines (a 6-row capital against a 5-row x-height, ascenders a row above the
+caps), because a fixed 8x8 mono cell can borrow nothing else from a
+proportional 12pt bitmap. There were five, and a house face plus three
+variations on it (`os8088`, `thin`, `smallcap`, `stencil`) were removed once
+it existed. Drop a `.f8` in and `make font-<name>` exists on the next run.
+**Prefer `make font-<name>` over `make FONT=<name>`** — the knob
 lands its kernel in `build/` on top of the shipped one, which is the mistake
 the `cgak` note is about, while the target builds in `build/fontk-<name>/` and
 names its disks for the face. Neither is in `all`; `FONT=` is passed to a
 sub-make and never to the top one, which is *why* the default stays the
 machine's ROM set rather than a promise that it does.
 
-**The stencil is where the grid pushed back and it is worth knowing before
-drawing another display face.** A stencil is defined by its enclosed counters
-— the piece of plate that would fall out — so the face differs from the house
-one in exactly the 22 glyphs that HAVE a counter, in 28 pixels. The breaks are
-**one pixel**, which is a legibility finding and not a preference: at 6px wide
-a letter's sides are 2px, so breaking a side removes it and `o` reads as `c`,
-`B` as `H`, `8` as `3`; a 2px break in the top arch turns `Locator` into
-`Lccatcr`. Both were drawn, looked at, and thrown away. The smallest cut that
-frees the counter is a nick in a horizontal bar, and it is plainly visible at
-8x8 without taking anything with it.
+**Two things the removed faces found are kept in SPEC.md §6.2 because they
+are about the GRID and not about a file.** The stems here are **2px** because
+`thin` — the same skeleton eroded to 1px — was drawn to see what that looks
+like on a CGA, whose pixels are 2.4:1 tall: it is spindly, and that is why a
+new face may not go light. And **a cut in a glyph at this size can only be
+ONE pixel**, which came out of the stencil and is a legibility finding rather
+than a preference: at 6px wide a letter's sides are 2px, so breaking a side
+removes it and `o` reads as `c`, `B` as `H`, `8` as `3`; a 2px break in the
+top arch turns `Locator` into `Lccatcr`. Both were drawn, looked at, and
+thrown away. **A face this size has no room for a gesture.**
 
 **The default path depends on an address that is IBM's, not the
 architecture's.** On an EGA/VGA, int 10h AH=11h answers and the typeface is
