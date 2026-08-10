@@ -649,9 +649,16 @@ ui_drag:
     jle .y_high_ok
     mov ax, [vid_ymax]
 .y_high_ok:
+%ifdef KERN_BIG
+    call ui_ylow                ; SPEC.md 39.16.2: MBAR_H is the PRIMARY's
+    cmp ax, si                  ; floor, and no other card has a menu bar
+    jge .y_low_ok
+    mov ax, si
+%else
     cmp ax, MBAR_H
     jge .y_low_ok
     mov ax, MBAR_H
+%endif
 .y_low_ok:
     cmp [bx + W_Y], ax
     je .y_same
@@ -746,6 +753,42 @@ ui_drag_xor:
 ; into. Clamping into the display the window CAME from would be the smaller
 ; move, and the record no longer holds that origin by the time this runs.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; ui_ylow - the lowest y a title bar may take, where this window is
+;           (SPEC.md 39.16.2)
+;
+; in:       BX = the window; [ui_curx] = the x the drag is proposing
+; out:      SI = the floor
+; clobbers: SI, flags
+;
+; MBAR_H on display 0 and the display's own vy anywhere else - because the
+; menu bar is the primary's and nothing else has one. Asked with the drag's
+; PROPOSED x rather than the window's current one: the clamp runs before
+; W_X is stored on some passes, and a window being dragged onto the second
+; monitor must be floored by where it is GOING.
+; -----------------------------------------------------------------------------
+ui_ylow:
+    mov si, MBAR_H
+    cmp byte [vid_ndisp], 1
+    jbe .out
+    push ax
+    push bx
+    push di
+    mov ax, [ui_curx]
+    mov bx, MBAR_H              ; any row the primary's band contains, so a
+                                ; point on display 0 resolves to it
+    call vid_disp_of
+    or al, al
+    jz .done                    ; display 0 keeps the chrome's floor
+    call vid_ctx_ptr
+    mov si, [di+VID_CTX_VY]
+.done:
+    pop di
+    pop bx
+    pop ax
+.out:
+    ret
+
 ui_drag_dead:
     cmp byte [vid_ndisp], 1
     jbe .out

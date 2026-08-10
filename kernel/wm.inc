@@ -426,6 +426,50 @@ wm_fit_box:
 %endif
 
 ; -----------------------------------------------------------------------------
+; wm_dmg_band - the rows the desktop dither may use (SPEC.md 39.16.2)
+;
+; in:       AX = a virtual x inside the damage, BX = a virtual y in it
+; out:      SI = the first usable row, DI = the last
+; clobbers: SI, DI, flags
+;
+; MBAR_H .. [vid_dock_y0]-1 was the answer while there was one display, and it
+; is still the answer ON display 0 - the menu bar and the dock are the
+; PRIMARY's and no other card carries either. On any other display the whole
+; height is desktop, and flooring it at MBAR_H left the top 20 rows of the
+; second monitor undithered by the damage path: a window closing up there left
+; its own pixels behind. Capping at [vid_dock_y0] was the same mistake at the
+; other end and bites harder the other way round - a CGA primary puts that row
+; at 176, which would have left 172 rows of a Hercules secondary unreachable.
+; -----------------------------------------------------------------------------
+wm_dmg_band:
+    mov si, MBAR_H
+    mov di, [vid_dock_y0]
+    dec di
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    jbe .out
+    push ax
+    push bx
+    call vid_disp_of            ; AL = the display this damage is on
+    or al, al
+    jz .pop                     ; display 0: the chrome's band, as before
+    call vid_ctx_ptr
+    mov si, [di+VID_CTX_VY]
+    mov ax, si
+    add ax, [di+VID_CTX_CH]
+    dec ax
+    mov di, ax
+    pop bx
+    pop ax
+    ret
+.pop:
+    pop bx
+    pop ax
+.out:
+%endif
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_refit - clamp EVERY live window back onto the screen (SPEC.md 39.11.2)
 ;
 ; in:       nothing (the live geometry has just changed)
@@ -2236,14 +2280,17 @@ wm_paint_dmg:
 
 .fill:
     mov ax, [wm_dmg_x1]         ; the desktop dither, clipped to the damage
-    mov bx, [wm_dmg_y1]         ; and to the band below the menu bar
-    cmp bx, MBAR_H
+    mov bx, [wm_dmg_y1]         ; and to the band the CHROME leaves free
+    push ax                     ; (SPEC.md 39.16.2: only display 0 has any)
+    call wm_dmg_band            ; SI = the floor, DI = the ceiling
+    pop ax
+    cmp bx, si
     jge .fy
-    mov bx, MBAR_H
+    mov bx, si
 .fy:
     mov cx, [wm_dmg_x2]
-    mov dx, [vid_dock_y0]       ; ...and stopping above the strip, which
-    dec dx                      ; dock_paint restores below (SPEC.md 30.3.2):
+    mov dx, di                  ; ...and stopping above the strip, which
+                                ; dock_paint restores below (SPEC.md 30.3.2):
     cmp dx, [wm_dmg_y2]         ; damage that reaches the dock already forces
     jle .fy2                    ; the span through dock_force_x, so dithering
     mov dx, [wm_dmg_y2]         ; those rows is drawn only to be painted over

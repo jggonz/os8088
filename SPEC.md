@@ -19488,6 +19488,38 @@ sizes a window to `[vid_pw]`/`[vid_ph]` rather than the union, so an app that
 goes fullscreen covers one monitor and behaves exactly as it does today.
 Choosing *which* display by `wm_disp_of` is docs/DUAL-DISPLAY-PLAN.md step 6b.
 
+#### 39.16.2 The band the chrome leaves free is the PRIMARY's, not the desktop's
+
+`MBAR_H .. [vid_dock_y0]-1` was the rows a window and the desktop dither could
+use, and it was right while there was one display. It is right **on display 0**
+and on no other: the menu bar and the dock are the primary's, and no second
+card carries either — so on every other display the whole height is desktop.
+
+Two sites still clamped in virtual coordinates against those two constants,
+and each wasted rows at a different end:
+
+- **`ui_drag`'s low-y floor.** A title bar could not be dragged above virtual
+  y = `MBAR_H` wherever it was, so on a Hercules+CGA machine in Right layout
+  the **top 20 rows of the CGA — 640 × 20 = 12,800 px, 6.4% of that screen —**
+  could hold no window at all.
+- **`wm_paint_dmg`'s dither.** Floored at `MBAR_H` and capped at
+  `[vid_dock_y0]`, so damage in those bands on a secondary was never
+  re-dithered: a window closing there left its own pixels behind. The cap
+  bites harder the other way round — a **CGA primary** puts `[vid_dock_y0]`
+  at 176, which leaves 172 rows of a Hercules secondary out of the damage
+  path entirely.
+
+`wm_dmg_band` answers it for the dither and `ui_ylow` for the drag: display 0
+keeps the chrome's band, anything else gets its own `vy .. vy+ch-1`.
+
+**Nothing shifts, and that is the point.** The obvious reading of "give the
+second monitor back the menu bar space" is to move its origin up by `MBAR_H`,
+which would put it at a negative virtual y and break §39.19.2's non-negative
+invariant — the one `vid_disp_find`'s unsigned compares, `vid_desk_union`'s
+bounding box from (0,0) and `mou_clamp` all rest on. The rows were never
+missing from the display; two clamps were reserving them for chrome that is
+not there.
+
 #### 39.16.1 A window is fitted into a DISPLAY, not into the desktop
 
 `wm_fit` clamped a frame into `[vid_w]` × `[vid_dock_y0]`. Against a union
