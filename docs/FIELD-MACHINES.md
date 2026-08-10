@@ -484,7 +484,7 @@ differing runs. **Ask nobody for a dump of a build you can run yourself.**
 What still needs the owner is a dump of a machine *whose behaviour differs
 from the emulator's* — which, given everything in docs/FIELD-NOTES.md, is
 more often than it sounds, and always when a disk is involved. MartyPC's
-floppy TURNS now (PERFORMANCE.md Set 30) so its timing is close, but its BIOS
+floppy TURNS now (PERFORMANCE.md Set 35) so its timing is close, but its BIOS
 still returns what its author believed the hardware returns, so **a dump taken
 in the container proves what the code does and not what the 5150 does with
 it**.

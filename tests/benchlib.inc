@@ -124,7 +124,7 @@ BL_MAXROWS  equ 380             ; report lines. Sized for the longest suite,
                                 ; is a report that truncates on somebody
                                 ; else's machine, and it happened a THIRD
                                 ; time at 300 when SPEC.md 18.4's write block
-                                ; landed. 380 for 305, and 337 after Set 30's
+                                ; landed. 380 for 305, and 337 after Set 35's
                                 ; seek and spin-up blocks.
 BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text.
                                 ; **THIS CEILING IS INVISIBLE UNTIL IT IS
@@ -134,7 +134,7 @@ BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text.
                                 ; after the fact; this one never has been,
                                 ; because `bl_full` says a report TRUNCATED
                                 ; and nothing said how close a report that did
-                                ; not had come. Set 30's two blocks landed it
+                                ; not had come. Set 35's two blocks landed it
                                 ; at 14,806 of 16,000 - 7% spare.
                                 ;
                                 ; And raising it costs TWICE what it looks

@@ -3823,7 +3823,7 @@ sb_b_seek:
     ret
 
 ; -----------------------------------------------------------------------------
-; sb_seek - what a HEAD STEP costs (PERFORMANCE.md Part 9 Set 30)
+; sb_seek - what a HEAD STEP costs (PERFORMANCE.md Part 9 Set 35)
 ;
 ; This block exists because the floppy timing model in
 ; tools/martypc/patches/03-floppy-disk-timing.patch has exactly one number in
@@ -3929,7 +3929,7 @@ sb_seek:
     ret
 
 ; -----------------------------------------------------------------------------
-; sb_motor - what SPIN-UP costs (PERFORMANCE.md Part 9 Set 30)
+; sb_motor - what SPIN-UP costs (PERFORMANCE.md Part 9 Set 35)
 ;
 ; The other number the model does not have. A stopped drive has to reach
 ; 300 RPM before anything can be read, and the BIOS additionally waits the

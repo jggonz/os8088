@@ -224,7 +224,7 @@ rule goes first:
 > **And for anything with a disk in its TIMING, the 5150 is still where a
 > number LANDS** (docs/FIELD-MACHINES.md) — but MartyPC's floppy is no longer
 > a fiction: it turns at 300 RPM, honours an interleave and charges a seek
-> (PERFORMANCE.md Set 30), which took the boot from 4.4x fast to 1.17x. Use it
+> (PERFORMANCE.md Set 35), which took the boot from 4.4x fast to 1.17x. Use it
 > to find a disk regression; confirm it on the iron before it goes in
 > PERFORMANCE.md. QEMU remains 30x fast and models none of it.
 >
@@ -932,7 +932,7 @@ Its **"Modelling the old machine from a fast one"** section is the part that
 has cost four bugs, and most of it is about QEMU: this container is ~1000x a
 4.77MHz 8088, so every constant sized while looking at it encodes the wrong
 range. MartyPC removes a good deal of that (a cycle-accurate 8088 does not
-have a clock that tells you nothing), and since PERFORMANCE.md Set 30 it
+have a clock that tells you nothing), and since PERFORMANCE.md Set 35 it
 removes most of it for the disk too - its floppy turns at 300 RPM and honours
 an interleave, so the error is 1.17x rather than 30x. The 5150 is still where
 a disk number lands. **FLICKER IS MEASURABLE NOW** and

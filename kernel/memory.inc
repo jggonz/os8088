@@ -1817,7 +1817,15 @@ osapi_sys_kb:
     call mem_kernel_kb          ; AX += the kernel's own tagged claims
     pop di
     mov [es:di+SK_KCLAIM], ax
+%ifdef KERN_BIG
     mov ax, [xm_kb]             ; the pool above 1MB, 0 on tier 0 (SPEC.md 41)
+%else
+    xor ax, ax                  ; kern_small has no store above 1MB at all
+                                ; (SPEC.md 41.11), so SK_XMS is the 0 that
+                                ; tier 0 reports and the Task Manager's line
+                                ; reads 'XMS 0/0K' - the same words on the
+                                ; same build for the same reason
+%endif
     mov [es:di+SK_XMS], ax
     pop di
     pop bx

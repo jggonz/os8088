@@ -8,7 +8,7 @@ breakpoints, single-step and cycle counts, none of it costing the guest a
 cycle (docs/MARTYPC-DEBUG.md). It covers **all three** of SPEC.md §39's
 adapters, scripted input, screenshots and sound. **And for anything with a
 disk in its timing, the 5150 is where the number LANDS — though MartyPC's
-floppy now turns (PERFORMANCE.md Set 30), so it is 1.17x rather than 30x.**
+floppy now turns (PERFORMANCE.md Set 35), so it is 1.17x rather than 30x.**
 
 **Here is the whole of QEMU's remaining list**, stated as a list so that "a
 legitimate need" is something you can check rather than something you can
@@ -58,7 +58,7 @@ modelled no platter at all — a seek completed in the breath it was issued and
 a sector arrived the instant it was asked for — which is where Set 11's 30x
 came from. `tools/martypc/patches/03-floppy-disk-timing.patch` gives it
 rotation, an MFM data rate, a physical interleave and a per-cylinder seek
-(PERFORMANCE.md Set 30, docs/MARTYPC-DEBUG.md):
+(PERFORMANCE.md Set 35, docs/MARTYPC-DEBUG.md):
 
 | `boot ticks`, 360KB | before | after | real 5150 |
 |---|---|---|---|
@@ -1041,7 +1041,7 @@ with interrupts off and then on), and the floppy — twice, because the first
 read pays the motor spin-up and quoting either figure alone misleads.
 
 **Two of its floppy blocks exist to pin the two numbers the MartyPC disk model
-has no measurement for** (PERFORMANCE.md Set 30, `tools/martypc/patches/04-*`).
+has no measurement for** (PERFORMANCE.md Set 35, `tools/martypc/patches/04-*`).
 Both go through the kernel's `dsk_dbg_raw`, so both need a `DISKCNT=1` kernel
 and are silent on any other — which is what every `make field` disk is.
 
