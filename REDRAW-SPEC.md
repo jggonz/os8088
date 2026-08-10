@@ -392,36 +392,77 @@ comment documents it. So a slot that tells Paint which rect it owes achieves
 kernel's erase contract rather than an optimisation: every application depends
 on the fill.
 
-And the canvas is only a third of the problem. Measured on a cycle-accurate
-5150/CGA, Paint launched from `APPS` at 494×152 and raised from behind a Disk
-window, **blank canvas**:
+**A BLANK CANVAS IS THE VERY CHEAP CASE, and the first version of this section
+priced only that** — PERFORMANCE.md Set 32 is the correction. Measured on a
+cycle-accurate 5150/CGA, Paint raised from behind a Disk window:
 
-| | ms |
-|---|---|
-| kernel white fill + palette + colour strip + divider | ~391 |
-| the canvas blit + marquee (one `gfx_blit4`) | ~211 |
-| **one Paint repaint** | **~602** |
+| | blank canvas | a textured 492×133 BMP |
+|---|---|---|
+| kernel white fill + palette + strip + divider | ~376 | ~376 |
+| the canvas blit (one `gfx_blit4`) | ~211 | **~8,670** |
+| **one Paint repaint** | ~602 ms | **~9,060 ms** |
 
-A blank canvas is the *cheap* case — `pt_blit`'s own note prices a blit at
-`runs × ~0.5 ms`, so detailed art multiplies the 211. But even a perfect
-sub-rect blit leaves ~391 ms untouched unless the chrome is gated per element
-too, which is `tm_row_draw`'s answer and more app-side work than the blit.
+**Nine seconds**, and the blit is linear in the *runs* it covers, not the pixels
+(`pt_blit`'s own note: a `gfx_hline` per run at ~756 µs of arriving each). So the
+canvas is not "a third of the problem" as this section first said — at 85 runs a
+row it is 96% of it, and an ordinary drawing at ~30 runs a row lands near the
+three seconds the field reports.
 
-**So two cheaper things come before any of it**, both already-proven machinery:
+**That kills the ordering this section first proposed.** `WF_SAVEU` on Paint
+*would* be enormously faster — a restore is a flat `rep movsb` at ~5.5 µs a byte
+against the blit's ~244, so ~50 ms on 1bpp against 8,670 — but it is the wrong
+lever anyway, on memory:
 
-1. **`WF_SAVEU` on Paint** — one flag, and it turns the whole ~602 ms into a
-   §11.96 restore. The objection on record is memory ("a fourth copy of pixels
-   it already has"), and §50.6's priority ladder is the answer the objection
-   predates: the cache is a *purgeable* claim at the trivial rank, given up the
-   instant anything wants the room, so a machine with none behaves exactly as it
-   does now. §11.96.1's promise holds — Paint owns **no worker task**, its
-   marquee is a latched XOR rather than a marching one and its caret is drawn
-   and erased by keystrokes, so nothing changes its content while it is not
-   drawing. This is the Disk window's §22.14 again.
-2. **A "do not erase me" flag.** `pt_repaint`'s own comment is *"Every part of
-   this draws its own background, so no white fill is needed first"* — so for
-   Paint the kernel's fill is pure waste today, independently of any of the
-   above.
+- Paint already holds canvas + undo + clipboard, **~127 KB** at stock size.
+- A cache over its content is ~9 KB on 1bpp, **~36 KB on VGA**, ~150 KB for a
+  window grown over most of a 640×480 screen.
+- On a **256 KB machine** the heap is ~160 KB after the kernel, so the VGA figure
+  cannot exist and the 1bpp one only just can. Purgeability (§50.6) makes that a
+  refusal rather than damage — which is to say the feature simply is not there on
+  the machines this project is calibrated against.
+
+**Drawing less of the canvas beats caching it, and it composes.** A repaint that
+owes 10% of the canvas costs ~10% of the blit — about 0.9 s against 8.7 — at **no
+memory cost at all**, on every adapter and every machine size, and it stacks with
+a cache wherever a cache fits. So the erase contract is not the expensive
+prerequisite to be avoided; it is the thing worth doing first.
+
+Two smaller things stand unchanged, and one is now the *shape* of the answer
+rather than an alternative to it:
+
+1. **The white fill must become opt-out.** `pt_repaint`'s own comment is *"Every
+   part of this draws its own background, so no white fill is needed first"* — so
+   for Paint the kernel's fill is waste today, before any of the above.
+2. **The chrome is small in AREA and dear in TIME** — that ~376 ms of palette,
+   strip and divider is a narrow left-hand column, about **1 KB** of cache on
+   1bpp. It is the part a cache holds cheaply, exactly where the canvas is the
+   part it cannot.
+
+#### The design that follows: registered cache regions, and exclusions
+
+Which points at one mechanism rather than two competing ones. A window registers
+**regions it hands to the cache** and **regions it keeps**; a repaint then
+restores the cached regions that the damage touches, and calls `W_PAINT` with the
+damage rects that fall in the kept ones. For Paint that is exactly the right
+split — cache the chrome (~1 KB, kills ~376 ms), keep the canvas (no memory, and
+the app blits only the rect it is handed) — and it makes the white fill the **last
+resort** it should be rather than the default: a region that is neither cached
+nor claimed by the app is the only thing that needs blanking, and blanking is
+what a repaint should be seen to do least of.
+
+Three things from consumer 1 carry straight into it, and one warning:
+
+- `wm_dmg_x1..y2` from `.draw` onward already **is** the damage, accumulated
+  (§11.96.6), and `wm_su_owed` already makes it a per-window answer.
+- A per-window rect **list** is what `wm_clip_tab` already is (§11.3, 16 rects
+  with a documented overflow degradation), so the shape exists.
+- The one-shot discipline (§5.8) is what keeps it safe: armed immediately before
+  the draw, disarmed by whatever consumes it.
+- **The warning is §11.3's granularity rule.** Handing an app a damage rect and
+  no clip leaves it free to draw outside it; handing it a clip as well brings back
+  the fill-clips-per-pixel / glyph-clips-per-cell trap for every app that adopts
+  it. Paint is the easy consumer because 96% of its repaint is a blit; the next
+  one will not be.
 
 **One thing to look at while in there**, found by the measurement and not chased:
 that raise produced **two** `wm_grow_paint` calls for Paint's window (374 ms

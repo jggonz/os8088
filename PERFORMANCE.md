@@ -4070,3 +4070,60 @@ the figure beats the 1.45x the geometry suggests.
 there is no obvious next cut in it: it is `rep movsb` over exactly the bytes that
 changed, at 27 bytes a row for 94 rows, and the per-row overhead is the row loop
 the two renderers already share with the cursor.
+
+### Set 32 — Paint's repaint with a PICTURE in it: blank was the very cheap case
+
+Set 30's Paint figures were taken on a **blank** canvas, and that turns out to
+be the wrong end of a 41x range. Same machine (cycle-accurate 5150/CGA), same
+window, same cover-and-raise — the only difference is what is in the canvas. The
+picture arrives by **double-clicking it**: `assoc.inc` ships `BMP` → PAINT, so
+§54.5's launch-with-a-document path loads it with no file dialog to drive.
+
+| canvas | runs/row | the canvas blit |
+|---|---|---|
+| blank (one run a row) | 1 | **211 ms** |
+| a textured 492×133 16-colour BMP | 84.9 | **8,670 ms** |
+
+**8.7 seconds**, and the model holds: 11,298 runs at ~0.77 ms each against
+`pt_blit`'s own quoted ~0.5 ms per `gfx_hline`, the balance being the 4bpp source
+scan. A picture with ~30 runs a row — an ordinary drawing rather than this
+deliberately noisy one — lands near the three seconds the field reports.
+
+**What this settles about `WF_SAVEU` for Paint, which is the opposite of the
+guess on record.** "Paint is already drawing a blit, so a restore cannot be
+faster" is false by two orders of magnitude, because the two are not the same
+kind of operation: `gfx_blit4` costs **per RUN** (a `gfx_hline` per run, ~756 µs
+of arriving each, §5.7), while `gfx_restore` is a flat `rep movsb` with no
+per-run cost at all. Priced per byte off Set 30 and this set:
+
+| | bytes moved | ms | per byte |
+|---|---|---|---|
+| `gfx_restore`, whole content (Set 30) | 5,576 | 30.63 | **5.5 µs** |
+| `gfx_blit4`, textured canvas | ~35,600 | 8,670 | **244 µs** |
+
+So a raise cache over Paint's content would be ~9 KB and ~50 ms on a 1bpp
+adapter against 8,670 — **170x** — and ~36 KB and ~200 ms on VGA, 43x.
+
+**The objection that survives is memory, and it is adapter-shaped.** `wm_su_kb`'s
+`(bpr + 2) × rows × planes`: Paint's stock content on CGA/Hercules is ~9 KB, on
+VGA ~36 KB, and a window grown to most of a 640×480 screen is ~150 KB. Paint
+itself already holds canvas + undo + clipboard, ~127 KB at stock size — so on a
+**256 KB machine** (heap ≈ 160 KB after the kernel) there is no room for the VGA
+figure and only just room for the 1bpp one, and the claim being purgeable
+(§50.6) means it is simply refused rather than damaging. The cache is therefore
+a **640 KB-machine** optimisation on VGA and a marginal one on the machines this
+project is calibrated against.
+
+**Which is why drawing LESS of the canvas beats caching it, and composes with
+everything.** The blit is linear in the runs it covers, so a repaint that owes
+10% of the canvas costs ~10% of 8,670 ms — about **0.9 s** — at **no memory cost
+at all**, on every adapter and every machine size. That is a bigger win than the
+cache can give on a 256 KB machine and it stacks with the cache where the cache
+fits. §11.90's unconditional white fill is what stands in front of it.
+
+**And two smaller things this run recorded**: the repaint issues **two**
+`wm_draw_win` passes for Paint's window (a 376 ms one that draws no canvas, then
+the 8,670 ms one), which is the `[pt_apend]` deferred-resize path calling
+`OSAPI_WM_FRONT` from inside `W_PAINT` and is worth its own look; and the
+~376 ms of palette, colour strip and divider is **small in area** — a narrow
+left-hand column — so it is the part a cache would hold for about 1 KB.
