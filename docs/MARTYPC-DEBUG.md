@@ -35,33 +35,112 @@ moment the cost feels like a reason to type `make test` instead.
 
 ---
 
-## The one thing it is not: a disk
+## The disk: it used to have no platter, and now it has one
 
-**MartyPC is cycle-accurate. It is not disk-accurate.** It models the 8088's
-instruction timing, its prefetch queue and its bus contention, and it does not
-model a platter turning at 300 rpm, a head seeking, or a 2:1 interleave.
-PERFORMANCE.md Set 11 measured the gap on the same test, the same kernel and
-the same media:
+**Stock MartyPC does not model a floppy at all.** It models the 8088's
+instruction timing, its prefetch queue and its bus contention exactly, and
+then hands a sector over the instant it is asked for. Read the upstream source
+and there is nothing to look for: `operation_read_data` calls the drive once
+and streams the whole run to DMA as fast as the CPU can turn, `command_seek_head`
+returns `CommandComplete` in the same breath it is issued so a seek costs
+nothing, `FloppyDriveMechanicalState` — `MotorSpinningUp`, `HeadSeeking` — is an
+enum **no code anywhere references**, and `media_geom`'s sectors-per-track is
+hardcoded to `0` because until now nothing needed it. That is why it read a
+16 KB file ~30x faster than the 5150 (PERFORMANCE.md Part 9 Set 11).
 
-| | real 5150 | MartyPC |
+`tools/martypc/patches/03-floppy-disk-timing.patch` gives it a platter.
+
+### What it models
+
+| | |
+|---|---|
+| **Rotation** | a head angle per drive, advanced while the motor turns. 300 RPM (360K/720K/1.44M drives) or 360 (a 1.2M), so a revolution is 200 ms or 167 |
+| **Data rate** | 250 kbit/s DD, 500 HD, and **300** for DD media in a 1.2M drive, which spins it 20% fast. 32 us a byte at 250, so a 512-byte sector's data field is 16.384 ms |
+| **Interleave** | the physical order of the logical sectors round the track, from the machine config — a raw sector image cannot supply it |
+| **Pacing** | one sector at a time: wait for it to come round, stream it, wait for the next. Not one lump per run — see the GLaBIOS note below |
+| **Seek** | a step per cylinder crossed at the rate the BIOS asked for through SPECIFY, plus a 25 ms settle. The platter keeps turning while the head steps |
+
+### Why one mechanism gets all three field rows right
+
+The 5150's three raw `int 13h` rows (Sets 14 and 22) are not three facts, they
+are one fact seen three ways — **a sector is readable only as it passes the
+head** — and the model reproduces them without being told any of them:
+
+| | field, IBM 5150 | this model, 2:1 |
 |---|---|---|
-| read 16 KB, cold motor | **8.07 s** | **0.27 s** — 30x fast |
-| boot | **38,886 ms** | **2,306 ms** — 17x fast |
+| one sector, re-read | 199 ms = **1.00 rev** | **1.00 rev** — the same sector comes round once a turn |
+| a 9-sector track, one call | 384 ms = **1.92 rev** | 372 ms = **1.86 rev** |
+| the same nine, as nine calls | 2,005 ms = **10.02 rev** | ~1 rev per call, for the same reason as row 1 |
 
-**Both 5150 columns are pre-Set-18 and the ratios are not.** That machine's
-boot is **9,886 ms** now and a cold 16 KB read **1.21 s** (PERFORMANCE.md
-Part 9 Sets 18 and 22), because the `AL` fix and §18.95's cache landed in
-between. The point the table exists to make is unchanged and in fact
-sharpened — MartyPC is still ~4x fast on the boot and ~4.5x on the read, and
-a disk in the path is still the wrong thing to time here — but do not quote
-the left column as current.
+The 3% left on row 2 is BIOS overhead the model does not claim to carry.
 
-So: **if a disk is anywhere in the path, the number this tool gives you is
-wrong, and wrong by more than an order of magnitude in the flattering
-direction.** That catches a great deal that is not obviously about disks — a
-boot time, a package launch, a Tracker module load, a `SYSTEM.CFG` save, the
-Control Panel closing. When any of those is the question, the instrument is
-the machine in docs/FIELD-MACHINES.md and there is no substitute.
+### What it does NOT fix, and this is the half that matters
+
+**It changes what the disk COSTS. It does not change what the disk SAYS.**
+SPEC.md §18.91's `AL` bug — the BIOS moving nine sectors and answering
+`AL = 1` — is a claim about what a real ROM *returns*, and no amount of
+platter modelling invents it. An emulator's floppy controller still returns
+what its author believed the hardware returns. So:
+
+- **timing** questions: MartyPC is now worth asking, and worth checking on the
+  5150 before anything goes in PERFORMANCE.md;
+- **correctness** questions — short reads, `int 1Eh`'s EOT, what `AL` holds,
+  BIOS interrupt stack depth — the 5150, exactly as before.
+
+Not modelled, and each is a place not to trust a number: **motor spin-up**
+(the BIOS's own ~1 s wait is a CPU-timed loop and so was always accurate, but
+the drive itself comes up to speed instantly), **the PIO paths** (PCjr), and
+**Format Track**, charged a flat revolution and never calibrated. The seek
+figures are the BIOS's own request rather than a measurement — the field's
+three rows all read one track and never seek, so nothing here pins them.
+**Hard disks are untouched**: this is the floppy alone.
+
+### The GLaBIOS machines keep 1:1 media, and the reason is worth reading
+
+Only the `rom_set = "ibm5150_82_v4"` machines carry 2:1. The GLaBIOS ones
+cannot: measured here, **that BIOS abandons a floppy operation after ~250 ms
+and resets the controller**, three times in a row, and then the boot sector
+prints `os8088: disk error` — status **80**, a timeout, which `make BOOTDIAG=1`
+puts on the screen as two hex digits. A 6-sector 2:1 run legitimately takes
+305 ms and a 9-sector one 372, so under GLaBIOS such a read can never finish.
+
+Two things say this is the BIOS's behaviour and not the model's bug. The FDC
+presents a correctly BUSY status register for the whole delay (that bit comes
+from `self.busy`, which the patch does not touch). And **seeks of 329 ms
+complete fine on the same machine in the same boot** — so it is a read
+timeout, not an inability to wait. The IBM ROM has no such limit, and that is
+not an assumption: docs/FIELD-MACHINES.md's 5150 runs that ROM and reads a
+whole 2:1 track in one `int 13h` in 384 ms every time it boots.
+
+This also produced the one modelling correction worth keeping. The first
+version charged a whole multi-sector run as **one silent delay**, which is not
+how a drive behaves — a real controller starts DRQing the moment the first
+sector arrives and pauses only over the inter-sector gaps. Pacing it per
+sector is both more faithful and shorter-gapped, and it is what the `82.8 ms
+then 44.4 ms then 44.4 ms…` in the trace is: the first sector's latency, then
+two slots of 2:1 gap each time. It did not save GLaBIOS, because that BIOS's
+limit turned out to be on the whole operation rather than on silence — but the
+model is right for the reason it was changed.
+
+### What it measures now
+
+`boot ticks`, os8088's own counter, on the 360KB image:
+
+| | before | after | field 5150 (Set 22) |
+|---|---|---|---|
+| `os8088_5150_cga_gla` | 41 (2.25 s) | **130 (7.14 s)** | 180 (9.886 s) |
+
+4.4x fast becomes **1.38x**, on 1:1 media where the field machine's is 2:1 —
+and the gap closes where it should: 2:1 adds ~178 ms to each of the kernel's
+~19 track reads, which is ~3.4 s, landing at ~10.5 s against the field's 9.9.
+**That last step is arithmetic, not a measurement**: the IBM ROM is not in this
+tree (see the bottom of `tools/martypc/README.md`), so the 2:1 machines have
+never been booted here. With the ROM dropped in, `python3 tools/os88marty.py`
+against `os8088_5150_cga` is the run that would settle it.
+
+So the standing rule is **relaxed, not withdrawn**: a disk figure from here is
+now worth having, and PERFORMANCE.md Part 9's disk rows still come off the
+5150.
 
 **It will not catch a disk CORRECTNESS bug either, and that is the sharper
 half.** SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the

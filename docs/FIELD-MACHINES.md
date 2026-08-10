@@ -458,9 +458,10 @@ differing runs. **Ask nobody for a dump of a build you can run yourself.**
 What still needs the owner is a dump of a machine *whose behaviour differs
 from the emulator's* — which, given everything in docs/FIELD-NOTES.md, is
 more often than it sounds, and always when a disk is involved. MartyPC's
-floppy is 30x fast and its BIOS returns what its author believed the hardware
-returns (PERFORMANCE.md, Set 11), so **a dump taken in the container proves
-what the code does and not what the 5150 does with it**.
+floppy TURNS now (PERFORMANCE.md Set 24) so its timing is close, but its BIOS
+still returns what its author believed the hardware returns, so **a dump taken
+in the container proves what the code does and not what the 5150 does with
+it**.
 
 The rest of this section is unchanged and applies to both, because the rules
 are about dumps and not about who took them. MartyPC's own debugger will also

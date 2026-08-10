@@ -215,10 +215,12 @@ rule goes first:
 > (`MOUSEPORT=`, a socket chardev). "It is quicker to type" is not a reason;
 > neither is "I already know the QMP commands".
 >
-> **And for anything with a disk in its TIMING, neither one is the
-> instrument** — that is the 5150 (docs/FIELD-MACHINES.md), because no
-> emulator here is disk-accurate and MartyPC's error is 30x in the flattering
-> direction.
+> **And for anything with a disk in its TIMING, the 5150 is still where a
+> number LANDS** (docs/FIELD-MACHINES.md) — but MartyPC's floppy is no longer
+> a fiction: it turns at 300 RPM, honours an interleave and charges a seek
+> (PERFORMANCE.md Set 24), which took the boot from 4.4x fast to 1.38x. Use it
+> to find a disk regression; confirm it on the iron before it goes in
+> PERFORMANCE.md. QEMU remains 30x fast and models none of it.
 >
 > Why this is a rule and not a preference: QEMU is the emulator **furthest
 > from the target**. It runs the guest at host speed, on a CPU that is not an
@@ -532,12 +534,20 @@ sectors, so `dirty()` compares CONTENT; a bare `save(drive)` writes back over
 the mounted image and so destroys the reference `diff` needs; and the
 EMULATOR writes the file, so a relative path lands in the run tree.
 
-**MARTYPC IS CYCLE ACCURATE AND IT IS NOT DISK ACCURATE. If a disk is in the
-path, its timing is WRONG** - 30x fast on a 16KB read (0.27 s against the
-5150's 8.07) and 17x fast on a boot (PERFORMANCE.md Set 11) - and that catches
-plenty that is not obviously about disks: a boot time, a package launch, a
-Tracker module load, a `SYSTEM.CFG` save. **Nor will it catch a disk
-CORRECTNESS bug.** SPEC.md 18.91's `AL` bug is the worked example - the BIOS
+**MARTYPC'S FLOPPY NOW TURNS, AND THAT FIXES THE TIMING HALF ONLY.** It was
+30x fast on a 16KB read and 17x on a boot (Set 11) because upstream models
+**no platter at all** - `command_seek_head` completes in the breath it is
+issued, `FloppyDriveMechanicalState` is an enum nothing references, and
+sectors-per-track is hardcoded 0. `tools/martypc/patches/03-floppy-disk-timing.patch`
+gives it rotation, an interleave, an MFM data rate and a per-cylinder seek, and
+the three raw `int 13h` rows the 5150 measured (Sets 14/22) fall out of that
+one mechanism: 1.00 revolution to re-read a sector, 1.86 for a 9-sector 2:1
+track against the field's 1.92. Boot 41 ticks -> 130 against the field's 180.
+**Two caveats that are not small.** 2:1 media is only on the `ibm5150_82_v4`
+machines - GLaBIOS abandons a floppy op after ~250 ms, so it keeps 1:1 - and
+those machines need an IBM ROM this tree cannot ship, so **the 2:1 path has
+never been booted here**. **And it will still not catch a disk CORRECTNESS
+bug**, because the patch changes what a disk COSTS and never what it SAYS. SPEC.md 18.91's `AL` bug is the worked example - the BIOS
 moved nine sectors and answered `AL = 1`, the kernel believed it and re-read
 the rest one at a time, and on the 5150 that was 148 sectors in 34 int 13h
 calls for a 32-sector file. **The same binary on the same image under QEMU
@@ -887,8 +897,10 @@ Its **"Modelling the old machine from a fast one"** section is the part that
 has cost four bugs, and most of it is about QEMU: this container is ~1000x a
 4.77MHz 8088, so every constant sized while looking at it encodes the wrong
 range. MartyPC removes a good deal of that (a cycle-accurate 8088 does not
-have a clock that tells you nothing) and removes **none** of it for the disk,
-where its error is 30x and flattering. **FLICKER IS MEASURABLE NOW** and
+have a clock that tells you nothing), and since PERFORMANCE.md Set 24 it
+removes most of it for the disk too - its floppy turns at 300 RPM and honours
+an interleave, so the error is 1.38x rather than 30x. The 5150 is still where
+a disk number lands. **FLICKER IS MEASURABLE NOW** and
 PERFORMANCE.md Part 3.1 is the method: `os88marty.py flicker` samples the
 card's RENDERED framebuffer once per displayed frame - which is exactly how
 often an eye samples it, a CRT showing whatever the raster last read - and

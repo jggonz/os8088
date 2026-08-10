@@ -7,8 +7,8 @@ period BIOS, with a debugger attached: memory, registers, I/O ports,
 breakpoints, single-step and cycle counts, none of it costing the guest a
 cycle (docs/MARTYPC-DEBUG.md). It covers **all three** of SPEC.md §39's
 adapters, scripted input, screenshots and sound. **And for anything with a
-disk in its timing, go to the 5150 — no emulator here is disk-accurate,
-MartyPC included.**
+disk in its timing, the 5150 is where the number LANDS — though MartyPC's
+floppy now turns (PERFORMANCE.md Set 24), so it is 1.38x rather than 30x.**
 
 **Here is the whole of QEMU's remaining list**, stated as a list so that "a
 legitimate need" is something you can check rather than something you can
@@ -51,24 +51,34 @@ A tool that is wrong in the flattering direction does not announce itself.
 | **86Box** | a machine that is **not an 8088** (the 286 and 386 targets), real sound cards on a period bus, a second opinion on the video probe | period-correct whole machines, and the widest hardware library |
 | **the 5150** | anything with a **disk** in it, and the three defects no emulator shows | docs/FIELD-MACHINES.md |
 
-## The one rule that outranks the table: no emulator here is disk-accurate
+## The one rule that outranks the table: a disk number lands on the 5150
 
-**MartyPC is cycle-accurate on the CPU and it is not a floppy drive.** It
-models instruction timing, the prefetch queue and bus contention; it does not
-model a disk that spins at 300 rpm, a head that has to seek, or an interleave.
-PERFORMANCE.md Set 11 measured the gap on the same test and the same media:
+**MartyPC's floppy used to be a fiction and now it is a model.** Upstream it
+modelled no platter at all — a seek completed in the breath it was issued and
+a sector arrived the instant it was asked for — which is where Set 11's 30x
+came from. `tools/martypc/patches/03-floppy-disk-timing.patch` gives it
+rotation, an MFM data rate, a physical interleave and a per-cylinder seek
+(PERFORMANCE.md Set 24, docs/MARTYPC-DEBUG.md):
 
-| | real 5150 | MartyPC |
-|---|---|---|
-| read 16 KB, cold motor | **8.07 s** | **0.27 s** — 30x fast |
-| boot | **38,886 ms** | **2,306 ms** — 17x fast |
+| `boot ticks`, 360KB | before | after | real 5150 |
+|---|---|---|---|
+| `os8088_5150_cga_gla` | 41 (2.25 s) | **130 (7.14 s)** | 180 (9.886 s) |
 
-So **if a disk is in the path, MartyPC's number is wrong** and it is wrong by
-more than an order of magnitude. That includes anything that *contains* a
-disk read without being about one — a boot time, a package launch, a Tracker
-module load, a Control Panel save. PCem is no better and QEMU is worse. There
-is exactly one instrument for disk timing and it is the machine in
-docs/FIELD-MACHINES.md.
+So the rule is now two rules, and the second has not moved at all:
+
+- **TIMING**: MartyPC is worth asking, at ~1.38x rather than 30x — good enough
+  to catch a disk regression. It still is not where a figure LANDS: anything
+  going into PERFORMANCE.md Part 9 comes off the 5150. PCem is no better and
+  QEMU models none of it.
+- **CORRECTNESS**: unchanged, and the sharper half. The patch changes what a
+  disk COSTS and never what it SAYS, so §18.91's `AL` bug — a claim about what
+  a real ROM returns — is exactly as invisible here as it was. Short reads,
+  `int 1Eh`'s EOT and BIOS stack depth are the 5150's alone.
+
+Two caveats that are not small: 2:1 media is configured only on the
+`ibm5150_82_v4` machines (GLaBIOS abandons a floppy op after ~250 ms, so its
+machines keep 1:1), and those machines need an IBM ROM this tree cannot ship —
+so **the 2:1 path has never been booted in the container**.
 
 **And it will not catch a disk CORRECTNESS bug either**, which is the sharper
 half. SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the

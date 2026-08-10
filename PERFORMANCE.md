@@ -43,21 +43,27 @@ you may finally *time* work rather than only count it. The debugger attached
 to it costs the guest no cycles at all, so measuring does not change the
 measurement.
 
-**It is cycle-accurate and it is NOT disk-accurate, and that distinction is
-load-bearing enough to sit at the top of this document rather than in Set 11
-where it was measured.** MartyPC models instruction timing, the prefetch queue
-and bus contention; it models no platter, no seek and no interleave:
+**It was cycle-accurate and NOT disk-accurate, and that half has now been
+fixed — read Set 24 before quoting the old ratio.** MartyPC models instruction
+timing, the prefetch queue and bus contention; upstream it modelled **no
+platter, no seek and no interleave at all**, which is where these came from:
 
-| | real 5150 | MartyPC |
+| | real 5150 | MartyPC, upstream |
 |---|---|---|
 | read 16 KB, cold motor | **8.07 s** | **0.27 s** — 30x fast |
 | boot | **38,886 ms** | **2,306 ms** — 17x fast |
 
-So **any figure with a disk in its path is wrong on MartyPC, by more than an
-order of magnitude and in the flattering direction** — and that reaches a lot
-that is not obviously about disks: a boot time, a package launch, a Tracker
-module load, a `SYSTEM.CFG` write, the Control Panel closing. Part 9's disk
-rows come off the 5150 and nowhere else.
+`tools/martypc/patches/03-floppy-disk-timing.patch` gives the drive a platter,
+an interleave and a data rate (Set 24, docs/MARTYPC-DEBUG.md), and the boot
+goes **41 ticks → 130** against the field's 180 — 4.4x fast to 1.38x, with the
+rest accounted for by media this container cannot yet run. So the rule is now:
+
+> **A disk TIMING figure from MartyPC is worth having, and is still checked on
+> the 5150 before it lands here.** Part 9's disk rows come off the 5150.
+>
+> **A disk CORRECTNESS question is unchanged and unmoved**: the patch changes
+> what a disk COSTS, never what it SAYS. §18.91's `AL` bug is a claim about
+> what a real ROM returns and no emulator here invents it.
 
 **Nor will it catch a disk CORRECTNESS bug**, which is how the last two disk
 optimisations came to measure *worse* than what they replaced. §18.91's `AL`
@@ -3591,3 +3597,86 @@ like. Crop the cell and read it before believing it.
 
 Cost: `.text` +13 bytes (the per-row saving is 2–4 bytes, the once-per-call
 setup 2–9), no rung crossed, `KERN_SIZE` unchanged.
+
+### Set 24 — MartyPC's floppy is given a platter
+
+Not a field report: a change to the **instrument**, measured against the field
+reports that already exist. `tools/martypc/patches/03-floppy-disk-timing.patch`,
+docs/MARTYPC-DEBUG.md.
+
+#### What was actually there
+
+Upstream MartyPC models no floppy mechanism whatever, and the source says so
+plainly once you look: `operation_read_data` calls the drive once and streams
+the whole run to DMA as fast as the CPU turns; `command_seek_head` returns
+`CommandComplete` in the same breath it is issued, so **a seek is free**;
+`FloppyDriveMechanicalState`, with its `MotorSpinningUp` and `HeadSeeking`
+arms, is an enum **nothing in the tree references**; and `media_geom`'s
+sectors-per-track is hardcoded `0`, because until now no code wanted it. Set
+11's 30x was not a calibration error. There was nothing to calibrate.
+
+#### One mechanism, three rows
+
+The patch models rotation (a head angle per drive), the MFM data rate (32 us a
+byte at 250 kbit/s, so a 512-byte sector's data field is 16.384 ms), the
+physical **interleave**, and a per-cylinder seek. Sets 14 and 22's three raw
+`int 13h` rows then fall out of it together, which is the point — they were
+never three facts:
+
+| | field, IBM 5150 | model, 2:1 |
+|---|---|---|
+| one sector, re-read | 199 ms = **1.00 rev** | **1.00 rev** |
+| a 9-sector track, one call | 384 ms = **1.92 rev** | 372 ms = **1.86 rev** |
+| the same nine as nine calls | 2,005 ms = **10.02 rev** | ~1 rev a call |
+
+**The interleave cannot come from the image and does not.** A raw sector image
+records the LOGICAL order and says nothing about the platter, so 2:1 is a
+statement in the machine config — the 5150's media is 2:1 (Set 14), the Compaq
+Portable III's ~1:1 (Set 19), and that difference is exactly why the Compaq
+streams a track in 1.24 revolutions where the 5150 needs 1.92.
+
+#### Measured end to end
+
+`boot ticks`, 360KB image, os8088's own counter:
+
+| | before | after | field (Set 22) |
+|---|---|---|---|
+| `os8088_5150_cga_gla` | 41 (2.25 s) | **130 (7.14 s)** | 180 (9.886 s) |
+
+**4.4x fast → 1.38x.** The remainder is media: 2:1 adds ~178 ms to each of the
+kernel's ~19 track reads, ~3.4 s, landing at ~10.5 s against 9.9. **That last
+step is arithmetic and not a measurement** — the IBM ROM is not in this tree,
+so the 2:1 machines have never been booted anywhere. It is the first thing to
+run on a machine that has the ROM.
+
+#### Two things it found
+
+**GLaBIOS abandons a floppy operation after ~250 ms.** Measured three times
+running, at 250.2 / 245.8 / 245.8 ms, after which it resets the controller and
+the boot sector prints `os8088: disk error` — status **80**, read off the
+screen with `make BOOTDIAG=1`, which is precisely the boot this knob exists
+for. A 6-sector 2:1 run takes 305 ms, so under that BIOS it can never
+complete. It is the BIOS and not the model: the FDC presents a correctly BUSY
+status register throughout, and **seeks of 329 ms complete fine in the same
+boot**. So 2:1 goes only on the `ibm5150_82_v4` machines, and the GLaBIOS
+twins keep 1:1.
+
+**And a run must be paced per SECTOR, not charged as one lump.** The first
+version delayed a whole multi-sector run in one silent block, which is not what
+a drive does — a controller starts DRQing as the first sector arrives and
+pauses only over the inter-sector gaps. Per-sector pacing reads out of the
+trace as `82.8 ms, 44.4, 44.4, …`: the first sector's rotational latency, then
+two slots of 2:1 gap apiece. It did not rescue GLaBIOS, whose limit is on the
+whole operation rather than on silence, but it is the honest model and the
+totals are identical by construction.
+
+#### What it does not touch
+
+The patch changes what a disk **costs** and never what it **says**. §18.91's
+`AL` bug is a claim about what a real ROM returns; an emulator returns what its
+author believed, and this one still does. Correctness questions — short reads,
+`int 1Eh`'s EOT, BIOS interrupt stack depth — remain the 5150's, exactly as
+before. Motor spin-up, the PCjr PIO paths and Format Track are unmodelled or
+uncalibrated, and the seek figures are the BIOS's own SPECIFY request rather
+than anything measured: the field's three rows all read one track and never
+seek, so nothing in Part 9 pins them. **Hard disks are untouched.**

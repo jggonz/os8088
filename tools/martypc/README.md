@@ -14,20 +14,45 @@ in the guest at all**.
 |---|---|
 | `UPSTREAM` | the pinned commit. Editing it is a deliberate act, not maintenance |
 | `debug_server.rs` | the new module, copied in whole |
-| `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have |
+| `patches/` | everything else: the upstream files that had to change, plus `devices/sblaster.rs`, the Sound Blaster upstream does not have, and `03-floppy-disk-timing.patch`, the platter |
 | `configs/` | five IBM 5150 machine configs shaped after docs/FIELD-MACHINES.md |
 | `roms/` | **gitignored, and you supply it** — see the note at the bottom |
 | `build.sh` | clone at the pin, patch, stage a run tree, build |
+
+**Adding a patch that touches a file an earlier patch already touches is the
+trap here, and it has been sprung twice.** `build.sh` applies `patches/*.patch`
+in glob order onto a tree reset to the pin, so patch 03 is applied to
+**pin + 01 + 02** — but a bare `git diff` in `build/martypc/src` is taken
+against the *pin*, so for any file 01 also edits it silently emits 01's hunks
+as well and the next clean build dies with `patch does not apply`. Regenerate
+against the right base:
+
+```sh
+cd build/martypc/src
+git stash                                  # your changes, briefly
+git checkout --force $PIN && git clean -qfd
+cp ../../../tools/martypc/debug_server.rs crates/binaries/martypc_headless/src/debug_server.rs
+git apply ../../../tools/martypc/patches/01-*.patch
+git apply ../../../tools/martypc/patches/02-*.patch
+git add -A && git commit -qm "pin + 01/02"  # <- the base your patch is against
+git stash pop
+git diff > ../../../tools/martypc/patches/NN-yours.patch
+```
+
+Then throw the temp commit away and run `make marty` — a clean build from the
+pin is the only thing that proves the patch applies.
 
 **Reach for this first** when what you are testing runs on an 8088 — all
 three of SPEC.md §39's adapters, VGA mode 12h included — screenshots included (`os88marty.py shot out.png` reads the
 framebuffer out of VRAM, so there is no reason to start QEMU to look at a
 screen) and sound included (`MARTYPC_WAV=` captures one wav per source, and
 the `os8088_5150_sb` machine has a PC speaker, an OPL2 **and** a Sound
-Blaster). **It is cycle-accurate and it is not disk-accurate**: its
-floppy is 30x fast, so no figure with a disk in its path means anything here,
-and it would not have caught SPEC.md §18.91's `AL` bug any more than QEMU did.
-docs/MARTYPC-DEBUG.md has the long version of both.
+Blaster). **Its floppy now turns** — `patches/03-floppy-disk-timing.patch`
+gives the drive a platter, an interleave and a data rate, so a read costs
+revolutions instead of arriving instantly (docs/MARTYPC-DEBUG.md). That fixes
+the *timing*; it does **not** make the emulator a source of truth about what
+the BIOS RETURNS, so it would still not have caught SPEC.md §18.91's `AL` bug,
+and the 5150 is still the instrument for anything a disk can get *wrong*.
 
 **What the guest WROTE to a floppy is a different question, and `flush`
 answers it.** MartyPC keeps a mounted image in RAM and never writes it back —
