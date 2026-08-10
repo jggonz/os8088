@@ -1761,6 +1761,29 @@ sb_cbx:
 
 sb_trailer:
     push si
+    push ax
+
+    ; How close this report came to its own ceilings. `bl_full` already says a
+    ; report TRUNCATED; nothing said how near one that did not had come, which
+    ; is why the row ceiling was raised three times after the fact and the
+    ; arena ceiling never was. Both are printed now.
+    call bl_blank
+    mov si, sb_s_h_cap
+    call bl_sline
+    mov si, sb_l_caprow
+    mov ax, [bl_nrow]
+    call sb_num
+    mov si, sb_l_caprmx
+    mov ax, BL_MAXROWS
+    call sb_num
+    mov si, sb_l_capuse
+    mov ax, [bl_used]
+    call sb_num
+    mov si, sb_l_capmax
+    mov ax, BL_ARENA
+    call sb_num
+
+    pop ax
     call bl_blank
     mov si, sb_s_end1
     call bl_sline
@@ -3872,6 +3895,8 @@ sb_motor:
     call bl_sline
     mov si, sb_s_h_mt2
     call bl_sline
+    mov si, sb_s_h_mt3
+    call bl_sline
     call bl_head
 
     call sb_r13at                   ; touch the drive so the countdown is
@@ -4528,10 +4553,16 @@ sb_r_sk10:   db 'seek 10 cyl, pair', 0
 sb_r_sk20:   db 'seek 20 cyl, pair', 0
 sb_r_sk39:   db 'seek 39 cyl, pair', 0
 sb_s_h_mt:   db '-- what SPIN-UP costs: one sector cold, then the same one warm --', 0
-sb_s_h_mt2:  db '   cold - warm is spin-up plus the DPT motor-start wait above.', 0
+sb_s_h_mt2:  db '   cold - warm is spin-up plus the DPT motor-start wait above;', 0
+sb_s_h_mt3:  db '   cold NOT slower than warm means none is being paid at all.', 0
 sb_r_mtc:    db '1 sector, motor COLD', 0
 sb_r_mtw:    db '1 sector, motor warm', 0
 sb_l_mtst:   db 'motor status 40:3F', 0
+sb_s_h_cap:  db '-- how close this report came to its own ceilings --', 0
+sb_l_caprow: db 'report rows used', 0
+sb_l_caprmx: db '  ...of BL_MAXROWS', 0
+sb_l_capuse: db 'arena bytes used', 0
+sb_l_capmax: db '  ...of BL_ARENA', 0
 sb_d_r13b:   db 'bios track 1 call B/s', 0
 sb_d_r13s:   db 'bios track 9 calls B/s', 0
 sb_s_nodbg:  db 'This kernel carries no disk instrument - build DISKCNT=1.', 0

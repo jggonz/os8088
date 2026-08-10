@@ -3726,3 +3726,64 @@ what `int 13h` returns, `int 1Eh`'s EOT, the ROM's own arithmetic — is
 reproduced because it is IBM's code. **Controller-level** behaviour — what a
 real 765 puts in ST1 on a CRC error, whether a real drive ever returns short —
 remains the emulator author's belief, and remains the 5150's question.
+
+#### Set 24.1 — the seek and the spin-up get an instrument
+
+The model's two untested numbers now have `sysbench` blocks
+(docs/TESTING.md, `make field`). Run here on `cga.img` under the IBM ROM with
+2:1 media, so this is **what the model predicts, not what the drive does** —
+the 5150 is what turns it into a measurement.
+
+**The seek rows come out as a staircase, which is the design and not an
+accident.** A read ends at a fixed angular position, so the seek hides inside
+the wait for sector 1 to come round and the rows can only step in whole
+revolutions:
+
+| row | us/op (a pair of reads) | revolutions per read |
+|---|---:|---:|
+| `seek 0 cyl (baseline)` | 398,211 | **1.00** |
+| `seek 1 cyl, pair` | 398,211 | 1.00 |
+| `seek 5 cyl, pair` | 398,211 | 1.00 |
+| `seek 10 cyl, pair` | 398,211 | 1.00 |
+| `seek 20 cyl, pair` | 810,154 | **2.03** |
+| `seek 39 cyl, pair` | 1,194,634 | **2.99** |
+
+The baseline is 1.00 revolution per read to three digits, which is what says
+the instrument is sound — it is the same check `int 13h 1 sector` has always
+been. **The break falls between 10 and 20 cylinders**, and that is the whole
+datum: at the DPT's `00CF` (SRT = 12, so 8 ms a cylinder at 250 kbit/s) plus a
+25 ms settle, a 20-cylinder seek is 185 ms against the ~184 ms of rotational
+slack a 1-sector read leaves — so it steps up *just*, exactly where the model
+says. **If the 5150's break falls lower, its drive steps slower than the BIOS
+asked for; if there is no break at all, it steps faster than 5.1 ms and the
+model is overcharging every seek in the system.**
+
+**The spin-up rows read INVERTED here, and that is the correct answer for this
+machine**: cold 164,777 us against warm 219,702, with `motor status 40:3F` =
+`0000` so the drive really had stopped. MartyPC models no spin-up — the header
+says a cold row not slower than the warm one means none is being paid — and
+the two rows are one revolution apart in either direction because N = 1 and
+each catches the platter wherever it was. On the 5150 the cold row should be
+**about a second longer**, that being what the DPT asks for, and the size of
+the gap over and above it is the platter itself.
+
+**One thing to check on the iron while it is running.** MartyPC's ROM reports
+`DPT motor start /8 s` = **4** — half a second — where Set 14 read **8** on the
+field machine off the same 27 OCT 82 ROM. One of those two readings is wrong
+and the report prints the byte, so the next field run settles it.
+
+#### ...and the report is one round from its own ceiling
+
+`SYSBENCH.TXT` is **337 rows of 380 and 14,806 arena bytes of 16,000** — 7%
+spare. That ceiling has never been visible: `bl_full` says a report
+*truncated* and nothing said how close one that did not had come, which is why
+the ROW ceiling was raised three times after the fact and the arena's never
+was. Both figures are printed in the trailer now.
+
+**And it cannot simply be raised.** `bl_out` is `BL_ARENA`-sized too, so every
+byte costs two, and sysbench's image plus bss is already within ~5KB of the
+64KB **segment** a package gets (SPEC.md §20.1): +3,456 overflows it, and the
+failure is a wall of `word data exceeds bounds` at unrelated lines rather than
+anything naming the constant. The next round wants a row dropped or the suite
+split, and now that decision can be taken from the report rather than from a
+truncated one coming back off a machine nobody can re-run cheaply.

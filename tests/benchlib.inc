@@ -124,8 +124,32 @@ BL_MAXROWS  equ 380             ; report lines. Sized for the longest suite,
                                 ; is a report that truncates on somebody
                                 ; else's machine, and it happened a THIRD
                                 ; time at 300 when SPEC.md 18.4's write block
-                                ; landed. 380 for 305.
-BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text
+                                ; landed. 380 for 305, and 337 after Set 24's
+                                ; seek and spin-up blocks.
+BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text.
+                                ; **THIS CEILING IS INVISIBLE UNTIL IT IS
+                                ; HIT, AND IT CANNOT SIMPLY BE RAISED**, which
+                                ; together are why it needs a paragraph. The
+                                ; row ceiling above was raised three times
+                                ; after the fact; this one never has been,
+                                ; because `bl_full` says a report TRUNCATED
+                                ; and nothing said how close a report that did
+                                ; not had come. Set 24's two blocks landed it
+                                ; at 14,806 of 16,000 - 7% spare.
+                                ;
+                                ; And raising it costs TWICE what it looks
+                                ; like: `bl_out` below is BL_ARENA-sized too,
+                                ; so every byte here is two, and sysbench's
+                                ; image plus bss is already within ~5KB of the
+                                ; 64KB SEGMENT a package gets (SPEC.md 20.1).
+                                ; +3,456 here overflows it, and the failure is
+                                ; a wall of `word data exceeds bounds` at
+                                ; unrelated lines rather than anything naming
+                                ; this constant. The next round wants a row
+                                ; DROPPED, or the suite split - not a bigger
+                                ; number here. sysbench's trailer prints both
+                                ; figures so that decision can be taken before
+                                ; a field report truncates rather than after.
 BL_OUTSZ    equ BL_ARENA + BL_MAXROWS * 2 + 64   ; ...plus a CR LF each
 BL_BASE_N   equ 400             ; iterations of the empty body, for the
                                 ; overhead every method-P row is net of
