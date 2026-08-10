@@ -1445,14 +1445,21 @@ wm_hide:
     push cx
     push dx
     push si
-    call wm_su_drop             ; MINIMIZING IS NOT COVERING (SPEC.md 11.96.1).
-                                ; A hidden window's background painter finds
-                                ; itself invisible and SKIPS drawing, so it
-                                ; never reaches wm_clip_set and never drops the
-                                ; cache - while its state goes on changing. The
-                                ; promise in WF_SAVEU is about a window that is
-                                ; merely covered; nothing may assume it across
-                                ; a hide
+%ifdef REDRAWFULL
+    call wm_su_drop             ; the reference build (SPEC.md 11.96.5)
+%else
+    push di                     ; MINIMIZING IS NOT COVERING (SPEC.md 11.96.1)
+    mov di, bx                  ; and this used to DROP the cache for that
+    call wm_su_take             ; reason. Taking one is strictly safer than
+    pop di                      ; either dropping or keeping: it is banked
+                                ; HERE, at the last moment the window's pixels
+                                ; are correct and still on the glass, so no
+                                ; older cache can survive a hide and a restore
+                                ; puts back what went down (SPEC.md 11.96.5).
+                                ; It must run before the visible bit drops
+                                ; below - wm_su_take refuses an invisible
+                                ; window, having no pixels to read
+%endif
     mov si, bx
     call wm_win_rect            ; AX,BX,CX,DX = the rect it is vacating
     test word [si+W_FLAGS], WF_FULL
@@ -4400,10 +4407,14 @@ wm_su_try:
     mov cx, [wm_su_x2]
     mov dx, [wm_su_y2]
     call gfx_restore
-    mov bx, di
-    call wm_su_drop             ; SPENT: the pixels are on screen and this
-    clc                         ; window is about to be the front one, so the
-    jmp short .out              ; next thing it does is change them
+    clc                         ; THE CACHE IS NOT SPENT HERE. It used to be
+    jmp short .out              ; dropped on the grounds that this window is
+                                ; about to be the front one and will change
+                                ; its own pixels - true of a raise and false
+                                ; of a damage repaint, which redraws a window
+                                ; that stays exactly where it was. wm_su_bank
+                                ; below asks which of the two this is, and
+                                ; drops it only for the first (SPEC.md 11.96.4)
 .no:
     stc
 .out:
@@ -4520,10 +4531,56 @@ wm_draw_win:
 .growbox:
     mov bx, di                  ; grow box AFTER W_PAINT (SPEC.md 11.1) -
     call wm_grow_paint          ; a no-op unless frontmost + WF_SIZABLE
+    call wm_su_bank             ; ...and THIS is the moment its pixels are
+                                ; both correct and finished with (SPEC.md
+                                ; 11.96.4)
     pop di
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_su_bank - after drawing window DI, decide what its raise cache should be
+; in:  DI = the window just drawn (gfx lock held)
+; out: nothing (all registers preserved)
+;
+; SPEC.md 11.96.4. The cache used to be taken in ONE place - wm_raise, from
+; the window losing the front - and spent on the first restore, so it served
+; the case it was written for (two windows alternating) and nothing else: a
+; second drag across the same window repainted it, and a window that had been
+; in the background a while had no cache at all.
+;
+; The question is the same wherever it is asked: has this window finished
+; with the pixels it has just been drawn? The FRONT window has not - the next
+; thing it does is change them - and every other window has, because nothing
+; but a redraw can move them (11.96.1's promise). So the front window's cache
+; is dropped and everybody else's is taken, at the one place every window in
+; the system is drawn.
+;
+; It is affordable because a bank is a COPY and a repaint is a W_PAINT: about
+; 5.7KB of framebuffer on a mono Disk window against 578 ms of glyphs
+; (11.96). The claim is purgeable (50.6), so a machine with no room to spare
+; declines and behaves exactly as it did before this existed.
+; -----------------------------------------------------------------------------
+wm_su_bank:
+    push ax
+    push bx
+%ifdef REDRAWFULL
+    jmp short .front            ; the reference build (SPEC.md 11.96.4): only
+%endif                          ; wm_raise ever banks, and the first restore
+                                ; spends it, which is where this started
+    call wm_top                 ; BX = frontmost visible (0 if none)
+    cmp bx, di
+    je .front
+    call wm_su_take             ; covered, or minimized a moment from now:
+    jmp short .out              ; its pixels stand until something draws it
+.front:
+    mov bx, di
+    call wm_su_drop             ; the front window is about to change them
+.out:
     pop bx
     pop ax
     ret

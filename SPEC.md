@@ -4441,7 +4441,11 @@ raise shows the wrong time until something else redraws.
 Minimizing is the sharper form and it gets its own hook regardless of the
 flag: `wm_hide` drops the cache, because a hidden window's painter skips
 drawing for the whole time it is down. **A promise about being covered may not
-be assumed across a hide.**
+be assumed across a hide.** — **it TAKES one now instead** (§11.96.5).
+Banking at the moment of the hide is strictly safer than dropping, because an
+*older* cache surviving the hide is the whole of what the drop protected
+against, and one taken from the glass a moment before the window goes down
+cannot be stale.
 
 **The test a window has to pass, and it is three questions.** `wm_su_try`
 returning CF = 0 skips *both* the white fill and `W_PAINT`, so anything the
@@ -4799,6 +4803,58 @@ dirties the back buffer nor flushes — the poll loop does no drawing work at
 all beyond the XOR itself. The final save-under restore + title un-highlight
 need no flush of their own — the caller's gfx_unlock flushes them (§13
 step 2), and that flush is what clears the last item highlight from VRAM.
+
+#### 11.96.4 The cache is taken wherever a window is drawn, not only at a raise
+
+§11.96 took the cache in **one place** — `wm_raise`, from the window losing
+the front — and spent it on the first restore. That serves the case it was
+written for, two windows alternating, and nothing else: a **second** drag
+across the same window repainted it in full, and a window that had been in
+the background for a while had no cache at all. Reported as *"call to front
+uses the cache; drag and drop does not"*, which is exactly the shape of a
+one-shot.
+
+The question is the same wherever it is asked, so it is asked once, at the
+one place every window in the system is drawn. **Has this window finished
+with the pixels it has just been given?** The front window has not — the next
+thing it does is change them — and every other window has, because nothing
+but a redraw can move them, which is §11.96.1's promise restated. So
+`wm_su_bank`, at the end of `wm_draw_win`, **drops the front window's cache
+and takes everybody else's**.
+
+Two things fall out rather than being arranged. **`wm_su_try` no longer
+spends the cache**: it dropped it on the grounds that the window was about to
+become front and change its own pixels, which is true of a raise and false of
+a damage repaint, and the bank below now asks which of the two this is. And
+**`wm_paint_all` leaves every covered window banked**, so the first drag
+after a full repaint is already cheap.
+
+It is affordable because **a bank is a copy and a repaint is a `W_PAINT`** —
+about 5.7KB of framebuffer for a mono Disk window against §11.96's measured
+578 ms of glyphs. The claim is purgeable (§50.6) at the cheapest rank, so a
+machine with no room declines and behaves exactly as it did before any of
+this existed.
+
+#### 11.96.5 …including the moment a window is minimized
+
+`wm_hide` **dropped** the cache, on §11.96.1's reasoning that a hidden
+window's background painter finds itself invisible, skips drawing, and so
+never reaches `wm_clip_set` to invalidate anything — *a promise about being
+covered may not be assumed across a hide*. The remedy did not follow from the
+hazard: dropping leaves a restore-from-minimized paying the most expensive
+repaint in the system, every time.
+
+**Taking one is strictly safer than either dropping or keeping.** `wm_hide`
+banks the window at the last moment its pixels are both correct and still on
+the glass, so no *older* cache can survive a hide — which is the whole of what
+the drop was protecting against — and a restore puts back exactly what went
+down. What is left is the promise itself, and `WF_SAVEU`'s wording is already
+the right one: *my content does not change while I am not drawing*, not
+*while I am merely covered*. An application whose content moves on its own is
+disqualified from the flag at all (§11.96.1's question 1), minimized or not.
+
+The ordering is load-bearing: it runs **before the visible bit drops**, because
+`wm_su_take` refuses an invisible window — it would have no pixels to read.
 
 ### 12.05 The bar is redrawn only when its contents changed
 

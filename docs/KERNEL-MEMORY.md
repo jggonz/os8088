@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 55480
+    "text": 55538
   },
   "small": {
     "bss": 4666,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 53102
+    "text": 53160
   }
 }
 ```
@@ -874,21 +874,21 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,634 | 36.6% |
-| the window system and its furniture | 16,421 | 21.0% |
+| the file system, end to end | 28,634 | 36.5% |
+| the window system and its furniture | 16,479 | 21.0% |
 | drawing: adapters, primitives, glyphs, icons | 11,492 | 14.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,848 | 12.6% |
 | the kernel proper: API table, heap, scheduler, events | 5,897 | 7.5% |
-| the Control Panel | 4,662 | 6.0% |
+| the Control Panel | 4,662 | 5.9% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **78,330** | |
+| **total** | **78,388** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 917 | 7,304 | **8,221** | 336 | — |
-| `wm.inc` — the window manager (§11) | 5,984 | — | **5,984** | 635 | — |
+| `wm.inc` — the window manager (§11) | 6,008 | — | **6,008** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
 | `ctrl.inc` — the Control Panel (§31) | 902 | 3,760 | **4,662** | — | — |
@@ -898,7 +898,7 @@ generated in the first place.
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,624 | — | **2,624** | 256 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,561 | — | **2,561** | 194 | 98 |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,406 | — | **2,406** | 37 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,440 | — | **2,440** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
@@ -923,7 +923,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,705 | — | **2,705** | — | — |
-| **total** | **55,480** | **22,850** | **78,330** | **4,751** | **7,762** |
+| **total** | **55,538** | **22,850** | **78,388** | **4,751** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
