@@ -1293,9 +1293,11 @@ The two insertion points, and both of them need a `cs:` override:
 **A sub-rect is ONE restore, and it is disarmed by the body rather than by the
 caller** — `wm_dmg_dk`'s rule, so the value a forgetful caller inherits is the
 safe one. In `sw_xfer` that clear is gated on `[sw_dir]`: `.done` is the
-**save** path's exit too, and a `gfx_save` between an arm and its restore would
-disarm it. `wm_su_edge` is exactly that, twice, which is why it runs *before*
-the arm in `wm_su_try` and not after.
+**save** path's exit too, and an ungated clear there would disarm a sub-rect
+whenever a `gfx_save` ran between the arm and the restore. `wm_su_edge` is
+exactly that, twice — so the gate is what lets it run **after** the arm, which
+§11.96.8 needs it to: it patches the bytes *this* restore will write, so it has
+to know which those are.
 
 **The byte-column overhang is already paid for, and by the whole-window
 answer.** A sub-rect's left and right byte columns hold pixels outside it, and
@@ -5186,6 +5188,44 @@ disqualified from the flag at all (§11.96.1's question 1), minimized or not.
 
 The ordering is load-bearing: it runs **before the visible bit drops**, because
 `wm_su_take` refuses an invisible window — it would have no pixels to read.
+
+#### 11.96.8 …and the edge merge is bounded by the same rect
+
+§11.96.6 halved the blit and left the *other* half untouched, which then became
+the larger one: measured on a 318×136 CGA Disk window, `wm_su_edge` is **18.22
+ms** of a 47.86 ms restore against the blit's 29.64, and it was still walking
+the whole banked rect however small a strip the restore put back.
+
+It is bounded by asking about **the rect being restored** rather than about the
+buffer. Two things fall out, and the second is the bigger:
+
+- **The rows walked are the sub-rect's**, both in the two `gfx_save` reads of
+  the screen columns and in the merge.
+- **An edge column the restore does not reach is not merged at all.** The banked
+  rect's left byte column is written only when the sub-rect's left edge lands in
+  that same byte; anywhere else the "overhang" is the window's own content, which
+  this pass did not paint, so the cache and the screen already agree there
+  (§5.8's argument) and there is nothing to repair. A sub-rect in the middle of
+  a window therefore does **no** edge work.
+
+**The masks stay the banked rect's, and that is not an oversight.** The byte
+being patched is that rect's edge byte — the restore only reaches it when the
+sub-rect's edge is in the same byte column — so the overhang to repair is that
+rect's overhang. The sub-rect's own mask would be equally correct and no
+tighter: the bits between the two are pixels the cache and the screen agree on.
+
+**`wm_su_merge` grows a second level, and that is what the bound costs.** One
+flat walk of stride `bpr` was right while every restore covered the whole banked
+rect — the layout is plane-major and every plane holds the same rows, so all of
+them are contiguous at that stride. A sub-rect leaves a **tail in each plane**
+that the walk must step over, so the planes become an outer loop and
+`[wm_su_pext]` is that tail. With nothing armed the tail is 0 and the row count
+is every row, so it degenerates to the walk it replaced — which is what makes
+this additive on the cursor's and the menu's paths.
+
+**It runs after the arm**, where it used to run before: it patches the bytes
+*this* restore will write, so it has to be told which those are. §5.8's
+`[sw_dir]` gate on the disarm is what makes that ordering legal.
 
 #### 11.96.7 A bank is only worth what was on the glass when it was taken
 

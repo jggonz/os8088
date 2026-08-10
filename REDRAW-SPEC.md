@@ -225,6 +225,7 @@ a Disk window it repaints in full.
 | i | **`gfx_restore` can put back part of its buffer** | §5.8 | the primitive; skips 0 at rest |
 | j | **the raise cache restores only what the pass painted** | §11.96.6 | 30.63 → 15.27 ms, 2.01x |
 | k | **a bank is only worth what was on the glass** | §11.96.7 | a real bug: 3,876 stale px |
+| l | **the edge merge is bounded by the same rect** | §11.96.8 | 18.59 → 8.09 ms, 2.30x |
 
 (i) and (j) are the primitive and its first consumer, below. **(k) was not on
 anyone's list**: verifying (j) against `REDRAWFULL=1` turned up 7,907 differing
@@ -429,14 +430,26 @@ too slow through the debug server. A breakpoint at `gfx_restore` and another
 at `wm_grow_paint`, reading `cycles` at each, is the measurement that was
 being set up when the session ended.
 
-**That measurement was then taken, and PERFORMANCE.md Set 30 is it**: on a
-318×136 Disk window the restore is **47.86 ms** — 29.64 of blit and 18.22 of
-`wm_su_edge`'s merge — against 48.84 ms for all the chrome around it. So the
-instruction above was right to insist on it, and the answer justified the work:
-the sub-rect took the blit to **15.27 ms, 2.01x**. **The edge merge is what is
-left, and it is now the bigger half**: `wm_su_edge` still walks the whole banked
-rect's rows even when the restore is a 94-row band, because bounding it needs
-the two-level buffer walk the plane skip implies.
+**That measurement was then taken, and PERFORMANCE.md Sets 30 and 31 are it**:
+on a 318×136 Disk window the restore is **47.86 ms** — 29.64 of blit and 18.22
+of `wm_su_edge`'s merge — against 48.84 ms for all the chrome around it. So the
+instruction above was right to insist on it, and the answer justified both
+halves of the work. On one drag that genuinely uncovers, priced end to end:
+
+| | edge | blit | restore |
+|---|---|---|---|
+| before | 18.59 | 30.63 | 49.22 ms |
+| §11.96.6 — the sub-rect blit | 18.59 | 15.27 | 33.86 ms |
+| §11.96.8 — the bounded merge | **8.09** | 15.27 | **23.36 ms** |
+
+**2.11x on the restore.** The edge half beat the row-count ratio (2.30x against
+the 1.45x that 136 → 94 rows predicts) because bounding it also means **an edge
+column the restore does not reach is not merged at all** — a sub-rect in the
+middle of a window does no edge work whatever its height.
+
+**What is left of the restore is the blit again**, and there is no obvious next
+cut in it: `rep movsb` over exactly the bytes that changed, at a per-row overhead
+the two renderers share with the cursor.
 
 ### How to verify any of it
 

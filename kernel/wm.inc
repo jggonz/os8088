@@ -4534,7 +4534,26 @@ wm_su_kb:
 
 ; wm_su_edge - make the banked buffer's two edge byte columns agree with the
 ;              screen OUTSIDE the window (SPEC.md 11.96.2)
-; in:  ES = the claim, the four wm_su_* rect words; preserves every register
+; in:  ES = the claim; AX/BX/CX/DX = the rect gfx_restore is about to be handed
+;      - the whole content rect, or 11.96.6's sub-rect of it; the four wm_su_*
+;      words = the rect the buffer was SAVED over. Preserves every register.
+;
+; IT PATCHES THE BYTES THE RESTORE WILL WRITE, AND ONLY THOSE (SPEC.md 11.96.8).
+; That used to be the whole banked rect because that was the whole restore, and
+; it is the larger half of what a restore costs: 18.22 ms of a 47.86 ms restore
+; on a 318x136 CGA Disk window, against the blit's 29.64. Two things fall out of
+; asking about the rect rather than the buffer, and the second is the bigger:
+; the rows walked are the SUB-RECT's, and an edge column the restore does not
+; reach is not patched at all - a sub-rect whose left byte column is inside the
+; banked rect has no overhang there to fix, because those pixels are the
+; window's own content (SPEC.md 5.8's argument) and the cache already agrees
+; with the screen about them.
+;
+; The MASKS stay the banked rect's, which is not an oversight: the byte being
+; patched is the banked rect's edge byte - the restore only reaches it when the
+; sub-rect's edge is in the same byte column - so the overhang to repair is that
+; rect's overhang. The sub-rect's own mask would also be correct and no tighter,
+; the difference between them being pixels the cache and the screen agree on.
 ;
 ; gfx_restore writes WHOLE BYTES - x1 rounded down and x2 up - so putting a
 ; content rect back paints up to 6 pixels to the left of the window's frame
@@ -4561,24 +4580,45 @@ wm_su_edge:
     push dx
     push si
     push di
-    mov cx, [wm_su_y2]          ; rows x planes = the number of buffer rows,
-    sub cx, [wm_su_y1]          ; because the layout is plane-major and every
-    inc cx                      ; plane holds the same rows (SPEC.md 5)
-    mov ax, [vid_planes_w]
-    mul cx
-    mov [wm_su_nrow], ax
-    mov bx, [wm_su_x2]
-    mov cl, 3
+    mov [wm_su_sx1], ax         ; the rect being restored, banked: every
+    mov [wm_su_sy1], bx         ; register is wanted below, and wm_su_sub's
+    mov [wm_su_sx2], cx         ; one-shot has already been spent by
+    mov [wm_su_sy2], dx         ; wm_su_srect (SPEC.md 11.96.6)
+
+    mov bx, [wm_su_x2]          ; BX = bpr, the buffer's stride: the BANKED
+    mov cl, 3                   ; rect's bytes per row, whatever is restored
     shr bx, cl
     mov ax, [wm_su_x1]
     shr ax, cl
     sub bx, ax
-    inc bx                      ; BX = bytes per row
+    inc bx
     mov [wm_su_bpr], bx
-    mov ax, [wm_su_nrow]
+
+    mov ax, [wm_su_sy2]         ; the restored rect's own rows, which is what
+    sub ax, [wm_su_sy1]         ; every walk below is bounded by
+    inc ax
+    mov [wm_su_srow], ax
+    mov cx, [vid_planes_w]      ; ...x planes = the bytes gfx_save writes for
+    mul cx                      ; one screen column, so the second column's
+    mov [wm_su_nrow], ax        ; scratch starts that far past the first
+
+    mov ax, [wm_su_y2]          ; the banked rect's rows, for two things the
+    sub ax, [wm_su_y1]          ; sub-rect cannot answer: where the scratch can
+    inc ax                      ; start, and how far a plane's unwalked tail is
+    push ax
+    sub ax, [wm_su_srow]
     mul bx
-    add ax, WSU_IMG             ; ...so the scratch starts past the header
-    mov [wm_su_scr], ax         ; AND past the image
+    mov [wm_su_pext], ax        ; the rows of each plane this rect does not
+    pop ax                      ; cover, one whole buffer row each
+    mul cx
+    mul bx
+    add ax, WSU_IMG             ; ...so the scratch starts past the header AND
+    mov [wm_su_scr], ax         ; past the WHOLE image, sub-rect or not
+
+    mov ax, [wm_su_sy1]         ; where the restored rect's first row sits in
+    sub ax, [wm_su_y1]          ; the buffer
+    mul bx
+    mov [wm_su_rofs], ax
 
     mov bx, [wm_su_x1]          ; the masks, from the rect primitives' tables
     and bx, 7
@@ -4589,36 +4629,67 @@ wm_su_edge:
     mov al, [bx + vga_rmtab]
     mov [wm_su_rm], al
 
-    mov ax, [wm_su_x1]          ; the LEFT byte column as it is on screen now
-    mov bx, [wm_su_y1]
+    ; --- which edge columns does the restore actually reach? -----------------
+    ; The banked rect's left byte column is written only if the restored rect's
+    ; left edge is in that same byte, and likewise on the right. Anywhere else
+    ; the "overhang" is the window's own content, which this pass did not paint,
+    ; so the cache and the screen already agree and there is nothing to merge.
+    mov cl, 3
+    mov ax, [wm_su_sx1]
+    shr ax, cl
+    mov bx, [wm_su_x1]
+    shr bx, cl
+    sub ax, bx
+    mov [wm_su_dol], ax         ; 0 = the left column IS this rect's left byte
+    mov ax, [wm_su_x2]
+    shr ax, cl
+    mov bx, [wm_su_sx2]
+    shr bx, cl
+    sub ax, bx
+    mov [wm_su_dor], ax         ; 0 = ...and the right one is its right byte
+
+    cmp word [wm_su_dol], 0     ; the LEFT byte column as it is on screen now,
+    jne .noleft                 ; over the RESTORED rect's rows only
+    mov ax, [wm_su_x1]
+    mov bx, [wm_su_sy1]
     mov cx, ax                  ; x2 = x1: one byte wide, whole bytes copied
-    mov dx, [wm_su_y2]
+    mov dx, [wm_su_sy2]
     mov di, [wm_su_scr]
     call gfx_save
-    mov ax, [wm_su_x2]          ; ...and the right one
-    mov bx, [wm_su_y1]
+.noleft:
+    cmp word [wm_su_dor], 0     ; ...and the right one
+    jne .nomask
+    mov ax, [wm_su_x2]
+    mov bx, [wm_su_sy1]
     mov cx, ax
-    mov dx, [wm_su_y2]
+    mov dx, [wm_su_sy2]
     mov di, [wm_su_scr]
     add di, [wm_su_nrow]
     call gfx_save
-
+.nomask:
     cmp word [wm_su_bpr], 1
     jne .two
     mov al, [wm_su_rm]          ; one byte column: it is both edges at once,
     and [wm_su_lm], al          ; so it keeps only the bits between them
 .two:
-    mov si, [wm_su_scr]         ; left: buffer byte 0 of every row
+    cmp word [wm_su_dol], 0
+    jne .right
+    mov si, [wm_su_scr]         ; left: buffer byte 0 of every restored row
     mov di, WSU_IMG
+    add di, [wm_su_rofs]
     mov dl, [wm_su_lm]
     call wm_su_merge
+.right:
     cmp word [wm_su_bpr], 1
     je .out                     ; ...and there is no second column to do
+    cmp word [wm_su_dor], 0
+    jne .out
     mov si, [wm_su_scr]
-    add si, [wm_su_nrow]        ; right: buffer byte bpr-1 of every row
+    add si, [wm_su_nrow]        ; right: buffer byte bpr-1 of every restored row
     mov di, [wm_su_bpr]
     dec di
     add di, WSU_IMG
+    add di, [wm_su_rofs]
     mov dl, [wm_su_rm]
     call wm_su_merge
 .out:
@@ -4630,15 +4701,31 @@ wm_su_edge:
     pop ax
     ret
 
-; wm_su_merge - ES:DI = the buffer byte to patch in row 0, ES:SI = the screen
-;               column, DL = the bits to KEEP from the buffer
+; wm_su_merge - ES:DI = the buffer byte to patch in the restored rect's FIRST
+;               row of plane 0, ES:SI = the screen column, DL = the bits to
+;               KEEP from the buffer
+;
+; TWO LEVELS, and that is what bounding this to a sub-rect costs (SPEC.md
+; 11.96.8). One flat walk of stride bpr was right while every restore covered
+; the whole banked rect: the layout is plane-major and every plane holds the
+; same rows, so all of them are contiguous at that stride. A sub-rect leaves a
+; TAIL in each plane that the walk must step over - [wm_su_pext], the rows of
+; the plane this rect does not cover - so the planes become an outer loop. The
+; screen column is contiguous either way, because gfx_save wrote exactly the
+; rows being merged.
+;
+; With no sub-rect armed [wm_su_pext] is 0 and [wm_su_srow] is every row, so
+; this degenerates to the one flat walk it replaced.
 wm_su_merge:
     push si
     push di
+    push bp
     mov dh, dl
     not dh                      ; ...and the bits to take from the screen
-    mov cx, [wm_su_nrow]
     mov bx, [wm_su_bpr]
+    mov bp, [vid_planes_w]
+.plane:
+    mov cx, [wm_su_srow]
 .row:
     mov al, [es:di]
     and al, dl
@@ -4649,6 +4736,10 @@ wm_su_merge:
     inc si
     add di, bx
     loop .row
+    add di, [wm_su_pext]        ; past the rows of this plane the rect does not
+    dec bp                      ; cover, and on to the next plane's copy of it
+    jnz .plane
+    pop bp
     pop di
     pop si
     ret
@@ -4667,18 +4758,20 @@ wm_su_try:
     call wm_su_ck               ; ...which loads wm_su_x1..y2 out of the
     jc .no                      ; claim's own header, and answers AX = it
     mov es, ax
-    call wm_su_edge             ; the two edge bytes overhang the window, so
-                                ; they are merged with the screen as it is
-                                ; NOW before any of this goes back (11.96.2).
-                                ; BEFORE the arm below, because it is two
-                                ; gfx_save calls and a save between an arm and
-                                ; its restore would disarm it (SPEC.md 5.8)
     call wm_su_srect            ; AX/BX/CX/DX = the rect to put back, and only
     jnc .put                    ; part of the buffer if the caller named one
     clc                         ; nothing this pass painted reached the content,
     jmp short .out              ; so it is ALREADY right - which is the whole
                                 ; point of 11.96.6 and not a failure
 .put:
+    call wm_su_edge             ; the edge bytes overhang the window, so they are
+                                ; merged with the screen as it is NOW before any
+                                ; of this goes back (11.96.2) - AFTER the arm,
+                                ; because it patches the bytes THIS restore will
+                                ; write and no others (11.96.8). Its own two
+                                ; gfx_save calls cannot disarm the sub-rect: the
+                                ; disarm is gated on [sw_dir], so a save never
+                                ; reaches it (SPEC.md 5.8)
     mov si, WSU_IMG             ; GFX_RESTORE'S BUFFER IS ES:SI, NOT ES:DI -
                                 ; the twin of gfx_save's, because one advances
                                 ; a movsb source and the other its destination.
@@ -5009,11 +5102,19 @@ wm_fs_save: resw 4                  ; its windowed x/y/w/h, restored on exit
 ; --- wm_su_edge's scratch (SPEC.md 11.96.2) ----------------------------------
 ; Derived from the banked rect at every restore and never read before it is
 ; written, so unlike the five wm_su_* words above these want no initialiser.
-wm_su_nrow: resw 1                  ; buffer rows = rect rows x planes
-wm_su_bpr:  resw 1                  ; bytes per buffer row
+wm_su_nrow: resw 1                  ; scratch bytes per column = restored rows
+                                    ; x planes, which is what gfx_save wrote
+wm_su_bpr:  resw 1                  ; bytes per buffer row (the BANKED rect's)
 wm_su_scr:  resw 1                  ; offset of the two screen columns
 wm_su_lm:   resb 1                  ; bits of the left edge byte the rect owns
 wm_su_rm:   resb 1                  ; ...and of the right
+; --- and what bounds it to the rect being restored (SPEC.md 11.96.8) ---------
+wm_su_srow: resw 1                  ; rows of THIS restore, per plane
+wm_su_pext: resw 1                  ; ...and the rows of the plane it does not
+                                    ; cover, which the walk steps over
+wm_su_rofs: resw 1                  ; where its first row sits in the buffer
+wm_su_dol:  resw 1                  ; 0 = the restore reaches the banked rect's
+wm_su_dor:  resw 1                  ; left / right edge byte column
 
 ; --- the clip region (SPEC.md 11.3) ------------------------------------------
 ; Uninitialized on purpose: wm_clip_n lives in .text as a dw 0 and is the

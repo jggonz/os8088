@@ -4029,4 +4029,44 @@ still done over the *whole* banked rect's rows even when the restore is a
 94-row band, because `wm_su_edge` walks the buffer with one stride and bounding
 it to the sub-rect's rows needs the two-level walk the plane skip implies. That
 is the larger of the two remaining halves — bigger than what the blit has left
-to give.
+to give. **Set 31 is that, done.**
+
+### Set 31 — the edge merge bounded to the rect being restored (SPEC.md §11.96.8)
+
+Set 30 halved the blit and named what it had left alone: `wm_su_edge`, walking
+the whole banked rect however small a strip the restore put back. Same machine
+(cycle-accurate 5150/CGA), same session, same drag — the two Disk windows with
+the front one dragged *away* so it genuinely uncovers — and the span is
+`wm_su_try` → `gfx_restore`, which is `wm_su_ck` plus the merge:
+
+| build | cycles | ms |
+|---|---|---|
+| the whole banked rect (136 rows, both columns) | 88,736 | 18.59 |
+| bounded to the restored rect | 38,596 | **8.09** |
+
+**2.30x**, and the blit beside it is unchanged at 15.27 ms, which is the check
+that the two halves are independent. So one restore on this drag:
+
+| | edge | blit | restore |
+|---|---|---|---|
+| before the round | 18.59 | 30.63 | 49.22 ms |
+| after §11.96.6 | 18.59 | 15.27 | 33.86 ms |
+| after §11.96.8 | **8.09** | 15.27 | **23.36 ms** |
+
+**2.11x on the restore**, from two changes that are each provably the same
+pixels.
+
+**Two things in the 2.30x are not the row count**, and they are worth separating
+because the second is free where the first is not. The rows walked drop 136 → 94
+(a 1.45x), and the **left edge column is not merged at all**: this restore's
+`x1` is 216, which is byte column 27 against the banked rect's 13, so there is
+no overhang on that side to repair — those pixels are the window's own content,
+which the pass did not paint, so the cache and the screen already agree. A
+sub-rect in the middle of a window does *no* edge work whatever its height. That
+is the half of the win the row bound alone would not have found, and it is why
+the figure beats the 1.45x the geometry suggests.
+
+**What is left of the restore is now the blit again**, 15.27 against 8.09 — and
+there is no obvious next cut in it: it is `rep movsb` over exactly the bytes that
+changed, at 27 bytes a row for 94 rows, and the per-row overhead is the row loop
+the two renderers already share with the cursor.
