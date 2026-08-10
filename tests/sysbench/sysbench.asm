@@ -95,8 +95,24 @@ SB_RAH_GAP  equ 9216              ; ...and the stride's floor: TWO 9-sector
                                   ; tracks, so two reads can never share a
                                   ; chunk however a fill was bounded
 SB_RAH_WSTEP equ 2                ; working sets go 2, 4, 6 ... which brackets
-SB_RAH_WMAX  equ 18               ; the run count to a pair. 18 x 9216 is
-                                  ; 166KB, inside the 170KB file this walks
+SB_RAH_WMAX  equ 12               ; the run count to a pair.
+                                  ;
+                                  ; THE SWEEP'S CEILING IS WHAT SIZES
+                                  ; bigfile.dat, and it was 18 for a 170KB
+                                  ; file. On a one-drive machine that file is
+                                  ; most of a 360KB field disk and the reports
+                                  ; are the point (docs/FIELD-MACHINES.md), so
+                                  ; it is 12 and the file is 104KB: the
+                                  ; deepest byte a floppy sweep touches is
+                                  ; (12-1) x 9216 + 1024 = 102,400. It still
+                                  ; brackets DSK_RAH_RUNS = 8 with a step of
+                                  ; headroom - free through 8, missing at 10,
+                                  ; confirmed at 12 - and a run count raised
+                                  ; past 10 would report no cliff rather than
+                                  ; a wrong one, which the row below says in
+                                  ; words. Raising this means growing
+                                  ; bigfile.dat in the Makefile to match; the
+                                  ; sweep stops honestly either way.
 
 ; -----------------------------------------------------------------------------
 ; sb_entry - package entry (SPEC.md 20.2)
@@ -2449,6 +2465,7 @@ sb_rah:
     mov ax, [sb_rstr]
     call sb_num
 
+    mov byte [sb_rshort], 0
     mov word [sb_rw], SB_RAH_WSTEP
 .sweep:
     call sb_rah_pass                ; populate W chunks...
@@ -2491,6 +2508,12 @@ sb_rah:
     jmp short .out
 .stop:
     mov si, sb_s_rerr
+    cmp byte [sb_rshort], 0
+    je .stopsay
+    mov si, sb_s_rshort
+    call bl_sline
+    mov si, sb_s_rshort2
+.stopsay:
     call bl_sline
     jmp short .free
 .noclaim:
@@ -2588,7 +2611,7 @@ sb_rah_pass:
     or ax, ax                       ; 0 bytes = past the end: the file is too
     jnz .on                         ; short for a working set this wide, and
     or dx, dx                       ; pretending otherwise reports a cliff
-    jz .fail                        ; that is the FILE's and not the cache's
+    jz .short                       ; that is the FILE's and not the cache's
 .on:
     inc di
     cmp di, [sb_rw]
@@ -2602,8 +2625,10 @@ sb_rah_pass:
     pop ax
     clc
     ret
-.fail:
-    pop es
+.short:
+    mov byte [sb_rshort], 1         ; ...which is a different sentence from a
+.fail:                              ; read that refused, and the two used to
+    pop es                          ; print the same one
     pop di
     pop si
     pop dx
@@ -3916,10 +3941,12 @@ sb_s_h_rah2: db '   W chunks written, then re-read. Round-robin plus the same', 
 sb_s_h_rah3: db '   order is Belady worst case, so this is a CLIFF, not a slope.', 0
 sb_s_h_rah4: db '   It is a LOWER BOUND on DSK_RAH_RUNS: resolving the file by', 0
 sb_s_h_rah5: db '   name touches a directory sector and the FAT, and those take', 0
-sb_s_h_rah6: db '   slots as well. 12 free against a compiled 14 is the walk.', 0
+sb_s_h_rah6: db '   slots as well, and the sweep stops at 12 (see SB_RAH_WMAX).', 0
 sb_s_rnofile: db '   BIGFILE.DAT is not on this volume: nothing wide to walk.', 0
 sb_s_rnoclaim: db '   no 8KB heap claim available: the cache rows were skipped.', 0
 sb_s_rerr:   db '   a read refused mid-sweep - the rows above are what stands.', 0
+sb_s_rshort: db '   BIGFILE.DAT ran out: the sweep is bounded by the FILE here,', 0
+sb_s_rshort2: db '   not by the cache. Grow it, or read the rows above as a floor.', 0
 sb_l_rcl:    db '  cluster bytes, probed', 0
 sb_l_rstr:   db '  ...so the stride is', 0
 sb_l_rw:     db '  chunks re-read -> int 13h', 0
@@ -3981,9 +4008,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 202              ; ...and the scalars end at 201 now:
-                                ; SPEC.md 57.4's nine words are
-                                ; 184..201, which is why this moved
+SB_O_SYSKB equ 204              ; ...and the scalars end at 203 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -4061,7 +4086,9 @@ sb_vctx     equ os88_image_end + 192   ; word: -> the context records...
 sb_vstr     equ os88_image_end + 194   ; word: ...and their stride
 sb_vdesk    equ os88_image_end + 196   ; word: -> vid_w, vid_h
 sb_vchr     equ os88_image_end + 198   ; word: -> vid_pw, vid_ph
-sb_vrp      equ os88_image_end + 200   ; word: the record being printed (201)
+sb_vrp      equ os88_image_end + 200   ; word: the record being printed
+sb_rshort   equ os88_image_end + 202   ; byte: the sweep ran off the END of
+                                       ; BIGFILE.DAT rather than refusing (203)
 sb_fbord    equ os88_image_end + 124   ; word: the ordinal the timed FIND asks
 sb_fask     equ os88_image_end + 126   ; word: ...and the one the counter did
 sb_fn       equ os88_image_end + 128   ; word: entries in this directory

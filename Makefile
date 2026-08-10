@@ -1181,15 +1181,22 @@ $(BUILD)/bench.dat: | $(BUILD)
 $(BUILD)/benchsml.dat: | $(BUILD)
 	python3 -c "import sys; sys.stdout.buffer.write(b'os8088 sysbench small file\r\n' * 18)" > $@
 
-# ...and ONE BIG CONTIGUOUS FILE, for a DOS cross-check rather than for
-# sysbench, which never opens it. PERFORMANCE.md Part 9 Set 13's DOS figure
-# came from copying the disk's several small files, so it carried a directory
-# write, a FAT write and a fresh seek per file and undercounts the read rate
-# it was being used to bound. One 170KB file is a single chain and a single
-# open. It is ~80% of what is free on a 360KB field disk after everything
-# else, which leaves room for both reports to be written back.
+# ...and ONE BIG CONTIGUOUS FILE, for a DOS cross-check AND for sysbench's
+# cache-capacity sweep. PERFORMANCE.md Part 9 Set 13's DOS figure came from
+# copying the disk's several small files, so it carried a directory write, a
+# FAT write and a fresh seek per file and undercounts the read rate it was
+# being used to bound. One big file is a single chain and a single open.
+#
+# 104KB, AND IT USED TO BE 170. The old size was "~80% of what is free on a
+# 360KB field disk after everything else", which left 11 clusters for the two
+# reports the disk exists to produce - and the reports are the point
+# (docs/FIELD-MACHINES.md). The floor is sysbench's sweep, not this file: the
+# deepest byte SB_RAH_WMAX = 12 touches on a floppy is 11 x 9216 + 1024 =
+# 102,400, so 104KB covers it with slack. Raise SB_RAH_WMAX and this has to
+# grow with it; the sweep says so in the report either way rather than
+# reporting a cliff that is the FILE's.
 $(BUILD)/bigfile.dat: | $(BUILD)
-	python3 -c "import sys; sys.stdout.buffer.write(bytes((i>>9)&0xFF for i in range(170*1024)))" > $@
+	python3 -c "import sys; sys.stdout.buffer.write(bytes((i>>9)&0xFF for i in range(104*1024)))" > $@
 
 $(BUILD)/bench.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BENCHPKGS) $(BENCHDATA)
@@ -1367,6 +1374,7 @@ fontlist:
 
 field: $(BUILD)/herc.img $(BUILD)/cga.img $(BUILD)/cga720.img $(BUILD)/flop1.img \
        $(BUILD)/cqdiag.img
+
 
 # EVERY field disk rebuilds the DRIVERS under $(FIELDKNOBS) too, and that line
 # is not decoration. $(DRIVERS) comes out of $(BUILD), built with whatever
@@ -1602,6 +1610,50 @@ $(APPSIMG720): $(APPS) tools/os88disk.py
 
 $(APPSIMG360): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(APPSARGS)
+
+# `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
+# every application AND the four benchmarks on it.
+#
+# The field machine has ONE floppy drive (docs/FIELD-MACHINES.md), so the
+# three-disk shape `all` produces - system, apps, bench - is two disk swaps,
+# and on that machine a swap is a walk to another room. This is the whole
+# session on one disk.
+#
+# WHAT IT LEAVES OFF, because 360KB is 354 clusters and everything is 484:
+#
+#   MEDIA/BEVERLY.MOD  114 cl - the module Tracker and ModPlug open. It is a
+#                      third of the disk on its own, and it is the one item
+#                      here that is DATA rather than software: the two players
+#                      still launch, they just have nothing to open. Use the
+#                      shipped apps disk when the module is the point.
+#   BIGFILE.DAT        104 cl - sysbench's cache-capacity sweep and the DOS
+#                      read-rate cross-check. sysbench says so in the report
+#                      and skips the row (SPEC.md 57.3 rule 2's shape); every
+#                      other row still runs. It is on the `make field` disks,
+#                      which is where that measurement belongs.
+#   README.TXT         16 cl - the manual, on a disk that is for running.
+#
+# ONE IMAGE AND NOT ONE PER CARD, unlike the field disks above, and that is
+# SPEC.md 39.19 rather than a compromise: the probe still finds the Hercules
+# first (39.1), and the Control Panel's Display page then switches the primary
+# to the CGA or extends the desktop across both without rebuilding anything.
+# The disk is NOT write-protected - SYSTEM.CFG is what remembers that choice.
+COMBOARGS := $(DRIVERS) $(SYSAPPSARGS) \
+             $(addprefix APPS:,$(APPS_TOOLS)) \
+             $(addprefix GAMES:,$(APPS_GAMES)) \
+             $(BENCHPKGS) $(BUILD)/bench.dat $(BUILD)/benchsml.dat
+
+combo: $(BUILD)/combo.img
+
+$(BUILD)/combo.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
+                    $(APPS_TOOLS) $(APPS_GAMES) $(SYSAPPS) \
+                    $(BENCHPKGS) $(BUILD)/bench.dat $(BUILD)/benchsml.dat \
+                    tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
+		$(COMBOARGS)
+	@echo "combo: $@ - system + apps + benchmarks on ONE 360KB boot disk"
+	@echo "       no BEVERLY.MOD, no BIGFILE.DAT, no README.TXT (see the Makefile)"
 
 # The GUI reads a Microsoft serial mouse on COM1 or COM2 (SPEC.md 9.5); QEMU
 # emulates one natively. MOUSEPORT= says where, and on WHICH IRQ:
