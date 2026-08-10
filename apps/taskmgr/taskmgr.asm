@@ -316,7 +316,10 @@ TMH_ROW_Y   equ 37              ; first claim row, same TM_ROW_H pitch
 ; and not the screen's - tm_row_place still clamps to the live frame - and it
 ; is what tm_rowck has to be sized for, since a row past the array is a check
 ; word written over whatever follows it.
-TMH_ROWS    equ MEM_MAX + INST_MAX + 2
+; ...plus one for the blank tm_mrow_nolast spends to keep a heading off the
+; foot of a column. At most ONE, however many headings there are: only one row
+; index per column is that column's last, and the list passes it once.
+TMH_ROWS    equ MEM_MAX + INST_MAX + 3
 
 ; The claim row, in characters: two of indent, the type, A SEPARATOR, the
 ; segment, the KB column tm_kcol emits, a gap and the purge tier. Stated here
@@ -492,6 +495,30 @@ tm_init:
     add ax, TITLE_H + 1 + TMM_ROW_Y
     mov [tm_tpl+6], ax          ; the frame height the machine can take
 
+    ; --- how deep is the HEAP page's column 0? --------------------------------
+    ; The same frame, but its list starts at TMH_ROW_Y instead of TMM_ROW_Y
+    ; (SPEC.md 28.4) - there is no map and no bar above it - so it holds the
+    ; rows that fit in the extra height.
+    ;
+    ; Derived from the FRAME and never from the dock, which is what
+    ; [tm_colrows] above uses. On a screen where TMM_ROWS caps the height
+    ; below what the dock would allow, a dock-derived depth names rows the
+    ; frame cannot show - and tm_row_place would then wrap PAST rows tm_ylim
+    ; had already refused, so they would be lost rather than moved into
+    ; column 1.
+    push ax
+    sub ax, TITLE_H + 1 + TMH_ROW_Y
+    jbe .nohrow
+    mov bl, TM_ROW_H
+    div bl                      ; AL = rows, and the quotient fits: the tallest
+    xor ah, ah                  ; frame here is 295px against an 11px pitch
+    jmp short .havehrow
+.nohrow:
+    mov ax, 1
+.havehrow:
+    mov [tm_hcolrows], ax
+    pop ax
+
     ; --- how deep is a LATER column? -----------------------------------------
     ; Not [tm_colrows]: a later column is top-anchored (TM_C2_ROW_Y), so it
     ; holds every row the frame has height for, which on a short screen is
@@ -510,7 +537,12 @@ tm_init:
     mov bx, [tm_cols]           ; the whole list's depth: column 0, plus every
     dec bx                      ; later column's own
     mul bx
-    add ax, [tm_colrows]
+    add ax, [tm_hcolrows]       ; the DEEPEST column 0 of the three pages, so
+                                ; the heap page is not clipped by a cap sized
+                                ; for a shallower one. Safe for the other two:
+                                ; the performance list is bounded by its own
+                                ; `cmp si, TM_ROWS`, the memory list tests
+                                ; TMM_ROWS first, and tm_ylim clamps both
     cmp ax, TMH_ROWS            ; never more than there is data for - and the
     jbe .rowcap                 ; DEEPEST list is the heap page's now, so a
     mov ax, TMH_ROWS            ; tall screen may show more than the memory
@@ -2611,6 +2643,8 @@ tm_hhead:
     push cx
     push di
     push si
+    call tm_mrow_nolast         ; ...never at the foot of a column, where the
+                                ; rows it heads are in the next one
     call tm_mrow_open
     call tm_copy7
     mov cx, TMH_IND + TMH_TYPEC + 1 + 4 - 7
@@ -2973,13 +3007,20 @@ tm_row_place:
     push bx
     push cx
     push dx
+    push si
+
+    mov si, [tm_colrows]        ; column 0's depth, and the HEAP page has its
+    cmp byte [tm_view], 2       ; own: its list starts 30px higher (no map, no
+    jne .depth                  ; bar), so the column takes more rows before it
+    mov si, [tm_hcolrows]       ; has to wrap. Sharing this one wrapped early
+.depth:                         ; and left a map's height of white at the foot
 
     push ax                     ; the index again, for the tm_maxrow test
     mov cx, [tm_cx]
-    cmp ax, [tm_colrows]
+    cmp ax, si
     jb .place                   ; inside column 0: BX and CX already stand
 
-    sub ax, [tm_colrows]        ; ...otherwise which LATER column, and how far
+    sub ax, si                  ; ...otherwise which LATER column, and how far
     xor dx, dx                  ; down it
     div word [tm_col2rows]
     inc ax                      ; 0 was column 1
@@ -3009,6 +3050,7 @@ tm_row_place:
 .nofit:                         ; of the list would be lettered over the dock
     stc                         ; strip once a second
 .out:
+    pop si
     pop dx
     pop cx
     pop bx
@@ -3025,7 +3067,11 @@ tm_mrow_open:
     push ax
     push bx
     mov ax, [tm_mrow]
-    mov bx, TMM_ROW_Y
+    mov bx, TMM_ROW_Y           ; ...or the heap page's own first row, which is
+    cmp byte [tm_view], 2       ; 30px higher: what the memory view has above
+    jne .y                      ; its list is a MAP and a BAR, and this page
+    mov bx, TMH_ROW_Y           ; has two caption lines. Shared, the list sat a
+.y:                             ; map's height below its own header
     call tm_row_place
     mov byte [tm_mfit], 1
     jnc .fits
@@ -3087,6 +3133,67 @@ tm_mrow_close:
     inc word [tm_mrow]
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_mrow_nolast - keep a HEADING off the foot of a column
+;
+; The list is column-major (tm_row_place), so a heading landing on a column's
+; last row is separated from every row it heads: on CGA the heap page put
+; 'APPS' at the foot of column 0 and its one claim at the top of column 1. A
+; heading is a label for what follows it and says nothing on its own, so it
+; gives up that row and starts the next column instead.
+;
+; WHICH heading this catches is not fixed - it is whichever one the claim
+; count happens to push there, and one claim fewer makes it a different one.
+;
+; It costs at most ONE row per column however many headings there are, because
+; only one row index per column is that column's last and the list passes it
+; once. TMH_ROWS carries that one.
+;
+; Does nothing in the LAST column, where there is nowhere to push to and the
+; foot of the column is simply the end of the list - a heading pushed there
+; would be lost rather than moved.
+;
+; in:       [tm_mrow]
+; out:      [tm_mrow] advanced over a blank row if it was about to be the last
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+tm_mrow_nolast:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [tm_mrow]
+    mov bx, [tm_colrows]        ; ...the depth of the column this row is in
+    cmp byte [tm_view], 2
+    jne .d0
+    mov bx, [tm_hcolrows]
+.d0:
+    xor cx, cx                  ; CX = which column
+    cmp ax, bx
+    jb .have                    ; column 0, and BX is already its depth
+    sub ax, bx
+    mov bx, [tm_col2rows]       ; every later column is top-anchored and so
+    xor dx, dx                  ; deeper - never 0, by tm_init
+    div bx
+    inc ax
+    mov cx, ax                  ; 1 + how many later columns in
+    mov ax, dx                  ; ...and the row within this one
+.have:
+    inc cx                      ; is there a column AFTER this one to push to?
+    cmp cx, [tm_cols]
+    jae .out                    ; no - see the header
+    inc ax
+    cmp ax, bx
+    jne .out                    ; not this column's last row: nothing to do
+    call tm_mrow_open           ; spend it on a blank row, and DRAW it, so
+    call tm_mrow_close          ; whatever used to be here is erased
+.out:
     pop dx
     pop cx
     pop bx
@@ -4637,13 +4744,13 @@ tm_rowck    equ os88_image_end + 1355  ; the last drawn content of each row, a
                                 ; cleared as one span on the strength of
                                 ; being declared adjacent, which they have
                                 ; not been for some time
-tm_view     equ os88_image_end + 1825  ; 0 = performance, 1 = memory, 2 = heap
-tm_inm      equ os88_image_end + 1826  ; I_NAME snapshots
-tm_rcyc     equ os88_image_end + 2018  ; per-ROW cycles: task + instance, dword
-tm_total    equ os88_image_end + 2070  ; sum of the rows, dword
-tm_pct      equ os88_image_end + 2074  ; per-row share, 0..100
-tm_usedk    equ os88_image_end + 2087  ; used RAM, KB
-tm_barw     equ os88_image_end + 2089  ; RAM bar black width, 0..TM_GW
+tm_view     equ os88_image_end + 1835  ; 0 = performance, 1 = memory, 2 = heap
+tm_inm      equ os88_image_end + 1836  ; I_NAME snapshots
+tm_rcyc     equ os88_image_end + 2028  ; per-ROW cycles: task + instance, dword
+tm_total    equ os88_image_end + 2080  ; sum of the rows, dword
+tm_pct      equ os88_image_end + 2084  ; per-row share, 0..100
+tm_usedk    equ os88_image_end + 2097  ; used RAM, KB
+tm_barw     equ os88_image_end + 2099  ; RAM bar black width, 0..TM_GW
 
 ; --- worked out once by tm_init, before the window exists --------------------
 ; These used to need saying out loud, because a built-in's .bss survives
@@ -4652,32 +4759,41 @@ tm_barw     equ os88_image_end + 2089  ; RAM bar black width, 0..TM_GW
 ; first launch. It cost a divide by zero the first time the window was opened,
 ; tm_colrows being a divisor. A package has no such hazard: the bss is zeroed
 ; once per launch, before the entry proc runs, and tm_init runs inside it.
-tm_cols     equ os88_image_end + 2091  ; process-list columns, 1 or 2 (SPEC.md 28.1)
-tm_colrows  equ os88_image_end + 2093  ; rows in COLUMN 0, which starts under the maps
-tm_col2rows equ os88_image_end + 2095  ; rows in each LATER column, which starts at the
+tm_cols     equ os88_image_end + 2101  ; process-list columns, 1 or 2 (SPEC.md 28.1)
+tm_colrows  equ os88_image_end + 2103  ; rows in COLUMN 0, which starts under the maps
+tm_col2rows equ os88_image_end + 2105  ; rows in each LATER column, which starts at the
                                 ; top and so holds more - A DIVISOR, never 0
-tm_maxrow   equ os88_image_end + 2097  ; rows this SCREEN shows, <= TMM_ROWS: derived
+tm_maxrow   equ os88_image_end + 2107  ; rows this SCREEN shows, <= TMM_ROWS: derived
                                 ; from [vid_dock_y0] so the window never
                                 ; overlaps the dock (SPEC.md 28.1)
-tm_totkb    equ os88_image_end + 2099  ; total conventional RAM (int 12h, boot)
-tm_vw       equ os88_image_end + 2101  ; the live screen width and the dock strip's
-tm_vdock    equ os88_image_end + 2103  ; top row (osapi_video, SPEC.md 39.2), banked
+tm_totkb    equ os88_image_end + 2109  ; total conventional RAM (int 12h, boot)
+tm_vw       equ os88_image_end + 2111  ; the live screen width and the dock strip's
+tm_vdock    equ os88_image_end + 2113  ; top row (osapi_video, SPEC.md 39.2), banked
                                 ; at boot: the template's whole geometry is
                                 ; derived from them
-tm_cx       equ os88_image_end + 2105  ; cached content origin (draw paths only,
-tm_cy       equ os88_image_end + 2107  ; always under the gfx lock)
-tm_ord      equ os88_image_end + 2109  ; tm_order: display row - 1 -> instance slot
-tm_rowi     equ os88_image_end + 2121  ; ...the one tm_rows is drawing right now
-tm_rowy     equ os88_image_end + 2122  ; tm_rows/tm_rows_mem scratch: current row y
-tm_ylim     equ os88_image_end + 2124  ; ...and the lowest row top the frame holds
+tm_cx       equ os88_image_end + 2115  ; cached content origin (draw paths only,
+tm_cy       equ os88_image_end + 2117  ; always under the gfx lock)
+tm_ord      equ os88_image_end + 2119  ; tm_order: display row - 1 -> instance slot
+tm_rowi     equ os88_image_end + 2131  ; ...the one tm_rows is drawing right now
+tm_rowy     equ os88_image_end + 2132  ; tm_rows/tm_rows_mem scratch: current row y
+tm_ylim     equ os88_image_end + 2134  ; ...and the lowest row top the frame holds
                                 ; (tm_view_begin): the row lists are fixed-pitch
                                 ; and nothing clips a draw to a window
-tm_liny     equ os88_image_end + 2126  ; tm_txt_ram_y scratch: the line's y
-tm_str      equ os88_image_end + 2128  ; line-format scratch
+tm_liny     equ os88_image_end + 2136  ; tm_txt_ram_y scratch: the line's y
+tm_str      equ os88_image_end + 2138  ; line-format scratch
 
-tm_spawned  equ os88_image_end + 2156  ; byte: 1 = this instance owns its
+tm_spawned  equ os88_image_end + 2166  ; byte: 1 = this instance owns its
                                        ; worker. Latches on SUCCESS only, so
                                        ; every paint retries until a task slot
                                        ; frees up (SPEC.md 20.6)
 
-TM_BSS_TOTAL equ 2157
+; Appended here rather than beside [tm_colrows] where it belongs by subject:
+; the offsets above are hand-chained literals, so a word inserted mid-block
+; renumbers every one below it.
+tm_hcolrows equ os88_image_end + 2167  ; the HEAP page's column-0 depth
+                                       ; (SPEC.md 28.4) - its list starts
+                                       ; higher than the memory view's, so it
+                                       ; wraps later. Frame-derived, never
+                                       ; dock-derived: see tm_init
+
+TM_BSS_TOTAL equ 2169

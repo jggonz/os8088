@@ -15229,8 +15229,53 @@ than a bare per-app total.
   docs/FIELD-NOTES.md 2 is a refusal where the total says there is room and
   the largest run does not, and until now nothing in the OS showed both at
   once.
-- (6,26): the header, `"TYPE     ADDR SIZE TIER"`.
+- (6,26): the header, `"TYPE      ADDR SIZE TIER"`.
 - (6,37): the rows, at the memory list's `TM_ROW_H` pitch and `TM_MPEN` pen.
+
+**The list starts at `TMH_ROW_Y`, and it needed saying twice.** `tm_mrow_open`
+had `TMM_ROW_Y` — the *memory* view's first row — baked in, because it was
+written when that was the only list using it. What sits above the memory
+view's rows is a MAP and a BAR; what sits above these is two caption lines,
+so the heap page's list opened a map's height below its own header, 30 px of
+white between `TYPE` and `System`. It picks the row origin off `[tm_view]`
+now.
+
+**...and it needs its own column depth to go with it.** `[tm_colrows]` is
+derived from `TMM_ROW_Y`, so a list starting 30 px higher wraps into column 2
+with a map's height still unused at the foot of column 1. `[tm_hcolrows]` is
+the same arithmetic from `TMH_ROW_Y` (measured: 8 rows against the memory
+view's, on CGA), and `tm_row_place` picks between them the same way. **It is
+derived from the FRAME and never from the dock**, which is the trap:
+`[tm_colrows]` is dock-derived and `TMM_ROWS` caps the frame height below
+what the dock allows, so on a tall screen a dock-derived depth names rows the
+frame cannot show — and `tm_row_place` would then wrap *past* rows `tm_ylim`
+had already refused, losing them instead of moving them into the next column.
+`[tm_maxrow]` takes the deeper of the two, which cannot hurt the other two
+pages: the performance list is bounded by its own `cmp si, TM_ROWS`, the
+memory list tests `TMM_ROWS` first, and `tm_ylim` clamps both.
+
+**A heading is never left on the foot of a column** (`tm_mrow_nolast`). The
+list is column-major, so a heading landing on a column's last row is
+separated from every row it heads — on CGA this put `APPS` at the bottom of
+column 1 and its one claim at the top of column 2. A heading is a label for
+what follows and says nothing alone, so it gives that row up and starts the
+next column instead. Three things about it:
+
+- **Which heading it catches is not fixed.** It is whichever one the claim
+  count happens to push there, and one claim fewer makes it a different one —
+  so this is a rule about the row index, never a special case for a
+  particular group.
+- **It costs at most one row per column**, however many headings there are,
+  because only one row index per column is that column's last and the list
+  passes it once. `TMH_ROWS` carries that one, which is what its `+ 3` is.
+- **It does nothing in the last column**, where the foot of the column is
+  simply the end of the list and a pushed heading would be lost rather than
+  moved.
+
+The memory view has the same defect — `Builtins` lands at the foot of
+column 1 with its first built-in at the top of column 2 — and deliberately
+has not been changed here; it is one call to `tm_mrow_nolast` at each of its
+two heading sites if that is wanted.
 
 **Grouping is by OWNER, and a heading is not a claim.** `System` first, then
 one heading per live instance in slot order, each carrying that owner's total
@@ -15280,8 +15325,9 @@ discrepancy to reconcile — it is the whole point of a tier column. The
 caption answers *what could I get*, the rows answer *what would it cost*.
 
 **The row budget is the table's, not the screen's.** `TMH_ROWS` is
-`MEM_MAX + INST_MAX + 2` = 46 — every record, plus a heading each, plus
-System — and `tm_maxrow`'s cap was raised from `TMM_ROWS` to it so a tall
+`MEM_MAX + INST_MAX + 3` = 47 — every record, plus a heading each, plus
+System, plus the one row `tm_mrow_nolast` can spend — and `tm_maxrow`'s cap
+was raised from `TMM_ROWS` to it so a tall
 screen can show more than the memory view's 19. Nothing else moved: the
 frame HEIGHT is still derived from `TMM_ROWS`, the performance list is still
 bounded by its own `cmp si, TM_ROWS`, and the memory list's blank loop still
