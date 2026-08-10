@@ -2185,8 +2185,8 @@ cp_flush_close_x:
 ;     what came back. Greying on a guess would keep a machine that has the
 ;     room off a tier it can afford.
 ;
-; That second half is the one place this page departs from the bb_avail idiom
-; (SPEC.md 31.3), and deliberately: bb_canfit is a real predicate and
+; That second half is the one place this page departs from the sw_avail idiom
+; (SPEC.md 31.3), and deliberately: sw_canfit is a real predicate and
 ; mem_claim_dma has none.
 ;
 ; A driver that publishes DSV_TIERS = 0 said nothing, and is taken at its
@@ -2542,7 +2542,7 @@ cp_snd_click:
 ; A row's LABEL is the driver's name and its CAPTION is what its last load
 ; attempt answered - DRVE_OK reads 'Loaded', and every other value is the
 ; reason it is not (kernel/driver.inc's drv_errstr, the same strings the boot
-; notice uses). That is the bb_avail idiom again: the box, the caption and
+; notice uses). That is the sw_avail idiom again: the box, the caption and
 ; the click all read one word, so they cannot disagree.
 ; -----------------------------------------------------------------------------
 cp_drv_paint:

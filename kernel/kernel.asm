@@ -679,9 +679,9 @@ HEAP_SEG    equ KERN_END        ; the claim heap (SPEC.md 50) starts where
 
 ; The software renderer's plane stride (SPEC.md 32/39.3). One plane is 480
 ; rows x 80 bytes; on a 1bpp adapter there is exactly one and vid_apply sets
-; the stride to a single paragraph, purely so bb_xfer's segment compare can
+; the stride to a single paragraph, purely so sw_xfer's segment compare can
 ; terminate.
-BB_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)
+SW_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)
 
 ; --- CPU tiers and memory above 1MB (SPEC.md 41) -----------------------------
 ; None of this exists on tier 0, which is the target machine: an 8088 has no
@@ -983,7 +983,7 @@ osapi_table:
                                   ;          rather than being reused - a
                                   ;          shipped slot keeps its contract
     OSAPI_SLOT gfx_dbuf_gone      ; 0x01F0 - RETIRED (SPEC.md 32/20.8 rule 4):
-                                  ;          was a package's own bb_set. The
+                                  ;          was a package's own sw_set. The
                                   ;          cell answers CF=1 rather than
                                   ;          being reused
     OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
@@ -2114,7 +2114,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                                 ; cpudet.inc, whose tier and feature bits it
                                 ; branches on and whose cpu_hma_claim it calls
 %include "vga12.inc"
-%include "vgabb.inc"
+%include "softgfx.inc"
 %include "font.inc"
 %include "mouse.inc"
 %include "sched.inc"

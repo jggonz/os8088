@@ -572,7 +572,7 @@ vid_ctx_ptr:
 ;
 ; CALLED AFTER ANYTHING THAT CHANGES THE LIVE GEOMETRY OUTSIDE A SWAP. That
 ; is vid_apply - a mode or adapter change - and, since SPEC.md 32 went, only
-; vid_apply: bb_set used to write [vid_rseg] from inside this run and was the
+; vid_apply: sw_set used to write [vid_rseg] from inside this run and was the
 ; one other entry on the list. Miss one and the display's record describes a
 ; geometry that has moved on - which shows up as drawing through the wrong
 ; segment the next time that display is activated, a long way from the cause.

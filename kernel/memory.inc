@@ -918,7 +918,7 @@ mem_bcopy:
 ;
 ; WHAT IT IS NOT. It does not compact the heap by sliding OTHER claims down,
 ; and it cannot: a claim's base lives in its holder's own bss - a package's
-; [pt_base], the kernel's [bb_seg] - and nothing here can reach in and
+; [pt_base], the kernel's [sw_seg] - and nothing here can reach in and
 ; rewrite those. Moving somebody else's block hands them a pointer into
 ; memory that is no longer theirs. Real compaction needs a relocation
 ; callback every holder implements; until there is one, the fix is to stop

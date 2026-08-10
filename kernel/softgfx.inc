@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - vgabb.inc
+; os8088 - softgfx.inc
 ;
 ; THE 1BPP DRIVER, and the reason the kernel can drive a Hercules or a CGA
 ; card at all (SPEC.md 39.3). Nothing in here touches a VGA port or a latch:
@@ -40,16 +40,16 @@
 
 
 ; -----------------------------------------------------------------------------
-; bb_fill / bb_fill_gray / bb_xor_fill - software twins of gfx_fill,
+; sw_fill / sw_fill_gray / sw_xor_fill - software twins of gfx_fill,
 ; gfx_fill_gray and gfx_xor_fill (same register contracts: AX = x1,
-; BX = y1, CX = x2, DX = y2; clobbers flags). One shared core, bb_rect,
-; parameterized by [bb_mode]:
+; BX = y1, CX = x2, DX = y2; clobbers flags). One shared core, sw_rect,
+; parameterized by [sw_mode]:
 ;
-;   BBM_SOLID - per plane, the [gfx_color] bit picks a 00/FF byte; edges
+;   SWM_SOLID - per plane, the [gfx_color] bit picks a 00/FF byte; edges
 ;               become (dest & ~mask) | (value & mask), interiors stosb.
-;   BBM_GRAY  - one AA/55 pattern for all planes (color 15/0 per pixel
-;               bit), toggled each row via [bb_altm] = FF; same edge math.
-;   BBM_XOR   - XOR 0Fh flips every plane identically: edges xor the
+;   SWM_GRAY  - one AA/55 pattern for all planes (color 15/0 per pixel
+;               bit), toggled each row via [sw_altm] = FF; same edge math.
+;   SWM_XOR   - XOR 0Fh flips every plane identically: edges xor the
 ;               mask, interior bytes are complemented.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
@@ -60,26 +60,26 @@ gfx_dbuf_gone:
     stc
     ret
 
-BBM_SOLID equ 0
-BBM_GRAY  equ 1
-BBM_XOR   equ 2
+SWM_SOLID equ 0
+SWM_GRAY  equ 1
+SWM_XOR   equ 2
 
 ; SOLID is the one that falls through, because it is the one the machine
 ; spends its day on: every window background, every glyph cell's erase, every
 ; frame. XOR pays the jump instead - selection bands and drag outlines.
-bb_xor_fill:
-    mov byte [bb_mode], BBM_XOR
-    jmp bb_rect
+sw_xor_fill:
+    mov byte [sw_mode], SWM_XOR
+    jmp sw_rect
 
-bb_fill_gray:
-    mov byte [bb_mode], BBM_GRAY
-    jmp bb_rect
+sw_fill_gray:
+    mov byte [sw_mode], SWM_GRAY
+    jmp sw_rect
 
-bb_fill:
-    mov byte [bb_mode], BBM_SOLID
-    ; fall through to bb_rect
+sw_fill:
+    mov byte [sw_mode], SWM_SOLID
+    ; fall through to sw_rect
 
-bb_rect:
+sw_rect:
     push ax
     push bx
     push cx
@@ -90,11 +90,11 @@ bb_rect:
     push es
     call vga_rect_setup
     jc .done
-    mov byte [bb_altm], 0
-    cmp byte [bb_mode], BBM_GRAY ; ONLY gray starts from the dither byte. Solid
-    jne .planes                  ; overwrote it per plane below (bb_ink), and
-    call bb_parity               ; its own dither branch stages it there; XOR
-    mov byte [bb_altm], 0xFF     ; never reads [bb_pat] at all. Staging it for
+    mov byte [sw_altm], 0
+    cmp byte [sw_mode], SWM_GRAY ; ONLY gray starts from the dither byte. Solid
+    jne .planes                  ; overwrote it per plane below (sw_ink), and
+    call sw_parity               ; its own dither branch stages it there; XOR
+    mov byte [sw_altm], 0xFF     ; never reads [sw_pat] at all. Staging it for
 .planes:                         ; all three cost every solid fill five
                                  ; instructions it threw away
     mov dx, [vid_rseg]          ; DX = plane segment - the framebuffer, which
@@ -102,11 +102,11 @@ bb_rect:
     mov bh, [vid_planes]        ; BH = plane counter: 4 or 1
 .plane:
     mov es, dx
-    cmp byte [bb_mode], BBM_SOLID
+    cmp byte [sw_mode], SWM_SOLID
     jne .go
-    call bb_ink                 ; solid: this pass's 00/FF byte
+    call sw_ink                 ; solid: this pass's 00/FF byte
 .go:
-    call bb_plane_op
+    call sw_plane_op
     add dx, [vid_rpara]
     dec bh
     jnz .plane
@@ -122,94 +122,94 @@ bb_rect:
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_parity - internal: [bb_pat] = the 50% dither byte for the rect's top
-;             row, which the row loops then alternate through [bb_altm].
+; sw_parity - internal: [sw_pat] = the 50% dither byte for the rect's top
+;             row, which the row loops then alternate through [sw_altm].
 ; in:       [vga_y1] valid
 ; clobbers: AL, flags
 ; -----------------------------------------------------------------------------
-bb_parity:
+sw_parity:
     mov al, 0xAA
     test byte [vga_y1], 1
     jz .set
     mov al, 0x55
 .set:
-    mov [bb_pat], al
+    mov [sw_pat], al
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_ink - internal: solid mode's byte pattern for the pass about to run
+; sw_ink - internal: solid mode's byte pattern for the pass about to run
 ;
 ; VGA: the plane's own bit of [gfx_color], consumed LSB-first out of BL -
 ; exactly what the open-coded shr/sbb did before.
 ;
 ; Mono: gfx_ink's reduction of the colour. Black and white become 00/FF; the
 ; middle greys become the 50% dither, which costs nothing extra because
-; bb_rect has ALREADY put the row-parity AA/55 byte in [bb_pat] - arming
-; [bb_altm] is all it takes to make BBM_GRAY's machinery do the work
+; sw_rect has ALREADY put the row-parity AA/55 byte in [sw_pat] - arming
+; [sw_altm] is all it takes to make SWM_GRAY's machinery do the work
 ; (SPEC.md 39.4).
 ;
 ; in:       BL = the colour's remaining bits (VGA path only)
-; out:      [bb_pat], possibly [bb_altm]; BL shifted on the VGA path
+; out:      [sw_pat], possibly [sw_altm]; BL shifted on the VGA path
 ; clobbers: AL, SI, flags
 ; -----------------------------------------------------------------------------
-bb_ink:
+sw_ink:
     cmp byte [vid_mono], 0
     jne .mono
     shr bl, 1
     sbb al, al
-    mov [bb_pat], al
+    mov [sw_pat], al
     ret
 .mono:
     mov al, [gfx_color]         ; gfx_ink's table read, inlined through SI -
     and ax, 15                  ; it indexes through BX, and BX is the plane
     mov si, ax                  ; counter and the colour bits here. SI is dead
-    mov al, [si + gfx_inktab]   ; between vga_rect_setup and bb_plane_op, which
+    mov al, [si + gfx_inktab]   ; between vga_rect_setup and sw_plane_op, which
     cmp al, 1                   ; loads it itself
     je .dither
-    mov [bb_pat], al
+    mov [sw_pat], al
     ret
 .dither:
-    call bb_parity              ; the AA/55 byte, and then alternate it
-    mov byte [bb_altm], 0xFF
+    call sw_parity              ; the AA/55 byte, and then alternate it
+    mov byte [sw_altm], 0xFF
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_plane_op - internal: one plane of a bb_rect op - left/right masked
+; sw_plane_op - internal: one plane of a sw_rect op - left/right masked
 ;               edge columns plus the whole-byte interior.
-; in:       ES = plane segment; [bb_mode]/[bb_pat]/[bb_altm]; vga_* rect
+; in:       ES = plane segment; [sw_mode]/[sw_pat]/[sw_altm]; vga_* rect
 ;           scratch from vga_rect_setup
 ; clobbers: ax, cx, si, di, bp, flags (preserves BX, DX)
 ;
-; It banks BX and DX ONCE per plane so that bb_col - which used to save five
+; It banks BX and DX ONCE per plane so that sw_col - which used to save five
 ; registers on each of its two calls - can have the run of the register file
 ; and save none, and so that this routine's own interior loop can hold
 ; gfx_nextrow's two parameters in registers (SPEC.md 39.3). A row step was a
 ; near call plus two CS-overridden memory reads; it is three register
 ; instructions now, and a fill walks its rows THREE times.
 ; -----------------------------------------------------------------------------
-bb_plane_op:
+sw_plane_op:
     push bx
     push dx
     mov ah, [vga_lmsk]          ; left edge column (whole rect if 1 byte wide)
     mov di, [vga_off]
-    call bb_col
+    call sw_col
     mov bp, [vga_span]
     or bp, bp
     jz .out
     mov ah, [vga_rmsk]          ; right edge column
     mov di, [vga_off]
     add di, bp
-    call bb_col
-    mov bp, [vga_span]          ; bb_col owns BP too (it parks the wrap bit)
+    call sw_col
+    mov bp, [vga_span]          ; sw_col owns BP too (it parks the wrap bit)
     dec bp                      ; interior bytes per row
     jz .out
     mov di, [vga_off]
     inc di
     mov si, [vga_rows]
-    mov ah, [bb_pat]
+    mov ah, [sw_pat]
     mov bx, [cs:vid_rowadd]     ; gfx_nextrow's two parameters, hoisted out of
     mov dx, [cs:vid_wrapbit]    ; the row loop and inlined below
-    cmp byte [bb_mode], BBM_XOR
+    cmp byte [sw_mode], SWM_XOR
     je .xrow
 .irow:
     mov al, ah                  ; AX = pattern:pattern, so stosw is safe for
@@ -226,7 +226,7 @@ bb_plane_op:
     jz .inw
     add di, [cs:vid_wrapfix]
 .inw:
-    xor ah, [bb_altm]           ; gray alternates, solid stays
+    xor ah, [sw_altm]           ; gray alternates, solid stays
     dec si
     jnz .irow
     jmp .out
@@ -251,28 +251,28 @@ bb_plane_op:
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_col - internal: one masked byte column of [vga_rows] rows at ES:DI.
+; sw_col - internal: one masked byte column of [vga_rows] rows at ES:DI.
 ;          XOR mode: dest ^= mask. Else: dest = (dest & ~mask) |
-;          (pattern & mask), pattern xor-stepped by [bb_altm] per row.
-; in:       AH = mask, DI = top byte, ES = plane; [bb_mode]/[bb_pat]/[bb_altm]
+;          (pattern & mask), pattern xor-stepped by [sw_altm] per row.
+; in:       AH = mask, DI = top byte, ES = plane; [sw_mode]/[sw_pat]/[sw_altm]
 ; clobbers: AL, BX, CX, DX, SI, DI, BP, flags (AH and ES survive)
 ;
-; It preserves NOTHING, deliberately: bb_plane_op banks BX/DX for the whole
+; It preserves NOTHING, deliberately: sw_plane_op banks BX/DX for the whole
 ; plane and reloads AH, DI, SI and BP itself around every call, so the five
 ; push/pop pairs this used to open with were saving registers their only
 ; caller was about to overwrite - a fifth of the cost of drawing one pixel
 ; (PERFORMANCE.md Part 2). SI and BP then pay for themselves by holding
 ; gfx_nextrow's step and wrap bit across the row loop.
 ; -----------------------------------------------------------------------------
-bb_col:
+sw_col:
     mov bl, ah
     not bl                      ; BL = ~mask
-    mov ch, [bb_pat]            ; CH = running pattern
-    mov cl, [bb_altm]
+    mov ch, [sw_pat]            ; CH = running pattern
+    mov cl, [sw_altm]
     mov dx, [vga_rows]
     mov si, [cs:vid_rowadd]     ; gfx_nextrow, hoisted and inlined - its body
     mov bp, [cs:vid_wrapbit]    ; is three instructions and the call and ret
-    cmp byte [bb_mode], BBM_XOR ; around them cost as much again
+    cmp byte [sw_mode], SWM_XOR ; around them cost as much again
     je .xrow
 .row:
     mov al, ch
@@ -300,16 +300,16 @@ bb_col:
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_fill_pat - software twin of gfx_fill_pat (SPEC.md 5/32): the 8-row
+; sw_fill_pat - software twin of gfx_fill_pat (SPEC.md 5/32): the 8-row
 ;               pattern at [gfx_pat], staged into vga_patbuf, written
-;               identically to all four planes (colors 0/15 per pixel bit,
-;               [bb_mono] untouched). bb_col's fixed-byte/xor-toggle model
-;               cannot index 8 rows, so this brings its own column helper.
+;               identically to every plane (colors 0/15 per pixel bit).
+;               sw_col's fixed-byte/xor-toggle model cannot index 8 rows,
+;               so this brings its own column helper.
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2; [gfx_pat] = pattern ptr
 ; out:      -
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
-bb_fill_pat:
+sw_fill_pat:
     push ax
     push bx
     push cx
@@ -321,20 +321,20 @@ bb_fill_pat:
     call vga_rect_setup
     jc .done
     call vga_pat_stage          ; vga_patbuf <- the 8 bytes at [gfx_pat]
-    mov dx, [vid_rseg]          ; DX = plane segment (see bb_rect)
+    mov dx, [vid_rseg]          ; DX = plane segment (see sw_rect)
     mov bp, [vid_planes_w]      ; BP = plane counter
 .plane:
     mov es, dx
     mov di, [vga_off]
     mov cl, [vga_lmsk]          ; left edge column (whole rect if 1 byte)
-    call bb_patcol
+    call sw_patcol
     mov si, [vga_span]
     or si, si
     jz .next
     mov di, [vga_off]
     add di, si
     mov cl, [vga_rmsk]          ; right edge column
-    call bb_patcol
+    call sw_patcol
     dec si                      ; SI = interior bytes per row
     jz .next
     mov di, [vga_off]
@@ -346,7 +346,7 @@ bb_fill_pat:
 .irow:
     mov al, [vga_patbuf+bx]
     mov ah, al                  ; byte uniform across the row: stosw + odd
-    mov cx, si                  ; tail via the shr carry, like bb_plane_op
+    mov cx, si                  ; tail via the shr carry, like sw_plane_op
     shr cx, 1
     push di
     rep stosw
@@ -376,13 +376,13 @@ bb_fill_pat:
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_patcol - internal: one masked byte column of [vga_rows] rows at ES:DI,
+; sw_patcol - internal: one masked byte column of [vga_rows] rows at ES:DI,
 ;             row byte from vga_patbuf by (y & 7):
 ;             dest = dest ^ ((dest ^ pat) & mask)
 ; in:       CL = mask, DI = top byte, ES = plane; vga_* rect scratch
 ; clobbers: AX, flags (preserves BX, SI, DI and CX)
 ; -----------------------------------------------------------------------------
-bb_patcol:
+sw_patcol:
     push bx
     push di
     push si
@@ -407,14 +407,14 @@ bb_patcol:
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_xor_rect - software twin of gfx_xor_rect: 1px outline, XOR 0Fh.
+; sw_xor_rect - software twin of gfx_xor_rect: 1px outline, XOR 0Fh.
 ;               Same edge decomposition as the VRAM version - each pixel
 ;               XORed exactly once, degenerate rects collapse - built from
-;               four bb_xor_fill strips.
+;               four sw_xor_fill strips.
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2  (x1<=x2, y1<=y2)
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
-bb_xor_rect:
+sw_xor_rect:
     push ax
     push bx
     push cx
@@ -424,12 +424,12 @@ bb_xor_rect:
     mov si, bx                  ; SI = y1
     mov di, dx                  ; DI = y2
     mov dx, si
-    call bb_xor_fill            ; top row (x1,y1)-(x2,y1)
+    call sw_xor_fill            ; top row (x1,y1)-(x2,y1)
     cmp di, si
     je .out                     ; y1 = y2: one line, done
     mov bx, di
     mov dx, di
-    call bb_xor_fill            ; bottom row (x1,y2)-(x2,y2)
+    call sw_xor_fill            ; bottom row (x1,y2)-(x2,y2)
     mov bx, si                  ; verticals span y1+1 .. y2-1
     inc bx
     mov dx, di
@@ -438,13 +438,13 @@ bb_xor_rect:
     jl .out                     ; only two rows: no vertical part
     push cx
     mov cx, ax
-    call bb_xor_fill            ; left column (x1,y1+1)-(x1,y2-1)
+    call sw_xor_fill            ; left column (x1,y1+1)-(x1,y2-1)
     pop cx
     cmp cx, ax
     je .out                     ; x1 = x2: one column, done
     push ax
     mov ax, cx
-    call bb_xor_fill            ; right column
+    call sw_xor_fill            ; right column
     pop ax
 .out:
     pop di
@@ -456,23 +456,23 @@ bb_xor_rect:
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_save / bb_restore - software twins of gfx_save / gfx_restore, same
+; sw_save / sw_restore - software twins of gfx_save / gfx_restore, same
 ; rounding and buffer layout (SPEC.md 5) - a buffer saved from the back
-; buffer restores to it byte-identically. One shared body, bb_xfer, with
-; [bb_dir] picking the direction; restore additionally dirties the rect.
-;   bb_save:    in AX/BX/CX/DX = rect, ES:DI = buffer; DI advances
-;   bb_restore: in AX/BX/CX/DX = rect, ES:SI = buffer; SI advances
+; buffer restores to it byte-identically. One shared body, sw_xfer, with
+; [sw_dir] picking the direction; restore additionally dirties the rect.
+;   sw_save:    in AX/BX/CX/DX = rect, ES:DI = buffer; DI advances
+;   sw_restore: in AX/BX/CX/DX = rect, ES:SI = buffer; SI advances
 ; ES preserved; clobbers flags.
 ; -----------------------------------------------------------------------------
-bb_save:
-    mov byte [bb_dir], 0
-    jmp bb_xfer
+sw_save:
+    mov byte [sw_dir], 0
+    jmp sw_xfer
 
-bb_restore:
-    mov byte [bb_dir], 1
-    ; fall through to bb_xfer
+sw_restore:
+    mov byte [sw_dir], 1
+    ; fall through to sw_xfer
 
-bb_xfer:
+sw_xfer:
     push ax
     push bx
     push cx
@@ -480,7 +480,7 @@ bb_xfer:
     push bp
     call vga_rect_setup
     jc .done
-    cmp byte [bb_dir], 0
+    cmp byte [sw_dir], 0
     je .geom
 .geom:
     mov bp, [vga_span]
@@ -491,7 +491,7 @@ bb_xfer:
     mov dx, [vga_rows]
     push ds
     push es
-    cmp byte [bb_dir], 0
+    cmp byte [sw_dir], 0
     jne .rst
     push si                     ; save: plane -> buffer; caller SI untouched
     mov si, ax
@@ -544,9 +544,9 @@ bb_xfer:
 ; -----------------------------------------------------------------------------
 section .bss
 
-bb_dir          resb 1          ; xfer: 0 = save, 1 = restore
-bb_mode         resb 1          ; rect core: BBM_SOLID / BBM_GRAY / BBM_XOR
-bb_pat          resb 1          ; rect core: plane value / dither pattern
-bb_altm         resb 1          ; rect core: per-row pattern toggle (0 or FF)
+sw_dir          resb 1          ; xfer: 0 = save, 1 = restore
+sw_mode         resb 1          ; rect core: SWM_SOLID / SWM_GRAY / SWM_XOR
+sw_pat          resb 1          ; rect core: plane value / dither pattern
+sw_altm         resb 1          ; rect core: per-row pattern toggle (0 or FF)
 
 section .text

@@ -1909,7 +1909,7 @@ the first thing done here was to count it rather than guess (rule 4). One
 static path agrees: they are spread over eleven routines with no hot spot
 anywhere — the API far-call cell, `gfx_pixel`'s rect marshalling, §11.3's
 clip test, `bb_mono_chk`, the `[bb_on]` dispatch, `vga_rect_setup`,   <!-- pre-§32-removal -->
-`gfx_rowbase`, `bb_dirty_rect`, `bb_ink`, `bb_plane_op`, `bb_col`. **About a
+`gfx_rowbase`, `bb_dirty_rect`, `sw_ink`, `sw_plane_op`, `sw_col`. **About a
 third of it was register discipline and call structure** — 13 push/pop pairs
 at Part 2's measured 29.7 clocks and ~10 near call/rets at 52.1 — and none
 of it was drawing. SPEC.md §5.7 lists the seven changes and why each is a
@@ -1938,7 +1938,7 @@ and `one full-width row` of text (2,220 → 2,219) are the three drawing paths
 none of these changes touch, and all three sat still. A harness that had
 moved them would have been measuring itself.
 
-The same suite on **VGA**, where the planar VRAM bodies run and `bb_col`
+The same suite on **VGA**, where the planar VRAM bodies run and `sw_col`
 never does, so only the shared coordinate core changed: `GFX_PIXEL` 424 →
 404 (−4.7%), `GFX_FILL 8x8` 338 → 317 (−6.2%), `GFX_BLIT4 4px runs` 13,110
 → 12,192 (−7.0%), `GFX_FILL 64x64` and `GFX_SCROLL` unmoved. Nothing on
@@ -1975,7 +1975,7 @@ Priced from the same teardown, for whoever comes next:
 | still on the floor | worth | why it was not taken |
 |---|---|---|
 | `gfx_rowbase`'s `mul` by the stride | ~145 clocks, 4% | a per-row table is 2 bytes x `[vid_h]` — 960 on VGA, and `KERN_BUDGET` has 1,536 left |
-| `bb_rect`'s eight push/pop pairs | ~240 clocks, 7% | it is `gfx_fill`'s "clobbers flags" contract, which every caller in the tree leans on |
+| `sw_rect`'s eight push/pop pairs | ~240 clocks, 7% | it is `gfx_fill`'s "clobbers flags" contract, which every caller in the tree leans on |
 | the API far-call cell | ~223 clocks, 6% | the package ABI (§20.1) |
 | a dedicated 1-row body for `gfx_hline`/`gfx_pixel` | maybe 25% of what remains | a second implementation of the same pixels, ~100 bytes, and Part 3 item 4's exact failure mode |
 | a one-entry memo on `gfx_rowbase` | ~4% of a text row (78 cells share a y) | it is a *loss* on the single-call case this section is about — the wrong trade for the headline number, the right one for text |
@@ -2373,7 +2373,7 @@ Costed before building, against this run's floor. A batch removes the API
 cell, the `GFXCLIP` test, the `bb_mono_chk` call and the `bb_on` dispatch —   <!-- pre-§32-removal -->
 about **170 of ~4,381 clocks**. It cannot remove eight push/pop pairs,
 `vga_rect_setup`'s twenty-odd memory accesses, `gfx_rowbase`, the dirty-rect
-and mode round-trips, the plane loop or `bb_ink`, because those are per
+and mode round-trips, the plane loop or `sw_ink`, because those are per
 *rect* and not per *call*.
 
 That is the difference from §5.6.8, which did pay: a walk step's fixed cost

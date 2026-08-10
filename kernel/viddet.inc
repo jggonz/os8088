@@ -16,7 +16,7 @@
 ; serves both: the bank count, the bank shift, the row stride and the
 ; segment are the four numbers that differ, and they live in vid_tab.
 ;
-; The mono renderer itself is not in this file. It is vgabb.inc, a latch-free,
+; The mono renderer itself is not in this file. It is softgfx.inc, a latch-free,
 ; port-free SOFTWARE renderer over the coordinate core in vga12.inc: it does
 ; the VGA ALU's work with plain CPU instructions, so pointing it at the real
 ; framebuffer with a plane count of 1 IS the 1bpp driver (SPEC.md 39.3).
@@ -116,9 +116,9 @@ vid_rseg    dw 0                ; the software renderer's target segment:
                                 ; 0 on VGA, where nothing routes through the
                                 ; software renderer; the FRAMEBUFFER itself
                                 ; on mono
-vid_rpara   dw BB_PLANE_PARA    ; paragraphs from one plane to the next.
+vid_rpara   dw SW_PLANE_PARA    ; paragraphs from one plane to the next.
                                 ; MUST be nonzero even at one plane -
-                                ; bb_xfer's loop terminates on a segment
+                                ; sw_xfer's loop terminates on a segment
                                 ; compare, and a step of 0 never terminates.
 vid_rend    dw 0                ; that loop's exclusive end
 vid_cwm1    dw SCREEN_W-1       ; the display's last legal x and y, and the
@@ -378,7 +378,7 @@ vid_apply:
     mov byte [vid_planes], 4
     mov word [vid_planes_w], 4
     xor ax, ax                  ; VGA: the renderer has no target until
-    mov bx, BB_PLANE_PARA       ; unreachable: [vid_rseg] is 0 here
+    mov bx, SW_PLANE_PARA       ; unreachable: [vid_rseg] is 0 here
     xor dx, dx
     cmp byte [vid_kind], VID_VGA
     je .rend
@@ -387,7 +387,7 @@ vid_apply:
     mov word [vid_planes_w], 1
     mov ax, [vid_seg]           ; the software renderer draws straight into
     mov bx, 1                   ; the framebuffer - one "plane", and a step
-    mov dx, ax                  ; of 1 paragraph purely so bb_xfer's segment
+    mov dx, ax                  ; of 1 paragraph purely so sw_xfer's segment
     inc dx                      ; compare can terminate
 .rend:
     mov [vid_rseg], ax
@@ -699,7 +699,7 @@ gfx_rowbase:
 ; with no adapter test on the path at all.
 ;
 ; CS OVERRIDES, NOT DS. Two of the callers run with DS pointed somewhere
-; else entirely: bb_xfer's save path sets DS to the framebuffer segment for
+; else entirely: sw_xfer's save path sets DS to the framebuffer segment for
 ; its movsb, and its restore path sets DS to the caller's buffer (SAVE_SEG
 ; for a menu's save-under). Reading the step through DS there fetches
 ; framebuffer bytes as a scan-line stride. CS is KERNEL_SEG for everything

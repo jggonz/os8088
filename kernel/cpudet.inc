@@ -8,7 +8,7 @@
 ; [cpu_tier] is one of CPU_8086 / CPU_286 / CPU_386 and [cpu_feat] carries
 ; the three feature bits. Both are INITIALIZED DATA IN .text, not .bss:
 ; -f bin zeroes nothing at boot, and the answer a machine reads when the
-; probe never ran has to be the safe one - the bb_avail / snd_live idiom of
+; probe never ran has to be the safe one - the sw_avail / snd_live idiom of
 ; SPEC.md 32/34.7. cpu_detect writes the tier on every path.
 ;
 ; The tier is information, not permission (SPEC.md 41.1). Nothing above this

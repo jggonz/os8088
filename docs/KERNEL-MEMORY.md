@@ -490,7 +490,7 @@ big the kernel below it is — with only the RAM column re-derived.
 | 103KB | 23KB | Note Pad runs. Paint loads and puts up its "Not enough memory" notice — the designed tier, not a crash |
 | 167KB | 87KB | Paint still gets the notice |
 | 183KB | 103KB | **Paint runs live**, full 448×280 canvas |
-| 639KB | 559KB | everything, including the 150KB back buffer |
+| 639KB | 559KB | everything, with room to spare |
 
 So the honest floor is **85KB to boot and browse, 88KB to run something**,
 and **~183KB for every shipped app at full function**. The often-quoted
@@ -891,7 +891,7 @@ generated in the first place.
 | `wm.inc` — the window manager (§11) | 5,840 | — | **5,840** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,051 | — | **4,051** | 118 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,413 | — | **4,413** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 743 | 3,141 | **3,884** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
@@ -908,7 +908,6 @@ generated in the first place.
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,187 | — | **1,187** | 84 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,172 | — | **1,172** | 17 | 768 |
-| `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,097 | — | **1,097** | 18 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
@@ -917,6 +916,7 @@ generated in the first place.
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
+| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 735 | — | **735** | 4 | — |
 | `toast.inc` — **(undescribed)** | 435 | — | **435** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
@@ -1073,13 +1073,11 @@ run-time cost** where the others do not, and it was checked rather than waved
 through. A segment override is one byte and 2 clocks on an 8088 — up to 4 if
 the four-byte prefetch queue is starved, which in these loops it will be. Per
 glyph the read runs eight times (once per row) on the mono adapters and in
-`font_char`'s VGA path, and 32 times in `font_char_bb` with the back buffer
-armed, because there the row loop sits inside the per-plane loop:
+`font_char`'s VGA path:
 
 | | clocks/glyph | of a ~4,770-clock cell |
 |---|---:|---:|
 | mono — the 8088 target | 16–32 | **0.34–0.67%** |
-| VGA, back buffer armed | 64–128 | 1.34–2.68% |
 
 The 1 ms a cell costs on a real 4.77 MHz XT with a Hercules card comes from
 `tests/fontbench` (SPEC.md §6.1.1). Two thirds of one percent on the machine

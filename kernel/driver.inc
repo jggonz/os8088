@@ -32,7 +32,7 @@
 ; as an ordinary answer and never as a failure to recover from: at boot the
 ; machine comes up without the driver and says so afterwards (drv_notice), and
 ; at runtime the Control Panel refuses the click with the reason in prose.
-; That is the bb_avail idiom (SPEC.md 32) pointed at a floppy drive.
+; That is the sw_avail idiom (SPEC.md 32) pointed at a floppy drive.
 ;
 ; Boot ordering, binding: drv_boot runs BEFORE the desktop's first paint, so a
 ; machine whose sound driver loads has sound from the first frame - and
@@ -1942,7 +1942,7 @@ drv_task:
 ; out: nothing (all registers preserved)
 ;
 ; The back buffer is unpacked SEPARATELY, by drv_boot, because turning it on
-; is not a store: bb_set claims 150KB and seeds the buffer from VRAM under the
+; is not a store: sw_set claims 150KB and seeds the buffer from VRAM under the
 ; gfx lock, and it has to happen after the screen exists.
 ; -----------------------------------------------------------------------------
 drv_cfg_pack:

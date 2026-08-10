@@ -4161,7 +4161,7 @@ wm_su_kb:
 ; beside Note Pad, replaced with the copy taken before that window was raised.
 ;
 ; A masked write would be the other fix, and it would mean edge read-modify-
-; writes in bb_xfer and a Bit Mask plus a latch load in vga_restore_vram - two
+; writes in sw_xfer and a Bit Mask plus a latch load in vga_restore_vram - two
 ; primitives the cursor is on, to serve one caller. So the merge is done in
 ; RAM instead: read what the screen holds in those two byte columns NOW, and
 ; patch the bits OUTSIDE the rect into the buffer before restoring it. The

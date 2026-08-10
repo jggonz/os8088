@@ -533,7 +533,7 @@ APP_MAX_SIZE equ 0xF000      ; image + bss budget: 60KB. The ceiling is the
 PKG_DISP     equ 12          ; the dispatcher's fixed offset inside a
                              ; package's header (§20.2)
 ; the software renderer's plane stride (§32/§39.3)
-BB_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
+SW_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
 ; the file manager's per-window view cache (§2.3/§22.1)
 VIEW_SLOTS    equ 4          ; max Disk windows = the kind's KD_CAP (§29.3)
 VIEW_KB       equ 3          ; each window's cache, claimed when it opens
@@ -547,7 +547,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/viddet.inc` | video adapters (§39): the boot probe, the live geometry block, mode set/teardown (`vid_setmode`/`vid_text`/`vid_init`), the shared addressing helpers `gfx_rowbase`/`gfx_nextrow`, the 1bpp colour map `gfx_ink` — prefix `vid_`; included **before** `splash.inc`, and all its data lives in `.text` |
 | `kernel/splash.inc` | boot-time loading screen (§15): the first adapter probe and mode set, welcome dialog, pixel progress bar, spinning vector "8088" — on a 1bpp adapter the progress bar alone (§39.6); far-ticked by the boot sector per sector read; self-contained, no .bss |
 | `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock, `gfx_scroll` (§5.5); the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
-| `kernel/vgabb.inc`  | the software renderer (§32/§39.3): the software planar primitives, and the only video driver on a 1bpp adapter |
+| `kernel/softgfx.inc`  | the software renderer (§32/§39.3): the software planar primitives, and the only video driver on a 1bpp adapter |
 | `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
@@ -627,7 +627,7 @@ computes the size at run time.
 
 **Software-renderer dispatch (§32/§39.5).** Every public drawing entry above
 (`gfx_pixel` … `gfx_restore`) starts with a `[vid_mono]` test and branches to
-its `bb_*` twin in vgabb.inc on a 1bpp adapter, where that renderer *is* the
+its `bb_*` twin in softgfx.inc on a 1bpp adapter, where that renderer *is* the
 driver; contracts, clipping and layouts are identical in both paths. Four
 VRAM bodies remain reachable under their own names, for callers that must
 skip the public entry's `cur_unlazy`: `vga_save_vram`/`vga_restore_vram` (the
@@ -707,7 +707,7 @@ SI = dy **signed**, positive scrolling the content *up*. Caller holds the
 gfx lock. **out** CF=0 moved, CF=1 refused and nothing touched. Every
 register preserved — CF is the whole answer.
 
-**It lives in `vga12.inc`.** It was in `vgabb.inc` while it had three
+**It lives in `vga12.inc`.** It was in `softgfx.inc` while it had three
 backends and one of them was §32's back buffer; with the buffer gone it has
 two — VGA through the latches, mono through `gfx_rowbase` — which is exactly
 the shape of every other primitive in `vga12.inc`, and it was the last public
@@ -1059,7 +1059,7 @@ instructions removed per arrival** rather than §5.7's 196.
 
 The reason is structural, and it corrects the argument this section opens
 with: **`gfx_lstep` is not a rect primitive.** It never goes near
-`vga_rect_setup` or `bb_rect`, so its arrival is the far-call cell and a
+`vga_rect_setup` or `sw_rect`, so its arrival is the far-call cell and a
 prologue, not the rect machinery §5.7 measured. Borrowing §5.7's ~756 µs for
 it was wrong.
 
@@ -1125,8 +1125,8 @@ Taken apart, one `gfx_pixel` on a 1bpp adapter was **196 guest instructions**
 (measured under `-icount`, PERFORMANCE.md Part 4) spread over eleven
 routines, with no hot spot anywhere: the API far-call cell, `gfx_pixel`'s
 rect marshalling, §11.3's clip test, `bb_mono_chk`, the `[bb_on]` dispatch,
-`vga_rect_setup`, `gfx_rowbase`, `bb_dirty_rect`, `bb_ink`, `bb_plane_op`
-and `bb_col`. **It is generic machinery, and what it costs is
+`vga_rect_setup`, `gfx_rowbase`, `bb_dirty_rect`, `sw_ink`, `sw_plane_op`
+and `sw_col`. **It is generic machinery, and what it costs is
 register discipline and call structure rather than work** — a third of it
 was push/pop pairs (29.7 clocks each, measured) and near call/rets (52.1).
 
@@ -1149,7 +1149,7 @@ a harmless tidy-up in the other direction:
    The formula in §39.3 is unchanged. The `mul` by the stride stays: the
    alternative is a per-row table, and 480 rows of it is a third of what
    `KERN_BUDGET` has left.
-5. **`bb_col` preserves nothing** (§32). Its only caller banks BX and DX for
+5. **`sw_col` preserves nothing** (§32). Its only caller banks BX and DX for
    the whole plane and reloads AH, DI, SI and BP around every call, so the
    five push/pop pairs it used to open with were saving registers that
    caller was about to overwrite. SI and BP then carry `gfx_nextrow`'s step
@@ -1158,19 +1158,19 @@ a harmless tidy-up in the other direction:
    already was in font.inc's (§6.1). Its body is three instructions and the
    call and ret around them cost as much again — and **a fill walks its rows
    three times**, once per edge column and once for the interior, so a fill
-   pays it three times per scan line. `bb_xfer`'s two loops were the last
+   pays it three times per scan line. `sw_xfer`'s two loops were the last
    holdouts and followed later (§7.1's work): the save side walks the
    framebuffer in **SI**, so through the call it paid two `xchg si, di` as
    well, around a body that is a `rep movsb` of two or three bytes.
-7. **`[bb_pat]` is staged by whoever needs it**, not by `bb_rect` for all
-   three modes: `BBM_GRAY` starts from the dither byte, `BBM_SOLID`'s own
-   dither branch stages it in `bb_ink`, and `BBM_XOR` never reads it.
+7. **`[sw_pat]` is staged by whoever needs it**, not by `sw_rect` for all
+   three modes: `SWM_GRAY` starts from the dither byte, `SWM_SOLID`'s own
+   dither branch stages it in `sw_ink`, and `SWM_XOR` never reads it.
 
 Together those took a `gfx_pixel` from 196 instructions to 158 and a
 `GFX_FILL 64x64` by 14.5%, with the output byte-identical on all three
 adapters and both renderers (PERFORMANCE.md Part 9, Set 3). What is left is
 mostly irreducible: the far-call cell is the package ABI (§20.1), the eight
-push/pops in `bb_rect` are `gfx_fill`'s "clobbers flags" contract, and
+push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract, and
 `vga_rect_setup`'s clipping is the clipping.
 
 ## 6. font.inc
@@ -1715,7 +1715,7 @@ Four things make the pair what it is.
   the renderer's own target there (§39.5), so `cur_put_mono` reads the byte
   under the arrow, banks it, ORs the white outline in, ANDs the black body
   out and writes it back — in one row loop. The three it replaces (a save
-  through `vga_rect_setup` and `bb_xfer`, then `cur_pass_mono` for white,
+  through `vga_rect_setup` and `sw_xfer`, then `cur_pass_mono` for white,
   then `cur_pass_mono` again for black) read the same byte three times and
   wrote it twice, each through its own row walk and its own `gfx_nextrow`
   call. The masks compose: `(under | white) & ~black` is exactly what drawing
@@ -3532,7 +3532,7 @@ rectangle vocabulary is one choke point. The clipped set is seven:
 | `gfx_fill_gray` | per fragment (the dither is screen-parity, so fragments align) |
 | `gfx_fill_pat` | per fragment (the pattern is screen-aligned for the same reason: the row byte is `y & 7` off a table staged from `[gfx_pat]` on every call, so a fragment starting at any y picks the byte the whole rect would have) |
 | `gfx_xor_fill` | per fragment |
-| `gfx_xor_rect` | **decomposed first**: an outline is not the intersection of its bounding rect with anything, so it becomes four `gfx_xor_fill` strips (the same decomposition `bb_xor_rect` uses, each pixel touched once, still self-inverting) |
+| `gfx_xor_rect` | **decomposed first**: an outline is not the intersection of its bounding rect with anything, so it becomes four `gfx_xor_fill` strips (the same decomposition `sw_xor_rect` uses, each pixel touched once, still self-inverting) |
 | `font_char` | whole-cell; covers `font_str` |
 | `icon_draw16` | whole-icon; covers `icon_draw` and `ico_core` |
 
@@ -4448,7 +4448,7 @@ the cache poked off as a control: **6 pixels of the Disk window beside Note
 Pad**, replaced with the copy taken before that window came forward.
 
 `wm_su_edge` is the fix, and what it does *not* do is the point. A masked
-write is the obvious answer and it means edge read-modify-writes in `bb_xfer`
+write is the obvious answer and it means edge read-modify-writes in `sw_xfer`
 and a Bit Mask plus a latch load in `vga_restore_vram` — two primitives the
 **cursor** is on, slowed for every caller to serve this one. So the merge
 happens in RAM instead: read the two edge byte columns off the screen **as
@@ -16237,7 +16237,7 @@ rather than losing a row belonging to something else.
 The pane assertion still uses `CP_ITEMS` rather than the byte, because the
 guard has to hold on the machine that shows every row.
 
-## 32. vgabb.inc — the software renderer (§39's 1bpp driver)
+## 32. softgfx.inc — the software renderer (§39's 1bpp driver)
 
 **What it is.** A latch-free, port-free CPU implementation of `vga12.inc`'s
 drawing primitives, rendering into whatever `[vid_rseg]`/`[vid_planes]`
@@ -16287,23 +16287,23 @@ names it fails to assemble rather than silently getting a different call.
 RAM has no latches and no Set/Reset, so these routines do the VGA ALU's work
 with plain CPU instructions, one plane at a time:
 
-  * `BBM_SOLID` — per plane, the `[gfx_color]` bit picks a 00/FF byte; edges
+  * `SWM_SOLID` — per plane, the `[gfx_color]` bit picks a 00/FF byte; edges
     become `(dest & ~mask) | (value & mask)`, interiors are `rep stosb`.
-  * `BBM_GRAY` — one AA/55 pattern for all planes, toggled each row via
-    `[bb_altm]`; same edge arithmetic.
-  * `BBM_XOR` — XOR 0Fh flips every plane identically: edges xor the mask,
+  * `SWM_GRAY` — one AA/55 pattern for all planes, toggled each row via
+    `[sw_altm]`; same edge arithmetic.
+  * `SWM_XOR` — XOR 0Fh flips every plane identically: edges xor the mask,
     interior bytes are complemented.
 
 Plane *p* lives at `[vid_rseg] + p*[vid_rpara]`, so `vga_rect_setup`'s masks
 and offsets serve this module and the planar one alike; every solid and XOR
-primitive funnels through `bb_rect`. Pixel, hline and vline are degenerate
+primitive funnels through `sw_rect`. Pixel, hline and vline are degenerate
 fills — a rect setup costs one `mul`, the same as a dedicated loop would.
 
-`bb_fill` / `bb_fill_gray` / `bb_xor_fill` / `bb_fill_pat` / `bb_xor_rect` /
-`bb_save` / `bb_restore` are the software twins of the `gfx_*` primitives with
+`sw_fill` / `sw_fill_gray` / `sw_xor_fill` / `sw_fill_pat` / `sw_xor_rect` /
+`sw_save` / `sw_restore` are the software twins of the `gfx_*` primitives with
 identical register contracts, reached through the `[vid_mono]` dispatch at
-each public entry (§39.5). `bb_xfer` is the save/restore worker;
-`bb_ink`/`bb_col`/`bb_parity`/`bb_patcol`/`bb_plane_op` are its internals.
+each public entry (§39.5). `sw_xfer` is the save/restore worker;
+`sw_ink`/`sw_col`/`sw_parity`/`sw_patcol`/`sw_plane_op` are its internals.
 
 **Concurrency.** Every routine here runs with the gfx lock held (§1.6), so
 `vga12`'s rect scratch needs no interrupt guard. The cursor does not come
@@ -16311,7 +16311,7 @@ through this module at all: `mouse.inc` goes through
 `vga_save_vram`/`vga_restore_vram` and the fused mono path of §7.1.
 
 **On a 1bpp adapter `[vid_planes]` is 1** and `vid_apply` sets the plane
-stride to a single paragraph — purely so `bb_xfer`'s segment compare
+stride to a single paragraph — purely so `sw_xfer`'s segment compare
 terminates. Colours reduce to black, white and a 50% dither (§39.4).
 
 ## 33. Far code — retired
@@ -18011,8 +18011,8 @@ the bytes `vid_kind`, `vid_mono`, `vid_planes`, `vid_planes_w`.
 ```
 vid_mono   = (kind != VID_VGA)          vid_planes = mono ? 1 : 4
 vid_rseg   = mono ? vid_seg : [bb_seg]
-vid_rpara  = mono ? 1 : BB_PLANE_PARA   ; MUST be nonzero - see 39.3
-vid_rend   = vid_rseg + (mono ? 1 : 4*BB_PLANE_PARA)
+vid_rpara  = mono ? 1 : SW_PLANE_PARA   ; MUST be nonzero - see 39.3
+vid_rend   = vid_rseg + (mono ? 1 : 4*SW_PLANE_PARA)
 vid_popmax = min(MENU_POPMAX, (vid_h - MBAR_H - 2) >> 4)    ; 16 / 16 / 11
 vid_desk_zx = vid_w - 56                ; 584 at 640 wide, as it always was
 [bb_on]    = vid_mono                   ; see 39.5
@@ -18075,7 +18075,7 @@ Three sites are worth knowing because they are not obviously renderer:
 
 ### 39.3 The parameterized software renderer
 
-**There is no second graphics driver.** `vgabb.inc` (§32) is a latch-free,
+**There is no second graphics driver.** `softgfx.inc` (§32) is a latch-free,
 port-free *software* renderer over `vga_rect_setup`'s coordinate core — it
 was written against a RAM back buffer and nothing in it cares what the target
 is. Four things make it the 1bpp driver:
@@ -18083,7 +18083,7 @@ is. Four things make it the 1bpp driver:
 - its plane segment is `[vid_rseg]` — the **framebuffer itself**;
 - its plane count is `[vid_planes]` — 4 or 1;
 - its plane step is `[vid_rpara]`, which **must stay nonzero even at one
-  plane**: `bb_xfer` terminates on a segment compare against `[vid_rend]`,
+  plane**: `sw_xfer` terminates on a segment compare against `[vid_rend]`,
   and a step of 0 never terminates;
 - every row advance goes through `gfx_nextrow`.
 
@@ -18120,7 +18120,7 @@ the renderer's row loops (§32) both open-code it, CS overrides and all. A
 loop that can hold `rowadd` and `wrapbit` in registers should.
 
 **Both read their parameters through `CS`, not `DS`.** Two callers run with
-DS pointed elsewhere entirely: `bb_xfer`'s save path sets DS to the
+DS pointed elsewhere entirely: `sw_xfer`'s save path sets DS to the
 framebuffer segment for its `movsb`, and its restore path sets DS to the
 caller's buffer (the menu's save-under claim). Reading the stride through DS
 there fetches framebuffer bytes as a scan-line step. CS is `KERNEL_SEG` for
@@ -18135,8 +18135,8 @@ A change of stride or height breaks this silently, so `viddet.inc` asserts it.
 ### 39.4 Colour reduction at 1bpp
 
 `gfx_ink` maps a 16-colour index to `00h` black, `FFh` white, or `01h` — the
-50% dither class, which costs nothing extra because `bb_rect` has already
-computed the row-parity AA/55 byte for `BBM_GRAY`; arming `[bb_altm]` is the
+50% dither class, which costs nothing extra because `sw_rect` has already
+computed the row-parity AA/55 byte for `SWM_GRAY`; arming `[sw_altm]` is the
 whole implementation.
 
 ```
@@ -18180,7 +18180,7 @@ slowest machines we support, and almost no glyph wants this.
 `[vid_mono]` means **"route drawing through the software renderer"**. It is
 set by `vid_apply` before anything draws and never changes afterwards, so on
 a Hercules or a CGA machine every public primitive dispatches into
-`vgabb.inc` and on a VGA none of them does.
+`softgfx.inc` and on a VGA none of them does.
 
 It used to be two flags. `[bb_on]` said "route through the software
 renderer" and `[bb_dbl]` said "a back buffer is armed and must be flushed",
@@ -23565,9 +23565,9 @@ ms, spread over a life of a second and a half.
 controlled A/B — the whole `mc_expcol` table forced to `CLMAGENTA` (§39.4's
 dither class) against the whole table forced to `CWHITE` — measured **3.114
 versus 3.106 counts per fill, a difference of 0.26%**. It cannot be
-otherwise: on a 1bpp adapter `bb_ink`'s dither branch only arms `[bb_altm]`,
-and `bb_rect` has already put the row-parity AA/55 byte in `[bb_pat]`, so
-`bb_col` and `bb_plane_op` run the identical instruction sequence with a
+otherwise: on a 1bpp adapter `sw_ink`'s dither branch only arms `[sw_altm]`,
+and `sw_rect` has already put the row-parity AA/55 byte in `[sw_pat]`, so
+`sw_col` and `sw_plane_op` run the identical instruction sequence with a
 different constant XORed in per row (§39.4/§32). Solid and dithered fills
 are the same code.
 
@@ -24383,7 +24383,7 @@ call: what a batch removes is the API cell, the `GFXCLIP` test, the
 `bb_mono_chk` call and the `bb_on` dispatch — perhaps 170 of ~4,381 clocks.
 What it cannot remove is everything that makes a *rect* a rect: eight
 push/pop pairs, `vga_rect_setup`'s twenty-odd memory accesses, `gfx_rowbase`,
-the dirty-rect and mode round-trips, the plane loop and `bb_ink`.
+the dirty-rect and mode round-trips, the plane loop and `sw_ink`.
 
 That is precisely why §5.6.8 *did* pay for the walk and this does not: a walk
 step's fixed cost was block staging and `gfx_ink`, which are per **call**; a

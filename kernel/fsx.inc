@@ -508,10 +508,7 @@ fsx_xcrtc:                      ; Mode X CRTC retiming, index in the low byte
 ;           not fail); CF=1 outside a bracket or on an unknown AL. Every
 ;           register preserved.
 ;
-; The present: while [bb_dbl] is armed and no mode switch has happened, the
-; armed buffer is flushed BEFORE the wait - the bracket never calls
-; gfx_unlock, so this is the only flush a buffered renderer gets. Every
-; retrace poll is bounded by a [ticks] delta (SPEC.md 37.90's rule: the one
+; Every retrace poll is bounded by a [ticks] delta (SPEC.md 37.90's rule: the one
 ; way to hang is waiting forever for a bit that never changes on a machine
 ; where every read is 0FFh).
 ;

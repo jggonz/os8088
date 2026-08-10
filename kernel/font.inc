@@ -677,13 +677,12 @@ font_run_cell:
     ; font_char_bb does (SPEC.md 32). It is easy to miss here because the
     ; target is [vid_rseg] either way and on MONO that IS the framebuffer, so
     ; the cell appears the moment it is written and nothing looks wrong. On a
-    ; VGA with double buffering armed, bb_set repoints [vid_rseg] at the back
-    ; buffer and gfx_unlock flushes only what bb_dirty was told about - so an
+    ; VGA with double buffering armed, sw_set repoints [vid_rseg] at the back
+    ; buffer and gfx_unlock flushes only what sw_dirty was told about - so an
     ; unmarked cell is rendered, correctly, into memory nobody copies to VRAM.
     ; The symptom is position-dependent and reads as anything but this: the
     ; fast path needs a byte-aligned x, so the Task Manager froze solid at one
     ; window x and ran perfectly one pixel either side of it.
-    ; bb_dirty is a no-op when [bb_dbl] is 0, which is every mono machine.
     push cx                     ; x and y are still wanted below
     push dx
     mov ax, cx

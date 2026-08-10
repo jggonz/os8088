@@ -1746,7 +1746,7 @@ gfx_fill_d:
     GFXDISP gfx_fill_raw
 gfx_fill_raw:
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
-    jne bb_fill
+    jne sw_fill
     push ax
     push bx
     push cx
@@ -1861,7 +1861,7 @@ gfx_fill_gray_d:
     GFXDISP gfx_fill_gray_raw
 gfx_fill_gray_raw:
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
-    jne bb_fill_gray
+    jne sw_fill_gray
     push ax
     push bx
     push cx
@@ -2004,7 +2004,7 @@ gfx_fill_pat_d:
     GFXDISP gfx_fill_pat_raw
 gfx_fill_pat_raw:
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
-    jne bb_fill_pat
+    jne sw_fill_pat
     push ax
     push bx
     push cx
@@ -2214,14 +2214,14 @@ gfx_xor_rect:
                                 ; that way would draw edges through the
                                 ; middle of it, so it decomposes first
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
-    jne bb_xor_rect
+    jne sw_xor_rect
 vga_xor_rect_vram:
     call cur_unlazy             ; the drag outline bypasses the clip
                                 ; (SPEC.md 11.3): 7.1.4. VRAM body under its
                                 ; own name, which the transient overlays call
                                 ; direct
     cmp byte [vid_mono], 0      ; ...but "direct" means the framebuffer, and
-    jne bb_xor_rect             ; on a 1bpp adapter the software renderer IS
+    jne sw_xor_rect             ; on a 1bpp adapter the software renderer IS
                                 ; the direct path (SPEC.md 39.5)
     push bx
     push dx
@@ -2264,7 +2264,7 @@ vga_xor_rect_vram:
 ; out:      -
 ; clobbers: flags
 ;
-; The same decomposition bb_xor_rect uses, with the same degenerate cases -
+; The same decomposition sw_xor_rect uses, with the same degenerate cases -
 ; each pixel is touched exactly once, so the result is still self-inverting.
 ; Every strip goes through the PUBLIC gfx_xor_fill, which is where it meets
 ; the clip region (SPEC.md 11.3).
@@ -2322,13 +2322,13 @@ gfx_xor_fill_d:
     GFXDISP gfx_xor_fill_raw
 gfx_xor_fill_raw:
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
-    jne bb_xor_fill
+    jne sw_xor_fill
 vga_xor_fill_vram:
     call cur_unlazy             ; ...and the menu highlights with it. VRAM
                                 ; body under its own name (see
                                 ; vga_xor_rect_vram)
     cmp byte [vid_mono], 0
-    jne bb_xor_fill
+    jne sw_xor_fill
     push ax
     push bx
     push cx
@@ -2409,7 +2409,7 @@ vga_xor_fill_vram:
 ;           empty); ES preserved
 ; clobbers: flags
 ;
-; Dispatches to bb_save on a 1bpp adapter (SPEC.md 39.5). vga_save_vram is
+; Dispatches to sw_save on a 1bpp adapter (SPEC.md 39.5). vga_save_vram is
 ; the VRAM body under its own name: the mouse cursor's save-under calls it
 ; directly, without cur_unlazy.
 ; -----------------------------------------------------------------------------
@@ -2417,11 +2417,11 @@ gfx_save:
     call cur_unlazy             ; the menu save-under READS the screen, so
                                 ; the arrow must not be in what it banks
     cmp byte [vid_mono], 0
-    jne bb_save
+    jne sw_save
 vga_save_vram:
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
-    jne bb_save                 ; on mono the framebuffer IS the renderer's
-                                ; target, so one "plane" of bb_xfer is it
+    jne sw_save                 ; on mono the framebuffer IS the renderer's
+                                ; target, so one "plane" of sw_xfer is it
     push ax
     push bx
     push cx
@@ -2477,16 +2477,16 @@ vga_save_vram:
 ;           empty); ES preserved
 ; clobbers: flags
 ;
-; Dispatches to bb_restore on a 1bpp adapter (SPEC.md 39.5);
+; Dispatches to sw_restore on a 1bpp adapter (SPEC.md 39.5);
 ; vga_restore_vram is the VRAM body for the cursor path (see gfx_save).
 ; -----------------------------------------------------------------------------
 gfx_restore:
     call cur_unlazy             ; ...and writes it back, unclipped
     cmp byte [vid_mono], 0
-    jne bb_restore
+    jne sw_restore
 vga_restore_vram:
     cmp byte [vid_mono], 0      ; see vga_save_vram
-    jne bb_restore
+    jne sw_restore
     push ax
     push bx
     push cx
@@ -2711,30 +2711,30 @@ gfx_scroll:
     jae .no
     call wm_clip_test           ; whole-shape clip (SPEC.md 11.3): CF=1 =
     jc .no                      ; armed and not wholly inside one fragment
-    mov [bbs_sdy], si
+    mov [vgas_sdy], si
     push cx
     mov cl, 3
     shr ax, cl
-    mov [bbs_col], ax           ; left byte column
+    mov [vgas_col], ax           ; left byte column
     pop ax                      ; AX = x2
     inc ax
     mov cl, 3
     shr ax, cl
-    sub ax, [bbs_col]
-    mov [bbs_nb], ax            ; bytes per row
+    sub ax, [vgas_col]
+    mov [vgas_nb], ax            ; bytes per row
     mov ax, dx
     sub ax, bx
     inc ax
     sub ax, di
-    mov [bbs_rows], ax          ; rows to copy = height - |dy|
-    cmp word [bbs_sdy], 0
+    mov [vgas_rows], ax          ; rows to copy = height - |dy|
+    cmp word [vgas_sdy], 0
     jl .down
-    mov [bbs_ydst], bx          ; up: dest rows y1..y2-|dy|, walked top-down
-    mov word [bbs_step], 1      ; (source below destination - forward-safe)
+    mov [vgas_ydst], bx          ; up: dest rows y1..y2-|dy|, walked top-down
+    mov word [vgas_step], 1      ; (source below destination - forward-safe)
     jmp short .disp
 .down:
-    mov [bbs_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
-    mov word [bbs_step], -1     ; bottom-up (source above destination)
+    mov [vgas_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
+    mov word [vgas_step], -1     ; bottom-up (source above destination)
 .disp:
     cmp byte [vid_planes], 1
     je .mono
@@ -2742,13 +2742,13 @@ gfx_scroll:
     mov ax, 0x0105              ; GC5: write mode 1 - a movsb read fills the
     out dx, ax                  ; latches, the write stores all four planes
     mov dx, VGA_SEG
-    call bbs_lincopy
+    call vgas_lincopy
     mov dx, 0x03CE
     mov ax, 0x0005              ; write mode back to 0 (SPEC.md 1 rule 7)
     out dx, ax
     jmp short .ok
 .mono:
-    call bbs_bankcopy           ; the framebuffer IS [vid_rseg] (SPEC.md 39)
+    call vgas_bankcopy           ; the framebuffer IS [vid_rseg] (SPEC.md 39)
 .ok:
     clc
     jmp short .out
@@ -2765,72 +2765,72 @@ gfx_scroll:
     ret
 
 ; -----------------------------------------------------------------------------
-; bbs_lincopy - scroll one LINEAR segment (the VGA stride): a buffer plane,
+; vgas_lincopy - scroll one LINEAR segment (the VGA stride): a buffer plane,
 ; or VRAM itself in write mode 1
-; in:       DX = target segment; the bbs_* geometry
+; in:       DX = target segment; the vgas_* geometry
 ; clobbers: AX/BX/CX/DX/SI/DI, flags (gfx_scroll banked the caller's)
 ; -----------------------------------------------------------------------------
-bbs_lincopy:
+vgas_lincopy:
     push ds
     mov es, dx
-    mov ax, [bbs_rows]
-    mov [bbs_left], ax
-    mov bx, [bbs_ydst]
+    mov ax, [vgas_rows]
+    mov [vgas_left], ax
+    mov bx, [vgas_ydst]
 .r:
     mov ax, bx
-    add ax, [bbs_sdy]
+    add ax, [vgas_sdy]
     mul word [vid_stride]       ; AX = src row * stride (DX:AX, DX = 0)
-    add ax, [bbs_col]
+    add ax, [vgas_col]
     mov si, ax
     mov ax, bx
     mul word [vid_stride]
-    add ax, [bbs_col]
+    add ax, [vgas_col]
     mov di, ax
-    mov cx, [bbs_nb]
+    mov cx, [vgas_nb]
     push es
     pop ds                      ; DS = ES = the target for the movs
     cld
     rep movsb
     mov ax, KERNEL_SEG
     mov ds, ax
-    add bx, [bbs_step]
-    dec word [bbs_left]
+    add bx, [vgas_step]
+    dec word [vgas_left]
     jnz .r
     pop ds
     ret
 
 ; -----------------------------------------------------------------------------
-; bbs_bankcopy - the mono twin: per-row copies through gfx_rowbase, which
+; vgas_bankcopy - the mono twin: per-row copies through gfx_rowbase, which
 ; absorbs the Hercules/CGA bank interleave (SPEC.md 39.2)
-; in:       the bbs_* geometry; target = [vid_rseg]
+; in:       the vgas_* geometry; target = [vid_rseg]
 ; clobbers: AX/BX/CX/DX/SI/DI, flags
 ; -----------------------------------------------------------------------------
-bbs_bankcopy:
+vgas_bankcopy:
     push ds
     mov ax, [vid_rseg]
     mov es, ax
-    mov ax, [bbs_rows]
-    mov [bbs_left], ax
-    mov bx, [bbs_ydst]
+    mov ax, [vgas_rows]
+    mov [vgas_left], ax
+    mov bx, [vgas_ydst]
 .r:
     mov ax, bx
-    add ax, [bbs_sdy]
+    add ax, [vgas_sdy]
     call gfx_rowbase            ; AX = the src row's start (CS-relative
-    add ax, [bbs_col]           ; parameter reads - DS-safe, SPEC.md 39.2)
+    add ax, [vgas_col]           ; parameter reads - DS-safe, SPEC.md 39.2)
     mov si, ax
     mov ax, bx
     call gfx_rowbase
-    add ax, [bbs_col]
+    add ax, [vgas_col]
     mov di, ax
-    mov cx, [bbs_nb]
+    mov cx, [vgas_nb]
     push es
     pop ds
     cld
     rep movsb
     mov ax, KERNEL_SEG
     mov ds, ax
-    add bx, [bbs_step]
-    dec word [bbs_left]
+    add bx, [vgas_step]
+    dec word [vgas_left]
     jnz .r
     pop ds
     ret
@@ -2902,11 +2902,11 @@ gfx_ls_by2      resw 1          ; per CALL in every case that matters
 gfx_ls_cseg     resw 1          ; ...and where the caller's block came from,
 gfx_ls_coff     resw 1          ; because ES cannot hold it across the walk
 
-bbs_col         resw 1          ; gfx_scroll (SPEC.md 5.5): left byte column
-bbs_nb          resw 1          ;   bytes per row
-bbs_sdy         resw 1          ;   signed dy (positive = content up)
-bbs_ydst        resw 1          ;   first destination row
-bbs_step        resw 1          ;   +1 (up: top-down) / -1 (down: bottom-up)
-bbs_rows        resw 1          ;   rows to copy = height - |dy|
-bbs_left        resw 1          ;   per-pass row countdown
+vgas_col         resw 1          ; gfx_scroll (SPEC.md 5.5): left byte column
+vgas_nb          resw 1          ;   bytes per row
+vgas_sdy         resw 1          ;   signed dy (positive = content up)
+vgas_ydst        resw 1          ;   first destination row
+vgas_step        resw 1          ;   +1 (up: top-down) / -1 (down: bottom-up)
+vgas_rows        resw 1          ;   rows to copy = height - |dy|
+vgas_left        resw 1          ;   per-pass row countdown
 section .text
