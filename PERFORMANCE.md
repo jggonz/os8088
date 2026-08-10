@@ -3666,3 +3666,62 @@ measured **18.29 s and 20.97 s on two trials of the SAME kernel**, a 15%
 spread against a 0.5% effect — the floppy mount dominates and MartyPC is not
 disk-accurate anyway (Set 11). A per-primitive harness with the interrupts off
 is the only instrument with the resolution, which is what `gfxbench` is for.
+
+### Set 25 — `font_run`'s compose, and the blank-row skip that does not transfer (SPEC.md §6.1.5)
+
+Asked directly, after Set 24: `font_char` skips a blank glyph row, so can
+`font_run`?
+
+**No, and the reason is what `font_run` IS.** It is *opaque* — the cell owns
+its framebuffer byte, so a blank glyph row is still **painted**, with the
+background. There is no write to skip. What could be skipped is the compose
+arithmetic, guarded by `or al, al` + `jz`: four bytes on every row to save
+eleven on the ~30% of rows that are blank, plus a taken branch's prefetch
+flush, on the innermost loop of every string the slow machines draw.
+Break-even at best.
+
+**The compose itself was the thing to fix, and §6.1 had already noticed it
+without the code taking it** — "which on mono reduces to the glyph or its
+complement". `(glyph & ink) | (~glyph & background)` is
+`(glyph & (ink ^ background)) ^ background`, both terms constant per plane; in
+CL and CH a row becomes a load, an `and`, an `xor` and a store.
+
+| `gfxbench` row, CGA | baseline | hoisted | delta |
+|---|---|---|---|
+| **`FONT_RUN` 10 aligned** | 8,879.59 µs | 7,898.60 µs | **−11.05%** |
+| `FONT_CHAR` one cell | 895.44 | 895.27 | −0.02% |
+| `FONT_STR` 10 aligned | 8,402.93 | 8,401.88 | −0.01% |
+| `PAIR` 10 aligned | 10,152.88 | 10,151.83 | −0.01% |
+| `FONT_RUN` 10 skewed 5 | 10,839.77 | 10,840.26 | +0.00% |
+| `PAIR` 10 skewed 5 | 10,658.81 | 10,659.02 | +0.00% |
+| `GFX_PIXEL` · `GFX_FILL 64x64` · `GFX_FILL 8x8` | — | — | +0.00% |
+
+**The unmoved rows are the result as much as the first one.** Skewed is
++0.00% because an unaligned run never reaches `font_run_cell` at all (§6.1's
+gate), and `FONT_CHAR`/`FONT_STR` are untouched code — so the change landed
+exactly where it was aimed and nowhere else. Cost: `.text` **−12** bytes,
+`.bss` **−2**, no rung crossed.
+
+**Byte-for-byte on both mono adapters**, a scripted desktop → chip menu →
+Disk-window session through each kernel: **Hercules 0 differing pixels of
+250,560 on all three screens**, CGA 0 on two.
+
+**The third CGA screen reported 31 differing pixels and is Set 23's trap, not
+a defect.** The bbox was x 624..630, y 6..12 — *one 8x8 cell*, which is the
+menu bar clock: with no RTC the fallback starts at `Jul 04 2026 00:00` and a
+run crossing the minute reads `00:01`. Cropped and read as pixels rather than
+believed, the baseline's last digit is `0` and the other's is `1`. Masking
+that field, every screen is 0 of 128,000. **A systematic, reproducible
+difference in one cell looks exactly like a real bug** — read it before
+reporting it.
+
+**What is left is bigger than what was taken, and it is NOT measured.**
+`font_run_cell` runs the whole prologue **per cell** — two edge compares, the
+clip test, the glyph address, `gfx_rowbase`, `font_ink` *twice* (each a
+further near call) and the plane setup — and across a run those all produce
+the same answers, because a run shares its y and both its colours and differs
+only by one byte of DI per cell. Priced against this measurement: a cell of an
+aligned run is ~888 µs of which the eight-row loop is ~270, so **~70% of
+`FONT_RUN` is a prologue a run could pay once**. Near `call`+`ret` alone is
+11.0–11.5 µs before any body (Part 9's table), so the ceiling is real — but so
+is the restructuring, and this figure is inferred rather than measured.

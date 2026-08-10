@@ -771,19 +771,16 @@ font_run_cell:
     mov di, [font_rn_di]
     mov bh, 8
     shr byte [font_rn_fs], 1    ; this plane's bit -> CF -> an 00/FF mask
-    sbb al, al
-    mov [font_rn_fm], al
+    sbb al, al                  ; AL = ink mask
     shr byte [font_rn_bs], 1
-    sbb al, al
-    mov [font_rn_bm], al
+    sbb ch, ch                  ; CH = background mask
+    mov cl, al
+    xor cl, ch                  ; CL = ink XOR background
 .row:
     mov al, [ss:si]             ; AL = the glyph row
     inc si
-    mov ah, al
-    and al, [font_rn_fm]        ; ink where the glyph is set...
-    not ah
-    and ah, [font_rn_bm]        ; ...background where it is not
-    or al, ah
+    and al, cl                  ; a set bit picks ink, a clear bit background
+    xor al, ch                  ; - the same byte, three instructions fewer
     mov [es:di], al             ; the cell owns the byte: store, never merge
     add di, [cs:vid_rowadd]     ; (gfx_nextrow inlined - see font_char_bb)
     test di, [cs:vid_wrapbit]
@@ -905,8 +902,6 @@ font_rn_fg:     resb 1          ; font_run: the run's two colours, and the
 font_rn_bg:     resb 1          ; per-plane bit sources and 00/FF masks its
 font_rn_fs:     resb 1          ; cell loop consumes. In .bss for the same
 font_rn_bs:     resb 1          ; reason font_bb_si is: the row loop has no
-font_rn_fm:     resb 1          ; register to spare, and every caller holds
-font_rn_bm:     resb 1          ; the gfx lock (SPEC.md 1.6)
 font_rn_ch:     resb 1          ; font_run_scell's character, parked because
                                 ; AL is the rect's low byte by the time the
                                 ; letter is drawn

@@ -1301,7 +1301,8 @@ the two mono adapters. On a 1bpp adapter at a byte-aligned x the cell owns
 its whole framebuffer byte, so there is nothing underneath to preserve: no
 shift, no read, no second byte, and no separate fill pass at all. Per plane
 the byte is `(glyph & ink) | (~glyph & background)` with each mask 00 or FF,
-which on mono reduces to the glyph or its complement. That is the path the
+which on mono reduces to the glyph or its complement — §6.1.5 is the loop
+taking that reduction, two instructions instead of five. That is the path the
 slow machines are on — `[vid_mono]` is permanently 1 there (§39.5) — and it is
 where the cost of text actually lives.
 
@@ -1522,6 +1523,39 @@ it general and is not worth what it would do to dragging", and §11.94 is the
 decision to do it anyway** — opt in, mono only, at the price of 8-pixel drag
 steps on the windows that ask. Three windows have: the Task Manager, Note Pad
 and the Timer (§14.1).
+
+#### 6.1.5 The compose is an XOR, and its two terms live in registers
+
+§6.1's `(glyph & ink) | (~glyph & background)` is what the byte **means**; it
+is not what the loop computes. The same byte is
+`(glyph & (ink ^ background)) ^ background` — checked exhaustively over all
+2^24 (glyph, ink, background) triples, so it does not rest on the masks being
+00 or FF and survives that invariant changing — and **both terms are constant
+for the whole plane**. So they are computed once above the eight rows and held
+in **CL and CH**, and a row body is a load, an `and`, an `xor` and a store:
+**two instructions where there were five**, with no branch and nothing in
+`.bss`.
+
+`font_rn_fm`/`font_rn_bm` went with it. Their comment said there was "no
+register to spare", which was true where it was written and not where it
+mattered: `CX` is dead from `.plane` onward, because `gfx_rowbase` has already
+clobbered `CL` and `font_ink`'s second call has finished with `CH`.
+
+**Measured** (`tests/gfxbench`, cycle-accurate 4.77MHz 8088, CGA):
+`FONT_RUN 10 aligned` **8,879.59 µs → 7,898.60 µs, −11.05%**, with every other
+row unmoved — `FONT_CHAR` −0.02%, `FONT_STR` −0.01%, `FONT_RUN` skewed +0.00%,
+`GFX_PIXEL` and both fills +0.00%. `.text` −12 bytes, `.bss` −2, no rung
+crossed, so it is *smaller* as well as faster. Framebuffer byte-identical on
+CGA and Hercules (PERFORMANCE.md Set 25).
+
+**What this deliberately does NOT do is skip a blank glyph row**, and that is
+worth writing down because it is the obvious next idea. `font_char` skips one
+because there a blank row means **no write at all**; here the cell owns its
+byte and a blank row is still *painted*, with the background — so there is no
+write to skip, only the compose, which is now two instructions. A guard costs
+`or al, al` + `jz`: the same four bytes the compose costs, plus a taken
+branch's prefetch flush, on the innermost loop of every string the slow
+machines draw. **The optimisation removed its own successor.**
 
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
