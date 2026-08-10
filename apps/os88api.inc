@@ -1648,6 +1648,24 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; heap that is the difference between a paste
                                  ; that works and one that half-arrives.
                                  ; Preserves all but AX.
+%define OSAPI_WM_DAMAGE     KERNEL_SEG:0x03B0   ; BX = your window ptr, called
+                                                ; from inside your own W_PAINT.
+                                                ; CF=1 = draw the WHOLE content
+                                                ; and AX/BX/CX/DX are it; CF=0 =
+                                                ; draw AX/BX/CX/DX and no more,
+                                                ; absolute and inclusive, and it
+                                                ; may be EMPTY (x1 > x2) meaning
+                                                ; draw NOTHING. An empty rect is
+                                                ; safe to hand any primitive -
+                                                ; they read it as nothing to do
+                                                ; - so forgetting to test cannot
+                                                ; paint anything wrong, only
+                                                ; waste the answer. Requires
+                                                ; OSAPI_WM_OWNBG: without it the
+                                                ; kernel has already whitened
+                                                ; your content and the only
+                                                ; correct answer is "whole"
+                                                ; (SPEC.md 11.90.2)
 %define OSAPI_WM_OWNBG      KERNEL_SEG:0x03A8   ; BX = window ptr, AL = 0 clear
                                                 ; / non-0 set. "I paint EVERY
                                                 ; PIXEL of my content myself",

@@ -576,3 +576,39 @@ therefore its own piece of work:
   compares a textured canvas pixel for pixel across builds on all three
   adapters, which is what a change of this kind needs and what a blank canvas
   would silently pass.
+
+## It is told which rect it owes (SPEC.md §11.90.2)
+
+`WF_OWNBG` stopped the kernel whitening the content; `OSAPI_WM_DAMAGE` is the
+other half — asked once per paint (`pt_dmg_get`, right after `pt_org`) and spent
+two ways:
+
+- **Per element, for the small parts.** `pt_dmg_hit` tests a content-relative
+  rect against the damage, and the tool column, the colour strip, the divider and
+  `pt_fsbed`'s two beds are each drawn or skipped whole. That is `tm_row_draw`'s
+  answer (SPEC.md §11.3): each part is small and self-contained, so the part is
+  the unit and there is no fill-versus-glyph granularity trap to fall into.
+- **Narrowed, for the canvas.** `pt_blit_dmg` converts the rect to canvas
+  coordinates and hands it to `pt_blit`, which has always taken one. No clamping
+  is needed: `pt_clip` reads its four words as signed, floors at 0, caps at the
+  canvas and refuses an empty rect.
+
+Measured (PERFORMANCE.md Set 34) on a Disk window dragged off Paint: the canvas
+blit **8,669.8 ms → 6,758.8 ms**, the damage having covered 73% of the width.
+Proportional, which is the whole design — and bounded by geometry, because a
+drag's damage is at least the moving window's own rect.
+
+Three things in the adoption are load-bearing:
+
+- **A SELECTION disqualifies us.** The marquee is an XOR and every paint re-shows
+  it unconditionally, so a partial blit would leave the part outside the rect lit
+  and the re-show would then invert it *off*. `pt_dmg_get` asks for nothing while
+  `[pt_selon]` is set.
+- **The fullscreen bracket asks nothing**, there being no window damage on a
+  surface that is the machine's (§42.7). `[pt_fsx]` is the test, and it is what
+  keeps `pt_fsbed` drawing both its beds unconditionally in there.
+- **`pt_repaint` forces `[pt_dall]` back to 1**, because it is a FULL repaint and
+  must not inherit the last `W_PAINT`'s rect — which would skip whichever parts
+  that paint owed and this one does not. It also calls `pt_fsbed` itself now, so
+  that its own comment ("every part of this draws its own background") is true
+  rather than true-because-a-`W_PAINT`-ran-first.

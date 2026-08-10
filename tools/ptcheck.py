@@ -42,18 +42,11 @@ ROW_TEXTURE = 2                 # pttest.img root, sorted: APPS FINE.BMP TEXTURE
 MASK_Y = 18
 
 
-def shot(m, tag, out, log):
-    w, bpp, data = su.fb(m)
-    body = data[MASK_Y * w * bpp:]
-    stem = os.path.join(out, "%02d-%s" % (len(log), tag))
-    with open(stem + ".raw", "wb") as f:
-        f.write(struct.pack("<HH", w, bpp) + body)
-    geom = " ".join("%d:%d,%d,%d,%d" % (x.i, x.x, x.y, x.w, x.h)
-                    for x in su.windows(m) if x.visible)
-    with open(stem + ".txt", "w") as f:
-        f.write(geom + "\n")
-    log.append(tag)
-    print("  %-16s %d x %s  %s" % (tag, w, bpp, geom))
+# subcheck's, because it MASKS THE MOUSE ARROW and this gate needs that for the
+# same reason: the same build captured twice differed by 45 arrow-shaped pixels
+# over a dock tile, the cursor being erased under the gfx lock and put back at
+# the unlock (SPEC.md 7.1.4).
+shot = sc.shot
 
 
 def capture(out, machine):
@@ -72,15 +65,15 @@ def capture(out, machine):
             raise SystemExit("ptcheck: Paint did not launch")
         pt = pt[0]
         os88marty.settle(m)
-        shot(m, "loaded", out, log)
+        shot(m, "loaded", out, log, mo)
 
         sc.pclick(mo, *su.tile(m, disk))            # cover Paint
         os88marty.settle(m)
-        shot(m, "covered", out, log)
+        shot(m, "covered", out, log, mo)
 
         sc.pclick(mo, *su.tile(m, pt))              # ...and raise it: the paint
         os88marty.settle(m)                         # that used to be white first
-        shot(m, "raised", out, log)
+        shot(m, "raised", out, log, mo)
 
         # Drag the Disk window ACROSS Paint and off it. An unwritten pixel here
         # holds the DISK WINDOW's content, which white would not have hidden.
@@ -91,10 +84,10 @@ def capture(out, machine):
         if ptn:
             sc.pdrag(mo, ptn[0], ptn[1], ptn[0] + 60, ptn[1] + 40)
             os88marty.settle(m)
-            shot(m, "dragged", out, log)
+            shot(m, "dragged", out, log, mo)
         sc.pclick(mo, *su.tile(m, pt))              # Paint back on top
         os88marty.settle(m)
-        shot(m, "reraised", out, log)
+        shot(m, "reraised", out, log, mo)
         m.quit()
     print("captured %d step(s)" % len(log))
 

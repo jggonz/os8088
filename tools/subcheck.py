@@ -36,10 +36,16 @@ Four things cost a run each, and all four are REDRAW-SPEC Part 3's:
     and the bar can never be covered (windows clamp to y >= MBAR_H), so nothing
     this feature touches is up there.
 
-  THE MOUSE ARROW IS NOT MASKED, on purpose. Both runs drive the pointer to the
-    same derived coordinates, so the arrow is in the same place in both and its
-    pixels are part of what must agree. A run that leaves it somewhere else has
-    diverged, and that is a finding rather than noise.
+  THE MOUSE ARROW IS MASKED, and the reasoning that said otherwise was wrong.
+    It ran: both runs drive the pointer to the same derived coordinates, so the
+    arrow is in the same place in both. True of its POSITION and silent about
+    whether it is DRAWN - the cursor is erased under the gfx lock and put back at
+    the unlock (SPEC.md 7.1.4), so whether a capture catches it depends on where
+    `settle` lands relative to the last one. Measured: the SAME BUILD captured
+    twice differed by 45 arrow-shaped pixels over a dock tile. A gate that fails
+    at random is worse than no gate, so a 16x16 box at the published cursor
+    position is excluded - and none of the features these gates cover involves
+    the cursor, which has verification of its own.
 
   EVERY COORDINATE IS DERIVED from wm_wins/wm_zord read out of the guest, never
     written down: half the harness time in this round went on clicks that
@@ -62,7 +68,15 @@ MASK_Y = 18                     # the menu bar: clock + toast (SPEC.md 12.9/59)
 TITLE_H = 18
 
 
-def shot(m, tag, out, log):
+def curbox(mo):
+    """The cell the mouse arrow may or may not be occupying, 16x16 at its
+    published position - CUR_GW/CUR_GH are 8x12 (SPEC.md 7.1) and this is
+    generous on purpose."""
+    x, y, _ = mo.where()
+    return (x, y, x + 15, y + 15)
+
+
+def shot(m, tag, out, log, mo=None):
     """The screen, in guest coordinates, with the bar dropped.
 
     The window rects go into a .txt beside it, because a pixel diff cannot tell
@@ -72,7 +86,16 @@ def shot(m, tag, out, log):
     region). `diff` compares these FIRST for that reason.
     """
     w, bpp, data = su.fb(m)
-    body = data[MASK_Y * w * bpp:]
+    body = bytearray(data[MASK_Y * w * bpp:])
+    if mo is not None:                  # blank the arrow's cell in BOTH runs, so
+        x1, y1, x2, y2 = curbox(mo)     # "drawn or not" cannot be a difference
+        rows = len(body) // (w * bpp)
+        for y in range(max(y1, MASK_Y), min(y2, MASK_Y + rows - 1) + 1):
+            r = (y - MASK_Y) * w * bpp
+            for x in range(max(x1, 0), min(x2, w - 1) + 1):
+                for k in range(bpp):
+                    body[r + x * bpp + k] = 0
+    body = bytes(body)
     stem = os.path.join(out, "%02d-%s" % (len(log), tag))
     with open(stem + ".raw", "wb") as f:
         f.write(struct.pack("<HH", w, bpp) + body)
@@ -161,13 +184,13 @@ def capture(out, machine, defines=()):
             m.sym = lambda n, d=tuple(defines): plain(n, d)
         mo = Mouse(marty=m)
         print("machine %s -> %s" % (machine, out))
-        shot(m, "desktop", out, log)
+        shot(m, "desktop", out, log, mo)
 
         # Two Disk windows, cascaded 16px apart by wm_create.
         mo.dblclick(*su.zone(m, 1)); time.sleep(4)
-        shot(m, "disk-b", out, log)
+        shot(m, "disk-b", out, log, mo)
         mo.dblclick(*su.zone(m, 0)); time.sleep(4)
-        shot(m, "disk-a", out, log)
+        shot(m, "disk-a", out, log, mo)
 
         w = wins(m)
         if len(w) < 2:
@@ -183,39 +206,39 @@ def capture(out, machine, defines=()):
         if pt is None:
             raise SystemExit("subcheck: no title strip on %r" % (front,))
         pdrag(mo, pt[0], pt[1], pt[0] + 90, pt[1] + 60)
-        shot(m, "drag-clear", out, log)
+        shot(m, "drag-clear", out, log, mo)
 
         # THE FIELD BUG: drag the front window ACROSS the back one. Left, then
         # back right - the two directions uncover different Ls.
         f = [x for x in wins(m) if x.i == front.i][0]
         pt = titlebar(m, f)
         pdrag(mo, pt[0], pt[1], pt[0] - 70, pt[1])
-        shot(m, "drag-across-l", out, log)
+        shot(m, "drag-across-l", out, log, mo)
         f = [x for x in wins(m) if x.i == front.i][0]
         pt = titlebar(m, f)
         pdrag(mo, pt[0], pt[1], pt[0] + 40, pt[1] - 25)
-        shot(m, "drag-across-r", out, log)
+        shot(m, "drag-across-r", out, log, mo)
 
         # A raise of a covered window, both ways round: this is the restore the
         # whole cache exists for.
         pclick(mo, *su.tile(m, back))
-        shot(m, "raise-back", out, log)
+        shot(m, "raise-back", out, log, mo)
         pclick(mo, *su.tile(m, front))
-        shot(m, "raise-front", out, log)
+        shot(m, "raise-front", out, log, mo)
 
         # Minimize banks (SPEC.md 11.96.5) and restore-from-dock is a blit.
         # Both boxes are wm_hit_test's own geometry: rows W_Y+4..W_Y+14, close
         # at W_X+8..W_X+18 and minimize mirrored at W_X+W_W-19..W_X+W_W-9.
         f = [x for x in wins(m) if x.i == front.i][0]
         pclick(mo, f.x + f.w - 14, f.y + 9)
-        shot(m, "minimized", out, log)
+        shot(m, "minimized", out, log, mo)
         pclick(mo, *su.tile(m, front))
-        shot(m, "restored", out, log)
+        shot(m, "restored", out, log, mo)
 
         # ...and closing, which damages the rect the window vacated.
         f = [x for x in wins(m) if x.i == front.i][0]
         pclick(mo, f.x + 13, f.y + 9)
-        shot(m, "closed", out, log)
+        shot(m, "closed", out, log, mo)
         m.quit()
     print("captured %d step(s)" % len(log))
 

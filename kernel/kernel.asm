@@ -1371,7 +1371,16 @@ osapi_table:
                                   ;          sets it and leaves a pixel unwritten
                                   ;          shows whatever was there before -
                                   ;          after a move, another window's
-osapi_table_end:                  ; 0x03B0
+    OSAPI_SLOT wm_damage          ; 0x03B0 - BX = your window, inside your own
+                                  ;          W_PAINT. CF=1 = draw the whole
+                                  ;          content (AX/BX/CX/DX = it); CF=0 =
+                                  ;          draw AX/BX/CX/DX only, absolute and
+                                  ;          inclusive, possibly EMPTY meaning
+                                  ;          draw nothing (SPEC.md 11.90.2).
+                                  ;          Answers "whole" unless WF_OWNBG is
+                                  ;          set, because without it the kernel
+                                  ;          has already whitened the content
+osapi_table_end:                  ; 0x03B8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1379,8 +1388,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 116 * 8
-%error "os8088 API jump table must be exactly 116 8-byte slots"
+%if OSAPI_TABLE_LEN != 117 * 8
+%error "os8088 API jump table must be exactly 117 8-byte slots"
 %endif
 
 ; =============================================================================

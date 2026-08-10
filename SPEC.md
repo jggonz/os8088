@@ -4177,6 +4177,69 @@ would not fund. Windowed, that routine was dead code the kernel's fill stood in
 for; adopting the flag is calling it, and the `pt_mode` notice path grew a fill
 of its own because two lines of black text is not every pixel of anything.
 
+#### 11.90.2 `OSAPI_WM_DAMAGE` — and the application is told which rect it owes
+
+§11.96.6 computes, per window, everything a repaint pass has painted; the raise
+cache spends it to restore a strip instead of a window. This hands the same
+answer to the **application** instead, for the windows that hold their own
+pixels: `OSAPI_WM_DAMAGE` (slot **0x03B0**), BX = your window, called from inside
+your own `W_PAINT`.
+
+- **CF = 1** — draw the whole content, and `AX/BX/CX/DX` are that content rect.
+- **CF = 0** — draw `AX/BX/CX/DX` and nothing else, absolute and inclusive; it
+  may be **empty** (`x1 > x2`), meaning draw nothing at all.
+
+**An empty rect is safe to hand any primitive** — `vga_rect_setup` reads one as
+"nothing to do" — so a caller that never tests for it cannot paint anything
+wrong, only waste the answer. That is deliberate: the failure mode of a new ABI
+should be a missed optimisation, not a corrupted window.
+
+**There is no new bookkeeping behind it.** `wm_dmg_wins` already arms the
+per-window rect before every `wm_draw_win` (§11.96.6), and on a window with no
+raise cache `wm_su_srect` never spends it — so it is still armed when `W_PAINT`
+runs, and this slot is a read plus an intersection with the content rect.
+
+**It answers "whole" unless `WF_OWNBG` is set, and that is an interlock rather
+than a rule to remember.** With the flag clear the kernel has already filled the
+content white (§11.90.1), so a partial answer would leave the rest of the window
+blank. The two features are only correct together, and the kernel makes that true
+instead of asking an author to.
+
+**Nothing can under-report.** Every path with no damage rect — a raise, a
+`wm_paint_all`, §53's exclusive surface — has armed nothing and so answers
+"whole"; and the one path that does arm cannot be too small, because a window
+that **moved** has its whole content inside the damage by construction (the rect
+is the union of where it was and where it is).
+
+**Measured (PERFORMANCE.md Set 34), and the ceiling is geometry rather than
+implementation.** A Disk window dragged off Paint with a textured bitmap in it:
+the canvas blit **8,669.8 ms → 6,758.8 ms, 1.28x**, the damage having covered 73%
+of the content's width. Two things bound how small the rect can get, and both are
+worth knowing before quoting a figure:
+
+- **A drag's damage is at least the MOVER's own rect** (`ui_drag` passes the union
+  of where the window was and where it is), so the saving is bounded by how much
+  smaller the moving window is than the one underneath. A small window across a
+  full-screen Paint saves nearly everything; the same arithmetic, not a different
+  feature.
+- **A raise still repaints whole**, and that is the bigger gap. `wm_raise` arms no
+  damage rect because there is none, so this answers "whole" — correctly. What a
+  raised window *owes* is the part that was **covered**, which is computable as
+  the complement of §11.3's visible region taken before `wm_lift`. That is the
+  case where a mostly-covered window turns seconds into a fraction of one, and it
+  is the natural next step rather than something this slot already does.
+
+`apps/paint` is the reference consumer, and two things in its adoption are the
+general lesson rather than Paint's own business. **A partial repaint is per
+ELEMENT, not per pixel** — `tm_row_draw`'s answer (§11.3): the palette, the
+colour strip, the divider and the two beds are each tested whole against the
+damage and drawn or skipped, while the canvas is the one thing narrowed to the
+rect, because `pt_blit` already takes an arbitrary canvas rect. And **an XOR
+overlay disqualifies the window from a partial paint**: Paint's marquee is XOR
+and its paint re-shows it unconditionally, so a partial blit would leave the part
+outside it lit and the re-show would then invert it *off*. With a selection live,
+Paint asks for nothing and repaints whole.
+
 ### 11.91 Hiding, destroying and moving cost a rectangle, not a screen
 
 The mirror of §11.90. Hiding a window, destroying one and dragging one to a

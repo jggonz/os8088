@@ -4158,3 +4158,50 @@ Hercules and VGA mode 12h across cover / raise / drag-across / re-raise
 (`tools/ptcheck.py`). The gate uses a **textured** BMP deliberately: a blank
 canvas is uniform white, which is precisely the colour the fill would have left,
 so it is the one picture that cannot tell a kept promise from a broken one.
+
+### Set 34 — Paint told which rect it owes (SPEC.md §11.90.2)
+
+§11.90.1 stopped the kernel whitening Paint's content; this hands Paint
+§11.96.6's accumulated damage so it blits only the part it owes. Measured on a
+cycle-accurate 5150/CGA with Set 32's textured bitmap, the Disk window dragged
+**off** Paint by (+70, +45) — a `wm_dmg_wins` pass, which is where a damage rect
+exists at all:
+
+| | Paint's `W_PAINT` | its canvas blit |
+|---|---|---|
+| the whole content | 9,024.5 ms | 8,669.8 ms |
+| the damage rect | **7,114.1 ms** | **6,758.8 ms** |
+
+**1.28x, and it is exactly proportional rather than surprising**: the damage
+covered 73% of Paint's content width and the blit came in at 78% of the whole.
+That is the feature working as designed — the blit is linear in the runs it
+covers — and it is also the honest ceiling, because two things bound how small
+the rect can get.
+
+**A drag's damage is at least the MOVER's own rect.** `ui_drag` passes the union
+of where the window was and where it is, so the saving is bounded by how much
+smaller the moving window is than the one underneath: a Disk window 320 wide
+dragged over a Paint 536 wide can only ever uncover so little of it, and 1.28x is
+what that geometry allows. A small window dragged across a full-screen Paint
+saves nearly everything; that is the same arithmetic, not a different feature.
+
+**And a RAISE still repaints whole**, which is the bigger of the two gaps and the
+obvious next step. `wm_raise` arms no damage rect — there is none to arm — so
+`wm_damage` answers "whole", correctly. But what a raised window actually owes is
+the part that **was covered**, which is computable: it is the complement of
+§11.3's visible region taken *before* `wm_lift`. That is the case where "only 10%
+of the canvas was visible" turns 8.7 s into ~0.9 s, and nothing in this set
+reaches it.
+
+Verified with `tools/ptcheck.py` against a build that asks for nothing: **0
+differing pixels** on CGA, Hercules and VGA mode 12h.
+
+**A harness correction came out of it, and it is the second time this round that
+the arrow has cost a run.** `subcheck`'s docstring argued the mouse arrow needed
+no masking because both runs drive the pointer to the same derived coordinates.
+True of its POSITION and silent about whether it is DRAWN — the cursor is erased
+under the gfx lock and put back at the unlock (§7.1.4), so whether a capture
+catches it depends on where `settle` lands relative to the last one. Measured:
+**the same build captured twice differed by 45 arrow-shaped pixels** over a dock
+tile. Both gates now blank a 16x16 box at the published cursor position. A gate
+that fails at random is worse than no gate.

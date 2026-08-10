@@ -1586,6 +1586,104 @@ pt_undo_swap:
 
 
 ; -----------------------------------------------------------------------------
+; pt_dmg_get - what does this paint owe? (SPEC.md 11.90.2)
+; in:  pt_org has run; gfx lock held
+; out: [pt_dall] and, when it is 0, [pt_dx1]..[pt_dy2] CONTENT-relative
+; preserves every register
+;
+; A SELECTION DISQUALIFIES US, and it is the one thing here that is not
+; arithmetic: the marquee is an XOR and every paint re-shows it unconditionally,
+; so a partial blit would leave the part outside the rect lit and the re-show
+; would then invert it OFF. Whole content while one is live.
+;
+; The fullscreen bracket asks nothing either - there is no window damage there,
+; the surface being the machine's (SPEC.md 42.7).
+; -----------------------------------------------------------------------------
+pt_dmg_get:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [pt_dall], 1
+    cmp byte [pt_fsx], 0
+    jne .out
+    cmp byte [pt_selon], 0
+    jne .out
+    mov bx, [pt_win]
+    call OSAPI_WM_DAMAGE
+    jc .out                         ; the whole content, which is every path
+                                    ; with no damage rect behind it
+    sub ax, [pt_ox]                 ; absolute -> content-relative, pt_cprep's
+    sub cx, [pt_ox]                 ; conversion the other way round
+    sub bx, [pt_oy]
+    sub dx, [pt_oy]
+    mov [pt_dx1], ax
+    mov [pt_dy1], bx
+    mov [pt_dx2], cx
+    mov [pt_dy2], dx
+    mov byte [pt_dall], 0
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_dmg_hit - must this content-relative rect be drawn at all?
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (content-relative, inclusive)
+; out: CF = 1 draw it; every register preserved
+;
+; PER ELEMENT, not per pixel - tm_row_draw's answer (SPEC.md 11.3). Each of this
+; app's parts is small and self-contained, so the unit is the whole part; the
+; canvas is the one thing worth narrowing, and pt_blit already takes a rect.
+; -----------------------------------------------------------------------------
+pt_dmg_hit:
+    cmp byte [pt_dall], 0
+    jne .yes
+    cmp ax, [pt_dx2]
+    jg .no
+    cmp cx, [pt_dx1]
+    jl .no
+    cmp bx, [pt_dy2]
+    jg .no
+    cmp dx, [pt_dy1]
+    jl .no
+.yes:
+    stc
+    ret
+.no:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_blit_dmg - the canvas, or only the part this paint owes (SPEC.md 11.90.2)
+; in:  [pt_dall]/[pt_dx1]..[pt_dy2]; gfx lock held
+; out: nothing; preserves every register
+;
+; No clamping here: pt_clip reads its four words as SIGNED, floors at 0, caps at
+; the canvas and refuses an empty rect, so the raw content-minus-PT_CV_X
+; arithmetic is already what it wants.
+; -----------------------------------------------------------------------------
+pt_blit_dmg:
+    cmp byte [pt_dall], 0
+    jne pt_blit_all                 ; tail call: all of it
+    push ax
+    mov ax, [pt_dx1]                ; content x -> canvas x; the canvas's rows
+    sub ax, PT_CV_X                 ; ARE the content's, only x is offset
+    mov [pt_rx1], ax
+    mov ax, [pt_dx2]
+    sub ax, PT_CV_X
+    mov [pt_rx2], ax
+    mov ax, [pt_dy1]
+    mov [pt_ry1], ax
+    mov ax, [pt_dy2]
+    mov [pt_ry2], ax
+    call pt_blit
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; pt_blit - put a canvas rectangle on screen
 ; in:  [pt_rx1]..[pt_ry2] = canvas rect; gfx lock held
 ; out: nothing; preserves all registers
@@ -2718,24 +2816,51 @@ pt_paint:
     cmp byte [pt_mode], PT_M_LIVE
     jne .notice
     call pt_track                   ; did ui_grow resize the window under us?
+    call pt_dmg_get                 ; ...and what do we owe? (SPEC.md 11.90.2)
     call pt_fsbed                   ; the beds nothing below covers - the tool
                                     ; column's and any band right of the canvas.
                                     ; WINDOWED THIS USED TO BE THE KERNEL'S
                                     ; white fill; under WF_OWNBG (SPEC.md
                                     ; 11.90.1) it is ours, and this routine was
-                                    ; already exactly it for the 53 bracket
+                                    ; already exactly it for the 53 bracket.
+                                    ; It gates its own two fills
+    xor ax, ax                      ; the tool column: the palette's buttons sit
+    xor bx, bx                      ; on the bed pt_fsbed just laid
+    mov cx, PT_SEPX - 1
+    mov dx, [pt_ch]
+    dec dx
+    call pt_dmg_hit
+    jnc .nopal
     call pt_draw_pal
+.nopal:
+    xor ax, ax                      ; the colour strip, below the canvas: its
+    mov bx, [pt_ch]                 ; own separator row is its top
+    mov cx, [pt_contw]
+    dec cx
+    mov dx, [pt_conth]
+    dec dx
+    call pt_dmg_hit
+    jnc .nostrip
     call pt_draw_strip
-    mov byte [pt_pen], CBLACK
-    mov ax, PT_SEPX
-    mov bx, 0
+.nostrip:
+    mov ax, PT_SEPX                 ; the palette/canvas divider, one column
+    xor bx, bx
     mov cx, ax
     mov dx, [pt_ch]
     dec dx
-    call pt_cfill                   ; the palette/canvas divider
-    call pt_blit_all
+    call pt_dmg_hit
+    jnc .nosep
+    mov byte [pt_pen], CBLACK
+    call pt_cfill
+.nosep:
+    call pt_blit_dmg                ; ...and the canvas, narrowed to the rect -
+                                    ; the one part worth narrowing rather than
+                                    ; gating, and 96% of this paint (Set 32)
     mov byte [pt_selshown], 0
-    call pt_marq                    ; the marquee, if a selection is live
+    call pt_marq                    ; the marquee, if a selection is live - and
+                                    ; pt_dmg_get asked for the whole content if
+                                    ; there is one, because this re-show is an
+                                    ; XOR (SPEC.md 11.90.2)
     cmp byte [pt_abon], 0           ; ...and the About card over the lot
     je .noab
     call pt_abdraw
@@ -6984,6 +7109,14 @@ pt_repaint:
     push bx
     push cx
     push dx
+    mov byte [pt_dall], 1           ; A FULL repaint, so it must not inherit the
+                                    ; last W_PAINT's damage rect - which would
+                                    ; skip whichever parts that one owed and
+                                    ; this one does not (SPEC.md 11.90.2)
+    call pt_fsbed                   ; ...and it lays its own beds now: under
+                                    ; WF_OWNBG nothing else does, and this
+                                    ; routine's own comment already claimed
+                                    ; every part draws its background
     call pt_draw_pal
     call pt_draw_strip
     mov byte [pt_pen], CBLACK
@@ -7035,7 +7168,10 @@ pt_fsbed:
     mov cx, PT_SEPX - 1
     mov dx, [pt_ch]
     dec dx
+    call pt_dmg_hit                 ; SPEC.md 11.90.2: only if this paint owes
+    jnc .right                      ; it. Always, in the 42.7 bracket
     call pt_cfill
+.right:
     mov ax, [pt_cw]                 ; ...and anything the canvas leaves to its
     add ax, PT_CV_X                 ; right (pt_fit shrank it, not the user)
     mov cx, [pt_contw]
@@ -7045,6 +7181,8 @@ pt_fsbed:
     xor bx, bx
     mov dx, [pt_ch]
     dec dx
+    call pt_dmg_hit
+    jnc .out
     call pt_cfill
 .out:
     pop dx
@@ -9806,6 +9944,11 @@ pt_ic_text:
     PTBYTE pt_ncol                  ; palette entries this adapter shows
     PTBYTE pt_mono                  ; 1bpp adapter
     PTBYTE pt_selon                 ; a selection exists
+    PTBYTE pt_dall                  ; 1 = this paint owes the WHOLE content
+    PTWORD pt_dx1                   ; ...else the rect it owes, CONTENT-relative
+    PTWORD pt_dy1                   ; (SPEC.md 11.90.2)
+    PTWORD pt_dx2
+    PTWORD pt_dy2
     PTBYTE pt_selshown              ; ...and its marquee is on the glass
     PTBYTE pt_txton                 ; a text run is open
     PTBYTE pt_careton               ; ...and its caret is on the glass

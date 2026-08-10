@@ -4133,6 +4133,67 @@ wm_ownbg:
     popf
     ret
 
+; -----------------------------------------------------------------------------
+; wm_damage - which rect does this paint owe? (SPEC.md 11.90.2)
+; in:  BX = window ptr - your own, called from inside its W_PAINT
+; out: CF = 1 = draw the WHOLE content, and AX/BX/CX/DX are that content rect;
+;      CF = 0 = draw AX/BX/CX/DX and nothing else, absolute screen coordinates,
+;      inclusive - and possibly EMPTY (x1 > x2), which means draw nothing at all.
+;      Either answer leaves a rect in the four registers that is safe to draw:
+;      vga_rect_setup reads an empty one as "nothing to do", so a caller that
+;      never tests for it still cannot paint anything wrong.
+;      Clobbers the four outputs only.
+;
+; §11.96.6's accumulated damage, handed to the application instead of being kept
+; for the raise cache. There is no new bookkeeping behind it: wm_dmg_wins already
+; arms the per-window rect before every wm_draw_win, and on a window with no
+; cache wm_su_srect never spends it, so it is still there when W_PAINT runs.
+;
+; IT ANSWERS "WHOLE" WITHOUT WF_OWNBG, and that is the interlock rather than a
+; documented rule: with the flag clear the kernel has ALREADY filled the content
+; white, so a partial answer would leave the rest of the window blank. The two
+; features are only correct together and this is where that is made true.
+;
+; Every other path answers "whole" by having armed nothing - a raise, a
+; wm_paint_all, a fullscreen surface - and the one path that does arm cannot
+; under-report, because a window that MOVED has its whole content inside the
+; damage by construction (the rect is the union of where it was and where it is).
+; -----------------------------------------------------------------------------
+wm_damage:
+    push si
+    push di
+    mov di, bx                  ; the window: wm_su_rect writes all four
+    call wm_su_rect             ; AX/BX/CX/DX = its content rect
+    test word [di+W_FLAGS], WF_OWNBG
+    jz .whole
+    cmp word [wm_su_son], 0
+    je .whole                   ; nobody named one
+    cmp ax, [wm_su_sx1]
+    jge .x1
+    mov ax, [wm_su_sx1]
+.x1:
+    cmp bx, [wm_su_sy1]
+    jge .y1
+    mov bx, [wm_su_sy1]
+.y1:
+    cmp cx, [wm_su_sx2]
+    jle .x2
+    mov cx, [wm_su_sx2]
+.x2:
+    cmp dx, [wm_su_sy2]
+    jle .y2
+    mov dx, [wm_su_sy2]
+.y2:
+    clc
+    pop di
+    pop si
+    ret
+.whole:
+    stc
+    pop di
+    pop si
+    ret
+
 ; =============================================================================
 ; THE RAISE CACHE (SPEC.md 11.96) - a window raised without repainting it
 ;
