@@ -235,22 +235,46 @@ sed 's/%error "kernel too big.*/%warning bypassed/' kernel/kernel.asm > /tmp/ksz
 printf '%%assign KT KTEXT_SIZE\n%%assign KB KBSS_SIZE\n%%warning KTEXT=KT KBSS=KB\n' >> /tmp/ksz.asm
 nasm -f bin -I kernel/ -o /dev/null /tmp/ksz.asm     # warning prints both; ramBytes = KT + KB
 
-# sourceLines and modules, counted the way the FAQ counts them: the boot
-# sector, kernel.asm and everything it actually includes, the SDK header and
-# the example packages. The dead .inc files are not included and do not count.
-# Keep the include list as an inline $(...): this shell is zsh, where an
-# unquoted $VAR does NOT word-split and wc would be handed one long filename.
-wc -l boot/boot.asm kernel/kernel.asm \
-      $(grep '%include' kernel/kernel.asm | sed -E 's/.*"(.*)".*/kernel\/\1/') \
-      apps/os88api.inc apps/*/*.asm | tail -1      # sourceLines
-grep -c '%include' kernel/kernel.asm                # modules
+# sourceLines and modules: the boot sector, kernel.asm and everything it
+# actually includes, the SDK header, and every package's .asm AND the .inc
+# files that .asm includes. The dead kernel .inc files are not included by
+# anything and do not count; neither does apps/frotz/zharness.inc, which is
+# development-only and never in a shipped build.
+#
+# ANCHOR THE GREP. `grep '%include'` also matches the word in a comment, and
+# both figures were wrong for it: a stray match became a garbage filename wc
+# silently skipped, and `grep -c` counted it as a 35th kernel module when
+# there are 34.
+python3 - <<'EOF'
+import glob, os, re
+def n(p):
+    return open(p, 'rb').read().count(b'\n')
+inc = re.findall(r'^\s*%include\s+"([^"]+)"', open('kernel/kernel.asm').read(), re.M)
+kern = [os.path.join('kernel', k) for k in inc]
+apps = sorted(glob.glob('apps/*/*.asm'))
+pkg = []
+for a in apps:
+    d = os.path.dirname(a)
+    for f in re.findall(r'^\s*%include\s+"([^"]+)"', open(a).read(), re.M):
+        p = os.path.join(d, f)
+        if os.path.exists(p) and p not in pkg and 'zharness' not in p:
+            pkg.append(p)
+files = ['boot/boot.asm', 'kernel/kernel.asm'] + kern + ['apps/os88api.inc'] + apps + pkg
+print('sourceLines', sum(n(p) for p in files if os.path.exists(p)))
+print('modules    ', len(kern))
+EOF
 ```
 
-`sourceLines` counts `apps/*/*.asm` and **not** a package's own `.inc` files,
-so a package that grew includes of its own is undercounted -- Frotz's twelve
-are about 16,000 lines the figure does not see. Leave the recipe alone so the
-release-to-release series stays comparable, and quote a package's own size on
-its Spotlight page instead, where it means something.
+**This recipe changed at v1.0.20260810 and the series steps there.** It used
+to glob `apps/*/*.asm` only, which missed the `.inc` files four packages keep
+their bulk in -- ArtfulType, ModPlug, Tracker and Frotz, 37,309 lines between
+them at that release. The old recipe reported 115,528 lines and 35 modules for
+that tree; this one reports 152,837 and 34, and `data/releases.json` was
+restated to the new figures rather than left carrying a known undercount.
+Entries before it still hold old-recipe numbers and are not being recounted --
+so **the step is between v1.0.20260809 and v1.0.20260810, and the entry says
+so.** When a figure jumps because the counting changed, say so where the
+figure is, or the jump reads as growth that did not happen.
 
 If you update these, the same figures are hardcoded in the website's prose --
 `site/index.html`, `site/faq.html`, `site/how-it-works.html`,
