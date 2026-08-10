@@ -163,8 +163,9 @@ TMC_BAR     equ 3               ; the performance view's RAM bar
 TMC_XMS     equ 4               ; the XMS readout line (SPEC.md 41)
 TMC_XBAR    equ 5               ; ...and its bar
 TMC_HTOT    equ 6               ; the heap page's totals line (SPEC.md 28.4)
-TMC_HFRG    equ 7               ; ...and its free/largest-run pair
-TMC_N       equ 8
+TMC_HSPL    equ 7               ; ...its held/purgeable split
+TMC_HFRG    equ 8               ; ...and its free/largest-run pair
+TMC_N       equ 9
 
 ; Every line in this window is composed into tm_str before any of it is
 ; drawn - that is what lets one hash decide whether to draw it at all - so
@@ -305,12 +306,18 @@ TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
 ; Its rows start far higher up the content than either list above, because it
 ; has no map and no bar to sit under - two caption lines and a header, and the
 ; rest is list.
-TMH_TOT_Y   equ 4               ; 'HEAP uuu/tttK  nn clm'
-TMH_FRG_Y   equ 15              ; 'FREE nnnK  MAX nnnK' - the fragmentation
+; Three caption lines, because the heap answers three different questions and
+; one line running them together is what made the memory view's single HEAP
+; figure ambiguous in the first place (SPEC.md 28.4.1): how big is the heap,
+; how much of it is spoken for and on what terms, and how much is left.
+TMH_TOT_Y   equ 4               ; 'HEAP nnnK  nn clm' - the SIZE, on its own
+TMH_SPL_Y   equ 15              ; 'HELD nnnK  PURGE nnnK' - claimed, split by
+                                ; whether the kernel can take it back
+TMH_FRG_Y   equ 26              ; 'FREE nnnK  MAX nnnK' - the fragmentation
                                 ; pair, and the reading this page exists for
                                 ; (docs/FIELD-NOTES.md 2)
-TMH_HDR_Y   equ 26              ; 'TYPE     ADDR SIZE TIER'
-TMH_ROW_Y   equ 37              ; first claim row, same TM_ROW_H pitch
+TMH_HDR_Y   equ 37              ; 'TYPE      ADDR SIZE TIER'
+TMH_ROW_Y   equ 48              ; first claim row, same TM_ROW_H pitch
 
 ; Every record, plus a heading each, plus System. This is the TABLE's bound
 ; and not the screen's - tm_row_place still clamps to the live frame - and it
@@ -734,6 +741,8 @@ tm_s_hheap: db 'HEAP ', 0
 tm_s_hclm:  db ' clm', 0        ; ...how many records are live, because the
                                 ; list can be longer than the window and this
                                 ; is what says so without spending a row
+tm_s_hheld: db 'HELD ', 0       ; the two halves of what is claimed, never one
+tm_s_hpurg: db '  PURGE ', 0    ; figure: they are owed on different terms
 tm_s_hfree: db 'FREE ', 0
 tm_s_hmax:  db '  MAX ', 0      ; total free against the LARGEST run: the
                                 ; fragmentation reading (docs/FIELD-NOTES.md 2)
@@ -774,7 +783,14 @@ tm_s_ztriv: db 'TRIV', 0
 tm_s_zlow:  db 'LOW', 0
 tm_s_zmed:  db 'MED', 0
 tm_s_zhigh: db 'HIGH', 0
-tm_s_zno:   db '-', 0
+tm_s_zno:   db 'HELD', 0        ; NOT a dash. The tiers are what LOSING a
+                                ; block costs, and a dash in that column read
+                                ; as a rank BELOW 'TRIV' - the opposite of the
+                                ; truth, since an ordinary claim is the only
+                                ; rank that outranks every cache (MEM_LVL_TOP,
+                                ; SPEC.md 50.6.4). 'HELD' says the thing the
+                                ; scale cannot: this one is not a cache at all
+                                ; and the kernel cannot take it back
 
 ; The kernel-buffer texture for the RAM map (SPEC.md 28): 2-on-2-off
 ; horizontal bars. The band is 14 rows tall and, on a 640KB machine, four
@@ -1602,6 +1618,8 @@ tm_upd_mem:
 
     mov bx, [tm_win]
     call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
+    call tm_hsnap               ; ...and the claim table, which the caption
+                                ; reads as well as the map (SPEC.md 28.4.1)
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
@@ -1632,6 +1650,7 @@ tm_draw_mem:
 
     mov bx, si
     call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
+    call tm_hsnap               ; ...and the claim table (SPEC.md 28.4.1)
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
@@ -1862,12 +1881,9 @@ tm_map_ram:
     push si
     push di
 
-    push es                     ; the claim table, whole, before anything is
-    TM_ES_DATA                  ; hashed or drawn: the walk below wants every
-    mov di, tm_claims           ; record and the check word wants every record,
-    TM_CLAIM_SNAPSHOT               ; so one call serves both (SPEC.md 20.9)
-    pop es
-
+    ; The snapshot is taken by tm_upd_mem/tm_draw_mem above, because the
+    ; CAPTION reads it too now (SPEC.md 28.4.1) and two calls a refresh would
+    ; walk the table twice for one picture.
     mov si, tm_claims           ; the claim map is the only part of this that
     mov cx, CLAIM_SNAPSHOT_SIZE      ; moves - the kernel and its buffers are fixed
     xor ax, ax                  ; at build time and the total is the boot int
@@ -2506,6 +2522,52 @@ tm_hsum:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_hsplit - what is claimed, split by whether the kernel can take it back
+; in:  the claim snapshot
+; out: AX = KB held (unpurgeable), DX = KB purgeable
+; clobbers: nothing else (flags)
+;
+; The two are never added into one figure anywhere the user can see, and that
+; is the whole point (SPEC.md 28.4.1): they are owed on completely different
+; terms. AX is also exactly what the memory view's rows account for between
+; their SIZE and HEAP columns - a region is a claim owned by the instance slot
+; and lands in SIZE, a data claim lands in HEAP, and a PURGEABLE claim lands
+; in neither because it belongs to no instance at all.
+; -----------------------------------------------------------------------------
+tm_hsplit:
+    push bx
+    push cx
+    push si
+    xor ax, ax                  ; held
+    xor cx, cx                  ; purgeable
+    mov si, tm_claims
+.rec:
+    cmp word [si+CLS_SEG], 0
+    je .next                    ; a free record
+    push ax
+    mov ax, [si+CLS_PARA]
+    call tm_hkb
+    mov bx, ax
+    pop ax
+    cmp byte [si+CLS_OWN+1], MEM_PG_MIN   ; the owner's high byte IS the rank
+    jb .held
+    cmp byte [si+CLS_OWN+1], MEM_PG_MAX
+    ja .held                    ; MEM_LVL_TOP: an ordinary kernel claim
+    add cx, bx
+    jmp short .next
+.held:
+    add ax, bx
+.next:
+    add si, CLS_RECSZ
+    cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
+    jb .rec
+    mov dx, cx
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_hcount - how many records are live, whoever owns them
 ; in:  nothing
 ; out: AX = count
@@ -2810,9 +2872,10 @@ tm_cap_htot:
     mov di, tm_str
     mov si, tm_s_hheap
     call tm_copy
-    mov ax, [tm_kb+SK_CLAIM]
-    mov bx, [tm_kb+SK_HEAP]
-    call tm_kpair               ; 'nnn/nnnK'
+    mov ax, [tm_kb+SK_HEAP]     ; the SIZE, alone: what is claimed out of it is
+    call tm_put3                ; two different answers and gets its own line
+    mov byte [di], 'K'
+    inc di
     mov byte [di], ' '
     inc di
     mov byte [di], ' '
@@ -2839,6 +2902,67 @@ tm_cap_htot:
     add cx, 6
     mov dx, [tm_cy]
     add dx, TMH_TOT_Y
+    mov si, tm_str
+    call OSAPI_FONT_STR
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_cap_hspl - 'HELD nnnK  PURGE nnnK' (SPEC.md 28.4.1)
+;
+; What is claimed, and on what terms. One figure could not say it: HELD is
+; memory nothing can get back, PURGE is memory the next claim can have for the
+; price in the TIER column, and adding them produces a number that answers no
+; question anybody has.
+; in:  nothing
+; out: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_cap_hspl:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    call tm_hsplit              ; AX = held, DX = purgeable
+    push dx
+    mov di, tm_str
+    mov si, tm_s_hheld
+    call tm_copy
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    mov si, tm_s_hpurg
+    call tm_copy
+    pop ax
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    mov byte [di], 0
+
+    call tm_rowsum
+    mov bx, tm_elck + 2*TMC_HSPL
+    call tm_elchk
+    jc .out
+
+    mov ax, TMH_SPL_Y
+    call tm_lfill
+    jnc .draw
+    mov word [bx], 0
+    jmp short .out
+.draw:
+    TM_INK CBLACK
+    mov cx, [tm_cx]
+    add cx, 6
+    mov dx, [tm_cy]
+    add dx, TMH_SPL_Y
     mov si, tm_str
     call OSAPI_FONT_STR
 .out:
@@ -2927,8 +3051,9 @@ tm_upd_heap:
 
     mov bx, [tm_win]
     call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
-    call tm_hsnap               ; ...and one claim table for all three below
+    call tm_hsnap               ; ...and one claim table for all four below
     call tm_cap_htot
+    call tm_cap_hspl
     call tm_cap_hfrg
     call tm_rows_heap
 
@@ -2976,6 +3101,7 @@ tm_draw_heap:
 
     call tm_hsnap
     call tm_cap_htot
+    call tm_cap_hspl
     call tm_cap_hfrg
     call tm_rows_heap
 
@@ -3949,9 +4075,11 @@ tm_txt_ram_y:
     je .built
     mov si, tm_s_heap           ; ...whose two leading spaces are where the
     call tm_copy                ; claim swatch goes
-    mov ax, [tm_kb+SK_CLAIM]    ; AX = claimed KB, BX = heap size KB
-    mov bx, [tm_kb+SK_HEAP]
-    call tm_kpair
+    push dx                     ; AX = claimed KB, BX = heap size KB - and the
+    call tm_hsplit              ; claimed half EXCLUDES the purgeables, because
+    pop dx                      ; no row below shows one: SK_CLAIM counts them
+    mov bx, [tm_kb+SK_HEAP]     ; and this list cannot, so the figure was a sum
+    call tm_kpair               ; of things the reader could not find (28.4.1)
 .built:
     call tm_rowsum              ; unchanged since the last refresh? then the
     mov bx, tm_elck + 2*TMC_LINE            ; pixels on screen are already right
@@ -4722,20 +4850,20 @@ tm_sqp      equ os88_image_end + 1327  ; ...and its texture, or 0 for no square.
                                 ; would be erased again
 tm_elck     equ os88_image_end + 1329  ; the last drawn state of the non-row
                                 ; elements, one word each (TMC_*)
-tm_rowx     equ os88_image_end + 1345  ; the left edge of the row being drawn: tm_cx
+tm_rowx     equ os88_image_end + 1347  ; the left edge of the row being drawn: tm_cx
                                 ; for column 0, one TM_COLW on for column 1
-tm_xbarw    equ os88_image_end + 1347  ; the XMS bar's black run, px (TMC_XBAR)
-tm_penx     equ os88_image_end + 1349  ; where the row's text starts: the process
+tm_xbarw    equ os88_image_end + 1349  ; the XMS bar's black run, px (TMC_XBAR)
+tm_penx     equ os88_image_end + 1351  ; where the row's text starts: the process
                                 ; list letters from tm_rowx+6 and the memory
                                 ; list from tm_rowx+16, and tm_row_draw has to
                                 ; be told which - drawing a process row at the
                                 ; memory list's pen puts it 10px right of the
                                 ; text it is replacing
-tm_ci       equ os88_image_end + 1351  ; tm_row_draw's chunk index (BP is the task's
+tm_ci       equ os88_image_end + 1353  ; tm_row_draw's chunk index (BP is the task's
                                 ; instance record and cannot be borrowed)
-tm_ckb      equ os88_image_end + 1353  ; ...and the running check-word pointer, for
+tm_ckb      equ os88_image_end + 1355  ; ...and the running check-word pointer, for
                                 ; the same reason
-tm_rowck    equ os88_image_end + 1355  ; the last drawn content of each row, a
+tm_rowck    equ os88_image_end + 1357  ; the last drawn content of each row, a
                                 ; word per CHUNK (tm_chunksum), plus one
                                 ; virtual row for the CPU caption (TMR_CPU).
                                 ; Shared by all THREE pages, so it is sized
@@ -4747,13 +4875,13 @@ tm_rowck    equ os88_image_end + 1355  ; the last drawn content of each row, a
                                 ; cleared as one span on the strength of
                                 ; being declared adjacent, which they have
                                 ; not been for some time
-tm_view     equ os88_image_end + 1835  ; 0 = performance, 1 = memory, 2 = heap
-tm_inm      equ os88_image_end + 1836  ; I_NAME snapshots
-tm_rcyc     equ os88_image_end + 2028  ; per-ROW cycles: task + instance, dword
-tm_total    equ os88_image_end + 2080  ; sum of the rows, dword
-tm_pct      equ os88_image_end + 2084  ; per-row share, 0..100
-tm_usedk    equ os88_image_end + 2097  ; used RAM, KB
-tm_barw     equ os88_image_end + 2099  ; RAM bar black width, 0..TM_GW
+tm_view     equ os88_image_end + 1837  ; 0 = performance, 1 = memory, 2 = heap
+tm_inm      equ os88_image_end + 1838  ; I_NAME snapshots
+tm_rcyc     equ os88_image_end + 2030  ; per-ROW cycles: task + instance, dword
+tm_total    equ os88_image_end + 2082  ; sum of the rows, dword
+tm_pct      equ os88_image_end + 2086  ; per-row share, 0..100
+tm_usedk    equ os88_image_end + 2099  ; used RAM, KB
+tm_barw     equ os88_image_end + 2101  ; RAM bar black width, 0..TM_GW
 
 ; --- worked out once by tm_init, before the window exists --------------------
 ; These used to need saying out loud, because a built-in's .bss survives
@@ -4762,30 +4890,30 @@ tm_barw     equ os88_image_end + 2099  ; RAM bar black width, 0..TM_GW
 ; first launch. It cost a divide by zero the first time the window was opened,
 ; tm_colrows being a divisor. A package has no such hazard: the bss is zeroed
 ; once per launch, before the entry proc runs, and tm_init runs inside it.
-tm_cols     equ os88_image_end + 2101  ; process-list columns, 1 or 2 (SPEC.md 28.1)
-tm_colrows  equ os88_image_end + 2103  ; rows in COLUMN 0, which starts under the maps
-tm_col2rows equ os88_image_end + 2105  ; rows in each LATER column, which starts at the
+tm_cols     equ os88_image_end + 2103  ; process-list columns, 1 or 2 (SPEC.md 28.1)
+tm_colrows  equ os88_image_end + 2105  ; rows in COLUMN 0, which starts under the maps
+tm_col2rows equ os88_image_end + 2107  ; rows in each LATER column, which starts at the
                                 ; top and so holds more - A DIVISOR, never 0
-tm_maxrow   equ os88_image_end + 2107  ; rows this SCREEN shows, <= TMM_ROWS: derived
+tm_maxrow   equ os88_image_end + 2109  ; rows this SCREEN shows, <= TMM_ROWS: derived
                                 ; from [vid_dock_y0] so the window never
                                 ; overlaps the dock (SPEC.md 28.1)
-tm_totkb    equ os88_image_end + 2109  ; total conventional RAM (int 12h, boot)
-tm_vw       equ os88_image_end + 2111  ; the live screen width and the dock strip's
-tm_vdock    equ os88_image_end + 2113  ; top row (osapi_video, SPEC.md 39.2), banked
+tm_totkb    equ os88_image_end + 2111  ; total conventional RAM (int 12h, boot)
+tm_vw       equ os88_image_end + 2113  ; the live screen width and the dock strip's
+tm_vdock    equ os88_image_end + 2115  ; top row (osapi_video, SPEC.md 39.2), banked
                                 ; at boot: the template's whole geometry is
                                 ; derived from them
-tm_cx       equ os88_image_end + 2115  ; cached content origin (draw paths only,
-tm_cy       equ os88_image_end + 2117  ; always under the gfx lock)
-tm_ord      equ os88_image_end + 2119  ; tm_order: display row - 1 -> instance slot
-tm_rowi     equ os88_image_end + 2131  ; ...the one tm_rows is drawing right now
-tm_rowy     equ os88_image_end + 2132  ; tm_rows/tm_rows_mem scratch: current row y
-tm_ylim     equ os88_image_end + 2134  ; ...and the lowest row top the frame holds
+tm_cx       equ os88_image_end + 2117  ; cached content origin (draw paths only,
+tm_cy       equ os88_image_end + 2119  ; always under the gfx lock)
+tm_ord      equ os88_image_end + 2121  ; tm_order: display row - 1 -> instance slot
+tm_rowi     equ os88_image_end + 2133  ; ...the one tm_rows is drawing right now
+tm_rowy     equ os88_image_end + 2134  ; tm_rows/tm_rows_mem scratch: current row y
+tm_ylim     equ os88_image_end + 2136  ; ...and the lowest row top the frame holds
                                 ; (tm_view_begin): the row lists are fixed-pitch
                                 ; and nothing clips a draw to a window
-tm_liny     equ os88_image_end + 2136  ; tm_txt_ram_y scratch: the line's y
-tm_str      equ os88_image_end + 2138  ; line-format scratch
+tm_liny     equ os88_image_end + 2138  ; tm_txt_ram_y scratch: the line's y
+tm_str      equ os88_image_end + 2140  ; line-format scratch
 
-tm_spawned  equ os88_image_end + 2166  ; byte: 1 = this instance owns its
+tm_spawned  equ os88_image_end + 2168  ; byte: 1 = this instance owns its
                                        ; worker. Latches on SUCCESS only, so
                                        ; every paint retries until a task slot
                                        ; frees up (SPEC.md 20.6)
@@ -4793,10 +4921,10 @@ tm_spawned  equ os88_image_end + 2166  ; byte: 1 = this instance owns its
 ; Appended here rather than beside [tm_colrows] where it belongs by subject:
 ; the offsets above are hand-chained literals, so a word inserted mid-block
 ; renumbers every one below it.
-tm_hcolrows equ os88_image_end + 2167  ; the HEAP page's column-0 depth
+tm_hcolrows equ os88_image_end + 2169  ; the HEAP page's column-0 depth
                                        ; (SPEC.md 28.4) - its list starts
                                        ; higher than the memory view's, so it
                                        ; wraps later. Frame-derived, never
                                        ; dock-derived: see tm_init
 
-TM_BSS_TOTAL equ 2169
+TM_BSS_TOTAL equ 2171

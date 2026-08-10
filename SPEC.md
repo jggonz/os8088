@@ -15350,6 +15350,51 @@ legend square**: a claim's band on the memory view's map is that page's
 statement, and repeating the swatch here would key a map this page does not
 draw.
 
+### 28.4.1 A purgeable claim is in nobody's column, so it is in nobody's total
+
+Two reporting faults, one cause: **`mem_avail` and `SK_CLAIM` count purgeable
+claims and every per-row column does not** (§50.6.3, and `mem_sum_kb` skips
+them by design — a cache belongs to no instance). So the memory view's
+`HEAP uuu/tttK` was a figure the reader could not find: 96 KB claimed against
+rows accounting for 33, the missing 63 being a `DirRead` window that appears
+in no column because it belongs to nobody.
+
+**The memory view's claimed half now excludes them** (`tm_hsplit`), which
+makes it exactly what its own rows account for between SIZE (a region — a
+claim owned by the instance slot) and HEAP (that instance's data claims).
+Nothing about the kernel's accounting changed; the figure stopped counting
+what the list cannot show. Its map still draws purgeable bands, and that is
+not the same inconsistency: a map is about *addresses*, and a cache occupies
+real memory at a real address whoever owns it.
+
+**The heap page splits it rather than hiding it**, because this is the page
+where a cache is the subject. Three caption lines, one question each:
+
+```
+HEAP 545K   8 clm          the SIZE of the heap, and how many records are live
+HELD  37K  PURGE  63K      what is claimed, and on what terms
+FREE 508K   MAX 508K       what is left, and the largest single run
+```
+
+`HELD` and `PURGE` are **never added together anywhere the user can see**,
+and that is the point rather than a layout accident: their sum answers no
+question. `HELD` is memory nothing can get back; `PURGE` is memory the next
+claim can have for the price in the TIER column. `FREE` already includes
+`PURGE` (§50.6.3), so the three lines are readable together —
+`HEAP = HELD + FREE`, and `PURGE` says how much of that `FREE` is currently
+doing something useful. Total heap gets a line of its own because it is a
+property of the machine and the other two are properties of the moment.
+
+**`TIER` reads `HELD` for an unpurgeable claim, never a dash.** The column
+answers what LOSING a block costs, and a dash in a list under `TRIV` reads as
+a rank *below* the cheapest cache — the exact opposite of the truth, since an
+ordinary claim ranks `MEM_LVL_TOP` and is the only rank that outranks every
+cache (§50.6.4). Naming it says the thing the scale cannot: this one is not a
+cache at all. The alternative considered and rejected was `TOP`, which keeps
+the ordering explicit and matches the constant, but reads as *purge this
+last* rather than *this is not purgeable* — ambiguous in exactly the place
+the column has to be plain.
+
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
 Every running application instance — built-in kind or loaded package — is
