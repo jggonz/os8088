@@ -1183,7 +1183,10 @@ fm_s_mfile:   db 'File', 0
 fm_s_medit:   db 'Edit', 0
 fm_s_mfold:   db 'Folder', 0
 fm_s_mview:   db 'View', 0
-fm_s_mspec:   db 'Special', 0
+fm_s_mbuilt:  db 'Builtins', 0   ; the SAME menu as Locator's, with the
+                                ; same items in the same order (SPEC.md
+                                ; 12.3.1) - which is the whole point of
+                                ; the rename
 
 fm_s_open:    db 'Open', 0
 fm_s_mkdir:   db 'New Folder...', 0
@@ -1239,8 +1242,8 @@ fm_items_fold:
     dw fm_s_refr, fm_s_up, fm_s_rootf, fm_s_drva, fm_s_drvb
 fm_items_view:
     dw fm_s_aslist, fm_s_asicon
-fm_items_spec:
-    dw menu_s_timer, menu_s_bounce, menu_s_restart
+fm_items_built:
+    dw menu_s_timer, menu_s_bounce, menu_s_disk
 
 fm_menus:
     dw menu_loc_name            ; AM_NAME: still 'Locator' (SPEC.md 12.3)
@@ -1263,7 +1266,7 @@ fm_menus:
                                         ; modelled on - has always put them
     dw fm_s_mfold, fm_items_fold, 7
     dw fm_s_mview, fm_items_view, 2
-    dw fm_s_mspec, fm_items_spec, 3
+    dw fm_s_mbuilt, fm_items_built, 3
 section .cold                   ; ...and back to cold code
 
 
@@ -2633,9 +2636,12 @@ FMC_DRVA    equ 14
 FMC_DRVB    equ 15
 FMC_LIST    equ 16              ; View
 FMC_ICONS   equ 17
-FMC_TIMER   equ 18              ; Special
-FMC_BOUNCE  equ 19
-FMC_RESTART equ 20
+FMC_TIMER   equ 18              ; Builtins (SPEC.md 12.3.1) - the same three
+FMC_BOUNCE  equ 19              ; commands Locator's own Builtins menu has,
+FMC_DISK    equ 20              ; in the same order. Restart is NOT among them
+                                ; any more: it moved to the System menu, which
+                                ; is cell 0 of every application, so a Disk
+                                ; window reaches it there like everything else
 FMC_PASTEIN equ 21              ; no menu CELL of its own: the context menu's
                                 ; "paste into the folder under the pointer"
                                 ; (SPEC.md 22.3), which the bar cannot offer
@@ -2694,7 +2700,7 @@ fm_jmp:
     dw fm_c_icons               ; inline (FS_VIEW = 1)
     dw fm_c_timer               ; POSTED - app_launch takes the lock
     dw fm_c_bounce              ; POSTED - app_launch takes the lock
-    dw fm_c_restart             ; POSTED - ui_cmd takes the lock
+    dw fm_c_disk                ; POSTED - ui_cmd takes the lock
     dw fm_c_pastein             ; inline (fm_c_paste with another target), forever
 section .cold                   ; ...and back to cold code
 
@@ -2990,17 +2996,17 @@ fm_nw_none:
 fm_c_nop:                       ; the File menu's separator (SPEC.md 22.12)
     ret                         ; - MENU_DIS, so nothing can select it
 
-fm_c_restart:                   ; Special > Restart
-    mov ax, CMD_REBOOT
-    call KERNEL_SEG:cw_ui_post_cmd
+fm_c_disk:                      ; Builtins > Disk - CMD_FILES, exactly what
+    mov ax, CMD_FILES           ; Locator's own Builtins menu posts, so the
+    call KERNEL_SEG:cw_ui_post_cmd  ; item does the same thing from either bar
     ret
 
-fm_c_timer:                     ; Special > Timer
+fm_c_timer:                     ; Builtins > Timer
     mov al, KIND_TIMER
     call KERNEL_SEG:cw_inst_launch_post ; NOT app_launch: it takes the lock
     ret                             ; (29.4)
 
-fm_c_bounce:                    ; Special > Bounce
+fm_c_bounce:                    ; Builtins > Bounce
     mov al, KIND_BOUNCE
     call KERNEL_SEG:cw_inst_launch_post
     ret
