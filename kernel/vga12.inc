@@ -120,7 +120,6 @@ gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
 ; .text with real initialisers: -f bin zeroes nothing, and every drawing call
 ; in the machine reads these - including the first, before anything has run.
 gfx_dnest   db 0                ; whole-shape hooks in effect (SPEC.md 39.14.2)
-gfx_dprev   db 0                ; ...and the display the outermost came from
 gfx_dr      times 4 dw 0        ; gfx_disp_run's banked virtual rect
 gfx_dfn     dw 0                ; ...and the raw body it is re-entering
 
@@ -142,10 +141,11 @@ gfx_dfn     dw 0                ; ...and the raw body it is re-entering
 ; preserve everything, there is nothing left to spare, and this only ever runs
 ; with the gfx lock held.
 ;
-; IT RESTORES THE DISPLAY IT ENTERED FROM (SPEC.md 39.14.3). Leaving the last
-; one current would be cheaper and is not yet safe: cur_unlazy runs at the top
-; of GFXCLIP, above all of this, and erases the arrow through whatever display
-; is live.
+; IT DOES NOT RESTORE THE DISPLAY (SPEC.md 39.14.3): the last one drawn on
+; stays current until gfx_unlock, so a window's repaint pays ONE swap and not
+; two per primitive. That is safe because the cursor brackets itself (39.15.2)
+; - cur_unlazy runs at the top of GFXCLIP, above all of this, and would
+; otherwise erase the arrow through whatever display happened to be live.
 ; -----------------------------------------------------------------------------
 gfx_disp_run:
     push ax
@@ -159,9 +159,6 @@ gfx_disp_run:
     mov [gfx_dr+4], cx
     mov [gfx_dr+6], dx
     mov [gfx_dfn], di
-    mov al, [vid_cur]           ; the display to come back to (SPEC.md 39.14.3)
-    mov ah, 0
-    push ax
     xor si, si                  ; SI = the display being drawn
 .disp:
     mov ax, si
@@ -213,10 +210,8 @@ gfx_disp_run:
     mov al, [vid_ndisp]
     mov ah, 0
     cmp si, ax
-    jb .disp
-    pop ax
-    call vid_ctx_act
-    pop di
+    jb .disp                    ; ...and the LAST display drawn on stays
+    pop di                      ; current; gfx_unlock is what puts 0 back
     pop si
     pop dx
     pop cx
@@ -251,10 +246,6 @@ gfx_disp_enter:
     inc byte [gfx_dnest]
     cmp byte [gfx_dnest], 1
     jne .out                    ; nested: an outer hook owns the translation
-    push ax
-    mov al, [vid_cur]
-    mov [gfx_dprev], al
-    pop ax
     push ax                     ; vid_disp_of ANSWERS in AL, so x is banked
     call vid_disp_of            ; AL = the display holding (AX, BX); it cannot
     call vid_ctx_act            ; fail - the dead zone answers with the primary
@@ -276,15 +267,6 @@ gfx_disp_enter_cd:
     pop ax
     ret
 
-gfx_disp_leave:
-    dec byte [gfx_dnest]
-    jnz .out                    ; an outer hook is still standing
-    push ax
-    mov al, [gfx_dprev]
-    call vid_ctx_act
-    pop ax
-.out:
-    ret
 %endif
 
 ; GFXDENTER / GFXDLEAVE - the two above, with their one-display test inlined
@@ -329,14 +311,18 @@ gfx_disp_leave:
 %endif
 %endmacro
 
-; ...and GFXDLEAVE banks the FLAGS, because more than one of these routines
-; answers in CF and a leave is the last thing before its `ret`.
+; ...and GFXDLEAVE is only the count coming down, because NOTHING RESTORES
+; THE DISPLAY any more (SPEC.md 39.14.3): the last one drawn on stays current
+; until gfx_unlock, so a burst of primitives in one place pays one swap
+; instead of one per call. It banks the FLAGS, because more than one of these
+; routines answers in CF and a leave is the last thing before its `ret`, and
+; `dec` sets them.
 %macro GFXDLEAVE 0
 %ifdef KERN_BIG
     pushf
     cmp byte [vid_ndisp], 1
     jbe %%one
-    call gfx_disp_leave
+    dec byte [gfx_dnest]
 %%one:
     popf
 %endif
@@ -2609,7 +2595,8 @@ gfx_lock:
 ; The clip region dies here too (SPEC.md 11.3 rule 1). Making it die with
 ; the lock hold is what stops a leaked region from silently truncating the
 ; next painter - and it is what keeps the drag outline and the menu
-; highlights unclipped without any of them knowing the region exists.
+; highlights unclipped without any of them knowing the region exists. The
+; DISPLAY CONTEXT dies with it, for the same reason (SPEC.md 39.14.3).
 ; in:       -
 ; out:      -
 ; clobbers: flags
@@ -2620,6 +2607,16 @@ gfx_unlock:
                                 ; clip region's reason (SPEC.md 11.3/47): a
                                 ; site that forgets gfx_pen_live cannot leak
                                 ; dithered text into whatever draws next
+%ifdef KERN_BIG
+    push ax                     ; ...and so does the DISPLAY CONTEXT (SPEC.md
+    xor al, al                  ; 39.14.3). Nothing in 39.14 restores it any
+    call vid_ctx_act            ; more - the last display drawn on stays
+    pop ax                      ; current, so a repaint pays one swap instead
+                                ; of two per primitive - and this is what
+                                ; bounds that to one lock hold, exactly as the
+                                ; two stores above bound theirs. It is a
+                                ; compare and a branch when nothing moved
+%endif
     call gfx_flush
     cmp byte [cur_lazy], 0      ; was the hide ever spent? (SPEC.md 7.1.4)
     jne .never                  ; no: the arrow never left the screen, so

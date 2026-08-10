@@ -18810,18 +18810,20 @@ translate twice. So the outermost hook raises a nesting count and every hook
 under it is a compare and a branch. It is a count rather than a flag because
 `GFXDLEAVE` has to know whether it is the one that owes the restore.
 
-#### 39.14.3 Each hook restores the display it entered from
+#### 39.14.3 Nothing restores the display; the LOCK HOLD bounds it
 
-Deliberately, and it is not the cheapest arrangement. Leaving the last-drawn
-display current and restoring once at `gfx_unlock` would pay one swap per
-burst instead of one per off-display primitive, and drawing is spatially
-coherent enough for that to be nearly free — **but `cur_unlazy` runs at the
-top of `GFXCLIP`, before any of this**, and the deferred cursor hide (§7.1.4)
-reads `[vid_rseg]` and the display's stride to erase the arrow. Left on the
-wrong display it erases from the wrong card, permanently. The cursor becomes
-display-aware in its own right at docs/DUAL-DISPLAY-PLAN.md step 5, and the
-optimisation is available then; until it is, self-contained hooks are the
-version that cannot be wrong.
+The last display drawn on stays current, and `gfx_unlock` puts display 0
+back — beside the two stores that already retire the clip region and the
+disabled pen, and for their reason. **A window's repaint therefore pays one
+swap and not two per primitive**: drawing is spatially coherent, so the
+steady state inside a burst is `vid_ctx_act`'s two compares.
+
+This is safe only because **the cursor brackets itself** (§39.15.2).
+`cur_unlazy` runs at the top of `GFXCLIP`, above every hook here, and the
+deferred hide (§7.1.4) reads `[vid_rseg]` and the display's stride to erase
+the arrow — through whatever display happened to be live. While that was the
+danger, each hook restored what it entered from; once `cur_put`/`cur_get`/
+`cur_move` name their own display, the restores were pure cost.
 
 `vid_ctx_act` publishes the active display's origin as `[vid_ox]`/`[vid_oy]`,
 which is what every hook subtracts. They are outside §39.12's eighteen-word
@@ -18888,10 +18890,10 @@ previous one back. They have to own that themselves: `cur_get` is reached from
 inside a §39.14 drawing hook, and the display live at either moment is
 whatever the last primitive left.
 
-That also retires §39.14.3's reason for every rect hook restoring the display
-it entered from. The optimisation — leave the last-drawn display current and
-restore once at `gfx_unlock` — is available now and is deliberately not taken
-in the same change that makes it safe.
+That is also what lets §39.14.3 leave the last-drawn display current instead
+of restoring it per primitive: with the cursor naming its own display, the
+only reader that could be caught out by a stale one is no longer a reader of
+it at all.
 
 #### 39.15.3 It does not straddle; it jumps
 
