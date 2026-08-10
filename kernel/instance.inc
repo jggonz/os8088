@@ -1128,6 +1128,13 @@ app_close_win:
 .noflush:
     call snd_release_rec        ; free every sound grant before the record
                                 ; goes (SPEC.md 29.4/34.3)
+    call xm_release_rec         ; ...and every extended-memory block with it
+                                ; (SPEC.md 41.5). It may run BEFORE the windows
+                                ; where mem_free_rec may not, and the reason is
+                                ; the rule below read exactly: a freed REGION
+                                ; makes a survivor's procs a wild call, and
+                                ; nothing up there is ever code (SPEC.md 20.8
+                                ; rule 1) or even addressable in real mode
     call wm_destroy             ; frees the wm slot + wm_owner, repaints -
     mov word [di+I_WIN], 0      ; and the windows go BEFORE the claims: the
     cmp word [di+I_SIZE], 0     ; repaint inside a destroy far-calls every
@@ -1188,6 +1195,7 @@ inst_restore:
 inst_task_die:
     call snd_release_rec        ; free every sound grant before the record
                                 ; goes (SPEC.md 29.4/34.3)
+    call xm_release_rec         ; ...and every extended-memory block (41.5)
     call toast_owner_gone       ; ...and its message (SPEC.md 59)
     call gfx_lock
     mov bx, [di+I_WIN]
@@ -1399,11 +1407,14 @@ inst_pkg_alive:
                                 ; would zero the cold-entry jmp at 0800:0000
     jmp inst_task_die           ; never returns
 .winless:
-    call snd_release_rec        ; the inst_task_die order, minus the BOUND
-    cmp word [di+I_SIZE], 0     ; window - but a package can have made
-    je .nwin                    ; windows it never bound to the record, and
-    call gfx_lock               ; they must not outlive the region either
-    mov ax, [di+I_SPTR]         ; (SPEC.md 20.2)
+    call snd_release_rec        ; the same two releases inst_task_die makes,
+    call xm_release_rec         ; in the same order (SPEC.md 29.4/34.3/41.5) -
+                                ; this leg differs only in having no BOUND
+                                ; window to destroy
+    cmp word [di+I_SIZE], 0     ; ...but a package can have made windows it
+    je .nwin                    ; never bound to the record, and they must not
+    call gfx_lock               ; outlive the region either (SPEC.md 20.2)
+    mov ax, [di+I_SPTR]
     call wm_destroy_seg
     call gfx_unlock
 .nwin:
