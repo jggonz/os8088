@@ -13,7 +13,12 @@ The release notes get written once and used twice: `data/releases.json` in the
 website repo (step 4a) and the GitHub release (step 6) say the same thing, and
 the site's /releases/ page is that file rendered.
 
-**Read "Writing the copy" below before writing a word of either.**
+When the release adds a whole program -- or there is a video about it -- it
+also gets a **Spotlight page** (step 4b), which is a page of its own under
+`/spotlight/` with its own screenshots. A line on the releases page does not
+carry a new program.
+
+**Read "Writing the copy" below before writing a word of any of them.**
 
 ## Writing the copy
 
@@ -209,9 +214,19 @@ above for all three fields:**
   otherwise surprise someone (a menu item that moved, a default that flipped).
   Write it as an instruction to the reader. Rendered as a call-out.
 
+**Check whether the images actually changed** -- `git diff --stat HEAD --
+public/disk/` in the website repo, after `release.py` has run. The build is
+deterministic, so a release whose work was all in a package or on the story
+disk produces four images byte for byte identical to the previous release.
+That is a fine release to cut, and it is a lie by omission not to say so: the
+headline feature is not in the download, and someone will boot the image
+looking for it. Put it in the summary and again in `notes`.
+
 The optional `ramBytes` / `ramCap` / `sourceLines` / `modules` fields render
-the size figures on the page. `ramCap` is always 40960 (`0xA000`). The other
-three are not printed by the build, so measure them -- from `$OS_REPO`:
+the size figures on the page. `ramCap` is `KERN_CODE_MAX` -- **65536**, and
+read it out of `kernel/kernel.asm` rather than trusting this line, because it
+has moved once already. The other three are not printed by the build, so
+measure them -- from `$OS_REPO`:
 
 ```bash
 # ramBytes: image + .bss, the number the build-time assertion guards.
@@ -230,6 +245,12 @@ wc -l boot/boot.asm kernel/kernel.asm \
       apps/os88api.inc apps/*/*.asm | tail -1      # sourceLines
 grep -c '%include' kernel/kernel.asm                # modules
 ```
+
+`sourceLines` counts `apps/*/*.asm` and **not** a package's own `.inc` files,
+so a package that grew includes of its own is undercounted -- Frotz's twelve
+are about 16,000 lines the figure does not see. Leave the recipe alone so the
+release-to-release series stays comparable, and quote a package's own size on
+its Spotlight page instead, where it means something.
 
 If you update these, the same figures are hardcoded in the website's prose --
 `site/index.html`, `site/faq.html`, `site/how-it-works.html`,
@@ -255,6 +276,85 @@ whose entry renders as an empty window is worse than no page at all:
 # has its summary, its highlights, its figures and its four files
 ```
 
+#### 4b. The Spotlight page, when the release earns one
+
+`/spotlight/` is the hub for one-page write-ups: a new program, a feature too
+big for a highlight, or anything with a video about it. `site/spotlight.html`
+is the index and `site/spotlight/<name>.html` is the page. The nav already
+carries Spotlight (File menu in `tools/build.py`, and the footer dock in
+`site/_layout.html`), so a new page needs no wiring beyond its own entry on the
+index.
+
+**Decide first, and it is usually no.** A bug fix, a speed-up or a new menu
+item is a highlight on the releases page and nothing more. Write a Spotlight
+page when a reader would want a page: a program that did not exist before, or a
+video that needs somewhere to live. If in doubt, ask the user rather than
+producing a page nobody asked for.
+
+**1. Capture the screenshots.** They come out of the emulator, never a mockup.
+Scenes live in the website repo beside the others:
+
+```bash
+cd "$WEB_REPO"
+# scenes.frotz.json is the worked example: five scenes, one per story.
+python3 tools/capture.py --scenes tools/scenes.<name>.json \
+        --out public/img/<name> --repo "$OS_REPO" --jobs 3
+```
+
+A scene may set `"diskB": "<image>.img"` to put a different floppy in drive B:
+than the software disk -- that is how Frotz's scenes reach the story disk
+`make zdisk` builds. Whatever the page shows must be built first; `make` alone
+does not build an on-demand disk.
+
+**Look at every captured PNG with the Read tool.** A lost click gives a
+plausible-looking screenshot of the wrong thing, and file size will not tell
+you: two of Frotz's five first came out sitting on an unanswered "Do you need
+instructions?" prompt with an otherwise empty window.
+
+**2. Write the page.** Copy `site/spotlight/frotz.html` and change it. It is
+the template, in this order: breadcrumb, `h1` and a one-paragraph pitch, the
+hero screenshot, what the thing *is* for someone who has never heard of it, the
+video, the screenshot gallery, the parts that were hard, what it deliberately
+does not do, and how to run it.
+
+The copy rules above apply, plus one more: **a Spotlight page is written for
+someone who does not know the subject at all**, so explain the domain and not
+only the change. The Frotz page spends three paragraphs on what a Z-machine is
+before it says a word about the implementation. That is the right proportion.
+Still no marketing, still numbers instead of adjectives, and still no `§`
+numbers or symbol names.
+
+**3. Embed the video, if there is one.** Reuse the markup on the Frotz page --
+an `<a class="vid__poster" data-video="<id>">` around an
+`<img src="/videos/thumb/<id>.jpg">`, plus `<script src="/js/videos.js" defer>`
+at the foot of the page. That gets the same bargain `/videos/` makes: the
+poster is a plain link until someone presses play, the still is proxied through
+this site so loading the page tells YouTube nothing, and the embed is
+`youtube-nocookie.com`, which is the one host `frame-src` allows.
+
+Get the real title from YouTube rather than inventing one:
+
+```bash
+curl -sS "https://www.youtube.com/oembed?url=https%3A//www.youtube.com/watch%3Fv%3D<id>&format=json"
+```
+
+`/videos/thumb/` is served by the Worker, not from `public/`, so **the poster
+is a broken image on a local `http.server` and correct in production.** That is
+expected. `tools/linkcheck.py` knows -- `WORKER_ROUTES` -- and a new
+Worker-served path has to be added there or the link check fails on a link that
+works.
+
+**4. Add it to the index and link it.** One `figure.win.shot` block at the top
+of the list in `site/spotlight.html` (newest first), and a pointer from
+wherever a reader would otherwise look for it -- for Frotz that is
+`site/applications.html`, which lists the programs it is *not* among. Link the
+page from the matching `highlights[].body` in `data/releases.json` too.
+
+**5. Rebuild, link-check, and look at both pages** in the browser, the same way
+step 4a makes you look at the releases page. Check the index at a wide viewport:
+`.grid` is sized for two 640px windows side by side and silently collapses to
+one column inside a window body, which is why the index uses a plain figure.
+
 ### 5. Commit and open the pull request
 
 ```bash
@@ -274,6 +374,11 @@ expected and nothing changed, that is a signal something is wrong.
 Check the diff includes `data/releases.json` with its prose filled in. A
 release PR that touches the images and the manifest but not the release log
 means step 4a was skipped.
+
+If step 4b produced a Spotlight page, say so in the PR body and give its path,
+list the scenes captured, and name the video it embeds. Mention that the video
+poster only resolves once the Worker is serving the page, so a reviewer reading
+a local build does not file it as a broken image.
 
 End the PR body with:
 
@@ -313,9 +418,15 @@ and update `data/releases.json` to match before the website PR is merged.
 ### 7. Report
 
 Tell the user: the version, the PR URL, the release URL, the kernel size and
-its delta, and anything you skipped or that needs their attention. If the
-website PR is merged, the site's own CI deploys from its `main` branch -- say
-so, and say the site is not live until that merge happens.
+its delta, the Spotlight page's URL if step 4b ran, and anything you skipped or
+that needs their attention. If the website PR is merged, the site's own CI
+deploys from its `main` branch -- say so, and say the site is not live until
+that merge happens.
+
+Driving the OS to take screenshots is also the most thorough anyone uses it all
+week, and it turns defects up. Report those separately from the release, with
+what you did and what happened -- they are not release business, and burying
+them in a status line is how they get lost.
 
 ## Rules
 
@@ -328,10 +439,15 @@ so, and say the site is not live until that merge happens.
   to a reader.
 - **Never ship copy that only a contributor can read.** Spec section numbers,
   symbol names and register talk stay out of the notes, and so does marketing
-  language. "Writing the copy" is the standard for both the website entry and
-  the GitHub release.
-- **Do not claim a software license.** This repo carries no LICENSE file. If
-  the user wants one, that is a separate decision, not part of a release.
+  language. "Writing the copy" is the standard for the website entry, the
+  GitHub release and any Spotlight page.
+- **Never put a screenshot on a Spotlight page that you have not looked at.**
+  Step 4b captures them from a real boot and you read every one. A mockup, a
+  crop of an old shot, or a scene whose click was lost are all the same defect
+  to a reader: a picture of something that did not happen.
+- **The licence is MIT** -- `LICENSE` is in the root of this repo and the FAQ
+  says so. Do not restate the terms in release copy, and do not claim a
+  different one.
 - Both repositories get branches, never direct commits to `main`.
 - If any step fails, stop and report rather than continuing with a partial
   release. A half-published release is worse than none.
