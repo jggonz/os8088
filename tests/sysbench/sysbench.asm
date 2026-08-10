@@ -2405,6 +2405,8 @@ sb_raw13:
     mov cx, 9
     call bl_kv
 
+    call sb_seek                    ; ...what a head STEP costs
+    call sb_motor                   ; ...and what SPIN-UP costs
     call sb_dbgctr                  ; ...and what os8088's own path issued
     call sb_find                    ; ...and what a FIND cursor would win
     call sb_rah                     ; ...and how many chunks the cache holds
@@ -3654,6 +3656,262 @@ sb_b_r13nine:
     pop cx
     ret
 
+; -----------------------------------------------------------------------------
+; sb_r13at - one raw single-sector read at a GIVEN cylinder
+; in:  CH = cylinder. Sector 1, head 0, drive 0, through the kernel's entry.
+;
+; sb_r13go above always reads SB_R13_CYL, because the rows it serves are about
+; what a track costs once the head is on it. The seek rows below are about
+; getting there, so they need to name the cylinder.
+; -----------------------------------------------------------------------------
+sb_r13at:
+    push ax
+    push es
+    push bx
+    push cx
+    push dx
+    mov es, [sb_bseg2]
+    mov bx, [sb_r13off]
+    mov al, 1                       ; one sector...
+    mov cl, 1                       ; ...the first one on the track
+    xor dx, dx                      ; head 0, drive 0 (A:)
+    call far [sb_r13ent]            ; KERNEL_SEG:dsk_dbg_raw - holds sch_lock
+    mov al, ah
+    xor ah, ah
+    mov [sb_st13], ax
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    pop ax
+    ret
+
+; sb_b_seek - ONE OP IS A PAIR: cylinder 0, then [sb_skcyl]. So an op contains
+; two seeks of that distance, and the row's us/op is twice one of them plus
+; twice whatever rotational wait follows.
+sb_b_seek:
+    xor ch, ch
+    call sb_r13at
+    mov ch, [sb_skcyl]
+    call sb_r13at
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_seek - what a HEAD STEP costs (PERFORMANCE.md Part 9 Set 24)
+;
+; This block exists because the floppy timing model in
+; tools/martypc/patches/03-floppy-disk-timing.patch has exactly one number in
+; it that no measurement anywhere pins: the seek. Every raw row above reads a
+; single track and never moves the head, so the step rate there is the BIOS's
+; own SPECIFY request (the DPT byte printed above) and the settle is the DPT's
+; - both taken on trust. This says what the DRIVE actually does with them.
+;
+; **READ THE ROWS AS REVOLUTIONS, AND EXPECT THEM TO BE WHOLE ONES.** A read
+; ends at a fixed angular position, so the next read of sector 1 waits for
+; sector 1 to come round again: the seek happens INSIDE that wait and is
+; invisible until it is longer than the wait. Every row is therefore quantized
+; to whole revolutions, and what the block measures is the DISTANCE AT WHICH
+; THE COST STEPS UP, not a smooth slope:
+;
+;   all rows == the baseline    every seek fits inside one revolution, so the
+;                               step rate is bounded ABOVE by (rev / cyls)
+;   a row costs one rev more    that seek does NOT fit; the step rate is
+;                               bounded BELOW between it and the row under it
+;
+; On the calibration 5150 (200 ms a turn) an 8 ms/cylinder step predicts the
+; break between 20 cylinders (160 ms + settle) and 39 (312 ms + settle), so a
+; report where 1/5/10/20 match the baseline and 39 does not is the model being
+; right. A break lower than that says the drive steps SLOWER than the BIOS
+; asked for, and a report with no break at all says it steps faster than
+; 200 ms / 39 = 5.1 ms and the model is charging too much.
+;
+; The baseline row reads cylinder 0 TWICE - same work, same rotational wait,
+; no head movement - so it is the zero of the scale and not a separate thing
+; the reader has to trust.
+;
+; It never writes, reads only cylinders the booted disk already holds, and goes
+; through the kernel's entry like every raw row here (docs/FIELD-NOTES.md 10).
+; -----------------------------------------------------------------------------
+SB_SK_ROWS  equ 5
+
+sb_seek:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    cmp word [sb_dbgblk], 0         ; the raw entry is the debug block's; with
+    je .out                         ; no block there is nothing to call
+
+    call bl_blank
+    mov si, sb_s_h_sk
+    call bl_sline
+    mov si, sb_s_h_sk2
+    call bl_sline
+    mov si, sb_s_h_sk3
+    call bl_sline
+    call bl_head
+
+    xor ch, ch                      ; warm the motor and park the head at 0, so
+    call sb_r13at                   ; the baseline row below is a pure pair of
+                                    ; rotations with no seek in it at all
+
+    mov word [sb_skcyl], 0          ; --- the zero of the scale ---
+    mov word [bl_n], 4
+    mov word [bl_body], sb_b_seek
+    mov si, sb_r_sk0
+    mov al, 1
+    call bl_run
+
+    mov di, sb_sktab                ; --- and the distances ---
+    mov cx, SB_SK_ROWS
+.row:
+    push cx
+    mov ax, [di]
+    mov [sb_skcyl], ax
+
+    mov ch, [sb_skcyl]              ; PARK THE HEAD AT THE FAR CYLINDER FIRST.
+    call sb_r13at                   ; An op is (read 0, read N) = two seeks of
+                                    ; N - but only if the head is ALREADY at N
+                                    ; when the op starts. Left at 0 by the row
+                                    ; before, the first op of every row
+                                    ; contains one seek instead of two and the
+                                    ; row reads 12.5% short at N = 4 ops.
+
+    mov si, [di+2]
+    mov word [bl_n], 4
+    mov word [bl_body], sb_b_seek
+    mov al, 1
+    call bl_run
+    add di, 4
+    pop cx
+    loop .row
+
+    mov si, sb_l_r13st              ; ...and whether the BIOS stayed happy,
+    mov ax, [sb_st13]               ; because a row that FAILED is fast
+    call sb_hex
+
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_motor - what SPIN-UP costs (PERFORMANCE.md Part 9 Set 24)
+;
+; The other number the model does not have. A stopped drive has to reach
+; 300 RPM before anything can be read, and the BIOS additionally waits the
+; DPT's motor-start time (printed above as eighths of a second - the IBM ROM
+; asks for 8, a whole second) before it will believe the platter. Nothing in
+; this suite has ever separated those two from each other or from the read.
+;
+; `16K read, cold motor` above is a cold read, but it is a 32-sector one, so
+; the spin-up is a fifth of it and buried. This is the same event with one
+; sector under it, which is as close to isolating it as a package can get.
+;
+; **The wait is the machine's own, not ours.** The BIOS reloads a countdown at
+; 0040:0040 on every disk operation and its tick handler turns the motor off
+; when that reaches zero; 0040:003F bit 0 is drive 0's motor. So this waits for
+; that byte to clear rather than forcing anything - and reports what it saw, so
+; a run where the motor never stopped is legible as such instead of quietly
+; reporting a warm read as a cold one. Bounded at SB_MT_WAIT ticks.
+;
+; Both rows are N = 1 and must be: the event only happens once, and a second
+; iteration would be measuring a warm drive. The pair is the measurement -
+; cold minus warm is spin-up plus the BIOS's motor-start wait, and the DPT row
+; above says how much of it the BIOS asked for.
+; -----------------------------------------------------------------------------
+SB_MT_WAIT  equ 110                 ; ~6 s at 18.2065 Hz, well past the ~2 s
+                                    ; the BIOS reloads
+
+sb_mwait:
+    push ax
+    push bx
+    push es
+    call OSAPI_GET_TICKS
+    mov bx, ax
+.spin:
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x3F]               ; diskette motor status, bits 0..3
+    test al, 0x0F
+    jz .off
+    call OSAPI_GET_TICKS
+    sub ax, bx
+    cmp ax, SB_MT_WAIT
+    jb .spin
+.off:
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x3F]
+    xor ah, ah
+    mov [sb_mtst], ax               ; 0 = it really did stop
+    pop es
+    pop bx
+    pop ax
+    ret
+
+sb_motor:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    cmp word [sb_dbgblk], 0
+    je .out
+
+    call bl_blank
+    mov si, sb_s_h_mt
+    call bl_sline
+    mov si, sb_s_h_mt2
+    call bl_sline
+    call bl_head
+
+    call sb_r13at                   ; touch the drive so the countdown is
+                                    ; loaded, then wait for it to expire
+    call sb_mwait
+
+    mov word [bl_n], 1              ; the cold one - spin-up, the BIOS's
+    mov word [bl_body], sb_b_r13one ; motor-start wait, a seek and a turn
+    mov si, sb_r_mtc
+    mov al, 1
+    call bl_run
+
+    mov word [bl_n], 1              ; ...and the same read with the motor
+    mov word [bl_body], sb_b_r13one ; already turning. The SAME body, said
+    mov si, sb_r_mtw                ; twice rather than carried
+    mov al, 1
+    call bl_run
+
+    mov si, sb_l_mtst               ; 00 = the motor really was off. Anything
+    mov ax, [sb_mtst]               ; else and the cold row is not cold
+    call sb_hex
+    mov si, sb_l_r13st
+    mov ax, [sb_st13]
+    call sb_hex
+
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sb_sktab:
+    dw 1,  sb_r_sk1
+    dw 5,  sb_r_sk5
+    dw 10, sb_r_sk10
+    dw 20, sb_r_sk20
+    dw 39, sb_r_sk39
+
 sb_b_rdsml:
     push es
     mov es, [sb_bseg]
@@ -4260,6 +4518,20 @@ sb_r_131:    db 'int 13h 1 sector', 0
 sb_r_139:    db 'int 13h track, 1 call', 0
 sb_r_13n:    db 'int 13h track, 9 calls', 0
 sb_l_r13st:  db 'int 13h last status AH', 0
+sb_s_h_sk:   db '-- what a HEAD STEP costs: the same read either side of a seek --', 0
+sb_s_h_sk2:  db '   Read as REVOLUTIONS. A seek hides inside the wait for sector 1', 0
+sb_s_h_sk3:  db '   to come round, so what to look for is WHERE the cost steps up.', 0
+sb_r_sk0:    db 'seek 0 cyl (baseline)', 0
+sb_r_sk1:    db 'seek 1 cyl, pair', 0
+sb_r_sk5:    db 'seek 5 cyl, pair', 0
+sb_r_sk10:   db 'seek 10 cyl, pair', 0
+sb_r_sk20:   db 'seek 20 cyl, pair', 0
+sb_r_sk39:   db 'seek 39 cyl, pair', 0
+sb_s_h_mt:   db '-- what SPIN-UP costs: one sector cold, then the same one warm --', 0
+sb_s_h_mt2:  db '   cold - warm is spin-up plus the DPT motor-start wait above.', 0
+sb_r_mtc:    db '1 sector, motor COLD', 0
+sb_r_mtw:    db '1 sector, motor warm', 0
+sb_l_mtst:   db 'motor status 40:3F', 0
 sb_d_r13b:   db 'bios track 1 call B/s', 0
 sb_d_r13s:   db 'bios track 9 calls B/s', 0
 sb_s_nodbg:  db 'This kernel carries no disk instrument - build DISKCNT=1.', 0
@@ -4355,7 +4627,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 214              ; ...and the scalars end at 213 now
+SB_O_SYSKB equ 218              ; ...and the scalars end at 217 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -4456,6 +4728,10 @@ sb_wkb      equ os88_image_end + 206   ; word: ...and the KB it actually got
 sb_werr     equ os88_image_end + 208   ; word: the FERR_* a write refused with
 sb_wfree    equ os88_image_end + 210   ; word: KB free on the volume before
 sb_wdone    equ os88_image_end + 212   ; word: KB appended so far
+sb_skcyl    equ os88_image_end + 214   ; word: the cylinder the seek pair steps
+                                       ; to, 0 for the baseline row
+sb_mtst     equ os88_image_end + 216   ; word: 40:3F before the cold row - 0 if
+                                       ; the motor really had stopped (216..217)
 sb_syskb    equ os88_image_end + SB_O_SYSKB    ; SYSKB_SIZE bytes
 sb_res      equ os88_image_end + SB_O_RES      ; SB_NCPU dwords
 sb_rrow     equ os88_image_end + SB_O_RROW     ; SB_BWROWS words

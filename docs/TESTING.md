@@ -1026,6 +1026,27 @@ own interrupts cost per second of ordinary work** (the same workload timed
 with interrupts off and then on), and the floppy — twice, because the first
 read pays the motor spin-up and quoting either figure alone misleads.
 
+**Two of its floppy blocks exist to pin the two numbers the MartyPC disk model
+has no measurement for** (PERFORMANCE.md Set 24, `tools/martypc/patches/03-*`).
+Both go through the kernel's `dsk_dbg_raw`, so both need a `DISKCNT=1` kernel
+and are silent on any other — which is what every `make field` disk is.
+
+- **The head step.** Every other raw row reads one track and never moves the
+  head, so the model's step rate is the BIOS's own SPECIFY request and its
+  settle is the DPT's, both on trust. `seek N cyl, pair` reads cylinder 0 and
+  then cylinder N, so an op holds two seeks of that distance. **Read the rows
+  as revolutions and expect whole ones**: a read ends at a fixed angular
+  position, so the seek happens inside the wait for sector 1 to come round and
+  is invisible until it is longer than that wait. What the block measures is
+  therefore *the distance at which the cost steps up*, not a slope — and the
+  `seek 0 cyl` row is the zero of that scale rather than something to trust.
+- **Spin-up.** `1 sector, motor COLD` waits for the BIOS's own motor countdown
+  at `0040:0040` to expire, checks `0040:003F` and prints it, then times one
+  sector; `1 sector, motor warm` is the same read with the platter already
+  turning. Both are N = 1 and must be — the event happens once. A `motor
+  status 40:3F` of anything but `00` means the drive never stopped and the
+  cold row is not cold, which is the one way this can lie and so is printed.
+
 Three things about reading their output:
 
 1. **A method-`t` row of 0 counts finished inside one 55 ms tick.** True on a
