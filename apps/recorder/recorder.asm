@@ -27,7 +27,7 @@
 ;     capture buffer (5 s at 8 kHz), verb 4 opens the input stream, and the
 ;     kernel drain task fills the grant. Without the cap the button is drawn
 ;     grayed AND a click on it only explains in the status line (the
-;     bb_avail three-layer idiom, SPEC.md 32) - the app stays fully usable
+;     three-layer refusal idiom, SPEC.md 31.3) - the app stays fully usable
 ;     as a player on speaker-only machines.
 ;   - Progress is POLLED (there are no sound events, SPEC.md 34.3): every
 ;     paint and click runs rc_poll, which reads STREAM verb 3 and retires

@@ -238,7 +238,6 @@ toast_now:
     push ax
     call toast_arm
     call menu_draw_bar
-    call gfx_flush              ; we draw MID-lock, and the flush that would
                                 ; carry it to VRAM does not come until the
                                 ; operation this announces is over (SPEC.md
                                 ; 32) - fpg_begin's reasoning exactly

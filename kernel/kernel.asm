@@ -677,11 +677,11 @@ HEAP_SEG    equ KERN_END        ; the claim heap (SPEC.md 50) starts where
                                 ; (SPEC.md 50.3); nothing up here has a fixed
                                 ; address any more
 
-; double buffering (SPEC.md 32) - the back buffer is a heap CLAIM now, so
-; there is no BB_SEG constant: bb_init asks for BB_KB and remembers what it
-; got, and on a machine that cannot fund it the Control Panel says so.
-BB_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)
-BB_KB         equ 150           ; 4 planes x 0x9600 bytes, in KB
+; The software renderer's plane stride (SPEC.md 32/39.3). One plane is 480
+; rows x 80 bytes; on a 1bpp adapter there is exactly one and vid_apply sets
+; the stride to a single paragraph, purely so sw_xfer's segment compare can
+; terminate.
+SW_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)
 
 ; --- CPU tiers and memory above 1MB (SPEC.md 41) -----------------------------
 ; None of this exists on tier 0, which is the target machine: an 8088 has no
@@ -983,11 +983,10 @@ osapi_table:
                                   ;          answers CF=1 / AX = FERR_NAME
                                   ;          rather than being reused - a
                                   ;          shipped slot keeps its contract
-    OSAPI_SLOT osapi_gfx_dbuf     ; 0x01F0 - a package's own bb_set (SPEC.md
-                                  ;          32): AL = 1 arm / 0 disarm, out
-                                  ;          AL = the state before, to hand
-                                  ;          back. CF=1 on the wrong adapter
-                                  ;          or a heap that cannot fund it
+    OSAPI_SLOT gfx_dbuf_gone      ; 0x01F0 - RETIRED (SPEC.md 32/20.8 rule 4):
+                                  ;          was a package's own sw_set. The
+                                  ;          cell answers CF=1 rather than
+                                  ;          being reused
     OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows
@@ -1183,9 +1182,7 @@ osapi_table:
                                   ;          block (SPEC.md 53.4): AL = FSXM
                                   ;          id, ES:DI = the caller's buffer
     OSAPI_SLOT fsx_wait           ; 0x02D8 - frame clock / present (SPEC.md
-                                  ;          53.5): AL = 0 tick / 1 retrace;
-                                  ;          flushes an armed back buffer
-                                  ;          first while the mode is unswitched
+                                  ;          53.5): AL = 0 tick / 1 retrace
     OSAPI_SLOT gfx_line           ; 0x02E0 - an arbitrary-angle line (SPEC.md
                                   ;          5.6): AX/BX = x1/y1, CX/DX =
                                   ;          x2/y2 inclusive, pen in
@@ -1779,9 +1776,6 @@ kmain:
     call mem_init               ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
-    call bb_init                ; back buffer (SPEC.md 32): can this ADAPTER
-                                ; double-buffer? The memory question is asked
-                                ; of the heap when the buffer is armed
 %ifdef BAKED_FONT
     call FAT_SEG:ovl_font_init  ; the typeface this BUILD carries (SPEC.md
                                 ; 6.2), out of the overlay - so it needs no
@@ -1843,9 +1837,8 @@ kmain:
 
     ; --- stop the boot timer (SPEC.md 15.4) ----------------------------------
     ; HERE, not after cursor_show: the question is when the first desktop
-    ; FRAME is finished, and gfx_unlock is what puts it on the glass - it
-    ; flushes the back buffer where there is one, so this is the same instant
-    ; on all three adapters. The cursor is not the desktop.
+    ; FRAME is finished, and gfx_unlock is what puts it on the glass. The
+    ; cursor is not the desktop.
     cmp word [boot_ticks], 0xFFFF   ; unstamped: leave it saying unknown
     je .nobt
     push ds
@@ -2127,7 +2120,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                                 ; cpudet.inc, whose tier and feature bits it
                                 ; branches on and whose cpu_hma_claim it calls
 %include "vga12.inc"
-%include "vgabb.inc"
+%include "softgfx.inc"
 %include "font.inc"
 %include "mouse.inc"
 %include "sched.inc"
@@ -2208,8 +2201,6 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 cw_app_launch:          call app_launch
                     retf
 cw_assoc_post:          call assoc_post
-                    retf
-cw_bb_set:              call bb_set
                     retf
 cw_clk_fld_adj:         call clk_fld_adj
                     retf

@@ -382,8 +382,6 @@ count is an 8086 count.
 |---|---|---|
 | `repe scasb` run scan | ~15 clocks/byte | `kernel/vga12.inc` |
 | Naive per-pixel decode (shift by CL) | 75–90 clocks/pixel | ibid — the pre-coalescer `gfx_blit4`, Part 3 |
-| Back-buffer flush vs. its RAM render | ~24× | §32 — **VGA only**, and the field machine has none |
-| 4-plane flush vs. 1-plane (`bb_mono`) | ~3.7× | ibid |
 | Note Pad layout walk iteration | ~500 8086 cycles | §27.4 |
 | ArtfulType `at_getb` | ~32 clocks/character | `apps/artful/atdoc.inc` — 9 bytes of instruction, so ≥39 by the floor |
 
@@ -1202,7 +1200,7 @@ list to check yourself against.
 | The pointer during a window refresh | `gfx_lock` erased the cursor for the **whole** hold, so a Task Manager refresh — twice a second, and a visible span on a 4.77 MHz machine — blinked the pointer off and on every time, most obviously with the mouse sitting still | the hide is **deferred** and `wm_clip_set` spends it only if the cursor is reachable: **30 of 31 refreshes kept it on screen**, 0 cell violations across menus, drags and a Control Panel | §7.1.4 |
 | A press-and-hold on a file row | `fm_drag`'s `.wait` poll, unpaced: `gfx_unlock`/`task_yield`/`gfx_lock` as fast as the CPU allows, drawing **nothing**. **20,761 lock/unlock pairs a second** under `-icount`; on the field machine each costs ~1.9 ms, so it is the whole machine for as long as the button is down, and the pointer blinks continuously | one pair a tick, like the three sibling loops that already lingered: **21** | §7.1.3 |
 | Moving the cursor | erase-then-draw, two walks, so every byte where the old and new cells overlap is written **twice** — and the value in between is the background, `ffff` on all twelve rows inside a window. ~6.5% of a 20 ms Hercules frame, on every mouse packet | each byte written **once**: pass 1 skips what pass 2 will write, pass 2 sources its background from the save buffer. No gate, no union walk, and the pair unmoved at 544 counts against 541 | §7.1.2, docs/FIELD-NOTES.md 6 |
-| A renderer row step | `call gfx_nextrow`: a near call plus two CS-overridden memory reads, **three times per scan line** | three register instructions, parameters hoisted out of the loop | §39.3, §32 |
+| A renderer row step | `call gfx_nextrow`: a near call plus two CS-overridden memory reads, **three times per scan line** | three register instructions, parameters hoisted out of the loop | §39.3 |
 | `gfx_lock` + `gfx_unlock` — the pair every drawing burst pays | the mouse cursor over a 16x16 cell it never fills: a save, a white pass and a black pass, three walks over the same bytes, plus a restore — **17.82** guest-instruction counts a pair on Hercules, ~6.4 ms of the field machine, 11.6% of a 55 ms frame | the arrow's real 8x12 cell, no third byte, and on 1bpp **one** fused read-bank-paint-write pass: **5.41**, ~1.94 ms, 3.5% — **3.29x**, output byte-identical on all three adapters | §7.1, Part 9 Set 7 |
 
 Two entries in that table are load-bearing beyond their own numbers.
@@ -1353,7 +1351,6 @@ was ruled out (tens of seconds per 448×280 frame before the dither).
 | `WF_SNAP`, and the keystroke priced | SPEC.md §11.94 |
 | Note Pad's redraw optimisations, seven of them | SPEC.md §27.2 – §27.7.2 |
 | The Task Manager's chunks | SPEC.md §28.2 |
-| Double buffering, and the flush's 24× | SPEC.md §32 |
 | The mono renderer's inner loop | SPEC.md §39.3, §39.5 |
 | The fractal's restore cache | SPEC.md §40.1; [REDRAW-SPEC.md](REDRAW-SPEC.md) |
 | Solitaire's incremental repaint | SPEC.md §43.7 |
@@ -1455,11 +1452,13 @@ with two rows to recompute, not a set to retake. If `R_B > R_A` the equations
 have no positive solution and the answer is the floored one: arrival 0, pixel
 `R_B / 8`.
 
-**Reading the fullscreen pairs has one trap, and it is a VGA one.**
-`[bb_mono]` (§32) is one-way, and `bb_mono_chk` is five instructions cheaper
-once it has retired — so if anything drawn between the two passes used a
-colour that is not 0 or 15, every fullscreen row comes in slightly under its
-twin for a reason that has nothing to do with fullscreen. It shows as a flat
+**Reading the fullscreen pairs had one trap, and §32's removal retired it.**
+`[bb_mono]` was one-way and `bb_mono_chk` five instructions cheaper once it
+had retired — so if anything drawn between the two passes used a colour that
+is not 0 or 15, every fullscreen row came in slightly under its twin for a
+reason that had nothing to do with fullscreen. Neither the flag nor the call
+exists now; the paragraph is kept because the *shape* recurs, and because the
+figures below were taken while it did. It shows as a flat
 few instructions per drawing call rather than a proportional gap, and it is
 visible in the QEMU sighting run: the VGA `GFX_PIXEL` pair read 408 against
 389 while the **CGA pair read 456 against 456**. On the two 1bpp adapters
@@ -1909,8 +1908,8 @@ the first thing done here was to count it rather than guess (rule 4). One
 `gfx_pixel` on the 1bpp renderer is **196 guest instructions**, and the
 static path agrees: they are spread over eleven routines with no hot spot
 anywhere — the API far-call cell, `gfx_pixel`'s rect marshalling, §11.3's
-clip test, `bb_mono_chk`, the `[bb_on]` dispatch, `vga_rect_setup`,
-`gfx_rowbase`, `bb_dirty_rect`, `bb_ink`, `bb_plane_op`, `bb_col`. **About a
+clip test, `bb_mono_chk`, the `[bb_on]` dispatch, `vga_rect_setup`,   <!-- pre-§32-removal -->
+`gfx_rowbase`, `bb_dirty_rect`, `sw_ink`, `sw_plane_op`, `sw_col`. **About a
 third of it was register discipline and call structure** — 13 push/pop pairs
 at Part 2's measured 29.7 clocks and ~10 near call/rets at 52.1 — and none
 of it was drawing. SPEC.md §5.7 lists the seven changes and why each is a
@@ -1939,7 +1938,7 @@ and `one full-width row` of text (2,220 → 2,219) are the three drawing paths
 none of these changes touch, and all three sat still. A harness that had
 moved them would have been measuring itself.
 
-The same suite on **VGA**, where the planar VRAM bodies run and `bb_col`
+The same suite on **VGA**, where the planar VRAM bodies run and `sw_col`
 never does, so only the shared coordinate core changed: `GFX_PIXEL` 424 →
 404 (−4.7%), `GFX_FILL 8x8` 338 → 317 (−6.2%), `GFX_BLIT4 4px runs` 13,110
 → 12,192 (−7.0%), `GFX_FILL 64x64` and `GFX_SCROLL` unmoved. Nothing on
@@ -1965,8 +1964,8 @@ Rendering was verified byte-for-byte rather than by eye, on all three
 adapters and both renderers, over a fixture of desktop dither, window
 frames, a file listing, an XOR selection band, a pull-down menu and its
 save-under restore: **CGA pixel-identical** bar the menu-bar clock's last
-glyph cell, **VGA pixel-identical** with the §32 back buffer both off and
-on, and **Hercules** differing by 10 pixels of menu bar — against 17 between
+glyph cell, **VGA pixel-identical**, and
+**Hercules** differing by 10 pixels of menu bar — against 17 between
 two boots of the *same* kernel, so below that fixture's own reproducibility.
 
 #### What is left, and what it would cost
@@ -1976,7 +1975,7 @@ Priced from the same teardown, for whoever comes next:
 | still on the floor | worth | why it was not taken |
 |---|---|---|
 | `gfx_rowbase`'s `mul` by the stride | ~145 clocks, 4% | a per-row table is 2 bytes x `[vid_h]` — 960 on VGA, and `KERN_BUDGET` has 1,536 left |
-| `bb_rect`'s eight push/pop pairs | ~240 clocks, 7% | it is `gfx_fill`'s "clobbers flags" contract, which every caller in the tree leans on |
+| `sw_rect`'s eight push/pop pairs | ~240 clocks, 7% | it is `gfx_fill`'s "clobbers flags" contract, which every caller in the tree leans on |
 | the API far-call cell | ~223 clocks, 6% | the package ABI (§20.1) |
 | a dedicated 1-row body for `gfx_hline`/`gfx_pixel` | maybe 25% of what remains | a second implementation of the same pixels, ~100 bytes, and Part 3 item 4's exact failure mode |
 | a one-entry memo on `gfx_rowbase` | ~4% of a text row (78 cells share a y) | it is a *loss* on the single-call case this section is about — the wrong trade for the headline number, the right one for text |
@@ -2371,10 +2370,10 @@ blobs and nothing else. §48.18 is the three changes that cut the count.
 #### The negative result: a vector gfx_fill recovers ~4%
 
 Costed before building, against this run's floor. A batch removes the API
-cell, the `GFXCLIP` test, the `bb_mono_chk` call and the `bb_on` dispatch —
+cell, the `GFXCLIP` test, the `bb_mono_chk` call and the `bb_on` dispatch —   <!-- pre-§32-removal -->
 about **170 of ~4,381 clocks**. It cannot remove eight push/pop pairs,
 `vga_rect_setup`'s twenty-odd memory accesses, `gfx_rowbase`, the dirty-rect
-and mode round-trips, the plane loop or `bb_ink`, because those are per
+and mode round-trips, the plane loop or `sw_ink`, because those are per
 *rect* and not per *call*.
 
 That is the difference from §5.6.8, which did pay: a walk step's fixed cost

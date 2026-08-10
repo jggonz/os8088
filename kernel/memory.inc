@@ -5,14 +5,15 @@
 ; the package pool, handed out in KB-granular, segment-aligned blocks to
 ; whoever asks - a package through the API slots, or the kernel itself for
 ; the things it uses speculatively (the menu save-under, a Disk window's
-; listing cache, the double-buffer back buffer).
+; listing cache, the clipboard).
 ;
 ; Why this exists. Before it, memory outside the pool was carved up by
 ; CONSTANTS - SND_SEG, SAVE_SEG, VIEW_SEG, BB_SEG - each claimed whole from
 ; boot whether or not a byte of it was ever written, and a package that
 ; wanted more than its 19.5KB region had no way to ask: apps/paint simply
 ; took linear 0x66000 and hoped, reading a kernel policy constant to guess
-; whether the back buffer would ever want it (docs/PAINT-NOTES.md records
+; whether SPEC.md 32's then-live back buffer would ever want it
+; (docs/PAINT-NOTES.md records
 ; that as the least defensible thing in the file). One map, owned by the
 ; kernel, retires the whole class: two packages cannot pick the same
 ; address, an app cannot outlive its claim, and the Task Manager can bill
@@ -70,7 +71,6 @@ MC_DMA   equ 6                  ; word: the 64KB-page-safe HEAD in paragraphs,
 MC_SIZE  equ 8
 
 MEM_K_SAVE equ 0xFF01           ; kernel tags (SPEC.md 50.2): menu save-under
-MEM_K_BB   equ 0xFF02           ; the double-buffer back buffer
 MEM_K_DRV  equ 0xFF03           ; a loaded driver's image (SPEC.md 51.3)
 MEM_K_COPY equ 0xFF04           ; the file manager's copy buffer (22.3): held
                                 ; for exactly one Cut/Copy/Paste operation,
@@ -918,7 +918,7 @@ mem_bcopy:
 ;
 ; WHAT IT IS NOT. It does not compact the heap by sliding OTHER claims down,
 ; and it cannot: a claim's base lives in its holder's own bss - a package's
-; [pt_base], the kernel's [bb_seg] - and nothing here can reach in and
+; [pt_base], the kernel's [sw_seg] - and nothing here can reach in and
 ; rewrite those. Moving somebody else's block hands them a pointer into
 ; memory that is no longer theirs. Real compaction needs a relocation
 ; callback every holder implements; until there is one, the fix is to stop
@@ -1030,7 +1030,7 @@ mem_regrow:
 ; out:      CF = 0 released; CF = 1 no such claim, or not this owner's
 ; clobbers: nothing else (flags)
 ;
-; The owner test is what stops a package freeing the kernel's back buffer,
+; The owner test is what stops a package freeing the kernel's own claims,
 ; or another instance's canvas, with one wrong word.
 ; -----------------------------------------------------------------------------
 mem_free:

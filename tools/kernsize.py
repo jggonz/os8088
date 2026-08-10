@@ -144,7 +144,7 @@ THEMES = (
      ("mouse.inc", "clock.inc", "driver.inc", "snd.inc", "cpudet.inc",
       "xmem.inc")),
     ("drawing: adapters, primitives, glyphs, icons",
-     ("vga12.inc", "vgabb.inc", "font.inc", "icons.inc", "viddet.inc",
+     ("vga12.inc", "softgfx.inc", "font.inc", "icons.inc", "viddet.inc",
       "vidsel.inc", "splash.inc")),
     ("the kernel proper: API table, heap, scheduler, events",
      (RESIDUAL, "memory.inc", "sched.inc", "events.inc")),

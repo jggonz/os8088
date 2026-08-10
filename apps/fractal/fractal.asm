@@ -82,7 +82,6 @@
 ; A refused claim degrades one rung further, to the pre-cache behaviour of a
 ; repaint being a restart, and is retried on every kick.
 ;
-; Colors beyond 0/15 retire [bb_mono] (SPEC.md 32) - supported, expected.
 ; On a 1bpp adapter (SPEC.md 39.4) the entry proc defaults to the Contour
 ; palette, whose 48 entries use only the white and dither classes in runs of
 ; four: twelve legible contour bands, and the interior is then the ONLY

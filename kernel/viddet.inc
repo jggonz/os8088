@@ -16,13 +16,11 @@
 ; serves both: the bank count, the bank shift, the row stride and the
 ; segment are the four numbers that differ, and they live in vid_tab.
 ;
-; The mono renderer itself is not in this file. It is vgabb.inc, which has
-; always been a latch-free, port-free SOFTWARE renderer over the coordinate
-; core in vga12.inc - written for a RAM back buffer, but nothing in it cares
-; that the target is RAM. Point it at the real framebuffer with a plane count
-; of 1 and it IS the 1bpp driver (SPEC.md 39.3). Hence [bb_on] means "route
-; drawing through the software renderer", which is permanently 1 on mono,
-; and the new [bb_dbl] carries the old "double buffering is armed" meaning.
+; The mono renderer itself is not in this file. It is softgfx.inc, a latch-free,
+; port-free SOFTWARE renderer over the coordinate core in vga12.inc: it does
+; the VGA ALU's work with plain CPU instructions, so pointing it at the real
+; framebuffer with a plane count of 1 IS the 1bpp driver (SPEC.md 39.3).
+; [vid_mono] is what routes drawing through it.
 ;
 ; This module is included BEFORE splash.inc because the boot splash calls
 ; vid_detect/vid_apply/vid_setmode on its first tick, while the rest of the
@@ -115,12 +113,12 @@ vid_ch      dw SCREEN_H         ; PRIMITIVE clips to (SPEC.md 39.2.1). Not the
 vid_bankmask dw 0              ; gfx_prevrow: DI's bank bits, (nbanks-1)<<13
 vid_strm1   dw ROW_BYTES-1
 vid_rseg    dw 0                ; the software renderer's target segment:
-                                ; the claimed back buffer on VGA (0 until
-                                ; bb_set arms one), the FRAMEBUFFER itself
+                                ; 0 on VGA, where nothing routes through the
+                                ; software renderer; the FRAMEBUFFER itself
                                 ; on mono
-vid_rpara   dw BB_PLANE_PARA    ; paragraphs from one plane to the next.
+vid_rpara   dw SW_PLANE_PARA    ; paragraphs from one plane to the next.
                                 ; MUST be nonzero even at one plane -
-                                ; bb_xfer's loop terminates on a segment
+                                ; sw_xfer's loop terminates on a segment
                                 ; compare, and a step of 0 never terminates.
 vid_rend    dw 0                ; that loop's exclusive end
 vid_cwm1    dw SCREEN_W-1       ; the display's last legal x and y, and the
@@ -171,8 +169,8 @@ vid_desk_zr dw SCREEN_W-6       ; and its EXCLUSIVE right, zx + 50: the
                                 ; 640 wide, which is what they open-coded).
 
 vid_kind    db VID_VGA          ; VID_VGA / VID_HERC / VID_CGA
-vid_mono    db 0                ; 1bpp adapter? Not [bb_mono], which means
-                                ; "all four planes hold identical bytes"
+vid_mono    db 0                ; 1bpp adapter? This is what routes every
+                                ; draw through the software renderer (32/39.5)
 vid_planes  db 4                ; 4 or 1
 vid_planes_w dw 4               ; the same, where a word is wanted
 vid_force   db VID_FORCE        ; 0 = probe; 1/2/3 = VGA/Herc/CGA
@@ -267,8 +265,8 @@ vid_detect:
 ; vid_apply - publish [vid_kind]'s geometry into the live and derived blocks
 ;
 ; in:       [vid_kind]
-; out:      the whole geometry block; [bb_on]; the cursor homed to the centre
-;           of the new screen
+; out:      the whole geometry block; [vid_mono]; the cursor homed to the
+;           centre of the new screen
 ; clobbers: flags
 ;
 ; Homing the cursor is not a nicety. [mouse_x]/[mouse_y] are initialized data
@@ -380,7 +378,7 @@ vid_apply:
     mov byte [vid_planes], 4
     mov word [vid_planes_w], 4
     xor ax, ax                  ; VGA: the renderer has no target until
-    mov bx, BB_PLANE_PARA       ; bb_set claims one (SPEC.md 32/50.2)
+    mov bx, SW_PLANE_PARA       ; unreachable: [vid_rseg] is 0 here
     xor dx, dx
     cmp byte [vid_kind], VID_VGA
     je .rend
@@ -389,14 +387,12 @@ vid_apply:
     mov word [vid_planes_w], 1
     mov ax, [vid_seg]           ; the software renderer draws straight into
     mov bx, 1                   ; the framebuffer - one "plane", and a step
-    mov dx, ax                  ; of 1 paragraph purely so bb_xfer's segment
+    mov dx, ax                  ; of 1 paragraph purely so sw_xfer's segment
     inc dx                      ; compare can terminate
 .rend:
     mov [vid_rseg], ax
     mov [vid_rpara], bx
     mov [vid_rend], dx
-    mov al, [vid_mono]          ; mono routes every draw through the software
-    mov [bb_on], al             ; renderer, permanently (SPEC.md 39.5)
 
     mov ax, [vid_w]             ; --- home the cursor; see the header
     shr ax, 1
@@ -436,7 +432,7 @@ vid_apply:
 ;
 ; VGA and CGA get their mode - and their clear - from the BIOS. Hercules has
 ; no BIOS mode at all, so the 6845 is programmed directly and the 32KB clear
-; is ours to do; bb_init's ordering and the first desktop paint both assume a
+; is ours to do; the first desktop paint assumes a
 ; cleared framebuffer. The explicit `cld` matters: on the splash path this
 ; runs on the boot sector's flags, and spl_tick never issues one.
 ;
@@ -668,7 +664,7 @@ vid_text:
 ; gfx_rowbase - byte offset of the first byte of a scan line (SPEC.md 39.3)
 ;
 ; in:       AX = y
-; out:      AX = offset into the framebuffer / back buffer
+; out:      AX = offset into the framebuffer
 ; clobbers: AX, CX, DX, flags. PRESERVES BX - ico_core depends on it.
 ;
 ; On VGA bmask and bshift are 0 and this reduces to exactly y * 80, which is
@@ -703,7 +699,7 @@ gfx_rowbase:
 ; with no adapter test on the path at all.
 ;
 ; CS OVERRIDES, NOT DS. Two of the callers run with DS pointed somewhere
-; else entirely: bb_xfer's save path sets DS to the framebuffer segment for
+; else entirely: sw_xfer's save path sets DS to the framebuffer segment for
 ; its movsb, and its restore path sets DS to the caller's buffer (SAVE_SEG
 ; for a menu's save-under). Reading the step through DS there fetches
 ; framebuffer bytes as a scan-line stride. CS is KERNEL_SEG for everything

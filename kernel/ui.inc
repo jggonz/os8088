@@ -709,7 +709,7 @@ ui_drag_xor:
                                 ; VRAM-direct (SPEC.md 32): the outline is a
                                 ; transient overlay like the cursor - it is
                                 ; always XOR-erased before the lock drops, so
-                                ; VRAM still equals the back buffer whenever
+                                ; the overlay is always erased before
                                 ; anyone else can draw. Going through the back
                                 ; buffer instead would dirty the whole window
                                 ; rect and flush it twice per pass.

@@ -97,10 +97,10 @@ pre-empted background task, updating live while the user types or drags).
    VGA) and leaves the VGA Graphics Controller in the default state on
    return: Set/Reset enable = 0, Bit Mask = FF, Function = replace, Data
    Rotate = 0, Map Mask = 0Fh, Read Map = 0, write mode 0 / read mode 0.
-   When drawing is routed through the software renderer (§32/§39.3 — always
-   on a 1bpp adapter, on VGA only while double buffering is active) the
+   When drawing is routed through the software renderer (§32/§39.3 — every
+   draw on a 1bpp adapter, none on a VGA) the
    drawing routines render into `[vid_rseg]` and touch no VGA register at
-   all; only `gfx_flush` (Sequencer Map Mask) and the cursor path program
+   all; only the cursor path programs
    the hardware, and both restore the same defaults.
 8. **A control that can refuse a click is greyed the way §46 says**, whether
    it is the kernel's or a package's: `CDGRAY`, the whole control and not just
@@ -532,9 +532,8 @@ APP_MAX_SIZE equ 0xF000      ; image + bss budget: 60KB. The ceiling is the
                              ; what the heap has contiguous
 PKG_DISP     equ 12          ; the dispatcher's fixed offset inside a
                              ; package's header (§20.2)
-; double buffering (§32) - a heap claim, so there is no BB_SEG
-BB_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
-BB_KB         equ 150        ; what bb_set claims to arm it
+; the software renderer's plane stride (§32/§39.3)
+SW_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
 ; the file manager's per-window view cache (§2.3/§22.1)
 VIEW_SLOTS    equ 4          ; max Disk windows = the kind's KD_CAP (§29.3)
 VIEW_KB       equ 3          ; each window's cache, claimed when it opens
@@ -547,8 +546,8 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 API jump table at 0x0010** (§20.3) + osapi helper routines, **boot splash entry at 0x0008** (§15) |
 | `kernel/viddet.inc` | video adapters (§39): the boot probe, the live geometry block, mode set/teardown (`vid_setmode`/`vid_text`/`vid_init`), the shared addressing helpers `gfx_rowbase`/`gfx_nextrow`, the 1bpp colour map `gfx_ink` — prefix `vid_`; included **before** `splash.inc`, and all its data lives in `.text` |
 | `kernel/splash.inc` | boot-time loading screen (§15): the first adapter probe and mode set, welcome dialog, pixel progress bar, spinning vector "8088" — on a 1bpp adapter the progress bar alone (§39.6); far-ticked by the boot sector per sector read; self-contained, no .bss |
-| `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock; the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
-| `kernel/vgabb.inc`  | the software renderer (§32/§39.3): RAM probe, back buffer, software planar primitives, dirty rect, `gfx_flush` — VGA's optional double buffer, and the only driver on a 1bpp adapter |
+| `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock, `gfx_scroll` (§5.5); the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
+| `kernel/softgfx.inc`  | the software renderer (§32/§39.3): the software planar primitives, and the only video driver on a 1bpp adapter |
 | `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
@@ -597,7 +596,7 @@ still behave sanely — draw nothing — if the clipped rect is empty). The
 only clip is the screen edge, except while a background task has a clip
 region armed (§11.3), in which case `gfx_fill`, `gfx_fill_gray`,
 `gfx_xor_fill` and `gfx_xor_rect` are additionally cut to it — at the
-public entry, above the `[bb_on]` dispatch, so the same hook serves both
+public entry, above the `[vid_mono]` dispatch, so the same hook serves both
 renderers and all three adapters.
 **Color for every drawing op comes from the byte variable `[gfx_color]`.**
 Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
@@ -619,8 +618,7 @@ Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
 | `gfx_save`      | AX=x1, BX=y1, CX=x2, DX=y2, ES:DI=buf| copy region to buffer; x1 is rounded **down** to a byte boundary and x2 **up** internally. Buffer layout: plane 0 rows, plane 1 rows, plane 2, plane 3 — all four on VGA, the single plane at 1bpp (§39.3). Returns DI advanced past data. |
 | `gfx_restore`   | AX=x1, BX=y1, CX=x2, DX=y2, ES:SI=buf| write region back (same rounding/layout). Returns SI advanced. |
 | `gfx_lock`      | —                                    | acquire drawing mutex + hide cursor (§7) |
-| `gfx_unlock`    | —                                    | flush the back buffer (§32), show cursor, release mutex |
-| `gfx_flush`     | —                                    | copy the dirty back-buffer rect to VRAM; no-op when double buffering is off or nothing is dirty (§32) |
+| `gfx_unlock`    | —                                    | show cursor, release mutex (§7) |
 
 Save/restore for a W-px-wide, H-px-tall rect uses
 `bytes = ((x2/8) - (x1/8) + 1) * H * [vid_planes]` — ×4 on VGA, ×1 on a 1bpp
@@ -628,18 +626,16 @@ adapter (§39.2). Buffers are budgeted for the VGA worst case, so no routine
 computes the size at run time.
 
 **Software-renderer dispatch (§32/§39.5).** Every public drawing entry above
-(`gfx_pixel` … `gfx_restore`) starts with a `[bb_on]` test and branches to
-its `bb_*` twin in vgabb.inc when the renderer is in use — a back buffer on
-VGA, permanently on a 1bpp adapter, where that renderer *is* the driver;
-contracts, clipping and buffer layouts are identical in both paths. Four
+(`gfx_pixel` … `gfx_restore`) starts with a `[vid_mono]` test and branches to
+its `bb_*` twin in softgfx.inc on a 1bpp adapter, where that renderer *is* the
+driver; contracts, clipping and layouts are identical in both paths. Four
 VRAM bodies remain reachable under their own names, for callers that must
-not touch the back buffer: `vga_save_vram`/`vga_restore_vram` (the mouse
-cursor's save-under, §9) and `vga_xor_rect_vram`/`vga_xor_fill_vram` (the
-drag outline and the menu highlights, §12/§13). All four are transient
-overlays — drawn and erased within one held lock — so they live in VRAM
-only, never in the back buffer (§32); each still opens with a `[vid_mono]`
-test into its `bb_*` twin, because at 1bpp "direct to VRAM" and "through the
-renderer" are the same place (§39.5).
+skip the public entry's `cur_unlazy`: `vga_save_vram`/`vga_restore_vram` (the
+mouse cursor's save-under, §9) and `vga_xor_rect_vram`/`vga_xor_fill_vram`
+(the drag outline and the menu highlights, §12/§13). All four are transient
+overlays — drawn and erased within one held lock — and each still opens with
+a `[vid_mono]` test into its `bb_*` twin, because at 1bpp "direct to VRAM"
+and "through the renderer" are the same place (§39.5).
 
 ### 5.4 `gfx_blit4` — a block of pixels
 
@@ -652,8 +648,8 @@ as long as every row of the block stays inside the segment.
 
 It coalesces runs of equal pixels and emits one `gfx_hline` per run. That is
 deliberately not a plane-parallel fast path: going through `gfx_hline` means
-it works on all three adapters, in front of and behind the back buffer, and
-inside a clip region without one line of adapter-specific code, because
+it works on all three adapters and inside a clip region without one line of
+adapter-specific code, because
 `gfx_fill` already does. Colour reduction on a 1bpp adapter happens per run
 in `gfx_fill` (§39.4), so a 16-colour picture reads as black/dither/white
 exactly as the rest of the UI does. `[gfx_color]` is left holding the last
@@ -701,7 +697,7 @@ from one is a FAR call. The identical run scan written inside the package
 cost one far call per run — hundreds to thousands per canvas repaint — and
 this costs one. A plane-parallel VGA path (byte-per-8-pixels masks written
 through the Map Mask) would beat this on detailed pictures and lose on flat
-ones, and would need its own back-buffer and 1bpp twins; it changes no
+ones, and would need its own 1bpp twin; it changes no
 caller, so it stays available as a later optimisation.
 
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
@@ -710,6 +706,12 @@ caller, so it stays available as a later optimisation.
 SI = dy **signed**, positive scrolling the content *up*. Caller holds the
 gfx lock. **out** CF=0 moved, CF=1 refused and nothing touched. Every
 register preserved — CF is the whole answer.
+
+**It lives in `vga12.inc`.** It was in `softgfx.inc` while it had three
+backends and one of them was §32's back buffer; with the buffer gone it has
+two — VGA through the latches, mono through `gfx_rowbase` — which is exactly
+the shape of every other primitive in `vga12.inc`, and it was the last public
+API slot with its body in the software renderer.
 
 A scrolling view is the one case the repaint optimisations elsewhere in this
 spec cannot help with: row signatures (§27.2) find every row changed, and a
@@ -750,7 +752,6 @@ merely parallel:
 | adapter | how |
 |---|---|
 | VGA direct | GC write mode 1: a `movsb` read fills the latches and the write stores all four planes at once. Mode restored after (§1 rule 7). |
-| VGA + back buffer | `gfx_flush` **first**, then the four buffer planes *and* VRAM scroll in step. Nothing is marked dirty — they stay identical by construction. |
 | Hercules / CGA | per-row `rep movsb` through `gfx_rowbase`, so the banked interleave is absorbed rather than special-cased. |
 
 The flush-first rule is the subtle one. A pending dirty rect inside the
@@ -825,10 +826,10 @@ its screen clipping, so there is no separate edge test on the path.
 
 #### 5.6.4 Two inner loops, split where the slow machine is
 
-| `[bb_on]` and `[vid_planes]` | how |
+| `[vid_mono]` and `[vid_planes]` | how |
 |---|---|
 | software renderer, **1 plane** — all three mono adapters | per-pixel: one `gfx_rowbase`, then a rotating bit mask, `gfx_nextrow` per row step, and one read-modify-write per pixel. `gfx_ink`'s three inks are all honoured, the dither by `(x^y)&1`. |
-| everything else — VGA direct, VGA + back buffer | Bresenham coalescing along the **major** axis, one `gfx_fill_raw` per run. |
+| everything else — VGA direct | Bresenham coalescing along the **major** axis, one `gfx_fill_raw` per run. |
 
 The split is deliberate and not a gap. Mono *is* the 4.77 MHz machine (§39),
 so it gets the tight loop; VGA is the fast one, and major-axis coalescing
@@ -1058,7 +1059,7 @@ instructions removed per arrival** rather than §5.7's 196.
 
 The reason is structural, and it corrects the argument this section opens
 with: **`gfx_lstep` is not a rect primitive.** It never goes near
-`vga_rect_setup` or `bb_rect`, so its arrival is the far-call cell and a
+`vga_rect_setup` or `sw_rect`, so its arrival is the far-call cell and a
 prologue, not the rect machinery §5.7 measured. Borrowing §5.7's ~756 µs for
 it was wrong.
 
@@ -1124,8 +1125,8 @@ Taken apart, one `gfx_pixel` on a 1bpp adapter was **196 guest instructions**
 (measured under `-icount`, PERFORMANCE.md Part 4) spread over eleven
 routines, with no hot spot anywhere: the API far-call cell, `gfx_pixel`'s
 rect marshalling, §11.3's clip test, `bb_mono_chk`, the `[bb_on]` dispatch,
-`vga_rect_setup`, `gfx_rowbase`, `bb_dirty_rect`, `bb_ink`, `bb_plane_op`
-and `bb_col`. **It is generic machinery, and what it costs is
+`vga_rect_setup`, `gfx_rowbase`, `bb_dirty_rect`, `sw_ink`, `sw_plane_op`
+and `sw_col`. **It is generic machinery, and what it costs is
 register discipline and call structure rather than work** — a third of it
 was push/pop pairs (29.7 clocks each, measured) and near call/rets (52.1).
 
@@ -1134,8 +1135,8 @@ a harmless tidy-up in the other direction:
 
 1. **A one-way flag is tested before it is recomputed.** `bb_mono_chk`
    opens with `cmp byte [bb_mono], 0` — once the flag is retired there is
-   nothing left to decide — and `bb_init` retires it at boot on a 1bpp
-   adapter, where a back buffer can never be armed (§39.5). Eight
+   nothing left to decide — and it was retired at boot on a 1bpp
+   adapter, where no buffer could ever be armed (§39.5). Eight
    instructions on every fill and every glyph become three.
 2. **`bb_dirty_rect` asks `[bb_dbl]` first.** With no buffer armed it was
    computing a rectangle that `bb_dirty`'s first compare then discarded.
@@ -1148,7 +1149,7 @@ a harmless tidy-up in the other direction:
    The formula in §39.3 is unchanged. The `mul` by the stride stays: the
    alternative is a per-row table, and 480 rows of it is a third of what
    `KERN_BUDGET` has left.
-5. **`bb_col` preserves nothing** (§32). Its only caller banks BX and DX for
+5. **`sw_col` preserves nothing** (§32). Its only caller banks BX and DX for
    the whole plane and reloads AH, DI, SI and BP around every call, so the
    five push/pop pairs it used to open with were saving registers that
    caller was about to overwrite. SI and BP then carry `gfx_nextrow`'s step
@@ -1157,19 +1158,19 @@ a harmless tidy-up in the other direction:
    already was in font.inc's (§6.1). Its body is three instructions and the
    call and ret around them cost as much again — and **a fill walks its rows
    three times**, once per edge column and once for the interior, so a fill
-   pays it three times per scan line. `bb_xfer`'s two loops were the last
+   pays it three times per scan line. `sw_xfer`'s two loops were the last
    holdouts and followed later (§7.1's work): the save side walks the
    framebuffer in **SI**, so through the call it paid two `xchg si, di` as
    well, around a body that is a `rep movsb` of two or three bytes.
-7. **`[bb_pat]` is staged by whoever needs it**, not by `bb_rect` for all
-   three modes: `BBM_GRAY` starts from the dither byte, `BBM_SOLID`'s own
-   dither branch stages it in `bb_ink`, and `BBM_XOR` never reads it.
+7. **`[sw_pat]` is staged by whoever needs it**, not by `sw_rect` for all
+   three modes: `SWM_GRAY` starts from the dither byte, `SWM_SOLID`'s own
+   dither branch stages it in `sw_ink`, and `SWM_XOR` never reads it.
 
 Together those took a `gfx_pixel` from 196 instructions to 158 and a
 `GFX_FILL 64x64` by 14.5%, with the output byte-identical on all three
 adapters and both renderers (PERFORMANCE.md Part 9, Set 3). What is left is
 mostly irreducible: the far-call cell is the package ABI (§20.1), the eight
-push/pops in `bb_rect` are `gfx_fill`'s "clobbers flags" contract, and
+push/pops in `sw_rect` are `gfx_fill`'s "clobbers flags" contract, and
 `vga_rect_setup`'s clipping is the clipping.
 
 ## 6. font.inc
@@ -1209,7 +1210,7 @@ is one whose cell is not wholly inside a single fragment of an armed clip
 region (§11.3) — a glyph is one shape or none, and half an 8x8 glyph is
 unreadable. Glyph rows may straddle two VRAM
 bytes; use Set/Reset + Bit Mask with the glyph row shifted across a 16-bit
-window. Under `[bb_on]` (§32/§39.5) `font_char` branches after clipping to
+window. Under `[vid_mono]` (§39.5) `font_char` branches after clipping to
 the software renderer, which applies the same shifted row masks to every
 plane the adapter has (or/and-not per the `[gfx_color]` plane bit — at 1bpp
 there is one plane and one bit, and `font_ink` rounds everything but pure
@@ -1231,10 +1232,10 @@ its whole framebuffer byte, so there is nothing underneath to preserve: no
 shift, no read, no second byte, and no separate fill pass at all. Per plane
 the byte is `(glyph & ink) | (~glyph & background)` with each mask 00 or FF,
 which on mono reduces to the glyph or its complement. That is the path the
-slow machines are on — `[bb_on]` is permanently 1 there (§39.5) — and it is
+slow machines are on — `[vid_mono]` is permanently 1 there (§39.5) — and it is
 where the cost of text actually lives.
 
-The fast path is deliberately narrow: `[bb_on]` set **and** `x & 7 == 0`
+The fast path is deliberately narrow: `[vid_mono]` set **and** `x & 7 == 0`
 **and** `[gfx_dis]` clear (a disabled control's glyph is masked to a
 checkerboard inside `font_ink`, §47, which a plain store cannot express).
 Anything else — a VRAM planar target, an unaligned run, a greyed one — falls
@@ -1286,7 +1287,7 @@ about any other glyph that breaks it.)
 
 | adapter | PAIR aligned | PAIR at x+5 | `font_run` aligned | `font_run` at x+5 |
 |---|---|---|---|---|
-| VGA, `[bb_on]` = 0 | 2694 | 2957 | 2763 | 3023 |
+| VGA, `[vid_mono]` = 0 | 2694 | 2957 | 2763 | 3023 |
 | CGA 640x200 | 3400 | 3513 | **2695** | 3580 |
 | Hercules 720x348 | 3369 | 3483 | **2673** | 3548 |
 
@@ -1373,7 +1374,7 @@ so the spilled second byte costs four times). But most of the value is in the
 single-store path, and alignment is what unlocks it — see §6.1.4.
 
 **On VGA `font_run` costs 2.5%.** Both `font_run` rows sit 2.4-2.5% above
-their matching pair, which is the tell that `[bb_on]` = 0 sends everything to
+their matching pair, which is the tell that `[vid_mono]` = 0 sends everything to
 the fallback whatever the alignment; the 2.5% is the far call, the gate tests
 and `font_width_x`. That is the price of the abstraction on the adapter it
 cannot help, it is small, and it is why the tracker calls `font_run` only
@@ -1625,11 +1626,9 @@ kernel against `build/`'s `associco.inc` rather than `smallk`'s.
 
 - **gfx lock**: byte `gfx_lock_flag` in vga12.inc. `gfx_lock`:
   `cli`; if flag set → `sti`, `call task_yield`, retry; else set flag, `sti`,
-  then `call cursor_hide`. `gfx_unlock`: `call gfx_flush` (§32 — pushes the
-  dirty back-buffer rect to VRAM while the cursor is still hidden; a no-op
-  without double buffering), then `call cursor_show`, then clear flag. That
-  order is binding: the flush must complete before the cursor may reappear,
-  and the cursor's save-under must be taken from the freshly flushed VRAM.
+  then `call cursor_hide`. `gfx_unlock`: `call cursor_show`, then clear the
+  flag. That order is binding: the cursor must reappear while we still own
+  the screen, so its save-under is taken from finished pixels.
   Every task-level drawing burst is wrapped in gfx_lock/gfx_unlock.
 - **Cursor vs ISR**: the mouse ISR never draws while `gfx_lock_flag` is set
   **or while `cur_level` < 0** (cursor refcount-hidden — the save-under
@@ -1716,7 +1715,7 @@ Four things make the pair what it is.
   the renderer's own target there (§39.5), so `cur_put_mono` reads the byte
   under the arrow, banks it, ORs the white outline in, ANDs the black body
   out and writes it back — in one row loop. The three it replaces (a save
-  through `vga_rect_setup` and `bb_xfer`, then `cur_pass_mono` for white,
+  through `vga_rect_setup` and `sw_xfer`, then `cur_pass_mono` for white,
   then `cur_pass_mono` again for black) read the same byte three times and
   wrote it twice, each through its own row walk and its own `gfx_nextrow`
   call. The masks compose: `(under | white) & ~black` is exactly what drawing
@@ -1819,13 +1818,13 @@ before building an optimisation whose justification came from a measurement
 taken before its neighbours were fixed.**
 
 For the record, had it been built: the check is ~12 instructions while the
-arrow is up and **~2** after it comes down (`bb_mono_chk`'s one-way shape,
-§5.7), against ~568 for the pair, so the economics were never the problem.
+arrow is up and **~2** after it comes down (the one-way-flag shape of §5.7),
+against ~568 for the pair, so the economics were never the problem.
 The nine ways to miss were: the seven §11.3 clipped primitives plus
 `gfx_blit4`/`gfx_scroll`/`ico_core`/`gfx_fill_pat`/`gfx_line`/`gfx_lstepv`/
 `font_char`/`font_run`; `vga_xor_rect_vram`/`vga_xor_fill_vram` (the drag
 outline and menu highlights, which bypass the public entries by design);
-`gfx_flush` mid-hold from `menu_track`/`ui_drag`/`fsx_wait`; `gfx_restore`;
+`gfx_restore`;
 `vid_setmode`/`fsx_mode`/`fsx_restore`; the cursor's own path, which must be
 excluded or the check recurses; a package's raw writes; the erase having to
 run *before* the overdraw (§48.11's crosshair rule); and `gfx_unlock` having
@@ -1937,8 +1936,8 @@ and two things do:
 - **`cur_unlazy`** - take it now, unconditionally. Every path that can draw
   ANYWHERE calls this: `GFXCLIP`'s unclipped branch, the primitives §11.3
   keeps off the clip list (`gfx_blit4`, `gfx_scroll`, `gfx_line`,
-  `gfx_lstepv`), the VRAM XOR twins, `gfx_flush`, `gfx_save`/`gfx_restore`
-  and `fsx_run`.
+  `gfx_lstepv`), the VRAM XOR twins, `gfx_save`/`gfx_restore` and
+  `fsx_run`.
 - **`cur_lazyck`** - take it only if the cursor is reachable. `wm_clip_set`
   calls it, and this is the whole trick: **once a region is armed the clipped
   primitives are CONFINED to it**, so a cursor outside that window is provably
@@ -2427,10 +2426,10 @@ then, so this is invisible.
   banked bytes back, replaying `cur_geom`'s geometry rather than
   re-deriving it. Save-under buffer in .bss: `CUR_SPAN` × `CUR_GH` × 4
   planes = 96 bytes. The cursor is **always
-  VRAM-direct**, double buffering or not: save/restore go through
+  VRAM-direct**: save/restore go through
   `vga_save_vram`/`vga_restore_vram` (§5, §32), never the dispatching
-  `gfx_save`/`gfx_restore` — the back buffer must never contain cursor
-  pixels, and the ISR must never touch the back buffer.
+  `gfx_save`/`gfx_restore`, whose public entry calls `cur_unlazy` (§7.1.4)
+  and would recurse.
 - `cursor_hide` / `cursor_show`: refcounted (`cur_level`, hidden when < 0
   like classic HideCursor/ShowCursor; init state hidden). Must be callable
   with interrupts on; guard their critical sections with cli/sti so the ISR
@@ -3533,7 +3532,7 @@ rectangle vocabulary is one choke point. The clipped set is seven:
 | `gfx_fill_gray` | per fragment (the dither is screen-parity, so fragments align) |
 | `gfx_fill_pat` | per fragment (the pattern is screen-aligned for the same reason: the row byte is `y & 7` off a table staged from `[gfx_pat]` on every call, so a fragment starting at any y picks the byte the whole rect would have) |
 | `gfx_xor_fill` | per fragment |
-| `gfx_xor_rect` | **decomposed first**: an outline is not the intersection of its bounding rect with anything, so it becomes four `gfx_xor_fill` strips (the same decomposition `bb_xor_rect` uses, each pixel touched once, still self-inverting) |
+| `gfx_xor_rect` | **decomposed first**: an outline is not the intersection of its bounding rect with anything, so it becomes four `gfx_xor_fill` strips (the same decomposition `sw_xor_rect` uses, each pixel touched once, still self-inverting) |
 | `font_char` | whole-cell; covers `font_str` |
 | `icon_draw16` | whole-icon; covers `icon_draw` and `ico_core` |
 
@@ -3556,12 +3555,11 @@ package that blits (Solitaire, §43) has no worker. A package that arms
 `OSAPI_WM_CLIP_SET` from a worker and then blits **will** paint over the
 window on top of it.
 
-Each hook sits at the **public entry, above the `[bb_on]` dispatch**, so one
-implementation covers the VRAM path, the back-buffer path, VGA and both mono
-adapters — on a 1bpp adapter the software renderer *is* the direct path
-(§39.5), and a hook below the dispatch would work on VGA and silently do
-nothing on Hercules. This is the same reasoning that places `bb_mono_chk`
-where it is. Disarmed, the hook is one compare and a taken branch: the
+Each hook sits at the **public entry, above the `[vid_mono]` dispatch**, so one
+implementation covers the VRAM path, VGA and both mono adapters — on a 1bpp
+adapter the software renderer *is* the direct path (§39.5), and a hook below
+the dispatch would work on VGA and silently do nothing on Hercules.
+Disarmed, the hook is one compare and a taken branch: the
 repaint path pays nothing measurable. Armed, `gfx_clip_run` intersects the
 primitive's rect with each fragment and re-enters the raw body per surviving
 fragment.
@@ -3599,8 +3597,8 @@ at both ends, so its two operations clip alike by construction.
    hold is what stops a leaked region from silently truncating the next
    painter. Nothing relies on callers to clear it.
 2. **Transient overlays are never clipped.** The drag outline and the menu
-   highlights call `vga_xor_rect_vram` / `vga_xor_fill_vram` direct,
-   deliberately bypassing the back buffer (§32). They are drawn by the UI
+   highlights call `vga_xor_rect_vram` / `vga_xor_fill_vram` direct (§32).
+   They are drawn by the UI
    task in a different lock hold, and rule 1 is what makes that structural
    rather than a convention.
 3. **Clipping is for background tasks only.** `wm_paint_all` draws visible
@@ -3972,12 +3970,9 @@ border, so the number the kernel actually holds is `W_X ≡ 7 (mod 8)`.
 Publishing the frame number would make every app rediscover that `inc ax`,
 and they would each get it wrong differently.
 
-**The gate is `[vid_mono]`, never `[bb_on]`.** They agree on Hercules and CGA,
-but `[bb_on]` is also 1 on a VGA with double buffering armed — so gating on it
-would make windows drag differently depending on a Control Panel setting, and
-buy almost nothing: the back buffer's flush costs ~24× its render (§32), so
-the render-side saving is diluted away there. On VGA the flag is therefore a
-no-op, which is what lets an app set it unconditionally instead of asking
+**The gate is `[vid_mono]`.** What snapping buys is §6.1's single-store cell
+path, which exists on the 1bpp adapters and nowhere else. On VGA the flag is
+therefore a no-op, which is what lets an app set it unconditionally instead of asking
 `OSAPI_VIDEO` first.
 
 Four sites write `W_X` and all four go through `wm_snap_ax`:
@@ -4453,7 +4448,7 @@ the cache poked off as a control: **6 pixels of the Disk window beside Note
 Pad**, replaced with the copy taken before that window came forward.
 
 `wm_su_edge` is the fix, and what it does *not* do is the point. A masked
-write is the obvious answer and it means edge read-modify-writes in `bb_xfer`
+write is the obvious answer and it means edge read-modify-writes in `sw_xfer`
 and a Bit Mask plus a latch load in `vga_restore_vram` — two primitives the
 **cursor** is on, slowed for every caller to serve this one. So the merge
 happens in RAM instead: read the two edge byte columns off the screen **as
@@ -4692,13 +4687,9 @@ before, just no longer baked into the bar.
 them fresh; cursor stays hidden during tracking since the gfx lock is held —
 acceptable, tracking feedback is the highlight).
 
-Because the whole interaction runs under one gfx_lock, `menu_track` calls
-`gfx_flush` (§32) once, after the pull-down + items are drawn — that is real
-back-buffer content and would otherwise stay invisible while the button is
-held. The two highlights are not: `menu_title_xor` and `menu_item_xor` go
-through `vga_xor_fill_vram` (§5), straight to VRAM, so tracking neither
-dirties the back buffer nor flushes — the poll loop does no drawing work at
-all beyond the XOR itself. The final save-under restore + title un-highlight
+The two highlights go through `vga_xor_fill_vram` (§5), straight to the
+framebuffer, so the poll loop does no drawing work at all beyond the XOR
+itself. The final save-under restore + title un-highlight
 need no flush of their own — the caller's gfx_unlock flushes them (§13
 step 2), and that flush is what clears the last item highlight from VRAM.
 
@@ -4774,9 +4765,8 @@ minute without** (§13 step 4). No
 `wm_obscured` check is needed anywhere: windows clamp to `y >= MBAR_H`
 (§13), so nothing can ever cover the bar — **except a fullscreen window
 (§11.2), which is why step 4's redraw and the ladder's menu-bar branch are
-gated on `[wm_fs]` being zero.** The cell is ordinary persistent
-content — it goes through the back buffer like everything else (§32) and
-the caller's `gfx_unlock` flushes it.
+gated on `[wm_fs]` being zero.** The cell is ordinary persistent content,
+drawn like everything else.
 
 **Clicking the cell opens the Control Panel on its Date/Time page** (§31.5).
 ui_task hit-tests `x >= [vid_clk_hx]` *before* `menu_track`, so the cell is
@@ -5019,7 +5009,7 @@ in exactly three things: where the rect is, which `mouse_btn` bit ends it,
 and where the item array comes from. Everything else — the save-under, the
 white fill and black frame, the 16px item cells, the XOR highlight that
 follows `mouse_y`, the `task_yield` in the poll loop, the restore — is the
-same code and, more to the point, the same §32 back-buffer discipline.
+same code and, more to the point, the same save-under discipline.
 **Two copies of that discipline would drift**, so there is one:
 `menu_track` was split, and `menu_drop` is the half both callers share.
 
@@ -5254,13 +5244,6 @@ Five things hold it up.
   initialisers, **not `.bss`** — `-f bin` zeroes nothing, `drv_boot` reads
   the disk before any init routine could run, and a garbage `[fpg_on]` would
   have the widget drawing into the splash.
-- **It draws mid-lock, so it must flush itself.** With a back buffer armed
-  (§32) the `gfx_*` primitives render into RAM and only `gfx_unlock` pushes
-  them to VRAM — and the lock is not released until the file operation ends,
-  which is precisely the span the widget exists to report. Each of the three
-  entry points therefore ends in `gfx_flush`, as `menu_track` does for a
-  pull-down. On a mono adapter that is a compare and a return (`[bb_dbl]`,
-  not `[bb_on]` — §39).
 - **The arrow comes off before anything is drawn.** `gfx_lock` only
   *promises* the hide (§7.1.4), so `fpg_begin` spends the promise with
   `cur_unlazy`; it is one-way within a hold, so `fpg_step` inherits it for
@@ -5436,10 +5419,8 @@ Loop forever:
      pair so a third press starts a fresh one. Otherwise: if
      not front, `wm_front`; then run
      the **drag loop**: gfx_lock; xor-draw the outline at the window rect
-     (via `vga_xor_rect_vram`, §5/§32 — the outline is a transient overlay
-     that never enters the back buffer, so no flush is involved anywhere in
-     this loop; it is always xor-erased before the lock drops, which is what
-     keeps VRAM equal to the back buffer for every other drawer);
+     (via `vga_xor_rect_vram`, §5/§32 — a transient overlay, always
+     xor-erased before the lock drops);
      while `mouse_btn` bit0 set: xor-erase the outline, gfx_unlock,
      `task_yield` (background tasks stay live here), gfx_lock, xor-draw the
      outline at rect offset by (mouse - start) — every iteration, even if
@@ -5896,9 +5877,7 @@ kmain: set DS/ES = `KERNEL_SEG` and SS:SP = `LOW_SEG:STK0_TOP` (§2.1),
 mode set so a machine without one is dated from the fallback constants
 from the first paint onward) → `vid_init` (§39 — re-runs the splash's probe
 and apply, and **skips the mode set while the splash is live**, §15.3) →
-`bb_init` (§32 — the RAM probe
-must run after the mode set, which clears VRAM, and before the first
-drawing call) → `font_init` → `wm_init` →
+`font_init` → `wm_init` →
 `inst_init` → `mouse_init` → `desk_init` → `files_init` → `loader_init` →
 `snd_init` (§34.7 — publishes `snd_live` last) → `drv_boot` (§51.3) →
 `spl_finish` (§15.3) → gfx_lock →
@@ -6099,13 +6078,7 @@ Four things are load-bearing:
    set, and setting it again is precisely what used to wipe the screen.
    The probe and the publish still re-run and must: everything between there
    and the paint reads `[vid_w]`/`[vid_h]`/`[vid_stride]`.
-2. **`bb_set` moved to the END of `drv_boot`** (§32/§51.3). It seeds the back
-   buffer *from VRAM*, and until the paint VRAM holds the loading screen — a
-   buffer armed ahead of the reads swallows every notch after it, because a
-   direct VRAM write is what the next flush undoes. Nothing about the heap
-   depends on the order: data claims grow up and a driver's region down
-   (§50.3).
-3. **The allowance is a clamp, not a scale.** `spl_step` stops at
+2. **The allowance is a clamp, not a scale.** `spl_step` stops at
    `total - 1`, so the last notch always belongs to `spl_finish` and a boot
    that overruns crowds up against 100% instead of claiming to be finished.
    `SPL_POST` is tuned for the common boot — a `SYSTEM.CFG` that asks for no
@@ -6156,9 +6129,8 @@ Three things about it are deliberate:
   counter has been running since POST and the hook chains it, so it never
   stops. One word is an hour at 18.2065 Hz.
 - **`gfx_unlock`, not `cursor_show`.** The question is when the first desktop
-  *frame* is finished, and `gfx_unlock` is what puts it on the glass — it
-  flushes the back buffer where there is one, so it is the same instant on
-  all three adapters. The cursor is not the desktop.
+  *frame* is finished, and `gfx_unlock` is what puts it on the glass. The
+  cursor is not the desktop.
 - **Ticks, not a finer unit.** 54.925 ms of resolution on a boot measured in
   seconds is quantisation, not noise, and it costs nothing: there is no
   timebase available in the boot sector's first instruction that is finer and
@@ -9786,7 +9758,7 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 0x01B0 wm_geom         0x01D8 gfx_blit4         0x0200 mem_claim      (X)
 0x01B8 cm_alloc    (X) 0x01E0 wm_about_set      0x0208 mem_free       (X)
 0x01C0 cm_free     (X) 0x01E8 (retired)         0x0210 mem_avail
-0x01C8 cm_caps         0x01F0 osapi_gfx_dbuf    0x0218 osapi_font_glyphs
+0x01C8 cm_caps         0x01F0 RETIRED (§32)     0x0218 osapi_font_glyphs
 0x01D0 wm_resize       0x01F8 gfx_scroll        0x0220 wm_onsize
                                                 0x0228 osapi_file_here
                                                 0x0230 osapi_file_goto
@@ -9956,12 +9928,10 @@ Slot-specific contracts that are not simply their target routine's:
 0x02D0 fsx_mode          in AL = FSXM_* id, ES:DI = an FSI_SIZE buffer
                          (ES the caller's own, like gfx_blit4).
                          Bracket-only (§53.4). CF=1 refused: bad id, not
-                         this adapter, back buffer armed, not the
-                         exclusive task.
+                         this adapter, not the exclusive task.
 0x02D8 fsx_wait          in AL = 0 next tick / 1 vertical retrace.
-                         Bracket-only, CF=1 outside one. Flushes an armed
-                         back buffer first while no mode switch has
-                         happened — the present (§53.5).
+                         Bracket-only, CF=1 outside one. The frame clock
+                         (§53.5).
 0x02E0 gfx_line          in AX/BX = x1/y1, CX/DX = x2/y2 inclusive, pen in
                          [gfx_color], lock held (§5.6). Any direction;
                          an axis-aligned pair defers to gfx_hline /
@@ -12356,11 +12326,11 @@ not.
 Bitmaps are hand-authored `dw` rows (like the menu-bar logo, the one
 sanctioned place for hand-made bitmap data — icons are the second).
 
-Under the software renderer (`[bb_on]`: double buffering on VGA, always set
+Under the software renderer (`[vid_mono]`, always set
 on a 1bpp adapter — §32/§39.5) `ico_core` branches after its clip/shift
 setup to a software pass pair: the white underlay ORs the shifted mask-row
-bits into all `[vid_planes]` planes at `[vid_rseg]` — the back buffer on
-VGA, the framebuffer itself on mono — the black pass AND-NOTs the data-row
+bits into all `[vid_planes]` planes at `[vid_rseg]` — the framebuffer itself
+— the black pass AND-NOTs the data-row
 bits out of them, same 3-byte window and same edge clipping as the VRAM
 passes. Its row advance goes through `gfx_nextrow` (§39.3), because the
 mono framebuffers are banked.
@@ -14595,9 +14565,9 @@ account, and the rows partition one total.
   heap's package regions, §20.1
   — reserved from boot, so a machine with no package open still shows it
   spoken for), and every live **heap claim** (§50, `mem_claimed_kb`). Both
-  the kernel's own claims (the menu save-under, the back buffer) and every
-  package's are in that last term. **All three are KB from the start**: the
-  back buffer alone is 150KB and would not fit a 16-bit byte count. Total KB
+  the kernel's own claims (the menu save-under, the clipboard) and every
+  package's are in that last term. **All three are KB from the start**: a
+  package's canvas alone can exceed a 16-bit byte count. Total KB
   is the boot-time int 12h value. **All bar math is in KB**: barw =
   usedK·160/totalK (`mul` then `div`; totalK cannot be 0 from int 12h, but a
   0 check that skips the bar is required anyway).
@@ -14833,8 +14803,8 @@ own above the second map and read as *its* label.
   signature vertically or it has nowhere to show it), **each live heap claim**
   as a **framed block**
   (`tm_map_claim`: `tm_pat_clm` inside, a 1px black `gfx_frame` around) —
-  read live at draw time from the claim table, so arming double buffering or
-  opening a Disk window makes a band appear. The buffer band is what makes
+  read live at draw time from the claim table, so opening a Disk window makes
+  a band appear. The buffer band is what makes
   the bar say the same thing the rows do: the kernel is not one lump, and the
   part of it that is scratch rather than program is the part these figures
   are steered by (`docs/KERNEL-MEMORY.md`).
@@ -14856,8 +14826,8 @@ own above the second map and read as *its* label.
   mixed case, which is the whole of the distinction between a map's label and
   a row.
 - (16,62): header `"NAME     ADDR SIZE   HEAP"` (25 chars, the row width).
-  Two spaces of gap before HEAP, not one: a 150K back buffer beside a 150K
-  package ran the two figures together at the old 22-char width.
+  Two spaces of gap before HEAP, not one: two 150K figures side by side ran
+  together at the old 22-char width.
   **The NAME field is eight columns plus a separator.** Seven of them are the
   name (`tm_copy7`) and the eighth is the indent a nested row carries, so the
   four builders line their addresses up whichever way they spend it: System
@@ -15767,50 +15737,23 @@ repainted within the same UI pass by the `cp_dirty` repaint above, and the
 Task Manager's SCHED field (§28), rewritten at its next sample (≤ 9 ticks)
 and by that repaint.
 
-### 31.3 Buffer page — double buffering
+### 31.3 Buffer page — retired
 
-Third item in the panel list, same two-row radio geometry as §31.2 (it
-shares `cp_glyph` and the `CP_B*Y` hit bands).
+The panel had four items after §31.4 took the Sound page; it has three
+static rows and the Display page (§31.10) appended last. This page chose
+whether drawing went straight to the framebuffer or through §32's 150KB back
+buffer, and it went with the buffer — see §32 for why the feature was
+removed. `CP_ITIME`, the Date/Time item `ui.inc` selects when the menu-bar
+clock is clicked (§12.1), is therefore **1**; `CP_IDRV` is **2** and
+`CP_ISND` **3**.
 
-**It was called "Display" until §31.10's Display page existed**, and the
-rename is the honest one of the two: this page has never had anything to do
-with *which* display the machine drives — it chooses whether drawing goes
-straight to the framebuffer or through the 150KB back buffer of §32, which
-is a question about buffering. Its procs are `cp_buf_*` to match; the
-string is `cp_s_buf`.
-
-Heading "Buffer"; row 0
-"Direct to screen", row 1 "Double buffered"; the filled glyph follows
-`[bb_dbl]`, the armed-buffer flag and **not** `[bb_on]` (1 on any mono
-adapter, §39.5); it is **0 at boot** — double buffering is opt-in.
-
-Caption: "Smoother; costs 150K" normally, or — on a 1bpp card — the two
-lines "Framebuffer is the display" / "driver on this adapter", which say why
-rather than merely refusing: the software renderer *is* the direct path
-there (§39.5), so there is nothing to double at any memory size and
-`[bb_avail]` is never armed at all. Two lines because the pane is 27
-characters wide and the answer is 49; the caption is the lowest thing on the
-page, so `CP_PCAP2` sits under it. On such a machine the page is
-display-only: a
-click in either band is ignored outright rather than moving a dot that
-`bb_set` would refuse to honour.
-
-**"Double buffered" greys out when the heap cannot fund it.** `cpf_dbok`
-asks `bb_canfit` (§32) — `[bb_avail]` set *and* a free run of `BB_KB`
-available right now — and when the answer is no the row's label and glyph
-are drawn in `CDGRAY` with **"Not Enough Ram"** beside it, and the click
-band is inert. This is the reciprocal half of the claim heap (§50) and the
-thing docs/PAINT-NOTES.md said was usually forgotten: a kernel feature that
-speculatively wants 150KB has to ask the same allocator a package does, and
-be told no by the same answer. It is live state, not a boot-time verdict —
-open a package that claims a canvas and the row greys out; close it and the
-row comes back.
-
-`cp_buf_click` mirrors `cp_sched_click` — signed comparisons, x ignored,
-a hit on the live row does nothing — and calls `bb_set` (§32), which
-requires the gfx lock the click handler already holds. It then redraws just
-the two glyphs. No `[cp_dirty]`: unlike the scheduler mode, no window quotes
-this setting, and the switch is invisible except as speed.
+What the page demonstrated is not retired with it. The **three-layer refusal
+idiom** — one predicate, read by the setter, by the caption and by the click
+band, so all three agree by construction rather than by three copies of the
+test — is §47's rule 3 in its original form, and §50.5's "Not Enough Ram"
+still uses it: this page was where a kernel feature that speculatively wanted
+150KB had to ask the same allocator a package does, and be told no by the
+same answer.
 
 ### 31.4 Sound page — retired
 
@@ -15888,7 +15831,7 @@ selected one — white on a black `gfx_fill` box inset 2px around the glyphs
   `'Click a field, then + or -'` at CPT_CAP1Y and, at CPT_CAP2Y,
   the `cp_rtcnam` row for `[clk_tier]` — `'Hardware clock: none'`,
   `'... AT 70h'`, `'... 58167 2C0h'`, `'... 5C01 2C0h'` or `'... BIOS'`,
-  read live from `[clk_rtc]`/`[clk_tier]` (§37.90). The `bb_avail` caption
+  read live from `[clk_rtc]`/`[clk_tier]` (§37.90). The three-layer refusal
   idiom again, and it names the RUNG rather than answering yes/no because
   on a machine whose clock will not hold a setting that is the diagnosis.
   Purely informative: editing works either way.
@@ -15941,7 +15884,7 @@ sentence `drv_status` derives from the row's live state — `'Loaded'`,
 
 **The checkbox tracks what is LOADED, not what the settings file wants.** A
 driver enabled on a machine with no card is unchecked, with `'No hardware
-found'` under it. That is the `bb_avail` idiom (§31.3) again: the box, the
+found'` under it. That is the three-layer refusal idiom (§31.3) again: the box, the
 caption and the click all read one word, so they cannot disagree.
 
 **A click loads or unloads on the spot**, mounting A: on demand, and marks
@@ -16065,7 +16008,7 @@ between those two is the whole design of the page:
   exists inside it (§50.3), so only `mem_claim_dma`'s own scan knows. The click
   therefore tries, and reports what came back.
 
-That second half is the one place the page departs from the `bb_avail` idiom
+That second half is the one place the page departs from the three-layer refusal idiom
 (§31.3), and deliberately: `bb_canfit` is a real predicate and `mem_claim_dma`
 has none. Greying on a guess would keep a machine that has the room off a tier
 it can afford.
@@ -16407,256 +16350,82 @@ rather than below. The three radios are on a uniform 74px pitch so the hit
 test is one divide, like the adapter rows above them, and their bands are
 contiguous across the pane's full width.
 
-## 32. vgabb.inc — the software renderer (double buffering, and §39's 1bpp driver)
+## 32. softgfx.inc — the software renderer (§39's 1bpp driver)
 
-**Why it exists.** The original design drew straight into VRAM because
-256KB of RAM leaves no room for a 640×480×4-plane shadow (150KB). Machines
-with more memory can afford one, and get flicker-free updates: everything
-drawn inside one gfx_lock/gfx_unlock burst appears on screen at once.
-Module prefix `bb_`; file included right after `vga12.inc`. The same code is
-also the kernel's 1bpp driver — on a Hercules or CGA card it renders straight
-to the framebuffer and nothing below applies (§39.3/§39.5).
+**What it is.** A latch-free, port-free CPU implementation of `vga12.inc`'s
+drawing primitives, rendering into whatever `[vid_rseg]`/`[vid_planes]`
+describe. On a Hercules or a CGA card that target is the framebuffer itself
+and this module **is** the video driver — there is no second one (§39.3).
+Module prefix `bb_`; included right after `vga12.inc`.
 
-**Probe — `bb_init`** (from kmain, after `mem_init`): on a mono adapter it
-returns at once, leaving `[bb_avail]` 0 (§39.5); on a colour adapter it sets
-`[bb_avail]` = 1 and that is all it does — it neither arms the buffer nor
-touches the planes, and it asks int 12h nothing. `[bb_avail]` now means
-**"this adapter has planes to double"**, a property of the card and not of
-the machine's size; whether the memory is there is a live question the claim
-heap answers (`bb_canfit`, below), because it can change while the machine
-runs. The old `DB_MIN_KB` (500) floor was a boot-time verdict derived from
-int 12h and is retired with it.
+**It was written for a back buffer, and the back buffer is gone.** Until this
+section was rewritten, VGA machines could route every draw through four
+planes of claimed RAM (150KB, owner `MEM_K_BB`) and flush the dirty rectangle
+to VRAM at `gfx_unlock`, so everything drawn inside one lock burst appeared
+at once. `bb_init`/`bb_canfit`/`bb_sync`/`bb_set`, `bb_mono_chk`, the dirty
+rect and `gfx_flush` were that feature; slot 0x01F0 was a package's own
+`bb_set`; the Control Panel's Buffer page (§31.3) armed it; `SYSTEM.CFG`'s
+`BB` key remembered it; Tracker's Smooth (§45.11) borrowed it.
 
-**Double buffering is OFF at boot and switched at runtime.** On VGA `[bb_on]`
-and `[bb_dbl]` start 0, so a fresh boot runs exactly the pre-§32 direct-VRAM
-code and **nothing else in this section applies** until the user turns it on
-from the Control Panel's Display page (§31.3), which calls `bb_set`.
-`bb_canfit` gates that — `[bb_avail]` set *and* the claim heap holding a free
-run of `BB_KB` (§50) — and the page greys the row and says "Not Enough Ram"
-instead of offering a switch that would refuse. All three
-bytes are initialized data (`db`, next to `gfx_lock_flag`), **not** .bss — nothing
-zeroes .bss at boot.
+**Why it went, which is worth keeping because the shape recurs.** The feature
+could only ever be armed on a **VGA** with a **150KB free run** in the heap.
+The machine this project is calibrated against — a 5150 with a Hercules and a
+CGA in it (docs/FIELD-MACHINES.md) — could not reach it at any memory size,
+and `bb_avail` is a card question, so no amount of RAM changed that. Meanwhile
+**every** adapter paid for it on **every** primitive: a `bb_mono_chk` call at
+the top of `gfx_fill` and `font_char`, a `bb_dirty` union per fill and per
+glyph, and a `gfx_flush` at every `gfx_unlock`. It also carried nine standing
+invariants that a future change could break silently — the `[bb_on]` /
+`[bb_dbl]` distinction, `bb_mono`'s one-way retirement, the four `vga_*_vram`
+escape hatches, `gfx_flush` called mid-lock from eight sites, `bb_set` last in
+`drv_boot` (§15.3), the buffer dropped before `vid_switch` moves the geometry,
+`fsx_mode` refusing while armed, `bb_canfit` as live Control Panel state, and
+`bb_set` owing a `vid_ctx_capture` (§39.12) that **it never actually made**.
+That last one was a real latent bug on a two-display VGA machine, found by
+reading the spec against the code while removing the feature.
 
-**Switching — `bb_set`** (AL = 0 off / 1 on; caller HOLDS the gfx lock).
-Turning ON **claims `BB_KB` off the heap** (§50, owner `MEM_K_BB`) and stores
-the base in `[bb_seg]`; a refusal leaves everything as it was. Turning OFF
-frees it again — 150KB back to the heap the moment the user stops wanting it,
-which is the whole reason it is a claim and not a constant. Turning ON then
-calls `bb_sync`: per plane, Graphics Controller Read Map
-Select (GC4) = that plane, then a straight 0x9600-byte copy from `VGA_SEG`
-to the plane segment at identical offsets, leaving GC4 back at its default
-(§1 rule 7). Seeding is not optional — the buffer has never been written
-while disabled, and after a disable it is arbitrarily stale, so the first
-flush would otherwise push dead pixels over live ones. The cursor must be
-hidden for it (it is — the lock is held), or it would be captured into the
-buffer and smeared by that same flush. `bb_set` then resets the dirty rect,
-points `[vid_rseg]`/`[vid_rend]` at the claim,
-arms `[bb_dbl]`, and publishes `[bb_on]` = 1 **last**, since every
-drawing entry dispatches on it. Turning OFF calls `gfx_flush` first, so
-nothing drawn under the old mode is stranded in RAM, then clears both and
-releases the claim. Both directions no-op when already in that state, so a
-repeated click cannot re-copy 150KB.
+Measured, the removal is `.text` −878, `.bss` −15, `.cold` −408 — two 512-byte
+image rungs on `kern_big` and three on `kern_small`, whose spare went from one
+step to four (docs/KERNEL-MEMORY.md). Verified by booting the desktop on a
+cycle-accurate 5150 and comparing framebuffers with the build before it: **0
+differing bytes** on CGA (128,000), Hercules (250,560), VGA mode 12h (921,600
+rendered) and on the dual-display machine's **both** cards.
 
-**A package may switch it too — `osapi_gfx_dbuf`** (slot 0x01F0, AL = 1 on /
-0 off, lock held). Out CF=0 and **AL = the state before**, which the caller
-hands straight back when it is done so the user's own Control Panel setting
-survives an app that borrowed the buffer for one flicker-free frame. CF=1
-means it did not happen, and there are two reasons: `[bb_avail]` clear, or
-`bb_set`'s claim refused (§50.2 — a heap that cannot fund `BB_KB` right now).
+**Slot 0x01F0 is RETIRED, not reused** (§20.8 rule 4): the cell answers CF=1,
+and `apps/os88api.inc` publishes no `OSAPI_GFX_DBUF`, so a source that still
+names it fails to assemble rather than silently getting a different call.
 
-The `[bb_avail]` gate covers **both** directions, which is not symmetry for
-its own sake: `bb_set`'s AL=0 path keys on `[bb_on]`, and a mono adapter
-holds that at 1 permanently because it *is* the renderer (§39.5). An
-ungated disarm from a package would therefore turn off the only drawing path
-Hercules and CGA have. Refusal is a normal answer here, like every other
-claim in §50 — the app draws unbuffered.
+### 32.1 What the renderer does
 
-**`bb_sync` reads `[bb_seg]` BEFORE it loads DS = `VGA_SEG`.** With the base
-a constant this could not be got wrong; with it a variable in the kernel's
-own segment, reading it after the DS load fetches framebuffer bytes as a
-segment number and the screen fills with bands. It cost one debug cycle
-already.
+RAM has no latches and no Set/Reset, so these routines do the VGA ALU's work
+with plain CPU instructions, one plane at a time:
 
-**Back buffer layout.** Plane p lives at segment `[bb_seg] + p*BB_PLANE_PARA`
-(0x960 paragraphs = 0x9600 bytes apart), offsets 0..0x95FF, 80-byte rows —
-byte-for-byte the same geometry as one VRAM plane, so `vga_rect_setup`'s
-offsets work unchanged in both worlds. The base is wherever the heap put it,
-which is the only thing about this layout that is not fixed.
+  * `SWM_SOLID` — per plane, the `[gfx_color]` bit picks a 00/FF byte; edges
+    become `(dest & ~mask) | (value & mask)`, interiors are `rep stosb`.
+  * `SWM_GRAY` — one AA/55 pattern for all planes, toggled each row via
+    `[sw_altm]`; same edge arithmetic.
+  * `SWM_XOR` — XOR 0Fh flips every plane identically: edges xor the mask,
+    interior bytes are complemented.
 
-**Rendering.** RAM has no latches, no Set/Reset, no write modes — the
-`bb_*` twins do in software, per plane, what the VGA ALU did in hardware
-(on a mono adapter there is one plane and `bb_ink` reduces the colour first,
-§39.3/§39.4):
+Plane *p* lives at `[vid_rseg] + p*[vid_rpara]`, so `vga_rect_setup`'s masks
+and offsets serve this module and the planar one alike; every solid and XOR
+primitive funnels through `sw_rect`. Pixel, hline and vline are degenerate
+fills — a rect setup costs one `mul`, the same as a dedicated loop would.
 
-- solid ops (`bb_pixel/hline/vline/fill`): plane byte value from
-  `[gfx_color]`'s plane bit — set bits with `or dest, mask`, clear with
-  `and dest, ~mask`; interiors of fills are `rep stosw` of 0xFFFF/0x0000.
-- `bb_fill_gray`: per row `and dest, ~mask` + `or dest, pat&mask` at the
-  edges, `rep stosw` pattern in the interior; 0xAA/0x55 alternating by row
-  parity, identical in all four planes (color 15/0 per pixel bit).
-- `bb_fill_pat`: same edge/interior scheme with the row byte fetched from
-  `[gfx_pat]`'s 8-byte table by `y&7` (§5), identical in all four planes;
-  the byte is uniform across a row, so interiors are the same `rep stosw`
-  as the other fills.
+`sw_fill` / `sw_fill_gray` / `sw_xor_fill` / `sw_fill_pat` / `sw_xor_rect` /
+`sw_save` / `sw_restore` are the software twins of the `gfx_*` primitives with
+identical register contracts, reached through the `[vid_mono]` dispatch at
+each public entry (§39.5). `sw_xfer` is the save/restore worker;
+`sw_ink`/`sw_col`/`sw_parity`/`sw_patcol`/`sw_plane_op` are its internals.
 
-Interiors go by word, not byte: the pattern is uniform across a row in both
-solid and dither modes, so AL=AH and one `rep stosw` (plus a `stosb` tail on
-an odd width, selected by the `shr cx, 1` carry that the string op leaves
-alone) replaces two `stosb`. Free on an 8088's 8-bit bus, half the bus
-cycles on any 16-bit part.
+**Concurrency.** Every routine here runs with the gfx lock held (§1.6), so
+`vga12`'s rect scratch needs no interrupt guard. The cursor does not come
+through this module at all: `mouse.inc` goes through
+`vga_save_vram`/`vga_restore_vram` and the fused mono path of §7.1.
 
-**Register discipline inside a plane, which is §5.7's floor and not a
-style.** `bb_plane_op` banks BX and DX once per plane and reloads AH, DI, SI
-and BP itself around each call, so **`bb_col` preserves nothing** — the five
-push/pop pairs it used to open with were saving registers its only caller
-was about to overwrite, and a push/pop pair is 29.7 clocks on the target
-machine. What that buys is registers for the row loop: both routines hold
-`gfx_nextrow`'s step and wrap bit (§39.3) in registers and open-code the row
-advance rather than calling it, which matters three times per scan line
-because a fill walks its rows once per edge column and once for the
-interior. `bb_ink` reads `gfx_inktab` through SI for the same reason — BX is
-the plane counter and the colour bits — and it is the only caller that needs
-the table, so `gfx_ink` itself is untouched.
-
-`[bb_pat]` is staged by whichever mode actually reads it: `BBM_GRAY` before
-the plane loop, `BBM_SOLID` inside `bb_ink` and only on its dither branch,
-`BBM_XOR` never. `bb_parity` is that one computation, in one place.
-- XOR ops (`bb_xor_rect/xor_fill` internals): `xor dest, mask` at edges,
-  `not dest` for full interior bytes, all four planes — self-inverting
-  exactly like the hardware XOR path.
-- `bb_save`/`bb_restore`: plain rect copies between the planes and the
-  caller's buffer, same layout and rounding as `gfx_save`/`gfx_restore`
-  (§5) — the §5 size formula budgets both paths, over-generously on mono,
-  where there is one plane to copy instead of four.
-- `font_char` (§6) and `ico_core` (§25) branch after their clip/shift
-  setup to plane-loop twins using the same shifted masks.
-
-All bb_* routines run with the gfx lock held (they share vga12's rect
-scratch and the dirty rect) and preserve registers per §1 rule 3. They
-touch no VGA register (§1 rule 7).
-
-**Dirty rect.** Words `bb_dx1/bb_dx2` (byte columns, x/8) and
-`bb_dy1/bb_dy2` (rows), a single bounding box unioned by every bb_* draw
-after clipping; empty is encoded as dx1 > dx2 (reset: 0x7FFF/0/0x7FFF/0).
-Byte-column granularity is deliberate — the flush copies whole bytes
-anyway, and it spares the union any pixel↔byte conversions.
-
-**Clipping and the dirty rect (§11.3).** A clipped primitive re-enters its
-own body once per surviving fragment, so it produces several `bb_*` calls
-where it used to produce one. That is correct by construction and needed no
-change here: the union only ever widens, and the only resets are `bb_set`
-turning the buffer on and the tail of `gfx_flush`. N sub-rects therefore
-accumulate into one enclosing box and one flush pushes exactly that box.
-The clip hook itself sits **above** the `[bb_on]` dispatch, at the public
-entry, so the buffered and direct paths clip identically and the mono
-adapters — where that dispatch is the only path — get it for free (§39.5).
-
-**Flush — `gfx_flush`.** Public, callable only with the gfx lock held
-(cursor hidden). No-op when `[bb_dbl]` = 0 (single `cmp`/`je` — **not**
-`[bb_on]`, which is 1 on mono with no buffer behind it, §39.5) or the rect
-is empty. Otherwise: for each plane, Sequencer Map Mask (SEQ2) = that
-plane's bit, copy the dirty rows (`rep movsw` + odd-byte tail) from the
-plane segment to `VGA_SEG` at the same offsets, then Map Mask back to 0Fh
-and reset the dirty rect. GC state is untouched (defaults hold outside the
-primitives). Interrupts stay enabled — the tick may switch tasks mid-flush,
-but any drawer blocks on the gfx lock and the mouse ISR defers the cursor
-while the lock is held, so nobody else touches VRAM or the Map Mask.
-
-**The monochrome fast path — `[bb_mono]`** (a plane-identity flag; **not**
-`[vid_mono]`, the adapter kind, §39). The flush is the expensive half
-of double buffering: back-buffer rendering is plain RAM, but the flush is
-four passes of VRAM writes, and VRAM is the slow side on every target
-(measured on QEMU: a full-screen 4-plane flush costs ~3.7× a one-plane one
-and ~24× the RAM-side render of the same area).
-
-**Treat the ~24× as a QEMU ratio and nothing more, wherever this document
-quotes it.** It has never been measured on hardware and, unlike every other
-figure in this document, it never can be by the usual route: double buffering
-is VGA-only and the machine this project is calibrated against
-(PERFORMANCE.md Part 9) is a 4.77MHz 5150 with Hercules and CGA cards. Worse,
-QEMU services a VRAM write through an MMIO callback and a RAM write through a
-plain host store, so the ratio it reports is substantially an *emulator*
-artifact rather than a bus one — the real hardware figure could be well under
-it. The ~3.7× four-plane-to-one-plane ratio is sound (it is a write count, and
-QEMU counts work exactly); the 24× is not, and no design decision should rest
-on its magnitude. What it is safely used for here is its *sign*: the flush is
-the expensive half, so `[bb_mono]` and the dirty rect are both worth having.
-
-`bb_mono` (initialized data, `db 1`, same reason as `bb_on`) records whether
-all four planes hold identical bytes. That is true at boot — `bb_init` zeroes
-them — and stays true for every pixel drawn in colour 0 or 15, which is the
-entire System 1 UI: its greys are 0/15 dither, not a grey plane value. While
-it holds, the flush sets Map Mask = **0Fh** and copies plane 0 *once*; the
-Sequencer fans that byte out to all four planes. A quarter of the VRAM
-writes, and — because the four planes now land in the same write — a pixel is
-never briefly the wrong colour, which is what the plane-sequential copy could
-otherwise show mid-flush on a large rect.
-
-The single loop falls out of the existing one: `[bb_plane]` starts at 0Fh
-instead of 1, and the `shl` + `test 0x10` that ends the four-plane loop trips
-on the first iteration (0Fh << 1 = 1Eh).
-
-`bb_mono_chk` retires the flag when `[gfx_color]` is neither 0 nor 15. It is
-called from exactly two places — `gfx_fill` and `font_char` — because those
-are the only paths a third colour can reach the screen by: gray dithers 0/15, XOR flips every plane alike, icons are
-white-under/black-over, and save/restore only moves plane bytes that were
-already there. Retirement is one-way and needs no repair pass: all four
-planes are always fully rendered, so the flush simply reverts to four passes.
-A Minesweeper digit (§20) is what trips it in practice.
-
-Both call sites sit on the **mode-independent** path, ahead of the `[bb_on]`
-dispatch, so the flag tracks colour even while double buffering is off. That
-is required, not incidental: `bb_set` can arm the buffer at any moment and
-seeds it from VRAM, and those planes are only identical if nothing but 0/15
-was ever drawn — including everything drawn while the buffer was disabled.
-
-**Flush points.** `gfx_unlock` flushes before `cursor_show` (§7) — that
-covers every ordinary lock/draw/unlock burst, including `wm_paint_all` and
-the boot paint. Nothing else flushes: the two interactions that draw *while
-holding* the lock — `menu_track` (§12) and the ui_drag outline (§13) — draw
-their feedback **VRAM-direct** instead (see below), so the back buffer stays
-clean through both and there is nothing to push. `menu_track` keeps one
-flush, for the pull-down itself, which is real back-buffer content.
-
-**Transient overlays bypass the back buffer — and the clip region.** Rule 2
-of §11.3 is the same statement one level up: these bodies are entered below
-both dispatches, and `gfx_unlock` clears the clip, so a background task's
-region can never survive into the UI task's drag or menu hold.
-The drag outline and the two
-menu highlights are XOR overlays: drawn, then erased, never meant to persist
-— the cursor's contract, not a window's. They call `vga_xor_rect_vram` /
-`vga_xor_fill_vram`, the VRAM bodies of `gfx_xor_rect` / `gfx_xor_fill` under
-their own names (§5), exactly as the cursor calls `vga_save_vram`. The
-public `gfx_xor_*` entries keep dispatching to the back buffer, because
-packages reach them through the API table (§20.3) and their XOR output *is*
-persistent content.
-
-This is a throughput fix, not a tidiness one. Routed through the back buffer,
-a 1px outline dirties the **whole window rect** — `bb_xor_rect` unions four
-strips — so each drag pass flushed the entire window area, twice (once for
-the draw, once inside the `gfx_unlock` after the erase), for ~1000 changed
-pixels. Correctness rests on the drag loop's existing discipline: the outline
-is XOR-erased before the lock ever drops, so whenever another task can draw,
-VRAM still equals the back buffer. The menu highlights rely on the same
-property, plus the teardown order — the save-under restore repaints the
-pull-down area in the back buffer and the caller's `gfx_unlock` flushes it,
-which is what actually clears the item highlight from VRAM; the title
-highlight sits above `MBAR_H`, outside that rect, so its VRAM-direct
-un-highlight survives the flush.
-
-**The cursor is not double-buffered.** The ISR draws it into VRAM over
-flushed content; its save-under reads VRAM through `vga_save_vram` /
-`vga_restore_vram` (the VRAM bodies of gfx_save/gfx_restore, §5). Invariant:
-while the gfx lock is free, VRAM = back buffer + cursor; while it is held,
-the cursor is hidden and flushes may run at any point. The back buffer
-never contains cursor pixels, so no flush can smear or erase a live cursor.
-
-**Accounting.** The Task Manager bills the back buffer as 150KB of System
-memory (§28) whenever `[bb_dbl]` is set — never on mono, which allocates
-none (§39.5) — so the RAM line and the System row
-both move the moment the Display page switches it (39K ↔ 189K on a 639K
-QEMU). The §16 test flow boots direct-to-screen like every machine; turning
-the buffer on is a deliberate act, and `make xt` (256K) cannot do it at all.
+**On a 1bpp adapter `[vid_planes]` is 1** and `vid_apply` sets the plane
+stride to a single paragraph — purely so `sw_xfer`'s segment compare
+terminates. Colours reduce to black, white and a 50% dither (§39.4).
 
 ## 33. Far code — retired
 
@@ -17369,7 +17138,7 @@ clk_sn_* : a second copy of the six fields, same order and adjacency
 ```
 
 **The two display settings** are runtime state like every other Control
-Panel setting (the scheduler mode, double buffering, the tone route): they
+Panel setting (the scheduler mode, the tone route): they
 return to their defaults at boot. Since §18.4 the kernel *can* write the
 data disk, so a settings file is now buildable — it is deliberately not
 built: it would tie a machine's UI state to whichever floppy happens to sit
@@ -18305,9 +18074,8 @@ Module `kernel/viddet.inc`, prefix `vid_`. It is `%include`d **before**
 tick, which means everything in it must be resident inside the first
 `SPL_RESIDENT` sectors and **all of its data must live in `.text`** — `.bss`
 is not cleared at that point and holds whatever the machine left there
-(§15). `[vid_mono]` is **not** `[bb_mono]`: the latter means "all four
-back-buffer planes hold identical bytes" (§32) and the two must never be
-conflated.
+(§15). `[vid_mono]` is the flag that routes every draw through the software
+renderer (§39.5).
 
 ### 39.1 Detection — `vid_detect`
 
@@ -18356,8 +18124,8 @@ the bytes `vid_kind`, `vid_mono`, `vid_planes`, `vid_planes_w`.
 ```
 vid_mono   = (kind != VID_VGA)          vid_planes = mono ? 1 : 4
 vid_rseg   = mono ? vid_seg : [bb_seg]
-vid_rpara  = mono ? 1 : BB_PLANE_PARA   ; MUST be nonzero - see 39.3
-vid_rend   = vid_rseg + (mono ? 1 : 4*BB_PLANE_PARA)
+vid_rpara  = mono ? 1 : SW_PLANE_PARA   ; MUST be nonzero - see 39.3
+vid_rend   = vid_rseg + (mono ? 1 : 4*SW_PLANE_PARA)
 vid_popmax = min(MENU_POPMAX, (vid_h - MBAR_H - 2) >> 4)    ; 16 / 16 / 11
 vid_desk_zx = vid_w - 56                ; 584 at 640 wide, as it always was
 [bb_on]    = vid_mono                   ; see 39.5
@@ -18420,21 +18188,20 @@ Three sites are worth knowing because they are not obviously renderer:
 
 ### 39.3 The parameterized software renderer
 
-**There is no second graphics driver.** `vgabb.inc` (§32) was written as a
-latch-free, port-free *software* renderer over `vga_rect_setup`'s coordinate
-core, targeting a RAM back buffer — and nothing in it cares that the target
-is RAM. Four changes make it the 1bpp driver:
+**There is no second graphics driver.** `softgfx.inc` (§32) is a latch-free,
+port-free *software* renderer over `vga_rect_setup`'s coordinate core — it
+was written against a RAM back buffer and nothing in it cares what the target
+is. Four things make it the 1bpp driver:
 
-- its plane segment is `[vid_rseg]` — the back buffer on VGA, the
-  **framebuffer itself** on mono;
+- its plane segment is `[vid_rseg]` — the **framebuffer itself**;
 - its plane count is `[vid_planes]` — 4 or 1;
 - its plane step is `[vid_rpara]`, which **must stay nonzero even at one
-  plane**: `bb_xfer` terminates on a segment compare against `[vid_rend]`,
+  plane**: `sw_xfer` terminates on a segment compare against `[vid_rend]`,
   and a step of 0 never terminates;
 - every row advance goes through `gfx_nextrow`.
 
 The planar bodies in `vga12.inc` are simply unreachable on mono, so they keep
-their assembly-time `ROW_BYTES` and `VGA_SEG`, and `gfx_flush` keeps them
+their assembly-time `ROW_BYTES` and `VGA_SEG`, and nothing else keeps them
 too — it only ever runs on VGA.
 
 **`gfx_rowbase`** — in AX = y, out AX = that row's byte offset. Clobbers AX,
@@ -18466,7 +18233,7 @@ the renderer's row loops (§32) both open-code it, CS overrides and all. A
 loop that can hold `rowadd` and `wrapbit` in registers should.
 
 **Both read their parameters through `CS`, not `DS`.** Two callers run with
-DS pointed elsewhere entirely: `bb_xfer`'s save path sets DS to the
+DS pointed elsewhere entirely: `sw_xfer`'s save path sets DS to the
 framebuffer segment for its `movsb`, and its restore path sets DS to the
 caller's buffer (the menu's save-under claim). Reading the stride through DS
 there fetches framebuffer bytes as a scan-line step. CS is `KERNEL_SEG` for
@@ -18481,8 +18248,8 @@ A change of stride or height breaks this silently, so `viddet.inc` asserts it.
 ### 39.4 Colour reduction at 1bpp
 
 `gfx_ink` maps a 16-colour index to `00h` black, `FFh` white, or `01h` — the
-50% dither class, which costs nothing extra because `bb_rect` has already
-computed the row-parity AA/55 byte for `BBM_GRAY`; arming `[bb_altm]` is the
+50% dither class, which costs nothing extra because `sw_rect` has already
+computed the row-parity AA/55 byte for `SWM_GRAY`; arming `[sw_altm]` is the
 whole implementation.
 
 ```
@@ -18521,65 +18288,37 @@ lines are in step with each other too. It is a **separate loop** and not an
 `and` inside `.crow` because that is the innermost loop of every string on the
 slowest machines we support, and almost no glyph wants this.
 
-### 39.5 Dispatch: `[bb_on]` and `[bb_dbl]`
+### 39.5 Dispatch: `[vid_mono]`
 
-`[bb_on]` now means **"route drawing through the software renderer"**. It is
-permanently 1 on a mono adapter, set by `vid_apply` before anything draws.
-The new `[bb_dbl]` carries the narrower old meaning, **"a back buffer is
-armed and must be flushed"**, and is what `gfx_flush`, the Control Panel's
-Display page and the Task Manager's RAM figures read — otherwise a mono
-machine would claim double buffering and bill 150KB that was never
-allocated. `bb_init` refuses to set `[bb_avail]` on mono, so the Display page
-cannot arm it, and its caption says *"Framebuffer is the display driver on
-this adapter"* rather than lying about memory — naming the reason, because
-"not here" invites the guess that a bigger machine would qualify.
+`[vid_mono]` means **"route drawing through the software renderer"**. It is
+set by `vid_apply` before anything draws and never changes afterwards, so on
+a Hercules or a CGA machine every public primitive dispatches into
+`softgfx.inc` and on a VGA none of them does.
 
-This is why the nine existing `[bb_on]` dispatch sites needed **no new
-dispatch bytes**. The four that did are the escape hatches — the callers that
-bypass `[bb_on]` by contract because their output is transient and must never
-enter the back buffer (§32): `vga_xor_rect_vram` (the drag outline),
+It used to be two flags. `[bb_on]` said "route through the software
+renderer" and `[bb_dbl]` said "a back buffer is armed and must be flushed",
+because a VGA with double buffering on wanted the first without being mono
+and a mono adapter wanted the first without the second. With §32's buffer
+gone `[bb_on]` is exactly `[vid_mono]`, and the byte went: conflating the two
+was a documented trap — a mono machine claiming double buffering and billing
+150KB it never allocated — and one flag cannot be conflated with itself.
+
+Four callers bypass the dispatch by contract, because their output is
+transient and the cursor's save-under must read the screen rather than any
+renderer's idea of it: `vga_xor_rect_vram` (the drag outline),
 `vga_xor_fill_vram` (menu highlights), and `vga_save_vram` /
-`vga_restore_vram` (the cursor's save-under, from inside IRQ4). On mono
-"direct to VRAM" and "through the software renderer" are the same place, so
-each gets a `[vid_mono]` prefix into its `bb_*` twin.
+`vga_restore_vram` (the cursor, from inside IRQ4). On mono "direct to VRAM"
+and "through the software renderer" are the same place, so each carries its
+own `[vid_mono]` test into the `bb_*` twin. They remain separate entry points
+rather than collapsing into the public ones, because the public entry calls
+`cur_unlazy` (§7.1.4) and the cursor path must not.
 
-Double buffering is **unavailable** on mono, by design and not by omission:
-the renderer already writes the framebuffer directly, so there is nothing to
-double.
-
-The same reasoning is why the clip hooks of §11.3 sit at the **public**
-entry of each primitive rather than in its VRAM body: above the `[bb_on]`
+The same reasoning is why the clip hooks of §11.3 sit at the **public** entry
+of each primitive rather than in its VRAM body: above the `[vid_mono]`
 dispatch one hook serves both renderers, and below it a clip would work on
-VGA and silently do nothing on Hercules and CGA. That is the expected
-failure mode of getting the placement wrong, and `make test VIDEO=cga` plus
+VGA and silently do nothing on Hercules and CGA. That is the expected failure
+mode of anything placed below this dispatch, and `make test VIDEO=cga` plus
 `tools/hercshot.py` are what catch it.
-
-And it is why `font_char_bb` is the mono adapters' **only** text renderer,
-which makes its eight-row loop the innermost loop of every string os8088
-draws on the slowest machines it runs on. It therefore keeps three things the
-VRAM path had from the start and the port did not:
-
-- **The ink test is hoisted out of the rows.** `[gfx_color]`'s plane bit
-  cannot change inside a plane, so the set/clear choice is made once per
-  plane and there are two eight-row loops rather than one branch per row.
-- **A blank glyph row is skipped whole.** or-ing in 0 and and-ing in FF are
-  both identity, but a read-modify-write of framebuffer memory costs the
-  same on an 8088 whether or not it changes a pixel — **79.6 clocks a byte,
-  measured** on a real 5150's Hercules and 81.0 on its CGA (PERFORMANCE.md
-  Part 9). This paragraph said "~30 cycles" until that set was taken; it was
-  low by 2.6x, and it credited the framebuffer for what is really the CPU —
-  the identical loop against plain RAM measures 72.8 clocks, so under 7 of
-  the 79.6 are the bus. Most glyphs have a blank descender row, many a blank
-  top row, and a space is eight of them. The second byte is skipped on the
-  same test, which is the whole cost of a glyph at a byte-aligned x.
-- **`gfx_nextrow` is inlined**, CS overrides and all. Its body is three
-  instructions and the `call`/`ret` around them cost as much again.
-
-There is no BIOS alternative to any of this and there cannot be. `int 10h`
-AH=09h/0Eh is cell-aligned to the BIOS font's own grid, knows nothing of
-§11.3's clip region, and is slower than this code in mode 12h — and on
-Hercules **graphics** there is no BIOS text support whatsoever, the mode
-itself being set behind the BIOS's back (§39.6).
 
 ### 39.6 Mode set and teardown
 
@@ -18599,7 +18338,7 @@ rep stosw  0x4000 words at B000:0000
 out 3B8h, 0Ah                   ; graphics, page 0, video ON    <- unblank
 ```
 
-The 32KB clear is **load-bearing**: `bb_init`'s ordering and the first
+The 32KB clear is **load-bearing**: the first
 desktop paint both assume a cleared framebuffer, and no BIOS will do it. Its
 `cld` is explicit because on the splash path this runs on the boot sector's
 flags and `spl_tick` never issues one.
@@ -18882,23 +18621,17 @@ geometry, and the two callers want different things put back (§39.11.3).
 
 Order is binding, and every step is somebody else's invariant:
 
-1. **The back buffer belongs to the old adapter.** Its 150KB claim is sized
-   for four 640x480 planes and its flush targets that framebuffer, so
-   `bb_set 0` runs while the old geometry still describes it. `bb_init`
-   below then re-answers whether the new adapter can have one at all — on
-   mono it cannot (§39.5), and a stale `[bb_avail]` would let the Buffer
-   page offer a buffer `bb_set` would refuse.
-2. **`cur_unlazy`, while the old geometry still describes the save-under.**
+1. **`cur_unlazy`, while the old geometry still describes the save-under.**
    `gfx_lock` only *promises* the hide (§7.1.4), so under the Control
    Panel's lock the arrow is typically still on screen with 24 bytes of
    background banked against the old stride. Change the geometry first and
    `gfx_unlock` restores those bytes through the new addressing, smearing
    the arrow across the screen permanently. It is a no-op on the boot path,
    where no promise is outstanding.
-3. **`vid_equip`, `vid_apply`, `bb_init`, `vid_setmode`.** `vid_apply`
+2. **`vid_equip`, `vid_apply`, `vid_setmode`.** `vid_apply`
    republishes all nine live words and everything derived from them, and
    homes the mouse — load-bearing for §39.2's reason.
-4. **`desk_rowcalc` and `wm_refit`**, the two things `vid_apply` does not
+3. **`desk_rowcalc` and `wm_refit`**, the two things `vid_apply` does not
    own. Zones per column is 7 on VGA, 4 on Hercules and 2 on CGA; and every
    window's frame was clamped onto the *old* screen, so a 640x480 window is
    off the bottom of a 640x200 one — with its title bar below the dock,
@@ -19044,10 +18777,12 @@ Three things are load-bearing:
   no clue. `viddet.inc` carries the same warning about `cur_unlazy`.
 - **Anything that changes the live geometry outside a swap must re-capture.**
   The list is short and not empty: `vid_apply` (a mode or adapter change) and
-  **`bb_set`**, which writes `[vid_rseg]` when a back buffer is armed or
-  dropped and is inside the run. A missed capture shows up as drawing through
-  the wrong segment the next time that display is activated, a long way from
-  the cause.
+  — and since §32's buffer went, **only** `vid_apply`: `bb_set` used to write
+  `[vid_rseg]` from inside this run and was the one other entry on the list.
+  It never actually made the capture it owed, which was a latent bug on a
+  two-display VGA with the buffer armed, and it is gone with the feature. A
+  missed capture shows up as drawing through the wrong segment the next time
+  that display is activated, a long way from the cause.
 
 **Nothing on a drawing path calls any of it yet.** This is step 1 of
 docs/DUAL-DISPLAY-PLAN.md §11 — the state and the swap — so the screen is
@@ -19860,7 +19595,7 @@ not, and moving costs one replay because the cache survives the repaint.
 - Two instances alongside Minesweeper and Note Pad all load (the heap must
   not refuse the fourth package), and `python3 tools/os88disk.py --verify
   build/apps.img` passes.
-- All three adapters, and the back buffer both off and on.
+- All three adapters.
 
 ## 41. cpudet.inc / xmem.inc — CPU tiers and memory above 1MB
 
@@ -19881,7 +19616,7 @@ touched no port. The Task Manager reads `XMS 0/0K` there (§28).
 `[cpu_feat]` carries three verified bits: bit 0 A20 open, bit 1 HMA claimed,
 bit 2 unreal mode armed. Both are **initialised `.text` data, not `.bss`**:
 `-f bin` zeroes nothing at boot, so the answer a machine reads when the probe
-never ran has to be the safe one — the `bb_avail` / `snd_live` idiom of §32
+never ran has to be the safe one — the §31.3 / `snd_live` idiom
 and §34.7.
 
 **The tier is INFORMATION, not permission.** Nothing branches on
@@ -20115,7 +19850,7 @@ allow, from 32x16 up, and everything else follows from that:
   `OSAPI_MEM_CLAIM` (§50.3); `[pt_base]` is whatever segment came back. That
   retires the whole of what this bullet used to describe — a hard-coded
   0x66000, chosen as the first paragraph above the back-buffer planes, plus a
-  second base for the case where `bb_init` had refused the buffer and those
+  second base for the case where the buffer had been refused and those
   150KB were dead for the session. The app no longer reads a kernel policy
   constant to guess whether the kernel will ever want that block, because the
   kernel now has to ask the same allocator: with Paint holding the memory the
@@ -20300,11 +20035,10 @@ allow, from 32x16 up, and everything else follows from that:
   a fact. A canvas edited on a 1bpp adapter still saves its full 4-bit indices
   in either format: the reduction to §39.4's three ink classes is a property of
   the screen, not of the picture.
-- **Drag loops invert `ui_drag`'s lock ordering (§13), and must.** A package's
-  `gfx_*` output goes through the back buffer when double buffering is armed
-  (§32), so a tracking loop that held the lock would show nothing until the
-  button came up. `pt_wait`/`pt_wait_tick` draw under the lock, *release* it so
-  `gfx_unlock`'s flush reaches VRAM, yield, and re-take it. The window is
+- **Drag loops invert `ui_drag`'s lock ordering (§13), and must.** A tracking
+  loop that held the lock would starve every other drawer for the length of a
+  stroke. `pt_wait`/`pt_wait_tick` draw under the lock, *release* it, yield,
+  and re-take it. The window is
   frontmost while it tracks, and since §11.3 a background painter under it
   draws its own visible region rather than over the top — so the released-lock
   window is safer than it was when this was written against `wm_obscured`.
@@ -20643,7 +20377,7 @@ trails, §48.14) is untouched.
 **And the bracket had a 55 ms floor under every sample**, which is the other
 half of the same complaint. `pt_wait` is `fsx_wait` inside the bracket, and a
 tick is the fastest that can return — so full screen sampled the mouse *more
-slowly than the window*, which yields. On a 1bpp adapter no back buffer is
+slowly than the window*, which yields. On a 1bpp adapter the renderer is
 possible (§32), so nothing is owed a present and nothing is being unlocked:
 there is nothing to wait for, and `pt_wait` returns at once.
 
@@ -21646,7 +21380,7 @@ head on:
   bug this consumer found.)
 - **The bracket is the one drawer.** Input is polled (int 16h — this IS the
   UI task, §53.1; no events are dispatched in a bracket), one frame per
-  `osapi_fsx_wait`, which also presents the §32 back buffer (§45.11). The
+  `osapi_fsx_wait`, the frame clock (§53.5). The
   worker keeps *feeding* and nothing else. A refusal (CF=1) flips `[trk_fs]`
   back. Exit is Esc, polled in the bracket; the close and minimize boxes
   and any stray path are covered because `[trk_fs]` is only ever 1 while the
@@ -22098,7 +21832,7 @@ The XT trades fidelity for cycles; a 286/386 has cycles to spend, and the
 **Rate** menu spends them: `11 kHz` (default, requested as 11,000),
 `22 kHz` (22,050) and `44 kHz` (44,100 — the §34.5 wide-rate regime, so a
 DSP ≥ 4.00; on an older card the open refuses err 2 and the status line
-says so, the `bb_avail` honesty pattern). The active item is its own
+says so, the three-layer refusal pattern). The active item is its own
 `MENU_DIS`-disabled twin — the Solitaire Deal-menu radio idiom — and the
 **R** key cycles the selection for fullscreen reach. A rate change while
 playing stops playback first (the §45.2 drain), exactly like the XT
@@ -22107,35 +21841,20 @@ on, and the selection returns when it is off. The mixer's cost is linear
 in the rate: 44 kHz is 4× the default's samples — chosen for machines
 where the default is loafing, refused honestly where it is not.
 
-### 45.11 Smooth — the fullscreen redraw rides the §32 back buffer
+### 45.11 Smooth — retired with §32's back buffer
 
-The pattern scroll repaints 30-plus row strips erase-then-text, and on a
-direct-to-VRAM path the CRT catches every intermediate state — the flicker
-is architectural, not a bug in the strips. The cure is the §32 back
-buffer: while it is armed, a draw burst renders to RAM and the frame is
-flushed once. **In the fsx bracket (§53) that flush is `osapi_fsx_wait`'s
-present** — the bracket never calls `gfx_unlock`, so `fsx_wait` running
-`gfx_flush` before it waits (while the mode is unswitched, which Tracker's
-same-mode bracket always is) is the only flush a buffered frame gets
-(§53.5). **View ▸ `Smooth: On/Off`** (the relabeling idiom; key **S**;
-default Off — the flush cost is opt-in) makes the tracker arm it via
-slot 0x01F0 **on entering fullscreen** and hand back the user's previous
-state on leaving; while Smooth is off, or where the slot refuses (mono
-adapters — where the software renderer already IS the direct path — or a
-heap that cannot fund the 150KB claim right now), fullscreen draws exactly
-as before. That second refusal is a **live** condition, not a
-boot-time verdict: `bb_avail` is about the adapter alone and the memory
-question is asked of the heap every time the buffer is armed (§32), so
-Smooth can be refused with Paint open and granted after it closes. **It is
-refused outright on XT mode's text fullscreen** (§45.13.3) — a back buffer
-describes desktop geometry, so `fsx_mode` will not set a foreign mode while
-one is armed, and a text cell has nothing to double. Two recorded
-consequences: the flush costs VRAM bandwidth (the §32 ~24× figure), which
-is why the toggle exists — a slow-bus VGA machine can decline; and a close
-**while fullscreen** takes the kernel's
-`wm_destroy` safety net, which the app never sees — the buffer then stays
-armed, a legal user-settable mode the Control Panel's Display page shows
-and can disarm, recorded here rather than fenced with kernel machinery.
+Tracker's fullscreen FT2 screen could be drawn through §32's back buffer:
+`View > Smooth` (or `S`) borrowed it on entry, `OSAPI_FSX_WAIT` presented it
+once a frame, and the exit handed the user's setting back. It is gone with
+the buffer — see §32. The app lost `trk_smooth_toggle`, the `S` key on both
+surfaces, the `View` menu's second item, four bss flags
+(`trk_smooth`/`trk_bbprev`/`trk_bbheld`/`trk_txbb`) and the park-and-restore
+dance around `ttx_begin`, which existed only because `fsx_mode` refused to
+set a foreign mode while a back buffer described the desktop's geometry.
+16,647 → 16,263 bytes.
+
+`OSAPI_FSX_WAIT` is still the frame clock (§53.5) and still the only pacing
+a bracket gets; what it no longer does is present anything.
 
 ### 45.12 The scroll path and the delta-drawn VU bars
 
@@ -22466,16 +22185,13 @@ already was:
 - **X** would turn XT mode off, and XT mode is *what this surface is*; the
   bracket cannot re-enter itself as the graphics one. `XT off is windowed: Esc
   first`.
-- **S** (Smooth, §45.11) is the §32 back buffer, which describes the
-  **desktop's** geometry — there is nothing to double in a text mode, and
-  `fsx_mode` refuses outright while one is armed. `Smooth is a graphics mode
-  only`.
-
-That refusal is also why the entry path **parks the user's back buffer**: a
-Control Panel setting of `on` would make `fsx_mode` refuse and drop the whole
-feature. `trk_fsx_main` turns it off before the mode set, notes the debt in
-`[trk_txbb]`, and `trk_fs_enter` re-arms it **after `fsx_run` returns** — not
-inside the bracket the way Smooth hands its own back (§45.11), because by then
+**Smooth is gone with §32's back buffer (§45.11)**, and with it the `S` key on
+this surface and the park-and-restore dance the entry path used to run: the
+buffer described the *desktop's* geometry, so `fsx_mode` refused while one was
+armed, and `trk_fsx_main` had to turn the user's setting off before the mode
+set and pay the debt back after `fsx_run` returned. What is left of that
+paragraph is the general rule it was an instance of — a bracket's entry must
+leave nothing the restore cannot undo — and by then
 the desktop mode *and* its pixels are back and `bb_set`'s seed-from-VRAM reads
 the screen the user is actually looking at. A refused `ttx_begin` puts it back
 on the spot and falls through to the graphics bracket, so the two mechanisms
@@ -23836,7 +23552,7 @@ means.
    adapter, a driver that is not loaded. When the only way to know is to *try*,
    do not grey: attempt it and report what came back. Memory is the case that
    splits: `mem_avail` is a real predicate for an ordinary claim, so the
-   back-buffer row greys on it (§31.3); `mem_claim_dma` has no predicate at all
+   §31.3's retired Buffer row greyed on it; `mem_claim_dma` has no predicate at all
    because the 64KB page rule is inside its scan (§50.3), so the Sound Blaster
    row does not grey on memory and the click reports instead (§34.8).
 
@@ -23887,10 +23603,6 @@ Conformant, and worth reading as the reference:
   in words, `'Save Gif (NoRam)'` and five more. Since `font_ink` learned the
   dither those words say *why not* rather than *whether*, which is still worth
   having.
-- **The Display page's back-buffer row** (§31.3) — `cp_dbradios` takes
-  `cpf_dbok`'s pen for row 1's glyph. It used to draw it `CBLACK` beside a grey
-  label, which rule 2 forbids and §31.3 had *already* described correctly; the
-  code was the thing that disagreed.
 - **Every disabled menu item everywhere** (§12.2, `MENU_DIS`) — fixed in the
   renderer rather than per app, which is why there is nothing to list. It was
   text and nothing else, so on Hercules and CGA it was pixel-identical to a live
@@ -24153,9 +23865,9 @@ ms, spread over a life of a second and a half.
 controlled A/B — the whole `mc_expcol` table forced to `CLMAGENTA` (§39.4's
 dither class) against the whole table forced to `CWHITE` — measured **3.114
 versus 3.106 counts per fill, a difference of 0.26%**. It cannot be
-otherwise: on a 1bpp adapter `bb_ink`'s dither branch only arms `[bb_altm]`,
-and `bb_rect` has already put the row-parity AA/55 byte in `[bb_pat]`, so
-`bb_col` and `bb_plane_op` run the identical instruction sequence with a
+otherwise: on a 1bpp adapter `sw_ink`'s dither branch only arms `[sw_altm]`,
+and `sw_rect` has already put the row-parity AA/55 byte in `[sw_pat]`, so
+`sw_col` and `sw_plane_op` run the identical instruction sequence with a
 different constant XORed in per row (§39.4/§32). Solid and dithered fills
 are the same code.
 
@@ -24971,7 +24683,7 @@ call: what a batch removes is the API cell, the `GFXCLIP` test, the
 `bb_mono_chk` call and the `bb_on` dispatch — perhaps 170 of ~4,381 clocks.
 What it cannot remove is everything that makes a *rect* a rect: eight
 push/pop pairs, `vga_rect_setup`'s twenty-odd memory accesses, `gfx_rowbase`,
-the dirty-rect and mode round-trips, the plane loop and `bb_ink`.
+the dirty-rect and mode round-trips, the plane loop and `sw_ink`.
 
 That is precisely why §5.6.8 *did* pay for the walk and this does not: a walk
 step's fixed cost was block staging and `gfx_ink`, which are per **call**; a
@@ -25737,8 +25449,8 @@ the Task Manager reporting 145K on a machine that was really 224K committed.
 
 And a package that needed more than its 19.5KB region had **no way to ask**.
 `apps/paint` therefore took linear 0x66000 unilaterally and read
-`DB_MIN_KB` — a kernel policy constant — to guess whether the back buffer
-would ever want that block (`docs/PAINT-NOTES.md` calls this "the least
+`DB_MIN_KB` — a kernel policy constant — to guess whether §32's then-live
+back buffer would ever want that block (`docs/PAINT-NOTES.md` calls this "the least
 defensible thing in this file"). One allocator retires the whole class of
 problem: two packages cannot pick the same address, an app cannot outlive
 its claim, a kernel feature and a package cannot both believe they own a
@@ -25760,7 +25472,7 @@ segment uses `osapi_claim_snapshot`, §20.9, never a raw pointer):
 MC_SEG   0  word  base segment, 0 = free record
 MC_PARA  2  word  size in paragraphs (KB << 6)
 MC_OWN   4  word  owner: 0..INST_MAX-1 = instance slot;
-                  0xFF00 | tag = the kernel's own (MEM_K_SAVE, MEM_K_BB, …);
+                  0xFF00 | tag = the kernel's own (MEM_K_SAVE, …);
                   a package's claims carry the SEGMENT it runs in
 MC_DMA   6  word  the 64KB-page-safe HEAD in paragraphs, 0 = no constraint
                   (mem_claim_dma, §50.3 — recorded so a claim that MOVES
@@ -25796,7 +25508,6 @@ The kernel's own claims, and what each replaced:
 | tag / owner | KB | taken by | replaces |
 |-------------|----|----------|----------|
 | `MEM_K_SAVE` | `MENU_SAVE_KB` = 20 | `menu_drop`, for exactly as long as a menu is on screen; **released before it returns** | `SAVE_SEG`, 48KB pinned |
-| `MEM_K_BB` | `BB_KB` = 150 | `bb_set` when the Display page arms it; **freed when it is switched off** | `BB_SEG`, 150KB pinned |
 | the Disk instance's slot | `VIEW_KB` = 3 | `fm_kinit`, per open window | `VIEW_SEG`, 4 × 4KB pinned |
 
 Each has a documented "then don't" path, because a claim can be refused:
@@ -25933,7 +25644,7 @@ two cures, and they are a decision rather than a bug fix:**
 
 1. **A relocation callback.** The only thing that makes real compaction safe,
    and it is an ABI addition every holder has to implement — a package, the
-   back buffer, the menu save-under, the sound driver's DMA claim (which
+   the menu save-under, the sound driver's DMA claim (which
    additionally may not move at all, §50.3's page rule). It is not a change
    `memory.inc` can make on its own, and it is not one to make speculatively.
 2. **Better placement, which needs no ABI at all.** `mem_claim` is a
@@ -25963,7 +25674,7 @@ is owned by the Disk *instance*, and the instance's death frees it.
 ### 50.5 What the Task Manager shows
 
 The heap is the RAM figure's fourth term (§28), and unlike the constants it
-replaced it is *live*: arm double buffering and the figure rises 150K, close
+replaced it is *live*: open a Disk window and the figure rises, close
 Paint and it falls by whatever Paint held. `mem_claimed_kb` sums every
 claim; `mem_kernel_kb` sums only the `0xFFxx`-tagged ones, so a package's
 claim lands on the package's row rather than on System's.
@@ -26497,11 +26208,6 @@ reported later, never where it happens. The whole of `drv_boot` is also on
 the boot progress bar: it is floppy sectors, and `dsk_xfer` ticks the bar per
 sector for as long as the loading screen is up (§15.3).
 
-**`bb_set` is the last thing `drv_boot` does**, after the load loop, for the
-§15.3 reason: it seeds the back buffer from VRAM, and until the first paint
-VRAM holds the loading screen. The heap does not care which end it happens
-at — data claims grow up and a driver's region down (§50.3).
-
 `drv_notice` opens the **Control Panel on its Drivers page** rather than
 putting up a notice of its own, and that is a design rather than a saving:
 the page already names every driver, already says what its last attempt
@@ -26643,7 +26349,7 @@ the wrong settings. Every value now travels with a key that says what it is.
 ```
 
 Seven keys today, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
-clock 12/24, `CS` clock seconds, `SM` scheduler mode, `BB` back buffer, and
+clock 12/24, `CS` clock seconds, `SM` scheduler mode, and
 `HD` — a **driver's** own settings, whose contents the kernel does not know
 (§51.9). They are ASCII so a hex dump of the file reads as the list of
 settings it is.
@@ -28646,9 +28352,7 @@ ever matter, this is the routine that learns the finer probe.
 `fsx_mode` (slot 0x02D0) — in AL = id, ES:DI = a 16-byte `FSI_*` block the
 kernel fills (ES is the caller's own, like `gfx_blit4`). Legal only inside
 the bracket, from the exclusive task. Refusals, CF=1: not in a bracket;
-not this task; id ≥ 9 or its caps bit clear; **the caller's back buffer is
-armed** (`[bb_dbl]` — the buffer describes desktop geometry and nothing
-else, so `osapi_gfx_dbuf` off comes first). The mode set clears the
+not this task; id ≥ 9 or its caps bit clear. The mode set clears the
 screen: the BIOS does, and the Hercules body keeps its load-bearing 32KB
 `rep stosw`. Mode X is 13h plus the canonical ten-write sequence (chain4
 off, 25MHz dot clock, CRTC retimed to 480-scan/240-line, dword off, byte
@@ -28924,10 +28628,9 @@ everything they touch.
                   CF=1 refused.
 0x02D0 fsx_mode   in AL = FSXM_* id, ES:DI = FSI_SIZE buffer (caller's
                   ES). Bracket-only. CF=0 mode set + block filled;
-                  CF=1 refused (id, adapter, back buffer armed, context).
+                  CF=1 refused (id, adapter, context).
 0x02D8 fsx_wait   in AL = 0 next tick / 1 vertical retrace. Bracket-only
-                  (CF=1 outside). Flushes the armed back buffer first
-                  while the mode is unswitched (§53.5).
+                  (CF=1 outside). The frame clock (§53.5).
 ```
 
 `apps/os88api.inc` publishes `OSAPI_FSX_CAPS`/`RUN`/`MODE`/`WAIT`, the
@@ -28961,10 +28664,7 @@ everything they touch.
   (§45) follows with `FSXF_KEEPWORKER | FSXF_FASTTICK`. Paint (§42.7) is the
   same-mode consumer, and the one to run when the question is whether a
   bracket that sets no mode still works everywhere: enter, draw, leave and
-  check the picture on VGA, on `VIDEO=cga` and on `VIDEO=herc` + hercshot, and
-  again with the Control Panel's Display page armed — with a back buffer up,
-  the entry frame reaches VRAM only through `fsx_wait`'s flush, so a blank
-  screen there is §53.5's present and not the app.
+  check the picture on VGA, on `VIDEO=cga` and on `VIDEO=herc` + hercshot.
 
 ---
 
@@ -29674,7 +29374,7 @@ elsewhere:
   that copied leaves the clipboard exactly where it was. Anything less and
   "copy here, paste there" would work only while both programs were open.
 - **The Task Manager already counts it.** `mem_sum_kb` tests the owner's high
-  byte for 0xFF, so the clipboard lands under System with the back buffer and
+  byte for 0xFF, so the clipboard lands under System with
   the FAT windows, with no change in `apps/taskmgr`.
 
 ### 55.4 The three slots

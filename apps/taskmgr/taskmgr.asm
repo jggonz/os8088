@@ -1128,7 +1128,7 @@ tm_sample:
                                 ; every task stack are one contiguous span,
                                 ; and there is no growth room in it to bill
     add ax, [tm_kb+SK_CLAIM]    ; + everything claimed out of the heap
-                                ; (SPEC.md 50): the back buffer while it is
+                                ; (SPEC.md 50): the clipboard while it is
                                 ; armed, the menu save-under while a menu is
                                 ; down, each open Disk window's listing
                                 ; cache, and every package's region and data
@@ -3387,7 +3387,7 @@ tm_rows:
                                 ; - the same term the RAM line above uses, so
                                 ; the rows still sum to the bar
     add ax, [tm_kb+SK_KCLAIM]   ; + the kernel's OWN heap claims (SPEC.md
-                                ; 42.2): the save-under and the back buffer.
+                                ; 42.2): the save-under and the clipboard.
                                 ; A package's claim belongs to its own row.
     call tm_memcol_kb
     jmp .draw
@@ -3558,7 +3558,7 @@ tm_memcol:
 
 ; -----------------------------------------------------------------------------
 ; tm_memcol_kb - tm_memcol's tail for a caller that already has KB in AX
-;                (nonzero) - the System row adds the 150K back buffer,
+;                (nonzero) - the System row adds the kernel's own claims,
 ;                which cannot be expressed as a 16-bit byte count
 ; in:  AX = KB (> 0), DI = dest
 ; out: DI advanced by 4

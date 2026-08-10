@@ -183,7 +183,7 @@ ico_core:
     mov ch, 8
     sub ch, cl                  ; CH = 8 - shift
 
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32) - the bb
+    cmp byte [vid_mono], 0      ; 1bpp? (SPEC.md 39.5) - the software
     jne ico_core_bb             ; twin returns straight to the wrapper
 
     mov ax, VGA_SEG
@@ -288,7 +288,7 @@ ico_pass:
     ret
 
 ; -----------------------------------------------------------------------------
-; ico_core_bb - back-buffer icon renderer (SPEC.md 32): the white underlay
+; ico_core_bb - the software renderer's icon body (SPEC.md 32/39.5): the white underlay
 ;               ORs the shifted mask-row bits into all four planes, the
 ;               black pass AND-NOTs the data-row bits out of them - color
 ;               15 under the mask, 0 under the data, like the VRAM passes.
@@ -308,14 +308,6 @@ ico_core_bb:
     jb .rok
     mov bx, [vid_strm1]
 .rok:
-    push cx                     ; CL/CH shift pair survives bb_dirty setup
-    mov cx, [ico_y]
-    mov dx, cx
-    add dx, [ico_rows]
-    dec dx
-    call bb_dirty               ; AX is STILL the left byte column here - do
-    pop cx                      ; not borrow it before this call
-
     mov al, [vid_strm1]         ; the three right-edge limits ico_pass_bb
     mov [ico_lim1], al          ; needs as BYTES - see the compares there
     dec al
@@ -333,7 +325,7 @@ ico_core_bb:
     ret
 
 ; -----------------------------------------------------------------------------
-; ico_pass_bb - one masked pass over all four back-buffer planes: the same
+; ico_pass_bb - one masked pass over every renderer plane: the same
 ;               3-byte shifted window and edge clipping as ico_pass, with
 ;               [ico_bbop] picking OR (0) or AND-NOT (1) per byte.
 ; in:       SI -> word rows, DI = row offset, CL = shift, CH = 8-shift,

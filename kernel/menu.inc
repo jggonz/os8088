@@ -31,7 +31,7 @@
 ; whichever mouse button [menu_btn] names, so menu_popup can drop the same
 ; menu machinery anywhere on screen under the RIGHT button (SPEC.md 12.4).
 ; That split exists for one reason: the SPEC.md 32 rule about what goes
-; through the back buffer and what goes straight to VRAM is subtle, and two
+; persistent and what is a transient VRAM overlay is subtle, and two
 ; copies of it would drift.
 ;
 ; The right end of the bar is the system clock (SPEC.md 12.1): drawn by
@@ -1211,7 +1211,7 @@ menu_bput:
 ; [vid_clk_hx] .. w-9, both ends on glyph cells, so a shorter form blanks the
 ; cells it gave up in the same pass. No wm_obscured check: windows clamp to
 ; y >= MBAR_H, so nothing can ever cover the bar. Ordinary persistent content
-; - it goes through the back buffer like everything else and the caller's
+; - it is drawn like everything else and the caller's
 ; gfx_unlock flushes it (SPEC.md 32).
 ; -----------------------------------------------------------------------------
 menu_draw_clock:
@@ -1315,7 +1315,7 @@ menu_draw_clock:
 ; Everything left here is bar-specific: the cell find, the title highlight,
 ; and the (cell, item) pack. The tracker itself moved into menu_drop so the
 ; context menu (SPEC.md 12.4) runs the same code - and, far more to the
-; point, the same SPEC.md 32 back-buffer discipline. Two copies of that
+; point, the same save-under discipline. Two copies of that
 ; would drift.
 ; -----------------------------------------------------------------------------
 menu_track:
@@ -1499,11 +1499,9 @@ menu_popup:
 ; out: AX = item index, or 0xFFFF if released outside every item
 ; clobbers: nothing else
 ;
-; This is the one copy of the SPEC.md 32 discipline for dropped menus: the
-; body is real persistent content and goes through the back buffer with one
-; gfx_flush (it would otherwise stay invisible for as long as the button is
-; held), while the item highlight is a transient overlay drawn VRAM-direct
-; like the cursor. Only one menu is ever open - both callers run on the UI
+; This is the one copy of the save-under discipline for dropped menus: the
+; body is real persistent content, while the item highlight is a transient
+; overlay drawn VRAM-direct like the cursor. Only one menu is ever open - both callers run on the UI
 ; task and both are driven by a held button - so the one save-under buffer
 ; needs no allocator of its own. It IS a heap claim (SPEC.md 50.2), and it is
 ; claimed HERE and released before this routine returns - MENU_SAVE_KB for
@@ -1663,7 +1661,6 @@ menu_drop:
     loop .item
     pop es
 .drawn:
-    call gfx_flush              ; pull-down + items on screen (SPEC.md 32)
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
@@ -1688,7 +1685,7 @@ menu_drop:
 .same:
                                 ; no flush: the highlights are VRAM-direct and
                                 ; nothing else draws while we hold the lock,
-                                ; so the back buffer is untouched here (§32)
+                                ; a transient overlay (SPEC.md 32)
     call kbm_pollm              ; ...and let the keyboard mouse release the
                                 ; button it latched, or this loop never ends
                                 ; on a machine with no mouse (SPEC.md 9.6)
@@ -1738,7 +1735,6 @@ menu_drop:
     mov cx, [menu_x2]           ; shadow outside it, and everything beyond it
     mov dx, [menu_y2]           ; is still correct on screen (SPEC.md 11.91)
     call wm_paint_dmg
-    call gfx_flush
 .sel:
     mov dx, [menu_sseg]         ; the menu is off the screen: hand the buffer
     or dx, dx                   ; back rather than hold 20KB until the next

@@ -32,7 +32,6 @@
 ; very routine pn_onclick's button branch calls, guards and messages
 ; included, so the QWERTY keys and the buttons keep working unchanged.
 ;
-; Colors beyond 0/15 retire [bb_mono] (SPEC.md 32) - supported, expected.
 ; Window procs run with the gfx lock held and preserve all registers.
 ; BP is used as a plain register holder only - never dereferenced (SS != DS).
 ; =============================================================================

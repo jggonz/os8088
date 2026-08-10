@@ -313,7 +313,7 @@ enumerable:
 | `vga12.inc` | `vga_rect_setup` — 4 |
 | `icons.inc` | ~9 (`vid_h`, `vid_hm1`, `vid_stride`, `vid_strm1`) |
 | `mouse.inc` | ~5 in `cur_draw`/`cur_geom` |
-| `vgabb.inc` | 2 in `gfx_scroll` |
+| `softgfx.inc` | 2 in `gfx_scroll` |
 | `font.inc` | 2 (`vid_wm8`/`vid_hm8`, the whole-cell clip) |
 | `wm.inc` | 2 in `wm_su_edge` |
 

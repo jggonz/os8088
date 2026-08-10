@@ -120,7 +120,6 @@ fpg_begin:
     call gfx_frame
 
     mov byte [fpg_on], 1
-    call gfx_flush              ; we draw MID-lock: without this the whole
                                 ; widget waits for a gfx_unlock that does not
                                 ; come until the operation is over (SPEC.md 32)
 .out:
@@ -152,7 +151,7 @@ fpg_step:
     cmp byte [fpg_on], 0
     je .out
     push ax                     ; AX/BX/CX/DX/SI and no more: everything this
-    push bx                     ; calls below - gfx_fill, gfx_flush, fpg_boxr
+    push bx                     ; calls below - gfx_fill and fpg_boxr
     push cx                     ; - is documented "clobbers: flags", and DI/BP
     push dx                     ; /ES are dsk_xfer's live transfer state that
     push si                     ; nothing on this path touches
@@ -185,7 +184,6 @@ fpg_step:
     mov dx, FPG_BOX_Y + FPG_BOX_H - 2
     mov byte [gfx_color], CBLACK
     call gfx_fill
-    call gfx_flush              ; mid-lock again (SPEC.md 32)
 
 .done:
     pop si
@@ -243,7 +241,6 @@ fpg_end:
     call gfx_fill
 
     call menu_draw_bar          ; the text band, as the ONE run that differs
-    call gfx_flush
 .out:
     pop dx
     pop cx
