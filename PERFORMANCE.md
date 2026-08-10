@@ -3591,3 +3591,78 @@ like. Crop the cell and read it before believing it.
 
 Cost: `.text` +13 bytes (the per-row saving is 2–4 bytes, the once-per-call
 setup 2–9), no rung crossed, `KERN_SIZE` unchanged.
+
+### Set 24 — the typeface priced: tallx against the IBM ROM face (SPEC.md §6.2)
+
+`tests/gfxbench` on MartyPC, CGA, a **cycle-accurate 4.77MHz 8088 running the
+real IBM 5150 BIOS** (`BIOS_IBM5150_27OCT82_1501476_U33.BIN`, md5
+`f453eb2d…`, the ROM MartyPC knows as `ibm5150_82_v4`). Asked because tallx
+looks sparser than the ROM face and a blank glyph row is the one thing
+`font_char` skips whole — so the question was whether the baked typeface costs
+the machine anything.
+
+**Both faces were BAKED for the A/B.** Comparing tallx against a stock kernel
+would compare two different binaries — the ROM probe is assembled in one and
+not the other — so the ROM face was extracted from the U33 image at
+`F000:FA6E` and built as a `.f8` too. The two kernels are **85,384 bytes each
+and differ in 395 bytes, all of them inside the 760-byte glyph table**; the
+guest's live `font_glyphs` confirms it (the ROM build reads **760/760
+identical to the ROM**, the tallx build 365/760). Every non-text `gfxbench`
+row agrees to ±10 counts in ~200,000 — 0.005%, which is the noise floor and
+also the proof that nothing but the glyphs moved.
+
+| `gfxbench` row | IBM ROM | tallx | delta |
+|---|---|---|---|
+| `FONT_CHAR one cell` (`'W'`) | 895.46 µs | 880.17 µs | **−1.71%** |
+| `FONT_STR 10 aligned` | 8,403.00 µs | 8,297.39 µs | **−1.26%** |
+| `PAIR 10 aligned` | 10,152.95 µs | 10,047.35 µs | −1.04% |
+| **`FONT_RUN 10 aligned`** | 8,879.66 µs | 8,880.01 µs | **+0.00%** (+5 counts) |
+| `PAIR 10 skewed 5` | 10,659.09 µs | 10,433.22 µs | −2.12% |
+| `FONT_RUN 10 skewed` | 10,840.54 µs | 10,618.65 µs | −2.05% |
+| `FONT_WIDTH 10` | 217.91 µs | 217.91 µs | +0.00% |
+| `boot ticks` / `kernel span KB` | 60 / 94 | 60 / 94 | **identical** |
+
+**tallx is the CHEAPER face, and the direction was the surprise** — it has
+**32.0% blank rows against the ROM's 25.3%**. It is **rows and never
+columns**: `or ah, ah / jz` is the renderer's only content-dependent branch,
+and a row is a whole byte whatever is in it.
+
+**`FONT_RUN` aligned at +0.00% is the result, as much as the first row.** The
+fast path (SPEC.md §6.1, mono, `x & 7 == 0`) is branch-free — the cell owns
+its framebuffer byte, so it *stores* every row whether the glyph set any bits
+or not. A face's ink costs exactly nothing there, and that is the path every
+hot incremental redraw in the tree was moved to (§12.9's menu bar, §22.11's
+scroll, §27.2's Note Pad row, §11.94's `WF_SNAP` consumers). **Skewed, there
+is no fast path** — `font_run` falls back to the pair — so it becomes
+content-dependent again *and* picks up a second term: the low `x & 7` bits of
+a row spill into a second byte, which is the one place a face's COLUMNS cost
+anything and is what §6.1.4's blank column 7 is about. Predicted −0.62 spill
+writes a cell at `x & 7 = 5`, measured as the skewed delta being twice the
+aligned one.
+
+**The model predicts the measurement from the glyphs alone**, which is what
+makes `tools/os88fontcost.py` worth having: the bench string `'C-2 01 A0F'`
+differs by 7 drawn rows, ×81.0 clocks (Part 9's five-instruction step) = 118.8
+µs predicted against **105.61 µs measured**; `'W'` differs by one row, 17.0 µs
+predicted against **15.29 µs**. Inverted, the measurement prices **one drawn
+row at 15.09 µs** on this CGA — the same number from the other end, the gap
+being that a *skipped* row still pays its own load, test and branch.
+
+**And the honest figure for a session is HALF the bench's.** `'C-2 01 A0F'`
+is uppercase-and-digit heavy, which is exactly where tallx wins: its capitals
+are **6 rows against the ROM's 7**, and so are its digits. **Lowercase is a
+wash** — 5.77 rows against 5.81 — because tallx spends on a 5-row x-height
+what it saves on cap height. Weighted by os8088's own 29,082 characters of UI
+text, which is mostly lowercase, the face is **4.557 rows/glyph against 4.815,
+so −0.46% of an 840 µs cell**. Against a 2.50 s page of text that is 11 ms.
+
+**Nothing else moved.** Identical `boot ticks`, identical `kernel span`,
+identical `KERNEL.SYS` sector count — the glyph table is 760 bytes either way,
+so a face costs the same disk, the same RAM and the same boot on any machine.
+
+**What could NOT be measured, and it is worth knowing why.** An end-to-end UI
+operation cannot see this at all: opening a Disk window (~40 `font_str` calls)
+measured **18.29 s and 20.97 s on two trials of the SAME kernel**, a 15%
+spread against a 0.5% effect — the floppy mount dominates and MartyPC is not
+disk-accurate anyway (Set 11). A per-primitive harness with the interrupts off
+is the only instrument with the resolution, which is what `gfxbench` is for.
