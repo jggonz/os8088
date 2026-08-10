@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54905
+    "text": 55001
   },
   "small": {
     "bss": 4651,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52310
+    "text": 52406
   }
 }
 ```
@@ -875,20 +875,20 @@ generated in the first place.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 28,634 | 37.0% |
-| the window system and its furniture | 16,531 | 21.4% |
+| the window system and its furniture | 16,627 | 21.5% |
 | drawing: adapters, primitives, glyphs, icons | 10,981 | 14.2% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.7% |
 | the kernel proper: API table, heap, scheduler, events | 5,890 | 7.6% |
 | the Control Panel | 4,120 | 5.3% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,347** | |
+| **total** | **77,443** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 917 | 7,304 | **8,221** | 336 | — |
-| `wm.inc` — the window manager (§11) | 6,052 | — | **6,052** | 635 | — |
+| `wm.inc` — the window manager (§11) | 6,148 | — | **6,148** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,542 | — | **4,542** | 132 | — |
@@ -923,7 +923,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,698 | — | **2,698** | — | — |
-| **total** | **54,905** | **22,442** | **77,347** | **4,736** | **7,762** |
+| **total** | **55,001** | **22,442** | **77,443** | **4,736** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

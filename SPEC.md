@@ -4064,10 +4064,21 @@ keeps the pixel it already had.
 
 Four things are load-bearing.
 
-- **It is a superset of what is really uncovered.** `old` minus `new` is an L
-  and this is the whole of `old`, so a short drag still marks the window it
-  was sitting on. That is the safe direction and it costs a repaint nobody
-  will see coming.
+- **It is `old` minus the moved window's NEW FRAME, which is the L itself.**
+  The first cut tested the whole of `old` and called the over-marking "the
+  safe direction"; measured on a four-window desktop that was most of the
+  remaining waste, because a short drag leaves the window it was sitting on
+  entirely back underneath. So the test is two questions: did this window
+  overlap where the moved window WAS, and is that overlap now back inside
+  where it IS. Both yes means every pixel of it is written again by the move
+  and nothing is exposed.
+- **The second test is against the FRAME and not `wm_win_rect`'s box**, and
+  the difference is load-bearing rather than fussy. `wm_draw_win` writes every
+  pixel of the frame, while the drop shadow is two *lines* — so the occupied
+  box contains two corners, `(x+w, y)` and `(x, y+h)`, that nothing writes.
+  Claiming those would strand the old shadow's pixel on a rightward drag.
+  Under-claiming by two lines marks a window that only sat under a shadow,
+  which is the safe direction and costs almost nothing.
 - **The window that moved is marked unconditionally**, by pointer. A drag
   long enough to land clear of where it started does not overlap its own
   vacated rect, and the mechanism would otherwise decline to draw the one
