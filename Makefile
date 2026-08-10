@@ -1199,7 +1199,22 @@ $(BUILD)/bench360.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 #
 # The names are short and unambiguous at a DOS prompt on purpose: DOS 3.3 has
 # 8.3 names and no tab completion, and these get typed by hand into dskimage.
+# NOBIG=1 leaves BIGFILE.DAT off the field disks. It is 170KB of the 354 a
+# 360KB floppy holds, so a full disk has ~14KB free and SPEC.md 18.4's write
+# rows step all the way down and skip - and a WRITE bench with no room to
+# write in is the one thing it cannot be. Without it there is ~185KB free and
+# the row gets its full 128KB.
+#
+# The trade is stated rather than hidden: BIGFILE.DAT is what PERFORMANCE.md
+# Part 9 Set 13's DOS cross-check reads, and what SPEC.md 18.95.4's
+# cache-width sweep walks, so a NOBIG disk skips that row and says so. Build
+# one of each if you want both, and they have the same NAMES - so build,
+# copy, rebuild.
+ifneq ($(NOBIG),)
+FIELDBENCH := $(BENCHPKGS) $(BUILD)/bench.dat $(BUILD)/benchsml.dat
+else
 FIELDBENCH := $(BENCHPKGS) $(BENCHDATA)   # bigfile.dat is in BENCHDATA now
+endif
 CGADIR     := $(BUILD)/cgak
 F1DIR      := $(BUILD)/f1k
 HERCDIR    := $(BUILD)/herck
