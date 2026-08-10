@@ -120,6 +120,17 @@ ifneq ($(DIRW1),)
 VIDDEF += -DDIRW_ONE
 endif
 
+# FDDPROBE=0 never asks the FDC whether the second floppy drive is really there
+# (SPEC.md 18.97), so the int 11h equipment word decides on its own again - the
+# pre-18.97 behaviour, and the A/B for the whole probe. A knob for DIRW1's
+# reason turned up one further: this is a claim about what a real uPD765
+# reports for a drive that is NOT THERE, an emulated controller answers what
+# its author believed one answers (SPEC.md 18.92, docs/FIELD-NOTES.md 5), and
+# the machine that can settle it is the one whose desktop is wrong today.
+ifeq ($(FDDPROBE),0)
+VIDDEF += -DNO_FDDPROBE
+endif
+
 # KERN_SMALL=1 selects the SMALL build of the kernel (docs/KERN-SPLIT-PLAN.md).
 #
 # The split is the one docs/KERNEL-MEMORY.md and kernel.asm have named for
@@ -264,9 +275,9 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 REDRAWFULL SNDSNIFF RAMKB FONT,\
+                             DIRW1 FDDPROBE REDRAWFULL SNDSNIFF RAMKB FONT,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \

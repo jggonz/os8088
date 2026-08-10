@@ -77,9 +77,31 @@ desk_init:
 .none:
     xor ah, ah
 .flags:
+    mov [fdd_dbg_eqp], ah       ; what int 11h CLAIMED, banked before anything
+                                ; contests it (SPEC.md 57.5)
+%ifndef NO_FDDPROBE
+    ; ...and on a 5150 that claim is the SW1 DIP switches read back through the
+    ; 8255, which is a statement about what somebody SET. Ask the drive
+    ; (SPEC.md 18.97). Only when the word claims the second drive - a machine
+    ; claiming one is uncontested and pays this compare - and only ever about
+    ; unit 1, because unit 0 is where the kernel just came from.
+    cmp ah, 2
+    jb .probed
+    push ax
+    call dsk_fdd_probe
+    mov cl, al                  ; the verdict, out of AX's way: AH is the zone
+    pop ax                      ; count and the probe answers in AL
+    or cl, cl
+    jnz .probed                 ; present, or not PROVEN absent - either way it
+    mov ah, 1                   ; keeps its zone (18.97: the two errors are not
+    call dsk_fdd_retire         ; symmetric). Absent: one zone, and the row too
+.probed:
+%endif
     ; A floppy the machine does not have gets no zone - but its VOLUME ROW
     ; stays live, because [disk_drive] may still name it and a mount of an
-    ; absent drive is an ordinary failed mount (SPEC.md 18.3).
+    ; absent drive is an ordinary failed mount (SPEC.md 18.3). That is still
+    ; right for a drive nothing DISPROVED - a claim of one drive is no evidence
+    ; about unit 1, and retiring a row on no evidence is what 18.97 forbids.
     xor cl, cl
 .zloop:
     mov bl, cl
