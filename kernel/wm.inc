@@ -1405,6 +1405,11 @@ wm_raise:
                                 ; only to be painted over
     xchg bp, di                 ; DI = the outgoing front, BP = the incoming
     call wm_draw_title          ; DI != BP now, so it loses its stripes
+    call wm_grow_erase          ; ...and its grow box, which belongs to the
+                                ; front window just as its two title-bar
+                                ; boxes do (SPEC.md 11.1.1) - BEFORE the bank
+                                ; below, so the cache holds the window as it
+                                ; now looks
     call wm_su_take             ; ...and its content is banked HERE, while it
                                 ; is still on the glass and before the window
                                 ; going over it has drawn (SPEC.md 11.96)
@@ -1484,14 +1489,21 @@ wm_hide:
     push cx
     push dx
     push si
-    call wm_su_drop             ; MINIMIZING IS NOT COVERING (SPEC.md 11.96.1).
-                                ; A hidden window's background painter finds
-                                ; itself invisible and SKIPS drawing, so it
-                                ; never reaches wm_clip_set and never drops the
-                                ; cache - while its state goes on changing. The
-                                ; promise in WF_SAVEU is about a window that is
-                                ; merely covered; nothing may assume it across
-                                ; a hide
+%ifdef REDRAWFULL
+    call wm_su_drop             ; the reference build (SPEC.md 11.96.5)
+%else
+    push di                     ; MINIMIZING IS NOT COVERING (SPEC.md 11.96.1)
+    mov di, bx                  ; and this used to DROP the cache for that
+    call wm_su_take             ; reason. Taking one is strictly safer than
+    pop di                      ; either dropping or keeping: it is banked
+                                ; HERE, at the last moment the window's pixels
+                                ; are correct and still on the glass, so no
+                                ; older cache can survive a hide and a restore
+                                ; puts back what went down (SPEC.md 11.96.5).
+                                ; It must run before the visible bit drops
+                                ; below - wm_su_take refuses an invisible
+                                ; window, having no pixels to read
+%endif
     mov si, bx
     call wm_win_rect            ; AX,BX,CX,DX = the rect it is vacating
     test word [si+W_FLAGS], WF_FULL
@@ -2075,6 +2087,71 @@ wm_dmg_hit:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_dmg_vacate - the rect a moved window is LEAVING (SPEC.md 11.91.2)
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 - where the window WAS, drop shadow
+;      included; SI = the window
+; out: nothing (all registers preserved)
+;
+; A window that MOVED damages the union of where it was and where it is, and
+; wm_dmg_wins marked everything overlapping that union - so dragging a window
+; ACROSS another one redrew the one underneath, although the only ground given
+; up was a strip nowhere near it.
+;
+; The rect it is LEAVING is the whole of where a pixel can have gone stale.
+; Everywhere else in the damage, one of two things is true and both are right:
+; the moved window writes the pixel (it is on top, so its value is the answer),
+; or nothing in this pass writes it at all - wm_dmg_gray subtracts every
+; visible window (11.91.1), so the dither never reaches inside one - and the
+; window underneath keeps the pixel it already had.
+;
+; It is a superset of what is actually uncovered - old MINUS new is an L and
+; this is the whole of old - which costs a repaint on a short drag and is the
+; safe direction. The caller owes one fact: the window is going to be drawn in
+; this pass. ui_drag can say it, because a drag is only reached after a raise.
+; -----------------------------------------------------------------------------
+wm_dmg_vacate:
+    mov [wm_dmg_st1], ax
+    mov [wm_dmg_sy1], bx
+    mov [wm_dmg_st2], cx
+    mov [wm_dmg_sy2], dx
+    mov [wm_dmg_stwin], si
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_dmg_stale - can any pixel of this window have gone stale?
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (the window's rect); wm_dmg_hit has
+;      already said it overlaps the damage
+; out: CF = 1 = no: it never overlapped the rect the moved window vacated, so
+;      it owes nothing. CF = 0 = mark it.
+; clobbers: nothing else (flags)
+;
+; wm_dmg_hit's four compares against a different rect. With nothing armed the
+; answer is always "mark", which is what every caller but ui_drag gets and
+; what this pass has always done.
+; -----------------------------------------------------------------------------
+wm_dmg_stale:
+%ifdef REDRAWFULL
+    clc                         ; the reference build (SPEC.md 11.91.2): mark
+    ret                         ; against the whole damage rect, as this pass
+%endif                          ; did before the vacated rect existed
+    cmp word [wm_dmg_stwin], 0
+    je .mark
+    cmp ax, [wm_dmg_st2]
+    jg .clean
+    cmp cx, [wm_dmg_st1]
+    jl .clean
+    cmp bx, [wm_dmg_sy2]
+    jg .clean
+    cmp dx, [wm_dmg_sy1]
+    jl .clean
+.mark:
+    clc
+    ret
+.clean:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_dmg_add - grow the damage rect to cover AX,BX,CX,DX as well
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive)
 ; out: nothing (all registers preserved)
@@ -2274,6 +2351,12 @@ wm_paint_dmg:
     jne .wins                   ; fullscreen: no zones to grow the rect to
     call desk_dmg_zones         ; AL = the zone mask; the rect grows to cover
     mov [wm_dmg_zn], al         ; every zone it touched
+    or al, al
+    jz .fill                    ; ...and a zone is redrawn WHOLE, so a window
+    mov word [wm_dmg_stwin], 0  ; over one is damaged by something other than
+                                ; the move: 11.91.2's rect no longer describes
+                                ; everything that can have gone stale, so it
+                                ; is disarmed rather than reasoned about
 
 .fill:
     mov ax, [wm_dmg_x1]         ; the desktop dither, clipped to the damage
@@ -2337,7 +2420,8 @@ wm_paint_dmg:
     mov di, bx
     mov bp, bx                  ; DI == BP: draw it as the FRONT window
     call wm_draw_title
-    jmp short .out
+    call wm_grow_paint          ; ...and it GAINS a grow box, the other half
+    jmp short .out              ; of SPEC.md 11.1.1 (BX is still the window)
 
 .chrome:
     cmp byte [wm_dmg_fs], 0     ; "nothing was uncovered but the chrome
@@ -2406,7 +2490,16 @@ wm_dmg_wins:
     mov si, bx                  ; SI = our window for the rest of the pass
     call wm_win_rect            ; AX,BX,CX,DX = our rect, shadow included
     call wm_dmg_hit
-    jc .mset
+    jnc .mnodmg
+    cmp si, [wm_dmg_stwin]
+    je .mset                    ; the window that moved draws itself, always
+    call wm_dmg_stale           ; ...and one that never overlapped the rect it
+    jnc .mset                   ; VACATED had nothing uncovered (SPEC.md
+                                ; 11.91.2). It still falls through to the two
+                                ; tests below: the dock is drawn UNDER windows,
+                                ; and a marked window BELOW is redrawn whole
+                                ; and reaches wherever its own rect reaches
+.mnodmg:
     cmp byte [wm_dmg_dk], 0     ; the strip was drawn, and it is drawn UNDER
     je .mnodock                 ; windows, so a window reaching into it is
     cmp dx, [vid_dock_y0]       ; damaged by it - per window, rather than by
@@ -2480,7 +2573,9 @@ wm_dmg_wins:
     jmp .dwin
 .wdone:
     mov byte [wm_dmg_dk], 0     ; consumed: a one-shot argument must not be
-    pop bp                      ; left set for a caller that draws no strip
+    mov word [wm_dmg_stwin], 0  ; left set for a caller that draws no strip -
+    pop bp                      ; and the vacated rect is one for the same
+                                ; reason (SPEC.md 11.91.2)
     pop di
     pop si
     pop dx
@@ -2840,6 +2935,17 @@ wm_dmg_dk   db 0                ; 1 = the dock strip really was drawn, so a
                                 ; one-shot argument to wm_dmg_wins, which
                                 ; clears it on the way out
 wm_dmg_j    dw 0                ; the marking pass's inner index
+
+; --- the rect a moved window is LEAVING (SPEC.md 11.91.2) -------------------
+; A one-shot argument to wm_dmg_wins, like wm_dmg_dk, and cleared by it for
+; the same reason: a call site that forgets inherits 0, which marks against
+; the whole damage rect as this pass always did, and a wasted repaint is the
+; safe error.
+wm_dmg_stwin dw 0               ; the window that moved, 0 = not armed
+wm_dmg_st1  dw 0                ; ...and where it WAS, shadow included
+wm_dmg_sy1  dw 0
+wm_dmg_st2  dw 0
+wm_dmg_sy2  dw 0
 wm_hide_r   times 4 dw 0        ; wm_hide/wm_destroy: the vacated rect,
                                 ; banked across the record teardown
 wm_dg_r     times 4 dw 0        ; wm_dmg_gray's rect, banked across the
@@ -4345,10 +4451,14 @@ wm_su_try:
     mov cx, [wm_su_x2]
     mov dx, [wm_su_y2]
     call gfx_restore
-    mov bx, di
-    call wm_su_drop             ; SPENT: the pixels are on screen and this
-    clc                         ; window is about to be the front one, so the
-    jmp short .out              ; next thing it does is change them
+    clc                         ; THE CACHE IS NOT SPENT HERE. It used to be
+    jmp short .out              ; dropped on the grounds that this window is
+                                ; about to be the front one and will change
+                                ; its own pixels - true of a raise and false
+                                ; of a damage repaint, which redraws a window
+                                ; that stays exactly where it was. wm_su_bank
+                                ; below asks which of the two this is, and
+                                ; drops it only for the first (SPEC.md 11.96.4)
 .no:
     stc
 .out:
@@ -4465,12 +4575,113 @@ wm_draw_win:
 .growbox:
     mov bx, di                  ; grow box AFTER W_PAINT (SPEC.md 11.1) -
     call wm_grow_paint          ; a no-op unless frontmost + WF_SIZABLE
+    call wm_su_bank             ; ...and THIS is the moment its pixels are
+                                ; both correct and finished with (SPEC.md
+                                ; 11.96.4)
     pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_su_bank - after drawing window DI, decide what its raise cache should be
+; in:  DI = the window just drawn (gfx lock held)
+; out: nothing (all registers preserved)
+;
+; SPEC.md 11.96.4. The cache used to be taken in ONE place - wm_raise, from
+; the window losing the front - and spent on the first restore, so it served
+; the case it was written for (two windows alternating) and nothing else: a
+; second drag across the same window repainted it, and a window that had been
+; in the background a while had no cache at all.
+;
+; The question is the same wherever it is asked: has this window finished
+; with the pixels it has just been drawn? The FRONT window has not - the next
+; thing it does is change them - and every other window has, because nothing
+; but a redraw can move them (11.96.1's promise). So the front window's cache
+; is dropped and everybody else's is taken, at the one place every window in
+; the system is drawn.
+;
+; It is affordable because a bank is a COPY and a repaint is a W_PAINT: about
+; 5.7KB of framebuffer on a mono Disk window against 578 ms of glyphs
+; (11.96). The claim is purgeable (50.6), so a machine with no room to spare
+; declines and behaves exactly as it did before this existed.
+; -----------------------------------------------------------------------------
+wm_su_bank:
+    push ax
+    push bx
+%ifdef REDRAWFULL
+    jmp short .front            ; the reference build (SPEC.md 11.96.4): only
+%endif                          ; wm_raise ever banks, and the first restore
+                                ; spends it, which is where this started
+    call wm_top                 ; BX = frontmost visible (0 if none)
+    cmp bx, di
+    je .front
+    call wm_su_take             ; covered, or minimized a moment from now:
+    jmp short .out              ; its pixels stand until something draws it
+.front:
+    mov bx, di
+    call wm_su_drop             ; the front window is about to change them
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_grow_rect - DI = window -> AX,BX,CX,DX = its grow box, inclusive
+; (W_X+W_W-14, W_Y+W_H-14) .. (W_X+W_W-2, W_Y+W_H-2)
+; -----------------------------------------------------------------------------
+wm_grow_rect:
+    mov ax, [di+W_X]
+    add ax, [di+W_W]
+    sub ax, 14
+    mov bx, [di+W_Y]
+    add bx, [di+W_H]
+    sub bx, 14
+    mov cx, ax
+    add cx, 12
+    mov dx, bx
+    add dx, 12
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_grow_erase - take the grow box off a window that has stopped being front
+; in:  DI = window ptr (caller holds the gfx lock)
+; out: nothing (all registers preserved)
+;
+; SPEC.md 11.1.1. The grow box belongs to the frontmost window alone, exactly
+; like the close and minimize boxes wm_draw_title takes away when a window
+; loses the front - and nothing took it off. It survived only until something
+; repainted that window, which used to be nearly every damage pass; SPEC.md
+; 11.91.2 makes "nothing repaints it" the normal case and turns a transient
+; artifact into a permanent one.
+;
+; White is the exact erase and not an approximation: wm_grow_paint's first act
+; is to white-fill this same 13x13, so whatever the application had drawn
+; there was already gone the moment the box appeared. This puts the window
+; back to how it looked before the box, not to something new.
+; -----------------------------------------------------------------------------
+wm_grow_erase:
+    test word [di+W_FLAGS], WF_SIZABLE
+    jz .out
+    test word [di+W_FLAGS], WF_FULL
+    jnz .out                    ; wm_grow_paint's own two gates, and the
+    test word [di+W_FLAGS], 2   ; visible bit: a hidden window has no pixels
+    jz .out
+    push ax
+    push bx
+    push cx
+    push dx
+    call wm_grow_rect
+    mov byte [gfx_color], CWHITE
+    call gfx_fill
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4499,16 +4710,7 @@ wm_grow_paint:
     and ax, WF_SIZABLE | WF_FULL
     cmp ax, WF_SIZABLE
     jne .out
-    mov ax, [di+W_X]            ; 13x13 white square, black frame, at
-    add ax, [di+W_W]            ; (W_X+W_W-14, W_Y+W_H-14)..(+W_W-2, +W_H-2)
-    sub ax, 14
-    mov bx, [di+W_Y]
-    add bx, [di+W_H]
-    sub bx, 14
-    mov cx, ax
-    add cx, 12
-    mov dx, bx
-    add dx, 12
+    call wm_grow_rect           ; 13x13 white square, black frame
     mov byte [gfx_color], CWHITE
     call gfx_fill
     mov byte [gfx_color], CBLACK
