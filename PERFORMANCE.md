@@ -3845,3 +3845,63 @@ taking it to ~12; it costs ~240 bytes of `.text`, which is another rung, and at
 that point the fetch is nearly all of it. A `rep stosb` for a run of identical
 glyph rows (a span of spaces, which §27.2's padding makes common) is the other
 candidate and needs a compare per cell to find the span.
+
+### Set 28 — Set 27's two candidates, measured: one rejected, one kept
+
+Set 27 named two and measured neither. Both were built against the same kernel
+and run on the same machine — and **`gfxbench` had to grow two rows first**,
+because the existing one could not have answered the second question:
+`C-2 01 A0F` has no adjacent repeat, so a span optimisation measures as exactly
+nothing on it, while the text this system actually draws is padded on purpose.
+`FONT_RUN 20 text` and `FONT_RUN 20 padded` are the same LENGTH and differ only
+in content.
+
+**The baseline decomposes, which is what makes the rest readable**: 10 cells at
+3,131.77 µs and 20 at 5,394.84 µs, so **~872 µs is fixed per run and ~226 µs is
+per cell**. And `20 text` against `20 padded` is **0.02%** — content was free
+before any of this.
+
+| `gfxbench` row, CGA | baseline | A unrolled | B span |
+|---|---|---|---|
+| `FONT_RUN 10 aligned` | 3,131.77 µs | **−4.74%** | +1.44% |
+| `FONT_RUN 20 text` | 5,394.84 | **−4.44%** | +0.84% |
+| `FONT_RUN 20 padded` | 5,393.73 | −4.44% | **−31.33%** |
+| `FONT_CHAR` · `FONT_STR` · `PAIR` · skewed · every `GFX_*` | — | ±0.01% | ±0.03% |
+
+**A — unrolling the eight row passes: REJECTED.** The bar it was given was 5%
+and it returns **4.74%**, for **+267 bytes of `.text`** (against the ~240
+estimated) and a CROSSED rung — spare 2,048 → 1,536, three steps, under the
+four this tree keeps. Two things make it a clearer no than the headline
+suggests. The disp8 saves **one** byte a cell-row, not two: `mov al,[ss:bx+r]`
+is 4 bytes where `add bx,bp` + `mov al,[ss:bx]` is 5. And **it gets worse as
+runs get longer**, which is the direction real text goes — solving the two rows
+gives a **fixed** saving of 57.5 µs (the row counter, once a run) and **9.1 µs
+a cell**, so the percentage falls as the per-cell term dominates.
+
+**B — the trailing span as one `rep stosb`: KEPT.** +138 bytes of `.text`, +4
+of `.bss`, **no rung crossed**. It is a trade and both halves are real: −31.3%
+on a padded run, **+1.4% on a run with no span**, which is the fixed cost of
+deciding. Framebuffer **byte-identical** to the shipped kernel on both mono
+adapters.
+
+**The first version cost +3.06% on unpadded runs and the fix is the general
+lesson**: it tested for a span *per row*, and a span is a property of the RUN —
+so every unpadded run answered the same question eight times. Moving the branch
+to `.rm` took it to +1.50%. A second refinement, gating the backward search on
+the last two entries matching, took it only to +1.44% — **the diagnosis there
+was wrong**: what remains is not the search but the ~45 µs of *deciding at all*,
+and that is why the first fix was worth 1.5 points and the second 0.06.
+
+**How much of a real session HAS a span, measured rather than argued.** Four
+counters in a scratch kernel, two scripted sessions: **34%** of the cells
+`font_run` drew were inside a span (42 of 124), and **28%** in the other (53 of
+187); half the runs had one.
+
+**And the probe found something worth more than the number.** In a 40-second
+session with the Task Manager open, unoccluded and refreshing, `font_run` was
+called **four times**. Not four hundred. Every consumer is change-gated —
+§12.9's bar composes a diff, §28's rows skip what has not moved, §22.11 scrolls
+instead of redrawing — so **`FONT_RUN` is a BURST cost, not a steady-state
+one**: it is what a keystroke, a full bar redraw or a Tracker screen pays, and
+an idle desktop does not call it at all. That is the context for all of Sets
+25–28: 2.84x on a path that is already, by design, not running most of the time.

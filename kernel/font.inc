@@ -25,6 +25,11 @@ FONT_BYTES  equ (FONT_LAST - FONT_FIRST + 1) * 8    ; 95 glyphs x 8 rows = 760
 ; on another module's geometry is one somebody will change.
 FONT_RN_MAX equ 90
 
+; SPEC.md 6.1.8: the shortest trailing span worth a `rep stosb`. The tail block
+; is 17 bytes against a plain cell's 14, so it breaks even at 2 and wins from
+; 3; below that the run takes the plain walk and pays nothing at all.
+FONT_RN_KMIN equ 3
+
 %ifndef BAKED_FONT
 ; -----------------------------------------------------------------------------
 ; font_init - copy the ROM 8x8 font's printable range into RAM
@@ -521,6 +526,27 @@ font_run:
     pop es
     ret
 
+; SPEC.md 6.1.7: one cell of a row pass, and the row advance after it. Macros
+; because the padded and unpadded row loops differ only in the tail, and two
+; copies of a five-instruction body that must agree is how they stop agreeing.
+%macro FONT_RN_PX 0
+    lodsw                       ; AX = this cell's glyph base (DS:SI, the table)
+    xchg ax, bx                 ; BX = it, in one byte
+    add bx, bp                  ; ...+ the row this pass is on
+    mov al, [ss:bx]             ; the glyph row byte (font_glyphs is LOW_SEG)
+    and al, dl
+    xor al, dh
+    stosb
+%endmacro
+
+%macro FONT_RN_NEXTROW 0
+    add di, [cs:vid_rowadd]     ; gfx_nextrow, ONCE a row
+    test di, [cs:vid_wrapbit]
+    jz %%nw
+    add di, [cs:vid_wrapfix]
+%%nw:
+%endmacro
+
 font_run_x:
     push ax
     push bx
@@ -679,11 +705,47 @@ font_run_x:
     jmp .cell                   ; NOT `jmp short`: it reaches by 12 bytes today
                                 ; and this is the cold path of the pair
 .p1end:
+    or bp, bp
+    jz .p1none
+    mov [font_rn_n], bp
+    mov [font_rn_n2], bp        ; the default is NO span: every cell drawn
+    mov word [font_rn_k], 0     ; singly, and the plain row walk below
+    cmp bp, 2
+    jb .p1none                  ; one cell cannot repeat anything
+    mov ax, [bx-2]              ; the last cell's glyph against the one before
+    cmp ax, [bx-4]              ; it. On a run with no span THIS is the whole
+    jne .p1none                 ; test - two words and a branch, not a walk,
+                                ; which is what took the unpadded rows from
+                                ; +1.50% back to the noise
+    ; --- the TRAILING SPAN, found once (SPEC.md 6.1.8) ----------------------
+    ; This system pads deliberately - 27.2 makes a Note Pad row's padding its
+    ; ERASE, 12.9 composes the bar out to the clock, 28's columns are largely
+    ; spaces - so the last cells of a run are usually the SAME cell repeated,
+    ; and repeated cells compose to one byte. That is a `rep stosb`. The scan
+    ; is here, once, rather than a compare per cell per row; SI and CX are
+    ; free because the values they held are on the stack.
+    mov si, bx                  ; AX already holds the repeated glyph
+    sub si, 4                   ; ...and the one before it
+    mov cx, 1                   ; the last cell always repeats itself
+.p1trl:
+    cmp cx, bp
+    jae .p1trle
+    cmp [si], ax
+    jne .p1trle
+    dec si
+    dec si
+    inc cx
+    jmp short .p1trl
+.p1trle:
+    mov [font_rn_k], cx         ; cells the tail writes...
+    mov ax, bp
+    sub ax, cx
+    mov [font_rn_n2], ax        ; ...and the ones drawn singly before it
+.p1none:
     pop cx
     pop si
     or bp, bp
     jz .out                     ; nothing on screen: no rows to write
-    mov [font_rn_n], bp
     cmp word [wm_clip_n], 0
     je .rm
     ; A region is armed. stosb walks CONSECUTIVE bytes, so it is only correct
@@ -720,28 +782,48 @@ font_run_x:
     mov dh, [font_rn_bm]        ; the run's masks (SPEC.md 6.1.5) for all 8 rows
     mov es, [vid_rseg]          ; ES:DI is the framebuffer from here on - the
     xor bp, bp                  ; string has been read and will not be touched
+    cmp word [font_rn_k], FONT_RN_KMIN
+    jb .rmp                     ; no span worth a `rep`: take the plain walk,
+                                ; and take it at the RUN level. The span is a
+                                ; property of the run, so a per-ROW test would
+                                ; ask the same question eight times and charge
+                                ; every unpadded run for the answer - measured
+                                ; at +3.06% before this branch existed
 .rmrow:
     mov si, font_rn_tab
-    mov cx, [font_rn_n]
+    mov cx, [font_rn_n2]        ; the cells before the trailing span
     push di                     ; this row's first byte
+    jcxz .rmtail                ; ...of which there may be none at all
 .rmpx:
-    lodsw                       ; AX = this cell's glyph base (DS:SI, the table)
-    xchg ax, bx                 ; BX = it, in one byte
-    add bx, bp                  ; ...+ the row this pass is on
-    mov al, [ss:bx]             ; the glyph row byte (font_glyphs is LOW_SEG)
+    FONT_RN_PX
+    loop .rmpx
+.rmtail:
+    mov cx, [font_rn_k]         ; the repeated tail: one compose, then the
+    lodsw                       ; string instruction writes every byte of it.
+    xchg ax, bx                 ; SI already points at the first tail entry,
+    add bx, bp                  ; and they all carry the same glyph
+    mov al, [ss:bx]
     and al, dl
     xor al, dh
-    stosb
-    loop .rmpx
+    rep stosb
     pop di
-    add di, [cs:vid_rowadd]     ; gfx_nextrow, ONCE a row
-    test di, [cs:vid_wrapbit]
-    jz .rmnw
-    add di, [cs:vid_wrapfix]
-.rmnw:
+    FONT_RN_NEXTROW
     inc bp
     cmp bp, 8
     jb .rmrow
+    jmp .out
+.rmp:                           ; ...and the same rows with no tail at all
+    mov si, font_rn_tab
+    mov cx, [font_rn_n]
+    push di
+.rmppx:
+    FONT_RN_PX
+    loop .rmppx
+    pop di
+    FONT_RN_NEXTROW
+    inc bp
+    cmp bp, 8
+    jb .rmp
     jmp .out
 
 .cell:                          ; the per-cell path: a clip-cut run, and the
@@ -1036,6 +1118,8 @@ font_rn_bm:     resb 1          ; 6.1.5/6.1.6): ink XOR background, and
 font_rn_ch:     resb 1          ; font_run_scell's character, parked because
                                 ; AL is the rect's low byte by the time the
                                 ; letter is drawn
+font_rn_n2:     resw 1          ; cells drawn singly, before the trailing span
+font_rn_k:      resw 1          ; ...the span's length, at least 1
 font_rn_n:      resw 1          ; SPEC.md 6.1.7: cells the run will draw, and
 font_rn_tab:    resw FONT_RN_MAX ; a glyph pointer for each. 180 bytes, taken
                                 ; deliberately: it is what lets the drawing

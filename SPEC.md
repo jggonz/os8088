@@ -1629,6 +1629,30 @@ whole life.
 
 Measured in PERFORMANCE.md Set 27.
 
+#### 6.1.8 The trailing span is one `rep stosb`
+
+**This system pads on purpose**: §27.2 makes a Note Pad row's padding its
+*erase*, §12.9 composes the menu bar whole out to the clock, §28's columns are
+largely spaces, §48.9's score is three space-padded fields. So the last cells
+of a run are usually the *same cell repeated* — and repeated cells compose to
+one byte, which is a string instruction rather than a loop.
+
+Pass 1 finds the span once (`[font_rn_k]`, `[font_rn_n2]`), and the row pass
+draws `n2` cells singly and then `rep stosb`s the tail. **Two things keep it
+from costing the runs it cannot help.** The span is a property of the RUN, so
+the choice between the two row loops is made **once at `.rm`**, not per row —
+a per-row test charged every unpadded run eight times and measured **+3.06%**.
+And the search is gated on the last two entries matching, so a run with no
+span pays two words and a branch instead of a walk.
+
+`FONT_RN_KMIN` is 3: the tail block is 17 bytes against a plain cell's 14, so
+it breaks even at 2 and wins from 3.
+
+**It is a TRADE and the numbers are in PERFORMANCE.md Set 28**: −31.3% on a
+padded 20-cell run, **+1.4% on a run with no span at all** — the fixed cost of
+deciding. Measured over two scripted sessions, 34% and 28% of the cells
+`font_run` drew were inside a span.
+
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
 `make FONT=<name>` builds a kernel whose 8x8 typeface is `fonts/<name>.f8`

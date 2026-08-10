@@ -360,7 +360,7 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4912,
+    "bss": 4916,
     "budget": 98304,
     "codemax": 65536,
     "cold": 22331,
@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54734
+    "text": 54872
   },
   "small": {
     "bss": 4651,
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,523 | 37.0% |
-| the window system and its furniture | 16,229 | 21.1% |
-| drawing: adapters, primitives, glyphs, icons | 11,118 | 14.4% |
+| the file system, end to end | 28,523 | 36.9% |
+| the window system and its furniture | 16,229 | 21.0% |
+| drawing: adapters, primitives, glyphs, icons | 11,256 | 14.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,813 | 12.7% |
 | the kernel proper: API table, heap, scheduler, events | 5,886 | 7.6% |
 | the Control Panel | 4,120 | 5.3% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,065** | |
+| **total** | **77,203** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -903,7 +903,7 @@ generated in the first place.
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
-| `font.inc` — the 8x8 text renderers (§6) | 1,389 | — | **1,389** | 193 | 768 |
+| `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `icons.inc` — the icon renderer (§10) | 1,342 | — | **1,342** | 34 | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,336 | — | **1,336** | 84 | — |
@@ -923,7 +923,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,694 | — | **2,694** | — | — |
-| **total** | **54,734** | **22,331** | **77,065** | **4,912** | **7,762** |
+| **total** | **54,872** | **22,331** | **77,203** | **4,916** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
