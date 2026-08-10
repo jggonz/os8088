@@ -3627,9 +3627,31 @@ never three facts:
 
 | | field, IBM 5150 | model, 2:1 |
 |---|---|---|
-| one sector, re-read | 199 ms = **1.00 rev** | **1.00 rev** |
-| a 9-sector track, one call | 384 ms = **1.92 rev** | 372 ms = **1.86 rev** |
-| the same nine as nine calls | 2,005 ms = **10.02 rev** | ~1 rev a call |
+| one sector, re-read | 199.1 ms = **1.00 rev** | **199.106 ms = 1.00 rev** |
+| a 9-sector track, one call | 384.5 ms = **1.92 rev** | **590.5 ms = 2.95 rev** |
+| the same nine as nine calls | 2,004.8 ms = **10.02 rev** | **2,197.0 ms = 10.99 rev** |
+
+**The middle row is a MISS and the right column is measured, not modelled.**
+An earlier draft of this set put 1.86 rev there, which was this document's
+author working the mechanism out on paper rather than reading it off the
+machine — `sysbench` on MartyPC says 2.95. The single-sector row is exact to
+four digits and the nine-call row is within 10%, so the per-sector arithmetic
+is right; what the track row exposes is a **quantization boundary**. The model
+finishes the ninth sector 28 ms before sector 1 comes round again, and its
+turnaround — the real IBM ROM returning from `int 13h` and being re-entered,
+which is cycle-accurate — does not fit in 28 ms, so every iteration waits a
+further whole revolution. The 5150 catches that same sector. **So the media
+model is sound and the miss is one of tens of milliseconds at a
+revolution-sized cliff**, which is precisely the shape that makes the boot
+17% slow rather than 3x, and precisely why a rotational model has to be
+checked against a rotational measurement instead of against its own algebra.
+
+**Also measured and NOT the cause**: the platter was being turned during a
+transfer's byte-streaming phase as well as by the transfer's own per-sector
+walk, which double-counts. Fixing it is right — the operation owns the angle —
+and it is worth **2%**, not the miss above. It measured as nothing against a
+7,980 ms boot transfer total and is recorded here so the next reader does not
+re-derive it as the explanation.
 
 **The interleave cannot come from the image and does not.** A raw sector image
 records the LOGICAL order and says nothing about the platter, so 2:1 is a
