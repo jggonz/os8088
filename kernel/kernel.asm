@@ -2371,6 +2371,8 @@ cw_snd_disp_set:        call snd_disp_set
                     retf
 cw_task_yield:          call task_yield
                     retf
+cw_toast_show:          call toast_show
+                    retf
 cw_toast_say:           call toast_say
                     retf
 cw_ui_post_cmd:         call ui_post_cmd

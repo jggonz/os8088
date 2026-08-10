@@ -684,7 +684,7 @@ teardown (SPEC.md 31.8), so a persistence run is: mount, type a geometry,
 be on the desktop with no clicks at all. A run that quits with the panel still
 open reboots with the probe's numbers back and nothing mounted, which reads
 exactly like the blob not persisting and is the test being wrong. **Minimizing
-is not closing**, and neither is a hard reset from outside; Special > Restart
+is not closing**, and neither is a hard reset from outside; the System menu's Restart
 is the other way that does flush.
 
 Worth testing once as a pair, because it is the property the blob exists for:

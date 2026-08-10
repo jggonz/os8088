@@ -363,7 +363,7 @@ Three things about it:
     "bss": 4751,
     "budget": 98304,
     "codemax": 65536,
-    "cold": 22688,
+    "cold": 22739,
     "coldpara": 1440,
     "fatpara": 288,
     "imgpara": 3776,
@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 55179
+    "text": 55215
   },
   "small": {
     "bss": 4666,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52928
+    "text": 52953
   }
 }
 ```
@@ -406,12 +406,12 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 54,222 + `.bss` 4,743) | 59,392 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
-| cold code | 22,528 B | 22,477 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
+| image (`.text` 55,194 + `.bss` 4,751) | 60,416 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| cold code | 23,040 B | 22,739 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,762 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
 | the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **95,744 B** | of a 96,256-byte budget — **512 B spare, ONE step**. Move 14's grant is spent and then some: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, the toast and baked-typeface rounds a third, §39.14/§39.15's per-display split two more, and SPEC.md §18.96's floppy formatter two |
+| **total** | **97,280 B** | of a 98,304-byte budget — **1,024 B spare, TWO steps** |
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
 (docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — SPEC.md §18.96's
@@ -422,21 +422,21 @@ exactly where it stood before the formatter landed: the whole of that feature
 is behind `%ifndef KERN_SMALL`, and the Edit-menu split that came with it
 (SPEC.md §22.12) fits in slack the small build already had.
 
-**Both variants now stand at one step, and that is the number to quote.** The
-two got there independently — big by spending §39's dual-display round and the
-formatter, small by spending nothing at all since its own budget was set — so
-the next feature of any size has to ask, on either build.
-
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
-are the only slack anywhere in the ladder: **427 bytes on the image, 51 on
+are the only slack anywhere in the ladder: **471 bytes on the image, 301 on
 the cold segment, 430 on `.lowbss`**. They are rounding artefacts, not
 reservations — and per the accounting section above they are also the whole
-of what the next feature can spend without moving the machine's RAM. The
-**cold segment has 51 bytes** in it, which is the one to watch: anything added
-there at all takes a whole step, and the footprint has only one left.
+of what the next feature can spend without moving the machine's RAM.
 
-The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0EE0,
-`FAT_SEG` 0x1460, `LOW_SEG` 0x1580, `HEAP_SEG` 0x17C0. `tools/kernsize.py`
+**§22.12.1's toast is the worked example of what that slack is for.** Written
+as a proc it measured +55 bytes of `.cold` against the 51 that were free at
+the time, and crossed a rung; inlined at its one call site — `fm_edit_commit`
+has already saved AX, SI and DI, so a proc was spending ten bytes re-saving
+them — it is +51 and costs the machine **nothing**. Four bytes were the
+difference between free and 512.
+
+The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0F20,
+`FAT_SEG` 0x14C0, `LOW_SEG` 0x15E0, `HEAP_SEG` 0x1820. `tools/kernsize.py`
 prints that line, so it need never be derived by hand again.
 
 **Run `python3 tools/kernsize.py` rather than trusting the numbers in this
@@ -874,20 +874,20 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,460 | 36.5% |
-| the window system and its furniture | 16,254 | 20.9% |
+| the file system, end to end | 28,523 | 36.6% |
+| the window system and its furniture | 16,274 | 20.9% |
 | drawing: adapters, primitives, glyphs, icons | 11,378 | 14.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,848 | 12.6% |
-| the kernel proper: API table, heap, scheduler, events | 5,889 | 7.6% |
+| the kernel proper: API table, heap, scheduler, events | 5,893 | 7.6% |
 | the Control Panel | 4,662 | 6.0% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,867** | |
+| **total** | **77,954** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 905 | 7,142 | **8,047** | 336 | — |
+| `files.inc` — the Disk window (§22) | 917 | 7,193 | **8,110** | 336 | — |
 | `wm.inc` — the window manager (§11) | 5,840 | — | **5,840** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
@@ -897,7 +897,7 @@ generated in the first place.
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,624 | — | **2,624** | 256 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 98 |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,561 | — | **2,561** | 194 | 98 |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,403 | — | **2,403** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
@@ -922,8 +922,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,697 | — | **2,697** | — | — |
-| **total** | **55,179** | **22,688** | **77,867** | **4,751** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,701 | — | **2,701** | — | — |
+| **total** | **55,215** | **22,739** | **77,954** | **4,751** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
