@@ -209,7 +209,7 @@ kernel/*.inc         34 modules. SPEC.md section 4 is the ownership table and
                      the authority on which one owns what - a copy of that
                      list here is a copy that goes stale. The load-bearing
                      ones: vga12 (planar primitives + the drawing lock),
-                     vgabb (the software renderer and the 1bpp driver),
+                     softgfx (the software renderer and the 1bpp driver),
                      viddet (which adapter is fitted, and the live geometry),
                      sched (the PIT hook and the context switch), wm
                      (windows, z-order, damage rects), memory (the claim
