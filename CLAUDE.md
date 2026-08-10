@@ -816,9 +816,10 @@ answer).
   paragraph filled up at three (`boot_ticks` 0x0C, mouse 0x06, disk 0x0E) and
   the fourth had nowhere to go. An API slot is the wrong answer twice: half of
   these are knob-built and a slot that exists in one build and not another is
-  an ABI that depends on a knob (§20.8 rule 4), and a slot is a permanent
-  promise where a debug block's whole value is that it changes with the code
-  it describes. A reader that cannot find its block **says so and continues** —
+  an ABI that depends on a knob (§20.8 rule 4), and a slot is a DELIBERATE
+  promise - costing a rebuild of every package to move, alpha unfreeze or
+  not - where a debug block's whole value is that it changes freely with the
+  code it describes. A reader that cannot find its block **says so and continues** —
   that is what lets one build of `sysbench` run on a plain kernel and a
   `DISKCNT=1` one.
 
@@ -2410,19 +2411,32 @@ whole diagnosis.
   (`OSAPI_SND_FM`/`OSAPI_SND_STREAM` at 0x00F8/0x0100, now the loadable
   sound driver's).
 
-  The rule that governs the table is **a RELEASED slot keeps its contract**,
-  and "we no longer implement this" is a refusing stub, not a reuse. A slot
-  introduced since the last release is NOT shipped and may still be changed
-  freely - renumbered, re-contracted or withdrawn - because nothing outside
-  this tree can have been built against it; the obligation is to get the
-  contract right before it goes out, not to freeze it the moment it is typed.
-  `gfx_line` is the worked example, its thin-or-dilated `SI` contract having
-  been replaced outright rather than kept alongside a successor. Reusing
-  0x01C8 for a KB-counting `mem_avail` where a paragraph-counting one had
-  been published would fail silently and by a factor of 64 — which is why
-  that block was *moved* rather than overlaid. SPEC.md §20.8 rule 4 is the
-  written form; **renumbering invalidates every `.o88` at once** and is only
-  survivable because every package is in this tree and `make` rebuilds them.
+  **The table is UNFROZEN while the OS is in alpha** (SPEC.md §20.8 rule 4),
+  and this is a REVERSAL of what this file said for most of the project's
+  life. Any slot may be renumbered, re-contracted or withdrawn — **released
+  or not** — for as long as this tree hosts every package written for this
+  OS. That condition is a fact about the repo rather than a hope: `apps/`,
+  `drivers/` and `tests/` are the complete set of callers, `make` rebuilds
+  all of them, and the toolchain is deterministic, so a contract change is a
+  rebuild and not a compatibility event. The old rule — *a released slot
+  keeps its contract*, retirement being a refusing stub rather than a reuse —
+  was costing the development cycle every first draft it ever typed, and it
+  comes back at the first release to a world that builds packages outside
+  this tree. **It comes back by being written into §20.8 rule 4**; until it
+  is, do not treat a slot as frozen because it looks old.
+
+  Nearly all of the rule still binds, and it is the part that matters. Get
+  the contract right *before* it goes out anyway — this is licence to fix a
+  mistake, not to skip the design. **Renumbering invalidates every `.o88` at
+  once**, so every package is rebuilt and every image reissued together; it
+  has happened three times. Prefer APPENDING to renumbering, and prefer a NEW
+  number to a silent change of meaning at an old one, because a re-contracted
+  cell fails in the worst available way — a package that assembles cleanly
+  and runs wrong. Reusing 0x01C8 for a KB-counting `mem_avail` where a
+  paragraph-counting one had been published would be wrong by a factor of 64
+  and say nothing, which is why that block was *moved* rather than overlaid.
+  The two refusing stubs already in the table (0x01E8, 0x01F0) stay as they
+  are — they are built and correct — but a NEW retirement need not add one.
 
   **No app reads the window record through ES any more.** `wm_geom` answers
   content size and visibility, so Fractal and Note Pad ask the kernel instead

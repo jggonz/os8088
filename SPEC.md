@@ -19,11 +19,21 @@ as much as in prose, and `tools/checkdocs.py` would only catch the ones that
 stopped resolving — not the ones that resolved to something else. That is the
 whole reason to leave them.
 
-The same rule governs the API table (§20.3): **a RELEASED slot keeps its
-contract**, and "we no longer implement this" is a refusing stub, not a reuse
-(§20.8 rule 4). A slot introduced since the last release is not shipped and
-may still be changed freely — the obligation is to get a contract right
-before it goes out, not to freeze it the moment it is typed.
+**The API table (§20.3) is the exception, and only for now.** It is
+**UNFROZEN while the OS is in alpha** (§20.8 rule 4): a slot may be
+renumbered, re-contracted or withdrawn, released or not, for as long as this
+tree hosts every package written for this OS — `make` rebuilds every caller
+there is, so a contract change is a rebuild rather than a compatibility
+event. The obligation to get a contract right *before* it goes out is
+unchanged; what is suspended is having to live for ever with one that was
+not. The freeze — *a released slot keeps its contract*, and "we no longer
+implement this" is a refusing stub rather than a reuse — comes back at the
+first release to a world that builds packages outside this tree, and comes
+back by being **written into §20.8 rule 4**, not by being inferred.
+
+Note that this does not extend to the §-numbering above: renumbering a
+section breaks citations silently, which is a different failure from
+renumbering a slot, and `make` cannot rebuild prose.
 
 ## 0. Goal
 
@@ -10381,13 +10391,17 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                                                 0x0318 gfx_lstepv  X
 ```
 
-**Every RELEASED slot keeps its number and contract** (§20.8 rule 4), on the
-rule that **a slot number must never mean two contracts**: a released number
-keeps its meaning, and the answer to "we no longer implement this" is a wrapper or a
-refusing stub, never a reuse. Reusing 0x01C8 for a KB-counting `mem_avail`
-where it once held a paragraph-counting one would fail silently and by a
-factor of 64, which is the whole class of bug the rule exists to prevent. So
-the three v3 arena slots at 0x01B8..0x01C8 stay live as `osapi_cm_*`
+**A slot number must never mean two contracts** — which survives §20.8 rule
+4's alpha unfreeze intact, because it was always the sharper half of that
+rule. The table being open means a number may be *withdrawn* or the whole
+block *renumbered* and every `.o88` rebuilt; it does not mean a live number
+may quietly start meaning something else. Reusing 0x01C8 for a KB-counting
+`mem_avail` where it once held a paragraph-counting one would fail silently
+and by a factor of 64 — a package that assembles cleanly and runs wrong,
+which is the class of bug this exists to prevent and the one thing a rebuild
+cannot catch. The answer to "we no longer implement this" is therefore still
+a wrapper or a refusing stub rather than a reuse. So the three v3 arena slots
+at 0x01B8..0x01C8 stay live as `osapi_cm_*`
 (kernel/memory.inc) — paragraph-counting wrappers over the claim heap that
 keep their original register contracts exactly — and `OSAPI_SND_FM` /
 `OSAPI_SND_STREAM` at 0x00F8/0x0100, once refusing stubs, carry the loadable
@@ -10880,42 +10894,51 @@ without anyone noticing it was a rule.
    contended register in this kernel and those bodies serve kernel-internal
    callers whose pointers are plain DS. The override version of this feature is
    where the bugs would have lived.
-4. **A RELEASED slot keeps its contract.** The table is 8 bytes per cell from
-   0x0010, and a number that has gone out in a release never means something
-   else afterwards — retired functionality gets a **refusing stub**, not a
-   reuse. What this rule is *not* is a promise that the numbers match another
-   tree's: they did while two branches were live and stopped when they merged
-   (§20.3), and closing that gap moved every cell above 0x01B0 down 88 bytes.
-   Renumbering is therefore possible but expensive and deliberate: it
-   invalidates every `.o88` at once, and it is only survivable because every
-   package is in this tree and `make` rebuilds all of them. It has happened
-   three times.
+4. **The API table is UNFROZEN while the OS is in alpha.** The table is 8
+   bytes per cell from 0x0010, and any slot may be renumbered, re-contracted
+   or withdrawn — **including one that has already gone out in a release** —
+   for as long as this tree hosts *every package written for this OS*.
 
-   **A slot introduced since the last release is not shipped and may still be
-   changed freely** — renumbered, re-contracted or withdrawn — because nothing
-   outside this tree can have been built against it yet. That is the whole
-   reason the rule says *released* rather than *written*: a development cycle
-   that cannot edit its own API spends its slots defensively and ends up
-   carrying every first draft forever. The obligation is to get the contract
-   right **before** it goes out, not to freeze it the moment it is typed. Once
-   a release carries it, the first paragraph binds and nothing relaxes it
-   again.
+   That condition is the whole justification, and it is a fact about the repo
+   rather than a hope: `apps/`, `drivers/` and `tests/` are the complete set
+   of things that call these cells, `make` rebuilds all of them from source,
+   and the toolchain is deterministic (§24), so a contract change is a
+   rebuild rather than a compatibility event. A freeze whose beneficiaries do
+   not exist protects nobody, and it costs the development cycle every first
+   draft it ever typed: a slot spent defensively is carried forever, and the
+   alternative to editing a wrong contract is *shipping around* it — a
+   successor slot beside a permanent no-consumer path, which is a worse spec
+   than the one the freeze was defending.
 
-   `gfx_line` (0x02E0) is the worked example: introduced after the last
-   release, so its `SI = 0/1` thin-or-dilated contract may be replaced
-   outright by a resumable walk rather than kept alongside one. Under the old
-   wording that would have meant a second slot and a permanent dilation path
-   with no consumer left to use it.
+   **What still binds, and it is most of the rule.** Get the contract right
+   **before** it goes out anyway — this is a licence to fix a mistake, not to
+   skip the design. A change is still expensive and still deliberate:
+   renumbering **invalidates every `.o88` at once**, so every package is
+   rebuilt and every shipped image reissued together, and it has happened
+   three times. Prefer *appending* to renumbering; prefer a *new number* to a
+   silent change of meaning at an old one, because a re-contracted cell fails
+   in the worst available way — a package that assembles cleanly and runs
+   wrong. Reusing 0x01C8 for a KB-counting `mem_avail` where a
+   paragraph-counting one had been published would be wrong by a factor of 64
+   and say nothing, which is why that block was *moved* rather than overlaid
+   (§20.3). And this rule was never a promise that the numbers match another
+   tree's: they did while two branches were live and stopped when they merged.
 
-   **The unification of §18.4.1 is the one recorded exception, and it is an
-   exception to the first sentence, not to the rest of the rule.** Slots
-   0x0120 and 0x0128 kept their numbers and *changed* their register
-   contracts: CX became DX:CX, and `dskw_read`'s answer became DX:AX. That is
-   exactly what this rule forbids, and it was taken deliberately, before
-   anything outside this tree can have been built against them — the whole
-   point of doing it now rather than later. The retired third slot, 0x01E8,
-   obeys the rule as written: a refusing stub, not a reuse. Nothing else may
-   read this as licence; the next contract change is a new number.
+   **When the freeze comes back.** The rule reverts to *a released slot keeps
+   its contract* — retired functionality getting a **refusing stub** rather
+   than a reuse — at the first release this project makes to a world that
+   builds packages outside this tree. **That is a decision to record here when
+   it is taken, not one to infer** from a version number, a tag, or the
+   passage of time. Until it is written in this paragraph, the table is open.
+
+   Two things in the table are history and stay as they are. The refusing
+   stubs already built — 0x01E8 `dskw_gone` (§18.4.1) and 0x01F0
+   `gfx_dbuf_gone` (§32) — are correct and re-treading them buys nothing;
+   what changes is that a *new* retirement need not add another. And the
+   §18.4.1 unification of 0x0120/0x0128, which kept two numbers while
+   changing their register contracts (CX became DX:CX, `dskw_read`'s answer
+   became DX:AX), is no longer an exception to anything — it is kept in the
+   record because *what* it did to those two cells is still worth knowing.
 5. **No `retf` from a package proc the kernel calls.** The
    kernel reaches a package through the three-byte `call bp` / `retf`
    dispatcher in its own header (§20.2), so entry, paint, onkey, onclick, menu
