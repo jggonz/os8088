@@ -112,10 +112,16 @@ HIW_CHUNKKB  equ 32             ; the copy buffer, KB. A cluster multiple on
                                 ; every geometry here (SPEC.md 18.4.4's rule),
                                 ; and small enough that a 128KB machine can
                                 ; still find it
-HIW_KMAXKB   equ 96             ; ...and the ceiling on KERNEL.SYS, which is
-                                ; written WHOLE (18.4.4: append refuses a
-                                ; protected file, and one write is also the
-                                ; strongest guarantee of contiguity)
+; ...and what it ASKS for first, so KERNEL.SYS - the biggest file the install
+; carries - goes down in one write. That is a SPEED choice since SPEC.md
+; 18.4.4 grew OSAPI_FILE_APPEND_SYS; before it, a machine that could not fund
+; this was a machine that could not install os8088. `make INSTCHUNK=1` builds
+; it at the fallback size, which is how the chunked path gets exercised on a
+; machine with plenty of heap - and the chunked path is the ONE that carries
+; a system file across three writes, so it is not a path to leave untested.
+%ifndef HIW_KMAXKB
+HIW_KMAXKB   equ 96
+%endif
 
 hd_itpl:    dw 70, 70, HIW_W, HIW_H, hd_s_ititle, hd_iw_paint, 0, hd_iw_click
 
@@ -1477,8 +1483,12 @@ hd_ibuf_get:
                                 ; kernel code. A claim can never be below the
                                 ; heap base, so the value alone was the tell
     mov ax, HIW_CHUNKKB         ; not enough for the kernel in one piece: take
-    call OSAPI_MEM_CLAIM        ; the chunk size and let hd_icopy_one refuse
-    jc .no                      ; the one file that needs more
+    call OSAPI_MEM_CLAIM        ; the chunk size, which now costs SPEED and not
+    jc .no                      ; CAPABILITY - KERNEL.SYS arrives as a run of
+                                ; appends instead of one write. It used to
+                                ; "let hd_icopy_one refuse the one file that
+                                ; needs more", i.e. a machine short of heap
+                                ; could not install os8088 at all
     mov word [hd_ibufkb], HIW_CHUNKKB
     jmp short .have
 .got:
@@ -1938,11 +1948,14 @@ hd_icopy_sub:
 ; on every geometry this kernel mounts - the rule that has to hold at BOTH
 ; ends, since the destination's cluster size need not equal the source's.
 ;
-; A SYSTEM file goes through OSAPI_FILE_WRITE_SYS (SPEC.md 19.6.1) so it lands
-; hidden and system exactly as it is on the floppy. That path cannot chunk -
-; append refuses a protected file - so a system file has to fit the buffer,
-; which is why hd_ibuf_get asks for HIW_KMAXKB first and KERNEL.SYS is the one
-; file that could ever need it.
+; A SYSTEM file goes through the _SYS twin of whichever verb the shape needs
+; (SPEC.md 19.6.1) so it lands hidden and system exactly as it is on the
+; floppy. BOTH shapes have one now, which is what removed this routine's only
+; refusal: append used to meet the two bits the create had stamped, so a
+; system file had to fit the buffer WHOLE, and the largest file the installer
+; carries - KERNEL.SYS - is a system file. hd_ibuf_get's HIW_KMAXKB is a speed
+; choice today; it was a capability one, and on a machine that took the 32KB
+; fallback the answer was that the disk you booted from cannot be installed.
 ; -----------------------------------------------------------------------------
 hd_icopy_one:
     push ax
@@ -1997,9 +2010,17 @@ hd_icopy_one:
     jmp short .ok
 
     ; --- and the chunked one (SPEC.md 18.4.4) --------------------------------
+    ; No species test HERE any more, and its absence is the fix rather than a
+    ; simplification. It read `cmp byte [hd_isys], 0 / jne .toobig` - "a system
+    ; file cannot be appended to" - which was true of the kernel it was written
+    ; against and made the whole install rest on hd_ibuf_get winning its
+    ; HIW_KMAXKB claim, because KERNEL.SYS is the biggest file here and a
+    ; system one. A machine short of heap took the 32KB fallback and was then
+    ; told `A file is too big for this machine` about a file the disk it booted
+    ; from is carrying, and a kernel that grew past 96KB would have got the
+    ; same answer on every machine. OSAPI_FILE_APPEND_SYS is the door
+    ; (SPEC.md 19.6.1); hd_ibuf_get's size is a speed choice now.
 .chunked:
-    cmp byte [hd_isys], 0
-    jne .toobig                 ; a system file cannot be appended to
 .chunk:
     HDBSTEP 6
     call hd_isrc_here
@@ -2029,10 +2050,6 @@ hd_icopy_one:
     jb .chunk                   ; offset reaches the size (SPEC.md 52.10.7)
 .ok:
     clc
-    jmp short .out
-.toobig:
-    mov word [hd_imsg], hd_s_ibig
-    stc
     jmp short .out
 .fail:
 %ifdef INSTBENCH
@@ -2186,6 +2203,11 @@ hd_iread_chunk:
 
 ; -----------------------------------------------------------------------------
 ; hd_iwrite_chunk - the first take CREATES, every later one APPENDS
+;
+; A SYSTEM file takes the _SYS twin of each verb (SPEC.md 19.6.1), so it is
+; created hidden + system and then extended past those bits - which is the
+; whole reason a big system file can be copied at all, and why this path has
+; no size limit left in it (SPEC.md 18.4.4).
 ; -----------------------------------------------------------------------------
 hd_iwrite_chunk:
     push ax
@@ -2202,10 +2224,20 @@ hd_iwrite_chunk:
     or ax, [hd_ioff+2]
     jnz .append
     xor dx, dx
+    cmp byte [hd_isys], 0
+    jne .cresys
     call OSAPI_FILE_WRITE       ; offset 0: create (or replace, on a re-run)
     jmp short .out
+.cresys:
+    call OSAPI_FILE_WRITE_SYS   ; ...hidden + system, as it is on the floppy
+    jmp short .out
 .append:
+    cmp byte [hd_isys], 0
+    jne .appsys
     call OSAPI_FILE_APPEND      ; every later chunk, SPEC.md 18.4.4
+    jmp short .out
+.appsys:
+    call OSAPI_FILE_APPEND_SYS  ; ...past the two bits the create stamped
 .out:
     pop es
     pop si
@@ -2740,7 +2772,6 @@ hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone
     HIMSG hd_s_imnt, 'Formatted, but it would not mount'
     HIMSG hd_s_ierr, 'Disk error - the install stopped'
     HIMSG hd_s_inboot, 'Copied, but it will not boot'
-    HIMSG hd_s_ibig, 'A file is too big for this machine'
 %ifdef INSTBENCH
     HIMSG hd_s_bdone, '     fC   fS   dC   dS   tk  done'
 %endif

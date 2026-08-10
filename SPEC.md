@@ -7912,13 +7912,49 @@ end of the file is **not** an error — it answers zero bytes, which is how the
 caller's loop terminates.
 
 `dskw_append` also refuses a **protected** file with `FERR_PROT`, `DSKW_PROT`
-being read-only|hidden|system|label|directory — so there is no chunked path
-to a system file and §19.6.1's slot is the only way to write one. That is a
-constraint on §52.10.4 rather than an oversight: the installer writes
-`KERNEL.SYS` **whole**, in one `OSAPI_FILE_WRITE_SYS` call, which is also the
-strongest guarantee that it lands contiguously from cluster 2 the way
-§52.10.2 requires. Chunked I/O is for the *application* files, which are the
-big ones and are not protected.
+being read-only|hidden|system|label|directory. That is right for a package
+and it was **wrong for the one caller that can legitimately make a system
+file**, which is §19.6.1's — so `OSAPI_FILE_APPEND_SYS` is the other half of
+that fence and §18.4.4.1 is why it had to exist.
+
+#### 18.4.4.1 A system file could be created and never finished
+
+The pairing is what was missing. `OSAPI_FILE_WRITE_SYS` stamps hidden +
+system on the file it makes; `dskw_append` then met those exact bits in
+`DSKW_PROT` and answered `FERR_PROT`. So a system file **larger than the
+caller's buffer could not be written at all** — created, and then unable to
+be extended by the only verb that extends anything.
+
+Nothing looked broken, because the only writer of system files is the
+installer and it had been given a way around it: claim a buffer big enough
+for the whole of `KERNEL.SYS` and write it in one call (§52.10.4). The
+round-number ceiling in `hd_ibuf_get` — 96KB, against a kernel of 86,118
+bytes — was the *capability*, not a tuning, and its fallback path said so in
+its own comment: "let `hd_icopy_one` refuse the one file that needs more".
+Spelled out, that is **a machine short of heap cannot install os8088**, and
+**a kernel that grows past 96KB cannot be installed on any machine** — with
+the same sentence for both, `A file is too big for this machine`, about a
+file the disk it booted from is carrying.
+
+`OSAPI_FILE_APPEND_SYS` (slot 0x03A0) is `dskw_append` with `DSKW_SPROT` in
+place of `DSKW_PROT` — the identical relaxation `dskw_write_sys`'s replace
+already takes, keyed off the identical `[dskw_syswr]` byte, one shot and
+cleared on the way out. **Read-only, a volume label and a subdirectory still
+refuse**, and the cluster-multiple precondition is untouched.
+
+Three things keep §19.6's rule where it was. It is behind the **same fence**
+— `drv_owns_seg`, the caller's segment being a loaded driver's — and shares
+`api_file_write_sys`'s body rather than copying it, because a fence written
+twice is a fence that can be got wrong once. It **cannot create** anything:
+an append needs a directory entry that is already there, so the only way to
+make a file the user can neither see nor delete is still the write cell. And
+a package that calls it gets the answer it has always had, `FERR_PROT`.
+
+What it buys: the installer's copy has **no size limit left in it**,
+`HIW_KMAXKB` becomes a speed choice (one write instead of three), and
+`make INSTCHUNK=1` builds the driver at the fallback size so the chunked
+system-file path is exercised on a machine that has plenty of heap — which
+is every machine here, and is why that path had never run.
 
 ### 18.94 The transfer instrument, published at a fixed offset
 
@@ -9443,6 +9479,18 @@ Two consequences worth stating, because both are load-bearing for §52.10:
   in the calling instance's own directory; this one must not, because the
   installer is naming files on the volume it is building and a folder put
   underneath it would scatter them.
+
+**There are TWO cells behind this fence, and the second is what lets the
+first finish its job.** `OSAPI_FILE_APPEND_SYS` (slot 0x03A0) is
+`dskw_append` with the same `DSKW_SPROT` relaxation, and §18.4.4.1 is the
+whole argument: without it a system file could be *created* and never
+*extended*, so one bigger than the caller's buffer could not be written at
+all. It shares `api_file_write_sys`'s body — one fence, a byte
+(`[api_sysap]`, `.text` with a real initialiser, written through `CS`
+because the stub still holds the caller's `DS` when it lands) picking which
+`dskw_` verb runs at the end — because two copies of a fence is one that can
+be got wrong. It cannot **create** anything, an append needing an entry that
+is already there, so §19.6's rule is unmoved by it.
 
 ### 19.7 `README.TXT` — the manual is on the disk, and the reader sets its shape
 
@@ -28045,6 +28093,32 @@ by then the install is done and the click adds software. Nine characters is
 72px and the button was 72px, so it is 88 now and the other two moved right
 by 16 — `HIW_B0X`/`HIW_BW0` drive the hit test as well as the drawing, so
 that is one change and not two.
+
+### 52.10.11 No file is too big for this machine any more
+
+`hd_icopy_one` had one refusal in it and it is gone. The chunked shape began
+`cmp byte [hd_isys], 0 / jne .toobig` — *a system file cannot be appended
+to*, which was a true statement about the kernel it was written against
+(§18.4.4) and which made the whole install rest on `hd_ibuf_get` winning its
+96KB claim. The fallback claim of 32KB was therefore not a fallback at all:
+on a machine that took it, the installer reported **`A file is too big for
+this machine`** about `KERNEL.SYS`, the file on the disk it had just booted
+from. The same sentence was waiting for every machine on the day the kernel
+passed 96KB; it stands at 86,118 bytes.
+
+§18.4.4.1's `OSAPI_FILE_APPEND_SYS` removes the constraint rather than
+widening the buffer, so `hd_iwrite_chunk` takes the `_SYS` twin of both
+verbs when `[hd_isys]` is set — created hidden + system, then extended past
+those bits — and `HIW_KMAXKB` is a **speed** choice: one write instead of
+three, and the strongest guarantee that `KERNEL.SYS` lands contiguously from
+cluster 2 (§52.10.2), which is why it is still asked for first.
+
+**`make INSTCHUNK=1` is how that path is tested at all.** It builds the
+driver with the buffer at its fallback size and touches nothing else — the
+kernel is byte-identical — so the run that carries a system file across
+several writes happens on a machine with plenty of heap, which is every
+machine anyone develops on. A path that only executes on hardware nobody has
+is a path that has never executed.
 
 
 ## 52.11 Two images: the transport, and the tool

@@ -3524,3 +3524,57 @@ no `APPS` folder for — and the distinct-sector count is what settles the
 question. That division of labour is worth stating on its own: **counts and
 traces on MartyPC, seconds on the 5150**, and a claim that needs both should
 not be made from either alone.
+
+### Set 23 — the WRITE priced on both drives, and the append penalty is real
+
+`REPORTS9`: two `sysbench` runs on the 5150, one with `A:` current and one
+with `C:` current, both booted from the **ST-225**. Same binary, same session,
+so the two write columns differ only in the medium under them. Set 22's
+`bl_usfield` wrap is gone from this build — the whole-microsecond field is
+nine digits and the append row reads 11.04 s rather than 1.04.
+
+**The boot is 59 ticks / 3,240 ms from the ST-225**, against 181 / 9,941 from
+the floppy in the previous round: **3.07x**, and the first figure this project
+has for what a hard disk is worth at boot on the target machine.
+
+| | floppy `A:` | ST-225 `C:` |
+|---|---|---|
+| 16KB read, warm | 768,960 us — **21,307 B/s** | 219,703 us — **74,553 B/s** |
+| 16KB read, cold motor | 1,263,292 us | 329,554 us |
+| BIOS's own track, 1 call | 398,211 us — 11,570 B/s | (floppy row) |
+| one cluster written | 1,263,292 us | 329,554 us |
+| create | **32KB** in 4,668,686 us | **128KB** in 1,428,069 us |
+| …as sectors / `int 13h` | 73 / 12 (6.08 a call) | 261 / 22 (11.86 a call) |
+| replace | skipped: needs 2x free | 1,537,920 us, 265 / 25 |
+| append, 8KB chunks | 11,040,070 us, 100 / 33 | 5,437,646 us, 366 / 126 |
+| append ÷ create | **2.36x** | **3.81x** |
+
+**A 16KB read is now 1.84x the BIOS's own one-call track read** (21,307 B/s
+against 11,570), which is not a paradox and is worth saying plainly: a
+`dsk_xfer` run spans the track boundary with the multi-track bit set, so it
+gets more than one track's sectors per revolution, where the ROM's single
+call stops at EOT. The figure that used to bound us is behind us.
+
+**The append penalty is the whole finding.** The same bytes written as a run
+of 8KB chunks instead of one call cost 2.36x on the floppy and 3.81x on the
+hard disk, and the split says why: sectors go 73 → 100 (1.37x) and 261 → 366
+(1.40x), while `int 13h` calls go 12 → 33 (**2.75x**) and 22 → 126 (**5.7x**).
+The extra sectors are the FAT and the directory; the extra *calls* are that
+each chunk is a whole §18.4 commit — allocate, flush the FAT, link, flush
+again, write the directory sector — and a commit is four small, scattered
+transfers that no coalescer can join to anything.
+
+So the lever is **commit once per file, not once per chunk**: hold the FAT
+dirty across the run and write the directory entry at the end, which is what
+`dskw_write` already does for a whole-file write and what `dskw_append` cannot
+do because each call is a complete operation by contract. Nothing here is
+implemented; this set is the measurement that says what it would be worth —
+**2.4x to 3.8x on every chunked write in the system**, which is the file
+manager's copy (§22.5), the installer's big files (§52.10.11) and any package
+saving something larger than its buffer.
+
+**The ST-225's own numbers, for the record**: `FILE_DFREE` 315,823 us, a mount
+and back 302,091 us, one cluster 329,554 us. And `COMMAND.COM` answers
+`FERR_NOENT` — the DOS 3.3 install docs/FIELD-MACHINES.md used to warn about
+is gone, overwritten by an os8088 install, so that row measures nothing now
+and should be pointed at a file this OS puts there.

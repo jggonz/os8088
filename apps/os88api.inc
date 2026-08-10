@@ -1827,7 +1827,7 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; filled with CX = the next ordinal, else
                                  ; CF=1 and AX = FERR_NOENT at the end
 
-; --- the one cell a PACKAGE may not call (SPEC.md 19.6.1) ---------------------
+; --- the two cells a PACKAGE may not call (SPEC.md 19.6.1) --------------------
 ; It is published here because a DRIVER assembles against this same SDK, and
 ; refused here in the text because an application author reading the list is
 ; owed the reason rather than a silent CF=1.
@@ -1848,6 +1848,18 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
 %define OSAPI_FILE_WRITE_SYS KERNEL_SEG:0x0340  ; SI = NUL 8.3 name, ES:BX =
                                  ; bytes, DX:CX = count; out as
                                  ; OSAPI_FILE_WRITE. DRIVERS ONLY.
+;
+; ...and its other half. OSAPI_FILE_APPEND refuses a hidden + system file the
+; same way every write does, so without this one a system file could be MADE
+; by the cell above and never FINISHED: a file larger than the caller's buffer
+; is moved as a run of appends (SPEC.md 18.4.4), and the first of those met the
+; two bits the create had just stamped. Same fence, same arguments and the same
+; precondition as OSAPI_FILE_APPEND - the file's current size must be a whole
+; number of clusters. It cannot CREATE anything, an append needing an entry
+; that is already there, so SPEC.md 19.6's rule is untouched by it.
+%define OSAPI_FILE_APPEND_SYS KERNEL_SEG:0x03A0 ; SI = NUL 8.3 name, ES:BX =
+                                 ; bytes, CX = count; out as
+                                 ; OSAPI_FILE_APPEND. DRIVERS ONLY.
 %define OSAPI_BOOT_TICKS    KERNEL_SEG:0x02F8   ; out AX = how long this machine
                                  ; took to boot, in SYSTEM TICKS (18.2065 Hz,
                                  ; 54.925 ms each): the boot sector's first
