@@ -218,7 +218,7 @@ rule goes first:
 > **And for anything with a disk in its TIMING, the 5150 is still where a
 > number LANDS** (docs/FIELD-MACHINES.md) — but MartyPC's floppy is no longer
 > a fiction: it turns at 300 RPM, honours an interleave and charges a seek
-> (PERFORMANCE.md Set 24), which took the boot from 4.4x fast to 1.38x. Use it
+> (PERFORMANCE.md Set 24), which took the boot from 4.4x fast to 1.17x. Use it
 > to find a disk regression; confirm it on the iron before it goes in
 > PERFORMANCE.md. QEMU remains 30x fast and models none of it.
 >
@@ -542,12 +542,17 @@ sectors-per-track is hardcoded 0. `tools/martypc/patches/03-floppy-disk-timing.p
 gives it rotation, an interleave, an MFM data rate and a per-cylinder seek, and
 the three raw `int 13h` rows the 5150 measured (Sets 14/22) fall out of that
 one mechanism: 1.00 revolution to re-read a sector, 1.86 for a 9-sector 2:1
-track against the field's 1.92. Boot 41 ticks -> 130 against the field's 180.
-**Two caveats that are not small.** 2:1 media is only on the `ibm5150_82_v4`
-machines - GLaBIOS abandons a floppy op after ~250 ms, so it keeps 1:1 - and
-those machines need an IBM ROM this tree cannot ship, so **the 2:1 path has
-never been booted here**. **And it will still not catch a disk CORRECTNESS
-bug**, because the patch changes what a disk COSTS and never what it SAYS. SPEC.md 18.91's `AL` bug is the worked example - the BIOS
+track against the field's 1.92. On the IBM ROM with the 5150's own 2:1 media
+the boot is **211 ticks against the field's 180 - 4.4x fast becomes 1.17x
+SLOW**, and the change of SIGN is worth as much as the size, because the old
+error flattered every disk decision taken on it. Measured attribution: 7.2 s
+of rotation and transfer against 0.62 s of seeks, so the uncalibrated seek
+model is 8% and not the residual. **Two caveats.** 2:1 media is only on the
+`ibm5150_82_v4` machines - GLaBIOS abandons a floppy op after ~250 ms, so it
+keeps 1:1 - and those machines need an IBM ROM this tree cannot ship, so a
+container without one in `tools/martypc/roms/` runs the GLaBIOS twins only.
+**And it will still not catch a disk CORRECTNESS bug**, because the patch
+changes what a disk COSTS and never what it SAYS. SPEC.md 18.91's `AL` bug is the worked example - the BIOS
 moved nine sectors and answered `AL = 1`, the kernel believed it and re-read
 the rest one at a time, and on the 5150 that was 148 sectors in 34 int 13h
 calls for a 32-sector file. **The same binary on the same image under QEMU
@@ -899,7 +904,7 @@ has cost four bugs, and most of it is about QEMU: this container is ~1000x a
 range. MartyPC removes a good deal of that (a cycle-accurate 8088 does not
 have a clock that tells you nothing), and since PERFORMANCE.md Set 24 it
 removes most of it for the disk too - its floppy turns at 300 RPM and honours
-an interleave, so the error is 1.38x rather than 30x. The 5150 is still where
+an interleave, so the error is 1.17x rather than 30x. The 5150 is still where
 a disk number lands. **FLICKER IS MEASURABLE NOW** and
 PERFORMANCE.md Part 3.1 is the method: `os88marty.py flicker` samples the
 card's RENDERED framebuffer once per displayed frame - which is exactly how

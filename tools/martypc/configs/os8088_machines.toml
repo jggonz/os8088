@@ -16,9 +16,11 @@
 # emulator: that BIOS abandons a floppy operation after ~250 ms and resets the
 # controller, and a 2:1 track read legitimately takes up to 400 ms - so a
 # GLaBIOS machine given 2:1 media cannot finish reading one and the boot ends
-# in `os8088: disk error`, status 80. The IBM ROM has no such limit, which is
-# not an assumption: docs/FIELD-MACHINES.md's 5150 runs that ROM and reads a
-# whole 2:1 track in one `int 13h` in 384 ms every time it boots (Set 14).
+# in `os8088: disk error`, status 80. The IBM ROM has no such limit, and that
+# is measured rather than assumed: os8088_5150_herc boots this exact 2:1
+# configuration in 211 ticks against the field machine's 180 (Set 24), and
+# docs/FIELD-MACHINES.md's 5150 runs that ROM and reads a whole 2:1 track in
+# one `int 13h` in 384 ms every time it boots (Set 14).
 # So 2:1 goes on the machines that model that 5150, and the GLaBIOS twins -
 # which exist to boot FAST rather than to boot the way the field machine does -
 # keep upstream's 1:1 overlay.

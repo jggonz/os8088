@@ -49,10 +49,16 @@ screen) and sound included (`MARTYPC_WAV=` captures one wav per source, and
 the `os8088_5150_sb` machine has a PC speaker, an OPL2 **and** a Sound
 Blaster). **Its floppy now turns** — `patches/03-floppy-disk-timing.patch`
 gives the drive a platter, an interleave and a data rate, so a read costs
-revolutions instead of arriving instantly (docs/MARTYPC-DEBUG.md). That fixes
-the *timing*; it does **not** make the emulator a source of truth about what
-the BIOS RETURNS, so it would still not have caught SPEC.md §18.91's `AL` bug,
-and the 5150 is still the instrument for anything a disk can get *wrong*.
+revolutions instead of arriving instantly (docs/MARTYPC-DEBUG.md): with the
+IBM ROM and the 5150's own 2:1 media the boot lands at 211 ticks against the
+field machine's 180, where it used to be 41. That fixes the *timing*; it does
+**not** make the emulator a source of truth about what the BIOS RETURNS, so it
+would still not have caught SPEC.md §18.91's `AL` bug, and the 5150 is still
+the instrument for anything a disk can get *wrong*.
+
+**The 2:1 machines need the ROM below.** Without it only the GLaBIOS twins
+run, and those carry 1:1 media on purpose — that BIOS abandons a floppy
+operation after ~250 ms.
 
 **What the guest WROTE to a floppy is a different question, and `flush`
 answers it.** MartyPC keeps a mounted image in RAM and never writes it back —

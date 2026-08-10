@@ -54,9 +54,11 @@ platter, no seek and no interleave at all**, which is where these came from:
 | boot | **38,886 ms** | **2,306 ms** — 17x fast |
 
 `tools/martypc/patches/03-floppy-disk-timing.patch` gives the drive a platter,
-an interleave and a data rate (Set 24, docs/MARTYPC-DEBUG.md), and the boot
-goes **41 ticks → 130** against the field's 180 — 4.4x fast to 1.38x, with the
-rest accounted for by media this container cannot yet run. So the rule is now:
+an interleave and a data rate (Set 24, docs/MARTYPC-DEBUG.md), and on the IBM
+ROM with the 5150's own 2:1 media the boot is **211 ticks against the field's
+180**. So the error goes from **4.4x fast to 1.17x SLOW**, and the change of
+sign is worth as much as the size: it used to flatter every disk decision and
+now costs a little. So the rule is now:
 
 > **A disk TIMING figure from MartyPC is worth having, and is still checked on
 > the 5150 before it lands here.** Part 9's disk rows come off the 5150.
@@ -3639,15 +3641,27 @@ streams a track in 1.24 revolutions where the 5150 needs 1.92.
 
 `boot ticks`, 360KB image, os8088's own counter:
 
-| | before | after | field (Set 22) |
-|---|---|---|---|
-| `os8088_5150_cga_gla` | 41 (2.25 s) | **130 (7.14 s)** | 180 (9.886 s) |
+| machine | media | before | after | field (Set 22) |
+|---|---|---|---|---|
+| `os8088_5150_cga_gla` (GLaBIOS) | 1:1 | 41 (2.25 s) | **130 (7.14 s)** | — |
+| `os8088_5150_cga` (IBM ROM) | 2:1 | — | **210 (11.53 s)** | 180 (9.886 s) |
+| `os8088_5150_herc` (IBM ROM) | 2:1 | — | **211 (11.59 s)** | **180 (9.886 s)** |
 
-**4.4x fast → 1.38x.** The remainder is media: 2:1 adds ~178 ms to each of the
-kernel's ~19 track reads, ~3.4 s, landing at ~10.5 s against 9.9. **That last
-step is arithmetic and not a measurement** — the IBM ROM is not in this tree,
-so the 2:1 machines have never been booted anywhere. It is the first thing to
-run on a machine that has the ROM.
+The last row is the like-for-like — the field's 180 is a Hercules boot off
+`herc.img` — and **4.4x fast becomes 1.17x SLOW**. The sign matters as much as
+the magnitude: the old error flattered every disk decision taken on it, and
+this one costs a little instead.
+
+**The residual is attributed rather than assumed.** Instrumenting the charge
+puts the boot at **7.2 s of rotation and transfer over 161 sector waits against
+0.62 s over 14 seeks** — so the seek model, the one part no row in this
+document pins, is 8% of disk time and cannot be the 17%. The sector average is
+44.9 ms against the 42.7 that this document's own 384 ms/9 implies, and that
+5% is physical: a short run pays a full rotational latency for its first
+sector and only a whole-track read amortises one. The rest is not disk.
+One caveat on the comparison: the field boots a `make field` disk and this
+boots the shipped one (167 sectors), so `tools/fieldsize.py`'s rung check is
+what licenses putting the two side by side.
 
 #### Two things it found
 
@@ -3656,10 +3670,11 @@ running, at 250.2 / 245.8 / 245.8 ms, after which it resets the controller and
 the boot sector prints `os8088: disk error` — status **80**, read off the
 screen with `make BOOTDIAG=1`, which is precisely the boot this knob exists
 for. A 6-sector 2:1 run takes 305 ms, so under that BIOS it can never
-complete. It is the BIOS and not the model: the FDC presents a correctly BUSY
-status register throughout, and **seeks of 329 ms complete fine in the same
-boot**. So 2:1 goes only on the `ibm5150_82_v4` machines, and the GLaBIOS
-twins keep 1:1.
+complete. It is the BIOS and not the model, on three counts: the FDC presents
+a correctly BUSY status register throughout, **seeks of 329 ms complete fine in
+the same boot**, and **the IBM ROM boots the identical 2:1 configuration** —
+which was a prediction when this was written and is now the 211 above. So 2:1
+goes only on the `ibm5150_82_v4` machines, and the GLaBIOS twins keep 1:1.
 
 **And a run must be paced per SECTOR, not charged as one lump.** The first
 version delayed a whole multi-sector run in one silent block, which is not what

@@ -62,23 +62,24 @@ rotation, an MFM data rate, a physical interleave and a per-cylinder seek
 
 | `boot ticks`, 360KB | before | after | real 5150 |
 |---|---|---|---|
-| `os8088_5150_cga_gla` | 41 (2.25 s) | **130 (7.14 s)** | 180 (9.886 s) |
+| `os8088_5150_cga_gla` (GLaBIOS, 1:1) | 41 (2.25 s) | **130 (7.14 s)** | — |
+| `os8088_5150_herc` (IBM ROM, 2:1) | — | **211 (11.59 s)** | 180 (9.886 s) |
 
 So the rule is now two rules, and the second has not moved at all:
 
-- **TIMING**: MartyPC is worth asking, at ~1.38x rather than 30x — good enough
-  to catch a disk regression. It still is not where a figure LANDS: anything
-  going into PERFORMANCE.md Part 9 comes off the 5150. PCem is no better and
-  QEMU models none of it.
+- **TIMING**: MartyPC is worth asking, at ~1.17x rather than 30x — and now
+  wrong in the *pessimistic* direction, which is the safe one. It still is not
+  where a figure LANDS: anything going into PERFORMANCE.md Part 9 comes off the
+  5150. PCem is no better and QEMU models none of it.
 - **CORRECTNESS**: unchanged, and the sharper half. The patch changes what a
   disk COSTS and never what it SAYS, so §18.91's `AL` bug — a claim about what
   a real ROM returns — is exactly as invisible here as it was. Short reads,
   `int 1Eh`'s EOT and BIOS stack depth are the 5150's alone.
 
-Two caveats that are not small: 2:1 media is configured only on the
-`ibm5150_82_v4` machines (GLaBIOS abandons a floppy op after ~250 ms, so its
-machines keep 1:1), and those machines need an IBM ROM this tree cannot ship —
-so **the 2:1 path has never been booted in the container**.
+One caveat: 2:1 media is configured only on the `ibm5150_82_v4` machines,
+because GLaBIOS abandons a floppy op after ~250 ms and its machines keep 1:1.
+Those machines need an IBM ROM this tree cannot ship, so a container without
+one in `tools/martypc/roms/` can run the GLaBIOS twins only.
 
 **And it will not catch a disk CORRECTNESS bug either**, which is the sharper
 half. SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the

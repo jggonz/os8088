@@ -104,13 +104,14 @@ prints `os8088: disk error` — status **80**, a timeout, which `make BOOTDIAG=1
 puts on the screen as two hex digits. A 6-sector 2:1 run legitimately takes
 305 ms and a 9-sector one 372, so under GLaBIOS such a read can never finish.
 
-Two things say this is the BIOS's behaviour and not the model's bug. The FDC
+Three things say this is the BIOS's behaviour and not the model's bug. The FDC
 presents a correctly BUSY status register for the whole delay (that bit comes
-from `self.busy`, which the patch does not touch). And **seeks of 329 ms
-complete fine on the same machine in the same boot** — so it is a read
-timeout, not an inability to wait. The IBM ROM has no such limit, and that is
-not an assumption: docs/FIELD-MACHINES.md's 5150 runs that ROM and reads a
-whole 2:1 track in one `int 13h` in 384 ms every time it boots.
+from `self.busy`, which the patch does not touch). **Seeks of 329 ms complete
+fine on the same machine in the same boot** — so it is a read timeout, not an
+inability to wait. And **the IBM ROM boots the identical 2:1 configuration
+without complaint**, which was a prediction when this was written and is now
+measured: 211 ticks on `os8088_5150_herc`. docs/FIELD-MACHINES.md's 5150 runs
+that ROM and reads a whole 2:1 track in one `int 13h` in 384 ms every boot.
 
 This also produced the one modelling correction worth keeping. The first
 version charged a whole multi-sector run as **one silent delay**, which is not
@@ -126,17 +127,27 @@ model is right for the reason it was changed.
 
 `boot ticks`, os8088's own counter, on the 360KB image:
 
-| | before | after | field 5150 (Set 22) |
-|---|---|---|---|
-| `os8088_5150_cga_gla` | 41 (2.25 s) | **130 (7.14 s)** | 180 (9.886 s) |
+| machine | media | before | after | field 5150 (Set 22) |
+|---|---|---|---|---|
+| `os8088_5150_cga_gla` (GLaBIOS) | 1:1 | 41 (2.25 s) | **130 (7.14 s)** | — |
+| `os8088_5150_cga` (IBM ROM) | 2:1 | — | **210 (11.53 s)** | 180 (9.886 s) |
+| `os8088_5150_herc` (IBM ROM) | 2:1 | — | **211 (11.59 s)** | **180 (9.886 s)** |
 
-4.4x fast becomes **1.38x**, on 1:1 media where the field machine's is 2:1 —
-and the gap closes where it should: 2:1 adds ~178 ms to each of the kernel's
-~19 track reads, which is ~3.4 s, landing at ~10.5 s against the field's 9.9.
-**That last step is arithmetic, not a measurement**: the IBM ROM is not in this
-tree (see the bottom of `tools/martypc/README.md`), so the 2:1 machines have
-never been booted here. With the ROM dropped in, `python3 tools/os88marty.py`
-against `os8088_5150_cga` is the run that would settle it.
+The last row is the like-for-like: the field's 180 is a Hercules boot off
+`herc.img`. **4.4x fast becomes 1.17x SLOW** — and the sign matters as much as
+the size. The error used to flatter every disk decision; it now costs a little,
+which is the safe direction to be wrong in.
+
+**Where the remaining 17% is, measured rather than assumed.** Instrumenting the
+charge shows the boot spending **7.2 s in rotation and transfer across 161
+sector waits, against 0.62 s across 14 seeks** — so the seek model, the one
+part no field row pins, is 8% of disk time and cannot be the residual. The
+sector average is 44.9 ms against the 42.7 the field's 384 ms/9 implies, and
+that 5% is physical rather than error: a short run pays a full rotational
+latency for its first sector, and only a whole-track read amortises one. The
+rest is not disk at all. One caveat on the comparison itself: the field boots a
+`make field` disk and this boots the shipped one (167 sectors), so
+`tools/fieldsize.py`'s rung check is what says the two are comparable.
 
 So the standing rule is **relaxed, not withdrawn**: a disk figure from here is
 now worth having, and PERFORMANCE.md Part 9's disk rows still come off the
