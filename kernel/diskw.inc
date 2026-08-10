@@ -3911,6 +3911,88 @@ dskw_fmt_zero:
     ret
 
 ; -----------------------------------------------------------------------------
+; dskw_fmt_reach - can this drive actually reach the volume just declared?
+; in:  AL = the dskw_fmt_tab row that was written, [disk_drive] = the volume,
+;      [disk_spt]/[disk_heads] still the format's (dskw_format leaves them)
+; out: CF=0 = the last sector was written and read back intact; CF=1 = it was
+;      not. Clobbers AX, flags.
+;
+; SPEC.md 18.96.2. The size on the confirmation can be the USER's rather than
+; the probe's, and a 720KB pick on a 40-cylinder drive is the one wrong answer
+; that stays silent: the whole layout is boot + 6 FAT + 7 root = LBA 0..13,
+; all of it inside CYLINDER 0, so the format completes, the volume mounts and
+; the disk lies about its size until something writes past cylinder 39 - by
+; which time it is mountable, so 22.12's predicate has greyed Format Disk out
+; and there is no way back.
+;
+; **The LAST sector, not the 360KB boundary.** LBA 720 is cylinder 40, the
+; first sector a 360KB disk has not got, and it is too weak a test: plenty of
+; 40-track drives step to 41 or 42, so a probe there PASSES on exactly the
+; drive it exists to catch. No 40-cylinder mechanism reaches cylinder 79, it
+; is one seek either way, and it validates the extent the BPB just claimed.
+;
+; **It writes, and that is what makes it a POSITIVE test** (18.96.1's rule:
+; every test is a read SUCCEEDING). A bare read of cylinder 79 breaks that
+; twice - it rests on a failure, and a head stopped at track 39 can answer
+; with track 39's data. A marker written first removes both, and the buffer
+; is re-zeroed BETWEEN the write and the read so a read that never touched it
+; cannot compare equal against our own staging.
+;
+; It destroys the sector it tests, which is free here and nowhere else: the
+; only caller is a commit the user has already agreed to erase the disk for.
+; -----------------------------------------------------------------------------
+dskw_fmt_reach:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call dskw_fmt_row
+    mov di, [si+DFMT_TOT]
+    dec di                      ; DI = the last sector the BPB now claims
+    call dskw_fmt_zero
+    mov ax, LOW_SEG
+    mov es, ax                  ; dsk_secbuf is .lowbss (SPEC.md 2.1), so the
+    mov word [es:dsk_secbuf+0], 'o8'    ; marker goes in through ES and never
+    mov word [es:dsk_secbuf+2], '8R'    ; through DS - dskw_format's own trap
+    mov [es:dsk_secbuf+4], di   ; ...and the LBA, so a seek that landed on a
+                                ; DIFFERENT track cannot match by accident
+    mov ax, di
+    call dskw_fmt_put
+    jc .no
+    call dskw_fmt_zero          ; a read that never happened must not compare
+                                ; equal against what we staged for the write
+    mov ax, di
+    mov bx, dsk_secbuf
+    mov cx, 1
+    call KERNEL_SEG:cw_disk_read
+    jc .no
+    cmp word [es:dsk_secbuf+0], 'o8'
+    jne .no
+    cmp word [es:dsk_secbuf+2], '8R'
+    jne .no
+    cmp [es:dsk_secbuf+4], di
+    jne .no
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; dskw_fmt_boot - build the boot sector for the row in SI
 ; in:  SI = a dskw_fmt_tab row
 ; out: dsk_secbuf holds it; all registers preserved

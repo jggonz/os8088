@@ -1148,9 +1148,18 @@ fm_s_repk:    db 'Enter=yes  A=all  Esc=stop', 0  ; three answers are 45
 fm_s_delpr:   db 'Delete ', 0
 fm_s_delq:    db '? Enter=yes Esc=no', 0
 %ifndef KERN_SMALL
-fm_s_fmtpr:   db 'Format ', 0       ; 'Format A: as 360K? Enter=yes Esc=no',
-fm_s_fmtas:   db ': as ', 0         ; which is 35 characters at its longest
-fm_s_fmtq:    db 'K? Enter=yes Esc=no', 0    ; and so inside FM_HDRMAX
+fm_s_fmtpr:   db 'Format ', 0       ; TWO lines (SPEC.md 22.12): 'Format A: as
+fm_s_fmtas:   db ': as ', 0         ; 720K?' in the row above, the answers on
+fm_s_fmtq:    db 'K?', 0            ; the status line itself - as one line it
+                                    ; is 44 characters and fm_stat_line
+                                    ; truncates at ([fm_cw]-12)/8 = 38 on the
+                                    ; 320px template, losing 'Esc=no'
+fm_s_fmtk:    db 'Enter=yes  Esc=no', 0
+fm_s_fmtk2:   db 'Spc=size  Enter=yes  Esc=no', 0   ; ...when there IS another
+                                    ; size to offer (rows 2 and 3 alone)
+fm_s_fmtbad:  db 'Drive cannot reach 720K - made 360K', 0
+fm_fmtbadt:   dw 0, fm_s_fmtbad     ; toast_say never uses index 0, so a
+FM_NFMTBAD    equ 2                 ; one-message table is two slots (59.5)
 %endif
 fm_s_delq2:   db ' +contents? Enter=yes Esc=no', 0   ; ...for a folder
 fm_s_size:    db 'Size ', 0         ; ...and the resting status line, which
@@ -2857,6 +2866,48 @@ fm_fmt_ok:
     stc
     ret
 
+; -----------------------------------------------------------------------------
+; fm_fmt_reach - prove the drive can hold what was just declared (18.96.2)
+; in:  [fm_fmtrow] = the row dskw_format has just written, [disk_drive] = the
+;      volume, that format's geometry still live
+; out: CF=0 and [fm_fmtrow] names the volume ACTUALLY on the platter; CF=1
+;      with AX = FERR_* - the fallback format failed too
+; clobbers: AX, flags
+;
+; Row 2 (720K) is the only row the confirmation's Space key can produce that a
+; 40-cylinder drive cannot hold, so it is the only one checked and every other
+; format pays one compare.
+;
+; A failure RE-FORMATS as 360K rather than reporting and stopping, and that is
+; not a courtesy: the 720K volume just written MOUNTS - its whole layout is
+; inside cylinder 0 - and 22.12's predicate greys Format Disk out on a window
+; whose mount succeeded. Stopping would leave a disk that lies about its size
+; and no way left to remake it.
+; -----------------------------------------------------------------------------
+fm_fmt_reach:
+    cmp byte [fm_fmtrow], 2
+    jne .ok
+    mov al, 2
+    call dskw_fmt_reach
+    jnc .ok
+    mov byte [fm_fmtrow], 3     ; 360K - and the caller re-lists and re-titles
+    mov al, 3                   ; from this, so the window describes the disk
+    call dskw_format            ; that exists rather than the one asked for
+    jc .out                     ; AX = FERR_*, said by the caller: one
+                                ; operation gets one verdict (SPEC.md 59)
+    push bx                     ; Said HERE, before the caller re-lists, and
+    push cx                     ; that survives only because the disk it is
+    mov al, 1                   ; about is EMPTY: fpg_begin retires a live
+    mov bx, fm_fmtbadt          ; toast (SPEC.md 59) and its only caller is
+    mov cx, FM_NFMTBAD          ; dsk_read_chain, which a mount of a
+    call KERNEL_SEG:cw_toast_say    ; just-formatted volume never reaches -
+    pop cx                      ; there is no file on it to harvest an icon
+    pop bx                      ; from
+.ok:
+    clc
+.out:
+    ret
+
 fm_c_format:                    ; File > Format Disk... (SPEC.md 22.12)
     mov di, [fm_vp]
     call fm_fmt_ok              ; the greying is the primary answer; this is
@@ -3282,7 +3333,7 @@ fm_editkey:
     je .replace
 %ifndef KERN_SMALL
     cmp byte [di+FS_EDIT], 5
-    je .confirm                 ; Format (SPEC.md 22.12) takes mode 3's
+    je .confirmf                ; Format (SPEC.md 22.12) takes mode 3's
                                 ; asymmetry unchanged, and wants it more:
                                 ; there is no undo, and the operation is not
                                 ; one file but every one of them
@@ -3353,6 +3404,27 @@ fm_editkey:
     call fm_paste_res
     jmp short .out
 
+%ifndef KERN_SMALL
+    ; Format's confirmation takes ONE key the other two do not: Space offers
+    ; the other row with the same media sectors-per-track (SPEC.md 18.96).
+    ; That pair exists for 9-sector media alone - rows 2 and 3, 720K and 360K
+    ; - so the toggle is `xor 1` and can never reach row 0 or 1, which is
+    ; 18.96.1's disaster case made unreachable rather than guarded against.
+    ;
+    ; Rows 0 and 1 have no partner, so Space FALLS THROUGH and still means no
+    ; there: the line does not name the key in that case (47), and a key that
+    ; is not advertised must not quietly change what it used to do.
+.confirmf:
+    cmp al, ' '
+    jne .confirm
+    cmp byte [fm_fmtrow], 2
+    jb .confirm
+    xor byte [fm_fmtrow], 1
+    jmp short .lineonly         ; the size on the line IS [fm_fmtrow], so the
+                                ; redraw is the one a typed rename character
+                                ; already takes - nothing else on the window
+                                ; moved
+%endif
 .confirm:
     cmp al, 13
     jne .cancel                 ; anything but Enter means no (SPEC.md 22)
@@ -3496,6 +3568,13 @@ fm_edit_commit:
 .fmt:
     mov al, [fm_fmtrow]
     call dskw_format
+    jc .bad
+    call fm_fmt_reach           ; the size may have been the USER's, and a
+                                ; 720K volume a 40-cylinder drive cannot hold
+                                ; mounts perfectly and then lies (18.96.2).
+                                ; BEFORE the re-list below, because this can
+                                ; make the disk a second time and the window
+                                ; has to describe what is on the platter
     jc .bad
     mov di, [fm_vp]             ; the volume is a different one now, so the
     mov al, [di+FS_DRV]         ; window is re-listed at its ROOT rather than
@@ -5384,10 +5463,12 @@ fm_draw_status:
     call fm_stat_line
     mov di, fm_hdrbuf           ; ...and line two, the answers, where every
     mov si, fm_s_repk           ; other status line goes
-    jmp short .fs_stat
+    jmp .fs_stat                ; NEAR: the format question below sits between
+                                ; here and .fs_stat
 %ifndef KERN_SMALL
-    ; "Format A: as 360K? Enter=yes Esc=no" (SPEC.md 22.12). The SIZE is the
-    ; point of naming it: dskw_fmt_probe cannot always tell 360K media from
+    ; "Format A: as 720K?" over "Spc=size  Enter=yes  Esc=no" (SPEC.md 22.12),
+    ; the replace question's own two-line shape. The SIZE is the point of
+    ; naming it: dskw_fmt_probe cannot always tell 360K media from
     ; 720K in a 1.2MB drive, and this line is the one place the user can
     ; catch that before it costs them anything.
 .fs_st_fmt:
@@ -5406,6 +5487,17 @@ fm_draw_status:
     call fm_utoa
     pop bx
     mov si, fm_s_fmtq
+    call fm_scat
+    mov byte [di], 0            ; line one, in the row area - the replace
+    mov dx, [fm_cy]             ; question's own shape (22.3), and the reason
+    add dx, [fm_staty]          ; fm_stat_line is a proc rather than the tail
+    sub dx, 9                   ; of fm_draw_status
+    call fm_stat_line
+    mov di, fm_hdrbuf           ; ...and line two, the answers, where every
+    mov si, fm_s_fmtk           ; other status line goes
+    cmp byte [fm_fmtrow], 2     ; 9-sector media is the one ambiguous case,
+    jb .fs_stat                 ; so it is the only one with a key to name
+    mov si, fm_s_fmtk2          ; (SPEC.md 18.96)
     jmp short .fs_stat
 %endif
 .fs_st_del:

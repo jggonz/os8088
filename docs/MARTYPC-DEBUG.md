@@ -395,6 +395,7 @@ pass the same `-D`s (`--define DISKCNT=1`).
 | `os8088_5150_both` | **two cards**: a CGA *and* a Hercules, which is docs/FIELD-MACHINES.md's machine as it actually is. SPEC.md §39.11's adapter switching exists for this, and docs/DUAL-DISPLAY-PLAN.md is the study of driving both at once |
 | `os8088_5150_both_gla` | its GLaBIOS twin, and the one `tests/dualcheck.py` runs by default — the IBM ROM this tree cannot ship is what the other needs |
 | `os8088_5150_herc_gla` | a single-card Hercules on GLaBIOS: `os8088_5150_herc` without the ROM, and the control for "does this card rasterise at all" with no second card to confuse the question |
+| `os8088_5150_cga_720b` | the default with an **80-cylinder drive as B** — SPEC.md §18.96.2's machine. The 1982 ROM answers no `AH=08h` for a floppy, so `dskw_fmt_probe` reads a 360KB machine and offers 360K for a disk that could hold 720K; this is the only machine here where §22.12's **Space** key has something to toggle to. It drops the `pcxt_2_360k_floppies` overlay and declares `[machine.fdc]` itself, because the drives are the point — upstream's own `pcxt_4_360k_floppies` is the other one worth knowing about, and the FDC takes **four**. Put a non-FAT image of the size under test in B: the reach test's verdict is whether LBA 1439 can be written and read back, so a 1440-sector image passes and a 720-sector one takes the 360K fallback |
 
 **Two cards is a real configuration and it took two patches to make honest.**
 The `[[machine.video]]` blocks are an array and the bus builder installs every
