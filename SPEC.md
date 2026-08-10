@@ -15673,10 +15673,21 @@ real memory at a real address whoever owns it.
 where a cache is the subject. Three caption lines, one question each:
 
 ```
-HEAP  544K                 the SIZE of the heap
-HELD  25K(5) PURGE 63K(1)  what is claimed, on what terms, and how many records
-AVAIL 519K   MAX 515K      what a claim can GET, and the largest single run
+HEAP 544K  AVAIL 519K      the heap, and what a claim can GET out of it
+HELD 25K(5)  PURGE 69K(2)  what is claimed, on what terms, and how many records
+MAX  515K   FRAG    4K     how that AVAIL is SHAPED
 ```
+
+**Every line is a pair that closes**, and that is the layout's whole rule:
+`HEAP − AVAIL = HELD`, and `MAX + FRAG = AVAIL`. A figure the reader cannot
+reconcile against its neighbours reads as a bug however sound the model
+behind it is — which is what `AVAIL 519K` beside `MAX 515K` did before `FRAG`
+existed, since "519K available, 515K maximum" is arithmetic nobody can close.
+`FRAG` is everything available *outside* the largest run: memory that is
+genuinely there and genuinely unclaimable in one piece, which is the number a
+refused claim wants and the only one that makes the pair add up. It reads
+`0K` on an unfragmented heap, which is a positive statement rather than a
+missing one.
 
 `HELD` and `PURGE` are **never added together anywhere the user can see**,
 and that is the point rather than a layout accident: their sum answers no
@@ -15700,7 +15711,8 @@ four figures then read as one statement: **`HEAP = HELD + AVAIL`**, with
 Total heap gets a line of its own because it is a property of the machine and
 the rest are properties of the moment.
 
-**`AVAIL` and `MAX` being equal is the normal reading, not a fault.** They
+**`AVAIL` equal to `MAX` — so `FRAG 0K` — is the normal reading, not a
+fault.** They
 differ only when the heap is fragmented, and on a lightly loaded machine it
 is not: data claims pack up from the bottom, regions down from the top, and
 a purgeable block does not divide a run because `mem_run` steps over it. A
@@ -15711,7 +15723,7 @@ one and the hole it leaves is cut off from the main span by the survivor:
 mem_base 17E0  mem_top A000  span 544K
   17E0 +0140 held   19E0 +0140 held   2000 +0FC0 PURGE
   1920 +00C0 held   1B20 +00C0 held   9CC0 +0240 held
-                    -> AVAIL 519K, MAX 515K       (the 4K above 9F00 is stranded)
+                    -> AVAIL 519K, MAX 515K, FRAG 4K   (the 4K above 9F00)
 ```
 
 **`TIER` reads `HELD` for an unpurgeable claim, never a dash.** The column
