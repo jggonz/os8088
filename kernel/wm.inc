@@ -4268,6 +4268,10 @@ wm_su_y2:  dw 0                 ; of that claim's header by wm_su_ck
 ; --- and the rect the NEXT window drawn owes (SPEC.md 11.96.6) --------------
 ; A one-shot, wm_dmg_dk's rule: 0 means "the whole window", which is what a
 ; caller that never heard of this inherits.
+wm_dw_part: db 0                ; the draw in hand is PARTIAL (SPEC.md 11.96.9).
+                                ; In .text with an initialiser: -f bin zeroes
+                                ; nothing and wm_su_bank reads it on the first
+                                ; window the machine ever draws
 wm_su_son: dw 0                 ; is a sub-rect named? (in .text: -f bin zeroes
 wm_su_sx1: dw 0                 ; nothing, and wm_su_try reads this before
 wm_su_sy1: dw 0                 ; anything in the machine has written it)
@@ -4900,6 +4904,13 @@ wm_draw_win:
     push si
     push di
     mov di, bx                  ; DI = window ptr for the duration
+%ifndef REDRAWFULL
+    mov byte [wm_dw_part], 0    ; IS THIS DRAW PARTIAL? (SPEC.md 11.96.9) Read
+    cmp word [wm_su_son], 0     ; HERE, because wm_su_srect spends the one-shot
+    je .whole                   ; inside wm_su_try below and wm_su_bank needs to
+    mov byte [wm_dw_part], 1    ; know about it afterwards
+.whole:
+%endif
 
     test word [di+W_FLAGS], WF_FULL
     jz .chrome                  ; fullscreen: no chrome at all - the whole
@@ -5045,6 +5056,13 @@ wm_su_bank:
     call wm_top                 ; BX = frontmost visible (0 if none)
     cmp bx, di
     je .front
+    cmp byte [wm_dw_part], 0    ; A PARTIAL DRAW MAY NOT RE-BANK (SPEC.md
+    jne .out                    ; 11.96.9): the screen inside this window's
+                                ; content is not all ours, so banking it would
+                                ; store the covering window's pixels as our own.
+                                ; Keeping the cache we already have is not a
+                                ; compromise - a partial draw changed nothing,
+                                ; so the old one is still exactly right
     call wm_su_take             ; covered, or minimized a moment from now:
     jmp short .out              ; its pixels stand until something draws it
 .front:

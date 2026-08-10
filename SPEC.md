@@ -5346,6 +5346,46 @@ this additive on the cursor's and the menu's paths.
 *this* restore will write, so it has to be told which those are. §5.8's
 `[sw_dir]` gate on the disarm is what makes that ordering legal.
 
+#### 11.96.9 …and a PARTIAL draw may not re-bank
+
+**§11.96.6 broke §11.96.7's invariant at a second call site, and this is the
+repair.** `wm_su_bank` reads the window's content off the **screen** after
+`wm_draw_win`, which was safe for as long as every draw was whole: the window had
+just painted its own content over everything, so the glass inside its content rect
+was all its own. A draw that restores only a **strip** leaves the rest of that
+rect holding whatever is on top of it — and banking that stores the covering
+window's pixels as this window's content.
+
+Reported from the field (PCem/Hercules) as a window called to the front coming
+back with **another window's content inside it and no title bar over it** — the
+missing title bar being the tell, because a raise cache holds content and never
+chrome. Reproduced with `tools/callfront.py` and confirmed the §11.96.7 way, by
+rendering the claim: a Disk window's cache held a second Disk window's `SYSTEM` /
+`Size 15K Free 217K` and a Note Pad's left column, with only its own bottom strip
+correct.
+
+**Keeping the existing cache is not a compromise, it is the right answer.** A
+partial draw changed nothing about the window's content — on a cache hit `W_PAINT`
+does not run at all — so whatever was banked before is still exactly true. So
+`wm_su_bank` skips the take and leaves the previous claim alone; a window that had
+no cache keeps having none, and its next raise repaints as it always did.
+
+`[wm_dw_part]` is the fact, sampled at the **top** of `wm_draw_win` because
+`wm_su_srect` spends the one-shot inside `wm_su_try` long before `wm_su_bank` runs.
+It is deliberately the coarse test — *was a sub-rect named for this window* —
+rather than *was the rect smaller than the content*: the conservative direction
+costs a re-bank that would have been legal and cannot get the unsafe answer.
+
+**Two things about how this escaped the gate are worth more than the fix.** The
+session in `tools/subcheck.py` drives **two Disk windows cascaded 16px apart**, so
+a drag of one across the other leaves damage covering nearly all of the other's
+content — the partial restore is very nearly a whole one and the bank comes out
+nearly clean. It takes **three windows with partial overlaps** to leave a large
+region of a covered window's content untouched, which is exactly what the field
+session had. And a polluted cache is **invisible until it is used**: §11.96.7's own
+paragraph says so, and it caught the author of this section out a second time in
+the same round.
+
 #### 11.96.7 A bank is only worth what was on the glass when it was taken
 
 `wm_su_take` reads the window's content **off the screen**, so it is valid only
