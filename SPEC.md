@@ -20675,48 +20675,71 @@ not, and moving costs one replay because the cache survives the repaint.
   build/apps.img` passes.
 - All three adapters.
 
-## 41. cpudet.inc / xmem.inc — CPU tiers and memory above 1MB
+## 41. xmem.inc — memory above 1MB
 
-Two modules and five slots: `cpudet.inc` publishes the CPU tier and the A20 line,
-`xmem.inc` sizes the store above 1MB, allocates out of it and moves bytes
-through it. The claim heap (§50) is unaffected and remains the answer
-for *conventional* memory a package cannot fit in its own segment; these are
-the answer for bulk data that does not fit conventional memory at all.
+`xmem.inc` sizes the store above 1MB, allocates out of it, and moves bytes
+through it — together with **its own prerequisites**, the A20 gate (§41.2) and
+the HMA claim (§41.3), which live in that file because reaching the store is
+the only thing they are for. The claim heap (§50) is unaffected and remains
+the answer for *conventional* memory a package cannot fit in its own segment;
+this is the answer for bulk data that does not fit conventional memory at all.
+
+**The CPU tier is §60**, not this section, and §41.1 is the pointer. It was
+documented here until the `kern_small` split showed the seam running through
+`cpudet.inc` rather than around it; that module is now purely *which CPU is
+this*, in both builds, and this one is purely *the store*, in `kern_big`
+(§41.11).
+
+**Four slots** — `OSAPI_XMEM_CAPS` / `_ALLOC` / `_FREE` / `_COPY` (§41.8);
+`OSAPI_CPU_INFO` at 0x0188 belongs to §60.
 
 **None of it exists on tier 0, which is the target machine.** An 8088 has no
-A20 line and nothing above linear 0x0FFFFF; `cpu_detect` stores `CPU_8086`,
-`xm_init` publishes zero KB, and every entry point below refuses having
-touched no port. The Task Manager reads `XMS 0/0K` there (§28).
+A20 line and nothing above linear 0x0FFFFF; `xm_init` publishes zero KB and
+every entry point below refuses having touched no port. The Task Manager reads
+`XMS 0/0K` there (§28). **And nothing in the tree allocates from the pool on
+any tier** — see §41.5.
 
-### 41.1 The three tiers, and how they are detected
+### 41.1 The three tiers — MOVED to §60
 
-`[cpu_tier]` is `CPU_8086` (0), `CPU_286` (1) or `CPU_386` (2), and
-`[cpu_feat]` carries three verified bits: bit 0 A20 open, bit 1 HMA claimed,
-bit 2 unreal mode armed. Both are **initialised `.text` data, not `.bss`**:
-`-f bin` zeroes nothing at boot, so the answer a machine reads when the probe
-never ran has to be the safe one — the §31.3 / `snd_live` idiom
-and §34.7.
+The CPU tier used to be documented here, because this feature is what first
+needed it: you cannot look above 1MB without knowing you are on a 286 or
+better, so `cpudet.inc` was written as this module's prerequisite and filed
+under its section. **That is no longer the right way round** and §60 is now
+its home — the tier is read across the tree by things with no interest in
+memory at all, while memory above 1MB is its least active reader. This
+heading is kept, rather than the subsections after it renumbered, so that
+every citation of §41.1 still lands somewhere that tells the reader where to
+go.
 
-**The tier is INFORMATION, not permission.** Nothing branches on
-`[cpu_tier]` to decide whether the store is usable; it branches on the
-feature bits, and a package branches on the KB figure `xm_caps` answers
-(§41.8). A 386 whose A20 gate never verified has no store, and code keyed off
-the tier alone walks straight into it. The one legitimate use of the tier is
-choosing an instruction *encoding* — which transport `xm_copy` runs, whether
-`xm_arm` may execute its `cpu 386` island.
+What stays in §41 is the store and **its own prerequisites**: the A20 gate
+(§41.2) and the HMA claim (§41.3), which live in `xmem.inc` beside the code
+they serve and have exactly two callers between them — `kmain` calls
+`xm_a20_enable`, `xm_init` calls `xm_hma_claim`.
 
 ### 41.2 A20 — the gate, and the verification that is not optional
 
 Both enable methods are advisory: a machine may have neither, may decode port
 0x92 to something else, may have a keyboard controller that accepts D1h/DFh
-and does nothing. So `CPU_F_A20` is set by `cpu_a20_probe` — a wraparound
+and does nothing. So `CPU_F_A20` is set by `xm_a20_probe` — a wraparound
 read — and by **nothing else**, never by "we wrote to the gate".
+
+The gate, the probe and their helpers live in **`xmem.inc`**, not
+`cpudet.inc`: they exist only to make the store reachable, and between them
+they have two callers — `kmain` calls `xm_a20_enable`, `xm_init` calls
+`xm_hma_claim` (§60). On tier 0 `xm_a20_enable` returns having touched no port
+at all: there is no gate on an 8088, and port 0x92 there decodes to whatever
+that machine happens to put on it (§41.9 rule 1).
 
 ### 41.3 HMA_SEG — the one segment above 1MB, and who owns it
 
 `HMA_SEG:0010` is linear 0x100000 and `HMA_SEG:FFFF` is 0x10FFEF, the highest
 byte real mode can name at all: 65,520 bytes, **data only**. The near model
 pins CS = DS = `KERNEL_SEG`, so no code ever lives up there on any tier.
+
+`xm_hma_claim` is all-or-nothing and names its claimant in the source — there
+is no HMA allocator and there will not be one, a 65,520-byte region with two
+implicit owners being the bug factory §2.2 refuses to build. **Nothing claims
+it today**; the bit exists so `xm_init` knows where its pool starts (§2.4).
 
 ### 41.4 Unreal mode, and why it is FS and GS
 
@@ -20881,9 +20904,17 @@ by *what the code is for*, not by which file it is in:
 
 | in both builds | `kern_big` only |
 |---|---|
-| `cpu_detect`, `cpu_info` (slot 0x0188), `[cpu_tier]`, `[cpu_feat]` | `cpu_a20_probe`/`_settle`, `cpu_kbc_wait`, `cpu_fast_a20`, `cpu_kbc_a20`, `cpu_a20_enable`, `cpu_hma_claim` |
-| — | the whole of `xmem.inc`'s body: `xm_init`, `xm_arm`, the allocator, `xm_copy` and both transports |
+| `cpu_detect`, `cpu_info` (slot 0x0188), `[cpu_tier]`, `[cpu_feat]` — §60 | the whole of `xmem.inc`: `xm_init`, `xm_arm`, the allocator, `xm_copy` and both transports |
 | the four slots 0x0190..0x01A8, as cells | their real bodies |
+| — | `xm_a20_probe`/`_settle`, `xm_kbc_wait`, `xm_fast_a20`, `xm_kbc_a20`, `xm_a20_enable`, `xm_hma_claim` |
+
+**The seam ran THROUGH `cpudet.inc` when this landed, and does not any more.**
+The A20 and HMA routines were in that file, so `kern_small` took it with an
+`%ifdef` down its middle — which was correct and was also the tell that one
+file held two subjects. They now live in `xmem.inc` beside their only two
+callers, so **the file boundary is the build boundary**: `xmem.inc` has one
+guard covering the whole feature, and `cpudet.inc` has none at all. Preserve
+that property if any of this moves again.
 
 **The TIER stays in both and must.** It is a fact about the CPU, not about
 this store: slot 0x0188 is a published ABI that Note Pad (§27.3), Missile
@@ -31934,3 +31965,78 @@ blank space, and it read exactly like a statement about the menus. The check
 now uses a message wide enough to cover **11 cells of Locator's menu text and
 21 of a Disk window's** (File, Folder, View, Special), on both owners, and
 requires the bar to come back byte-identical with no cell left inverted.
+
+## 60. cpudet.inc — the CPU tier
+
+**Which CPU is this?** Two published bytes and two routines, and that is
+deliberately the whole of the module. It is in **both builds**, entire, and
+carries no `%ifdef` at all (§41.11).
+
+It used to be half of §41, "CPU tiers and memory above 1MB", and the reason
+was historical rather than structural: `cpudet.inc` and `xmem.inc` arrived in
+one commit, because the feature that first reached above 1MB had to know it
+was on a 286+ before it could look. **The dependency has since run the other
+way.** The tier is read by Note Pad (§27.3's typing path), Missile Command's
+explosion ramp, Tracker, ModPlug, Paint, the Task Manager (§28), both
+benchmarks, and the hard-disk driver — which gates its rung-1 IDE task file on
+`CPU_286` because an 8088's `in ax, dx` loses the drive's high byte (§52.1),
+a hardware-transport decision with no memory in it. Meanwhile **memory above
+1MB is the tier's least active reader**, nothing in the tree allocating from
+that pool at all (§41.5).
+
+The `kern_small` split is what made it visible: the seam ran straight through
+this file — half of it in both builds, half of it `kern_big`'s — which is the
+shape that says one file is holding two subjects. The A20 gate and the HMA
+claim moved to `xmem.inc`, beside their only two callers, so **the file
+boundary is now the build boundary**. That is the property to preserve if any
+of this moves again.
+
+### 60.1 The three tiers, and how they are detected
+
+`[cpu_tier]` is `CPU_8086` (0), `CPU_286` (1) or `CPU_386` (2), and
+`[cpu_feat]` carries three verified bits: bit 0 A20 open, bit 1 HMA claimed,
+bit 2 unreal mode armed. Both are **initialised `.text` data, not `.bss`**:
+`-f bin` zeroes nothing at boot, so the answer a machine reads when the probe
+never ran has to be the safe one — the §31.3 / `snd_live` idiom and §34.7.
+
+The discriminator is the FLAGS register's top nibble, which the three
+generations answer differently in real mode, and the order of the two tests is
+binding: clear bits 12..15 and read them back (still set = 8086/8088, whose
+`pushf` writes ones there unconditionally); otherwise set them and read back (a
+286 in real mode forces all four to zero, a 386+ keeps IOPL and NT).
+`cpu_detect` writes the tier on **every** path.
+
+**`[cpu_feat]` is written by `xmem.inc` and published here**, which is the one
+seam left between the two modules and is deliberate: the bits are reported
+through `cpu_info`'s AH (slot 0x0188), so the byte belongs beside the routine
+that publishes it. On `kern_small` nothing ever writes it and it reads 0 — no
+gate verified, no HMA, no unreal mode — which is true, and is also exactly
+what tier 0 answers.
+
+`cpu_detect` is **boot overlay** (§2.5): once from `kmain`, first thing,
+before `sched_init` hooks an ISR and before anything may key off the tier.
+Only `cpu_info` stays in `.text` — it is API slot 0x0188 and answers all
+session.
+
+### 60.2 The tier is INFORMATION, not permission (binding)
+
+Nothing branches on `[cpu_tier]` to decide whether the store above 1MB is
+usable; a package branches on the KB figure `xm_caps` answers (§41.8). A 386
+whose A20 gate never verified has no store, and code keyed off the tier alone
+walks straight into it.
+
+The legitimate uses are choosing an instruction **encoding** — which transport
+`xm_copy` runs, whether `xm_arm` may execute its `cpu 386` island (§41.9
+rule 2) — or choosing a code path whose **cost** the CPU decides, which is
+what every reader listed above wants it for. Both are questions about what the
+processor *is*, never about what memory *exists*.
+
+### 60.3 Acceptance
+
+- The module contains no `%ifdef`: `kern_big` and `kern_small` assemble the
+  same source here, and slot 0x0188 answers on both.
+- On the target machine the whole module is a stored byte and two returns:
+  `CPU_8086`, feature bits 0.
+- `make test` (a 386-class QEMU machine): tier 2, and `[cpu_feat]` reads
+  A20 | HMA | UNREAL once `xm_init` has run — the one path an 8088 can never
+  exercise, and the reason §41's own testing matrix (§41.7) sends it to QEMU.

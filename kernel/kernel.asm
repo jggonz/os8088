@@ -702,7 +702,7 @@ HMA_BYTES   equ 0xFFF0          ; HMA_SEG:FFFF is linear 0x10FFEF - the
                                 ; 65,520 bytes, DATA ONLY: the near model
                                 ; pins CS = DS = KERNEL_SEG, so no code ever
                                 ; lives up there (SPEC.md 41.3/41.9 rule 3)
-XM_HMA_KB   equ 64              ; what a successful cpu_hma_claim takes off
+XM_HMA_KB   equ 64              ; what a successful xm_hma_claim takes off
                                 ; the xm pool - the HMA is the first 64KB of
                                 ; exactly the RAM AH=88h sizes (SPEC.md 2.4)
 XM_MAX_BLKS equ 8               ; xm_alloc's fixed block table, entries: a
@@ -773,7 +773,7 @@ ovl_cpu_detect:     call cpu_detect
                                 ; is assembled - the overlay is free either
                                 ; way, but a shim to a body that does not
                                 ; exist would not assemble at all
-ovl_cpu_a20:        call cpu_a20_enable
+ovl_xm_a20:        call xm_a20_enable
                     retf
 ovl_xm_init:        call xm_init
                     retf
@@ -1789,7 +1789,7 @@ kmain:
                                 ; machine time rather than bytes. The tier is
                                 ; still detected above, in both builds: it is a
                                 ; fact about the CPU that packages read
-    call FAT_SEG:ovl_cpu_a20    ; ...and VERIFY it: the feature bit is set by
+    call FAT_SEG:ovl_xm_a20    ; ...and VERIFY it: the feature bit is set by
                                 ; the wraparound probe, never by the poke
                                 ; (SPEC.md 41.2). A no-op on tier 0 - an 8088
                                 ; has no gate and port 0x92 belongs to
@@ -2184,7 +2184,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "cpudet.inc"           ; CPU tiers + the A20 line (SPEC.md 41.1-41.3)
 %include "xmem.inc"             ; memory above 1MB (SPEC.md 41.4/41.5): after
                                 ; cpudet.inc, whose tier and feature bits it
-                                ; branches on and whose cpu_hma_claim it calls
+                                ; branches on and whose xm_hma_claim it calls
 %include "vga12.inc"
 %include "softgfx.inc"
 %include "font.inc"

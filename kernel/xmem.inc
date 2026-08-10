@@ -73,11 +73,15 @@
 ; TIER 0's answers. See that block for why parity is with tier 0 rather than
 ; with a bare refusal.
 ;
-; The A20 half of the feature lives in cpudet.inc and is split the same way
-; and for the same reason: cpu_a20_enable and cpu_hma_claim exist ONLY to make
-; a store above 1MB reachable, so they are kern_big's too, while cpu_detect
-; and cpu_info - the TIER, which is a fact about the CPU and not about this
-; store - stay in both builds.
+; The A20 gate and the HMA claim are HERE, below xm_init, and not in
+; cpudet.inc where they used to live (SPEC.md 41.2/41.3). They exist only to
+; make a store above 1MB reachable and sizeable - xm_a20_enable has one caller
+; in kmain, xm_hma_claim one in xm_init - so they belong to this feature and
+; go into kern_big with it. What stays in cpudet.inc is the TIER, which is a
+; fact about the CPU that ten readers across the tree branch on and which has
+; nothing to do with this store; that module is in both builds and carries no
+; %ifdef at all. The file boundary is now the build boundary, which is the
+; property to preserve if any of this moves again.
 ; =============================================================================
 
 %ifdef KERN_BIG
@@ -149,7 +153,7 @@ xm_gdtr:
 ; xm_init - size the store, set the pool base, arm unreal mode (SPEC.md 41.5)
 ;
 ; in:       [cpu_tier] and [cpu_feat] published (cpu_detect and
-;           cpu_a20_enable have run)
+;           xm_a20_enable have run)
 ; out:      [xm_kb], [xm_base_lo/hi], the block table zeroed, CPU_F_HMA and
 ;           CPU_F_UNREAL settled
 ; clobbers: nothing (flags)
@@ -202,7 +206,7 @@ xm_init:
     or ax, ax
     jz .done                    ; a 1MB AT: zero bytes above 0x0FFFFF
     mov bx, ax                  ; BX = the KB figure
-    call cpu_hma_claim          ; AX is still that figure - the claim needs it
+    call xm_hma_claim          ; AX is still that figure - the claim needs it
     mov dx, 0x0010              ; pool base high word: linear 0x00100000
     jc .nohma
     sub bx, XM_HMA_KB           ; the HMA is the first 64KB of exactly this
@@ -263,6 +267,325 @@ xm_init:
 ;
 ; There is no far jump. CS is never reloaded and keeps its real-mode base,
 ; which is what makes the instruction after `mov cr0` reachable at all.
+
+
+; =============================================================================
+; The A20 gate and the HMA claim - the store's own PREREQUISITES (SPEC.md 41.2
+; / 41.3), and they live here because that is the only thing they are for.
+;
+; They were in cpudet.inc until the kern_small split made the reason visible:
+; that module had to be cut down the middle, half of it in both builds and
+; half of it kern_big's, which is the shape that says one file is holding two
+; subjects. The tier is a fact about the CPU that ten readers across the tree
+; branch on - Note Pad's typing path, Missile Command's explosion ramp, the
+; hard-disk driver's rung-1 gate - and none of them is asking about memory.
+; These seven routines have exactly two callers between them: kmain calls
+; xm_a20_enable, xm_init calls xm_hma_claim. So the file boundary IS the build
+; boundary now, and cpudet.inc carries no %ifdef at all.
+;
+; They keep [cpu_feat] as their output rather than growing a byte of their own:
+; the CPU_F_* bits are published through cpu_info's AH (slot 0x0188), so the
+; byte belongs beside the routine that publishes it. On kern_small nothing
+; writes it and it reads 0 - no gate verified, no HMA, no unreal mode - which
+; is both true and exactly what tier 0 answers.
+;
+; Still .ovl, still run-once from kmain, still plain 8086 code.
+; =============================================================================
+
+; The A20 wraparound probe's scratch. Linear 0x00500..0x005FF is the 256
+; free bytes of SPEC.md 2 (the boot stack that grew down from 0x7C00 is dead
+; by kmain), which is why the probe goes there and not at 0000:0000 - the
+; kernel hooks int 08h and IRQ4 and the IVT is live. The alias is arithmetic:
+; HMA_SEG:0510 = 0xFFFF0 + 0x510 = linear 0x100500, the same byte with A20
+; shut and 1MB higher with it open.
+XM_A20_OFF     equ 0x0500
+XM_A20_ALIAS   equ HMA_MIN_OFF + XM_A20_OFF    ; = 0x0510
+XM_A20_PAT1    equ 0x1234              ; written low
+XM_A20_PAT2    equ 0x4321              ; written through the alias
+XM_A20_SETTLE  equ 512                 ; probes to allow a gate to take
+
+; -----------------------------------------------------------------------------
+; xm_a20_probe - is the A20 line open RIGHT NOW? (SPEC.md 41.2)
+;
+; in:       -
+; out:      CF = 0 open, CF = 1 shut; CPU_F_A20 in [cpu_feat] set to match.
+;           THIS ROUTINE IS THE ONLY WRITER OF THAT BIT.
+; clobbers: nothing else (flags)
+;
+; Write a known word to 0000:0500, a different word through the alias at
+; HMA_SEG:0510, then read 0000:0500 back. Unchanged means the second write
+; landed a megabyte up and the line is open; mutated means it wrapped.
+;
+; The saved words are restored in the opposite order to the writes, which is
+; correct in BOTH cases: with the line shut the two addresses are the same
+; word, and putting back the alias value (which is then just the pattern we
+; wrote low) before the low value leaves the original byte pair intact.
+;
+; The whole thing runs inside one pushf/cli ... popf - an interrupt that
+; touched conventional memory between the write and the read-back would make
+; the probe lie - and every register including ES is restored.
+; -----------------------------------------------------------------------------
+xm_a20_probe:
+    push ax
+    push bx
+    push dx
+    push es
+    pushf
+    cli                         ; --- the probe window ---------------------
+    xor ax, ax
+    mov es, ax
+    mov bx, [es:XM_A20_OFF]            ; save the low word
+    mov word [es:XM_A20_OFF], XM_A20_PAT1
+    mov ax, HMA_SEG
+    mov es, ax
+    mov dx, [es:XM_A20_ALIAS]          ; save the aliased word (= PAT1 if
+                                        ; the line is shut - see above)
+    mov word [es:XM_A20_ALIAS], XM_A20_PAT2
+    xor ax, ax
+    mov es, ax
+    mov ax, [es:XM_A20_OFF]            ; did the high write land down here?
+    push ax
+    mov ax, HMA_SEG
+    mov es, ax
+    mov [es:XM_A20_ALIAS], dx          ; restore, alias first
+    xor ax, ax
+    mov es, ax
+    mov [es:XM_A20_OFF], bx
+    pop ax
+    popf                        ; --- probe window closed ------------------
+    and byte [cpu_feat], 0xFF - CPU_F_A20
+    cmp ax, XM_A20_PAT1
+    jne .shut                   ; the low word was overwritten: it wrapped
+    or byte [cpu_feat], CPU_F_A20
+    pop es
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+.shut:
+    pop es
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_a20_settle - re-probe a few times, to let a gate take effect
+;
+; in:       -
+; out:      CF = 0 open (and CPU_F_A20 set), CF = 1 still shut
+; clobbers: nothing else (flags)
+;
+; The keyboard controller's gate command in particular is not instantaneous:
+; the controller acknowledges long before the line moves. A bounded retry is
+; the difference between "this machine has no A20" and "we asked too early".
+; -----------------------------------------------------------------------------
+xm_a20_settle:
+    push cx
+    mov cx, XM_A20_SETTLE
+.spin:
+    call xm_a20_probe
+    jnc .open
+    loop .spin
+    pop cx
+    stc
+    ret
+.open:
+    pop cx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_kbc_wait - wait for the keyboard controller's input buffer to empty
+;
+; in:       -
+; out:      CF = 0 empty, CF = 1 timed out
+; clobbers: nothing else (flags)
+;
+; The timeout is what stops a wedged controller from hanging the machine at
+; boot (SPEC.md 41.2). 65,536 polls of an ISA port is on the order of 60ms -
+; paid at most three times, and only on a machine whose controller is dead.
+; -----------------------------------------------------------------------------
+xm_kbc_wait:
+    push ax
+    push cx
+    xor cx, cx                  ; 65,536 polls
+.poll:
+    in al, 0x64
+    test al, 0x02               ; input buffer full?
+    jz .empty
+    loop .poll
+    pop cx
+    pop ax
+    stc
+    ret
+.empty:
+    pop cx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_fast_a20 - the fast gate at port 0x92
+;
+; in:       -
+; out:      nothing (the PROBE decides whether it worked)
+; clobbers: nothing (flags)
+;
+; Read the port, set bit 1, write it back. NEVER WRITE BIT 0: that is the
+; fast-reset line and a 1 there reboots the machine (SPEC.md 41.2). A read
+; of 0xFF - "no such port", the common answer on a machine that has none -
+; already has bit 1 set, so this declines to write at all rather than
+; guessing; the keyboard controller is the next step either way.
+;
+; Read-modify-write of a port shared with nothing else in the kernel, but
+; still under pushf/cli: an ISR that touched 0x92 between the in and the out
+; would have its write silently undone.
+; -----------------------------------------------------------------------------
+xm_fast_a20:
+    push ax
+    pushf
+    cli
+    in al, 0x92
+    test al, 0x02
+    jnz .out                    ; already set, and the line is still shut:
+                                ; 0x92 is not the gate on this machine
+    or al, 0x02
+    and al, 0xFE                ; mask bit 0 - fast reset - unconditionally
+    out 0x92, al
+.out:
+    popf
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_kbc_a20 - ask the keyboard controller to open the gate
+;
+; in:       -
+; out:      nothing (the PROBE decides whether it worked)
+; clobbers: nothing (flags)
+;
+; Command D1h "write output port" to 0x64, then the output-port value DFh to
+; 0x60 - bit 1 of that port is A20, and DFh is the standard value that sets
+; it while leaving the reset line (bit 0) alone. Each write waits for the
+; input buffer first, bounded.
+;
+; THE WHOLE SEQUENCE IS ONE pushf/cli ... popf WINDOW (SPEC.md 41.2), and
+; that is not tidiness: between the D1h and the DFh the controller is armed
+; to take the NEXT byte written to 0x60 as its output port. The kernel does
+; not hook int 09h, so the BIOS keyboard ISR is live here; a key down or
+; repeating at that instant makes it read 0x60 and write a keyboard command
+; back - and the 8042 would consume THAT as the output port value. Bit 0 of
+; that port is the active-low CPU RESET line, so 0xF4 or 0xF6 (both perfectly
+; ordinary bytes for the BIOS to send) reboot the machine mid-boot. The mild
+; version of the same race is the ISR's own 0x64 traffic satisfying the
+; pending D1h with something benign, leaving A20 shut and the machine with no
+; extended memory it can prove it has.
+;
+; The cost is a bounded IF=0 window: xm_kbc_wait times out after 65,536
+; polls, so a dead controller stalls boot by ~180ms once, before sched_init
+; installs any kernel ISR at all. A dropped BIOS tick there is nothing.
+; -----------------------------------------------------------------------------
+xm_kbc_a20:
+    push ax
+    pushf
+    cli                         ; --- the gate window ----------------------
+    call xm_kbc_wait
+    jc .out
+    mov al, 0xD1
+    out 0x64, al
+    call xm_kbc_wait
+    jc .out
+    mov al, 0xDF
+    out 0x60, al
+    call xm_kbc_wait           ; let the command drain before probing
+.out:
+    popf                        ; --- window closed ------------------------
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_a20_enable - open the A20 line, and VERIFY it (SPEC.md 41.2)
+;
+; in:       [cpu_tier] published (cpu_detect has run)
+; out:      CF = 0 and CPU_F_A20 set: the line is verified open.
+;           CF = 1 and CPU_F_A20 clear: it is not, on any tier.
+; clobbers: nothing else (flags)
+;
+; Three steps in a binding order:
+;
+;   1. Test before enabling. Every machine the QMP harness boots comes up
+;      with A20 already open (SeaBIOS opens it), and so do many later AT
+;      BIOSes. If the probe says open, no gate is touched at all.
+;   2. The fast gate at port 0x92 (xm_fast_a20), then re-probe.
+;   3. The keyboard controller (xm_kbc_a20), then re-probe.
+;
+; On tier 0 the routine returns immediately having touched no port: there is
+; no gate on an 8088 and 0x92 belongs to something else there (41.9 rule 1).
+; -----------------------------------------------------------------------------
+xm_a20_enable:
+    push ax
+    and byte [cpu_feat], 0xFF - CPU_F_A20
+    cmp byte [cpu_tier], CPU_8086
+    je .done                    ; tier 0: no gate exists. Touch nothing.
+    call xm_a20_probe
+    jnc .done                   ; already open - do not poke a working line
+    call xm_fast_a20           ; step 2
+    call xm_a20_settle
+    jnc .done
+    call xm_kbc_a20            ; step 3
+    call xm_a20_settle
+.done:
+    pop ax
+    test byte [cpu_feat], CPU_F_A20     ; the PROBE decides, never the poke
+    jz .fail
+    clc
+    ret
+.fail:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_hma_claim - claim the High Memory Area for one named owner (SPEC.md 41.3)
+;
+; in:       AX = extended-memory KB as int 15h AH=88h reported it (0 = none)
+; out:      CF = 0 claimed, CPU_F_HMA set: HMA_SEG:HMA_MIN_OFF .. 0xFFFF,
+;           HMA_BYTES = 65,520 bytes at linear 0x100000, are the claimant's.
+;           CF = 1 refused, CPU_F_HMA clear.
+; clobbers: nothing else (flags)
+;
+; Refuses on tier 0, on a machine where A20 did not VERIFY open, and when
+; the BIOS reports fewer than XM_HMA_KB. The last case is not hypothetical:
+; a 1MB AT has zero bytes above 0x0FFFFF, its BIOS answers 0, and claiming
+; an HMA there would hand out 64KB of nothing.
+;
+; There is no HMA allocator and there will not be one. A 65,520-byte region
+; with two implicit owners is the bug factory SPEC.md 2.2 refuses to build,
+; so the claim is all-or-nothing and the claimant names itself in the source.
+; It is not exposed to packages either: a real-mode segment above 1MB is a
+; DATA segment here (the near model pins CS = DS = KERNEL_SEG), and a package
+; that wants bytes up there gets them from xm_alloc, which works on both
+; tiers. NOTHING IS CLAIMING IT TODAY - the bit exists so that xm_init knows
+; where its pool starts (SPEC.md 2.4) and so the first claimant is a
+; two-line change rather than an allocator.
+; -----------------------------------------------------------------------------
+xm_hma_claim:
+    and byte [cpu_feat], 0xFF - CPU_F_HMA
+    cmp byte [cpu_tier], CPU_8086
+    je .no
+    test byte [cpu_feat], CPU_F_A20     ; the verified bit, not the poke
+    jz .no
+    cmp ax, XM_HMA_KB
+    jb .no                      ; less than 64KB up there: nothing to claim
+    or byte [cpu_feat], CPU_F_HMA
+    clc
+    ret
+.no:
+    stc
+    ret
+
 
 section .text
 ; -----------------------------------------------------------------------------
