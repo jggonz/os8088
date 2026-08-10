@@ -720,6 +720,41 @@ CLS_OWN    equ 4                ; word: owner - an instance slot, a package's
 CLS_RECSZ  equ 6
 CLAIM_SNAPSHOT_SIZE equ MEM_MAX * CLS_RECSZ
 
+; --- decoding CLS_OWN (SPEC.md 50.2/50.6, mirrored from kernel/memory.inc) ----
+; The owner word is a NAMESPACE, and these are the names in it. They are a
+; DECODE AID for the snapshot above, not a promise: the kernel owns these
+; numbers and may renumber them, and a renumber has to change both files - the
+; same standing arrangement MAX_TASKS, INST_MAX and MEM_MAX are under, and the
+; reason each of those carries a "mirrored" comment on the kernel side too.
+;
+; Nothing SHIPPED reads these - a package has no business knowing what the
+; kernel cached. They are here for the Task Manager's heap page (SPEC.md 28.4),
+; which is a debug view of exactly this table, and for anything else that later
+; wants to explain the heap to a human rather than allocate out of it.
+;
+; 0..INST_MAX-1  an instance slot: a package's REGION, or a built-in's claim
+; >= HEAP_SEG    a package's own segment: one of that package's data claims
+; 0xFFxx         a kernel tag, unpurgeable
+; 0xFBxx..0xFExx a kernel tag that is PURGEABLE, the HIGH BYTE being the tier
+MEM_K_SAVE  equ 0xFF01          ; the menu save-under (SPEC.md 12)
+MEM_K_DRV   equ 0xFF03          ; a loaded driver's image (SPEC.md 51.3)
+MEM_K_COPY  equ 0xFF04          ; the file manager's copy buffer (SPEC.md 22.5)
+MEM_K_FATW  equ 0xFF05          ; one volume's FAT window (SPEC.md 18.8.1)
+MEM_K_ASC   equ 0xFF06          ; one volume's ASSOC.DAT cache (SPEC.md 54.7)
+MEM_K_CLIP  equ 0xFF07          ; the system clipboard's text (SPEC.md 55)
+
+MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
+MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is
+MEM_PG_MED  equ 0xFD            ; what decides which cache a claimant takes
+MEM_PG_HIGH equ 0xFE            ; first
+MEM_PG_MIN  equ MEM_PG_TRIV     ; the range: a record is a cache when its high
+MEM_PG_MAX  equ MEM_PG_HIGH     ; byte is in [MIN, MAX]
+MEM_LVL_TOP equ 0xFF            ; ...and an ordinary claim outranks all of them
+
+MEM_P_WSAVE equ MEM_PG_TRIV<<8 | 0x10   ; a window's raise cache - a RANGE,
+MEM_P_WSAVE_N equ 16            ; 0x10..0x1F, the window's slot added (11.96.3)
+MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window (18.95)
+
 ; --- OSAPI_SYS_KB's buffer, all in KB ----------------------------------------
 SK_KERN    equ 0                ; word: the whole kernel span
 SK_IMG     equ 2                ; word: image + scratch + cold code
