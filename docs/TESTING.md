@@ -894,7 +894,10 @@ It boots QEMU itself, builds the B: disk itself (the story arrives as
 its way in — os8088 has no way to start a package from outside, so the launch
 is a scripted GUI walk and the coordinates live in `tools/zharness.py`. **A
 timeout waiting for `[[ZH:READY]]` is that walk, not the interpreter**;
-`--shot` writes what the screen actually had on it.
+`--shot` writes what the screen actually had on it. The walk is retried once
+before it gives up: a double-click landing before the desktop has finished
+drawing is decoded as two single clicks, and the giveaway is a screendump of a
+bare desktop with the icon not even selected.
 
 Three differences from a real session, each deliberate and each documented at
 its `%ifdef`: no `[MORE]` paging (it waits on a key the script has no reason to
@@ -924,6 +927,60 @@ indents in the *lower* window loses those words from the reference and keeps
 them here, so the error is a divergence to investigate, never a silent pass.
 There is no way to opt a story out of the diff, on purpose: an opt-out is a
 place for a real divergence to hide, and both of the ones this found are real.
+
+**`make zgfx` is the other half, and it asks what the transcript cannot**
+(SPEC.md §59.14). Every check above is about characters the story *printed*; a
+story that draws a quote box into the upper window and then loses it prints
+exactly the same characters as one that keeps it, so `zcheck` is structurally
+blind to a whole class of defect. `zgfx` compares the interpreter's own model
+of each row against the pixels under it, does it again on a freshly repainted
+window, and holds each story's opening screen against the real curses Frotz's.
+
+```sh
+make zgfx                                     # the gate, stories + the fixture
+python3 tools/zharness.py BEAR.Z5 --graphics  # one story
+make zscreens                                 # re-take the golden screens
+```
+
+Three things about running it are worth knowing before a failure confuses you:
+
+- **it is slower**, by a screendump per prompt. That is the only reason it is a
+  separate target;
+- **every complaint leaves a PNG** in `build/zh/`, named for the story, and the
+  raw wire — markers, both windows' grids, every split and repaint — is in
+  `build/zh/<story>.wire`. The `.log` beside it is the prose with all of that
+  taken out, which is the wrong file to open when the question is graphical;
+- **`make zscreens` is the only part that needs anything installed** (`brew
+  install frotz`, `pip3 install pyte`). The goldens are committed, so the gate
+  itself is still nasm + qemu + python3. Re-take them when the Frotz window's
+  size changes — the geometry is in each file's header and the gate refuses,
+  with the reason, rather than reporting the mismatch as a story failure;
+- **each golden is two takes, and the gate wants the words common to both.**
+  A story may roll for its opening — `CURSES.Z5` draws a different epigraph
+  every time — so the file measures how much of the screen is settled instead
+  of assuming all of it is. Fourteen of fifteen come out fully stable.
+
+**Do not make it send keys.** An earlier version forced the repaint check by
+sending `PgUp`/`PgDn` — which the interpreter takes before the story's input
+ring, so they cannot be mistaken for the story's own input. It nonetheless left
+`DREAMHLD.Z8` with no further prompt inside a seven-minute budget, every time,
+where the same run without it finished cleanly. That is worth chasing on its
+own (SPEC.md §59.14); it is not worth a gate that fails for two reasons at
+once. The check now rides on the repaints stories provoke themselves.
+
+**A `@random` story can diverge run to run in `zcheck`, and that is not a
+regression.** Both interpreters seed from the clock (Standard 2.4,
+`zx_seedclock`), so a word diff over a story that rolls dice is not
+reproducible — `ZTUU.Z5` diverged on one lamp message in one run and matched on
+the next. Re-run before believing a divergence that names a random event; the
+graphics gate is unaffected, because its golden knows which words were rolled
+for.
+
+It found four defects on its first run over the library, and the two that
+matter most to a reader were both about the upper window — a quote box erased
+by the shrink that follows it, and a `Flags 1` bit that turned 905's clock into
+a move counter (SPEC.md §59.5). Neither changed one character of any
+transcript, which is the argument for the gate in one sentence.
 
 `filetest` also has a fragmented-volume variant, `build/filetest-frag.img`,
 and its results are worth pairing with the host-side fsck — the in-kernel

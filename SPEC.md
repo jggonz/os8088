@@ -27555,6 +27555,45 @@ one 8x8 font and no true bold:
 per pixel: every colour there rounds to black, white or a dither, so a story
 that colours by meaning would become less readable, not more.
 
+**The upper window has TWO row counts, and shrinking it does not erase it.**
+`[zw_upper]` is how many rows the story owns; `[zw_uphold]` is how many are
+still on the glass, and it is never smaller. They differ because Standard 8.7.2
+leaves the shrink case open and every interpreter worth matching leaves those
+pixels alone — the rows revert to the lower window and keep what was in them
+until its own text scrolls over them.
+
+That is not a curiosity. **It is how every Inform quote box works**:
+`@split_window 11`, print the box, `@set_window 0`, `@split_window 1`. A window
+model that repaints on a shrink therefore erases every quote box in existence
+the instant it is drawn, which is what this did — `BEAR.Z5` and `CURSES.Z5`
+both open on one, and the box was on the glass for the few milliseconds between
+the print and the split. A reader sees that as a flash.
+
+"Do not repaint on a shrink" is not the fix, and the distinction is the whole
+reason there is a second count rather than a skipped call. That version leaves
+the box on the glass with nothing in the model holding it, so the first uncover
+erases it — trading a certain defect for an intermittent one, against a window
+this file rebuilds from its model by construction. So the vacated rows stay in
+the **grid**: `zw_up_draw` draws `[zw_uphold]` rows, `zw_lowtop` starts the
+lower window below them, and `zw_scroll1` gives them back the moment the lower
+window actually needs the space — which is the same moment a real
+interpreter's scroll would carry the box off the top.
+
+It is **cheaper**, not dearer: a shrink used to cost a full repaint and now
+costs none, against one repaint at most once per box (`PERFORMANCE.md` Part 5).
+
+**Flags 1 bit 1 is the story's outside v6, and clearing it changed a game's
+status line.** The Standard marks bit 1 — "pictures available" — and bit 5 as
+**v6** (11.1), and Inform's library reads that same bit in every version to
+choose between a score/turns status line and a clock, which is what
+`Statusline time;` sets in the header. `zm_setup`'s v4+ path answered the whole
+byte and cleared it, so `905.Z5`, which ships with it set, drew "Moves: 0"
+where every other interpreter draws "Time: 9:05 am" — the *story's* own status
+line, composed from a byte we had overwritten under it. The v1–3 path had
+always preserved it. This is the shape of defect §59.14's gate exists for: the
+transcript was identical either way, because the words were in the upper window
+and the upper window is not the transcript.
+
 **A typed character is drawn on the keystroke, and story text is not.** The
 lower window holds a word back in a buffer until a space or a newline arrives,
 because a word is the unit word-wrap has to be able to move to the next row and
@@ -27637,6 +27676,47 @@ why Bronze is on the disk — its Blorb carries a JPEG cover, so the picture pat
 is exercised by a game that legally ships, and its Z-code drops from 492KB to
 359KB on the way, which is the difference between fitting a 640KB machine and
 not.
+
+**`zi_load` loads the art, and for a long time it did not.** The archive is
+claimed on the UI task after the window is drawn and **before `zf_hire`**, and
+each of those is load-bearing. Before, because the worker can execute
+`@picture_data` on its first instruction and a story that is told "none" lays
+its interface out around the answer and never asks again. After the window,
+because `zp_reason` may have a sentence to say (§47) and needs somewhere to say
+it. Last of the claims, because it is the only one whose failure costs nothing:
+the Standard requires `@picture_data` to be able to answer "unavailable", so
+art that will not fit is a degraded story rather than a refused one.
+
+That call did not exist until the graphics gate (§59.14) asked for a picture
+and got nothing. `zi_load` filled `[zi_story]` — which is only there for
+`zp_mkname` to derive the art's name from — and then never asked, so every
+story ever run on this interpreter reported no pictures, including Bronze,
+whose cover was on the disk the whole time. **Underneath it were two more
+defects that only unreachable code can have**: `zp_load` and `zp_findfile` each
+pushed seven registers and popped six, so either would have returned to
+whatever the caller's `SI` happened to be. Three defects, and the outer one hid
+the other two completely — nothing that is never called can be wrong. It is the
+argument for the fixture in the section that follows: a capability with no
+caller is a capability with no evidence.
+
+**It runs for v6 and no other version, and that is a clock decision as much as
+a correctness one.** `@draw_picture` and `@picture_data` are v6 opcodes
+(Standard 15), so art beside a v3 or v5 story is art no story can ask for.
+Looking for it anyway is expensive in the one place it matters:
+`OSAPI_FILE_FIND` is by ordinal and `dsk_find` re-walks the directory from the
+front on every call, with no sector cache under it — so a folder of eleven
+stories costs about eleven `int 13h` calls to answer "no", and this would ask
+twice, `.PIX` then `.MG1`. At `PERFORMANCE.md`'s ~400 ms a call that is the
+better part of **ten seconds added to opening every story** on an XT, to look
+for something only one version can use. Rule 1: cost disk work in calls.
+
+A consequence worth stating rather than discovering: **Bronze's cover is never
+loaded on the guest**, because Bronze is v8. What Bronze exercises is the HOST
+half — `tools/os88pix.py` taking a real Blorb's picture chunk and packing it —
+which is where that path's bugs would be, and it still earns its place on the
+disk for the Z-code reason above. The guest half is exercised by
+`tests/frotz/zpictest.inf` (§59.14), which is v6 and can therefore actually
+ask.
 
 ### 59.8 Sound
 
@@ -27736,7 +27816,13 @@ is short of.
 **A repainted line carries one style.** The live draw honours a style change
 mid-line, as the Standard permits; the scrollback stores one style byte per
 line, which is the real case — a bold or reverse room name is a whole line —
-and flattens the rest only on a repaint.
+and flattens the rest only on a repaint. **The upper window's grid does the
+same, and until §59.14's gate asked, it stored no style at all**: the row
+header always had the byte and nothing filled it, so `zw_up_draw` painted the
+whole window roman and an uncover turned an Inform quote box — which is
+`style reverse` — back into ordinary text. `zw_upclear` zeroes the byte with
+the length for the same reason a stale one would otherwise paint a bar of
+background across a row the story had emptied.
 
 **v6 omits four things the Standard permits omitting**: the `[MORE]` prompt (a
 v6 game sets its line counts to place its own pauses), the newline interrupt
@@ -27894,6 +27980,18 @@ reference and keeps them here, so the error is a divergence to investigate,
 never a silent pass. **There is no way to opt a story out of the diff**, on
 purpose — an opt-out is a place for a real divergence to hide.
 
+The same rule costs it `PHOTOPIA.Z5`, in the other direction and for the same
+reason. The reference prints `Would you like instructions?` and its opening
+quote box **on one line**, separated by the padding that positions the box — so
+the rule drops the question along with it, and this interpreter, which put the
+box in the upper window where it belongs, keeps the question and diverges by
+it. There is no rule that fixes both: narrowing it to "drop from the run
+onward" would keep the room name of every v4+ status line in the reference,
+which is not on our wire at all, and every one of those would then diverge. It
+is left as a divergence to investigate rather than an opt-out (that is the
+policy above), and §59.14's gate — which compares screens and has no such
+heuristic — passes the story.
+
 Its one known blind spot is a v4+ status line with **no right-hand field**:
 `DREAMHLD.Z8` writes just a room name, which the reference prints with no run
 of spaces in it and this cannot tell from prose, so that story diverges by the
@@ -27901,3 +27999,161 @@ one word. The fix, if it is ever worth it, is not a better heuristic — it is t
 put the upper window on the wire between markers and strip the reference's copy
 only for v1–3, where the *interpreter* composes the status line and the two
 therefore cannot agree on it anyway.
+
+**§59.14 took that fix, by another route, and the blind spot is covered.** The
+graphics gate puts the whole upper window on the wire — as a grid at each
+prompt rather than as a stream between markers — and compares it against a
+reference *screen*, where a status line is a status line whether or not it has
+a right-hand field. `DREAMHLD.Z8` passes there. The word diff described above
+is unchanged and still diverges by that one word; the two gates now fail
+differently on purpose, and this is the one story that shows why both exist.
+
+### 59.14 The graphics gate (development only)
+
+§59.13 asks what the story **printed**. This asks what the reader can **see**,
+and the two are different questions: a story that draws a quote box and then
+loses it prints exactly the same characters as one that keeps it. `BEAR.Z5`
+opened on a blank band where its box should be while every transcript matched
+`dfrotz` word for word, because the words were never in dispute.
+
+`make zgfx` is the gate. Three checks per story, and only the last needs a
+reference interpreter at all:
+
+| | |
+|---|---|
+| **model against pixels** | every row the interpreter says holds text is drawn, and every row it says is blank is not |
+| **across a repaint** | the same, on a window that has just been redrawn from the model — which is what an uncover does, and where anything on the glass the model does not hold disappears |
+
+The repaint check **rides on repaints the story provokes itself** — any
+`@erase_window -1` does, and so does any `@split_window` that changes the split
+— rather than forcing one. It used to force one, by sending `PgUp`/`PgDn`,
+which belong to the interpreter and never reach the story. That left
+`DREAMHLD.Z8` with no further prompt inside a seven-minute budget, every time,
+where the same run without it finished cleanly. Either a repaint of a full
+41-row window under lock contention with the worker is far slower than
+anything else here, or paging a busy window is a defect of its own; **it is
+worth finding out separately, and a harness may not be the thing that breaks
+the run.** Nothing was lost — `BEAR.Z5`'s `@split_window 2` repaints just
+before its prompt, which is the case that mattered — and a run that never
+repaints is reported as such rather than counted as a pass.
+| **the opening screen** | every word the real Frotz shows at the same moment is on our screen too |
+
+**The first two need no golden and no reference**, which is what makes them
+worth having: they are the drawing path against its own bookkeeping, and they
+localise a failure rather than just reporting one. A grid holding a box against
+a blank band is a *drawing* defect; an empty grid against a blank band is a
+*window-model* defect, and the two need opposite fixes.
+
+**A row is read by UNIFORMITY, not by ink.** A row of spaces is one flat colour
+whatever the story chose — white, black under a reversed status line, blue in
+Photopia — and a row with one glyph in it is not. Counting dark pixels instead
+would call a reversed blank row full and a white-on-black letter empty, and
+both readings are exactly backwards. It is the one decision in the gate that
+makes `@set_colour` and `ZST_REVERSE` cost nothing.
+
+The guest side is the same `-DZHARNESS` build, with a second wire: every
+`@split_window`, `@set_window`, `@erase_window` and repaint as it happens, both
+windows' whole character grids at every prompt, and every picture the drawing
+path accepted or refused **with the screen rectangle it used** — which is what
+lets the host go and look at those pixels rather than at pixels it computed
+itself. `apps/frotz/zharness.inc` is the authority on the marker set.
+
+Two things the guest reports that look like detail and are not:
+
+- **the pending word.** `zwin` draws one `OSAPI_FONT_RUN` per *word* (§59.5),
+  so a word with no space after it yet — the `>` of a prompt always is one — is
+  in `zw_wbuf` and not on the glass, while a repaint composes it through
+  `zw_liveinto` and paints it. Both states are correct and the model does not
+  record which happened, so that one row is checked against both readings, and
+  strictly at the repaint checkpoint where the ambiguity is gone;
+- **v6 is skipped.** Its eight windows are pixel-addressed and `zwin6.inc` owns
+  them; dumping `zwin`'s grid there would report a v1–5 story's leftovers, and
+  stale state the host cannot identify as stale is worse than none. The picture
+  markers still come, which is where v6's evidence is.
+
+**The reference is the curses Frotz, photographed.** `tools/zref.py` runs it in
+a pseudo-terminal, models that terminal, and writes what is on display into
+`tests/frotz/screens/<story>.txt`. Those files are **committed**, and that is
+the whole design: the tool needs `frotz` and `pyte`, the toolchain is
+deliberately nasm + qemu + python3, and generating at gate time would put both
+in the critical path of a build. Generated rather than hand-written is the rule
+`make ztest` already follows; committed is what keeps it free. Geometry is
+written into each file's header, because word wrap decides what has scrolled
+off the top — a screen taken at 80 columns is not a fact about a 67-column
+window — and the gate **refuses with the reason** when the live window has
+moved rather than reporting the mismatch as a story failure.
+
+The comparison is a **subsequence**, not an equality: our window carries
+scrollback the terminal has already lost, so extra content is not a defect and
+missing content is the only thing being asked about. The v1–3 status line is
+dropped from the reference's side, because the interpreter composes that one
+with its own `OSAPI_FONT_RUN` and it belongs to neither window (§59.5) — the
+model has no record of it to compare. Its *presence* is checked against the
+pixels instead, which is the part a blank status bar would fail.
+
+Three things are normalised away, and each earned its place by producing a
+divergence that was not one:
+
+- **the reference's `[MORE]`.** The harness build does not page (§59.13), so a
+  story whose opening runs past one screen leaves the two on different pages of
+  it — `ZTUU.Z5` opens on a letter a screen and a half long, and its last page
+  had nothing in common with the reference's first. `tools/zref.py` pages the
+  reference through to the same place;
+- **the reference's own commentary.** `Warning: get_child called with object 0`
+  is frotz talking about Balances, not Balances talking to the player, and this
+  interpreter answers the same 0 without editorialising (§59.11). It is a
+  paragraph, not a line — it wraps like anything else — so it is taken to the
+  blank line that ends it, exactly as the word diff already does;
+- **the hyphen**, which is a word separator here. The two wrap a long
+  hyphenated token differently at the margin: Lost Pig's banner carries
+  `ZCODE-1-070917-994E`, which the reference splits after `ZCODE-1-` and this
+  one moves down whole. As one word they never match and as four they always
+  do, and neither wrap is about anything a reader would call a difference.
+
+**The golden is two takes of the same opening, and the gate requires the words
+common to both.** A story may choose what it opens with: `CURSES.Z5` draws a
+different epigraph every time, and both interpreters seed from the clock
+because Standard 2.4 asks them to — so no single screen is *the* answer, and a
+golden that pretended otherwise would report the story's own dice as a defect.
+Taking it twice and keeping the longest common subsequence lets the file
+measure that rather than assume it: everything the story settled on stays in
+the gate, everything it rolled for drops out, and nobody has to declare per
+story which was which. Fourteen of the fifteen openings come out fully stable;
+`CURSES.Z5` keeps ten words of banner and gives up its epigraph — and its box
+is still checked, by the model-against-pixels and repaint checks, which do not
+care what it says.
+
+Only **one** checkpoint per story, the opening, and the restraint is the point.
+Driving the reference deeper means replaying the guest's input, and a "press
+any key" prompt is answered by the harness itself and consumes no line of the
+script — so a story that asks for two leaves the reference a turn behind and
+every later checkpoint compares two different moments. That failure looks
+exactly like the defect the gate is for. The opening needs no input, and it is
+where every title screen, quote box and cover picture lives.
+
+**`tests/frotz/zpictest.inf` is the picture fixture**, and it exists because
+nothing that ships exercises the drawing path: `@draw_picture` is v6-only and
+every v6 game is Activision's (§59.2). It is compiled by `inform -v6`, and
+`tools/zpicgen.py` builds the art it draws — three blocks, each one flat
+colour, all non-square, numbered **1, 2 and 5**. Every one of those is a
+decision. Flat, because a screendump can be held to a flat block exactly and
+cannot be held to a photograph without the host learning to dither the way
+`tools/os88pix.py` does, which would be the code under test checking itself.
+Non-square, because `@picture_data` answers height first and width second and a
+swap stays plausible. Non-contiguous, because Standard 8.8.6.1 says numbering
+need not be contiguous, `zp_find` is a linear scan for that reason, and a
+fixture numbered 1,2,3 lets an implementation that indexed pass.
+
+Colours are compared through the **six-bit DAC**: palette entry 1 is `0x0000AA`
+in the tool's table and leaves a VGA card as `0x0000A8`, which is what a
+screendump reads back. Comparing the archive's byte against the scanout's
+without that reports every picture on the disk as the wrong colour — a fact
+about the hardware read as a defect in the blitter.
+
+**Four defects were found by pointing this at the stories on the disk**, none
+of which the word diff could see, and each is described where it lives: the
+picture archive nothing ever loaded and the two register imbalances hiding
+under it (§59.7), the Flags 1 bit that turned a clock into a move counter, and
+the quote box a shrink threw away (both §59.5). The last two were invisible for
+the same reason: they are about the upper window, and the upper window is not
+the transcript.

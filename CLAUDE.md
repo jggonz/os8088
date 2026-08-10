@@ -39,6 +39,15 @@ make zcheck   # play every Z-machine story to a script and diff it against
               # `tools/zharness.py <story> --repl` types at one by hand. This
               # is how a Frotz change is checked — a story is the only thing
               # that exercises an interpreter, and it is minutes by hand
+make zgfx     # ...and what the reader can SEE (§59.14): every row the
+              # interpreter claims against the pixels under it, the same
+              # across a repaint, and each story's opening screen against the
+              # real Frotz's. `make zpic` builds the v6 picture fixture it
+              # ends with; `make zscreens` re-takes the golden screens, and
+              # is the only part that needs `frotz` and `pyte` installed.
+              # zcheck cannot see a graphics defect — a story that draws a
+              # quote box and loses it prints the same characters as one that
+              # keeps it
 make clean
 ```
 

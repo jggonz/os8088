@@ -191,7 +191,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 .PHONY: all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field stackprobe trklog npbench clicktest marty comscan \
-        stories zdisk ztest zh zhboot zcheck xt-z 386-z \
+        stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         checkdocs clean clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -968,6 +968,54 @@ zhboot: $(IMG)
 # (`make stories`, which fetches) and dfrotz on the host.
 zcheck: zh $(BUILD)/stories.stamp
 	python3 tools/zharness.py --all --compare
+
+# --- the GRAPHICS gate (ON DEMAND: `make zgfx`) ------------------------------
+# `make zcheck` above asks what the story PRINTED. This asks what the reader
+# can SEE, which is a different question and the one three defects hid behind:
+# a quote box drawn into the upper window and thrown away by the next
+# @split_window, a picture archive nothing ever loaded, and two routines in
+# apps/frotz/zpic.inc that pushed seven registers and popped six because
+# nothing had ever called them.
+#
+# Three checks per story, and only the third needs a reference interpreter:
+#
+#   model vs pixels  every row the interpreter says holds text is drawn, and
+#                    every row it says is blank is not. Read by UNIFORMITY, so
+#                    reverse video and @set_colour do not fool it
+#   across a repaint the same, on a window that has just been redrawn from the
+#                    model - which is what an uncover does, and where anything
+#                    on the glass the model does not hold disappears
+#   opening screen   against tests/frotz/screens, taken from the real curses
+#                    Frotz by tools/zref.py. Every word the reference shows
+#                    must be on our screen too
+#
+# It is slower than zcheck by a screendump per prompt and is a separate target
+# for that reason alone; it is not optional in any other sense.
+zgfx: zh zpic $(BUILD)/stories.stamp
+	python3 tools/zharness.py --all --graphics
+	python3 tools/zharness.py $(ZPICDIR)/zpictest.z6 --graphics
+
+# The v6 picture fixture: a story that draws, and three flat blocks to draw.
+# Needs `inform` (`brew install inform6`), which is host-side only.
+ZPICDIR := $(BUILD)/zpic
+
+zpic: $(ZPICDIR)/zpictest.z6 $(ZPICDIR)/zpictest.PIX
+
+$(ZPICDIR)/zpictest.z6: tests/frotz/zpictest.inf
+	@mkdir -p $(ZPICDIR)
+	inform -v6 $< $@
+
+$(ZPICDIR)/zpictest.PIX: tools/zpicgen.py tools/os88pix.py
+	@mkdir -p $(ZPICDIR)
+	python3 tools/zpicgen.py -o $(ZPICDIR)
+
+# The golden opening screens the graphics gate compares against. REGENERATING
+# them needs the curses frotz and pyte (`brew install frotz`, `pip3 install
+# pyte`); the gate itself needs neither, which is why they are committed.
+# Re-take them when the Frotz window's size changes - tools/zref.py writes the
+# geometry into each file and zharness.py refuses rather than guessing.
+zscreens: $(BUILD)/stories.stamp
+	python3 tools/zref.py --all -o tests/frotz/screens
 
 # --- the tracker log disk (ON DEMAND: `make trklog`) -------------------------
 # TRKLOG.O88 is apps/tracker built with -DTRKLOG, which is the ONLY difference:

@@ -1,0 +1,133 @@
+! =============================================================================
+! os8088 - tests/frotz/zpictest.inf
+!
+! THE PICTURE FIXTURE, and it exists because nothing that ships exercises the
+! drawing path. SPEC.md 59.7 puts Bronze on the library disk so that a real
+! game's Blorb cover goes through tools/os88pix.py and @picture_data - but
+! Bronze is v8, and @draw_picture is a v6 opcode, so no story anywhere in this
+! project has ever asked the interpreter to put a picture on the glass. SPEC.md
+! 59.2 says as much in the open: "v6 is in scope by decision, and nothing
+! shippable exercises it". This is the thing that does.
+!
+! It is a v6 story compiled by `inform -v6` (`make zpic`), and it does three
+! things, in the order they can go wrong:
+!
+!   1. asks @picture_data 0 how many pictures there are, and prints the answer.
+!      A story LAYS ITSELF OUT around this reply, so a wrong count is not a
+!      cosmetic defect - it is an interface built around space that is not
+!      there (SPEC.md 59.7);
+!   2. asks @picture_data n for each one's size and checks it against what
+!      tools/zpicgen.py put in the archive. Every number is printed whether it
+!      passed or not, in zopstest.inf's PASS/FAIL shape, so the transcript is a
+!      RESULT and not prose to eyeball;
+!   3. draws each one at a known place and then WAITS. The waiting is the
+!      point: tools/zharness.py photographs the screen while the pictures are
+!      still on it and checks that the rectangle the interpreter reported
+!      blitting into is solidly the colour that picture is. Every picture in
+!      the archive is one flat colour for exactly that reason - a flat block is
+!      the one thing a screendump can verify without knowing how to decode a
+!      font or dither a photograph.
+!
+! Picture numbers 1, 2 and 5 - deliberately NOT contiguous. Standard 8.8.6.1
+! says numbering "is not necessarily contiguous", zpic.inc's directory is a
+! linear scan for that reason, and a fixture numbered 1,2,3 would let an
+! implementation that indexed instead of scanning pass.
+!
+! No library, for zopstest.inf's reasons: a parser and a status line are not
+! what is being measured, and at v6 the library would also bring its own window
+! layout and fight the one under test.
+! =============================================================================
+
+Constant Story "ZPICTEST";
+Constant Headline "^The os8088 picture gate.^";
+
+Global npass = 0;
+Global nfail = 0;
+
+! @picture_data writes a two-word block: HEIGHT first, then WIDTH (Standard 15,
+! picture_data). Getting that pair the wrong way round is a real and silent
+! defect - a picture is usually landscape, so the numbers stay plausible - and
+! the archive below is deliberately never square, so a swap cannot pass.
+Array pinfo --> 2;
+
+[ ok name got want;
+    if (got == want) {
+        npass = npass + 1;
+        print "PASS ", (string) name, "^";
+    } else {
+        nfail = nfail + 1;
+        print "FAIL ", (string) name, " got ", got, " want ", want, "^";
+    }
+];
+
+! ---------------------------------------------------------------------------
+! sized(num, wantw, wanth) - one picture's entry in the archive.
+! The BRANCH is checked as well as the numbers: @picture_data must branch false
+! for a picture that is not there, which is how a v6 story with its art missing
+! degrades instead of failing, and an interpreter that always branches true
+! would otherwise pass every size check by never being asked.
+! ---------------------------------------------------------------------------
+[ sized num wantw wanth;
+    pinfo-->0 = 0; pinfo-->1 = 0;
+    @picture_data num pinfo ?there;
+    nfail = nfail + 1;
+    print "FAIL exists ", num, " got 0 want 1^";
+    return;
+  .there;
+    npass = npass + 1;
+    print "PASS exists ", num, "^";
+    ok("height", pinfo-->0, wanth);
+    ok("width", pinfo-->1, wantw);
+];
+
+[ Main ch;
+    @set_window 0;
+    print "ZPICTEST^";
+
+    pinfo-->0 = 0; pinfo-->1 = 0;
+    @picture_data 0 pinfo ?have;
+    print "FAIL any got 0 want 1^";
+    print "RESULT pass 0 fail 1^";
+    @read_char 1 -> ch;
+    quit;
+
+  .have;
+    print "PASS any^";
+    ok("count", pinfo-->0, 3);
+    ok("release", pinfo-->1, 7);
+
+    sized(1, 64, 32);
+    sized(2, 32, 16);
+    sized(5, 48, 24);
+
+    ! A number that is NOT in the archive. The Standard has the opcode branch
+    ! false and the story carry on; an interpreter that halted here would take
+    ! every v6 game down at its first missing picture.
+    @picture_data 9 pinfo ?bogus;
+    npass = npass + 1;
+    print "PASS absent 9^";
+    jump drawn;
+  .bogus;
+    nfail = nfail + 1;
+    print "FAIL absent 9 got 1 want 0^";
+
+  .drawn;
+    ! y THEN x (Standard 15, draw_picture), and the three do not overlap, so
+    ! one drawn at the wrong origin cannot be read as another one's pixels.
+    @draw_picture 1 8 8;
+    @draw_picture 2 8 96;
+    @draw_picture 5 56 8;
+
+    ! An illegal number, drawn LAST and on top of nothing: it must put no
+    ! pixels anywhere and must not stop the story. zpic.inc draws nothing at
+    ! all rather than partially for exactly this case.
+    @draw_picture 9 56 96;
+
+    print "RESULT pass ", npass, " fail ", nfail, "^";
+
+    ! ...and now hold still. The host reads the transcript for the numbers and
+    ! photographs the screen for the pixels, and the pixels are only there
+    ! while the story is waiting.
+    @read_char 1 -> ch;
+    quit;
+];

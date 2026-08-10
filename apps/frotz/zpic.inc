@@ -203,6 +203,18 @@ zp_load:
     mov word [zp_mgn], 0
     mov word [zp_mgrel], 0
 
+    ; v6 ONLY, AND THE REASON IS THE CLOCK. @draw_picture and @picture_data are
+    ; v6 opcodes (Standard 15), so art beside a v3 or v5 story is art no story
+    ; can ask for - and looking for it is not free. OSAPI_FILE_FIND is BY
+    ; ORDINAL and dsk_find re-walks the directory from the front on every call,
+    ; with no sector cache under it, so a folder of eleven stories costs about
+    ; eleven int 13h calls to answer "no" - and this asks twice, .PIX then
+    ; .MG1. At PERFORMANCE.md's ~400 ms a call that is the better part of ten
+    ; seconds added to opening EVERY story on the target machine, to find
+    ; something only one version can use.
+    cmp byte [zf_ver], 6
+    jne .none
+
     mov si, zp_ext_pix
     call zp_mkname
     jc .none                        ; no story name: nothing to derive from
@@ -227,11 +239,17 @@ zp_load:
 .out:
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    pop si                          ; SI. The prologue pushes seven registers
+    pop dx                          ; and this popped six, so zp_load returned
+    pop cx                          ; to whatever the caller's SI happened to
+    pop bx                          ; be. It survived review because NOTHING
+    pop ax                          ; CALLED IT: zi_load filled [zi_story] and
+    ret                             ; never asked for the art, so every story
+                                    ; ran with @picture_data answering "none"
+                                    ; and the imbalance was unreachable. Two
+                                    ; defects holding each other up - the gate
+                                    ; in tests/frotz/zpictest.inf is what
+                                    ; separated them.
 
 ; =============================================================================
 ; zp_info - @picture_data's answer for one picture (Standard 15, picture_data)
@@ -249,13 +267,19 @@ zp_info:
     jc .no
     mov cx, [zp_h]
     mov dx, [zp_w]
+%ifdef ZHARNESS
+    call zh_pdata                   ; AX = number, DX = width, CX = height
+%endif
     pop ax
     clc
     ret
 .no:
     xor cx, cx
     xor dx, dx
-    pop ax
+%ifdef ZHARNESS
+    call zh_pdata                   ; 0 x 0 is the "unavailable" answer, and
+%endif                              ; a story that lays out around it needs it
+    pop ax                          ; said as loudly as a real size
     stc
     ret
 
@@ -310,8 +334,32 @@ zp_draw:
 
     mov [zp_x], cx
     mov [zp_y], dx
+%ifdef ZHARNESS
+    push ax                         ; what the STORY asked for, before any of
+    push si                         ; our clamping - so the host can tell a
+    mov si, zh_m_pic                ; picture we cropped from one we dropped.
+    call zh_evbeg                   ; AX is BANKED because zp_find below reads
+    call zh_evnum                   ; the picture number out of it, and an
+    mov ax, [zp_x]                  ; instrument that changes the answer is
+    call zh_evnum                   ; worse than no instrument at all
+    mov ax, [zp_y]
+    call zh_evnum
+    call zh_evend
+    pop si
+    pop ax
+%endif
     call zp_find                    ; -> [zp_w]/[zp_h]/[zp_stride]/[zp_bseg]
+%ifdef ZHARNESS
+    jnc .have                       ; the refusal gets a marker, so the shipped
+    push si                         ; build's `jc .out` has to stay EXACTLY
+    mov si, zh_m_picno              ; that: restructuring it for both builds
+    call zh_ev1                     ; grew the shipped package by two bytes,
+    pop si                          ; which is a harness leaking into a disk
+    jmp .out
+.have:
+%else
     jc .out
+%endif
 
     mov bx, [zf_win]
     or bx, bx
@@ -346,6 +394,28 @@ zp_draw:
     pop dx
     pop cx
 
+%ifdef ZHARNESS
+    push ax                         ; the pixels this blit is about to write,
+    push bx                         ; in SCREEN coordinates: the host can go
+    push cx                         ; and photograph exactly this rectangle
+    push dx
+    push si
+    mov si, zh_m_picat
+    call zh_evbeg
+    call zh_evnum                   ; AX = destination x
+    mov ax, bx
+    call zh_evnum                   ; ...y
+    mov ax, cx
+    call zh_evnum                   ; ...width, after the clamp
+    mov ax, dx
+    call zh_evnum                   ; ...and height
+    call zh_evend
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%endif
     mov bp, [zp_stride]             ; BP is a VALUE here, never a base - it
                                     ; addresses SS if it is dereferenced
     mov es, [zp_bseg]               ; ES is ours for this call: no stub is
@@ -593,9 +663,10 @@ zp_findfile:
 .out:
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
+    pop si                          ; ...and the same missing pop as zp_load,
+    pop dx                          ; for the same reason: unreachable code is
+    pop cx                          ; unreviewed code. Both are now on a path
+    pop bx                          ; tests/frotz/zpictest.inf walks every run
     pop ax
     ret
 

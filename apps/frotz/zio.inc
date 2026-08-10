@@ -792,6 +792,26 @@ zi_load:
     call zw_clear
     call zw_paint
 
+    ; THE PICTURES. Last of the claims and after the window is drawn, for two
+    ; reasons: it is the only one whose failure costs nothing - @picture_data
+    ; is required to be able to answer "unavailable" and stories handle it
+    ; (SPEC.md 59.7) - so it must not be able to take the story down with it;
+    ; and zp_reason may have something to say, which needs a window to say it
+    ; in. It has to happen BEFORE zf_hire: the worker can execute
+    ; @picture_data on its first instruction, and an answer of "none" given
+    ; because the archive had not been read yet is one a story lays itself out
+    ; around and never asks again.
+    ;
+    ; It needs [zi_story], which is why it is here rather than beside the
+    ; other claims above - the archive's name is derived from the story's
+    ; (apps/frotz/zpic.inc, zp_mkname).
+    call zp_load
+    call zp_reason                  ; SI = a fact worth saying, or 0
+    or si, si
+    jz .nosay
+    call zw_notice
+.nosay:
+
     ; HIRE THE WORKER HERE, not only from W_PAINT. A story loaded into a
     ; window that is ALREADY ON SCREEN gets no repaint from the kernel - and
     ; zf_hire lives in zf_paint, so nothing ever started the VM and the story
@@ -869,8 +889,9 @@ zi_free_all:
     mov word [zi_undoseg], 0
 .noundo:
     mov byte [zi_undook], 0
-    pop dx
-    pop ax
+    call zp_free                    ; the art goes back with the story that
+    pop dx                          ; named it, or opening a second one keeps
+    pop ax                          ; the first one's claim for ever
     ret
 
 ; =============================================================================
@@ -967,11 +988,14 @@ zi_readchar:
     push es                         ; the PC's segment; see zi_yield
     mov byte [zi_want], ZIW_CHAR
 %ifdef ZHARNESS
-    push si                         ; a "press any key" prompt is not a command
-    mov si, zh_m_key                ; and must not eat a line of the script -
-    call zh_mark                    ; the host answers this one itself. Without
-    pop si                          ; it a story with a title screen (BEAR.Z5
-%endif                              ; opens on one) never starts at all.
+    call zh_snap                    ; the windows, BEFORE the marker: the host
+    push si                         ; photographs the screen when it sees the
+    mov si, zh_m_key                ; marker, and must already hold what the
+    call zh_mark                    ; interpreter thinks is on it. A title
+    pop si                          ; screen is exactly this moment (BEAR.Z5
+%endif                              ; opens on one) - and it is not a command,
+                                    ; so the host answers it itself rather than
+                                    ; spending a line of the script.
 .wait:
     call zi_getkey
     jnc .got
@@ -1032,6 +1056,7 @@ zi_readline:
     mov word [zi_linen], 0
     mov byte [zi_want], ZIW_LINE
 %ifdef ZHARNESS
+    call zh_snap                    ; ...and the windows first; see zi_readchar
     push si                         ; the host sends the next line when it sees
     mov si, zh_m_read               ; this, rather than guessing at a delay -
     call zh_mark                    ; which is what makes a scripted run

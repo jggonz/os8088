@@ -243,6 +243,389 @@ zh_getkey:
     stc
     ret
 
+; =============================================================================
+; THE SECOND WIRE: what the story DREW, not what it printed
+;
+; Everything above this line carries stream 1 - the prose. That was enough for
+; a wrong opcode and is structurally blind to the defect class next to it: a
+; story that puts a quote box, a title screen or a picture in a window OTHER
+; than the lower one is, on the prose wire, completely silent. BEAR.Z5 opens on
+; such a box; it was blank on screen for a fortnight and every transcript
+; matched dfrotz word for word, because the words were never in dispute.
+;
+; So this half reports the WINDOW MODEL: every @split_window, @set_window,
+; @erase_window and repaint as it happens, the upper window's whole character
+; grid at every prompt, and every picture the drawing path accepted or refused
+; - with the screen coordinates it used, which is what lets the host go and
+; look at those pixels.
+;
+; IT IS THE MODEL AND NOT THE SCREEN, and that distinction is the point rather
+; than a shortcoming. The grid is what the interpreter BELIEVES is on display;
+; tools/zharness.py photographs the screen at the same instant and compares.
+; Agreeing, they are evidence; disagreeing, they say which half is wrong - a
+; grid that holds the box against a blank screen is a drawing bug, and an empty
+; grid against a blank screen is a window-model bug. One wire alone cannot tell
+; those apart, and they need opposite fixes.
+;
+; Markers are `[[ZH:NAME arg arg]]`, on a line of their own, decimal, unsigned:
+; a Z-machine window number of -1 arrives as 65535 and the host reads it back.
+; The upper-window dump is bracketed by UPPER/`/UPPER` and its rows are wrapped
+; in '|' so a trailing space is still a character the host can count.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; zh_num - AX as unsigned decimal, no padding
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+zh_num:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    xor cx, cx                      ; CX counts the digits pushed
+.split:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .split
+.emit:
+    pop ax
+    add al, '0'
+    call zh_putc
+    loop .emit
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zh_evbeg / zh_evnum / zh_evend - a marker with any number of arguments
+; in:  SI = the event's name (zh_evbeg), AX = an argument (zh_evnum)
+; out: nothing; all three preserve every register
+;
+; Three pieces rather than one call per arity, because the arities run from
+; zero (PAINT) to eleven (GEOM) and a routine per shape is ten routines.
+; -----------------------------------------------------------------------------
+zh_evbeg:
+    push ax
+    push si
+    call zh_nl
+    mov si, zh_m_open
+    call zh_puts
+    pop si
+    push si
+    call zh_puts
+    pop si
+    pop ax
+    ret
+
+zh_evnum:
+    push ax
+    mov al, ' '
+    call zh_putc
+    pop ax
+    call zh_num
+    ret
+
+zh_evend:
+    push si
+    mov si, zh_m_close
+    call zh_puts
+    call zh_nl
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; zh_ev1 - the common shape: one name, one number
+; in:  SI = the name, AX = the number; preserves every register
+; -----------------------------------------------------------------------------
+zh_ev1:
+    call zh_evbeg
+    call zh_evnum
+    call zh_evend
+    ret
+
+; -----------------------------------------------------------------------------
+; zh_pdata - what @picture_data answered
+; in:  AX = picture number, DX = width, CX = height; 0 x 0 = unavailable
+; out: nothing; preserves every register
+;
+; Worth a marker of its own because the Standard lets this answer "no such
+; picture" (8.8.6.1) and a story LAYS ITSELF OUT around the reply. A wrong size
+; here is invisible in a transcript and rearranges the whole screen.
+; -----------------------------------------------------------------------------
+zh_pdata:
+    push ax
+    push si
+    mov si, zh_m_pdata
+    call zh_evbeg
+    call zh_evnum                   ; AX = the picture number
+    mov ax, dx
+    call zh_evnum                   ; ...width
+    mov ax, cx
+    call zh_evnum                   ; ...and height
+    call zh_evend
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zh_snap - the window state, at a moment the host chose
+; out: nothing; preserves every register INCLUDING ES and SI
+;
+; ES and SI are the worker's live program counter (docs/FROTZ-PLAN.md 3.1) and
+; zw_upptr loads ES to reach the grid, so the save here is load-bearing rather
+; than tidy. Called just before READ and KEY - the two moments the story is
+; quiescent and the host is about to photograph the screen.
+;
+; GEOM is emitted with it because a grid row means nothing to the host without
+; the pixels it occupies: row r of the upper window is at ty + (stat + r)*lead,
+; and every term of that is a live value on a resizable window, not a constant.
+; -----------------------------------------------------------------------------
+zh_snap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    ; v6 HAS NO CHARACTER GRID TO DUMP. Its eight windows are pixel-addressed
+    ; and zwin6.inc owns them; every name below belongs to zwin.inc and would
+    ; report the state a v1-5 story left behind, which is worse than reporting
+    ; nothing because the host cannot tell it is stale. The picture markers are
+    ; where the v6 evidence is, and they are emitted from zpic.inc regardless.
+    cmp byte [zf_ver], 6
+    je .out
+
+    ; THE GFX LOCK, and taking it here is not politeness. zi_readline and
+    ; zi_readchar drop it before they wait, because a worker that waits under
+    ; the lock is a hung machine (SPEC.md 20.6) - so this runs UNLOCKED, and
+    ; the row builders below fill zw_rbuf, which is the same one-row scratch
+    ; the UI task's W_PAINT uses. Without the lock a repaint landing mid-dump
+    ; gets a row this file overwrote underneath it: the harness would corrupt
+    ; the very screen it exists to measure, occasionally, and the report would
+    ; be a picture of the harness rather than of the interpreter.
+    ;
+    ; Holding it here is legal where waiting under it is not. Nothing below
+    ; yields: it is memory reads and polled port writes, every one of them
+    ; bounded (zh_putc drops a byte rather than spin for ever).
+    call OSAPI_GFX_LOCK
+
+    mov si, zh_m_geom
+    call zh_evbeg
+    mov ax, [zw_x0]
+    call zh_evnum
+    mov ax, [zw_y0]
+    call zh_evnum
+    mov ax, [zw_w]
+    call zh_evnum
+    mov ax, [zw_h]
+    call zh_evnum
+    mov ax, [zw_tx]
+    call zh_evnum
+    mov ax, [zw_ty]
+    call zh_evnum
+    mov ax, [zw_cols]
+    call zh_evnum
+    mov ax, [zw_rows]
+    call zh_evnum
+    mov ax, [zw_upper]
+    call zh_evnum
+    call zw_statrows
+    call zh_evnum
+    mov ax, ZF_LEAD
+    call zh_evnum
+    mov ax, [zw_uphold]             ; both counts, because the difference is
+    call zh_evnum                   ; the whole of the quote-box story
+    call zh_evend
+
+    ; --- the upper window, straight out of the grid a repaint would use ------
+    ; [zw_uphold] rows, matching zw_up_draw exactly: a row the story has given
+    ; up but which is still displayed is on the screen the host photographs,
+    ; and dumping only the owned rows would report it as ink with no model
+    ; behind it.
+    mov si, zh_m_upper
+    call zh_evbeg
+    mov ax, [zw_uphold]
+    call zh_evnum
+    mov ax, [zw_cols]
+    call zh_evnum
+    call zh_evend
+
+    mov al, [zw_style]              ; banked once for both dumps; the builders
+    mov [zw_lstyle], al             ; below adopt each row's own style
+
+    mov cx, [zw_uphold]
+    jcxz .updone
+    xor bx, bx                      ; BX = the grid row
+.uprow:
+    push cx
+    call zw_rowfill                 ; spaces to [zw_cols], NUL-terminated
+    mov byte [zw_style], ZST_ROMAN
+    mov ax, bx
+    call zw_upptr                   ; ES:DI = the row's record, CF=1 no grid
+    jc .upemit
+    mov cl, [es:di]                 ; ...and its length byte
+    xor ch, ch
+    jcxz .upsty
+    mov al, [es:di+1]               ; the style it was written in, exactly as
+    mov [zw_style], al              ; zw_up_draw adopts it
+.upsty:
+    cmp cx, [zw_cols]
+    jbe .uplen
+    mov cx, [zw_cols]
+.uplen:
+    jcxz .upemit
+    mov si, di
+    add si, ZW_LHDR
+    mov di, zw_rbuf                 ; DS:DI - zw_rowfill left the NUL at [cols]
+.upcp:
+    mov al, [es:si]
+    inc si
+    cmp al, ' '
+    jae .upkeep
+    mov al, ' '                     ; a cell the story never wrote is a blank,
+.upkeep:                            ; and the claim's zero would end the line
+    mov [di], al
+    inc di
+    loop .upcp
+.upemit:
+    call zh_row
+    inc bx
+    pop cx
+    loop .uprow
+.updone:
+    mov si, zh_m_upend
+    call zh_evbeg
+    call zh_evend
+
+    ; --- and the lower window, through zwin's OWN row builders --------------
+    ; zw_storedinto / zw_liveinto are what zw_low_draw calls, so this cannot
+    ; drift from what is actually drawn - a dump with its own idea of which
+    ; line goes where would agree with the screen only by luck, and the whole
+    ; point of the dump is to be evidence about the screen.
+    ; THE LIVE ROW AND THE PENDING WORD are arguments three and four, and they
+    ; are what keeps the host from reporting the prompt as a lost character.
+    ; zwin draws one OSAPI_FONT_RUN per WORD (zwin.inc's opening note), so a
+    ; word with no space after it yet - '>' at a prompt is exactly that - is in
+    ; zw_wbuf and NOT on the glass, while zw_liveinto, which a repaint uses,
+    ; composes it into the row. Both are right. The host subtracts the pending
+    ; word from the live row before comparing with the screen, and puts it back
+    ; after a repaint, at which point it IS drawn.
+    mov si, zh_m_lower
+    call zh_evbeg
+    call zw_lowrows
+    call zh_evnum
+    mov ax, [zw_cols]
+    call zh_evnum
+    mov ax, [zw_sbcount]
+    sub ax, [zw_sbtop]
+    jnc .havelive
+    mov ax, 0xFFFF                  ; scrolled off the top: no live row here
+.havelive:
+    call zh_evnum
+    mov ax, [zw_wbn]
+    call zh_evnum
+    call zh_evend
+
+    call zw_lowrows                 ; the live style was banked above
+    mov cx, ax
+    jcxz .lowdone
+    mov bx, [zw_sbtop]              ; BX = the logical line
+.lowrow:
+    push cx
+    call zw_rowfill
+    mov byte [zw_style], ZST_ROMAN
+    mov ax, bx
+    cmp ax, [zw_sbcount]
+    ja .lowemit                     ; past the live line: a blank row
+    jb .lowstored
+    call zw_liveinto
+    jmp short .lowemit
+.lowstored:
+    call zw_storedinto
+.lowemit:
+    call zh_row
+    inc bx
+    pop cx
+    loop .lowrow
+.lowdone:
+    mov al, [zw_lstyle]
+    mov [zw_style], al
+    mov si, zh_m_lowend
+    call zh_evbeg
+    call zh_evend
+
+    call OSAPI_GFX_UNLOCK
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zh_row - zw_rbuf as one dump line: '|', the row padded to [zw_cols], '|'
+; out: nothing; preserves every register
+;
+; The bars are not decoration. A row's trailing spaces are as much a fact as
+; its letters - a status line is a run of text and then deliberate blank - and
+; without a right-hand delimiter every transport between here and the host is
+; free to strip them.
+; -----------------------------------------------------------------------------
+zh_row:
+    push ax
+    push cx
+    push si
+    mov al, [zw_style]              ; THE ROW'S STYLE, ahead of its text. A row
+    xor ah, ah                      ; of spaces in REVERSE is a black bar - an
+    call zh_num                     ; Inform quote box is framed with three of
+                                    ; them - so its characters say blank and
+                                    ; its pixels are ink, and both are right.
+                                    ; Without this the host has no way to know
+                                    ; that and reports the frame as a defect.
+    mov al, '|'
+    call zh_putc
+    mov si, zw_rbuf
+    xor cx, cx                      ; CX = characters emitted
+.ch:
+    mov al, [si]
+    or al, al
+    jz .pad
+    cmp al, ' '
+    jae .keep
+    mov al, ' '
+.keep:
+    call zh_putc
+    inc si
+    inc cx
+    cmp cx, [zw_cols]
+    jb .ch
+.pad:
+    cmp cx, [zw_cols]
+    jae .end
+    mov al, ' '
+    call zh_putc
+    inc cx
+    jmp short .pad
+.end:
+    mov al, '|'
+    call zh_putc
+    call zh_nl
+    pop si
+    pop cx
+    pop ax
+    ret
+
 zh_m_open:  db '[[ZH:', 0
 zh_m_close: db ']]', 0
 zh_m_ready: db 'READY', 0
@@ -250,4 +633,18 @@ zh_m_halt:  db 'HALT', 0
 zh_m_quit:  db 'QUIT', 0
 zh_m_read:  db 'READ', 0
 zh_m_key:   db 'KEY', 0
+zh_m_geom:  db 'GEOM', 0
+zh_m_upper: db 'UPPER', 0
+zh_m_upend: db '/UPPER', 0
+zh_m_lower: db 'LOWER', 0
+zh_m_lowend: db '/LOWER', 0
+zh_m_split: db 'SPLIT', 0
+zh_m_win:   db 'WIN', 0
+zh_m_erase: db 'ERASE', 0
+zh_m_upclr: db 'UPCLR', 0
+zh_m_paint: db 'PAINT', 0
+zh_m_pic:   db 'PIC', 0
+zh_m_picat: db 'PICAT', 0
+zh_m_picno: db 'PICNO', 0
+zh_m_pdata: db 'PDATA', 0
 zh_story:   db 'STORY.DAT', 0

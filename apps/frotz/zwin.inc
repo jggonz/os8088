@@ -84,8 +84,33 @@ ZW_SB_ARR    equ 11                 ; arrow cell at each end
 ZW_SB_STEP   equ 3                  ; rows an arrow click steps
 ZW_GROW      equ 13                 ; the kernel's grow box, bottom right
 
+; --- THE TWO UPPER-WINDOW COUNTS, and why there are two ----------------------
+; [zw_upper] is how many rows the STORY owns. [zw_uphold] is how many are still
+; ON THE GLASS, and it is never smaller.
+;
+; They differ because shrinking the upper window does not erase it. Standard
+; 8.7.2 leaves the case open and every interpreter worth matching leaves those
+; pixels alone: the rows revert to the lower window and keep what was in them
+; until its own text scrolls over them. That is not a curiosity - it is how
+; every Inform quote box works. `box` splits the window large, prints the box,
+; selects the lower window and splits back to the status line's height, so a
+; window model that repaints on a shrink erases every quote box in existence
+; the instant it is drawn. BEAR.Z5 and CURSES.Z5 both open on one.
+;
+; Keeping the rows in the GRID rather than merely leaving them on screen is the
+; part that matters here. Anything on the glass that no model holds is erased
+; by the first uncover, and this window is repainted from the model by
+; construction (SPEC.md 11, 59.5) - so "do not repaint on a shrink" would trade
+; a guaranteed defect for an intermittent one. zw_up_draw draws [zw_uphold]
+; rows, the lower window starts below them, and the hold is given back the
+; moment the lower window actually needs the space (zw_scroll1).
+;
+; PERFORMANCE: this REMOVES the repaint a shrink used to cost and adds one, at
+; most once per box, when the lower window first scrolls afterwards. A story
+; that never boxes never pays anything (PERFORMANCE.md Part 5).
+;
 ; --- private state, from this module's slack range (zbss.inc 10) -------------
-; ZWIN_SLACK is 256 bytes and this uses 230 of them.
+; ZWIN_SLACK is 256 bytes and this uses 232 of them.
 %define zw_tx     (os88_image_end + ZWIN_SLACK + 0)   ; word: text origin x
 %define zw_ty     (os88_image_end + ZWIN_SLACK + 2)   ; word: text origin y
 %define zw_sbr    (os88_image_end + ZWIN_SLACK + 4)   ; word: bar's right edge
@@ -102,6 +127,8 @@ ZW_GROW      equ 13                 ; the kernel's grow box, bottom right
 %define zw_lstyle (os88_image_end + ZWIN_SLACK + 20)  ; byte: live style, banked
 %define zw_rbuf   (os88_image_end + ZWIN_SLACK + 22)  ; 112: one row, for FONT_RUN
 %define zw_stat   (os88_image_end + ZWIN_SLACK + 134) ; 96: the status line
+%define zw_uphold (os88_image_end + ZWIN_SLACK + 230) ; word: upper rows still
+                                                      ; displayed; >= zw_upper
 
 ; =============================================================================
 ; Geometry
@@ -210,6 +237,15 @@ zw_bounds:
     jbe .upok
     mov [zw_upper], bx
 .upok:
+    cmp [zw_uphold], bx             ; the held rows are clamped by the same
+    jbe .holdok                     ; window, or a resize leaves the lower
+    mov [zw_uphold], bx             ; one drawing from below the bottom
+.holdok:
+    mov ax, [zw_upper]              ; ...and the invariant, restated rather
+    cmp [zw_uphold], ax             ; than assumed: never fewer held than owned
+    jae .holdinv
+    mov [zw_uphold], ax
+.holdinv:
     mov byte [zw_geom], 1
     clc
     jmp short .out
@@ -242,10 +278,16 @@ zw_statrows:
     pop bx
     ret
 
-; zw_lowtop  - out AX = the first screen row the lower window owns
+; zw_lowtop  - out AX = the first screen row the lower window may DRAW in
+;
+; [zw_uphold] and not [zw_upper]: rows the story has given up but which are
+; still on the glass belong to the lower window in the Standard's terms and are
+; not available to it here until zw_scroll1 takes them back. Everything that
+; lays the lower window out goes through this, which is what keeps the two
+; counts from having to be reasoned about anywhere else.
 zw_lowtop:
     call zw_statrows
-    add ax, [zw_upper]
+    add ax, [zw_uphold]
     ret
 
 ; zw_lowrows - out AX = how many rows it owns; never 0 (zw_bounds guarantees
@@ -739,6 +781,24 @@ zw_scroll1:
     push cx
     push dx
     push si
+    ; THE MOMENT THE HELD ROWS GO BACK. A scroll is the lower window saying it
+    ; has run out of room, and that is exactly when a real interpreter's scroll
+    ; carries a quote box off the top. Giving the rows back instead of scrolling
+    ; is the same outcome by a shorter route: the band grows by what was held,
+    ; so the line that needed a new row now has one, and the repaint draws the
+    ; lower window over where the box was. Once per box, never per line.
+    mov ax, [zw_upper]
+    cmp [zw_uphold], ax
+    jbe .band
+    mov [zw_uphold], ax
+    call zw_snap                    ; the view is pinned against a bigger band
+    call zw_liverow                 ; ...so the live row moved; zw_break set it
+    jc .repaint                     ; from the old one and would be stale
+    mov [zw_row], ax
+.repaint:
+    call zw_paint
+    jmp .out
+.band:
     call zw_lowtop
     call zw_rowy
     mov bx, dx                      ; BX = y1, the band's top
@@ -1243,6 +1303,17 @@ zw_upputc:
     jc .nogrid
     mov al, [zw_rbuf]
     mov [es:bx+di+ZW_LHDR], al
+    mov al, [zw_style]              ; ...IN THE STYLE IT WAS WRITTEN IN. The
+    mov [es:di+1], al               ; row header has always had this byte and
+                                    ; nothing filled it, so a repaint drew the
+                                    ; upper window roman - and an Inform quote
+                                    ; box is `style reverse`, so it came back
+                                    ; from an uncover as black text on white
+                                    ; with its box gone. One style per row is
+                                    ; the same compromise the scrollback makes
+                                    ; and is documented with it (SPEC.md
+                                    ; 59.11): a status line or a box is written
+                                    ; in one style, which is the real case.
     mov al, bl
     inc al
     cmp al, [es:di]
@@ -1337,6 +1408,13 @@ zw_paint:
     push es
     call zw_bounds
     jc .out
+%ifdef ZHARNESS
+    push si                         ; a repaint is the moment an upper window
+    mov si, zh_m_paint              ; with no backing grid loses its contents,
+    call zh_evbeg                   ; so the host has to know one happened
+    call zh_evend
+    pop si
+%endif
     call zw_status_draw
     call zw_up_draw
     call zw_low_draw
@@ -1367,20 +1445,24 @@ zw_up_draw:
     push es
     mov al, [zw_style]
     mov [zw_lstyle], al
-    mov byte [zw_style], ZST_ROMAN  ; 8.7.2.4: the upper window is plain and
-    mov cx, [zw_upper]              ; fixed pitch, which this font always is
-    jcxz .done
+    mov cx, [zw_uphold]             ; HELD rows are drawn too - that is what
+    jcxz .done                      ; makes a quote box survive a repaint
     call zw_statrows
     mov dx, ax                      ; DX = screen row
     xor bx, bx                      ; BX = grid row
 .row:
     call zw_rowfill
+    mov byte [zw_style], ZST_ROMAN  ; the default for a row nothing has written
     mov ax, bx
     call zw_upptr
     jc .draw
     push cx
     mov cl, [es:di]
     xor ch, ch
+    jcxz .nostyle                   ; an empty row keeps ROMAN whatever byte
+    mov al, [es:di+1]               ; the claim happens to hold: a stale
+    mov [zw_style], al              ; REVERSE would paint a bar of background
+.nostyle:
     cmp cx, [zw_cols]
     jbe .len
     mov cx, [zw_cols]
@@ -1823,6 +1905,12 @@ zw_split:
     jbe .cap
     mov ax, ZW_UPMAX
 .cap:
+%ifdef ZHARNESS
+    push si                         ; the size AFTER the cap, which is the one
+    mov si, zh_m_split              ; that decides what the reader sees
+    call zh_ev1
+    pop si
+%endif
     mov bx, ax
     cmp byte [zf_ver], 4
     jae .nov3
@@ -1831,9 +1919,27 @@ zw_split:
     cmp bx, [zw_upper]
     je .cursor
     mov [zw_upper], bx
-    call zw_bounds                  ; re-clamp against the live geometry
+    cmp byte [zf_ver], 4
+    jb .moved                       ; v3 CLEARED the window a few lines above
+                                    ; (8.6.1.1.2), so there is nothing left to
+                                    ; hold and the bands really did move -
+                                    ; holding rows it had just blanked would
+                                    ; leave a blank strip above the story
+    cmp bx, [zw_uphold]
+    jbe .shrunk                     ; A SHRINK. The rows the story gave up keep
+                                    ; what is in them, on the glass and in the
+                                    ; grid, so the drawn bands have not moved
+                                    ; and there is NOTHING TO REPAINT - which
+                                    ; is both the correct screen and one fewer
+                                    ; full repaint than this used to cost.
+.moved:
+    mov [zw_uphold], bx             ; a grow past what is displayed: the lower
+    call zw_bounds                  ; window really is a different band now
     call zw_snap
-    call zw_paint                   ; the lower window is a different band now
+    call zw_paint
+    jmp short .cursor
+.shrunk:
+    call zw_bounds                  ; re-clamp only; nothing has moved
 .cursor:
     ; 8.7.2.1.1 / 8.7.2.2: a cursor the new size swallowed goes back to (1,1)
     mov ax, [zw_urow]
@@ -1862,6 +1968,16 @@ zw_setwin:
     mov word [zw_urow], 1
     mov word [zw_ucol], 1
 .out:
+%ifdef ZHARNESS
+    push ax
+    push si
+    mov al, [zw_cur]
+    xor ah, ah
+    mov si, zh_m_win
+    call zh_ev1
+    pop si
+    pop ax
+%endif
     pop ax
     ret
 
@@ -1937,16 +2053,25 @@ zw_upclear:
     push dx
     push di
     push es
-    mov cx, [zw_upper]
-    jcxz .out
-    call zw_statrows
-    mov dx, ax
-    xor bx, bx
+%ifdef ZHARNESS
+    push si                         ; how many rows are about to go blank; a
+    mov si, zh_m_upclr              ; box that vanishes leaves this behind it
+    mov ax, [zw_upper]
+    call zh_ev1
+    pop si
+%endif
+    mov cx, [zw_uphold]             ; every row that is DISPLAYED, not only the
+    jcxz .out                       ; ones the story still owns: a clear that
+    call zw_statrows                ; left a held box on the glass would leave
+    mov dx, ax                      ; it there for ever, with nothing able to
+    xor bx, bx                      ; address it
 .row:
     mov ax, bx
     call zw_upptr
     jc .blank
-    mov byte [es:di], 0
+    mov word [es:di], 0             ; length AND style: a cleared row that kept
+                                    ; a REVERSE byte would come back from the
+                                    ; next repaint as a bar of black
 .blank:
     mov ax, dx
     call zw_blank
@@ -1954,8 +2079,15 @@ zw_upclear:
     inc dx
     loop .row
 .out:
-    mov word [zw_urow], 1
-    mov word [zw_ucol], 1
+    mov ax, [zw_upper]              ; nothing is held any more; the lower
+    cmp [zw_uphold], ax             ; window gets those rows back - and if it
+    je .noheld                      ; really did, its band just grew and the
+    mov [zw_uphold], ax             ; rows it gained are blank on screen while
+    call zw_snap                    ; the scrollback has content for them.
+    call zw_paint                   ; @erase_window 1 over a held box is the
+.noheld:                            ; path that gets here; the others are
+    mov word [zw_urow], 1           ; followed by a repaint of their own and
+    mov word [zw_ucol], 1           ; find nothing to release
     pop es
     pop di
     pop dx
@@ -1971,6 +2103,9 @@ zw_lowclear:
     push ax
     push bx
     push cx
+    mov ax, [zw_upper]              ; FIRST: the held rows are the lower
+    mov [zw_uphold], ax             ; window's, and a story clearing it means
+                                    ; the whole band, box included
     mov word [zw_sbhead], 0
     mov word [zw_sbcount], 0
     mov word [zw_sbtop], 0
@@ -2005,6 +2140,12 @@ zw_lowclear:
 ; -----------------------------------------------------------------------------
 zw_erasewin:
     push ax
+%ifdef ZHARNESS
+    push si                         ; unsigned: -1 and -2 arrive as 65535/65534
+    mov si, zh_m_erase
+    call zh_ev1
+    pop si
+%endif
     cmp byte [zw_geom], 0
     jne .have
     call zw_bounds

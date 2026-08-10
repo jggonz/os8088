@@ -5,7 +5,8 @@
     python3 tools/zharness.py ADVENT.Z3         # play its script, print the log
     python3 tools/zharness.py ADVENT.Z3 --repl  # ...or type at it yourself
     python3 tools/zharness.py --all --compare   # every story, diffed vs dfrotz
-    make zcheck                                 # the same thing, as a gate
+    python3 tools/zharness.py --all --graphics  # ...and what is on the SCREEN
+    make zcheck / make zgfx                     # the same two, as gates
 
 WHAT THIS IS FOR. `make ztest` asks whether an opcode is right one opcode at a
 time, against tests/frotz/zopstest.inf - a story written to be a test. This
@@ -13,6 +14,38 @@ asks the other question, which that one cannot: does a REAL story run. The
 answers differ. zopstest found @div's rounding; this found a branch that
 decoded correctly, executed correctly, and left the program counter in a form
 the next instruction's guard rejected.
+
+AND `--graphics` ASKS A THIRD, which neither of the others can: what does the
+reader SEE. A transcript is characters, and a story that draws a quote box into
+the upper window and then throws it away prints exactly the same characters as
+one that keeps it - so `--compare` is structurally blind to every defect that
+is about the screen rather than the words. BEAR.Z5 sat with a blank band at the
+top of its window matching dfrotz perfectly for as long as anyone had looked.
+
+Three checks, and only the third needs a reference (SPEC.md 59.14):
+
+    model vs pixels   every row the interpreter says holds text is drawn, and
+                      every row it says is blank is not. Read by UNIFORMITY, so
+                      a reversed status line and a coloured scene do not fool it
+    across a repaint  the same, on a window just redrawn from the model, which
+                      is where anything on the glass the model does not hold
+                      goes missing
+    opening screen    against tests/frotz/screens - the real curses Frotz's own
+                      screen, photographed by tools/zref.py and committed
+    pictures          every rectangle the interpreter said it blitted, read
+                      back off the glass and held to the colour that picture
+                      is. Only tests/frotz/zpictest.inf has any, because
+                      @draw_picture is v6 and nothing that ships is
+
+The first two need no golden and no second interpreter, which is what makes
+them worth having: they are the drawing path against its own bookkeeping, and
+they say WHICH half is wrong. A grid holding a box against a blank band is a
+drawing defect; an empty grid against a blank band is a window-model defect.
+
+EVERY GRAPHICS COMPLAINT LEAVES A PNG in build/zh/, and the raw wire - markers,
+both windows' grids, every split, repaint and picture - is in <story>.wire. The
+<story>.log beside it is the prose with all of that stripped out, which is the
+wrong file to open when the question is graphical.
 
 HOW IT WORKS. build/zh/frotz.o88 is apps/frotz built with -DZHARNESS, which
 gives the interpreter a teletype on COM4: every character the story prints
@@ -63,6 +96,7 @@ BUILD = os.path.join(ROOT, "build")
 ZHDIR = os.path.join(BUILD, "zh")
 STORYDIR = os.path.join(BUILD, "stories")
 SCRIPTDIR = os.path.join(ROOT, "tests", "frotz", "scripts")
+SCREENDIR = os.path.join(ROOT, "tests", "frotz", "screens")
 QMP = os.path.join(BUILD, "qmp.sock")
 ZHSOCK = os.path.join(BUILD, "zh.sock")
 PIDFILE = os.path.join(BUILD, "qemu.pid")
@@ -109,8 +143,56 @@ NOTICES = REFUSALS + (
 
 BOOT_WAIT = 25.0                                # to a usable desktop
 READY_WAIT = 40.0                               # ...and to the story's banner
-TURN_WAIT = 90.0                                # one command; a v8 game is slow
+# How long a story may be SILENT before it is called stuck, and how long one
+# turn may run however talkative it is. Silence rather than elapsed time,
+# because the two failures are different and a fixed per-turn budget confuses
+# them: Photopia answers a single `look` with several screenfuls and took more
+# than ninety seconds to do it, which was reported as a hang with a screendump
+# showing the story mid-sentence and plainly still working. A story that is
+# still putting bytes on the wire is not stuck; one that has stopped is, in a
+# second or two rather than a minute.
+#
+# 150 SECONDS OF IT, and the number is large for a reason worth knowing: THE
+# WIRE RUNS AHEAD OF THE GLASS. zh_screenc puts a character on the port at the
+# moment the stream produces it, and zw_putc draws it afterwards - so a story
+# that prints three screenfuls empties them onto the wire in a moment and then
+# goes quiet for as long as it takes to paint them. Photopia does exactly that
+# and was reported stuck at a prompt it had already reached, with a screendump
+# of it mid-paragraph and plainly working.
+# 300 of them, because 150 was not enough under load: every story passes on its
+# own, and a back-to-back sweep of fifteen would occasionally call a small one
+# stuck with a screendump of it plainly mid-conversation. A false STUCK is the
+# expensive failure here - it costs a re-run and reads like a defect - and the
+# only thing a larger budget costs is how long a genuine hang takes to admit.
+TURN_QUIET = 300.0
+TURN_CAP = 900.0                                # a livelock still has to end
+
+# The SYNCHRONISING markers - the five the run's control flow turns on. They
+# take no arguments, which is what keeps them distinguishable from the window
+# and picture events below without a second pass over the stream.
 MARK = re.compile(rb"\[\[ZH:(READY|READ|KEY|HALT|QUIT)\]\]")
+
+# ...and everything else the guest says about its windows (apps/frotz/
+# zharness.inc): a name and any number of unsigned decimal arguments.
+#
+# ANCHORED TO A WHOLE LINE, for the reason zh_mark brackets them in the first
+# place: every byte of "[[ZH:UPPER 1 2]]" is printable, so a story could print
+# one, and the guest's own defence is that a marker occupies a line of its own.
+# A dumped row is wrapped in bars and can therefore never be one, whatever the
+# story wrote into that window.
+EVENT = re.compile(rb"^\[\[ZH:(/?[A-Z]+)((?: \d+)*)\]\]$", re.M)
+
+# A dumped row: the style it is drawn in, then the text between bars. The bars
+# are there because a status line's trailing blank is a fact and every
+# transport between the guest and here would otherwise eat it; the style is
+# there because a row of spaces in REVERSE is a black bar, and its characters
+# and its pixels then disagree without either being wrong.
+DUMPROW = re.compile(rb"^(\d+)\|(.*)\|$", re.M)
+
+ZST_REVERSE = 1                                 # apps/frotz/zwin.inc
+
+CELL_W = 8                                      # the kernel font (SPEC.md 6)
+CELL_H = 8
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +304,28 @@ def screendump(path):
         return None
 
 
+def screen_pixels():
+    """The screen as (w, h, RGB bytes), through QEMU's own screendump.
+
+    tools/shot.py writes a PNG for a person to look at; this wants the pixels
+    themselves, so it borrows that file's P6 reader rather than growing a
+    second one. QEMU resolves the path against ITS cwd, so it has to be
+    absolute.
+    """
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import shot
+    ppm = os.path.join(ZHDIR, "frame.ppm")
+    os.makedirs(ZHDIR, exist_ok=True)
+    hmp(f'screendump "{os.path.abspath(ppm)}"')
+    try:
+        return shot.read_ppm(ppm)
+    finally:
+        try:
+            os.unlink(ppm)
+        except OSError:
+            pass
+
+
 def mouse(*args):
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mouse.py"),
                     QMP, *args], check=True, capture_output=True)
@@ -259,13 +363,31 @@ def build_image(story_path, name):
     -DZHARNESS binary play every story without a way to pass it an argument.
     """
     stage = os.path.join(ZHDIR, "stage")
+    if os.path.isdir(stage):
+        shutil.rmtree(stage)                    # no art left from a past story
     os.makedirs(stage, exist_ok=True)
     shutil.copyfile(story_path, os.path.join(stage, "STORY.DAT"))
+    files = [os.path.join(stage, "STORY.DAT")]
+
+    # ART TRAVELS WITH THE STORY, AND UNDER THE STORY'S NAME. zp_mkname derives
+    # the archive's name from [zi_story] (apps/frotz/zpic.inc), so a story
+    # renamed to STORY.DAT looks for STORY.PIX and would never find BRONZE.PIX
+    # sitting beside it. Two places are searched: next to the story, which is
+    # where tools/zpicgen.py leaves the fixture's, and build/, which is where
+    # the Makefile leaves the one it builds out of Bronze's Blorb.
+    stem = os.path.splitext(os.path.basename(story_path))[0]
+    for art in (os.path.splitext(story_path)[0] + ".PIX",
+                os.path.join(BUILD, stem.upper() + ".PIX")):
+        if os.path.exists(art):
+            shutil.copyfile(art, os.path.join(stage, "STORY.PIX"))
+            files.append(os.path.join(stage, "STORY.PIX"))
+            break
+
     img = os.path.join(ZHDIR, name + ".img")
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88disk.py"),
                     "-o", img, "--size", "1440",
-                    os.path.join(ZHDIR, "frotz.o88"),
-                    os.path.join(stage, "STORY.DAT"), "--folder", "SAVES"],
+                    os.path.join(ZHDIR, "frotz.o88"), *files,
+                    "--folder", "SAVES"],
                    check=True, capture_output=True)
     return img
 
@@ -291,6 +413,185 @@ def launch():
     dblclick(ROW_X, ROW_Y0 + STORY_ROW * ROW_H)
 
 
+# ---------------------------------------------------------------------------
+# What the guest says is on its screen
+# ---------------------------------------------------------------------------
+GEOM_FIELDS = ("x0", "y0", "w", "h", "tx", "ty", "cols", "rows", "upper",
+               "stat", "lead", "uphold")
+
+
+class Snapshot:
+    """The window model at one prompt: geometry, and both windows as text.
+
+    This is what the interpreter BELIEVES is displayed. It is not evidence
+    about the screen until it has been compared with the screen, which is what
+    check_pixels does - and the pair is the point. A grid holding a quote box
+    against a blank band is a drawing defect; an empty grid against a blank
+    band is a window-model defect, and the two need opposite fixes.
+    """
+
+    def __init__(self, geom, upper, lower, live=None, pending=0, styles=None):
+        self.geom = geom                        # {} until a GEOM has arrived
+        self.upper = upper                      # list of str, [cols] wide
+        self.lower = lower
+        self.live = live                        # index into lower, or None
+        self.pending = pending                  # bytes of zw_wbuf not yet drawn
+        self.styles = styles or []              # ZST_* per row, upper then lower
+
+    def live_row(self):
+        """Which screen row the pending word would land on, or None.
+
+        THE ONE ROW WHOSE GLASS STATE IS GENUINELY AMBIGUOUS, and it is worth
+        saying why rather than papering over it. zwin draws one FONT_RUN per
+        WORD, so a word with no space after it yet - the '>' of a prompt is
+        always one - sits in zw_wbuf undrawn. But a REPAINT composes the live
+        row through zw_liveinto, which includes zw_wbuf, so any repaint since
+        the word was buffered has put it on the glass. Both states are correct
+        and the model does not record which happened, so this row is checked
+        against both readings, and strictly - pending word and all - at the
+        repaint checkpoint, where there is no ambiguity left.
+        """
+        if self.live is None or not self.pending:
+            return None
+        index = len(self.upper) + self.live
+        return index if 0 <= index < len(self.rows()) else None
+
+    def rows(self):
+        """Every text row on screen, top to bottom.
+
+        The v1-3 status line is NOT here: the interpreter draws it with its own
+        OSAPI_FONT_RUN and it belongs to neither window (SPEC.md 59.5), so the
+        model has no record of it to report.
+        """
+        return self.upper + self.lower
+
+    def row_y(self, index):
+        """The top pixel row of screen row `index` (0 = the very first)."""
+        return self.geom["ty"] + index * self.geom["lead"]
+
+    def screen_rows(self):
+        """(screen row index, text) for every row the model claims to own."""
+        first = self.geom.get("stat", 0)
+        return list(enumerate(self.rows(), start=first))
+
+
+def parse_snapshot(chunk):
+    """The last GEOM/UPPER/LOWER block in `chunk`, as a Snapshot.
+
+    The LAST, because a segment of wire may carry more than one - a story that
+    reads a character and then a line snapshots twice - and the one that
+    describes the screen the host is about to photograph is the newest.
+    """
+    geom, upper, lower, where = {}, [], [], None
+    styles = {"UPPER": [], "LOWER": []}
+    live, pending = None, 0
+    for m in re.finditer(
+            rb"^\[\[ZH:(/?[A-Z]+)((?: \d+)*)\]\]$|^(\d+)\|(.*)\|$",
+            chunk, re.M):
+        name = m.group(1)
+        if name is None:                        # a dumped row
+            row = m.group(4).decode("latin-1")
+            if where in ("UPPER", "LOWER"):
+                (upper if where == "UPPER" else lower).append(row)
+                styles[where].append(int(m.group(3)))
+            continue
+        name = name.decode()
+        args = [int(v) for v in m.group(2).split()]
+        if name == "GEOM":
+            geom = dict(zip(GEOM_FIELDS, args))
+        elif name == "UPPER":
+            upper, where, styles["UPPER"] = [], "UPPER", []
+        elif name == "LOWER":
+            lower, where, styles["LOWER"] = [], "LOWER", []
+            live = args[2] if len(args) > 2 and args[2] != 0xFFFF else None
+            pending = args[3] if len(args) > 3 else 0
+        elif name in ("/UPPER", "/LOWER"):
+            where = None
+    return Snapshot(geom, upper, lower, live, pending,
+                    styles["UPPER"] + styles["LOWER"])
+
+
+def band_colour(pix, w, h, x, y, cw, ch):
+    """The one colour this rectangle is, or None if it is not one colour.
+
+    THE TEST IS UNIFORMITY, NOT INK, and that is what makes it survive
+    @set_colour and reverse video. A row of spaces is one flat colour whatever
+    the story chose - white, black under a reversed status line, blue in
+    Photopia - and a row with so much as one glyph in it is not. Counting dark
+    pixels instead would call a reversed blank row "full of ink" and a
+    white-on-black letter "empty", and both readings are the wrong way round.
+    """
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(w, x + cw), min(h, y + ch)
+    if x1 <= x0 or y1 <= y0:
+        return b""                              # off-screen: nothing to see
+    first = pix[(y0 * w + x0) * 3:(y0 * w + x0) * 3 + 3]
+    for yy in range(y0, y1):
+        row = pix[(yy * w + x0) * 3:(yy * w + x1) * 3]
+        for i in range(0, len(row), 3):
+            if row[i:i + 3] != first:
+                return None
+    return first
+
+
+def band_is_uniform(pix, w, h, x, y, cw, ch):
+    return band_colour(pix, w, h, x, y, cw, ch) is not None
+
+
+def check_pixels(snap, frame, label, repainted=False):
+    """Every row the model describes, against the pixels under it.
+
+    Returns a list of complaints. A row the model says holds text must not be a
+    flat band of colour, and a row it says is blank must be exactly that. After
+    a repaint every row is read strictly; before one, the live row is allowed
+    either reading of its pending word (Snapshot.live_row says why).
+    """
+    if not snap.geom:
+        return []
+    w, h, pix = frame
+    g = snap.geom
+    live = None if repainted else snap.live_row()
+    bad = []
+    # v1-3: the INTERPRETER owes a status line and draws it with its own
+    # FONT_RUN, so it belongs to neither window and the model has no record of
+    # it to compare (SPEC.md 59.5). What can still be said is that it is there:
+    # the Standard requires the row, and a blank one is a defect whatever it
+    # was going to say.
+    for index in range(g.get("stat", 0)):
+        y = snap.row_y(index)
+        if band_is_uniform(pix, w, h, g["tx"], y, g["cols"] * CELL_W, CELL_H):
+            bad.append(f"{label}: row {index} is the interpreter's own status "
+                       f"line (v1-3) and nothing is drawn in it at y={y}")
+    for index, text in snap.screen_rows():
+        row = index - g.get("stat", 0)
+        style = snap.styles[row] if row < len(snap.styles) else 0
+        if not text.strip() and style & ZST_REVERSE:
+            # A ROW OF SPACES IN REVERSE VIDEO is a bar of background, and how
+            # much of the row it covers is not in the model - only the cells
+            # the story actually wrote are painted, and the grid records how
+            # many but not where they began. An Inform quote box is framed with
+            # three of these. Blank characters and inked pixels are both
+            # correct here, so the blank side of the test does not apply; the
+            # text side still does, on every other row.
+            continue
+        y = snap.row_y(index)
+        flat = band_is_uniform(pix, w, h, g["tx"], y, g["cols"] * CELL_W,
+                               CELL_H)
+        want = {bool(text.strip())}             # does the model expect ink?
+        if row == live:
+            trimmed = text.rstrip()[:-snap.pending]
+            want.add(bool(trimmed.strip()))
+        if (not flat) in want:
+            continue
+        if flat:
+            bad.append(f"{label}: row {index} holds {text.strip()[:40]!r} in "
+                       f"the model and nothing is on screen at y={y}")
+        else:
+            bad.append(f"{label}: row {index} is blank in the model and has "
+                       f"something drawn in it at y={y}")
+    return bad
+
+
 class Wire:
     """The guest's teletype: a byte stream with four markers in it."""
 
@@ -301,6 +602,40 @@ class Wire:
         self.buf = b""
         self.wire = bytearray()                 # exactly what the guest sent
         self.log = bytearray()                  # ...and what a person reads
+        self.seg = 0                            # wire consumed by a past mark
+        self.last_seg = b""                     # ...and the newest one's bytes
+        self.snap = None                        # the newest window snapshot
+        self.ready = False                      # READY has arrived
+        self.prompted = False                   # ...and a READ or KEY after it
+
+    def refused(self):
+        """Has the interpreter said, on screen, that it will not run this story?
+
+        A refusal is a PASS (SPEC.md 59.4/47) and it arrives as a notice on the
+        wire, so waiting out the silence budget to infer it is both slow and
+        backwards - BRONZE.Z8 spent five minutes proving something it had
+        already said in words.
+
+        BETWEEN READY AND THE FIRST PROMPT, and both ends matter. The harness
+        build opens B:\\STORY.DAT itself and can refuse it BEFORE it says READY,
+        so a short-circuit that ignored the lower bound turned the refusal into
+        a failed launch - which is a different thing and is reported
+        differently. After the first prompt the same sentences may be the story
+        quoting the interpreter back at itself.
+        """
+        if self.prompted or not self.ready:
+            return False
+        tail = bytes(self.wire[-4096:])
+        return any(r.encode("latin-1") in tail for r in REFUSALS)
+
+    def paints(self):
+        """How many full repaints the guest has reported so far.
+
+        The repaint check needs to know a repaint HAPPENED. A scroll that had
+        nowhere to go repaints nothing, and a check that silently did not run
+        is worse than one that failed - it reads as a pass.
+        """
+        return len(re.findall(rb"\[\[ZH:PAINT\]\]", self.wire))
 
     def pump(self):
         try:
@@ -315,14 +650,34 @@ class Wire:
         return True
 
     def await_mark(self, timeout):
-        """Read until a marker completes. Returns its name, or None on timeout."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        """Read until a marker completes. Returns its name, or None on timeout.
+
+        The wire since the PREVIOUS marker is parsed on the way past, so
+        self.snap always describes the moment the caller has just reached -
+        which is the moment it is entitled to photograph the screen.
+        """
+        quiet = time.time() + timeout
+        hard = time.time() + TURN_CAP
+        while time.time() < quiet and time.time() < hard:
             m = MARK.search(self.buf)
             if m:
+                end = len(self.wire) - len(self.buf) + m.end()
+                self.last_seg = bytes(self.wire[self.seg:end])
+                snap = parse_snapshot(self.last_seg)
+                if snap.geom:
+                    self.snap = snap
+                self.seg = end
                 self.buf = self.buf[m.end():]
-                return m.group(1).decode()
-            self.pump()
+                name = m.group(1).decode()
+                if name == "READY":
+                    self.ready = True
+                elif name in ("READ", "KEY"):
+                    self.prompted = True
+                return name
+            if self.pump():
+                quiet = time.time() + timeout   # bytes are progress
+                if self.refused():
+                    return None                 # said so; no need to time out
         return None
 
     def send_key(self, ch):
@@ -351,8 +706,199 @@ class Wire:
 
 
 def drain_transcript(raw):
-    """The wire, minus the markers, as something a person reads."""
-    return MARK.sub(b"", raw.replace(b"\r", b"")).decode("latin-1")
+    """The wire, minus the markers and the window dumps, for a person.
+
+    The dumps stay in the .wire file next to it: they are forty lines per
+    prompt and they would bury the prose, which is what this one is for.
+    """
+    raw = MARK.sub(b"", raw.replace(b"\r", b""))
+    raw = EVENT.sub(b"", raw)
+    return DUMPROW.sub(b"", raw).decode("latin-1")
+
+
+# ---------------------------------------------------------------------------
+# The graphics gate
+# ---------------------------------------------------------------------------
+def park_pointer():
+    """The mouse, off the window, before anything photographs it.
+
+    The pointer is drawn INTO the framebuffer, so a pointer resting over the
+    text would put pixels in a row the model calls blank - a failure report
+    about the harness's own cursor.
+    """
+    mouse("to", "4", "470")
+    time.sleep(0.3)
+
+
+# THERE IS NO forced repaint here, and there was one for a day. It sent
+# PgUp/PgDn - which belong to the interpreter and never reach the story - to
+# make the window redraw on demand. It also left DREAMHLD.Z8 with no further
+# prompt inside a seven-minute budget, every time, while the same run without
+# it finished cleanly: either a repaint of a full 41-row window under lock
+# contention with the worker is far slower than anything else here, or paging a
+# busy window is a real defect. Either way A HARNESS MAY NOT BE THE THING THAT
+# BREAKS THE RUN, and it is worth investigating on its own rather than through
+# a gate that fails for two reasons at once.
+#
+# Nothing is lost by dropping it. Stories provoke repaints themselves - any
+# @erase_window -1 does, and so does any @split_window that changes the split -
+# and repaint_settled below notices, so the strict comparison still happens. It
+# is what caught BEAR.Z5, whose @split_window 2 repaints just before the
+# prompt. When a run genuinely never repaints, the report says so rather than
+# counting a check that did not run as a pass.
+
+
+def dac6(rgb):
+    """A colour as the screen can actually show it.
+
+    The VGA DAC is SIX bits per channel, so palette entry 1 - 0x0000AA in
+    tools/os88pix.py's table - leaves the card as 0x0000A8 and that is what a
+    screendump reads back. Comparing the archive's byte against the scanout's
+    without this reports every picture on the disk as the wrong colour, which
+    is a fact about the hardware being read as a defect in the blitter.
+    """
+    return bytes(v & 0xFC for v in rgb)
+
+
+def read_expect(story_path):
+    """tools/zpicgen.py's picture table, or {} when the story has no art.
+
+    Keyed by picture number -> (palette index, rgb, width, height).
+    """
+    base = os.path.splitext(story_path)[0] + ".expect"
+    if not os.path.exists(base):
+        return {}
+    out = {}
+    for line in open(base):
+        if line.startswith("#") or not line.strip():
+            continue
+        num, index, r, g, b, w, h = (int(v) for v in line.split())
+        out[num] = (index, bytes((r, g, b)), w, h)
+    return out
+
+
+def check_pictures(segment, frame, expect, label):
+    """Every rectangle the interpreter said it blitted, read back off the glass.
+
+    The guest reports @draw_picture twice: PIC with the number and the origin
+    the STORY asked for, and PICAT with the screen rectangle it actually blitted
+    into after clamping to the window. Checking the second against the pixels is
+    what makes this a picture test rather than a test of our own arithmetic
+    about pictures - the interpreter can be wrong about where a picture went,
+    and a check that trusted PICAT's coordinates to find PICAT's pixels would
+    agree with it either way.
+
+    Every fixture picture is one flat colour (tools/zpicgen.py), so "solidly the
+    right colour" is decidable; a picture drawn at the wrong origin, at the
+    wrong size, from the wrong directory entry, or not at all, each fails it
+    differently and none of them passes.
+    """
+    if not expect or b"[[ZH:PIC" not in segment:
+        return [], set()                        # this turn drew no pictures
+    w, h, pix = frame
+    problems, num, seen = [], None, set()
+    for m in EVENT.finditer(segment):
+        name = m.group(1).decode()
+        args = [int(v) for v in m.group(2).split()]
+        if name == "PIC":
+            num = args[0]
+        elif name == "PICNO":
+            if args[0] in expect:
+                problems.append(f"{label}: picture {args[0]} is in the archive "
+                                f"and the interpreter refused to draw it")
+        elif name == "PICAT" and len(args) == 4:
+            px, py, pw, ph = args
+            if num not in expect:
+                problems.append(f"{label}: picture {num} is not in the archive "
+                                f"and something was blitted at {px},{py}")
+                continue
+            seen.add(num)
+            index, rgb, want_w, want_h = expect[num]
+            if pw > want_w or ph > want_h:
+                problems.append(f"{label}: picture {num} is {want_w}x{want_h} "
+                                f"and {pw}x{ph} was blitted")
+            got = band_colour(pix, w, h, px, py, pw, ph)
+            if got is None:
+                problems.append(f"{label}: picture {num} should be a solid "
+                                f"block of palette {index} and the "
+                                f"{pw}x{ph} at {px},{py} is not one colour")
+            elif dac6(got) != dac6(rgb):
+                problems.append(f"{label}: picture {num} should be palette "
+                                f"{index} {rgb.hex()} and the screen at "
+                                f"{px},{py} is {got.hex()}")
+    # Which of them turned up is the CALLER's tally, over the whole run rather
+    # than over one turn: a story is free to draw picture 1 now and picture 5
+    # three commands later, and a per-turn verdict would call each of them
+    # missing while the other was on screen.
+    return problems, seen
+
+
+def repaint_settled(segment):
+    """Did this prompt arrive on a freshly repainted window, with nothing since?
+
+    A repaint redraws every row from the model, pending word and all, so the
+    screen after one can be compared with the model STRICTLY. That is only true
+    if nothing was printed afterwards - a word buffered after the repaint is
+    undrawn again - so the test is that the tail of the segment, once the
+    markers and the window dumps are taken out of it, has no story text in it.
+
+    Stories provoke repaints themselves: @erase_window -1 does, and so does any
+    @split_window that changes the split. Noticing that costs nothing and is
+    what the repaint check rides on now that nothing forces one.
+    """
+    cut = segment.rfind(b"[[ZH:PAINT]]")
+    if cut < 0:
+        return False
+    tail = segment[cut + len(b"[[ZH:PAINT]]"):]
+    tail = EVENT.sub(b"", tail)
+    tail = DUMPROW.sub(b"", tail)
+    return not tail.strip()
+
+
+def check_opening(snap, story_path, stem):
+    """The opening screen, against the reference interpreter's own.
+
+    tests/frotz/screens/<stem>.txt is what the curses Frotz has on display at
+    this moment, generated by tools/zref.py. The test is that every word of it
+    is on OUR screen too, IN ORDER - a subsequence rather than an equality,
+    because our window carries scrollback the terminal has already lost and
+    extra content is not a defect. A quote box we drew and threw away is one:
+    its words are simply absent.
+    """
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import zref
+    gold = zref.read_golden(os.path.join(SCREENDIR, stem.lower() + ".txt"))
+    if gold is None:
+        return None, "no golden screen; `make zscreens` writes one"
+    cols, rows, shots = gold
+    if snap.geom.get("cols") != cols or snap.geom.get("rows") != rows:
+        return None, (f"the golden was taken at {cols}x{rows} and this window "
+                      f"is {snap.geom.get('cols')}x{snap.geom.get('rows')} - "
+                      f"run `make zscreens`")
+    # The reference's first row is the v1-3 status line, and ours is not in
+    # either window for the model to report (SPEC.md 59.5). Its PRESENCE is
+    # checked against the pixels instead; its wording is the one thing on the
+    # screen this comparison cannot reach, and saying so beats a heuristic that
+    # tries to guess which words were the score.
+    stat = snap.geom.get("stat", 0)
+    # The words BOTH takes of the reference agree on. A story may choose its
+    # opening with @random - CURSES.Z5 draws a different epigraph every time,
+    # and both interpreters seed from the clock (Standard 2.4) - so the words
+    # it rolled for cannot be required of anyone. What is left is everything it
+    # actually settled on, and that is still the whole of most openings.
+    want = zref.words(shots[0][stat:])
+    for extra in shots[1:]:
+        want = zref.common(want, zref.words(extra[stat:]))
+    have = zref.words(snap.rows())
+    i = 0
+    for word in have:
+        if i < len(want) and word == want[i]:
+            i += 1
+    if i == len(want):
+        return True, f"{len(want)} words of the opening screen, all present"
+    missing = " ".join(want[i:i + 10])
+    return False, (f"the opening screen is missing {len(want) - i} of "
+                   f"{len(want)} words the reference shows, from: {missing!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -361,11 +907,13 @@ def drain_transcript(raw):
 KEY_LIMIT = 40
 
 
-def next_prompt(w):
+def next_prompt(w, at_prompt=None):
     """Await the next marker, answering key-prompts ourselves.
 
     Returns READ, HALT, QUIT, or None on a timeout. KEY never reaches the
-    caller - it is not a turn.
+    caller - it is not a turn. `at_prompt` is called at BOTH, before the key
+    prompt is answered, because a title screen is only on display until it is:
+    the graphics checks have to run while the thing they are about is still up.
 
     BOUNDED, because "answer every key prompt" is a loop with no natural end.
     A story sitting in a @read_char loop - a menu whose space we are not
@@ -375,7 +923,9 @@ def next_prompt(w):
     """
     keys = 0
     while True:
-        m = w.await_mark(TURN_WAIT)
+        m = w.await_mark(TURN_QUIET)
+        if m in ("READ", "KEY") and at_prompt:
+            at_prompt(m)
         if m != "KEY":
             return m
         keys += 1
@@ -417,7 +967,115 @@ def load_script(stem):
     return default_script()
 
 
-def play(story_path, script, shot=None, verbose=True):
+class Graphics:
+    """The graphics checks, run at every prompt of one story's run.
+
+    Three questions, and they are deliberately different questions:
+
+      1. does the SCREEN agree with the MODEL - is every row the interpreter
+         says holds text actually drawn, and every row it says is blank
+         actually blank. This needs no reference interpreter and no golden: it
+         is the drawing path against its own bookkeeping.
+      2. does the model survive a REPAINT. An uncover or a resize redraws the
+         window from that bookkeeping, so anything on screen the model does not
+         hold disappears at the first one - which is the defect a person
+         describes as "it flashes up and then it is gone".
+      3. is the OPENING SCREEN what a real interpreter shows. This is the only
+         one that needs a golden, and it is the only one that can catch content
+         the model never held in the first place - a quote box that was drawn,
+         discarded, and correctly not redrawn.
+    """
+
+    def __init__(self, stem, story_path, verbose=True):
+        self.stem = stem
+        self.story_path = story_path
+        self.verbose = verbose
+        self.problems = []
+        self.prompts = 0
+        self.repainted = False                  # a repaint was really observed
+        self.opening = None                     # True / False / None = not run
+        self.opening_note = "not reached"
+        self.parked = False
+        self.shots = 0
+        self.expect = read_expect(story_path)
+        self.drew = set()                       # picture numbers actually seen
+
+    def at_prompt(self, w, kind):
+        self.prompts += 1
+        if not self.parked:
+            park_pointer()
+            self.parked = True
+
+        # A repaint the STORY provoked is the only kind taken now, and it
+        # arrives free on any story that erases the screen or moves its split.
+        strict = repaint_settled(w.last_seg)
+        label = f"prompt {self.prompts} ({kind})" + \
+                (", on a repainted window" if strict else "")
+        frame = screen_pixels()
+
+        # PICTURES FIRST, because they are the one check that does not need the
+        # character-window model - and v6, which is the only version that has
+        # @draw_picture, is the one version that does not have that model
+        # (SPEC.md 59.2: v6 replaces the whole thing with zwin6.inc).
+        if self.expect and b"[[ZH:PIC" in w.last_seg:
+            found, seen = check_pictures(w.last_seg, frame, self.expect, label)
+            self.drew |= seen
+            self.note(found, frame, label)
+
+        snap = w.snap
+        if snap is None or not snap.geom:
+            return
+        self.note(check_pixels(snap, frame, label, repainted=strict), frame,
+                  label)
+        if strict:
+            self.repainted = True
+
+        if self.prompts == 1:
+            ok, note = check_opening(snap, self.story_path, self.stem)
+            self.opening, self.opening_note = ok, note
+
+    def note(self, found, frame, label):
+        """Record complaints, and KEEP THE PICTURE that goes with them.
+
+        A row named as blank is not a thing anyone can act on. The frame it was
+        blank in is - and by the time the run ends the machine is gone, so it
+        has to be written here or not at all.
+        """
+        if not found:
+            return
+        self.problems += found
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import shot
+        w_, h_, pix = frame
+        png = os.path.join(ZHDIR, f"{self.stem.lower()}-gfx{self.shots}.png")
+        shot.png(png, w_, h_, pix)
+        self.shots += 1
+        self.problems.append(f"    ...the screen it happened on -> {png}")
+
+    def report(self):
+        for p in self.problems:
+            print(f"zharness:     {p}")
+        if self.opening is True:
+            print(f"zharness:   opening screen: {self.opening_note}")
+        elif self.opening is False:
+            print(f"zharness:   OPENING SCREEN DIVERGED: {self.opening_note}")
+        else:
+            print(f"zharness:   opening screen not compared: "
+                  f"{self.opening_note}")
+        if not self.repainted:
+            print("zharness:   the repaint check never ran - this story never "
+                  "repainted its own window")
+        missed = sorted(set(self.expect) - self.drew)
+        if missed:
+            print(f"zharness:   PICTURES NEVER DREW: {missed} are in the "
+                  f"archive and nothing was ever blitted for them")
+        elif self.expect:
+            print(f"zharness:   {len(self.expect)} pictures drawn and read "
+                  f"back off the screen")
+        return bool(self.problems) or self.opening is False or bool(missed)
+
+
+def play(story_path, script, shot=None, verbose=True, graphics=None):
     """Boot, launch, play the script. Returns (outcome, transcript, turns)."""
     stem = os.path.splitext(os.path.basename(story_path))[0]
     img = build_image(story_path, stem.lower())
@@ -433,13 +1091,27 @@ def play(story_path, script, shot=None, verbose=True):
                                                 # with a screendump showing it
                                                 # open and waiting.
     if w.await_mark(READY_WAIT) != "READY":
-        screendump(shot or os.path.join(ZHDIR, stem.lower() + "-nolaunch.png"))
-        return ("NOLAUNCH", w.text(), w.transcript(), 0)
+        # ONE RETRY OF THE WALK, because the walk is the fragile part and it
+        # fails in a way that is not about the interpreter at all: a
+        # double-click that lands before the desktop has finished drawing is
+        # decoded as two single clicks, and the run ends with a screendump of a
+        # bare desktop with the icon not even selected. Re-doing it costs a few
+        # seconds on the rare miss and turns a spurious red gate into a pass.
+        # A second failure is reported as it always was.
+        print("zharness:   the launch did not land; walking it again",
+              flush=True)
+        launch()
+        if w.await_mark(READY_WAIT) != "READY":
+            screendump(shot or os.path.join(ZHDIR,
+                                            stem.lower() + "-nolaunch.png"))
+            return ("NOLAUNCH", w.text(), w.transcript(), 0)
+
+    hook = (lambda kind: graphics.at_prompt(w, kind)) if graphics else None
 
     turns = 0
     outcome = "OK"
     for line in script:
-        mark = next_prompt(w)
+        mark = next_prompt(w, hook)
         if mark is None:
             outcome = "STUCK"
             break
@@ -453,7 +1125,7 @@ def play(story_path, script, shot=None, verbose=True):
     else:
         # The script ran out. One more marker settles whether the last command
         # completed cleanly or took the story down with it.
-        mark = next_prompt(w)
+        mark = next_prompt(w, hook)
         if mark in ("HALT", "QUIT"):
             outcome = mark
         elif mark is None:
@@ -462,6 +1134,12 @@ def play(story_path, script, shot=None, verbose=True):
     for _ in range(8):                          # let the tail arrive
         if not w.pump():
             break
+    # The RAW wire, markers and all. The transcript below is the prose a person
+    # reads; this is the evidence - which window each character went to, every
+    # split, every repaint, every picture - and a graphics failure is only
+    # diagnosable from it.
+    with open(os.path.join(ZHDIR, stem.lower() + ".wire"), "w") as f:
+        f.write(w.text())
     if outcome == "STUCK":
         shot_at = screendump(os.path.join(ZHDIR, stem.lower() + "-stuck.png"))
         if shot_at:
@@ -485,7 +1163,13 @@ def normalise(text):
     banners differ by design. So this compares the WORDS in order, which is
     what a wrong opcode changes and a different column count does not.
     """
-    text = MARK.sub(b"", text.encode("latin-1")).decode("latin-1")
+    raw = MARK.sub(b"", text.encode("latin-1"))
+    # ...and the window wire with it. The upper/lower dumps are this harness
+    # talking to itself about the screen; they are not the story's words, and
+    # a story is not diverging because its own status line got counted twice.
+    raw = EVENT.sub(b"", raw)
+    raw = DUMPROW.sub(b"", raw)
+    text = raw.decode("latin-1")
     text = re.sub(r"\[Frotz:.*", "", text)
     # dfrotz's own two lines of preamble, and the right-hand half of the status
     # line. os8088 composes the score and the move count with a separate
@@ -615,6 +1299,10 @@ def main():
                     help="diff the transcript against dfrotz")
     ap.add_argument("--repl", action="store_true",
                     help="boot it and type at it yourself")
+    ap.add_argument("--graphics", action="store_true",
+                    help="check the windows: model against pixels, across a "
+                         "repaint, and the opening screen against the "
+                         "reference interpreter's")
     ap.add_argument("--script", help="a command file, one line per turn")
     ap.add_argument("--shot", help="screendump here if the launch never lands")
     args = ap.parse_args()
@@ -638,8 +1326,11 @@ def main():
 
         print(f"zharness: {os.path.basename(path)} "
               f"({len(script)} commands)", flush=True)
+        gfx = Graphics(stem, path, verbose=not args.all) if args.graphics \
+            else None
         outcome, raw, transcript, turns = play(path, script, shot=args.shot,
-                                               verbose=not args.all)
+                                               verbose=not args.all,
+                                               graphics=gfx)
 
         log = os.path.join(ZHDIR, stem.lower() + ".log")
         with open(log, "w") as f:
@@ -668,7 +1359,10 @@ def main():
                     print("zharness:   " + line.strip())
 
         if outcome == "REFUSED":
-            continue
+            continue                            # nothing ran; nothing to look at
+
+        if gfx and gfx.report():
+            failures.append(stem + " (graphics)")
 
         if args.compare and outcome in ("OK", "QUIT"):
             gold = dfrotz_gold(path, script[:turns])

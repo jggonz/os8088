@@ -664,8 +664,24 @@ zm_setup:
     or al, 00100000b                ; bit 5: screen splitting, which zw_split is
     jmp short .f1done
 .f1v4:
-    and al, 01000000b               ; bit 6 is the story's; every other bit in
-                                    ; this byte is ours to answer
+    and al, 01000010b               ; bits 6 AND 1 are the story's here; the
+                                    ; rest of the byte is ours to answer.
+                                    ;
+                                    ; BIT 1 IS "pictures available" ONLY IN v6
+                                    ; (Standard 11.1 marks it, and bit 5, v6),
+                                    ; and Inform's library reads that same bit
+                                    ; in EVERY version to choose between a
+                                    ; score/turns status line and a clock -
+                                    ; which is what `Statusline time;` sets.
+                                    ; Clearing it turned 905.Z5, whose header
+                                    ; arrives with it set, into a score game:
+                                    ; the reference prints "Time: 9:05 am" and
+                                    ; this printed "Moves: 0", from the STORY's
+                                    ; own status line, on the story's own
+                                    ; reading of a byte we had overwritten. The
+                                    ; v1-3 path above always preserved it; this
+                                    ; one did not. v6 still sets it below, and
+                                    ; there it is genuinely ours.
     or al, 00011100b                ; bits 2,3,4: bold, italic and fixed-space
                                     ; are all available - as reverse video,
                                     ; underline and "no change", which is what
