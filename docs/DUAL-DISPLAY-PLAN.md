@@ -763,10 +763,67 @@ on its own.**
 | 4 | ~~`GFXDISP` at the four rect entries + font/icon/scroll/line~~ **DONE** — SPEC.md §39.14 | secondary shows a desktop dither; **0 differing pixels** on all three single-card adapters. `gfx_save`/`gfx_restore` deferred to step 5, §11.4 |
 | 5 | ~~Cursor crossing; mouse clamp to the union~~ **DONE** — SPEC.md §39.15 | the pointer crosses, and a round trip leaves **0 differing pixels** on both cards |
 | 6 | ~~`wm_fit`, `ui_drag`, `wm_paint_all` per display~~ **DONE** — SPEC.md §39.16 | a window drags across the seam, both primaries; **0 differing pixels** on all three single-card adapters |
-| 6b | `wm_disp_of`, then §11.2 fullscreen on one display | fullscreen on the secondary leaves the menu bar reachable on the primary |
+| 6b | ~~`wm_disp_of`, then §11.2 fullscreen on one display~~ **DONE** — SPEC.md §39.17 | fullscreen on the secondary leaves the menu bar **0 differing pixels** on both primaries; the control differs by 779/304 |
 | 6c | `fsx` on one display, others blanked; `vid_unblank` | Missile Command and Paint unchanged; the dark monitor comes back with a repainted desktop, never a stale one |
 | 7 | Control Panel mode + layout; `VM` key | survives a reboot; refuses on a single-card machine |
 | 8 | Field run on the 5150 | the three things QEMU cannot show |
+
+### 11.7 Step 6b, as built
+
+`wm_disp_of` and what asks it (SPEC.md §39.17). **Cost: `.text` +259 for
+`kern_big` — one image rung, and it carries §39.14.4's owed clip translation
+too — and `kern_small` +24.**
+
+**§6.5.1's centre-then-origin-then-primary ladder went in unchanged**, and the
+32-bit-multiply argument against overlap area held: 720 × 348 is 250,560 and
+does not fit a word, so "which display does more of this window touch" is a
+`mul` pair per display on a machine whose whole design is about not paying for
+arithmetic.
+
+**What the step turned out to be about is `wm_fs_vis`, not `wm_fullscreen`.**
+Sizing the window is four stores; what decides whether a *second monitor is
+usable at all* while an app is fullscreen is the predicate four painters and
+three input sites ask. It answers "is a visible fullscreen window covering
+**the chrome**" now — the chrome being the primary's — so a fullscreen window
+anywhere else answers no and the bar, the dock and the drive column are drawn
+and clickable exactly as with no fullscreen window at all. `wm_paint_all`'s
+"start the walk AT the fullscreen window" follows for free: it is gated on the
+same answer and is only sound when the cover is total.
+
+**`ui.inc`'s three sites were testing the LATCH** (`[wm_fs] != 0`) where they
+meant the predicate. That is the correction that would otherwise have made a
+menu bar sitting plainly on screen unclickable.
+
+**Two things went with it that §6.5 did not list.** The damage a fullscreen
+window leaves is its **own rect**, read out of the record — a constant screen
+rect would repaint the primary because a window on the *other* display went
+away. And `wm_zoom`'s "standard state" is the display the window is on, or
+zooming a window on the second monitor would move it to the first: `wm_zoom`
+introduced that defect at step 6 and this is where it is paid for.
+
+**And §39.14.4's owed item is closed.** `wm_clip_tab` is virtual; a
+whole-shape hook that has translated and then calls a rect primitive arrives
+in display coordinates. Both meeting points — `wm_clip_test` and
+`gfx_clip_run` — translate the **one** rect rather than the sixteen region
+entries, gated on `[gfx_dnest]`. `wm_clip_test` has to `pushf` around undoing
+it, because `font_char` takes its `CX`/`DX` back from `AX`/`BX` after the call
+and `sub` sets the flags the routine answers in.
+
+Measured on `os8088_5150_both_gla`, both primaries, in the same run as every
+earlier step's assertions:
+
+| | CGA primary | Hercules primary |
+|---|---|---|
+| fullscreen latched on the **second** display | menu bar differs by **0 px** | **0 px** |
+| the control — same latch, window on the primary | **779 px** | **304 px** |
+
+plus byte identity on the three single-card adapters.
+
+**What that gate does not cover, stated plainly:** `wm_fs_setrect`'s own
+arithmetic. No shipped *kernel* window has a fullscreen item, so driving it
+for real means loading a package — three double-clicks and two mounts — and
+the poke drives the painters instead. `wm_disp_of` itself *is* exercised,
+because the flip between 0 and 779 is that routine answering.
 
 ### 11.6 Step 6, as built
 

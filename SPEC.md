@@ -19255,6 +19255,61 @@ lands somewhere no display has — and a window straddling the two cards is
 drawn by §39.14's split, one fragment per display, with no code in the window
 manager aware of it.
 
+### 39.17 A window belongs to ONE display — `wm_disp_of` (`KERN_BIG` only)
+
+**The test is the window's CENTRE, then its ORIGIN, then the primary.** Overlap
+area is the intuitive answer and it needs a 32-bit multiply — 720 × 348 is
+250,560 and overflows a word — so "which display does more of this window
+touch" costs a `mul` pair per display on a machine whose whole design is about
+not paying for arithmetic. The centre is one point-in-rect test per display and
+lands on the same answer in every case anybody will construct. The ladder has
+three rungs because the virtual desktop is not a rectangle (§39.2.1): a centre
+can fall in the dead zone, and so can an origin.
+
+**It is one rule and not two, which is the point.** Both fullscreens use it,
+`wm_zoom` uses it, and `fsx` will — so they cannot drift about which monitor an
+app is on.
+
+#### 39.17.1 §11.2's fullscreen takes that display, and the chrome survives
+
+`wm_fullscreen` sizes the window to `wm_disp_of`'s answer rather than to the
+primary, so an app that goes fullscreen covers **one monitor**. On the second
+one, the menu bar, the dock and the drive column are all still on screen and
+still clickable — which is the whole of what a second monitor buys a
+fullscreen app.
+
+**`wm_fs_vis` is what makes that true, in one place.** It answers *"is a
+visible fullscreen window covering the chrome"*, and the chrome is the
+primary's — so a fullscreen window on any other display answers **no**, and
+the four painters that ask (`menu_draw_bar`, `dock_paint`, `fprog`,
+`wm_paint_all`) draw the bar and the strip exactly as they would with no
+fullscreen window at all. `wm_paint_all`'s "start the walk AT the fullscreen
+window, everything below is covered" follows for free, because that
+optimisation is gated on the same answer and is only sound when the cover is
+total.
+
+**`ui.inc`'s three input sites ask it too**, where they used to test
+`[wm_fs] != 0`: a press in rows 0..19 goes to the menu bar unless something is
+actually over it. That is the same correction, and testing the latch instead
+of the predicate is what would have made the bar unreachable on a machine
+where it is plainly visible.
+
+**The damage a fullscreen window leaves is its own rect**, read out of the
+record, rather than `0,0`..`[vid_pwm1]`,`[vid_phm1]`. On one display those are
+the same four numbers; on two, the constant would repaint the primary because
+a window on the secondary went away. The record still holds the fullscreen
+rect at both sites — `wm_fs_drop` has not run yet — so it is the shadow-free
+rect and nothing else.
+
+#### 39.17.2 Zoom follows the window, not the machine
+
+§11.95's "standard state" is *the whole live screen*, and on a virtual desktop
+that has to mean the display the window is on: zooming a window on the second
+monitor must not move it to the first. `wm_disp_span` answers the origin and
+width, `wm_zoom_xmax` the largest legal x for a given width, and both are
+`wm_disp_of` again. The restore path's clamp floors at that display's left
+edge rather than at 0, for the same reason.
+
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
 The reference §20.6 worker, and the first shipped package whose window is

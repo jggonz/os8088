@@ -252,6 +252,137 @@ wm_fit:
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
+; wm_disp_of - which display is this window primarily ON? (SPEC.md 39.17)
+; in:       BX = the window
+; out:      AL = the display index
+; clobbers: AX, flags
+;
+; THE CENTRE, then the ORIGIN, then the primary. Overlap area is the intuitive
+; answer and needs a 32-bit multiply - 720 x 348 is 250,560 and overflows a
+; word - so "which display does more of this window touch" costs a mul pair
+; per display on a machine whose whole design is about not paying for
+; arithmetic. The centre is one point-in-rect test per display and lands on
+; the same answer in every case anybody will construct. Three rungs because
+; the virtual desktop is not a rectangle (39.2.1): a centre can fall in the
+; dead zone, and so can an origin.
+;
+; ONE RULE, not two: both fullscreens, wm_zoom and eventually fsx all ask it,
+; so none of them can drift about which monitor an app is on.
+; -----------------------------------------------------------------------------
+wm_disp_of:
+    push bx
+    push si
+    mov si, bx                  ; SI, because vid_disp_find wants BX = y
+    mov ax, [si+W_W]
+    shr ax, 1
+    add ax, [si+W_X]
+    mov bx, [si+W_H]
+    shr bx, 1
+    add bx, [si+W_Y]
+    call vid_disp_find          ; the CENTRE
+    jnc .out
+    mov ax, [si+W_X]            ; ...else the ORIGIN
+    mov bx, [si+W_Y]
+    call vid_disp_find
+    jnc .out
+    xor al, al                  ; ...else the primary
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_disp_span - that display's x origin and width (SPEC.md 39.17.2)
+; in:       BX = the window; AX/CX = the primary's, already loaded
+; out:      AX = x0, CX = width
+; clobbers: AX, CX, flags
+; -----------------------------------------------------------------------------
+wm_disp_span:
+    cmp byte [vid_ndisp], 1
+    jbe .out                    ; one display: the caller's numbers stand
+    push di
+    call wm_disp_of
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    mov cx, [di+VID_CTX_CW]
+    pop di
+.out:
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
+; wm_zoom_xmax - the largest x a window of width CX may have on ITS display
+;                (SPEC.md 39.17.2)
+; in:       BX = the window, CX = the width
+; out:      DX = that x, floored at the display's left edge
+; clobbers: DX, flags
+; -----------------------------------------------------------------------------
+wm_zoom_xmax:
+    push ax
+    push di
+    xor ax, ax                  ; the primary's left edge...
+    mov dx, [vid_pw]            ; ...and one past its right
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    jbe .have
+    call wm_disp_of
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    mov dx, ax
+    add dx, [di+VID_CTX_CW]
+.have:
+%endif
+    sub dx, cx
+    cmp dx, ax                  ; ...floored at THAT edge, not at 0
+    jge .out
+    mov dx, ax
+.out:
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_fs_setrect - a fullscreen window's rect: the display it is ON
+;                 (SPEC.md 39.17.1)
+; in:       BX = the window
+; out:      W_X/W_Y/W_W/W_H filled
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_fs_setrect:
+    push ax
+%ifdef KERN_BIG
+    push di
+    cmp byte [vid_ndisp], 1
+    jbe .one
+    call wm_disp_of
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    mov [bx+W_X], ax
+    mov ax, [di+VID_CTX_VY]
+    mov [bx+W_Y], ax
+    mov ax, [di+VID_CTX_CW]
+    mov [bx+W_W], ax
+    mov ax, [di+VID_CTX_CH]
+    mov [bx+W_H], ax
+    jmp short .out
+.one:
+%endif
+    xor ax, ax
+    mov [bx+W_X], ax
+    mov [bx+W_Y], ax
+    mov ax, [vid_pw]
+    mov [bx+W_W], ax
+    mov ax, [vid_ph]
+    mov [bx+W_H], ax
+%ifdef KERN_BIG
+.out:
+    pop di
+%endif
+    pop ax
+    ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
 ; wm_fit_box - the box for the display this window's ORIGIN is on
 ;              (SPEC.md 39.16.1)
 ; in:       BX = the window; AX/CX/SI/DI = the primary's box
@@ -775,7 +906,11 @@ wm_zoom:
     push dx
     push si
     xor ax, ax                  ; the standard state: x = the left edge...
-    mov cx, [vid_pw]             ; ...and w = the whole live screen (SPEC 39.2)
+    mov cx, [vid_pw]            ; ...and w = the whole live screen (SPEC 39.2)
+%ifdef KERN_BIG
+    call wm_disp_span           ; ...of the DISPLAY this window is on, or a
+                                ; zoom would move it to the other monitor
+%endif
     call wm_snap_want
     jnc .nosnap
     mov ax, 7                   ; WF_SNAP: the leftmost frame x whose CONTENT
@@ -840,11 +975,11 @@ wm_zoom:
     je .out                     ; partial restore, and it travels
 .rgo:
     push dx                     ; x is replayed and then CLAMPED, because on
-    mov dx, [vid_pw]             ; that partial path the size is not the one it
-    sub dx, cx                  ; was banked with - a negotiator refusing to
-    jns .rx                     ; shrink hands back the STANDARD width, and
-    xor dx, dx                  ; the banked x plus that runs off the right
-.rx:                            ; edge
+    call wm_zoom_xmax           ; that partial path the size is not the one it
+                                ; was banked with - a negotiator refusing to
+                                ; shrink hands back the STANDARD width, and
+                                ; the banked x plus that runs off the right
+                                ; edge of its display (SPEC.md 39.17.2)
     cmp ax, dx
     jle .rxc
     mov ax, dx
@@ -943,10 +1078,14 @@ wm_destroy:
 .vis:
     test word [si+W_FLAGS], WF_FULL
     jz .bank
-    xor ax, ax                  ; fullscreen: the whole screen was its rect
-    xor bx, bx
-    mov cx, [vid_pwm1]
-    mov dx, [vid_phm1]
+    mov ax, [si+W_X]            ; fullscreen: its rect WITHOUT the shadow -
+    mov bx, [si+W_Y]            ; the record still holds it, wm_fs_drop not
+    mov cx, ax                  ; having run yet. A constant screen rect here
+    add cx, [si+W_W]            ; would repaint the PRIMARY because a window
+    dec cx                      ; on the other display went away (39.17.1)
+    mov dx, bx
+    add dx, [si+W_H]
+    dec dx
 .bank:
     mov [wm_hide_r], ax
     mov [wm_hide_r+2], bx
@@ -1118,6 +1257,16 @@ wm_fs_vis:
     jz .no
     test word [bx+W_FLAGS], 2
     jz .no
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    jbe .yes
+    push ax                     ; ...and is it on the display the CHROME is
+    call wm_disp_of             ; on? A fullscreen window covering the second
+    or al, al                   ; monitor covers no bar, no dock and no drive
+    pop ax                      ; column, and all four painters below have to
+    jnz .no                     ; draw them (SPEC.md 39.17.1). `pop` leaves
+%endif                          ; the flags alone
+.yes:
     pop bx
     stc
     ret
@@ -1303,10 +1452,14 @@ wm_hide:
     call wm_win_rect            ; AX,BX,CX,DX = the rect it is vacating
     test word [si+W_FLAGS], WF_FULL
     jz .drop
-    xor ax, ax                  ; ...so that is the damage, whatever wm_fs_drop
-    xor bx, bx                  ; is about to put back in the record
-    mov cx, [vid_pwm1]
-    mov dx, [vid_phm1]
+    mov ax, [si+W_X]            ; ...so that is the damage, whatever wm_fs_drop
+    mov bx, [si+W_Y]            ; is about to put back in the record - and it
+    mov cx, ax                  ; is that window's DISPLAY, not the machine's
+    add cx, [si+W_W]            ; screen (SPEC.md 39.17.1)
+    dec cx
+    mov dx, bx
+    add dx, [si+W_H]
+    dec dx
 .drop:
     mov [wm_hide_r], ax
     mov [wm_hide_r+2], bx
@@ -1535,13 +1688,9 @@ wm_fullscreen:
     mov [wm_fs_save+4], ax
     mov ax, [bx+W_H]
     mov [wm_fs_save+6], ax
-    xor ax, ax
-    mov [bx+W_X], ax
-    mov [bx+W_Y], ax
-    mov ax, [vid_pw]
-    mov [bx+W_W], ax
-    mov ax, [vid_ph]
-    mov [bx+W_H], ax
+    call wm_fs_setrect          ; the display this window is primarily ON
+                                ; (SPEC.md 39.17.1), which is the primary on a
+                                ; machine with one
     or word [bx+W_FLAGS], WF_FULL
                                 ; Raise it AND draw it WHOLE. Not wm_front:
                                 ; that asks wm_obscured whether anything was
@@ -3308,7 +3457,29 @@ wm_clip_ptr:
 ; -----------------------------------------------------------------------------
 wm_clip_test:
     cmp word [wm_clip_n], 0
-    je .free
+    je wm_clip_free             ; ...NOT a local label: the walk below is its
+                                ; own symbol now, so this one would belong to
+                                ; it rather than to the entry above
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; SPEC.md 39.14.4: inside a whole-shape hook
+    je wm_clip_walk             ; the caller's rect has already been moved into
+                                ; its display, and wm_clip_tab is VIRTUAL. One
+                                ; rect translated here beats sixteen there,
+                                ; and it is the only place the two spaces meet
+    add ax, [vid_ox]
+    add cx, [vid_ox]
+    add bx, [vid_oy]
+    add dx, [vid_oy]
+    call wm_clip_walk
+    pushf                       ; ...and back, because font_char takes its
+    sub ax, [vid_ox]            ; CX/DX from AX/BX after this returns - and
+    sub cx, [vid_ox]            ; `sub` sets the flags this routine answers in
+    sub bx, [vid_oy]
+    sub dx, [vid_oy]
+    popf
+    ret
+%endif
+wm_clip_walk:
     push si
     push di
     mov si, wm_clip_tab
@@ -3334,7 +3505,7 @@ wm_clip_test:
     pop di
     pop si
     ret
-.free:
+wm_clip_free:
     clc
     ret
 

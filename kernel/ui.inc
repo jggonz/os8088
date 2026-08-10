@@ -125,9 +125,13 @@ ui_task:
                                 ; menu bar must die as firmly as one on
                                 ; another window
 
-    cmp word [wm_fs], 0         ; a fullscreen window (SPEC.md 11.2) sits
-    jne .on_desktop             ; over the bar: route rows 0..19 to wm_hit
-                                ; like any other point
+    call wm_fs_vis              ; a fullscreen window (SPEC.md 11.2) sits
+    jc .on_desktop              ; over the bar: route rows 0..19 to wm_hit
+                                ; like any other point. The PREDICATE and not
+                                ; the latch (SPEC.md 39.17.1): one covering
+                                ; the second monitor covers no bar, and
+                                ; testing [wm_fs] would make a bar that is
+                                ; plainly on screen unclickable
     cmp dx, MBAR_H              ; in the menu bar?
     jae .on_desktop
     cmp cx, [vid_clk_hx]        ; the clock cell at the right end (SPEC 12.1)?
@@ -378,9 +382,9 @@ ui_task:
     mov bl, al                  ; text changed
     or al, al
     jz .idle
-    cmp word [wm_fs], 0         ; fullscreen (SPEC.md 11.2): the bar and any
-    jne .idle                   ; Date/Time page are covered - time is kept,
-                                ; nothing is drawn
+    call wm_fs_vis              ; fullscreen (SPEC.md 11.2): the bar and any
+    jc .idle                    ; Date/Time page are covered - time is kept,
+                                ; nothing is drawn. The predicate, 39.17.1
     test al, 2
     jnz .clk_lock
     call cp_tick_due            ; CF = 1: a live Date/Time page is showing
@@ -431,8 +435,8 @@ ui_rdown:
     mov cx, [ui_ev + EV_A]      ; CX = press x, DX = press y. NO [ui_click_t]
     mov dx, [ui_ev + EV_B]      ; store - see above.
 
-    cmp word [wm_fs], 0         ; a fullscreen window (SPEC.md 11.2) owns the
-    jne .hit                    ; bar's rows like any other point
+    call wm_fs_vis              ; a fullscreen window (SPEC.md 11.2) owns the
+    jc .hit                     ; bar's rows like any other point (39.17.1)
     cmp dx, MBAR_H
     jb .ret                     ; the menu bar has no right-button behaviour
 .hit:

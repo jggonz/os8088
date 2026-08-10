@@ -467,6 +467,67 @@ def main(argv):
                 fail.append("the window crossed but its %dpx frame is not on "
                             "the second card: longest run %d" % (ww, run2))
 
+            # --- 7: fullscreen on the SECOND display leaves the chrome alone
+            # (SPEC.md 39.17.1). What decides that is wm_fs_vis, and what it
+            # asks is wm_disp_of - so latching [wm_fs] onto this window by
+            # hand and forcing a repaint drives exactly the four painters the
+            # question exists for. It does NOT drive wm_fs_setrect: no shipped
+            # window here has a fullscreen item, and a package would be three
+            # double-clicks and two mounts to reach.
+            #
+            # THE NEGATIVE CONTROL IS THE HALF THAT MEANS ANYTHING: the same
+            # latch with the window moved onto the PRIMARY must suppress the
+            # bar. Without it, "the bar is still there" is equally what a
+            # kernel that ignored [wm_fs] entirely would print.
+            pw = u16(m.read(S("vid_pw"), 2))
+            clk = u16(m.read(S("vid_clk_hx"), 2))
+            def barband(px, w):
+                # rows 0..MBAR_H-1, left of the clock cell - which ticks on a
+                # schedule of its own and is not part of the question.
+                return bytes(px[(y * w + x) * 3]
+                             for y in range(os88marty.MBAR_H)
+                             for x in range(min(clk, w)))
+            wp, hp, prest = m.fbuf(card=pri["idx"])
+            bar_rest = barband(prest, wp)
+
+            rec = S("wm_wins") - (0x60 << 4) + found * WIN
+            m.write(S("wm_fs"), bytes([rec & 255, rec >> 8]))
+            fl = u16(m.read(S("wm_wins") + found * WIN, 2)) | 8   # WF_FULL
+            m.write(S("wm_wins") + found * WIN, bytes([fl & 255, fl >> 8]))
+            m.write(S("cp_dirty"), bytes([1]))
+            m.advance(frames=90, card=pri["idx"])
+            m.run()
+            os88marty.settle(m, card=gate_card)
+            wp, hp, pfs = m.fbuf(card=pri["idx"])
+            d_far = sum(1 for i, b in enumerate(barband(pfs, wp))
+                        if b != bar_rest[i])
+            say("fullscreen on the SECOND display: menu bar differs by %d px"
+                % d_far)
+            if d_far:
+                fail.append("a fullscreen window on the second display "
+                            "changed the primary's menu bar by %d px - "
+                            "wm_fs_vis answered about the latch, not the "
+                            "chrome" % d_far)
+
+            m.write(S("wm_wins") + found * WIN + 2, bytes([0, 0, 0, 0]))
+            m.write(S("wm_wins") + found * WIN + 6,
+                    bytes([pw & 255, pw >> 8]))
+            ph = u16(m.read(S("vid_ph"), 2))
+            m.write(S("wm_wins") + found * WIN + 8,
+                    bytes([ph & 255, ph >> 8]))
+            m.write(S("cp_dirty"), bytes([1]))
+            m.advance(frames=90, card=pri["idx"])
+            m.run()
+            os88marty.settle(m, card=gate_card)
+            wp, hp, pfs2 = m.fbuf(card=pri["idx"])
+            d_near = sum(1 for i, b in enumerate(barband(pfs2, wp))
+                         if b != bar_rest[i])
+            say("...and moved onto the PRIMARY: differs by %d px" % d_near)
+            if d_near == 0:
+                fail.append("a fullscreen window ON the primary left its menu "
+                            "bar untouched - the control says the test above "
+                            "proves nothing")
+
 
     print()
     for f in fail:

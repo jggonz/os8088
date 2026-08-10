@@ -347,6 +347,15 @@ gfx_clip_run:
     push dx
     push si
     push di
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; SPEC.md 39.14.4: a nested call from inside a
+    je .virt                    ; whole-shape hook arrives in DISPLAY
+    add ax, [vid_ox]            ; coordinates, and wm_clip_tab is virtual. The
+    add cx, [vid_ox]            ; fragments go back below, one subtraction
+    add bx, [vid_oy]            ; each, because the raw body wants them local
+    add dx, [vid_oy]
+.virt:
+%endif
     mov [gfx_cl_x1], ax
     mov [gfx_cl_y1], bx
     mov [gfx_cl_x2], cx
@@ -379,6 +388,15 @@ gfx_clip_run:
 .y2:
     cmp bx, dx
     jg .next
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; ...and the fragment back into the display the
+    je .lv                      ; body is going to draw on. The loop re-reads
+    sub ax, [vid_ox]            ; gfx_cl_* below, which stayed virtual, so
+    sub cx, [vid_ox]            ; there is nothing to undo
+    sub bx, [vid_oy]
+    sub dx, [vid_oy]
+.lv:
+%endif
     call word [gfx_cl_fn]
 .next:
     add si, WCR_SZ

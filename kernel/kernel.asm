@@ -170,11 +170,32 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 96256           ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE SIXTEENTH MOVE, 96,256 -> 98,304, ASKED
+                                ; FOR AND GRANTED, and the second that is
+                                ; kern_big's alone. 2KB again, for the rest of
+                                ; SPEC.md 39's dual display - 39.16's union
+                                ; and what follows it - on the fifteenth
+                                ; move's terms.
+                                ;
+                                ; WHAT SPENT THE FIFTEENTH IS WORTH RECORDING,
+                                ; because the two rounds landed in the same
+                                ; week and the arithmetic reads as one. Dual
+                                ; display took 39.12's context, 39.13's second
+                                ; card, 39.14's split, 39.15's cursor and
+                                ; 39.16's union; the spare it left went to
+                                ; SPEC.md 18.96/22.12's floppy FORMAT and
+                                ; 11.96.3's per-window raise cache, which are
+                                ; other work and are what took the guard from
+                                ; two steps to one. A raise is granted for a
+                                ; feature, so which feature spent the last one
+                                ; is the question the next request has to
+                                ; answer, and it is not always the one asking.
                                 ;
                                 ; THE FIFTEENTH MOVE, 94,208 -> 96,256, AND
                                 ; THE FIRST THAT IS kern_big's ALONE. 2KB,
