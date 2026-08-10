@@ -4847,10 +4847,19 @@ section .bss
 ; I/O at all; dsk_bpbsg keeps the signature dsk_fatw_pick needs to decide window
 ; reuse, which is otherwise computed off the sector we would have read.
 ;
-; NOT for floppies, which is the whole point of the split: a floppy is exactly
-; the volume that CAN be swapped between two operations, and the batch bracket
-; is what will let one skip this - under an assertion a caller makes,
-; not one the kernel invents.
+; **FLOPPIES BANK HERE TOO, and this comment used to say they did not.** It was
+; written before SPEC.md 18.9.3 landed and left in the future tense - "the batch
+; bracket is what WILL let one skip this" - so it read as a statement that rows
+; 0 and 1 never touch this array. They are its HEAVIEST users: inside a batch a
+; floppy banks with [dsk_bpbok] = 2, and that is the whole of 18.9.3's measured
+; win (an install's BPB reads 41 -> 2, the floppy side 356 -> 163 sectors).
+;
+; So this is DVOL_MAX * 64 and cannot be indexed from volume 2 to save the two
+; rows 18.97 added. That was proposed, on the strength of the stale comment
+; above, and it would have taken the bracket away from A: and B: - the two
+; volumes it was written for. The split 18.9.2 makes is between PERMANENT
+; (fixed, 1) and BATCH-SCOPED (floppy, 2), not between volumes that use this
+; and volumes that do not.
 dsk_bpbv:     resb DVOL_MAX * 64
 dsk_bpbsg:    resw DVOL_MAX
 dsk_bpbok:    resb DVOL_MAX     ; 0 = nothing banked, 1 = banked and good

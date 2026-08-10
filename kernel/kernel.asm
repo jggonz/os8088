@@ -170,11 +170,32 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 100352          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE SEVENTEENTH MOVE, 98,304 -> 100,352,
+                                ; ASKED FOR AND GRANTED. 2KB, big's own step,
+                                ; on the thirteenth move's terms - headroom
+                                ; for ordinary growth, not another feature's
+                                ; worth pre-authorised.
+                                ;
+                                ; WHAT SPENT THE SIXTEENTH IS THE FLOPPY
+                                ; ROUND, and the last step of it went to CGA
+                                ; QUALITY rather than to capacity: SPEC.md
+                                ; 18.96.2's user-picked format size and its
+                                ; reach test, then 18.97's third and fourth
+                                ; drives with DVOL_MAX 6 -> 8, and then 26.4 -
+                                ; the 'A:' caption, the hugged label rect and
+                                ; the 32x14 icon that makes a diskette square
+                                ; on an adapter whose pixels are 2.4:1. That
+                                ; last one bought no feature at all; it bought
+                                ; the desktop looking right on the machine
+                                ; this project is calibrated against, and it
+                                ; is worth recording as a thing a step may be
+                                ; spent on.
                                 ;
                                 ; THE SIXTEENTH MOVE, 96,256 -> 98,304, ASKED
                                 ; FOR AND GRANTED, and the second that is
@@ -222,10 +243,33 @@ KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; the two by 2KB, which is the direction it
                                 ; should drift from here.
 %else
-KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 95232           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
-                                ; It has moved fourteen times, every raise asked
+                                ;
+                                ; **kern_small's STEP IS 1KB, not the 2KB big
+                                ; moves by.** Set at this raise, and it is the
+                                ; point of the split: this is the guard the
+                                ; 128KB machine lives under, so it is the one
+                                ; that has to be defended, and it should be
+                                ; asked for in the smallest useful unit rather
+                                ; than in big's. Two 512-byte rungs is enough
+                                ; room for ordinary growth to continue and not
+                                ; enough to pre-authorise a feature.
+                                ;
+                                ; THE FIFTEENTH MOVE, 94,208 -> 95,232, ASKED
+                                ; FOR AND GRANTED, and the first that is
+                                ; kern_small's alone - the fifteenth and
+                                ; sixteenth above were big's. 1KB, the new
+                                ; step. What spent the last of the old figure
+                                ; was the floppy round (18.96.2, 18.97's
+                                ; DVOL_MAX 6 -> 8 and 26.4's CGA quality),
+                                ; which landed it on 94,208 of 94,208 -
+                                ; EXACTLY zero spare, a guard met rather than
+                                ; exceeded, with the next byte of .text or
+                                ; .bss failing the build.
+                                ;
+                                ; It has moved fourteen times before that, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
                                 ; SPEC.md 41 store and the two API surfaces
                                 ; that came with it (wm_geom, wm_about_set);

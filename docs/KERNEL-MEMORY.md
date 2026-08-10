@@ -197,6 +197,10 @@ row below, and it is the copy to trust if the two ever disagree.
 | 12 | 86,016 → **90,112** | 4KB asked for and granted **in advance**, on move 7's terms: SPEC.md §39.11's adapter switching took the spare to EXACTLY ZERO — 6 bytes left in the image rung and 155 in the cold one — and what the headroom buys immediately is §39.11.4 (blanking the card the machine has just left, so a two-monitor 5150 does not sit with a frozen desktop on the tube nobody is using) and §31.10's hiding of a Display page with nothing to choose between. Granted WITHOUT the usual "hand back what the optimisation pass saves", because the 128KB floor is to be met by a SECOND BUILD of this kernel rather than by holding one build to a figure both machines can live with. Until that exists this is still the only guard there is, so move 5's rule stands: headroom for ordinary growth, not an invitation to spend it |
 | 13 | 90,112 → **92,160** | 2KB, and move 12's story again: the spare hit EXACTLY ZERO, this time from two directions at once — SPEC.md §52's hard-disk installer arriving on the integration branch, and §11.95.1's "a window that grew reveals nothing" (193 B of `.text`, 8 of `.bss`). Granted at 2KB rather than 4, which puts the guard back within reach of ordinary growth without pre-authorising another feature's worth |
 | 14 | 92,160 → **94,208** | 2KB granted **in advance** for SPEC.md §18.94.2's finding: a file operation spends over half its disk TIME on work the progress widget never shows, because the kernel optimised for SECTORS where the media charges for REVOLUTIONS. Measured over one install, the payload streams at **5.78 sectors per `int 13h` call and every other phase runs at exactly 1.00** — `dsk_dirw_next` hands out one LBA at a time and every caller reads it with `cx = 1` into a single 512-byte buffer. What it funds: a per-volume banked BPB (a fixed disk cannot be swapped, so it revalidates once ever) and coalescing the directory walks into runs, which needs somewhere bigger than `dsk_secbuf`. The batch bracket and its sector cache still to come cost this figure **nothing** — that one is a refusable heap claim by explicit decision, so a 128KB machine can still install, just slowly |
+| 15 | **big** 94,208 → **96,256** | 2KB, and **the first move that is one BUILD's alone** — the kern_small/kern_big split (docs/KERN-SPLIT-PLAN.md) had landed, so from here the two guards move separately and `kern_small` stays where it is. For SPEC.md §39's dual display: the estimate was 1,400–1,900 bytes against a spare that had fallen to 1,024, so the feature no longer fitted. Granted on move 13's terms — headroom, not another feature's worth |
+| 16 | **big** 96,256 → **98,304** | 2KB again, for the rest of the dual display — §39.16's union and what follows it. What spent move 15 is worth recording, because the two rounds landed in the same week and read as one: dual display took §39.12's context, §39.13's second card, §39.14's split, §39.15's cursor and §39.16's union, and the spare it left went to §18.96/§22.12's floppy formatter and §11.96.3's per-window raise cache, which are **other work**. A raise is granted for a feature, so which feature spent the last one is the question the next request has to answer — and it is not always the one asking |
+| 17 | **big** 98,304 → **100,352** | 2KB, big's own step. What spent move 16 was the floppy round, and **its last step went to CGA QUALITY rather than to capacity**: §18.96.2's user-picked format size and its reach test, §18.97's third and fourth drives with `DVOL_MAX` 6 → 8, and then §26.4 — the `A:` caption, the hugged label rect, and the 32×14 icon that makes a diskette square on an adapter whose pixels are 2.4:1. That last one bought no feature at all. It bought the desktop looking right on the machine this project is calibrated against, and it is worth recording as a thing a step may legitimately be spent on |
+| 15s | **small** 94,208 → **95,232** | 1KB, and **the first move that is `kern_small`'s alone** — moves 15 through 17 above were big's. It also sets the step: **`kern_small` grows by 1KB, not by big's 2KB**, because this is the guard the 128KB machine lives under and it should be asked for in the smallest useful unit. Two 512-byte rungs is enough for ordinary growth to continue and not enough to pre-authorise a feature. What spent the old figure was the same floppy round, which landed it on **94,208 of 94,208 — exactly zero spare**, a guard met rather than exceeded, with the next byte of `.text` or `.bss` failing the build |
 
 **`BOOT_RELOC` moved with the first five** — 0x0940 → 0x0AA0 → 0x0B80 →
 0x0C00 → **0x0D40** (linear 0x11000 → 0x12600 → 0x13400 → 0x13C00 →
@@ -361,7 +365,7 @@ Three things about it:
 {
   "big": {
     "bss": 4887,
-    "budget": 98304,
+    "budget": 100352,
     "codemax": 65536,
     "cold": 22911,
     "coldpara": 1440,
@@ -411,21 +415,29 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,762 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
 | the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **95,744 B** | of a 96,256-byte budget — **512 B spare, ONE step**. Move 14's grant is spent and then some: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, the toast and baked-typeface rounds a third, §39.14/§39.15's per-display split two more, and SPEC.md §18.96's floppy formatter two |
+| **total** | **97,792 B** | of a 100,352-byte budget — **2,560 B spare, FIVE steps**, move 17 having just landed. Moves 14–16 are spent and then some: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, the toast and baked-typeface rounds a third, §39.14/§39.15's per-display split two more, SPEC.md §18.96's floppy formatter two, and the floppy round after it (§18.96.2, §18.97, §26.4) two more |
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
 (docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — SPEC.md §18.96's
 floppy formatter is the first thing through the seam — so this table is big's
 alone and `make kernsplit` is what prices the difference. `kern_small` stands
-at **93,696 B of its own 94,208-byte budget, 512 B spare, one step**, which is
-exactly where it stood before the formatter landed: the whole of that feature
-is behind `%ifndef KERN_SMALL`, and the Edit-menu split that came with it
-(SPEC.md §22.12) fits in slack the small build already had.
+at **94,208 B of its own 95,232-byte budget, 1,024 B spare, two steps**, its
+move 15s having just landed for the same reason big's 17 did.
 
-**Both variants now stand at one step, and that is the number to quote.** The
-two got there independently — big by spending §39's dual-display round and the
-formatter, small by spending nothing at all since its own budget was set — so
-the next feature of any size has to ask, on either build.
+**`kern_small`'s step is 1KB and big's is 2KB**, set at those two moves, and
+the asymmetry is the point of the split: small is the guard the 128KB machine
+lives under, so it is asked for in the smallest useful unit. Two rungs is
+enough for ordinary growth to continue and not enough to pre-authorise a
+feature; five on big is one round's headroom, no more.
+
+**What took small to zero is worth knowing before the next raise.** §18.97's
+`DVOL_MAX` 6 → 8 costs `.bss` 134 bytes — and 128 of those are `dsk_bpbv`, a
+**64-byte banked BPB per volume**. That array is NOT fixed-disk-only, however
+its declaration used to read: a floppy banks there too, inside §18.9.3's batch
+bracket, and rows 0 and 1 are its heaviest users. Re-indexing it from volume 2
+to reclaim the 128 bytes was proposed here on the strength of that stale
+comment and is **wrong** — it would take the bracket away from A: and B:, the
+two volumes it was written for.
 
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
 are the only slack anywhere in the ladder: **427 bytes on the image, 51 on
