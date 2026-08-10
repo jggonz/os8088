@@ -377,21 +377,21 @@ Three things about it:
     "text": 55332
   },
   "small": {
-    "bss": 4651,
+    "bss": 4707,
     "budget": 94208,
     "codemax": 65536,
     "cold": 21382,
     "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3584,
-    "kend": 5888,
+    "imgpara": 3552,
+    "kend": 5856,
     "kseg": 96,
-    "ksize": 92672,
+    "ksize": 92160,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 2662,
+    "ovl": 2681,
     "stk0": 1024,
-    "text": 52447
+    "text": 51701
   }
 }
 ```
@@ -406,25 +406,30 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 55,194 + `.bss` 4,751) | 60,416 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
-| cold code | 23,040 B | 22,739 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
+| image (`.text` 55,332 + `.bss` 4,916) | 60,416 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| cold code | 22,528 B | 22,463 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,762 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
-| the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **97,280 B** | of a 98,304-byte budget — **1,024 B spare, TWO steps** |
+| the boot overlay | 0 B | 3,067 bytes of code inside the FAT window, gone by the first mount |
+| **total** | **96,768 B** | of a 98,304-byte budget — **1,536 B spare, THREE steps** |
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
-(docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — SPEC.md §18.96's
-floppy formatter is the first thing through the seam — so this table is big's
-alone and `make kernsplit` is what prices the difference. `kern_small` stands
-at **93,696 B of its own 94,208-byte budget, 512 B spare, one step**, which is
-exactly where it stood before the formatter landed: the whole of that feature
-is behind `%ifndef KERN_SMALL`, and the Edit-menu split that came with it
-(SPEC.md §22.12) fits in slack the small build already had.
+(docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — in both
+directions now — so this table is big's alone and `make kernsplit` is what
+prices the difference. Things ADDED to big behind `%ifndef KERN_SMALL`:
+SPEC.md §18.96's floppy formatter, §39.11's dual display. Things REMOVED from
+small: SPEC.md §41.11's extended-memory store, the first of those and so far
+the only one.
+
+`kern_small` stands at **92,160 B of its own 94,208-byte budget, 2,048 B
+spare, four steps** — back at the four-step standard move 5 settled on, and it
+got there by the removal rather than by a raise: isolating the store took
+`.text` −1,035, `.bss` −124 and `.ovl` −386 off it, two whole 512-byte rungs.
+That is what the split is for, and it is the first time it has paid.
 
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
-are the only slack anywhere in the ladder: **471 bytes on the image, 301 on
-the cold segment, 430 on `.lowbss`**. They are rounding artefacts, not
+are the only slack anywhere in the ladder: **168 bytes on the image, 65 on
+the cold segment, 430 on `.lowbss`** (big's; small's are 424, 122 and 430). They are rounding artefacts, not
 reservations — and per the accounting section above they are also the whole
 of what the next feature can spend without moving the machine's RAM.
 
