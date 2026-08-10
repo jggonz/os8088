@@ -1312,15 +1312,33 @@ of what was actually painted** (§11.96.6's intersection), and a masked write is
 still the wrong fix for §11.96.2's reason — it would put edge
 read-modify-writes in two primitives the cursor is on, to serve one caller.
 
-**What is NOT done: `gfx_blit4`.** The other half of REDRAW-SPEC Part 3 is
-Paint repainting only the uncovered part of its canvas, and it needs the same
-*shape* of arithmetic over a different layout — packed 4bpp with a caller's own
-stride, not a plane-major save buffer — plus an API slot telling a package
-which rect it owes, which no slot answers today (`OSAPI_WM_OBSCURED` is a
-boolean and `wm_clip_test` asks whether a rect crosses an edge). The principle
-that decides between the two consumers is **who already holds the pixels**: if
-only the kernel can, that is `WF_SAVEU`; if the application already does, it
-does not need a cache, it needs telling which part to put back.
+**`gfx_blit4` needs NOTHING, and that is the correction.** REDRAW-SPEC Part 3
+paired this with "Paint repainting only the uncovered part of its canvas" as
+the same primitive twice — *build it once and both follow* — and that is wrong,
+for a reason worth stating because it decides where the remaining work is.
+**What makes a sub-rect impossible for the caller is not the blit, it is who
+owns the source layout.** `gfx_save`'s buffer is the kernel's private business
+— plane-major, at a stride the kernel computes, with the planes in an order
+only §5 states — so a caller cannot address into it and the kernel had to grow
+the three words above. `gfx_blit4`'s source is **the caller's own pointer and
+its own `BP` stride**, so a sub-rect is already expressible by advancing the
+pointer and passing a smaller `CX`/`DX`; `apps/paint`'s `pt_blit` has taken an
+arbitrary canvas rect all along, rounding its left edge to an even pixel
+because two pixels share a byte. Being off §11.3's clipped list says the
+*kernel* will not clip a blit, which is a different claim from the caller not
+being able to ask for one.
+
+So what Paint's half actually needs is neither of those: it is an API slot
+telling a package which rect it owes (`OSAPI_WM_OBSCURED` is a boolean and
+`wm_clip_test` asks whether a rect crosses an edge — neither says *here is the
+rect*), and, first, **`wm_draw_win`'s unconditional white fill** (§11.90),
+which erases the whole content before every `W_PAINT` and so makes a partial
+answer useless whatever the app does with it. That is a change to the kernel's
+erase contract rather than an optimisation, and every application depends on
+it. The principle that decides between the two consumers stands and is
+unaffected: **who already holds the pixels** — if only the kernel can, that is
+`WF_SAVEU`; if the application already does, it needs telling which part to put
+back.
 
 ## 6. font.inc
 

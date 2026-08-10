@@ -251,16 +251,19 @@ wins:
 - **the raise cache putting back only the part that was uncovered**, instead
   of the whole window (`gfx_restore`) — **landed, SPEC.md §5.8/§11.96.6**;
 - **Paint repainting only the uncovered part of its canvas** (`gfx_blit4`) —
-  **not built**, and see below for what it actually needs.
+  **there is no primitive to build here at all.** See "Consumer 2" below.
 
-"Build it once and both follow" turned out to be half right, and the half that
-is wrong is worth stating plainly for whoever does the second one. The *shape*
-transfers — where the first byte is, how far to step past each row, how far
-past each plane — and **none of the code does**: `gfx_save`'s buffer is
-plane-major with a stride the kernel computes, `gfx_blit4`'s source is packed
-4bpp with a stride its caller passes in `BP`, and the sub-rect of the second is
-`start`/`row_skip` over that stride with no plane term at all. It is a smaller
-job than the first, not a shared one.
+**"Build it once and both follow" was wrong, and the reason decides where the
+rest of the work is.** What makes a sub-rect impossible for a caller is not the
+blit — it is **who owns the source layout**. `gfx_save`'s buffer is the kernel's
+private business, plane-major at a stride the kernel computes, so a caller
+cannot address into it and the kernel had to grow §5.8's three words.
+`gfx_blit4`'s source is the caller's own pointer and its own `BP` stride, so a
+sub-rect is already expressible by advancing the pointer and passing a smaller
+`CX`/`DX` — and `pt_blit` has taken an arbitrary canvas rect all along, rounding
+its left edge to an even pixel because two pixels share a byte. Being off
+§11.3's clipped list means *the kernel* will not clip a blit; it never meant the
+caller could not ask for one.
 
 **And the arithmetic was never the hard part of either.** What cost this round
 its time was (a) the register discipline at the call site — the arming call
@@ -380,8 +383,54 @@ What is missing on the app side is an **API**: a package can ask
 `OSAPI_WM_OBSCURED` (a boolean) and `wm_clip_test` (does a rect cross a clip
 edge). Neither says *"here is the rect you owe"*.
 
-**Three things consumer 1 settled that this one can now be written against**,
-and they are the reason it is a smaller job than it was:
+#### What consumer 2 is actually blocked on, measured
+
+**`wm_draw_win` white-fills the whole content before every `W_PAINT`** — Part
+1's point 1, still true, no opt-out flag, and `apps/paint`'s own `pt_fsbed`
+comment documents it. So a slot that tells Paint which rect it owes achieves
+**nothing** until the kernel stops erasing the rest, and that is a change to the
+kernel's erase contract rather than an optimisation: every application depends
+on the fill.
+
+And the canvas is only a third of the problem. Measured on a cycle-accurate
+5150/CGA, Paint launched from `APPS` at 494×152 and raised from behind a Disk
+window, **blank canvas**:
+
+| | ms |
+|---|---|
+| kernel white fill + palette + colour strip + divider | ~391 |
+| the canvas blit + marquee (one `gfx_blit4`) | ~211 |
+| **one Paint repaint** | **~602** |
+
+A blank canvas is the *cheap* case — `pt_blit`'s own note prices a blit at
+`runs × ~0.5 ms`, so detailed art multiplies the 211. But even a perfect
+sub-rect blit leaves ~391 ms untouched unless the chrome is gated per element
+too, which is `tm_row_draw`'s answer and more app-side work than the blit.
+
+**So two cheaper things come before any of it**, both already-proven machinery:
+
+1. **`WF_SAVEU` on Paint** — one flag, and it turns the whole ~602 ms into a
+   §11.96 restore. The objection on record is memory ("a fourth copy of pixels
+   it already has"), and §50.6's priority ladder is the answer the objection
+   predates: the cache is a *purgeable* claim at the trivial rank, given up the
+   instant anything wants the room, so a machine with none behaves exactly as it
+   does now. §11.96.1's promise holds — Paint owns **no worker task**, its
+   marquee is a latched XOR rather than a marching one and its caret is drawn
+   and erased by keystrokes, so nothing changes its content while it is not
+   drawing. This is the Disk window's §22.14 again.
+2. **A "do not erase me" flag.** `pt_repaint`'s own comment is *"Every part of
+   this draws its own background, so no white fill is needed first"* — so for
+   Paint the kernel's fill is pure waste today, independently of any of the
+   above.
+
+**One thing to look at while in there**, found by the measurement and not chased:
+that raise produced **two** `wm_grow_paint` calls for Paint's window (374 ms
+then 211 ms), which reads as its `W_PAINT` running twice. `[pt_apend]`'s
+deferred-resize path calls `OSAPI_WM_FRONT` from inside the paint, which would
+do exactly that.
+
+**Three things consumer 1 settled that a rect-passing slot can be written
+against**, whenever the erase contract is faced:
 
 1. **The rect exists and is already computed.** `wm_dmg_x1..y2` from `.draw`
    onward *is* "what this pass painted", accumulated (§11.96.6), and
