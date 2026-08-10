@@ -360,7 +360,7 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4743,
+    "bss": 4747,
     "budget": 98304,
     "codemax": 65536,
     "cold": 22477,
@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54683
+    "text": 54999
   },
   "small": {
     "bss": 4662,
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,460 | 36.9% |
-| the window system and its furniture | 16,200 | 21.0% |
-| drawing: adapters, primitives, glyphs, icons | 11,020 | 14.3% |
+| the file system, end to end | 28,460 | 36.7% |
+| the window system and its furniture | 16,254 | 21.0% |
+| drawing: adapters, primitives, glyphs, icons | 11,282 | 14.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,801 | 12.7% |
 | the kernel proper: API table, heap, scheduler, events | 5,877 | 7.6% |
 | the Control Panel | 4,426 | 5.7% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,160** | |
+| **total** | **77,476** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -907,13 +907,13 @@ generated in the first place.
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `icons.inc` — the icon renderer (§10) | 1,358 | — | **1,358** | 34 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,201 | — | **1,201** | 17 | 768 |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,197 | — | **1,197** | 84 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 935 | — | **935** | 80 | — |
+| `fsx.inc` — fullscreen exclusive (§53) | 943 | — | **943** | 9 | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 912 | — | **912** | 16 | — |
-| `fsx.inc` — fullscreen exclusive (§53) | 889 | — | **889** | 9 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 821 | — | **821** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
@@ -923,7 +923,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,685 | — | **2,685** | — | — |
-| **total** | **54,683** | **22,477** | **77,160** | **4,743** | **7,762** |
+| **total** | **54,999** | **22,477** | **77,476** | **4,747** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
