@@ -28120,6 +28120,62 @@ several writes happens on a machine with plenty of heap, which is every
 machine anyone develops on. A path that only executes on hardware nobody has
 is a path that has never executed.
 
+### 52.10.12 The apps phase never writes a system file
+
+`hd_icopy_one` asks whose file it is before it copies one, and in the **apps
+phase** anything hidden + system on the source is skipped — silently, with
+`CF = 0`, because a system file on the apps disk is not a failure, it is a
+file that is not the apps disk's business.
+
+The phases mean different things and this is the line between them. The
+system phase *is* the system files: `KERNEL.SYS` at cluster 2, every `*.DRV`,
+whatever `SYSTEM.CFG` and `ASSOC.DAT` the source carries. The apps phase adds
+**software to a machine that already boots** (§52.10.10), and everything
+hidden + system on that machine was put there by the phase before it and
+belongs to the volume rather than to the disk currently in the drive.
+
+Three things it prevents, in rising order of how much they cost:
+
+- **A stale driver over a fresh one.** Nothing says the disk offered as the
+  apps disk was built from the same tree as the one that was offered as the
+  system disk.
+- **A floppy's `ASSOC.DAT` on a hard disk.** §54.7's rows carry
+  `ASC_ROWCLUS`, the directory the program lives in — a **source** cluster
+  number, meaningless on the destination. The hint loses to a real lookup
+  (§54.7.2), so this costs searches rather than correctness, but writing it
+  is still writing a lie.
+- **`KERNEL.SYS` relocated off cluster 2.** A replace allocates a fresh chain
+  at the end of the volume and frees the one at the front, which is exactly
+  the failure §52.10.2's tree-walk skip exists to prevent — *and that skip is
+  by NAME*, so it protects one file and nothing else.
+
+**It is a species test rather than a name list**, so it needs no maintenance
+as files are added and it reads the same two bits every other boundary in
+this system reads (§19.6). The name skip in `hd_icopy_tree` stays: that one is
+about the system phase not copying, in its walk, the file it has already
+written first and alone.
+
+**And it is what a consolidated install disk needs.** On the larger floppy
+geometries a single disk can carry the system and the applications, so the
+"apps disk" may legitimately *be* a system disk — offered as the second half
+of a split install, or simply left in the drive because there is only one. A
+copy that then rewrote the system files would be doing the wrong thing in
+the normal case rather than in a mistake, which is why this is a protection
+in the installer and not advice in a document.
+
+`INSTBNCH.TXT` also names the **copy buffer's KB** now. Which size the claim
+got is invisible from outside and changes how every large file is written, and
+a field report that cannot say which one was in play cannot settle an argument
+about the heap. One has already had to be settled by guessing.
+
+**And `hd_ibuf_get` walks a LADDER rather than asking twice.** 96KB then 32
+is a cliff, and the heap is a continuum: a machine that could spare 64 was
+copied at 32 — three times the `int 13h` calls for nothing. It tries
+96, 64, 48, 32, 16, 8 and takes the first that answers, which costs a table
+and a loop and makes the installer degrade smoothly on exactly the small
+machines this OS is for. The top rung is `HIW_KMAXKB`, so where the heap
+allows it `KERNEL.SYS` still goes down in one write.
+
 
 ## 52.11 Two images: the transport, and the tool
 

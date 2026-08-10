@@ -823,6 +823,7 @@ hd_s_bhdr:  db 'os8088 install, SPEC.md 52.10.9', 13, 10
             ; ...the ROW's own columns: 3 for the label, then five 5-wide
             ; fields. The window's legend is 5 spaces in and this is 3,
             ; because the caption is drawn at its own x and this is not
+hd_s_bbuf:  db 'copy buffer KB', 0
 hd_bbuf:    times 256 db 0
             ; the caption is with the other HIMSGs, where the macro exists
 
@@ -1049,6 +1050,15 @@ hd_bn_save:
     mov di, hd_bbuf
     mov si, hd_s_bhdr               ; a header, so a photograph of the file
     call hd_scat                    ; says what its columns are
+    mov [hd_bp], di
+    mov si, hd_s_bbuf               ; ...and WHAT BUFFER the copy got, because
+    call hd_scat                    ; hd_ibuf_get's fallback is invisible from
+    mov [hd_lineptr], di            ; the outside and changes how every big
+    mov ax, [hd_ibufkb]             ; file is written (SPEC.md 52.10.11). A
+    call hd_utoa4                   ; field report that does not say which of
+    mov di, [hd_lineptr]            ; the two sizes was in play cannot settle
+    mov word [di], 0x0A0D           ; an argument about the heap - and one has
+    add di, 2                       ; already had to be settled by guessing
     mov [hd_bp], di                 ; ...our OWN cursor: hd_bn_rowtext builds
     mov byte [hd_irow], 0           ; into hd_line and resets [hd_lineptr]
 .row:
@@ -1307,6 +1317,8 @@ hd_inst_sys:
     cmp byte [hd_mbrok], HMB_BAD    ; hd_mbr is a fabrication, not this disk's
     je .notable                     ; table: an Install that commits it wipes
                                     ; every partition we could not see
+    mov byte [hd_iphase], 0         ; the SYSTEM phase: the system files are
+                                    ; exactly what it is here for (52.10.12)
     call hd_ibuf_get            ; the buffer FIRST: a format we cannot follow
     jc .nomem                   ; with a copy is a wiped partition
     mov word [hd_imsg], hd_s_iwork
@@ -1402,6 +1414,15 @@ hd_inst_apps:
     push dx
     push si
     push di
+    mov byte [hd_iphase], 1     ; ...and this one adds SOFTWARE to a machine
+                                ; that already boots, so nothing hidden and
+                                ; system on the source is its business
+                                ; (SPEC.md 52.10.12). It is set HERE and not
+                                ; cleared at the end: hd_inst_sys sets its own
+                                ; on the way in, which is the ordering that
+                                ; survives a failed apps phase leaving the
+                                ; stage machine at HII_IDLE for a fresh
+                                ; Install click
     call hd_ibuf_get
     jc .nomem
     mov word [hd_imsg], hd_s_iwork
@@ -1464,37 +1485,43 @@ hd_inst_apps:
 ; A heap claim rather than bss, for SPEC.md 50's reason: it is HIW_KMAXKB at
 ; its largest and the driver's image would carry that on every machine, hard
 ; disk or not. Refusal is a normal path - the caller says so and stops.
+;
+; IT WALKS A LADDER, and that is SPEC.md 52.10.11's other half. It used to ask
+; twice - 96KB, then 32 - so a machine that could spare 64 was copied at 32,
+; three times the int 13h calls for no reason at all. Two sizes is a CLIFF and
+; the heap is a continuum; the table is descending, the first that answers
+; wins, and the size taken is recorded because it is the only way anyone
+; outside can tell which rung a machine landed on (52.10.9's report prints it).
+;
+; THE SIZE GOES IN AX AND THE SEGMENT COMES BACK IN DX (SPEC.md 50.3). This
+; asked in CX and read the answer out of AX, so the buffer segment was
+; whatever AX happened to hold - 0x0047 on the machine that found it, which is
+; BELOW KERNEL_SEG. Reading 76KB of KERNEL.SYS there writes over the interrupt
+; vector table, the BIOS data area and the bottom of the kernel, which is why
+; it presented first as a crash to CS=0000:IP=0000 and then as an endless loop
+; through damaged kernel code. A claim can never be below the heap base, so
+; the value alone was the tell.
 ; -----------------------------------------------------------------------------
 hd_ibuf_get:
     push ax
     push cx
     push dx
-    mov ax, HIW_KMAXKB          ; THE SIZE GOES IN AX AND THE SEGMENT COMES
-    call OSAPI_MEM_CLAIM        ; BACK IN DX (SPEC.md 50.3). This asked in CX
-    jnc .got                    ; and read the answer out of AX, so the buffer
-                                ; segment was whatever AX happened to hold -
-                                ; 0x0047 on the machine that found it, which
-                                ; is BELOW KERNEL_SEG. Reading 76KB of
-                                ; KERNEL.SYS there writes over the interrupt
-                                ; vector table, the BIOS data area and the
-                                ; bottom of the kernel, which is why this
-                                ; presented first as a crash to CS=0000:IP=0000
-                                ; and then as an endless loop through damaged
-                                ; kernel code. A claim can never be below the
-                                ; heap base, so the value alone was the tell
-    mov ax, HIW_CHUNKKB         ; not enough for the kernel in one piece: take
-    call OSAPI_MEM_CLAIM        ; the chunk size, which now costs SPEED and not
-    jc .no                      ; CAPABILITY - KERNEL.SYS arrives as a run of
-                                ; appends instead of one write. It used to
-                                ; "let hd_icopy_one refuse the one file that
-                                ; needs more", i.e. a machine short of heap
-                                ; could not install os8088 at all
-    mov word [hd_ibufkb], HIW_CHUNKKB
-    jmp short .have
+    push si
+    mov si, hd_ibufsz
+.try:
+    mov ax, [si]
+    or ax, ax
+    jz .no                      ; the ladder ran out: not even the smallest
+    call OSAPI_MEM_CLAIM
+    jnc .got
+    add si, 2
+    jmp short .try
 .got:
-    mov word [hd_ibufkb], HIW_KMAXKB
+    mov ax, [si]
+    mov [hd_ibufkb], ax
 .have:
     mov [hd_ibufseg], dx
+    pop si
     pop dx
     pop cx
     pop ax
@@ -1502,11 +1529,19 @@ hd_ibuf_get:
     ret
 .no:
     mov word [hd_ibufseg], 0
+    mov word [hd_ibufkb], 0
+    pop si
     pop dx
     pop cx
     pop ax
     stc
     ret
+
+; The ladder, descending, ending in a 0. Every rung is a whole number of KB
+; and so a cluster multiple on every geometry this kernel mounts (SPEC.md
+; 18.4.4's rule at both ends), and the top one is HIW_KMAXKB so that
+; KERNEL.SYS goes down in one write where the heap allows it.
+hd_ibufsz:  dw HIW_KMAXKB, 64, 48, HIW_CHUNKKB, 16, 8, 0
 
 ; -----------------------------------------------------------------------------
 ; hd_ibufbytes - the buffer's capacity in BYTES, 32-bit (module internal)
@@ -1984,6 +2019,29 @@ hd_icopy_one:
     call hd_istat
     jc .fail
 
+    ; --- and WHOSE file is it? (SPEC.md 52.10.12) ----------------------------
+    ; The APPS phase never writes a system file. The machine it is adding to
+    ; already boots, and everything hidden + system on it - KERNEL.SYS, every
+    ; *.DRV, SYSTEM.CFG, ASSOC.DAT - was put there by the system phase and
+    ; belongs to the volume rather than to the disk in the drive. Copying the
+    ; source's over them is at best pointless and at worst a stale driver on
+    ; top of a fresh one, or a floppy's association cache (54.7, whose rows
+    ; carry SOURCE cluster numbers) on a hard disk.
+    ;
+    ; It is a SPECIES test and not a name list, so it needs no maintenance as
+    ; files are added, and it is the same two bits every other boundary in
+    ; this system reads (19.6). hd_icopy_tree's KERNEL.SYS test stays - that
+    ; one is about the SYSTEM phase not copying, in its tree walk, the file it
+    ; has already written first and alone (52.10.2).
+    ;
+    ; Skipping is CF = 0: a system file on the apps disk is not a failure, it
+    ; is a file that is not the apps disk's business.
+    cmp byte [hd_iphase], 0
+    je .mine
+    cmp byte [hd_isys], 0
+    jne .notmine
+.mine:
+
     ; Does it fit the buffer whole? A 32-BIT compare, and it has to be: the
     ; buffer is up to HIW_KMAXKB and `kb << 10` overflows a word at 64KB, so
     ; the 16-bit version made every file of 64KB or more take the chunked path
@@ -2048,6 +2106,7 @@ hd_icopy_one:
     mov ax, [hd_ioff]           ; hd_istat already told us at the top - the
     cmp ax, [hd_isize]          ; loop knows it is finished the moment the
     jb .chunk                   ; offset reaches the size (SPEC.md 52.10.7)
+.notmine:                       ; SPEC.md 52.10.12: not the apps phase's
 .ok:
     clc
     jmp short .out
@@ -2185,12 +2244,8 @@ hd_iread_chunk:
     mov es, [hd_ibufseg]
     xor bx, bx
     mov si, hd_iname
-    call hd_ibufbytes           ; DX:AX = the capacity...
-    mov cx, ax                  ; ...and CX is what READ_AT takes, a cluster
-                                ; multiple by construction (SPEC.md 18.4.4).
-                                ; The chunk path only runs for buffers under
-                                ; 64KB, so the high half is 0 here by the same
-                                ; construction that makes HIW_CHUNKKB 32
+    call hd_ichunk              ; AX = the take, and it is CAPPED - see there
+    mov cx, ax
     mov ax, [hd_ioff]
     mov dx, [hd_ioff+2]
     call OSAPI_FILE_READ_AT     ; out DX:AX = the bytes, 0 at the end
@@ -2199,6 +2254,39 @@ hd_iread_chunk:
     pop dx
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ichunk - how many bytes one take moves (module internal)
+; out: AX; every other register preserved
+;
+; The buffer's capacity, CAPPED AT 32,768, and the cap is not tidiness:
+; OSAPI_FILE_READ_AT takes its count in CX, so a 64KB buffer asks for 65,536,
+; which truncates to **zero** - and a zero-length take is exactly what
+; hd_icopy_one reads as "the file is finished", so the destination would be
+; left holding whatever had been written so far and the copy would report
+; success. A silently truncated KERNEL.SYS is the worst outcome this module
+; has, and nothing downstream could catch it.
+;
+; This routine's predecessor was a `mov cx, ax` on the low half with a comment
+; saying the chunk path never ran above 64KB - untrue since HIW_KMAXKB became
+; 96 (which lands on 0x8000 and worked by luck), and fatal the moment
+; hd_ibufsz gained a 64KB rung.
+;
+; 32,768 is a power of two and so a whole number of clusters on every geometry
+; this kernel mounts, which is SPEC.md 18.4.4's precondition at both ends.
+; -----------------------------------------------------------------------------
+hd_ichunk:
+    push dx
+    call hd_ibufbytes           ; DX:AX = the buffer's capacity, 32-bit
+    or dx, dx
+    jnz .cap                    ; 64KB or more: the low half is a lie
+    cmp ax, 32768
+    jbe .out
+.cap:
+    mov ax, 32768
+.out:
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2813,6 +2901,13 @@ hd_isord:     dw 0              ; ...and the sub-folder walk's
 hd_isubc:     dw 0              ; the source folder's cluster
 hd_idsubc:    dw 0              ; ...and the destination folder's
 hd_iinsub:    db 0              ; 1 = the file being copied is in a folder
+hd_iphase:    db 0              ; 0 = the SYSTEM phase, 1 = the APPS phase.
+                                ; Only hd_icopy_one reads it, and only to
+                                ; refuse a hidden+system source file in phase
+                                ; 1 (SPEC.md 52.10.12). .text with a real
+                                ; initialiser like every byte here: -f bin
+                                ; zeroes nothing, and garbage would put the
+                                ; system phase on the wrong side of that test
 hd_ient:      times OSAPI_FIND_SZ db 0
 hd_ifind:     times OSAPI_FIND_SZ db 0
 hd_iname:     times 14 db 0

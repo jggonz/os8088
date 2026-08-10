@@ -85,8 +85,8 @@ VIDDEF += -DDISK_COUNTERS
 DRVDEF += -DINSTBENCH
 endif
 
-# INSTCHUNK=1 builds the hard-disk installer's copy buffer at its FALLBACK
-# size, so KERNEL.SYS - the biggest file it moves, and a hidden+system one -
+# INSTCHUNK=1 puts the TOP of the hard-disk installer's copy-buffer ladder at
+# 32KB, so KERNEL.SYS - the biggest file it moves, and a hidden+system one -
 # goes down as a run of OSAPI_FILE_APPEND_SYS calls instead of a single write
 # (SPEC.md 18.4.4/52.10.11). That path only happens on a machine too short of
 # heap to fund 96KB, which is no machine here, so without this knob the one
