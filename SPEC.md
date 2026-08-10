@@ -546,7 +546,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 API jump table at 0x0010** (§20.3) + osapi helper routines, **boot splash entry at 0x0008** (§15) |
 | `kernel/viddet.inc` | video adapters (§39): the boot probe, the live geometry block, mode set/teardown (`vid_setmode`/`vid_text`/`vid_init`), the shared addressing helpers `gfx_rowbase`/`gfx_nextrow`, the 1bpp colour map `gfx_ink` — prefix `vid_`; included **before** `splash.inc`, and all its data lives in `.text` |
 | `kernel/splash.inc` | boot-time loading screen (§15): the first adapter probe and mode set, welcome dialog, pixel progress bar, spinning vector "8088" — on a 1bpp adapter the progress bar alone (§39.6); far-ticked by the boot sector per sector read; self-contained, no .bss |
-| `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock; the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
+| `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock, `gfx_scroll` (§5.5); the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
 | `kernel/vgabb.inc`  | the software renderer (§32/§39.3): the software planar primitives, and the only video driver on a 1bpp adapter |
 | `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
@@ -706,6 +706,12 @@ caller, so it stays available as a later optimisation.
 SI = dy **signed**, positive scrolling the content *up*. Caller holds the
 gfx lock. **out** CF=0 moved, CF=1 refused and nothing touched. Every
 register preserved — CF is the whole answer.
+
+**It lives in `vga12.inc`.** It was in `vgabb.inc` while it had three
+backends and one of them was §32's back buffer; with the buffer gone it has
+two — VGA through the latches, mono through `gfx_rowbase` — which is exactly
+the shape of every other primitive in `vga12.inc`, and it was the last public
+API slot with its body in the software renderer.
 
 A scrolling view is the one case the repaint optimisations elsewhere in this
 spec cannot help with: row signatures (§27.2) find every row changed, and a

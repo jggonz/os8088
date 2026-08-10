@@ -28,200 +28,16 @@
 ; through it. Pixel/hline/vline are degenerate fills - a rect setup costs one
 ; mul, same as the dedicated VRAM loops.
 ;
+; No public API slot has its body here: gfx_scroll was the last and moved to
+; vga12.inc with the back buffer (SPEC.md 5.5), so every bb_* entry below is
+; reached through the [vid_mono] dispatch at a public entry in another file.
+;
 ; Concurrency: every routine here runs with the gfx lock held (SPEC.md 1.6) -
 ; vga12's rect scratch needs no interrupt guard. The cursor does not come
 ; through here at all: mouse.inc goes through vga_save_vram/vga_restore_vram
 ; and draws straight to the framebuffer (SPEC.md 7.1).
 ; =============================================================================
 
-
-; -----------------------------------------------------------------------------
-; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x01E0)
-;
-; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, absolute screen
-;           coords), SI = dy SIGNED: positive moves the rect's content UP dy
-;           rows, negative down. Caller holds the gfx lock - which is what
-;           makes the blit cursor-safe: the cursor is hidden under it.
-; out:      CF=0 done; the |dy| vacated rows keep UNSPECIFIED content and
-;           the caller repaints them. CF=1 refused, nothing moved: x1/(x2+1)
-;           not multiples of 8, empty/inverted rect, |dy| = 0 or >= height,
-;           rect off the live screen, or an armed clip region that does not
-;           contain the whole rect (whole-shape clipping, the font_char/
-;           ico_core class - a blit cannot be cut per pixel; the caller
-;           falls back to a full repaint, which clips per strip).
-; clobbers: nothing (registers preserved; CF is the answer)
-;
-; Two backends, one contract (SPEC.md 39):
-;   VGA direct   - GC write mode 1: each movsb moves 8 pixels across all
-;                  four planes through the latches; mode restored after
-;                  (SPEC.md 1 rule 7).
-;   mono         - per-row rep movsb through gfx_rowbase, immune to the
-;                  banked layouts by construction.
-; -----------------------------------------------------------------------------
-gfx_scroll:
-    call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    GFXDENTER                   ; a blit cannot take a sub-rect (SPEC.md 11.3),
-    GFXDORG cx, dx              ; so it goes onto the display holding its top
-                                ; left - and the two edge tests below then
-                                ; REFUSE a rect that reaches past that display,
-                                ; which is 39.14.2's straddle rule for free
-    test ax, 7                  ; byte-column granularity on every adapter
-    jnz .no
-    mov di, cx
-    inc di
-    test di, 7
-    jnz .no
-    cmp ax, cx
-    ja .no
-    cmp bx, dx
-    ja .no
-    cmp cx, [vid_cw]
-    jae .no                     ; also catches a "negative" x1 via x1 <= x2
-    cmp dx, [vid_ch]
-    jae .no
-    or si, si
-    jz .no
-    mov di, si                  ; DI = |dy|
-    jns .pos
-    neg di
-.pos:
-    push dx
-    sub dx, bx
-    inc dx                      ; DX = height
-    cmp di, dx
-    pop dx
-    jae .no
-    call wm_clip_test           ; whole-shape clip (SPEC.md 11.3): CF=1 =
-    jc .no                      ; armed and not wholly inside one fragment
-    mov [bbs_sdy], si
-    push cx
-    mov cl, 3
-    shr ax, cl
-    mov [bbs_col], ax           ; left byte column
-    pop ax                      ; AX = x2
-    inc ax
-    mov cl, 3
-    shr ax, cl
-    sub ax, [bbs_col]
-    mov [bbs_nb], ax            ; bytes per row
-    mov ax, dx
-    sub ax, bx
-    inc ax
-    sub ax, di
-    mov [bbs_rows], ax          ; rows to copy = height - |dy|
-    cmp word [bbs_sdy], 0
-    jl .down
-    mov [bbs_ydst], bx          ; up: dest rows y1..y2-|dy|, walked top-down
-    mov word [bbs_step], 1      ; (source below destination - forward-safe)
-    jmp short .disp
-.down:
-    mov [bbs_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
-    mov word [bbs_step], -1     ; bottom-up (source above destination)
-.disp:
-    cmp byte [vid_planes], 1
-    je .mono
-    mov dx, 0x03CE              ; VRAM, via the latches
-    mov ax, 0x0105              ; GC5: write mode 1 - a movsb read fills the
-    out dx, ax                  ; latches, the write stores all four planes
-    mov dx, VGA_SEG
-    call bbs_lincopy
-    mov dx, 0x03CE
-    mov ax, 0x0005              ; write mode back to 0 (SPEC.md 1 rule 7)
-    out dx, ax
-    jmp short .ok
-.mono:
-    call bbs_bankcopy           ; the framebuffer IS [vid_rseg] (SPEC.md 39)
-.ok:
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    GFXDLEAVE                   ; ...and it banks CF, which is this routine's
-    pop di                      ; whole answer
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; bbs_lincopy - scroll one LINEAR segment (the VGA stride): a buffer plane,
-; or VRAM itself in write mode 1
-; in:       DX = target segment; the bbs_* geometry
-; clobbers: AX/BX/CX/DX/SI/DI, flags (gfx_scroll banked the caller's)
-; -----------------------------------------------------------------------------
-bbs_lincopy:
-    push ds
-    mov es, dx
-    mov ax, [bbs_rows]
-    mov [bbs_left], ax
-    mov bx, [bbs_ydst]
-.r:
-    mov ax, bx
-    add ax, [bbs_sdy]
-    mul word [vid_stride]       ; AX = src row * stride (DX:AX, DX = 0)
-    add ax, [bbs_col]
-    mov si, ax
-    mov ax, bx
-    mul word [vid_stride]
-    add ax, [bbs_col]
-    mov di, ax
-    mov cx, [bbs_nb]
-    push es
-    pop ds                      ; DS = ES = the target for the movs
-    cld
-    rep movsb
-    mov ax, KERNEL_SEG
-    mov ds, ax
-    add bx, [bbs_step]
-    dec word [bbs_left]
-    jnz .r
-    pop ds
-    ret
-
-; -----------------------------------------------------------------------------
-; bbs_bankcopy - the mono twin: per-row copies through gfx_rowbase, which
-; absorbs the Hercules/CGA bank interleave (SPEC.md 39.2)
-; in:       the bbs_* geometry; target = [vid_rseg]
-; clobbers: AX/BX/CX/DX/SI/DI, flags
-; -----------------------------------------------------------------------------
-bbs_bankcopy:
-    push ds
-    mov ax, [vid_rseg]
-    mov es, ax
-    mov ax, [bbs_rows]
-    mov [bbs_left], ax
-    mov bx, [bbs_ydst]
-.r:
-    mov ax, bx
-    add ax, [bbs_sdy]
-    call gfx_rowbase            ; AX = the src row's start (CS-relative
-    add ax, [bbs_col]           ; parameter reads - DS-safe, SPEC.md 39.2)
-    mov si, ax
-    mov ax, bx
-    call gfx_rowbase
-    add ax, [bbs_col]
-    mov di, ax
-    mov cx, [bbs_nb]
-    push es
-    pop ds
-    cld
-    rep movsb
-    mov ax, KERNEL_SEG
-    mov ds, ax
-    add bx, [bbs_step]
-    dec word [bbs_left]
-    jnz .r
-    pop ds
-    ret
 
 ; -----------------------------------------------------------------------------
 ; bb_fill / bb_fill_gray / bb_xor_fill - software twins of gfx_fill,
@@ -732,13 +548,5 @@ bb_dir          resb 1          ; xfer: 0 = save, 1 = restore
 bb_mode         resb 1          ; rect core: BBM_SOLID / BBM_GRAY / BBM_XOR
 bb_pat          resb 1          ; rect core: plane value / dither pattern
 bb_altm         resb 1          ; rect core: per-row pattern toggle (0 or FF)
-
-bbs_col         resw 1          ; gfx_scroll (SPEC.md 5.5): left byte column
-bbs_nb          resw 1          ;   bytes per row
-bbs_sdy         resw 1          ;   signed dy (positive = content up)
-bbs_ydst        resw 1          ;   first destination row
-bbs_step        resw 1          ;   +1 (up: top-down) / -1 (down: bottom-up)
-bbs_rows        resw 1          ;   rows to copy = height - |dy|
-bbs_left        resw 1          ;   per-pass row countdown
 
 section .text
