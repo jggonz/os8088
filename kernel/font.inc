@@ -18,6 +18,13 @@ FONT_FIRST  equ 32              ; first glyph kept from the ROM set
 FONT_LAST   equ 126             ; last  glyph kept
 FONT_BYTES  equ (FONT_LAST - FONT_FIRST + 1) * 8    ; 95 glyphs x 8 rows = 760
 
+; SPEC.md 6.1.7: the widest run any adapter can show, in cells. A run stops at
+; [vid_cwm8], so this is vid_w / 8 for the widest screen os8088 drives -
+; Hercules at 720 - and the run-major scan can therefore never overflow the
+; table. It has a fallback for it anyway, because a constant that is a bound
+; on another module's geometry is one somebody will change.
+FONT_RN_MAX equ 90
+
 %ifndef BAKED_FONT
 ; -----------------------------------------------------------------------------
 ; font_init - copy the ROM 8x8 font's printable range into RAM
@@ -521,6 +528,10 @@ font_run_x:
     push dx
     push si
     push di
+    push bp                     ; SPEC.md 6.1.7's row pass holds the glyph row
+                                ; in BP, and 7.1.4.1 is what a routine that
+                                ; forgets to save it costs: a background task
+                                ; keeps BP for its whole life
 %ifdef KERN_BIG
     ; --- SPEC.md 39.14.6: A RUN IS NOT A SHAPE. font_char is whole-cell
     ; because a cell is 8x8 and goes wholly onto one display; a run is up to a
@@ -625,8 +636,116 @@ font_run_x:
     shr di, 1                   ; 6 clocks against 20, and CL stays the x it
     shr di, 1                   ; still needs to be
     add di, ax                  ; DI = the run's first framebuffer byte
-.cell:
+
+    ; --- PASS 1: which cells get drawn, and where their glyphs live ----------
+    ; SPEC.md 6.1.7. The string is walked ONCE into a table of glyph pointers,
+    ; which is what frees ES - it holds the caller's string right up to here -
+    ; so the drawing pass can point it at the framebuffer for the whole run.
+    push si                     ; both wanted again if this falls back to the
+    push cx                     ; per-cell path below
+    mov bx, font_rn_tab
+    xor bp, bp                  ; BP = cells that will actually be drawn
+.p1:
     mov al, [es:si]
+    or al, al
+    jz .p1end
+    cmp cx, [vid_cwm8]          ; the first cell off the right edge ends the
+    ja .p1end                   ; run - x only grows, so the drawn cells are
+    cmp bp, FONT_RN_MAX         ; a PREFIX, which is what lets stosb walk them
+    jae .p1full
+    inc si
+    add cx, 8
+    cmp al, FONT_FIRST
+    jb .p1blank
+    cmp al, FONT_LAST
+    ja .p1blank
+    sub al, FONT_FIRST
+    mov ah, 0
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, font_glyphs
+    jmp short .p1put
+.p1blank:
+    mov ax, font_zero           ; an unprintable cell is still PAINTED
+.p1put:
+    mov [bx], ax
+    add bx, 2
+    inc bp
+    jmp short .p1
+.p1full:                        ; unreachable while the table covers the widest
+    pop cx                      ; screen, and a fallback rather than a truncation
+    pop si                      ; if that ever stops being true
+    jmp .cell                   ; NOT `jmp short`: it reaches by 12 bytes today
+                                ; and this is the cold path of the pair
+.p1end:
+    pop cx
+    pop si
+    or bp, bp
+    jz .out                     ; nothing on screen: no rows to write
+    mov [font_rn_n], bp
+    cmp word [wm_clip_n], 0
+    je .rm
+    ; A region is armed. stosb walks CONSECUTIVE bytes, so it is only correct
+    ; if every cell is drawn - one rejected in the middle breaks the run into
+    ; pieces. So the whole run has to sit inside one fragment; a cut one goes
+    ; per cell, which is where a per-cell clip test lives anyway (SPEC.md 6.1.2).
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, cx                  ; AX = x1
+    mov bx, dx                  ; BX = y1
+    mov cx, bp
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, ax
+    dec cx                      ; CX = x2 = x + 8n - 1
+    mov dx, bx
+    add dx, 7                   ; DX = y2
+    call wm_clip_test
+    pop di
+    pop si
+    pop dx
+    pop cx
+    jc .cell
+
+    ; --- PASS 2: one ROW of the whole run at a time --------------------------
+    ; The cells of a run are CONSECUTIVE BYTES within a row, so a row is a
+    ; stosb walk and gfx_nextrow is paid once a row instead of once a row per
+    ; cell - 12 of the old 27-byte row body, eight times over, per cell.
+.rm:
+    mov dl, [font_rn_xm]        ; DL = ink XOR background, DH = background:
+    mov dh, [font_rn_bm]        ; the run's masks (SPEC.md 6.1.5) for all 8 rows
+    mov es, [vid_rseg]          ; ES:DI is the framebuffer from here on - the
+    xor bp, bp                  ; string has been read and will not be touched
+.rmrow:
+    mov si, font_rn_tab
+    mov cx, [font_rn_n]
+    push di                     ; this row's first byte
+.rmpx:
+    lodsw                       ; AX = this cell's glyph base (DS:SI, the table)
+    xchg ax, bx                 ; BX = it, in one byte
+    add bx, bp                  ; ...+ the row this pass is on
+    mov al, [ss:bx]             ; the glyph row byte (font_glyphs is LOW_SEG)
+    and al, dl
+    xor al, dh
+    stosb
+    loop .rmpx
+    pop di
+    add di, [cs:vid_rowadd]     ; gfx_nextrow, ONCE a row
+    test di, [cs:vid_wrapbit]
+    jz .rmnw
+    add di, [cs:vid_wrapfix]
+.rmnw:
+    inc bp
+    cmp bp, 8
+    jb .rmrow
+    jmp .out
+
+.cell:                          ; the per-cell path: a clip-cut run, and the
+    mov al, [es:si]             ; overflow that cannot happen
     or al, al
     jz .out
     inc si
@@ -693,6 +812,7 @@ font_run_x:
     jmp short .cells
 .out:
     GFXDLEAVE
+    pop bp
     pop di
     pop si
     pop dx
@@ -710,6 +830,7 @@ font_run_x:
     add cx, 8
     jmp short .cells_nx
 .out_nx:
+    pop bp
     pop di
     pop si
     pop dx
@@ -915,6 +1036,11 @@ font_rn_bm:     resb 1          ; 6.1.5/6.1.6): ink XOR background, and
 font_rn_ch:     resb 1          ; font_run_scell's character, parked because
                                 ; AL is the rect's low byte by the time the
                                 ; letter is drawn
+font_rn_n:      resw 1          ; SPEC.md 6.1.7: cells the run will draw, and
+font_rn_tab:    resw FONT_RN_MAX ; a glyph pointer for each. 180 bytes, taken
+                                ; deliberately: it is what lets the drawing
+                                ; pass go ROW-major, which pays gfx_nextrow
+                                ; once a row instead of once a row per cell
 font_bb_si:     resw 1          ; bb path: glyph pointer, reloaded per plane
 font_bb_di:     resw 1          ; bb path: cell offset, reloaded per plane
 font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono

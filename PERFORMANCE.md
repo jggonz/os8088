@@ -3783,3 +3783,65 @@ stosb` for repeated glyphs — which §27.2's space-padding idiom makes common,
 since there the padding IS the erase. It needs a per-run array of glyph
 pointers (80 cells × 2 bytes of `.bss`) or 8x the glyph-address lookups, so it
 is a real trade rather than a free one.
+
+### Set 27 — the run is drawn a ROW at a time: `FONT_RUN` is 2.84x (SPEC.md §6.1.7)
+
+Set 26 named what it had left: the row body was 27 bytes of which **12 were the
+banked-row advance**, paid eight times per CELL. But the cells of an aligned run
+are consecutive bytes *within a row*, so that advance belongs to the row.
+
+`font_run_x` is two passes now. Pass 1 walks the string once into
+`font_rn_tab` — a glyph pointer per cell, stopping at the first cell past
+`[vid_cwm8]`, so the drawn cells are a *prefix* and therefore contiguous. Pass
+2 runs eight times, once per glyph row, each a `lodsw`/`stosb` walk of the whole
+run with `gfx_nextrow` paid **once at the end of it**.
+
+**The table is what frees `ES`**, which is the part that is not obvious: `ES`
+holds the caller's *string* right up to the end of pass 1 (`font_run` is an X
+stub — the string is in the package's segment), so a cell-major loop has to
+reload it per cell to reach the framebuffer. Once the string has been read,
+`ES:DI` is the framebuffer for the whole run and the masks sit in `DX` for all
+eight passes.
+
+| `gfxbench` row, CGA | original | §6.1.6 | §6.1.7 | vs §6.1.6 | vs original |
+|---|---|---|---|---|---|
+| **`FONT_RUN` 10 aligned** | 8,879.59 µs | 4,785.69 | **3,126.81** | **−34.66%** | **−64.79%, 2.84x** |
+| `FONT_CHAR` one cell | 895.44 | 895.50 | 895.27 | −0.03% | −0.02% |
+| `FONT_STR` 10 aligned | 8,402.93 | 8,402.93 | 8,402.93 | +0.00% | +0.00% |
+| `PAIR` 10 aligned | 10,152.88 | 10,152.88 | 10,151.83 | −0.01% | −0.01% |
+| `FONT_RUN` 10 skewed 5 | 10,839.77 | 10,840.47 | 10,843.40 | +0.03% | +0.03% |
+| `GFX_PIXEL` · `GFX_FILL` · `GFX_SCROLL` | — | — | — | +0.00% | ±0.00% |
+
+**Cost, and this one is NOT free.** `.text` **+137** and `.bss` **+176** against
+the pre-§6.1.5 baseline — the 180-byte table plus its count — and **the image
+rung CROSSED**: `KERN_SIZE` 95,744 → 96,256, spare 2,560 → **2,048, four
+steps**, which is the standard this tree keeps. That was authorised in advance
+for this path specifically. The three changes together are net **+137 `.text`**
+for **2.84x**.
+
+**Three bounds hold it up and each is a correctness argument.** A **clip
+region** makes cells individually refusable and one rejected in the middle
+breaks the run into pieces `stosb` cannot walk — so an armed region costs one
+`wm_clip_test` over the whole run and a **cut** run goes per cell (§6.1.2's
+path). **Table overflow** cannot happen while `FONT_RN_MAX` = 90 covers
+`vid_w / 8`, and falls back anyway. And **`BP` carries the glyph row**, so
+`font_run_x` saves it — §7.1.4.1 is what forgetting costs.
+
+**Verified against the ORIGINAL kernel**, three screens on each mono adapter,
+with a partly-occluded Task Manager behind the Disk window so the clip-region
+fallback is exercised too: **0 differing pixels** on four of six screens, and
+on the other two the difference is **8 pixels in one cell — and it is TRUE.**
+The Disk window reads `Free 248K` where the old kernel read `Free 249K`,
+because a kernel 512 bytes bigger takes one more 1 KB cluster: read out of the
+two images' FATs independently, 249 free clusters against 248. Set 25's clock
+cell was the same lesson and this is the second instance — **a systematic
+difference in one glyph cell is what BOTH a real defect and a correctly
+reported fact look like.** Read the cell.
+
+**What is left.** The inner loop is 14 bytes — `lodsw`, `xchg`, `add bx,bp`,
+`mov al,[ss:bx]`, `and`, `xor`, `stosb`, `loop`. Unrolling the eight row passes
+would make the row a disp8 on the glyph fetch and retire `BP` and the `add`,
+taking it to ~12; it costs ~240 bytes of `.text`, which is another rung, and at
+that point the fetch is nearly all of it. A `rep stosb` for a run of identical
+glyph rows (a span of spaces, which §27.2's padding makes common) is the other
+candidate and needs a compare per cell to find the span.

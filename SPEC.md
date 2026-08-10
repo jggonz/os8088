@@ -1593,6 +1593,42 @@ still has to be.
 
 Measured with §6.1.5's, in PERFORMANCE.md Set 26.
 
+#### 6.1.7 The run is drawn a ROW at a time, not a cell at a time
+
+§6.1.6 left the row body at 27 bytes of which **12 were the banked-row
+advance** — `add di, [cs:vid_rowadd]`, `test di, [cs:vid_wrapbit]`, `jz` —
+paid eight times per CELL. But **the cells of an aligned run are consecutive
+bytes within a row**, so that advance belongs to the row and not to the cell.
+
+`font_run_x` is two passes. **Pass 1** walks the string once into
+`font_rn_tab`, a glyph pointer per cell, stopping at the first cell past
+`[vid_cwm8]` — x only grows, so the drawn cells are a *prefix*, which is what
+makes them contiguous. **Pass 2** then runs eight times, once per glyph row,
+and each pass is a `lodsw`/`stosb` walk of the whole run with `gfx_nextrow`
+paid once at the end of it.
+
+**The table is what frees `ES`.** It holds the caller's string right up to the
+end of pass 1 (`font_run` is an X stub — the string is in the *package's*
+segment), so a cell-major loop must reload `ES` per cell to reach the
+framebuffer. Once the string has been read, `ES:DI` is the framebuffer for the
+whole run and the masks live in `DX` for all eight passes. That is 180 bytes
+of `.bss` — `FONT_RN_MAX` = 90 cells, `vid_w / 8` for the widest screen os8088
+drives — spent deliberately on the system's hottest text path.
+
+**Three things bound it, and each is a correctness argument rather than a
+tuning.** A **clip region** makes cells individually refusable, and one
+rejected in the middle breaks the run into pieces `stosb` cannot walk — so an
+armed region costs one `wm_clip_test` over the whole run, and a **cut** run
+goes per cell (§6.1.2's path, which is where a per-cell clip test belongs
+anyway). The **table overflow** cannot happen while `FONT_RN_MAX` covers
+`vid_w / 8`, and falls back to the per-cell path regardless, because a
+constant that is a bound on another module's geometry is one somebody will
+change. And **`BP` carries the glyph row**, so `font_run_x` saves it: §7.1.4.1
+is what a routine that forgets costs, a background task holding `BP` for its
+whole life.
+
+Measured in PERFORMANCE.md Set 27.
+
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
 `make FONT=<name>` builds a kernel whose 8x8 typeface is `fonts/<name>.f8`
