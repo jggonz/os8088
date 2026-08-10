@@ -15721,19 +15721,58 @@ real memory at a real address whoever owns it.
 where a cache is the subject. Three caption lines, one question each:
 
 ```
-HEAP 545K   8 clm          the SIZE of the heap, and how many records are live
-HELD  37K  PURGE  63K      what is claimed, and on what terms
-FREE 508K   MAX 508K       what is left, and the largest single run
+HEAP 544K  AVAIL 519K      the heap, and what a claim can GET out of it
+HELD 25K(5)  PURGE 69K(2)  what is claimed, on what terms, and how many records
+MAX  515K   FRAG    4K     how that AVAIL is SHAPED
 ```
+
+**Every line is a pair that closes**, and that is the layout's whole rule:
+`HEAP − AVAIL = HELD`, and `MAX + FRAG = AVAIL`. A figure the reader cannot
+reconcile against its neighbours reads as a bug however sound the model
+behind it is — which is what `AVAIL 519K` beside `MAX 515K` did before `FRAG`
+existed, since "519K available, 515K maximum" is arithmetic nobody can close.
+`FRAG` is everything available *outside* the largest run: memory that is
+genuinely there and genuinely unclaimable in one piece, which is the number a
+refused claim wants and the only one that makes the pair add up. It reads
+`0K` on an unfragmented heap, which is a positive statement rather than a
+missing one.
 
 `HELD` and `PURGE` are **never added together anywhere the user can see**,
 and that is the point rather than a layout accident: their sum answers no
 question. `HELD` is memory nothing can get back; `PURGE` is memory the next
-claim can have for the price in the TIER column. `FREE` already includes
-`PURGE` (§50.6.3), so the three lines are readable together —
-`HEAP = HELD + FREE`, and `PURGE` says how much of that `FREE` is currently
-doing something useful. Total heap gets a line of its own because it is a
-property of the machine and the other two are properties of the moment.
+claim can have for the price in the TIER column. **The record count is split
+with them** for the same reason — one `8 clm` was a sum across the only
+distinction this page exists to draw — and it is `tm_putn` rather than
+`tm_put3` because a parenthesised count wants its own width: `(5)`, not
+`(  5)`. At two-digit counts the line is exactly 27 characters, which is
+`TM_STRMAX`'s limit.
+
+**`AVAIL`, never `FREE`.** It counts the purgeables (§50.6.3), so it is what a
+claim can *get* rather than what is unused, and the two differ by `PURGE`
+exactly. Labelled `FREE` it read as a contradiction: `HELD 37` + `PURGE 63`
+against `FREE 508` out of `HEAP 545` does not balance, because 63 of that
+"free" is holding a cache. `AVAIL` is also the kernel's own name for the
+quantity (`mem_avail`, `OSAPI_MEM_AVAIL`), and the same distinction Linux's
+`free(1)` draws between *free* and *available* for exactly this reason. The
+four figures then read as one statement: **`HEAP = HELD + AVAIL`**, with
+`PURGE` naming the part of `AVAIL` that is currently doing something useful.
+Total heap gets a line of its own because it is a property of the machine and
+the rest are properties of the moment.
+
+**`AVAIL` equal to `MAX` — so `FRAG 0K` — is the normal reading, not a
+fault.** They
+differ only when the heap is fragmented, and on a lightly loaded machine it
+is not: data claims pack up from the bottom, regions down from the top, and
+a purgeable block does not divide a run because `mem_run` steps over it. A
+worked example, measured — close an app whose region sits *above* another
+one and the hole it leaves is cut off from the main span by the survivor:
+
+```
+mem_base 17E0  mem_top A000  span 544K
+  17E0 +0140 held   19E0 +0140 held   2000 +0FC0 PURGE
+  1920 +00C0 held   1B20 +00C0 held   9CC0 +0240 held
+                    -> AVAIL 519K, MAX 515K, FRAG 4K   (the 4K above 9F00)
+```
 
 **`TIER` reads `HELD` for an unpurgeable claim, never a dash.** The column
 answers what LOSING a block costs, and a dash in a list under `TRIV` reads as

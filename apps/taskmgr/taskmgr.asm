@@ -738,14 +738,19 @@ tm_s_bfat:  db '  FAT snap', 0
 ; row's tm_kcol total lands too.
 tm_s_hhdr:  db 'TYPE      ADDR SIZE TIER', 0
 tm_s_hheap: db 'HEAP ', 0
-tm_s_hclm:  db ' clm', 0        ; ...how many records are live, because the
-                                ; list can be longer than the window and this
-                                ; is what says so without spending a row
-tm_s_hheld: db 'HELD ', 0       ; the two halves of what is claimed, never one
-tm_s_hpurg: db '  PURGE ', 0    ; figure: they are owed on different terms
-tm_s_hfree: db 'FREE ', 0
-tm_s_hmax:  db '  MAX ', 0      ; total free against the LARGEST run: the
-                                ; fragmentation reading (docs/FIELD-NOTES.md 2)
+tm_s_hheld: db 'HELD', 0        ; the two halves of what is claimed, never one
+tm_s_hpurg: db '  PURGE', 0     ; figure: they are owed on different terms.
+                                ; No trailing space - tm_put3 right-aligns
+                                ; into three and brings its own
+tm_s_havl:  db '  AVAIL ', 0    ; NOT 'FREE': this counts the purgeables, so
+                                ; it is what a claim can GET rather than what
+                                ; is unused, and the two differ by PURGE
+                                ; exactly (SPEC.md 28.4.1)
+tm_s_hmax:  db 'MAX ', 0        ; the LARGEST single run of AVAIL...
+tm_s_hfrag: db '  FRAG ', 0     ; ...and everything available OUTSIDE it, so
+                                ; the two SUM to AVAIL. Without it the page
+                                ; said '519K available, 515K max', which is
+                                ; arithmetic nobody can close (SPEC.md 28.4.1)
 
 ; TYPE names, seven columns. A claim the table does not know prints its owner
 ; word in hex instead (tm_htype) - a debug page must not label an unknown tag
@@ -2433,6 +2438,11 @@ tm_hsnap:
     mov di, tm_claims
     TM_CLAIM_SNAPSHOT
     pop es
+    push bx                     ; ...and the heap's two live figures with it:
+    call OSAPI_MEM_AVAIL        ; AX = largest run, BX = total available. Once
+    mov [tm_maxrun], ax         ; a refresh, because BOTH captions read them
+    mov [tm_avl], bx            ; and mem_avail walks the table per candidate
+    pop bx
     pop di
     pop ax
     ret
@@ -2522,9 +2532,46 @@ tm_hsum:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_putn - an unsigned count in as few digits as it needs
+; in:  AX = value, DI = dest
+; out: DI advanced by 1..5
+; clobbers: nothing else (flags)
+;
+; tm_put3 pads to three columns, which is right for a KB figure in a column
+; and wrong for a parenthesised count: '(  5)' against '(5)'. The split line
+; is 27 characters at two-digit counts and there is no room for the padding.
+; -----------------------------------------------------------------------------
+tm_putn:
+    push ax
+    push bx
+    push cx
+    push dx
+    xor cx, cx
+    mov bx, 10
+.split:
+    xor dx, dx
+    div bx                      ; AX = quotient, DX = this digit
+    push dx
+    inc cx
+    or ax, ax
+    jnz .split
+.emit:                          ; ...back off the stack, most significant first
+    pop ax
+    add al, '0'
+    mov [di], al
+    inc di
+    loop .emit
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_hsplit - what is claimed, split by whether the kernel can take it back
 ; in:  the claim snapshot
-; out: AX = KB held (unpurgeable), DX = KB purgeable
+; out: AX = KB held (unpurgeable), DX = KB purgeable,
+;      BX = records held,           CX = records purgeable
 ; clobbers: nothing else (flags)
 ;
 ; The two are never added into one figure anywhere the user can see, and that
@@ -2535,11 +2582,12 @@ tm_hsum:
 ; in neither because it belongs to no instance at all.
 ; -----------------------------------------------------------------------------
 tm_hsplit:
-    push bx
-    push cx
     push si
-    xor ax, ax                  ; held
-    xor cx, cx                  ; purgeable
+    push di                     ; DI and not BP: a callback's BP is the task's
+    xor ax, ax                  ; instance record and is never scratch here
+    xor bx, bx                  ; (tm_row_draw says so for the same reason)
+    xor di, di                  ; AX/BX = held KB and records, DI/CX = the
+    xor cx, cx                  ; purgeable pair
     mov si, tm_claims
 .rec:
     cmp word [si+CLS_SEG], 0
@@ -2547,44 +2595,24 @@ tm_hsplit:
     push ax
     mov ax, [si+CLS_PARA]
     call tm_hkb
-    mov bx, ax
+    mov dx, ax
     pop ax
     cmp byte [si+CLS_OWN+1], MEM_PG_MIN   ; the owner's high byte IS the rank
     jb .held
     cmp byte [si+CLS_OWN+1], MEM_PG_MAX
     ja .held                    ; MEM_LVL_TOP: an ordinary kernel claim
-    add cx, bx
+    add di, dx
+    inc cx
     jmp short .next
 .held:
-    add ax, bx
+    add ax, dx
+    inc bx
 .next:
     add si, CLS_RECSZ
     cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
     jb .rec
-    mov dx, cx
-    pop si
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; tm_hcount - how many records are live, whoever owns them
-; in:  nothing
-; out: AX = count
-; clobbers: nothing else (flags)
-; -----------------------------------------------------------------------------
-tm_hcount:
-    push si
-    xor ax, ax
-    mov si, tm_claims
-.rec:
-    cmp word [si+CLS_SEG], 0
-    je .next
-    inc ax
-.next:
-    add si, CLS_RECSZ
-    cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
-    jb .rec
+    mov dx, di
+    pop di
     pop si
     ret
 
@@ -2872,18 +2900,16 @@ tm_cap_htot:
     mov di, tm_str
     mov si, tm_s_hheap
     call tm_copy
-    mov ax, [tm_kb+SK_HEAP]     ; the SIZE, alone: what is claimed out of it is
-    call tm_put3                ; two different answers and gets its own line
+    mov ax, [tm_kb+SK_HEAP]     ; the heap, and what a claim can get out of
+    call tm_put3                ; it: HEAP - AVAIL is HELD, so the pair closes
     mov byte [di], 'K'
     inc di
-    mov byte [di], ' '
-    inc di
-    mov byte [di], ' '
-    inc di
-    call tm_hcount
-    call tm_put3
-    mov si, tm_s_hclm
+    mov si, tm_s_havl
     call tm_copy
+    mov ax, [tm_avl]
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
     mov byte [di], 0
 
     call tm_rowsum
@@ -2931,19 +2957,35 @@ tm_cap_hspl:
     push si
     push di
 
-    call tm_hsplit              ; AX = held, DX = purgeable
-    push dx
+    call tm_hsplit              ; AX/BX = held KB and records, DX/CX = the
+    push dx                     ; purgeable pair
+    push cx
+    push bx
     mov di, tm_str
     mov si, tm_s_hheld
     call tm_copy
     call tm_put3
     mov byte [di], 'K'
     inc di
+    mov byte [di], '('
+    inc di
+    pop ax                      ; held records
+    call tm_putn
+    mov byte [di], ')'
+    inc di
     mov si, tm_s_hpurg
     call tm_copy
-    pop ax
+    pop cx                      ; purgeable records, banked across the KB
+    pop ax                      ; purgeable KB
+    push cx
     call tm_put3
     mov byte [di], 'K'
+    inc di
+    mov byte [di], '('
+    inc di
+    pop ax
+    call tm_putn
+    mov byte [di], ')'
     inc di
     mov byte [di], 0
 
@@ -2993,18 +3035,20 @@ tm_cap_hfrg:
     push si
     push di
 
-    call OSAPI_MEM_AVAIL        ; AX = largest run KB, BX = total free KB
-    push ax
     mov di, tm_str
-    mov si, tm_s_hfree
+    mov si, tm_s_hmax
     call tm_copy
-    mov ax, bx
+    mov ax, [tm_maxrun]
     call tm_put3
     mov byte [di], 'K'
     inc di
-    mov si, tm_s_hmax
+    mov si, tm_s_hfrag
     call tm_copy
-    pop ax
+    mov ax, [tm_avl]            ; everything available OUTSIDE the largest run,
+    sub ax, [tm_maxrun]         ; so MAX + FRAG = AVAIL exactly. The largest
+    jnc .frag                   ; run is a subset of the total by construction,
+    xor ax, ax                  ; so this cannot go negative - but a wrong 0
+.frag:                          ; beats a wrong 65,000 if it ever does
     call tm_put3
     mov byte [di], 'K'
     inc di
@@ -4921,10 +4965,17 @@ tm_spawned  equ os88_image_end + 2168  ; byte: 1 = this instance owns its
 ; Appended here rather than beside [tm_colrows] where it belongs by subject:
 ; the offsets above are hand-chained literals, so a word inserted mid-block
 ; renumbers every one below it.
+tm_avl      equ os88_image_end + 2171  ; OSAPI_MEM_AVAIL's pair, banked once a
+tm_maxrun   equ os88_image_end + 2173  ; refresh by tm_hsnap: total available,
+                                       ; and the largest single run of it.
+                                       ; Both captions read them and mem_avail
+                                       ; walks the claim table once per
+                                       ; candidate, so it is not a call to
+                                       ; make twice (SPEC.md 28.4.1)
 tm_hcolrows equ os88_image_end + 2169  ; the HEAP page's column-0 depth
                                        ; (SPEC.md 28.4) - its list starts
                                        ; higher than the memory view's, so it
                                        ; wraps later. Frame-derived, never
                                        ; dock-derived: see tm_init
 
-TM_BSS_TOTAL equ 2171
+TM_BSS_TOTAL equ 2175
