@@ -14586,18 +14586,21 @@ double-click on `TASKMGR.O88` in a Disk window is unaffected and opens as
 many as you like; that is the package rule, and the singleton is the menu
 item's rule.
 
-**Two views.** `[tm_view]` (0 = performance, 1 = memory) selects what the
-content shows; both share the sampler, the instance snapshot and the
-process-row geometry. The window's W_ONCLICK is `tm_click`: ANY content
-click toggles the view — the content has no other click targets, ui.inc
-§13 only feeds clicks to the front window (a click that raises the window
-does not toggle), and the handler runs under the gfx lock its caller
-already holds, so it white-fills the whole content rect (198×245 from the
-wm_content origin) and runs the new view's full paint body in place.
-`tm_kinit` zeroes `[tm_view]` with the rest of the module state: every
-launch opens in the performance view. The sampler never looks at the view
-— history keeps accumulating while the memory view is up, so toggling
-back shows a gapless graph.
+**Three pages.** `[tm_view]` (0 = performance, 1 = memory, 2 = heap — §28.4)
+selects what the content shows; all three share the sampler, the instance
+snapshot and the process-row geometry. The window's W_ONCLICK is `tm_click`:
+ANY content click **cycles** the page 0 → 1 → 2 → 0 — the content has no
+other click targets, ui.inc §13 only feeds clicks to the front window (a
+click that raises the window does not cycle), and the handler runs under the
+gfx lock its caller already holds, so it white-fills the whole content rect
+(198×245 from the wm_content origin) and runs the new page's full paint body
+in place. It **cycles rather than toggles**, and that is the whole of the
+navigation: a third page needs no chrome, no tabs and no second hit-test,
+because the one click target this window has ever had is all of it. `tm_kinit`
+zeroes `[tm_view]` with the rest of the module state: every launch opens in
+the performance view. The sampler never looks at the view — history keeps
+accumulating while the other two pages are up, so cycling back shows a
+gapless graph.
 
 **Load gauge — idle-spin calibration.** `tm_worker` never sleeps. Each
 interval it spins { 32-bit counter += 1; `task_yield` } until 9 ticks have
@@ -15194,6 +15197,158 @@ in the root it left.
 
 The cost is 5,444 bytes twice, plus one cluster per folder: 7 clusters of
 the 360KB disk's 354.
+
+### 28.4 The heap page — every claim, grouped under the app that holds it
+
+The third page (`[tm_view]` = 2, `tm_rows_heap`). The memory view above it
+answers *how much* heap each instance holds — one `HEAP` column per row, out
+of `SSI_KB` — and that single figure is the wrong shape for the two questions
+a heap actually goes wrong in: **which** of an app's claims is the big one,
+and **what is still purgeable** when a claim is refused. This page is
+`mem_tab` itself, read through §20.9's `osapi_claim_snapshot` and grouped.
+
+**It cost the kernel nothing, and that is why the per-claim detail is here at
+all.** The whole page is decode: the owner word already carries the
+namespace (§50.2) and, since §50.6, the purge tier in its high byte — the
+encoding was chosen so that "the Task Manager can pick the class out of what
+it already reads", and this is that claim being cashed. No new API cell, no
+new snapshot field, no `.o88` invalidated: `kernel.bin` is **byte-identical**
+before and after (md5 `cd62282e…`, `KERN_SIZE` 95,744, 2,560 spare, +0 on
+every rung). The budget for the detailed version was 100 bytes of kernel and
+the price was zero, so the indented per-claim listing is what shipped rather
+than a bare per-app total.
+
+**Two caption lines, then the list.**
+
+- (6,4): `"HEAP uuu/tttK  nn clm"` — claimed of heap, and **how many records
+  are live**. The count is there because the list can be longer than the
+  window: it is what says so, without spending a row on saying it.
+- (6,15): `"FREE nnnK  MAX nnnK"` — total free against the **largest single
+  run**, from one `OSAPI_MEM_AVAIL`. That pair *is* the fragmentation
+  reading, and it is the one number this page exists to put on screen:
+  docs/FIELD-NOTES.md 2 is a refusal where the total says there is room and
+  the largest run does not, and until now nothing in the OS showed both at
+  once.
+- (6,26): the header, `"TYPE      ADDR SIZE TIER"`.
+- (6,37): the rows, at the memory list's `TM_ROW_H` pitch and `TM_MPEN` pen.
+
+**The list starts at `TMH_ROW_Y`, and it needed saying twice.** `tm_mrow_open`
+had `TMM_ROW_Y` — the *memory* view's first row — baked in, because it was
+written when that was the only list using it. What sits above the memory
+view's rows is a MAP and a BAR; what sits above these is two caption lines,
+so the heap page's list opened a map's height below its own header, 30 px of
+white between `TYPE` and `System`. It picks the row origin off `[tm_view]`
+now.
+
+**...and it needs its own column depth to go with it.** `[tm_colrows]` is
+derived from `TMM_ROW_Y`, so a list starting 30 px higher wraps into column 2
+with a map's height still unused at the foot of column 1. `[tm_hcolrows]` is
+the same arithmetic from `TMH_ROW_Y` (measured: 8 rows against the memory
+view's, on CGA), and `tm_row_place` picks between them the same way. **It is
+derived from the FRAME and never from the dock**, which is the trap:
+`[tm_colrows]` is dock-derived and `TMM_ROWS` caps the frame height below
+what the dock allows, so on a tall screen a dock-derived depth names rows the
+frame cannot show — and `tm_row_place` would then wrap *past* rows `tm_ylim`
+had already refused, losing them instead of moving them into the next column.
+`[tm_maxrow]` takes the deeper of the two, which cannot hurt the other two
+pages: the performance list is bounded by its own `cmp si, TM_ROWS`, the
+memory list tests `TMM_ROWS` first, and `tm_ylim` clamps both.
+
+**A heading is never left on the foot of a column** (`tm_mrow_nolast`). The
+list is column-major, so a heading landing on a column's last row is
+separated from every row it heads — on CGA this put `APPS` at the bottom of
+column 1 and its one claim at the top of column 2. A heading is a label for
+what follows and says nothing alone, so it gives that row up and starts the
+next column instead. Three things about it:
+
+- **Which heading it catches is not fixed.** It is whichever one the claim
+  count happens to push there, and one claim fewer makes it a different one —
+  so this is a rule about the row index, never a special case for a
+  particular group.
+- **It costs at most one row per column**, however many headings there are,
+  because only one row index per column is that column's last and the list
+  passes it once. `TMH_ROWS` carries that one, which is what its `+ 3` is.
+- **It does nothing in the last column**, where the foot of the column is
+  simply the end of the list and a pushed heading would be lost rather than
+  moved.
+
+**The memory view had the same defect and takes the same rule** — `Builtins`
+landed at the foot of a column with its first built-in at the top of the
+next — so `tm_rows_mem` calls it at both of its heading sites (`Builtins`,
+`Packages`). `System` does not need it: row 0 is a column's last only on a
+one-row column, which no screen here produces. `TMM_ROWS` is deliberately
+**not** raised for the row it can spend, because the window's HEIGHT is
+derived from it (§28.1) and raising it makes the window taller on every
+screen to buy a row that only a two-column layout can ever use. The cost of
+leaving it is bounded and rare: a machine running the full `INST_MAX`
+instances on a wrapped list loses the last row, which is the same clipping
+that layout already does.
+
+**Grouping is by OWNER, and a heading is not a claim.** `System` first, then
+one heading per live instance in slot order, each carrying that owner's total
+KB in the SIZE column; every claim it holds is a row **indented two
+characters** under it. An owner with no claims still gets its heading — "this
+app holds nothing" is an answer, and its absence would read as the app not
+running.
+
+**The TYPE column is what makes a row identifiable**, seven characters
+decoded from `CLS_OWN`:
+
+| Owner word | TYPE | |
+|---|---|---|
+| the instance's own slot, `CLS_SEG` = `I_SPTR` | `Region` | its image+bss (§20.1) |
+| the instance's own slot, otherwise | `Data` | a built-in's claim |
+| the package's own segment | `Data` | a package's data claim (§50.3) |
+| `MEM_K_SAVE` | `MenuSav` | the menu save-under |
+| `MEM_K_DRV` | `DrvImg` | a loaded driver |
+| `MEM_K_COPY` | `CopyBuf` | the file manager's copy buffer |
+| `MEM_K_FATW` | `FATwin` | one volume's FAT window |
+| `MEM_K_ASC` | `Assoc` | one volume's `ASSOC.DAT` cache |
+| `MEM_K_CLIP` | `Clipbrd` | the system clipboard |
+| `MEM_P_WSAVE` + slot | `WinSave` | a window's raise cache (a RANGE, §11.96.3) |
+| `MEM_P_DIRW` | `DirRead` | the directory read-ahead window |
+| anything else | `xxxx` | **the raw owner word, in hex** |
+
+That last row is the rule the table is built around: an unknown tag prints
+its number rather than being labelled as the nearest thing, because this is
+a debug page and a *wrong* name is worse here than no name. A tag added to
+the kernel and not to `apps/os88api.inc` therefore shows up as a hex word in
+the list — visible, and honest about what it is.
+
+**The TIER column is the purge rank** (§50.6.4), and it is the second half of
+what the page is for. `TRIV` / `LOW` / `MED` / `HIGH` for a purgeable record,
+and `-` for one that is not, taken from the high byte alone — so a claim that
+is refused can be read against what the machine was *willing to give back*
+and at what price. `WinSave` at `TRIV` costs a redraw; `DirRead` at `HIGH` is
+316 `int 13h` calls against 114 on an install (§18.95). Both are "a cache" in
+the memory view's single figure and they are not the same thing to the person
+waiting.
+
+**A purgeable claim is counted as FREE by `mem_avail` (§50.6.3) and is listed
+here anyway**, which is the one place this page deliberately disagrees with
+the caption above it: `FREE` and `MAX` already include every cache, so the
+KB in the list can exceed `HEAP claimed` minus `FREE`. That is not a
+discrepancy to reconcile — it is the whole point of a tier column. The
+caption answers *what could I get*, the rows answer *what would it cost*.
+
+**The row budget is the table's, not the screen's.** `TMH_ROWS` is
+`MEM_MAX + INST_MAX + 3` = 47 — every record, plus a heading each, plus
+System, plus the one row `tm_mrow_nolast` can spend — and `tm_maxrow`'s cap
+was raised from `TMM_ROWS` to it so a tall
+screen can show more than the memory view's 19. Nothing else moved: the
+frame HEIGHT is still derived from `TMM_ROWS`, the performance list is still
+bounded by its own `cmp si, TM_ROWS`, and the memory list's blank loop still
+tests `TMM_ROWS` before `tm_maxrow`. What it did cost is `tm_rowck`, which is
+a check word per chunk per row and grew with it (§28.2) — 200 bytes → 470,
+in the package's bss and so on the heap, paid only while the window is open.
+
+**It borrows the memory view's row machinery whole** — `tm_mrow_open` /
+`tm_mrow_close` / `tm_row_draw` / `tm_row_place` — so it inherits the chunked
+redraw, the two-column wrap on a short screen (§28.1.1), the `tm_ylim` clamp
+and §11.3's granularity handling without restating any of it. It draws **no
+legend square**: a claim's band on the memory view's map is that page's
+statement, and repeating the swatch here would key a map this page does not
+draw.
 
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
