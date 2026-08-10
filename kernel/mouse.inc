@@ -1698,7 +1698,7 @@ cur_get_1:
 ; -----------------------------------------------------------------------------
 ; cur_restoreu - write cur_save back under (cur_drawn_x, cur_drawn_y).
 ;                VRAM-direct (SPEC.md 32) - the cursor lives on the screen
-;                only, never in the back buffer, and this runs from the ISR
+;                only, and this runs from the ISR
 ;                where the bb dispatch must not apply.
 ; clobbers: ax, bx, cx, dx, si
 ; -----------------------------------------------------------------------------

@@ -9,33 +9,12 @@
 ;
 ; THE CANVAS LIVES OUTSIDE THE PACKAGE REGION. A 448x280 image at 4bpp is
 ; 62,720 bytes against a 19.5KB region (SPEC.md 20.1), so the pixels cannot
-; be here. They sit in four 64KB windows starting at linear 0x66000 - the
-; first paragraph above BB_SEG's four planes (SPEC.md 2: BB_SEG's 4 x 0x9600
-; bytes end at 0x657FF), which is the lowest address in the machine that no
-; kernel structure can ever reach:
-;
-;   0x66000  PT_CVSEG   canvas      118-byte BMP header + rows, bottom-up
-;   0x76000  PT_UNSEG   undo image  same layout, row-granular (see pt_umark)
-;   0x86000  PT_CBSEG   clipboard   also the load staging buffer (64KB)
-;   0x96000  PT_SCSEG   scratch     the claim record + the flood-fill stack
-;
-; That is memory nobody granted us, and it is the ONE thing here that a
-; kernel service should own instead (see the notes in docs/PAINT-NOTES.md).
-; Three consequences are handled rather than hoped about:
-;
-;  1. The region only exists on a machine with ~620KB of conventional RAM,
-;     so pt_entry asks int 12h first and puts up "Not enough memory" instead
-;     of a canvas when the answer is short. A 256KB or 512KB machine gets a
-;     window that explains itself and touches nothing.
-;  2. Two instances would share one canvas, so the SECOND one refuses. The
-;     claim record at PT_SCSEG:0 carries a magic pair and the owner's window
-;     pointer; pt_dupchk trusts it only if that record is still a used
-;     window whose title string is ours (SPEC.md 11's W_FLAGS bit 0 and
-;     W_TITLE, read through DS = KERNEL_SEG). A closed Paint leaves a stale
-;     magic behind - there is no close hook for a task-less package - and
-;     that test is what makes the staleness harmless.
-;  3. BB_SEG is never touched, so the Control Panel's Display page can arm
-;     or disarm double buffering under us with no effect but the flush.
+; be here. They come from the claim heap (SPEC.md 50): one contiguous block
+; asked for at startup and carved into four - canvas, undo image, clipboard,
+; scratch - with the sizes tiered off OSAPI_MEM_AVAIL, so a small machine
+; gives up features one at a time and finally gets a notice window instead of
+; a canvas. See the block above PT_GIF_MAX_KB below for what this used to be
+; and why none of it is a fixed address any more.
 ;
 ; PERFORMANCE. Two decisions carry the whole app:
 ;
@@ -60,7 +39,7 @@
 ; tracking loops here - brush, rubber band, marquee - therefore follow
 ; ui_drag's discipline in reverse (SPEC.md 13): they draw, RELEASE the lock
 ; so gfx_unlock's flush pushes the work to VRAM (a package's gfx_* calls go
-; through the back buffer when double buffering is on, so without the
+; drawn under a held lock, so without the
 ; release a stroke would be invisible until the button came up), yield, then
 ; re-take it. They exit with the lock held, as the contract requires.
 ;
@@ -134,7 +113,8 @@
 ; undo image, clipboard, scratch. Nothing here is a fixed address any more -
 ; the kernel owns the map and hands us a segment, which is the whole of what
 ; docs/PAINT-NOTES.md asked for. What used to be here instead: two hard-coded
-; bases (0x66000, or BB_SEG when the kernel could never arm a back buffer),
+; bases (0x66000, or the back buffer's own segment when the kernel could
+; never arm one),
 ; a mirror of the kernel's DB_MIN_KB policy constant to choose between them,
 ; and a magic-word claim record so two Paints could not silently share one
 ; canvas. All three are gone: OSAPI_MEM_CLAIM cannot hand the same paragraph
@@ -1299,9 +1279,9 @@ pt_clip:
 ; selection clears and paste rows all come through here, which is why the
 ; nibble edge masks are computed once per call and the row loop is a
 ; `rep stosb` between two read-modify-writes. The screen half is a single
-; gfx_fill: the kernel's own clipping and its back-buffer dispatch
+; gfx_fill: the kernel's own clipping and its adapter dispatch
 ; (SPEC.md 32/39.5) then apply, so the same call is correct on all three
-; adapters and with double buffering either way.
+; adapters.
 ; -----------------------------------------------------------------------------
 pt_rect:
     push ax
@@ -1600,7 +1580,7 @@ pt_undo_swap:
 ; paste, a file load, and erasing the text caret. It is one OSAPI_GFX_BLIT4
 ; per BAND of rows - usually one call for the whole rectangle - and the
 ; kernel does the run coalescing, the clipping, the adapter dispatch and the
-; back buffer.
+; renderer.
 ;
 ; This used to be the app's own coalescer (pt_runend, `repe scasb` over the
 ; packed bytes) emitting one OSAPI_GFX_HLINE per run. That was the right
@@ -2864,8 +2844,8 @@ pt_msg_show:
 ;
 ; The lock is what makes this necessary in both directions. Holding it across
 ; a whole stroke would keep every other task's painting out (fine) but would
-; also postpone gfx_unlock's back-buffer flush until the button came up, so
-; with double buffering on (SPEC.md 32) the stroke would be invisible while
+; also hold the lock for the whole stroke, so every other drawer would be
+; starved while
 ; being drawn. Releasing it on every mouse sample instead is what puts the
 ; ink on the glass, and the yield is what keeps the clock ticking.
 ;
@@ -2877,7 +2857,7 @@ pt_msg_show:
 ; before OSAPI_FSX_RUN and released after it returns (SPEC.md 53.6), and
 ; unlocking it mid-bracket would hand the mouse ISR a screen the app owns.
 ; The flush comes back with it - gfx_unlock is where the SPEC.md 32 flush
-; lives, so on a double-buffered machine fsx_wait is the ONLY present a
+; lives, so fsx_wait is the only pacing a
 ; tracking loop gets, which is exactly what SPEC.md 53.5 built it for. What
 ; is given up is the yield: a bracket has nothing to yield TO, every other
 ; task being frozen, so the pace is one pass per tick either way.
@@ -2886,7 +2866,7 @@ pt_wait:
     cmp byte [pt_fsx], 0
     je .win
     cmp byte [pt_mono], 0           ; in the bracket on a 1bpp adapter there is
-    jne .nowait                     ; nothing to wait FOR: no back buffer is
+    jne .nowait                     ; nothing to wait FOR: no frame clock is
     jmp pt_fswait                   ; possible (SPEC.md 32), so nothing is owed
 .nowait:                            ; a present, and the lock is the caller's
     ret                             ; and is not being released either way.
@@ -4226,7 +4206,7 @@ pt_clampy:
 ; The outline is drawn UNDER the lock and left up while the lock is released
 ; (pt_wait_tick), which is the opposite of ui_drag's ordering and deliberate:
 ; ui_drag's XOR goes straight to VRAM and is visible immediately, while a
-; package's OSAPI_GFX_XOR_RECT goes through the back buffer when double
+; package's OSAPI_GFX_XOR_RECT is a persistent draw when double
 ; buffering is armed (SPEC.md 32) and only reaches the glass at gfx_unlock's
 ; flush. The window that ui_drag protects - "nothing may touch the covered
 ; pixels between draw and erase" - is safe here for a different reason: this
@@ -7339,7 +7319,7 @@ pt_ondlg:
                                     ; toast_now is what puts this on the glass
                                     ; before the machine goes quiet, and is
                                     ; why the pt_wait that used to be here for
-                                    ; the double-buffer flush is gone
+                                    ; the lock round trip is gone
     call pt_save
 .draw:
     cmp byte [pt_wchg], 0           ; a load that resized the window has to

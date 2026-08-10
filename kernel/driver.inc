@@ -32,7 +32,7 @@
 ; as an ordinary answer and never as a failure to recover from: at boot the
 ; machine comes up without the driver and says so afterwards (drv_notice), and
 ; at runtime the Control Panel refuses the click with the reason in prose.
-; That is the bb_avail idiom (SPEC.md 32) pointed at a floppy drive.
+; That is the sw_avail idiom (SPEC.md 32) pointed at a floppy drive.
 ;
 ; Boot ordering, binding: drv_boot runs BEFORE the desktop's first paint, so a
 ; machine whose sound driver loads has sound from the first frame - and
@@ -268,23 +268,22 @@ CFG_RT      equ 2               ; db: [snd_route]  (SPEC.md 34.8)
 CFG_H12     equ 3               ; db: [clk_h12]    (SPEC.md 31.5)
 CFG_SEC     equ 4               ; db: [clk_secs]
 CFG_SCH     equ 5               ; db: the scheduler mode (SPEC.md 8.2)
-CFG_BB      equ 6               ; db: double buffering  (SPEC.md 32)
-CFG_VID     equ 7               ; db: the display adapter (SPEC.md 39.11.3) -
+CFG_VID     equ 6               ; db: the display adapter (SPEC.md 39.11.3) -
                                 ; a VID_* kind, not a bitmap. Applied by
-                                ; drv_boot and NOT by drv_cfg_unpack, for the
-                                ; back buffer's reason one line up: it is not
-                                ; a store. It sets a video mode, and it is
+                                ; drv_boot and NOT by drv_cfg_unpack, because
+                                ; it is not a store: it sets a video mode, and
+                                ; it is
                                 ; refused outright when the machine no longer
                                 ; has that card - which is what stops a disk
                                 ; carried from a machine with a Hercules in it
                                 ; booting this one to a dead monitor
-CFG_VDM     equ 8               ; db: [vid_dmode], Single or Extend (39.19)
-CFG_VDL     equ 9               ; db: [vid_dlay], where display 1 sits. Both
+CFG_VDM     equ 7               ; db: [vid_dmode], Single or Extend (39.19)
+CFG_VDL     equ 8               ; db: [vid_dlay], where display 1 sits. Both
                                 ; range-checked before they are stored, on
                                 ; CFG_SCH's terms: a byte from a future
                                 ; version leaves the default alone rather
                                 ; than selecting nonsense
-CFG_DBLOB   equ 10              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_DBLOB   equ 9               ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
                                 ; the LENGTH, carries them to disk and back,
@@ -313,8 +312,6 @@ drv_cfg_keys:
     db 1, 1, CFG_SEC
     dw 'SM'                     ; Scheduler Mode
     db 1, 1, CFG_SCH
-    dw 'BB'                     ; Back Buffer
-    db 1, 1, CFG_BB
     dw 'VM'                     ; Video Mode - which adapter, then SPEC.md
     db 2, 3, CFG_VID            ; 39.19's two arrangement bytes. ver 2 because
                                 ; it WAS one byte: an old record's VM stops
@@ -325,7 +322,7 @@ drv_cfg_keys:
                                 ; at a time
     dw 'HD'                     ; Hard Disk - the DRIVER's own blob (51.9)
     db 1, DRV_BLOB_SZ, CFG_DBLOB
-CFG_NKEY    equ 8
+CFG_NKEY    equ 7
 CFG_KESZ    equ 5               ; bytes per table entry
 
 ; The file buffer, DERIVED rather than guessed: drv_cfg_ser emits the header,
@@ -341,7 +338,7 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
 ; The three plain bytes, as (struct offset, kernel byte) pairs: one loop packs
 ; and another unpacks, so a new setting is three bytes of table rather than
 ; two more hand-written copies that can drift apart. The scheduler and the
-; back buffer are NOT here - neither is a plain store (SPEC.md 8.2/32).
+; adapter is NOT here - it is not a plain store (SPEC.md 8.2/39.11.3).
 drv_cfg_map:
     db CFG_RT
     dw snd_route
@@ -1956,8 +1953,7 @@ drv_task:
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ;
-; The back buffer is unpacked SEPARATELY, by drv_boot, because turning it on
-; is not a store: bb_set claims 150KB and seeds the buffer from VRAM under the
+; is not a store: sw_set claims 150KB and seeds the buffer from VRAM under the
 ; gfx lock, and it has to happen after the screen exists.
 ; -----------------------------------------------------------------------------
 drv_cfg_pack:
@@ -1980,8 +1976,6 @@ drv_cfg_pack:
     mov [drv_cfg+CFG_WANT], ax
     call sched_mode_get
     mov [drv_cfg+CFG_SCH], al
-    mov al, [bb_dbl]
-    mov [drv_cfg+CFG_BB], al
     mov al, [vid_kind]          ; the adapter the machine is RUNNING as, which
     mov [drv_cfg+CFG_VID], al   ; on a machine that has never been asked is
                                 ; exactly what vid_detect chose - so the file
@@ -2598,7 +2592,7 @@ drv_boot:
     mov ch, 1                   ; the loop below correctly loads nothing
 
     ; --- the display adapter, FIRST (SPEC.md 39.11.3) ------------------------
-    ; Before the driver loads and long before the back buffer at the bottom of
+    ; Before the driver loads, at the bottom of
     ; this routine, because everything after it draws: the splash bar is
     ; ticked once per sector by dsk_xfer (SPEC.md 15.3), and vid_setmode
     ; CLEARS the framebuffer - so the switch has to happen while there is the
@@ -2665,7 +2659,6 @@ drv_boot:
     cmp cl, DRV_MAX
     jb .next
 
-    ; --- and the back buffer LAST (SPEC.md 32) -------------------------------
     ; It is the one setting that is not a store: it claims 150KB and SEEDS
     ; ITSELF FROM VRAM. Until this line VRAM holds the loading screen, whose
     ; bar is still being ticked one notch per sector by everything above
@@ -2673,15 +2666,6 @@ drv_boot:
     ; notch after it, because a direct VRAM write is exactly what the next
     ; flush undoes. The heap does not care which end of this routine it
     ; happens at: data claims grow up and a driver's region down (SPEC 50.3).
-    or ch, ch
-    jz .out
-    cmp byte [drv_cfg+CFG_BB], 0
-    je .out
-    call gfx_lock
-    mov al, 1
-    call bb_set                 ; refuses itself on an adapter or a heap that
-    call gfx_unlock             ; cannot fund it - an ordinary answer, not an
-    jmp short .out              ; error (SPEC.md 32/50)
 .nodisk:
     ; No system disk at all. Only a row the user actually wanted counts as a
     ; failure: a machine that has never enabled a driver must not be told

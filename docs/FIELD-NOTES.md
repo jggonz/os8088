@@ -458,7 +458,7 @@ base is its CS and can never move (§50.3).
 
 **A related honesty bug worth fixing at the same time:** the splash says only
 `Out of memory`. It should say which figure failed and how short it was —
-`bb_avail`'s pattern (§47: say *why* not).
+§31.3's three-layer refusal pattern (§47: say *why* not).
 
 ---
 
@@ -1085,9 +1085,11 @@ That is the only row where the 5150 and MartyPC disagree at all; the other 45
 gfxbench rows agree within 0–4%. So the 5150 is doing *different work* in
 this pair, not the same work more slowly.
 
-**What the pair can vary by.** With no back buffer (both mono adapters,
-`[bb_dbl]` = 0) `gfx_flush` returns before it can spend the deferred hide, so
-`gfx_unlock` takes `.never` → `cur_lazyend` every iteration. That path is a
+**What the pair can vary by.** Nothing in `gfx_unlock` spends the deferred
+hide before `cur_lazyend`, so it takes `.never` → `cur_lazyend` every
+iteration. (This was measured while SPEC.md §32's `gfx_flush` still stood at
+the top of `gfx_unlock`; it returned without spending the hide on a mono
+adapter, so the path measured is the one that runs today.) That path is a
 few compares **unless `[mouse_x]`/`[mouse_y]` differ from
 `[cur_drawn_x]`/`[cur_drawn_y]`**, in which case it is a full `cur_move` —
 which is about the right size to explain 2 ms on a 4.77 MHz machine.

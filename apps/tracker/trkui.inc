@@ -321,8 +321,8 @@ tui_textc:                          ; SI = string, CX = x, DX = y
 ; Hercules and on CGA. The harness that says so is apps/fontbench, which lives
 ; on the testing branch - the numbers are recorded in 6.1.1 either way.
 ;
-; On a colour adapter [bb_on] is 0 unless Smooth borrowed the back buffer, so
-; the kernel would fall back to its own fill plus FONT_STR - a second fill of
+; On a colour adapter [vid_mono] is 0, so the kernel would fall back to its
+; own fill plus FONT_STR - a second fill of
 ; ground the caller has already covered. There it stays FONT_STR: the row
 ; band was filled once, which is cheaper than filling it again per run.
 tui_runc:

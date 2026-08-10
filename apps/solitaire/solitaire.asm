@@ -2790,7 +2790,7 @@ sol_drag:
 ; -----------------------------------------------------------------------------
 ; sol_linger - yield until the timer tick changes, gfx lock HELD throughout
 ; sol_pace   - the same wait with the lock RELEASED across it, so what was
-;              just drawn reaches the glass (with double buffering on it only
+;              just drawn reaches the glass (it only
 ;              does so at gfx_unlock's flush, SPEC.md 32) and other tasks run
 ; in:  nothing; out: nothing; both preserve every register
 ; -----------------------------------------------------------------------------

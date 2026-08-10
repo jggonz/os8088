@@ -484,7 +484,6 @@ VID_CGA    equ 2
 ; OSAPI_FILE_READBIG fails to assemble, which is the intended way to find
 ; out: pass your base segment in ES with BX = 0 and call OSAPI_FILE_READ.
 
-%define OSAPI_GFX_DBUF      KERNEL_SEG:0x01F0   ; arm/disarm double buffering
                                  ; for your own drawing (SPEC.md 32): AL = 1
                                  ; on / 0 off, lock HELD. Out CF=0 and AL =
                                  ; the state before, which you hand straight
@@ -575,7 +574,7 @@ VID_CGA    equ 2
                                  ; calls now, and one of these replaces the
                                  ; hundreds of OSAPI_GFX_HLINE calls a
                                  ; hand-rolled run-length blitter would make.
-                                 ; Honours the clip region and the back buffer.
+                                 ; Honours the clip region.
 ; --- CPU tier and memory above 1MB (SPEC.md 41) --------------------------------
 ; On a 286 or a 386 the machine has RAM above linear 0x0FFFFF that the 640KB
 ; conventional map cannot name. These five slots lend you some of it.
@@ -1445,10 +1444,8 @@ OS88_BSS_SIZE equ 0
                                                 ; (set ES = DS). Bracket-only.
                                                 ; Out CF=0: mode set, screen
                                                 ; cleared, buffer filled;
-                                                ; CF=1: bad id, not on this
-                                                ; adapter, or your back
-                                                ; buffer is armed - call
-                                                ; OSAPI_GFX_DBUF off first.
+                                                ; CF=1: bad id, or not on
+                                                ; this adapter.
 
 %define OSAPI_FSX_WAIT      KERNEL_SEG:0x02D8   ; in AL = FSXW_TICK (0) the
                                                 ; next tick / FSXW_VSYNC (1)
@@ -1461,13 +1458,6 @@ OS88_BSS_SIZE equ 0
                                                 ; a kept worker (53.5.1).
                                                 ; Bracket-only, CF=1 outside
                                                 ; or on an unknown AL.
-                                                ; THE PRESENT: while your
-                                                ; back buffer is armed and no
-                                                ; mode switch has happened,
-                                                ; it flushes before waiting -
-                                                ; the bracket never unlocks,
-                                                ; so this is the only flush a
-                                                ; buffered renderer gets.
                                                 ; Draw, wait, repeat.
 %define OSAPI_ARG_FILE      KERNEL_SEG:0x02E8   ; the document this instance was
                                  ; launched to open (SPEC.md 54.5). No

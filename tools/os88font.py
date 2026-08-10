@@ -14,8 +14,8 @@ letter with a hole in it is obvious in `.` and `#` and invisible in `0x6C`.
 2.4:1 tall, so a face that is balanced on VGA can be spindly there, and that
 is the adapter it will be read on.
 
-    python3 tools/os88font.py fonts/os8088.f8 -o build/font8x8.inc
-    python3 tools/os88font.py fonts/os8088.f8 --preview /tmp/sheet.png
+    python3 tools/os88font.py fonts/tallx.f8 -o build/font8x8.inc
+    python3 tools/os88font.py fonts/tallx.f8 --preview /tmp/sheet.png
 
 The `.f8` format, all of it:
 

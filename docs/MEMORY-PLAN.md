@@ -44,7 +44,7 @@ every app at once, with no new rule for anyone to forget.
 
 Three other things must drop it, and all are one-liners at sites that already
 exist: the window moving or resizing (`ui_drag`, `ui_grow`, `wm_fit`), the
-adapter changing (§39.11's `vid_switch`, which already drops the back buffer),
+adapter changing (§39.11's `vid_switch`),
 and the window being destroyed.
 
 ---
@@ -73,10 +73,10 @@ adapters, ~40 ms on VGA. **A raise becomes ~20 ms of blitting instead of 578
 ms of glyphs**, which is comfortably inside the 100 ms budget and would be the
 first interaction in §7's table to reach it.
 
-Note what the full-screen VGA figure is: **152 KB, which is §32's back buffer
-to within a rounding**. That is the number `bb_canfit` already refuses on a
-small machine, so we know both that it is affordable on a 640 KB box and that
-it must be refusable.
+Note what the full-screen VGA figure is: **152 KB, which was §32's back buffer
+to within a rounding** — the number `bb_canfit` refused on a small machine
+while that feature existed. So we know both that it is affordable on a 640 KB
+box and that it must be refusable.
 
 ---
 

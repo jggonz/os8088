@@ -1621,12 +1621,9 @@ wm_snap_win:
 ; RIGHT and the width is about to shrink to pay for it. One answer, two
 ; users, rather than a second copy of three tests that has to agree.
 ;
-; MONO ONLY, and the gate is [vid_mono] rather than [bb_on] on purpose. The
-; two say the same thing on Hercules and CGA, but [bb_on] is also 1 on a VGA
-; that has double buffering armed - so gating on it would make windows drag
-; differently depending on a Control Panel setting, and buy almost nothing
-; for it: the back buffer's flush costs ~24x its render (SPEC.md 32), so the
-; render-side saving snapping unlocks is diluted away there.
+; MONO ONLY, and [vid_mono] is the gate: what snapping buys is font_run's
+; single-store cell path (SPEC.md 6.1), which exists on the 1bpp adapters and
+; nowhere else. On VGA it would cost 8px drag steps for nothing.
 ;
 ; WF_FULL is left alone: a fullscreen window is at x=0 with no border, so its
 ; content origin is 0 and already aligned (SPEC.md 11.2) - which is why the
@@ -4211,7 +4208,7 @@ wm_su_kb:
 ; beside Note Pad, replaced with the copy taken before that window was raised.
 ;
 ; A masked write would be the other fix, and it would mean edge read-modify-
-; writes in bb_xfer and a Bit Mask plus a latch load in vga_restore_vram - two
+; writes in sw_xfer and a Bit Mask plus a latch load in vga_restore_vram - two
 ; primitives the cursor is on, to serve one caller. So the merge is done in
 ; RAM instead: read what the screen holds in those two byte columns NOW, and
 ; patch the bits OUTSIDE the rect into the buffer before restoring it. The

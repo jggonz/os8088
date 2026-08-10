@@ -131,7 +131,7 @@ monitor.
 
 | piece         | how it works on an XT                                       |
 |---------------|--------------------------------------------------------------|
-| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly by default (the real Mac drew directly too). Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. A 150KB back buffer is available as a runtime option on machines with the heap for it — it is a claim, not a reservation, so a small machine never pays for it. **CGA and Hercules are the same binary**: the adapter is probed at boot, a 1bpp renderer takes over, and the live screen size is read at runtime rather than assumed — so anything that clips or anchors to an edge is right on all three. |
+| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly by default (the real Mac drew directly too). Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. **CGA and Hercules are the same binary**: the adapter is probed at boot, a 1bpp renderer takes over, and the live screen size is read at runtime rather than assumed — so anything that clips or anchors to an edge is right on all three. |
 | multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 12 task slots, 512-byte stacks (sized against a measured 150-byte high-water mark). Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
 | mouse         | Microsoft serial mouse on **COM1 or COM2** (IRQ4 / IRQ3), 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. The port is neither asked nor configured: both are probed for a UART, every one that answers is listened to at once, and the first to deliver a run of clean packets wins — so the other port stays free for the modem that is usually on it. QEMU emulates a mouse natively (`-chardev msmouse`); `make run MOUSEPORT=com2` puts it on the second port. |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
@@ -209,7 +209,7 @@ kernel/*.inc         34 modules. SPEC.md section 4 is the ownership table and
                      the authority on which one owns what - a copy of that
                      list here is a copy that goes stale. The load-bearing
                      ones: vga12 (planar primitives + the drawing lock),
-                     vgabb (the software renderer and the 1bpp driver),
+                     softgfx (the software renderer and the 1bpp driver),
                      viddet (which adapter is fitted, and the live geometry),
                      sched (the PIT hook and the context switch), wm
                      (windows, z-order, damage rects), memory (the claim

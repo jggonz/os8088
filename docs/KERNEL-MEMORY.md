@@ -360,38 +360,38 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4751,
+    "bss": 4736,
     "budget": 98304,
     "codemax": 65536,
-    "cold": 22739,
-    "coldpara": 1440,
+    "cold": 22331,
+    "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3776,
-    "kend": 6176,
+    "imgpara": 3712,
+    "kend": 6080,
     "kseg": 96,
-    "ksize": 97280,
+    "ksize": 95744,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 55215
+    "text": 54597
   },
   "small": {
-    "bss": 4666,
+    "bss": 4651,
     "budget": 94208,
     "codemax": 65536,
-    "cold": 21658,
-    "coldpara": 1376,
+    "cold": 21250,
+    "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3616,
-    "kend": 5952,
+    "imgpara": 3552,
+    "kend": 5856,
     "kseg": 96,
-    "ksize": 93696,
+    "ksize": 92160,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52953
+    "text": 52086
   }
 }
 ```
@@ -490,7 +490,7 @@ big the kernel below it is — with only the RAM column re-derived.
 | 103KB | 23KB | Note Pad runs. Paint loads and puts up its "Not enough memory" notice — the designed tier, not a crash |
 | 167KB | 87KB | Paint still gets the notice |
 | 183KB | 103KB | **Paint runs live**, full 448×280 canvas |
-| 639KB | 559KB | everything, including the 150KB back buffer |
+| 639KB | 559KB | everything, with room to spare |
 
 So the honest floor is **85KB to boot and browse, 88KB to run something**,
 and **~183KB for every shipped app at full function**. The often-quoted
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,523 | 36.6% |
-| the window system and its furniture | 16,274 | 20.9% |
-| drawing: adapters, primitives, glyphs, icons | 11,378 | 14.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,848 | 12.6% |
-| the kernel proper: API table, heap, scheduler, events | 5,893 | 7.6% |
-| the Control Panel | 4,662 | 6.0% |
+| the file system, end to end | 28,523 | 37.1% |
+| the window system and its furniture | 16,229 | 21.1% |
+| drawing: adapters, primitives, glyphs, icons | 10,981 | 14.3% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,813 | 12.8% |
+| the kernel proper: API table, heap, scheduler, events | 5,886 | 7.7% |
+| the Control Panel | 4,120 | 5.4% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,954** | |
+| **total** | **76,928** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -891,39 +891,39 @@ generated in the first place.
 | `wm.inc` — the window manager (§11) | 5,840 | — | **5,840** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
-| `ctrl.inc` — the Control Panel (§31) | 902 | 3,760 | **4,662** | — | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,057 | — | **4,057** | 118 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,542 | — | **4,542** | 132 | — |
+| `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,624 | — | **2,624** | 256 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,561 | — | **2,561** | 194 | 98 |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,589 | — | **2,589** | 250 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,403 | — | **2,403** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
-| `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,687 | — | **1,687** | 27 | — |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
-| `icons.inc` — the icon renderer (§10) | 1,358 | — | **1,358** | 34 | — |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,293 | — | **1,293** | 84 | — |
-| `font.inc` — the 8x8 text renderers (§6) | 1,201 | — | **1,201** | 17 | 768 |
+| `icons.inc` — the icon renderer (§10) | 1,342 | — | **1,342** | 34 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,336 | — | **1,336** | 84 | — |
+| `font.inc` — the 8x8 text renderers (§6) | 1,252 | — | **1,252** | 17 | 768 |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
-| `fsx.inc` — fullscreen exclusive (§53) | 943 | — | **943** | 9 | — |
+| `fsx.inc` — fullscreen exclusive (§53) | 916 | — | **916** | 9 | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 912 | — | **912** | 16 | — |
-| `viddet.inc` — adapter detection and geometry (§39) | 821 | — | **821** | — | — |
+| `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
-| `toast.inc` — **(undescribed)** | 438 | — | **438** | 43 | — |
-| `fprog.inc` — the file-operation progress widget (§12.8) | 379 | — | **379** | — | — |
+| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 733 | — | **733** | 4 | — |
+| `toast.inc` — **(undescribed)** | 435 | — | **435** | 43 | — |
+| `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,701 | — | **2,701** | — | — |
-| **total** | **55,215** | **22,739** | **77,954** | **4,751** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,694 | — | **2,694** | — | — |
+| **total** | **54,597** | **22,331** | **76,928** | **4,736** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1073,13 +1073,11 @@ run-time cost** where the others do not, and it was checked rather than waved
 through. A segment override is one byte and 2 clocks on an 8088 — up to 4 if
 the four-byte prefetch queue is starved, which in these loops it will be. Per
 glyph the read runs eight times (once per row) on the mono adapters and in
-`font_char`'s VGA path, and 32 times in `font_char_bb` with the back buffer
-armed, because there the row loop sits inside the per-plane loop:
+`font_char`'s VGA path:
 
 | | clocks/glyph | of a ~4,770-clock cell |
 |---|---:|---:|
 | mono — the 8088 target | 16–32 | **0.34–0.67%** |
-| VGA, back buffer armed | 64–128 | 1.34–2.68% |
 
 The 1 ms a cell costs on a real 4.77 MHz XT with a Hercules card comes from
 `tests/fontbench` (SPEC.md §6.1.1). Two thirds of one percent on the machine

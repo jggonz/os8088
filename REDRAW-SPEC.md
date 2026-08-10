@@ -148,9 +148,8 @@ unclipped** — SPEC.md §11.3 rule 3.
 
 A visible-region rect list, `wm_clip_set` / `wm_clip_clear`, built per lock
 hold, 16 rects capped, overflow degrading to "skip the frame". The hook sits
-at the **public entry** of each of the six primitives, above the `[bb_on]`
-dispatch, so one implementation covers VRAM, back buffer, VGA and both mono
-adapters. `gfx_unlock` clears the clip. Full contract: SPEC.md §11.3.
+at the **public entry** of each of the six primitives, above the `[vid_mono]`
+dispatch, so one implementation covers VRAM, VGA and both mono adapters. `gfx_unlock` clears the clip. Full contract: SPEC.md §11.3.
 
 Three details worth keeping in mind, because none of them is obvious from
 the plan as originally written:
@@ -179,10 +178,11 @@ the plan as originally written:
   a subtraction that does nothing when nothing overlaps, so there is no
   `wm_obscured` fast path and no `wm_zord` generation counter — a pre-test
   would only walk the list twice.
-- **Back-buffer dirty rect.** Clipped drawing produces several sub-rects.
-  `bb_dirty` only ever widens the bounding box and is reset in exactly two
-  places, so N sub-rects accumulate into one box and one flush pushes it.
-  Nothing needed changing; SPEC.md §32 records why.
+- **Back-buffer dirty rect.** Clipped drawing produces several sub-rects, and
+  `bb_dirty` only ever widened the bounding box, so N sub-rects accumulated
+  into one box and one flush pushed it — nothing needed changing. Moot since
+  SPEC.md §32's back buffer was removed; kept because it is the shape a
+  future accumulating damage rect would take.
 - **Menu bar and dock.** Windows clamp to `y >= MBAR_H` except under
   `WF_FULL`, which owns the bar legitimately, and windows cover the dock by
   design (`wm_paint_all` paints the dock first, then windows). Neither needs
