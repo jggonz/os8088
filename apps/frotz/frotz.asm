@@ -159,6 +159,9 @@ KEY_DEL     equ 0x53
 %include "zsnd.inc"                 ; @sound_effect
 %include "zio.inc"                  ; input ring, the request handshake, Quetzal
 %include "zexec.inc"                ; decode, dispatch, and every opcode
+%ifdef ZHARNESS
+%include "zharness.inc"             ; DEVELOPMENT ONLY - `make zh`, never a
+%endif                              ; shipped disk. See the file's header.
 
 ; =============================================================================
 ; zf_entry - package entry point (SPEC.md 20.2)
@@ -212,6 +215,35 @@ zf_entry:
     call zf_copyname                ; ES:SI -> DS:DI, NUL, at most 13 bytes
     mov byte [zf_pendok], 1
 .noarg:
+%ifdef ZHARNESS
+    ; The harness opens B:\STORY.DAT whatever it was launched from, so the
+    ; scripted walk that starts it may double-click either the story or the
+    ; interpreter and does not have to tell them apart on the desktop. An
+    ; ARG_FILE, when there is one, still wins: that is the shipping path and
+    ; the harness must not be the only thing that exercises it.
+    call zh_init
+    cmp byte [zf_pendok], 0
+    jne .zhready
+    push si
+    push di
+    mov si, zh_story
+    mov di, zf_pend
+.zhcp:
+    mov al, [si]
+    inc si
+    mov [di], al
+    inc di
+    or al, al
+    jnz .zhcp
+    pop di
+    pop si
+    mov byte [zf_pendok], 1
+.zhready:
+    push si
+    mov si, zh_m_ready
+    call zh_mark
+    pop si
+%endif
     ; **RELOAD BX.** Our contract is BX = the window pointer, and everything
     ; between wm_create and here is free to clobber it - OSAPI_ARG_FILE does.
     ; Returning CF=0 with a bogus BX is not defended against: the loader's

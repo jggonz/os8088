@@ -66,7 +66,7 @@ ZX_STKBYTES equ ZI_STKKB * 1024
 
 ; What a halt reports. A %define expands at the use site but NASM still reads
 ; this file top to bottom, so these have to precede zx_bad.
-%define zx_prevop  (os88_image_end + ZEXEC_SLACK + 412)  ; byte: the last opcode
+%define zx_raw     (os88_image_end + ZEXEC_SLACK + 412)  ; byte: the opcode BYTE
 %define zx_seglim  (os88_image_end + ZEXEC_SLACK + 414)  ; word: last valid ES
 
 ; --- call frame layout, in the [zf_stkseg] claim ------------------------------
@@ -144,6 +144,10 @@ zx_worker:
     jmp .top
 .fatal:
     call zx_report                  ; say why, once, then park
+%ifdef ZHARNESS
+    mov si, zh_m_halt               ; ...and tell the host, which is running
+    call zh_mark                    ; unattended and cannot read the screen
+%endif
     mov byte [zf_dead], 1
     mov byte [zf_err], 0
     jmp .top
@@ -368,8 +372,6 @@ zx_step:
     jb zx_lost
     cmp ax, [zx_seglim]
     ja zx_lost
-    mov al, [zx_op]
-    mov [zx_prevop], al             ; so a halt can name what ran last
     cmp si, 0x8000
     jb .norm
     call zm_norm                    ; once per 32KB of straight-line code
@@ -381,6 +383,14 @@ zx_step:
 %endif
     mov al, [es:si]
     inc si
+    mov [zx_raw], al                ; THE BYTE, not the number the forms mask
+                                    ; out of it. A halt that says "opcode 5"
+                                    ; names five different instructions - 2OP
+                                    ; @inc_chk, 1OP @inc, 0OP @save, VAR
+                                    ; @print_char, EXT @draw_picture - and the
+                                    ; byte is the only thing that separates
+                                    ; them. One store per instruction buys the
+                                    ; form, and tools/zharness.py names it.
 
     cmp al, 0xBE
     jne .notext
@@ -882,6 +892,20 @@ zx_bf:
 ; +/-8191, so exactly one case needs a segment adjustment: a backwards move
 ; that goes below zero. `add si, bx` with BX negative clears CF precisely when
 ; that happened, and 0x1000 paragraphs is the 65536 bytes SI wrapped by.
+;
+; THE WHOLE OFFSET IS THEN FOLDED BACK INTO THE SEGMENT, and that is not
+; tidiness. `sub es, 0x1000` alone leaves ES:SI addressing the right BYTE with
+; SI up near 0xFFFF and ES a full 64KB below where the story starts - a legal
+; alias of a legal address that nothing downstream accepts. zx_step's guard
+; compares ES against [zf_sseg] and calls it a lost PC; zm_pcaddr subtracts
+; [zf_sseg] and reports an address a megabyte out, so the return address a
+; @call banks is wrong and the matching @ret fails zm_inimg. It bit whenever
+; the PC was in the story's first 64KB and a backwards branch reached further
+; back than SI had walked - which is every loop whose body contains a call,
+; because @ret comes through zm_seek and zm_seek leaves SI in 0..15. That is
+; the halt docs/FROTZ-PLAN.md 10.1 describes: the guard was right that
+; something had gone wrong and wrong about what, because the PC in front of it
+; was correct and merely unnormalised.
 ; -----------------------------------------------------------------------------
 zx_jrel:
     or bx, bx
@@ -890,12 +914,20 @@ zx_jrel:
     ret
 .neg:
     add si, bx
-    jc .ok
+    jc .ok                          ; no borrow: SI stayed above zero
     push ax
-    mov ax, es
-    sub ax, 0x1000
+    push cx
+    mov ax, si                      ; SI is now the true offset MINUS 0x10000,
+    mov cl, 4                       ; so its top 12 bits are paragraphs the
+    shr ax, cl                      ; segment is owed
+    and si, 15
+    mov cx, es
+    sub cx, 0x1000                  ; ...less the 64KB SI wrapped by
+    add ax, cx
     mov es, ax
     mov [zf_pcseg], ax              ; a PC mover; see zm_seek in zmem.inc
+    mov [zf_pcoff], si
+    pop cx
     pop ax
 .ok:
     ret
@@ -1189,10 +1221,14 @@ zx_halt:
 
 ; The decoder's two "no such opcode" arms land here. They are jumped to from
 ; zx_step, so the `ret` returns to zx_run, which sees [zf_err] and stops.
-; The PC left the story image. Reported as a bad opcode naming the PREVIOUS
-; one, because that is the instruction whose handler is at fault.
+; The PC left the story image, and the instruction whose handler is at fault
+; is the one that JUST RAN - which is [zx_op], still holding the opcode this
+; guard is standing in front of. It used to report a separate [zx_prevop], and
+; that was one instruction too far back: the guard runs BEFORE the decode that
+; would have rolled the two over, so the name in the halt was never the name
+; of the culprit - it named the instruction before it, every time.
 zx_lost:
-    mov al, [zx_prevop]
+    mov al, [zx_op]
     mov [zx_badop], al
     mov ax, es                      ; the segment we ended up in, which names
     mov [zx_badseg], ax             ; the claim whose owner clobbered ES
@@ -1254,6 +1290,13 @@ zx_report:
     mov al, [zx_badop]
     xor ah, ah
     call zx_hex
+    mov si, zx_m_raw                ; the opcode BYTE too: 0x05 alone is five
+    push es                         ; different instructions and the form is
+    call zt_puts                    ; the only thing that separates them
+    pop es
+    mov al, [zx_raw]
+    xor ah, ah
+    call zx_hex
     mov si, zx_m_at
     push es
     call zt_puts
@@ -1292,6 +1335,7 @@ zx_m_div0:   db '[Frotz: division by zero - the story has stopped.]', 0
 zx_m_ustack: db '[Frotz: stack underflow - the story has stopped.]', 0
 zx_m_ostack: db '[Frotz: stack overflow - the story has stopped.]', 0
 zx_m_opat:   db '  opcode 0x', 0
+zx_m_raw:    db ' byte 0x', 0
 zx_m_at:     db ' at 0x', 0
 zx_m_seg:    db ' es=', 0
 zx_m_base:   db ' story=', 0
@@ -1934,6 +1978,12 @@ zxo_pop_catch:                      ; 0OP:185 pop (v1-4) / catch (v5+)
 
 zxo_quit:                           ; 0OP:186 quit
     mov byte [zf_dead], 1
+%ifdef ZHARNESS
+    push si
+    mov si, zh_m_quit               ; a story that ENDED, as against one that
+    call zh_mark                    ; stopped: the host must tell them apart
+    pop si
+%endif
     ret
 
 zxo_new_line:                       ; 0OP:187 new_line

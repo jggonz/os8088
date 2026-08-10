@@ -868,6 +868,63 @@ write-protected**, for the same reason the bench disks must not be. The log
 buffer is a heap claim taken at D and given back at D, so an unarmed log costs
 no memory and cannot split the heap.
 
+### Frotz: the story harness, which is `trklog`'s shape again
+
+`apps/frotz` built a second time with `-DZHARNESS` (SPEC.md §59.13), for the
+same reason `trklog` exists: the thing measured is the shipped code and not a
+copy that can drift from it. Every hook is inside `%ifdef ZHARNESS` and the
+shipped `FROTZ.O88` is unchanged to the byte — which is checkable, by building
+it both ways and comparing sizes.
+
+What it adds is a **teletype on COM4 (`0x3E8`)**: the story's output goes out a
+byte at a time, its keystrokes come back in, and four markers say where it is.
+So a story is playable from the host over a socket, and the answer to "does a
+real story run" stops being a person reading a screendump.
+
+```sh
+make zh                                     # the harness interpreter
+python3 tools/zharness.py ADVENT.Z3         # play its script, print the log
+python3 tools/zharness.py ADVENT.Z3 --repl  # ...or type at it yourself
+python3 tools/zharness.py --all --compare   # every story, diffed vs dfrotz
+make zcheck                                 # the same, as a gate
+```
+
+It boots QEMU itself, builds the B: disk itself (the story arrives as
+`STORY.DAT`, which is what lets one binary play all of them), and double-clicks
+its way in — os8088 has no way to start a package from outside, so the launch
+is a scripted GUI walk and the coordinates live in `tools/zharness.py`. **A
+timeout waiting for `[[ZH:READY]]` is that walk, not the interpreter**;
+`--shot` writes what the screen actually had on it.
+
+Three differences from a real session, each deliberate and each documented at
+its `%ifdef`: no `[MORE]` paging (it waits on a key the script has no reason to
+send, and the run deadlocks around the sixth room), no echo on the wire, and no
+status line on the wire. The last two are what make the transcript comparable
+to `dfrotz -p`, which prints neither in a form that survives normalisation.
+
+`--compare` diffs the WORDS in order, not the lines: `dfrotz` wraps at its
+`-w`, os8088 wraps at whatever the window is, and the harness sends the
+pre-wrap stream. A wrong opcode changes the words; a different column count
+does not. Both sides' commentary is dropped — `dfrotz`'s `Warning:` lines
+(Balances calls `@get_child` on object 0 every turn and says so) and os8088's
+own notices (`No room for undo; play continues.`) — and neither side's halt
+ever is.
+
+**`refused, with a reason` is a pass.** A story too big to be resident is
+turned down on purpose (§59.4/§47), so `BRONZE.Z8` reports `No room for the
+scrollback.` on a 640KB machine and the gate counts that as correct. A gate
+that failed on it would be arguing with the design.
+
+The reference's upper window is recognised **by its padding** and dropped:
+`dfrotz` positions that text with spaces, and its own prose never carries a run
+of three because it wraps at `-w` and separates words by one. That is what lets
+a story whose upper window holds a quote box rather than a status line —
+`BEAR.Z5`, `CURSES.Z5` — be compared at all. It fails safe: a story that
+indents in the *lower* window loses those words from the reference and keeps
+them here, so the error is a divergence to investigate, never a silent pass.
+There is no way to opt a story out of the diff, on purpose: an opt-out is a
+place for a real divergence to hide, and both of the ones this found are real.
+
 `filetest` also has a fragmented-volume variant, `build/filetest-frag.img`,
 and its results are worth pairing with the host-side fsck — the in-kernel
 free-space check and `python3 tools/os88disk.py --verify <img>` catch

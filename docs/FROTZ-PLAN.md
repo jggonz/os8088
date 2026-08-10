@@ -356,21 +356,26 @@ does not hold a library. `386-z` is the comfortable one — the same code, two
 Neither is a 256KB machine, and that is deliberate: `make xt` already is one,
 and running Frotz there is how the refusal path gets tested.
 
-## 10.1 What is not finished
+## 10.1 The halt, and what it actually was
 
-**A real story runs its opening and then halts partway through play.** The
-conformance gate passes 44 of 44 at v3, v5 and v8; Mini-Zork I and Adventure
-print their banners, status lines and room descriptions; Adventure accepts a
-typed line, tokenises it and replies. It is a command or two later that it
-stops, with `unknown opcode ... es=<a kernel segment>`.
+**A real story used to run its opening and then halt a command or two into
+play**, with `unknown opcode ... es=<a segment below the story>`. This section
+carried the diagnosis for two rounds and the diagnosis was wrong twice, so
+what it says now is what it turned out to be.
 
-SPEC.md §59.12 is the diagnosis. The ES-as-program-counter problem it
-describes has been fixed — the segment lives in `[zf_pcseg]`, only the movers
-write it, and `zx_run` reloads ES every instruction — and **the halt did not
-move**, which is the useful part. With three guards in place and none of them
-firing, what is left is a stray write into the bss corrupting `[zf_pcseg]`
-itself, which is a narrower thing to hunt than a register discipline spread
-over sixty handlers.
+It was not ES discipline and it was not a stray write into the bss. **The
+program counter was correct.** `zx_jrel`'s backwards-branch fix-up subtracted
+`0x1000` paragraphs from the segment and left SI where it had wrapped to, near
+`0xFFFF`: a legal alias of the right byte, and a form `zx_step`'s guard rejects
+and `zm_pcaddr` mis-reads. It bit only inside the story's first 64KB, and only
+where a backwards branch reached further back than SI had walked — which is
+every loop whose body contains a call, because `@ret` goes through `zm_seek`
+and `zm_seek` leaves SI in 0..15. Adventure's `help` is one of them.
+
+SPEC.md §59.12 has the whole account, including the part worth keeping: a
+guard firing says an invariant was broken, not which one. Three rounds went
+into hunting a register-discipline bug because the guard that caught it had
+been written to catch register-discipline bugs.
 
 ## 11. Verification
 
@@ -383,9 +388,19 @@ tree and worth using:
 - **`dfrotz`** is a reference interpreter. Feeding it and Frotz the same input
   gives two transcripts to diff, which turns "does the object tree work" from
   an opinion into a test.
-- The guest side is `tests/frotz/ztest`, a capability-gate package that runs a
-  story headlessly against a scripted input and writes the transcript to B:.
-  The host reads it back out of the image and diffs.
+- The guest side **is built and is `make zh`** (SPEC.md §59.13): `apps/frotz`
+  assembled with `-DZHARNESS`, which gives the interpreter a teletype on COM4 —
+  story text out a byte at a time, keys back in, and four markers saying where
+  it is. `tools/zharness.py` plays a story to a script over it and diffs the
+  transcript against `dfrotz`; `make zcheck` does that for every story there
+  is.
+
+  It streams rather than writing the transcript to B: as this section first
+  planned, and the reason is the failing case: a transcript on a floppy is only
+  readable after the machine stops, so a story that hangs or halts leaves
+  nothing to read — which is exactly the run worth reading. §59.12 was found on
+  the third command of a scripted Adventure, with the whole transcript that led
+  to it.
 
 Three defects PERFORMANCE.md names as invisible in an emulator apply directly
 here — a visible redraw, a double-draw flash, and input overrun — so the text

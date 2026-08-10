@@ -582,6 +582,9 @@ zt_screen:
 ; -----------------------------------------------------------------------------
 zt_screen1:
     push ax
+%ifdef ZHARNESS
+    call zh_screenc                 ; the teletype (apps/frotz/zharness.inc)
+%endif
     cmp byte [zf_ver], 6
     je .v6
     cmp al, 13

@@ -188,8 +188,12 @@ zi_getkey:
     ret
 .empty:
     pop bx
+%ifdef ZHARNESS
+    jmp zh_getkey                   ; the host's keyboard, polled (zharness.inc)
+%else
     stc
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; zi_flush - worker: throw away everything queued
@@ -962,6 +966,12 @@ zi_readchar:
     push bx
     push es                         ; the PC's segment; see zi_yield
     mov byte [zi_want], ZIW_CHAR
+%ifdef ZHARNESS
+    push si                         ; a "press any key" prompt is not a command
+    mov si, zh_m_key                ; and must not eat a line of the script -
+    call zh_mark                    ; the host answers this one itself. Without
+    pop si                          ; it a story with a title screen (BEAR.Z5
+%endif                              ; opens on one) never starts at all.
 .wait:
     call zi_getkey
     jnc .got
@@ -986,10 +996,11 @@ zi_readchar:
 ;      (0 = do not tokenise), CX = the most characters the story will take
 ; out: AL = the terminating character; preserves every other register
 ;
-; It echoes through zw_putc rather than drawing itself, so the typed line
+; It echoes through zw_typec rather than drawing itself, so the typed line
 ; lands in the scrollback and wraps, scrolls and repaints exactly like story
 ; output - which is the whole reason the scrollback is a stream of characters
-; and not a picture of the screen.
+; and not a picture of the screen. zw_typec rather than zw_putc because an
+; echo has to appear on the keystroke, not on the next space (zwin.inc).
 ;
 ; The two buffer layouts differ and the difference is not cosmetic:
 ;   v1-4   byte 0 = max letters MINUS ONE; the text goes at byte 1 with a
@@ -1020,6 +1031,12 @@ zi_readline:
     mov [zi_lmax], cx
     mov word [zi_linen], 0
     mov byte [zi_want], ZIW_LINE
+%ifdef ZHARNESS
+    push si                         ; the host sends the next line when it sees
+    mov si, zh_m_read               ; this, rather than guessing at a delay -
+    call zh_mark                    ; which is what makes a scripted run
+    pop si                          ; reproducible (apps/frotz/zharness.inc)
+%endif
 
 .wait:
     call zi_getkey
@@ -1052,8 +1069,8 @@ zi_readline:
     mov [zi_line + bx], al
     inc bx
     mov [zi_linen], bx
-    call zw_putc                    ; echo, with wrap and scroll
-    jmp short .wait
+    call zw_typec                   ; echo, drawn NOW - not held in the wrap
+    jmp short .wait                 ; buffer until a space arrives (zwin.inc)
 
 .back:
     mov bx, [zi_linen]
@@ -1061,8 +1078,7 @@ zi_readline:
     jz .wait
     dec bx
     mov [zi_linen], bx
-    mov al, 8
-    call zw_putc                    ; zwin removes the last cell of the line
+    call zw_rubc                    ; zwin removes the last cell of the line
     jmp short .wait
 
 .ext:

@@ -27427,6 +27427,7 @@ configuration.
 | `zsnd.inc` | `@sound_effect` |
 | `zio.inc` | the input ring, the request handshake, Quetzal saves |
 | `zexec.inc` | decode, dispatch, frames, and every opcode |
+| `zharness.inc` | **development only** — the teletype §59.13 describes. Included only under `-DZHARNESS`, and no shipped build defines it |
 
 `zbss.inc` holds the locations as `%define`s and not `equ`s on purpose: a
 `%define` expands at the use site, so a forward reference to `os88_image_end`
@@ -27553,6 +27554,19 @@ one 8x8 font and no true bold:
 `@set_colour` is honoured on VGA and ignored where `OSAPI_VIDEO` answers 1 bit
 per pixel: every colour there rounds to black, white or a dither, so a story
 that colours by meaning would become less readable, not more.
+
+**A typed character is drawn on the keystroke, and story text is not.** The
+lower window holds a word back in a buffer until a space or a newline arrives,
+because a word is the unit word-wrap has to be able to move to the next row and
+drawing it early would mean erasing it. That is right for prose and wrong for a
+line editor: it means nothing appears until the typist reaches a space, so
+`help` is invisible until Enter and the person at the keyboard cannot see what
+they are typing. The editor therefore echoes through `zw_typec`, which flushes
+after every character — so the line breaks at the margin mid-word, which is
+what every terminal line editor does and the alternative is not showing the
+typing. Backspace is `zw_rubc` and blanks the cell it retreats over; reaching
+`zw_putc` it was a control character below `' '`, occupied no cell, and did
+nothing at all.
 
 ### 59.6 Input, and how a worker saves a game
 
@@ -27741,57 +27755,149 @@ letter rather than a right one.
 should; here it does nothing, because the only module that can name the
 offending opcode is `zexec.inc` and the object layer has no error channel.
 
-### 59.12 The open defect: ES, and why it is the wrong register for the PC
+### 59.12 The halt that was not a lost program counter
 
-**A real story runs its opening and then halts partway through play** with
-`unknown opcode ... es=<segment> story=<segment>`, where the reported `es` is
-below the story's claim — a kernel segment. Conformance is unaffected: the
-gate story passes 44 of 44 at v3, v5 and v8, and Adventure reaches its prompt,
-accepts a typed line, tokenises it and replies. It is the second or third
-command that stops.
+**A real story used to run its opening and then halt partway through play**
+with `unknown opcode ... es=<segment> story=<segment>`, where the reported
+`es` was *below* the story's claim. Conformance was unaffected throughout —
+the gate story passed 44 of 44 at v3, v5 and v8 — and it was the second or
+third typed command that stopped. This section is kept rather than deleted
+because the diagnosis it carried for two rounds was wrong in an instructive
+way, and because the guard that reported it is still there.
 
-The cause is §59.3's own bargain. Making `ES:SI` the live program counter is
-what makes instruction fetch a `lods`, and it costs one rule: **ES belongs to
-the story.** But ES is exactly the register the OS does not preserve — the X
-stub hands a callee the caller's DS *in ES*, and only an X-stubbed slot puts
-it back — so any handler that reaches an OSAPI slot can return with the
-program counter's segment pointing at a font, a back buffer or a disk cache.
-The interpreter then executes whatever lies at the same offset there, and dies
-somewhere unrelated hundreds of instructions later.
+The suspicion was §59.3's own bargain. Making `ES:SI` the live program counter
+is what makes instruction fetch a `lods`, and it costs one rule: **ES belongs
+to the story.** But ES is exactly the register the OS does not preserve — the
+X stub hands a callee the caller's DS *in ES* — so any handler reaching an
+OSAPI slot could return with the PC's segment pointing at a font, a back
+buffer or a disk cache. Four instances were found and fixed, each by a
+different route, and none of them was the last one; so the segment was moved
+into `[zf_pcseg]`, only the movers were allowed to write it (`zm_seek`,
+`zm_norm`, `zx_jrel`), `zm_addr` was split off for walks that are not the PC,
+and `zx_run` was made to reload ES from memory before every instruction.
 
-Four instances of this were found and fixed, each by a different route:
-`zx_call` restoring the caller's ES over `zm_seek`'s answer; `zt_putc` — the
-one funnel from the VM to the window — preserving every register but that one;
-`zi_yield`, called from every wait loop; and the input path. Each fix was
-correct and none of them was the last one, which is the signature of a wrong
-invariant rather than a bug.
+**And the halt did not move.** Same story, same address, same segment. With
+three guards in place and none of them firing, the conclusion drawn here was
+that `[zf_pcseg]` was being overwritten in memory by a stray write. It was
+not. **The program counter was correct the whole time.**
 
-**That refactor has since been done.** The PC's segment lives in
-`[zf_pcseg]`, only the movers write it (`zm_seek`, `zm_norm`, `zx_jrel`),
-`zm_addr` exists for walks that are *not* the PC, and `zx_run` reloads ES from
-memory before every instruction and stores SI back after it. A handler that
-clobbers ES can no longer lose the program counter.
+`zx_jrel` moves the PC by a signed branch offset. A backwards branch that
+takes SI below zero was fixed up by subtracting `0x1000` paragraphs from the
+segment and leaving SI where it had wrapped to, up near `0xFFFF`. `ES:SI` then
+addresses **the right byte** — and is a form nothing downstream accepts:
 
-**And the halt did not move.** Same story, same address, same segment. Three
-guards were added on the way and none of them fires:
+- `zx_step`'s guard compares ES against `[zf_sseg]`, finds it lower, and
+  reports a lost PC;
+- `zm_pcaddr` subtracts `[zf_sseg]` from a segment below it and answers an
+  address a megabyte out, so the return address a `@call` banks is wrong and
+  the matching `@ret` fails `zm_inimg`.
 
-- `zm_seek` refuses a seek outside the story image and reports the address
-  asked for (`0xFD`);
-- `zx_ret` validates a frame's saved return address before it becomes the PC
-  (`0xFE`);
-- `zx_step` range-checks the PC's segment every instruction.
+It fired only when the PC was inside the story's first 64KB — anywhere higher
+and the subtraction stayed above `[zf_sseg]`, which is why big stories got
+further than small ones — and only when a backwards branch reached further
+back than SI had walked. That is every loop whose body contains a call:
+`@ret` goes through `zm_seek`, and `zm_seek` deliberately leaves SI in 0..15.
+Adventure's `help` is one.
 
-So the PC's segment is not being clobbered in a register and no PC-mover is
-asking for a bad address: **`[zf_pcseg]` is being overwritten in memory by
-something that is not a PC-mover at all.** It is a stray write into the bss,
-and the value that lands there looks like a kernel segment.
+The fix is one instruction sequence: fold the whole offset back into the
+segment, so a normalised `ES:SI` is the only form the PC is ever in. **The
+lesson is the one worth keeping — a guard firing is evidence that an
+invariant was broken, not evidence about which one.** Three rounds were spent
+hunting a register-discipline bug because the guard that caught it was written
+to catch register-discipline bugs.
 
-That is a different defect from the one this section originally described, and
-a narrower one. The next step is to move `[zf_pcseg]` somewhere isolated and
-see whether the symptom follows it — if it does, the writer is found by
-elimination; if it does not, the corruption is of the object it points at
-rather than of the pointer.
+Two smaller things came out of the same hunt and are part of the contract now:
 
-`zx_step` range-checks the PC's segment on every instruction and names the
-last opcode that ran, which is what turned this from "a story stops" into a
-one-line diagnosis. That check earns its ~20 bytes and stays regardless.
+- `zx_lost` used to report `[zx_prevop]`, one instruction further back than
+  the handler at fault, because the guard runs *before* the decode that rolls
+  the two over. It reports `[zx_op]`.
+- the halt line prints the opcode **byte** as well as the opcode number.
+  `opcode 0x0005` names five different instructions — 2OP `@inc_chk`, 1OP
+  `@inc`, 0OP `@save`, VAR `@print_char`, EXT `@draw_picture` — and only the
+  byte separates them. `tools/zharness.py` turns it back into a name.
+
+`zx_step`'s range check earns its ~20 bytes and stays. So does `zm_seek`'s
+refusal (`0xFD`) and `zx_ret`'s frame validation (`0xFE`).
+
+### 59.13 The story harness (development only)
+
+§59.12 took three rounds partly because the only way to run a story was for a
+person to boot QEMU, double-click a floppy icon, type at a window and read a
+screendump. That loop is minutes long and its output is a picture, so nothing
+about it could be a regression test. **`make zh` builds a second interpreter —
+`apps/frotz` with `-DZHARNESS` — that gives the Z-machine a teletype**, and
+`tools/zharness.py` plays a story to a script over it.
+
+| | |
+|---|---|
+| port | COM4, `0x3E8`, polled. §9.5's mouse probe knows `3F8`/`2F8` and §58's monitor is at `2E8`; this is the one address with no other owner |
+| out | every byte stream 1 draws, plus every `zw_notice` — which is how a halt reaches the host |
+| in | every key `zi_getkey` would have taken from the ring |
+| markers | `[[ZH:READY]]`, `[[ZH:READ]]`, `[[ZH:KEY]]`, `[[ZH:HALT]]`, `[[ZH:QUIT]]`, on their own lines |
+
+`[[ZH:READ]]` is what makes a run reproducible: the host sends the next command
+when the story says it is reading, rather than after a delay chosen by
+guessing. `[[ZH:KEY]]` is `@read_char` and is **not** the same event — it is a
+"press any key" prompt, the host answers it with a space, and it consumes no
+line of the script. Conflated, a story that opens on a title screen (`BEAR.Z5`
+does) eats the first command and every later one answers the wrong question.
+
+Three things the harness build does differently, each for a reason that would
+otherwise read as a defect:
+
+- **it does not page.** `[MORE]` waits on `zi_getkey`, and the harness's
+  "person" is a script that types only when asked for a command, so the run
+  deadlocks in about the sixth room. `dfrotz -p` does not page either, which is
+  also what makes the two transcripts comparable;
+- **it does not put the echo on the wire.** The host typed the line and can put
+  it back in its own log; on the wire it is text the reference interpreter
+  never prints;
+- **it does not put a capture on the wire.** A capture is the status line being
+  composed rather than drawn, and the two interpreters emit that at different
+  moments.
+
+**None of it ships.** Every line is inside `%ifdef ZHARNESS`, the harness
+build writes `build/zh/` and never `build/*.o88`, and `apps/frotz/zharness.inc`
+is not included at all without the define. The shipped package is unchanged to
+the byte, which is checkable by building it both ways.
+
+The one part that is still a GUI walk is the launch, because os8088 has no way
+to start a package from outside: `tools/zharness.py` double-clicks Disk B and
+then the story. `make zcheck` is the gate — every story in `build/stories`,
+each played to `tests/frotz/scripts/<name>.txt` (or a generic script), each
+transcript diffed against `dfrotz` word for word.
+
+A run ends in one of five outcomes, and two of them are passes:
+
+| | |
+|---|---|
+| `ran N commands` | played the script out with no halt |
+| `the story ended` | `@quit`, which is a story finishing, not a failure |
+| **`refused, with a reason`** | §59.4 turned the story down because it will not fit, and said so on screen. **A pass** — that is the designed path, and a gate that reported it as a bug would be arguing with §47 |
+| `HALT` | the interpreter stopped. The opcode byte is in the line above it |
+| `STUCK` | no marker inside the timeout: a hang, or a prompt the harness does not know how to answer |
+
+The diff compares the **words in order**, not the lines: `dfrotz` wraps at its
+`-w`, os8088 wraps at whatever the window is, and the harness sends the
+pre-wrap stream, so a different column count is not a difference. Both sides'
+interpreter *commentary* is removed — `dfrotz`'s `Warning:` lines, os8088's
+notices — and neither side's halt ever is.
+
+The reference's **upper window is recognised by its padding** and dropped:
+`dfrotz` positions that text with spaces — a status line right-aligns its
+score, a quote box indents to centre itself — and its own prose never carries a
+run of three spaces, because it wraps at `-w` and separates words by one. That
+is what lets a story whose upper window holds prose rather than a status line
+(`BEAR.Z5` and `CURSES.Z5` both open on a quote box) be compared at all. It
+fails safe: a story that indents in the LOWER window loses those words from the
+reference and keeps them here, so the error is a divergence to investigate,
+never a silent pass. **There is no way to opt a story out of the diff**, on
+purpose — an opt-out is a place for a real divergence to hide.
+
+Its one known blind spot is a v4+ status line with **no right-hand field**:
+`DREAMHLD.Z8` writes just a room name, which the reference prints with no run
+of spaces in it and this cannot tell from prose, so that story diverges by the
+one word. The fix, if it is ever worth it, is not a better heuristic — it is to
+put the upper window on the wire between markers and strip the reference's copy
+only for v1–3, where the *interpreter* composes the status line and the two
+therefore cannot agree on it anyway.

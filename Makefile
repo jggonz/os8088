@@ -191,7 +191,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 .PHONY: all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field stackprobe trklog npbench clicktest marty comscan \
-        stories zdisk ztest xt-z 386-z \
+        stories zdisk ztest zh zhboot zcheck xt-z 386-z \
         checkdocs clean clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -914,6 +914,60 @@ $(ZTESTDIR)/ztest.img: $(BUILD)/frotz.o88 $(ZTESTDIR)/zopstest.z3 \
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		$(BUILD)/frotz.o88 $(ZTESTDIR)/zopstest.z3 $(ZTESTDIR)/zopstest.z5 \
 		$(ZTESTDIR)/zopstest.z8 --folder SAVES
+
+# --- the Frotz story harness (ON DEMAND: `make zh` / `make zcheck`) ----------
+# `make ztest` above asks whether the opcodes are right one opcode at a time,
+# against a story written to be a test. This asks the other question - whether
+# a REAL story runs - by playing one to a script and diffing the transcript
+# against dfrotz. They fail differently and both are needed: zopstest.inf found
+# @div's rounding, and the harness found a branch that was decoded correctly,
+# executed correctly, and left the program counter in a form the next
+# instruction's guard rejected (apps/frotz/zexec.inc, zx_jrel).
+#
+# FROTZ.O88 HERE IS A DIFFERENT BINARY, built with -DZHARNESS: the story's
+# output goes out COM4 a byte at a time and its keystrokes come back the same
+# way, so the host plays the story over a socket instead of a person typing at
+# a window. Every line of that is inside %ifdef ZHARNESS and none of it is in
+# the shipped package - `nasm -f bin` twice, once each way, and the shipped
+# build's size is unchanged to the byte.
+#
+#   make zh                                 # build the harness interpreter
+#   python3 tools/zharness.py ADVENT.Z3     # play one story, print the log
+#   make zcheck                             # every story x its script, gated
+ZHDIR := $(BUILD)/zh
+
+zh: $(ZHDIR)/frotz.o88
+
+$(ZHDIR)/frotz.bin: $(FROTZSRC) apps/frotz/zharness.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(ZHDIR)
+	$(NASM) -f bin -w+error -DZHARNESS -I apps/ -I apps/frotz/ -o $@ apps/frotz/frotz.asm
+	@echo "zh:     $(call FILESIZE,$@) bytes (harness build, not shipped)"
+
+$(ZHDIR)/frotz.o88: $(ZHDIR)/frotz.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+
+# The B: disk the harness boots with. tools/zharness.py writes it - the story
+# has to arrive as STORY.DAT whatever it is called in build/stories, which is
+# a copy make cannot express as a pattern rule over eleven different names.
+#
+# ZHIMG names it, so `make zhboot ZHIMG=build/zh/advent.img` is the one line
+# the tool runs. It is `test` with one more chardev: COM4 at 0x3E8, the one
+# port SPEC.md 9.5's mouse probe and SPEC.md 58's monitor both leave alone.
+ZHIMG ?= $(ZHDIR)/story.img
+ZHDEV = -chardev socket,id=zh,path=$(BUILD)/zh.sock,server=on,wait=off \
+        -device isa-serial,chardev=zh,iobase=0x3e8,irq=3
+
+zhboot: $(IMG)
+	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+		-drive file=$(ZHIMG),format=raw,if=floppy,index=1 \
+		-display none -qmp unix:$(BUILD)/qmp.sock,server,nowait \
+		-daemonize -pidfile $(BUILD)/qemu.pid $(ZHDEV)
+
+# The gate. Every story on the 1.44MB library disk, each played to its script
+# in tests/frotz/scripts, each diffed against dfrotz. Needs the stories
+# (`make stories`, which fetches) and dfrotz on the host.
+zcheck: zh $(BUILD)/stories.stamp
+	python3 tools/zharness.py --all --compare
 
 # --- the tracker log disk (ON DEMAND: `make trklog`) -------------------------
 # TRKLOG.O88 is apps/tracker built with -DTRKLOG, which is the ONLY difference:

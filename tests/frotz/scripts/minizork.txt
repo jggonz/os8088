@@ -1,0 +1,12 @@
+# Mini-Zork I: out of the clearing, into the house, down.
+open mailbox
+read leaflet
+north
+east
+open window
+enter window
+look
+take lamp
+inventory
+west
+look

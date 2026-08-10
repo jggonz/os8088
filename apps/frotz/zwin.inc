@@ -828,6 +828,18 @@ zw_break:
 ; deadlocked machine.
 ; -----------------------------------------------------------------------------
 zw_morechk:
+%ifdef ZHARNESS
+    ret                             ; THE HARNESS DOES NOT PAGE. [MORE] is a
+                                    ; screen affordance - it waits on a key so
+                                    ; a person can read a full window - and the
+                                    ; harness's "person" is a script that only
+                                    ; types when the story asks for a command.
+                                    ; Left in, the run deadlocks somewhere in
+                                    ; the sixth room, which reads exactly like
+                                    ; the story hanging. dfrotz -p does not
+                                    ; page either, so leaving it out is also
+                                    ; what makes the two transcripts comparable.
+%endif
     cmp byte [zw_nomore], 0
     jne .out
     push ax
@@ -1115,6 +1127,89 @@ zw_putc:
     ret
 
 ; -----------------------------------------------------------------------------
+; zw_typec / zw_rubc - the line editor's echo, which is NOT story output
+; in:  AL = the character (zw_typec only); gfx lock held
+; out: nothing; preserves every register
+;
+; zw_putc holds a word back in [zw_wbuf] until a space or a newline arrives,
+; because a word is the unit word-wrap has to be able to move to the next row
+; and drawing it early would mean erasing it. That is right for prose and
+; wrong for a keystroke: it means nothing at all appears on screen until the
+; typist reaches a space, so "help" is invisible until Enter and the person at
+; the keyboard cannot see what they are typing.
+;
+; So the echo flushes the word after every character. The line then breaks at
+; the margin mid-word rather than wrapping - which is what every terminal
+; line editor does, and the alternative is not showing the typing.
+;
+; The rub-out is the other half. Backspace reaches zw_putc as a control
+; character below ' ', which occupies no cell, so it fell out of the bottom of
+; the dispatch and did nothing at all: [zi_linen] went down and the glass did
+; not change.
+; -----------------------------------------------------------------------------
+zw_typec:
+    call zw_putc
+    push ax
+    ; The harness deliberately does NOT mirror the echo. The host typed the
+    ; line and can put it back in its own log; on the wire it would be text
+    ; the reference interpreter never prints, and every comparison would then
+    ; begin by trying to subtract it back out again.
+    cmp byte [zw_capon], 0
+    jne .out                        ; captured, not drawn
+    cmp byte [zw_cur], 0
+    jne .out                        ; the upper window draws each cell already
+    call zw_wflush
+.out:
+    pop ax
+    ret
+
+zw_rubc:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cmp byte [zw_capon], 0
+    jne .out
+    cmp byte [zw_cur], 0
+    jne .out                        ; no rub-out in the upper window
+    cmp byte [zw_geom], 0
+    jne .have
+    call zw_bounds
+    jc .out
+.have:
+    cmp word [zw_wbn], 0            ; unflushed ink is the easy case: it was
+    je .online                      ; never drawn, so drop it and stop
+    dec word [zw_wbn]
+    jmp short .out
+.online:
+    mov bx, [zw_lbn]
+    or bx, bx
+    jz .out                         ; at the left margin: the character being
+    dec bx                          ; rubbed out is on the row above, which
+    mov [zw_lbn], bx                ; this deliberately does not chase
+    call zw_liverow
+    jc .out                         ; paged back: the model advanced, no ink
+    call zw_rowy                    ; DX = y
+    mov ax, bx
+    call zw_colx                    ; CX = x
+    mov byte [zw_rbuf], ' '
+    mov byte [zw_rbuf+1], 0
+    mov si, zw_rbuf
+    call zw_run                     ; one cell, blanked, one call
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; zw_upputc - one character into the upper window's character grid
 ; in:  AL = the character; gfx lock held
 ;
@@ -1186,6 +1281,11 @@ zw_notice:
     push ax
     push bx
     push si
+%ifdef ZHARNESS
+    call zh_nl                      ; interpreter messages are the harness's
+    call zh_puts                    ; whole point: a halt has to reach the host
+    call zh_nl
+%endif
     mov byte [zw_nomore], 1
     mov bl, [zw_style]
     mov byte [zw_style], ZST_ROMAN

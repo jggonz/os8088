@@ -34,6 +34,11 @@ make test     # boot headless, QMP socket at build/qmp.sock — this is how you 
 make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndcheck.py)
 make debug    # boot halted, waiting for gdb on :1234
 make bench    # build the tests/ apps — ON DEMAND ONLY; nothing under tests/ ships
+make zcheck   # play every Z-machine story to a script and diff it against
+              # dfrotz (§59.13). `make zh` builds the harness interpreter;
+              # `tools/zharness.py <story> --repl` types at one by hand. This
+              # is how a Frotz change is checked — a story is the only thing
+              # that exercises an interpreter, and it is minutes by hand
 make clean
 ```
 
