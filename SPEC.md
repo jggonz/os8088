@@ -26370,20 +26370,35 @@ or not a document is ever opened). Paying it here instead puts the cost at
 the moment the user has already asked for a file and is expecting the drive
 to run — and charges it only to sessions that actually open a document.
 
-### 54.8 Accepting the document: four apps, and the two traps between them
+### 54.8 Accepting the document: five apps, and the three traps between them
 
-Note Pad, Paint, Tracker and ArtfulType all take a document handed to them at
-launch, and the shape is the same in all four: the entry proc **records**
-(`OSAPI_ARG_FILE`, then the name copied into the app's own buffer) and the
-first `W_PAINT` **spends**. Recording in the entry proc is forced — the word
+Note Pad, Paint, Tracker, ArtfulType and Frotz all take a document handed to
+them at launch, and the shape is the same in all five: the entry proc
+**records** (`OSAPI_ARG_FILE`, then the name **and the locator** copied into
+the app's own buffers) and the first `W_PAINT` **spends**. Recording in the entry proc is forced — the word
 is read-and-clear (§54.5), so it must be taken before anything else asks —
 and spending in the paint is forced too, because every load path in these
 apps shows a toast, repaints or enters fullscreen, and all three want the
 **gfx lock held**, which an entry proc does not hold (§20.2). The paint is
 also the first moment the window is placed and visible.
 
-Two traps, both of which shipped broken and were caught by clicking a saved
-file rather than by reading the code:
+Three traps, every one of which shipped broken and was caught by clicking a
+saved file rather than by reading the code:
+
+- **`DX` and `BL` are half the answer.** `OSAPI_ARG_FILE` hands back the name
+  *and* the pair that locates it, and the name on its own is only findable
+  from wherever the kernel happens to be standing. It is standing in the
+  **program's** directory: `ld_run_body` reads the image out of it and far-
+  calls the entry proc as one unit, and §54.9's `assoc_back` does not restore
+  the document's folder until the load has returned. So the whole of opening a
+  document is **copy the name, `OSAPI_FILE_GOTO`, read** — and an app that
+  banks only the name works perfectly for every document that happens to sit
+  in the same folder as the program, which is the entire root of a disk.
+  Frotz banked only the name and reported `That story is not on this disk.`
+  for every story in `INFOCOM\`, `CLASSIC\` and `MODERN\` — which is every
+  story the story floppy ships (§59.9) — while the same file copied to the
+  root opened. The two directories being the same one is the case that hides
+  it, and it is the case every test disk was built as.
 
 - **The load routine's own contract still applies.** `pt_load` takes its name
   in **SI**, because the dialog's completion proc had one there; the handoff
@@ -27436,6 +27451,17 @@ is an ordinary one, while an `equ` would have to be evaluated before
 not anticipate takes it from its own `*_SLACK` range and from no other; a
 module that overruns its range raises `ZF_BSS_TOTAL` in the same edit, which is
 the review that arrangement exists to force.
+
+**That review does not catch the other way of getting it wrong**, and `zio.inc`
+had it: three separate buffers were all declared at `ZIO_SLACK + 40` — the save
+name's 13 bytes, the scrollback's three words and the 24-byte find record.
+Nothing overran anything and the total never moved, so nothing raised
+`ZF_BSS_TOTAL` and the build was clean. Saving a game while a transcript was
+open wrote the save's file name over `[zi_scrseg]`, which `zi_script_write`
+then loads into **ES** to store 16KB through. A range says where a module's
+state may live and says nothing about two of its own allocations landing on
+each other; the offsets inside a range are still a map somebody has to keep,
+which is why `zio.inc` now carries one in a comment and appends at the end.
 
 ### 59.2 Versions
 

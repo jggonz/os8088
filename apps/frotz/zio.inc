@@ -129,7 +129,32 @@ ZI_DYNMAX    equ 0E000h
 %define zi_skoff      (os88_image_end + ZIO_SLACK + 34)  ; parse: Stks body offset
 %define zi_sklen      (os88_image_end + ZIO_SLACK + 36)  ; parse: Stks body length
 %define zi_end        (os88_image_end + ZIO_SLACK + 38)  ; parse: end of the image
-%define zi_savname    (os88_image_end + ZIO_SLACK + 40)  ; 13: NAME.SAV
+%define zi_savname    (os88_image_end + ZIO_SLACK + 40)  ; 13: NAME.SAV, +40..+52
+
+; The document a double-click named (SPEC.md 54.7). OSAPI_ARG_FILE answers a
+; name AND the pair that locates it, and the name alone is not enough: the
+; entry proc runs while the kernel is standing in the PROGRAM's directory, so
+; a story in B:\INFOCOM opened from the root is not found by name. frotz.asm
+; banks these two at entry and zi_openpend spends them on OSAPI_FILE_GOTO.
+%define zi_argclus    (os88_image_end + ZIO_SLACK + 84)  ; word: its directory
+%define zi_argdrv     (os88_image_end + ZIO_SLACK + 86)  ; byte: and its volume
+%define zi_arghave    (os88_image_end + ZIO_SLACK + 87)  ; byte: ...and whether
+                                                         ; those two mean
+                                                         ; anything
+; The flag is not redundant with a zero cluster: 0,0 IS a valid locator, the
+; root of drive 0, so zeroed bss cannot be read as "nobody set this". And
+; [zf_pend] has a second writer - the development harness (zharness.inc) seeds
+; it with its own story name and never calls OSAPI_ARG_FILE - so without the
+; flag zi_openpend would send that build to A:\ before looking for a story
+; that is on B:.
+
+; THE OFFSETS ABOVE +38 ARE NOT CONTIGUOUS AND MUST NOT BE PACKED. Three
+; buffers used to start at +40 on top of each other: zi_savname's 13 bytes,
+; the scrollback's three words (now +78) and the find record's 24 (now +54).
+; Saving a game while a transcript was open wrote the save's file name over
+; [zi_scrseg], which zi_script_write then loaded into ES - a 16KB store into
+; whatever segment 'MI' happens to be. Anything taken from this slack from
+; here on goes at the END of it, and the map is this comment.
 
 ; =============================================================================
 ; THE KEY RING - the one place the two tasks touch without a lock
@@ -2217,9 +2242,12 @@ zi_m_notsave: db 'Not a Quetzal saved game.', 0
 ZI_SCRKB    equ 16                  ; 16,384 characters - about 250 lines of
                                     ; prose, and Note Pad's own ceiling is the
                                     ; same number for the same reason
-%define zi_scrseg  (os88_image_end + ZIO_SLACK + 40)  ; word: the claim, 0 = none
-%define zi_scrlen  (os88_image_end + ZIO_SLACK + 42)  ; word: bytes buffered
-%define zi_scrfull (os88_image_end + ZIO_SLACK + 44)  ; byte: it filled up
+; +78 and not +40: these sat on top of zi_savname's 13 bytes, and a Save while
+; scripting was on overwrote the claim segment this loads into ES. The map is
+; the comment beside zi_savname.
+%define zi_scrseg  (os88_image_end + ZIO_SLACK + 78)  ; word: the claim, 0 = none
+%define zi_scrlen  (os88_image_end + ZIO_SLACK + 80)  ; word: bytes buffered
+%define zi_scrfull (os88_image_end + ZIO_SLACK + 82)  ; byte: it filled up
 
 ; -----------------------------------------------------------------------------
 ; zi_script_open - claim the transcript buffer (UI TASK)
@@ -2332,17 +2360,24 @@ zi_m_scrfull: db 'Transcript full - it stops here.', 0
 
 ; The find record is ours. The %define must precede its first USE: a %define
 ; expands at the use site, but NASM still reads this file top to bottom.
-%define zi_find (os88_image_end + ZIO_SLACK + 46)   ; OSAPI_FIND_SZ = 24
+%define zi_find (os88_image_end + ZIO_SLACK + 54)   ; OSAPI_FIND_SZ = 24, so
+                                                    ; +54..+77 - clear of
+                                                    ; zi_savname's +40..+52
 
 ; -----------------------------------------------------------------------------
 ; zi_openpend - open the story a double-click named (UI TASK, first paint)
 ; in:  [zf_pend] = a NUL 8.3 name; out: nothing; the notice says why on failure
 ;
-; The association path (SPEC.md 54.7) hands over a NAME and nothing else,
-; while the file dialog hands over a name AND the size - and the size is what
+; The association path (SPEC.md 54.7) hands over a name and a LOCATOR, while
+; the file dialog hands over a name AND the size - and the size is what
 ; SPEC.md 59.4's refusal is decided from, before any disk I/O. So this looks
 ; the size up the only way a package can: OSAPI_FILE_FIND walks the mount
 ; snapshot, which is in RAM, so the walk costs no motor time either.
+;
+; It walks the directory we are STANDING IN, so the locator frotz.asm banked
+; is spent first. Nothing here searches for the file - the whole of opening a
+; document is copy the name, GOTO, read - and skipping the GOTO is why a story
+; in a folder reported itself missing while the same story in the root opened.
 ;
 ; Then it joins the dialog's own path at zi_dlg_story, so a story opened by
 ; double-click gets exactly the same sizing, the same refusal and the same
@@ -2357,11 +2392,30 @@ zi_openpend:
     push di
     push es
 
-    ; ES FIRST, and this is not a formality. We are called from W_PAINT, so ES
+    ; THE GOTO GOES FIRST, before ES is set up, because it is a REMOUNT and
+    ; nothing promises what it leaves in ES. CF=1 is the folder no longer being
+    ; listable - a disk swapped between the double-click and this first paint -
+    ; and searching the wrong directory would report the wrong reason, so it
+    ; takes the not-found exit.
+    ;
+    ; Only when a locator actually came with the name. The harness build sets
+    ; [zf_pend] itself and has none, and must go on searching where it already
+    ; stands.
+    cmp byte [zi_arghave], 0
+    je .located
+    mov dx, [zi_argclus]
+    mov bl, [zi_argdrv]
+    call OSAPI_FILE_GOTO
+    jc .nofile
+.located:
+
+    ; ES SECOND, and this is not a formality. We are called from W_PAINT, so ES
     ; is KERNEL_SEG (SPEC.md 20.5) - and `rep movsb` stores through ES:DI. The
     ; first version of this proc copied the name before setting ES and wrote
     ; thirteen bytes into the KERNEL's segment, which assembles cleanly, runs,
-    ; and leaves [zi_name] empty so the search below finds nothing.
+    ; and leaves [zi_name] empty so the search below finds nothing. It is set
+    ; here rather than at the top so that the remount above cannot come between
+    ; the load and its use.
     push ds
     pop es
 

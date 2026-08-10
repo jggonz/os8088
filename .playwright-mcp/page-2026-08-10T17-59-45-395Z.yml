@@ -1,0 +1,1459 @@
+- generic [active] [ref=e1]:
+  - link "Skip to content" [ref=e2] [cursor=pointer]:
+    - /url: "#main"
+  - navigation "Main" [ref=e3]:
+    - link "os8088 home" [ref=e4] [cursor=pointer]:
+      - /url: /
+      - img "os8088" [ref=e5]
+    - button "System" [ref=e17]
+    - generic [ref=e18]:
+      - button "File" [ref=e19]
+      - text: "*"
+    - link "Videos" [ref=e21] [cursor=pointer]:
+      - /url: /videos/
+    - link "Live demo" [ref=e23] [cursor=pointer]:
+      - /url: /demo/
+    - button "Special" [ref=e25]
+  - main [ref=e26]:
+    - generic [ref=e28]:
+      - heading "Releases" [level=1] [ref=e29]
+      - paragraph [ref=e30]:
+        - text: Every tagged build of os8088, newest first, with the same notes that go on the
+        - link "GitHub releases page" [ref=e31] [cursor=pointer]:
+          - /url: https://github.com/jggonz/os8088/releases
+        - text: . Each one is four raw floppy images built from a single commit, booted in an emulator before it was published.
+      - paragraph [ref=e32]:
+        - text: "Builds before the first tag are not listed: the project was published as images on the download page without a release behind them. The"
+        - link "download page" [ref=e33] [cursor=pointer]:
+          - /url: /download/
+        - text: always serves the newest release, with checksums.
+    - generic [ref=e34]:
+      - generic [ref=e35]: v1.0.20260810 latest
+      - generic [ref=e39]:
+        - heading "v1.0.20260810" [level=2] [ref=e40]
+        - paragraph [ref=e41]:
+          - text: Released 2026-08-10 from
+          - code [ref=e42]: 0670804ea
+          - text: ·
+          - link "on GitHub" [ref=e43] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260810
+        - paragraph [ref=e44]: "os8088 plays Infocom text adventures now. A new program called Frotz runs the story files those games were published as: Mini-Zork, Colossal Cave Adventure, Zork: The Undiscovered Underground and Photopia all work. It is 23,722 bytes of 8086 assembly. Nothing in the system itself changed in this release, so the four images below are byte for byte the ones from v1.0.20260809 -- Frotz travels on a story floppy of its own, built from a source checkout."
+        - list [ref=e45]:
+          - listitem [ref=e46]:
+            - text: Frotz plays Infocom games
+            - link "#72" [ref=e47] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/72
+            - text: Infocom wrote their games for a pretend computer called the Z-machine, and then wrote one small program per real computer to run it. That is why a story file from 1982 is still a plain file that still works. Frotz is that small program, written for os8088 in 8086 assembly. It is 23,722 bytes and it handles every version of the format, 1 through 8. A story is held in memory whole while you play, so it checks the size before it reads anything and turns the job down with a number in it --
+            - code [ref=e48]: Anchorhead needs 508K and this machine has 149K free
+            - text: "-- rather than failing part of the way in. Saved games are written in Quetzal, the format other interpreters use, so a game saved here can be finished on a laptop. There is"
+            - link "a page about it" [ref=e49] [cursor=pointer]:
+              - /url: /spotlight/frotz/
+            - text: with screenshots of four stories running.
+          - listitem [ref=e50]:
+            - text: A floppy of its own, and no games in the repository
+            - link "#72" [ref=e51] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/72
+            - text: Frotz is not on the software disk. The 360KB disk has about 100KB free and the interpreter is most of that, never mind a game to play on it, so
+            - code [ref=e52]: make zdisk
+            - text: "builds a story floppy in all three sizes instead. The story files are not in the source tree either -- they are other people's games. The build fetches each one and checks it against a recorded checksum, from a list limited to what the authors released freely. That is why the Infocom titles are Mini-Zork I, both Sampler disks and Zork: The Undiscovered Underground, and not Zork I to III or The Hitchhiker's Guide, which Activision still sells."
+        - paragraph [ref=e53]:
+          - text: "The four images here are identical to the last release and Frotz is not on them. It needs story files to be worth anything, and those are not redistributable from this project, so it ships as a floppy you build yourself:"
+          - code [ref=e54]: make zdisk
+          - text: in a source checkout fetches the freely released games and writes the disk in all three sizes.
+          - link "The page about it" [ref=e55] [cursor=pointer]:
+            - /url: /spotlight/frotz/
+          - text: walks through the whole thing.
+        - paragraph [ref=e56]:
+          - text: Once it is running, open
+          - code [ref=e57]: FROTZ.O88
+          - text: first and then choose File › Open Story... to pick a game out of one of the folders. Double-clicking a story file only starts it when the file is in the root of the disk, and the disk
+          - code [ref=e58]: make zdisk
+          - text: builds sorts its stories into folders by era.
+        - paragraph [ref=e59]: "The source figure below jumped because the way it is counted changed, not because that much was written. It used to count each program's main file and stop there, which missed the other files four of them are mostly made of -- 37,309 lines across ArtfulType, the MOD player, the tracker and Frotz. It now counts those too. The same tree under the old count is 115,528 lines, and the module figure was one too many: there are 34, not 35. Earlier releases on this page still carry old-count numbers and have not been recounted."
+        - generic [ref=e60]:
+          - generic [ref=e61]:
+            - term [ref=e62]: Kernel image
+            - definition [ref=e63]: 80,486 bytes
+          - generic [ref=e64]:
+            - term [ref=e65]: Image + .bss
+            - definition [ref=e66]: 55,355 of 65,536 (10,181 free)
+          - generic [ref=e67]:
+            - term [ref=e68]: Source
+            - definition [ref=e69]: 152,837 lines of assembly across 34 kernel modules
+        - table [ref=e70]:
+          - caption [ref=e71]: Files in os8088 v1.0.20260810
+          - rowgroup [ref=e72]:
+            - row [ref=e73]:
+              - columnheader "File" [ref=e74]
+              - columnheader "What it is" [ref=e75]
+              - columnheader "Size" [ref=e76]
+          - rowgroup [ref=e77]:
+            - row [ref=e78]:
+              - rowheader [ref=e79]:
+                - link "os8088.img" [ref=e80] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260810/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e81]'
+              - cell "1,474,560 bytes" [ref=e82]
+            - row [ref=e83]:
+              - rowheader [ref=e84]:
+                - link "os8088-360.img" [ref=e85] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260810/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e86]'
+              - cell "368,640 bytes" [ref=e87]
+            - row [ref=e88]:
+              - rowheader [ref=e89]:
+                - link "apps.img" [ref=e90] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260810/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding APPS (ARTFUL.O88, FRACTAL.O88, HELLO.O88, MODPLUG.O88, NOTEPAD.O88, PAINT.O88, PIANO.O88, RECORDER.O88, TRACKER.O88), GAMES (ARKANOID.O88, MINES.O88, MISSILE.O88, SOLITAIR.O88, TAMEGRAM.O88), MEDIA (BEVERLY.MOD), SYSTEM (TASKMGR.O88) and ASSOC.DAT. Not bootable." [ref=e91]'
+              - cell "1,474,560 bytes" [ref=e92]
+            - row [ref=e93]:
+              - rowheader [ref=e94]:
+                - link "apps360.img" [ref=e95] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260810/apps360.img
+              - cell "Software disk, 360KB. The same 15 packages, same filesystem, different geometry." [ref=e96]
+              - cell "368,640 bytes" [ref=e97]
+        - paragraph [ref=e98]:
+          - text: "The download page serves these same four images with their SHA-256 checksums:"
+          - link "os8088.com/download" [ref=e99] [cursor=pointer]:
+            - /url: /download/
+          - text: .
+    - generic [ref=e100]:
+      - generic [ref=e101]: v1.0.20260809
+      - generic [ref=e105]:
+        - heading "v1.0.20260809" [level=2] [ref=e106]
+        - paragraph [ref=e107]:
+          - text: Released 2026-08-09 from
+          - code [ref=e108]: 818bd9fea
+          - text: ·
+          - link "on GitHub" [ref=e109] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260809
+        - paragraph [ref=e110]: "Hard disks did not work in the last release on the path nearly every machine uses. A routine reported failure even on the runs that had succeeded, so the driver refused every transfer before it reached the BIOS -- that is fixed, and the fix is one instruction. The rest of this release is speed on a slow machine: moving through a long document in Note Pad went from about five seconds a keypress to under half a second, and the music tracker's mixer now takes 29.6% of the processor instead of 45.2%. Windows also gained a maximize -- double-click a title bar."
+        - list [ref=e111]:
+          - listitem [ref=e112]:
+            - text: Hard disks read again
+            - link "#66" [ref=e113] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/66
+            - text: "The last release shipped a hard-disk driver that refused every transfer before it reached the BIOS. A routine added late in that release reported failure on its success path, and the code that called it believed the answer. All three of the reported symptoms were that one fault: mounting a disk said there was no partition table, the installer offered free slots on a drive that was already partitioned, and Install refused to start. Hard disks now work on any machine whose BIOS answers for them, which is very nearly all of them."
+          - listitem [ref=e114]:
+            - text: Note Pad keeps up with a long document
+            - link "#66" [ref=e115] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/66
+            - text: "Moving through a long file used to stop the machine for seconds at a time. Measured on a 4.77MHz IBM PC/XT with a 15,428-character file open in a 16-row window: pressing Up at the top of the view took 5.2 seconds and now takes 0.38. A key press with nothing to do at all took 5.0 seconds and now takes 0.15. Typing at the front of the file went from 0.41 to 0.26 seconds. The target is a tenth of a second, so none of these are finished yet."
+          - listitem [ref=e116]:
+            - text: The tracker gives the machine back
+            - link "#66" [ref=e117] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/66
+            - text: Playing a MOD file used to spend 45.2% of the processor mixing audio. Its inner loops were rewritten and it now spends 29.6%. Stop also became a pause, so playing again carries on from where the music stopped rather than restarting the tune. And the jerk when playback started is gone -- it was the run-up filling the buffer, not the buffer running dry.
+          - listitem [ref=e118]:
+            - text: A raised window is put back, not redrawn
+            - link "#66" [ref=e119] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/66
+            - text: Bringing a covered window to the front took 1.03 seconds on a 4.77MHz PC/XT, and more than half of that was redrawing text that had been painted over while the window was hidden. A program can now ask the system to keep a copy of its window while it is covered, which turns the raise into about 10 milliseconds of copying. The copy is held in memory that is given back the instant anything else needs it, so a machine with no room to spare behaves exactly as it did before.
+          - listitem [ref=e120]:
+            - text: Double-click a title bar to maximize
+            - link "#66" [ref=e121] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/66
+            - text: Double-clicking the title bar of a window that can be resized grows it to fill the screen. Double-click it again and the window returns to the size and place it had.
+          - listitem [ref=e122]:
+            - text: Installing to a hard disk does less disk work
+            - link "#66" [ref=e123] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/66
+            - text: "A full install copies 22 files from both floppies onto a partition. It used to mount a volume 128 times and make 638 calls to the BIOS to do it; it now mounts 76 times and makes 354 calls. Those counts are the claim and the seconds are not: one disk call on real hardware costs roughly a single turn of the disk, which is not something an emulator can measure for you."
+        - paragraph [ref=e124]: If you installed os8088 onto a hard disk from the previous release, install again from these images. That build could not read a hard disk on most machines, so anything you put on one is best treated as unfinished.
+        - paragraph [ref=e125]: "In the Tracker, Stop is now a pause: playing again carries on from where you stopped instead of starting the tune over."
+        - paragraph [ref=e126]: Double-clicking the title bar of a resizable window now maximizes it, and double-clicking again puts it back where it was.
+        - generic [ref=e127]:
+          - generic [ref=e128]:
+            - term [ref=e129]: Kernel image
+            - definition [ref=e130]: 80,486 bytes
+          - generic [ref=e131]:
+            - term [ref=e132]: Image + .bss
+            - definition [ref=e133]: 55,355 of 65,536 (10,181 free)
+          - generic [ref=e134]:
+            - term [ref=e135]: Source
+            - definition [ref=e136]: 114,865 lines of assembly across 35 kernel modules
+        - table [ref=e137]:
+          - caption [ref=e138]: Files in os8088 v1.0.20260809
+          - rowgroup [ref=e139]:
+            - row [ref=e140]:
+              - columnheader "File" [ref=e141]
+              - columnheader "What it is" [ref=e142]
+              - columnheader "Size" [ref=e143]
+          - rowgroup [ref=e144]:
+            - row [ref=e145]:
+              - rowheader [ref=e146]:
+                - link "os8088.img" [ref=e147] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260809/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e148]'
+              - cell "1,474,560 bytes" [ref=e149]
+            - row [ref=e150]:
+              - rowheader [ref=e151]:
+                - link "os8088-360.img" [ref=e152] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260809/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e153]'
+              - cell "368,640 bytes" [ref=e154]
+            - row [ref=e155]:
+              - rowheader [ref=e156]:
+                - link "apps.img" [ref=e157] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260809/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding APPS (ARTFUL.O88, FRACTAL.O88, HELLO.O88, MODPLUG.O88, NOTEPAD.O88, PAINT.O88, PIANO.O88, RECORDER.O88, TRACKER.O88), GAMES (ARKANOID.O88, MINES.O88, MISSILE.O88, SOLITAIR.O88, TAMEGRAM.O88), MEDIA (BEVERLY.MOD), SYSTEM (TASKMGR.O88) and ASSOC.DAT. Not bootable." [ref=e158]'
+              - cell "1,474,560 bytes" [ref=e159]
+            - row [ref=e160]:
+              - rowheader [ref=e161]:
+                - link "apps360.img" [ref=e162] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260809/apps360.img
+              - cell "Software disk, 360KB. The same 15 packages, same filesystem, different geometry." [ref=e163]
+              - cell "368,640 bytes" [ref=e164]
+    - generic [ref=e165]:
+      - generic [ref=e166]: v1.0.20260808
+      - generic [ref=e170]:
+        - heading "v1.0.20260808" [level=2] [ref=e171]
+        - paragraph [ref=e172]:
+          - text: Released 2026-08-08 from
+          - code [ref=e173]: ca8211243
+          - text: ·
+          - link "on GitHub" [ref=e174] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260808
+        - paragraph [ref=e175]: "The disk stops being a floppy. os8088 installs onto a hard disk and boots from a partition, mounts every FAT partition it finds, and a document on any volume opens its own program when you double-click it -- so the system disk, the software disk and a 40MB drive are all just places files live. Three packages join: Missile Command from Atari's own 1979 sources, TameGram from Jason Page, and ModPlug Player, whose face is drawn from an invalidation mask and costs a tenth of the glyphs it used to. The File Manager gets Cut, Copy, Paste and drag and drop, with copies that stream rather than fit in memory. Mono text drawing is ~30% faster. And the kernel grew a debugging story it never had: a serial monitor that ships as a loadable driver, and an emulator-side debugger the guest cannot feel."
+        - list [ref=e176]:
+          - listitem [ref=e177]:
+            - text: "Hard disks: install it, and boot what you installed"
+            - link "#61" [ref=e178] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/61
+            - text: "SPEC.md 52 lands in full. The kernel mounts every FAT partition it finds, an installer writes os8088 onto a drive, and the machine boots from that partition rather than from A: -- then mounts what it booted and asks for one disk instead of two. Rung 0 is the controller ROM, which is what an XT actually has, and it is the rung QEMU cannot test at all: the verification is 86Box emulating"
+            - code [ref=e179]: st506_xt_st11_m
+            - text: ", the calibration machine's own controller. A pre-merge safety pass closed six hard-disk defects and the FAT window's write half before any of it shipped."
+          - listitem [ref=e180]:
+            - text: A document opens its program
+            - link "#61" [ref=e181] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/61
+            - code [ref=e182]: ASSOC.DAT
+            - text: maps an extension to the package that handles it, and says where that package lives -- so one mount of a volume's root seeds associations for the whole disk, on any volume rather than just the two floppies. Double-click a
+            - code [ref=e183]: .MOD
+            - text: and the player opens it. Coming back from a document open is a file operation like any other (SPEC.md 54.9), so it reports itself on the menu bar and leaves the current directory where the instance had it.
+          - listitem [ref=e184]:
+            - text: Missile Command, the twelfth package
+            - link "#53" [ref=e185] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/53
+            - text: "Ported from Atari's original W3MAIN / W3DSUP / W3COMN 6502 sources -- \"WWIII\", project 23603, July 1979. The numbers are the arcade's and not re-invented: six cities and three bases at their original coordinates, ten ABMs a base, satellites and MIRVs on the arcade's own wave counters, and SETICS scoring with the 10,000-point bonus city. No kernel change and no heap claim -- every array is sized by the arcade's object counts and fits the package bss. Windowed, or on the fullscreen surface with F and Esc. Two bugs it cost first are worth the telling: a trail drawn in per-frame segments and erased as one line does not erase (the two Bresenham rasterisations differ by a pixel, leaving half of every dead missile on screen), and a permanent refusal coded like a transient one hung the wave forever on a perfectly live machine."
+          - listitem [ref=e186]:
+            - text: ModPlug Player, the fourteenth package -- and a face drawn from dirty bits
+            - link "#58" [ref=e187] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/58
+            - text: "ModPlug Player V2's look and feel: the skinned window with its green LCD, LED transport row, scrubber, option-button grid and spectrum pane, plus a Setup window and a PlayList editor. The interface is the port; the replayer is this tree's own, because ModPlugPlayer's real playback is libopenmpt and no 8086 runs that. The reason it keeps time at all is SPEC.md 52.12: every wake used to redraw 158 glyph cells, which at a millisecond a cell is 158ms of work inside a 55ms frame -- the player could not keep its own clock. Drawing is now gated on a word of dirty bits, the period's update-region idea applied at the widget. Measured with counters, over the same ten seconds of playback: 28,365 glyph cells down to 2,468 (11.5x), gfx_fill calls 12,856 down to 4,130, and 158 cells a frame down to 13.7."
+          - listitem [ref=e188]:
+            - text: TameGram, the thirteenth package
+            - link "#55" [ref=e189] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/55
+            - text: "A four-direction dual-faction containment matrix, designed and originally implemented by Jason Page and credited in the app's own About panel. Units fall from the centre of a 32x32 matrix toward one of four edges; eight contiguous same-faction cells purge, and what survives settles along the vector until nothing more clears. The port is a catalogue of the three mistakes this ABI invites: six callbacks ending in"
+            - code [ref=e190]: retf
+            - text: (which assembles perfectly and hangs at the first paint), a reachable out-of-bounds grid write where a worker updated lock-free while W_PAINT ran inside the same scratch words, and drawing outside the window, because the gfx primitives clip to the screen -- on CGA the matrix hung 19 rows through the bottom of its own window.
+          - listitem [ref=e191]:
+            - text: The File Manager gets Cut, Copy, Paste and drag and drop
+            - link "#54" [ref=e192] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/54
+            - text: With a recursive paste engine, so a folder pastes its whole tree. A copy is a stream now (SPEC.md 22.5), so the size of a file is no longer bounded by what fits in memory, and a move inside one volume is three sector writes rather than a copy and a delete (22.6). Underneath, one read and one write with no 64KB ceiling on either (18.4.1). The listing gained a
+            - code [ref=e193]: ..
+            - text: row in both views and in the file dialog, and the mount snapshot sorts by name.
+          - listitem [ref=e194]:
+            - text: Note Pad stops walking the note, and ~30% off mono text
+            - link "#54" [ref=e195] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/54
+            - text: A keystroke used to cost a walk of the whole document and a repaint of the band; it now draws the cells that changed, records where each row starts so a caret key costs a row, scrolls by moving the pixels it already has, and keeps the note in a heap claim that grows instead of 512 bytes of bss. The general win underneath it is
+            - code [ref=e196]: font_run
+            - text: "(SPEC.md 6.1): the erase-and-letter pair as one operation, one decision per cell, so a line is never momentarily blank. Measured on mono: 1.26x fewer instructions and 2.85x less framebuffer traffic."
+            - code [ref=e197]: WF_SNAP
+            - text: is the other half -- an opt-in, mono-only flag that keeps a window's content on a byte boundary so the run never straddles.
+          - listitem [ref=e198]:
+            - text: Two debuggers, because 86Box has no automation socket and real iron has none at all
+            - link "#61" [ref=e199] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/61
+            - code [ref=e200]: DEBUG.DRV
+            - text: is a serial monitor that reads and writes memory and I/O ports on a running machine -- and it is a driver, not a
+            - code [ref=e201]: SERDBG=
+            - text: "kernel build, which is the whole point: a knob kernel is a different binary, so the thing you debugged is not the thing that ships. It costs a machine that never loads it one table row and a file it can delete. It takes COM4, the port the kernel has never heard of, and tests that it may have IRQ3 by reading the mouse driver's own state rather than assuming. Alongside it, a MartyPC-side debugger that costs the guest not one cycle and does three things a guest-side stub structurally cannot: breakpoints, single-step and real cycle counts. On an emulator it supersedes the driver; the driver stays the only half that works on a 5150."
+          - listitem [ref=e202]:
+            - text: 86Box targets for the fast end of the range
+            - link "#59" [ref=e203] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/59
+            - code [ref=e204]: make 486
+            - text: (486DX2/66) and
+            - code [ref=e205]: make pentium
+            - text: "(P54C/133) join the register. 8086 real-mode code runs verbatim on both, so what they are for is the other end of the timing range -- every constant in this tree was sized while looking at a 4.77MHz 8088, and QEMU models no clock speed at all. Recording the trap they cost: 86Box silently replaces an unrecognised"
+            - code [ref=e206]: cpu_family
+            - text: rather than rejecting it, so a config saying
+            - code [ref=e207]: pentium
+            - text: boots a 75MHz P54C while still claiming 133. The name that takes the multiplier is
+            - code [ref=e208]: pentium_p54c
+            - text: .
+          - listitem [ref=e209]:
+            - text: The repository stops shipping its own build output
+            - link "#56" [ref=e210] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/56
+            - text: 35 artifacts under
+            - code [ref=e211]: build/
+            - text: had been force-added past the gitignore -- the kernel, both boot sectors, all four floppies and every package. The staleness check that guarded them worked; the reason to stop is that the cache carried no information. The toolchain is deterministic on purpose (
+            - code [ref=e212]: tools/os88disk.py
+            - text: pins the volume serial and every FAT timestamp), so
+            - code [ref=e213]: make
+            - text: "reproduces any of those bytes exactly, and a committed copy bought a correctness obligation for nothing. The images live where a version can be attached to them: this page, and the GitHub release."
+            - code [ref=e214]: tools/setup-macos.sh
+            - text: (#57) installs the toolchain on a Mac, including the 86Box ROM set nobody remembers.
+        - paragraph [ref=e215]:
+          - text: The Disk window and the file dialog now list
+          - code [ref=e216]: ..
+          - text: as the first row, and entries sort by name rather than the order they were written to the disk. Both disks also carry SYSTEM/ and MEDIA/ folders now, and README.TXT ships on the system disk. If you have scripted anything against row positions, they moved.
+        - paragraph [ref=e217]: os8088 can be installed onto a hard disk and booted from a partition. It mounts every FAT partition it finds -- which means a partition it can see is a partition it can write to, so point the installer at a drive you are willing to lose.
+        - paragraph [ref=e218]: "The kernel image figure below jumped from 52,718 to 78,950 bytes, and that is a change of shape rather than 26KB of new resident code. KERNEL.SYS now carries three things: the resident image (54,272), the cold-start code that runs once and is then thrown away (22,016), and the boot overlay (2,662). Image + .bss -- the kernel's own 64KB segment -- actually fell, from 59,031 to 53,842."
+        - paragraph [ref=e219]: "The whole-kernel footprint is at its ceiling: KERN_SIZE is 90,112 bytes of a KERN_BUDGET of 90,112, with zero spare, and the three rungs have 430, 175 and 444 bytes left between them. The next feature pays for itself by shrinking something else, or by a deliberate decision to raise the budget."
+        - generic [ref=e220]:
+          - generic [ref=e221]:
+            - term [ref=e222]: Kernel image
+            - definition [ref=e223]: 78,950 bytes
+          - generic [ref=e224]:
+            - term [ref=e225]: Image + .bss
+            - definition [ref=e226]: 53,842 of 65,536 (11,694 free)
+          - generic [ref=e227]:
+            - term [ref=e228]: Source
+            - definition [ref=e229]: 112,792 lines of assembly across 35 kernel modules
+        - table [ref=e230]:
+          - caption [ref=e231]: Files in os8088 v1.0.20260808
+          - rowgroup [ref=e232]:
+            - row [ref=e233]:
+              - columnheader "File" [ref=e234]
+              - columnheader "What it is" [ref=e235]
+              - columnheader "Size" [ref=e236]
+          - rowgroup [ref=e237]:
+            - row [ref=e238]:
+              - rowheader [ref=e239]:
+                - link "os8088.img" [ref=e240] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260808/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e241]'
+              - cell "1,474,560 bytes" [ref=e242]
+            - row [ref=e243]:
+              - rowheader [ref=e244]:
+                - link "os8088-360.img" [ref=e245] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260808/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e246]'
+              - cell "368,640 bytes" [ref=e247]
+            - row [ref=e248]:
+              - rowheader [ref=e249]:
+                - link "apps.img" [ref=e250] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260808/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding APPS (ARTFUL.O88, FRACTAL.O88, HELLO.O88, MODPLUG.O88, NOTEPAD.O88, PAINT.O88, PIANO.O88, RECORDER.O88, TRACKER.O88), GAMES (ARKANOID.O88, MINES.O88, MISSILE.O88, SOLITAIR.O88, TAMEGRAM.O88), MEDIA (BEVERLY.MOD), SYSTEM (TASKMGR.O88) and ASSOC.DAT. Not bootable." [ref=e251]'
+              - cell "1,474,560 bytes" [ref=e252]
+            - row [ref=e253]:
+              - rowheader [ref=e254]:
+                - link "apps360.img" [ref=e255] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260808/apps360.img
+              - cell "Software disk, 360KB. The same 15 packages, same filesystem, different geometry." [ref=e256]
+              - cell "368,640 bytes" [ref=e257]
+    - generic [ref=e258]:
+      - generic [ref=e259]: v1.0.20260804.1
+      - generic [ref=e263]:
+        - heading "v1.0.20260804.1" [level=2] [ref=e264]
+        - paragraph [ref=e265]:
+          - text: Released 2026-08-04 from
+          - code [ref=e266]: aad482530
+          - text: ·
+          - link "on GitHub" [ref=e267] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260804.1
+        - paragraph [ref=e268]: "An experimental branch comes home, and it changes what the system is made of. Memory stops being a floor plan and becomes a heap: everything above the kernel is handed out on demand, which retires the fixed package pool and drops the RAM floor from 256KB to 128KB. A driver becomes a file you can put on a floppy -- the sound card's is the first, loaded by name from a settings file that also holds the whole Control Panel, because the system disk is a real FAT12 volume now. Repainting stops meaning the screen: closing a window costs the rectangle it vacated, raising one costs a title bar, and renaming one costs a strip. And the eleventh package is ArtfulType, a distraction-free Markdown writer that takes the whole screen and draws its own Macintosh menu bar on it."
+        - list [ref=e269]:
+          - listitem [ref=e270]:
+            - text: ArtfulType, the eleventh package
+            - link "#49" [ref=e271] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/49
+            - text: "A port of ActionRetro's ArtfulType -- the distraction-free Markdown writer for classic 68k Macintoshes -- onto the fullscreen surface. Windowed it is a splash card; in Writer mode it takes the whole screen and draws its own Macintosh menu bar on it, black with white titles, tracking press-drag-release pull-downs with drop shadows, right-aligned shortcuts and the triple selection flash. The document is canonical Markdown in a 20KB gap buffer and the styling is a rendering property, not a second buffer: styled lines hide their delimiters and draw from the package's own glyph engine -- bold by overstrike, italic by shear, headings bit-doubled to two and three times size, underlined links with the URL hidden, code cells dithered -- while the paragraph the caret is in renders raw and collapses again when the caret leaves. The performance contract is what makes it usable at 4.77MHz: a keystroke is one gap store, a one-paragraph relayout and one blit per repainted line. Nothing on the typing path walks the document. It needed no kernel changes at all -- the whole port sits on the API surface that was already there."
+          - listitem [ref=e272]:
+            - text: "Loadable drivers: a driver is a package that is not an application"
+            - link "#51" [ref=e273] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/51
+            - text: "Same 32-byte header, same flat binary, same paragraph-aligned heap claim, same three-byte dispatcher -- so a driver author writes ordinary near procedures and the kernel calls them exactly as it calls a window's. Four things make it a driver instead: it is a"
+            - code [ref=e274]: .DRV
+            - text: file (the mount types only
+            - code [ref=e275]: .O88
+            - text: as an application, so it can never be double-clicked into the loader), its header version is 4 (a second, independent gate), it has no instance record, and its bss ships inside its image -- which is what lets the kernel make exactly one claim, at the size the directory entry already reported, before a byte is read. It publishes a service table the kernel copies into its own memory at attach, so the timer interrupt can ask whether there is sound work to do without touching a segment register.
+            - code [ref=e276]: SOUND.DRV
+            - text: "is the first one, and publishing its tone cell moves the tone tier off the PC speaker -- an FM note becomes two register writes and then no CPU at all. Nothing here can stop the boot: no disk, no file, no card and no memory are all recorded and reported afterwards, on the Control Panel's new Drivers page."
+          - listitem [ref=e277]:
+            - text: The claim heap, and a 128KB floor
+            - link "#51" [ref=e278] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/51
+            - text: "Everything above the kernel is now handed out on demand: ask for so many kilobytes, get a segment back, and give it back when the instance dies. That retires the fixed 60KB package pool -- a package's region is an ordinary claim taken from the top down, because a region's base is its code segment and can never move, while a data claim can -- and returns those 60KB to every machine. The RAM floor drops from 256KB to 128KB. The kernel is a client of its own heap too: the menu save-under is claimed for exactly as long as a menu is on screen, and the 150KB double-buffer is claimed when you switch it on and freed when you switch it off -- which is why the Control Panel's Display row now greys out and comes back as you open and close Paint. Refusal is a normal path everywhere, not a panic: every claim in the tree has a fallback."
+          - listitem [ref=e279]:
+            - text: Repainting costs a rectangle, not the screen
+            - link "#51" [ref=e280] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/51
+            - text: "Three things that used to repaint the whole desktop no longer do. Coming to the front reveals nothing -- the window moves up, so every other window's covered area can only grow -- so raising a window draws that window and the outgoing front window's title bar, and a click on a background window's title bar now costs two title bars. Going away costs the rectangle you vacated: hiding, closing and dragging repaint the desktop, the drive icons and the windows clipped to the damaged rect, with a marking pass that also catches every window overlapping a window already marked. Retitling costs a strip -- a caption changes on an event, after the frame carrying it has already been drawn, so there is now a call that redraws the title row and nothing else. A window closing on the left of the screen no longer redraws a window on the right."
+          - listitem [ref=e281]:
+            - text: The system disk is a FAT12 volume, and it remembers
+            - link "#51" [ref=e282] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/51
+            - text: "Drive A: mounts, browses and writes like any other volume -- the boot sector's raw read of the kernel's sectors is untouched, because those sectors are simply the reserved region the BPB already describes."
+            - code [ref=e283]: SYSTEM.CFG
+            - text: "in its root is 32 bytes carrying the whole Control Panel: the driver list, the sound route, the clock options, the scheduler mode and the back-buffer setting, rewritten on every click and restored at boot. A missing or malformed file means the defaults, never an error."
+          - listitem [ref=e284]:
+            - text: A clock ladder, because the BIOS is the last rung
+            - link "#51" [ref=e285] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/51
+            - text: An XT BIOS implements two of the six clock calls, so on a 5150 with a clock card sitting right there the BIOS knows nothing about it -- and a BIOS that can read the clock may still quietly ignore the two calls that set it. The kernel now probes four rungs in an order chosen so that no rung writes to a chip a later rung would have identified differently, obeys each chip's own BCD and 12/24-hour settings rather than rewriting them behind the machine's BIOS, and bounds every wait loop -- the one way to hang here is to wait forever for a bit that never changes on a machine where every read is 0FFh. The Control Panel names the rung that answered, because on a machine whose clock will not hold a setting that is the whole diagnosis.
+          - listitem [ref=e286]:
+            - text: CPU tiers and memory above 1MB
+            - link "#51" [ref=e287] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/51
+            - text: The kernel identifies the processor it is running on and, above the 8086, can find the A20 line and the store above 1MB. On the target machine all of it is zero kilobytes and every entry point returns having touched no port. The Task Manager reports it as one line below the memory map rather than a map of its own -- real mode has no address for it, so it cannot honestly appear in either map above.
+        - paragraph [ref=e288]: A machine with no sound card now opens the Control Panel on its Drivers page at boot, saying what could not be attached and why. That is the driver system reporting itself, not an error -- nothing a driver does can stop the boot -- and turning the driver off on that page makes it stop.
+        - paragraph [ref=e289]: Settings persist now, in SYSTEM.CFG on the boot floppy. If you run os8088 from a write-protected disk, every Control Panel change still applies immediately and none of them survive a reboot.
+        - paragraph [ref=e290]: "The kernel has grown a lot this release: 59,031 bytes of the 65,536 a single segment holds, against 47,681 last time. 6,505 bytes of headroom left."
+        - generic [ref=e291]:
+          - generic [ref=e292]:
+            - term [ref=e293]: Kernel image
+            - definition [ref=e294]: 52,718 bytes
+          - generic [ref=e295]:
+            - term [ref=e296]: Image + .bss
+            - definition [ref=e297]: 59,031 of 65,536 (6,505 free)
+          - generic [ref=e298]:
+            - term [ref=e299]: Source
+            - definition [ref=e300]: 66,183 lines of assembly across 29 kernel modules
+        - table [ref=e301]:
+          - caption [ref=e302]: Files in os8088 v1.0.20260804.1
+          - rowgroup [ref=e303]:
+            - row [ref=e304]:
+              - columnheader "File" [ref=e305]
+              - columnheader "What it is" [ref=e306]
+              - columnheader "Size" [ref=e307]
+          - rowgroup [ref=e308]:
+            - row [ref=e309]:
+              - rowheader [ref=e310]:
+                - link "os8088.img" [ref=e311] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260804.1/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e312]'
+              - cell "1,474,560 bytes" [ref=e313]
+            - row [ref=e314]:
+              - rowheader [ref=e315]:
+                - link "os8088-360.img" [ref=e316] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260804.1/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e317]'
+              - cell "368,640 bytes" [ref=e318]
+            - row [ref=e319]:
+              - rowheader [ref=e320]:
+                - link "apps.img" [ref=e321] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260804.1/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding APPS (HELLO.O88, NOTEPAD.O88, PIANO.O88, FRACTAL.O88, PAINT.O88, RECORDER.O88, TRACKER.O88, ARTFUL.O88, BEVERLY.MOD) and GAMES (MINES.O88, SOLITAIR.O88, ARKANOID.O88). Not bootable." [ref=e322]'
+              - cell "1,474,560 bytes" [ref=e323]
+            - row [ref=e324]:
+              - rowheader [ref=e325]:
+                - link "apps360.img" [ref=e326] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260804.1/apps360.img
+              - cell "Software disk, 360KB. The same eleven packages, same filesystem, different geometry." [ref=e327]
+              - cell "368,640 bytes" [ref=e328]
+    - generic [ref=e329]:
+      - generic [ref=e330]: v1.0.20260804
+      - generic [ref=e334]:
+        - heading "v1.0.20260804" [level=2] [ref=e335]
+        - paragraph [ref=e336]:
+          - text: Released 2026-08-04 from
+          - code [ref=e337]: b401eda0c
+          - text: ·
+          - link "on GitHub" [ref=e338] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260804
+        - paragraph [ref=e339]: "Three programs arrive at once -- Solitaire, Arkanoid and an FT2-style MOD player -- taking the software disk from seven packages to ten, which is also why the disk now has folders. Each of the three left something behind in the kernel, because a card game that drags a fan of cards, a game whose ball has to keep moving between keystrokes, and a player that has to keep a sound card fed while it redraws a full screen all needed something the API did not yet offer. The application menu bar gained the one cell it was missing: an About item under the program's own name, where a Macintosh has always kept it."
+        - list [ref=e340]:
+          - listitem [ref=e341]:
+            - text: Solitaire
+            - link "#44" [ref=e342] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/44
+            - text: "Klondike, ported from the same fork that contributed Paint: three-card draw, a stock that recycles, and the full set of tableau and foundation moves. It is the one package that drags the way the window manager does -- a held card is an XOR outline that erases before the drawing lock drops, so a hand of cards costs a few inverted strips per timer tick and nothing repaints until you let go. Card faces are drawn from primitives, but the backs are blitted: the lattice is rendered once into a packed 4bpp image and every later back is a single"
+            - code [ref=e343]: gfx_blit4
+            - text: call instead of hundreds of far calls across the package boundary. On a Hercules or CGA machine the red pips go hollow rather than red, because the red index reduces to white and a filled pip would vanish into the card face -- the shape carries the color when the color cannot.
+          - listitem [ref=e344]:
+            - text: About moved under the application's name
+            - link "#44" [ref=e345] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/44
+            - text: The menu bar has carried the active application's name since the menus became per-app, but the name was only a label. It becomes a real one-item menu -- About <Name> -- the moment a window registers a handler through the new
+            - code [ref=e346]: OSAPI_ABOUT_SET
+            - text: "call, which is where a Macintosh application has always kept its About box. The cell is appended to the bar rather than inserted, so every application menu keeps the index it had and nothing downstream of the dispatch had to change. Locator never grows one: its About is already in the chip menu, where the system's own About belongs."
+          - listitem [ref=e347]:
+            - text: Arkanoid
+            - link "#45" [ref=e348] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/45
+            - text: "A brick-breaker, and the first package whose game loop is its worker task -- one frame per tick of sleep, running whether or not you touch the keyboard, because a ball has to keep moving between keystrokes. Everything the UI task does is set a word the worker reads. Two things it discovered are worth knowing before writing another real-time program here. The BIOS keyboard has no key-up event, so a held arrow key has to be inferred from typematic repeat: each press refills a deadline that must outlast the roughly half-second typematic delay, or a held key stalls and reads as a dropped keyboard. And"
+            - code [ref=e349]: OSAPI_SND_TONE
+            - text: turns out to be safe to call from a worker -- the kernel stamps the grant with the running task's own instance when no callback is being dispatched -- which the SDK had never said.
+          - listitem [ref=e350]:
+            - text: The software disk has folders
+            - link "#45" [ref=e351] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/45
+            - text: "Ten packages is more than a flat 32-entry root wants to show at once, so the apps disk now keeps them in two folders:"
+            - code [ref=e352]: APPS
+            - text: for the tools and
+            - code [ref=e353]: GAMES
+            - text: for the games, and nothing else in the root. The Disk window already knew how to walk a subdirectory -- it grew that with the FAT write path -- so this is a change to what is on the disk rather than to the file manager. The visible consequence is that a program is now two double-clicks away instead of one, and the Folder menu's Up One Folder and Root Folder are how you get back.
+          - listitem [ref=e354]:
+            - text: Tracker, an FT2-style MOD player
+            - link "#46" [ref=e355] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/46
+            - text: "A four-channel ProTracker MOD player with a FastTracker II screen: pattern view, live VU bars, and a song that keeps playing while you scroll. The window it opens is only a splash card -- any key or click takes it fullscreen, F toggles and Esc comes back. The audio is the interesting half: the UI task opens and closes the stream, and the worker mixes and feeds it, handing the sound card a 16KB ring buffer that is refilled a half at a time rather than a clip that has to be complete before it starts. Playback runs at 11, 22 or 44 kHz, and there is an XT mode sized for what a 4.77MHz 8088 can actually mix in real time. It ships with BEVERLY.MOD, a 116,085-byte module -- which is what forced the next item."
+          - listitem [ref=e356]:
+            - text: What the Tracker needed from the kernel
+            - link "#46" [ref=e357] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/46
+            - text: "Three amendments, all of them things the player could not fake. Ring-mode streams: the sound stream verbs learned an open flag that makes a grant a circular buffer with free-running counters, so a stream can be fed forever instead of being staged whole up front -- and the feed verb is safe to call from a worker task. Wide rates: a DSP 4.00 or better now opens up to 44,100 Hz instead of stopping at the 22,222 Hz the timing-constant range allows."
+            - generic [ref=e358]:
+              - code [ref=e359]: OSAPI_FILE_READBIG
+              - text: ":"
+            - text: the ordinary read call takes a 16-bit byte count, so any file of 65,536 bytes or more failed outright; BEVERLY.MOD is 116,085. The API table went from 57 far slots to 62, all appended.
+        - paragraph [ref=e360]: Packages built for the previous release still run. The API table grew from 57 slots to 62 and every new one is appended, so nothing was renumbered and the format is still v3.
+        - paragraph [ref=e361]: Programs are two double-clicks away now. The software disk's root holds only the APPS and GAMES folders. Minesweeper is GAMES then MINES.O88; the Note Pad is APPS then NOTEPAD.O88. Folder > Up One Folder and Folder > Root Folder navigate back out.
+        - paragraph [ref=e362]: The Disk window's size column is 16-bit and clamps at 65535, so BEVERLY.MOD lists as 65535 rather than its real 116,085 bytes. Only the display is clamped -- the file loads in full.
+        - paragraph [ref=e363]: Sound hardware is what decides how the Tracker sounds. 44 kHz needs a Sound Blaster 16 or another DSP 4.00 part; older cards top out at 22 kHz, and the XT mode exists for machines that cannot mix faster than they can play.
+        - paragraph [ref=e364]: "Recorded as unexercised: 86Box -- the XT targets and the three AT-class machines -- and the 256KB floor, where the arena is empty and no package can load at all. QEMU is the only environment run routinely. Verified there: all ten packages load from their folders, Solitaire deals and drags, Arkanoid plays with sound from its worker, and the Tracker loads BEVERLY.MOD through readbig and plays it fullscreen. The XT mode and the 44 kHz path were not verified on period hardware."
+        - generic [ref=e365]:
+          - generic [ref=e366]:
+            - term [ref=e367]: Kernel image
+            - definition [ref=e368]: 47,617 bytes
+          - generic [ref=e369]:
+            - term [ref=e370]: Image + .bss
+            - definition [ref=e371]: 47,681 of 65,536 (17,855 free)
+          - generic [ref=e372]:
+            - term [ref=e373]: Source
+            - definition [ref=e374]: 58,243 lines of assembly across 31 kernel modules
+        - table [ref=e375]:
+          - caption [ref=e376]: Files in os8088 v1.0.20260804
+          - rowgroup [ref=e377]:
+            - row [ref=e378]:
+              - columnheader "File" [ref=e379]
+              - columnheader "What it is" [ref=e380]
+              - columnheader "Size" [ref=e381]
+          - rowgroup [ref=e382]:
+            - row [ref=e383]:
+              - rowheader [ref=e384]:
+                - link "os8088.img" [ref=e385] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260804/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e386]'
+              - cell "1,474,560 bytes" [ref=e387]
+            - row [ref=e388]:
+              - rowheader [ref=e389]:
+                - link "os8088-360.img" [ref=e390] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260804/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e391]'
+              - cell "368,640 bytes" [ref=e392]
+            - row [ref=e393]:
+              - rowheader [ref=e394]:
+                - link "apps.img" [ref=e395] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260804/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding APPS (HELLO.O88, NOTEPAD.O88, RECORDER.O88, PIANO.O88, FRACTAL.O88, PAINT.O88, TRACKER.O88, BEVERLY.MOD) and GAMES (MINES.O88, SOLITAIR.O88, ARKANOID.O88). Not bootable." [ref=e396]'
+              - cell "1,474,560 bytes" [ref=e397]
+            - row [ref=e398]:
+              - rowheader [ref=e399]:
+                - link "apps360.img" [ref=e400] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260804/apps360.img
+              - cell "Software disk, 360KB. The same ten packages, same filesystem, different geometry." [ref=e401]
+              - cell "368,640 bytes" [ref=e402]
+    - generic [ref=e403]:
+      - generic [ref=e404]: v1.0.20260803.1
+      - generic [ref=e408]:
+        - heading "v1.0.20260803.1" [level=2] [ref=e409]
+        - paragraph [ref=e410]:
+          - text: Released 2026-08-03 from
+          - code [ref=e411]: cef5bf3bf
+          - text: ·
+          - link "on GitHub" [ref=e412] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260803.1
+        - paragraph [ref=e413]: Paint arrives -- a bitmap editor with eight tools, an undo that doubles as redo, and BMP and GIF files it reads and writes off the floppy -- and the kernel grows the thing Paint needed in order to exist. Under the old rules a program that wanted a quarter megabyte to draw on took it by picking an address and hoping nothing else wanted it; now it asks, and the arena that hands out program segments hands out plain memory from the same single first-fit walk. A window can also resize itself for the first time, which is what lets a canvas refuse a shrink that would crop the picture. Along the way the floppy driver learned that the DMA controller cannot cross a 64KB boundary -- a rule it had been getting away with ignoring only because every buffer before this one happened to be aligned.
+        - list [ref=e414]:
+          - listitem [ref=e415]:
+            - text: Paint
+            - link "#43" [ref=e416] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/43
+            - text: A bitmap editor contributed as a fork of os8088 by
+            - link "github.com/Elendilon" [ref=e417] [cursor=pointer]:
+              - /url: https://github.com/Elendilon
+            - text: ": eight tools over a 4bpp offscreen canvas, one level of undo that doubles as redo, an internal clipboard, and BMP and GIF load and save through the Standard File dialog. At 14,112 bytes it is by some distance the largest package that ships -- the six before it ran from 323 bytes to 2,774. Its canvas, undo image, clipboard and scratch space are one allocation, sized from the largest free run the kernel reports, and it deliberately leaves 64KB behind when doing so still funds the top size tier: a canvas plus an equal-sized undo image otherwise eats a 233KB arena whole and nothing else can load while Paint is open. Two copies of Paint get two canvases, the second tiered down to fit."
+          - listitem [ref=e418]:
+            - text: A package can ask the kernel for memory
+            - link "#43" [ref=e419] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/43
+            - text: Three new calls --
+            - code [ref=e420]: OSAPI_MEM_ALLOC
+            - text: ","
+            - code [ref=e421]: OSAPI_MEM_FREE
+            - text: and
+            - code [ref=e422]: OSAPI_MEM_AVAIL
+            - text: "-- hand a package a plain segment out of the same conventional-memory arena that loaded programs come from. A package's own region caps at one segment and holds its image and its static data, so an application whose working set is hundreds of kilobytes had nowhere to put it. What matters about the implementation is that there is still only one allocator: the loader's region search is now a jump into the grant allocator's first-fit walk, which rejects a candidate overlapping any package region or any grant. Two allocators over one arena that searched separately would eventually hand out the same paragraph. Grants are stamped with the instance that asked and force-freed at all three teardown paths, which is what makes the call safe for a package that owns no task and is therefore never told its window is closing."
+          - listitem [ref=e423]:
+            - text: The segment a package was already executing in
+            - link "#43" [ref=e424] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/43
+            - text: "The loader reserves a package's region early but does not publish the instance record until after the entry procedure returns -- and the record is the only evidence the allocator has that a region is taken. So for the whole of that call, the loading package's own memory read as free. Paint was the first package to allocate from its entry, and it was handed the segment it was running in: it filled its new canvas with white and the machine wedged mid-repaint on the first"
+            - code [ref=e425]: "0xFF"
+            - text: opcode, with the drawing lock still held. There is now an explicit reservation covering that window, written with MOV only so the entry procedure's carry flag still reaches the loader.
+          - listitem [ref=e426]:
+            - text: A window can resize itself
+            - link "#43" [ref=e427] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/43
+            - code [ref=e428]: OSAPI_WM_RESIZE
+            - text: "retires the last place where a package wrote a kernel record behind the kernel's back. The two things that could resize a window -- the grow box and full-screen -- were both kernel-internal, so an app whose content has a size of its own, a picture just opened or a canvas whose shrink must be refused because it would crop artwork, had no legitimate way to say so. The call clamps to the minimum window size and to the screen, re-clamps the position, and draws nothing: the caller is inside its own callback and knows what it is about to repaint."
+          - listitem [ref=e429]:
+            - text: "One sector per call is not enough: the 64KB DMA page"
+            - link "#43" [ref=e430] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/43
+            - text: "Opening a saved BMP answered Disk error, while the save that produced it had worked and the file was byte-exact to a host reader. The floppy driver transfers one sector per BIOS call and had concluded from that -- in writing, in the spec -- that DMA alignment could never matter. The first half of that is true and the second is not: the DMA controller's page register does not increment, so a transfer of any length may not cross a 64KB physical boundary, and a BIOS asked to do it anyway refuses rather than wrapping the buffer. It hid for years because every disk buffer in the tree before this one was 512-aligned by accident. The first that was not was the first to come from an arena grant, where a base can be any paragraph. The driver now detects a sector that would straddle and stages it through a buffer of its own -- at most one extra 512-byte copy per 64KB transferred. This is the kernel's obligation and not the caller's: an application cannot be asked to know about the 8237."
+          - listitem [ref=e431]:
+            - text: The Task Manager counts what was granted
+            - link "#43" [ref=e432] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/43
+            - text: The RAM line, the arena caption, the per-row size column and the memory map's coloured bands all include grants now. A grant is routinely an order of magnitude larger than the package region beside it, and leaving it out drew a one-pixel sliver where a quarter of the machine had gone.
+          - listitem [ref=e433]:
+            - text: About lives under the app's own name
+            - link "#43" [ref=e434] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/43
+            - text: Paint puts a pull-down exactly where the menu bar draws an application's name, which is where a Macintosh keeps About. It needs no kernel change -- a menu set whose name is the empty string and whose first menu is titled after the app does it -- and the dock tile, the Task Manager row and the loader all keep reading the name out of the package header. The About window is a second instance-less window of the file dialog's species, and its command is dispatched ahead of the check for whether there was enough memory to start, so a machine too small to fund a canvas can still be told what the program is and who wrote it.
+        - paragraph [ref=e435]: Packages built for the previous release still run. The API table grew from 53 slots to 57 and the four new ones are appended, so nothing was renumbered and the format is still v3.
+        - paragraph [ref=e436]: Paint sizes itself to the memory it can get. On a 640KB machine it opens full size; with less free arena it tiers down, and on a machine with no arena at all it puts up a notice instead of a canvas. Two instances is normal and the second is smaller by design.
+        - paragraph [ref=e437]: The disk fix matters beyond Paint. Any file read or written into a buffer that a package allocated could previously fail with Disk error depending on where in memory that buffer happened to land. If you have a package of your own that stages file I/O anywhere other than its own static data, this release is the one that makes it reliable.
+        - paragraph [ref=e438]: "Recorded as unexercised: 86Box -- the XT targets and the three AT-class machines -- and the 256KB floor, where the arena is empty and Paint should show its notice. QEMU is the only environment run routinely, and everything above was verified there: launch, draw, resize, a Save As to a 320x280 4bpp BMP that a host reader accepts, close with the grant released, two instances, and Minesweeper loading beside a full-size Paint. The file-system gate package passes 21 of 21 on plain FAT12, a deliberately fragmented volume and FAT16."
+        - generic [ref=e439]:
+          - generic [ref=e440]:
+            - term [ref=e441]: Kernel image
+            - definition [ref=e442]: 45,595 bytes
+          - generic [ref=e443]:
+            - term [ref=e444]: Image + .bss
+            - definition [ref=e445]: 45,586 of 65,536 (19,950 free)
+          - generic [ref=e446]:
+            - term [ref=e447]: Source
+            - definition [ref=e448]: 49,298 lines of assembly across 31 kernel modules
+        - table [ref=e449]:
+          - caption [ref=e450]: Files in os8088 v1.0.20260803.1
+          - rowgroup [ref=e451]:
+            - row [ref=e452]:
+              - columnheader "File" [ref=e453]
+              - columnheader "What it is" [ref=e454]
+              - columnheader "Size" [ref=e455]
+          - rowgroup [ref=e456]:
+            - row [ref=e457]:
+              - rowheader [ref=e458]:
+                - link "os8088.img" [ref=e459] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260803.1/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e460]'
+              - cell "1,474,560 bytes" [ref=e461]
+            - row [ref=e462]:
+              - rowheader [ref=e463]:
+                - link "os8088-360.img" [ref=e464] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260803.1/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e465]'
+              - cell "368,640 bytes" [ref=e466]
+            - row [ref=e467]:
+              - rowheader [ref=e468]:
+                - link "apps.img" [ref=e469] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260803.1/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding MINES.O88, HELLO.O88, NOTEPAD.O88, RECORDER.O88, PIANO.O88, FRACTAL.O88 and PAINT.O88. Not bootable." [ref=e470]'
+              - cell "1,474,560 bytes" [ref=e471]
+            - row [ref=e472]:
+              - rowheader [ref=e473]:
+                - link "apps360.img" [ref=e474] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260803.1/apps360.img
+              - cell "Software disk, 360KB. The same seven packages, same filesystem, different geometry." [ref=e475]
+              - cell "368,640 bytes" [ref=e476]
+    - generic [ref=e477]:
+      - generic [ref=e478]: v1.0.20260803
+      - generic [ref=e482]:
+        - heading "v1.0.20260803" [level=2] [ref=e483]
+        - paragraph [ref=e484]:
+          - text: Released 2026-08-03 from
+          - code [ref=e485]: a999aef41
+          - text: ·
+          - link "on GitHub" [ref=e486] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260803
+        - paragraph [ref=e487]: Packages move out of the kernel's 64KB segment and into segments of their own. A loaded package used to live in a 19,968-byte pool carved out of the kernel, which meant three copies of the fractal renderer would not fit -- and never could have. Format v3 gives each one a paragraph-aligned region from a conventional-memory arena instead, so five run at once where two was the ceiling; the pool's bytes go back to the kernel, which now has 20,756 free where it had 1,579. Alongside it the kernel learns what CPU it is running on, opens the A20 gate, and can reach memory above 1MB as a data store -- and three new emulated AT-class machines run the same 8086 binary on a 286 and two 386s.
+        - list [ref=e488]:
+          - listitem [ref=e489]:
+            - text: Five fractals where two was the ceiling
+            - link "#41" [ref=e490] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/41
+            - text: One instance of
+            - code [ref=e491]: FRACTAL.O88
+            - text: costs a 7,168-byte region -- 2,774 bytes of image and 4,394 of working storage -- and the package pool held 19,968 bytes at kernel offset
+            - code [ref=e492]: "0xB000"
+            - text: ". The third launch answered Out of memory, and no amount of care inside the fractal was going to change that: the pool was a fixed slice of a 64KB segment the kernel also had to fit in. Under format v3 each loaded package gets a whole-paragraph region from an arena in conventional memory, first-fit, with occupancy derived from the instance table that was already tracking it. The arena is about 233KB on a 640KB machine and about 107KB at 512KB. Five concurrent fractal instances now run and were confirmed from the dock."
+          - listitem [ref=e493]:
+            - text: Where the arena starts, and why it is not convenient
+            - link "#41" [ref=e494] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/41
+            - text: The arena begins at linear
+            - code [ref=e495]: "0x65800"
+            - text: ", one paragraph past the end of the optional back buffer's pinned"
+            - code [ref=e496]: 0x40000..0x657FF
+            - text: ". Starting lower would have given packages more room, and would also have let a package load and a Display toggle in the Control Panel fail each other at run time depending on which happened first. A smaller arena with a fixed boundary is the better failure: on the 256KB floor there is no arena at all, and a package load refuses with a message that says so while every built-in runs as it always has."
+          - listitem [ref=e497]:
+            - text: The API goes far, and callbacks resolve their own segment
+            - link "#41" [ref=e498] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/41
+            - text: "A package in its own segment can no longer near-call the kernel, so all 53 jump table slots become far: the stride goes from 4 bytes to 8 and the sequence is"
+            - code [ref=e499]: push ds / push cs / pop ds / call / pop ds / retf
+            - text: . Neither
+            - code [ref=e500]: pop ds
+            - text: nor
+            - code [ref=e501]: retf
+            - text: "touches the flags, so the slots that answer in the carry flag keep their contracts unchanged, and slot order is preserved. Window callbacks took the opposite route -- they stay near offsets, and a new per-window stamp records which segment created the window, so the dispatcher resolves far for a package window and near for a kernel one. That keeps the window record the size it was, at the price of one rule: teardown has to sweep every window stamped with a dying package, because a callback resolved this way must not outlive its segment."
+          - listitem [ref=e502]:
+            - text: Marshalling at the boundary, not segment overrides everywhere
+            - link "#41" [ref=e503] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/41
+            - text: The kernel can no longer follow a package's pointer through
+            - code [ref=e504]: DS
+            - text: ", and the tempting fix -- thread a \"which segment\" answer through"
+            - code [ref=e505]: font_str
+            - text: ", the menu tracker and the filename parsers -- would pile onto an"
+            - code [ref=e506]: ES
+            - text: already carrying save-unders, directory caches, the FAT snapshot, sound and disk buffers. So the kernel copies at the boundary instead, the way it has always staged directory entries. Strings land in bounded buffers with a stated capacity and a defined truncation; the entire menu set is copied whole at relayout, which retires the nested-pointer traversal in one move. Package data is treated as hostile input, because it is.
+          - listitem [ref=e507]:
+            - text: Relocation is gone
+            - link "#41" [ref=e508] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/41
+            - text: At org 0 on a paragraph boundary the segment base does the work the old class 0 relocations did, and far calls with absolute immediates do class 1's. So the relocation table goes away, and with it
+            - code [ref=e509]: os88pkg.py
+            - text: "'s trick of assembling each package twice at two different origins and diffing the results to find the words that needed patching. The build is one assembly per package now, and the tool is validate-and-stamp. The v2 rule that a package author could only relocate whole 16-bit words is retired along with it."
+          - listitem [ref=e510]:
+            - text: The kernel knows what CPU it is on, and can see above 1MB
+            - link "#41" [ref=e511] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/41
+            - text: Two new modules.
+            - code [ref=e512]: cpudet.inc
+            - text: distinguishes 8086, 286 and 386-or-later, opens the A20 gate through port
+            - code [ref=e513]: "0x92"
+            - text: with a keyboard-controller fallback, and never believes it succeeded without a wraparound test.
+            - code [ref=e514]: xmem.inc
+            - text: claims the high memory area, sizes extended memory with
+            - code [ref=e515]: int 15h AH=88h
+            - text: ", and copies through it --"
+            - code [ref=e516]: AH=87h
+            - text: block move on a 286, unreal mode on a 386. Real mode addresses only up to
+            - code [ref=e517]: "0x10FFEF"
+            - text: ", so extended memory is a data store and nothing else; package code stays below 1MB, which is why the package arena is in conventional memory. Unreal mode uses"
+            - code [ref=e518]: FS
+            - text: and
+            - code [ref=e519]: GS
+            - text: precisely because no 8086 code in this tree touches them, so the widened limits survive every segment reload, and every 386 instruction sits in a scoped island behind a run-time tier check -- an
+            - code [ref=e520]: "%cpu"
+            - text: directive is assembly-time permission, never proof that the chip is there.
+          - listitem [ref=e521]:
+            - text: Twenty thousand bytes back in the kernel
+            - link "#41" [ref=e522] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/41
+            - text: The evicted pool's 19,968 bytes return to the kernel segment, and they pay for the far jump table, the marshalling buffers, the copied menu set and an icon cache with a great deal left over. The guard that binds -- image plus far-code blob against the 64KB segment -- goes from 1,579 bytes of slack to 20,756. The kernel image itself grew, from 41,739 bytes to 44,780, and for the first time in a while that is not the interesting number.
+          - listitem [ref=e523]:
+            - text: The same binary on a 286 and two 386s
+            - link "#40" [ref=e524] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/40
+            - text: "os8088 is 8086 code running in real mode, so a 286 or a 386 executes it verbatim -- and nothing in the tree said so, because every emulated target was an XT. Three 86Box configurations now do: an AMI 286 clone at 12.5MHz with 1MB, a Shuttle 386SX at 16MHz and a Micronics 386DX at 25MHz with 2MB each, all with ISA VGA and a serial mouse, all booting the 1.44MB images. The OS changes not at all, which is the point --"
+            - code [ref=e525]: int 12h
+            - text: still answers 640K and the kernel never leaves real mode. What they buy is the other end of the speed range from the 4.77MHz XT, whose repaints you can watch happen.
+        - paragraph [ref=e526]: Packages must be rebuilt. The package format is v3, and the loader rejects v1 and v2 files outright rather than trying to interpret them -- the API call sequence and the stride between jump table slots both changed. Rebuild against the SDK header shipped with this release; the source of a well-behaved package needs no edits, only one reassembly at org 0.
+        - paragraph [ref=e527]: On a 256KB machine there is no package arena, so loading a package from the software disk now fails with a message saying so. This is not new behavior arriving -- a 256KB machine could not run much anyway -- but the refusal is explicit where it used to be an out-of-memory surprise. Every built-in still runs.
+        - paragraph [ref=e528]: The extended-memory allocator and both of its transports are written, verified to assemble and to detect correctly, and have no caller yet. Nothing in this release stores anything above 1MB. Treat it as groundwork.
+        - paragraph [ref=e529]: "Recorded as unexercised: the 8086 and 286 code paths have no automated coverage, because QEMU emulates neither. The A20-less XT path and the 286's block-move copy need a run on 86Box, which is interactive. The three new AT-class machines also want one manual pass through their BIOS setup screen the first time -- they have a CMOS an XT does not, and it waits for EXIT FOR BOOT to be picked once per VM directory."
+        - generic [ref=e530]:
+          - generic [ref=e531]:
+            - term [ref=e532]: Kernel image
+            - definition [ref=e533]: 44,780 bytes
+          - generic [ref=e534]:
+            - term [ref=e535]: Image + .bss
+            - definition [ref=e536]: 44,719 of 65,536 (20,817 free)
+          - generic [ref=e537]:
+            - term [ref=e538]: Source
+            - definition [ref=e539]: 40,373 lines of assembly across 30 kernel modules
+        - table [ref=e540]:
+          - caption [ref=e541]: Files in os8088 v1.0.20260803
+          - rowgroup [ref=e542]:
+            - row [ref=e543]:
+              - columnheader "File" [ref=e544]
+              - columnheader "What it is" [ref=e545]
+              - columnheader "Size" [ref=e546]
+          - rowgroup [ref=e547]:
+            - row [ref=e548]:
+              - rowheader [ref=e549]:
+                - link "os8088.img" [ref=e550] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260803/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e551]'
+              - cell "1,474,560 bytes" [ref=e552]
+            - row [ref=e553]:
+              - rowheader [ref=e554]:
+                - link "os8088-360.img" [ref=e555] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260803/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e556]'
+              - cell "368,640 bytes" [ref=e557]
+            - row [ref=e558]:
+              - rowheader [ref=e559]:
+                - link "apps.img" [ref=e560] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260803/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding MINES.O88, HELLO.O88, NOTEPAD.O88, RECORDER.O88, PIANO.O88 and FRACTAL.O88. Not bootable." [ref=e561]'
+              - cell "1,474,560 bytes" [ref=e562]
+            - row [ref=e563]:
+              - rowheader [ref=e564]:
+                - link "apps360.img" [ref=e565] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260803/apps360.img
+              - cell "Software disk, 360KB. The same six packages, same filesystem, different geometry." [ref=e566]
+              - cell "368,640 bytes" [ref=e567]
+    - generic [ref=e568]:
+      - generic [ref=e569]: v1.0.20260802
+      - generic [ref=e573]:
+        - heading "v1.0.20260802" [level=2] [ref=e574]
+        - paragraph [ref=e575]:
+          - text: Released 2026-08-02 from
+          - code [ref=e576]: 7afa4de88
+          - text: ·
+          - link "on GitHub" [ref=e577] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260802
+        - paragraph [ref=e578]: A package can run in the background, and a covered window can keep drawing. Two API calls let a loaded package claim one worker task of its own, so two packages can be pre-empted against each other for the first time; a clip region replaces the boolean "am I covered?" veto that made every background painter freeze under a single overlapping pixel; and FRACTAL.O88 -- five escape-time fractals computed scanline by scanline while the desktop stays live -- is the package that needed both.
+        - list [ref=e579]:
+          - listitem [ref=e580]:
+            - text: A package can claim a background task
+            - link "#36" [ref=e581] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/36
+            - text: "Until now a loaded package only ever ran inside its own window callbacks, on the UI task: it could be scheduled against nothing. Two slots in the kernel's jump table change that."
+            - code [ref=e582]: OSAPI_TASK_SPAWN
+            - text: gives an instance exactly one worker task, and
+            - code [ref=e583]: OSAPI_TASK_ALIVE
+            - text: is where that worker finds out it is being closed and dies. The teardown machinery already existed -- Clock and Bounce have been task-owned instances since they were built -- so a package simply becomes eligible for a path it had been excluded from. Two kernel-side rules hold it up.
+            - code [ref=e584]: inst_pkg_spawn
+            - text: "fences the caller's window pointer with an ownership test, because attaching a worker to a stranger's record puts both instances on the wrong teardown path: the stranger hides forever waiting on a worker it does not own, while the caller's own close frees the region its worker is still executing in. And"
+            - code [ref=e585]: task_spawn
+            - text: now runs its slot scan and its state publish under one
+            - code [ref=e586]: cli
+            - text: ", because this is the first time two different tasks can spawn at once."
+          - listitem [ref=e587]:
+            - text: A covered window can draw again
+            - link "#37" [ref=e588] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/37
+            - code [ref=e589]: wm_obscured
+            - text: answers a boolean, and every background painter used it as a veto -- one covered pixel and the whole frame was skipped. It had to be that blunt, because the drawing primitives take absolute screen coordinates and clip only to the edge of the screen, so a covered window that drew would paint straight over the window on top of it. The visible cost was a Bounce that froze under a corner, a Clock that stopped, and a fractal that gave up two minutes of work.
+            - code [ref=e590]: wm_clip_set
+            - text: "replaces the veto with a region: the window's content rect less every visible window above it, drop shadows included, as a list of up to sixteen disjoint rectangles, and while it is armed the six clipped primitives draw only inside it. Overflow past sixteen degrades to \"skip this frame\" -- exactly what the old boolean said -- so it cannot regress anything."
+          - listitem [ref=e591]:
+            - text: Fills clip per pixel; glyphs clip per whole cell
+            - link "#37" [ref=e592] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/37
+            - text: "That asymmetry is deliberate -- a character cell cannot be drawn half-wide, so a glyph that would straddle the region is dropped whole, the same way it is already dropped at a screen edge -- and it is the sharp edge of the whole feature. Anything that erases a rectangle and then writes text into it has to reconcile the two or it goes blank rather than stale: a Clock cut horizontally by another window's edge would get its visible rows white-filled and then no digits back in them, twice a second. There is a third call,"
+            - code [ref=e593]: wm_clip_test
+            - text: ", so a caller can ask the glyphs' question before it erases anything -- the Clock now erases per 8x8 cell behind it, the fractal's status strip gates the erase and the text together. Solid drawing is unaffected, which is why Bounce needed no change at either end."
+          - listitem [ref=e594]:
+            - text: A repaint no longer destroys the picture
+            - link "#37" [ref=e595] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/37
+            - text: "A window's content has never been stored anywhere -- exposing one meant asking the application to compute it from scratch, which for a fractal is minutes. There is still no frame buffer, and there cannot be: the canvas is 27,200 bytes against a 19,968-byte pool shared by every resident package. What fits is the progressive first pass alone, one word per run of equal color -- color in the top four bits, last column in the low twelve, which cannot collide -- so 4,000 bytes covers the whole canvas at quarter vertical resolution. A repaint replays the cache and tells the worker to resume rather than restart, so an uncovered window comes back with its picture already on it and the render carries on from where it was."
+          - listitem [ref=e596]:
+            - text: FRACTAL.O88, the package that needed both
+            - link "#36" [ref=e597] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/36
+            - text: "Five escape-time fractals -- Mandelbrot, two Julia sets, Burning Ship and Tricorn -- through one fixed-point iteration core, four palettes, click to recentre and zoom, all chosen from the menu bar. It is the reference client for worker tasks: the worker computes each scanline with the drawing lock free and takes it only for a short blit, so the desktop stays fully live through a render, and two Fractals will render side by side while a Clock ticks and a window is dragged over both. It also ships on the software disk, which is now six packages -- and two Fractals plus Minesweeper plus Note Pad still fit the pool, at 19,456 bytes of 19,968."
+        - paragraph [ref=e598]:
+          - text: A worker task must never return or exit on its own. If it does, its instance record and its slice of the package pool leak for the rest of the session, because the close path then sets a die flag that nobody is left to read. The loop calls
+          - code [ref=e599]: OSAPI_TASK_ALIVE
+          - text: every pass and that call is where it dies -- this is written into the SDK's rules rather than left to be rediscovered.
+        - paragraph [ref=e600]: Bounce now always steps, and only its erase and redraw are conditional, so a covered or minimized one turns up where it now is rather than where it was buried. The old rule that a hidden Bounce skips without stepping is retired.
+        - paragraph [ref=e601]: "Not landed, and recorded as such: the fractal's symmetry mirror, and non-destructive window moves in the window manager. A drag still repaints what it uncovers rather than blitting it."
+        - generic [ref=e602]:
+          - generic [ref=e603]:
+            - term [ref=e604]: Kernel image
+            - definition [ref=e605]: 41,739 bytes
+          - generic [ref=e606]:
+            - term [ref=e607]: Image + .bss
+            - definition [ref=e608]: 39,922 of 45,056 (5,134 free)
+          - generic [ref=e609]:
+            - term [ref=e610]: Source
+            - definition [ref=e611]: 37,184 lines of assembly across 28 kernel modules
+        - table [ref=e612]:
+          - caption [ref=e613]: Files in os8088 v1.0.20260802
+          - rowgroup [ref=e614]:
+            - row [ref=e615]:
+              - columnheader "File" [ref=e616]
+              - columnheader "What it is" [ref=e617]
+              - columnheader "Size" [ref=e618]
+          - rowgroup [ref=e619]:
+            - row [ref=e620]:
+              - rowheader [ref=e621]:
+                - link "os8088.img" [ref=e622] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260802/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e623]'
+              - cell "1,474,560 bytes" [ref=e624]
+            - row [ref=e625]:
+              - rowheader [ref=e626]:
+                - link "os8088-360.img" [ref=e627] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260802/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e628]'
+              - cell "368,640 bytes" [ref=e629]
+            - row [ref=e630]:
+              - rowheader [ref=e631]:
+                - link "apps.img" [ref=e632] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260802/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding MINES.O88, HELLO.O88, NOTEPAD.O88, RECORDER.O88, PIANO.O88 and FRACTAL.O88. Not bootable." [ref=e633]'
+              - cell "1,474,560 bytes" [ref=e634]
+            - row [ref=e635]:
+              - rowheader [ref=e636]:
+                - link "apps360.img" [ref=e637] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260802/apps360.img
+              - cell "Software disk, 360KB. The same six packages, same filesystem, different geometry." [ref=e638]
+              - cell "368,640 bytes" [ref=e639]
+    - generic [ref=e640]:
+      - generic [ref=e641]: v1.0.20260801.1
+      - generic [ref=e645]:
+        - heading "v1.0.20260801.1" [level=2] [ref=e646]
+        - paragraph [ref=e647]:
+          - text: Released 2026-08-01 from
+          - code [ref=e648]: 1518792cf
+          - text: ·
+          - link "on GitHub" [ref=e649] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260801.1
+        - paragraph [ref=e650]: One binary, three display adapters. The kernel probes the video card at boot and drives whichever it finds -- VGA at 640x480 in 16 colors, a Hercules card at 720x348, or a CGA at 640x200 -- so os8088 now runs on the monochrome hardware an actual 1983 PC was likely to have, and it cost 1,171 bytes to do it.
+        - list [ref=e651]:
+          - listitem [ref=e652]:
+            - text: The video card is decided at boot, not at build time
+            - link "#34" [ref=e653] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/34
+            - text: os8088 has always required a VGA. It no longer does.
+            - code [ref=e654]: kernel/viddet.inc
+            - text: "probes in the order VGA, then Hercules, then CGA, and sets the mode itself: mode 12h through the BIOS for a VGA, mode 6 for a CGA, and the 6845 registers directly for a Hercules, because no BIOS will do it for you. The equipment word is consulted last -- an EGA or a VGA driving a monochrome monitor also reports a mono card, and those machines belong on the mode 12h path. One documented scope cut: a Hercules is not distinguished from a plain MDA. An MDA is text-only so there is no better action available, and driving it as a Hercules is strictly less wrong than driving it as a CGA at the wrong address."
+          - listitem [ref=e655]:
+            - text: There is no second graphics driver
+            - link "#34" [ref=e656] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/34
+            - text: A monochrome card is a different enough machine that the obvious answer is a second driver, and the obvious answer was wrong.
+            - code [ref=e657]: vgabb.inc
+            - text: ", the software renderer written for the optional back buffer, was already latch-free and port-free -- it drew into RAM, and nothing in it cared that the target was RAM. Point it at the framebuffer, tell it there is one bit plane instead of four, route its row advances through a banked next-row helper, and it is the 1bpp driver. Hercules and CGA then differ from each other in four numbers in a table. That is what made this affordable: 1,171 bytes of code, against roughly 3KB for a driver written twice. The planar routines are simply unreachable on a mono machine and keep their assembly-time constants."
+          - listitem [ref=e658]:
+            - text: The screen size is a variable now
+            - link "#34" [ref=e659] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/34
+            - text: "Chrome that had been pinned to 640x480 since the first window appeared -- the dock strip, the clock cell at the right end of the menu bar, the pull-down item cap, the column the drive icons stand in -- is derived from the live geometry at boot, and reproduces its old constants exactly at 640 wide. Windows are clamped onto the real screen when created, so all five shipped packages place correctly on a 200-line CGA with no rebuild: the same"
+            - code [ref=e660]: .o88
+            - text: files from the same disk. A package that wants to know what it actually got can ask, through a new call in the kernel's table.
+          - listitem [ref=e661]:
+            - text: Two flags where there was one
+            - link "#34" [ref=e662] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/34
+            - text: "The back-buffer flag used to mean two things at once: route drawing through the software renderer and a buffer is armed and must be flushed. On a mono machine the first is permanently true and the second is permanently false, so they had to come apart. Without the split, a 256KB Hercules machine would have reported double buffering in the Control Panel and billed 150KB of RAM it never allocated. The nine places that dispatch on it needed no new code."
+          - listitem [ref=e663]:
+            - text: "Also fixed: the Task Manager painted over the dock"
+            - link "#34" [ref=e664] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/34
+            - text: Nothing in this kernel clips a draw to a window -- the clip is to the screen -- and the Task Manager laid its rows out from fixed constants with no check against its own height. On a 200-line screen it repainted straight over the dock once a second. Its two row lists now stop at a computed limit. Separately, the mouse test driver was silently dropping moves on a fast host, because the emulated serial mouse runs at 1200 baud and loses a packet whose predecessor is still in flight; it paces itself now. The symptom was a cursor that never moved while every screenshot still looked plausible.
+        - paragraph [ref=e665]: "Nothing changes on a VGA machine: the mode 12h output of this build was compared byte for byte against the previous one, with double buffering armed and windows re-dragged, on both floppy geometries. It is pixel-identical, which is why the screenshots on this site were not recaptured."
+        - paragraph [ref=e666]: On a monochrome adapter the sixteen colors reduce to black, white and a 50 percent dither, and double buffering is unavailable by design -- the renderer already writes the framebuffer directly, so there is nothing to double. The Control Panel's Display page says so rather than offering it.
+        - paragraph [ref=e667]: "The boot splash draws only its progress bar on a mono adapter. Its dialog does not fit in 200 rows, and it runs before any other module is in memory, so the bar is deliberately kept on all three cards: a wrong stride, wrong bank arithmetic or wrong height each fail it visibly, and differently, on hardware with no debugger."
+        - generic [ref=e668]:
+          - generic [ref=e669]:
+            - term [ref=e670]: Kernel image
+            - definition [ref=e671]: 40,636 bytes
+          - generic [ref=e672]:
+            - term [ref=e673]: Image + .bss
+            - definition [ref=e674]: 38,657 of 45,056 (6,399 free)
+          - generic [ref=e675]:
+            - term [ref=e676]: Source
+            - definition [ref=e677]: 34,465 lines of assembly across 28 kernel modules
+        - table [ref=e678]:
+          - caption [ref=e679]: Files in os8088 v1.0.20260801.1
+          - rowgroup [ref=e680]:
+            - row [ref=e681]:
+              - columnheader "File" [ref=e682]
+              - columnheader "What it is" [ref=e683]
+              - columnheader "Size" [ref=e684]
+          - rowgroup [ref=e685]:
+            - row [ref=e686]:
+              - rowheader [ref=e687]:
+                - link "os8088.img" [ref=e688] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260801.1/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e689]'
+              - cell "1,474,560 bytes" [ref=e690]
+            - row [ref=e691]:
+              - rowheader [ref=e692]:
+                - link "os8088-360.img" [ref=e693] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260801.1/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e694]'
+              - cell "368,640 bytes" [ref=e695]
+            - row [ref=e696]:
+              - rowheader [ref=e697]:
+                - link "apps.img" [ref=e698] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260801.1/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding MINES.O88, HELLO.O88, NOTEPAD.O88, RECORDER.O88 and PIANO.O88. Not bootable." [ref=e699]'
+              - cell "1,474,560 bytes" [ref=e700]
+            - row [ref=e701]:
+              - rowheader [ref=e702]:
+                - link "apps360.img" [ref=e703] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260801.1/apps360.img
+              - cell "Software disk, 360KB. The same five packages, same filesystem, different geometry." [ref=e704]
+              - cell "368,640 bytes" [ref=e705]
+    - generic [ref=e706]:
+      - generic [ref=e707]: v1.0.20260801
+      - generic [ref=e711]:
+        - heading "v1.0.20260801" [level=2] [ref=e712]
+        - paragraph [ref=e713]:
+          - text: Released 2026-08-01 from
+          - code [ref=e714]: 739889a34
+          - text: ·
+          - link "on GitHub" [ref=e715] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260801
+        - paragraph [ref=e716]: The disk becomes real. The software floppy is now a standard FAT12 volume that os8088 reads and writes, folders and a Standard File dialog give files names and places, and the menu bar stops belonging to nobody -- it belongs to whichever application is active, with the kernel itself appearing as one, called Locator.
+        - list [ref=e717]:
+          - listitem [ref=e718]:
+            - text: The software floppy is a standard DOS floppy
+            - link "#30" [ref=e719] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/30
+            - text: The disk used to be os88fs, a private read-only format shaped around exactly what the kernel had to do. It is now canonical FAT12 -- the thing IBM PC DOS wrote in 1983 -- so DOS, Windows, macOS and Linux all mount it, and you can drop a
+            - code [ref=e720]: .o88
+            - text: "onto the floppy with the file manager of whatever computer you happen to be sitting at. The type is decided by cluster count per the Microsoft specification, so FAT16 comes along for free; only the entry decode differs. Because a foreign machine can now write this disk, every byte on it is treated as hostile: the BIOS parameter block goes through seventeen rules before a single derived number is trusted, and the directory is re-shaped on the way in, with volume labels, long-filename fragments, hidden, system and deleted entries all filtered out. Files load through a size-driven cluster-chain walk with run coalescing, so a file a host wrote back fragmented loads fine and a corrupt chain fails bounded as \"Bad package\" rather than wandering."
+          - listitem [ref=e721]:
+            - text: ...and os8088 writes it too
+            - link "#31" [ref=e722] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/31
+            - text: Reading a real filesystem is half of it.
+            - code [ref=e723]: kernel/diskw.inc
+            - text: "is the other half: create-or-replace, read, delete, rename and free space, reached by the system directly and by packages through the API table. Three rules carry the weight. Commit order -- allocate and write the data, flush the allocation table, then write the one directory sector that commits the file, then free whatever chain was replaced -- so the worst-case power failure leaks lost clusters, which any host"
+            - code [ref=e724]: fsck
+            - text: "reclaims, and can never cross-link two files or lose bytes you already had. Rollback: anything failing before that commit re-reads the allocation table off the disk, so a half-built chain cannot survive in memory to be flushed later by an unrelated write. Coherence by remount: a successful metadata change re-runs the mount, so the directory listing stays exactly a mount snapshot and no new staleness rule enters the kernel. Writing is gated on a fully successful mount, which is why the boot floppy -- no valid BPB -- can never be written."
+          - listitem [ref=e725]:
+            - text: Every application owns the menu bar, and the kernel becomes Locator
+            - link "#32" [ref=e726] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/32
+            - text: "The bar was three fixed menus belonging to nobody. It is now three zones: the chip menu, identical in every application and always the first cell; the active application's name; and that application's own menus. Ownership is a window, and it moves through three one-line hooks, so nothing else in the kernel has to know the bar exists -- raising a window activates it, clicking a window that is already frontmost activates it too, and one validation at the top of every bar redraw covers close, minimize and hide at once. Locator is the kernel acting as an application, the os8088 answer to the Finder: the desktop, the drive icons, the Disk browser and the menus that launch everything else. It is not an instance and has no task -- it is the menu set the bar falls back to, and clicking the bare desktop is how you get back to it. For a program the whole interface is one API slot and three macros; all five shipped packages take the bar, and every item calls the routine its key or button already called, so the menus are a second door rather than a replacement."
+          - listitem [ref=e727]:
+            - text: Folders, and four file-manager windows
+            - link "#33" [ref=e728] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/33
+            - text: A FAT volume has two directory shapes -- the root is a flat run of sectors, a subdirectory is an ordinary cluster chain -- and folders rest on spelling that out exactly once, in a single iterator used by both the mount listing and the write path's slot search, so the two shapes cannot drift apart. Navigation is a remount, the same choice writing already made, so no third staleness rule enters the kernel; going up reads the parent out of the
+            - code [ref=e729]: ..
+            - text: "link and needs no path stack. You get up to four Disk windows, each on its own drive and folder, each with its own cached copy of the listing: paints read the cache and actions re-sync first, which is what makes a repaint, a drag or a full-desktop repaint cost zero floppy I/O. New Folder, Rename and Delete are on the File menu -- Delete asks first, because this system has no undo and no trash -- and the right mouse button drops a context menu anywhere."
+          - listitem [ref=e730]:
+            - text: "Files get names: the Standard File dialog"
+            - link "#33" [ref=e731] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/33
+            - text: The file API shipped five whole-file operations and no way to name a file, which is why the Note Pad wrote a hard-coded
+            - code [ref=e732]: NOTES.TXT
+            - text: ". The Open/Save chooser fixes that, and it is modal on purpose. Because nothing else is clickable while it is up, no other window can navigate the volume, so the dialog reads the global mount snapshot directly and needs no listing cache of its own. It is not an instance either -- no dock tile, no Task Manager row, closer to a pull-down menu than to an application -- so its close and minimize boxes both reduce to \"cancelled\" and the module contains no close-path code at all. Window callbacks cannot block, so it shows its window inline and answers later through a completion callback, run after teardown so the program repaints onto clean screen. The Note Pad is its first caller: a document name per instance, Open, Save and Save As."
+          - listitem [ref=e733]:
+            - text: Resizable windows, a scrolling browser, and fullscreen
+            - link "#29" [ref=e734] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/29
+            - text: "A resizable window draws a Mac-style grow box in its bottom-right corner and resizes through the same rubber-band outline discipline as a title-bar drag. There is no resize callback and there does not need to be: a resizable window lays out from its live record every paint, which is also why the Note Pad re-wraps its text as you drag the corner for free. The Disk browser stopped baking in its old fixed size -- painter and hit-tester derive every coordinate from one shared layout routine, so they cannot disagree -- and gained a scroll bar, keyboard scrolling, and a list/icon view toggle. Fullscreen is the other half: a fullscreen surface is a real window covering the whole screen with its chrome suppressed, so the existing obscured test silences the background drawers behind it without knowing anything new."
+        - paragraph [ref=e735]:
+          - text: The Disk window lists 8.3 names now --
+          - code [ref=e736]: MINES.O88
+          - text: rather than
+          - code [ref=e737]: MINES
+          - text: "-- because that is what is really on a FAT12 disk. A running program still shows the name from its own header."
+        - paragraph [ref=e738]: The menu bar changes as you switch applications, and the menus you launch things from belong to Locator. If the bar is showing some other program's menus, click the bare desktop to hand it back to Locator.
+        - paragraph [ref=e739]:
+          - text: The software floppy is now ordinary FAT12, so you can mount it on any modern machine and copy programs on and off it.
+          - code [ref=e740]: tools/os88disk.py
+          - text: still builds one, but it is no longer the only way.
+        - paragraph [ref=e741]: "The Note Pad saves and loads real files: F2 saves, F3 opens, and Save As names the file through the new dialog. Line endings are translated both ways, so a document written here opens in Windows Notepad and one written there opens here."
+        - paragraph [ref=e742]: Kernel headroom is down to 5,652 bytes on the binding image-plus-far-code guard, from 17,474 at the last release. The room the memory work bought has largely been spent; moving packages into their own segments is the next tranche.
+        - paragraph [ref=e743]: Only QEMU is exercised routinely. This release is not verified on 86Box or on real XT hardware, though both floppy geometries build and all five size guards pass.
+        - generic [ref=e744]:
+          - generic [ref=e745]:
+            - term [ref=e746]: Kernel image
+            - definition [ref=e747]: 39,404 bytes
+          - generic [ref=e748]:
+            - term [ref=e749]: Image + .bss
+            - definition [ref=e750]: 37,479 of 45,056 (7,577 free)
+          - generic [ref=e751]:
+            - term [ref=e752]: Source
+            - definition [ref=e753]: 33,553 lines of assembly across 27 kernel modules
+        - table [ref=e754]:
+          - caption [ref=e755]: Files in os8088 v1.0.20260801
+          - rowgroup [ref=e756]:
+            - row [ref=e757]:
+              - columnheader "File" [ref=e758]
+              - columnheader "What it is" [ref=e759]
+              - columnheader "Size" [ref=e760]
+          - rowgroup [ref=e761]:
+            - row [ref=e762]:
+              - rowheader [ref=e763]:
+                - link "os8088.img" [ref=e764] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260801/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e765]'
+              - cell "1,474,560 bytes" [ref=e766]
+            - row [ref=e767]:
+              - rowheader [ref=e768]:
+                - link "os8088-360.img" [ref=e769] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260801/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e770]'
+              - cell "368,640 bytes" [ref=e771]
+            - row [ref=e772]:
+              - rowheader [ref=e773]:
+                - link "apps.img" [ref=e774] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260801/apps.img
+              - 'cell "Software disk, 1.44MB: a FAT12 volume holding MINES.O88, HELLO.O88, NOTEPAD.O88, RECORDER.O88 and PIANO.O88. Not bootable." [ref=e775]'
+              - cell "1,474,560 bytes" [ref=e776]
+            - row [ref=e777]:
+              - rowheader [ref=e778]:
+                - link "apps360.img" [ref=e779] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260801/apps360.img
+              - cell "Software disk, 360KB. The same five packages, same filesystem, different geometry." [ref=e780]
+              - cell "368,640 bytes" [ref=e781]
+    - generic [ref=e782]:
+      - generic [ref=e783]: v1.0.20260730.1
+      - generic [ref=e787]:
+        - heading "v1.0.20260730.1" [level=2] [ref=e788]
+        - paragraph [ref=e789]:
+          - text: Released 2026-07-30 from
+          - code [ref=e790]: 84387fae8
+          - text: ·
+          - link "on GitHub" [ref=e791] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260730.1
+        - paragraph [ref=e792]: The menu bar tells the time. A new system clock reads the hardware RTC at boot and keeps itself on the PIT from then on, the right end of the bar carries the date and time of day, and clicking it opens a Control Panel page that sets them.
+        - list [ref=e793]:
+          - listitem [ref=e794]:
+            - text: The date and the time, at the right end of the menu bar
+            - link "#28" [ref=e795] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/28
+            - text: The bar has carried nothing but the chip glyph, File and Special since the GUI existed; it now ends with the date and the time of day, and clicking it opens the Control Panel straight onto the page that sets them. The text is right-aligned inside a cell sized for the longest form it can take -- the string runs 18 to 24 glyphs depending on whether seconds and a 12-hour AM/PM are showing -- so switching format redraws one cell rather than relaying the bar out. An edit or a toggle asks for that redraw through a queue flag rather than painting from where it stands, because the alternative was a whole-desktop repaint to fix a flicker, which is a worse flash than the one it fixes.
+          - listitem [ref=e796]:
+            - text: A system clock that assumes its machine may not have one
+            - link "#28" [ref=e797] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/28
+            - code [ref=e798]: kernel/clock.inc
+            - text: probes the hardware RTC through int 1Ah at boot, and the probe is deliberately paranoid, because the machines this OS targets are exactly the ones that may have no CMOS clock at all and whose BIOS may simply iret out of a function it does not implement. CX and DX are poisoned and the carry flag set before every call, every returned byte must be valid packed BCD and in range, and the values commit out of scratch only once all of it has passed. Nothing found means 4 July 2026, 00:00:00, and the system runs on regardless. From then on the PIT is the clock -- the same accumulator idiom the rest of the kernel uses -- carrying through month lengths and leap Februaries, which is how DOS behaves on the same hardware.
+          - listitem [ref=e799]:
+            - text: Reading a clock that ticks underneath you
+            - link "#28" [ref=e800] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/28
+            - text: "Only the UI task ever writes the fields, but the readers are not so confined: the bar's painter reaches the formatter from"
+            - code [ref=e801]: wm_paint_all
+            - text: ", which a dying background task runs inside"
+            - code [ref=e802]: wm_destroy
+            - text: . So every write that can carry is one interrupts-off section, and every formatter works from a snapshot copy taken under that same guard. A reader pre-empted mid-format can never pair a pre-carry field with a post-carry one and print 31 December of next year, or 13:00 on a clock that has just rolled to midnight.
+          - listitem [ref=e803]:
+            - text: A Date/Time page in the Control Panel
+            - link "#28" [ref=e804] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/28
+            - text: "The panel's fourth page is two rows of fields with one selected and a +/- pair that steps it. It knows nothing about what a month or an hour is -- the field index is the number the clock's stringify and adjust routines take -- and it touches no BIOS itself: an edit posts a dirty flag and the UI task writes the RTC back outside the drawing lock, because a page proc may not take one. 12-hour mode adds a seventh, clickable AM/PM field, while the hour underneath is always stored and stepped 0..23, so the format is a rendering and nothing can drift out of it."
+          - listitem [ref=e805]:
+            - text: Seconds are off by default, and that is not taste
+            - link "#28" [ref=e806] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/28
+            - text: The tick returns a two-bit mask saying what actually changed. With seconds hidden, the bar's text is unchanged 59 seconds out of 60, so the UI task does not take the drawing lock at all -- and the cursor blink that comes with taking the lock is precisely the flicker the setting removes. Turn seconds on and you get them, once a second, blink included. An open Date/Time page still wants its seconds either way, which a cheap check answers before the lock is reached for.
+          - listitem [ref=e807]:
+            - text: What it cost
+            - link "#28" [ref=e808] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/28
+            - text: The kernel image grew from 25,136 bytes to 27,582 and its segment footprint from 23,358 to 25,079, leaving 19,977 bytes of headroom below the 0xB000 line where loaded programs begin. The Control Panel window grew with its two new option rows, 320x120 to 320x140; the other three pages simply have more white space below them now. Every screenshot on this site was recaptured, because the menu bar is in all of them.
+        - paragraph [ref=e809]: "Clicking the clock is a new thing the menu bar does: it opens the Control Panel on the Date/Time page. The bar's left-hand menus are unchanged."
+        - paragraph [ref=e810]: Seconds in the menu bar are off by default. The Date/Time page turns them on, along with 12-hour time.
+        - paragraph [ref=e811]: A machine with no readable RTC boots at 4 July 2026, 00:00:00 rather than refusing to keep time. Set it from the Control Panel; the write-back survives a Restart on hardware that has a clock to write to.
+        - generic [ref=e812]:
+          - generic [ref=e813]:
+            - term [ref=e814]: Kernel image
+            - definition [ref=e815]: 27,582 bytes
+          - generic [ref=e816]:
+            - term [ref=e817]: Image + .bss
+            - definition [ref=e818]: 25,079 of 45,056 (19,977 free)
+          - generic [ref=e819]:
+            - term [ref=e820]: Source
+            - definition [ref=e821]: 23,601 lines of assembly across 25 kernel modules
+        - table [ref=e822]:
+          - caption [ref=e823]: Files in os8088 v1.0.20260730.1
+          - rowgroup [ref=e824]:
+            - row [ref=e825]:
+              - columnheader "File" [ref=e826]
+              - columnheader "What it is" [ref=e827]
+              - columnheader "Size" [ref=e828]
+          - rowgroup [ref=e829]:
+            - row [ref=e830]:
+              - rowheader [ref=e831]:
+                - link "os8088.img" [ref=e832] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260730.1/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e833]'
+              - cell "1,474,560 bytes" [ref=e834]
+            - row [ref=e835]:
+              - rowheader [ref=e836]:
+                - link "os8088-360.img" [ref=e837] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260730.1/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e838]'
+              - cell "368,640 bytes" [ref=e839]
+            - row [ref=e840]:
+              - rowheader [ref=e841]:
+                - link "apps.img" [ref=e842] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260730.1/apps.img
+              - 'cell "Software disk, 1.44MB: an os88fs volume holding MINES, HELLO, NOTEPAD, RECORDER and PIANO. Not bootable." [ref=e843]'
+              - cell "1,474,560 bytes" [ref=e844]
+            - row [ref=e845]:
+              - rowheader [ref=e846]:
+                - link "apps360.img" [ref=e847] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260730.1/apps360.img
+              - cell "Software disk, 360KB. The same five packages, same filesystem, different geometry." [ref=e848]
+              - cell "368,640 bytes" [ref=e849]
+    - generic [ref=e850]:
+      - generic [ref=e851]: v1.0.20260730
+      - generic [ref=e855]:
+        - heading "v1.0.20260730" [level=2] [ref=e856]
+        - paragraph [ref=e857]:
+          - text: Released 2026-07-30 from
+          - code [ref=e858]: 3405e0bf0
+          - text: ·
+          - link "on GitHub" [ref=e859] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260730
+        - paragraph [ref=e860]: os8088 gets sound. One API covers three generations of PC audio -- the PC speaker, the AdLib, and the Sound Blaster playing and recording in the background -- and two new programs on the software floppy use it.
+        - list [ref=e861]:
+          - listitem [ref=e862]:
+            - text: One sound API, three cards, five capability tiers
+            - link "#26" [ref=e863] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/26
+            - text: A program does not ask for a Sound Blaster. It asks for a tone, an FM note, or a stream, and a router picks the best device present. The layer is a table of drivers, each declaring what it can do -- tone, FM, background PCM, exclusive PCM, PCM in -- and five API slots at 0x0078 that dispatch through it. The PC speaker is always row zero, so every machine can make a sound; an AdLib adds nine-voice FM; a Sound Blaster adds streaming playback and recording that run off their own interrupt while the GUI keeps going. Ownership is a single owner with priority steal, and every grant is made inside one interrupts-off window, so a timer tick can never observe a half-made one. A program that dies with a note held is silenced by its own teardown.
+          - listitem [ref=e864]:
+            - text: The PC speaker plays sampled sound
+            - link "#26" [ref=e865] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/26
+            - text: "The speaker is a one-bit output, so a clip is played as pulse-width modulation: one PIT write per sample, and the cone integrates the pulse train. Timing comes from reading the scheduler's own channel 0 -- latch-and-read, never a write, so the clock the whole system runs on is untouched -- and a sample that arrives late is dropped by deadline resync rather than played slow. It is exclusive by nature: the clip owns the CPU while it runs, so a mouse click aborts it, and the aborting click is drained rather than falling through to whatever is underneath. An unplayable rate is refused with an error rather than quietly clamped."
+          - listitem [ref=e866]:
+            - text: Piano and Recorder, on the software floppy
+            - link "#26" [ref=e867] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/26
+            - text: "PIANO is an octave and a half of clickable keys with a scrolling mini-staff, a 300-note sequence recorder, a REPLAY button that reproduces your original timing, and three built-in songs. RECORDER is a wave recorder and player: it captures to a 5-second buffer through a Sound Blaster, draws the waveform, and plays back through whichever device the router picks -- and on a machine with no capture hardware the REC button is grayed and says why when clicked, so it stays a usable player. Both are ordinary packages that reach all of this through the public API table, which is the point: nothing about the sound layer is reserved for the kernel."
+          - listitem [ref=e868]:
+            - text: The Task Manager draws memory
+            - link "#25" [ref=e869] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/25
+            - text: "Clicking in the Task Manager flips it between the load graph and a new memory view: the RAM line, a map of the 640K conventional space, and a map of the kernel's own segment where every loaded package's region is drawn in its slot's dither pattern, matched by a legend square on that package's row in the process list. The sampler keeps running while you are in the other view, so flipping back shows an unbroken history. The process list is re-columned as NAME / ADDR / SIZE to go with it."
+          - listitem [ref=e870]:
+            - text: A Sound page in the Control Panel
+            - link "#26" [ref=e871] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/26
+            - text: It reports which devices were actually found, lets you pin the tone route to the speaker or the AdLib -- refusing the AdLib when no probe found one, the same way the Display page refuses double buffering on a small machine -- carries the exclusive-clips checkbox with its trade-off stated in prose, and has a Test button that plays a synthesised 1 kHz clip through the public API. Underneath it are the emitted and resync counters, which is how the speaker's timing was measured in the first place.
+          - listitem [ref=e872]: "What it cost, and what is leftThe kernel grew from 16,611 bytes to 25,136 and its segment footprint from 16,927 to 23,358, leaving 21,698 bytes of headroom below the 0xB000 line where loaded programs begin -- the sound layer spent about a quarter of what the memory release before it bought. Nothing left conventional memory that a 256KB machine needs, and a machine with no sound hardware behaves exactly as it did: the drivers publish themselves only after a probe succeeds, and the speaker row is the one that is always there."
+        - paragraph [ref=e873]: "The software floppy now holds five packages, not three. Drive B: lists MINES, HELLO, NOTEPAD, RECORDER and PIANO."
+        - paragraph [ref=e874]:
+          - text: "To hear anything past the speaker in QEMU you have to give it the hardware: add"
+          - code [ref=e875]: "-device adlib"
+          - text: for FM and
+          - code [ref=e876]: "-device sb16"
+          - text: for streaming and recording, each with an
+          - code [ref=e877]: "-audiodev"
+          - text: . Without them the probes correctly report the cards as absent and the Control Panel's Sound page refuses to route to them.
+        - paragraph [ref=e878]: Recording is Sound Blaster only, and QEMU never starts its input DMA against a file audiodev -- a capture there always ends on the watchdog, which RECORDER reports honestly as REC STOPPED (WATCHDOG) rather than pretending it worked. The live capture path is owed to real hardware, as is the whole DSP-below-2.00 branch.
+        - generic [ref=e879]:
+          - generic [ref=e880]:
+            - term [ref=e881]: Kernel image
+            - definition [ref=e882]: 25,136 bytes
+          - generic [ref=e883]:
+            - term [ref=e884]: Image + .bss
+            - definition [ref=e885]: 23,358 of 45,056 (21,698 free)
+          - generic [ref=e886]:
+            - term [ref=e887]: Source
+            - definition [ref=e888]: 21,997 lines of assembly across 24 kernel modules
+        - table [ref=e889]:
+          - caption [ref=e890]: Files in os8088 v1.0.20260730
+          - rowgroup [ref=e891]:
+            - row [ref=e892]:
+              - columnheader "File" [ref=e893]
+              - columnheader "What it is" [ref=e894]
+              - columnheader "Size" [ref=e895]
+          - rowgroup [ref=e896]:
+            - row [ref=e897]:
+              - rowheader [ref=e898]:
+                - link "os8088.img" [ref=e899] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260730/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e900]'
+              - cell "1,474,560 bytes" [ref=e901]
+            - row [ref=e902]:
+              - rowheader [ref=e903]:
+                - link "os8088-360.img" [ref=e904] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260730/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e905]'
+              - cell "368,640 bytes" [ref=e906]
+            - row [ref=e907]:
+              - rowheader [ref=e908]:
+                - link "apps.img" [ref=e909] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260730/apps.img
+              - 'cell "Software disk, 1.44MB: an os88fs volume holding MINES, HELLO, NOTEPAD, RECORDER and PIANO. Not bootable." [ref=e910]'
+              - cell "1,474,560 bytes" [ref=e911]
+            - row [ref=e912]:
+              - rowheader [ref=e913]:
+                - link "apps360.img" [ref=e914] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260730/apps360.img
+              - cell "Software disk, 360KB. The same five packages, same filesystem, different geometry." [ref=e915]
+              - cell "368,640 bytes" [ref=e916]
+    - generic [ref=e917]:
+      - generic [ref=e918]: v1.0.20260729
+      - generic [ref=e922]:
+        - heading "v1.0.20260729" [level=2] [ref=e923]
+        - paragraph [ref=e924]:
+          - text: Released 2026-07-29 from
+          - code [ref=e925]: f7a3b2973
+          - text: ·
+          - link "on GitHub" [ref=e926] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260729
+        - paragraph [ref=e927]: A memory release. The task stacks, the disk buffers and two of the coldest modules move out of the kernel's 64KB segment, taking the headroom left for future features from 1,089 bytes to 28,129.
+        - list [ref=e928]:
+          - listitem [ref=e929]:
+            - text: Room to grow -- 1,089 bytes of headroom becomes 28,129
+            - link "#24" [ref=e930] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/24
+            - text: "The kernel was not short of memory, it was short of segment: everything it touched through DS had to fit in one 64KB window, and 59% of that budget was uninitialised scratch. The task stacks alone -- eleven of them at 1,536 bytes -- were 41% of the window. Three moves fixed it. The stacks and the floppy buffers went to their own segment at linear 0x08000, in low memory that sits free on every machine once the boot sector hands off, which is 20KB back. The package pool slid up from 0xA000 to 0xB000 into the 4KB that task 0's stack used to occupy. And two cold modules, the Control Panel and the Task Manager, now assemble into a far segment that is copied out of the kernel image at boot and lands on top of .bss -- 2,922 bytes of code that costs the window nothing. Nothing left conventional memory and nothing on screen changed, so a 256KB machine behaves exactly as before."
+          - listitem [ref=e931]: The RAM figure means something different nowThis page said 39,871 bytes last release and says 16,927 this one. No code was deleted -- the number counts what the kernel keeps inside its own segment, and the stacks and disk buffers that made up most of it still exist, just at another address. The ceiling moved too, from 0xA000 to 0xB000, because the package pool moved with it. The Task Manager's RAM total and its System row both add back what now lives outside the segment, so its rows still sum to the total.
+          - listitem [ref=e932]:
+            - text: The release process feeds this page
+            - link "#23" [ref=e933] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/23
+            - text: This entry exists because the release checklist now requires it. The publishing script writes what it can read off the build -- version, date, commit, kernel size, file list -- and stops there, so the words around the numbers are written by hand, once, and used both here and on the GitHub release.
+        - paragraph [ref=e934]:
+          - text: Packages load at a new address. The pool moved from offsets 0xA000-0xEFFF to 0xB000-0xFDFF and is 19,968 bytes rather than 20,480. A
+          - code [ref=e935]: .o88
+          - text: built before this release carries the old link base in its header and will not load -- reassemble it against the current SDK. The three packages on the software floppy here are already rebuilt.
+        - generic [ref=e936]:
+          - generic [ref=e937]:
+            - term [ref=e938]: Kernel image
+            - definition [ref=e939]: 16,611 bytes
+          - generic [ref=e940]:
+            - term [ref=e941]: Image + .bss
+            - definition [ref=e942]: 16,927 of 45,056 (28,129 free)
+          - generic [ref=e943]:
+            - term [ref=e944]: Source
+            - definition [ref=e945]: 13,243 lines of assembly across 21 kernel modules
+        - table [ref=e946]:
+          - caption [ref=e947]: Files in os8088 v1.0.20260729
+          - rowgroup [ref=e948]:
+            - row [ref=e949]:
+              - columnheader "File" [ref=e950]
+              - columnheader "What it is" [ref=e951]
+              - columnheader "Size" [ref=e952]
+          - rowgroup [ref=e953]:
+            - row [ref=e954]:
+              - rowheader [ref=e955]:
+                - link "os8088.img" [ref=e956] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260729/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e957]'
+              - cell "1,474,560 bytes" [ref=e958]
+            - row [ref=e959]:
+              - rowheader [ref=e960]:
+                - link "os8088-360.img" [ref=e961] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260729/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e962]'
+              - cell "368,640 bytes" [ref=e963]
+            - row [ref=e964]:
+              - rowheader [ref=e965]:
+                - link "apps.img" [ref=e966] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260729/apps.img
+              - 'cell "Software disk, 1.44MB: an os88fs volume holding MINES, HELLO and NOTEPAD. Not bootable." [ref=e967]'
+              - cell "1,474,560 bytes" [ref=e968]
+            - row [ref=e969]:
+              - rowheader [ref=e970]:
+                - link "apps360.img" [ref=e971] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260729/apps360.img
+              - cell "Software disk, 360KB. The same three packages, same filesystem, different geometry." [ref=e972]
+              - cell "368,640 bytes" [ref=e973]
+    - generic [ref=e974]:
+      - generic [ref=e975]: v1.0.20260728
+      - generic [ref=e979]:
+        - heading "v1.0.20260728" [level=2] [ref=e980]
+        - paragraph [ref=e981]:
+          - text: Released 2026-07-28 from
+          - code [ref=e982]: 698b5878c
+          - text: ·
+          - link "on GitHub" [ref=e983] [cursor=pointer]:
+            - /url: https://github.com/jggonz/os8088/releases/tag/v1.0.20260728
+        - paragraph [ref=e984]: The first tagged release. Optional double buffering, a graphical boot splash, 640KB boot targets, and the Note Pad moved out of the kernel onto the software floppy.
+        - list [ref=e985]:
+          - listitem [ref=e986]:
+            - text: Optional double buffering
+            - link "#22" [ref=e987] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/22
+            - text: Switchable at runtime from the Control Panel's new Display page, and off by default on every machine -- a 256K machine draws straight to video memory as before and can never leave that path. At 500K or more of conventional memory the kernel allows a four-plane back buffer at segment 0x4000, flushed one dirty rectangle at a time when the drawing lock drops. While everything on screen is black or white all four planes hold identical bytes, so the flush writes one plane and lets the Map Mask register fan it out; the transient XOR overlays, drag outlines and menu highlights, bypass the buffer entirely.
+          - listitem [ref=e988]:
+            - text: A graphical boot splash
+            - link "#21" [ref=e989] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/21
+            - text: A spinning 8088 over a progress bar, drawn while the kernel loads.
+          - listitem [ref=e990]:
+            - text: 640KB boot targets
+            - link "#20" [ref=e991] [cursor=pointer]:
+              - /url: https://github.com/jggonz/os8088/pull/20
+            - code [ref=e992]: make run-640
+            - text: for QEMU and
+            - code [ref=e993]: make xt-640
+            - text: for 86Box, so the system can be exercised on a maxed-out period machine as well as a 256K one.
+          - listitem [ref=e994]: Repository housekeepingA CONTRIBUTING guide (#19), SECURITY.md (#18), a CODEOWNERS file (#17) and a tracked gitleaks pre-commit hook (#16).
+        - paragraph [ref=e995]: "Note Pad is no longer on the File menu. It left the kernel and became the NOTEPAD package on the software floppy: open File > Disk and double-click it. The File menu is now Clock, Bounce, Disk and Close Window."
+        - generic [ref=e996]:
+          - generic [ref=e997]:
+            - term [ref=e998]: Kernel image
+            - definition [ref=e999]: 16,281 bytes
+          - generic [ref=e1000]:
+            - term [ref=e1001]: Image + .bss
+            - definition [ref=e1002]: 39,871 of 40,960 (1,089 free)
+          - generic [ref=e1003]:
+            - term [ref=e1004]: Source
+            - definition [ref=e1005]: 12,848 lines of assembly across 20 kernel modules
+        - table [ref=e1006]:
+          - caption [ref=e1007]: Files in os8088 v1.0.20260728
+          - rowgroup [ref=e1008]:
+            - row [ref=e1009]:
+              - columnheader "File" [ref=e1010]
+              - columnheader "What it is" [ref=e1011]
+              - columnheader "Size" [ref=e1012]
+          - rowgroup [ref=e1013]:
+            - row [ref=e1014]:
+              - rowheader [ref=e1015]:
+                - link "os8088.img" [ref=e1016] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260728/os8088.img
+              - 'cell "Boot disk, 1.44MB geometry: 80 cylinders, 2 heads, 18 sectors per track. For QEMU." [ref=e1017]'
+              - cell "1,474,560 bytes" [ref=e1018]
+            - row [ref=e1019]:
+              - rowheader [ref=e1020]:
+                - link "os8088-360.img" [ref=e1021] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260728/os8088-360.img
+              - 'cell "Boot disk, 360KB geometry: 40 cylinders, 2 heads, 9 sectors per track. For 86Box and real XT hardware." [ref=e1022]'
+              - cell "368,640 bytes" [ref=e1023]
+            - row [ref=e1024]:
+              - rowheader [ref=e1025]:
+                - link "apps.img" [ref=e1026] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260728/apps.img
+              - 'cell "Software disk, 1.44MB: an os88fs volume holding MINES, HELLO and NOTEPAD. Not bootable." [ref=e1027]'
+              - cell "1,474,560 bytes" [ref=e1028]
+            - row [ref=e1029]:
+              - rowheader [ref=e1030]:
+                - link "apps360.img" [ref=e1031] [cursor=pointer]:
+                  - /url: https://github.com/jggonz/os8088/releases/download/v1.0.20260728/apps360.img
+              - cell "Software disk, 360KB. The same three packages, same filesystem, different geometry." [ref=e1032]
+              - cell "368,640 bytes" [ref=e1033]
+    - generic [ref=e1035]:
+      - heading "What a release is here" [level=2] [ref=e1036]
+      - paragraph [ref=e1037]: "A release is a tag on the source repository plus the four images that tag builds: a boot disk in 1.44MB and 360KB geometries, and a software disk carrying the loadable packages in the same two geometries. Nothing is compiled on the way in: the images published are byte-for-byte the ones the build produced, which is what the checksums on the download page are for."
+      - paragraph [ref=e1038]:
+        - text: The kernel size quoted with each release is the assembled
+        - code [ref=e1039]: kernel.bin
+        - text: . The second figure is that image plus every buffer the kernel addresses through its data segment, which is the number that has to fit the 64K segment. A release that ran out of that headroom would not build at all. Scratch the kernel keeps outside that segment -- chiefly the task stacks -- is not counted in it, and neither are loaded programs, which since v1.0.20260803 live in segments of their own.
+      - generic [ref=e1040]:
+        - link "Download the newest" [ref=e1041]:
+          - /url: /download/
+        - link "Boot it in your browser" [ref=e1042]:
+          - /url: /demo/
+        - link "Releases on GitHub" [ref=e1043]:
+          - /url: https://github.com/jggonz/os8088/releases
+  - contentinfo [ref=e1044]:
+    - link "os8088" [ref=e1045] [cursor=pointer]:
+      - /url: /
+    - link "Spotlight" [ref=e1046] [cursor=pointer]:
+      - /url: /spotlight/
+    - link "Screenshots" [ref=e1047] [cursor=pointer]:
+      - /url: /screenshots/
+    - link "Hardware" [ref=e1048] [cursor=pointer]:
+      - /url: /hardware/
+    - link "Videos" [ref=e1049] [cursor=pointer]:
+      - /url: /videos/
+    - link "Demo" [ref=e1050] [cursor=pointer]:
+      - /url: /demo/
+    - link "Download" [ref=e1051] [cursor=pointer]:
+      - /url: /download/
+    - link "Releases" [ref=e1052] [cursor=pointer]:
+      - /url: /releases/
+    - link "How it works" [ref=e1053] [cursor=pointer]:
+      - /url: /how-it-works/
+    - link "FAQ" [ref=e1054] [cursor=pointer]:
+      - /url: /faq/
+    - button "Invert" [ref=e1055]
+    - link "Source" [ref=e1056] [cursor=pointer]:
+      - /url: https://github.com/jggonz/os8088
+    - link "Colophon" [ref=e1057] [cursor=pointer]:
+      - /url: /colophon/

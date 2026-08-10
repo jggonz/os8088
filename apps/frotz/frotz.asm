@@ -209,8 +209,24 @@ zf_entry:
     ; into KERNEL_SEG, so it is read through ES and copied before anything
     ; else is called - the slot is read-and-clear and the buffer is the
     ; kernel's, valid for this call only.
-    call OSAPI_ARG_FILE             ; out CF=0 and SI = ES:SI name, CF=1 none
-    jc .noarg
+    ;
+    ; DX AND BL ARE HALF THE ANSWER AND ARE BANKED FIRST. The call also hands
+    ; back the directory the document lives in and its volume, which is the
+    ; pair OSAPI_FILE_GOTO takes - and without them the name is only findable
+    ; from wherever the kernel happens to be standing. It is standing in the
+    ; PROGRAM's directory: ld_run_body reads the image out of it and far-calls
+    ; this proc as one unit, and assoc_back does not restore the document's
+    ; folder until the load has returned. So a story in B:\INFOCOM, opened by
+    ; double-click while FROTZ.O88 sits in the root, was searched for in the
+    ; root and reported 'That story is not on this disk.' A story in the root
+    ; worked, which is why this survived: it is the case the two directories
+    ; are the same one. zi_openpend spends the pair.
+    call OSAPI_ARG_FILE             ; out CF=0, SI = ES:SI name, DX = its
+    jc .noarg                       ; directory cluster, BL = its volume
+    mov [zi_argclus], dx
+    mov [zi_argdrv], bl
+    mov byte [zi_arghave], 1        ; 0,0 is a real locator, so the pair cannot
+                                    ; speak for itself
     mov di, zf_pend
     call zf_copyname                ; ES:SI -> DS:DI, NUL, at most 13 bytes
     mov byte [zf_pendok], 1
