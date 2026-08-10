@@ -1348,7 +1348,21 @@ osapi_table:
                                   ;         is then unloaded leaves that record
                                   ;         naming memory the next claim takes
                                   ;         (SPEC.md 52.11.3)
-osapi_table_end:                  ; 0x03A0
+    OSAPI_JSLOT api_file_append_sys ; 0x03A0 - N, and the SECOND fenced cell
+                                  ;         (SPEC.md 19.6.1): dskw_append for a
+                                  ;         file that is already hidden +
+                                  ;         system. The same arguments as
+                                  ;         OSAPI_FILE_APPEND and the same
+                                  ;         precondition; the only thing it
+                                  ;         forgives is the two bits
+                                  ;         OSAPI_FILE_WRITE_SYS stamped. It
+                                  ;         cannot CREATE one - an append needs
+                                  ;         an entry that is already there - so
+                                  ;         19.6's rule is unmoved, and this is
+                                  ;         what lets a system file too big for
+                                  ;         the caller's buffer be finished at
+                                  ;         all (SPEC.md 18.4.4)
+osapi_table_end:                  ; 0x03A8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1356,8 +1370,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 114 * 8
-%error "os8088 API jump table must be exactly 114 8-byte slots"
+%if OSAPI_TABLE_LEN != 115 * 8
+%error "os8088 API jump table must be exactly 115 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1557,8 +1571,21 @@ api_file_find:
 ;
 ; BX is banked across it because BX is the caller's DATA BUFFER offset here -
 ; the fence needs a register and that one is live.
+;
+; api_file_append_sys - slot 0x03A0 - is the SAME cell with a different tail,
+; and it shares this body rather than copying it because the fence is the
+; whole of the interesting part and two copies of a fence is one that can be
+; got wrong. [api_sysap] picks which dskw_ entry point runs; it is written
+; through CS because DS is still the CALLER's here, and it is set on both
+; paths rather than only the append one - a byte left set by an append would
+; silently turn the next driver's write into an append.
 ; -----------------------------------------------------------------------------
+api_file_append_sys:
+    mov byte [cs:api_sysap], 1
+    jmp short api_file_sysc
 api_file_write_sys:
+    mov byte [cs:api_sysap], 0
+api_file_sysc:
     push ds
     push si
     push di
@@ -1588,7 +1615,13 @@ api_file_write_sys:
                                 ; the volume it is building and must not have
                                 ; its own instance's folder put underneath it
     mov si, api_name
+    cmp byte [api_sysap], 0
+    jne .append
     call dskw_write_sys
+    jmp short .done
+.append:
+    call dskw_append_sys        ; ...the same fence, the other verb (18.4.4)
+.done:
     pop si
     pop ds
     retf
@@ -1687,6 +1720,11 @@ api_copyname:
 api_name:   times 13 db 0       ; staged names (.text, not .bss: the file
 api_name2:  times 13 db 0       ; slots are reachable before anything clears
                                 ; .bss, and -f bin clears nothing)
+api_sysap:  db 0                ; which verb the shared fenced cell runs:
+                                ; 0 = dskw_write_sys, 1 = dskw_append_sys.
+                                ; .text for api_name's reason, and written
+                                ; through CS because the stub still has the
+                                ; caller's DS when it lands
 
 ; =============================================================================
 ; Boot (SPEC.md 15)
@@ -2466,6 +2504,8 @@ dskw_mkdir:           call COLD_SEG:dwf_dskw_mkdir
 dskw_read_at:         call COLD_SEG:dwf_dskw_read_at
                     ret
 dskw_append:          call COLD_SEG:dwf_dskw_append
+                    ret
+dskw_append_sys:      call COLD_SEG:dwf_dskw_append_sys
                     ret
 files_init:           call COLD_SEG:fmf_files_init
                     ret
