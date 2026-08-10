@@ -1557,6 +1557,42 @@ write to skip, only the compose, which is now two instructions. A guard costs
 branch's prefetch flush, on the innermost loop of every string the slow
 machines draw. **The optimisation removed its own successor.**
 
+#### 6.1.6 A run is one y, one pair of colours and a column — so it pays once
+
+§6.1.5 took three instructions out of a row. This is the larger half of the
+same reading: **`font_run_cell` was deriving, per cell, everything a RUN
+shares.** A run is ONE y, ONE pair of colours, and a column that advances by
+exactly one byte a cell — and the cell body was calling `gfx_rowbase`, whose
+16-bit `MUL` an 8088 charges ~120 clocks for, and `font_ink` **twice**, for
+answers that cannot change until the run ends. Ten cells paid ten row bases
+and twenty ink reductions to draw one word.
+
+What moved up into `font_run_x`, once per run: the **y edge test** (every cell
+of a run has the run's y), both **ink reductions** — kept as §6.1.5's two
+derived masks, `[font_rn_xm]` and `[font_rn_bm]`, rather than as the colours —
+and **`gfx_rowbase`**. `DI` then holds the run's first framebuffer byte and
+the cell loop does `inc di`, because an aligned cell is one byte wide.
+
+What stays per cell is exactly what differs between two cells of one word:
+the character, the **x** edge test, the clip test (§6.1.2 — a cell is still
+clipped whole) and that one byte of `DI`.
+
+**The plane loop went with it.** It walked `[vid_planes]`, 4 or 1 — but this
+path is gated on `[vid_mono]` three instructions above the cell loop and a
+planar run takes `.slow` (§6.1), so the 4-plane walk could never execute. With
+one plane there is nothing to restart, which retires `[font_rn_si]`,
+`[font_rn_di]`, `[font_rn_fs]` and `[font_rn_bs]` as well.
+
+Two things are load-bearing and both look like bugs to a reader who does not
+know the contract. **The clip test spends CX and DX and does not put them
+back**: nothing below reads either, because the masks arrive in CX from memory
+and y is no longer wanted — restoring them would be two instructions per cell
+for a value that is dead. And **the run's x/8 uses three single-bit shifts
+rather than one by CL**: 6 clocks against 20 on an 8088, and CL stays the x it
+still has to be.
+
+Measured with §6.1.5's, in PERFORMANCE.md Set 26.
+
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
 `make FONT=<name>` builds a kernel whose 8x8 typeface is `fonts/<name>.f8`

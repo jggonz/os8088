@@ -3725,3 +3725,61 @@ aligned run is ~888 µs of which the eight-row loop is ~270, so **~70% of
 `FONT_RUN` is a prologue a run could pay once**. Near `call`+`ret` alone is
 11.0–11.5 µs before any body (Part 9's table), so the ceiling is real — but so
 is the restructuring, and this figure is inferred rather than measured.
+
+### Set 26 — the run pays once: `FONT_RUN` is 1.86x (SPEC.md §6.1.6)
+
+Set 25 ended by naming what it had not taken: `font_run_cell` ran the whole
+prologue **per cell**, for values a RUN shares. This is that, measured.
+
+A run is ONE y, ONE pair of colours and a column that advances by one byte a
+cell — and the cell body was calling **`gfx_rowbase`**, whose 16-bit `MUL` an
+8088 charges ~120 clocks for, and **`font_ink` twice**, per cell. Ten cells
+paid ten row bases and twenty ink reductions to draw one word. All of it moved
+up into `font_run_x`; `DI` then holds the run's first byte and the cell loop
+does `inc di`.
+
+**The plane loop went with it** — it walked `[vid_planes]`, 4 or 1, but the
+path is gated on `[vid_mono]` three instructions above the cell loop, so the
+4-plane walk could never execute. With one plane there is nothing to restart,
+which retires `[font_rn_si]`, `[font_rn_di]`, `[font_rn_fs]` and
+`[font_rn_bs]` as well.
+
+| `gfxbench` row, CGA | original | §6.1.5 | §6.1.6 | vs original |
+|---|---|---|---|---|
+| **`FONT_RUN` 10 aligned** | 8,879.59 µs | 7,898.60 | **4,785.69** | **−46.10%, 1.86x** |
+| `FONT_CHAR` one cell | 895.44 | 895.27 | 895.50 | +0.01% |
+| `FONT_STR` 10 aligned | 8,402.93 | 8,401.88 | 8,402.93 | +0.00% |
+| `PAIR` 10 aligned | 10,152.88 | 10,151.83 | 10,152.88 | +0.00% |
+| `FONT_RUN` 10 skewed 5 | 10,839.77 | 10,840.26 | 10,840.47 | +0.01% |
+| `PAIR` 10 skewed 5 | 10,658.81 | 10,659.02 | 10,659.02 | +0.00% |
+| `GFX_PIXEL` · `GFX_FILL` 8x8 / 64x64 · `GFX_SCROLL` | — | — | — | ±0.01% |
+
+Cost across both changes: `.text` 54,597 → **54,540 (−57)**, `.bss` 4,736 →
+**4,730 (−6)**. No rung crossed. **Byte-for-byte identical to the ORIGINAL
+kernel** — the pre-§6.1.5 one, not the intermediate — over a scripted
+desktop → chip-menu → Disk-window session: CGA 0 differing pixels of 128,000
+on all three screens, Hercules 0 of 250,560 on all three. (The Disk window's
+31-pixel clock cell is Set 25's documented trap again.)
+
+**One real hole was found and closed before it shipped, and it is the reason
+to distrust a lockstep.** `DI` tracks x by `inc di`, and `(x+8)>>3 ==
+(x>>3)+1` holds for every x **except across the 16-bit wrap** — so a run at a
+NEGATIVE x (0xFFF0 = −16, which is byte-aligned and therefore takes the fast
+path) skips two cells on the unsigned edge test, wraps to x = 0, and then
+draws at `DI` = 0x2000 past where it belongs: a word rendered 8KB into the
+framebuffer. The old code recomputed `DI` per cell and could not have it. The
+guard is one compare per run — a run STARTING off screen goes per cell
+(§6.1.2's path, which recomputes both) — and it costs 9.85 µs on a ten-cell
+run, 0.2%. **It was found by arithmetic, not by a test**: every screen in the
+pixel gate passed before and after, because nothing in this tree draws text at
+a negative x today.
+
+**What is left, and it is NOT measured.** The row loop is now ~70% of a cell,
+and **44% of the row body is the banked-row advance** — `add di,
+[cs:vid_rowadd]` + `test di, [cs:vid_wrapbit]` + `jz`, 12 of 27 bytes, paid 8
+times per CELL. A run's cells are contiguous bytes *within* a row, so a
+ROW-MAJOR walk would pay it 8 times per RUN instead, and would open `rep
+stosb` for repeated glyphs — which §27.2's space-padding idiom makes common,
+since there the padding IS the erase. It needs a per-run array of glyph
+pointers (80 cells × 2 bytes of `.bss`) or 8x the glyph-address lookups, so it
+is a real trade rather than a free one.
