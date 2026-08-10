@@ -593,6 +593,22 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0):
     It is equally the right wait AFTER an action: `settle(m)` in place of the
     `time.sleep(4)` every script in this tree has after a click, which is the
     same guess in the same two directions.
+
+    **KEEP `limit` UNDER 90 SECONDS unless there is a very good reason, and
+    write the reason down.** MartyPC runs FASTER than real time on an ordinary
+    host, so guest seconds arrive sooner than wall seconds and a generous
+    limit is not insurance - it is how long you wait to be told something went
+    wrong. The default 120 already covers a 360KB Hercules boot (16.1 s
+    measured) several times over.
+
+    The failure this guards against is not a truncated wait, it is a
+    MISDIAGNOSIS. A session that sets `limit=1800` because "the emulator might
+    be slow" and then sees the run take half an hour concludes the GUEST is
+    slow and goes looking for a performance bug in os8088; it was the harness
+    waiting. Sitting on a 700-second blind `time.sleep` before a `settle` is
+    the same mistake with the evidence thrown away - if a run really needs
+    that long, something is wrong and the way to find out is to sample the
+    screen every few seconds, not to sleep through it.
     """
     import time
     t0 = time.time()

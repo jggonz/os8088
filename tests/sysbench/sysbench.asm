@@ -97,6 +97,18 @@ SB_RAH_GAP  equ 9216              ; ...and the stride's floor: TWO 9-sector
 SB_RAH_WSTEP equ 2                ; working sets go 2, 4, 6 ... which brackets
 SB_RAH_WMAX  equ 18               ; the run count to a pair. 18 x 9216 is
                                   ; 166KB, inside the 170KB file this walks
+SB_WR_KB     equ 128              ; the LARGE write, KB. Stepped down by halves
+SB_WR_MIN    equ 8                ; to this if the heap or the volume cannot
+                                  ; take it, and the row SAYS which it got -
+                                  ; a benchmark that silently measured 8KB
+                                  ; where the reader assumed 128 is worse
+                                  ; than one that refused
+SB_WR_CHUNK  equ 8                ; ...and the append chunk, KB: the copy
+                                  ; engine's shape (SPEC.md 22.5), which is
+                                  ; what makes that row comparable to a copy
+SB_WR_SLACK  equ 8                ; KB of the volume left alone. A benchmark
+                                  ; that fills the disk it is measuring has
+                                  ; changed the thing under test
 
 ; -----------------------------------------------------------------------------
 ; sb_entry - package entry (SPEC.md 20.2)
@@ -2103,6 +2115,7 @@ sb_raw13:
     call sb_dbgctr                  ; ...and what os8088's own path issued
     call sb_find                    ; ...and what a FIND cursor would win
     call sb_rah                     ; ...and how many chunks the cache holds
+    call sb_write                   ; ...and what a LARGE WRITE costs
 
 .out:
     pop di
@@ -2110,6 +2123,289 @@ sb_raw13:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_write - what a LARGE WRITE costs (SPEC.md 18.4)
+;
+; Every disk figure in PERFORMANCE.md Part 9 is a READ. The write path has
+; never been measured on the machine it is for, and it is a different shape:
+; SPEC.md 18.4's commit order is allocate + write the data, flush the FAT,
+; write the directory entry, then free any replaced chain and flush again - so
+; a write carries metadata a read does not, and the interesting number is how
+; much of the cost that metadata is.
+;
+; IT WRITES WHERE SYSBENCH IS STANDING (SPEC.md 19.2), and that is the whole
+; interface: run it from A: to measure a floppy and from C: to measure a hard
+; disk. The row says which volume it used. Nothing here takes an option.
+;
+; Four operations, each answering what the others cannot:
+;   one cluster   the FIXED cost - a create, a FAT flush and a directory
+;                 commit with almost no data underneath them
+;   create NKB    the same thing with a real payload: the slope
+;   replace NKB   the same name again, which ALSO frees the chain it replaces
+;                 and flushes the FAT a second time (SPEC.md 18.4)
+;   append NKB    in SB_WR_CHUNK pieces - the copy engine's own shape
+;                 (SPEC.md 22.5), so the row is comparable to a copy
+;
+; It refuses rather than damages. The volume's free space is read FIRST and
+; the size steps down by halves until it fits with SB_WR_SLACK to spare; a
+; write-protected disk reports its FERR_* and the block stops instead of
+; timing nine refusals; and the scratch file is deleted whatever happened.
+; -----------------------------------------------------------------------------
+sb_write:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call bl_blank
+    mov si, sb_s_h_wr
+    call bl_sline
+    mov si, sb_s_h_wr2
+    call bl_sline
+    mov si, sb_s_h_wr3
+    call bl_sline
+
+    call OSAPI_FILE_HERE            ; SAY where this landed: the whole point is
+    mov al, bl                      ; that it is wherever you started sysbench
+    add al, 'A'
+    mov si, sb_l_wvol
+    call sb_wchar
+
+    call OSAPI_FILE_DFREE           ; DX:AX = free bytes; KB is all we need
+    mov cl, 10
+    call sb_shr32
+    mov [sb_wfree], ax
+    mov si, sb_l_wfree
+    call sb_num
+
+    mov ax, SB_WR_KB                ; the largest size that fits the VOLUME and
+.fit:                               ; the HEAP both
+    mov bx, ax
+    add bx, SB_WR_SLACK
+    cmp bx, [sb_wfree]
+    ja .smaller
+    push ax
+    call OSAPI_MEM_CLAIM
+    jc .nomem
+    pop ax
+    mov [sb_wkb], ax
+    mov [sb_wseg], dx
+    jmp short .have
+.nomem:
+    pop ax
+.smaller:
+    shr ax, 1
+    cmp ax, SB_WR_MIN
+    jae .fit
+    mov si, sb_s_wnone
+    call bl_sline
+    jmp .out
+.have:
+    mov si, sb_l_wkb
+    mov ax, [sb_wkb]
+    call sb_num
+
+    mov es, [sb_wseg]               ; something to write, one word per KB so a
+    mov cx, [sb_wkb]                ; future check can verify it the way
+    xor ax, ax                      ; sb_verify verifies a read
+.fill:
+    push cx
+    xor di, di                      ; ...a KB at a time with ES walking, because
+    mov cx, 512                     ; DI alone wraps at 64KB and this is 128
+    cld
+    rep stosw
+    mov dx, es
+    add dx, 64                      ; 1KB = 64 paragraphs
+    mov es, dx
+    pop cx
+    inc ax
+    loop .fill
+
+    call bl_head
+    mov word [bl_n], 1              ; --- the FIXED cost: one cluster
+    mov word [bl_body], sb_b_wrsml
+    mov si, sb_r_wsml
+    mov al, 1
+    call bl_run
+    cmp word [sb_werr], 0
+    je .ok1
+    mov si, sb_l_werr               ; write-protected, or full: say which and
+    mov ax, [sb_werr]               ; stop rather than time nine refusals
+    call sb_num
+    jmp .free
+.ok1:
+    call sb_ctr_bank                ; --- the LARGE create
+    mov word [bl_n], 1
+    mov word [bl_body], sb_b_wrbig
+    mov si, sb_r_wbig
+    mov al, 1
+    call bl_run
+    call sb_ctr_take
+    call sb_ctr_show
+    call sb_ctr_trace               ; ...and every call it made, in order
+
+    call sb_ctr_bank                ; --- the same name AGAIN, which also frees
+    mov word [bl_n], 1              ; the chain it replaces and flushes the FAT
+    mov word [bl_body], sb_b_wrbig  ; a second time (SPEC.md 18.4)
+    mov si, sb_r_wrep
+    mov al, 1
+    call bl_run
+    call sb_ctr_take
+    call sb_ctr_show
+
+    call sb_wr_del                  ; --- and the copy engine's shape
+    call sb_ctr_bank
+    mov word [bl_n], 1
+    mov word [bl_body], sb_b_wrapp
+    mov si, sb_r_wapp
+    mov al, 1
+    call bl_run
+    call sb_ctr_take
+    call sb_ctr_show
+    mov si, sb_l_wchunk
+    mov ax, SB_WR_CHUNK
+    call sb_num
+    cmp word [sb_werr], 0
+    je .free
+    mov si, sb_l_werr
+    mov ax, [sb_werr]
+    call sb_num
+.free:
+    call sb_wr_del                  ; the volume goes back the way it was
+    mov dx, [sb_wseg]
+    call OSAPI_MEM_FREE
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sb_wbytes - DX:CX = [sb_wkb] KB in bytes. Clobbers AX, CX, DX, flags.
+sb_wbytes:
+    mov ax, [sb_wkb]
+    mov dx, ax
+    mov cl, 10
+    shl ax, cl                      ; low word = KB << 10
+    mov cl, 6
+    shr dx, cl                      ; high word = KB >> 6, so 128KB fits
+    mov cx, ax
+    ret
+
+; sb_b_wrsml - one cluster, so the row is the COMMIT and nothing else
+sb_b_wrsml:
+    push es
+    mov es, [sb_wseg]
+    xor bx, bx
+    mov si, sb_f_wr
+    mov cx, 512
+    xor dx, dx
+    call OSAPI_FILE_WRITE
+    jc .err
+    mov word [sb_werr], 0
+    pop es
+    ret
+.err:
+    mov [sb_werr], ax
+    pop es
+    ret
+
+; sb_b_wrbig - [sb_wkb] KB in one call: a create, or a replace if it is there
+sb_b_wrbig:
+    push es
+    mov es, [sb_wseg]
+    xor bx, bx
+    call sb_wbytes
+    mov si, sb_f_wr
+    call OSAPI_FILE_WRITE
+    jc .err
+    mov word [sb_werr], 0
+    pop es
+    ret
+.err:
+    mov [sb_werr], ax
+    pop es
+    ret
+
+; sb_b_wrapp - the same bytes as SB_WR_CHUNK-KB pieces: create, then append
+sb_b_wrapp:
+    push es
+    mov es, [sb_wseg]
+    xor bx, bx
+    mov si, sb_f_wr
+    mov cx, SB_WR_CHUNK * 1024
+    xor dx, dx
+    call OSAPI_FILE_WRITE           ; the first chunk MAKES the file: append
+    jc .err                         ; needs one that already exists
+    mov ax, SB_WR_CHUNK
+    mov [sb_wdone], ax
+.more:
+    mov ax, [sb_wdone]
+    cmp ax, [sb_wkb]
+    jae .done
+    mov dx, [sb_wseg]               ; ...from where we got to in the buffer,
+    mov bx, ax                      ; by SEGMENT, so nothing wraps
+    mov cl, 6
+    shl bx, cl                      ; KB -> paragraphs
+    add dx, bx
+    mov es, dx
+    xor bx, bx
+    mov si, sb_f_wr
+    mov cx, SB_WR_CHUNK * 1024
+    call OSAPI_FILE_APPEND
+    jc .err
+    add word [sb_wdone], SB_WR_CHUNK
+    jmp short .more
+.done:
+    mov word [sb_werr], 0
+    pop es
+    ret
+.err:
+    mov [sb_werr], ax
+    pop es
+    ret
+
+; sb_wr_del - take the scratch file away. Preserves every register.
+sb_wr_del:
+    push ax
+    push si
+    mov si, sb_f_wr
+    call OSAPI_FILE_DELETE
+    pop si
+    pop ax
+    ret
+
+; sb_shr32 - DX:AX >>= CL, saturated into AX. Clobbers AX, DX, CL, flags.
+sb_shr32:
+.step:
+    shr dx, 1
+    rcr ax, 1
+    dec cl
+    jnz .step
+    or dx, dx
+    jz .fits
+    mov ax, 0xFFFF                  ; a volume too big for a word of KB says
+.fits:                              ; the largest word, rather than wrapping to
+    ret                             ; a small number that reads as plausible
+
+; sb_wchar - SI = label, AL = one character in the value column
+sb_wchar:
+    push ax
+    push di
+    call bl_lclr
+    xor di, di
+    call bl_lput
+    mov [bl_lscr + BL_C_N + 4], al
+    call bl_lcommit
+    pop di
     pop ax
     ret
 
@@ -2809,12 +3105,23 @@ sb_ctr_trace:
     add bx, bx
     add bx, bx
     add bx, [sb_tbase]
-    mov ax, [es:bx+2]               ; ...and the run it asked for
-    xor dx, dx
-    mov di, [sb_tcol]
-    add di, 6
-    mov cx, 2
-    call bl_dec
+    mov ax, [es:bx+2]               ; ...and the run it asked for, which is AL
+    mov dx, ax                      ; ALONE: SPEC.md 18.94.3 packs the volume
+    xor ah, ah                      ; into AH and the WRITE flag into its top
+    push dx                         ; bit, and this printed the whole word. A
+    xor dx, dx                      ; read on volume 0 is 0x0009 and looks
+    mov di, [sb_tcol]               ; right; a write on volume 1 is 0x8109 and
+    add di, 6                       ; renders as 33033 in a 2-wide field, which
+    mov cx, 2                       ; reads as a run of 33 on a 9-sector track.
+    call bl_dec                     ; Invisible until something traced a WRITE
+    pop dx
+    test dh, 0x80                   ; ...and MARK it, because a trace that
+    jz .rd                          ; cannot tell a read from a write cannot be
+    mov di, [sb_tcol]               ; read at all
+    add di, 8
+    add di, bl_lscr
+    mov byte [di], 'w'
+.rd:
     add word [sb_tcol], 10
     inc word [sb_tslot]
     mov ax, [sb_tslot]
@@ -3613,6 +3920,20 @@ sb_s_h_ctr2: db '   the 1-sector read is the same overhead with no data in it,',
 sb_s_h_ctr3: db '   and each REPEAT row prices SPEC.md 18.95 cache in int 13h:', 0
 sb_s_h_ctr4: db '   0 calls = the cache served it whole. The 16KB pair MATCH,', 0
 sb_s_h_ctr5: db '   or a stream was cached; the after-16KB row is 18.95.1.', 0
+sb_s_h_wr:   db '-- SPEC.md 18.4: what a LARGE WRITE costs, where you started --', 0
+sb_s_h_wr2:  db '   It writes to the CURRENT volume, so run it from A: for a', 0
+sb_s_h_wr3:  db '   floppy and from C: for a hard disk. Cleans up after itself.', 0
+sb_s_wnone:  db '   no room on the volume or in the heap: the write rows were skipped.', 0
+sb_r_wsml:   db 'WRITE, one cluster', 0
+sb_r_wbig:   db 'WRITE, create', 0
+sb_r_wrep:   db 'WRITE, replace', 0
+sb_r_wapp:   db 'WRITE, append in chunks', 0
+sb_l_wvol:   db '  volume it wrote to', 0
+sb_l_wfree:  db '  free on it, KB', 0
+sb_l_wkb:    db '  ...so the write is KB', 0
+sb_l_wchunk: db '  ...in chunks of KB', 0
+sb_l_werr:   db '  REFUSED, FERR_', 0
+sb_f_wr:     db 'SBWRITE.TMP', 0
 sb_s_h_rah:  db '-- SPEC.md 18.95.4: how many chunks does the sector cache hold --', 0
 sb_s_h_rah2: db '   W chunks written, then re-read. Round-robin plus the same', 0
 sb_s_h_rah3: db '   order is Belady worst case, so this is a CLIFF, not a slope.', 0
@@ -3683,7 +4004,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 184
+SB_O_SYSKB equ 194
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -3768,6 +4089,11 @@ sb_rstr     equ os88_image_end + 176   ; word: ...and the stride it implies
 sb_rw       equ os88_image_end + 178   ; word: the working set being tried
 sb_rlast    equ os88_image_end + 180   ; word: the widest that stayed free
 sb_rfirst   equ os88_image_end + 182   ; word: ...and the first that missed
+sb_wseg     equ os88_image_end + 184   ; word: the write buffer's claim
+sb_wkb      equ os88_image_end + 186   ; word: ...and the KB it actually got
+sb_werr     equ os88_image_end + 188   ; word: the FERR_* a write refused with
+sb_wfree    equ os88_image_end + 190   ; word: KB free on the volume before
+sb_wdone    equ os88_image_end + 192   ; word: KB appended so far
 sb_syskb    equ os88_image_end + SB_O_SYSKB    ; SYSKB_SIZE bytes
 sb_res      equ os88_image_end + SB_O_RES      ; SB_NCPU dwords
 sb_rrow     equ os88_image_end + SB_O_RROW     ; SB_BWROWS words
