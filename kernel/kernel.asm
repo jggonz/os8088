@@ -170,11 +170,47 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 100352          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE SEVENTEENTH MOVE, 98,304 -> 100,352,
+                                ; ASKED FOR AND GRANTED, and the first since
+                                ; the fourteenth to move BOTH guards: 2KB here
+                                ; and 2KB on kern_small, which is deliberate
+                                ; and is the whole argument for the raise. What
+                                ; it buys is WINDOW DRAWING OPTIMIZATIONS -
+                                ; SPEC.md 5.8's partial restore, 11.96.6's
+                                ; cache restoring only what the pass painted,
+                                ; 11.96.8's bounded edge merge, 11.90.1's
+                                ; opt-out fill and 11.90.2's damage rect - and
+                                ; those are not a feature a big machine enjoys
+                                ; and a small one does without. They are what
+                                ; makes the OS FEEL SNAPPY, and the machine
+                                ; that feels a 49 ms restore becoming 23 is the
+                                ; 4.77MHz one at the RAM floor. So kern_small
+                                ; cannot be the build that goes without them,
+                                ; and this is the direction the fifteenth
+                                ; move's drift does not apply in.
+                                ;
+                                ; WHAT SPENT THE PRIOR STEP is the same work,
+                                ; and it is worth naming because the guard had
+                                ; fallen to ONE step against a standard of
+                                ; four: 11.96.9's fix - a partial draw may not
+                                ; re-bank, the field bug 11.96.6 introduced -
+                                ; crossed the rung the image had 15 bytes left
+                                ; of, so the next .text byte anywhere paid 512
+                                ; whatever it was for. Granted at 2KB on the
+                                ; thirteenth move's terms (headroom, half a
+                                ; step) with the round's biggest item still to
+                                ; come: a raise restoring only what was
+                                ; COVERED (docs/HANDOFF-REDRAW.md item A),
+                                ; which is a wm_raise change and not a new
+                                ; mechanism, and which turns Paint's 8.7 s
+                                ; canvas into ~0.9 s on the case the reporter
+                                ; described.
                                 ;
                                 ; THE SIXTEENTH MOVE, 96,256 -> 98,304, ASKED
                                 ; FOR AND GRANTED, and the second that is
@@ -222,10 +258,26 @@ KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; the two by 2KB, which is the direction it
                                 ; should drift from here.
 %else
-KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 96256           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
-                                ; It has moved fourteen times, every raise asked
+                                ;
+                                ; THE SEVENTEENTH MOVE, 94,208 -> 96,256, is
+                                ; the first this figure has taken since the two
+                                ; guards were split - the fifteenth and
+                                ; sixteenth were kern_big's alone - and the
+                                ; reason it moves here is stated at kern_big's
+                                ; copy above: what the 2KB buys is WINDOW
+                                ; DRAWING OPTIMIZATIONS, and the machine that
+                                ; feels those most is this one. A 128KB machine
+                                ; is a 4.77MHz machine, where a window restore
+                                ; going 49 ms to 23 and a white flash
+                                ; disappearing are the difference between an OS
+                                ; that feels snappy and one that does not. The
+                                ; fifth move's rule still binds it: headroom
+                                ; for ordinary growth, not an invitation.
+                                ;
+                                ; It had moved fourteen times before that, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
                                 ; SPEC.md 41 store and the two API surfaces
                                 ; that came with it (wm_geom, wm_about_set);
@@ -531,7 +583,7 @@ KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
                                 ; machine can still install, just slowly.
 %endif                          ; KERN_BIG
 
-KERN_SMALL_BUDGET equ 94208     ; ...and kern_small's, named separately so it
+KERN_SMALL_BUDGET equ 96256     ; ...and kern_small's, named separately so it
                                 ; can be REPORTED on a big build rather than
                                 ; only enforced on a small one. tools/
                                 ; kernsplit.py reads both out of the map and
@@ -547,6 +599,14 @@ KERN_SMALL_BUDGET equ 94208     ; ...and kern_small's, named separately so it
                                 ; written for, and nothing may be added to
                                 ; kern_small without the conversation every
                                 ; budget move so far has had.
+                                ;
+                                ; It moved at the seventeenth, 94,208 ->
+                                ; 96,256, for the window drawing
+                                ; optimisations - the argument is at
+                                ; KERN_BUDGET above, and the short form is that
+                                ; a redraw optimisation is worth most on the
+                                ; slowest machine, so this is not a figure that
+                                ; work may be kept out of.
 
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
@@ -1371,7 +1431,24 @@ osapi_table:
                                   ;         what lets a system file too big for
                                   ;         the caller's buffer be finished at
                                   ;         all (SPEC.md 18.4.4)
-osapi_table_end:                  ; 0x03A8
+    OSAPI_SLOT wm_ownbg           ; 0x03A8 - BX = window, AL = 0 clear / non-0
+                                  ;          set. "I paint every pixel of my
+                                  ;          content myself", which skips
+                                  ;          wm_draw_win's white fill for it
+                                  ;          (SPEC.md 11.90.1). A window that
+                                  ;          sets it and leaves a pixel unwritten
+                                  ;          shows whatever was there before -
+                                  ;          after a move, another window's
+    OSAPI_SLOT wm_damage          ; 0x03B0 - BX = your window, inside your own
+                                  ;          W_PAINT. CF=1 = draw the whole
+                                  ;          content (AX/BX/CX/DX = it); CF=0 =
+                                  ;          draw AX/BX/CX/DX only, absolute and
+                                  ;          inclusive, possibly EMPTY meaning
+                                  ;          draw nothing (SPEC.md 11.90.2).
+                                  ;          Answers "whole" unless WF_OWNBG is
+                                  ;          set, because without it the kernel
+                                  ;          has already whitened the content
+osapi_table_end:                  ; 0x03B8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1379,8 +1456,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 115 * 8
-%error "os8088 API jump table must be exactly 115 8-byte slots"
+%if OSAPI_TABLE_LEN != 117 * 8
+%error "os8088 API jump table must be exactly 117 8-byte slots"
 %endif
 
 ; =============================================================================
