@@ -11626,6 +11626,91 @@ It is `toast_show` and not §59.4's `toast_now`: the format has already
 happened, so there is nothing for the message to arrive *behind*, and the
 idle pass is where a staged toast belongs.
 
+### 22.13 A command that changes nothing draws nothing
+
+`fm_docmd` runs one `FMC_*` against the acting window and then repaints it,
+because the kernel does not repaint after an `AM_ONCMD` returns (§12.2) and a
+popup's command has no repaint of its own either. That is right for the
+commands that change the window and wrong for the five that do not.
+**`Timer`, `Bounce` and `Disk` launch a different application; `New Window`
+and `Open in New Window` open a different Disk window.** Every one of them
+only *posts* the work for the UI task to do once the lock drops (§29.4), and
+not one of them puts a pixel in the window whose menu bar was used — they
+were costing a white fill of the whole content and some forty `font_str`s
+all the same. §11.96 prices that class of repaint at **~1,026 ms on a
+4.77MHz 8088**, so opening a program from a Disk window's own bar spent
+about a second redrawing a listing that had not changed, and then drew the
+new window over the top of it. It is what a covered file manager looks like
+redrawing itself for no reason, and the Builtins menu is on a Disk window's
+bar (§12.3.1) precisely so that this is the ordinary way to launch things.
+
+**`[fm_cmdline]` could not say so.** It was two-valued — 0 "the whole
+window", 1 "the status line only" — and had no third value for *nothing*.
+That is §48.22.1 arriving from the other side: a field that already means one
+thing cannot be made to answer a second question, and the honest fix is a
+value of its own rather than a lie in an existing one. It is `[fm_cmdchg]`
+now, carrying `FMD_ALL` / `FMD_LINE` / `FMD_NONE`, and the name says what it
+holds rather than what one of its values means.
+
+**The default stays the safe one.** `fm_docmd` stamps `FMD_ALL` before the
+call, so a body that says nothing — including one somebody adds later — is
+repainted whole, and the cost of forgetting is a wasted repaint rather than a
+window that does not come back. §11.96.2's rule: the value a forgotten path
+inherits has to be the safe one.
+
+Two invariants make skipping legal, and both belong to somebody else.
+**The popup is already off the screen**: `menu_drop` restores its own rect —
+out of the save-under, or with `wm_paint_dmg` when that claim was refused
+(§50.2) — and returns the chosen item *before* the command runs, so nothing
+owes the menu's pixels to this repaint. And **the status line's verdicts
+stopped living in the window** (§59.5): `fm_stat_clear` and its
+`FS_FERR`/`FS_LDST` are gone, so there is no clear-at-entry left for a
+skipped repaint to strand on screen.
+
+**`File > Open` gained the judgement the double-click has always made.** A
+folder re-lists the window through `fm_go`, which is `FMD_ALL`; a package
+goes to the loader, and the only thing that changes on screen is
+`Loading...` in the status line, which is `FMD_LINE` — the same
+`[ld_pending]` test `fm_onclick` makes on a double-click (§22.2), written
+once in each place because the two reach `fm_open_sel` by different routes.
+With nothing selected it is `FMD_NONE`, and so are `Rename` and `Delete`
+with nothing selected, `Open in New Window` on anything that is not a
+folder, and `New Window` at `FM_MAXWIN` — where the beep is the whole of
+what happens.
+
+Counted under MartyPC — a cycle-accurate 8088, not the field machine — with
+a counter at `fm_repaint` and a Disk window open on B:. `Builtins > Timer`
+**1 → 0**, `Builtins > Bounce` **1 → 0**, `Folder > New Window` **1 → 0**,
+`View > Icons` 1 → 1 and `View > List` 1 → 1, because the view really did
+change. The millisecond figure above is §11.96's own measurement of that
+class of repaint and is not a second reading of this one.
+
+Verified the way §12.9 verifies a redraw change — the same scripted session
+driven through this kernel and through one built `REDRAWFULL=1`, where
+`fm_docmd` repaints the whole window after **every** command, framebuffers
+compared step by step: **0 differing pixels** over sixteen steps, on VGA
+mode 12h, on CGA and on Hercules. Two cautions for whoever repeats it, both
+of which cost a run: **do not put an animating window in the session** — a
+Timer's own digits and a Fractal's render differ between two passes and read
+as a redraw defect (use `Builtins > Disk`, which exercises the same
+`FMD_NONE` path and stands still) — and **rebuild the reference** after any
+change to a path the session touches, or the diff is against yesterday's
+kernel.
+
+**And that A/B found a defect older than the change it was checking.** One
+step differed, by 28 pixels in the window's bottom-right corner:
+`fm_status_only` fills the status band out to `[fm_rgt]`, which is the full
+content width, and the **grow box lives in those rows** — so the cheap path
+was erasing part of it and never putting it back, where `fm_repaint` has
+always ended in `wm_grow_paint` for exactly that reason. It has nothing to do
+with commands: any status-line-only draw did it — a New Folder prompt, a
+Rename, `Loading...` — and it survived until the next full repaint, which is
+why it read as a cosmetic oddity rather than a bug with a cause. The one call
+is the fix. It is worth recording as the *reason* for the reference build
+rather than as a footnote to it: a full-repaint reference does not check the
+optimisation being made, it checks **every** cheap path the session touches,
+and this one had been cheap and slightly wrong since §22.9.
+
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
 The clipboard is **(drive, folder, name, type)** and deliberately not an

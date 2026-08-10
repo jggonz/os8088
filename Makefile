@@ -144,10 +144,11 @@ else
 VIDDEF += -DKERN_BIG
 endif
 
-# REDRAWFULL=1 puts the menu bar and the dock back on their pre-SPEC.md
-# 12.9/30.3 paths: every bar redraw is a full one (fill, logo, name, every
-# title and the clock), every changed dock tile is erased and rebuilt, and
-# every damage to the strip is the whole strip. It exists to be DIFFED
+# REDRAWFULL=1 puts the menu bar, the dock and the Disk window's command
+# path back on their pre-SPEC.md 12.9/30.3/22.13 paths: every bar redraw is a
+# full one (fill, logo, name, every title and the clock), every changed dock
+# tile is erased and rebuilt, every damage to the strip is the whole strip,
+# and every fm_docmd ends in a whole-window fm_repaint. It exists to be DIFFED
 # against - the incremental paths must be byte-identical to it, and "the
 # picture is the same, only the number of times it was drawn changed" is the
 # whole claim they make, which a screenshot of one build alone cannot check.
