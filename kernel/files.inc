@@ -1151,6 +1151,10 @@ fm_s_delq:    db '? Enter=yes Esc=no', 0
 fm_s_fmtpr:   db 'Format ', 0       ; 'Format A: as 360K? Enter=yes Esc=no',
 fm_s_fmtas:   db ': as ', 0         ; which is 35 characters at its longest
 fm_s_fmtq:    db 'K? Enter=yes Esc=no', 0    ; and so inside FM_HDRMAX
+fm_s_fmtok:   db 'Formatted ', 0    ; ...and the verdict, SPEC.md 59.6's own
+                                    ; reasoning: a format is seconds of floppy
+                                    ; the user waited for, so success speaks
+                                    ; rather than only failure
 %endif
 fm_s_delq2:   db ' +contents? Enter=yes Esc=no', 0   ; ...for a folder
 fm_s_size:    db 'Size ', 0         ; ...and the resting status line, which
@@ -3505,6 +3509,38 @@ fm_edit_commit:
     xor si, si                  ; ...and the caption follows it: 'Disk' is
     call fm_settitle            ; the one name fm_settitle can always derive
     pop si
+
+    ; 'Formatted B:' in the menu bar (SPEC.md 22.12.1). SPEC.md 59.6's
+    ; reasoning where it is strongest: a format is seconds of floppy the user
+    ; waited for, so the success is worth saying and not only the failure -
+    ; and the window behind it is no substitute, because 'Drive B: 0 files'
+    ; is a fact about the volume rather than a report of what just happened.
+    ;
+    ; INLINE, and only because it has one call site: fm_edit_commit has
+    ; already saved AX, SI and DI, so a proc here would spend ten bytes of
+    ; `.cold` re-saving them - and the cold rung had 51 bytes in it.
+    ;
+    ; It is said AFTER fmv_load, not before: a mount can arm SPEC.md 12.8's
+    ; file-activity widget, which owns these pixels and which toast_show
+    ; refuses while it is up - 59.6's own ordering.
+    mov al, [di+FS_DRV]
+    add al, 'A'
+    mov ah, al                  ; banked: fm_scat spends AL and not AH
+    mov di, fm_hdrbuf           ; borrowed - toast_show COPIES into toast_buf,
+    mov si, fm_s_fmtok          ; and the painter stages this afresh later
+    call fm_scat
+    mov [di], ah
+    mov byte [di+1], ':'
+    mov byte [di+2], 0
+    push cx
+    push es
+    mov ax, KERNEL_SEG          ; NOT `push cs`: this is `.cold` (SPEC.md
+    mov es, ax                  ; 2.6), so CS here is COLD_SEG, and both
+    mov si, fm_hdrbuf           ; fm_hdrbuf and the string are KERNEL_SEG
+    xor cx, cx                  ; TOAST_TICKS, the default life
+    call KERNEL_SEG:cw_toast_show
+    pop es
+    pop cx
     jmp short .bcast
 %endif
 .del:

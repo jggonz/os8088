@@ -11547,6 +11547,40 @@ find 720KB media, which is bounded and once per format. And **the separator is a
 on it but a body may not assume which surface picked it (§22's rule for every
 handler in that table).
 
+#### 22.12.1 …and it says so when it worked
+
+`Formatted B:` in the menu bar for three seconds (§59), on success only. This
+is §59.6's reasoning applied where it is strongest: a format is **seconds of
+floppy the user waited for**, so the success is worth saying and not only the
+failure — and unlike the Control Panel's save, which had no channel at all
+until §59.6 gave it one, this one had a window sitting right behind it and
+still needed the toast.
+
+**The window is not the report.** After a format the Disk window reads
+`Drive B: 0 files · Size 0K · Free 354K`, and every word of that is a fact
+about the volume rather than an account of what just happened: it reads
+exactly the same whether this format ran a moment ago or the disk was always
+empty and fine. §59.5's distinction, from the other end — a status line says
+what is *true*, a toast says what *happened*.
+
+Three things are load-bearing, and each is somebody else's rule first:
+
+- **It is said AFTER `fmv_load`, not before.** A mount can arm §12.8's
+  file-activity widget, which owns those pixels and which `toast_show`
+  refuses while it is up — §59.6's own ordering, where the Control Panel's
+  save has to speak after `drv_cfg_save` rather than before it.
+- **ES is loaded explicitly**, because `toast_show` reads its string through
+  `ES:SI` and `files.inc` is `.cold` (§2.6): CS there is `COLD_SEG`, so the
+  `push cs` / `pop es` that would be right inside the kernel's own segment
+  points at the wrong one, and `fm_hdrbuf` is `.bss` in `KERNEL_SEG`.
+- **`fm_hdrbuf` is safe to borrow** because `toast_show` copies into
+  `toast_buf`. The painter that owns that buffer runs after this, from
+  `fm_docmd`'s repaint, and stages it afresh.
+
+It is `toast_show` and not §59.4's `toast_now`: the format has already
+happened, so there is nothing for the message to arrive *behind*, and the
+idle pass is where a staged toast belongs.
+
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
 The clipboard is **(drive, folder, name, type)** and deliberately not an

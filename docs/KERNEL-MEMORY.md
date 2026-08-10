@@ -363,7 +363,7 @@ Three things about it:
     "bss": 4743,
     "budget": 96256,
     "codemax": 65536,
-    "cold": 22477,
+    "cold": 22528,
     "coldpara": 1408,
     "fatpara": 288,
     "imgpara": 3712,
@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54222
+    "text": 54237
   },
   "small": {
     "bss": 4662,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52841
+    "text": 52845
   }
 }
 ```
@@ -428,12 +428,18 @@ formatter, small by spending nothing at all since its own budget was set — so
 the next feature of any size has to ask, on either build.
 
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
-are the only slack anywhere in the ladder: **427 bytes on the image, 51 on
+are the only slack anywhere in the ladder: **412 bytes on the image, ZERO on
 the cold segment, 430 on `.lowbss`**. They are rounding artefacts, not
 reservations — and per the accounting section above they are also the whole
-of what the next feature can spend without moving the machine's RAM. The
-**cold segment has 51 bytes** in it, which is the one to watch: anything added
-there at all takes a whole step, and the footprint has only one left.
+of what the next feature can spend without moving the machine's RAM.
+
+**The cold segment has nothing left at all**, and that is the number to quote.
+SPEC.md §22.12.1's toast took the last 51 bytes of it exactly — which is why
+that toast is inlined at its one call site rather than being the proc it wants
+to be, a ten-byte saving that was the difference between costing the machine
+nothing and costing it a whole 512-byte step. The footprint has **one step**
+behind that, so the next byte of cold code takes the kernel to its budget and
+the one after that needs the guard raised.
 
 The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0EE0,
 `FAT_SEG` 0x1460, `LOW_SEG` 0x1580, `HEAP_SEG` 0x17C0. `tools/kernsize.py`
@@ -874,20 +880,20 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,460 | 37.1% |
+| the file system, end to end | 28,522 | 37.2% |
 | the window system and its furniture | 15,872 | 20.7% |
 | drawing: adapters, primitives, glyphs, icons | 10,887 | 14.2% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,801 | 12.8% |
-| the kernel proper: API table, heap, scheduler, events | 5,877 | 7.7% |
+| the kernel proper: API table, heap, scheduler, events | 5,881 | 7.7% |
 | the Control Panel | 4,426 | 5.8% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **76,699** | |
+| **total** | **76,765** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 905 | 7,142 | **8,047** | 336 | — |
+| `files.inc` — the Disk window (§22) | 916 | 7,193 | **8,109** | 336 | — |
 | `wm.inc` — the window manager (§11) | 5,551 | — | **5,551** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
@@ -922,8 +928,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,685 | — | **2,685** | — | — |
-| **total** | **54,222** | **22,477** | **76,699** | **4,743** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,689 | — | **2,689** | — | — |
+| **total** | **54,237** | **22,528** | **76,765** | **4,743** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
