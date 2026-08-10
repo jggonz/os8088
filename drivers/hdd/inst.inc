@@ -61,6 +61,19 @@ HIW_ROWH     equ 12
 HIW_BY       equ 96
 HIW_BH       equ 16
 HIW_CAPY     equ 120
+; HDBSTEP - tag which step of hd_icopy_one is running (SPEC.md 52.10.9).
+; DEFINED IN BOTH BUILDS and empty in the shipped one, because the uses are
+; in ordinary code: a macro that exists only under a knob makes every build
+; without that knob fail to assemble, which is exactly what it did.
+%ifdef INSTBENCH
+  %macro HDBSTEP 1
+    mov byte [hd_bfstep], %1
+  %endmacro
+%else
+  %macro HDBSTEP 1
+  %endmacro
+%endif
+
 HIW_B0X      equ 8              ; 'Install', or 'Copy Apps' in the second
 HIW_B1X      equ 104            ; stage (SPEC.md 52.10.10) - which is nine
 HIW_B2X      equ 168            ; characters, 72px, and so exactly as wide as
@@ -749,9 +762,6 @@ hd_iw_rowtext:
     ret
 
 %ifdef INSTBENCH
-%macro HDBSTEP 1
-    mov byte [hd_bfstep], %1
-%endmacro
 ; =============================================================================
 ; SPEC.md 52.10.9 - what an install COSTS, per phase, in the only two units
 ; that survive an emulator: int 13h and sectors
