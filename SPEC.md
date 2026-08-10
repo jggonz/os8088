@@ -1577,11 +1577,13 @@ build, `.text` gets *smaller*. Measured, against the same tree:
 | `kernel.bin` | 82,534 | 83,336 (162 → **163 sectors**) |
 
 Every face costs exactly the same, because the table is 760 bytes whatever is
-in it, and the **delta has held while the tree grew around it**: those figures
-were taken against a 82,534-byte kernel and `FONT=tallx` measures
-86,118 → 86,920 today, the same **+802** — the 760-byte table plus the
-overlay's init, less the 78 bytes of ROM probe a baked build does not
-assemble.
+in it, and the **delta has held while the kernel moved under it in both
+directions**: those figures were taken against an 82,534-byte kernel, and
+`FONT=tallx` measures 84,582 → 85,384 today — the same **+802**, which is the
+760-byte table plus the overlay's init, less the 78 bytes of ROM probe a baked
+build does not assemble. (It read 86,118 → 86,920 on the branch this face
+arrived on, before §32's double-buffering removal landed; the absolute numbers
+are worth re-measuring rather than quoting, the delta is not.)
 
 So the whole cost is **one floppy sector**, ~65 ms of a ~10 s boot on the
 5150 (PERFORMANCE.md Part 2). The one number worth watching is the overlay's
