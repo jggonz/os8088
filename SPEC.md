@@ -1458,9 +1458,9 @@ and the Timer (§14.1).
 rather than whatever the machine's ROM holds. **It is off by default and the
 shipped images do not use it**: the ROM probe above is still what a plain
 `make` assembles, so this changes no released byte until somebody asks for it.
-`fonts/` holds four faces — `os8088`, `smallcap`, `stencil` and `thin` — and
-§6.2.1 is how a build target exists for each of them without anybody
-maintaining a list.
+`fonts/` holds five faces — `os8088`, `smallcap`, `stencil`, `tallx` and
+`thin` — and §6.2.1 is how a build target exists for each of them without
+anybody maintaining a list.
 
 **What the probe actually depends on.** On a VGA or EGA machine int 10h
 AH=11h answers and the typeface is that *card's*. On everything else — which
@@ -1537,10 +1537,47 @@ one-pixel vertical stroke reads far thinner than a one-pixel horizontal one
 and a light face is a spindly face there. The marks with only one sensible
 8x8 solution — space, `-`, `|`, `.`, `_` — are the same as everyone's.
 
-**The other three are variations on it, and each was drawn against a rule the
-grid imposes.** `thin` is the house skeleton with every 2px stem eroded to
-1px — the light weight the paragraph above says will be spindly on a CGA,
-which is now a thing that can be looked at rather than argued about.
+**`fonts/tallx.f8` is the Mac-like one, and what it takes is the PROPORTIONS
+rather than the outlines** — which is what it is named for. This OS is
+modelled on the Macintosh and its typeface was not, so the face is worth
+having; but the thing that makes a line of System 1 read as a Macintosh at a
+glance is not any individual letter, it is that the lowercase is enormous
+relative to the capitals. So `tallx` gives the capital **6 rows** where the
+ROM font and the house face both give it 7, keeps the x-height at 5, and puts
+the ascenders one row **above** the caps — `d` is taller than `D`, which is
+the original's arrangement and neither of the other faces'. Menu bars, window
+titles and file names are mostly lowercase, so that ratio is what the eye
+actually reads. The rest follows the house face's reasoning unchanged: 2px
+stems for CGA's 640x200, flat terminals, six columns for the round capitals.
+The dots on `i`, `j` and the punctuation are square, because the original's
+are and because a 2x2 block is the smallest mark that survives the mono
+reduction.
+
+**It is not a copy and could not be one**, which is worth stating rather than
+implying: the Macintosh face is a **proportional** 12pt bitmap and this is a
+fixed 8x8 cell, so there is no glyph either could lend the other — every
+letter here is redrawn to the same six-column skeleton the house face uses.
+Two places it parts company with the original on purpose, and both are a file
+manager's problem rather than a typographer's. The capital `I` keeps its
+serifs: a plain stem is what the Mac draws, and a plain stem at 8x8 is
+pixel-identical to `l`, which is a coin toss in the middle of a file name.
+And the digit zero is **five columns against the capital `O`'s six** — the
+narrow-figure convention doing the work a slash usually does — which is why
+every *other* digit is five columns too, since a figure that is the odd one
+out in a column of numbers is worse than the ambiguity it fixes.
+
+It is also the **cheapest face in the directory**, which is the one property
+here that is measured rather than looked at: **31%** of its glyph rows are
+blank, against 26% for the house face, `thin` and `stencil`, 28% for
+`smallcap` and the ROM's 25%. A blank row is the one the renderer skips
+whole (§6.1), so the row the capitals gave back is returned again at every
+cell drawn.
+
+**The other three are variations on the house face, and each was drawn
+against a rule the grid imposes.** `thin` is the house skeleton with every
+2px stem eroded to 1px — the light weight the paragraph above says will be
+spindly on a CGA, which is now a thing that can be looked at rather than
+argued about.
 `smallcap` replaces `a`..`z` with 5-row capitals on the x-height, same
 strokes and widths as the caps, so a line of text has one colour. `stencil`
 is the one with a rule worth writing down.

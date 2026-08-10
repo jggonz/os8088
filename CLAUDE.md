@@ -646,10 +646,14 @@ make fontsheet-thin    # proof sheets, VGA pixels and the CGA's 2.4:1
 make FONT=os8088       # the raw knob: bake it into build/ - no int 10h, no F000:FA6E
 ```
 
-**`fonts/` holds four faces and the target list is the DIRECTORY, not a list
+**`fonts/` holds five faces and the target list is the DIRECTORY, not a list
 anybody maintains** (SPEC.md §6.2.1): `os8088` (the house face), `thin`,
-`smallcap` and `stencil`. Drop a `.f8` in and `make font-<name>` exists on the
-next run. **Prefer `make font-<name>` over `make FONT=<name>`** — the knob
+`smallcap`, `stencil` and `tallx` — the Mac-like one, named for the thing it
+takes: the System 1 face's PROPORTIONS rather than its outlines (a 6-row
+capital against a 5-row x-height, ascenders a row above the caps), because a
+fixed 8x8 mono cell can borrow nothing else from a proportional 12pt bitmap.
+Drop a `.f8` in and `make font-<name>` exists on the next run.
+**Prefer `make font-<name>` over `make FONT=<name>`** — the knob
 lands its kernel in `build/` on top of the shipped one, which is the mistake
 the `cgak` note is about, while the target builds in `build/fontk-<name>/` and
 names its disks for the face. Neither is in `all`; `FONT=` is passed to a
