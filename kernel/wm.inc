@@ -176,54 +176,123 @@ wm_init:
 ; out:      W_X/W_Y/W_W/W_H clamped
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
+; THE BOX A FRAME MUST FIT IN is AX/CX = x0 and xe, SI/DI = y0 and ye, and it
+; is a DISPLAY's rather than the desktop's (SPEC.md 39.16.1). Against a union
+; the old bounds were the wrong shape twice: they would allow a window in the
+; dead zone, and they would apply the PRIMARY's dock row to a display that has
+; no dock. Four registers rather than four variables because that is all it
+; is - and on a machine with one display wm_fit_box does not exist and the
+; three loads below are the numbers this routine always used.
 wm_fit:
     push ax
-    mov ax, [vid_w]             ; w = min(w, screen width)
-    cmp [bx+W_W], ax
+    push cx
+    push si
+    push di
+    xor ax, ax                  ; x0
+    mov cx, [vid_pw]            ; xe
+    mov si, MBAR_H              ; y0
+    mov di, [vid_dock_y0]       ; ye
+%ifdef KERN_BIG
+    call wm_fit_box             ; ...unless the window is on another display
+%endif
+    push cx                     ; w = min(w, xe - x0)
+    sub cx, ax
+    cmp [bx+W_W], cx
     jle .wok
-    mov [bx+W_W], ax
+    mov [bx+W_W], cx
 .wok:
-    mov ax, [vid_dock_y0]       ; h = min(h, desktop height) - and ONE PIXEL
-    sub ax, MBAR_H + 1          ; SHORT of the dock, because the drop shadow
-                                ; lives on row y+h and wm_dock_clear tests
-                                ; y+h with `jae`. Clamping to exactly the
-                                ; band handed out a window flush against the
-                                ; strip, which then made every window opened
-                                ; over it pay a dock-under repaint (SPEC.md
-                                ; 11.90). This is the one place that decides
-                                ; it for every fixed-size package at once
-    cmp [bx+W_H], ax
+    pop cx
+    push di                     ; h = min(h, ye - y0) - and ONE PIXEL SHORT,
+    sub di, si                  ; because the drop shadow lives on row y+h and
+    dec di                      ; wm_dock_clear tests y+h with `jae`. Clamping
+                                ; to exactly the band handed out a window flush
+                                ; against the strip, which then made every
+                                ; window opened over it pay a dock-under
+                                ; repaint (SPEC.md 11.90). This is the one
+                                ; place that decides it for every fixed-size
+                                ; package at once
+    cmp [bx+W_H], di
     jle .hok
-    mov [bx+W_H], ax
+    mov [bx+W_H], di
 .hok:
-    mov ax, [vid_w]             ; x = min(x, screen width - w), floor 0
-    sub ax, [bx+W_W]
-    cmp [bx+W_X], ax
+    pop di
+    push cx                     ; x = min(x, xe - w), floor x0
+    sub cx, [bx+W_W]
+    cmp [bx+W_X], cx
     jle .xok
-    mov [bx+W_X], ax
+    mov [bx+W_X], cx
 .xok:
-    cmp word [bx+W_X], 0
+    pop cx
+    cmp [bx+W_X], ax
     jge .xfl
-    mov word [bx+W_X], 0
+    mov [bx+W_X], ax
 .xfl:
     call wm_snap_win            ; ...and back onto a multiple of 8 if this
                                 ; window asked for it (SPEC.md 11.94). After
                                 ; both clamps, never before: it moves left,
                                 ; which only stays legal once the right edge
                                 ; has been dealt with
-    mov ax, [vid_dock_y0]       ; y = min(y, dock top - h - 1), floor MBAR_H
-    sub ax, [bx+W_H]            ; - the same pixel, for the same reason
-    dec ax
-    cmp [bx+W_Y], ax
+    push di                     ; y = min(y, ye - h - 1), floor y0 - the same
+    sub di, [bx+W_H]            ; pixel, for the same reason
+    dec di
+    cmp [bx+W_Y], di
     jle .yok
-    mov [bx+W_Y], ax
+    mov [bx+W_Y], di
 .yok:
-    cmp word [bx+W_Y], MBAR_H
+    pop di
+    cmp [bx+W_Y], si
     jge .out
-    mov word [bx+W_Y], MBAR_H
+    mov [bx+W_Y], si
 .out:
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; wm_fit_box - the box for the display this window's ORIGIN is on
+;              (SPEC.md 39.16.1)
+; in:       BX = the window; AX/CX/SI/DI = the primary's box
+; out:      the same four, for that display
+; clobbers: AX, CX, SI, DI, flags
+;
+; The ORIGIN and not the centre, deliberately: wm_disp_of's centre test is for
+; deciding which monitor an app OWNS (docs/DUAL-DISPLAY-PLAN.md 6.5.1), and
+; this is deciding which edges a frame may not pass - which is a question
+; about the corner the clamps are written from. A window whose origin is in
+; the dead zone gets the primary, the only answer that cannot leave it
+; unreachable.
+; -----------------------------------------------------------------------------
+wm_fit_box:
+    cmp byte [vid_ndisp], 1
+    jbe .out
+    push bx
+    push dx
+    mov ax, [bx+W_X]
+    mov bx, [bx+W_Y]
+    call vid_disp_of            ; AL = the display holding the origin
+    mov dl, al
+    call vid_ctx_ptr            ; DI = its record
+    mov ax, [di+VID_CTX_VX]
+    mov cx, ax
+    add cx, [di+VID_CTX_CW]
+    mov si, [di+VID_CTX_VY]
+    add si, [di+VID_CTX_CH]     ; ...ye first, while DI is still the record
+    push si
+    mov si, [di+VID_CTX_VY]
+    pop di                      ; DI = ye, SI = y0
+    or dl, dl
+    jnz .done                   ; a secondary has no menu bar and no dock, so
+    mov si, MBAR_H              ; its whole height is desktop
+    mov di, [vid_dock_y0]
+.done:
+    pop dx
+    pop bx
+.out:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; wm_refit - clamp EVERY live window back onto the screen (SPEC.md 39.11.2)
@@ -706,7 +775,7 @@ wm_zoom:
     push dx
     push si
     xor ax, ax                  ; the standard state: x = the left edge...
-    mov cx, [vid_w]             ; ...and w = the whole live screen (SPEC 39.2)
+    mov cx, [vid_pw]             ; ...and w = the whole live screen (SPEC 39.2)
     call wm_snap_want
     jnc .nosnap
     mov ax, 7                   ; WF_SNAP: the leftmost frame x whose CONTENT
@@ -771,7 +840,7 @@ wm_zoom:
     je .out                     ; partial restore, and it travels
 .rgo:
     push dx                     ; x is replayed and then CLAMPED, because on
-    mov dx, [vid_w]             ; that partial path the size is not the one it
+    mov dx, [vid_pw]             ; that partial path the size is not the one it
     sub dx, cx                  ; was banked with - a negotiator refusing to
     jns .rx                     ; shrink hands back the STANDARD width, and
     xor dx, dx                  ; the banked x plus that runs off the right
@@ -878,8 +947,8 @@ wm_destroy:
     jz .bank
     xor ax, ax                  ; fullscreen: the whole screen was its rect
     xor bx, bx
-    mov cx, [vid_wm1]
-    mov dx, [vid_hm1]
+    mov cx, [vid_pwm1]
+    mov dx, [vid_phm1]
 .bank:
     mov [wm_hide_r], ax
     mov [wm_hide_r+2], bx
@@ -1238,8 +1307,8 @@ wm_hide:
     jz .drop
     xor ax, ax                  ; ...so that is the damage, whatever wm_fs_drop
     xor bx, bx                  ; is about to put back in the record
-    mov cx, [vid_wm1]
-    mov dx, [vid_hm1]
+    mov cx, [vid_pwm1]
+    mov dx, [vid_phm1]
 .drop:
     mov [wm_hide_r], ax
     mov [wm_hide_r+2], bx
@@ -1471,9 +1540,9 @@ wm_fullscreen:
     xor ax, ax
     mov [bx+W_X], ax
     mov [bx+W_Y], ax
-    mov ax, [vid_w]
+    mov ax, [vid_pw]
     mov [bx+W_W], ax
-    mov ax, [vid_h]
+    mov ax, [vid_ph]
     mov [bx+W_H], ax
     or word [bx+W_FLAGS], WF_FULL
                                 ; Raise it AND draw it WHOLE. Not wm_front:
@@ -2256,9 +2325,9 @@ wm_dock_under:
     mov [wm_dmg_x1], ax
     mov ax, [vid_dock_y0]
     mov [wm_dmg_y1], ax
-    mov ax, [vid_wm1]
+    mov ax, [vid_pwm1]
     mov [wm_dmg_x2], ax
-    mov ax, [vid_hm1]
+    mov ax, [vid_phm1]
     mov [wm_dmg_y2], ax
     mov byte [wm_dmg_dk], 1     ; dock_paint said CF = 1 above, so the strip
     call wm_dmg_wins            ; really was drawn (the rect covers it anyway,
@@ -2287,7 +2356,7 @@ wm_paint_all:
                                 ; them under it is pure waste (SPEC.md 11.2)
     xor ax, ax                  ; desktop: 50% dither under the bar, and
     mov bx, MBAR_H              ; STOPPING ABOVE THE DOCK (SPEC.md 30.3.2) -
-    mov cx, [vid_wm1]           ; dock_paint is the next call but one and owns
+    mov cx, [vid_pwm1]           ; dock_paint is the next call but one and owns
     mov dx, [vid_dock_y0]       ; every row from here down, so dithering them
     dec dx                      ; was a full-width band drawn to be painted
     call gfx_fill_gray          ; over: the double-draw flash, and the reason

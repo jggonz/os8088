@@ -455,7 +455,15 @@ vid_switch:
     call bb_init
     call vid_setmode
 
-    call desk_rowcalc           ; 4. the two things vid_apply does not own
+%ifdef KERN_BIG
+    call vid_disp_init          ; 4. ...and the OTHER card follows the switch:
+                                ; the records, the chrome's extent and the
+                                ; desktop union all describe the arrangement
+                                ; before it until this re-runs (SPEC.md
+                                ; 39.13/39.16). Before desk_rowcalc and
+                                ; wm_refit, which read what it publishes
+%endif
+    call desk_rowcalc           ; 5. the two things vid_apply does not own
     call wm_refit
     call menu_force             ; ...and the two the CHROME does not: setmode
     call dock_force             ; cleared the framebuffer, so the bar's logo
@@ -970,8 +978,71 @@ vid_disp_init:
 
     mov byte [vid_cur], 0       ; the live block is display 0's again
     mov byte [vid_ndisp], 2
+    call vid_desk_union         ; ...and the DESKTOP is both of them now
 .out:
     pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_desk_union - the desktop spans every display (SPEC.md 39.16)
+;
+; in:       vid_ctx, [vid_ndisp], and vid_apply having just published the
+;           PRIMARY's geometry
+; out:      [vid_w]/[vid_h]/[vid_wm1]/[vid_hm1] cover the union
+; clobbers: flags
+;
+; FOUR WORDS AND NOTHING ELSE, which is the whole reason 39.16 is cheap.
+; vid_apply computed every derived CHROME word - the dock row, the clock cell,
+; the drive column, the pull-down cap, and 39.16's own vid_pw/vid_ph pair -
+; from the display it was applying, and vid_disp_init applies the primary
+; LAST. So growing the desktop past them here leaves the strips measuring
+; themselves against the monitor they are drawn on, with no special case
+; anywhere.
+;
+; The union's ORIGIN is (0, 0) by construction: display 0 sits there and every
+; other display is placed to its right, so a bounding box needs only the far
+; corner.
+; -----------------------------------------------------------------------------
+vid_desk_union:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    xor cx, cx                  ; CX/DX = the far corner, exclusive
+    xor dx, dx
+    xor si, si
+.d:
+    mov ax, si
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    add ax, [di+VID_CTX_CW]
+    cmp ax, cx
+    jle .w
+    mov cx, ax
+.w:
+    mov ax, [di+VID_CTX_VY]
+    add ax, [di+VID_CTX_CH]
+    cmp ax, dx
+    jle .h
+    mov dx, ax
+.h:
+    inc si
+    mov al, [vid_ndisp]
+    mov ah, 0
+    cmp si, ax
+    jb .d
+    mov [vid_w], cx
+    dec cx
+    mov [vid_wm1], cx
+    mov [vid_h], dx
+    dec dx
+    mov [vid_hm1], dx
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop ax
     ret
 

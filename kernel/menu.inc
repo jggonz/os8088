@@ -815,13 +815,13 @@ menu_furniture:
     mov byte [gfx_color], CWHITE
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
     xor bx, bx
-    mov cx, [vid_wm1]
+    mov cx, [vid_pwm1]
     mov dx, MBAR_H - 2
     call gfx_fill
 
     mov byte [gfx_color], CBLACK
     xor ax, ax                  ; the black rule along the bottom
-    mov bx, [vid_wm1]
+    mov bx, [vid_pwm1]
     mov dx, MBAR_H - 1
     call gfx_hline
 
@@ -1411,7 +1411,7 @@ menu_popup:
     pop cx                      ; CX = anchor x again
 
     mov bx, cx                  ; BX = candidate x1
-    mov si, [vid_w]
+    mov si, [vid_pw]
     sub si, ax                  ; SI = rightmost x1 that still fits
     cmp bx, si
     jle .x_hi
@@ -1432,7 +1432,7 @@ menu_popup:
     shl ax, cl                  ; count * 16 ...
     add ax, 2                   ; ... + the top and bottom frame rows
     mov bx, dx                  ; BX = candidate y1 (DX = anchor y)
-    mov cx, [vid_h]
+    mov cx, [vid_ph]
     sub cx, ax                  ; CX = lowest y1 that still fits
     cmp bx, cx
     jle .y_hi

@@ -762,11 +762,77 @@ on its own.**
 | 3 | ~~Bring the second card up at boot; no desktop on it yet~~ **DONE** — SPEC.md §39.13 | both cards scanning our raster, primary framebuffer **byte-identical**, both directions |
 | 4 | ~~`GFXDISP` at the four rect entries + font/icon/scroll/line~~ **DONE** — SPEC.md §39.14 | secondary shows a desktop dither; **0 differing pixels** on all three single-card adapters. `gfx_save`/`gfx_restore` deferred to step 5, §11.4 |
 | 5 | ~~Cursor crossing; mouse clamp to the union~~ **DONE** — SPEC.md §39.15 | the pointer crosses, and a round trip leaves **0 differing pixels** on both cards |
-| 6 | `wm_fit`, `ui_drag`, `wm_paint_all` per display | a window drags across the seam |
+| 6 | ~~`wm_fit`, `ui_drag`, `wm_paint_all` per display~~ **DONE** — SPEC.md §39.16 | a window drags across the seam, both primaries; **0 differing pixels** on all three single-card adapters |
 | 6b | `wm_disp_of`, then §11.2 fullscreen on one display | fullscreen on the secondary leaves the menu bar reachable on the primary |
 | 6c | `fsx` on one display, others blanked; `vid_unblank` | Missile Command and Paint unchanged; the dark monitor comes back with a repainted desktop, never a stale one |
 | 7 | Control Panel mode + layout; `VM` key | survives a reboot; refuses on a single-card machine |
 | 8 | Field run on the 5150 | the three things QEMU cannot show |
+
+### 11.6 Step 6, as built
+
+`[vid_w]`/`[vid_h]` are the union (SPEC.md §39.16). **Cost: `.text` +202 for
+`kern_big`, no rung crossed — 48 bytes left in it — and `kern_small` +39.**
+
+**§5.1's naming decision is what made this ~15 sites instead of ~60.** Keeping
+`[vid_w]`/`[vid_h]` meaning *the desktop* means every UI site that reads them
+is asking the question it is still being answered; what had to move is the
+smaller set that reads them and means **the chrome**. Those go to
+`[vid_pw]`/`[vid_ph]`/`[vid_pwm1]`/`[vid_phm1]`, the primary's extent —
+`menu.inc` ×4, `dock.inc` ×3, `wm.inc` ×8 (the strips, the desktop band, and
+§11.2's fullscreen surface).
+
+**And every *derived* chrome word came free.** `[vid_dock_y0]`,
+`[vid_clk_hx]`, `[vid_ymax]`, `[vid_popmax]`, `[vid_desk_z*]` are computed by
+`vid_apply` from whatever display it is applying — and `vid_disp_init` applies
+the primary **last**. So `vid_desk_union` grows four words afterwards and
+touches nothing else; there is no special case anywhere and no second opinion
+about where the dock is.
+
+**`wm_fit` fits a frame into a DISPLAY.** Against a union its old bounds were
+the wrong shape twice — they would allow a window in the dead zone, and they
+would apply the primary's dock row to a display that has no dock. The box is
+four registers now (`x0`, `xe`, `y0`, `ye`) rather than three loads, filled
+from the display the window's **origin** is on. Origin and not centre
+deliberately: `wm_disp_of`'s centre test decides which monitor an app *owns*
+(§6.5.1), and this decides which edges a frame may not pass, which is a
+question about the corner the clamps are written from.
+
+**`ui_drag` needed one thing `wm_fit` could not give it.** Its clamps are
+per-axis and run before the record is written, and two per-axis clamps against
+a union can agree on a point no display covers — a title bar dropped there is
+one nobody can grab back. `ui_drag_dead` is the correction, and it reuses step
+5's two routines exactly: `vid_disp_find`, then `vid_pt_clamp` into
+`[cur_disp]` — **the pointer's** display, because during a drag the title bar
+is under the hand, and §39.15.4 already guarantees the pointer itself is
+inside a display.
+
+**A tall window dragged onto a short display is left hanging off, not
+shrunk**, and that falls out of the model rather than being decided: a window
+is a rect on the virtual plane, and §39.14's split draws the part each display
+covers. Nothing in the window manager is aware of it.
+
+Measured on `os8088_5150_both_gla`, driven end to end — the chip menu opened,
+the About box's title bar pressed, the pointer walked onto the second display,
+released:
+
+| | CGA primary | Hercules primary |
+|---|---|---|
+| desktop / chrome | 1360x348 / 640x200 | 1360x348 / 720x348 |
+| About opened at | (170, 55) | (170, 140) |
+| dragged to | **(850, 52)** — display 1 starts at 640 | **(890, 52)** — display 1 starts at 720 |
+| its 300px frame on the secondary | longest lit run **298 px** | **298 px** |
+
+plus byte identity on the three single-card adapters, and every step-3/4/5
+assertion still passing in the same run.
+
+**Still owed, and now the only thing in §39.14.4's caveat left standing:**
+`wm_clip_tab` is virtual and is not translated. `gfx_clip_run` sees virtual
+coordinates on the path that matters (GFXDISP is *below* GFXCLIP), so the leak
+is narrow — a whole-shape hook that has already translated calling a rect
+primitive *while a clip region is armed*, which is the background-painter case
+on a window that has been dragged to the second display. `vid_switch` no
+longer owes anything: it re-runs `vid_disp_init`, which was step 3's debt and
+became load-bearing here.
 
 ### 11.5 Step 5, as built
 

@@ -194,9 +194,18 @@ def main(argv):
             fail.append("the live block is not display 0's record")
         dw, dh = u16(m.read(S("vid_w"), 2)), u16(m.read(S("vid_h"), 2))
         say("desktop %dx%d" % (dw, dh))
-        if (dw, dh) != (ctx[0][7], ctx[0][8]):
-            fail.append("the desktop is not display 0's extent - step 3 draws "
-                        "nothing on the second card and must not claim to")
+        uw = max(c[18] + c[7] for c in ctx)
+        uh = max(c[19] + c[8] for c in ctx)
+        if (dw, dh) != (uw, uh):
+            fail.append("the desktop is %dx%d, not the union %dx%d "
+                        "(SPEC.md 39.16)" % (dw, dh, uw, uh))
+        pw = u16(m.read(S("vid_pw"), 2))
+        ph = u16(m.read(S("vid_ph"), 2))
+        say("chrome %dx%d (the primary's), desktop %dx%d (the union)"
+            % (pw, ph, dw, dh))
+        if (pw, ph) != (ctx[0][7], ctx[0][8]):
+            fail.append("the chrome's extent is %dx%d, not the primary's %dx%d"
+                        % (pw, ph, ctx[0][7], ctx[0][8]))
 
         # --- the picture on each -------------------------------------------
         pri = [c for c in cards if c["type"] == KIND[kind][0]][0]
@@ -399,6 +408,67 @@ def main(argv):
         if after < 16:
             fail.append("nothing whole reached the second display: its "
                         "longest lit run is still %d px" % after)
+        # --- 6: does a WINDOW go there, and does it drag across the seam?
+        # (SPEC.md 39.16.1). The About box is the cheapest window in the
+        # machine - the chip menu's first item, no package to load - and its
+        # title bar is the thing a drag grabs. Driven the whole way: open it
+        # from the menu, then press on the title bar, walk the pointer onto
+        # the second display and release.
+        mo.to(*home)
+        mo.menu(12, 8, 12, 30)                  # chip menu -> About
+        os88marty.settle(m, card=gate_card)
+        wins = m.read(S("wm_wins"), 12 * 26)
+        WIN = 26
+        found = None
+        for i in range(12):
+            fl = u16(wins, i * WIN + 0)
+            if fl & 3 == 3:                     # used and visible
+                found = i
+        if found is None:
+            fail.append("no visible window after About - the drag cannot be "
+                        "driven")
+        else:
+            wx, wy = (u16(wins, found * WIN + 2), u16(wins, found * WIN + 4))
+            ww = u16(wins, found * WIN + 6)
+            say("About is window %d at (%d,%d) %dx%d"
+                % (found, wx, wy, ww, u16(wins, found * WIN + 8)))
+            grab = (wx + ww // 2, wy + 8)       # the title bar's middle
+            dest = (ctx[1][18] + ctx[1][7] // 2, ctx[1][19] + 60)
+            mo.to(*grab)
+            mo.m.mouse(0, 0, l=True)
+            time.sleep(0.3)
+            cx0, cy0 = mo.where()[:2]
+            for _ in range(24):                 # walk it across, button DOWN
+                dx = max(-100, min(100, dest[0] - cx0))
+                dy = max(-100, min(100, dest[1] - cy0))
+                if dx == 0 and dy == 0:
+                    break
+                mo.m.mouse(dx, dy, l=True)
+                time.sleep(0.14)
+                cx0, cy0 = mo.where()[:2]
+            mo.m.mouse(0, 0)                    # release
+            os88marty.settle(m, card=gate_card)
+            wins = m.read(S("wm_wins"), 12 * 26)
+            nx, ny = (u16(wins, found * WIN + 2), u16(wins, found * WIN + 4))
+            say("dragged to (%d,%d)" % (nx, ny))
+            d = 0
+            for c in ctx:
+                if c[18] <= nx < c[18] + c[7] and c[19] <= ny < c[19] + c[8]:
+                    d = 1 if c is ctx[1] else 0
+                    break
+            else:
+                fail.append("the window's origin (%d,%d) is on NO display - "
+                            "it landed in the dead zone" % (nx, ny))
+            if nx < ctx[1][18]:
+                fail.append("the window did not cross: origin x=%d, and "
+                            "display 1 starts at %d" % (nx, ctx[1][18]))
+            w2, h2, sec2 = m.fbuf(card=sec["idx"])
+            run2 = longest_run(sec2, w2, h2)
+            say("secondary longest lit run with the window on it: %d px" % run2)
+            if run2 < ww - 8:
+                fail.append("the window crossed but its %dpx frame is not on "
+                            "the second card: longest run %d" % (ww, run2))
+
 
     print()
     for f in fail:

@@ -134,7 +134,7 @@ dock_force:
     push ax
     push cx
     xor ax, ax
-    mov cx, [vid_wm1]
+    mov cx, [vid_pwm1]
     call dock_force_x
     pop cx
     pop ax
@@ -145,7 +145,7 @@ dock_force_x:
     push cx
 %ifdef REDRAWFULL
     xor ax, ax                  ; REFERENCE BUILD: every damage is the whole
-    mov cx, [vid_wm1]           ; strip, the behaviour this replaced
+    mov cx, [vid_pwm1]           ; strip, the behaviour this replaced
 %endif
     cmp byte [dock_full], 0
     jne .union
@@ -220,7 +220,7 @@ dock_paint:
     mov cx, [dock_dx2]          ; the last row
     mov bx, [vid_dock_y0]
     inc bx
-    mov dx, [vid_hm1]
+    mov dx, [vid_phm1]
     call gfx_fill
 
     mov ax, DOCK_X0             ; ...and the tiles it actually covered: a

@@ -18945,6 +18945,55 @@ always done. Windows reach the second display at docs/DUAL-DISPLAY-PLAN.md
 step 6, and `wm_hit` needs nothing then either, because it has been comparing
 virtual coordinates all along.
 
+### 39.16 The desktop spans both; the chrome does not (`KERN_BIG` only)
+
+**`[vid_w]`/`[vid_h]` become the UNION of the display rects**, so a window may
+be placed, dragged and grown anywhere on the virtual desktop — and every UI
+site that already read them keeps working, because the question it was asking
+("how big is the desktop") is the one it is still being answered.
+
+**The chrome does not span it, and asking it to would be wrong rather than
+hard.** The menu bar, the dock strip and the drive column are full-width
+strips whose geometry comes from `[vid_w]`; spread over 1360 virtual pixels
+they would put the clock and half the dock on the other monitor, split across
+two cards with two strides. So they measure themselves against
+`[vid_pw]`/`[vid_ph]`/`[vid_pwm1]`/`[vid_phm1]` — the **primary's** extent —
+and a second monitor is pure desktop and windows, which is what a second
+monitor is *for*.
+
+**`vid_apply` publishes those four for whichever display it is applying, and
+`vid_disp_init` applies the primary LAST**, so they end up the primary's
+without a special case anywhere. `vid_desk_union` then grows `[vid_w]`,
+`[vid_h]`, `[vid_wm1]` and `[vid_hm1]` past them and touches nothing else —
+which is why every derived chrome word (`[vid_dock_y0]`, `[vid_clk_hx]`,
+`[vid_ymax]`, `[vid_popmax]`, `[vid_desk_z*]`) is already right: `vid_apply`
+computed them before the desktop grew. On a machine with one display the two
+sets are the same numbers and nothing above happens at all.
+
+**§11.2's fullscreen surface takes the primary too**, for now: `wm_fullscreen`
+sizes a window to `[vid_pw]`/`[vid_ph]` rather than the union, so an app that
+goes fullscreen covers one monitor and behaves exactly as it does today.
+Choosing *which* display by `wm_disp_of` is docs/DUAL-DISPLAY-PLAN.md step 6b.
+
+#### 39.16.1 A window is fitted into a DISPLAY, not into the desktop
+
+`wm_fit` clamped a frame into `[vid_w]` × `[vid_dock_y0]`. Against a union
+that is the wrong shape twice: it would allow a window in the dead zone, and
+it would apply the **primary's dock row** to a display that has no dock.
+
+So `wm_fit` picks the display the window's origin is on (`vid_disp_find`,
+falling back to the primary) and clamps into *that* — its own width, its own
+height, and `[vid_dock_y0]` only when it is the primary. A window whose origin
+is in the dead zone is moved to the primary, which is the only answer that
+cannot leave it unreachable.
+
+`ui_drag` and `ui_grow` end in `wm_fit`'s rule for the same reason, so the
+one place that knows how a window meets a display edge stays one place. **A
+drag therefore crosses the seam** — the frame is clamped only when the origin
+lands somewhere no display has — and a window straddling the two cards is
+drawn by §39.14's split, one fragment per display, with no code in the window
+manager aware of it.
+
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
 The reference §20.6 worker, and the first shipped package whose window is
