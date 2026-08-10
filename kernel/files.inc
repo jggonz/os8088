@@ -260,6 +260,25 @@ fm_kinit_x:
     mov ax, si
     add ax, I_NAME              ; the record's 16-byte name field, which
     mov [bx + W_TITLE], ax      ; inst_set_name zero-filled and NUL-capped
+%ifndef REDRAWFULL              ; the reference build (SPEC.md 22.14) leaves
+                                ; the Disk window off the raise cache, which
+                                ; is where it was before
+    or word [bx + W_FLAGS], WF_SAVEU
+%endif
+                                ; ...and it PROMISES its content stands still
+                                ; while it is not drawing (SPEC.md 11.96.1),
+                                ; so a window dragged over it and away again
+                                ; puts its pixels back with one blit instead
+                                ; of the most expensive W_PAINT in the system.
+                                ; 11.96.1 named this window as the one that
+                                ; could NOT make that promise, because 22.8
+                                ; re-lists a dirtied folder on the way to the
+                                ; front; the answer is that fmv_store is the
+                                ; one place a re-list lands and it drops the
+                                ; cache there, so the promise is kept by
+                                ; construction rather than by an app's word
+                                ; (SPEC.md 22.14). It has no worker, so the
+                                ; other disqualifier cannot arise
     mov word [bx + W_MENUS], fm_menus
                                 ; the Disk browser IS Locator's window
                                 ; (SPEC.md 12.3): fronting it keeps Locator
@@ -439,9 +458,54 @@ fmv_get_icon:
     ret
 
 ; -----------------------------------------------------------------------------
+; fmv_winof - which window owns the state block in DI? (the inst_tab walk)
+; in:  DI = state block
+; out: BX = its window ptr and CF = 0, or CF = 1 = no live record owns it
+; clobbers: nothing else (flags)
+;
+; fm_win_of answers the same question about [ld_pwin] by walking wm_zord for a
+; VISIBLE window, which is what files_poster wants; this one walks inst_tab and
+; finds a hidden window too, because a minimized Disk window still owns a
+; raise cache somebody has to drop.
+; -----------------------------------------------------------------------------
+fmv_winof:
+    push cx
+    push si
+    mov si, inst_tab
+    mov cx, INST_MAX
+.scan:
+    cmp byte [si+I_STATE], 1
+    jne .next
+    cmp byte [si+I_KIND], KIND_FILES
+    jne .next
+    cmp di, [si+I_SPTR]
+    je .found
+.next:
+    add si, I_RECSZ
+    loop .scan
+    pop si
+    pop cx
+    stc
+    ret
+.found:
+    mov bx, [si+I_WIN]
+    pop si
+    pop cx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; fmv_store - copy the global mount snapshot into one window's slot
 ; in:  DI = state block
 ; out: nothing (all registers preserved)
+;
+; THE ONE PLACE A WINDOW'S LISTING IS REPLACED, which is what makes it the one
+; place the RAISE CACHE (SPEC.md 11.96) has to be dropped: that cache is a
+; picture of this window drawn from the listing it is about to stop having, so
+; putting it back would be docs/FIELD-NOTES.md 4's bug with the stale half on
+; the glass. Every route in goes through here - fm_focus's re-list, a paste's
+; fmv_reload_all, a sibling adopting the snapshot in fmv_bcast, and every
+; navigation - so no new one can forget (SPEC.md 22.14).
 ; -----------------------------------------------------------------------------
 fmv_store:
     push ax
@@ -450,6 +514,10 @@ fmv_store:
     push dx
     push si
     push di
+    call fmv_winof              ; BEFORE the .none early-out: a window with no
+    jc .nowin                   ; view claim paints from the global snapshot,
+    call KERNEL_SEG:cw_wm_su_drop   ; which is changing under it too
+.nowin:
     call fmv_fit                ; the claim has to be big enough for THIS
     mov ax, [di+FS_VSEG]        ; volume's listing before anything is copied
     or ax, ax
@@ -2650,6 +2718,16 @@ FMC_PASTEIN equ 21              ; no menu CELL of its own: the context menu's
                                 ; sum can reach it by accident.
 FMC_COUNT   equ 22
 
+; --- how much of the acting window did the command change? (SPEC.md 22.13) ---
+; fm_docmd stamps FMD_ALL before every dispatch, so a body that says nothing -
+; and a body somebody adds later - is repainted whole: the value a forgotten
+; path inherits has to be the safe one (SPEC.md 11.96.2).
+FMD_ALL     equ 0               ; the listing, the selection or the view mode
+FMD_LINE    equ 1               ; the status line and nothing else
+FMD_NONE    equ 2               ; not one pixel of THIS window - the command
+                                ; posted work for another window entirely, or
+                                ; found nothing to act on
+
 FM_NMENUS   equ 5               ; = fm_menus' AM_COUNT = MENU_APPMAX
 fm_menu_base:
     db FMC_OPEN, FMC_CUT, FMC_NEWWIN, FMC_LIST, FMC_TIMER
@@ -2764,16 +2842,43 @@ fm_oncmd_x:
 ; is it on", so the per-entry comments in fm_jmp cover both surfaces at once.
 ; The closing repaint is not optional - the kernel does not repaint after an
 ; AM_ONCMD returns (SPEC.md 12.2), and a popup's command has no repaint of
-; its own either.
+; its own either - but HOW MUCH of the window it owes is the BODY's to say,
+; and FMD_NONE is a real answer (SPEC.md 22.13). Timer, Bounce, Disk and both
+; New Window commands only POST work that lands in another window entirely,
+; and each was spending a full repaint of this one to say nothing had
+; happened here: a white fill and some forty font_strs, about a second of
+; visible redraw on the machine this is written for, immediately before the
+; window they did launch was drawn over the top of it.
+;
+; What lets that be skipped is somebody else's invariant, twice. menu_drop
+; puts its own rect back - save-under or wm_paint_dmg - and returns the
+; chosen item BEFORE the command runs (SPEC.md 50.2), so nothing owes the
+; popup's pixels to this repaint; and SPEC.md 59.5 moved the status line's
+; verdicts out to the toast, so there is no clear-at-entry left for a skipped
+; repaint to strand on screen.
 ; -----------------------------------------------------------------------------
 fm_docmd:
     cmp bx, FMC_COUNT
     jae .out
     shl bx, 1
-    mov byte [fm_cmdline], 0    ; assume the whole window until a body says
-    call [fm_jmp+bx]            ; otherwise. CALL r/m16 near-indirect: 8086
+    mov byte [fm_cmdchg], FMD_ALL   ; assume the whole window until a body
+    call [fm_jmp+bx]            ; says otherwise. CALL r/m16 near-indirect:
+                                ; 8086. The SAFE default, so a body that
+                                ; forgets - or one added later - costs a
+                                ; wasted repaint and never a stale window
+                                ; (SPEC.md 11.96.2)
     mov si, [fm_cmdwin]
-    cmp byte [fm_cmdline], 0
+%ifdef REDRAWFULL
+    jmp short .full             ; the reference build (SPEC.md 22.13): EVERY
+%endif                          ; command repaints the whole window, which is
+                                ; strictly more than the code below ever draws
+                                ; - so "0 differing pixels" against it proves
+                                ; the picture, not just the call count
+    cmp byte [fm_cmdchg], FMD_NONE
+    je .out                     ; nothing in THIS window moved: the command
+                                ; acted on another one, or found nothing to
+                                ; act on at all
+    cmp byte [fm_cmdchg], FMD_ALL
     je .full                    ; the command changed the listing, the
     call fm_status_only         ; selection or the mode...
     jnc .out                    ; ...or it only put a PROMPT on the status
@@ -2794,8 +2899,15 @@ fm_c_open:                      ; File > Open - the selection, if any
     cmp ax, [di+FS_N]           ; 0xFFFF (no selection) also fails this
     jae .none
     call fm_open_sel
+    cmp word [ld_pending], 0    ; a folder re-listed us and owes the whole
+    je .out                     ; window; a PACKAGE went to the loader, and
+    mov byte [fm_cmdchg], FMD_LINE  ; the only thing that changed on screen
+.out:                           ; is 'Loading...' in the status line - the
+    ret                         ; same [ld_pending] test fm_onclick makes on
+                                ; a double-click (SPEC.md 22.2/22.13)
 .none:
-    ret
+    mov byte [fm_cmdchg], FMD_NONE  ; nothing selected: a no-op, and a no-op
+    ret                             ; draws nothing
 
 fm_c_mkdir:                     ; File > New Folder... - arm the editor
     mov di, [fm_vp]
@@ -2824,6 +2936,7 @@ fm_arm_sel:
     jmp fm_edit_arm
 .none:
     pop ax                      ; nothing selected: a no-op, like File > Open
+    mov byte [fm_cmdchg], FMD_NONE  ; - and a no-op draws nothing (22.13)
     ret
 
 %ifndef KERN_SMALL              ; kern_big only (SPEC.md 18.96's foot)
@@ -2985,30 +3098,38 @@ fm_newwin:
     call fm_seed                ; park the target for the new window's
     mov al, KIND_FILES          ; fm_kinit, then let ui_task do the launch
     call KERNEL_SEG:cw_inst_launch_post ; NOT app_launch: it takes the lock
-    ret                             ; we hold
+fm_nw_none:                     ; we hold. The NEW window is what draws; this
+    mov byte [fm_cmdchg], FMD_NONE  ; one is untouched, and so it is not
+    ret                             ; redrawn (SPEC.md 22.13)
 fm_nw_full:
     call KERNEL_SEG:cw_snd_beep ; at the cap app_launch would front an
-    ret                         ; existing window and silently drop the seed,
-                                ; which reads as "the menu did nothing"
-fm_nw_none:
-    ret
+    mov byte [fm_cmdchg], FMD_NONE  ; existing window and silently drop the
+    ret                         ; seed, which reads as "the menu did nothing"
 
 fm_c_nop:                       ; the File menu's separator (SPEC.md 22.12)
-    ret                         ; - MENU_DIS, so nothing can select it
+    mov byte [fm_cmdchg], FMD_NONE  ; - MENU_DIS, so nothing can select it
+    ret
 
+; Builtins (SPEC.md 12.3.1) - all three launch a DIFFERENT application, and
+; all three only post, because app_launch and ui_cmd take the lock we hold
+; (SPEC.md 29.4). Not one of them puts a pixel in this window, which is why
+; each says so: opening a program from a Disk window's own bar was costing a
+; full repaint of that window first (SPEC.md 22.13).
 fm_c_disk:                      ; Builtins > Disk - CMD_FILES, exactly what
     mov ax, CMD_FILES           ; Locator's own Builtins menu posts, so the
     call KERNEL_SEG:cw_ui_post_cmd  ; item does the same thing from either bar
-    ret
+    jmp short fm_c_elsewhere
 
 fm_c_timer:                     ; Builtins > Timer
     mov al, KIND_TIMER
     call KERNEL_SEG:cw_inst_launch_post ; NOT app_launch: it takes the lock
-    ret                             ; (29.4)
+    jmp short fm_c_elsewhere        ; (29.4)
 
 fm_c_bounce:                    ; Builtins > Bounce
     mov al, KIND_BOUNCE
     call KERNEL_SEG:cw_inst_launch_post
+fm_c_elsewhere:
+    mov byte [fm_cmdchg], FMD_NONE
     ret
 
 fm_c_refresh:                   ; Folder > Refresh
@@ -4118,7 +4239,7 @@ fm_stage_onam:
 fm_edit_arm:
     call fm_edit_end
     mov [di+FS_EDIT], al
-    mov byte [fm_cmdline], 1    ; ...and the prompt IS the whole change: no
+    mov byte [fm_cmdchg], FMD_LINE  ; ...and the prompt IS the whole change: no
                                 ; row moves, the selection stays where it is,
                                 ; and the header, the icons and the buttons
                                 ; are untouched. fm_docmd spends this; a
@@ -4965,6 +5086,15 @@ fm_status_only:
     mov byte [gfx_color], CWHITE
     call KERNEL_SEG:cw_gfx_fill
     call fm_draw_status
+    mov bx, si                  ; the fill above runs to fm_rgt, and the GROW
+    call KERNEL_SEG:cw_wm_grow_paint ; BOX is in those rows at the bottom-
+                                ; right corner - so the band ate part of it
+                                ; and nothing put it back until the next full
+                                ; repaint. fm_repaint has always done this
+                                ; after its own fill; the cheap path had not,
+                                ; and every status-line-only draw - a New
+                                ; Folder prompt, a Rename, 'Loading...' -
+                                ; left the box a broken glyph (SPEC.md 22.13)
     clc
     jmp short .out
 .refuse:
@@ -5738,8 +5868,14 @@ fm_statowed: resb 1             ; 1 = this click or keystroke retired a
                                 ; that the cheap paths do not provide - the
                                 ; two selection bands (SPEC.md 22.9) and now
                                 ; a scroll, which draws no text at all (22.11)
-fm_cmdline: resb 1              ; 1 = the FMC_* just run changed the status
-                                ; LINE and nothing else on the window
+fm_cmdchg:  resb 1              ; FMD_*: how much of the acting window the
+                                ; FMC_* just run changed (SPEC.md 22.13). It
+                                ; was fm_cmdline, holding 0/1 for "the whole
+                                ; window"/"the status line", and there was
+                                ; nowhere in it to say NOTHING - the name
+                                ; described one of its values rather than
+                                ; what it held, which is the shape SPEC.md
+                                ; 48.22.1 is about
 %ifndef KERN_SMALL
 fm_fmtrow:  resb 1              ; the dskw_fmt_tab row the FORMAT confirmation
                                 ; (SPEC.md 22.12) was built from, banked when

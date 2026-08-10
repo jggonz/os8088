@@ -3541,6 +3541,31 @@ size back on the way out, and a refusal in the middle of that has no meaning.
 `ui_drag`'s release clamp is unchanged (x + w ≤ `[vid_w]` — the live screen
 width, §39.2 — with the live window width), so a grown window still cannot be dragged off screen.
 
+#### 11.1.1 The grow box belongs to the front window, and had to be taken away
+
+`wm_grow_paint` draws the box **only** for the frontmost visible window — the
+same rule as the close and minimize boxes — and **nothing took it off again**.
+A window that lost the front kept its box until something repainted it, which
+used to be nearly every damage pass, so it read as a flicker rather than as a
+defect. §11.91.2 makes *nothing repaints it* the normal case and turns a
+transient artifact into a permanent one, which is how it was found.
+
+`wm_grow_erase` is the missing half, called from `wm_raise` beside the
+`wm_draw_title` that takes the outgoing window's other two boxes away — and
+**before `wm_su_take`**, so §11.96's cache banks the window as it now looks
+rather than with a box it is not entitled to. `wm_paint_dmg`'s promotion is
+the other end: the window that inherits the front gains a box there, next to
+the title bar it already gained (§11.91).
+
+**White is the exact erase, not an approximation.** `wm_grow_paint`'s first
+act is to white-fill the same 13x13, so whatever the application had drawn
+under the corner was already gone the moment the box appeared; erasing puts
+the window back to how it looked *before* the box rather than to something
+new. That is what makes this safe for a window whose content there is not
+white — the box had already taken it, and the app's next real repaint brings
+it back. `wm_grow_rect` is the one place the rect is computed, because a
+paint and an erase that disagree by a pixel leave a line on screen for ever.
+
 ### 11.2 Fullscreen
 
 The SDK/kernel foundation for apps that want the whole screen (640×480 on
@@ -4017,6 +4042,71 @@ Four things are load-bearing.
   `wm_dmg_gray` calls `cur_unlazy` itself, which is exactly what the
   unclipped fill did before it.
 
+#### 11.91.2 …and a window untouched by the rect that was vacated draws nothing
+
+§11.91.1 is this argument about the **dither**; this is the same argument
+about the **windows**, and it is the bigger half. `ui_drag` passes the union
+of where the window was and where it is, and `wm_dmg_wins` marked anything
+overlapping that union — so dragging a window *across* another one redrew the
+one underneath in full, though the only ground given up was a strip nowhere
+near it. Reported from the field with the case that isolates it: two windows
+side by side, drag the right one left over the left one, and the window
+underneath repaints although nothing of it was ever uncovered.
+
+**The rect the window is LEAVING is the whole of what can have gone stale.**
+`wm_dmg_vacate` records it and `wm_dmg_stale` is `wm_dmg_hit`'s four compares
+against it: a window that never overlapped it is not marked. Everywhere else
+in the damage one of two things is true and both are right — the moved window
+writes the pixel, and being on top its value is the answer; or nothing in this
+pass writes it at all, because `wm_dmg_gray` subtracts every visible window
+(§11.91.1) so the dither never reaches inside one, and the window underneath
+keeps the pixel it already had.
+
+Four things are load-bearing.
+
+- **It is a superset of what is really uncovered.** `old` minus `new` is an L
+  and this is the whole of `old`, so a short drag still marks the window it
+  was sitting on. That is the safe direction and it costs a repaint nobody
+  will see coming.
+- **The window that moved is marked unconditionally**, by pointer. A drag
+  long enough to land clear of where it started does not overlap its own
+  vacated rect, and the mechanism would otherwise decline to draw the one
+  window that certainly changed.
+- **A touched drive zone disarms it.** `desk_dmg_zones` grows the damage to
+  every zone it reached and `desk_paint_mask` redraws those zones *whole*, so
+  a window over one is damaged by something that is not the move — at which
+  point the vacated rect no longer describes everything that can have gone
+  stale, and it is dropped rather than reasoned about.
+- **A skipped window still falls through to the other two tests.** The dock is
+  drawn *under* windows, and a marked window *below* is redrawn whole and
+  reaches wherever its own rect reaches; this answers only "was anything of
+  it uncovered", never "is it safe from everything".
+
+It is a one-shot argument cleared by `wm_dmg_wins`, `wm_dmg_dk`'s rule: a
+caller that forgets inherits 0 and marks against the whole damage rect, which
+is what this pass has always done. The caller owes one fact it cannot be
+asked for — **this window is going to be drawn in this pass** — and `ui_drag`
+can say it, because a drag is only ever reached after the window has been
+raised. `ui_grow` is the same shape and deliberately does **not** arm it yet:
+a resize moves the origin through `wm_dock_snap` (§11.90) and deserves its own
+verification.
+
+**The version before this one is worth recording, because it looks right and
+is wrong by one pixel.** The first cut excluded the rect the window moved
+*to* — everything there is repainted by the window itself — and it never
+fired. `wm_dmg_union` includes the **drop shadow** (`y + W_H`) while the
+frame ends at `y + W_H - 1`, so a window extending one row lower than the
+moved one failed containment on that row every time. Widening the exclusion
+to the occupied box is not the fix either: `wm_draw_win` writes the frame and
+two shadow *lines*, so the corners `(x+w, y)` and `(x, y+h)` are inside the
+box and written by nothing — and on a rightward drag the first of those is a
+pixel the old shadow blacked and nothing restores. Asking which rect was
+*left* has no corners in it.
+
+This composes with §11.96 rather than replacing it, and the two answer
+different questions: nothing uncovered → no work at all; something uncovered
+→ one blit instead of a `W_PAINT`.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
@@ -4460,7 +4550,11 @@ raise shows the wrong time until something else redraws.
 Minimizing is the sharper form and it gets its own hook regardless of the
 flag: `wm_hide` drops the cache, because a hidden window's painter skips
 drawing for the whole time it is down. **A promise about being covered may not
-be assumed across a hide.**
+be assumed across a hide.** — **it TAKES one now instead** (§11.96.5).
+Banking at the moment of the hide is strictly safer than dropping, because an
+*older* cache surviving the hide is the whole of what the drop protected
+against, and one taken from the glass a moment before the window goes down
+cannot be stale.
 
 **The test a window has to pass, and it is three questions.** `wm_su_try`
 returning CF = 0 skips *both* the white fill and `W_PAINT`, so anything the
@@ -4474,9 +4568,15 @@ raise was going to do does not happen:
    in, and all three are interaction.
 2. **Does it do work on gaining focus?** That work arrives as `W_PAINT`, and
    a restored cache is exactly the case where `W_PAINT` does not run. A Disk
-   window is the worked example: §22.8 re-lists a dirtied folder when it comes
-   to the front, and putting old pixels back over a new listing is
-   docs/FIELD-NOTES.md 4's bug with a different cause.
+   window was the worked example: §22.8 re-lists a dirtied folder when it
+   comes to the front, and putting old pixels back over a new listing is
+   docs/FIELD-NOTES.md 4's bug with a different cause. **It is no longer a
+   disqualification, and §22.14 is why** — the hazard is real and the remedy
+   was wrong. "Does it do work on gaining focus" is a question the kernel can
+   answer *at the moment it matters* rather than one an application has to
+   promise about forever: a Disk window's focus work lands in exactly one
+   routine, `fmv_store`, which drops the cache there. What still disqualifies
+   a window is work on gaining focus that the kernel **cannot see** land.
 3. **Is its repaint actually expensive?** The first two are about being
    *allowed*; this one is about being *worth it*. Paint fails it — 95% of its
    repaint is one `gfx_blit4` out of a canvas it already holds in RAM — and so
@@ -4494,8 +4594,10 @@ it must arm `wm_clip_set` first (§11.3) and that drops the cache.
 
 Marked today: **Note Pad** (its worker watches typing), **Minesweeper** (no
 worker, and the only `GET_TICKS` in it seeds the mines), **Piano** (no worker;
-its one polling loop runs inside a click callback) and **Solitaire** (no
-worker, so the table moves only when a card is dragged).
+its one polling loop runs inside a click callback), **Solitaire** (no
+worker, so the table moves only when a card is dragged) — and the **Disk
+window**, which is the kernel's own and keeps the promise mechanically
+rather than by assertion (§22.14).
 
 So the flag is a promise only the application can make — *my content does not
 change while I am not drawing* — and the asymmetry settles the default:
@@ -4806,6 +4908,58 @@ framebuffer, so the poll loop does no drawing work at all beyond the XOR
 itself. The final save-under restore + title un-highlight
 need no flush of their own — the caller's gfx_unlock flushes them (§13
 step 2), and that flush is what clears the last item highlight from VRAM.
+
+#### 11.96.4 The cache is taken wherever a window is drawn, not only at a raise
+
+§11.96 took the cache in **one place** — `wm_raise`, from the window losing
+the front — and spent it on the first restore. That serves the case it was
+written for, two windows alternating, and nothing else: a **second** drag
+across the same window repainted it in full, and a window that had been in
+the background for a while had no cache at all. Reported as *"call to front
+uses the cache; drag and drop does not"*, which is exactly the shape of a
+one-shot.
+
+The question is the same wherever it is asked, so it is asked once, at the
+one place every window in the system is drawn. **Has this window finished
+with the pixels it has just been given?** The front window has not — the next
+thing it does is change them — and every other window has, because nothing
+but a redraw can move them, which is §11.96.1's promise restated. So
+`wm_su_bank`, at the end of `wm_draw_win`, **drops the front window's cache
+and takes everybody else's**.
+
+Two things fall out rather than being arranged. **`wm_su_try` no longer
+spends the cache**: it dropped it on the grounds that the window was about to
+become front and change its own pixels, which is true of a raise and false of
+a damage repaint, and the bank below now asks which of the two this is. And
+**`wm_paint_all` leaves every covered window banked**, so the first drag
+after a full repaint is already cheap.
+
+It is affordable because **a bank is a copy and a repaint is a `W_PAINT`** —
+about 5.7KB of framebuffer for a mono Disk window against §11.96's measured
+578 ms of glyphs. The claim is purgeable (§50.6) at the cheapest rank, so a
+machine with no room declines and behaves exactly as it did before any of
+this existed.
+
+#### 11.96.5 …including the moment a window is minimized
+
+`wm_hide` **dropped** the cache, on §11.96.1's reasoning that a hidden
+window's background painter finds itself invisible, skips drawing, and so
+never reaches `wm_clip_set` to invalidate anything — *a promise about being
+covered may not be assumed across a hide*. The remedy did not follow from the
+hazard: dropping leaves a restore-from-minimized paying the most expensive
+repaint in the system, every time.
+
+**Taking one is strictly safer than either dropping or keeping.** `wm_hide`
+banks the window at the last moment its pixels are both correct and still on
+the glass, so no *older* cache can survive a hide — which is the whole of what
+the drop was protecting against — and a restore puts back exactly what went
+down. What is left is the promise itself, and `WF_SAVEU`'s wording is already
+the right one: *my content does not change while I am not drawing*, not
+*while I am merely covered*. An application whose content moves on its own is
+disqualified from the flag at all (§11.96.1's question 1), minimized or not.
+
+The ordering is load-bearing: it runs **before the visible bit drops**, because
+`wm_su_take` refuses an invisible window — it would have no pixels to read.
 
 ### 12.05 The bar is redrawn only when its contents changed
 
@@ -11709,6 +11863,154 @@ Three things are load-bearing, and each is somebody else's rule first:
 It is `toast_show` and not §59.4's `toast_now`: the format has already
 happened, so there is nothing for the message to arrive *behind*, and the
 idle pass is where a staged toast belongs.
+
+### 22.13 A command that changes nothing draws nothing
+
+`fm_docmd` runs one `FMC_*` against the acting window and then repaints it,
+because the kernel does not repaint after an `AM_ONCMD` returns (§12.2) and a
+popup's command has no repaint of its own either. That is right for the
+commands that change the window and wrong for the five that do not.
+**`Timer`, `Bounce` and `Disk` launch a different application; `New Window`
+and `Open in New Window` open a different Disk window.** Every one of them
+only *posts* the work for the UI task to do once the lock drops (§29.4), and
+not one of them puts a pixel in the window whose menu bar was used — they
+were costing a white fill of the whole content and some forty `font_str`s
+all the same. §11.96 prices that class of repaint at **~1,026 ms on a
+4.77MHz 8088**, so opening a program from a Disk window's own bar spent
+about a second redrawing a listing that had not changed, and then drew the
+new window over the top of it. It is what a covered file manager looks like
+redrawing itself for no reason, and the Builtins menu is on a Disk window's
+bar (§12.3.1) precisely so that this is the ordinary way to launch things.
+
+**`[fm_cmdline]` could not say so.** It was two-valued — 0 "the whole
+window", 1 "the status line only" — and had no third value for *nothing*.
+That is §48.22.1 arriving from the other side: a field that already means one
+thing cannot be made to answer a second question, and the honest fix is a
+value of its own rather than a lie in an existing one. It is `[fm_cmdchg]`
+now, carrying `FMD_ALL` / `FMD_LINE` / `FMD_NONE`, and the name says what it
+holds rather than what one of its values means.
+
+**The default stays the safe one.** `fm_docmd` stamps `FMD_ALL` before the
+call, so a body that says nothing — including one somebody adds later — is
+repainted whole, and the cost of forgetting is a wasted repaint rather than a
+window that does not come back. §11.96.2's rule: the value a forgotten path
+inherits has to be the safe one.
+
+Two invariants make skipping legal, and both belong to somebody else.
+**The popup is already off the screen**: `menu_drop` restores its own rect —
+out of the save-under, or with `wm_paint_dmg` when that claim was refused
+(§50.2) — and returns the chosen item *before* the command runs, so nothing
+owes the menu's pixels to this repaint. And **the status line's verdicts
+stopped living in the window** (§59.5): `fm_stat_clear` and its
+`FS_FERR`/`FS_LDST` are gone, so there is no clear-at-entry left for a
+skipped repaint to strand on screen.
+
+**`File > Open` gained the judgement the double-click has always made.** A
+folder re-lists the window through `fm_go`, which is `FMD_ALL`; a package
+goes to the loader, and the only thing that changes on screen is
+`Loading...` in the status line, which is `FMD_LINE` — the same
+`[ld_pending]` test `fm_onclick` makes on a double-click (§22.2), written
+once in each place because the two reach `fm_open_sel` by different routes.
+With nothing selected it is `FMD_NONE`, and so are `Rename` and `Delete`
+with nothing selected, `Open in New Window` on anything that is not a
+folder, and `New Window` at `FM_MAXWIN` — where the beep is the whole of
+what happens.
+
+Counted under MartyPC — a cycle-accurate 8088, not the field machine — with
+a counter at `fm_repaint` and a Disk window open on B:. `Builtins > Timer`
+**1 → 0**, `Builtins > Bounce` **1 → 0**, `Folder > New Window` **1 → 0**,
+`View > Icons` 1 → 1 and `View > List` 1 → 1, because the view really did
+change. The millisecond figure above is §11.96's own measurement of that
+class of repaint and is not a second reading of this one.
+
+Verified the way §12.9 verifies a redraw change — the same scripted session
+driven through this kernel and through one built `REDRAWFULL=1`, where
+`fm_docmd` repaints the whole window after **every** command, framebuffers
+compared step by step: **0 differing pixels** over sixteen steps, on VGA
+mode 12h, on CGA and on Hercules. Two cautions for whoever repeats it, both
+of which cost a run: **do not put an animating window in the session** — a
+Timer's own digits and a Fractal's render differ between two passes and read
+as a redraw defect (use `Builtins > Disk`, which exercises the same
+`FMD_NONE` path and stands still) — and **rebuild the reference** after any
+change to a path the session touches, or the diff is against yesterday's
+kernel.
+
+**And that A/B found a defect older than the change it was checking.** One
+step differed, by 28 pixels in the window's bottom-right corner:
+`fm_status_only` fills the status band out to `[fm_rgt]`, which is the full
+content width, and the **grow box lives in those rows** — so the cheap path
+was erasing part of it and never putting it back, where `fm_repaint` has
+always ended in `wm_grow_paint` for exactly that reason. It has nothing to do
+with commands: any status-line-only draw did it — a New Folder prompt, a
+Rename, `Loading...` — and it survived until the next full repaint, which is
+why it read as a cosmetic oddity rather than a bug with a cause. The one call
+is the fix. It is worth recording as the *reason* for the reference build
+rather than as a footnote to it: a full-repaint reference does not check the
+optimisation being made, it checks **every** cheap path the session touches,
+and this one had been cheap and slightly wrong since §22.9.
+
+### 22.14 The Disk window keeps §11.96's promise, and `fmv_store` is why
+
+Drag a window over a Note Pad and off again and the Note Pad does not
+redraw; do it over a Disk window and the Disk window redraws in full, which
+on a 4.77MHz machine is the whole listing going blank and filling back in.
+Reported from the field as exactly that pair, and the difference is one
+flag: the Note Pad carries `WF_SAVEU`, so `wm_draw_win` finds a raise cache
+and blits its content back, and the Disk window did not. Counted under
+MartyPC on the identical geometry with the roles swapped: Note Pad behind,
+`SU_HIT` and no `W_PAINT`; Disk window behind, `SU_MISS` and the full
+painter.
+
+**§11.96.1 named this window as the one that could not make the promise**,
+and its reasoning was right about the hazard and wrong about the remedy.
+Question 2 is *does it do work on gaining focus?* — and §22.8's re-list is
+exactly that, so a cache taken before the folder changed would put the old
+listing back over the new one, which is docs/FIELD-NOTES.md 4's bug with the
+stale half moved onto the glass. But that is a question the kernel can
+**answer at the moment it matters** rather than one an application has to
+promise about forever.
+
+**`fmv_store` is the one place a window's listing is replaced**, and it drops
+that window's raise cache. Every route in goes through it — `fm_focus`'s
+re-list on the way to the front, a paste's `fmv_reload_all`, a sibling
+adopting the snapshot in `fmv_bcast`, and every navigation — because
+`fmv_take` and `fmv_load` are the only two writers and both end there. So
+the promise is kept by construction, and a route added later inherits it
+rather than having to remember it.
+
+The ordering that makes it work is already in place: `wm_raise` calls
+`fm_focus` **before** it draws anything (§11.90), so a raise that re-lists
+has dropped the cache by the time `wm_draw_win` asks for it, and answers
+CF = 1 so the window is drawn whole from the new listing. A raise with
+nothing owed never reaches `fmv_store` and the cache stands.
+
+Four things about it are worth knowing.
+
+- **The drop is before `fmv_store`'s own early-out.** A window with no view
+  claim (`FS_VSEG` = 0) paints from the global snapshot instead (§22.1), and
+  that snapshot is changing under it too, so it needs the drop just as much.
+- **`fmv_winof` walks `inst_tab`, not `wm_zord`.** `fm_win_of` answers the
+  same question about a VISIBLE window because that is what `files_poster`
+  wants; a *minimized* Disk window still owns a cache somebody has to drop.
+- **The other disqualifier cannot arise here**: §11.96.1's question 1 is a
+  worker that advances state and skips drawing, and a Disk window has no
+  worker at all — `W_PAINT`, `W_ONKEY` and `W_ONCLICK` are its only ways in,
+  and all three are interaction on the frontmost window.
+- **Question 3 it passes more emphatically than anything else in the tree**:
+  `fm_repaint` is one full-width fill plus some forty `font_str`s and eight
+  icons. And since §11.96.3 made the cache one per window rather than one
+  per machine, taking it robs nobody.
+
+**And the cache is refused for a window hanging off the bottom of the
+screen**, which `wm_su_take`'s own comment says "refuses nothing in
+practice" on the grounds that `wm_fit` keeps a window on screen. `wm_fit`
+does; `ui_drag` does not — it clamps the TITLE BAR onto the screen and lets
+the body hang below, which is most of a window at the bottom of a CGA
+desktop. That is not changed here, because the refusal is protecting real
+arithmetic (`wm_su_edge` computes its row count and stride from the rect
+rather than reading back what `vga_rect_setup` clipped), but it is written
+down because it is why the first measurement of this said the cache was dead
+for Note Pad too.
 
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 

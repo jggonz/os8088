@@ -706,6 +706,11 @@ ui_drag:
     mov dx, bx
     add dx, [ui_dragh]
     mov si, [ui_dragwin]
+    call wm_dmg_vacate          ; WHERE IT WAS is the whole of what can have
+                                ; gone stale (SPEC.md 11.91.2) - recorded
+                                ; BEFORE the union below grows AX..DX past it.
+                                ; It is what makes dragging a window ACROSS
+                                ; another one cost the other one nothing
     call wm_dmg_union           ; ...grown to cover where it is now
     call wm_paint_dmg           ; caller-held lock, per the wm contract
 .done:
@@ -897,6 +902,29 @@ ui_grow:
 .release:
     call ui_drag_xor            ; erase; lock stays held to the end
     mov bx, [ui_dragwin]
+
+    ; Where it WAS is the whole of what a resize can have uncovered (SPEC.md
+    ; 11.91.2), and the origin is the one banked at mousedown - fixed for the
+    ; whole grow, even though wm_dock_snap may move it below. A window that
+    ; only GREW uncovers nothing at all, so its neighbours cost nothing.
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, bx
+    mov ax, [ui_curx]
+    mov cx, ax
+    add cx, [ui_origx]          ; x2 = x + w: the drop shadow's own column
+    mov bx, [ui_cury]
+    mov dx, bx
+    add dx, [ui_origy]
+    call wm_dmg_vacate
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
 
     ; clamp w: WMIN_W <= w <= [vid_w] - W_X (high bound first, low wins)
     mov ax, [ui_dragw]

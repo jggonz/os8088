@@ -363,7 +363,7 @@ Three things about it:
     "bss": 4736,
     "budget": 98304,
     "codemax": 65536,
-    "cold": 22331,
+    "cold": 22442,
     "coldpara": 1408,
     "fatpara": 288,
     "imgpara": 3744,
@@ -374,24 +374,24 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54694
+    "text": 54905
   },
   "small": {
     "bss": 4651,
     "budget": 94208,
     "codemax": 65536,
-    "cold": 21250,
+    "cold": 21361,
     "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3552,
-    "kend": 5856,
+    "imgpara": 3584,
+    "kend": 5888,
     "kseg": 96,
-    "ksize": 92160,
+    "ksize": 92672,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52099
+    "text": 52310
   }
 }
 ```
@@ -874,21 +874,21 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,523 | 37.0% |
-| the window system and its furniture | 16,326 | 21.2% |
-| drawing: adapters, primitives, glyphs, icons | 10,981 | 14.3% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,813 | 12.7% |
-| the kernel proper: API table, heap, scheduler, events | 5,886 | 7.6% |
+| the file system, end to end | 28,634 | 37.0% |
+| the window system and its furniture | 16,531 | 21.4% |
+| drawing: adapters, primitives, glyphs, icons | 10,981 | 14.2% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.7% |
+| the kernel proper: API table, heap, scheduler, events | 5,890 | 7.6% |
 | the Control Panel | 4,120 | 5.3% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,025** | |
+| **total** | **77,347** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 917 | 7,193 | **8,110** | 336 | — |
-| `wm.inc` — the window manager (§11) | 5,884 | — | **5,884** | 635 | — |
+| `files.inc` — the Disk window (§22) | 917 | 7,304 | **8,221** | 336 | — |
+| `wm.inc` — the window manager (§11) | 6,052 | — | **6,052** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,542 | — | **4,542** | 132 | — |
@@ -896,9 +896,9 @@ generated in the first place.
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,589 | — | **2,589** | 250 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,591 | — | **2,591** | 250 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,456 | — | **2,456** | 37 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,493 | — | **2,493** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
@@ -922,8 +922,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,694 | — | **2,694** | — | — |
-| **total** | **54,694** | **22,331** | **77,025** | **4,736** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,698 | — | **2,698** | — | — |
+| **total** | **54,905** | **22,442** | **77,347** | **4,736** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
