@@ -3978,3 +3978,55 @@ lands on the paths that are least gated and longest-running**, and §6.1.8's
 span is worth having for the same reason — a padded Note Pad row is exactly the
 shape it collapses. The Task Manager is the one consumer that had already
 solved the problem a different way.
+
+### Set 30 — the raise cache's restore, and the sub-rect that halves it (SPEC.md §5.8/§11.96.6)
+
+REDRAW-SPEC Part 3 left one instruction for whoever picked it up: *do not spend
+the sub-rect work on the strength of the 644 → 215 ms figure — that is the
+cache's win and it is already banked. Measure the restore itself first.* So this
+set starts there, and the measurement is three exec breakpoints inside one
+`wm_draw_win` on a cycle-accurate 5150/CGA, with `cycles` read at each.
+
+A 318×136 Disk window content, raised with its cache live:
+
+| span | cycles | ms |
+|---|---|---|
+| `wm_draw_win` → `wm_su_try` (all the chrome: frame, shadow, title bar) | 233,108 | 48.84 |
+| `wm_su_try` → `gfx_restore` (`wm_su_ck` + `wm_su_edge`, the edge merge) | 86,962 | **18.22** |
+| `gfx_restore` → `wm_grow_paint` (the blit) | 141,465 | **29.64** |
+
+So the restore is **47.86 ms** against 48.84 for everything around it — the
+blit is not a rounding error on a raise, and the **edge merge is 38% of it**,
+which nothing had priced before.
+
+**What the sub-rect is worth, on the case it is for.** Two Disk windows, the
+front one dragged clear and then dragged *away* so it genuinely uncovers an L
+(dragged the other way, §11.91.2 marks nothing at all and the whole question
+does not arise). Same session, same machine, breakpoints on `gfx_restore` and
+`gfx_sub_off`, which bracket the blit:
+
+| build | rect restored | cycles | ms |
+|---|---|---|---|
+| whole content | (111,38,428,173) — 41 B/row × 136 | 146,212 | 30.63 |
+| sub-rect | (216,80,428,173) — 27 B/row × 94 | 72,860 | **15.27** |
+
+**2.01x**, against 2.20x predicted by the byte counts — the difference is the
+per-row overhead the narrower band still pays 94 times.
+
+**The dock strip cost 1.4x of that on its own, and finding out was the whole
+lesson.** The first version folded the strip into the shared painted rect
+whenever `dock_paint` had drawn, and the strip is *full width*, so every
+window's owed rect became full width — including a window nowhere near the
+dock. Measured: 21.28 ms rather than 15.27, a 41-byte row where 27 would do.
+The marking pass one screen up had already got this right (`.mnodock` tests
+each window's own `y+h`), and `wm_su_owed` follows it. **A term that is only
+true of some windows does not belong in a rect they all share** — §26.3's
+phantom drive-zone columns are the same mistake, and this is the second time
+the answer has been "ask per window".
+
+**What is NOT measured here, and should be next**: the 18.22 ms edge merge is
+still done over the *whole* banked rect's rows even when the restore is a
+94-row band, because `wm_su_edge` walks the buffer with one stride and bounding
+it to the sub-rect's rows needs the two-level walk the plane skip implies. That
+is the larger of the two remaining halves — bigger than what the blit has left
+to give.

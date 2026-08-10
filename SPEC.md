@@ -1243,6 +1243,83 @@ whole win is proportional to height. It is the *opposite* lever from
 having because a fill is usually tall, and not worth quoting as a figure for
 drawing in general.
 
+### 5.8 `gfx_restore` can put back PART of its buffer
+
+`gfx_restore` and `gfx_blit4` are both off §11.3's clipped list for one stated
+reason — *a blit cannot take a sub-rect without advancing its source to match*
+— and that sentence was the whole of what stood between the raise cache
+(§11.96) and putting back only the strip a pass actually uncovered. It is
+three numbers.
+
+`gfx_save`'s buffer is plane-major: all of plane 0's rows, then plane 1's, and
+each row is `(x2/8) − (x1/8) + 1` bytes with `x1` rounded down and `x2` up
+(§5's table). So for a saved rect `B` and a sub-rect `S` inside it:
+
+```
+full_row = (B.x2/8) - (B.x1/8) + 1        ; bytes per SAVED row
+sub_row  = (S.x2/8) - (S.x1/8) + 1        ; bytes to move per row
+gfx_sub_st = (S.y1 - B.y1) * full_row + (S.x1/8 - B.x1/8)
+gfx_sub_rs = full_row - sub_row           ; step the BUFFER past each row
+gfx_sub_ps = (full_rows - sub_rows) * full_row      ; ...and past each plane
+```
+
+**The screen side needs nothing at all.** `vga_rect_setup` recomputes the
+geometry from whatever rect it is handed, so the caller passes `S` and it lands
+in the right place; only the buffer walk had to learn anything.
+
+`gfx_sub_arm` (AX/BX/CX/DX = `S`, SI → `B`'s four words) fills them and
+**refuses rather than clamps** an `S` that is not inside `B` — a clamp would
+silently restore something nobody asked for, and every refusal has a correct
+fallback one branch away: put the whole buffer back, which is never wrong and
+only dearer.
+
+**All three are 0 at rest, and that is what makes this additive.** The two
+restore bodies read them unconditionally, and a zero skip is the walk they
+already had — so the mouse cursor's own save-under (`vga_save_vram` /
+`vga_restore_vram`, called straight out of IRQ4) and the menu save-under are
+**byte-identical** with this in the tree. They live in `.text` with real
+initialisers for the `cur_sptr` reason (§7.1.2): `-f bin` zeroes nothing, and
+the cursor reaches the restore body on the machine's first pointer move.
+
+The two insertion points, and both of them need a `cs:` override:
+
+- **`sw_xfer`** (`kernel/softgfx.inc`), the 1bpp body's `.rrow` — DS is the
+  *buffer* inside that loop, which is why the row walk beside it already reads
+  `[cs:vid_rowadd]`. The start is added **outside** the plane loop, in the slot
+  a dead `cmp [sw_dir]`/`je` was occupying, because `.rst` runs once per plane.
+- **`vga_restore_vram`** (`kernel/vga12.inc`), `.row` — same, except that the
+  start and the plane skip both sit where DS is still `KERNEL_SEG`.
+
+**A sub-rect is ONE restore, and it is disarmed by the body rather than by the
+caller** — `wm_dmg_dk`'s rule, so the value a forgetful caller inherits is the
+safe one. In `sw_xfer` that clear is gated on `[sw_dir]`: `.done` is the
+**save** path's exit too, and a `gfx_save` between an arm and its restore would
+disarm it. `wm_su_edge` is exactly that, twice, which is why it runs *before*
+the arm in `wm_su_try` and not after.
+
+**The byte-column overhang is already paid for, and by the whole-window
+answer.** A sub-rect's left and right byte columns hold pixels outside it, and
+restoring them writes the cache's version of pixels that may have changed —
+§11.96.2's hazard, one region in. `wm_su_edge` is still the answer and needs no
+generalising, because of what the two kinds of overhang are: where `S`'s edge
+is `B`'s edge the overhang is *outside the window*, which is what `wm_su_edge`
+patches; everywhere else the overhang is the window's own content, which was
+not painted over this pass, so the cache and the screen already agree there and
+writing it is a no-op in value. **That argument depends on `S` being a superset
+of what was actually painted** (§11.96.6's intersection), and a masked write is
+still the wrong fix for §11.96.2's reason — it would put edge
+read-modify-writes in two primitives the cursor is on, to serve one caller.
+
+**What is NOT done: `gfx_blit4`.** The other half of REDRAW-SPEC Part 3 is
+Paint repainting only the uncovered part of its canvas, and it needs the same
+*shape* of arithmetic over a different layout — packed 4bpp with a caller's own
+stride, not a plane-major save buffer — plus an API slot telling a package
+which rect it owes, which no slot answers today (`OSAPI_WM_OBSCURED` is a
+boolean and `wm_clip_test` asks whether a rect crosses an edge). The principle
+that decides between the two consumers is **who already holds the pixels**: if
+only the kernel can, that is `WF_SAVEU`; if the application already does, it
+does not need a cache, it needs telling which part to put back.
+
 ## 6. font.inc
 
 `font_init` runs **after** `vid_setmode` (§39.6): zero ES:BP, then int 10h
@@ -5146,6 +5223,57 @@ window the pass has *just drawn* while windows above it are still above it in
 says clean, and the glass is right. The invariant is a fact only the caller
 knows — *nothing has drawn over this window's content since it was last drawn* —
 so it is stated here and owed there.
+
+#### 11.96.6 …and it puts back only the part the pass actually painted
+
+The cache turned a covered window's raise from a `W_PAINT` into a blit, and
+then the blit was the cost: measured on a cycle-accurate 5150/CGA with a
+318×136 Disk window, one restore is **29.64 ms of `rep movsb`** and the edge
+merge in front of it another **18.22 ms**, against 48.84 ms for all the chrome
+around them. Nearly all of it is wasted — on a busy four-window desktop
+**between 91% and 99% of what a marked window is redrawn with was never
+uncovered** (REDRAW-SPEC Part 3's table).
+
+§5.8's sub-rect restore is the primitive; this is what names the rect.
+`wm_su_sub` (AX/BX/CX/DX) is a one-shot on `wm_dmg_dk`'s terms — **0 means
+"the whole window", which is what every caller that never heard of it
+inherits** — and `wm_su_srect` intersects it with the banked rect, because a
+caller names what its *pass has painted* and that says nothing about where
+this window is. An empty intersection is the best answer available and not a
+failure: nothing this pass painted reached the content, so the content is
+already right and **no pixel is written at all**.
+
+**`wm_dmg_x1..y2` means what the pass has PAINTED from `.draw` onward**, which
+is a continuation of an existing meaning rather than an overload:
+`desk_dmg_zones` already grew that rect because a drive zone is drawn whole
+(§11.91). Nothing reads it as damage after the marking pass, and
+`wm_paint_dmg`'s `.promote` reads only `wm_dmg_mask`.
+
+Three things grow it, and each is a thing that really does put pixels down:
+
+- **the seed** — the damage rect, already covering the desktop dither and
+  every touched drive zone;
+- **the dock strip**, when `[wm_dmg_dk]` says `dock_paint` drew on it, because
+  the strip is drawn *under* windows;
+- **each window's own frame, as it is drawn** — and this one is the whole
+  reason the accumulation exists rather than a single rect computed up front.
+  `wm_draw_win` writes the outline, the drop shadow and the title bar **whether
+  its cache hit or not**, and a window above it overlapping any of that has
+  those pixels taken away. Marking is bottom-to-top and drawing is back to
+  front, so one pass in that order sees every contribution before it can
+  matter.
+
+**The bottom-most drawn window is therefore the one that gains most, and that
+is the majority case rather than a corner** — after §11.91.2 three of five
+measured drags mark exactly one window. Above it the box grows and the saving
+tapers, which is the honest shape of a bounding-box accumulation: two windows
+that barely overlap still both gain, two that nest do not.
+
+**What this deliberately does NOT do is change §11.91's marking.** Every window
+that was marked is still marked and still drawn; only how much of itself it
+puts back has changed. Keying the marking on each window's *redrawn region*
+instead of its rect is the further step REDRAW-SPEC Part 3 names, and it is a
+real change to the marking pass rather than an extension of this one.
 
 ### 12.05 The bar is redrawn only when its contents changed
 

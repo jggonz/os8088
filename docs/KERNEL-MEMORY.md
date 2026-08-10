@@ -366,15 +366,15 @@ Three things about it:
     "cold": 22463,
     "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3776,
-    "kend": 6144,
+    "imgpara": 3808,
+    "kend": 6176,
     "kseg": 96,
-    "ksize": 96768,
+    "ksize": 97280,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 3067,
     "stk0": 1024,
-    "text": 55332
+    "text": 55752
   },
   "small": {
     "bss": 4651,
@@ -874,24 +874,24 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,666 | 36.8% |
-| the window system and its furniture | 16,627 | 21.4% |
-| drawing: adapters, primitives, glyphs, icons | 11,256 | 14.5% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.6% |
+| the file system, end to end | 28,666 | 36.7% |
+| the window system and its furniture | 16,845 | 21.5% |
+| drawing: adapters, primitives, glyphs, icons | 11,458 | 14.6% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.5% |
 | the kernel proper: API table, heap, scheduler, events | 5,935 | 7.6% |
 | the Control Panel | 4,120 | 5.3% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,795** | |
+| **total** | **78,215** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 917 | 7,304 | **8,221** | 336 | — |
-| `wm.inc` — the window manager (§11) | 6,148 | — | **6,148** | 635 | — |
+| `wm.inc` — the window manager (§11) | 6,366 | — | **6,366** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,529 | — | **5,529** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,298 | **5,471** | 155 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,542 | — | **4,542** | 132 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,717 | — | **4,717** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
@@ -915,15 +915,15 @@ generated in the first place.
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 912 | — | **912** | 16 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
+| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 760 | — | **760** | 4 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
-| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 733 | — | **733** | 4 | — |
 | `toast.inc` — **(undescribed)** | 435 | — | **435** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,743 | — | **2,743** | — | — |
-| **total** | **55,332** | **22,463** | **77,795** | **4,916** | **7,762** |
+| **total** | **55,752** | **22,463** | **78,215** | **4,916** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
