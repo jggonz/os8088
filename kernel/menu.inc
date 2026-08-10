@@ -906,7 +906,7 @@ menu_bar_text:
     mov ax, MENU_BCMAX
 .n:
     mov [menu_bn], ax
-    call toast_room             ; the toast strip (SPEC.md 59) borrows the
+    call toast_room             ; the toast strip (SPEC.md 60) borrows the
                                 ; right end, so the MENUS are composed into a
                                 ; shorter segment and menu_bput's clamp drops
                                 ; whatever the strip covers. Composition stays
@@ -996,14 +996,14 @@ menu_bar_text:
 ; in:  BX = first cell, DX = last cell (inclusive), AL = ink, AH = background
 ; out: nothing (all registers preserved)
 ;
-; Split out of menu_bar_text when the toast strip (SPEC.md 59) arrived: the
+; Split out of menu_bar_text when the toast strip (SPEC.md 60) arrived: the
 ; strip is inverse video, so a differing span that crosses its left edge is
 ; TWO runs with different colours rather than one. What is unchanged is the
 ; rest - the byte just past the run is still banked and put back, because
 ; font_run wants ASCIIZ and menu_bcell carries one spare cell for it.
 ;
 ; **Bit 7 in a cell is the INVERSION FLAG and not a character** (SPEC.md
-; 59.2), so it is masked off across the run before the glyphs are drawn and
+; 60.2), so it is masked off across the run before the glyphs are drawn and
 ; put back after. That is exact rather than approximate: a run arriving here
 ; with CWHITE ink is wholly inside the strip by construction, so every cell
 ; in it carries the bit and every cell in it gets it back.
@@ -1142,7 +1142,7 @@ menu_bpadc:
     jae .d                      ; the machine looks alive and answers nothing.
                                 ; It was unreachable while [menu_bn] was
                                 ; always the whole segment (menu_layout clamps
-                                ; every pen into it); SPEC.md 59.2's toast
+                                ; every pen into it); SPEC.md 60.2's toast
                                 ; strip LOWERS it, so a message wide enough to
                                 ; reach back over a menu title's pen hangs the
                                 ; UI. Clamping here rather than at the two

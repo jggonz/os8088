@@ -34,6 +34,20 @@ make test     # boot headless, QMP socket at build/qmp.sock — this is how you 
 make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndcheck.py)
 make debug    # boot halted, waiting for gdb on :1234
 make bench    # build the tests/ apps — ON DEMAND ONLY; nothing under tests/ ships
+make zcheck   # play every Z-machine story to a script and diff it against
+              # dfrotz (§59.13). `make zh` builds the harness interpreter;
+              # `tools/zharness.py <story> --repl` types at one by hand. This
+              # is how a Frotz change is checked — a story is the only thing
+              # that exercises an interpreter, and it is minutes by hand
+make zgfx     # ...and what the reader can SEE (§59.14): every row the
+              # interpreter claims against the pixels under it, the same
+              # across a repaint, and each story's opening screen against the
+              # real Frotz's. `make zpic` builds the v6 picture fixture it
+              # ends with; `make zscreens` re-takes the golden screens, and
+              # is the only part that needs `frotz` and `pyte` installed.
+              # zcheck cannot see a graphics defect — a story that draws a
+              # quote box and loses it prints the same characters as one that
+              # keeps it
 make clean
 ```
 
@@ -53,7 +67,10 @@ exactly like the feature being broken.
 
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
 `xt-cga`, `xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`, `386`,
-`386-sound`, `486`, `pentium`; plus `marty` (MartyPC).
+`386-sound`, `486`, `pentium`, `xt-z`, `386-z`; plus `marty` (MartyPC). The
+last two are the Frotz machines (§59.9) and the only ones that put a story
+floppy in B: instead of the apps disk — `make zdisk` builds it, and
+`tools/getstories.py` fetches the stories, which are never committed.
 
 **Nothing in `build/` is tracked — never commit a binary.** The toolchain is
 deterministic on purpose (`tools/os88disk.py` pins the volume serial and every

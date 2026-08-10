@@ -1,0 +1,13 @@
+# A bear's first few moves. It is a small game and the script stays in the
+# bedroom, which is where every object it starts with lives. Bear opens on a
+# quote box in the UPPER window; the reference prints that inline and the diff
+# drops it by its padding (tools/zharness.py, normalise), so this compares.
+look
+inventory
+examine me
+north
+look
+south
+look
+wait
+inventory

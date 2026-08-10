@@ -878,6 +878,120 @@ write-protected**, for the same reason the bench disks must not be. The log
 buffer is a heap claim taken at D and given back at D, so an unarmed log costs
 no memory and cannot split the heap.
 
+### Frotz: the story harness, which is `trklog`'s shape again
+
+`apps/frotz` built a second time with `-DZHARNESS` (SPEC.md §59.13), for the
+same reason `trklog` exists: the thing measured is the shipped code and not a
+copy that can drift from it. Every hook is inside `%ifdef ZHARNESS` and the
+shipped `FROTZ.O88` is unchanged to the byte — which is checkable, by building
+it both ways and comparing sizes.
+
+What it adds is a **teletype on COM4 (`0x3E8`)**: the story's output goes out a
+byte at a time, its keystrokes come back in, and four markers say where it is.
+So a story is playable from the host over a socket, and the answer to "does a
+real story run" stops being a person reading a screendump.
+
+```sh
+make zh                                     # the harness interpreter
+python3 tools/zharness.py ADVENT.Z3         # play its script, print the log
+python3 tools/zharness.py ADVENT.Z3 --repl  # ...or type at it yourself
+python3 tools/zharness.py --all --compare   # every story, diffed vs dfrotz
+make zcheck                                 # the same, as a gate
+```
+
+It boots QEMU itself, builds the B: disk itself (the story arrives as
+`STORY.DAT`, which is what lets one binary play all of them), and double-clicks
+its way in — os8088 has no way to start a package from outside, so the launch
+is a scripted GUI walk and the coordinates live in `tools/zharness.py`. **A
+timeout waiting for `[[ZH:READY]]` is that walk, not the interpreter**;
+`--shot` writes what the screen actually had on it. The walk is retried once
+before it gives up: a double-click landing before the desktop has finished
+drawing is decoded as two single clicks, and the giveaway is a screendump of a
+bare desktop with the icon not even selected.
+
+Three differences from a real session, each deliberate and each documented at
+its `%ifdef`: no `[MORE]` paging (it waits on a key the script has no reason to
+send, and the run deadlocks around the sixth room), no echo on the wire, and no
+status line on the wire. The last two are what make the transcript comparable
+to `dfrotz -p`, which prints neither in a form that survives normalisation.
+
+`--compare` diffs the WORDS in order, not the lines: `dfrotz` wraps at its
+`-w`, os8088 wraps at whatever the window is, and the harness sends the
+pre-wrap stream. A wrong opcode changes the words; a different column count
+does not. Both sides' commentary is dropped — `dfrotz`'s `Warning:` lines
+(Balances calls `@get_child` on object 0 every turn and says so) and os8088's
+own notices (`No room for undo; play continues.`) — and neither side's halt
+ever is.
+
+**`refused, with a reason` is a pass.** A story too big to be resident is
+turned down on purpose (§59.4/§47), so `BRONZE.Z8` reports `No room for the
+scrollback.` on a 640KB machine and the gate counts that as correct. A gate
+that failed on it would be arguing with the design.
+
+The reference's upper window is recognised **by its padding** and dropped:
+`dfrotz` positions that text with spaces, and its own prose never carries a run
+of three because it wraps at `-w` and separates words by one. That is what lets
+a story whose upper window holds a quote box rather than a status line —
+`BEAR.Z5`, `CURSES.Z5` — be compared at all. It fails safe: a story that
+indents in the *lower* window loses those words from the reference and keeps
+them here, so the error is a divergence to investigate, never a silent pass.
+There is no way to opt a story out of the diff, on purpose: an opt-out is a
+place for a real divergence to hide, and both of the ones this found are real.
+
+**`make zgfx` is the other half, and it asks what the transcript cannot**
+(SPEC.md §59.14). Every check above is about characters the story *printed*; a
+story that draws a quote box into the upper window and then loses it prints
+exactly the same characters as one that keeps it, so `zcheck` is structurally
+blind to a whole class of defect. `zgfx` compares the interpreter's own model
+of each row against the pixels under it, does it again on a freshly repainted
+window, and holds each story's opening screen against the real curses Frotz's.
+
+```sh
+make zgfx                                     # the gate, stories + the fixture
+python3 tools/zharness.py BEAR.Z5 --graphics  # one story
+make zscreens                                 # re-take the golden screens
+```
+
+Three things about running it are worth knowing before a failure confuses you:
+
+- **it is slower**, by a screendump per prompt. That is the only reason it is a
+  separate target;
+- **every complaint leaves a PNG** in `build/zh/`, named for the story, and the
+  raw wire — markers, both windows' grids, every split and repaint — is in
+  `build/zh/<story>.wire`. The `.log` beside it is the prose with all of that
+  taken out, which is the wrong file to open when the question is graphical;
+- **`make zscreens` is the only part that needs anything installed** (`brew
+  install frotz`, `pip3 install pyte`). The goldens are committed, so the gate
+  itself is still nasm + qemu + python3. Re-take them when the Frotz window's
+  size changes — the geometry is in each file's header and the gate refuses,
+  with the reason, rather than reporting the mismatch as a story failure;
+- **each golden is two takes, and the gate wants the words common to both.**
+  A story may roll for its opening — `CURSES.Z5` draws a different epigraph
+  every time — so the file measures how much of the screen is settled instead
+  of assuming all of it is. Fourteen of fifteen come out fully stable.
+
+**Do not make it send keys.** An earlier version forced the repaint check by
+sending `PgUp`/`PgDn` — which the interpreter takes before the story's input
+ring, so they cannot be mistaken for the story's own input. It nonetheless left
+`DREAMHLD.Z8` with no further prompt inside a seven-minute budget, every time,
+where the same run without it finished cleanly. That is worth chasing on its
+own (SPEC.md §59.14); it is not worth a gate that fails for two reasons at
+once. The check now rides on the repaints stories provoke themselves.
+
+**A `@random` story can diverge run to run in `zcheck`, and that is not a
+regression.** Both interpreters seed from the clock (Standard 2.4,
+`zx_seedclock`), so a word diff over a story that rolls dice is not
+reproducible — `ZTUU.Z5` diverged on one lamp message in one run and matched on
+the next. Re-run before believing a divergence that names a random event; the
+graphics gate is unaffected, because its golden knows which words were rolled
+for.
+
+It found four defects on its first run over the library, and the two that
+matter most to a reader were both about the upper window — a quote box erased
+by the shrink that follows it, and a `Flags 1` bit that turned 905's clock into
+a move counter (SPEC.md §59.5). Neither changed one character of any
+transcript, which is the argument for the gate in one sentence.
+
 `filetest` also has a fragmented-volume variant, `build/filetest-frag.img`,
 and its results are worth pairing with the host-side fsck — the in-kernel
 free-space check and `python3 tools/os88disk.py --verify <img>` catch
@@ -1533,7 +1647,15 @@ the sound cards: **a machine that is not an 8088** (the 286, 386, 486 and
 Pentium targets), a **period bus** under a card rather than a modelled one,
 and a second opinion on the video probe. `make xt`,
 `xt-640`, `xt-cga`, `xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`,
-`386`, `386-sound`, `486`, `pentium`.
+`386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`.
+
+The last pair are the Frotz machines (SPEC.md 59.9) and are the only targets
+that put something other than the apps disk in B:. They also cover a drive
+geometry nothing else does — `xt-z` gives the XT a 720KB 3.5" DD drive as B:,
+because a 360KB disk does not hold a story library and DOS 3.2 supported one
+on an XT. 86Box takes it as `fdd_02_type = 35_2dd`, and that was established
+the way every other machine setting in this file was: launch a throwaway copy
+of the config, `kill -TERM`, read the file back and see what it kept.
 
 The last two are the *fast* end rather than the period end: a 486DX2/66 and a
 Pentium 133, both with an SB16. 8086 real-mode code runs on them verbatim, so

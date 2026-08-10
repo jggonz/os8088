@@ -1,0 +1,251 @@
+! =============================================================================
+! os8088 - tests/frotz/zopstest.inf
+!
+! The Frotz capability gate (SPEC.md 59), and it is a STORY rather than a .o88
+! package because the thing under test is an interpreter: the only way to ask
+! whether @div rounds toward zero is to make a Z-machine execute @div.
+!
+! It prints one line per check - "PASS name" or "FAIL name got <n> want <n>" -
+! and ends with a count. That makes the transcript a RESULT rather than prose
+! to eyeball, and it makes the two interpreters comparable by diff:
+!
+!     dfrotz -w 80 -p build/ztest/zopstest.z3      <- must be all PASS
+!     ...the same story on os8088, transcript written to B:, diffed against it
+!
+! dfrotz is the reference (Frotz 2.55, from Homebrew). A check that fails THERE
+! is a bug in this file, not in the interpreter being tested - which is the
+! whole reason the gold side is generated rather than hand-written.
+!
+! No library. Inform's own library would drag in a parser, a status line and
+! several thousand bytes of prose, and none of that is what is being measured;
+! Main is the entry point and the story is about 3KB at every version.
+!
+! Compiled at v3, v5 and v8 from this one source (tools: `make ztest`), because
+! the three differ in exactly the places most likely to be wrong: packed
+! address scaling, the two property-size encodings, 32 vs 48 attributes, and
+! the v5 text-buffer layout.
+! =============================================================================
+
+Constant Story "ZOPSTEST";
+Constant Headline "^The os8088 Frotz gate.^";
+
+Global npass = 0;
+Global nfail = 0;
+
+! There is no library, so the one attribute these tests use has to be declared.
+! Any attribute number does; what is being checked is @set_attr / @clear_attr /
+! @test_attr, and in particular that v4+ has 48 of them where v3 has 32.
+Attribute light;
+
+! ---------------------------------------------------------------------------
+! ok(name, got, want) - one check.
+! Printing the name unconditionally (rather than only on failure) is what
+! makes the transcript diffable: the two interpreters emit the same LINES in
+! the same order, so a diff points at the check that diverged instead of at a
+! count that changed.
+! ---------------------------------------------------------------------------
+[ ok name got want;
+    if (got == want) {
+        npass = npass + 1;
+        print "PASS ", (string) name, "^";
+    } else {
+        nfail = nfail + 1;
+        print "FAIL ", (string) name, " got ", got, " want ", want, "^";
+    }
+];
+
+! ---------------------------------------------------------------------------
+! Objects. Deliberately a small tree with a known shape, so insert/remove can
+! be checked by walking it rather than by trusting a single link.
+! ---------------------------------------------------------------------------
+Object  room "Room"
+    with description "A room.",
+         cap 42;
+
+Object  crate "crate" room
+    with name 'crate' 'chest',
+         cap 7;
+
+Object  coin "coin" crate
+    with name 'coin',
+         cap 1;
+
+Object  lamp "lamp" room
+    with name 'lamp' 'lantern',
+         cap 3;
+
+[ CountChildren o n c;
+    c = child(o);
+    while (c ~= 0) { n = n + 1; c = sibling(c); }
+    return n;
+];
+
+! ---------------------------------------------------------------------------
+! Arithmetic. The Standard (15, under each opcode) pins signed division as
+! truncating TOWARD ZERO, which is the one every naive implementation gets
+! wrong in the negative cases - and @mod takes the sign of the dividend.
+! ---------------------------------------------------------------------------
+[ ArithTests x;
+    ok("add", 3 + 4, 7);
+    ok("sub_neg", 3 - 10, -7);
+    ok("mul", 300 * 100, 30000);
+    x = 1000;
+    ok("mul_wrap", x * 100, -31072);        ! 100000 truncated to 16 bits, and
+                                            ! it has to happen at RUN time -
+                                            ! Inform refuses to fold it
+    ok("div_pos", 13 / 4, 3);
+    ok("div_neg1", (-13) / 4, -3);           ! toward zero, not -4
+    ok("div_neg2", 13 / (-4), -3);
+    ok("div_neg3", (-13) / (-4), 3);
+    ok("mod_pos", 13 % 4, 1);
+    ok("mod_neg1", (-13) % 4, -1);           ! sign of the dividend
+    ok("mod_neg2", 13 % (-4), 1);
+    ok("min_int", -32768, -32768);
+    x = -32768;
+    ok("min_int_div", x / 1, -32768);
+    ok("and", $FF00 & $0FF0, $0F00);
+    ok("or", $FF00 | $00FF, -1);
+];
+
+! Comparisons go through VARIABLES, not constants. Inform folds a constant
+! comparison at compile time and folds the negative ones UNSIGNED, so
+! `(-4 < 3)` comes out 0 - which the reference interpreter duly reports as a
+! failure. That is the compiler being wrong about the source, not the Z-machine
+! being wrong about @jl, and the fix is to make the comparison happen at run
+! time where the signed opcode actually decides it.
+[ CompareTests a b;
+    a = 3; b = 4;
+    ok("jl", (a < b), 1);
+    a = -4; b = 3;
+    ok("jl_neg", (a < b), 1);
+    a = -4; b = -9;
+    ok("jg_neg", (a > b), 1);
+    a = 3;
+    ok("je_multi", (a == 1 or 2 or 3), 1);
+    a = 7;
+    ok("je_none", (a == 1 or 2 or 3), 0);
+    a = 0;
+    ok("jz", (a == 0), 1);
+];
+
+[ ObjectTests n;
+    ok("parent", parent(coin), crate);
+    ok("child", child(crate), coin);
+    ok("parent_lamp", parent(lamp), room);
+    n = CountChildren(room);
+    ok("children2", n, 2);
+
+    move coin to room;
+    ok("moved_parent", parent(coin), room);
+    ok("moved_child_first", child(room), coin);      ! insert_obj makes it FIRST
+    ok("box_empty", child(crate), 0);
+    n = CountChildren(room);
+    ok("children3", n, 3);
+
+    remove coin;
+    ok("removed", parent(coin), 0);
+    n = CountChildren(room);
+    ok("children_back2", n, 2);
+    ! ...and the sibling chain has to have been repaired, not just shortened
+    ok("chain_intact", (child(room) == lamp || child(room) == crate), 1);
+
+    move coin to crate;                                ! put it back
+];
+
+[ PropTests;
+    ok("prop_room", room.cap, 42);
+    ok("prop_box", crate.cap, 7);
+    crate.cap = 99;
+    ok("prop_write", crate.cap, 99);
+    crate.cap = 7;
+    ok("prop_provides", coin provides cap, 1);
+];
+
+[ AttrTests;
+    give lamp light;
+    ok("attr_set", lamp has light, 1);
+    give lamp ~light;
+    ok("attr_clear", lamp has light, 0);
+    give lamp light;
+    ok("attr_reset", lamp has light, 1);
+];
+
+! ---------------------------------------------------------------------------
+! Text. The point of these is the DECODER, so they cover the two things that
+! break it: an abbreviation (Inform emits them for repeated strings) and the
+! A2 shift/escape path that any character outside A0 takes.
+! ---------------------------------------------------------------------------
+[ TextTests;
+    print "TEXT plain^";
+    print "TEXT digits 0123456789^";
+    print "TEXT punct .,!?_#'/-:()^";      ! every one of these lives in A2,
+                                           ! so each is a shift the decoder has
+                                           ! to get right
+    print "TEXT caps ABCXYZ^";
+    print "TEXT num ", 12345, " ", -12345, " ", 0, " ", -32768, "^";
+    print "TEXT char ", (char) 'A', (char) 'z', "^";
+];
+
+[ StackTests a b c;
+    a = 1; b = 2; c = 3;
+    ok("locals", a + b + c, 6);
+    ok("nested", Fib(10), 55);
+    ! @call takes at most 3 arguments in v1-3 and up to 7 in v4+ (Standard 15,
+    ! @call_vs2). Inform refuses the 6-argument form at v3, which is the
+    ! version difference doing its job - so the check itself is conditional.
+#IfV3;
+    ok("many_args", Sum3(1, 2, 3), 6);
+#IfNot;
+    ok("many_args", Sum6(1, 2, 3, 4, 5, 6), 21);
+#Endif;
+];
+
+[ Fib n;
+    if (n < 2) return n;
+    return Fib(n - 1) + Fib(n - 2);
+];
+
+#IfV3;
+[ Sum3 a b c;
+    return a + b + c;
+];
+#IfNot;
+[ Sum6 a b c d e f;
+    return a + b + c + d + e + f;
+];
+#Endif;
+
+! ---------------------------------------------------------------------------
+! @random in its PREDICTABLE mode (Standard 2.4): a negative argument seeds a
+! deterministic sequence, which is the only way a random number generator can
+! appear in a diffable transcript at all.
+! ---------------------------------------------------------------------------
+[ RandomTests i n bad;
+    n = -3;
+    @random n -> n;                 ! a negative seed starts the predictable
+                                    ! sequence (Standard 2.4); the operand has
+                                    ! to be a variable - Inform will not emit a
+                                    ! negative constant here
+    bad = 0;
+    for (i = 1 : i <= 6 : i++) {
+        @random 3 -> n;
+        if (n < 1 || n > 3) bad = 1;
+    }
+    ok("random_range", bad, 0);
+    @random 0 -> n;                 ! back to a random source
+    ok("random_seeded_ok", 1, 1);
+];
+
+[ Main;
+    print "^ZOPSTEST^";
+    ArithTests();
+    CompareTests();
+    ObjectTests();
+    PropTests();
+    AttrTests();
+    TextTests();
+    StackTests();
+    RandomTests();
+    print "^RESULT pass ", npass, " fail ", nfail, "^";
+    @quit;
+];

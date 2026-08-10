@@ -15,6 +15,14 @@
 #   86Box ROMs  NOT shipped with 86Box, from github.com/86Box/roms. Without
 #               them 86Box starts and every machine in vm/ fails to boot.
 #
+# Nothing here is installed for the Frotz gates, and two of them want more:
+# `make ztest` and `make zcheck` need `inform` and `dfrotz` (`brew install
+# inform6 frotz`), and `make zscreens` - which RE-TAKES the golden screens the
+# graphics gate compares against, and is the one tool in tools/ that is not
+# stdlib-only - additionally needs `pip3 install pyte`. None of them is on the
+# path of `make`, `make run` or any gate that runs by default: the goldens are
+# committed precisely so that `make zgfx` stays stdlib + qemu (SPEC.md 59.14).
+#
 # Usage:
 #   tools/setup-macos.sh                 install everything, ask before big steps
 #   tools/setup-macos.sh --yes           ...without asking

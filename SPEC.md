@@ -7530,7 +7530,7 @@ So the assertion is the **caller's**:
 `dsk_batch_begin` / `dsk_batch_end`, nesting, published as API slots 0x0388
 and 0x0390 because the installer is a driver and reaches the kernel the same
 way a package does. (They were drafted at 0x0380/0x0388 and moved when they
-met §59's `OSAPI_TOAST` at the merge — §20.8 rule 4 working as written: neither
+met §60's `OSAPI_TOAST` at the merge — §20.8 rule 4 working as written: neither
 had shipped, so neither was frozen, and the one that had not yet reached the
 integration branch moved.) Inside a batch, `dsk_bpb_bank_get` and
 `dsk_bpb_bank_put` treat a floppy the way §18.9.2 already treats a fixed
@@ -11579,7 +11579,7 @@ the line asked about must be what happens.
 On success the window is re-listed with `fmv_load` at the new volume's root
 and `fmv_bcast` pushes it into any sibling window on the same drive — the
 same pair `fm_edit_commit` ends with, and for the same reason. On failure the
-`FERR_*` is said as a toast (§59.5) and the window is left showing exactly
+`FERR_*` is said as a toast (§60.5) and the window is left showing exactly
 what it showed before, which is the disk it still cannot mount.
 
 Two things are worth knowing before touching it. On the machine this project
@@ -11594,25 +11594,25 @@ handler in that table).
 
 #### 22.12.1 …and it says so when it worked
 
-`Formatted B:` in the menu bar for three seconds (§59), on success only. This
-is §59.6's reasoning applied where it is strongest: a format is **seconds of
+`Formatted B:` in the menu bar for three seconds (§60), on success only. This
+is §60.6's reasoning applied where it is strongest: a format is **seconds of
 floppy the user waited for**, so the success is worth saying and not only the
 failure — and unlike the Control Panel's save, which had no channel at all
-until §59.6 gave it one, this one had a window sitting right behind it and
+until §60.6 gave it one, this one had a window sitting right behind it and
 still needed the toast.
 
 **The window is not the report.** After a format the Disk window reads
 `Drive B: 0 files · Size 0K · Free 354K`, and every word of that is a fact
 about the volume rather than an account of what just happened: it reads
 exactly the same whether this format ran a moment ago or the disk was always
-empty and fine. §59.5's distinction, from the other end — a status line says
+empty and fine. §60.5's distinction, from the other end — a status line says
 what is *true*, a toast says what *happened*.
 
 Three things are load-bearing, and each is somebody else's rule first:
 
 - **It is said AFTER `fmv_load`, not before.** A mount can arm §12.8's
   file-activity widget, which owns those pixels and which `toast_show`
-  refuses while it is up — §59.6's own ordering, where the Control Panel's
+  refuses while it is up — §60.6's own ordering, where the Control Panel's
   save has to speak after `drv_cfg_save` rather than before it.
 - **ES is loaded explicitly**, because `toast_show` reads its string through
   `ES:SI` and `files.inc` is `.cold` (§2.6): CS there is `COLD_SEG`, so the
@@ -11622,7 +11622,7 @@ Three things are load-bearing, and each is somebody else's rule first:
   `toast_buf`. The painter that owns that buffer runs after this, from
   `fm_docmd`'s repaint, and stages it afresh.
 
-It is `toast_show` and not §59.4's `toast_now`: the format has already
+It is `toast_show` and not §60.4's `toast_now`: the format has already
 happened, so there is nothing for the message to arrive *behind*, and the
 idle pass is where a staged toast belongs.
 
@@ -29398,20 +29398,35 @@ or not a document is ever opened). Paying it here instead puts the cost at
 the moment the user has already asked for a file and is expecting the drive
 to run — and charges it only to sessions that actually open a document.
 
-### 54.8 Accepting the document: four apps, and the two traps between them
+### 54.8 Accepting the document: five apps, and the three traps between them
 
-Note Pad, Paint, Tracker and ArtfulType all take a document handed to them at
-launch, and the shape is the same in all four: the entry proc **records**
-(`OSAPI_ARG_FILE`, then the name copied into the app's own buffer) and the
-first `W_PAINT` **spends**. Recording in the entry proc is forced — the word
+Note Pad, Paint, Tracker, ArtfulType and Frotz all take a document handed to
+them at launch, and the shape is the same in all five: the entry proc
+**records** (`OSAPI_ARG_FILE`, then the name **and the locator** copied into
+the app's own buffers) and the first `W_PAINT` **spends**. Recording in the entry proc is forced — the word
 is read-and-clear (§54.5), so it must be taken before anything else asks —
 and spending in the paint is forced too, because every load path in these
 apps shows a toast, repaints or enters fullscreen, and all three want the
 **gfx lock held**, which an entry proc does not hold (§20.2). The paint is
 also the first moment the window is placed and visible.
 
-Two traps, both of which shipped broken and were caught by clicking a saved
-file rather than by reading the code:
+Three traps, every one of which shipped broken and was caught by clicking a
+saved file rather than by reading the code:
+
+- **`DX` and `BL` are half the answer.** `OSAPI_ARG_FILE` hands back the name
+  *and* the pair that locates it, and the name on its own is only findable
+  from wherever the kernel happens to be standing. It is standing in the
+  **program's** directory: `ld_run_body` reads the image out of it and far-
+  calls the entry proc as one unit, and §54.9's `assoc_back` does not restore
+  the document's folder until the load has returned. So the whole of opening a
+  document is **copy the name, `OSAPI_FILE_GOTO`, read** — and an app that
+  banks only the name works perfectly for every document that happens to sit
+  in the same folder as the program, which is the entire root of a disk.
+  Frotz banked only the name and reported `That story is not on this disk.`
+  for every story in `INFOCOM\`, `CLASSIC\` and `MODERN\` — which is every
+  story the story floppy ships (§59.9) — while the same file copied to the
+  root opened. The two directories being the same one is the case that hides
+  it, and it is the case every test disk was built as.
 
 - **The load routine's own contract still applies.** `pt_load` takes its name
   in **SI**, because the dialog's completion proc had one there; the handoff
@@ -30443,7 +30458,788 @@ same page:
   still holds unchanged. The two drivers that predate it set AL explicitly
   rather than leaking whatever their last compare loaded.
 
-## 59. toast.inc — the transient one-line message
+## 59. Frotz — the fifteenth package (`apps/frotz/frotz.asm`)
+
+An interpreter for Infocom's Z-machine, windowed, with sound and pictures, and
+its own story floppy in drive B:. `docs/FROTZ-PLAN.md` is the design record and
+the reasoning; this section is what the code promises.
+
+**It is not a port of Frotz.** David Griffith's Frotz is C and this tree has no
+C toolchain by choice. This is an independent implementation of the *Z-Machine
+Standard 1.1* in 8086 assembly, named in the Frotz tradition the way `dfrotz`
+and `wfrotz` are, and the About box says exactly that. A program that borrows a
+name and does not say where it came from is a misattribution.
+
+Prefixes: `zf_` for the package's own state and UI, and one per module —
+`zm_` memory, `zt_` text, `zo_` objects, `zd_` dictionary, `zw_` windows,
+`zw6_` v6 windows, `zp_` pictures, `zs_` sound, `zi_` input and files,
+`zx_` execution.
+
+### 59.1 Modules
+
+One subject each, and none of them reaches into another's state. The two
+crossings that exist are named here rather than discovered: the UI task writes
+`[zf_req]`/`[zf_reqres]` and the input ring that the worker reads (§59.6), and
+`zexec.inc` reads the whole story-header cache because that *is* the machine's
+configuration.
+
+| file | owns |
+|---|---|
+| `frotz.asm` | the window, the menu bar, the callbacks, the worker's hiring |
+| `zbss.inc` | **every byte of bss**, because `OS88_BSS` takes no forward reference |
+| `zmem.inc` | story memory, the header, and every big-endian word |
+| `ztext.inc` | Z-string decoding, ZSCII, the four output streams |
+| `zobj.inc` | the object tree, attributes, properties |
+| `zdict.inc` | the dictionary and the tokeniser |
+| `zwin.inc` | the v1-v5/v7/v8 text window: wrap, scroll, status line |
+| `zwin6.inc` | v6: eight windows in pixel coordinates |
+| `zpic.inc` | `.PIX` and Infocom `.mg1` pictures |
+| `zsnd.inc` | `@sound_effect` |
+| `zio.inc` | the input ring, the request handshake, Quetzal saves |
+| `zexec.inc` | decode, dispatch, frames, and every opcode |
+| `zharness.inc` | **development only** — the teletype §59.13 describes. Included only under `-DZHARNESS`, and no shipped build defines it |
+
+`zbss.inc` holds the locations as `%define`s and not `equ`s on purpose: a
+`%define` expands at the use site, so a forward reference to `os88_image_end`
+is an ordinary one, while an `equ` would have to be evaluated before
+`OS88_IMAGE_END` has planted the label. A module that needs state the map did
+not anticipate takes it from its own `*_SLACK` range and from no other; a
+module that overruns its range raises `ZF_BSS_TOTAL` in the same edit, which is
+the review that arrangement exists to force.
+
+**That review does not catch the other way of getting it wrong**, and `zio.inc`
+had it: three separate buffers were all declared at `ZIO_SLACK + 40` — the save
+name's 13 bytes, the scrollback's three words and the 24-byte find record.
+Nothing overran anything and the total never moved, so nothing raised
+`ZF_BSS_TOTAL` and the build was clean. Saving a game while a transcript was
+open wrote the save's file name over `[zi_scrseg]`, which `zi_script_write`
+then loads into **ES** to store 16KB through. A range says where a module's
+state may live and says nothing about two of its own allocations landing on
+each other; the offsets inside a range are still a map somebody has to keep,
+which is why `zio.inc` now carries one in a comment and appends at the end.
+
+### 59.2 Versions
+
+All of v1–v8. The version number is not the thing that varies — three
+mechanisms are:
+
+| | v1–v3 | v4–v5, v7–v8 | v6 |
+|---|---|---|---|
+| packed address | `<<1` | `<<2` (v7 adds the offsets) | `<<2` + offsets |
+| status line | the interpreter draws it | the story writes an upper window | none |
+| windows | lower + a 1-line status | lower + an upper character grid | 8, in **pixels** |
+| pictures | no | no | yes |
+
+v8 is v5 with `<<3`. v7 is v5 with two offset words. Neither costs anything.
+
+**v6 is in scope by decision, and nothing shippable exercises it**: every v6
+game is Activision's, 300KB and up, and needs separate picture files. It is
+verified against a v6 story compiled by `inform -v6` and against synthesised
+`.mg1` fixtures, and that is a weaker guarantee than the rest of this section
+carries. Saying so is the point — §47 forbids claiming a fact you have not
+established.
+
+### 59.3 Addressing 512KB from 16-bit registers
+
+A story address is up to 20 bits. A claim hands back a base *segment*, so the
+byte at `A` is at `[zf_sseg] + (A >> 4) : A & 15`, and for a 20-bit `A` the
+shift is a 16-bit result — no 32-bit register anywhere, which §1 rule 1 does
+not allow in the first place.
+
+Two fast paths carry nearly all of it:
+
+- **`A < 65536` is one segment**, reached as `[zf_sseg:A]` with no arithmetic.
+  All of dynamic memory lives there by construction.
+- **The PC is a live `ES:SI`.** Instruction fetch is `lods`. `ES:SI` is
+  renormalised only when SI crosses 0x8000 — once per 32KB of straight-line
+  code.
+
+That second one is what makes the interpreter affordable and it costs a rule:
+**ES belongs to the story while the VM runs.** Every kernel call from inside
+the VM saves and restores it, and every `[es:bx+W_*]` read of the window record
+happens with ES put back to `KERNEL_SEG`.
+
+Z-machine words are **big-endian** and the 8086 is not. `zmem.inc` owns that
+conversion and nothing else forms a Z-machine word by hand.
+
+### 59.4 The story is resident, and Frotz refuses rather than pretends
+
+**There is no paging.** `int 13h` costs about 400ms on the target machine
+whatever it moves (`PERFORMANCE.md`), and decoding a single turn's text touches
+high memory hundreds of times: paging is not a slower design here, it is a
+broken one.
+
+So the size is checked **before any disk I/O**. `OSAPI_FILE_DLG`'s completion
+hands over `DX:CX` = the file's size from the directory entry; Frotz compares
+it against `OSAPI_MEM_AVAIL`'s largest free run and, when it does not fit, puts
+the reason on screen and stops. That is §47's refusal path, and it is a normal
+outcome on a small machine, not an error:
+
+```
+Anchorhead needs 508K and this machine has 149K free.
+```
+
+`HEAP_SEG` is `0x1640`, so the heap is 551KB on a 640KB machine and 167KB on a
+256KB one — and Frotz's own region, about 50KB, is an ordinary claim out of the
+same heap. **What a story actually gets is ~501KB and ~117KB**, against a
+resident set of
+
+```
+  roundup1K(story) + dynamic memory (the save buffer)
+                   + dynamic memory again (undo, OPTIONAL)
+                   + 16KB scrollback
+```
+
+There is **no resident pristine copy of the story**. `@restart` and a save's
+compression baseline both want the original bytes and `OSAPI_FILE_READ_AT`
+reads them back off the floppy on the UI task instead: a restart is rare, and a
+second buffer the size of dynamic memory is not. The undo snapshot is claimed
+only when there is room for it — `@save_undo` is allowed to answer "cannot",
+and a story that loses UNDO on a small machine beats one that will not start.
+
+That arithmetic decides what ships. Anchorhead needs 565KB resident and does
+not fit 501KB; extended memory does not help, because no `CS:IP` can reach it
+(`OSAPI_XMEM_*`) and a story must be directly addressable. **So Anchorhead is
+not on the disk**, on any geometry: a file that could only ever produce a
+refusal is not a feature. Bronze (417KB), The Dreamhold (434KB) and Lost Pig
+(337KB) are the largest that do fit, and the four stories on the 360KB disk —
+Mini-Zork, Zork 285, Adventure and Balances, 63–100KB — all run on a 256KB XT,
+which is what `make xt` is for and where the refusal is tested.
+
+### 59.5 Windows and text
+
+For v1–v5/v7/v8 the Standard's two windows are drawn into one os8088 window.
+The lower window word-wraps to the content width, pages with `[MORE]`, and
+keeps a **scrollback ring in a heap claim**, so the scroll bar is real and
+`PgUp`/`PgDn` work. Those two keys belong to the interpreter at all times and
+are taken before the input ring, so a story reading a character cannot swallow
+them.
+
+**Nothing repaints more than it changed.** A new line is an `OSAPI_GFX_SCROLL`
+plus one repainted row, never a window repaint — `PERFORMANCE.md` Part 5 is the
+standing budget and a change that reintroduces a full repaint is a regression
+against a documented number. `OSAPI_GFX_SCROLL` needs its x-range 8-pixel
+aligned and may refuse; the fallback is to repaint the band, not the window.
+
+Styles map onto what the three adapters actually have (§39.4), because there is
+one 8x8 font and no true bold:
+
+| style | VGA | Hercules / CGA |
+|---|---|---|
+| roman | black on white | the same |
+| reverse video | swapped | swapped |
+| bold | drawn twice, one pixel apart | reverse video |
+| italic | underlined | underlined |
+| fixed pitch | no change — the font already is | |
+
+`@set_colour` is honoured on VGA and ignored where `OSAPI_VIDEO` answers 1 bit
+per pixel: every colour there rounds to black, white or a dither, so a story
+that colours by meaning would become less readable, not more.
+
+**The upper window has TWO row counts, and shrinking it does not erase it.**
+`[zw_upper]` is how many rows the story owns; `[zw_uphold]` is how many are
+still on the glass, and it is never smaller. They differ because Standard 8.7.2
+leaves the shrink case open and every interpreter worth matching leaves those
+pixels alone — the rows revert to the lower window and keep what was in them
+until its own text scrolls over them.
+
+That is not a curiosity. **It is how every Inform quote box works**:
+`@split_window 11`, print the box, `@set_window 0`, `@split_window 1`. A window
+model that repaints on a shrink therefore erases every quote box in existence
+the instant it is drawn, which is what this did — `BEAR.Z5` and `CURSES.Z5`
+both open on one, and the box was on the glass for the few milliseconds between
+the print and the split. A reader sees that as a flash.
+
+"Do not repaint on a shrink" is not the fix, and the distinction is the whole
+reason there is a second count rather than a skipped call. That version leaves
+the box on the glass with nothing in the model holding it, so the first uncover
+erases it — trading a certain defect for an intermittent one, against a window
+this file rebuilds from its model by construction. So the vacated rows stay in
+the **grid**: `zw_up_draw` draws `[zw_uphold]` rows, `zw_lowtop` starts the
+lower window below them, and `zw_scroll1` gives them back the moment the lower
+window actually needs the space — which is the same moment a real
+interpreter's scroll would carry the box off the top.
+
+It is **cheaper**, not dearer: a shrink used to cost a full repaint and now
+costs none, against one repaint at most once per box (`PERFORMANCE.md` Part 5).
+
+**Flags 1 bit 1 is the story's outside v6, and clearing it changed a game's
+status line.** The Standard marks bit 1 — "pictures available" — and bit 5 as
+**v6** (11.1), and Inform's library reads that same bit in every version to
+choose between a score/turns status line and a clock, which is what
+`Statusline time;` sets in the header. `zm_setup`'s v4+ path answered the whole
+byte and cleared it, so `905.Z5`, which ships with it set, drew "Moves: 0"
+where every other interpreter draws "Time: 9:05 am" — the *story's* own status
+line, composed from a byte we had overwritten under it. The v1–3 path had
+always preserved it. This is the shape of defect §59.14's gate exists for: the
+transcript was identical either way, because the words were in the upper window
+and the upper window is not the transcript.
+
+**A typed character is drawn on the keystroke, and story text is not.** The
+lower window holds a word back in a buffer until a space or a newline arrives,
+because a word is the unit word-wrap has to be able to move to the next row and
+drawing it early would mean erasing it. That is right for prose and wrong for a
+line editor: it means nothing appears until the typist reaches a space, so
+`help` is invisible until Enter and the person at the keyboard cannot see what
+they are typing. The editor therefore echoes through `zw_typec`, which flushes
+after every character — so the line breaks at the margin mid-word, which is
+what every terminal line editor does and the alternative is not showing the
+typing. Backspace is `zw_rubc` and blanks the cell it retreats over; reaching
+`zw_putc` it was a control character below `' '`, occupied no cell, and did
+nothing at all.
+
+### 59.6 Input, and how a worker saves a game
+
+**The VM is a worker task** (§20.6). A turn is tens of thousands of
+instructions — seconds on the target machine — and running it in a key callback
+would hold the gfx lock for those seconds and freeze the clock, the mouse and
+every other window. The worker is hired from the first `W_PAINT`, because the
+loader publishes the instance only after the entry proc returns.
+
+Two worker rules shape the rest: the stack is 256 bytes (`SCH_STACK`, shared
+with the tick, mouse and sound IRQs), so the VM keeps its own stack in a claim
+and nothing recurses; and **a worker may not touch a file slot,
+`OSAPI_FILE_DLG` or `OSAPI_MEM_*`**.
+
+Every claim is therefore made before the worker exists, on the UI task, by
+`zi_load`: the story, the Z-stack, the save staging buffer, the undo snapshot
+and the scrollback. The worker never allocates.
+
+Files cannot be pre-arranged, because `@save` and `@restore` are opcodes the
+*story* executes. The handshake:
+
+1. The worker stages the Quetzal image into the staging claim — a memory copy,
+   which it may do — sets `[zf_req]`, prints `Press RETURN to choose a save
+   file.` and waits on the ordinary input path.
+2. The user presses RETURN. That is a **key callback, on the UI task**, which
+   sees `[zf_req]` and raises `OSAPI_FILE_DLG`.
+3. The dialog's completion proc — the UI task again — writes the file, sets
+   `[zf_reqres]`, and clears `[zf_req]` last, because the worker is watching it.
+4. The worker wakes and takes the branch `@save` owes the story.
+
+It costs one keypress, which is one fewer than the Infocom interpreters asked
+for, and every step happens on the task that is allowed to do it.
+
+The key ring is a byte ring with separate head and tail cursors. It needs no
+critical section: each side writes exactly one of the two cursors, and a byte
+write is atomic against an interrupt on an 8086.
+
+### 59.7 Pictures
+
+Two sources, one drawing path, and `@picture_data` answers truthfully when
+there is no picture file at all — the Standard requires the "no pictures"
+answer and stories handle it, so a v6 story with its art missing degrades
+instead of failing.
+
+**`.PIX`** is native and built on the host by `tools/os88pix.py` from PNG,
+JPEG or a Blorb's picture chunks. The pixels are already in the packed 4bpp
+layout `OSAPI_GFX_BLIT4` wants — two per byte, high nibble leftmost — so
+drawing one is a seek and a single blit rather than a decoder in the guest.
+Every picture block is 16-byte aligned so it can be addressed as a segment with
+a zero offset. `apps/frotz/zpic.inc` carries the byte-level layout and is the
+authority on it; the host tool is written to match.
+
+**`.mg1`/`.mg2`** are Infocom's own, as shipped beside the v6 games. Frotz
+parses the container and the directory and then **reports no drawable
+pictures**, which is a measured refusal and not a gap. The pixel data is an
+LZW variant, not the RLE the plan first assumed: 11,520 bytes of live tables,
+a decoder that emits one byte per pixel and so wants a 64,000-byte canvas for
+a 320x200 picture, and a stream read at *draw* time — which is worker time,
+where there is no file slot and no `OSAPI_MEM_*`, so the whole 200–400KB file
+would have to be resident beside a 300KB v6 story. It does not fit by a margin
+no tuning closes. `@picture_data` may answer "unavailable" (Standard 8.8.6.1)
+and stories handle that; what a story cannot handle is being promised a
+picture it never sees, because it will lay its interface out around the space.
+
+Blorb (`FORM....IFRS`) is handled entirely on the host: `tools/getstories.py`
+takes the `ZCOD` chunk and `tools/os88pix.py` takes the picture chunks. That is
+why Bronze is on the disk — its Blorb carries a JPEG cover, so the picture path
+is exercised by a game that legally ships, and its Z-code drops from 492KB to
+359KB on the way, which is the difference between fitting a 640KB machine and
+not.
+
+**`zi_load` loads the art, and for a long time it did not.** The archive is
+claimed on the UI task after the window is drawn and **before `zf_hire`**, and
+each of those is load-bearing. Before, because the worker can execute
+`@picture_data` on its first instruction and a story that is told "none" lays
+its interface out around the answer and never asks again. After the window,
+because `zp_reason` may have a sentence to say (§47) and needs somewhere to say
+it. Last of the claims, because it is the only one whose failure costs nothing:
+the Standard requires `@picture_data` to be able to answer "unavailable", so
+art that will not fit is a degraded story rather than a refused one.
+
+That call did not exist until the graphics gate (§59.14) asked for a picture
+and got nothing. `zi_load` filled `[zi_story]` — which is only there for
+`zp_mkname` to derive the art's name from — and then never asked, so every
+story ever run on this interpreter reported no pictures, including Bronze,
+whose cover was on the disk the whole time. **Underneath it were two more
+defects that only unreachable code can have**: `zp_load` and `zp_findfile` each
+pushed seven registers and popped six, so either would have returned to
+whatever the caller's `SI` happened to be. Three defects, and the outer one hid
+the other two completely — nothing that is never called can be wrong. It is the
+argument for the fixture in the section that follows: a capability with no
+caller is a capability with no evidence.
+
+**It runs for v6 and no other version, and that is a clock decision as much as
+a correctness one.** `@draw_picture` and `@picture_data` are v6 opcodes
+(Standard 15), so art beside a v3 or v5 story is art no story can ask for.
+Looking for it anyway is expensive in the one place it matters:
+`OSAPI_FILE_FIND` is by ordinal and `dsk_find` re-walks the directory from the
+front on every call, with no sector cache under it — so a folder of eleven
+stories costs about eleven `int 13h` calls to answer "no", and this would ask
+twice, `.PIX` then `.MG1`. At `PERFORMANCE.md`'s ~400 ms a call that is the
+better part of **ten seconds added to opening every story** on an XT, to look
+for something only one version can use. Rule 1: cost disk work in calls.
+
+A consequence worth stating rather than discovering: **Bronze's cover is never
+loaded on the guest**, because Bronze is v8. What Bronze exercises is the HOST
+half — `tools/os88pix.py` taking a real Blorb's picture chunk and packing it —
+which is where that path's bugs would be, and it still earns its place on the
+disk for the Z-code reason above. The guest half is exercised by
+`tests/frotz/zpictest.inf` (§59.14), which is v6 and can therefore actually
+ask.
+
+### 59.8 Sound
+
+`@sound_effect` maps onto what `OSAPI_SND_CAPS` says the machine has, never
+onto an assumption. Effects 1 and 2 — the high beep and the low boop every v3
+game with sound uses — work on the floor machine through `OSAPI_SND_TONE`;
+with an AdLib or a Sound Blaster present, sampled effects are approximated
+through the FM slot. A sound that cannot be rendered gets the nearest tone; a
+sound number that does not exist gets silence. Both are normal.
+
+Sound is asked for from the worker, which the SDK's worker-safe list does not
+name. `apps/arkanoid/arkanoid.asm` already does this and documents why it is
+safe — the tone self-expires and the grant is attributed to the asking task —
+and Frotz follows it rather than inventing a second answer.
+
+### 59.9 The disks and the machines
+
+`FROTZ.O88` plus stories, in folders, on its own floppy. It does **not** ride
+the shipped apps disks: the 360KB one has about 100KB free and the interpreter
+alone is most of it.
+
+```
+B:\  FROTZ.O88     CATALOG.TXT
+     INFOCOM\  CLASSIC\  MODERN\  ART\  SAVES\
+```
+
+**No story file is committed to this repository.** `tools/getstories.py` holds
+a manifest of URL, SHA-256 and size and fetches into `build/stories/`, which is
+ignored outright — the decision `build/big.dat` already made, for a stronger
+reason: these are other people's games. The manifest carries only what its
+authors released freely, so the Infocom titles are Mini-Zork I, both Samplers
+and *Zork: The Undiscovered Underground* rather than Zork I–III, *The
+Hitchhiker's Guide to the Galaxy*, *Planetfall* and *Enchanter*, which are
+Activision's and still sold. `STORIES=` puts your own copies on the disk.
+
+The library is larger than any floppy, so each geometry ships a subset chosen
+against **cluster** counts and checked by `os88disk.py` at build time — a list
+that stops fitting fails the build rather than a comment claiming it fits.
+`build/zork2.img` is a second 1.44MB library disk carrying the large modern
+games, with no interpreter on it on purpose: it is swapped into B: while Frotz
+is already running, and the 50KB a second copy would cost is 50KB of story.
+
+Two machines, both with a sound card and both with the full 640KB, because a
+story is resident:
+
+| target | machine | drives |
+|---|---|---|
+| `make xt-z` | IBM XT, 8088 @ 4.77MHz, SB 2.0, 640KB | 360KB A:, **720KB** B: |
+| `make 386-z` | 386DX @ 25MHz, SB16 | two 1.44MB |
+
+The 3.5" DD drive on the XT is not an anachronism — DOS 3.2 supported one —
+and 360KB does not hold a library. 86Box accepts it as `fdd_02_type = 35_2dd`,
+checked the way §19's other machine settings were: launch on a throwaway copy
+of the config, terminate, and read the file back.
+
+### 59.10 Saves
+
+**Quetzal** (`FORM....IFZS`) — a save written here opens in Frotz on a laptop
+and one written there opens here, which a raw dump would not buy.
+
+Dynamic memory goes in as **`UMem`, uncompressed**, and that follows from
+§59.4 rather than from laziness: `CMem` XORs the current dynamic memory against
+the *original*, so it needs both resident, and there is no resident pristine
+copy. `UMem` is a legal Quetzal alternative every interpreter reads, and it
+spends disk instead of RAM — 50KB for a Bronze save, 13KB for Photopia, 10KB
+for Balances, all of which the disks hold.
+
+The disk has a `SAVES` folder and the file dialog starts in it.
+
+### 59.11 What it does not do
+
+Every one of these is a decision with a reason, taken in the module that owns
+the subject and written down there too. They are collected here because a
+capability list that only says yes is not a specification.
+
+**Timed input is refused, not faked.** Flags 1 bit 7 is left clear, so a v4/v5
+story never asks for a timeout it would wait on forever. §47's rule reaching
+the header.
+
+**Sound is tones.** `@sound_effect` 1 and 2 are exact; a sampled effect gets
+the nearest tone. `OSAPI_SND_PLAY` blocks the whole desktop for the length of
+a clip and is UI-task-only, and `OSAPI_SND_STREAM`'s open verbs are
+UI-callback-only, so neither is reachable from where `@sound_effect` runs — and
+a desktop frozen mid-turn is a worse defect than an approximated effect.
+Standard 9.4.4's completion routine is not called, because there is no sound
+event to hang it on (§34.3: notification is polling).
+
+**Infocom `.mg1` art does not draw** — §59.7 gives the arithmetic. `.PIX`
+pictures do.
+
+**Scrollback history is not re-wrapped when the window is resized.** The ring
+stores lines already wrapped, so narrowing the window shows old lines cut at
+the new width; new output wraps correctly at once. Keeping the pre-wrap
+character stream as well would double the claim, and the claim is what §59.4
+is short of.
+
+**A repainted line carries one style.** The live draw honours a style change
+mid-line, as the Standard permits; the scrollback stores one style byte per
+line, which is the real case — a bold or reverse room name is a whole line —
+and flattens the rest only on a repaint. **The upper window's grid does the
+same, and until §59.14's gate asked, it stored no style at all**: the row
+header always had the byte and nothing filled it, so `zw_up_draw` painted the
+whole window roman and an uncover turned an Inform quote box — which is
+`style reverse` — back into ordinary text. `zw_upclear` zeroes the byte with
+the length for the same reason a stale one would otherwise paint a bar of
+background across a row the story had emptied.
+
+**v6 omits four things the Standard permits omitting**: the `[MORE]` prompt (a
+v6 game sets its line counts to place its own pauses), the newline interrupt
+(properties 8 and 9, where the Standard's own note records that Infocom's
+files and interpreters disagree about the ordering), true colour (no adapter
+this kernel drives has any), and `@buffer_screen`, which 8.8.7 explicitly
+allows an interpreter to treat as always-flush. `@get_wind_prop` answers 0 for
+the absent ones rather than pretending.
+
+**Only the default Unicode translation table** (3.8.5.3) is implemented; a
+story with its own gets the default transliteration. The letter-forms do not
+exist in an 8x8 font either way, so the alternative is a different wrong ASCII
+letter rather than a right one.
+
+**`@put_prop` on an absent property does not halt.** The Standard says it
+should; here it does nothing, because the only module that can name the
+offending opcode is `zexec.inc` and the object layer has no error channel.
+
+### 59.12 The halt that was not a lost program counter
+
+**A real story used to run its opening and then halt partway through play**
+with `unknown opcode ... es=<segment> story=<segment>`, where the reported
+`es` was *below* the story's claim. Conformance was unaffected throughout —
+the gate story passed 44 of 44 at v3, v5 and v8 — and it was the second or
+third typed command that stopped. This section is kept rather than deleted
+because the diagnosis it carried for two rounds was wrong in an instructive
+way, and because the guard that reported it is still there.
+
+The suspicion was §59.3's own bargain. Making `ES:SI` the live program counter
+is what makes instruction fetch a `lods`, and it costs one rule: **ES belongs
+to the story.** But ES is exactly the register the OS does not preserve — the
+X stub hands a callee the caller's DS *in ES* — so any handler reaching an
+OSAPI slot could return with the PC's segment pointing at a font, a back
+buffer or a disk cache. Four instances were found and fixed, each by a
+different route, and none of them was the last one; so the segment was moved
+into `[zf_pcseg]`, only the movers were allowed to write it (`zm_seek`,
+`zm_norm`, `zx_jrel`), `zm_addr` was split off for walks that are not the PC,
+and `zx_run` was made to reload ES from memory before every instruction.
+
+**And the halt did not move.** Same story, same address, same segment. With
+three guards in place and none of them firing, the conclusion drawn here was
+that `[zf_pcseg]` was being overwritten in memory by a stray write. It was
+not. **The program counter was correct the whole time.**
+
+`zx_jrel` moves the PC by a signed branch offset. A backwards branch that
+takes SI below zero was fixed up by subtracting `0x1000` paragraphs from the
+segment and leaving SI where it had wrapped to, up near `0xFFFF`. `ES:SI` then
+addresses **the right byte** — and is a form nothing downstream accepts:
+
+- `zx_step`'s guard compares ES against `[zf_sseg]`, finds it lower, and
+  reports a lost PC;
+- `zm_pcaddr` subtracts `[zf_sseg]` from a segment below it and answers an
+  address a megabyte out, so the return address a `@call` banks is wrong and
+  the matching `@ret` fails `zm_inimg`.
+
+It fired only when the PC was inside the story's first 64KB — anywhere higher
+and the subtraction stayed above `[zf_sseg]`, which is why big stories got
+further than small ones — and only when a backwards branch reached further
+back than SI had walked. That is every loop whose body contains a call:
+`@ret` goes through `zm_seek`, and `zm_seek` deliberately leaves SI in 0..15.
+Adventure's `help` is one.
+
+The fix is one instruction sequence: fold the whole offset back into the
+segment, so a normalised `ES:SI` is the only form the PC is ever in. **The
+lesson is the one worth keeping — a guard firing is evidence that an
+invariant was broken, not evidence about which one.** Three rounds were spent
+hunting a register-discipline bug because the guard that caught it was written
+to catch register-discipline bugs.
+
+Two smaller things came out of the same hunt and are part of the contract now:
+
+- `zx_lost` used to report `[zx_prevop]`, one instruction further back than
+  the handler at fault, because the guard runs *before* the decode that rolls
+  the two over. It reports `[zx_op]`.
+- the halt line prints the opcode **byte** as well as the opcode number.
+  `opcode 0x0005` names five different instructions — 2OP `@inc_chk`, 1OP
+  `@inc`, 0OP `@save`, VAR `@print_char`, EXT `@draw_picture` — and only the
+  byte separates them. `tools/zharness.py` turns it back into a name.
+
+`zx_step`'s range check earns its ~20 bytes and stays. So does `zm_seek`'s
+refusal (`0xFD`) and `zx_ret`'s frame validation (`0xFE`).
+
+### 59.13 The story harness (development only)
+
+§59.12 took three rounds partly because the only way to run a story was for a
+person to boot QEMU, double-click a floppy icon, type at a window and read a
+screendump. That loop is minutes long and its output is a picture, so nothing
+about it could be a regression test. **`make zh` builds a second interpreter —
+`apps/frotz` with `-DZHARNESS` — that gives the Z-machine a teletype**, and
+`tools/zharness.py` plays a story to a script over it.
+
+| | |
+|---|---|
+| port | COM4, `0x3E8`, polled. §9.5's mouse probe knows `3F8`/`2F8` and §58's monitor is at `2E8`; this is the one address with no other owner |
+| out | every byte stream 1 draws, plus every `zw_notice` — which is how a halt reaches the host |
+| in | every key `zi_getkey` would have taken from the ring |
+| markers | `[[ZH:READY]]`, `[[ZH:READ]]`, `[[ZH:KEY]]`, `[[ZH:HALT]]`, `[[ZH:QUIT]]`, on their own lines |
+
+`[[ZH:READ]]` is what makes a run reproducible: the host sends the next command
+when the story says it is reading, rather than after a delay chosen by
+guessing. `[[ZH:KEY]]` is `@read_char` and is **not** the same event — it is a
+"press any key" prompt, the host answers it with a space, and it consumes no
+line of the script. Conflated, a story that opens on a title screen (`BEAR.Z5`
+does) eats the first command and every later one answers the wrong question.
+
+Three things the harness build does differently, each for a reason that would
+otherwise read as a defect:
+
+- **it does not page.** `[MORE]` waits on `zi_getkey`, and the harness's
+  "person" is a script that types only when asked for a command, so the run
+  deadlocks in about the sixth room. `dfrotz -p` does not page either, which is
+  also what makes the two transcripts comparable;
+- **it does not put the echo on the wire.** The host typed the line and can put
+  it back in its own log; on the wire it is text the reference interpreter
+  never prints;
+- **it does not put a capture on the wire.** A capture is the status line being
+  composed rather than drawn, and the two interpreters emit that at different
+  moments.
+
+**None of it ships.** Every line is inside `%ifdef ZHARNESS`, the harness
+build writes `build/zh/` and never `build/*.o88`, and `apps/frotz/zharness.inc`
+is not included at all without the define. The shipped package is unchanged to
+the byte, which is checkable by building it both ways.
+
+The one part that is still a GUI walk is the launch, because os8088 has no way
+to start a package from outside: `tools/zharness.py` double-clicks Disk B and
+then the story. `make zcheck` is the gate — every story in `build/stories`,
+each played to `tests/frotz/scripts/<name>.txt` (or a generic script), each
+transcript diffed against `dfrotz` word for word.
+
+A run ends in one of five outcomes, and two of them are passes:
+
+| | |
+|---|---|
+| `ran N commands` | played the script out with no halt |
+| `the story ended` | `@quit`, which is a story finishing, not a failure |
+| **`refused, with a reason`** | §59.4 turned the story down because it will not fit, and said so on screen. **A pass** — that is the designed path, and a gate that reported it as a bug would be arguing with §47 |
+| `HALT` | the interpreter stopped. The opcode byte is in the line above it |
+| `STUCK` | no marker inside the timeout: a hang, or a prompt the harness does not know how to answer |
+
+The diff compares the **words in order**, not the lines: `dfrotz` wraps at its
+`-w`, os8088 wraps at whatever the window is, and the harness sends the
+pre-wrap stream, so a different column count is not a difference. Both sides'
+interpreter *commentary* is removed — `dfrotz`'s `Warning:` lines, os8088's
+notices — and neither side's halt ever is.
+
+The reference's **upper window is recognised by its padding** and dropped:
+`dfrotz` positions that text with spaces — a status line right-aligns its
+score, a quote box indents to centre itself — and its own prose never carries a
+run of three spaces, because it wraps at `-w` and separates words by one. That
+is what lets a story whose upper window holds prose rather than a status line
+(`BEAR.Z5` and `CURSES.Z5` both open on a quote box) be compared at all. It
+fails safe: a story that indents in the LOWER window loses those words from the
+reference and keeps them here, so the error is a divergence to investigate,
+never a silent pass. **There is no way to opt a story out of the diff**, on
+purpose — an opt-out is a place for a real divergence to hide.
+
+The same rule costs it `PHOTOPIA.Z5`, in the other direction and for the same
+reason. The reference prints `Would you like instructions?` and its opening
+quote box **on one line**, separated by the padding that positions the box — so
+the rule drops the question along with it, and this interpreter, which put the
+box in the upper window where it belongs, keeps the question and diverges by
+it. There is no rule that fixes both: narrowing it to "drop from the run
+onward" would keep the room name of every v4+ status line in the reference,
+which is not on our wire at all, and every one of those would then diverge. It
+is left as a divergence to investigate rather than an opt-out (that is the
+policy above), and §59.14's gate — which compares screens and has no such
+heuristic — passes the story.
+
+Its one known blind spot is a v4+ status line with **no right-hand field**:
+`DREAMHLD.Z8` writes just a room name, which the reference prints with no run
+of spaces in it and this cannot tell from prose, so that story diverges by the
+one word. The fix, if it is ever worth it, is not a better heuristic — it is to
+put the upper window on the wire between markers and strip the reference's copy
+only for v1–3, where the *interpreter* composes the status line and the two
+therefore cannot agree on it anyway.
+
+**§59.14 took that fix, by another route, and the blind spot is covered.** The
+graphics gate puts the whole upper window on the wire — as a grid at each
+prompt rather than as a stream between markers — and compares it against a
+reference *screen*, where a status line is a status line whether or not it has
+a right-hand field. `DREAMHLD.Z8` passes there. The word diff described above
+is unchanged and still diverges by that one word; the two gates now fail
+differently on purpose, and this is the one story that shows why both exist.
+
+### 59.14 The graphics gate (development only)
+
+§59.13 asks what the story **printed**. This asks what the reader can **see**,
+and the two are different questions: a story that draws a quote box and then
+loses it prints exactly the same characters as one that keeps it. `BEAR.Z5`
+opened on a blank band where its box should be while every transcript matched
+`dfrotz` word for word, because the words were never in dispute.
+
+`make zgfx` is the gate. Three checks per story, and only the last needs a
+reference interpreter at all:
+
+| | |
+|---|---|
+| **model against pixels** | every row the interpreter says holds text is drawn, and every row it says is blank is not |
+| **across a repaint** | the same, on a window that has just been redrawn from the model — which is what an uncover does, and where anything on the glass the model does not hold disappears |
+
+The repaint check **rides on repaints the story provokes itself** — any
+`@erase_window -1` does, and so does any `@split_window` that changes the split
+— rather than forcing one. It used to force one, by sending `PgUp`/`PgDn`,
+which belong to the interpreter and never reach the story. That left
+`DREAMHLD.Z8` with no further prompt inside a seven-minute budget, every time,
+where the same run without it finished cleanly. Either a repaint of a full
+41-row window under lock contention with the worker is far slower than
+anything else here, or paging a busy window is a defect of its own; **it is
+worth finding out separately, and a harness may not be the thing that breaks
+the run.** Nothing was lost — `BEAR.Z5`'s `@split_window 2` repaints just
+before its prompt, which is the case that mattered — and a run that never
+repaints is reported as such rather than counted as a pass.
+| **the opening screen** | every word the real Frotz shows at the same moment is on our screen too |
+
+**The first two need no golden and no reference**, which is what makes them
+worth having: they are the drawing path against its own bookkeeping, and they
+localise a failure rather than just reporting one. A grid holding a box against
+a blank band is a *drawing* defect; an empty grid against a blank band is a
+*window-model* defect, and the two need opposite fixes.
+
+**A row is read by UNIFORMITY, not by ink.** A row of spaces is one flat colour
+whatever the story chose — white, black under a reversed status line, blue in
+Photopia — and a row with one glyph in it is not. Counting dark pixels instead
+would call a reversed blank row full and a white-on-black letter empty, and
+both readings are exactly backwards. It is the one decision in the gate that
+makes `@set_colour` and `ZST_REVERSE` cost nothing.
+
+The guest side is the same `-DZHARNESS` build, with a second wire: every
+`@split_window`, `@set_window`, `@erase_window` and repaint as it happens, both
+windows' whole character grids at every prompt, and every picture the drawing
+path accepted or refused **with the screen rectangle it used** — which is what
+lets the host go and look at those pixels rather than at pixels it computed
+itself. `apps/frotz/zharness.inc` is the authority on the marker set.
+
+Two things the guest reports that look like detail and are not:
+
+- **the pending word.** `zwin` draws one `OSAPI_FONT_RUN` per *word* (§59.5),
+  so a word with no space after it yet — the `>` of a prompt always is one — is
+  in `zw_wbuf` and not on the glass, while a repaint composes it through
+  `zw_liveinto` and paints it. Both states are correct and the model does not
+  record which happened, so that one row is checked against both readings, and
+  strictly at the repaint checkpoint where the ambiguity is gone;
+- **v6 is skipped.** Its eight windows are pixel-addressed and `zwin6.inc` owns
+  them; dumping `zwin`'s grid there would report a v1–5 story's leftovers, and
+  stale state the host cannot identify as stale is worse than none. The picture
+  markers still come, which is where v6's evidence is.
+
+**The reference is the curses Frotz, photographed.** `tools/zref.py` runs it in
+a pseudo-terminal, models that terminal, and writes what is on display into
+`tests/frotz/screens/<story>.txt`. Those files are **committed**, and that is
+the whole design: the tool needs `frotz` and `pyte`, the toolchain is
+deliberately nasm + qemu + python3, and generating at gate time would put both
+in the critical path of a build. Generated rather than hand-written is the rule
+`make ztest` already follows; committed is what keeps it free. Geometry is
+written into each file's header, because word wrap decides what has scrolled
+off the top — a screen taken at 80 columns is not a fact about a 67-column
+window — and the gate **refuses with the reason** when the live window has
+moved rather than reporting the mismatch as a story failure.
+
+The comparison is a **subsequence**, not an equality: our window carries
+scrollback the terminal has already lost, so extra content is not a defect and
+missing content is the only thing being asked about. The v1–3 status line is
+dropped from the reference's side, because the interpreter composes that one
+with its own `OSAPI_FONT_RUN` and it belongs to neither window (§59.5) — the
+model has no record of it to compare. Its *presence* is checked against the
+pixels instead, which is the part a blank status bar would fail.
+
+Three things are normalised away, and each earned its place by producing a
+divergence that was not one:
+
+- **the reference's `[MORE]`.** The harness build does not page (§59.13), so a
+  story whose opening runs past one screen leaves the two on different pages of
+  it — `ZTUU.Z5` opens on a letter a screen and a half long, and its last page
+  had nothing in common with the reference's first. `tools/zref.py` pages the
+  reference through to the same place;
+- **the reference's own commentary.** `Warning: get_child called with object 0`
+  is frotz talking about Balances, not Balances talking to the player, and this
+  interpreter answers the same 0 without editorialising (§59.11). It is a
+  paragraph, not a line — it wraps like anything else — so it is taken to the
+  blank line that ends it, exactly as the word diff already does;
+- **the hyphen**, which is a word separator here. The two wrap a long
+  hyphenated token differently at the margin: Lost Pig's banner carries
+  `ZCODE-1-070917-994E`, which the reference splits after `ZCODE-1-` and this
+  one moves down whole. As one word they never match and as four they always
+  do, and neither wrap is about anything a reader would call a difference.
+
+**The golden is two takes of the same opening, and the gate requires the words
+common to both.** A story may choose what it opens with: `CURSES.Z5` draws a
+different epigraph every time, and both interpreters seed from the clock
+because Standard 2.4 asks them to — so no single screen is *the* answer, and a
+golden that pretended otherwise would report the story's own dice as a defect.
+Taking it twice and keeping the longest common subsequence lets the file
+measure that rather than assume it: everything the story settled on stays in
+the gate, everything it rolled for drops out, and nobody has to declare per
+story which was which. Fourteen of the fifteen openings come out fully stable;
+`CURSES.Z5` keeps ten words of banner and gives up its epigraph — and its box
+is still checked, by the model-against-pixels and repaint checks, which do not
+care what it says.
+
+Only **one** checkpoint per story, the opening, and the restraint is the point.
+Driving the reference deeper means replaying the guest's input, and a "press
+any key" prompt is answered by the harness itself and consumes no line of the
+script — so a story that asks for two leaves the reference a turn behind and
+every later checkpoint compares two different moments. That failure looks
+exactly like the defect the gate is for. The opening needs no input, and it is
+where every title screen, quote box and cover picture lives.
+
+**`tests/frotz/zpictest.inf` is the picture fixture**, and it exists because
+nothing that ships exercises the drawing path: `@draw_picture` is v6-only and
+every v6 game is Activision's (§59.2). It is compiled by `inform -v6`, and
+`tools/zpicgen.py` builds the art it draws — three blocks, each one flat
+colour, all non-square, numbered **1, 2 and 5**. Every one of those is a
+decision. Flat, because a screendump can be held to a flat block exactly and
+cannot be held to a photograph without the host learning to dither the way
+`tools/os88pix.py` does, which would be the code under test checking itself.
+Non-square, because `@picture_data` answers height first and width second and a
+swap stays plausible. Non-contiguous, because Standard 8.8.6.1 says numbering
+need not be contiguous, `zp_find` is a linear scan for that reason, and a
+fixture numbered 1,2,3 lets an implementation that indexed pass.
+
+Colours are compared through the **six-bit DAC**: palette entry 1 is `0x0000AA`
+in the tool's table and leaves a VGA card as `0x0000A8`, which is what a
+screendump reads back. Comparing the archive's byte against the scanout's
+without that reports every picture on the disk as the wrong colour — a fact
+about the hardware read as a defect in the blitter.
+
+**Four defects were found by pointing this at the stories on the disk**, none
+of which the word diff could see, and each is described where it lives: the
+picture archive nothing ever loaded and the two register imbalances hiding
+under it (§59.7), the Flags 1 bit that turned a clock into a move counter, and
+the quote box a shrink threw away (both §59.5). The last two were invisible for
+the same reason: they are about the upper window, and the upper window is not
+the transcript.
+
+## 60. toast.inc — the transient one-line message
 
 `Saved NOTES.TXT`. `Opened SUNSET.BMP`. **One routine, one look, one
 lifetime**, for the kernel and for every package — where five applications had
@@ -30466,7 +31262,7 @@ until it is dismissed. This is for an operation that just finished, usually
 successfully, that nobody needs to acknowledge. A notice you can miss is not a
 notice; a toast you have to dismiss is a dialog.
 
-### 59.1 It lives in the menu bar, and that is the whole design
+### 60.1 It lives in the menu bar, and that is the whole design
 
 The strip is the right end of the **menus segment** (§12.9), on the
 file-activity widget's precedent (§12.8) — which reports a file operation *in
@@ -30514,7 +31310,7 @@ a 40-character toast leaves 8 cells of menus showing for about three seconds.
 Hercules gets 62 cells. `TOAST_MAX` is 40 for that reason and truncation is
 therefore unreachable in practice; `toast_room` clamps anyway.
 
-### 59.2 How the strip is composed: bit 7 is the inversion flag
+### 60.2 How the strip is composed: bit 7 is the inversion flag
 
 The menus are composed into a **shorter segment**. `toast_room` runs at the
 top of `menu_bar_text`, subtracts the strip's width from `[menu_bn]`, and
@@ -30553,7 +31349,7 @@ and every cell in it gets it back. The byte just past the run is still banked
 and restored, because `font_run` wants ASCIIZ and `menu_bcell` carries one
 spare cell for it.
 
-### 59.3 `toast_show` stages; `toast_pass` draws
+### 60.3 `toast_show` stages; `toast_pass` draws
 
 **Slot 0x0380.** `ES:SI` = a NUL string, `CX` = ticks to live (0 =
 `TOAST_TICKS`, 55 ≈ 3.0 s at 18.2 Hz). `CF = 1` refused. Preserves every
@@ -30613,7 +31409,7 @@ takes a closing instance's message down with it. Not needed for correctness —
 the string was copied, so nothing dangles — but `Saved NOTES.TXT` over a bar
 that now belongs to Locator is a message about a window that is not there.
 
-### 59.4 …and a message put up BEFORE a long operation reaches the glass
+### 60.4 …and a message put up BEFORE a long operation reaches the glass
 
 Staging alone is not enough for one real case, and Paint is where it showed:
 `Encoding...` goes up and then the machine spends **seconds** on 125,000
@@ -30650,7 +31446,7 @@ cannot disagree about what "the strip goes up" means. It clears
 `[toast_dirty]` because on the immediate path the draw has just happened;
 `toast_pass` re-sets it and draws.
 
-### 59.5 A verdict is a toast; a status line is not
+### 60.5 A verdict is a toast; a status line is not
 
 The Disk window's status line (§22.7/§22.9) carried five things on one row and
 two of them were the wrong species. Rungs 3 and 4 were **verdicts** — the
@@ -30700,7 +31496,7 @@ toast a moment after it went up. Its `Saving...` stays, because a GIF encodes
 125,000 pixels **before** the floppy starts and the widget cannot report work
 that has not reached the disk.
 
-### 59.6 The Control Panel's save result
+### 60.6 The Control Panel's save result
 
 `cp_flush_x` writes `SYSTEM.CFG` when the panel **closes** (§31.8) — one
 floppy write per session instead of one per click — and until now a failure
@@ -30753,7 +31549,7 @@ and no message:
 
 - **It is said AFTER the write.** `drv_cfg_save` arms §12.8's file-activity
   widget, and `fpg_begin` retires a live toast because the two cannot share
-  those pixels (§59.3). Said first, it would be overdrawn by the thing it
+  those pixels (§60.3). Said first, it would be overdrawn by the thing it
   announces.
 - **`toast_owner_gone` runs FIRST in `app_close_win`**, before the
   `KIND_CTRL` test rather than after `snd_release_rec`. The panel's last act
@@ -30763,7 +31559,7 @@ and no message:
   a claim about which slot `inst_caller` answers with at that moment, which
   is the kind of thing that is true until somebody adds a dispatch site.
 - **It stages rather than drawing.** `app_close_win` reaches here with no gfx
-  lock held, so §59.4's `toast_now` declines and `toast_pass` puts it up on
+  lock held, so §60.4's `toast_now` declines and `toast_pass` puts it up on
   the UI task's next idle pass — which is after `wm_destroy`'s repaint, so
   nothing overdraws it either.
 
@@ -30776,10 +31572,10 @@ row states (`Loaded`, `No hardware found`) are **status**, not verdicts — they
 say what is true now — and `Not Enough Ram` on the Buffer page is a §47
 greying explanation rather than a message.
 
-### 59.7 A wide strip hung the machine, and the invariant it broke was silent
+### 60.7 A wide strip hung the machine, and the invariant it broke was silent
 
 `toast_room` lowers `[menu_bn]` so the menus compose into a shorter segment
-(§59.2), and `menu_bput` **drops** a cell at or past `[menu_bn]` *without
+(§60.2), and `menu_bput` **drops** a cell at or past `[menu_bn]` *without
 advancing DI* — "past the segment: dropped, exactly as `menu_layout` drops a
 cell that will not fit". `menu_bpadc` pads by calling `menu_bput` in a loop
 until `DI` reaches its target. Give it a target beyond `[menu_bn]` and it
@@ -30804,7 +31600,7 @@ than at its two callers, deliberately: the invariant is a property of what
 `menu_bput` does, so the guard belongs where that is known.
 
 **And the test that found it is the one worth keeping.** The round-trip check
-(§59.1) put a 17-cell message at cells 33..49 while Locator's menus end around
+(§60.1) put a 17-cell message at cells 33..49 while Locator's menus end around
 cell 26 — so "the bar comes back 0 differing bytes" was a statement about
 blank space, and it read exactly like a statement about the menus. The check
 now uses a message wide enough to cover **11 cells of Locator's menu text and

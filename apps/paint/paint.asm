@@ -2830,7 +2830,7 @@ pt_sprep:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_msg_show - say one line, through the system toast (SPEC.md 59)
+; pt_msg_show - say one line, through the system toast (SPEC.md 60)
 ; in:  SI = NUL string
 ; out: nothing; preserves all registers
 ;
@@ -2846,7 +2846,7 @@ pt_msg_show:
     push cx
     push es
     push ds
-    pop es                          ; the kernel COPIES it (SPEC.md 59.3)
+    pop es                          ; the kernel COPIES it (SPEC.md 60.3)
     xor cx, cx
     call OSAPI_TOAST
     pop es
@@ -5788,7 +5788,7 @@ pt_oncmd:
 .save_go:
     mov si, pt_s_saving             ; an encode runs before the floppy does and
     call pt_msg_show                ; the file-activity widget cannot see it;
-                                    ; SPEC.md 59.4 gets this on the glass
+                                    ; SPEC.md 60.4 gets this on the glass
     call pt_save                    ; pt_save only SETS its toast: the dialog's
     mov si, [pt_msgp]               ; completion callback is what shows it on the
     or si, si                       ; Save As path, and this path has none
@@ -7315,7 +7315,7 @@ pt_ondlg:
                                     ; says better - a live bar rather than a
                                     ; static line - and it says it in THE SAME
                                     ; PIXELS, so fpg_begin retires this toast
-                                    ; (SPEC.md 59.3) a moment after it goes up.
+                                    ; (SPEC.md 60.3) a moment after it goes up.
                                     ; A decode follows the read, but the read
                                     ; is the long half and the widget covers
                                     ; it; the SAVE below keeps its message
@@ -7335,7 +7335,7 @@ pt_ondlg:
     call pt_msg_show                ; GIF encodes 125,000 pixels BEFORE the
                                     ; floppy starts, and the file-activity
                                     ; widget cannot report work that has not
-                                    ; reached the disk. SPEC.md 59.4's
+                                    ; reached the disk. SPEC.md 60.4's
                                     ; toast_now is what puts this on the glass
                                     ; before the machine goes quiet, and is
                                     ; why the pt_wait that used to be here for

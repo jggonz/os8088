@@ -358,7 +358,7 @@ ui_task:
     call gfx_unlock
 .chk_toast:
     call toast_pass             ; put a staged toast up, or take an expired
-                                ; one down (SPEC.md 59). One compare per pass
+                                ; one down (SPEC.md 60). One compare per pass
                                 ; when nothing is up, and the ONE place
                                 ; either edge is drawn - toast_show is
                                 ; reachable from a lock-holding callback, a

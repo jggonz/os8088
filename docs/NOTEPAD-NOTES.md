@@ -454,7 +454,7 @@ one strip, not a redraw-path defect, and nothing else in the content differs.
 **SETTLED, and it was the second — see §8.** `np_toast` cleared `[np_msg]`
 *as it drew*, so the toast was on the glass with nothing left to put it back
 and the repaint legitimately did not reproduce it. The toast is the kernel's
-now (SPEC.md §59) and is in the menu bar rather than in anybody's content;
+now (SPEC.md §60) and is in the menu bar rather than in anybody's content;
 this check reads **0**.
 
 **The keys were innocent and so was the height count**, both established
@@ -932,7 +932,7 @@ what a future measurement needs, not because either symptom is still live:
   which is not a layout bug. §5.2.1 chased the same residue and §8 explains
   why it was real: `np_toast` cleared `[np_msg]` as it drew, so the pixels
   were on the glass with nothing left to put them back. The toast is the
-  kernel's now (SPEC.md §59) and sits in the menu bar, in nobody's content,
+  kernel's now (SPEC.md §60) and sits in the menu bar, in nobody's content,
   so this cannot recur — `np_toast` and `[np_msg]` no longer exist in this
   module. **The general rule survives the specific fix**: anything drawn over
   the content that a repaint will not reproduce is a difference the
@@ -1047,7 +1047,7 @@ followed by one full `np_paint` — the exact operation the rest of §7's budget
 work exists to avoid — and it was invisible because it happened one keystroke
 after the thing that caused it.
 
-The toast is SPEC.md §59's now: an inverse-video strip at the right end of the
+The toast is SPEC.md §60's now: an inverse-video strip at the right end of the
 menu bar, `OSAPI_TOAST` at slot 0x0380. What went with it from this module:
 `np_toast` (91 lines), `[np_msg]`, `[np_msgn]`, `[np_smsg]`, `[np_smsgn]`,
 the four toast-box words, `np_sigsame`'s two tests, `np_sigmark`'s two

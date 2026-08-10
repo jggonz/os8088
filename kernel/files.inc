@@ -122,7 +122,7 @@ FS_EDIT     equ 13              ; byte: the status-line editor is armed here
                                 ; a failed load put 'Bad package' on every
                                 ; open Disk window at once, two of them each
                                 ; claiming to have been asked. A verdict is a
-                                ; TOAST now (SPEC.md 59.5) and belongs to no
+                                ; TOAST now (SPEC.md 60.5) and belongs to no
                                 ; window at all, which DISSOLVES that question
                                 ; rather than answering it. The offsets are
                                 ; left as a hole deliberately: every one below
@@ -1151,7 +1151,7 @@ fm_s_delq:    db '? Enter=yes Esc=no', 0
 fm_s_fmtpr:   db 'Format ', 0       ; 'Format A: as 360K? Enter=yes Esc=no',
 fm_s_fmtas:   db ': as ', 0         ; which is 35 characters at its longest
 fm_s_fmtq:    db 'K? Enter=yes Esc=no', 0    ; and so inside FM_HDRMAX
-fm_s_fmtok:   db 'Formatted ', 0    ; ...and the verdict, SPEC.md 59.6's own
+fm_s_fmtok:   db 'Formatted ', 0    ; ...and the verdict, SPEC.md 60.6's own
                                     ; reasoning: a format is seconds of floppy
                                     ; the user waited for, so success speaks
                                     ; rather than only failure
@@ -1935,7 +1935,7 @@ fm_onclick_x:
     mov [fm_statowed], al       ; LINE and changes nothing else on this
                                 ; window. It used to be ONE question with TWO
                                 ; causes, the other being a retired verdict,
-                                ; and verdicts are toasts now (SPEC.md 59.5).
+                                ; and verdicts are toasts now (SPEC.md 60.5).
                                 ; The cheap paths below draw no text
                                 ; at all, so they pay one fm_status_only for
                                 ; it - where each used to escalate to a whole
@@ -2211,7 +2211,7 @@ fm_onkey_x:
                                 ; one whenever it retired a verdict, and the
                                 ; debt had to be RECORDED because the scroll
                                 ; keys stopped drawing the line (22.11).
-                                ; Verdicts are toasts now (SPEC.md 59.5)
+                                ; Verdicts are toasts now (SPEC.md 60.5)
 
     cmp al, 13
     je .enter
@@ -2887,7 +2887,7 @@ fm_c_format:                    ; File > Format Disk... (SPEC.md 22.12)
     jmp fm_edit_arm
 .bad:
     push bx                     ; an unreadable medium is a verdict about what
-    push cx                     ; just happened, so it is a toast (59.5) - and
+    push cx                     ; just happened, so it is a toast (60.5) - and
     mov bx, fm_errtab           ; nothing is armed, so the window is left
     mov cx, FM_NERR             ; exactly as it was
     call KERNEL_SEG:cw_toast_say
@@ -3516,7 +3516,7 @@ fm_edit_commit:
     call fm_settitle            ; the one name fm_settitle can always derive
     pop si
 
-    ; 'Formatted B:' in the menu bar (SPEC.md 22.12.1). SPEC.md 59.6's
+    ; 'Formatted B:' in the menu bar (SPEC.md 22.12.1). SPEC.md 60.6's
     ; reasoning where it is strongest: a format is seconds of floppy the user
     ; waited for, so the success is worth saying and not only the failure -
     ; and the window behind it is no substitute, because 'Drive B: 0 files'
@@ -3528,7 +3528,7 @@ fm_edit_commit:
     ;
     ; It is said AFTER fmv_load, not before: a mount can arm SPEC.md 12.8's
     ; file-activity widget, which owns these pixels and which toast_show
-    ; refuses while it is up - 59.6's own ordering.
+    ; refuses while it is up - 60.6's own ordering.
     mov al, [di+FS_DRV]
     add al, 'A'
     mov ah, al                  ; banked: fm_scat spends AL and not AH
@@ -3568,7 +3568,7 @@ fm_edit_commit:
     jmp short .done             ; is showing this folder
 .bad:
     push bx                     ; every failure gets visible text (22) - as a
-    push cx                     ; TOAST now (SPEC.md 59.5): a verdict is a
+    push cx                     ; TOAST now (SPEC.md 60.5): a verdict is a
     mov bx, fm_errtab           ; report about what just happened, not a fact
     mov cx, FM_NERR             ; about this window, so it wants no per-window
     call KERNEL_SEG:cw_toast_say ; byte, no status-line rung, and no later
@@ -3864,7 +3864,7 @@ fm_paste_res:
     cmp al, FCPS_ERR
     jne .all
     mov al, [fcp_err]
-    mov bx, fm_errtab           ; SPEC.md 59
+    mov bx, fm_errtab           ; SPEC.md 60
     mov cx, FM_NERR
     call KERNEL_SEG:cw_toast_say
 .all:
@@ -5379,7 +5379,7 @@ fm_draw_status:
     ;     used to be five rungs and two of them were VERDICTS - the FERR_* of
     ;     the last file operation and the LD_* of the last load - which took
     ;     the line until some later interaction retired it. Those are toasts
-    ;     now (SPEC.md 59.5): a verdict is a report about what just happened,
+    ;     now (SPEC.md 60.5): a verdict is a report about what just happened,
     ;     so it belongs to the moment rather than to a window, and it goes
     ;     away on its own. What is left is what the line is FOR - one thing
     ;     that is true now (a load pending), one being typed, and one that

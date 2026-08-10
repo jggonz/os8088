@@ -1322,7 +1322,7 @@ osapi_table:
     OSAPI_SLOT toast_show         ; 0x0380 - ES:SI = a NUL line, CX = ticks to
                                   ;          live (0 = ~3s). Says it in the
                                   ;          menu bar and takes it down on its
-                                  ;          own (SPEC.md 59). An EMPTY string
+                                  ;          own (SPEC.md 60). An EMPTY string
                                   ;          retires whatever is up. ES:SI for
                                   ;          clip_put's reason: the text is
                                   ;          often not in the caller's image
@@ -2146,7 +2146,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                               ; sits beside and whose menu_draw_bar gives the
                               ; borrowed pixels back; before disk.inc, which
                               ; steps it per sector
-%include "toast.inc"          ; the transient one-line message (SPEC.md 59):
+%include "toast.inc"          ; the transient one-line message (SPEC.md 60):
                               ; the bar's other tenant, beside fprog.inc for
                               ; the same reason and after it, because
                               ; toast_show refuses while that widget is armed

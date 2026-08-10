@@ -1636,7 +1636,7 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; ticks to live (0 = ~3s at 18.2 Hz). Says it
                                  ; as an inverse-video strip at the right end
                                  ; of the MENU BAR and takes it down on its
-                                 ; own (SPEC.md 59) - so it costs your window
+                                 ; own (SPEC.md 60) - so it costs your window
                                  ; no pixels, survives a repaint without your
                                  ; help, and cannot leave your incremental
                                  ; drawing disagreeing with your W_PAINT.

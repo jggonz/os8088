@@ -2827,7 +2827,7 @@ np_selmark:
 ; the text and was in no row's signature, so the keystroke that retired one
 ; had to erase it the only way this module could, by painting the whole
 ; content again. The toast is the kernel's now and is in the menu bar
-; (SPEC.md 59), so it is in nothing this routine describes.
+; (SPEC.md 60), so it is in nothing this routine describes.
 ; -----------------------------------------------------------------------------
 np_sigsame:
     push ax
@@ -4844,7 +4844,7 @@ np_onkey:
     call np_hmove
 
 .edited:                        ; the toast is the kernel's and expires on
-                                ; its own (SPEC.md 59), so a keystroke owes it
+                                ; its own (SPEC.md 60), so a keystroke owes it
                                 ; nothing at all - this used to be a store on
                                 ; the hot path AND the reason np_sigsame threw
                                 ; the fast path away on the key after a save
@@ -5588,7 +5588,7 @@ np_new:
     mov word [np_cur], 0
     mov ax, np_s_nul            ; retire the toast: 'Loaded NOTES.TXT' over an
     call np_saymsg              ; empty note is a lie. An EMPTY string is how
-    call np_clamp               ; SPEC.md 59.3 spells that, so no flag of ours
+    call np_clamp               ; SPEC.md 60.3 spells that, so no flag of ours
                ; a no-op on the caret, which is already 0 -
                                 ; it is here for the invalidation np_clamp
                                 ; carries (SPEC.md 27.4/27.5)
@@ -9800,7 +9800,7 @@ np_redrawall:
 ; Small change (SPEC.md 27.8/27.10)
 ; =============================================================================
 
-; np_saymsg - AX = a NUL string -> the system toast (SPEC.md 59).
+; np_saymsg - AX = a NUL string -> the system toast (SPEC.md 60).
 ; Preserves all registers AND the flags: two callers are error paths that
 ; carry their answer in CF.
 ;
@@ -9811,7 +9811,7 @@ np_redrawall:
 ; repaint without help, it cannot be carried off its frame by a scroll blit,
 ; and it cannot leave the incremental path disagreeing with W_PAINT - which
 ; is what forced a FULL content repaint on the first keystroke after every
-; save and every load (SPEC.md 59.1).
+; save and every load (SPEC.md 60.1).
 np_saymsg:
     push ax
     push cx
@@ -9959,7 +9959,7 @@ np_m_saved:   db 'Saved ', 0
 np_m_loaded:  db 'Loaded ', 0
 np_m_trunc:   db 'Truncated', 0
 np_s_nul:     db 0              ; an EMPTY string retires whatever is up
-                                ; (SPEC.md 59.3) - one call, and this app
+                                ; (SPEC.md 60.3) - one call, and this app
                                 ; never has to know whether one was
 
 ; FERR_* (SPEC.md 18.4) -> string, indexed by the code itself
@@ -10256,7 +10256,7 @@ np_rgt      equ os88_image_end + 4   ; word: content right, inclusive
 np_bot      equ os88_image_end + 6   ; word: content bottom, inclusive
                                        ; +8..+17 FREE: [np_msg] and the four
                                        ; toast-box words. The toast is the
-                                       ; kernel's now (SPEC.md 59) and is in
+                                       ; kernel's now (SPEC.md 60) and is in
                                        ; the menu bar, so this app holds no
                                        ; state about it at all. The offsets
                                        ; below are unchanged deliberately -
@@ -10368,7 +10368,7 @@ np_cap      equ os88_image_end + 437    ; word: ...and in bytes, kept in step
                                        ; np_tbuf, so the POINTER could not
                                        ; tell "Saved X" from "Loaded X" -
                                        ; a distinction the kernel's copy
-                                       ; makes for itself (SPEC.md 59.3)
+                                       ; makes for itself (SPEC.md 60.3)
 np_stgseg   equ os88_image_end + 439    ; word: the save's CR/LF staging
                                        ; claim, 0 = not held. A SECOND claim,
                                        ; sized from [np_len] and taken only

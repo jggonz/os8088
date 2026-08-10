@@ -956,7 +956,7 @@ assoc_run:
                                 ; on, so no listing and no index (21.4)
     mov byte [assoc_argp], 0    ; a package launched later, by any route,
     mov [ld_status], al         ; must never inherit this document
-    push bx                     ; ...and SAY it (SPEC.md 59/22.9)
+    push bx                     ; ...and SAY it (SPEC.md 60/22.9)
     push cx
     mov bx, fm_stattab
     mov cx, LD_NSTAT

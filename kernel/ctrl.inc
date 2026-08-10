@@ -132,7 +132,7 @@ cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
 cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
                                 ; wrong disk in A:, 2 = the write failed. Said
                                 ; as a TOAST at the moment it happens (SPEC.md
-                                ; 59.6) rather than carried to a page caption
+                                ; 60.6) rather than carried to a page caption
                                 ; to be found next session; what is left of
                                 ; its old job is telling cp_flush_close_x
                                 ; whether to keep [cp_wdirty] and retry
@@ -2552,7 +2552,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in
 ; flushing on the two ways the panel can go away, teardown and reboot, rather
 ; than on the one obvious one.
 ;
-; **A FAILED WRITE IS SAID AS A TOAST** (SPEC.md 59.6). It used to be carried
+; **A FAILED WRITE IS SAID AS A TOAST** (SPEC.md 60.6). It used to be carried
 ; in [cp_dsave] to the Drivers page's caption - the only page with room for it
 ; - and reported the NEXT time the panel was opened, because by the time the
 ; write happens the page is gone. That is a verdict stored to be found later,
@@ -2564,7 +2564,7 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in
 ;
 ; It is said AFTER the write and not before, which is not a style choice:
 ; drv_cfg_save arms SPEC.md 12.8's file-activity widget, and fpg_begin retires
-; a live toast because the two cannot share those pixels (SPEC.md 59.3).
+; a live toast because the two cannot share those pixels (SPEC.md 60.3).
 ; -----------------------------------------------------------------------------
 cp_flush_x:
     push ax
@@ -3063,7 +3063,7 @@ cp_drv_paint:
     call cp_drv_boxes               ; every checkbox, from the live state.
                                     ; NO save caption: a failed write is said
                                     ; as a toast at the moment it fails
-                                    ; (SPEC.md 59.6), so this page has nothing
+                                    ; (SPEC.md 60.6), so this page has nothing
                                     ; left to report from a previous session
     pop si
     pop dx

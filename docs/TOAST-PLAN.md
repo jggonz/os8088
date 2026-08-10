@@ -4,10 +4,10 @@ Five places in this tree draw a transient one-line message and no two of them
 agree about where it goes, how long it lives, what it looks like or who erases
 it. This is the plan for one kernel routine they can share.
 
-**BUILT. This document is kept as the reasoning, and SPEC.md §59 is the
+**BUILT. This document is kept as the reasoning, and SPEC.md §60 is the
 contract.** Every decision §8 left to the owner was taken the way this
 recommended — the menu bar, the inverse strip, three seconds — with one
-addition the plan did not foresee and §59.4 records: a message put up *before*
+addition the plan did not foresee and §60.4 records: a message put up *before*
 a long operation has to reach the glass before the machine goes quiet, so
 `toast_show` draws on the spot when the caller provably holds the gfx lock.
 Paint's `Encoding...` is the case that forced it.

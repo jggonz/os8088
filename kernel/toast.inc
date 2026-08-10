@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - toast.inc (SPEC.md 59)
+; os8088 - toast.inc (SPEC.md 60)
 ;
 ; THE TRANSIENT ONE-LINE MESSAGE, for the whole machine: `Saved NOTES.TXT`,
 ; `Opened SUNSET.BMP`. One routine, one look, one lifetime - where five
@@ -147,7 +147,7 @@ toast_show:
     popf
     call toast_now              ; ...and if the caller can be shown to hold
     clc                         ; the lock, it reaches the glass NOW rather
-    jmp short .out              ; than on the next idle pass (SPEC.md 59.4)
+    jmp short .out              ; than on the next idle pass (SPEC.md 60.4)
 .kill:
     call toast_kill             ; preserves the flags, so the popf below is
     popf                        ; still the caller's
@@ -210,7 +210,7 @@ toast_say:
 
 ; -----------------------------------------------------------------------------
 ; toast_now - draw a staged toast on the spot, IF the caller provably holds
-;             the gfx lock (SPEC.md 59.4)
+;             the gfx lock (SPEC.md 60.4)
 ; in:       a toast staged; called from toast_show only
 ; out:      nothing (all registers preserved)
 ;

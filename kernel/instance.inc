@@ -1103,7 +1103,7 @@ app_close_win:
     jne .tasked
     mov byte [di+I_STATE], 2    ; dying: lock-held readers skip it from here
     call toast_owner_gone       ; ITS OLD MESSAGE GOES FIRST, before anything
-                                ; below can raise a NEW one (SPEC.md 59.6).
+                                ; below can raise a NEW one (SPEC.md 60.6).
                                 ; cp_flush_close writes SYSTEM.CFG and says
                                 ; whether that worked - the panel's last act
                                 ; is a report about the panel - so a kill
@@ -1188,7 +1188,7 @@ inst_restore:
 inst_task_die:
     call snd_release_rec        ; free every sound grant before the record
                                 ; goes (SPEC.md 29.4/34.3)
-    call toast_owner_gone       ; ...and its message (SPEC.md 59)
+    call toast_owner_gone       ; ...and its message (SPEC.md 60)
     call gfx_lock
     mov bx, [di+I_WIN]
     call wm_destroy             ; frees the wm slot + wm_owner, repaints -

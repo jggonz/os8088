@@ -251,7 +251,7 @@ loader_run_x:
     mov byte [ld_painted], 0
     call ld_run_body_x          ; out: AL = LD_* status
     mov [ld_status], al
-    push bx                     ; ...and SAY it (SPEC.md 59). It used to be
+    push bx                     ; ...and SAY it (SPEC.md 60). It used to be
     push cx                     ; stamped on the window that asked, because
     mov bx, fm_stattab          ; one global put 'Bad package' on every open
     mov cx, LD_NSTAT            ; Disk window at once - a question a toast
