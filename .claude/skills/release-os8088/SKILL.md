@@ -335,11 +335,37 @@ plausible-looking screenshot of the wrong thing, and file size will not tell
 you: two of Frotz's five first came out sitting on an unanswered "Do you need
 instructions?" prompt with an otherwise empty window.
 
-**2. Write the page.** Copy `site/spotlight/frotz.html` and change it. It is
-the template, in this order: breadcrumb, `h1` and a one-paragraph pitch, the
-hero screenshot, what the thing *is* for someone who has never heard of it, the
-video, the screenshot gallery, the parts that were hard, what it deliberately
-does not do, and how to run it.
+**2. Write the page.** Copy `site/spotlight/frotz.html` and change it. Set
+`body_class: spot` in the metadata block -- that is what turns on the article
+layout, and without it the page is the ordinary stack of one-screendump-wide
+windows, which is what these pages exist to stop being.
+
+The layout has **two widths and nothing between**: 800px for anything with
+sentences in it, the full two columns for anything to look at. Alternating them
+is the structure. The pieces, all in the stylesheet's `spotlight` section:
+
+| | |
+|---|---|
+| masthead | a `.grid` of two: the pitch, `.specs` with three numbers, the buttons and a `.spot-toc` of jump links -- beside the one screendump that proves it |
+| `.spot-band` | inverted full-width section heading, each with one line saying why you would read that section. These are the anchors somebody skims by |
+| gallery | the screendumps in a plain `.grid`, two abreast |
+| `.spot-cards` | a `.grid` of short titled cards, for what would otherwise be one window with four `h3`s in it |
+| `.spot-steps` | numbered instructions, for the part somebody follows while typing |
+
+Order: masthead, what it *is* for someone who has never heard of it, the video,
+the gallery, how it works, what it deliberately does not do, how to run it.
+
+The copy rules above apply, plus one more: **a Spotlight page is written for
+someone who does not know the subject at all**, so explain the domain and not
+only the change. The Frotz page spends three paragraphs on what a Z-machine is
+before it says a word about the implementation. That is the right proportion.
+Still no marketing, still numbers instead of adjectives, and still no `§`
+numbers or symbol names.
+
+Two things a reader gets in the first five seconds, so write them last and
+hardest: the **deck** (`.spot-deck`, one or two sentences that are the whole
+page) and the **three numbers** in the `.specs` block. If you cannot fill those
+three cells with facts, the page is probably a highlight and not a spotlight.
 
 The copy rules above apply, plus one more: **a Spotlight page is written for
 someone who does not know the subject at all**, so explain the domain and not
@@ -375,9 +401,17 @@ wherever a reader would otherwise look for it -- for Frotz that is
 page from the matching `highlights[].body` in `data/releases.json` too.
 
 **5. Rebuild, link-check, and look at both pages** in the browser, the same way
-step 4a makes you look at the releases page. Check the index at a wide viewport:
-`.grid` is sized for two 640px windows side by side and silently collapses to
-one column inside a window body, which is why the index uses a plain figure.
+step 4a makes you look at the releases page. Three things that will fool you:
+
+- **Look at it at 1600px wide.** A row of two screendumps needs a 1,360px
+  viewport, so at anything narrower the page folds to one column and looks
+  exactly like the thing this layout replaced. Check 390px too -- nothing may
+  scroll sideways.
+- **The stylesheet is cached and `build.py` does not touch it.** `public/css/`
+  is committed by hand, so a CSS change plus a reload shows you the old page. A
+  band that renders as plain text on the dither is that, not a broken rule.
+- **The video poster is a broken image locally** and correct in production; see
+  step 3.
 
 ### 5. Commit and open the pull request
 
