@@ -95,8 +95,24 @@ SB_RAH_GAP  equ 9216              ; ...and the stride's floor: TWO 9-sector
                                   ; tracks, so two reads can never share a
                                   ; chunk however a fill was bounded
 SB_RAH_WSTEP equ 2                ; working sets go 2, 4, 6 ... which brackets
-SB_RAH_WMAX  equ 18               ; the run count to a pair. 18 x 9216 is
-                                  ; 166KB, inside the 170KB file this walks
+SB_RAH_WMAX  equ 12               ; the run count to a pair.
+                                  ;
+                                  ; THE SWEEP'S CEILING IS WHAT SIZES
+                                  ; bigfile.dat, and it was 18 for a 170KB
+                                  ; file. On a one-drive machine that file is
+                                  ; most of a 360KB field disk and the reports
+                                  ; are the point (docs/FIELD-MACHINES.md), so
+                                  ; it is 12 and the file is 104KB: the
+                                  ; deepest byte a floppy sweep touches is
+                                  ; (12-1) x 9216 + 1024 = 102,400. It still
+                                  ; brackets DSK_RAH_RUNS = 8 with a step of
+                                  ; headroom - free through 8, missing at 10,
+                                  ; confirmed at 12 - and a run count raised
+                                  ; past 10 would report no cliff rather than
+                                  ; a wrong one, which the row below says in
+                                  ; words. Raising this means growing
+                                  ; bigfile.dat in the Makefile to match; the
+                                  ; sweep stops honestly either way.
 
 ; -----------------------------------------------------------------------------
 ; sb_entry - package entry (SPEC.md 20.2)
@@ -350,6 +366,10 @@ sb_run:
     call sb_mouse
     call sb_ladder                  ; SPEC.md 37.92 - a state dump, like the
                                     ; mouse block above and for its reason
+    call sb_video                   ; ...and SPEC.md 57.4, the third of them:
+                                    ; two cards on two monitors is the field
+                                    ; machine's own arrangement and the one
+                                    ; question no emulator can be asked
     call bl_operator                ; ...and what the OPERATOR was doing
     call sb_trailer
     mov si, sb_f_out                ; SAVE IT, without being asked: a report
@@ -1360,6 +1380,280 @@ sb_mbx:
     pop bx
     ret
 
+; SPEC.md 39.12's context record, mirrored from kernel/vidsel.inc. Rule 3 of
+; SPEC.md 57.3 as written: a block may change shape whenever its owner does,
+; as long as the READERS change with it, and there are none outside this tree.
+; The first three are inside the eighteen-word run - which is the live block's
+; own order, so they are viddet.inc's layout twice removed - and the last
+; three are the fields hung off the end of it.
+VCTX_SEG    equ 0               ; vid_seg:    the framebuffer
+VCTX_STRIDE equ 2               ; vid_stride: bytes from a row to the row one
+                                ;             bank down
+VCTX_BMASK  equ 4               ; vid_bmask:  y & this = the bank, so banks-1
+VCTX_CW     equ 14              ; vid_cw / vid_ch: THIS DISPLAY's extent, not
+VCTX_CH     equ 16              ; the desktop's (SPEC.md 39.2.1)
+VCTX_VX     equ 36              ; ...and its origin in the virtual desktop
+VCTX_VY     equ 38
+VCTX_KIND   equ 40              ; ...and which adapter it is
+
+; -----------------------------------------------------------------------------
+; sb_video - what SPEC.md 39 arranged, and on which cards (39.19, 57.4's 'VD')
+;
+; A STATE DUMP, like sb_mouse and sb_ladder above and for exactly their
+; reason: it is a question about hardware nobody in the container has. Two
+; cards is the field machine's own arrangement (docs/FIELD-MACHINES.md), and
+; the one thing no emulator can be asked is whether a monitor is plugged into
+; the second one - which is the whole of why SPEC.md 39.19.1 makes Single the
+; default and why these rows exist to be read off a real 5150.
+;
+; The rows to read TOGETHER, because each pair is a different fault:
+;
+;   avail vs displays   avail 6 with displays 1 is a machine that HAS two
+;                       cards and is arranged Single - the default, not a
+;                       failure. avail anything else with displays 2 is
+;                       impossible and means vid_dual_ok has been widened.
+;   desktop vs chrome   SPEC.md 39.16: the desktop is the UNION and the
+;                       chrome is the PRIMARY's. Equal with displays 2 means
+;                       vid_desk_union did not run; unequal with displays 1
+;                       means it ran and nothing put it back.
+;   origin vs size      the placement of SPEC.md 39.19.2. Display 0 is always
+;                       (0,0); display 1 is (cw,0) for Right and (0,ch) for
+;                       Below, and any other pair is a layout byte nothing
+;                       honoured.
+;   dead zone           the rows or columns the union covers and no display
+;                       does (SPEC.md 39.15.3). Nonzero is normal - two cards
+;                       of different sizes - and it is what ui_drag_dead and
+;                       mou_clamp exist for, so a field report of a pointer
+;                       vanishing is read against this number first.
+; -----------------------------------------------------------------------------
+sb_video:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    call bl_blank
+    mov si, sb_s_h_vid
+    call bl_sline
+    mov si, sb_s_h_vid2
+    call bl_sline
+    mov si, sb_s_h_vid3
+    call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
+
+    mov ax, DBG_TAG_VIDEO           ; SPEC.md 57's registry
+    call sb_dbgfind
+    jc .nodbg
+    mov ax, [es:bx+2]
+    mov [sb_vkind], ax              ; -> vid_kind, vid_mono, vid_planes
+    mov ax, [es:bx+4]
+    mov [sb_vavail], ax             ; -> vid_avail
+    mov ax, [es:bx+6]
+    mov [sb_vnd], ax                ; -> ndisp, cur, ox, oy, dmode, dlay
+    mov ax, [es:bx+8]
+    mov [sb_vcur], ax               ; -> cur_disp, cur_dprev
+    mov ax, [es:bx+10]
+    mov [sb_vctx], ax               ; -> the records...
+    mov ax, [es:bx+12]
+    mov [sb_vstr], ax               ; ...and their stride
+    mov ax, [es:bx+14]
+    mov [sb_vdesk], ax              ; -> vid_w, vid_h   (the DESKTOP, SPEC 39.16)
+    mov ax, [es:bx+16]
+    mov [sb_vchr], ax               ; -> vid_pw, vid_ph (the CHROME's extent)
+
+    mov bx, [sb_vkind]              ; --- what the machine IS ----------------
+    mov al, [es:bx]
+    xor ah, ah
+    mov si, sb_l_vkind
+    call sb_num
+    mov bx, [sb_vavail]
+    mov al, [es:bx]
+    xor ah, ah
+    mov si, sb_l_vavail
+    call sb_hex
+
+    cmp word [sb_vnd], 0            ; a kern_small kernel is single-display by
+    je .small                       ; CONSTRUCTION and has no bytes to report
+
+    mov bx, [sb_vnd]                ; --- ...and how it is arranged ----------
+    mov al, [es:bx]
+    xor ah, ah
+    mov si, sb_l_vnd
+    call sb_num
+    mov bx, [sb_vnd]
+    mov al, [es:bx+6]               ; vid_dmode
+    xor ah, ah
+    mov si, sb_l_vdm
+    call sb_num
+    mov bx, [sb_vnd]
+    mov al, [es:bx+7]               ; vid_dlay
+    xor ah, ah
+    mov si, sb_l_vdl
+    call sb_num
+    mov bx, [sb_vcur]
+    mov al, [es:bx]                 ; cur_disp
+    xor ah, ah
+    mov si, sb_l_vptr
+    call sb_num
+
+    mov bx, [sb_vdesk]              ; --- the desktop against the chrome -----
+    mov ax, [es:bx]
+    mov dx, [es:bx+2]
+    mov si, sb_l_vdesk
+    call sb_v2
+    mov bx, [sb_vchr]
+    mov ax, [es:bx]
+    mov dx, [es:bx+2]
+    mov si, sb_l_vchrm
+    call sb_v2
+
+    xor cl, cl                      ; --- one group per display --------------
+.d:
+    mov al, cl                      ; the record is BANKED and reloaded before
+    call sb_vrec                    ; every read, never held in BX across a
+    mov al, cl                      ; row: benchlib's line builders do not all
+    xor ah, ah                      ; promise BX, and a pointer that survives
+    mov si, sb_l_vd                 ; three of them and not the fourth reads
+    call sb_num                     ; as one wrong number in a page of right
+    mov bx, [sb_vrp]                ; ones
+    mov al, [es:bx+VCTX_KIND]
+    xor ah, ah
+    mov si, sb_l_vdk
+    call sb_num
+    mov bx, [sb_vrp]
+    mov ax, [es:bx+VCTX_VX]
+    mov dx, [es:bx+VCTX_VY]
+    mov si, sb_l_vdo
+    call sb_v2
+    mov bx, [sb_vrp]
+    mov ax, [es:bx+VCTX_CW]
+    mov dx, [es:bx+VCTX_CH]
+    mov si, sb_l_vds
+    call sb_v2
+    mov bx, [sb_vrp]
+    mov ax, [es:bx+VCTX_STRIDE]
+    mov dx, [es:bx+VCTX_BMASK]
+    inc dx                          ; the mask is banks-1 (0 on VGA, so 1)
+    mov si, sb_l_vdb
+    call sb_v2
+    mov bx, [sb_vrp]
+    mov ax, [es:bx+VCTX_SEG]
+    mov si, sb_l_vdf
+    call sb_hex
+    inc cl
+    mov bx, [sb_vnd]
+    cmp cl, [es:bx]
+    jb .d
+
+    call sb_vdead                   ; --- ...and what no display covers ------
+    jmp short .out
+.small:
+    mov si, sb_s_vsmall
+    call bl_sline
+    jmp short .out
+.nodbg:
+    mov si, sb_s_vnone
+    call bl_sline
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sb_vrec - display AL's record, in BX and banked in [sb_vrp]. ES is
+; KERNEL_SEG on entry. The stride comes out of the block rather than from a
+; constant here, because SPEC.md 57.3 rule 3 lets the record change shape and
+; a reader that assumed 42 would then walk into the middle of one.
+sb_vrec:
+    push ax
+    push dx
+    mul byte [sb_vstr]              ; mul r/m8: AX = AL * stride
+    add ax, [sb_vctx]
+    mov bx, ax
+    mov [sb_vrp], ax
+    pop dx
+    pop ax
+    ret
+
+; sb_vdead - the union's area less every display's, in whole pixels
+;
+; It is an AREA and not a rectangle on purpose: with the two placements of
+; SPEC.md 39.19.2 the displays never overlap, so the union's area minus the
+; sum of theirs IS the gap - one subtraction instead of a rectangle walk, and
+; it stays right if a third display is ever placed. Reported in units of 100
+; pixels, because 1360 x 548 does not fit a word and this is a magnitude
+; rather than a measurement.
+sb_vdead:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, [sb_vdesk]              ; DI:SI = the union's area
+    mov ax, [es:bx]
+    mov bx, [es:bx+2]
+    mul bx
+    mov si, ax
+    mov di, dx
+    xor cl, cl
+.d:
+    mov al, cl
+    call sb_vrec
+    mov ax, [es:bx+VCTX_CW]
+    mov bx, [es:bx+VCTX_CH]
+    mul bx
+    sub si, ax
+    sbb di, dx
+    inc cl
+    mov bx, [sb_vnd]
+    cmp cl, [es:bx]
+    jb .d
+    mov ax, si                      ; ...as hundreds, so it fits the field
+    mov dx, di
+    mov cx, 100
+    call bl_div32               ; ...and bl_div32 divides by CX
+    mov si, sb_l_vdead
+    call sb_num
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sb_v2 - SI = label, AX and DX = two numbers, one row. Preserves everything.
+sb_v2:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov bx, dx                      ; bank the second before bl_dec wants DX
+    call bl_lclr
+    xor di, di
+    call bl_lput
+    mov di, BL_C_N
+    xor dx, dx
+    mov cx, 6
+    call bl_dec
+    mov ax, bx
+    xor dx, dx
+    mov di, BL_C_N + 7
+    mov cx, 6
+    call bl_dec
+    call bl_lcommit
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sb_ladder - which rung of the RTC ladder answered, and where it stopped
 ;            (SPEC.md 37.90/37.92)
@@ -2171,6 +2465,7 @@ sb_rah:
     mov ax, [sb_rstr]
     call sb_num
 
+    mov byte [sb_rshort], 0
     mov word [sb_rw], SB_RAH_WSTEP
 .sweep:
     call sb_rah_pass                ; populate W chunks...
@@ -2213,6 +2508,12 @@ sb_rah:
     jmp short .out
 .stop:
     mov si, sb_s_rerr
+    cmp byte [sb_rshort], 0
+    je .stopsay
+    mov si, sb_s_rshort
+    call bl_sline
+    mov si, sb_s_rshort2
+.stopsay:
     call bl_sline
     jmp short .free
 .noclaim:
@@ -2310,7 +2611,7 @@ sb_rah_pass:
     or ax, ax                       ; 0 bytes = past the end: the file is too
     jnz .on                         ; short for a working set this wide, and
     or dx, dx                       ; pretending otherwise reports a cliff
-    jz .fail                        ; that is the FILE's and not the cache's
+    jz .short                       ; that is the FILE's and not the cache's
 .on:
     inc di
     cmp di, [sb_rw]
@@ -2324,8 +2625,10 @@ sb_rah_pass:
     pop ax
     clc
     ret
-.fail:
-    pop es
+.short:
+    mov byte [sb_rshort], 1         ; ...which is a different sentence from a
+.fail:                              ; read that refused, and the two used to
+    pop es                          ; print the same one
     pop di
     pop si
     pop dx
@@ -3499,6 +3802,26 @@ sb_l_hderr:   db '  hdd read error code', 0
 sb_l_hdsz:    db '  hdd bytes read', 0
 
 ; --- the mouse (SPEC.md 9.4.1/9.4.2) -----------------------------------------
+sb_s_h_vid:  db '-- the displays: what SPEC.md 39 arranged, and on which cards (39.19) --', 0
+sb_s_h_vid2: db '   STATE, not a measurement. kind/adapter: 0=Vga 1=Herc 2=Cga; avail is', 0
+sb_s_h_vid3: db '   a BITMAP of 1<<kind, so 6 = a Hercules AND a Cga. Read the PAIRS.', 0
+sb_s_vnone:  db '   this kernel publishes no display block (built before SPEC.md 57.4).', 0
+sb_s_vsmall: db '   kern_small: single-display by CONSTRUCTION, so there is nothing set.', 0
+sb_l_vkind:  db '  adapter running', 0
+sb_l_vavail: db '  adapters available (hex)', 0
+sb_l_vnd:    db '  displays brought up', 0
+sb_l_vdm:    db '  desktop 0=Sing 1=Extend', 0
+sb_l_vdl:    db '  layout 0=Right 1=Below', 0
+sb_l_vptr:   db '  pointer is on display', 0
+sb_l_vdesk:  db '  desktop w h (the union)', 0
+sb_l_vchrm:  db '  chrome  w h (primary)', 0
+sb_l_vd:     db '  -- display', 0
+sb_l_vdk:    db '     adapter', 0
+sb_l_vdo:    db '     origin x y', 0
+sb_l_vds:    db '     size w h', 0
+sb_l_vdb:    db '     stride banks', 0
+sb_l_vdf:    db '     framebuffer seg (hex)', 0
+sb_l_vdead:  db '  dead zone, 100s of px', 0
 sb_s_h_mou:  db '-- the mouse: the port contest and the identify burst (SPEC.md 9.4.1) --', 0
 sb_s_h_mou2: db '   STATE, not a measurement: base and first byte are HEX, rest decimal.', 0
 sb_s_h_mou3: db '   A mouse that identified reads: first byte 4D, identified 1, stamp 0.', 0
@@ -3618,10 +3941,12 @@ sb_s_h_rah2: db '   W chunks written, then re-read. Round-robin plus the same', 
 sb_s_h_rah3: db '   order is Belady worst case, so this is a CLIFF, not a slope.', 0
 sb_s_h_rah4: db '   It is a LOWER BOUND on DSK_RAH_RUNS: resolving the file by', 0
 sb_s_h_rah5: db '   name touches a directory sector and the FAT, and those take', 0
-sb_s_h_rah6: db '   slots as well. 12 free against a compiled 14 is the walk.', 0
+sb_s_h_rah6: db '   slots as well, and the sweep stops at 12 (see SB_RAH_WMAX).', 0
 sb_s_rnofile: db '   BIGFILE.DAT is not on this volume: nothing wide to walk.', 0
 sb_s_rnoclaim: db '   no 8KB heap claim available: the cache rows were skipped.', 0
 sb_s_rerr:   db '   a read refused mid-sweep - the rows above are what stands.', 0
+sb_s_rshort: db '   BIGFILE.DAT ran out: the sweep is bounded by the FILE here,', 0
+sb_s_rshort2: db '   not by the cache. Grow it, or read the rows above as a floor.', 0
 sb_l_rcl:    db '  cluster bytes, probed', 0
 sb_l_rstr:   db '  ...so the stride is', 0
 sb_l_rw:     db '  chunks re-read -> int 13h', 0
@@ -3683,7 +4008,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 184
+SB_O_SYSKB equ 204              ; ...and the scalars end at 203 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -3753,6 +4078,17 @@ sb_mbase    equ os88_image_end + 118   ; word: -> mou_bases (SPEC.md 9.4.2)
 sb_mstate   equ os88_image_end + 120   ; word: -> the mouse state span (121)
 sb_cstate   equ os88_image_end + 122   ; word: -> the clock state span (123),
                                        ; SPEC.md 37.92
+sb_vkind    equ os88_image_end + 184   ; word: -> vid_kind    (SPEC.md 57.4)
+sb_vavail   equ os88_image_end + 186   ; word: -> vid_avail
+sb_vnd      equ os88_image_end + 188   ; word: -> ndisp/cur/ox/oy/dmode/dlay
+sb_vcur     equ os88_image_end + 190   ; word: -> cur_disp
+sb_vctx     equ os88_image_end + 192   ; word: -> the context records...
+sb_vstr     equ os88_image_end + 194   ; word: ...and their stride
+sb_vdesk    equ os88_image_end + 196   ; word: -> vid_w, vid_h
+sb_vchr     equ os88_image_end + 198   ; word: -> vid_pw, vid_ph
+sb_vrp      equ os88_image_end + 200   ; word: the record being printed
+sb_rshort   equ os88_image_end + 202   ; byte: the sweep ran off the END of
+                                       ; BIGFILE.DAT rather than refusing (203)
 sb_fbord    equ os88_image_end + 124   ; word: the ordinal the timed FIND asks
 sb_fask     equ os88_image_end + 126   ; word: ...and the one the counter did
 sb_fn       equ os88_image_end + 128   ; word: entries in this directory

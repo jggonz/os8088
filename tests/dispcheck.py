@@ -70,6 +70,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dispcp                                             # noqa: E402
 
 # vid_kind -> the MartyPC card type that kind IS, and what that card's
 # framebuffer looks like: segment, stride, banks, extent.
@@ -135,6 +137,24 @@ def main(argv):
         os88marty.settle(m, gate=os88marty.desktop_up, card=gate_card)
 
         say = lambda s: print("  " + s)
+        S = lambda n: os88sym.linear(n, defs)   # the SAME defines the
+                                               # later one uses: a VIDEO=
+                                               # build moves every symbol
+
+        # SPEC.md 39.19.1 makes Single the DEFAULT - the kernel can detect a
+        # second card and nothing can detect a second monitor - so everything
+        # below has to ask for the extended desktop first. Driving the real
+        # control rather than poking [vid_dmode] is deliberate: it is the only
+        # route a user has, and it costs one Control Panel round trip against
+        # a ten-minute run. The panel is CLOSED afterwards, or its window sits
+        # over the pixels every assertion below is about.
+        mo0 = os88mouse.Mouse(marty=m)
+        dispcp.open_panel(m, mo0, S, os88marty.settle, card=gate_card)
+        dispcp.set_mode(m, mo0, S, os88marty.settle, "right", card=gate_card)
+        dispcp.close_panel(m, mo0, S, os88marty.settle, card=gate_card)
+        if m.read(S("vid_ndisp"), 1)[0] != 2:
+            sys.exit("dispcheck: the Control Panel did not turn Extend on - "
+                     "run tests/dispmode.py, which is the gate for that")
         cards = m.cards()           # ...AFTER the boot: `frames` is 0 on every
                                     # card before the machine has run, so the
                                     # never-scanned test asked above would fire
@@ -167,8 +187,12 @@ def main(argv):
             fail.append("vid_cur is %d - the live block is not display 0's"
                         % cur)
 
-        raw = m.read(S("vid_ctx"), 80)
-        ctx = [[u16(raw, d * 40 + i * 2) for i in range(20)] for d in (0, 1)]
+        # VID_CTX_SZ, and it has moved once already (SPEC.md 39.18 added the
+        # adapter kind): the eighteen-word run, then VX, VY and the kind byte.
+        CTXSZ = 42
+        raw = m.read(S("vid_ctx"), 2 * CTXSZ)
+        ctx = [[u16(raw, d * CTXSZ + i * 2) for i in range(21)]
+               for d in (0, 1)]
         for d in (0, 1):
             w = ctx[d]
             say("ctx[%d] seg=%04X stride=%2d cw=%3d ch=%3d rseg=%04X "
@@ -193,9 +217,18 @@ def main(argv):
             fail.append("the live block is not display 0's record")
         dw, dh = u16(m.read(S("vid_w"), 2)), u16(m.read(S("vid_h"), 2))
         say("desktop %dx%d" % (dw, dh))
-        if (dw, dh) != (ctx[0][7], ctx[0][8]):
-            fail.append("the desktop is not display 0's extent - step 3 draws "
-                        "nothing on the second card and must not claim to")
+        uw = max(c[18] + c[7] for c in ctx)
+        uh = max(c[19] + c[8] for c in ctx)
+        if (dw, dh) != (uw, uh):
+            fail.append("the desktop is %dx%d, not the union %dx%d "
+                        "(SPEC.md 39.16)" % (dw, dh, uw, uh))
+        pw = u16(m.read(S("vid_pw"), 2))
+        ph = u16(m.read(S("vid_ph"), 2))
+        say("chrome %dx%d (the primary's), desktop %dx%d (the union)"
+            % (pw, ph, dw, dh))
+        if (pw, ph) != (ctx[0][7], ctx[0][8]):
+            fail.append("the chrome's extent is %dx%d, not the primary's %dx%d"
+                        % (pw, ph, ctx[0][7], ctx[0][8]))
 
         # --- the picture on each -------------------------------------------
         pri = [c for c in cards if c["type"] == KIND[kind][0]][0]
@@ -397,6 +430,128 @@ def main(argv):
         if after < 16:
             fail.append("nothing whole reached the second display: its "
                         "longest lit run is still %d px" % after)
+        # --- 6: does a WINDOW go there, and does it drag across the seam?
+        # (SPEC.md 39.16.1). The About box is the cheapest window in the
+        # machine - the chip menu's first item, no package to load - and its
+        # title bar is the thing a drag grabs. Driven the whole way: open it
+        # from the menu, then press on the title bar, walk the pointer onto
+        # the second display and release.
+        mo.to(*home)
+        mo.menu(12, 8, 12, 30)                  # chip menu -> About
+        os88marty.settle(m, card=gate_card)
+        wins = m.read(S("wm_wins"), 12 * 26)
+        WIN = 26
+        found = None
+        for i in range(12):
+            fl = u16(wins, i * WIN + 0)
+            if fl & 3 == 3:                     # used and visible
+                found = i
+        if found is None:
+            fail.append("no visible window after About - the drag cannot be "
+                        "driven")
+        else:
+            wx, wy = (u16(wins, found * WIN + 2), u16(wins, found * WIN + 4))
+            ww = u16(wins, found * WIN + 6)
+            say("About is window %d at (%d,%d) %dx%d"
+                % (found, wx, wy, ww, u16(wins, found * WIN + 8)))
+            grab = (wx + ww // 2, wy + 8)       # the title bar's middle
+            dest = (ctx[1][18] + ctx[1][7] // 2, ctx[1][19] + 60)
+            mo.to(*grab)
+            mo.m.mouse(0, 0, l=True)
+            time.sleep(0.3)
+            cx0, cy0 = mo.where()[:2]
+            for _ in range(24):                 # walk it across, button DOWN
+                dx = max(-100, min(100, dest[0] - cx0))
+                dy = max(-100, min(100, dest[1] - cy0))
+                if dx == 0 and dy == 0:
+                    break
+                mo.m.mouse(dx, dy, l=True)
+                time.sleep(0.14)
+                cx0, cy0 = mo.where()[:2]
+            mo.m.mouse(0, 0)                    # release
+            os88marty.settle(m, card=gate_card)
+            wins = m.read(S("wm_wins"), 12 * 26)
+            nx, ny = (u16(wins, found * WIN + 2), u16(wins, found * WIN + 4))
+            say("dragged to (%d,%d)" % (nx, ny))
+            d = 0
+            for c in ctx:
+                if c[18] <= nx < c[18] + c[7] and c[19] <= ny < c[19] + c[8]:
+                    d = 1 if c is ctx[1] else 0
+                    break
+            else:
+                fail.append("the window's origin (%d,%d) is on NO display - "
+                            "it landed in the dead zone" % (nx, ny))
+            if nx < ctx[1][18]:
+                fail.append("the window did not cross: origin x=%d, and "
+                            "display 1 starts at %d" % (nx, ctx[1][18]))
+            w2, h2, sec2 = m.fbuf(card=sec["idx"])
+            run2 = longest_run(sec2, w2, h2)
+            say("secondary longest lit run with the window on it: %d px" % run2)
+            if run2 < ww - 8:
+                fail.append("the window crossed but its %dpx frame is not on "
+                            "the second card: longest run %d" % (ww, run2))
+
+            # --- 7: fullscreen on the SECOND display leaves the chrome alone
+            # (SPEC.md 39.17.1). What decides that is wm_fs_vis, and what it
+            # asks is wm_disp_of - so latching [wm_fs] onto this window by
+            # hand and forcing a repaint drives exactly the four painters the
+            # question exists for. It does NOT drive wm_fs_setrect: no shipped
+            # window here has a fullscreen item, and a package would be three
+            # double-clicks and two mounts to reach.
+            #
+            # THE NEGATIVE CONTROL IS THE HALF THAT MEANS ANYTHING: the same
+            # latch with the window moved onto the PRIMARY must suppress the
+            # bar. Without it, "the bar is still there" is equally what a
+            # kernel that ignored [wm_fs] entirely would print.
+            pw = u16(m.read(S("vid_pw"), 2))
+            clk = u16(m.read(S("vid_clk_hx"), 2))
+            def barband(px, w):
+                # rows 0..MBAR_H-1, left of the clock cell - which ticks on a
+                # schedule of its own and is not part of the question.
+                return bytes(px[(y * w + x) * 3]
+                             for y in range(os88marty.MBAR_H)
+                             for x in range(min(clk, w)))
+            wp, hp, prest = m.fbuf(card=pri["idx"])
+            bar_rest = barband(prest, wp)
+
+            rec = S("wm_wins") - (0x60 << 4) + found * WIN
+            m.write(S("wm_fs"), bytes([rec & 255, rec >> 8]))
+            fl = u16(m.read(S("wm_wins") + found * WIN, 2)) | 8   # WF_FULL
+            m.write(S("wm_wins") + found * WIN, bytes([fl & 255, fl >> 8]))
+            m.write(S("cp_dirty"), bytes([1]))
+            m.advance(frames=90, card=pri["idx"])
+            m.run()
+            os88marty.settle(m, card=gate_card)
+            wp, hp, pfs = m.fbuf(card=pri["idx"])
+            d_far = sum(1 for i, b in enumerate(barband(pfs, wp))
+                        if b != bar_rest[i])
+            say("fullscreen on the SECOND display: menu bar differs by %d px"
+                % d_far)
+            if d_far:
+                fail.append("a fullscreen window on the second display "
+                            "changed the primary's menu bar by %d px - "
+                            "wm_fs_vis answered about the latch, not the "
+                            "chrome" % d_far)
+
+            m.write(S("wm_wins") + found * WIN + 2, bytes([0, 0, 0, 0]))
+            m.write(S("wm_wins") + found * WIN + 6,
+                    bytes([pw & 255, pw >> 8]))
+            ph = u16(m.read(S("vid_ph"), 2))
+            m.write(S("wm_wins") + found * WIN + 8,
+                    bytes([ph & 255, ph >> 8]))
+            m.write(S("cp_dirty"), bytes([1]))
+            m.advance(frames=90, card=pri["idx"])
+            m.run()
+            os88marty.settle(m, card=gate_card)
+            wp, hp, pfs2 = m.fbuf(card=pri["idx"])
+            d_near = sum(1 for i, b in enumerate(barband(pfs2, wp))
+                         if b != bar_rest[i])
+            say("...and moved onto the PRIMARY: differs by %d px" % d_near)
+            if d_near == 0:
+                fail.append("a fullscreen window ON the primary left its menu "
+                            "bar untouched - the control says the test above "
+                            "proves nothing")
+
 
     print()
     for f in fail:

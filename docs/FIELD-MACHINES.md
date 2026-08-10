@@ -535,6 +535,44 @@ Both are shaped by the machine, and neither decision in them is cosmetic:
 protected disk answers int 13h status 03h, which the OS faithfully reports as
 `Write protected`.
 
+### `make combo` — the whole session on ONE disk
+
+```sh
+make combo          # -> build/combo.img, 360KB bootable
+```
+
+`make field` solves the swap for the *benchmarks*; this solves it for
+everything. The system, every application, every game and all four benchmarks
+on one bootable 360KB floppy — **303 of 354 clusters, so 52KB is left for the
+reports, `SYSTEM.CFG` and anything you save.**
+
+**One image and not one per card**, unlike the two above, and that is SPEC.md
+§39.19 rather than a compromise: the probe still finds the Hercules first
+(§39.1), and the Control Panel's **Display** page then switches the primary to
+the CGA — or extends the desktop across both — without rebuilding anything.
+The extended desktop is **off by default** (§39.19.1: the kernel can detect a
+second card and nothing can detect a second monitor), so on this machine that
+is one visit to the Display page.
+
+Three things are left off, because 360KB is 354 clusters and everything in the
+tree is 484:
+
+| | | why |
+|---|---|---|
+| `MEDIA/BEVERLY.MOD` | 114 cl | a third of the disk, and the only item here that is *data* rather than software. Tracker and ModPlug still launch; they have nothing to open. Use the shipped apps disk when the module is the point. |
+| `BIGFILE.DAT` | 104 cl | sysbench's cache-capacity sweep and the DOS read-rate cross-check. sysbench says so and skips that row; every other row runs. It is on the `make field` disks, where that measurement belongs. |
+| `README.TXT` | 16 cl | the manual, on a disk that is for running. |
+
+**`bigfile.dat` shrank from 170KB to 104KB to make room, and that was overdue
+on the field disks too**: at 170KB it left `herc.img` and `cga.img` **eleven
+clusters** for the two reports the disks exist to produce. The floor is
+sysbench's sweep and not the file — `SB_RAH_WMAX` is 12, so the deepest byte a
+floppy sweep touches is 11 × 9216 + 1024 = 102,400 — and the sweep still
+brackets `DSK_RAH_RUNS` = 8 with a step of headroom. Raise `SB_RAH_WMAX` and
+the file has to grow with it; either way the report now distinguishes *the
+file ran out* from *a read refused*, so a sweep bounded by the disk can never
+be read as a cliff bounded by the cache.
+
 They are 8.3-short and unambiguous at a DOS prompt on purpose: DOS 3.3 has no
 tab completion and these names get typed by hand into `dskimage`.
 

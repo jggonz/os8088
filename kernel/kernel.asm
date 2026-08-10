@@ -170,11 +170,32 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 96256           ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE SIXTEENTH MOVE, 96,256 -> 98,304, ASKED
+                                ; FOR AND GRANTED, and the second that is
+                                ; kern_big's alone. 2KB again, for the rest of
+                                ; SPEC.md 39's dual display - 39.16's union
+                                ; and what follows it - on the fifteenth
+                                ; move's terms.
+                                ;
+                                ; WHAT SPENT THE FIFTEENTH IS WORTH RECORDING,
+                                ; because the two rounds landed in the same
+                                ; week and the arithmetic reads as one. Dual
+                                ; display took 39.12's context, 39.13's second
+                                ; card, 39.14's split, 39.15's cursor and
+                                ; 39.16's union; the spare it left went to
+                                ; SPEC.md 18.96/22.12's floppy FORMAT and
+                                ; 11.96.3's per-window raise cache, which are
+                                ; other work and are what took the guard from
+                                ; two steps to one. A raise is granted for a
+                                ; feature, so which feature spent the last one
+                                ; is the question the next request has to
+                                ; answer, and it is not always the one asking.
                                 ;
                                 ; THE FIFTEENTH MOVE, 94,208 -> 96,256, AND
                                 ; THE FIRST THAT IS kern_big's ALONE. 2KB,
@@ -763,6 +784,7 @@ section .text
 DBG_TAG_MOUSE equ 0x4F4D          ; 'MO' - SPEC.md 9.4.2
 DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92
+DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4
 
 ; =============================================================================
 ; Fixed entry points
@@ -1374,6 +1396,11 @@ dbg_reg:
                                     ; about silicon nobody here has, and the
                                     ; one machine that has it is sent a
                                     ; knob-free kernel by handover rule
+    dw DBG_TAG_VIDEO, vid_dbg_blk   ; SPEC.md 57.4 - and unconditional for the
+                                    ; THIRD time for the same reason: whether
+                                    ; a second monitor is plugged into a
+                                    ; second card is the one question in
+                                    ; SPEC.md 39 no emulator can be asked
 %ifdef DISK_COUNTERS
     dw DBG_TAG_DISK, dsk_dbg_blk    ; SPEC.md 18.94 - `make DISKCNT=1` only
 %endif
@@ -2356,6 +2383,12 @@ cw_vid_avail_test:      call vid_avail_test
                     retf
 cw_vid_switch:          call vid_switch
                     retf
+%ifdef KERN_BIG
+cw_vid_dual_ok:         call vid_dual_ok
+                    retf
+cw_vid_disp_relay:      call vid_disp_relayout
+                    retf
+%endif
 cw_wm_clip_set:         call wm_clip_set
                     retf
 cw_wm_clip_test:        call wm_clip_test

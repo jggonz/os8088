@@ -307,6 +307,17 @@ make field    # ...and the FIELD disks: herc, cga, cga720, flop1 and cqdiag,
               # KIMG_PARA rung - same rung, exactly comparable - and never
               # fails the build, since growing is allowed and only has to be
               # known about
+make combo    # THE WHOLE SESSION ON ONE DISK: system + every app + every
+              # game + all four benchmarks, one 360KB bootable floppy
+              # (build/combo.img, 303 of 354 clusters, so 52KB left for the
+              # reports and SYSTEM.CFG). `make field` solves the one-drive
+              # swap for the BENCHMARKS; this solves it for everything. ONE
+              # image and not one per card, unlike the field disks: SPEC.md
+              # 39.19's Display page switches the primary or extends across
+              # both without a rebuild. It leaves off BEVERLY.MOD (114
+              # clusters of data, not software), BIGFILE.DAT (sysbench says
+              # so and skips that row) and README.TXT - docs/FIELD-MACHINES.md
+              # has the table and the arithmetic
 make fontlist # the TYPEFACES in fonts/ (SPEC.md 6.2.1) and what each is;
               # `make font-<name>` builds 360KB + 1.44MB system disks in one,
               # `make fonts` all of them, `make fontsheet-<name>` a proof
