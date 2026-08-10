@@ -764,9 +764,83 @@ on its own.**
 | 5 | ~~Cursor crossing; mouse clamp to the union~~ **DONE** — SPEC.md §39.15 | the pointer crosses, and a round trip leaves **0 differing pixels** on both cards |
 | 6 | ~~`wm_fit`, `ui_drag`, `wm_paint_all` per display~~ **DONE** — SPEC.md §39.16 | a window drags across the seam, both primaries; **0 differing pixels** on all three single-card adapters |
 | 6b | ~~`wm_disp_of`, then §11.2 fullscreen on one display~~ **DONE** — SPEC.md §39.17 | fullscreen on the secondary leaves the menu bar **0 differing pixels** on both primaries; the control differs by 779/304 |
-| 6c | `fsx` on one display, others blanked; `vid_unblank` | Missile Command and Paint unchanged; the dark monitor comes back with a repainted desktop, never a stale one |
+| 6c | ~~`fsx` on one display, others blanked; `vid_unblank`~~ **DONE** — SPEC.md §39.18 | the other card goes to **0 frames/s** inside the bracket and comes back; `tests/fsxdisp.py` |
 | 7 | Control Panel mode + layout; `VM` key | survives a reboot; refuses on a single-card machine |
 | 8 | Field run on the 5150 | the three things QEMU cannot show |
+
+### 11.8 Step 6c, as built
+
+`vid_fsx_enter` / `vid_fsx_leave` / `vid_fsx_unblank` (SPEC.md §39.18).
+**Cost: `.text` +320 for `kern_big`, no rung crossed, and `kern_small` +0.**
+
+**§6.5.2's design went in as written and no fsx app needed a line.** The
+bracket makes its display the *only* display at the virtual origin, and every
+§53 contract is then exactly what it is today. The one thing §6.5.2 did not
+say is what carries it: **`[vid_kind]` moves to that display's adapter**, and
+`vid_apply` then republishes the live block, the desktop words and §39.16's
+chrome extent out of `vid_tab` in a single call. That is why the context
+record grew an adapter-kind byte — outside the eighteen-word run, because the
+run is what the *renderer* reads.
+
+**The two orderings §6.5.2 called binding both are**, and the second one
+turned out to matter more than it reads: `vid_unblank_kind` restores the CGA
+from **the BIOS's shadow of 3D8h at 40:65h**, because that register is
+write-only on the card and the ROM's record is the only honest source for
+what its own mode set left there. The Hercules' pair is the two writes
+`vid_setmode` itself makes.
+
+**The gate's instrument took two goes, and the second is the interesting
+one.** A blanked Hercules does not render black — it *stops rendering*, and
+MartyPC's `fbuf` hands back the last frame it rasterised, so through it a dark
+Hercules reads as a perfectly ordinary desktop. Measured by hand and then
+built into the test: **163 frames/s → 0 → 160** across a 3B8h video bit
+cleared and set again, where counting lit pixels would have passed a kernel
+that never wrote the port at all.
+
+**And then the Hercules-primary run failed, on a test that was now wrong in
+the other direction.** With the CGA as the secondary the gate reported 196
+frames/s inside the bracket and called it a live card. It was not: writing
+3D8h from the host on that same machine takes the CGA to **0 lit and holds
+~187 frames/s**, because that adapter gates its video output and keeps its
+CRTC running, which is the card and not the model. So *dark* is **stopped
+scanning or scanning nothing** — SPEC.md §39.18.1 now says so — and the CGA
+half owes one thing more, because "0 lit" could also be a picture that had
+been erased: its **VRAM is read out of the guest** while the card is dark and
+must still hold the desktop, which is what makes this a test of the *signal*
+gate §39.18.1 specifies. Measured, Hercules primary: 0 lit on the card,
+**64,000 lit (50.0%) still in memory**.
+
+The lesson is the one this tree keeps relearning: *an instrument calibrated on
+one adapter is a claim about that adapter*. The kernel was right both times.
+
+`tests/fsxdisp.py` is `dispcheck`'s twin and separate because it needs a
+different apps floppy — §53.9's `fsxtest` is the only package in the tree with
+a fullscreen item reachable in two double-clicks, and it ships on a scratch
+image of its own. Its `x` key is the **same-mode** bracket, which is what a
+Hercules or a CGA can take and is also §39.18's own trap: entering changes the
+*geometry* even though it changes no mode.
+
+| | CGA primary (secondary = Hercules) | Hercules primary (secondary = CGA) |
+|---|---|---|
+| secondary before the bracket | 161 frames/s, 48.6% lit | 193 frames/s, 50.0% lit |
+| **inside it** | **0 frames/s** | **0 lit**, 187 frames/s, VRAM still 50.0% |
+| after | 158 frames/s, the same 48.6% | 190 frames/s, the same 50.0% |
+| the primary, before vs after | 185 px of 128,000 | 188 px of 252,000 |
+
+— the last row being §53.9's restore repaint erasing what the bracket drew —
+plus byte identity on the three single-card adapters and every `dispcheck`
+assertion still passing on both.
+
+**Two traps the change sprang in the harness rather than the kernel.**
+`VID_CTX_SZ` grew from 40 to 42 for the kind byte, and `dispcheck` had the 40
+written into it twice; it failed loudly — a display origin of 16,769 — which
+is the good kind of failure, but the size is a named constant with a comment
+there now. And `fsxdisp` watched MartyPC's card 0 for the boot gate, which on
+a `VIDEO=herc` build is the *secondary* — so it timed out saying the machine
+never booted, about a machine that had. What the secondary carries is the
+extended desktop's dither with no menu bar in it, which is exactly what the
+gate is looking for the absence of. It takes `--primary` now, the way
+`dispcheck` already did.
 
 ### 11.7 Step 6b, as built
 

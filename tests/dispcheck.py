@@ -167,8 +167,12 @@ def main(argv):
             fail.append("vid_cur is %d - the live block is not display 0's"
                         % cur)
 
-        raw = m.read(S("vid_ctx"), 80)
-        ctx = [[u16(raw, d * 40 + i * 2) for i in range(20)] for d in (0, 1)]
+        # VID_CTX_SZ, and it has moved once already (SPEC.md 39.18 added the
+        # adapter kind): the eighteen-word run, then VX, VY and the kind byte.
+        CTXSZ = 42
+        raw = m.read(S("vid_ctx"), 2 * CTXSZ)
+        ctx = [[u16(raw, d * CTXSZ + i * 2) for i in range(21)]
+               for d in (0, 1)]
         for d in (0, 1):
             w = ctx[d]
             say("ctx[%d] seg=%04X stride=%2d cw=%3d ch=%3d rseg=%04X "

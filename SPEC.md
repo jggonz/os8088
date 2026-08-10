@@ -19310,6 +19310,75 @@ width, `wm_zoom_xmax` the largest legal x for a given width, and both are
 `wm_disp_of` again. The restore path's clamp floors at that display's left
 edge rather than at 0, for the same reason.
 
+### 39.18 Inside an fsx bracket the machine is single-display again
+
+**That is the whole design of §53 on two monitors, and it is what makes it
+nearly free.** `fsx_run` picks the display with `wm_disp_of` (§39.17), makes it
+the *only* display at the virtual origin, and every §53 contract is then
+exactly what it is today — `fsx_mode`, the FSI block, `fsx_wait`,
+`FSXF_KEEPWORKER`, `FSXF_FASTTICK`. **No fsx app needs a line.**
+
+**`[vid_kind]` moves to that display's adapter**, which is what makes it work
+rather than merely look right: `fsx_caps`, `fsx_mode` and `vid_setmode` all
+read it, and `vid_apply` then republishes the live block, the desktop words
+and §39.16's chrome extent out of `vid_tab` in one call, with no second
+opinion. The context record carries the kind for exactly this — outside the
+eighteen-word run, because the run is what the *renderer* reads and an adapter
+kind is not renderer state.
+
+**The other displays blank.** Nothing can maintain them: the kernel does not
+run inside the bracket (§53.1), so a live card would show a frozen desktop.
+§39.11.4's argument unchanged, and it costs two `out`s with the card's sync
+preserved.
+
+**A SAME-MODE bracket still changes the geometry**, which is the trap §53.7
+does not lead you to expect. Paint (§42.7) sets no mode at all and takes the
+bracket purely for the lock — and on two displays its content origin still
+moves from virtual (720, 0) to (0, 0), because the machine it is running on
+became a different shape. Entering a bracket may change the geometry even when
+it does not change the mode; `OSAPI_VIDEO` answers the bracket's display while
+one is live, so an app that reads the screen size the ordinary way keeps
+working.
+
+#### 39.18.1 Unblank AFTER the repaint, and not with `vid_setmode`
+
+Two orderings, both §39.11.2's species.
+
+**The repaint comes first.** Blanking gates the video *signal* and not memory,
+so a blanked card's framebuffer still holds the desktop as it was when the
+bracket started — minutes stale, on a monitor the user has not been looking
+at. Unblanking first shows that frame and then paints over it. Restore order
+is therefore: the desktop's geometry back → `wm_paint_all` → unblank.
+
+**And unblanking is not `vid_setmode`.** Re-running the mode set on a card
+whose mode never changed buys a 32KB clear nobody asked for and a 6845 sync
+transient somebody might see. `vid_unblank_kind` is the exact inverse instead:
+the Hercules' pair is the two writes `vid_setmode` itself makes (3BFh graphics
+allowed, then 3B8h graphics + page 0 + video), and the CGA's comes from the
+BIOS's own shadow of 3D8h at **40:65h** — that register is write-only on the
+card, so the ROM's record is the only honest source for what its mode set
+left there.
+
+**The two cards go dark differently, and both are correct.** A Hercules with
+3B8h bit 3 clear **stops scanning** — the CRTC is held and the card produces
+no frames at all; a CGA with 3D8h bit 3 clear **keeps scanning and gates its
+output**, so it still drives sync and shows black. Nothing in the kernel
+depends on the distinction, and any instrument aimed at this does: measured
+on a cycle-accurate 5150, the Hercules goes 163 frames/s → 0 while `fbuf`
+keeps handing back the frame it last rasterised, and the CGA holds ~187
+frames/s while its lit pixels go 64,000 → 0. So *dark* here is **stopped
+scanning or scanning nothing**, and a test that asks only one of those passes
+a kernel that never wrote the other card's port (`tests/fsxdisp.py`, which had
+exactly that bug and could only see it on a Hercules-primary build).
+
+**`fsx_caps` answers for the display the asking window is on.** Inside a
+bracket that is `[vid_kind]`, which §39.18 has already moved; outside one it
+is the frontmost window's display, because an app greying its own mode menu
+(§47) is frontmost by construction. On a Hercules+CGA machine that is `0x011`
+or `0x00F`, so Mode X is refused either way — and `fsx_mode` re-checks the
+same bit against the live `[vid_kind]` once the bracket has been entered,
+which is the answer that binds.
+
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
 The reference §20.6 worker, and the first shipped package whose window is

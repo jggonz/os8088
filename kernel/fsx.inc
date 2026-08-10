@@ -71,6 +71,24 @@ FSIF_BANKED equ 4
 fsx_caps:
     push bx
     mov dl, [vid_kind]
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1     ; ...of the display the ASKING window is on
+    jbe .kind                   ; (SPEC.md 39.18.1). Inside a bracket
+    cmp byte [fsx_task], 0xFF   ; [vid_kind] has already moved and is the
+    jne .kind                   ; answer; outside one it is the primary's, and
+    push ax                     ; an app greying its own mode menu (SPEC.md
+    call wm_top                 ; 47) is frontmost by construction
+    or bx, bx
+    jz .notop
+    push di
+    call wm_disp_of
+    call vid_ctx_ptr
+    mov dl, [di+VID_CTX_KIND]
+    pop di
+.notop:
+    pop ax
+.kind:
+%endif
     mov bl, dl
     xor bh, bh
     shl bx, 1
@@ -187,6 +205,13 @@ fsx_run:
     loop .rel
     pop ax
 
+%ifdef KERN_BIG
+    push ax                     ; ONE DISPLAY from here to fsx_restore, the
+    call wm_disp_of             ; one this window is on, with every other card
+    call vid_fsx_enter          ; dark (SPEC.md 39.18). BX is still the
+    pop ax                      ; window; AX is the app's entry, owed below
+%endif
+
     push bp                     ; the app owns the machine from here to its
     mov si, bx                  ; ret: wm_pkgcall's contract, record in SI,
     mov bp, ax                  ; offset in BP (SPEC.md 53.1)
@@ -254,6 +279,11 @@ fsx_restore:
     mov byte [fsx_worker], 0xFF ; bracket run from the next tick
     popf
     mov byte [fsx_cur], 0xFF
+%ifdef KERN_BIG
+    call vid_fsx_leave          ; the DESKTOP's shape back - the union, the
+                                ; primary's chrome - before anything draws on
+                                ; it (SPEC.md 39.18)
+%endif
     call menu_force             ; the bar and the strip really WERE overdrawn -
     call dock_force             ; an exclusive app owned the whole screen
     call wm_paint_all           ; (SPEC.md 12.9/30.3), so the logo, the rule
@@ -261,6 +291,12 @@ fsx_restore:
                                 ; not force either any more, because nothing
                                 ; inside it destroys them; this is a caller
                                 ; that genuinely did
+%ifdef KERN_BIG
+    call vid_fsx_unblank        ; ...and only NOW the dark monitors, because a
+                                ; blanked card still holds the frame it was
+                                ; blanked on and lighting it first shows that
+                                ; one (SPEC.md 39.18.1)
+%endif
     pop di
     pop ax
     ret

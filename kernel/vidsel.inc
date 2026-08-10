@@ -515,7 +515,10 @@ VID_CTX_CW   equ 14             ; ...within the run, the display's own extent -
 VID_CTX_CH   equ 16             ; word 7 and word 8, vid_cw/vid_ch (39.2.1)
 VID_CTX_VX   equ VID_CTX_W*2    ; ...then the display's origin in the VIRTUAL
 VID_CTX_VY   equ VID_CTX_W*2+2  ; desktop, which is NOT copied anywhere
-VID_CTX_SZ   equ VID_CTX_W*2+4
+VID_CTX_KIND equ VID_CTX_W*2+4  ; ...and which ADAPTER it is, because SPEC.md
+                                ; 39.18 has to put [vid_kind] where the live
+                                ; geometry is and a segment is not a kind
+VID_CTX_SZ   equ VID_CTX_W*2+6
 
 ; ...and those two offsets are a SECOND opinion about viddet.inc's column
 ; order, so they are asserted rather than trusted, exactly as the run's length
@@ -596,10 +599,16 @@ vid_ctx_capture:
     mov ds, cx
     mov es, cx
     call vid_ctx_ptr            ; DI = the record
+    push di
     mov si, vid_seg
     mov cx, VID_CTX_W
     cld
     rep movsw
+    pop di
+    mov cl, [vid_kind]          ; ...and the adapter this geometry IS. Here
+    mov [di+VID_CTX_KIND], cl   ; rather than in the run, because the run is
+                                ; what the RENDERER reads and a kind is not
+                                ; renderer state (SPEC.md 39.12)
     pop es
     pop ds
     pop di
@@ -695,6 +704,209 @@ vid_ctx_init:
     pop cx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; vid_blank_kind / vid_unblank_kind - dark a card and bring it back
+;                                     (SPEC.md 39.18.1)
+;
+; in:       AL = the VID_* kind whose card to blank/unblank
+; out:      -
+; clobbers: flags
+;
+; vid_blank (39.11.4) is written for a SWITCH - it takes the kind being moved
+; TO and reads [vid_kind] for the one being left. An fsx bracket blanks a card
+; that nobody is switching away from, so it needs the question asked directly.
+;
+; UNBLANKING IS NOT vid_setmode. Re-running the mode set on a card whose mode
+; never changed buys a 32KB clear nobody asked for and a 6845 sync transient
+; somebody might see. The inverses are exact instead: the Hercules' two are
+; the two vid_setmode itself writes (3BFh graphics allowed, then 3B8h graphics
+; + page 0 + video), and the CGA's comes out of the BIOS's own shadow of 3D8h
+; at 40:65h - which is write-only on the card, so there is nothing to read
+; back and the ROM's record is the only honest source.
+; -----------------------------------------------------------------------------
+vid_blank_kind:
+    push ax
+    push dx
+    push es
+    cmp al, VID_HERC
+    jne .colour
+    mov dx, 0x3B8               ; video off, and 3BF back to "graphics not
+    xor al, al                  ; allowed" - vid_blank's own pair
+    out dx, al
+    mov dx, 0x3BF
+    out dx, al
+    jmp short .out
+.colour:
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x0065]         ; the BIOS's shadow of 3D8h...
+    and al, ~8                  ; ...minus the video-enable bit
+    mov dx, 0x3D8
+    out dx, al
+.out:
+    pop es
+    pop dx
+    pop ax
+    ret
+
+vid_unblank_kind:
+    push ax
+    push dx
+    push es
+    cmp al, VID_HERC
+    jne .colour
+    mov dx, 0x3BF               ; the order vid_setmode uses: allow graphics
+    mov al, 1                   ; first, then turn the video on
+    out dx, al
+    mov dx, 0x3B8
+    mov al, 0x0A
+    out dx, al
+    jmp short .out
+.colour:
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x0065]         ; ...exactly what the ROM's mode set left
+    mov dx, 0x3D8
+    out dx, al
+.out:
+    pop es
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_fsx_enter - one display, and the others dark (SPEC.md 39.18)
+;
+; in:       AL = the display the bracket runs on
+; out:      the machine describes itself as having ONE display, that one, at
+;           the virtual origin; every other card is blanked
+; clobbers: flags
+;
+; INSIDE A BRACKET THE MACHINE IS SINGLE-DISPLAY AGAIN, and that is the whole
+; design: every SPEC.md 53 contract - fsx_mode, the FSI block, fsx_wait,
+; FSXF_KEEPWORKER, FSXF_FASTTICK - is then exactly what it is today, and no
+; fsx app needs a line.
+;
+; [vid_kind] MOVES TO THAT DISPLAY'S ADAPTER, which is what makes it work
+; rather than merely look right: fsx_caps, fsx_mode and vid_setmode all read
+; it, and vid_apply then republishes the live block, the desktop words and
+; 39.16's chrome extent from vid_tab - one call, no second opinion.
+;
+; The others are BLANKED because nothing can maintain them: the kernel does
+; not run inside the bracket (53.1), so what a live card would show is a
+; frozen desktop. 39.11.4's argument, unchanged.
+; -----------------------------------------------------------------------------
+vid_fsx_enter:
+    cmp byte [vid_ndisp], 1
+    jbe .out                    ; one display: nothing here applies
+    push ax
+    push cx
+    push di
+    mov [fsx_vdisp], al
+    mov cl, [vid_kind]
+    mov [fsx_vkind], cl         ; the DESKTOP's adapter, to come back to
+    mov cl, [vid_ndisp]
+    mov [fsx_vndisp], cl
+
+    xor ch, ch                  ; ...dark every card but the bracket's
+.blank:
+    cmp ch, al
+    je .bnext
+    push ax
+    mov al, ch
+    call vid_ctx_ptr
+    mov al, [di+VID_CTX_KIND]
+    call vid_blank_kind
+    pop ax
+.bnext:
+    inc ch
+    cmp ch, cl
+    jb .blank
+
+    call vid_ctx_ptr            ; ...and become that one
+    mov cl, [di+VID_CTX_KIND]
+    mov [vid_kind], cl
+    call vid_apply              ; the live block, the desktop words and the
+                                ; chrome, all of it that display's
+    mov byte [vid_ndisp], 1
+    mov byte [vid_cur], 0       ; consistent with the lie: one display, and
+    mov word [vid_ox], 0        ; it is at the virtual origin
+    mov word [vid_oy], 0
+    pop di
+    pop cx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_fsx_leave - the desktop's geometry back (SPEC.md 39.18)
+; in:       nothing
+; out:      the union, the primary's chrome, the records unchanged
+; clobbers: flags
+;
+; The records were never written inside the bracket, so this is vid_apply on
+; the desktop's own adapter plus 39.16's union - and NOT an unblank, which
+; owes the repaint first (39.18.1).
+; -----------------------------------------------------------------------------
+vid_fsx_leave:
+    cmp byte [fsx_vndisp], 1
+    jbe .out
+    push ax
+    mov al, [fsx_vkind]
+    mov [vid_kind], al
+    call vid_apply
+    mov al, [fsx_vndisp]
+    mov [vid_ndisp], al
+    mov byte [vid_cur], 0
+    call vid_desk_union
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_fsx_unblank - the dark monitors back, AFTER the repaint (SPEC.md 39.18.1)
+; in:       nothing
+; out:      every card lit again; [fsx_vndisp] spent
+; clobbers: flags
+;
+; AFTER wm_paint_all AND NOT BEFORE IT. Blanking gates the video SIGNAL and
+; not memory, so a blanked card's framebuffer still holds the desktop as it
+; was when the bracket started - minutes stale, on a monitor the user has not
+; been looking at. Unblanking first shows that frame and then paints over it;
+; repainting first means the card is only ever shown what is current.
+; -----------------------------------------------------------------------------
+vid_fsx_unblank:
+    cmp byte [fsx_vndisp], 1
+    jbe .out
+    push ax
+    push cx
+    push di
+    mov cl, [fsx_vndisp]
+    mov byte [fsx_vndisp], 1    ; one-shot: a bracket that set no mode and a
+    xor ch, ch                  ; second restore must not write these ports
+.d:
+    cmp ch, [fsx_vdisp]
+    je .next
+    mov al, ch
+    call vid_ctx_ptr
+    mov al, [di+VID_CTX_KIND]
+    call vid_unblank_kind
+.next:
+    inc ch
+    cmp ch, cl
+    jb .d
+    pop di
+    pop cx
+    pop ax
+.out:
+    ret
+
+fsx_vdisp   db 0                ; the display a bracket is running on...
+fsx_vkind   db 0                ; ...the DESKTOP's adapter, banked across it
+fsx_vndisp  db 1                ; ...and how many displays there were. 1 means
+                                ; "no bracket state to undo", which is the
+                                ; boot value and what vid_fsx_unblank leaves
 
 ; -----------------------------------------------------------------------------
 ; vid_disp_dither - the desktop on every display but the primary
