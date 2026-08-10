@@ -315,11 +315,16 @@ Two derived rows were worse than useless: `est CPU MHz x100` read **8866**
 and `shl clk/bit x100` read **29**, both because they are computed against
 **8088** instruction timings a 286 does not have.
 
-So before this machine is worth running again it needs a **VGA field disk**,
-which `make field` does not build. And whoever adds one should fix the two
-8088-only derived rows to say so on a tier-1 machine rather than printing a
-number. It also has a known quirk: **it sometimes decides to boot in mono**,
-which may be what put it into the CGA path in the first place.
+**That half is solved: send it `combo.img`.** It carries the ordinary shipped
+kernel with no adapter forced, so the §39.1 probe runs and answers VGA on
+this machine — there is no "VGA field disk" to add, and the trap that ate the
+first set is not in the default ask any more. What is still outstanding is
+the other half: the two **8088-only derived rows** (`est CPU MHz x100` and
+`shl clk/bit x100`) should say so on a tier-1 machine rather than printing a
+number computed against instruction timings a 286 does not have. It also has
+a known quirk — **it sometimes decides to boot in mono** — which may be what
+put it into the CGA path in the first place, and which the Display page can
+now correct from inside the running OS.
 
 ---
 
@@ -522,58 +527,65 @@ so its **timings go in Part 9 labelled MartyPC** and a dump is evidence about
 
 ## How to take a set on the 5150
 
-### `make field` — two bootable disks, because there is no drive B
-
-```sh
-make field          # -> build/herc.img and build/cga.img, both 360KB bootable
-```
-
-Both are shaped by the machine, and neither decision in them is cosmetic:
-
-- **The benchmarks are on the BOOT disk**, in the root, for the reason
-  `TASKMGR.O88` is on it at all (§28.3 — that one is in `SYSTEM/`, because
-  it is the kernel's and these are yours to double-click). With one floppy drive, a
-  benchmark on a separate data floppy means a disk swap mid-session — and on
-  this machine a disk swap is a walk to another room and back (below).
-  **THAT IS A RULE FOR EVERY FIELD HARNESS AND NOT A FACT ABOUT THIS TARGET**,
-  which is how it gets missed: it is written down here, under `make field`, so
-  someone writing a *new* bench does not read it. `tests/npbench` was built as
-  a second disk and had to be rebuilt as a boot disk; docs/TESTING.md now
-  carries the same rule where a harness author will actually meet it. Boot
-  either image and the four harnesses are one double-click away in Disk A,
-  and the reports they save land back on the disk they came from.
-  `os88disk.py` marks them visible + read-only (§19.6), so they list and
-  cannot be deleted by accident.
-- **One image per card.** Both cards live in the machine permanently, so the
-  probe can only be asked one question at a time and it answers *Hercules*
-  (§39.1). `herc.img` is the ordinary shipped kernel — it exercises the probe
-  on the way past — and `cga.img` is a `VIDEO=cga` kernel that ignores the
-  Hercules. That kernel is built in `build/cgak/`, never in `build/`: a
-  forced kernel that reaches `build/` is a machine that boots the wrong card
-  for **everyone**, and that is a mistake that has been made.
-
-**Neither disk may be write-protected.** The reports are the point, and a
-protected disk answers int 13h status 03h, which the OS faithfully reports as
-`Write protected`.
-
-### `make combo` — the whole session on ONE disk
+### `make combo` — ONE disk, and it is the default ask
 
 ```sh
 make combo          # -> build/combo.img, 360KB bootable
 ```
 
-`make field` solves the swap for the *benchmarks*; this solves it for
-everything. The system, every application, every game and all four benchmarks
-on one bootable 360KB floppy — **303 of 354 clusters, so 52KB is left for the
-reports, `SYSTEM.CFG` and anything you save.**
+**This is what to build and send for a field or bench request unless something
+below says otherwise.** The system, every application, every game and all four
+benchmarks on one bootable 360KB floppy — **304 of 354 clusters, so about
+50KB is left for the reports, `SYSTEM.CFG` and anything you save.**
 
-**One image and not one per card**, unlike the two above, and that is SPEC.md
-§39.19 rather than a compromise: the probe still finds the Hercules first
-(§39.1), and the Control Panel's **Display** page then switches the primary to
-the CGA — or extends the desktop across both — without rebuilding anything.
-The extended desktop is **off by default** (§39.19.1: the kernel can detect a
-second card and nothing can detect a second monitor), so on this machine that
-is one visit to the Display page.
+**One image and not one per card**, and that is SPEC.md §39.19 rather than a
+compromise. It used to be two — `herc.img` and a `VIDEO=cga` `cga.img` —
+because both cards live in the 5150 permanently and the probe can only be
+asked one question at a time, so the card was a property of the *build*.
+Since §39.11 it is not: the probe picks one at boot (§39.1) and the Control
+Panel's **Display** page switches the primary to the other — or extends the
+desktop across both — with no rebuild, no second disk and no walk to the other
+room. **Do not assume which card it comes up on**; the page lists what
+`[vid_avail]` found and says which is running, and that is the thing to read.
+(Measured from this disk on MartyPC's two-card 5150: `avail = 0x06`, both
+cards seen, running CGA. On the iron it has come up Hercules. Either way the
+page is what settles it, which is the point.) The extended desktop is **off by default** (§39.19.1: the
+kernel can detect a second card and nothing can detect a second monitor), so
+on this machine that is one visit to the Display page.
+
+Three consequences worth stating, because they are the reason this replaced
+the pair rather than joining it:
+
+- **A forced-adapter kernel is a hazard the ask no longer carries.** `cga.img`
+  was built in `build/cgak/` precisely so a `VIDEO=cga` kernel could never
+  reach `build/`, where it would boot the wrong card for everyone — a mistake
+  that has been made. `combo.img` is the ordinary shipped kernel, so there is
+  no forced kernel in the request at all.
+- **It fixes the Packard Bell 286's discarded set** (above). That machine's
+  first run was thrown away because a `VIDEO=cga` field disk put a **VGA**
+  machine down the CGA framebuffer path — a fourth combination this project
+  does not support — and the note said it needed a VGA field disk "which
+  `make field` does not build". It does not need one: `combo.img` probes, and
+  on that machine the probe answers VGA.
+- **One disk means one report set that cannot be mixed up.** `gfxbench` names
+  its file after the adapter it *found* (`GFXHERC.TXT` / `GFXCGA.TXT` /
+  `GFXVGA.TXT`), so switching the display mid-session and running it again
+  produces both files on the same floppy rather than two disks whose files
+  have to be kept apart by hand.
+
+**The benchmarks are in the ROOT of the boot disk**, for the reason
+`TASKMGR.O88` is on it at all (§28.3 — that one is in `SYSTEM/`, because it is
+the kernel's and these are yours to double-click). With one floppy drive, a
+benchmark on a separate data floppy means a disk swap mid-session, and on this
+machine a disk swap is a walk to another room and back. **THAT IS A RULE FOR
+EVERY FIELD HARNESS AND NOT A FACT ABOUT THIS TARGET**, which is how it gets
+missed: `tests/npbench` was built as a second disk and had to be rebuilt as a
+boot disk. docs/TESTING.md carries the same rule where a harness author will
+actually meet it.
+
+**It may not be write-protected.** The reports are the point, and a protected
+disk answers int 13h status 03h, which the OS faithfully reports as
+`Write protected`.
 
 Three things are left off, because 360KB is 354 clusters and everything in the
 tree is 484:
@@ -581,8 +593,26 @@ tree is 484:
 | | | why |
 |---|---|---|
 | `MEDIA/BEVERLY.MOD` | 114 cl | a third of the disk, and the only item here that is *data* rather than software. Tracker and ModPlug still launch; they have nothing to open. Use the shipped apps disk when the module is the point. |
-| `BIGFILE.DAT` | 104 cl | sysbench's cache-capacity sweep and the DOS read-rate cross-check. sysbench says so and skips that row; every other row runs. It is on the `make field` disks, where that measurement belongs. |
+| `BIGFILE.DAT` | 104 cl | sysbench's cache-capacity sweep and the DOS read-rate cross-check. sysbench says so and skips that row; every other row runs. It is on the `make field` disks, which is one of the reasons those still exist. |
 | `README.TXT` | 16 cl | the manual, on a disk that is for running. |
+
+### `make field` — the disks that answer a question `combo.img` cannot
+
+```sh
+make field          # -> herc, cga, cga720, flop1 and cqdiag, all 360KB
+                    #    bootable except cga720, which is 720KB
+```
+
+**Not the default any more**, and `herc.img`/`cga.img` in particular are now
+the *narrow* case rather than the ordinary one — the Display page took their
+job. Reach for this set when the request is one of these:
+
+| disk | the question only it answers |
+|---|---|
+| `cga720.img` | the **Toshiba T1100 Plus**, which takes 720KB media (below). A geometry, not an adapter — `combo.img` is 360KB and that machine cannot read it |
+| `flop1.img` | `FLOPPY1=1`, one sector per `int 13h` — the A/B for docs/FIELD-NOTES.md 7, where the batched transfer measured *slower* on the iron. A knob kernel, so it must be a disk of its own |
+| `cqdiag.img` | `BOOTDIAG=1`, which trades the boot sector's `os8088: disk error` for int 13h's status as two hex digits — one boot instead of a bisect on a machine that will not start |
+| `herc.img` / `cga.img` | a run that must pin the adapter at BOOT rather than switch to it, or a comparison against an older set that was taken on them. `cga.img`'s kernel is built in `build/cgak/`, never in `build/` |
 
 **`bigfile.dat` shrank from 170KB to 104KB to make room, and that was overdue
 on the field disks too**: at 170KB it left `herc.img` and `cga.img` **eleven
@@ -594,24 +624,32 @@ the file has to grow with it; either way the report now distinguishes *the
 file ran out* from *a read refused*, so a sweep bounded by the disk can never
 be read as a cliff bounded by the cache.
 
-They are 8.3-short and unambiguous at a DOS prompt on purpose: DOS 3.3 has no
-tab completion and these names get typed by hand into `dskimage`.
+All of these names are 8.3-short and unambiguous at a DOS prompt on purpose:
+DOS 3.3 has no tab completion and they get typed by hand into `dskimage`.
 
-**They are never committed**, and neither is anything else under `build/` —
-it is gitignored outright (SPEC.md §16), and `all` never builds these two in
-any case. They are somebody's test disks, built on demand and **sent** —
-attach them to the person who is going to write them to a floppy. Adding them
-to the repo would put a pair of large binaries under version control that no
-source change updates, which is exactly why the shipped images stopped being
-tracked.
+**None of them is ever committed**, and neither is anything else under
+`build/` — it is gitignored outright (SPEC.md §16), and `all` builds none of
+them. They are somebody's test disks, built on demand and **sent** — attach
+them to the person who is going to write them to a floppy. Adding them to the
+repo would put large binaries under version control that no source change
+updates, which is exactly why the shipped images stopped being tracked.
 
 ### Then, on the machine
 
 - Boot the image, open **Disk A**, launch `GFXBENCH.O88`.
   **`R`** runs it, **`S`** saves the report. It names the file after the
-  adapter it found: `GFXHERC.TXT` / `GFXCGA.TXT` / `GFXVGA.TXT`, so the two
-  disks cannot produce a file that overwrites the other's.
-- Then `SYSBENCH.O88`, likewise, to `SYSBENCH.TXT`.
+  adapter it **found** — `GFXHERC.TXT` / `GFXCGA.TXT` / `GFXVGA.TXT` — which
+  is what lets one disk carry a set from both cards without either file
+  overwriting the other.
+- **For the second card, do not swap disks: switch the display.** Control
+  Panel ▸ **Display** ▸ pick the other adapter ▸ **Activate Mode** (SPEC.md
+  §31.10/§39.11), then run `GFXBENCH.O88` again. It re-reads the geometry
+  from `OSAPI_VIDEO` at run time, so the second run is the same measurement
+  on the other card and it names its own file. That is the whole reason the
+  ask is one disk now.
+- Then `SYSBENCH.O88`, likewise, to `SYSBENCH.TXT`. **Once, not per card** —
+  its rows are the CPU, the bus, memory, the clock, the scheduler and the
+  floppy, and none of them is a question about the adapter.
 - `gfxbench` is about fifteen seconds. `sysbench` is about a minute on a
   floppy-only machine and **two or more with the hard disk mounted** — its
   read row calibrates itself off the first read and then runs for about six
@@ -693,15 +731,19 @@ sees; keep every question about work.**
 ### Handing over a build
 
 State the **commit**, and hand over the images rather than a branch name — a
-branch moves. Build them from a clean checkout of the commit you quote with
-`make field`, and quote the knobs each image carries, or the floppy holds
-something the source no longer says.
+branch moves. Build them from a clean checkout of the commit you quote —
+**`make combo` unless the request is one of the `make field` cases above** —
+and quote the knobs each image carries, or the floppy holds something the
+source no longer says.
 
 **Which knobs those are is now the Makefile's business, not yours.** Every
-field kernel is `DISKCNT=1` (SPEC.md §18.94.1) and three of the five carry a
-second knob of their own — `VIDEO=cga`, `FLOPPY1=1`, `BOOTDIAG=1`. That is a
-change from the rule this section used to state, which was "no knob at all",
-and it is why the knob banner now names `DISKCNT=1` as the expected one.
+field kernel is `DISKCNT=1` (SPEC.md §18.94.1) and three of the five `make
+field` disks carry a second knob of their own — `VIDEO=cga`, `FLOPPY1=1`,
+`BOOTDIAG=1`. That is a change from the rule this section used to state,
+which was "no knob at all", and it is why the knob banner now names
+`DISKCNT=1` as the expected one. **`combo.img` is the plainest of the lot** —
+the shipped kernel, no adapter forced — which is part of why it is the
+default ask: there is less to state and less to get wrong.
 
 **A benchmark kernel is not bound by `KERN_BUDGET`.** Every machine in this
 register has 640KB (the 5150 by way of its SixPakPlus), so the only ceiling

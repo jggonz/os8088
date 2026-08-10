@@ -1238,10 +1238,19 @@ $(BUILD)/bench360.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 
 # --- the FIELD disks: one BOOTABLE 360KB floppy per adapter ------------------
 #
-# `make field` -> build/herc.img and build/cga.img, and both are shaped by the
-# machine this project is calibrated against (docs/FIELD-MACHINES.md, E1: an
-# IBM PC 5150 with ONE floppy drive - the second bay is an ST-225 - and both a
-# Hercules and a CGA card in it at all times).
+# `make field` -> the NARROW disks, for the questions `make combo` cannot
+# answer. It is no longer the default ask (that is combo.img, below), and
+# herc.img/cga.img in particular are now the special case rather than the
+# ordinary one: SPEC.md 39.11's Display page switches the adapter at RUN TIME,
+# so a pinned-adapter build is only wanted when a run must fix the card at
+# BOOT, or must compare against an older set that was taken that way. What is
+# still only here: cga720 (a 720KB GEOMETRY, for the Toshiba T1100 Plus),
+# flop1 (FLOPPY1=1) and cqdiag (BOOTDIAG=1).
+#
+# All of them are shaped by the machine this project is calibrated against
+# (docs/FIELD-MACHINES.md, E1: an IBM PC 5150 with ONE floppy drive - the
+# second bay is an ST-225 - and both a Hercules and a CGA card in it at all
+# times).
 #
 # THE BENCHMARKS ARE ON THE BOOT DISK. With no drive B, the two-floppy shape
 # `make bench` produces would mean swapping disks mid-session on the one
@@ -1661,6 +1670,13 @@ $(APPSIMG360): $(APPS) tools/os88disk.py
 # `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
 # every application AND the four benchmarks on it.
 #
+# THIS IS THE DEFAULT DISK FOR A FIELD OR BENCH REQUEST. Build and send this
+# one unless the ask is a `make field` case (a 720KB geometry, a knob kernel,
+# or an adapter pinned at boot to match an older set). It used to be the
+# herc.img/cga.img pair, and what changed is SPEC.md 39.11: the adapter
+# stopped being a property of the BUILD, so one disk now takes a set from both
+# cards - see below.
+#
 # The field machine has ONE floppy drive (docs/FIELD-MACHINES.md), so the
 # three-disk shape `all` produces - system, apps, bench - is two disk swaps,
 # and on that machine a swap is a walk to another room. This is the whole
@@ -1680,10 +1696,17 @@ $(APPSIMG360): $(APPS) tools/os88disk.py
 #                      which is where that measurement belongs.
 #   README.TXT         16 cl - the manual, on a disk that is for running.
 #
-# ONE IMAGE AND NOT ONE PER CARD, unlike the field disks above, and that is
-# SPEC.md 39.19 rather than a compromise: the probe still finds the Hercules
-# first (39.1), and the Control Panel's Display page then switches the primary
-# to the CGA or extends the desktop across both without rebuilding anything.
+# ONE IMAGE AND NOT ONE PER CARD, and that is SPEC.md 39.19 rather than a
+# compromise: the probe still finds the Hercules first (39.1), and the Control
+# Panel's Display page then switches the primary to the CGA or extends the
+# desktop across both without rebuilding anything. So the operator runs
+# GFXBENCH, switches the display, and runs it again - and because gfxbench
+# names its report after the adapter it FOUND, both sets land on the one disk
+# without colliding. SYSBENCH is run once: none of its rows is about the
+# adapter. This is also the PLAINEST kernel of the lot - the shipped one, with
+# no VIDEO= forced - so a field request no longer hands anybody a
+# forced-adapter kernel at all, which is what put a VGA machine down the CGA
+# path and cost the Packard Bell 286 its first set.
 # The disk is NOT write-protected - SYSTEM.CFG is what remembers that choice.
 COMBOARGS := $(DRIVERS) $(SYSAPPSARGS) \
              $(addprefix APPS:,$(APPS_TOOLS)) \
@@ -1700,6 +1723,10 @@ $(BUILD)/combo.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
 		$(COMBOARGS)
 	@echo "combo: $@ - system + apps + benchmarks on ONE 360KB boot disk"
+	@echo "       THE DEFAULT DISK FOR A FIELD OR BENCH REQUEST. One image for"
+	@echo "       BOTH cards: Control Panel > Display switches the adapter at"
+	@echo "       run time, and gfxbench names its report after the one it"
+	@echo "       found - so run it, switch, run it again. sysbench once."
 	@echo "       no BEVERLY.MOD, no BIGFILE.DAT, no README.TXT (see the Makefile)"
 
 # The GUI reads a Microsoft serial mouse on COM1 or COM2 (SPEC.md 9.5); QEMU

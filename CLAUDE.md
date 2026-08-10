@@ -57,7 +57,7 @@ SixPakPlus carrying 384KB and the MM58167 the clock ladder's rung 2 was
 written for - and every measured number in PERFORMANCE.md Part 2 came off it.
 It is kept **entirely period on purpose**, which is what makes its floppy and
 disk timings mean what they say, so "put a Gotek in it" is not a way to
-shorten the seven-step path an image takes to reach it - `make field` is. It is a register keyed on the
+shorten the seven-step path an image takes to reach it - `make combo` is. It is a register keyed on the
 full FORK NAME of whoever owns the iron (`Elendilon/os8088`, not a bare
 handle - the file is written to be merged upstream, where a handle alone does
 not say which tree the hardware belongs to), and it is in the repo for a reason
@@ -71,8 +71,14 @@ field number because a human handed it to you** (the same owner tests
 routinely on PCem, which models period hardware at period speed, so its
 figures are in the right units and do not announce themselves - ASK which
 machine a report came from), and **the 5150's C: is a real DOS 3.3 install**,
-so nothing may format, partition, write or delete on it. `make field`'s two
-images are built on demand and SENT, never committed.
+so nothing may format, partition, write or delete on it. **`make combo` is the
+disk to build for a field or bench request** - one 360KB bootable floppy with
+the system, every app, every game and all four benchmarks on it, and ONE image
+rather than one per card, because SPEC.md 39.19's Display page switches the
+adapter at run time and the old `herc.img`/`cga.img` pair only existed because
+it could not. `make field` still builds the narrow disks (a 720KB geometry, two
+knob kernels, and a pinned adapter); every one of them is built on demand and
+SENT, never committed.
 
 **Two standing rules for work on any branch of the `Elendilon/os8088` fork,
 written down in that file's last section.** They are that fork owner's
@@ -283,14 +289,38 @@ make comscan  # the SERIAL PORT SURVEY (tests/comscan) - the field diagnostic
               # the kernel never probes, and answers the one question no
               # emulator can: WHICH IRQ LINE the card actually drives
               # (docs/TESTING.md)
-make field    # ...and the FIELD disks: herc, cga, cga720, flop1 and cqdiag,
-              # BOOTABLE 360KB system disks with the benchmarks in their root.
-              # Shaped by the machine the project is calibrated against
-              # (docs/FIELD-MACHINES.md): it has ONE floppy drive, so a
-              # benchmark on a second disk means a swap; and it holds a
-              # Hercules AND a CGA permanently, so the CGA needs a kernel
-              # told to ignore the Hercules — built in build/cgak/, never in
+make combo    # THE FIELD/BENCH DISK, AND THE DEFAULT ASK: system + every
+              # app + every game + all four benchmarks, ONE 360KB bootable
+              # floppy (build/combo.img, 304 of 354 clusters, so ~50KB left
+              # for the reports and SYSTEM.CFG). Build and send THIS unless
+              # the request is one of `make field`'s narrow cases below.
+              # ONE image and not one per card - which is the change that
+              # made it the default: SPEC.md 39.19's Display page switches
+              # the primary or extends across both AT RUN TIME, so the
+              # adapter stopped being a property of the BUILD and herc.img +
+              # cga.img stopped being the ordinary ask. It is also the
+              # plainest kernel of the set (shipped, no VIDEO= forced), so
+              # there is no forced-adapter kernel in the request at all -
+              # and it is what the Packard Bell 286 needed when its first
+              # set was thrown away for being run on a VIDEO=cga disk.
+              # gfxbench names its report after the adapter it FOUND, so one
+              # disk carries both cards' sets without a collision; sysbench
+              # is run ONCE, none of its rows being about the adapter. It
+              # leaves off BEVERLY.MOD (114 clusters of data, not software),
+              # BIGFILE.DAT (sysbench says so and skips that row) and
+              # README.TXT - docs/FIELD-MACHINES.md has the table
+make field    # ...and the NARROW disks, for the questions combo.img cannot
+              # answer: cga720 (the Toshiba T1100 Plus takes 720KB media - a
+              # GEOMETRY, not an adapter), flop1 (FLOPPY1=1, the A/B for
+              # docs/FIELD-NOTES.md 7), cqdiag (BOOTDIAG=1, int 13h's status
+              # as two hex digits on a machine that will not boot), and
+              # herc/cga for a run that must pin the adapter at BOOT rather
+              # than switch to it, or must compare against an older set taken
+              # on them. cga.img's kernel is built in build/cgak/, never in
               # build/, where it would boot the wrong card for everyone.
+              # BOOTABLE 360KB system disks with the benchmarks in their root,
+              # because the calibration machine has ONE floppy drive and a
+              # benchmark on a second disk means a swap (docs/FIELD-MACHINES).
               # EVERY one of them is DISKCNT=1 (SPEC.md 18.94.1) - there is no
               # dskdbg.img any more, because both reasons it was a disk of its
               # own expired: the counters cost the image 0 bytes (same
@@ -307,17 +337,6 @@ make field    # ...and the FIELD disks: herc, cga, cga720, flop1 and cqdiag,
               # KIMG_PARA rung - same rung, exactly comparable - and never
               # fails the build, since growing is allowed and only has to be
               # known about
-make combo    # THE WHOLE SESSION ON ONE DISK: system + every app + every
-              # game + all four benchmarks, one 360KB bootable floppy
-              # (build/combo.img, 303 of 354 clusters, so 52KB left for the
-              # reports and SYSTEM.CFG). `make field` solves the one-drive
-              # swap for the BENCHMARKS; this solves it for everything. ONE
-              # image and not one per card, unlike the field disks: SPEC.md
-              # 39.19's Display page switches the primary or extends across
-              # both without a rebuild. It leaves off BEVERLY.MOD (114
-              # clusters of data, not software), BIGFILE.DAT (sysbench says
-              # so and skips that row) and README.TXT - docs/FIELD-MACHINES.md
-              # has the table and the arithmetic
 make fontlist # the TYPEFACES in fonts/ (SPEC.md 6.2.1) and what each is;
               # `make font-<name>` builds 360KB + 1.44MB system disks in one,
               # `make fonts` all of them, `make fontsheet-<name>` a proof

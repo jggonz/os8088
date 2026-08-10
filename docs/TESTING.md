@@ -946,6 +946,20 @@ rule. Two consequences that are easy to miss:
 are driven under an emulator here, where there are two drives; the moment one
 of them is wanted on the 5150 it needs the treatment above.
 
+**The disk to send is `make combo`.** `build/combo.img` is one 360KB bootable
+floppy carrying the system, every application, every game and all four
+benchmarks, and it is the default for a field or bench request — not the
+`herc.img`/`cga.img` pair, which is what this used to be. The pair existed
+because both cards live in the 5150 permanently and the §39.1 probe can only
+be asked one question at a time, so the adapter was a property of the
+**build**; since §39.11 it is not. The Control Panel's **Display** page
+switches the primary at run time, so one disk takes a set from both cards —
+run `GFXBENCH.O88`, switch the display, run it again, and it names each report
+after the adapter it *found*. `sysbench` runs once: none of its rows is a
+question about the adapter. `make field` still builds the narrow disks
+(docs/FIELD-MACHINES.md has the table: a 720KB geometry, two knob kernels, and
+a pinned adapter for comparing against an older set).
+
 ### `gfxbench` and `sysbench` — the two that write a file
 
 The first two benchmarks answer one question each and fit on a screen. These
