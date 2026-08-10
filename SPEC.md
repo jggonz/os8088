@@ -4139,6 +4139,44 @@ open:
 nothing else in a resize does, so it banks the old rect's last row *before*
 the call and unions against it afterwards.
 
+#### 11.90.1 `WF_OWNBG` — the white fill in front of `W_PAINT` becomes opt-out
+
+`wm_draw_win` fills the whole content white and *then* calls `W_PAINT`. That is
+unconditional, for every window, and until now there was no way out of it —
+REDRAW-SPEC Part 1's point 1, and the oldest unexamined thing in the redraw
+path. `WF_OWNBG` (slot **0x03A8**, `OSAPI_WM_OWNBG`) is the way out: *I paint
+every pixel of my content myself.*
+
+**The flash is the reason, ahead of the milliseconds.** The fill is one
+`gfx_fill` — ~24 ms on a CGA Disk-window-sized content — so as *work* it is
+noise. As a *picture* it is PERFORMANCE.md Part 1's double draw in its purest
+form: the window goes white and then the app draws over it, and the gap between
+the two is however long `W_PAINT` takes. On Paint with a textured bitmap that
+gap is measured at **8.7 seconds** (Set 32) — eight and a half seconds of white
+hole where the user's picture was, followed by it reappearing. The fill is not
+the cost; it is the cost made *visible*.
+
+**It is opt-IN, and the asymmetry is the point.** The fill is what every other
+application's `W_PAINT` draws on top of — most of them letter text into it and
+touch nothing else — so the default cannot change without auditing every one.
+A window that sets this flag and then leaves one pixel of its content unwritten
+shows whatever was there before, which after a move is **another window's
+pixels**. So the promise is the whole contract and it is the app's to keep.
+
+**What the eventual shape is**, and this is the first step of it rather than the
+whole thing: a repaint should blank only what is neither cached (§11.96) nor
+claimed by the application, and blanking should be the **last resort** — it is
+the one thing a repaint is *seen* doing. This flag is the "claimed by the
+application" half.
+
+`apps/paint` is the reference consumer and shows what keeping the promise costs:
+its `pt_fsbed` already existed for exactly this, because §53's fullscreen
+bracket has no `wm_draw_win` in front of it — *"the pixels `pt_repaint` does NOT
+cover"*, being the tool column's bed and any band right of a canvas that memory
+would not fund. Windowed, that routine was dead code the kernel's fill stood in
+for; adopting the flag is calling it, and the `pt_mode` notice path grew a fill
+of its own because two lines of black text is not every pixel of anything.
+
 ### 11.91 Hiding, destroying and moving cost a rectangle, not a screen
 
 The mirror of §11.90. Hiding a window, destroying one and dragging one to a

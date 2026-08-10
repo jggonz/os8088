@@ -1363,7 +1363,15 @@ osapi_table:
                                   ;         what lets a system file too big for
                                   ;         the caller's buffer be finished at
                                   ;         all (SPEC.md 18.4.4)
-osapi_table_end:                  ; 0x03A8
+    OSAPI_SLOT wm_ownbg           ; 0x03A8 - BX = window, AL = 0 clear / non-0
+                                  ;          set. "I paint every pixel of my
+                                  ;          content myself", which skips
+                                  ;          wm_draw_win's white fill for it
+                                  ;          (SPEC.md 11.90.1). A window that
+                                  ;          sets it and leaves a pixel unwritten
+                                  ;          shows whatever was there before -
+                                  ;          after a move, another window's
+osapi_table_end:                  ; 0x03B0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1371,8 +1379,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 115 * 8
-%error "os8088 API jump table must be exactly 115 8-byte slots"
+%if OSAPI_TABLE_LEN != 116 * 8
+%error "os8088 API jump table must be exactly 116 8-byte slots"
 %endif
 
 ; =============================================================================

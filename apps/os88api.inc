@@ -1648,6 +1648,21 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; heap that is the difference between a paste
                                  ; that works and one that half-arrives.
                                  ; Preserves all but AX.
+%define OSAPI_WM_OWNBG      KERNEL_SEG:0x03A8   ; BX = window ptr, AL = 0 clear
+                                                ; / non-0 set. "I paint EVERY
+                                                ; PIXEL of my content myself",
+                                                ; so the kernel's white fill in
+                                                ; front of W_PAINT is skipped
+                                                ; (SPEC.md 11.90.1). Worth
+                                                ; having for the FLASH before
+                                                ; the milliseconds: a window
+                                                ; whose paint takes seconds is
+                                                ; a white hole for that long
+                                                ; otherwise. Set it and leave a
+                                                ; pixel unwritten and you show
+                                                ; whatever was there before -
+                                                ; after a move, another
+                                                ; window's
 %define OSAPI_WM_SAVEU      KERNEL_SEG:0x0378   ; BX = window ptr, AL = 0 clear
                                                  ; / non-0 set. A PROMISE: this
                                                  ; window's content does not

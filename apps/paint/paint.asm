@@ -267,17 +267,31 @@ pt_entry:
     jc .out                         ; no window: nothing to flag, nothing to
                                     ; claim - the region stays untouched
     mov [pt_win], bx
-                                    ; NO WF_SAVEU here, and the promise would
-                                    ; hold: what disqualifies Paint is the
-                                    ; PRICE, not the truth. 95% of its repaint
-                                    ; is already one gfx_blit4 out of its own
-                                    ; canvas claim, so the raise cache would
-                                    ; bank a second copy of the biggest window
-                                    ; on screen to save the cheapest repaint in
-                                    ; the tree - and there is ONE cache for the
-                                    ; machine (SPEC.md 11.96), so covering
-                                    ; Paint would take it from a window whose
-                                    ; repaint really is glyphs
+    push ax
+    mov al, 1                       ; WE OWN OUR BACKGROUND (SPEC.md 11.90.1):
+    call OSAPI_WM_OWNBG             ; pt_fsbed + the palette + the strip + the
+    pop ax                          ; canvas cover every pixel of the content,
+                                    ; so the kernel's white fill in front of
+                                    ; W_PAINT is a white HOLE for as long as
+                                    ; the canvas takes to blit - measured at
+                                    ; 8.7 s on a textured bitmap
+                                    ;
+                                    ; NO WF_SAVEU here, and the promise WOULD
+                                    ; hold - Paint owns no worker, its marquee
+                                    ; is a latched XOR and its caret is
+                                    ; keystroke-driven. What disqualifies it is
+                                    ; MEMORY: a cache over this content is ~9KB
+                                    ; on 1bpp, ~36KB on VGA and ~150KB for a
+                                    ; window grown over most of a 640x480
+                                    ; screen, on top of the ~127KB Paint
+                                    ; already holds - so on a 256KB machine it
+                                    ; is refused and the feature is not there.
+                                    ; (This comment used to say the repaint was
+                                    ; "the cheapest in the tree" and that there
+                                    ; was one cache for the machine. Both were
+                                    ; wrong: PERFORMANCE.md Set 32 measures the
+                                    ; repaint at 9 s, and SPEC.md 11.96.3 made
+                                    ; the cache one per WINDOW.)
     call pt_arg                     ; were we launched to open a picture?
     cmp byte [pt_mode], PT_M_LIVE
     jne .menus
@@ -2704,6 +2718,12 @@ pt_paint:
     cmp byte [pt_mode], PT_M_LIVE
     jne .notice
     call pt_track                   ; did ui_grow resize the window under us?
+    call pt_fsbed                   ; the beds nothing below covers - the tool
+                                    ; column's and any band right of the canvas.
+                                    ; WINDOWED THIS USED TO BE THE KERNEL'S
+                                    ; white fill; under WF_OWNBG (SPEC.md
+                                    ; 11.90.1) it is ours, and this routine was
+                                    ; already exactly it for the 53 bracket
     call pt_draw_pal
     call pt_draw_strip
     mov byte [pt_pen], CBLACK
@@ -2740,6 +2760,14 @@ pt_paint:
     call pt_msg_show
     jmp short .out
 .notice:
+    mov byte [pt_pen], CWHITE       ; UNDER WF_OWNBG the kernel fills nothing,
+    xor ax, ax                      ; and two lines of black text is not every
+    xor bx, bx                      ; pixel of anything (SPEC.md 11.90.1)
+    mov cx, [pt_contw]
+    dec cx
+    mov dx, [pt_conth]
+    dec dx
+    call pt_cfill
     xor bx, bx
     mov bl, [pt_mode]
     add bx, bx

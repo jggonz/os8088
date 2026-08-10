@@ -62,6 +62,11 @@ WF_SAVEU   equ 32               ; W_FLAGS bit5: this window PROMISES that its
                                 ; pixels back instead of asking for new ones
                                 ; (SPEC.md 11.96.1). Opt-in, and it has to be:
                                 ; only the application knows
+WF_OWNBG   equ 64               ; W_FLAGS bit6: this window PAINTS EVERY PIXEL
+                                ; of its content itself, so wm_draw_win's white
+                                ; fill is skipped for it (SPEC.md 11.90.1).
+                                ; Opt-in, because the fill is what every other
+                                ; app's W_PAINT draws on top of
 WF_SNAP    equ 16               ; W_FLAGS bit4: this window's CONTENT origin
                                 ; is kept on a multiple of 8 so its text can
                                 ; take font_run's single-store path
@@ -4105,6 +4110,29 @@ wm_saveu:
     popf                        ; made under it with it
     ret
 
+; -----------------------------------------------------------------------------
+; wm_ownbg - "I paint every pixel of my content myself" (SPEC.md 11.90.1)
+; in:  BX = window ptr, AL = 0 clear / non-0 set
+; out: nothing (all registers and the flags preserved)
+;
+; Withdrawing it needs no cleanup, unlike wm_saveu's: the flag changes what the
+; NEXT paint does and leaves nothing behind. The promise is the whole contract
+; and it is the app's to keep - a window that sets this and then leaves a pixel
+; of its content unwritten shows whatever was there before, which after a move
+; is another window's.
+; -----------------------------------------------------------------------------
+wm_ownbg:
+    pushf
+    or al, al
+    jz .clear
+    or word [bx+W_FLAGS], WF_OWNBG
+    popf
+    ret
+.clear:
+    and word [bx+W_FLAGS], ~WF_OWNBG & 0xFFFF
+    popf
+    ret
+
 ; =============================================================================
 ; THE RAISE CACHE (SPEC.md 11.96) - a window raised without repainting it
 ;
@@ -4863,6 +4891,11 @@ wm_draw_win:
                                 ; The chrome above is drawn either way: it is
                                 ; cheap, and a raise changes the pinstripes
 .content:
+    test word [di+W_FLAGS], WF_OWNBG
+    jnz .paint                  ; IT OWNS ITS BACKGROUND (SPEC.md 11.90.1): the
+                                ; fill would be the first layer of a double
+                                ; draw, and on a window whose W_PAINT takes
+                                ; seconds it is that long as a white hole
     mov byte [gfx_color], CWHITE
     mov ax, [di+W_X]            ; content area, filled white before W_PAINT
     inc ax

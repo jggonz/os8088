@@ -4127,3 +4127,34 @@ the 8,670 ms one), which is the `[pt_apend]` deferred-resize path calling
 `OSAPI_WM_FRONT` from inside `W_PAINT` and is worth its own look; and the
 ~376 ms of palette, colour strip and divider is **small in area** — a narrow
 left-hand column — so it is the part a cache would hold for about 1 KB.
+
+### Set 33 — the white fill measured as a PICTURE, not as work (SPEC.md §11.90.1)
+
+`wm_draw_win`'s fill is one `gfx_fill` — ~24 ms on a Disk-window-sized content —
+so as *work* there is nothing here. As a *picture* it is PERFORMANCE.md Part 1's
+double draw in its purest form, and the gap between its two layers is however
+long `W_PAINT` takes. Sampled on a cycle-accurate 5150/CGA over a Paint raise
+with Set 32's textured bitmap, an interior box of the canvas:
+
+| | the sample box |
+|---|---|
+| the kernel fills (before) | **fully white from +350 ms to +2,967 ms — 2,617 ms** |
+| `WF_OWNBG` (after) | **never blank**: peak whiteness 0.818, never uniform |
+
+**The 2,617 ms is the BOX's figure and not the window's.** `pt_blit` works down
+the canvas in bands, so a given row is white from the fill until the blit reaches
+it: the box sampled here is in the upper middle and clears at 2.6 s, and the
+bottom rows stay white for the whole 8,670 ms. Which is the shape of the defect —
+the user watches their picture vanish and then wipe back down the screen.
+
+**So the flag's value is not the 24 ms and quoting it that way would be
+misleading.** It is that a repaint stops being visible as a blank-then-fill. The
+same argument applies to every window whose `W_PAINT` is slow, and to none whose
+`W_PAINT` is fast — which is why it is opt-in per window rather than a default
+(§11.90.1).
+
+Verified against a build that still gets the fill: **0 differing pixels** on CGA,
+Hercules and VGA mode 12h across cover / raise / drag-across / re-raise
+(`tools/ptcheck.py`). The gate uses a **textured** BMP deliberately: a blank
+canvas is uniform white, which is precisely the colour the fill would have left,
+so it is the one picture that cannot tell a kept promise from a broken one.
