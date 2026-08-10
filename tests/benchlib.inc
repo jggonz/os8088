@@ -137,7 +137,16 @@ BL_SUSPECT  equ 40000           ; a single iteration past this many counts
 ; heading line below cannot drift from the rows.
 BL_C_N      equ 24              ; iterations, width 5
 BL_C_CNT    equ 30              ; total PIT counts, width 9
-BL_C_US     equ 41              ; us/op: 7 digits, '.', 2 digits
+BL_C_US     equ 39              ; us/op: 9 digits, '.', 2 digits. IT WAS 7 AT
+                                ; COLUMN 41, AND SEVEN DIGITS WRAP AT TEN
+                                ; SECONDS - silently, mod 10,000,000, so a
+                                ; 41.96-second row printed 1.96 and read as
+                                ; the fastest thing on the page. Found when
+                                ; SPEC.md 18.4's write rows came back from the
+                                ; 5150 with an append that beat the create it
+                                ; was three times slower than. Nine digits is
+                                ; 999 seconds; the counts column ends at 38, so
+                                ; this starts at 39 and still clears the unit
 BL_C_UNIT   equ 52              ; 'us'
 BL_C_FLAG   equ 55              ; 't' method T, '!' suspicious iteration
 
@@ -811,10 +820,10 @@ bl_usfield:
     mov cx, 100
     call bl_div32               ; DX:AX = whole us, BX = hundredths (0..99)
     mov si, bx                  ; park them - bl_dec wants DX:AX
-    mov cx, 7
-    call bl_dec                 ; the whole part, right-aligned 7 wide
+    mov cx, 9
+    call bl_dec                 ; the whole part, right-aligned 9 wide
     add di, bl_lscr
-    add di, 7
+    add di, 9
     mov byte [di], '.'
     mov ax, si                  ; AH is 0: SI is under 100
     mov bl, 10
@@ -1432,7 +1441,7 @@ bl_drive:
 
 bl_s_nul:   db 0
 bl_s_us:    db 'us', 0
-bl_s_head:  db 'measurement                 N    counts       us/op', 0
+bl_s_head:  db 'measurement                 N    counts         us/op', 0
 bl_s_stat:  db 'rows', 0
 bl_s_dash:  db '-', 0
 bl_s_of:    db 'of', 0

@@ -2249,14 +2249,29 @@ sb_write:
     call sb_ctr_show
     call sb_ctr_trace               ; ...and every call it made, in order
 
-    call sb_ctr_bank                ; --- the same name AGAIN, which also frees
-    mov word [bl_n], 1              ; the chain it replaces and flushes the FAT
-    mov word [bl_body], sb_b_wrbig  ; a second time (SPEC.md 18.4)
+    mov ax, [sb_wkb]                ; --- the same name AGAIN. IT NEEDS TWICE
+    add ax, ax                      ; THE SIZE FREE: SPEC.md 18.4 allocates and
+    add ax, SB_WR_SLACK             ; writes the new chain BEFORE it frees the
+    cmp ax, [sb_wfree]              ; one it replaces, so both exist at once -
+    ja .norep                       ; and without this test the row ran out of
+    call sb_ctr_bank                ; space part-way and reported a plausible
+    mov word [bl_n], 1              ; 112 sectors in 14 calls, which is a
+    mov word [bl_body], sb_b_wrbig  ; FAILED write that reads like a fast one
     mov si, sb_r_wrep
     mov al, 1
     call bl_run
     call sb_ctr_take
     call sb_ctr_show
+    cmp word [sb_werr], 0
+    je .rep_ok
+    mov si, sb_l_werr
+    mov ax, [sb_werr]
+    call sb_num
+    jmp short .rep_ok
+.norep:
+    mov si, sb_s_wnorep
+    call bl_sline
+.rep_ok:
 
     call sb_wr_del                  ; --- and the copy engine's shape
     call sb_ctr_bank
@@ -3924,6 +3939,7 @@ sb_s_h_wr:   db '-- SPEC.md 18.4: what a LARGE WRITE costs, where you started --
 sb_s_h_wr2:  db '   It writes to the CURRENT volume, so run it from A: for a', 0
 sb_s_h_wr3:  db '   floppy and from C: for a hard disk. Cleans up after itself.', 0
 sb_s_wnone:  db '   no room on the volume or in the heap: the write rows were skipped.', 0
+sb_s_wnorep: db '   replace SKIPPED: it needs TWICE the size free (SPEC.md 18.4).', 0
 sb_r_wsml:   db 'WRITE, one cluster', 0
 sb_r_wbig:   db 'WRITE, create', 0
 sb_r_wrep:   db 'WRITE, replace', 0
