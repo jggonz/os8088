@@ -771,6 +771,31 @@ gfx_ls_one:
     pop si
     pop cx
 
+%ifdef KERN_BIG
+    ; --- SPEC.md 39.14.5: the walk goes onto the display holding its CURRENT
+    ; point, and the block is handed back in VIRTUAL coordinates.
+    ;
+    ; It is the staged copy that is translated, never the caller's: SPEC.md
+    ; 48.14 has Missile Command computing with the block's x and y itself, and
+    ; 5.6.7's replay-to-erase depends on the state meaning the same thing on
+    ; every call. A block left display-local would compound the translation on
+    ; the next step and put the caller's arithmetic in a space nothing else
+    ; uses. This is the whole of what was missing: the walk wrote the primary's
+    ; framebuffer at virtual coordinates, so a trail on the second display drew
+    ; at the wrong offset on the FIRST one and stopped dead at its edge.
+    cmp byte [vid_ndisp], 1
+    jbe .nodisp
+    push ax
+    push bx
+    mov ax, [gfx_ls_x]
+    mov bx, [gfx_ls_y]
+    call gfx_disp_enter         ; ...and it cannot fail: the dead zone answers
+    mov [gfx_ls_x], ax          ; with the primary
+    mov [gfx_ls_y], bx
+    pop bx
+    pop ax
+.nodisp:
+%endif
     cmp byte [bb_on], 0         ; 5.6.4's split: mono gets the per-pixel walk,
     je .slow                    ; VGA is the fast machine and gets gfx_pixel
     cmp byte [vid_planes], 1
@@ -780,6 +805,18 @@ gfx_ls_one:
 .slow:
     call gfx_lstep_slow
 .back:
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1     ; ...and back into virtual space before the
+    jbe .nodisp2                ; caller ever sees it
+    push ax
+    mov ax, [vid_ox]
+    add [gfx_ls_x], ax
+    mov ax, [vid_oy]
+    add [gfx_ls_y], ax
+    pop ax
+    dec byte [gfx_dnest]
+.nodisp2:
+%endif
     mov si, gfx_ls_x            ; --- and back out, to where it came from
     mov es, [gfx_ls_cseg]
     mov di, [gfx_ls_coff]
@@ -1514,6 +1551,12 @@ gfx_line_flush:
 ; -----------------------------------------------------------------------------
 gfx_blit4:
     call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
+    GFXDENTER                   ; ...and off the display SPLIT for the same
+                                ; reason (SPEC.md 39.14.5): a blit cannot take
+                                ; a sub-rect without advancing its source to
+                                ; match, so it goes whole onto the display
+                                ; holding its top-left corner and is cut at
+                                ; that display's edge
     push ax
     push bx
     push cx
@@ -1621,6 +1664,7 @@ gfx_blit4:
     pop cx
     pop bx
     pop ax
+    GFXDLEAVE
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2213,6 +2257,22 @@ vga_xor_hline:
 ; out:      -
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
+; SPEC.md 39.14.5: bb_xor_rect decomposes into bb_xor_fill - the RENDERER's
+; body, below the public gfx_xor_fill where GFXDISP sits - so the unclipped
+; path had no display hook at all and drew the drag outline and Missile
+; Command's crosshair into the primary at the other display's coordinates. It
+; is whole-shape here rather than split, for gfx_blit4's reason: an outline is
+; not the intersection of its bounding rect with anything (see the clipped
+; path below), and the four strips it decomposes into are already inside the
+; nest by the time they are drawn. A field gfxbench caught it as a 673us
+; GFX_XOR_RECT row - which is not a fast rectangle, it is one clipped away.
+gfx_xor_rect_bb:
+    GFXDENTER
+    GFXDORG cx, dx
+    call bb_xor_rect
+    GFXDLEAVE
+    ret
+
 gfx_xor_rect:
     cmp word [wm_clip_n], 0     ; clipped background draw? (SPEC.md 11.3)
     jne gfx_xor_rect_clip       ; an OUTLINE is not the intersection of its
@@ -2220,14 +2280,14 @@ gfx_xor_rect:
                                 ; that way would draw edges through the
                                 ; middle of it, so it decomposes first
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
-    jne bb_xor_rect
+    jne gfx_xor_rect_bb
 vga_xor_rect_vram:
     call cur_unlazy             ; the drag outline bypasses the buffer AND
                                 ; the clip (SPEC.md 32): 7.1.4              ; VRAM body under its own name: transient
                                 ; overlays (the drag outline) call it direct
                                 ; so they never enter the back buffer
     cmp byte [vid_mono], 0      ; ...but "direct" means the framebuffer, and
-    jne bb_xor_rect             ; on a 1bpp adapter the software renderer IS
+    jne gfx_xor_rect_bb         ; on a 1bpp adapter the software renderer IS
                                 ; the direct path (SPEC.md 39.5)
     push bx
     push dx

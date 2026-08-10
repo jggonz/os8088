@@ -19163,6 +19163,58 @@ coordinates: display 0's is the call that was always there (menu bar to dock),
 and every other display's is its whole extent, since §39.14's chrome lives on
 the primary alone.
 
+#### 39.14.5 The three paths the sweep missed, and what a FIELD run found
+
+§39.14.1 put the hook at the public entry and §39.14.2 gave the whole-shape
+primitives their own. Three drawing paths pass through neither, and all three
+shipped that way until a 5150 with both cards in it drew Missile Command
+across the seam (docs/FIELD-MACHINES.md). The symptom named the mechanism
+exactly: *the trails drew at the wrong offset on the Hercules and did not
+cross onto the CGA* — which is what drawing in VIRTUAL coordinates into the
+PRIMARY's framebuffer looks like from the outside.
+
+**The resumable walk (§5.6.7's `gfx_lstep`, §5.6.8's `gfx_lstepv`).** It is
+not reached through `gfx_line`, which is why the sweep missed it — §48.14
+moved Missile's trails off `gfx_line` onto the walk, and the walk writes the
+framebuffer itself. The hook goes on the STAGED copy of the block inside
+`gfx_ls_one`, which is where the caller's state is already being copied in and
+out: the point is moved into the display holding it, drawn, and **moved back
+into virtual space before the caller sees it**. That last part is the
+contract, not a tidiness — §48.14 has the app computing with the block's `x`
+and `y` itself, and a block left display-local would compound the translation
+on every later step.
+
+**It resolves per CALL and not per PIXEL**, so a walk that crosses the seam
+inside one `gfx_lstep` loses the pixels past the edge: the next call re-picks
+the display and carries on, leaving a gap of at most `CX - 1` pixels at the
+crossing. Per-pixel resolution would put four compares and a re-derived
+framebuffer pointer inside `gfx_lstep_mono`'s inner loop, which is the loop
+§5.6.6 exists to keep tight. A caller that needs an exact seam steps one pixel
+at a time across it; Missile's few-pixels-a-frame rate makes the gap a
+handful of pixels, and the erase — a replay whose call boundaries need not
+match the draw's — can strand that handful rather than clearing it.
+
+**`gfx_xor_rect`'s unclipped path on a 1bpp adapter.** `gfx_xor_rect` with no
+clip region jumps to `bb_xor_rect`, which decomposes into `bb_xor_fill` —
+the software renderer's body, *below* the public `gfx_xor_fill` where the hook
+sits. So the drag outline and Missile's crosshair drew into the primary at the
+other display's coordinates. The clipped path was always safe, because it
+decomposes into the public entry instead. **The field data caught this before
+anybody reported it**: `gfxbench`'s `GFX_XOR_RECT 64x64` row reads 673us with
+its sandbox on the CGA against ~5,000us straddling — and 673us is not a fast
+rectangle, it is four strips clipped away to nothing.
+
+**`gfx_blit4`.** Off the clip list by §11.3's own argument — a blit cannot take
+a sub-rect without advancing its source to match — and off the display split
+for the same reason, so it takes `GFXDENTER`: one display, the one holding its
+top-left corner, cut at that display's edge. Solitaire's card backs are the
+consumer.
+
+**The rule the three of them are: a path that writes the framebuffer without
+passing a public entry is a hole**, and it is exactly §11.3's rule about
+`gfx_fill_pat` being off the clip list for as long as it existed. The audit
+that finds them is by WRITER and not by entry point.
+
 ### 39.15 The pointer crosses; the arrow jumps (`KERN_BIG` only)
 
 **`[mouse_x]`/`[mouse_y]` are VIRTUAL desktop coordinates** — they always

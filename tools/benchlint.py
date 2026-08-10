@@ -20,15 +20,99 @@ consecutive rows is fine and often right - a row pair that changes only the
 rectangle wants the identical body - it just has to say so, because saying so
 is what an insertion cannot silently break.
 
+It also refuses a LABEL WIDER THAN THE VALUE COLUMN.  `bl_kv` writes the
+label at column 0 and the number right-aligned in a field starting at
+`BL_C_N`, so a label of more than `BL_C_N` characters has its own tail
+overwritten by its own value - and the row still prints, still lines up with
+its neighbours, and reads as a truncated word run into a number.  A field
+report came back with four of them at once (`adapters available (he0006`),
+which is how this got written: the labels had been counted by eye.  The
+column is read out of `benchlib.inc` rather than repeated here, so moving it
+moves the rule.
+
+A label handed to `bl_sline` is a whole LINE and may be as wide as the
+report, so the rule applies only to labels that reach something which prints
+a value beside them - which is decided by what consumes `SI` next.
+
 Run by `make bench`; also runnable by hand on any harness that uses benchlib.
 """
 
+import os
 import re
 import sys
 
 BODY = re.compile(r'^\s*mov\s+word\s+\[bl_body\]\s*,\s*(\w+)', re.I)
 RUN = re.compile(r'^\s*call\s+bl_run\b', re.I)
 LABEL = re.compile(r'^\s*mov\s+si\s*,\s*(gb_r_\w+|sb_r_\w+)', re.I)
+
+# `sb_l_foo:  db '  something', 0`
+DECL = re.compile(r"^\s*(\w+):\s+db\s+'([^']*)'\s*,\s*0", re.I)
+SETSI = re.compile(r'^\s*mov\s+si\s*,\s*(\w+)\s*$', re.I)
+CALL = re.compile(r'^\s*call\s+(\w+)', re.I)
+COLN = re.compile(r'^(BL_C_\w+)\s+equ\s+(\d+)', re.I | re.M)
+
+# The routines that print a VALUE beside the label in SI, and WHICH COLUMN
+# each writes at - because they do not all use the same one, and a rule with
+# a single column is wrong in both directions. `sb_us` puts a microsecond
+# figure at BL_C_US, so a 27-character label is fine in front of it and the
+# identical label in front of `sb_num` is not. Explicit, because the
+# alternative is chasing `call` chains - and it errs SHORT: a printer missing
+# from this map makes the rule report less, never block a good build.
+VALUE_PRINTERS = {
+    'bl_kv': 'BL_C_N', 'bl_kvs': 'BL_C_N',
+    'sb_num': 'BL_C_N', 'sb_hex': 'BL_C_N', 'sb_v2': 'BL_C_N',
+    'sb_mb': 'BL_C_N', 'sb_mbx': 'BL_C_N',
+    'sb_cb': 'BL_C_N', 'sb_cbx': 'BL_C_N',
+    'sb_rah_row': 'BL_C_N',
+    'sb_us': 'BL_C_US',
+    'gb_num': 'BL_C_N', 'gb_hex': 'BL_C_N',
+}
+
+
+def value_columns(path):
+    """The BL_C_* map, out of the benchlib.inc beside this harness."""
+    here = os.path.dirname(os.path.abspath(path))
+    for cand in (os.path.join(here, 'benchlib.inc'),
+                 os.path.join(os.path.dirname(here), 'benchlib.inc')):
+        if os.path.exists(cand):
+            txt = open(cand, encoding='utf-8', errors='replace').read()
+            return {m.group(1).upper(): int(m.group(2))
+                    for m in COLN.finditer(txt)}
+    return None
+
+
+def check_labels(path):
+    cols = value_columns(path)
+    if not cols:
+        return []
+    lines = open(path, encoding='utf-8', errors='replace').readlines()
+    width, decl_line = {}, {}
+    for n, line in enumerate(lines, 1):
+        m = DECL.match(line.split(';')[0])
+        if m:
+            width[m.group(1)] = len(m.group(2))
+            decl_line[m.group(1)] = n
+    # ...and which of them are handed to something that prints a value. SI is
+    # consumed by the NEXT call whatever it is, so one pending label and a
+    # clear on every call is the whole model - `mov si, header` followed by
+    # `call bl_sline` is a line, not a row.
+    valued, pending = {}, None
+    for line in lines:
+        line = line.split(';')[0].rstrip()
+        m = SETSI.match(line)
+        if m:
+            pending = m.group(1)
+            continue
+        m = CALL.match(line)
+        if m and pending is not None:
+            col = cols.get(VALUE_PRINTERS.get(m.group(1), ''))
+            if col is not None:           # ...and the NARROWEST one wins: the
+                valued[pending] = min(    # same label may head two rows
+                    valued.get(pending, col), col)
+            pending = None
+    return sorted((decl_line[n], n, width[n], col)
+                  for n, col in valued.items()
+                  if n in width and width[n] > col)
 
 
 def check(path):
@@ -58,6 +142,11 @@ def main(argv):
         return 2
     rc = 0
     for path in argv[1:]:
+        for n, name, w, col in check_labels(path):
+            print('%s:%d: %s is %d characters against a value column at %d - '
+                  'its own value overwrites its tail' % (path, n, name, w, col),
+                  file=sys.stderr)
+            rc = 1
         for n, label, body, body_line in check(path):
             print('%s:%d: bl_run for %s CARRIES its body (%s, last set at '
                   'line %d) - set [bl_body] for this row' %
@@ -65,7 +154,8 @@ def main(argv):
                   file=sys.stderr)
             rc = 1
     if rc == 0:
-        print('benchlint: every bl_run sets its own body')
+        print('benchlint: every bl_run sets its own body, and every\n'
+              '            key/value label fits its column')
     return rc
 
 

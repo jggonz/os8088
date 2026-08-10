@@ -3808,19 +3808,19 @@ sb_s_h_vid3: db '   a BITMAP of 1<<kind, so 6 = a Hercules AND a Cga. Read the P
 sb_s_vnone:  db '   this kernel publishes no display block (built before SPEC.md 57.4).', 0
 sb_s_vsmall: db '   kern_small: single-display by CONSTRUCTION, so there is nothing set.', 0
 sb_l_vkind:  db '  adapter running', 0
-sb_l_vavail: db '  adapters available (hex)', 0
+sb_l_vavail: db '  adapters avail (hex)', 0
 sb_l_vnd:    db '  displays brought up', 0
-sb_l_vdm:    db '  desktop 0=Sing 1=Extend', 0
+sb_l_vdm:    db '  desktop 0=Sing 1=Ext', 0
 sb_l_vdl:    db '  layout 0=Right 1=Below', 0
 sb_l_vptr:   db '  pointer is on display', 0
-sb_l_vdesk:  db '  desktop w h (the union)', 0
+sb_l_vdesk:  db '  desktop w h (union)', 0
 sb_l_vchrm:  db '  chrome  w h (primary)', 0
 sb_l_vd:     db '  -- display', 0
 sb_l_vdk:    db '     adapter', 0
 sb_l_vdo:    db '     origin x y', 0
 sb_l_vds:    db '     size w h', 0
 sb_l_vdb:    db '     stride banks', 0
-sb_l_vdf:    db '     framebuffer seg (hex)', 0
+sb_l_vdf:    db '     framebuffer (hex)', 0
 sb_l_vdead:  db '  dead zone, 100s of px', 0
 sb_s_h_mou:  db '-- the mouse: the port contest and the identify burst (SPEC.md 9.4.1) --', 0
 sb_s_h_mou2: db '   STATE, not a measurement: base and first byte are HEX, rest decimal.', 0
@@ -3949,9 +3949,9 @@ sb_s_rshort: db '   BIGFILE.DAT ran out: the sweep is bounded by the FILE here,'
 sb_s_rshort2: db '   not by the cache. Grow it, or read the rows above as a floor.', 0
 sb_l_rcl:    db '  cluster bytes, probed', 0
 sb_l_rstr:   db '  ...so the stride is', 0
-sb_l_rw:     db '  chunks re-read -> int 13h', 0
-sb_l_rhold:  db '  MEASURED: widest set kept', 0
-sb_l_rmiss:  db '  ...and the width that missed', 0
+sb_l_rw:     db '  chunks re-read, i13h', 0
+sb_l_rhold:  db '  MEASURED: widest kept', 0
+sb_l_rmiss:  db '  ...and the width miss', 0
 sb_f_bigger: db 'BIGFILE.DAT', 0
 sb_s_h_fnd:  db '-- SPEC.md 18.95.2: what a resumable FILE_FIND cursor would win --', 0
 sb_s_h_fnd2: db '   FIND is BY ORDINAL and re-seeks, so entry k walks past the k', 0
@@ -3961,7 +3961,7 @@ sb_s_fnfew:  db '   ...one entry or none: no slope to fit. Run it somewhere full
 sb_r_f0:     db 'FIND, first ordinal', 0
 sb_r_fl:     db 'FIND, last ordinal', 0
 sb_r_fw:     db 'FIND, a whole walk', 0
-sb_l_fn:     db '  entries in this directory', 0
+sb_l_fn:     db '  entries in this dir', 0
 sb_l_fsl:    db '  per entry SKIPPED', 0
 sb_l_fpc:    db '  a perfect cursor would be', 0
 sb_l_fwm:    db '  the walk as measured', 0
