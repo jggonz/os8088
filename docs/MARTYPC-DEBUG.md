@@ -48,6 +48,14 @@ the same media:
 | read 16 KB, cold motor | **8.07 s** | **0.27 s** — 30x fast |
 | boot | **38,886 ms** | **2,306 ms** — 17x fast |
 
+**Both 5150 columns are pre-Set-18 and the ratios are not.** That machine's
+boot is **9,886 ms** now and a cold 16 KB read **1.21 s** (PERFORMANCE.md
+Part 9 Sets 18 and 22), because the `AL` fix and §18.95's cache landed in
+between. The point the table exists to make is unchanged and in fact
+sharpened — MartyPC is still ~4x fast on the boot and ~4.5x on the read, and
+a disk in the path is still the wrong thing to time here — but do not quote
+the left column as current.
+
 So: **if a disk is anywhere in the path, the number this tool gives you is
 wrong, and wrong by more than an order of magnitude in the flattering
 direction.** That catches a great deal that is not obviously about disks — a
@@ -1070,11 +1078,17 @@ All of the following was run end to end in the container, against
   attempts *polled memory* every few seconds of wall clock while MartyPC runs
   faster than real time at a load-dependent rate, and got 81M and 313M cycles
   for the same event on the same machine — a 3.9x spread that was measuring
-  when somebody looked.
+  when somebody looked. **The rate itself is ~4.8x** — measured 4.87 and 4.81
+  over two 10-second samples of the cycle counter against 4.772727 MHz, the
+  check `settle`'s docstring spells out — and it belongs to the HOST, so
+  re-measure rather than quoting it. For a harness it means every
+  `settle(limit=)` must be sized as though guest seconds arrive FASTER than
+  wall ones, because they do.
   **It is a cycle count and NOT a boot time.** Dividing it by 4.772728 MHz
   gives 63.02 s, and that figure is worth nothing: a boot is mostly POST and
   floppy, and this tool is 30x fast on the floppy. The real machine's boot is
-  PERFORMANCE.md's 38,886 ms and the only way to move that number is to
+  PERFORMANCE.md's **9,886 ms** (see the table above: 38,886 was the figure
+  before Part 9 Set 18's `AL` fix) and the only way to move that number is to
   measure it there. What the cycle count IS good for is a **delta** against
   another MartyPC run — that is how you tell whether a change to the boot path
   did anything, which is a question this can answer and the 5150 answers

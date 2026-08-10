@@ -953,7 +953,9 @@ ui_loc_gate:
     jnz .set
     mov ax, menu_s_closex       ; ...or its MENU_DIS twin
 .set:
-    mov [menu_items_file + 3*2], ax
+    mov [menu_items_file], ax   ; Close Window is item 0 now: Locator's File
+                                ; menu is that item and nothing else, the
+                                ; builtins having moved to Builtins (12.3.1)
     pop bx
     pop ax
     ret
@@ -1095,9 +1097,9 @@ ui_dispatch:
     ret
 
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
-; System menu, then Locator's File and Special
+; System menu, then Locator's File and Builtins (SPEC.md 12.3.1)
 ui_loc_base:
-    dw CMD_ABOUT, CMD_TIMER, CMD_REBOOT
+    dw CMD_ABOUT, CMD_CLOSE, CMD_TIMER
 
 ; -----------------------------------------------------------------------------
 ; ui_post_cmd - defer one of the kernel's own menu commands (SPEC.md 13)

@@ -4900,12 +4900,12 @@ whenever no window owns it.
 `menu_loc_set` (menu.inc data) is an ordinary §12.2 set with
 `AM_NAME` = `'Locator'` and **`AM_ONCMD` = 0**, the one value reserved to
 mean *dispatched by the kernel*: ui.inc recognises it and reconstructs a
-`CMD_*` instead of calling through (§13). Its menus are unchanged from the
-pre-Locator bar — **File**: "Timer" (CMD_TIMER), "Bounce" (CMD_BOUNCE),
-"Disk" (CMD_FILES), "Close Window" (CMD_CLOSE); **Special**: "Restart"
-(CMD_REBOOT) — and so is the System menu, which is cell 0 for every
-application: "About os8088..." (CMD_ABOUT), "Control Panel" (CMD_CTRL,
-§31), "Task Manager" (CMD_TASKS, §28).
+`CMD_*` instead of calling through (§13). Its menus are **File**: "Close
+Window" (CMD_CLOSE); and **Builtins**: "Timer" (CMD_TIMER), "Bounce"
+(CMD_BOUNCE), "Disk" (CMD_FILES) — see §12.3.1 for why that is not how they
+started. The System menu is cell 0 for every application: "About os8088..."
+(CMD_ABOUT), "Control Panel" (CMD_CTRL, §31), "Task Manager" (CMD_TASKS,
+§28), a rule, and "Restart" (CMD_REBOOT).
 
 **"Close Window" greys when there is nothing to close.** `ui_loc_gate` points
 that item at its `MENU_DIS` twin from `wm_top`, on the press that opens the
@@ -4921,12 +4921,19 @@ predicate is per-kind rather than one word.
 CMD_ABOUT  equ 1   ; --- System (cell 0, every application) ---
 CMD_CTRL   equ 2
 CMD_TASKS  equ 3
-CMD_TIMER  equ 4   ; --- Locator: File ---
-CMD_BOUNCE equ 5
-CMD_FILES  equ 6
-CMD_CLOSE  equ 7
-CMD_REBOOT equ 8   ; --- Locator: Special ---
+CMD_SEP    equ 4   ; the rule above Restart - no handler, see below
+CMD_REBOOT equ 5
+CMD_CLOSE  equ 6   ; --- Locator: File ---
+CMD_TIMER  equ 7   ; --- Locator: Builtins ---
+CMD_BOUNCE equ 8
+CMD_FILES  equ 9
 ```
+
+The ids are contiguous **within** a menu, because that is what makes
+`ui_loc_base[cell] + item` work; they are internal constants and renumber
+freely whenever a menu gains an item, which §12.3.1 has just made them do.
+`CMD_SEP` needs no handler: `ui_cmd` is a compare ladder, so an id it does
+not match falls out of the bottom and returns.
 
 **Locator has two menu sets, and they share one name.** `menu_loc_set` is
 the desktop's, above. `fm_menus` (files.inc data, §22) is the file
@@ -4966,6 +4973,44 @@ one-window app named "Disk" — it just swaps Locator's desktop menus for its
 file-manager menus. Nothing else in the kernel points at either set; every
 other built-in kind leaves `W_MENUS` at 0 and shows
 its `I_NAME` with no menus of its own.
+
+#### 12.3.1 One place for the builtins, and Restart belongs to everybody
+
+The three built-in kinds — Timer, Bounce and Disk — were in **Locator's File
+menu** on the desktop and under a menu called **Special** in a Disk window.
+Same three commands, two different menus, chosen by which window happened to
+be frontmost: the user learns where Bounce is, opens a Disk window, and it is
+somewhere else. A menu that moves under you is worse than a menu in an odd
+place, because the odd place can at least be learned.
+
+So there is one **Builtins** menu and both sets carry it, with the same items
+in the same order. `menu_items_builtin` and `fm_items_built` are separate
+arrays — one is Locator's kernel-dispatched set and the other is `fm_menus`,
+whose `AM_ONCMD` is real — but they name the same strings and their commands
+do the same things: `fm_c_disk` posts `CMD_FILES`, which is exactly what
+Locator's own item dispatches.
+
+**`Special` was the wrong word twice over.** It named a leftover rather than a
+category — the drawer things went in when they fitted nowhere else — and what
+was in it on one bar was somewhere else entirely on the other.
+
+**Restart moved to the System menu**, below a `MENU_DIS` rule. That is where
+it belongs on the evidence: the System menu is **cell 0 of every
+application** (§12.2), so putting Restart there gives it to every app at
+once, where before it was reachable only from Locator's bar and from a Disk
+window's — a package running fullscreen had no way to it at all. It is also
+the shape the machine this OS is modelled on used: the destructive,
+whole-machine command sits under the chip, apart from the app's own menus and
+behind a rule.
+
+Locator's File menu is left with **Close Window** alone, which is thin and is
+correct: the bare desktop has `[menu_win]` = 0, so no app-name cell exists
+(§12.7) and Locator's File menu is the only way to close from the bar.
+
+Two things follow that are easy to miss. `menu_relayout` stamps cell 0's
+`MB_NITEM` from **`MENU_LOGO_N`** rather than the literal `3` it used to —
+the count lived in a different file from the list it counted. And
+`ui_loc_gate` writes `menu_items_file` at **index 0**, not 3.
 
 ### 12.4 Context menus — `menu_drop` and `menu_popup`
 
@@ -10941,15 +10986,15 @@ cells are `font_width + MENU_TITLE_PAD`:
 | **Edit** | 48 | 160..207 | Cut · Copy · Paste |
 | **Folder** | 64 | 208..271 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
 | **View** | 48 | 272..319 | as List · as Icons |
-| **Special** | 72 | 320..391 | Timer · Bounce · Restart |
+| **Builtins** | 80 | 320..399 | Timer · Bounce · Disk |
 
-391 against a 432 limit is 41px of slack — enough that a longer item
+399 against a 432 limit is 33px of slack — enough that a longer item
 string can never push a *title* off the bar, since item widths do not enter
 the layout at all. `MENU_APPMAX` is 5 and all five are used; it was 4 and
 File carried Cut/Copy/Paste as well, until §22.12 needed a sixth item and a
 seven-item File menu stopped being a menu and started being a list.
 
-The slack is 41px rather than 108 because §12.9 snapped the bar to 8px cells
+The slack is 33px rather than 108 because §12.9 snapped the bar to 8px cells
 and widened `MENU_TITLE_PAD`, and because a fifth title costs its own width
 plus that padding. It is still slack in the direction that matters: nothing
 here is measured against the number of menus, only against where the next
@@ -11546,6 +11591,40 @@ find 720KB media, which is bounded and once per format. And **the separator is a
 `FMC_FMTSEP` maps to a `ret` in `fm_jmp`, because `menu_hover` can never land
 on it but a body may not assume which surface picked it (§22's rule for every
 handler in that table).
+
+#### 22.12.1 …and it says so when it worked
+
+`Formatted B:` in the menu bar for three seconds (§59), on success only. This
+is §59.6's reasoning applied where it is strongest: a format is **seconds of
+floppy the user waited for**, so the success is worth saying and not only the
+failure — and unlike the Control Panel's save, which had no channel at all
+until §59.6 gave it one, this one had a window sitting right behind it and
+still needed the toast.
+
+**The window is not the report.** After a format the Disk window reads
+`Drive B: 0 files · Size 0K · Free 354K`, and every word of that is a fact
+about the volume rather than an account of what just happened: it reads
+exactly the same whether this format ran a moment ago or the disk was always
+empty and fine. §59.5's distinction, from the other end — a status line says
+what is *true*, a toast says what *happened*.
+
+Three things are load-bearing, and each is somebody else's rule first:
+
+- **It is said AFTER `fmv_load`, not before.** A mount can arm §12.8's
+  file-activity widget, which owns those pixels and which `toast_show`
+  refuses while it is up — §59.6's own ordering, where the Control Panel's
+  save has to speak after `drv_cfg_save` rather than before it.
+- **ES is loaded explicitly**, because `toast_show` reads its string through
+  `ES:SI` and `files.inc` is `.cold` (§2.6): CS there is `COLD_SEG`, so the
+  `push cs` / `pop es` that would be right inside the kernel's own segment
+  points at the wrong one, and `fm_hdrbuf` is `.bss` in `KERNEL_SEG`.
+- **`fm_hdrbuf` is safe to borrow** because `toast_show` copies into
+  `toast_buf`. The painter that owns that buffer runs after this, from
+  `fm_docmd`'s repaint, and stages it afresh.
+
+It is `toast_show` and not §59.4's `toast_now`: the format has already
+happened, so there is nothing for the message to arrive *behind*, and the
+idle pass is where a staged toast belongs.
 
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
@@ -17424,7 +17503,7 @@ probe claimed the chip through the two missing-half-register signatures and
 the scratch round-trip; the reads decode; a set from the Date/Time page
 writes the counters, the year−1980 cookie and the `CLK_NS_MAGIC` into the
 chip's standby RAM; and the whole setting **survives a warm boot** — both
-Ctrl-Alt-Del and Special→Restart — because the chip runs off bus +5V while
+Ctrl-Alt-Del and the System menu's Restart — because the chip runs off bus +5V while
 the machine is powered and the battery only bridges power-off. The same
 machine's **dead battery** confirms the other half: a cold boot finds the
 standby RAM scrambled, `CLK_NS_OK` fails, and the year reconstructs to the
@@ -26883,7 +26962,7 @@ not. That is the argument every page makes for being §31.8's exception, and it
 is refused here for the same reasons, plus one this cell had to itself — the
 write remounts A: to reach the file, so a driver that had just made its own
 volume current lost it inside the click. **A set never touches the disk**; the
-Control Panel's close and Special > Restart are the only two writers in the
+Control Panel's close and the System menu's Restart are the only two writers in the
 machine.
 
 `AL = 2` is still **accepted** and means exactly what `AL = 1` means, so a
@@ -27375,7 +27454,7 @@ Three things about it are load-bearing:
 
 **There is one way out, `hd_cfg_mark`, and it never touches a disk.** It hands
 the blob to the kernel — a 34-byte `rep movsb` — and `SYSTEM.CFG` is written
-when the Control Panel closes or Special > Restart is picked, like every other
+when the Control Panel closes or the System menu's Restart is picked, like every other
 setting in the machine (§31.8). Everything that can change the blob calls it:
 the geometry editor on every `+`, Mount and Unmount, and detach.
 
@@ -27988,6 +28067,37 @@ slower on the iron. An install writes ~740 sectors to a drive whose seek and
 rotational behaviour no emulator here models, so the two device columns and
 the tick column together are the first measurement in this tree that can say
 whether the floppy work or the drive is the install's cost.
+
+### 52.10.10 The SYSTEM phase commits; the apps are additions
+
+`hd_inst_vbr` and `hd_inst_mbr` run at the end of **`hd_inst_sys`**, not at
+the end of `hd_inst_apps`. That is where the disk becomes a working os8088 —
+the partition is formatted, `KERNEL.SYS` is at cluster 2 (§52.10.2) and every
+driver is written — and the apps disk is **additions to a machine that
+already boots**.
+
+They used to be at the end of the apps phase, on the reasoning that the MBR
+is the commit and a half-done install must not be offered as bootable. That
+is right about a half-**formatted** disk and wrong about this one, and the
+field found the difference the expensive way: an apps copy that stopped on a
+single file left a fully populated partition that had never been marked
+active, so the machine said **`No active partition`** and a complete,
+correct system install was thrown away by a failure in the extras. The user's
+previous DOS install had already been overwritten by then.
+
+**The state after each phase is what the rule is really about.** After the
+format: a partition entry and an empty volume, which Format can re-offer.
+After the system phase: a bootable machine. After the apps phase: the same
+machine with more software on it. Every one of those is a state a user can
+be left in and act on, which is what "every interruption has to land on a
+state the tool can re-offer" was always trying to say.
+
+The second stage's button says **`Copy Apps`** rather than `Install`, because
+by then the install is done and the click adds software. Nine characters is
+72px and the button was 72px, so it is 88 now and the other two moved right
+by 16 — `HIW_B0X`/`HIW_BW0` drive the hit test as well as the drawing, so
+that is one change and not two.
+
 
 ## 52.11 Two images: the transport, and the tool
 

@@ -56,14 +56,25 @@
 ; from ui_loc_base for the System menu and for Locator's own menus, which
 ; keeps the "each menu's commands stay consecutive from its base"
 ; arithmetic exactly where it always was, just off the data path.
+; The ids are contiguous WITHIN a menu, because that is what makes
+; ui_dispatch's `ui_loc_base[cell] + item` work; they are internal constants
+; and renumber freely whenever a menu gains an item, which SPEC.md 12.3.1
+; has just made them do.
 CMD_ABOUT   equ 1               ; --- System (cell 0, every application) ---
 CMD_CTRL    equ 2
 CMD_TASKS   equ 3
-CMD_TIMER   equ 4               ; --- Locator: File ---
-CMD_BOUNCE  equ 5
-CMD_FILES   equ 6
-CMD_CLOSE   equ 7
-CMD_REBOOT  equ 8               ; --- Locator: Special ---
+CMD_SEP     equ 4               ; the RULE above Restart. It is a MENU_DIS
+                                ; item, so menu_hover can never land on it -
+                                ; and it needs no handler either, because
+                                ; ui_cmd is a compare ladder and an id it
+                                ; does not match falls out of the bottom and
+                                ; returns. The id exists only so that
+                                ; CMD_REBOOT below it still equals base+item
+CMD_REBOOT  equ 5
+CMD_CLOSE   equ 6               ; --- Locator: File ---
+CMD_TIMER   equ 7               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
+CMD_BOUNCE  equ 8
+CMD_FILES   equ 9
 
 ; --- app menu set layout (SPEC.md 12.2; mirrored in apps/os88api.inc) --------
 AM_NAME     equ 0               ; word: NUL app name for the bar label; 0 =
@@ -481,7 +492,7 @@ menu_relayout:
     mov di, menu_bar
     mov word [ss:di + MB_TITLE], 0 ; 0 = draw the logo glyph
     mov word [ss:di + MB_ITEMS], menu_items_logo
-    mov word [ss:di + MB_NITEM], 3
+    mov word [ss:di + MB_NITEM], MENU_LOGO_N
     mov word [ss:di + MB_XL], 0
     mov word [ss:di + MB_XR], MENU_SYS_XR
     mov word [ss:di + MB_TX], MENU_SYS_TX
@@ -2022,7 +2033,11 @@ menu_logo_bmp:
 
 menu_loc_name   db 'Locator', 0 ; the kernel's own application (SPEC 12.3)
 menu_s_file     db 'File', 0
-menu_s_special  db 'Special', 0
+menu_s_builtin  db 'Builtins', 0    ; was 'Special', and it was the wrong word
+                                    ; twice over: it named a leftover rather
+                                    ; than a category, and the things in it
+                                    ; were somewhere ELSE on the desktop
+                                    ; (SPEC.md 12.3.1)
 
 menu_s_about    db 'About os8088...', 0
 menu_s_ctrl     db 'Control Panel', 0
@@ -2035,6 +2050,11 @@ menu_s_closex   db MENU_DIS, 'Close Window', 0  ; ...with nothing to close;
                                 ; other before the menu can drop (SPEC.md 47)
 menu_s_tasks    db 'Task Manager', 0
 menu_s_restart  db 'Restart', 0
+menu_s_msep     db MENU_DIS, '---------------', 0
+                                ; the rule above Restart: fifteen dashes, the
+                                ; width of 'About os8088...', so it reads as a
+                                ; rule across the menu rather than as a short
+                                ; dash in the middle of one
 
 ; The app-name menu's bottom item (SPEC.md 12.7), and the whole of the dock
 ; tile's context menu (SPEC.md 30.2) - dock_ctx_items points here. One
@@ -2042,17 +2062,25 @@ menu_s_restart  db 'Restart', 0
 ; different things.
 menu_s_appclose db 'Close', 0
 
+; The System menu (SPEC.md 12.1), cell 0 of EVERY application - which is
+; exactly why Restart lives here now: it is the one command every app should
+; be able to reach, and it used to be reachable only from Locator's own bar
+; and from a Disk window's (SPEC.md 12.3.1).
 menu_items_logo:
     dw menu_s_about
     dw menu_s_ctrl
     dw menu_s_tasks
+    dw menu_s_msep
+    dw menu_s_restart
+MENU_LOGO_N equ 5               ; ...and menu_relayout stamps this into cell
+                                ; 0's MB_NITEM. It was a literal 3 there, in
+                                ; a different file from the list it counts
 menu_items_file:
+    dw menu_s_close
+menu_items_builtin:
     dw menu_s_timer
     dw menu_s_bounce
     dw menu_s_disk
-    dw menu_s_close
-menu_items_special:
-    dw menu_s_restart
 
 ; Locator's menu set (SPEC.md 12.3) - an ordinary SPEC.md 12.2 structure
 ; whose AM_ONCMD is 0, the one value reserved to mean "dispatched by the
@@ -2064,8 +2092,8 @@ menu_loc_set:
     dw menu_loc_name            ; AM_NAME
     dw 0                        ; AM_ONCMD: kernel-dispatched
     dw 2                        ; AM_COUNT
-    dw menu_s_file,    menu_items_file,    4
-    dw menu_s_special, menu_items_special, 1
+    dw menu_s_file,    menu_items_file,    1
+    dw menu_s_builtin, menu_items_builtin, 3
 
 ; -----------------------------------------------------------------------------
 menu_s_abpfx db 'About ', 0     ; + the app's name -> menu_abstr (12.2)

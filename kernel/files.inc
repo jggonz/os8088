@@ -1151,6 +1151,10 @@ fm_s_delq:    db '? Enter=yes Esc=no', 0
 fm_s_fmtpr:   db 'Format ', 0       ; 'Format A: as 360K? Enter=yes Esc=no',
 fm_s_fmtas:   db ': as ', 0         ; which is 35 characters at its longest
 fm_s_fmtq:    db 'K? Enter=yes Esc=no', 0    ; and so inside FM_HDRMAX
+fm_s_fmtok:   db 'Formatted ', 0    ; ...and the verdict, SPEC.md 59.6's own
+                                    ; reasoning: a format is seconds of floppy
+                                    ; the user waited for, so success speaks
+                                    ; rather than only failure
 %endif
 fm_s_delq2:   db ' +contents? Enter=yes Esc=no', 0   ; ...for a folder
 fm_s_size:    db 'Size ', 0         ; ...and the resting status line, which
@@ -1179,7 +1183,10 @@ fm_s_mfile:   db 'File', 0
 fm_s_medit:   db 'Edit', 0
 fm_s_mfold:   db 'Folder', 0
 fm_s_mview:   db 'View', 0
-fm_s_mspec:   db 'Special', 0
+fm_s_mbuilt:  db 'Builtins', 0   ; the SAME menu as Locator's, with the
+                                ; same items in the same order (SPEC.md
+                                ; 12.3.1) - which is the whole point of
+                                ; the rename
 
 fm_s_open:    db 'Open', 0
 fm_s_mkdir:   db 'New Folder...', 0
@@ -1235,8 +1242,8 @@ fm_items_fold:
     dw fm_s_refr, fm_s_up, fm_s_rootf, fm_s_drva, fm_s_drvb
 fm_items_view:
     dw fm_s_aslist, fm_s_asicon
-fm_items_spec:
-    dw menu_s_timer, menu_s_bounce, menu_s_restart
+fm_items_built:
+    dw menu_s_timer, menu_s_bounce, menu_s_disk
 
 fm_menus:
     dw menu_loc_name            ; AM_NAME: still 'Locator' (SPEC.md 12.3)
@@ -1259,7 +1266,7 @@ fm_menus:
                                         ; modelled on - has always put them
     dw fm_s_mfold, fm_items_fold, 7
     dw fm_s_mview, fm_items_view, 2
-    dw fm_s_mspec, fm_items_spec, 3
+    dw fm_s_mbuilt, fm_items_built, 3
 section .cold                   ; ...and back to cold code
 
 
@@ -2629,9 +2636,12 @@ FMC_DRVA    equ 14
 FMC_DRVB    equ 15
 FMC_LIST    equ 16              ; View
 FMC_ICONS   equ 17
-FMC_TIMER   equ 18              ; Special
-FMC_BOUNCE  equ 19
-FMC_RESTART equ 20
+FMC_TIMER   equ 18              ; Builtins (SPEC.md 12.3.1) - the same three
+FMC_BOUNCE  equ 19              ; commands Locator's own Builtins menu has,
+FMC_DISK    equ 20              ; in the same order. Restart is NOT among them
+                                ; any more: it moved to the System menu, which
+                                ; is cell 0 of every application, so a Disk
+                                ; window reaches it there like everything else
 FMC_PASTEIN equ 21              ; no menu CELL of its own: the context menu's
                                 ; "paste into the folder under the pointer"
                                 ; (SPEC.md 22.3), which the bar cannot offer
@@ -2690,7 +2700,7 @@ fm_jmp:
     dw fm_c_icons               ; inline (FS_VIEW = 1)
     dw fm_c_timer               ; POSTED - app_launch takes the lock
     dw fm_c_bounce              ; POSTED - app_launch takes the lock
-    dw fm_c_restart             ; POSTED - ui_cmd takes the lock
+    dw fm_c_disk                ; POSTED - ui_cmd takes the lock
     dw fm_c_pastein             ; inline (fm_c_paste with another target), forever
 section .cold                   ; ...and back to cold code
 
@@ -2986,17 +2996,17 @@ fm_nw_none:
 fm_c_nop:                       ; the File menu's separator (SPEC.md 22.12)
     ret                         ; - MENU_DIS, so nothing can select it
 
-fm_c_restart:                   ; Special > Restart
-    mov ax, CMD_REBOOT
-    call KERNEL_SEG:cw_ui_post_cmd
+fm_c_disk:                      ; Builtins > Disk - CMD_FILES, exactly what
+    mov ax, CMD_FILES           ; Locator's own Builtins menu posts, so the
+    call KERNEL_SEG:cw_ui_post_cmd  ; item does the same thing from either bar
     ret
 
-fm_c_timer:                     ; Special > Timer
+fm_c_timer:                     ; Builtins > Timer
     mov al, KIND_TIMER
     call KERNEL_SEG:cw_inst_launch_post ; NOT app_launch: it takes the lock
     ret                             ; (29.4)
 
-fm_c_bounce:                    ; Special > Bounce
+fm_c_bounce:                    ; Builtins > Bounce
     mov al, KIND_BOUNCE
     call KERNEL_SEG:cw_inst_launch_post
     ret
@@ -3505,6 +3515,38 @@ fm_edit_commit:
     xor si, si                  ; ...and the caption follows it: 'Disk' is
     call fm_settitle            ; the one name fm_settitle can always derive
     pop si
+
+    ; 'Formatted B:' in the menu bar (SPEC.md 22.12.1). SPEC.md 59.6's
+    ; reasoning where it is strongest: a format is seconds of floppy the user
+    ; waited for, so the success is worth saying and not only the failure -
+    ; and the window behind it is no substitute, because 'Drive B: 0 files'
+    ; is a fact about the volume rather than a report of what just happened.
+    ;
+    ; INLINE, and only because it has one call site: fm_edit_commit has
+    ; already saved AX, SI and DI, so a proc here would spend ten bytes of
+    ; `.cold` re-saving them - and the cold rung had 51 bytes in it.
+    ;
+    ; It is said AFTER fmv_load, not before: a mount can arm SPEC.md 12.8's
+    ; file-activity widget, which owns these pixels and which toast_show
+    ; refuses while it is up - 59.6's own ordering.
+    mov al, [di+FS_DRV]
+    add al, 'A'
+    mov ah, al                  ; banked: fm_scat spends AL and not AH
+    mov di, fm_hdrbuf           ; borrowed - toast_show COPIES into toast_buf,
+    mov si, fm_s_fmtok          ; and the painter stages this afresh later
+    call fm_scat
+    mov [di], ah
+    mov byte [di+1], ':'
+    mov byte [di+2], 0
+    push cx
+    push es
+    mov ax, KERNEL_SEG          ; NOT `push cs`: this is `.cold` (SPEC.md
+    mov es, ax                  ; 2.6), so CS here is COLD_SEG, and both
+    mov si, fm_hdrbuf           ; fm_hdrbuf and the string are KERNEL_SEG
+    xor cx, cx                  ; TOAST_TICKS, the default life
+    call KERNEL_SEG:cw_toast_show
+    pop es
+    pop cx
     jmp short .bcast
 %endif
 .del:

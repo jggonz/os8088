@@ -1267,7 +1267,7 @@ OS88_IMAGE_SIZE equ os88_image_end - $$
 OS88_BSS_SIZE equ 0
     %endif
     %if (OS88_IMAGE_SIZE + OS88_BSS_SIZE) > APP_MAX_SIZE
-        %error "package too big: image + bss must fit in APP_MAX_SIZE (0x4E00)"
+        %error "package too big: image + bss must fit in APP_MAX_SIZE"
     %endif
 %endmacro
 
