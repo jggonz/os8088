@@ -2256,6 +2256,8 @@ cw_dsk_relist:          call dsk_relist
                     retf
 cw_dsk_synth:           call dsk_synth
                     retf
+cw_dsk_vol_row:         call dsk_vol_row
+                    retf
 cw_evq_pop:             call evq_pop
                     retf
 cw_font_str:            call font_str
@@ -2447,6 +2449,10 @@ files_poster:         call COLD_SEG:fmf_files_poster
                     ret
 files_refresh:        call COLD_SEG:fmf_files_refresh
                     ret
+%ifndef KERN_SMALL
+fm_bar_gate:          call COLD_SEG:fmf_fm_bar_gate
+                    ret
+%endif
 fm_focus:             call COLD_SEG:fmf_fm_focus
                     ret                 ; CF out (SPEC.md 22.8): a near ret
                                         ; over a far one, neither of which
@@ -2613,7 +2619,7 @@ KERN_CEIL equ KERN_BUDGET           ; become the reason the kernel grew
 ; 3b. menu_bar is a LITERAL byte count (.bss may not forward-reference), so
 ;    nothing makes it follow MENU_BARMAX. It gained a cell the day the app
 ;    name became a pull-down (SPEC.md 12.2); this is what catches the next one.
-%if MENU_BARMAX * MB_ENTSZ > 84
+%if MENU_BARMAX * MB_ENTSZ > 98
 %error "menu_bar is too small for MENU_BARMAX cells - raise the resb in menu.inc"
 %endif
 ; 4. the menu save-under (SPEC.md 2.2/12.4) must fit MENU_SAVE_KB. gfx_save

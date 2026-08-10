@@ -4497,6 +4497,73 @@ value a forgotten path inherits has to be the safe one** — `wm_dmg_wins`
 clearing `[wm_dmg_dk]` for its callers is the precedent (§11.91), and so is
 `fdlg_gate` living in `.text` as a `dw 0`.
 
+#### 11.96.3 One cache per window, because the bound stopped earning its keep
+
+§11.96 says "one cache for the machine, like the menu's save-under… it bounds
+the memory at one block rather than one per window", and that was the right
+trade **while every cache cost the same as every other**. §50.6.4's priority
+ladder ended that: a raise cache is `MEM_PG_TRIV`, the cheapest rank there is,
+so anything that wants the room takes it and the memory is genuinely free. A
+bound on free memory buys nothing, and it was being paid for in
+**last-covered-wins** — covering a cheap window took the cache from an
+expensive one, which is why §11.96.1's third question ("is its repaint
+actually expensive?") had to be asked at all. It is now a question about
+whether the *claim* is worth making, not about who else it robs.
+
+**The slot is the window, so `wm_su_win` is gone.** `wm_su_segs` is one word
+per record and `wm_su_slot` maps a window pointer to its word and to its
+owner tag in one place. The four hooks that used to read
+`cmp bx, [wm_su_win] / jne` — `wm_destroy`, `wm_hide`, `wm_clip_set` and
+`wm_saveu`'s clear — are a bare `call wm_su_drop` now, and each got *more*
+precise as well as shorter: `wm_clip_set` drops the cache of the window that
+is about to draw, where it used to drop whoever happened to hold the single
+one.
+
+**The rect lives in the claim.** `WSU_X1..WSU_Y2` are a four-word header and
+`WSU_IMG` is where the image starts; `wm_su_take` writes the header with one
+`rep movsw` before `gfx_save`, and `wm_su_ck` compares the window's rect *now*
+against the header rather than against four kernel words. This was reached for
+as the cheap answer — four more `MAX_WIN` arrays is 96 bytes, which on the
+slack at the time meant a 512-byte step of `KERN_BUDGET` for bookkeeping — and
+it is the better shape independently: **the rect travels with the pixels it
+describes and cannot get out of step with them.** `wm_su_x1..y2` survive as
+the working rect for one operation, because `wm_su_kb` has to size the claim
+before the claim exists.
+
+**A `mem_pg_own` row is a RANGE.** The tag is a base and the consumer adds an
+ordinal, so the lookup is `d = owner - tag; if d < count then word = base +
+d*2` instead of an equality — unsigned, so a row whose tag is above the owner
+wraps high and fails rather than matching backwards into somebody else's
+array. There is no stride column because there is nothing for it to be: §50.6
+already requires every purgeable block to be named by exactly one **word**.
+`MEM_P_WSAVE`'s low byte moved to `0x10` and `0x10..0x1F` is reserved for the
+range; low bytes are per-rank, so only a future `MEM_PG_TRIV` tag has to avoid
+that block.
+
+Three things are worth knowing before touching it.
+
+**`wm_su_take` still drops first, and now it means something different.** It
+used to mean "one cache for the machine"; it means "this window's previous
+claim, if any" — one window, one claim, or the old block is leaked with
+nothing naming it.
+
+**The shed is not LRU and does not need to be.** `mem_shed_one` takes the
+cheapest record it outranks and, among equals, the lowest in `mem_tab` — so
+with several window caches live it will keep taking the same one. That is
+defensible by construction rather than by luck: they are all `MEM_PG_TRIV`,
+and the rank is the claim that they cost the same to lose.
+
+**The divide is not worth guarding.** `wm_su_drop` runs unconditionally at
+every `wm_clip_set`, so every background painter now pays `wm_ptr2idx`'s 8-bit
+`div` — about 18us on a 4.77MHz 8088, against the two instructions the old
+`cmp` cost. It was left alone deliberately: `wm_clip_set` exists to be
+followed by drawing, and PERFORMANCE.md Part 2 prices the *arrival* of one
+`gfx_*` call at ~756us, so this is 2.4% of the cheapest thing that can happen
+next. A `[wm_su_live]` counter would short-circuit it, and it would drift —
+`mem_pg_forget` zeroes the word on a shed without coming through
+`wm_su_drop`, so the count would only ever read high and the guard would stop
+firing.
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -4530,7 +4597,18 @@ active**, so the bar is rebuilt whenever the active application changes —
 own segment) is a *runtime* table, not static data.
 
 ```nasm
-MENU_APPMAX  equ 4              ; app menus the bar can host
+MENU_APPMAX  equ 5              ; app menus the bar can host (was 4 until
+                                ; §22.12 split the Disk window's File menu
+                                ; and gave Cut/Copy/Paste an Edit menu of
+                                ; their own; a WIDENING, so no package that
+                                ; assembled against 4 is affected, and
+                                ; menu_relayout's own `cmp cx, MENU_APPMAX`
+                                ; is still what a package's count is clamped
+                                ; to). Raising it does not need the bar to
+                                ; be re-measured, because the layout is
+                                ; bounded by [vid_clk_hx] per CELL and never
+                                ; by the count: a title that would reach the
+                                ; clock's band stops the walk (§12.2's .full)
 MENU_BARMAX  equ MENU_APPMAX+2  ; + the System cell, which is always cell 0,
                                 ; + the app-NAME cell (§12.7), which is
                                 ; APPENDED last so the app's own menus keep
@@ -8261,6 +8339,125 @@ simulation needs beyond the LBA: the run is at most 128, so `AL` holds it and
 simulation that cannot tell a read from a write, or one volume's LBA 5 from
 another's, is answering about a disk that does not exist.
 
+### 18.96 Formatting a floppy — the mount's verdict, run backwards
+
+A disk that reads perfectly and is not a FAT12 volume had exactly one thing
+the OS could say about it: `No os8088 disk (A:)`, in the Disk window's header,
+for ever. Every other operating system these machines ever ran could make one.
+`dskw_format` is that, and it is a **high-level format only** — the same line
+§52.3's hard-disk formatter draws, and for a sharper reason here: writing
+sector ID fields is `int 13h AH=05h`, one call per track with a four-byte
+descriptor per sector, and it is the operation that turns a disk this OS
+merely cannot read into one *nothing* can read. What is written is the boot
+sector, both FATs and the root directory: **12 sectors on a 360KB disk and 33
+on a 1.44MB one**, all of them metadata, and the data area is not touched.
+
+| routine | contract |
+|---------|----------|
+| `dskw_fmt_probe` | in: `[disk_drive]` = the volume. Out: CF=0 with AL = a row of `dskw_fmt_tab`; CF=1 with AX = `FERR_*` — the medium could not be read at all (`FERR_IO`), or the volume is not a floppy (`FERR_PROT`). Clobbers AX, flags. **Reads only**, so it is safe to call before the user has agreed to anything, and that is the point: the confirmation names the size it is about to make. |
+| `dskw_format` | in: AL = a `dskw_fmt_tab` row, `[disk_drive]` = the volume. Out: CF=0; CF=1 with AX = `FERR_IO` / `FERR_WPROT` / `FERR_PROT`. Clobbers flags. Writes the boot sector **first** and the root directory last. |
+
+**The geometry is two questions and they have two different answers.** How
+many sectors a track holds is a property of the MEDIUM and is read off it —
+one `disk_read` of CHS (0,0,N) descending from the drive's own figure through
+18, 15, 9, first success wins, which works because `disk_read` derives CHS
+from `[disk_spt]`/`[disk_heads]` and those are ours to set. How many cylinders
+it has is a property of the DRIVE, and it comes from `int 13h AH=08h` — the
+same question DOS's own FORMAT asks.
+
+**A BIOS that will not answer AH=08h is a 360KB machine, and that inference is
+load-bearing.** AH=08h *for floppies* arrived with the AT, which is also when
+1.2MB and 1.44MB arrived — so a ROM old enough to refuse it is a ROM driving
+40-cylinder 5.25" drives, and 9/40 is not a guess but the only thing such a
+machine can be. Measured: neither GLaBIOS nor the 27 Oct 1982 IBM ROM answers
+it, and the 1982 ROM supports no other format anyway. The one genuinely
+undecidable case — 9-sector media in a 1.2MB drive, where 360KB and 720KB are
+indistinguishable — is resolved **downward, to 360KB**, because a 360KB layout
+on 720KB media wastes half a disk and a 720KB layout on 360KB media is a
+volume whose second half does not exist.
+
+#### 18.96.1 Reading cylinder 40 to settle it is WRONG — the negative result
+
+The obvious refinement is to stop asking the drive and read CHS (40,0,1): a
+40-cylinder drive cannot seek there, so the read fails, and a 3.5" drive
+holding 720KB media reads it. It was built, and it fails **two ways at once**.
+
+The lesser one is the case the veto above already names: 5.25" 360KB media in
+a 1.2MB drive, where physical track 40 is inside the 40-track disk's written
+area and answers with logical track 20's data — a confident wrong answer.
+
+The greater one is that it **rests on a read FAILING**, and that is the least
+portable thing there is to depend on across a BIOS, a controller and an
+emulator. Measured: MartyPC's FDC reads sector 18 of a 9-sector track quite
+happily, so a probe built this way reported a 360KB disk in a 360KB drive as
+**1.44MB** — the format that would have been written is 2,880 sectors onto a
+720-sector medium. Every test in `dskw_fmt_probe` is a read **succeeding** for
+exactly that reason, and the descent only ever steps DOWN from what the drive
+says it can do.
+
+The same measurement is why the probe is not simply widened when AH=08h
+refuses: widening searches upward, and upward is the direction whose negative
+cannot be trusted.
+
+| row | media spt | cyl | total | spc | FATsz | root | media byte |
+|-----|-----------|-----|-------|-----|-------|------|------------|
+| 0 | 18 | 80 | 2880 | 1 | 9 | 224 | F0 |
+| 1 | 15 | 80 | 2400 | 1 | 7 | 224 | F9 |
+| 2 | 9 | 80 | 1440 | 2 | 3 | 112 | F9 |
+| 3 | 9 | 40 | 720 | 2 | 2 | 112 | FD |
+
+The four rows are the four standard IBM formats and the table is **not
+computed**: `tools/os88disk.py`'s `GEOMETRY` already pins three of them, this
+is the same arithmetic, and a formatter that re-derives a layout DOS has had
+since 1983 can only differ from it. 1.44MB's FAT is 9 sectors, which is
+`DSK_FAT_SECS` exactly — §18.2 rule 10 refuses a floppy whose FAT is larger,
+so the largest format this can write is the largest one that can be mounted,
+by construction rather than by coincidence.
+
+Four things are load-bearing:
+
+- **The boot sector is written first and the root directory last**, which is
+  the OPPOSITE of §52.3's order and is right for the same reason that one is.
+  There the tool is laying a volume into a partition table that already
+  describes it, so the commit must come last; here the volume being replaced
+  is one nothing could mount anyway, and what an interruption must not leave
+  is a valid BPB over a FAT that was never written. Writing the BPB first
+  means an interrupted format leaves a volume that still fails to mount —
+  and so still offers Format, which is the state the user was already in.
+- **The FAT's first sector is the only one with content**: media byte, then
+  `FF FF`, then zeros. Every other FAT sector and every root sector is a
+  zeroed `dsk_secbuf`, written one sector per call, because `disk_write`
+  advances `ES:BX` per sector and one buffer cannot cover a run.
+- **No volume label entry is written.** It is legal to have none, `disk_mount`
+  filters labels out of the listing anyway, and the alternative is a name the
+  user was never asked for.
+- **`[disk_spt]`/`[disk_heads]` are the format's, not the failed mount's.** A
+  failed mount leaves the 9/2 fallback behind (§18.3), so the writer sets both
+  from its row before the first write, and the full remount afterwards
+  re-reads them off the BPB it has just written — which is also what
+  re-validates the whole thing through the one hostile-BPB pipeline (§18.2)
+  rather than trusting the formatter's own arithmetic.
+
+**It cannot be reached with a mountable volume under it.** `dskw_format` is
+not on the API table and has no `OSAPI_*` slot: the only caller is §22.12's
+menu command, whose predicate is that this window's last mount FAILED. That
+is deliberate and is the same judgement §19.6 makes about `dskw_write_sys` —
+"erase this disk" is not a thing a package should be able to do to the disk
+it happens to be sitting on, and a formatter reachable from a package is one
+`FERR_*` away from being one that is reachable by accident.
+
+**`kern_big` only, and it is the first thing through that seam**
+(docs/KERN-SPLIT-PLAN.md). It costs 1,024 bytes of footprint — one 512-byte
+rung on the image and one on the cold segment — and `kern_small` stood at 512
+bytes of spare, so the alternative was a second raise of the guard the 128KB
+machine lives under. It needs **no ABI parity work**, which is the whole
+reason it can go through the seam cheaply: having no API slot, there is
+nothing for a package to find missing and one `.o88` still serves both
+kernels. What `kern_small` loses is two items on one menu — the rule and
+`Format Disk…` — and its `FMC_*` ids do **not** renumber: the two ids stay
+and both point at `fm_c_nop`, so the two kernels differ by what a user can
+see rather than by a numbering nobody can.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
@@ -10740,14 +10937,24 @@ cells are `font_width + MENU_TITLE_PAD`:
 
 | menu | width | x range | items |
 |------|-------|---------|-------|
-| **File** | 44 | 110..153 | Open · New Folder… · Rename… · Delete · Close Window |
-| **Folder** | 60 | 154..213 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
-| **View** | 44 | 214..257 | as List · as Icons |
-| **Special** | 68 | 258..325 | Timer · Bounce · Restart |
+| **File** | 48 | 112..159 | Open · New Folder… · Rename… · Delete · ──── · Format Disk… |
+| **Edit** | 48 | 160..207 | Cut · Copy · Paste |
+| **Folder** | 64 | 208..271 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **View** | 48 | 272..319 | as List · as Icons |
+| **Special** | 72 | 320..391 | Timer · Bounce · Restart |
 
-325 against a 434 limit is 108px of slack — enough that a longer item
+391 against a 432 limit is 41px of slack — enough that a longer item
 string can never push a *title* off the bar, since item widths do not enter
-the layout at all. `MENU_APPMAX` is 4 and all four are used.
+the layout at all. `MENU_APPMAX` is 5 and all five are used; it was 4 and
+File carried Cut/Copy/Paste as well, until §22.12 needed a sixth item and a
+seven-item File menu stopped being a menu and started being a list.
+
+The slack is 41px rather than 108 because §12.9 snapped the bar to 8px cells
+and widened `MENU_TITLE_PAD`, and because a fifth title costs its own width
+plus that padding. It is still slack in the direction that matters: nothing
+here is measured against the number of menus, only against where the next
+cell's right edge lands, so the fifth title is laid out or it is not and no
+other cell is affected either way.
 
 **Dispatch.** `fm_oncmd` turns (menu, item) into one `FMC_*` id —
 `bl = fm_menu_base[ah] + al`, bounds-checked, then `shl bx,1` and
@@ -11285,6 +11492,60 @@ at the three columns a 320px window fits that is two thirds of the grid: the
 blit would be buying a third of the work at the price of a second exposed-cell
 painter. So the grid stops at `fm_rows_only`, which still leaves the header,
 both buttons and the status line alone, and the blit is the list view's.
+
+### 22.12 Formatting the disk in the window
+
+A floppy that reads and is not FAT12 shows `No os8088 disk (A:)` and nothing
+else — the window is a dead end with a perfectly good disk in it. **File ▸
+Format Disk…** is the way out, and the whole of it is §18.96's two routines
+behind §22's existing confirmation line.
+
+**The predicate is the mount's own verdict**, `FS_MOK == 0` on the acting
+window plus "this volume is a floppy", and both are stable, cheap facts the
+window already carries — §47 rule 5's own test, so `Format Disk…` is
+**greyed** rather than refusing a click. `fm_bar_gate` points the item at its
+`MENU_DIS` twin on the press that opens the bar, which is `ui_loc_gate`'s
+idiom exactly and for `ui_loc_gate`'s reason: nothing relays the bar out when
+a window's mount verdict changes, so a layout-time swap would keep whatever
+it last held.
+
+**What is NOT in the predicate is whether the disk can be read**, and that is
+§47 rule 3 rather than an oversight: the only test is doing the thing, so the
+thing is done and reported. `fm_c_format` calls `dskw_fmt_probe` on the spot —
+reads only — and a medium that answers nothing gets `Disk error` as a toast
+and no armed confirmation. A medium that answers gets a confirmation naming
+the size the probe chose:
+
+```
+Format A: as 360K? Enter=yes Esc=no
+```
+
+which is the one place the user can catch §18.96's undecidable case before it
+costs them anything.
+
+**The confirmation is `FS_EDIT = 5` and it is Delete's, not Rename's.** Enter
+says yes and *every other key* says no — the asymmetry §22 already argues
+for, and this is the strongest case of it in the system: there is no undo, no
+trash, and the operation is not one file but all of them. The probe's chosen
+row is banked at arm time (`fm_fmtrow`) and not re-derived at commit, for the
+reason Rename and Delete work from `fm_onam` rather than from `FS_SEL`: what
+the line asked about must be what happens.
+
+On success the window is re-listed with `fmv_load` at the new volume's root
+and `fmv_bcast` pushes it into any sibling window on the same drive — the
+same pair `fm_edit_commit` ends with, and for the same reason. On failure the
+`FERR_*` is said as a toast (§59.5) and the window is left showing exactly
+what it showed before, which is the disk it still cannot mount.
+
+Two things are worth knowing before touching it. On the machine this project
+is calibrated against the probe costs **no doomed read at all** — `AH=08h`
+refuses, which §18.96 reads as a 360KB drive, so the descent starts at 9 and
+the first candidate answers. A drive that reports 18 pays one doomed read to
+find 720KB media, which is bounded and once per format. And **the separator is a
+`MENU_DIS` item**, so it occupies an item index and therefore an `FMC_*` id:
+`FMC_FMTSEP` maps to a `ret` in `fm_jmp`, because `menu_hover` can never land
+on it but a body may not assume which surface picked it (§22's rule for every
+handler in that table).
 
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 

@@ -995,8 +995,16 @@ AMENU_TITLE equ 0           ; word: NUL menu title (the bar cell's text)
 AMENU_ITEMS equ 2           ; word: array of near ptrs to NUL item strings
 AMENU_NITEM equ 4           ; word: item count
 AMENU_ENTSZ equ 6
-MENU_APPMAX equ 4           ; menus the bar can host per app; extras are
-                            ; silently dropped by the kernel's layout pass
+MENU_APPMAX equ 5           ; menus the bar can host per app; extras are
+                            ; silently dropped by the kernel's layout pass.
+                            ; It was 4 until SPEC.md 22.12 gave the Disk
+                            ; window an Edit menu - a WIDENING, so a package
+                            ; built against 4 is unaffected and nothing here
+                            ; renumbered. What still bounds you is the BAR,
+                            ; not this: menu_relayout stops at the first
+                            ; title that would reach the clock's band, so
+                            ; five SHORT titles fit where four long ones may
+                            ; not (SPEC.md 12.2)
 MENU_MAXCH  equ 24          ; glyphs of item text a pull-down shows; longer
                             ; items are TRUNCATED, not wrapped
 MENU_DIS    equ 1           ; an item string that BEGINS with this byte is
@@ -1226,7 +1234,7 @@ WT_SIZE    equ 16
 %macro OS88_MENUSET_END 1
 %1 %+ _end:
     %if (%1 %+ _end - %1 %+ _list) / AMENU_ENTSZ > MENU_APPMAX
-        %error "OS88_MENUSET: at most MENU_APPMAX (4) menus fit in the bar"
+        %error "OS88_MENUSET: at most MENU_APPMAX (5) menus fit in the bar"
     %endif
 %endmacro
 

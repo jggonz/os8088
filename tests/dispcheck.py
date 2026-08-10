@@ -132,8 +132,7 @@ def main(argv):
             kind = 1 if a.primary == "herc" else 2
             gate_card = [c for c in cards if c["type"] == KIND[kind][0]][0]["idx"]
         m.run()
-        os88marty.settle(m, gate=lambda mm: os88marty.bar_up(mm, gate_card),
-                         card=gate_card)
+        os88marty.settle(m, gate=os88marty.desktop_up, card=gate_card)
 
         say = lambda s: print("  " + s)
         cards = m.cards()           # ...AFTER the boot: `frames` is 0 on every
@@ -398,8 +397,7 @@ def main(argv):
         m.write(S("cp_dirty"), bytes([1]))
         m.advance(frames=90, card=pri["idx"])
         m.run()                     # advance() leaves it PAUSED
-        os88marty.settle(m, gate=lambda mm: os88marty.bar_up(mm, gate_card),
-                         card=gate_card)
+        os88marty.settle(m, gate=os88marty.desktop_up, card=gate_card)
         w, h, px = m.fbuf(card=sec["idx"])
         after = longest_run(px, w, h)
         lit = sum(1 for i in range(0, len(px), 3) if px[i])
