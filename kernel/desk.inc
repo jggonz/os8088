@@ -2,17 +2,19 @@
 ; os8088 - desk.inc (SPEC.md 26)
 ;
 ; Desktop drive icons: detect the floppy drives at boot (int 11h), paint a
-; 32x32 disk icon + "Disk A"/"Disk B" label per drive on the desktop, track
-; selection, and open the Disk window on double-click via files_open_drive.
+; disk icon + an "A:" label per volume on the desktop, track selection, and
+; open the Disk window on double-click via files_open_drive.
 ;
-; Layout, per drive i (0 = A, 1 = B):
-;   hit zone   x zx..zx+47, y (32+60*i)..(75+60*i)   (48 x 44 px), where
+; Layout, per zone ordinal i (SPEC.md 26.1's wrap decides which one a volume
+; gets). [desk_icoh] is 32 rows on VGA and Hercules and 14 on the CGA, where
+; the pixels are 2.4:1 tall and a 32-row icon is a stretched column rather
+; than a diskette (SPEC.md 26.4); [desk_zstep] is 60 and 34 to match.
+;   hit zone   x zx..zx+31, y (32+step*i) .. +[desk_zh1], where
 ;              zx = [vid_desk_zx] = screen width - 56 (584 at 640 wide)
-;   icon       ico_disk32 at (592, 32+60*i)          (32 x 32 px)
-;   label      8px text at (584, 66+60*i), black on a white gap 2px around
-;              the text, centered in the 48px zone (the 6-char label is
-;              exactly 48px wide, so the white rect overhangs the zone by
-;              2px each side: x 582..633, y (64+60*i)..(75+60*i))
+;   icon       [desk_pdisk] / [desk_phdd] at (zx, top), 32 px wide
+;   label      8px text under it, black on a white rect that HUGS the
+;              caption - measured with font_width and clamped to the zone
+;              plus its 2px overhang, which is what desk_zone_rect erases
 ;
 ; desk_paint runs under the caller's gfx lock (from wm_paint_all, right
 ; after the desktop fill, before any window). desk_click runs with NO lock
@@ -27,12 +29,20 @@
 ; and 664 on a 720-wide Hercules, where a fixed 584 would leave the icons
 ; stranded 88px shy of the edge. Everything below derives from that ONE word,
 ; including the redraw-overlap test, which used to open-code 582 and 634.
-DESK_ZW     equ 48              ; hit zone width (zx .. zx+47)
+DESK_ZW     equ 32              ; hit zone width (zx .. zx+31) - the icon's
+                                ; own width now. It was 48, because the label
+                                ; was 'Disk A' and six 8px glyphs are exactly
+                                ; 48; SPEC.md 26.4 made it 'A:' and the zone
+                                ; is the picture again
 DESK_ZOVER  equ 2               ; label overhang each side
 DESK_ZY0    equ 32              ; first zone top
-DESK_ZSTEP  equ 60              ; zone-to-zone vertical pitch
-DESK_ZH     equ 44              ; zone height (top..top+43)
-DESK_COLW   equ 56              ; column-to-column pitch, leftwards
+DESK_LBLH   equ 12              ; the label band: 2px gap + 8px text + 2px gap
+DESK_ZSTEP  equ 60              ; zone pitch with the 32-row icon...
+DESK_ZSTEP_S equ 34             ; ...and with SPEC.md 26.4's 14-row one
+DESK_COLW   equ 44              ; column-to-column pitch, leftwards: the zone
+                                ; plus its overhang plus one clear glyph cell,
+                                ; which is what stops two columns' captions
+                                ; reading as one run of text
 DESK_DBLT   equ 9               ; double-click window, ticks
 
 ; The column wrap (SPEC.md 26.1). Zones run DOWN a column and then start a
@@ -162,20 +172,56 @@ section .text
 ; -----------------------------------------------------------------------------
 desk_rowcalc:
     push ax
+    push bx
     push cx
     push dx
+    push si
+    push di
+
+    ; --- which ICON, and therefore how tall a zone is (SPEC.md 26.4) --------
+    ; The CGA's pixels are 2.4:1 tall, so the 32-row diskette renders as a
+    ; stretched column there and costs 60 rows of pitch for it. The 14-row
+    ; pair is square on that adapter AND doubles the column: 144 usable rows
+    ; over a 34-row pitch is 4 zones where 60 was 2.
+    ;
+    ; [vid_kind] and not [vid_h], because the question is the PIXEL ASPECT
+    ; and that is a property of the adapter's mode rather than of how many
+    ; rows it has. It is re-asked here rather than at boot because this
+    ; routine is what vid_switch re-runs (SPEC.md 39.11.2), so a machine
+    ; moved from its CGA to its Hercules gets the tall pair back for free.
+    mov ax, 32
+    mov bx, DESK_ZSTEP
+    mov si, ico_disk32
+    mov di, ico_hdd32
+    cmp byte [vid_kind], VID_CGA
+    jne .set
+    mov ax, 14
+    mov bx, DESK_ZSTEP_S
+    mov si, ico_disk14
+    mov di, ico_hdd14
+.set:
+    mov [desk_icoh], ax
+    mov [desk_zstep], bx
+    mov [desk_pdisk], si
+    mov [desk_phdd], di
+    add ax, DESK_LBLH - 1       ; the zone is the icon plus the label band,
+    mov [desk_zh1], ax          ; and every reader wants it MINUS ONE
+
     mov ax, [vid_dock_y0]
     sub ax, DESK_ZY0
     xor dx, dx
-    mov cx, DESK_ZSTEP
+    mov cx, [desk_zstep]
     div cx
     or ax, ax
     jnz .rows
     mov ax, 1
 .rows:
     mov [desk_rows], ax
+    pop di
+    pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -227,21 +273,16 @@ desk_zone_label:
     lea si, [bx+DV_LBL]
     cmp byte [si], 0
     jne .out                    ; the row named itself
-    mov si, desk_lbl_gen        ; 'Disk ' or 'HDD ' + the letter, built in
-    mov word [desk_lbl_gen+0], 'Di'     ; place. The PREFIX comes from the
-    mov word [desk_lbl_gen+2], 'sk'     ; kind, so a driver that mounts four
-    mov byte [desk_lbl_gen+4], ' '      ; partitions gets HDD C..HDD F for
-    mov cx, 5                           ; nothing - it could not have named
-    cmp byte [bx+DV_KIND], DVK_DRV      ; them itself anyway, since the
-    jne .letter                         ; letter is the kernel's to assign
-    mov word [desk_lbl_gen+0], 'HD'
-    mov word [desk_lbl_gen+2], 'D '
-    mov cx, 4
-.letter:
-    mov bx, cx
-    add al, 'A'
-    mov [bx+desk_lbl_gen], al
-    mov byte [bx+desk_lbl_gen+1], 0
+    mov si, desk_lbl_gen        ; the DRIVE LETTER, built in place (SPEC.md
+    add al, 'A'                 ; 26.4). It was 'Disk C' / 'HDD C', and the
+    mov [desk_lbl_gen+0], al    ; prefix went for two reasons: six glyphs set
+                                ; the column pitch, so two columns' captions
+                                ; ran together with one space between them;
+                                ; and the prefix said what the ICON already
+                                ; says, since a driver-backed volume is drawn
+                                ; with the hard disk. 'A:' rather than 'A'
+                                ; because that is how every other surface in
+                                ; this OS writes a drive
 .out:
     pop bx
     pop ax
@@ -287,7 +328,7 @@ desk_paint:
 desk_zone_rect:
     call desk_zone_xy           ; AX = zone left, DX = zone top
     mov bx, dx
-    add dx, DESK_ZH-1           ; y2 = top + 43
+    add dx, [desk_zh1]           ; y2 = top + 43
     mov cx, ax
     add cx, DESK_ZW + DESK_ZOVER - 1    ; x2, label overhang included
     sub ax, DESK_ZOVER                  ; x1, likewise
@@ -343,7 +384,7 @@ desk_ord_xy:
                                 ; drive column (SPEC.md 26.1)
     mov ax, bx
     mov bx, cx                  ; ...banked again, for the same reason
-    mov cx, DESK_ZSTEP
+    mov cx, [desk_zstep]
     mul cx
     add ax, DESK_ZY0
     mov dx, ax                  ; DX = the top row
@@ -469,7 +510,7 @@ desk_zones_dmg:
     add cx, DESK_ZW + DESK_ZOVER - 1    ; x2, label overhang included
     sub ax, DESK_ZOVER                  ; x1, likewise
     mov bx, di                          ; y1
-    add dx, DESK_ZH-1                   ; y2
+    add dx, [desk_zh1]                   ; y2
     pop di
     pop si
     ret
@@ -624,7 +665,7 @@ desk_click:
     cmp si, dx
     jb .zstep
     mov bx, dx
-    add bx, DESK_ZH-1
+    add bx, [desk_zh1]
     cmp si, bx
     jbe .hit
 .zstep:
@@ -770,7 +811,7 @@ desk_zone_hilite:
     mov bx, dx
     mov cx, ax
     add cx, DESK_ZW-1
-    add dx, DESK_ZH-1
+    add dx, [desk_zh1]
     jmp gfx_xor_fill            ; tail call: it preserves everything and this
                                 ; frame has nothing left to restore
 
@@ -799,51 +840,77 @@ desk_draw_zone:
 
     ; --- gray desktop under the zone + the label's 2px side overhang --------
     mov bx, dx                  ; y1 = top
-    add dx, DESK_ZH-1           ; y2 = top+43
+    add dx, [desk_zh1]           ; y2 = top+43
     sub ax, DESK_ZOVER
     mov cx, ax
     add cx, DESK_ZW + 2*DESK_ZOVER - 1
     call gfx_fill_gray
 
-    ; --- 32x32 icon, 8px in from the zone's left -----------------------------
+    ; --- the icon, which IS the zone's width now (SPEC.md 26.4) --------------
     mov cx, [desk_zx]
-    add cx, 8
     mov dx, [desk_zy]
-    mov si, ico_disk32
+    mov si, [desk_pdisk]
     mov ax, [desk_zdrv]
     mov bl, al
     call dsk_vol_slot
     cmp byte [bx+DV_KIND], DVK_DRV
     jne .icon
-    mov si, ico_hdd32           ; a driver-backed volume is a HARD DISK to
+    mov si, [desk_phdd]         ; a driver-backed volume is a HARD DISK to
 .icon:                          ; look at, not a floppy (SPEC.md 26)
     call icon_draw
 
-    ; --- label: white rect, rows top+32..top+43 ------------------------------
-    mov bx, [desk_zy]
-    add bx, 32                  ; y1: just under the icon
-    mov dx, bx
-    add dx, 11                  ; y2: 12 rows = 2px gap + 8px text + 2px gap
-    mov ax, [desk_zx]
-    sub ax, DESK_ZOVER
-    mov cx, ax
-    add cx, DESK_ZW + 2*DESK_ZOVER - 1
-    mov byte [gfx_color], CWHITE
-    call gfx_fill
-
-    ; --- the caption, black, centred in the 48px zone ------------------------
-    mov byte [gfx_color], CBLACK
+    ; --- label: the white rect HUGS the caption (SPEC.md 26.4) ---------------
+    ; It used to be the zone's full width whatever was in it, which was right
+    ; while the caption was six glyphs and exactly filled it. 'A:' is two, and
+    ; a 36px bar with 16px of text in it reads as a bar with a letter lost in
+    ; the middle - so the width is measured and the rect follows it.
+    ;
+    ; CLAMPED to the zone plus its overhang, which is the bound desk_zone_rect
+    ; and desk_dmg_zones repaint: nothing in the tree gives a volume a DV_LBL
+    ; of its own today (the kernel names them, SPEC.md 52.4), but a driver
+    ; that did would otherwise letter outside the rect that erases it.
     mov ax, [desk_zdrv]
-    call desk_zone_label        ; SI -> it, the row's or a derived 'Disk X'
+    call desk_zone_label        ; SI -> it, the row's or a derived 'A:'
     push si
     call font_width             ; AX = its pixel width
     mov cx, [desk_zx]
     add cx, DESK_ZW/2
-    shr ax, 1
-    sub cx, ax
+    mov bx, ax
+    shr bx, 1
+    sub cx, bx                  ; CX = the caption's left, centred in the zone
+    mov [desk_lblx], cx
+    add ax, cx
+    dec ax                      ; AX = the caption's right
+    add ax, DESK_ZOVER          ; ...and the rect's, one overhang out
+    mov cx, [desk_zx]
+    add cx, DESK_ZW + DESK_ZOVER - 1
+    cmp ax, cx
+    jbe .rr
+    mov ax, cx                  ; clamped to what the erase covers
+.rr:
+    mov cx, ax                  ; CX = x2
+    mov ax, [desk_lblx]
+    sub ax, DESK_ZOVER          ; AX = x1
+    mov bx, [desk_zx]
+    sub bx, DESK_ZOVER
+    cmp ax, bx
+    jae .rl
+    mov ax, bx
+.rl:
+    mov bx, [desk_zy]
+    add bx, [desk_icoh]         ; y1: just under the icon, whichever it is
+    mov dx, bx
+    add dx, DESK_LBLH - 1       ; y2: 2px gap + 8px text + 2px gap
+    mov byte [gfx_color], CWHITE
+    call gfx_fill
+
+    ; --- ...and the caption in it, black -------------------------------------
+    mov byte [gfx_color], CBLACK
     pop si
+    mov cx, [desk_lblx]
     mov dx, [desk_zy]
-    add dx, 34                  ; text rows top+34..top+41
+    add dx, [desk_icoh]
+    add dx, 2                   ; the 2px gap above the text
     call font_str
 
     ; --- selection highlight: XOR the whole hit zone --------------------------
@@ -862,12 +929,27 @@ desk_draw_zone:
     pop ax
     ret
 
-desk_lbl_gen db "Disk X", 0, 0  ; scratch for desk_zone_label's derived form:
+desk_lbl_gen db "A:", 0         ; scratch for desk_zone_label's derived form:
                                 ; a volume with no label of its own is named
-                                ; from its KIND and its index, in place
+                                ; from its index, in place
+
+; --- what the ADAPTER decides (SPEC.md 26.4) ---------------------------------
+; Set by desk_rowcalc, which is also what vid_switch re-runs, so these follow
+; the machine being moved between its two cards. In .text with real
+; initialisers and not .bss, for the reason every boot-reachable table here
+; is: -f bin zeroes nothing, and a zero [desk_pdisk] draws the interrupt
+; vector table as an icon.
+desk_icoh   dw 32               ; the icon's height in rows
+desk_zh1    dw 32 + DESK_LBLH - 1   ; ...the zone's, MINUS ONE: every reader
+                                ; wants the inclusive bottom
+desk_zstep  dw DESK_ZSTEP       ; zone-to-zone pitch
+desk_pdisk  dw ico_disk32       ; the diskette at that height...
+desk_phdd   dw ico_hdd32        ; ...and the hard disk
 
 ; -----------------------------------------------------------------------------
 section .bss
+desk_lblx    resw 1             ; the caption's pen x, banked across the white
+                                ; rect that hugs it (SPEC.md 26.4)
 desk_rows    resw 1             ; zones that fit in one column above the dock
                                 ; (SPEC.md 26.1) - 7 on VGA, 4 on Hercules,
                                 ; 2 on CGA, which is why the wrap exists

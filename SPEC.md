@@ -12605,6 +12605,65 @@ two whole zones above the bottom of the first column, and a rect sized to it
 would cut them off. Taking the deepest row any column reaches costs at most
 one unused row of slack, in the safe direction.
 
+### 26.4 The caption is `A:`, and on the CGA the icon is square
+
+Two columns of drive zones on a CGA read as **one run of text** — `Disk C`
+followed by `Disk A` with a single space between them — and §18.97's third
+and fourth floppies made that the ordinary case rather than the hard-disk
+one. The gap is `DESK_COLW - (DESK_ZW + 2 × DESK_ZOVER)` = 56 − 52 = **4
+pixels**, so it is set by the *caption*, and the caption was six glyphs
+because `'Disk '` prefixed a letter the icon had already told you about: a
+driver-backed volume is drawn with the hard disk, a floppy with the diskette.
+The prefix carried no information and cost the whole column pitch.
+
+So the label is the drive letter — **`A:`, not `A`**, because that is how
+every other surface in this OS writes a drive. Three things fall out:
+
+- **`DESK_ZW` 48 → 32**, which is the icon's own width, so the zone is the
+  picture again; and `DESK_COLW` 56 → 44, which is the zone plus its overhang
+  plus one clear glyph cell.
+- **The white rect HUGS the caption.** It was the zone's full width whatever
+  was in it — right while six glyphs exactly filled it, and a bar with a
+  letter lost in the middle at two. `desk_draw_zone` already measured with
+  `font_width` to centre the text, so the rect follows the same number. It is
+  **clamped** to the zone plus overhang, because that is the bound
+  `desk_zone_rect` and `desk_dmg_zones` erase; nothing gives a volume a
+  `DV_LBL` of its own today (§52.4 — the kernel names them), but a driver
+  that did would otherwise letter outside the rect that cleans up after it.
+- **Nothing else moved.** The painter's centring, the hit test, the damage
+  rect and the XOR highlight all derive from `DESK_ZW`/`[desk_zh1]`.
+
+**And on the CGA the icon is 32 × 14 rather than 32 × 32.** That adapter's
+pixels are **2.4:1 tall** — 640×200 on a 4:3 tube — so `ico_disk32` renders
+about 32 wide by 77 high there: a stretched column that is not a diskette
+shape at all, costing 60 rows of pitch for the privilege. 14 rows is 33.6
+real units against 32, square to within 5%, and a 3.5" diskette is 90 × 94mm
+anyway. The same argument gives `ico_hdd14`.
+
+It is **drawn, not squashed**, and that is the part worth keeping. Halving
+`ico_disk32` by OR-ing row pairs is nearly free and thickens every 1-pixel
+feature into 2 — the shutter window, the label box and the two vertical rules
+are all single lines, so what comes out has the diskette's outline and none of
+its detail. Selecting alternate rows loses them instead. No new draw path was
+needed either way: `icon_draw` reads a `wwords, height` header, so a shorter
+icon is **pure data**.
+
+The pitch follows the icon, and that is the second half of the win: a zone is
+`icon + DESK_LBLH`, so CGA goes from a 60-row pitch to 34, and
+`desk_rowcalc`'s `(dock_y0 - DESK_ZY0) / pitch` from **2 zones a column to
+4** — which halves the columns for any given number of volumes, exactly when
+§18.97 and `DVOL_MAX` 8 made eight of them possible.
+
+Two things about where that decision lives. It keys on **`[vid_kind]`, not
+`[vid_h]`**: the question is the pixel aspect, which is a property of the
+adapter's mode rather than of how many rows it has. And it is re-asked in
+`desk_rowcalc` rather than at boot, because that is the routine `vid_switch`
+re-runs (§39.11.2) — so a machine moved from its CGA to its Hercules gets the
+tall pair back with no second site to remember. `[desk_icoh]`, `[desk_zh1]`,
+`[desk_zstep]`, `[desk_pdisk]` and `[desk_phdd]` are `.text` with real
+initialisers for the reason every boot-reachable table here is: `-f bin`
+zeroes nothing, and a zero icon pointer draws the interrupt vector table.
+
 ## 27. HELLO and NOTEPAD — the second and third packages
 
 Deliberately minimal, to prove the SDK surface and the no-icon fallback:

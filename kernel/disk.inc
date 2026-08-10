@@ -130,10 +130,10 @@ DVK_FREE     equ 0xFF
 dsk_vtab:
     db DVK_BIOS, 0, 0, 0         ; volume 0 = A:
     dw 0, 0
-    db 'Disk A', 0, 0
+    db 0, 0, 0, 0, 0, 0, 0, 0   ; named by the kernel (SPEC.md 26.4)
     db DVK_BIOS, 1, 0, 0         ; volume 1 = B:
     dw 0, 0
-    db 'Disk B', 0, 0
+    db 0, 0, 0, 0, 0, 0, 0, 0   ; ...as every other volume already was
     times DVOL_MAX - 2 db DVK_FREE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 ; --- the BOOT VOLUME's partition base (SPEC.md 52.10.3) ----------------------

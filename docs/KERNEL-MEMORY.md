@@ -360,21 +360,21 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4885,
+    "bss": 4887,
     "budget": 98304,
     "codemax": 65536,
     "cold": 22911,
     "coldpara": 1440,
     "fatpara": 288,
-    "imgpara": 3776,
-    "kend": 6176,
+    "imgpara": 3808,
+    "kend": 6208,
     "kseg": 96,
-    "ksize": 97280,
+    "ksize": 97792,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2676,
     "stk0": 1024,
-    "text": 55368
+    "text": 55661
   },
   "small": {
     "bss": 4666,
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,868 | 36.9% |
-| the window system and its furniture | 16,254 | 20.8% |
-| drawing: adapters, primitives, glyphs, icons | 11,378 | 14.5% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,848 | 12.6% |
+| the file system, end to end | 28,868 | 36.7% |
+| the window system and its furniture | 16,319 | 20.8% |
+| drawing: adapters, primitives, glyphs, icons | 11,606 | 14.8% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,848 | 12.5% |
 | the kernel proper: API table, heap, scheduler, events | 5,893 | 7.5% |
-| the Control Panel | 4,662 | 6.0% |
+| the Control Panel | 4,662 | 5.9% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **78,279** | |
+| **total** | **78,572** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -904,16 +904,16 @@ generated in the first place.
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
 | `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,687 | — | **1,687** | 27 | — |
+| `icons.inc` — the icon renderer (§10) | 1,586 | — | **1,586** | 34 | — |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
-| `icons.inc` — the icon renderer (§10) | 1,358 | — | **1,358** | 34 | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,293 | — | **1,293** | 84 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,201 | — | **1,201** | 17 | 768 |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 977 | — | **977** | 18 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 943 | — | **943** | 9 | — |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 912 | — | **912** | 16 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 821 | — | **821** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
@@ -923,7 +923,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,701 | — | **2,701** | — | — |
-| **total** | **55,368** | **22,911** | **78,279** | **4,885** | **7,762** |
+| **total** | **55,661** | **22,911** | **78,572** | **4,887** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
