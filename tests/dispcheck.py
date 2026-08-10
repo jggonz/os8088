@@ -70,6 +70,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dispcp                                             # noqa: E402
 
 # vid_kind -> the MartyPC card type that kind IS, and what that card's
 # framebuffer looks like: segment, stride, banks, extent.
@@ -135,6 +137,24 @@ def main(argv):
         os88marty.settle(m, gate=os88marty.desktop_up, card=gate_card)
 
         say = lambda s: print("  " + s)
+        S = lambda n: os88sym.linear(n, defs)   # the SAME defines the
+                                               # later one uses: a VIDEO=
+                                               # build moves every symbol
+
+        # SPEC.md 39.19.1 makes Single the DEFAULT - the kernel can detect a
+        # second card and nothing can detect a second monitor - so everything
+        # below has to ask for the extended desktop first. Driving the real
+        # control rather than poking [vid_dmode] is deliberate: it is the only
+        # route a user has, and it costs one Control Panel round trip against
+        # a ten-minute run. The panel is CLOSED afterwards, or its window sits
+        # over the pixels every assertion below is about.
+        mo0 = os88mouse.Mouse(marty=m)
+        dispcp.open_panel(m, mo0, S, os88marty.settle, card=gate_card)
+        dispcp.set_mode(m, mo0, S, os88marty.settle, "right", card=gate_card)
+        dispcp.close_panel(m, mo0, S, os88marty.settle, card=gate_card)
+        if m.read(S("vid_ndisp"), 1)[0] != 2:
+            sys.exit("dispcheck: the Control Panel did not turn Extend on - "
+                     "run tests/dispmode.py, which is the gate for that")
         cards = m.cards()           # ...AFTER the boot: `frames` is 0 on every
                                     # card before the machine has run, so the
                                     # never-scanned test asked above would fire

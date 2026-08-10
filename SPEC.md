@@ -16294,6 +16294,40 @@ rather than losing a row belonging to something else.
 The pane assertion still uses `CP_ITEMS` rather than the byte, because the
 guard has to hold on the machine that shows every row.
 
+#### 31.10.2 The desktop line — Single, Right, Below
+
+One row of three radios below the Activate button, and it is **one choice,
+not two controls**: a single display has no layout, so a checkbox plus a
+direction would have a fourth state that means nothing. `Single` /
+`Right` / `Below` is §39.19's two bytes as the three arrangements a user can
+actually be in.
+
+It reads the two bytes **live**, the way the Scheduler page reads
+`sched_mode_get` — there is no page-local copy to fall out of step — and a
+click **applies on the spot** and sets `[cp_wdirty]`, which is §31.8 as
+written: the thing happens now, only the record of it waits for the close.
+
+**A machine that cannot extend does not get the line at all**, which is
+§31.10.1's answer one level down. That page stopped being drawn on a
+single-adapter machine rather than carrying a caption apologising for itself;
+a pairing `vid_dual_ok` refuses (§39.19) is the same shape, and the
+alternative here is worse than an apology — it is a *permanently greyed*
+control whose say-why-not (§47 rule 6) would have to displace the Activate
+button's caption, on the one page where the Activate button is the main
+control.
+
+**Nothing is redrawn after a click that took**, exactly as the Activate
+button already documents: `vid_disp_init` re-fits every window and moves the
+desktop, so the `DI`/`BP` this page was handed describe a rectangle that may
+no longer exist. `[cp_dirty]` hands the screen to `ui_task` outside the lock.
+
+**The geometry that had to move is the caption**, from y 96 to 112, with the
+radio row at 96 — the pane is `CP_CH` = 121 tall and the caption is the
+lowest thing on every page by convention, so the new control goes above it
+rather than below. The three radios are on a uniform 74px pitch so the hit
+test is one divide, like the adapter rows above them, and their bands are
+contiguous across the pane's full width.
+
 ## 32. vgabb.inc — the software renderer (double buffering, and §39's 1bpp driver)
 
 **Why it exists.** The original design drew straight into VRAM because
@@ -18808,10 +18842,27 @@ far-calls it through `ovw_desk_rowcalc` like any other overlay→text step.
 
 #### 39.11.3 Remembering it — the `VM` key
 
-`SYSTEM.CFG` gains one byte, key `VM` (§51.5's keyed container), holding a
-`VID_*` kind. `drv_cfg_pack` records `[vid_kind]` — the adapter actually
-running — so on a machine that has never been asked, the file records the
-probe's own answer and a first save changes nothing about the next boot.
+`SYSTEM.CFG` gains **three** bytes, key `VM` (§51.5's keyed container): a
+`VID_*` kind, then §39.19's `[vid_dmode]` and `[vid_dlay]`. `drv_cfg_pack`
+records `[vid_kind]` — the adapter actually running — so on a machine that
+has never been asked, the file records the probe's own answer and a first
+save changes nothing about the next boot.
+
+**It was one byte and the widening bumped the key's `ver` to 2**, which is
+that table's whole compatibility story used as written: an old record's `VM`
+stops matching, the defaults stand — the probe's adapter and Single — and
+every *other* key in the file still loads, because keys are matched by name
+one at a time. A settings disk written by an older kernel therefore loses its
+adapter choice and nothing else, which is a smaller loss than the alternative
+of reading two bytes that were never written.
+
+**The mode and layout are applied before the kind, and survive its refusal.**
+`vid_switch` calls `vid_disp_init`, so a successful switch carries them for
+free; a *refused* switch — the settings disk carried to a machine without
+that card — must still honour them, so `drv_boot` calls `vid_disp_init`
+itself on that path. Both bytes are range-checked before they are stored, on
+`CFG_SCH`'s terms: a value from a future version leaves the default alone
+rather than selecting nonsense.
 
 **It is applied by `drv_boot` and not by `drv_cfg_unpack`**, for the back
 buffer's reason: it is not a store. It sets a video mode.
@@ -19378,6 +19429,80 @@ is the frontmost window's display, because an app greying its own mode menu
 or `0x00F`, so Mode X is refused either way — and `fsx_mode` re-checks the
 same bit against the live `[vid_kind]` once the bracket has been entered,
 which is the answer that binds.
+
+### 39.19 Single or Extend, and where the second display sits
+
+Two bytes, `[vid_dmode]` (0 = Single, 1 = Extend) and `[vid_dlay]`
+(`VID_L_RIGHT` = 0, `VID_L_BELOW` = 1), and one routine reads them:
+`vid_disp_init`, which is the only thing in the kernel that ever writes a
+`vid_ctx` origin or `[vid_ndisp]`. Everything §39.13–§39.18 built is downstream
+of those two bytes and none of it knows they exist.
+
+`vid_disp_init` is therefore **re-runnable**, not a boot-time one-shot. Going
+to Extend brings the second card up, places display 1 and grows the desktop to
+the union; going to Single blanks it, sets `[vid_ndisp]` = 1 and shrinks the
+desktop back to the primary. Both ends run `vid_apply` on the primary, which
+is what re-homes the pointer and re-publishes §39.16's chrome extent, and both
+leave the caller owing a repaint — the Control Panel posts `[cp_dirty]`,
+because the geometry it was drawn against no longer exists (§31.10's rule for
+the Activate button, unchanged and now shared).
+
+**`vid_dual_ok` is the predicate**, and it is the §31.3 idiom rather than a
+test written out three times — `vid_disp_init` acts on it, §31.10.2's row is
+drawn only when it says yes, and a click in that row's band is refused when it
+says no. `[vid_avail] == VID_A_HERC | VID_A_CGA` exactly.
+A VGA machine's CGA row *is* the VGA doing mode 6 (§39.11.1) and cannot be a
+second display; a VGA + Hercules pairing is a real machine this build does not
+extend. The renderer split is general and this gate is not, deliberately —
+what is missing for VGA is the mode set ordering and a second `vid_ctx` kind
+that decodes A000, not anything in §39.14.
+
+#### 39.19.1 The default is Single, because a card is not a monitor
+
+A machine that has never been asked comes up on one display, and that is the
+conservative answer rather than the timid one. The kernel can detect a second
+*card*; nothing it can do detects a second *monitor*, and a Hercules card
+with nothing plugged into it is an ordinary thing to find in a 5150. Extending
+onto it puts half the desktop, and every pointer position in that half, on
+glass that does not exist — and the pointer is how the user would reach the
+control that turns it off.
+
+That is §39.11.3's own reasoning about a settings disk carried between
+machines: *a machine must not boot to a dead monitor*. The refusal there is
+made on a fact the kernel has; here there is no such fact, so the default is
+made on the recoverable side and the Control Panel is where the user says yes.
+
+It costs the one thing a default can cost — a two-monitor machine has to be
+told once — and that once is recorded in `SYSTEM.CFG` like every other
+setting.
+
+#### 39.19.2 Right or Below, and why that is the whole of it
+
+The layout offers two placements for the second display and not four, because
+the other two are already reachable: **the primary is always at the virtual
+origin**, so which monitor is on the left is answered by which card is
+primary — the choice sitting directly above it on the same page.
+
+| want | primary | layout |
+|---|---|---|
+| Hercules left, CGA right | Hercules | Right |
+| CGA left, Hercules right | CGA | Right |
+| Hercules top, CGA bottom | Hercules | Below |
+| CGA top, Hercules bottom | CGA | Below |
+
+All four arrangements, and the degree of freedom given up is *which monitor
+carries the menu bar* — always the left or top one. That is not an oversight
+being rationalised: the chrome measures itself against the display it is drawn
+on (§39.16) and reaches it by drawing at x = 0, so a primary anywhere but the
+origin means every strip, zone and dock tile in the machine carries the
+primary's virtual origin. Buying the fourth degree of freedom costs an
+addition at every chrome site, and the thing it buys is the Macintosh
+convention already being violated.
+
+**Both origins stay non-negative by construction**, which is the property
+`vid_disp_find`'s unsigned compares, `vid_desk_union`'s bounding box from
+(0,0) and `mou_clamp` all rest on. There is no signed virtual coordinate
+anywhere and this is why.
 
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
@@ -29986,8 +30111,35 @@ Everything past that first word belongs to the section owning the block
    call (docs/FIELD-NOTES.md 10). Anything with that shape belongs here rather
    than in the package.
 6. **Prefer publishing a POINTER to state that already exists** over copying
-   it. Both current blocks are three or four words of descriptor naming spans
-   the kernel already keeps; neither costs a byte of `.bss`.
+   it. Every current block is three or four words of descriptor naming spans
+   the kernel already keeps; not one costs a byte of `.bss`.
+
+### 57.4 `VD` — the display block (§39.11–§39.19)
+
+Nine words: the tag, then a pointer each to `[vid_kind]`, `[vid_avail]`, the
+`[vid_ndisp]` run (`ndisp`, `cur`, `ox`, `oy`, `dmode`, `dlay` — six bytes
+under one pointer, which is *why* `[vid_dmode]` and `[vid_dlay]` sit after
+`[vid_oy]` rather than beside `[vid_avail]`), `[cur_disp]`, the `vid_ctx`
+array and its stride, and finally `vid_w`/`vid_h` and `vid_pw`/`vid_ph` — the
+desktop against the chrome extent, which is §39.16's own assertion in two
+words. Rule 6 throughout: nothing is copied and the block costs no `.bss`.
+
+**A `kern_small` kernel publishes the first three and zeroes the rest**, and
+that is the honest answer rather than a gap: it is single-display by
+*construction*, not by setting, so there is no arrangement byte to report and
+a reader that invented a 1 would be quoting memory that is not there.
+
+**It is unconditional, for the mouse and clock blocks' reason.** A dual-display
+arrangement is a question about two real cards and two real monitors, so it has
+to be answerable in the build the field machine is actually sent — and it is
+the one part of §39 no emulator can settle, because what an emulator cannot
+show is a monitor that is not plugged in.
+
+`sysbench` prints it as one section per display: the adapter, the virtual
+origin, the content size, the stride and bank count, and the framebuffer
+segment — plus the desktop union against the chrome extent, which is the pair
+that says whether §39.16 is intact, and the dead zone's size, which is the
+question `ui_drag_dead` exists to answer.
 
 ## 58. debug.inc — DEBUG.DRV, the serial monitor (`drivers/debug/debug.asm`)
 

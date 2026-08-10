@@ -784,6 +784,7 @@ section .text
 DBG_TAG_MOUSE equ 0x4F4D          ; 'MO' - SPEC.md 9.4.2
 DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92
+DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4
 
 ; =============================================================================
 ; Fixed entry points
@@ -1395,6 +1396,11 @@ dbg_reg:
                                     ; about silicon nobody here has, and the
                                     ; one machine that has it is sent a
                                     ; knob-free kernel by handover rule
+    dw DBG_TAG_VIDEO, vid_dbg_blk   ; SPEC.md 57.4 - and unconditional for the
+                                    ; THIRD time for the same reason: whether
+                                    ; a second monitor is plugged into a
+                                    ; second card is the one question in
+                                    ; SPEC.md 39 no emulator can be asked
 %ifdef DISK_COUNTERS
     dw DBG_TAG_DISK, dsk_dbg_blk    ; SPEC.md 18.94 - `make DISKCNT=1` only
 %endif
@@ -2375,6 +2381,12 @@ cw_vid_avail_test:      call vid_avail_test
                     retf
 cw_vid_switch:          call vid_switch
                     retf
+%ifdef KERN_BIG
+cw_vid_dual_ok:         call vid_dual_ok
+                    retf
+cw_vid_disp_relay:      call vid_disp_relayout
+                    retf
+%endif
 cw_wm_clip_set:         call wm_clip_set
                     retf
 cw_wm_clip_test:        call wm_clip_test

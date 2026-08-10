@@ -765,8 +765,89 @@ on its own.**
 | 6 | ~~`wm_fit`, `ui_drag`, `wm_paint_all` per display~~ **DONE** — SPEC.md §39.16 | a window drags across the seam, both primaries; **0 differing pixels** on all three single-card adapters |
 | 6b | ~~`wm_disp_of`, then §11.2 fullscreen on one display~~ **DONE** — SPEC.md §39.17 | fullscreen on the secondary leaves the menu bar **0 differing pixels** on both primaries; the control differs by 779/304 |
 | 6c | ~~`fsx` on one display, others blanked; `vid_unblank`~~ **DONE** — SPEC.md §39.18 | the other card goes to **0 frames/s** inside the bracket and comes back; `tests/fsxdisp.py` |
-| 7 | Control Panel mode + layout; `VM` key | survives a reboot; refuses on a single-card machine |
+| 7 | ~~Control Panel mode + layout; `VM` key~~ **DONE** — SPEC.md §39.19/§31.10.2 | Single is the **default**; Right/Below place display 1; survives a reboot; `tests/dispmode.py` |
 | 8 | Field run on the 5150 | the three things QEMU cannot show |
+
+### 11.9 Step 7, as built
+
+`[vid_dmode]` / `[vid_dlay]`, the Display page's desktop row and a `VM` key
+three bytes wide (SPEC.md §39.19, §31.10.2, §39.11.3). **Cost: `.text` +180,
+`.bss` +4, `.cold` +211 for `kern_big` — 395 bytes, but one image rung *and*
+one cold rung, so 2,048 spare becomes 1,024 — and `kern_small` +30 with no
+rung crossed, so +0 to the machine.**
+
+**The design decision worth arguing with is the default, and it is Single.**
+Everything §11.3–§11.8 built now ships switched off. The reasoning is in
+§39.19.1 and it is short: the kernel can detect a second *card* and nothing it
+can do detects a second *monitor*. A Hercules card with nothing plugged into
+it is an ordinary thing to find in a 5150, and extending onto it puts half the
+desktop — and every pointer position in that half — on glass that does not
+exist, with the pointer being how the user would reach the control that turns
+it off. That is §39.11.3's own rule about a settings disk carried between
+machines (*a machine must not boot to a dead monitor*), applied where the
+kernel has no fact to refuse on.
+
+**And the layout is two placements, not four**, because the primary is always
+at the virtual origin: which monitor is on the left is answered by which card
+is *primary*, the choice sitting directly above it on the same page. All four
+physical arrangements are reachable; what is given up is the menu bar being on
+the right-hand monitor, and buying that back would put the primary's virtual
+origin at every chrome site in the machine (§39.19.2).
+
+**`vid_disp_init` stopped being a boot-time one-shot and became the arbiter.**
+It is the only routine that writes a `vid_ctx` origin or `[vid_ndisp]`, so the
+Control Panel changing its mind, `vid_switch` moving the primary and
+`drv_boot` applying `SYSTEM.CFG` are one call. Single is not "do nothing"
+there: the other card is *darked*, the desktop shrinks back and the pointer
+comes home. `vid_disp_relayout` wraps it with `desk_rowcalc` + `wm_refit` —
+`vid_switch` already did those two as its steps 4 and 5; what needed a routine
+was the other caller, because turning Extend off strands every window that was
+on the display that went.
+
+**The page's line is not drawn on a machine that cannot extend**, which is
+§31.10.1's own answer one level down — that page stopped being drawn on a
+single-adapter machine rather than carrying a caption apologising for itself.
+The alternative here was worse than an apology: a permanently greyed control
+whose §47 rule 6 say-why-not would have to displace the Activate button's
+caption, on the one page where that button is the main control.
+
+| | measured, CGA primary |
+|---|---|
+| at boot | `ndisp 1 dmode 0`, desktop 640x200 = chrome, second card **stopped scanning** |
+| `Right` | `ndisp 2 dlay 0`, display 1 at **(640,0)**, desktop **1360x348**, chrome still 640x200 |
+| `Below` | `dlay 1`, display 1 at **(0,200)**, desktop **720x548**, chrome still 640x200 |
+| `Single` | back to `ndisp 1`, desktop = chrome, second card dark, the panel re-fitted to (160,35) |
+| swap the primary while extended | `kind 1`, d0 the Hercules at (0,0) 720x348, d1 the CGA at **(720,0)**, chrome **720x348** — §39.19.2's other two arrangements |
+| reboot | comes up on the saved arrangement without anybody clicking |
+
+**The harness trap this one sprang is the sharpest yet, and it is about
+persistence tests generally.** The reboot half failed first, reporting the
+defaults — and the kernel was right: MartyPC mounts a floppy by reading it
+into RAM, and `os88marty.launch` copies the image into its run directory
+before that, so the guest's `SYSTEM.CFG` write reached neither the build tree
+nor anything a *second* launch would mount. Two launches of the same path are
+two pristine floppies. The reboot is `m.reset()` — the same machine, the same
+in-RAM media, the POST run again — which is what a reboot actually is.
+`tools/os88flush.py` is the other route and is the one to reach for when the
+host has to *read* what the guest wrote.
+
+**`dispcheck` and `fsxdisp` had to grow a Control Panel round trip**, since
+what they test is no longer the default. Driving the real control rather than
+poking `[vid_dmode]` is deliberate: it is the only route a user has, so those
+two now exercise the default → Extend path on every run, at ~30 s against a
+ten-minute test. `tests/dispcp.py` is that drive, shared by all three, and its
+one rule is that **every click re-reads the window's rect** — a click that
+takes posts `[cp_dirty]` and runs `wm_refit`, so a click aimed at where the
+panel used to be lands on the desktop, switches the menu bar to Locator, and
+looks exactly like a control that does not work.
+
+**And sysbench grew a display section** (SPEC.md §57.4's `VD` block): the
+adapter, the availability bitmap, the arrangement, one group per display with
+its origin, size, stride, banks and framebuffer segment, the desktop against
+the chrome extent, and the dead zone. It is unconditional, for the mouse and
+clock blocks' reason — two cards on two monitors is the field machine's own
+arrangement, and whether a monitor is plugged into the second one is the one
+question in §39 no emulator can be asked.
 
 ### 11.8 Step 6c, as built
 

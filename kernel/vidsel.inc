@@ -27,12 +27,57 @@ VID_A_VGA   equ 1 << VID_VGA
 VID_A_HERC  equ 1 << VID_HERC
 VID_A_CGA   equ 1 << VID_CGA
 
+; SPEC.md 39.19.2's placements. TWO and not four, because the primary is
+; always at the virtual origin, so "which monitor is on the left" is answered
+; by which CARD is primary - the choice directly above this one on the same
+; Control Panel page. All four physical arrangements are reachable; what is
+; given up is the menu bar being on the right-hand monitor, and buying that
+; back costs the primary's origin added at every chrome site in the machine.
+VID_L_RIGHT equ 0
+VID_L_BELOW equ 1
+
 ; .text and not .bss, like everything else that has to be right before the
 ; kernel has zeroed anything: -f bin zeroes nothing at all.
 vid_avail   db 0                ; which adapters answered (VID_A_*). Probed
                                 ; ONCE, at boot, and cached - vid_switch moves
                                 ; [vid_kind], so re-deriving it later would
                                 ; ask the question of the wrong machine
+
+; -----------------------------------------------------------------------------
+; The 'VD' block of SPEC.md 57.4 - nine words, no .bss, nothing copied.
+;
+; UNCONDITIONAL, for the mouse and clock blocks' reason: a dual-display
+; arrangement is a question about two real cards on two real monitors, so it
+; has to be answerable in the build the field machine is actually sent - and
+; it is the one part of SPEC.md 39 no emulator can settle, because what an
+; emulator cannot show is a monitor that is not plugged in.
+;
+; Rule 6 throughout - every word points at state that already exists. The
+; second one covers SIX bytes with one pointer, which is why vid_dmode and
+; vid_dlay were put immediately after vid_oy rather than beside vid_avail.
+; -----------------------------------------------------------------------------
+vid_dbg_blk:
+    dw DBG_TAG_VIDEO            ; +0  'VD', and the block's own first word
+    dw vid_kind                 ; +2  db kind, db mono, db planes (viddet.inc)
+    dw vid_avail                ; +4  db: which adapters answered
+%ifdef KERN_BIG
+    dw vid_ndisp                ; +6  db ndisp, db cur, dw ox, dw oy,
+                                ;     db dmode, db dlay
+    dw cur_disp                 ; +8  db cur_disp, db cur_dprev
+    dw vid_ctx                  ; +10 the records, VID_CTX_SZ apart
+    dw VID_CTX_SZ               ; +12
+%else
+    dw 0                        ; +6  a kern_small kernel is single-display by
+    dw 0                        ; +8  CONSTRUCTION, not by setting - so the
+    dw 0                        ; +10 reader has nothing to report rather than
+    dw 0                        ; +12 a one taken from a byte that is not there
+%endif
+    dw vid_w                    ; +14 dw w, dw h - the DESKTOP, so the union
+    dw vid_pw                   ; +16 dw pw, dw ph - the CHROME's extent, the
+                                ;     primary's. The PAIR is the assertion
+                                ;     (SPEC.md 39.16): equal with two displays
+                                ;     means vid_desk_union never ran, unequal
+                                ;     with one means nothing put it back
 
 ; -----------------------------------------------------------------------------
 ; vid_memchk - is there display RAM at this segment? (SPEC.md 39.11.1)
@@ -550,6 +595,22 @@ vid_oy      dw 0                ; which is what every 39.14 hook subtracts.
                                 ; that run is asserted contiguous and is what
                                 ; the RENDERER reads, and an origin is not
                                 ; renderer state. Published by vid_ctx_act
+
+; SPEC.md 39.19's two bytes - the WHOLE of what the user gets to decide about
+; the arrangement, and the only thing vid_disp_init reads. Everything 39.13 to
+; 39.18 built is downstream of them and none of it knows they exist.
+;
+; They sit here, immediately after vid_oy, so that SPEC.md 57.4's 'VD' block
+; can name ndisp/cur/ox/oy/dmode/dlay with ONE pointer - rule 6's "publish a
+; pointer to state that already exists" taken at the point where it costs a
+; layout decision rather than a copy.
+;
+; THE DEFAULT IS SINGLE, and 39.19.1 is why in full: the kernel can detect a
+; second CARD and nothing it can do detects a second MONITOR, so extending by
+; default puts half the desktop - and the pointer that would reach the control
+; to undo it - on glass that may not exist.
+vid_dmode   db 0                ; 0 = Single, 1 = Extend
+vid_dlay    db VID_L_RIGHT      ; where display 1 sits when extended
 
 section .bss
 ; The records themselves are scratch - written by vid_ctx_init before anything
@@ -1107,14 +1168,48 @@ vid_pt_clamp:
     ret
 
 ; -----------------------------------------------------------------------------
-; vid_disp_init - programme the SECOND card, if this machine has one
-;                 (SPEC.md 39.13)
+; vid_dual_ok - can this machine have an extended desktop? (SPEC.md 39.19)
 ;
-; in:       [vid_avail], and the machine running on [vid_kind]
-; out:      a two-card machine has both cards scanning our raster, the second
-;           one black; [vid_ndisp] = 2, [vid_cur] = 0, display 1 banked.
-;           Anything else: untouched, [vid_ndisp] stays 1
+; in:       nothing
+; out:      CF = 0 yes, CF = 1 no
 ; clobbers: flags
+;
+; The SPEC.md 31.3 idiom - one predicate read by vid_disp_init, by whether
+; SPEC.md 31.10.2's row is drawn at all, and by that row's click refusal - so
+; none of the three can disagree about what this machine can do. There is no
+; GREYING in that list on purpose: a machine with no choice is not shown the
+; control (31.10.1's answer), which is why this never has to explain itself.
+; -----------------------------------------------------------------------------
+vid_dual_ok:
+    push ax
+    mov al, [vid_avail]
+    cmp al, VID_A_HERC | VID_A_CGA
+    pop ax                      ; POP does not touch flags
+    je .yes
+    stc
+    ret
+.yes:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_disp_init - arrange the displays the way SPEC.md 39.19's two bytes say
+;
+; in:       [vid_avail], [vid_dmode], [vid_dlay], and the machine running on
+;           [vid_kind] with vid_apply having published it
+; out:      EXTEND on a two-card machine: both cards scanning our raster, the
+;           second one black, [vid_ndisp] = 2, [vid_cur] = 0, display 1 banked
+;           and placed. SINGLE: the other card dark, [vid_ndisp] = 1, the
+;           desktop back to the primary alone. A machine vid_dual_ok refuses:
+;           untouched, [vid_ndisp] stays 1
+; clobbers: flags
+;
+; IT IS RE-RUNNABLE AND THAT IS THE POINT (SPEC.md 39.19). It was a boot-time
+; one-shot; it is now the ONLY routine in the kernel that writes a vid_ctx
+; origin or [vid_ndisp], so the Control Panel changing its mind, vid_switch
+; moving the primary and drv_boot applying SYSTEM.CFG are all one call. The
+; caller owes the repaint either way - the geometry it was drawn against has
+; just moved.
 ;
 ; TWO DISPLAYS IS [vid_avail] == HERC|CGA EXACTLY, and an equality rather than
 ; a bit count for a reason per value. VGA|CGA is ONE CARD - vid_probe_avail
@@ -1144,24 +1239,41 @@ vid_pt_clamp:
 ; on it (SPEC.md 15.3), and a second mode set would clear it. "Primary
 ; unchanged" is this step's literal gate and it holds by construction.
 ;
-; STILL OWED: vid_switch does not re-run this, so switching the primary leaves
-; these records describing the arrangement before the switch - and vid_blank
-; darks a card display 1 now owns. Inert while nothing reads either, and it
-; stops being inert the moment a primitive activates a display.
+; SINGLE IS NOT "DO NOTHING", which is the half that arrived with 39.19. The
+; other card is DARKED - it is a real card on a real monitor and what it would
+; otherwise show is whatever DOS left there - and the desktop, [vid_ndisp] and
+; the pointer all have to come home, because this path is reached by a user
+; turning Extend OFF as well as by a machine booting without it.
 ; -----------------------------------------------------------------------------
 vid_disp_init:
     push ax
     push di
-    mov al, [vid_avail]
-    cmp al, VID_A_HERC | VID_A_CGA
-    jne .out                    ; one display - or a pairing we do not take
+    call vid_dual_ok
+    jc .out                     ; one display - or a pairing we do not take
 
-    mov ah, [vid_kind]          ; bank the primary; the other kind is the one
-    mov al, VID_CGA             ; this machine has and is not running on
+    mov ah, [vid_kind]          ; the other kind is the one this machine has
+    mov al, VID_CGA             ; and is not running on
     cmp ah, VID_HERC
     je .other
     mov al, VID_HERC
 .other:
+    cmp byte [vid_dmode], 0
+    jne .extend
+
+    ; --- SINGLE (SPEC.md 39.19) ---------------------------------------------
+    call vid_blank_kind         ; AL is still the other kind: dark its monitor
+    mov byte [vid_ndisp], 1     ; ...before anything can compute a union over
+    mov byte [vid_cur], 0       ; a display that is no longer there
+    mov [vid_kind], ah          ; (a no-op unless a caller moved it)
+    call vid_apply              ; republishes the chrome extent AND re-homes
+    xor al, al                  ; the pointer onto display 0 - which is what
+    call vid_ctx_capture        ; a shrinking desktop owes it
+    call vid_desk_union         ; ...and BANK BEFORE UNION, the extend path's
+    jmp short .out              ; order: the union reads display 0's record,
+                                ; which is stale until the capture when a
+                                ; vid_switch has just moved the primary
+
+.extend:
     mov [vid_kind], al
     call vid_apply              ; the live block is the SECONDARY's now...
     call vid_setmode            ; ...which is what points this at the right
@@ -1181,12 +1293,20 @@ vid_disp_init:
                                 ; followed mechanically rather than reasoned
                                 ; about one instance at a time
 
-    mov al, 1                   ; display 1 sits to the RIGHT of display 0.
-    call vid_ctx_ptr            ; Nothing reads this yet; where the two really
-    mov ax, [vid_cw]            ; sit is the Control Panel's question, and this
-    mov [di+VID_CTX_VX], ax     ; is the arrangement its default will be
-    xor ax, ax
+    mov al, 1                   ; --- and WHERE display 1 sits (SPEC.md 39.19.2)
+    call vid_ctx_ptr            ; The primary is at the origin either way, so
+    xor ax, ax                  ; one of the two words is 0 and the other is
+    mov [di+VID_CTX_VX], ax     ; the primary's own extent - which vid_apply
+    mov [di+VID_CTX_VY], ax     ; has just republished into the live block
+    cmp byte [vid_dlay], VID_L_BELOW
+    je .below
+    mov ax, [vid_cw]
+    mov [di+VID_CTX_VX], ax
+    jmp short .placed
+.below:
+    mov ax, [vid_ch]
     mov [di+VID_CTX_VY], ax
+.placed:
 
     mov byte [vid_cur], 0       ; the live block is display 0's again
     mov byte [vid_ndisp], 2
@@ -1194,6 +1314,33 @@ vid_disp_init:
 .out:
     pop di
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_disp_relayout - vid_disp_init, plus the two things a moved desktop owes
+;                     the rest of the machine (SPEC.md 39.19)
+;
+; in:       [vid_dmode] / [vid_dlay], already set
+; out:      the displays arranged, the drive column recounted and every window
+;           clamped back onto a screen that exists
+; clobbers: flags
+;
+; vid_switch does these three in this order as its steps 4 and 5, and did so
+; before this existed; what needed a routine is the OTHER caller. Turning
+; Extend off shrinks the desktop, and a window left on the display that has
+; gone is a window off the right-hand edge of the screen with its title bar
+; unreachable - the same failure wm_refit was written for when a 640x480
+; machine switched to CGA (SPEC.md 39.11.2). desk_rowcalc is a no-op when only
+; the arrangement moved, and is here so the pair cannot be split up.
+;
+; NOT called from kmain's vid_disp_init: wm_wins is .bss, -f bin zeroes
+; nothing, and wm_init has not run yet - so wm_refit there would clamp records
+; whose used bit is whatever the machine left in memory.
+; -----------------------------------------------------------------------------
+vid_disp_relayout:
+    call vid_disp_init
+    call desk_rowcalc
+    call wm_refit
     ret
 
 ; -----------------------------------------------------------------------------

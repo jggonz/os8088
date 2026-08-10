@@ -278,7 +278,13 @@ CFG_VID     equ 7               ; db: the display adapter (SPEC.md 39.11.3) -
                                 ; has that card - which is what stops a disk
                                 ; carried from a machine with a Hercules in it
                                 ; booting this one to a dead monitor
-CFG_DBLOB   equ 8               ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_VDM     equ 8               ; db: [vid_dmode], Single or Extend (39.19)
+CFG_VDL     equ 9               ; db: [vid_dlay], where display 1 sits. Both
+                                ; range-checked before they are stored, on
+                                ; CFG_SCH's terms: a byte from a future
+                                ; version leaves the default alone rather
+                                ; than selecting nonsense
+CFG_DBLOB   equ 10              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
                                 ; the LENGTH, carries them to disk and back,
@@ -309,8 +315,14 @@ drv_cfg_keys:
     db 1, 1, CFG_SCH
     dw 'BB'                     ; Back Buffer
     db 1, 1, CFG_BB
-    dw 'VM'                     ; Video Mode - which adapter (SPEC.md 39.11.3)
-    db 1, 1, CFG_VID
+    dw 'VM'                     ; Video Mode - which adapter, then SPEC.md
+    db 2, 3, CFG_VID            ; 39.19's two arrangement bytes. ver 2 because
+                                ; it WAS one byte: an old record's VM stops
+                                ; matching and the defaults stand, which is
+                                ; this table's whole compatibility story used
+                                ; as written - and every other key in the file
+                                ; still loads, keys being matched by name one
+                                ; at a time
     dw 'HD'                     ; Hard Disk - the DRIVER's own blob (51.9)
     db 1, DRV_BLOB_SZ, CFG_DBLOB
 CFG_NKEY    equ 8
@@ -1975,6 +1987,12 @@ drv_cfg_pack:
                                 ; exactly what vid_detect chose - so the file
                                 ; records the probe's answer and a first save
                                 ; changes nothing about the next boot
+%ifdef KERN_BIG
+    mov al, [vid_dmode]         ; ...and SPEC.md 39.19's arrangement with it
+    mov [drv_cfg+CFG_VDM], al
+    mov al, [vid_dlay]
+    mov [drv_cfg+CFG_VDL], al
+%endif
     pop di
     pop si
     pop cx
@@ -2587,11 +2605,48 @@ drv_boot:
     ; least possible loading screen to put back, and spl_chrome puts that back
     ; immediately. vid_switch refuses a card this machine does not have, which
     ; is the whole safety story for a settings disk carried between machines.
+%ifdef KERN_BIG
+    ; SPEC.md 39.19's two bytes go in FIRST and survive a refused switch:
+    ; vid_switch calls vid_disp_init, so a switch that takes carries them for
+    ; free - and one that does not still has to honour them, which is what the
+    ; .vnosw path below is. Both are range-checked on CFG_SCH's terms.
+    mov al, [drv_cfg+CFG_VDM]
+    cmp al, 1
+    ja .vdone
+    mov [vid_dmode], al
+.vdone:
+    mov al, [drv_cfg+CFG_VDL]
+    cmp al, VID_L_BELOW
+    ja .vdone2
+    mov [vid_dlay], al
+.vdone2:
+%endif
+    ; THE ADAPTER, AND THEN WHATEVER THE SWITCH DID NOT DO. vid_switch answers
+    ; CF = 0 both for a switch that HAPPENED and for one that was not needed,
+    ; and only the first re-runs vid_disp_init - so [vid_kind] is banked and
+    ; compared afterwards, which asks the machine what changed instead of
+    ; predicting it. A second copy of vid_switch's own "am I already that
+    ; adapter" test here could only ever disagree with it; this cannot.
     mov al, [drv_cfg+CFG_VID]
+%ifdef KERN_BIG
+    mov ah, [vid_kind]
+%endif
     call vid_switch
-    jc .load                    ; no such adapter here: stay on the probe's
-    call spl_reset              ; answer. Otherwise redraw the loading screen
-                                ; onto the framebuffer the mode set just wiped
+    jc .vnosw                   ; no such adapter here: stay on the probe's
+%ifdef KERN_BIG                 ; answer
+    cmp ah, [vid_kind]
+    je .vnosw                   ; already that adapter: nothing was cleared
+%endif
+    call spl_reset              ; ...otherwise redraw the loading screen onto
+    jmp short .load             ; the framebuffer the mode set just wiped
+.vnosw:
+%ifdef KERN_BIG
+    ; ...and SPEC.md 39.19's ARRANGEMENT, which nothing else on this path
+    ; applies: the adapter was already right, or was refused, and neither is a
+    ; statement about the desktop. No spl_reset - the primary's card is never
+    ; re-programmed here, so the loading screen is untouched.
+    call vid_disp_init
+%endif
 .load:
     xor cl, cl
 .next:

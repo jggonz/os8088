@@ -58,6 +58,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dispcp                                                # noqa: E402
 
 # desk.inc's zone layout, for the one double-click this needs. The column's x
 # is read out of the guest ([vid_desk_zx], SPEC.md 39.2) because it moves with
@@ -123,6 +125,14 @@ def main(argv):
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up, card=gate_card)
         cards = m.cards()
+
+        # SPEC.md 39.19.1's default is Single, so ask for the extended desktop
+        # the way a user has to - dispcheck.py's block, and its reasoning.
+        mo0 = os88mouse.Mouse(marty=m)
+        dispcp.open_panel(m, mo0, S, os88marty.settle, card=gate_card)
+        dispcp.set_mode(m, mo0, S, os88marty.settle, "right", card=gate_card)
+        dispcp.close_panel(m, mo0, S, os88marty.settle, card=gate_card)
+
         kind = m.read(S("vid_kind"), 1)[0]
         ndisp = m.read(S("vid_ndisp"), 1)[0]
         if ndisp != 2:
