@@ -61,12 +61,15 @@ HIW_ROWH     equ 12
 HIW_BY       equ 96
 HIW_BH       equ 16
 HIW_CAPY     equ 120
-HIW_B0X      equ 8              ; 'Install'
-HIW_B1X      equ 88             ; 'Close'
-HIW_B2X      equ 152            ; 'Restart' (SPEC.md 52.10.6)
-HIW_BW0      equ 72
-HIW_BW1      equ 56
-HIW_BW2      equ 72
+HIW_B0X      equ 8              ; 'Install', or 'Copy Apps' in the second
+HIW_B1X      equ 104            ; stage (SPEC.md 52.10.10) - which is nine
+HIW_B2X      equ 168            ; characters, 72px, and so exactly as wide as
+HIW_BW0      equ 88             ; the 72px button was: it would have touched
+HIW_BW1      equ 56             ; the frame at both ends. 88 gives it 8px of
+HIW_BW2      equ 72             ; margin, and the other two move right by 16.
+                                ; They drive the HIT TEST as well as the
+                                ; drawing (hd_iw_click reads the same pair),
+                                ; so there is one place to change and not two
 HIW_CELLS    equ 35             ; characters across the text band: HIW_W - 12
                                 ; less HIW_LX, in 8px cells. Every run in this
                                 ; window is padded to it, which is what makes
@@ -583,7 +586,11 @@ hd_ibtns_emit:
     push cx
     push dx
     push si
-    mov si, hd_s_iinst
+    mov si, hd_s_iinst          ; ...and in the apps stage it is not an
+    cmp byte [hd_iw_st], HII_SYSDONE    ; INSTALL any more: the disk is
+    jne .b0                     ; already installed and bootable (SPEC.md
+    mov si, hd_s_icopy          ; 52.10.10), so the button says what the
+.b0:                            ; click actually does
     mov ax, HIW_B0X
     mov bx, HIW_BW0
     xor cl, cl
@@ -742,6 +749,9 @@ hd_iw_rowtext:
     ret
 
 %ifdef INSTBENCH
+%macro HDBSTEP 1
+    mov byte [hd_bfstep], %1
+%endmacro
 ; =============================================================================
 ; SPEC.md 52.10.9 - what an install COSTS, per phase, in the only two units
 ; that survive an emulator: int 13h and sectors
@@ -775,6 +785,9 @@ hd_bt:      times HDB_NROW * HDB_ROW db 0
 hd_bt0:     times 5 dw 0        ; ...and the bank the current phase started at
 hd_bblk:    dw 0                ; SPEC.md 18.94's block in KERNEL_SEG, or 0
 hd_bfound:  db 0                ; ...looked for once, found or not
+hd_bferr:   dw 0                ; the FERR_/status the failing step answered
+hd_s_bfs:   db ' s', 0
+hd_s_bfe:   db ' e', 0
 hd_s_bfmt:  db 'fmt', 0
 hd_s_bsys:  db 'sys', 0
 hd_s_bapp:  db 'app', 0
@@ -783,6 +796,8 @@ hd_btab:    dw hd_s_bfmt, hd_s_bsys, hd_s_bapp, hd_s_btot
 hd_bnd_cal: dw 0                ; the DEVICE counters, fetched across the seam
 hd_bnd_sec: dw 0
 hd_bnd_rst: dw 0
+hd_bfstep:  db 0                ; which step of hd_icopy_one was running
+hd_bfail:   times 32 db 0       ; ...and the caption built from it
 hd_bp:      dw 0                ; hd_bn_save's own cursor into hd_bbuf
 hd_bvdrv:   db 0                ; ...and the volume it has to put back
 hd_bvclus:  dw 0
@@ -794,6 +809,43 @@ hd_s_bhdr:  db 'os8088 install, SPEC.md 52.10.9', 13, 10
             ; because the caption is drawn at its own x and this is not
 hd_bbuf:    times 256 db 0
             ; the caption is with the other HIMSGs, where the macro exists
+
+; hd_bn_fail - a failed copy says WHICH STEP and what it answered
+; in:  AX = the FERR_/status the step returned, [hd_bfstep] = the step
+; out: [hd_imsg] -> 'NAME s<step> e<ax>'
+;
+; SPEC.md 52.10.9. The shipped installer names the FILE, which is the one
+; useful thing a user can act on. It is not enough to DEBUG with: nine call
+; sites in hd_icopy_one answer CF=1 and the caption is the same for all of
+; them, so a field failure says which file and leaves which half open. The
+; steps are, in order: 1 stand in the source, 2 stat, 3 read whole, 4 stand
+; in the destination, 5 write whole, 6 stand in the source (chunked), 7 read
+; chunk, 8 stand in the destination (chunked), 9 write chunk.
+hd_bn_fail:
+    push ax
+    push cx
+    push si
+    push di
+    mov [hd_bferr], ax
+    mov di, hd_bfail
+    mov si, hd_iname
+    call hd_scat
+    mov si, hd_s_bfs
+    call hd_scat
+    mov al, [hd_bfstep]
+    xor ah, ah
+    call hd_utoa
+    mov si, hd_s_bfe
+    call hd_scat
+    mov ax, [hd_bferr]
+    call hd_utoa
+    mov byte [di], 0
+    mov word [hd_imsg], hd_bfail
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
 
 ; hd_bn_find - SPEC.md 57's registry, once. A kernel that publishes no 'DD'
 ; block leaves [hd_bblk] at 0 and every floppy column reads 0, which is what
@@ -1273,11 +1325,28 @@ hd_inst_sys:
     jc .failed
     call hd_icopy_tree
     jc .failed
+    call hd_ivol_back
+    call hd_inst_vbr            ; THE COMMIT LIVES HERE, at the end of the
+    jc .nboot                   ; SYSTEM phase, because this is the point at
+    call hd_inst_mbr            ; which the disk is a working os8088: KERNEL.SYS
+    jc .nboot                   ; is at cluster 2 and every driver is written,
+                                ; and the apps disk is ADDITIONS. It used to be
+                                ; at the end of the APPS phase on the reasoning
+                                ; that the MBR is the commit and a half-install
+                                ; must not be offered as bootable - which is
+                                ; right about a half-formatted disk and wrong
+                                ; about this one. The field found it the
+                                ; expensive way: an apps copy that stopped on
+                                ; one file left a fully-populated partition
+                                ; that had never been marked active, so the
+                                ; machine said `No active partition` and a
+                                ; complete system install was thrown away by a
+                                ; failure in the extras (PERFORMANCE.md Part 9
+                                ; Set 22's install, SPEC.md 52.10.10)
 %ifdef INSTBENCH
-    mov al, 1
+    mov al, 1                   ; ...and the phase ends AT the commit now
     call hd_bn_take
 %endif
-    call hd_ivol_back
     call hd_ibuf_put
     clc
     jmp short .out
@@ -1289,6 +1358,11 @@ hd_inst_sys:
     mov word [hd_imsg], hd_s_inomem
     stc
     jmp short .out
+.nboot:                         ; the FILES are all there and the disk simply
+    mov word [hd_imsg], hd_s_inboot ; will not boot - a different sentence to
+    call hd_ibuf_put            ; the user and a different half to debug. The
+    stc                         ; volume is already back (SPEC.md 52.10.10 put
+    jmp short .out              ; the commit AFTER hd_ivol_back)
 .failed:
     call hd_ivol_back
     call hd_ibuf_put
@@ -1332,11 +1406,10 @@ hd_inst_apps:
 .src:
     call hd_icopy_tree
     jc .failed
-    call hd_ivol_back
-    call hd_inst_vbr            ; the volume boot record...
-    jc .nboot
-    call hd_inst_mbr            ; ...and the MBR LAST: it is the commit
-    jc .nboot
+    call hd_ivol_back           ; NO commit here: the system phase already
+                                ; made the disk bootable (SPEC.md 52.10.10),
+                                ; so a failure in this phase costs the apps
+                                ; and not the install
 %ifdef INSTBENCH
     mov al, 2                   ; the apps phase ends at the COMMIT, so the
     call hd_bn_take             ; two boot records are inside it (SPEC.md
@@ -1871,6 +1944,7 @@ hd_icopy_one:
     mov di, hd_iname            ; bank the name: every volume switch below
     mov cx, 13                  ; runs through code that rewrites hd_ient
     call hd_iname_copy
+    HDBSTEP 1
     call hd_isrc_here           ; ...and STAND IN THE SOURCE before asking about
     jc .fail                    ; it. The tree walk arrives here already there,
                                 ; but hd_inst_sys's KERNEL.SYS call arrives
@@ -1883,6 +1957,7 @@ hd_icopy_one:
     mov [hd_isys], al
 
     mov si, hd_iname            ; how big is it, and is it a system file?
+    HDBSTEP 2
     call hd_istat
     jc .fail
 
@@ -1900,10 +1975,13 @@ hd_icopy_one:
 .whole:
 
     ; --- the whole-file shape ------------------------------------------------
+    HDBSTEP 3
     call hd_iread_whole
     jc .fail
+    HDBSTEP 4
     call hd_idst_here
     jc .fail
+    HDBSTEP 5
     call hd_iwrite_whole
     jc .fail
     jmp short .ok
@@ -1913,15 +1991,19 @@ hd_icopy_one:
     cmp byte [hd_isys], 0
     jne .toobig                 ; a system file cannot be appended to
 .chunk:
+    HDBSTEP 6
     call hd_isrc_here
     jc .fail
+    HDBSTEP 7
     call hd_iread_chunk         ; AX = bytes taken, 0 = the file is finished
     jc .fail
     or ax, ax
     jz .ok
     mov [hd_itake], ax
+    HDBSTEP 8
     call hd_idst_here
     jc .fail
+    HDBSTEP 9
     call hd_iwrite_chunk
     jc .fail
     mov ax, [hd_itake]          ; the offset advances by what was TAKEN, and
@@ -1943,9 +2025,12 @@ hd_icopy_one:
     stc
     jmp short .out
 .fail:
+%ifdef INSTBENCH
+    call hd_bn_fail                 ; ...and in a benchmark build, WHICH STEP
+%else                               ; and what it answered (SPEC.md 52.10.9)
     mov word [hd_imsg], hd_iname    ; NAME THE FILE. A copy that stops has one
-    stc                             ; useful thing to say and it is which file
-                                    ; it stopped on - "Disk error" sent this
+%endif                              ; useful thing to say and it is which file
+    stc                             ; it stopped on - "Disk error" sent this
                                     ; session hunting the wrong half twice
 .out:
     pop di
@@ -2605,6 +2690,7 @@ hd_inst_mbr:
 hd_s_ititle:  db 'Install', 0
 hd_s_ihead:   db 'Install to        Size   State', 0
 hd_s_iinst:   db 'Install', 0
+hd_s_icopy:   db 'Copy Apps', 0
 hd_s_irest:   db 'Restart', 0
 hd_s_islot:   db 'Slot ', 0
 hd_s_igap:    db '    ', 0

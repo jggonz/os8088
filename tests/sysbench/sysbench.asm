@@ -2239,7 +2239,18 @@ sb_write:
     call sb_num
     jmp .free
 .ok1:
-    call sb_ctr_bank                ; --- the LARGE create
+    call sb_wr_del                  ; --- the LARGE create, and it has to be a
+                                    ; CREATE: the row above just made this file,
+                                    ; so without the delete this measured a
+                                    ; REPLACE and the two rows differed only in
+                                    ; size. It cost a wrong reading of the
+                                    ; trace - five single-sector commit calls
+                                    ; (FAT1, FAT2, dir, FAT1, FAT2) reported as
+                                    ; "a create flushes the FAT twice", when
+                                    ; dskw_write step 4 is gated on
+                                    ; [dskw_oldclus] and a true create has
+                                    ; always skipped it (SPEC.md 18.4)
+    call sb_ctr_bank
     mov word [bl_n], 1
     mov word [bl_body], sb_b_wrbig
     mov si, sb_r_wbig

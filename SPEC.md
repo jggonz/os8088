@@ -27016,6 +27016,37 @@ rotational behaviour no emulator here models, so the two device columns and
 the tick column together are the first measurement in this tree that can say
 whether the floppy work or the drive is the install's cost.
 
+### 52.10.10 The SYSTEM phase commits; the apps are additions
+
+`hd_inst_vbr` and `hd_inst_mbr` run at the end of **`hd_inst_sys`**, not at
+the end of `hd_inst_apps`. That is where the disk becomes a working os8088 —
+the partition is formatted, `KERNEL.SYS` is at cluster 2 (§52.10.2) and every
+driver is written — and the apps disk is **additions to a machine that
+already boots**.
+
+They used to be at the end of the apps phase, on the reasoning that the MBR
+is the commit and a half-done install must not be offered as bootable. That
+is right about a half-**formatted** disk and wrong about this one, and the
+field found the difference the expensive way: an apps copy that stopped on a
+single file left a fully populated partition that had never been marked
+active, so the machine said **`No active partition`** and a complete,
+correct system install was thrown away by a failure in the extras. The user's
+previous DOS install had already been overwritten by then.
+
+**The state after each phase is what the rule is really about.** After the
+format: a partition entry and an empty volume, which Format can re-offer.
+After the system phase: a bootable machine. After the apps phase: the same
+machine with more software on it. Every one of those is a state a user can
+be left in and act on, which is what "every interruption has to land on a
+state the tool can re-offer" was always trying to say.
+
+The second stage's button says **`Copy Apps`** rather than `Install`, because
+by then the install is done and the click adds software. Nine characters is
+72px and the button was 72px, so it is 88 now and the other two moved right
+by 16 — `HIW_B0X`/`HIW_BW0` drive the hit test as well as the drawing, so
+that is one change and not two.
+
+
 ## 52.11 Two images: the transport, and the tool
 
 `HDD.DRV` was two programs in one file. One knows how to find a hard disk,
