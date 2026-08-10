@@ -1652,7 +1652,6 @@ menu_drop:
     loop .item
     pop es
 .drawn:
-    call gfx_flush              ; pull-down + items on screen (SPEC.md 32)
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
@@ -1727,7 +1726,6 @@ menu_drop:
     mov cx, [menu_x2]           ; shadow outside it, and everything beyond it
     mov dx, [menu_y2]           ; is still correct on screen (SPEC.md 11.91)
     call wm_paint_dmg
-    call gfx_flush
 .sel:
     mov dx, [menu_sseg]         ; the menu is off the screen: hand the buffer
     or dx, dx                   ; back rather than hold 20KB until the next

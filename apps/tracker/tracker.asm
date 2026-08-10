@@ -522,10 +522,6 @@ trk_onkey:
     je .rcyc
     cmp bl, 'R'
     je .rcyc
-    cmp bl, 's'
-    je .smooth
-    cmp bl, 'S'
-    je .smooth
 %ifdef TRKLOG
     cmp bl, 'd'
     je .diag
@@ -576,9 +572,6 @@ trk_onkey:
     xor al, al
 .rset:
     call trk_rate_set
-    jmp .out
-.smooth:
-    call trk_smooth_toggle          ; S (SPEC.md 45.11 - fullscreen reach)
     jmp .out
 %ifdef TRKLOG
 .diag:
@@ -691,11 +684,7 @@ trk_oncmd:
     cmp bh, 1
     jne .out
     or bl, bl                       ; View > Fullscreen: toggle
-    jz .vfull
-    cmp bl, 1                       ; View > Smooth (SPEC.md 45.11)
-    jne .out
-    call trk_smooth_toggle
-    jmp .out
+    jnz .out
 .vfull:
     cmp byte [trk_fs], 0
     je .enter
@@ -1177,13 +1166,6 @@ trk_fs_enter:
     call OSAPI_FSX_RUN              ; blocks until trk_fsx_main returns; the
                                     ; kernel then repaints the desktop whole
     mov byte [trk_fs], 0            ; back to the windowed splash
-    cmp byte [trk_txbb], 0          ; ...and the user's own back-buffer setting
-    je .out                         ; if the text screen (SPEC.md 45.13) had to
-    mov byte [trk_txbb], 0          ; turn it off to get a foreign mode set.
-    mov al, 1                       ; AFTER the run, not inside it: the desktop
-    call OSAPI_GFX_DBUF             ; mode and its pixels are both back, so
-                                    ; bb_set's seed-from-VRAM reads the screen
-                                    ; the user is actually looking at
 .out:
     pop cx
     pop bx
@@ -1219,22 +1201,9 @@ trk_fsx_main:
     push di
     cmp byte [mp_xt], 0             ; XT mode's fullscreen is an 80x25 TEXT
     je .gfx                         ; screen (SPEC.md 45.13) - see trktxt.inc
-    xor al, al                      ; for the arithmetic. fsx_mode refuses
-    call OSAPI_GFX_DBUF             ; while a back buffer is armed (it
-    jc .txmode                      ; describes DESKTOP geometry), so park the
-    or al, al                       ; user's setting first and note the debt;
-    jz .txmode                      ; trk_fs_enter pays it after the restore
-    mov byte [trk_txbb], 1
-.txmode:
-    call ttx_begin                  ; CF=1: refused, and nothing was changed -
-    jnc .txok                       ; fsx_mode either sets the mode or touches
-    cmp byte [trk_txbb], 0          ; nothing at all. Put the buffer back
-    je .gfx                         ; before the graphics bracket takes over,
-    mov byte [trk_txbb], 0          ; or Smooth's own banking and ours would
-    mov al, 1                       ; both be holding the user's setting
-    call OSAPI_GFX_DBUF
-    jmp short .gfx
-.txok:
+    call ttx_begin                  ; for the arithmetic. CF=1: refused, and
+    jc .gfx                         ; nothing was changed - fsx_mode either
+.txok:                              ; sets the mode or touches nothing at all
     mov byte [trk_tx], 1
     call ttx_draw_all
     call ttx_clkpick                ; the frame clock (SPEC.md 45.16/53.5.1)
@@ -1271,17 +1240,7 @@ trk_fsx_main:
     call trk_legend
     jmp .out
 .gfx:
-    cmp byte [trk_smooth], 0        ; Smooth (SPEC.md 45.11): arm the 32 back
-    je .drawall                     ; buffer, and OSAPI_FSX_WAIT presents it
-    cmp byte [trk_bbheld], 0        ; (already borrowed if smooth was toggled
-    jne .drawall                    ; on before entry - it never is, but the
-    mov al, 1                       ; guard keeps this and trk_smooth_toggle
-    call OSAPI_GFX_DBUF             ; agreeing on one [trk_bbheld])
-    jc .drawall                     ; mono / no RAM: draw straight to VRAM
-    mov [trk_bbprev], al
-    mov byte [trk_bbheld], 1
-.drawall:
-    call tui_draw_all               ; the whole FT2 screen, into bb or VRAM
+    call tui_draw_all               ; the whole FT2 screen
 .loop:
     call trk_reap                   ; F00 / watchdog stream cleanup, UI ctx
     mov ah, 1                       ; poll the keyboard - this IS the UI task
@@ -1315,11 +1274,6 @@ trk_fsx_main:
                                     ; leaving; trk_fs_enter's clear covers the
                                     ; fsx_run-refused path where we never ran)
     call trk_legend                 ; ...and the legend follows the surface
-    cmp byte [trk_bbheld], 0        ; hand the buffer back BEFORE the return,
-    je .out                         ; so the kernel's desktop repaint takes
-    mov al, [trk_bbprev]            ; the mode the user actually chose
-    call OSAPI_GFX_DBUF
-    mov byte [trk_bbheld], 0
 .out:
     pop di
     pop si
@@ -1377,10 +1331,6 @@ trk_fsx_key:
     je .rcyc
     cmp al, 'R'
     je .rcyc
-    cmp al, 's'
-    je .smooth
-    cmp al, 'S'
-    je .smooth
 %ifdef TRKLOG
     cmp al, 'd'
     je .diag
@@ -1476,20 +1426,10 @@ trk_fsx_key:
 .rset:
     call trk_rate_set
     jmp .out
-.smooth:
-    cmp byte [trk_tx], 0            ; Smooth is the SPEC.md 32 back buffer,
-    jne .txsm                       ; which describes the DESKTOP's geometry -
-    call trk_smooth_toggle          ; there is nothing to double in a text mode
-    jmp .out                        ; and fsx_mode refused it on the way in.
-                                    ; Graphics: it arms / disarms live, and
-                                    ; OSAPI_FSX_WAIT's present follows [bb_dbl]
 .txxt:
     mov si, trk_s_txxt
     call tui_msg
     jmp short .out
-.txsm:
-    mov si, trk_s_txsm
-    call tui_msg
 .out:
     pop di
     pop si
@@ -2007,59 +1947,6 @@ trk_transport:
     ret
 
 ; -----------------------------------------------------------------------------
-; trk_smooth_toggle - flip Smooth (SPEC.md 45.11). UI context, lock held
-; (key S or View > Smooth). While fullscreen the change applies live:
-; arming borrows the SPEC.md 32 back buffer (previous state banked for the
-; exit hand-back), disarming returns the user's mode now. Windowed it just
-; decides what the next fullscreen entry does.
-; -----------------------------------------------------------------------------
-trk_smooth_toggle:
-    push ax
-    push bx
-    push si
-    mov al, [trk_smooth]
-    xor al, 1
-    mov [trk_smooth], al
-    cmp byte [trk_fs], 0
-    je .menu
-    or al, al
-    jz .disarm
-    cmp byte [trk_bbheld], 0        ; arm live (unless already borrowed)
-    jne .menu
-    mov al, 1
-    call OSAPI_GFX_DBUF
-    jc .menu                        ; mono/small: nothing to smooth
-    mov [trk_bbprev], al
-    mov byte [trk_bbheld], 1
-    jmp .menu
-.disarm:
-    cmp byte [trk_bbheld], 0
-    je .menu
-    mov al, [trk_bbprev]
-    call OSAPI_GFX_DBUF
-    mov byte [trk_bbheld], 0
-.menu:
-    mov si, trk_s_smoff             ; relabel + MENU_SET (the kernel holds
-    cmp byte [trk_smooth], 0        ; a COPY of the set, SPEC.md 12.2)
-    je .lab
-    mov si, trk_s_smon
-.lab:
-    mov [trk_mi_view + 2], si
-    mov bx, [trk_win]
-    mov si, trk_menus
-    call OSAPI_MENU_SET
-    mov si, trk_s_smmoff
-    cmp byte [trk_smooth], 0
-    je .msg
-    mov si, trk_s_smmon
-.msg:
-    call tui_msg
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; trk_rate_set - pick the Rate menu's sample rate (AL = 0/1/2 = 11/22/44
 ; kHz; SPEC.md 45.10). UI context, lock held (key R or the Rate menu).
 ; Playing stops first, like the XT toggle; the pick lands at the next Play.
@@ -2478,7 +2365,7 @@ trk_tpl:
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
     OS88_MENUSET trk_menus, trk_m_name, trk_oncmd
         OS88_MENU trk_m_file, trk_mi_file, 2
-        OS88_MENU trk_m_view, trk_mi_view, 2
+        OS88_MENU trk_m_view, trk_mi_view, 1
         OS88_MENU trk_m_rate, trk_mi_rate, 3
     OS88_MENUSET_END trk_menus
 
@@ -2491,11 +2378,8 @@ trk_s_open:  db 'Open...', 0
 trk_s_xtoff: db 'XT Mode: Off', 0
 trk_s_xton:  db 'XT Mode: On', 0
 trk_m_view:  db 'View', 0
-trk_mi_view: dw trk_s_fullm, trk_s_smoff ; item 1 repointed by
-                                        ; trk_smooth_toggle (SPEC.md 45.11)
+trk_mi_view: dw trk_s_fullm
 trk_s_fullm: db 'Fullscreen', 0
-trk_s_smon:  db 'Smooth: On', 0
-trk_s_smoff: db 'Smooth: Off', 0
 trk_m_rate:  db 'Rate', 0
 trk_mi_rate: dw trk_ritem0, trk_ritem1, trk_ritem2  ; COMPOSED, by
                                         ; trk_rate_menu (SPEC.md 45.17.1)
@@ -2536,10 +2420,7 @@ trk_s_xtmoff: db 'XT mode off - Enter plays', 0
 trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
 trk_s_ratext: db 'Xt mode sets the rate - X first', 0
 trk_s_buffer: db 'Buffering...', 0
-trk_s_smmon:  db 'Smooth on', 0
-trk_s_smmoff: db 'Smooth off', 0
 trk_s_txxt:   db 'XT off is windowed: Esc first', 0
-trk_s_txsm:   db 'Smooth is a graphics mode only', 0
 
 ; =============================================================================
 ; The rest of the package: the replayer, and the two renderers of one screen -
@@ -2575,9 +2456,6 @@ trk_s_txsm:   db 'Smooth is a graphics mode only', 0
                                     ; foreign mode: every kernel drawing slot
                                     ; is off-limits until the bracket returns
                                     ; (SPEC.md 53.1). Implies [trk_fs]
-    TRKB trk_txbb                   ; ...and we turned the user's back buffer
-                                    ; off to get that mode set, so we owe them
-                                    ; one re-arm after the restore
     TRKB trk_hired                  ; the worker exists
     TRKB trk_abon                   ; the About panel is up; worker frames drop
     TRKB trk_pmode                  ; 0 = song, 1 = pattern loop, 2 = resume
@@ -2631,10 +2509,6 @@ trk_s_txsm:   db 'Smooth is a graphics mode only', 0
     TRKB trk_rsel                   ; the Rate menu's pick (SPEC.md 45.10):
                                     ; 0/1/2 = 11/22/44 kHz; bss zeroes to
                                     ; the 11 kHz default
-    TRKB trk_smooth                 ; Smooth (SPEC.md 45.11) - bss zeroes:
-                                    ; the default is OFF
-    TRKB trk_bbprev                 ; ...the user's back-buffer state, banked
-    TRKB trk_bbheld                 ; ...1 = we borrowed it (hand back at exit)
     TRKB trk_mixing                 ; the worker is inside a trk_feed pass -
                                     ; trk_stream_close drains it before any
                                     ; UI-task touch of mp_* state or the blob

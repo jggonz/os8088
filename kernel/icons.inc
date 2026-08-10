@@ -183,7 +183,7 @@ ico_core:
     mov ch, 8
     sub ch, cl                  ; CH = 8 - shift
 
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32) - the bb
+    cmp byte [vid_mono], 0      ; 1bpp? (SPEC.md 39.5) - the software
     jne ico_core_bb             ; twin returns straight to the wrapper
 
     mov ax, VGA_SEG
@@ -308,14 +308,6 @@ ico_core_bb:
     jb .rok
     mov bx, [vid_strm1]
 .rok:
-    push cx                     ; CL/CH shift pair survives bb_dirty setup
-    mov cx, [ico_y]
-    mov dx, cx
-    add dx, [ico_rows]
-    dec dx
-    call bb_dirty               ; AX is STILL the left byte column here - do
-    pop cx                      ; not borrow it before this call
-
     mov al, [vid_strm1]         ; the three right-edge limits ico_pass_bb
     mov [ico_lim1], al          ; needs as BYTES - see the compares there
     dec al

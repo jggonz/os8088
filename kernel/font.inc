@@ -146,11 +146,8 @@ font_char:
     shl si, 1
     add si, font_glyphs
 
-    call bb_mono_chk            ; both modes - see gfx_fill (SPEC.md 32).
-                                ; Placed after the clip so a glyph that draws
-                                ; nothing cannot retire the flag.
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
-    je .vram
+    cmp byte [vid_mono], 0      ; 1bpp? the software renderer IS the direct
+    je .vram                    ; path there (SPEC.md 39.5)
     call font_char_bb
     jmp .done
 .vram:
@@ -255,22 +252,13 @@ font_char:
 ;   see gfx_nextrow for why they are not optional.
 ; -----------------------------------------------------------------------------
 font_char_bb:
-    mov ax, cx                  ; dirty: columns x/8..(x+7)/8, rows y..y+7
-    mov bx, cx
-    add bx, 7
+    mov ax, cx
     mov di, cx
     and di, 7                   ; DI parks the shift (x & 7) for a moment
     mov cl, 3
-    shr ax, cl
-    shr bx, cl                  ; same byte column when x & 7 = 0
+    shr ax, cl                  ; AX = the byte column (x / 8)
     push di
-    push dx
-    mov cx, dx
-    add dx, 7
-    push ax                     ; left column survives bb_dirty for the
-    call bb_dirty               ; offset math below
-    pop bx
-    pop dx
+    mov bx, ax                  ; BX survives gfx_rowbase; AX does not
     mov ax, dx                  ; DI = rowbase(y) + x / 8, CL = x & 7
     call gfx_rowbase            ; (CX is popped back below, DX is dead)
     add ax, bx
@@ -498,9 +486,9 @@ font_str_x:
 ; one cell, taken once. A caller using this cannot produce that failure.
 ;
 ; Two paths, and the fast one is deliberately narrow:
-;   - `[bb_on]` (both mono adapters, and VGA while double-buffered) with x
+;   - `[vid_mono]` (both mono adapters, and VGA while double-buffered) with x
 ;     byte-aligned: the per-plane loop below. This is the case the slow
-;     machines are in - on mono `[bb_on]` is permanently 1 (SPEC.md 39.5).
+;     machines are in - on mono `[vid_mono]` is permanently 1 (SPEC.md 39.5).
 ;   - anything else: one gfx_fill of the run's rect in the background colour
 ;     and font_str over it, which is exactly what every caller wrote by hand
 ;     before. No regression, no new planar VRAM code, and the answer is
@@ -541,7 +529,7 @@ font_run_x:
     mov [font_rn_bg], ah
     test cx, 7                  ; unaligned, or a VRAM planar target: the
     jnz .slow                   ; two-pass answer, unchanged
-    cmp byte [bb_on], 0
+    cmp byte [vid_mono], 0
     je .slow
     cmp byte [gfx_dis], 0       ; a DISABLED control (SPEC.md 47) masks the
     jne .slow                   ; glyph to a checkerboard inside font_ink,
@@ -552,10 +540,8 @@ font_run_x:
 
     mov al, [font_rn_fg]        ; both colours are drawn, so both decide
     mov [gfx_color], al         ; whether the planes can still be treated as
-    call bb_mono_chk            ; one (SPEC.md 32)
     mov al, [font_rn_bg]
     mov [gfx_color], al
-    call bb_mono_chk
     cld
 .cell:
     mov al, [es:si]
@@ -633,7 +619,7 @@ font_run_x:
     ret
 
 ; -----------------------------------------------------------------------------
-; font_run_cell - internal: one opaque 8x8 cell, byte-aligned, [bb_on] path
+; font_run_cell - internal: one opaque 8x8 cell, byte-aligned, [vid_mono] path
 ; in:       AL = character, CX = x (multiple of 8), DX = y
 ; out:      nothing (all registers preserved)
 ;
@@ -706,7 +692,6 @@ font_run_cell:
     mov bx, ax                  ; ...and its right column: an aligned 8px cell
     mov cx, dx                  ; is exactly one byte wide
     add dx, 7                   ; CX/DX = the rows it covers, inclusive
-    call bb_dirty               ; clobbers flags only
     pop dx
     pop cx
 

@@ -324,8 +324,6 @@ fsx_mode:
     je .fail
     cmp ah, [sch_cur]
     jne .fail
-    cmp byte [bb_dbl], 0
-    jne .fail
     cmp al, FSXM_COUNT
     jae .fail
     mov bl, [vid_kind]          ; the caps bit - the same predicate the
@@ -556,12 +554,6 @@ fsx_wait:
     cmp al, FSXW_FRAME          ; the argument is checked BEFORE the present,
     ja .fail                    ; so an unknown clock never flushes and then
                                 ; refuses (SPEC.md 53.1's all-or-nothing)
-    cmp byte [fsx_cur], 0xFF    ; the present clause: unswitched + armed
-    jne .nopresent
-    cmp byte [bb_dbl], 0
-    je .nopresent
-    call gfx_flush
-.nopresent:
     cmp al, FSXW_FRAME
     je .frame
     or al, al

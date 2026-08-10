@@ -159,20 +159,19 @@ CP_ISTRIDE  equ 8
 ; values they had before this page existed.
 cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
-    dw cp_s_buf,   cp_buf_paint,   cp_buf_click,   0
     dw cp_s_time,  cp_time_paint,  cp_time_click,  0
     dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0
     dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
     dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
-CP_ITIME  equ 2                 ; the Date/Time item: ui.inc selects it by
+CP_ITIME  equ 1                 ; the Date/Time item: ui.inc selects it by
                                 ; name when the menu bar clock is clicked
                                 ; (SPEC.md 12.1/31.5)
-CP_IDRV   equ 3                 ; ...and the Drivers item, which drv_notice
+CP_IDRV   equ 2                 ; ...and the Drivers item, which drv_notice
                                 ; opens the panel on when a driver did not
                                 ; load at boot (SPEC.md 51.3)
-CP_ISND   equ 4                 ; ...and Sound, the tone tier's route (34.8)
+CP_ISND   equ 3                 ; ...and Sound, the tone tier's route (34.8)
 
 ; How many static rows the list is showing RIGHT NOW - CP_ITEMS, or one fewer
 ; when the Display page is hidden. It is the boundary between a static row and
@@ -213,33 +212,6 @@ cp_s_cap:   db 'Takes effect immediately', 0
 ; has never had anything to do with which display the machine drives - it
 ; chooses whether drawing goes straight to the framebuffer or through the
 ; 150KB back buffer of SPEC.md 32, which is a question about buffering.
-cp_s_buf:   db 'Buffer', 0      ; list name AND the page heading
-cp_s_dbof:  db 'Direct to screen', 0
-cp_s_dbon:  db 'Double buffered', 0
-cp_s_dcap:  db 'Smoother; costs 150K', 0
-cp_s_dna:   db 'Not Enough Ram', 0          ; the heap cannot fund 150KB
-                                            ; RIGHT NOW - it is a claim, not
-                                            ; a reservation, so this can
-                                            ; change while the panel is open
-                                            ; (close an app and it comes back)
-                                            ; A 1bpp adapter draws straight to
-                                            ; the framebuffer and has no buffer
-                                            ; to double (SPEC.md 39.5) - a
-                                            ; memory answer would be a lie on a
-                                            ; 640K Hercules machine. It says
-                                            ; WHY rather than just "no": the
-                                            ; software renderer IS the direct
-                                            ; path there, so there is nothing
-                                            ; to double rather than no room.
-                                            ; Two lines because the pane is 27
-                                            ; characters wide (CP_PRGT-CP_PMX
-                                            ; = 219px) and this is 49; the
-                                            ; caption is the lowest thing on
-                                            ; the page, so the second line has
-                                            ; room under it.
-cp_s_dmono: db 'Framebuffer is the display', 0
-cp_s_dmono2: db 'driver on this adapter', 0
-
 ; --- Display page (SPEC.md 31.10/39.11) --------------------------------------
 ; One radio row per adapter the machine actually HAS, and a button that moves
 ; the machine onto the selected one. The rows are the ADAPTERS, not the modes
@@ -1115,274 +1087,6 @@ cp_radios:
 ; Same two-row radio geometry as the Scheduler page, so it shares cp_glyph
 ; and the CP_B*Y hit bands. Row 0 = direct to screen (the boot default),
 ; row 1 = double buffered.
-; =============================================================================
-
-; -----------------------------------------------------------------------------
-; cp_buf_paint - the Display page
-; in:  DI = pane left, BP = pane top; gfx lock held; entry pen is CWHITE
-; out: nothing
-; clobbers: nothing (flags only)
-; -----------------------------------------------------------------------------
-cp_buf_paint:
-    push cx
-    push dx
-    push si
-
-    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
-
-    mov si, cp_s_buf           ; heading, same string as the list row
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PHY
-    call KERNEL_SEG:cw_font_str
-
-    mov si, cp_s_dbof           ; row 0 label
-    mov cx, di
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CP_PR0Y + CP_PLDY
-    call KERNEL_SEG:cw_font_str
-
-    call cpf_dbok               ; CF = 1: the option cannot be taken now, so
-    call KERNEL_SEG:cw_gfx_pen_cf             ; its label takes the disabled pen (SPEC.md
-                                ; 31.3/46). One call, because the predicate
-                                ; already answers in CF and the pen is two
-                                ; pieces of state that must not disagree
-    mov si, cp_s_dbon           ; row 1 label
-    mov cx, di
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CP_PR0Y + CP_PROWH + CP_PLDY
-    call KERNEL_SEG:cw_font_str
-    call KERNEL_SEG:cw_gfx_pen_live
-
-    mov si, cp_s_dcap           ; caption: what it costs...
-    call cpf_dbok
-    jnc .cap
-    mov si, cp_s_dna            ; ...or why it cannot be had right now:
-    cmp byte [vid_mono], 0      ; no room in the heap, or the wrong adapter
-    je .cap
-    mov si, cp_s_dmono
-.cap:
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PCAPY
-    call KERNEL_SEG:cw_font_str
-    cmp si, cp_s_dmono          ; ...and that one answer runs to a second line.
-    jne .capdone                ; font_str clobbers nothing, so SI still names
-    mov si, cp_s_dmono2         ; the string that was drawn
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PCAP2
-    call KERNEL_SEG:cw_font_str
-.capdone:
-
-    call cp_dbradios            ; both glyphs, filled per the live state
-
-    pop si
-    pop dx
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
-; cpf_dbok - can double buffering be turned on right now? (far, internal)
-; in:  nothing
-; out: CF = 0 yes, CF = 1 no (wrong adapter, or the heap has no 150KB run)
-; clobbers: nothing (flags)
-;
-; Three layers, the bb_avail idiom of SPEC.md 31.3: this is the question the
-; caption answers, the label greys on and the click refuses on - so all three
-; agree by construction rather than by three copies of the test.
-; -----------------------------------------------------------------------------
-cpf_dbok:
-    cmp byte [bb_avail], 0
-    je .no                      ; the adapter can never do it
-    cmp byte [bb_dbl], 0
-    jne .yes                    ; already armed: the memory is ours
-    push ax
-    push bx
-    call KERNEL_SEG:cw_mem_avail             ; AX = largest free run, KB
-    cmp ax, BB_KB
-    pop bx
-    pop ax
-    jb .no
-.yes:
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_dbradios - redraw the Display page's two radio glyphs from [bb_dbl]
-; in:  DI = pane left, BP = pane top; gfx lock held
-; out: nothing
-; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
-;
-; Row 1's glyph takes cpf_dbok's pen, the same one cp_buf_paint gives its
-; label (SPEC.md 47 rule 2). It was drawn in CBLACK here while the label
-; beside it went grey, so a row the click band refuses still showed a
-; full-strength ring - which reads as a live control with faint writing next
-; to it. The caption saying 'Not Enough Ram' was carrying the whole message
-; on its own.
-; -----------------------------------------------------------------------------
-cp_dbradios:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov bl, [bb_dbl]            ; BL = the row whose glyph is filled. NOT
-                                ; [bb_on], which is 1 on a mono adapter and
-                                ; means only "software renderer" there
-    mov byte [gfx_color], CBLACK ; the pen cp_glyph draws the bitmap with
-    mov cx, di
-    add cx, CP_PGX
-    mov dx, bp
-    add dx, CP_PR0Y
-
-    mov si, cp_radio_off        ; --- row 0: direct to screen, always live ---
-    cmp bl, 0
-    jne .r0
-    mov si, cp_radio_on
-.r0:
-    call cp_glyph
-
-    add dx, CP_PROWH            ; --- row 1: double buffered ---
-    call cpf_dbok               ; ...which is the row that can be refused
-    call KERNEL_SEG:cw_gfx_pen_cf
-    mov si, cp_radio_off
-    cmp bl, 1
-    jne .r1
-    mov si, cp_radio_on
-.r1:
-    call cp_glyph
-    call KERNEL_SEG:cw_gfx_pen_live
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cpf_buf_cap - redraw the Display page's caption line only (far, internal)
-; in:  DI = pane left, BP = pane top; gfx lock held
-; out: nothing (all registers preserved)
-; -----------------------------------------------------------------------------
-cpf_buf_cap:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov byte [gfx_color], CWHITE    ; erase BOTH caption lines first - the
-    mov ax, di                      ; strings differ in length AND in line
-    add ax, CP_PMX                  ; count, so erasing only the first would
-    mov bx, bp                      ; leave the mono answer's second line
-    add bx, CP_PCAPY                ; stranded under a one-line caption
-    mov cx, di
-    add cx, CP_PRGT
-    mov dx, bx
-    add dx, CP_PCAP2 - CP_PCAPY + 7
-    call KERNEL_SEG:cw_gfx_fill
-    mov byte [gfx_color], CBLACK
-    mov si, cp_s_dcap
-    call cpf_dbok
-    jnc .draw
-    mov si, cp_s_dna
-    cmp byte [vid_mono], 0
-    je .draw
-    mov si, cp_s_dmono
-.draw:
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PCAPY
-    call KERNEL_SEG:cw_font_str
-    cmp si, cp_s_dmono              ; same two-line answer as the full paint
-    jne .done                       ; (SPEC.md 47 rule 6: a partial redraw
-    mov si, cp_s_dmono2             ; path draws what the full paint would)
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PCAP2
-    call KERNEL_SEG:cw_font_str
-.done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_buf_click - a click inside the Display page
-;
-; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
-;      DX = pane-relative y; gfx lock held by the caller
-; out: nothing
-; clobbers: nothing (flags only)
-;
-; Same band logic and signed comparisons as cp_sched_click. bb_set wants the
-; gfx lock held, which it is here, and does the real work: seeding the buffer
-; from VRAM on the way in, flushing it on the way out. A machine that failed
-; the RAM probe ignores the click entirely - the caption already says why -
-; rather than moving a dot that bb_set would refuse to honour. No [cp_dirty]:
-; no other window quotes this setting, and the buffer state is invisible.
-; -----------------------------------------------------------------------------
-cp_buf_click:
-    push ax
-
-    cmp dx, CP_B0Y1             ; outside both bands: nothing
-    jl .done
-    cmp dx, CP_B1Y2
-    jg .done
-
-    mov al, 1                   ; lower band = double buffered
-    cmp dx, CP_B0Y2
-    jg .set
-    xor al, al                  ; upper band = direct to screen
-.set:
-    cmp al, [bb_dbl]
-    je .done                    ; that row is already live: change nothing
-    or al, al
-    jz .doit
-    call cpf_dbok               ; arming: refuse if it cannot be funded, and
-    jc .done                    ; leave the dot where it is (the caption and
-.doit:                          ; the greyed label already say why)
-    call KERNEL_SEG:cw_bb_set                ; flips both flags; we hold the lock
-    mov byte [cp_wdirty], 1     ; ...and remembered on close (31.8)
-    call cp_dbradios            ; the two glyph boxes only
-    call cpf_buf_cap           ; the caption can change with the claim:
-                                ; turning it OFF hands 150KB back, which may
-                                ; un-grey it for the next machine state
-
-.done:
-    pop ax
-    ret
-
-; =============================================================================
-; Display page (SPEC.md 31.10) - which adapter this machine is driven as
-;
-; One radio row per adapter vid_probe_avail found (SPEC.md 39.11.1), and an
-; Activate button that moves the machine onto the selected one there and then
-; (SPEC.md 39.11.2). The rows show FACTS - an adapter with no card is not a
-; greyed row, it is no row - which is SPEC.md 47 rule 3 read the other way
-; round: greying is a claim about a control, and a control for hardware that
-; is absent should not be drawn at all. The one thing that does grey is the
-; button, whose predicate is "the dot is not on the running adapter".
-;
-; THE SELECTION AND THE SWITCH ARE TWO ACTIONS ON PURPOSE. A click that
-; switched immediately would make a mis-click on a 5150 with two monitors
-; move the picture to the other tube - recoverable, but only by finding a
-; window you can no longer see. It is also what lets the button carry the
-; page's whole refusal story in one place.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------

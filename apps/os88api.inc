@@ -483,7 +483,6 @@ VID_CGA    equ 2
 ; OSAPI_FILE_READBIG fails to assemble, which is the intended way to find
 ; out: pass your base segment in ES with BX = 0 and call OSAPI_FILE_READ.
 
-%define OSAPI_GFX_DBUF      KERNEL_SEG:0x01F0   ; arm/disarm double buffering
                                  ; for your own drawing (SPEC.md 32): AL = 1
                                  ; on / 0 off, lock HELD. Out CF=0 and AL =
                                  ; the state before, which you hand straight
@@ -1444,10 +1443,8 @@ OS88_BSS_SIZE equ 0
                                                 ; (set ES = DS). Bracket-only.
                                                 ; Out CF=0: mode set, screen
                                                 ; cleared, buffer filled;
-                                                ; CF=1: bad id, not on this
-                                                ; adapter, or your back
-                                                ; buffer is armed - call
-                                                ; OSAPI_GFX_DBUF off first.
+                                                ; CF=1: bad id, or not on
+                                                ; this adapter.
 
 %define OSAPI_FSX_WAIT      KERNEL_SEG:0x02D8   ; in AL = FSXW_TICK (0) the
                                                 ; next tick / FSXW_VSYNC (1)

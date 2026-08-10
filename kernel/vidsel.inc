@@ -412,14 +412,7 @@ vid_blank:
 ;
 ; Order is binding, and every step is somebody else's invariant:
 ;
-;   1. The back buffer belongs to the OLD adapter. Its 150KB claim is sized
-;      for four 640x480 planes and its flush targets that framebuffer, so it
-;      is dropped while the old geometry still describes it. bb_init below
-;      then re-answers whether the NEW adapter can have one at all - on mono
-;      it cannot (SPEC.md 39.5), and leaving [bb_avail] set would let the
-;      Buffer page offer a buffer that bb_set would refuse.
-;
-;   2. Spend the deferred cursor hide (SPEC.md 7.1.4) while the old geometry
+;   1. Spend the deferred cursor hide (SPEC.md 7.1.4) while the old geometry
 ;      still describes the save-under. gfx_lock only PROMISES the hide, so
 ;      under the Control Panel's lock the arrow is typically still on screen
 ;      with 24 bytes of background banked against the old stride. Change the
@@ -427,11 +420,11 @@ vid_blank:
 ;      addressing, which smears the arrow across the screen permanently. It
 ;      is a no-op on the boot path, where no promise is outstanding.
 ;
-;   3. vid_apply republishes all nine live words and everything derived from
+;   2. vid_apply republishes all nine live words and everything derived from
 ;      them, and homes the mouse into the new screen - which is load-bearing
 ;      rather than tidy, for the reason in SPEC.md 39.2.
 ;
-;   4. desk_rowcalc, because how many drive zones fit in a column is computed
+;   3. desk_rowcalc, because how many drive zones fit in a column is computed
 ;      from [vid_dock_y0] and is 7 on VGA, 4 on Hercules and 2 on CGA - and
 ;      wm_refit, because every window's frame was clamped onto the OLD screen
 ;      and a 640x480 window is off the bottom of a 640x200 one.
@@ -442,28 +435,24 @@ vid_switch:
     call vid_avail_test
     jc .refuse
 
-    push ax
-    xor al, al                  ; 1. the buffer is the old adapter's
-    call bb_set
-    pop ax
-    call cur_unlazy             ; 2. ...and so is the cursor's save-under
-    call vid_blank              ; ...and the tube we are walking away from
+    call cur_unlazy             ; 1. the cursor's save-under is the old
+    call vid_blank              ; geometry's - and so is the tube we are
+                                ; walking away from
 
-    mov [vid_kind], al          ; 3. republish the geometry
+    mov [vid_kind], al          ; 2. republish the geometry
     call vid_equip
     call vid_apply
-    call bb_init
     call vid_setmode
 
 %ifdef KERN_BIG
-    call vid_disp_init          ; 4. ...and the OTHER card follows the switch:
+    call vid_disp_init          ; 3. ...and the OTHER card follows the switch:
                                 ; the records, the chrome's extent and the
                                 ; desktop union all describe the arrangement
                                 ; before it until this re-runs (SPEC.md
                                 ; 39.13/39.16). Before desk_rowcalc and
                                 ; wm_refit, which read what it publishes
 %endif
-    call desk_rowcalc           ; 5. the two things vid_apply does not own
+    call desk_rowcalc           ; 4. the two things vid_apply does not own
     call wm_refit
     call menu_force             ; ...and the two the CHROME does not: setmode
     call dock_force             ; cleared the framebuffer, so the bar's logo
@@ -581,12 +570,12 @@ vid_ctx_ptr:
 ; out:      -
 ; clobbers: flags
 ;
-; CALLED AFTER ANYTHING THAT CHANGES THE LIVE GEOMETRY OUTSIDE A SWAP, and the
-; list is short but not empty: vid_apply (a mode or adapter change) and bb_set,
-; which writes [vid_rseg] when a back buffer is armed or dropped and is inside
-; this run. Miss one and the display's record describes a geometry that has
-; moved on - which shows up as drawing through the wrong segment the next time
-; that display is activated, a long way from the cause.
+; CALLED AFTER ANYTHING THAT CHANGES THE LIVE GEOMETRY OUTSIDE A SWAP. That
+; is vid_apply - a mode or adapter change - and, since SPEC.md 32 went, only
+; vid_apply: bb_set used to write [vid_rseg] from inside this run and was the
+; one other entry on the list. Miss one and the display's record describes a
+; geometry that has moved on - which shows up as drawing through the wrong
+; segment the next time that display is activated, a long way from the cause.
 ; -----------------------------------------------------------------------------
 vid_ctx_capture:
     push ax

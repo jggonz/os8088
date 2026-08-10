@@ -268,8 +268,7 @@ CFG_RT      equ 2               ; db: [snd_route]  (SPEC.md 34.8)
 CFG_H12     equ 3               ; db: [clk_h12]    (SPEC.md 31.5)
 CFG_SEC     equ 4               ; db: [clk_secs]
 CFG_SCH     equ 5               ; db: the scheduler mode (SPEC.md 8.2)
-CFG_BB      equ 6               ; db: double buffering  (SPEC.md 32)
-CFG_VID     equ 7               ; db: the display adapter (SPEC.md 39.11.3) -
+CFG_VID     equ 6               ; db: the display adapter (SPEC.md 39.11.3) -
                                 ; a VID_* kind, not a bitmap. Applied by
                                 ; drv_boot and NOT by drv_cfg_unpack, for the
                                 ; back buffer's reason one line up: it is not
@@ -278,7 +277,7 @@ CFG_VID     equ 7               ; db: the display adapter (SPEC.md 39.11.3) -
                                 ; has that card - which is what stops a disk
                                 ; carried from a machine with a Hercules in it
                                 ; booting this one to a dead monitor
-CFG_DBLOB   equ 8               ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_DBLOB   equ 7               ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
                                 ; the LENGTH, carries them to disk and back,
@@ -307,13 +306,11 @@ drv_cfg_keys:
     db 1, 1, CFG_SEC
     dw 'SM'                     ; Scheduler Mode
     db 1, 1, CFG_SCH
-    dw 'BB'                     ; Back Buffer
-    db 1, 1, CFG_BB
     dw 'VM'                     ; Video Mode - which adapter (SPEC.md 39.11.3)
     db 1, 1, CFG_VID
     dw 'HD'                     ; Hard Disk - the DRIVER's own blob (51.9)
     db 1, DRV_BLOB_SZ, CFG_DBLOB
-CFG_NKEY    equ 8
+CFG_NKEY    equ 7
 CFG_KESZ    equ 5               ; bytes per table entry
 
 ; The file buffer, DERIVED rather than guessed: drv_cfg_ser emits the header,
@@ -1968,8 +1965,6 @@ drv_cfg_pack:
     mov [drv_cfg+CFG_WANT], ax
     call sched_mode_get
     mov [drv_cfg+CFG_SCH], al
-    mov al, [bb_dbl]
-    mov [drv_cfg+CFG_BB], al
     mov al, [vid_kind]          ; the adapter the machine is RUNNING as, which
     mov [drv_cfg+CFG_VID], al   ; on a machine that has never been asked is
                                 ; exactly what vid_detect chose - so the file
@@ -2618,15 +2613,6 @@ drv_boot:
     ; notch after it, because a direct VRAM write is exactly what the next
     ; flush undoes. The heap does not care which end of this routine it
     ; happens at: data claims grow up and a driver's region down (SPEC 50.3).
-    or ch, ch
-    jz .out
-    cmp byte [drv_cfg+CFG_BB], 0
-    je .out
-    call gfx_lock
-    mov al, 1
-    call bb_set                 ; refuses itself on an adapter or a heap that
-    call gfx_unlock             ; cannot fund it - an ordinary answer, not an
-    jmp short .out              ; error (SPEC.md 32/50)
 .nodisk:
     ; No system disk at all. Only a row the user actually wanted counts as a
     ; failure: a machine that has never enabled a driver must not be told

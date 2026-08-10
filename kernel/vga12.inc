@@ -54,11 +54,10 @@ gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
 ; -----------------------------------------------------------------------------
 ; GFXCLIP - the clip hook, at a public rect entry (SPEC.md 11.3)
 ;
-; Placed at the PUBLIC entry, above the [bb_on] dispatch, so one hook covers
-; the VRAM path, the back-buffer path, VGA and both mono adapters at once -
-; on a 1bpp adapter the software renderer IS the direct path (SPEC.md 39.5),
-; and a hook below the dispatch would work on VGA and silently do nothing on
-; Hercules. Same reasoning that places bb_mono_chk where it is.
+; Placed at the PUBLIC entry, above the [vid_mono] dispatch, so one hook covers
+; the VRAM path, VGA and both mono adapters at once - on a 1bpp adapter the
+; software renderer IS the direct path (SPEC.md 39.5), and a hook below the
+; dispatch would work on VGA and silently do nothing on Hercules.
 ;
 ; Disarmed (the whole repaint path) it costs one compare and a taken branch;
 ; nothing else changes. Armed, gfx_clip_run re-enters the raw body once per
@@ -94,7 +93,7 @@ gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
 ; the clip's coordinate space had been thought about.
 ;
 ; ONE DISPLAY COSTS A COMPARE AND A TAKEN BRANCH, then falls straight through
-; into the body - the bargain [bb_on] and [wm_clip_n] already make. On
+; into the body - the bargain [vid_mono] and [wm_clip_n] already make. On
 ; kern_small it expands to nothing at all.
 ;
 ; [gfx_dnest] is what lets this compose with 39.14.2's whole-shape hooks: a
@@ -525,7 +524,7 @@ vga_rect_setup:
     mov dx, cx                  ; DX = x2; [vga_rows] already banked it
     mov cl, 3
     shr ax, cl                  ; ax = left byte  (x1 / 8)
-    mov [vga_lcol], ax          ; kept for the bb_* dirty union (SPEC.md 32)
+    mov [vga_lcol], ax          ; ax = left byte column
     shr dx, cl                  ; dx = right byte (x2 / 8)
     sub dx, ax
     mov [vga_span], dx          ; span = right byte - left byte
@@ -566,9 +565,9 @@ gfx_pixel:
 ; out:      -
 ; clobbers: flags
 ;
-; A 1-row solid rect: gfx_fill clips and back-buffer-dispatches itself.
-; (The former dedicated VRAM loop was retired for the SPEC.md 32 code
-; budget - gfx_fill produces identical pixels for one row.)
+; A 1-row solid rect: gfx_fill clips and adapter-dispatches itself.
+; (The former dedicated VRAM loop was retired for the code budget -
+; gfx_fill produces identical pixels for one row.)
 ; -----------------------------------------------------------------------------
 gfx_hline:
     push bx
@@ -771,7 +770,7 @@ gfx_ls_one:
     pop si
     pop cx
 
-    cmp byte [bb_on], 0         ; 5.6.4's split: mono gets the per-pixel walk,
+    cmp byte [vid_mono], 0         ; 5.6.4's split: mono gets the per-pixel walk,
     je .slow                    ; VGA is the fast machine and gets gfx_pixel
     cmp byte [vid_planes], 1
     jne .slow
@@ -1106,7 +1105,7 @@ gfx_line:
     ; One walk with a three-bit mask is therefore the identical pixel set at a
     ; third of the Bresenham. Solid ink only: the dither class alternates with
     ; x, so the neighbours never carry the centre's bit.
-    cmp byte [bb_on], 0         ; the same two tests gfx_line_raw makes
+    cmp byte [vid_mono], 0         ; the same two tests gfx_line_raw makes
     je .passes
     cmp byte [vid_planes], 1
     jne .passes
@@ -1191,7 +1190,7 @@ gfx_line:
 ;                box in gfx_ln_c*. The Bresenham state is already staged.
 ; clobbers: everything but the segment registers
 gfx_line_raw:
-    cmp byte [bb_on], 0         ; SPEC.md 5.6.4: mono IS the 4.77MHz machine
+    cmp byte [vid_mono], 0         ; SPEC.md 5.6.4: mono IS the 4.77MHz machine
     je gfx_line_runs            ; and gets the per-pixel loop; VGA is the fast
     cmp byte [vid_planes], 1    ; one and gets major-axis runs, still fewer
     jne gfx_line_runs           ; calls than the app-side horizontal-only
@@ -1466,8 +1465,8 @@ gfx_line_flush:
 ; segment (SPEC.md 20.1) every gfx call from one is a FAR call, so a canvas
 ; repaint that cost N far calls plus N run scans now costs ONE call and a
 ; near loop. It also means the primitive works on all three adapters, in
-; front of and behind the back buffer, and inside a clip region, without one
-; line of adapter-specific code - because gfx_fill already does.
+; and inside a clip region, without one line of adapter-specific code -
+; because gfx_fill already does.
 ;
 ; **The run scan compares BYTES, not pixels, and that is the whole speed of
 ; the SCAN.** A run of colour c is a run of bytes equal to c|c<<4, so
@@ -1504,7 +1503,7 @@ gfx_line_flush:
 ;
 ; A plane-parallel VGA fast path (build a byte-per-8-pixels mask per plane
 ; and write it through the Map Mask) would beat this on detailed pictures and
-; lose to it on flat ones, and it would need its own back-buffer and 1bpp
+; lose to it on flat ones, and it would need its own 1bpp
 ; twins. It is a worthwhile future optimisation and it changes no caller;
 ; docs/PAINT-NOTES.md records why it was not the first one.
 ;
@@ -1725,7 +1724,7 @@ vga_vline_core:
 ; out:      -
 ; clobbers: flags
 ;
-; A 1-column solid rect via gfx_fill (which clips and back-buffer-
+; A 1-column solid rect via gfx_fill (which clips and adapter-
 ; dispatches itself); vga_vline_core stays for gfx_xor_rect's verticals.
 ; -----------------------------------------------------------------------------
 gfx_vline:
@@ -1746,12 +1745,7 @@ gfx_fill:
 gfx_fill_d:
     GFXDISP gfx_fill_raw
 gfx_fill_raw:
-    call bb_mono_chk            ; colour tracking runs in BOTH modes: double
-                                ; buffering can be switched on later, and the
-                                ; buffer it seeds from VRAM is only plane-
-                                ; identical if nothing but 0/15 was ever
-                                ; drawn (SPEC.md 32)
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne bb_fill
     push ax
     push bx
@@ -1866,7 +1860,7 @@ gfx_fill_gray:
 gfx_fill_gray_d:
     GFXDISP gfx_fill_gray_raw
 gfx_fill_gray_raw:
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne bb_fill_gray
     push ax
     push bx
@@ -1951,7 +1945,7 @@ gfx_fill_gray_raw:
 ; Row y takes the byte [gfx_pat][y & 7]; bit set = white (15), clear =
 ; black (0), bit 7 the leftmost pixel of each screen byte. Ignores
 ; [gfx_color] and, like gfx_fill_gray, writes only colors 0/15, so it
-; never retires [bb_mono] (SPEC.md 32). Same masked-edge scheme as
+; is a pattern rather than a solid colour. Same masked-edge scheme as
 ; gfx_fill_gray, with the row byte fetched from the table instead of the
 ; AA/55 toggle. The 8 pattern bytes are staged into vga_patbuf first:
 ; [bp+bx] is not an 8086 addressing mode, but [vga_patbuf+bx] is (and the
@@ -2009,7 +2003,7 @@ gfx_fill_pat:
 gfx_fill_pat_d:
     GFXDISP gfx_fill_pat_raw
 gfx_fill_pat_raw:
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne bb_fill_pat
     push ax
     push bx
@@ -2219,13 +2213,13 @@ gfx_xor_rect:
                                 ; bounding rect with anything - clipping it
                                 ; that way would draw edges through the
                                 ; middle of it, so it decomposes first
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne bb_xor_rect
 vga_xor_rect_vram:
-    call cur_unlazy             ; the drag outline bypasses the buffer AND
-                                ; the clip (SPEC.md 32): 7.1.4              ; VRAM body under its own name: transient
-                                ; overlays (the drag outline) call it direct
-                                ; so they never enter the back buffer
+    call cur_unlazy             ; the drag outline bypasses the clip
+                                ; (SPEC.md 11.3): 7.1.4. VRAM body under its
+                                ; own name, which the transient overlays call
+                                ; direct
     cmp byte [vid_mono], 0      ; ...but "direct" means the framebuffer, and
     jne bb_xor_rect             ; on a 1bpp adapter the software renderer IS
                                 ; the direct path (SPEC.md 39.5)
@@ -2327,11 +2321,12 @@ gfx_xor_fill:
 gfx_xor_fill_d:
     GFXDISP gfx_xor_fill_raw
 gfx_xor_fill_raw:
-    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne bb_xor_fill
 vga_xor_fill_vram:
-    call cur_unlazy             ; ...and the menu highlights with it              ; VRAM body under its own name (see
-                                ; vga_xor_rect_vram) - the menu highlights
+    call cur_unlazy             ; ...and the menu highlights with it. VRAM
+                                ; body under its own name (see
+                                ; vga_xor_rect_vram)
     cmp byte [vid_mono], 0
     jne bb_xor_fill
     push ax
@@ -2414,14 +2409,14 @@ vga_xor_fill_vram:
 ;           empty); ES preserved
 ; clobbers: flags
 ;
-; Dispatches to bb_save under double buffering (SPEC.md 32). vga_save_vram
-; is the VRAM body under its own name: the mouse cursor's save-under calls
-; it directly - the cursor lives in VRAM, never in the back buffer.
+; Dispatches to bb_save on a 1bpp adapter (SPEC.md 39.5). vga_save_vram is
+; the VRAM body under its own name: the mouse cursor's save-under calls it
+; directly, without cur_unlazy.
 ; -----------------------------------------------------------------------------
 gfx_save:
     call cur_unlazy             ; the menu save-under READS the screen, so
                                 ; the arrow must not be in what it banks
-    cmp byte [bb_on], 0
+    cmp byte [vid_mono], 0
     jne bb_save
 vga_save_vram:
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
@@ -2482,12 +2477,12 @@ vga_save_vram:
 ;           empty); ES preserved
 ; clobbers: flags
 ;
-; Dispatches to bb_restore under double buffering (SPEC.md 32);
+; Dispatches to bb_restore on a 1bpp adapter (SPEC.md 39.5);
 ; vga_restore_vram is the VRAM body for the cursor path (see gfx_save).
 ; -----------------------------------------------------------------------------
 gfx_restore:
     call cur_unlazy             ; ...and writes it back, unclipped
-    cmp byte [bb_on], 0
+    cmp byte [vid_mono], 0
     jne bb_restore
 vga_restore_vram:
     cmp byte [vid_mono], 0      ; see vga_save_vram
@@ -2602,13 +2597,10 @@ gfx_lock:
                                 ; something is about to draw over it
 
 ; -----------------------------------------------------------------------------
-; gfx_unlock - flush, show the cursor, then release the mutex (SPEC.md 7)
+; gfx_unlock - show the cursor, then release the mutex (SPEC.md 7)
 ;
-; Order is binding: gfx_flush pushes the dirty back-buffer rect to VRAM
-; while the cursor is still hidden (a no-op without double buffering);
-; cursor_show then redraws at the latest mouse position - its save-under
-; captures the freshly flushed pixels - while we still own the screen;
-; only then may the ISR draw again.
+; Order is binding: cursor_show redraws at the latest mouse position while we
+; still own the screen; only then may the ISR draw again.
 ;
 ; The clip region dies here too (SPEC.md 11.3 rule 1). Making it die with
 ; the lock hold is what stops a leaked region from silently truncating the
@@ -2635,7 +2627,6 @@ gfx_unlock:
                                 ; two stores above bound theirs. It is a
                                 ; compare and a branch when nothing moved
 %endif
-    call gfx_flush
     cmp byte [cur_lazy], 0      ; was the hide ever spent? (SPEC.md 7.1.4)
     jne .never                  ; no: the arrow never left the screen, so
     call cursor_show            ; showing it would bank itself as background

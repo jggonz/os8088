@@ -360,38 +360,38 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4747,
+    "bss": 4732,
     "budget": 98304,
     "codemax": 65536,
-    "cold": 22477,
+    "cold": 22069,
     "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3744,
-    "kend": 6112,
+    "imgpara": 3680,
+    "kend": 6048,
     "kseg": 96,
-    "ksize": 96256,
+    "ksize": 95232,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54999
+    "text": 54121
   },
   "small": {
-    "bss": 4662,
+    "bss": 4647,
     "budget": 94208,
     "codemax": 65536,
-    "cold": 21656,
-    "coldpara": 1376,
+    "cold": 21248,
+    "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3616,
-    "kend": 5952,
+    "imgpara": 3552,
+    "kend": 5856,
     "kseg": 96,
-    "ksize": 93696,
+    "ksize": 92160,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52904
+    "text": 52026
   }
 }
 ```
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,460 | 36.7% |
-| the window system and its furniture | 16,254 | 21.0% |
-| drawing: adapters, primitives, glyphs, icons | 11,282 | 14.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,801 | 12.7% |
-| the kernel proper: API table, heap, scheduler, events | 5,877 | 7.6% |
-| the Control Panel | 4,426 | 5.7% |
+| the file system, end to end | 28,460 | 37.4% |
+| the window system and its furniture | 16,209 | 21.3% |
+| drawing: adapters, primitives, glyphs, icons | 10,625 | 13.9% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,766 | 12.8% |
+| the kernel proper: API table, heap, scheduler, events | 5,870 | 7.7% |
+| the Control Panel | 3,884 | 5.1% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,476** | |
+| **total** | **76,190** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -891,39 +891,39 @@ generated in the first place.
 | `wm.inc` — the window manager (§11) | 5,840 | — | **5,840** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
-| `ctrl.inc` — the Control Panel (§31) | 877 | 3,549 | **4,426** | — | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,057 | — | **4,057** | 118 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,051 | — | **4,051** | 118 | — |
+| `ctrl.inc` — the Control Panel (§31) | 743 | 3,141 | **3,884** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,577 | — | **2,577** | 252 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 98 |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,542 | — | **2,542** | 246 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,535 | — | **2,535** | 194 | 98 |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,403 | — | **2,403** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
-| `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,687 | — | **1,687** | 27 | — |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
-| `icons.inc` — the icon renderer (§10) | 1,358 | — | **1,358** | 34 | — |
-| `font.inc` — the 8x8 text renderers (§6) | 1,201 | — | **1,201** | 17 | 768 |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,197 | — | **1,197** | 84 | — |
+| `icons.inc` — the icon renderer (§10) | 1,342 | — | **1,342** | 34 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,187 | — | **1,187** | 84 | — |
+| `font.inc` — the 8x8 text renderers (§6) | 1,172 | — | **1,172** | 17 | 768 |
+| `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,097 | — | **1,097** | 18 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
-| `fsx.inc` — fullscreen exclusive (§53) | 943 | — | **943** | 9 | — |
+| `fsx.inc` — fullscreen exclusive (§53) | 916 | — | **916** | 9 | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 912 | — | **912** | 16 | — |
-| `viddet.inc` — adapter detection and geometry (§39) | 821 | — | **821** | — | — |
+| `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
-| `toast.inc` — **(undescribed)** | 438 | — | **438** | 43 | — |
-| `fprog.inc` — the file-operation progress widget (§12.8) | 379 | — | **379** | — | — |
+| `toast.inc` — **(undescribed)** | 435 | — | **435** | 43 | — |
+| `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,685 | — | **2,685** | — | — |
-| **total** | **54,999** | **22,477** | **77,476** | **4,747** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,678 | — | **2,678** | — | — |
+| **total** | **54,121** | **22,069** | **76,190** | **4,732** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
