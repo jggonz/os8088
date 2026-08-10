@@ -18,6 +18,9 @@ vm/pentium/nvr/
 vm/xt-z/nvr/
 vm/386-z/nvr/
 
+# Page snapshots the Playwright MCP server drops in the working directory
+.playwright-mcp/
+
 # Python bytecode from tools/ being imported as a module (os88dbg)
 __pycache__/
 *.pyc
