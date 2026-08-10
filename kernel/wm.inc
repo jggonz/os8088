@@ -2121,13 +2121,26 @@ wm_dmg_vacate:
 ; wm_dmg_stale - can any pixel of this window have gone stale?
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 (the window's rect); wm_dmg_hit has
 ;      already said it overlaps the damage
-; out: CF = 1 = no: it never overlapped the rect the moved window vacated, so
-;      it owes nothing. CF = 0 = mark it.
-; clobbers: nothing else (flags)
+; out: CF = 1 = no: nothing of it was uncovered, so it owes nothing.
+;      CF = 0 = mark it. All registers preserved.
 ;
-; wm_dmg_hit's four compares against a different rect. With nothing armed the
-; answer is always "mark", which is what every caller but ui_drag gets and
-; what this pass has always done.
+; SPEC.md 11.91.2, and it asks TWO questions. Did this window overlap the rect
+; the moved window LEFT - if not, nothing of it can be stale. And if it did,
+; is that overlap now back under the window at its NEW position - if so, every
+; one of those pixels is written again by the move and nothing is exposed.
+; The first test alone was the first cut, and on a four-window desktop the
+; second is where most of the remaining waste was: a short drag leaves the
+; window it was sitting on entirely back underneath.
+;
+; The second test is against the moved window's FRAME and not the rect
+; wm_win_rect answers with. wm_draw_win writes every pixel of the frame, while
+; the drop shadow is two LINES - so the occupied box holds two corners,
+; (x+w, y) and (x, y+h), that nothing writes, and claiming those would strand
+; the old shadow's pixel on a rightward drag. Under-claiming by two lines
+; marks a window that only sat under a shadow: the safe direction.
+;
+; With nothing armed the answer is always "mark", which is what every caller
+; but ui_drag and ui_grow gets and what this pass has always done.
 ; -----------------------------------------------------------------------------
 wm_dmg_stale:
 %ifdef REDRAWFULL
@@ -2136,7 +2149,7 @@ wm_dmg_stale:
 %endif                          ; did before the vacated rect existed
     cmp word [wm_dmg_stwin], 0
     je .mark
-    cmp ax, [wm_dmg_st2]
+    cmp ax, [wm_dmg_st2]        ; ...did it overlap where the window WAS?
     jg .clean
     cmp cx, [wm_dmg_st1]
     jl .clean
@@ -2144,6 +2157,62 @@ wm_dmg_stale:
     jg .clean
     cmp dx, [wm_dmg_sy1]
     jl .clean
+
+    ; It did. Is that overlap wholly back under the window's NEW frame? Then
+    ; the move re-covered every pixel of it and nothing is exposed.
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, [wm_dmg_stwin]
+    cmp ax, [wm_dmg_st1]        ; clip this window to the vacated rect: that
+    jge .ox1                    ; intersection is the only part of it the
+    mov ax, [wm_dmg_st1]        ; move can have touched
+.ox1:
+    cmp bx, [wm_dmg_sy1]
+    jge .oy1
+    mov bx, [wm_dmg_sy1]
+.oy1:
+    cmp cx, [wm_dmg_st2]
+    jle .ox2
+    mov cx, [wm_dmg_st2]
+.ox2:
+    cmp dx, [wm_dmg_sy2]
+    jle .oy2
+    mov dx, [wm_dmg_sy2]
+.oy2:
+    cmp ax, [si+W_X]            ; ...and ask whether THAT is inside the new
+    jl .exposed                 ; FRAME - x .. x+w-1, y .. y+h-1
+    cmp bx, [si+W_Y]
+    jl .exposed
+    push ax
+    mov ax, [si+W_X]
+    add ax, [si+W_W]
+    dec ax
+    cmp cx, ax
+    pop ax
+    jg .exposed
+    push ax
+    mov ax, [si+W_Y]
+    add ax, [si+W_H]
+    dec ax
+    cmp dx, ax
+    pop ax
+    jg .exposed
+    pop si                      ; covered again: nothing of it is showing
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.exposed:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
 .mark:
     clc
     ret
