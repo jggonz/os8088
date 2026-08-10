@@ -6050,6 +6050,75 @@ it may belong to another window and this one would then never be drawn at
 all. Owe it to a worker, not to the next event of your own — §27.7.8 is the
 reference consumer.
 
+### 13.5 The chrome boxes fire on the release, over the same box
+
+`wm_hit`'s **AL=2** (close) and **AL=3** (minimize) are dispatched on
+`EVT_MUP`, and only when `wm_hit` at the release point still answers the
+**same window and the same region** as the press. A press on a chrome box
+**arms** it — `[ui_armw]` the window, `[ui_armr]` the region — and returns
+having drawn nothing. Anything else discards the arm: a release elsewhere on
+the title bar, on the *other* box, over another window, over the desktop, or
+the armed window going away in between.
+
+Both halves of the comparison are load-bearing. Two stacked windows' close
+boxes can occupy the same screen point, and the two boxes of one window share
+the same eleven rows of one title bar — `W_Y+4 .. W_Y+14`, columns
+`W_X+8 .. W_X+18` and `W_X+W_W-19 .. W_X+W_W-9`.
+
+**The grow box is not in this rule.** `ui_grow` already commits `W_W`/`W_H` on
+release and repaints only when the size changed (§11.1), so it has both the
+release edge and the slide-back already; arming it would wrap a working
+tracker in a no-op.
+
+**Arm and return, never spin and track.** The press handler must end its
+`ui_task` pass. `kbm_ui` releases the keyboard mouse's latch and posts the
+`EVT_MUP` *once the pass that dispatched the mouse-down is over* (§9.6.1), so
+a handler that returns costs one keypress and one that loops costs two — and
+a button that stays down is the thing §9.6.1 describes as reading "as broken
+everywhere else". It also keeps the gfx lock out of a wait, so §7.1.3's
+pacing rule never arises: there is no loop to pace.
+
+**The stale-arm fallback tests the QUEUE as well as the level.** `ui_arm_chk`,
+run from the deferred ladder, drops the arm only when it is set, `mouse_btn`
+bit 0 is clear **and** `evq_count` is zero. `evq_push` drops silently when the
+ring is full (§10), and an arm nobody spends would be fired by the next
+unrelated release. Without the queue half the keyboard mouse could never close
+a window at all — `kbm_ui` posts its `EVT_MUP` at the end of the very pass
+that armed, so a level-only test sees the button already up and throws the arm
+away before the release it just queued is popped. With it, the only case that
+could depend on where in the ladder the check sits is exactly the case the
+queue is non-empty in, so the placement is free.
+
+**`[ui_click_t]` is stamped on the DOWN edge only.** The `EVT_MUP` branch must
+not touch it: §22/§26/§38's four detectors compare press birth ticks and the
+double-click stays on the press (§13.6). Stamping here would silently make
+double-click spacing release-to-release, and `tools/os88mouse.py`'s `dblclick`
+measures press-to-press and would keep passing.
+
+Nothing else changes edge. `W_ONCLICK` is still dispatched on the press, the
+title bar still drags, menus still commit at the hovered item on release, and
+the right button has no chrome path at all (§12.4).
+
+### 13.6 Which edge an element fires on
+
+An element may be dispatched on the **down** edge exactly when its
+single-click action is a **prefix** of its double-click action — select before
+open, raise before zoom — because then the first click's action is safe to
+perform whether or not a second follows. It is also where the down edge
+belongs on a slow machine, being the more responsive of the two. Everything
+else fires on the **release**, over the element the press landed on.
+
+The two are exclusive by construction:
+
+> **Anything that fires on the release has no double-click, and anything with
+> a double-click fires its first action on the press.**
+
+Buttons, checkboxes, radios and the chrome boxes of §13.5 have no prefix
+action — there is nothing safe to do on the press — which is exactly why they
+want the release. Rows, icons and title bars have one: §22.2's file row,
+§26.2's drive zone, §38.3's dialog row and §11.95's title bar all select or
+raise first and open or zoom second.
+
 ## 14. apps.inc
 
 The built-in app **kinds**: About, Timer, Bounce. Nothing is

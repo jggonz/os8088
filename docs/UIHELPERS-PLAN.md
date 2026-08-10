@@ -109,7 +109,7 @@ package's own image.
 
 | | SDK include | kernel API slot |
 |---|---|---|
-| `KERN_BUDGET` | **zero** | ~350–450 bytes, against 1,024 spare (kern_big) / 512 (kern_small) |
+| `KERN_BUDGET` | **zero** | ~350–450 bytes, against 1,536 spare (kern_big, three steps) — but only **63 bytes** left in the image rung after Tier 1, so it would cross at least one |
 | API table | untouched | 3–4 new cells, a table revision, every `.o88` rebuilt |
 | ABI | **none** — it is source | a published contract |
 | revision cost | edit and rebuild adopters | a table revision |
@@ -177,8 +177,8 @@ drift.
 | per adopting package | **+~250 B** of `APP_MAX_SIZE` = 0xF000 (60KB), *minus* the private helper deleted — near a wash |
 | floppy | a few clusters across both app images |
 
-**No measurement is possible in this container — there is no `nasm`.** The
-per-package figure is from instruction shapes. It does not touch the kernel, so
+The per-package figure is from instruction shapes; the kernel baseline is
+measured (Tier 1 installed `nasm`), and this tier adds nothing to it. It does not touch the kernel, so
 `kernsize.py` has nothing to report either way; what wants checking at
 implementation is that `combo.img` still fits (CLAUDE.md: 304 of 354 clusters).
 

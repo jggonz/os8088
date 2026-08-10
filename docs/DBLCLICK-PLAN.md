@@ -4,7 +4,7 @@
 and about four bytes of body. It publishes a word the kernel already keeps.
 
 It is independent of Tier 1 (`docs/MOUSEUP-PLAN.md`) in both directions —
-different edge, different elements, no shared state — which is 13.6's boundary
+different edge, different elements, no shared state — which is §13.6's boundary
 rule doing its job. Either may land first.
 
 ---
@@ -274,7 +274,7 @@ It just should be made knowingly.
 
 ## 10. Proposed SPEC.md text
 
-13.5 and 13.6 are Tier 1's (`MOUSEUP-PLAN.md` §11). **13.7 is free.**
+§13.5 and §13.6 are Tier 1's and are LANDED. **13.7 is free.**
 
 Section numbers that do not exist yet are written **without a `§`**, and the
 new cell is called a *cell* rather than a *slot* — `tools/checkdocs.py`
@@ -299,7 +299,7 @@ reads `git ls-files` and so cannot see an untracked file.
 > package load is seconds, under the gfx lock, with presses queueing behind it.
 > A package rolling its own detector fires when it should not.
 >
-> The kernel keeps its own four detectors (§22.2, §26.2, §38.3, 13.5's
+> The kernel keeps its own four detectors (§22.2, §26.2, §38.3, §13.5's
 > neighbour `ui_tdbl`) rather than routing them through this slot: three of
 > them fold the identity into a selection word they already keep, and
 > `ui_tdbl` *spends* a completed pair where the others *restamp*. The slot
@@ -318,7 +318,7 @@ reads `git ls-files` and so cannot see an untracked file.
 - **No package behaviour changes** — the slot has no callers until one is
   written. ModPlug's playlist keeps click-to-select / click-again-to-play,
   which is a good gesture on this machine and not a workaround to be undone.
-- **Nothing about which edge anything fires on.** 13.6's rule stands: the
+- **Nothing about which edge anything fires on.** §13.6's rule stands: the
   double-click stays on the **down** edge, where it is most responsive, and
   this slot serves only elements on that side of the boundary.
 - **No `.o88` invalidated**, no renumbering, no SDK breakage — an append.

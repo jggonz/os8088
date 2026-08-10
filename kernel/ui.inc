@@ -111,6 +111,10 @@ ui_task:
     mov ax, [ui_ev + EV_TYPE]
     cmp ax, EVT_RDOWN           ; the right button goes its own, much
     je .rdown                   ; narrower way (SPEC.md 12.4/13)
+    cmp ax, EVT_MUP             ; a release SPENDS an armed chrome press
+    je .mup                     ; (SPEC.md 13.5), and is otherwise ignored -
+                                ; which is what this loop did with every
+                                ; mouse-up before that section existed
     cmp ax, EVT_MDOWN
     jne .yield                  ; only mouse-downs matter here
     mov cx, [ui_ev + EV_A]      ; CX = click x
@@ -248,16 +252,64 @@ ui_task:
     call desk_click             ; CX/DX = click point, no lock held; select /
     jmp .yield                  ; double-click-open is desk.inc's business
 
+    ; --- the chrome boxes: the press only ARMS (SPEC.md 13.5) ----------------
+    ; Both boxes arm identically, so they are one body with two names rather
+    ; than two that have to be kept in step. wm_hit reports AL=2/AL=3 on the
+    ; FRONT window only, so there is no "which window" question here beyond
+    ; the one .mup asks again at the release.
+    ;
+    ; No lock is taken and nothing is drawn: the press is not the action any
+    ; more, and a pressed-state overlay is deliberately not part of this
+    ; (docs/MOUSEUP-PLAN.md 7 - arm-and-return never sees the pointer between
+    ; the two edges, so a static invert would stay lit while the user slid
+    ; off, which says the opposite of what is true).
 .close_box:                     ; wm_hit only reports AL=2 on the front window
-    call gfx_lock
-    call app_close_win          ; in: BX; quits the owning instance (or
-    call gfx_unlock             ; hides an ownerless window) - SPEC.md 29
+.min_box:                       ; ...and AL=3, likewise
+    mov [ui_armw], bx           ; BX = the window, AL = wm_hit's region
+    mov [ui_armr], al
     jmp .yield
 
-.min_box:                       ; wm_hit only reports AL=3 on the front window
+.mup:
+    ; The release. Fires the armed box only if wm_hit at THIS point still
+    ; answers the same window AND the same region - "released over the same
+    ; element", which is the whole feature. The arm is spent either way, so a
+    ; release that lands anywhere else simply throws it away.
+    cmp word [ui_armw], 0
+    je .yield                   ; nothing armed: one compare, and the release
+                                ; is ignored exactly as it always was
+    mov cx, [ui_ev + EV_A]      ; NO [ui_click_t] STORE HERE, and that is
+    mov dx, [ui_ev + EV_B]      ; binding: SPEC.md 22/26/38's four detectors
+                                ; compare PRESS birth ticks and the
+                                ; double-click stays on the down edge
+                                ; (SPEC.md 13.6). Stamping here would make
+                                ; double-click spacing release-to-release,
+                                ; silently - os88mouse.py's dblclick measures
+                                ; press-to-press and would keep passing
+    call wm_hit                 ; BX = window under the release, AL = region
+    mov si, [ui_armw]           ; (AH survives wm_hit by its own contract, but
+    mov ah, [ui_armr]           ; it is loaded after it regardless)
+    mov word [ui_armw], 0       ; spent: every path below leaves it clear
+    cmp bx, si
+    jne .yield                  ; a different window - two windows' boxes can
+                                ; share a point, so this half is not optional
+    cmp al, ah
+    jne .yield                  ; ...or the other box on the same title bar
     call gfx_lock
+    test word [bx + W_FLAGS], 2 ; the window can have gone between the two
+    jz .mup_done                ; passes - a package worker reaching
+                                ; inst_task_die, or a command off its own bar.
+                                ; wm_hit has answered already, so this is the
+                                ; belt to that braces; it costs a test, and
+                                ; what it guards is a dispatch through a freed
+                                ; record (the ui_dispatch guard, verbatim)
+    cmp ah, 2
+    jne .mup_min
+    call app_close_win          ; in: BX; quits the owning instance (or
+    jmp short .mup_done         ; hides an ownerless window) - SPEC.md 29
+.mup_min:
     call inst_minimize          ; in: BX; flags the instance minimized and
-    call gfx_unlock             ; hides - its dock tile inverts (SPEC.md 30)
+.mup_done:                      ; hides - its dock tile inverts (SPEC.md 30)
+    call gfx_unlock
     jmp .yield
 
 .grow_box:
@@ -307,6 +359,8 @@ ui_task:
                                 ; that whatever this pass dispatched could
                                 ; track it, and if nothing did, this is where
                                 ; the press becomes a click
+    call ui_arm_chk             ; ...and a chrome press whose release was
+                                ; DROPPED must not stay armed (SPEC.md 13.5)
     call fdlg_reap              ; a file dialog cancelled by its close or
                                 ; minimize box is only HIDDEN by that route
                                 ; (SPEC.md 38.1) - collect it here rather
@@ -411,6 +465,45 @@ ui_task:
 .idle:
     call task_yield
     jmp .loop
+
+; -----------------------------------------------------------------------------
+; ui_arm_chk - drop a chrome arm whose release will never arrive (SPEC.md 13.5)
+; in:  nothing
+; out: nothing (all registers preserved; flags clobbered)
+;
+; evq_push DROPS silently when the ring is full (16 records), and ui_drag,
+; ui_grow and fm_drag each carry the same fallback in as many words - "the
+; EVT_MUP was dropped (queue full) - the level still says so". Here the failure
+; is worse than a stuck drag: an arm nobody spends would be fired by the NEXT
+; unrelated release, on whatever window happened to be under it.
+;
+; THE QUEUE TEST IS NOT DECORATION, and it is the whole reason this routine can
+; sit anywhere in the ladder. Without it:
+;
+;   - the keyboard mouse could never close a window. kbm_ui posts the EVT_MUP
+;     at the end of the very pass that armed (SPEC.md 9.6.1), so a level-only
+;     check running after it sees bit 0 already clear and throws the arm away
+;     before the release it just queued can be popped.
+;   - a real mouse would lose the release intermittently: anything queued ahead
+;     of it means this runs with the button already up and the EVT_MUP still in
+;     the ring.
+;
+; With it, the case that would depend on ordering is exactly the case the queue
+; is non-empty in - so ui_arm_chk before or after kbm_ui is the same routine.
+; It is placed after only because that is the order the two were written in.
+;
+; One compare per pass when nothing is armed, which is nearly always.
+; -----------------------------------------------------------------------------
+ui_arm_chk:
+    cmp word [ui_armw], 0
+    je .out                     ; nothing armed - the common case
+    test byte [mouse_btn], 1
+    jnz .out                    ; still held: the release is yet to come
+    cmp word [evq_count], 0
+    jne .out                    ; ...or it is queued behind something else
+    mov word [ui_armw], 0       ; the button is up and nothing is pending, so
+.out:                           ; the release is never going to arrive
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ui_rdown - act on one EVT_RDOWN: the context-menu path (SPEC.md 12.4/13)
@@ -1701,6 +1794,15 @@ ui_click_t: resw 1              ; EV_C of the event being dispatched: the
 ui_tclkt:   resw 1              ; birth tick of the last title-bar press, and
 ui_tclkw:   resw 1              ; the window it landed on (0 = none recorded):
                                 ; ui_tdbl's pair, SPEC.md 11.95
+ui_armw:    resw 1              ; SPEC.md 13.5: the window a chrome press is
+                                ; ARMED on, 0 = nothing armed. A window pointer
+                                ; is never 0, so 0 is the sentinel and .bss
+                                ; arrives zeroed (kernel.asm) - ui_tclkw's
+                                ; convention exactly
+ui_armr:    resb 1              ; ...and which box: wm_hit's AL, 2 = close,
+                                ; 3 = minimize. Both halves are compared at the
+                                ; release, because the two boxes share a title
+                                ; bar and two windows' boxes can share a point
 ui_dragwin: resw 1              ; window being dragged
 ui_startx:  resw 1              ; mousedown position (drag origin)
 ui_starty:  resw 1

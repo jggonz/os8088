@@ -1,5 +1,10 @@
 # The chrome fires on mouse-UP — investigation and plan
 
+> **STATUS: IMPLEMENTED.** SPEC.md §13.5 and §13.6; `kernel/ui.inc`. Measured
+> at **`.text` +102, `.bss` +3, no rung crossed** (§8) and gated on CGA,
+> Hercules and VGA mode 12h (§12.1). Phase B — pressed-state feedback — is
+> deliberately **not** built (§7).
+
 **Tier 1 of the mouse-up work.** Self-contained: no API slot, no package
 rebuild, no `.o88` invalidated, no SDK change. It touches `kernel/ui.inc` and
 nothing else.
@@ -263,24 +268,32 @@ taken later, static invert on a **1bpp** adapter should be checked first — a
 CLAUDE.md's standing rule is that a greying or contrast change is not done
 until it has been looked at on mono.
 
-## 8. Budget
+## 8. Budget — MEASURED
 
-| | estimate |
-|---|---|
-| `.bss` | **3 bytes** (`ui_armw` word + `ui_armr` byte) |
-| `.text` | **~115 bytes** — MUP branch ~40, fire path ~50, level fallback ~25 |
+Built and measured (`tools/kernsize.py`), not estimated:
 
-Against `KERN_BUDGET`'s spare at the time of writing — **kern_big 1,024 bytes
-(two 512-byte steps), kern_small 512 (one step)**. kern_big should not cross a
-rung; **kern_small may**, since one step is all it has and `docs/KERNEL-MEMORY.md`
-warns the image's last sector can be nearly full independently of the reported
-spare.
+```
+kernsize[big]: sections   text 55,434 +102  bss 4,919 +3   (sum +105)
+kernsize[big]: rungs      image 60,416 +0 (63 left, was 168)
+kernsize[big]: footprint  KERN_SIZE 96,768 of 98,304 -> 1,536 spare (3 steps), was 1,536  [+0]
+kernsize[big]: segment    .text+.bss 60,353 of 65,536 -> 5,183 left
+```
 
-These are estimates from the instruction shapes, not measurements. `make` runs
-`tools/kernsize.py`, which prints the per-section delta and shouts when a rung
-is crossed — **report both numbers, and do not call it free if it crossed no
-rung**, per the Accounting rule. If kern_small crosses, that is a conversation
-and not a build fix.
+**`.text` +102, `.bss` +3, and NO RUNG CROSSED** — the estimate above was ~115
+and 3. The footprint is unchanged at 96,768 and the spare is still **1,536
+bytes, three 512-byte steps**. (Two earlier drafts of this document said 1,024
+and two steps, taken from `docs/KERNEL-MEMORY.md` rather than from a build;
+that was wrong and is corrected here and in the other three plans.)
+
+**The number to carry forward is the IMAGE RUNG: 63 bytes left, was 168.**
+That is the constraint CLAUDE.md warns is independent of the reported spare,
+and this change spent 105 of the 168 that were there. **The next addition to
+`.text` anywhere in the kernel — Tier 3's ~37 bytes included — very likely
+buys a whole 512-byte step**, taking the footprint spare from three rungs to
+two. That is not this change's fault and it is not free either; it is the next
+author's first fact.
+
+kern_small is a separate `KERN_SMALL=1` build and was **not** measured here.
 
 ## 9. Testing
 
@@ -335,77 +348,74 @@ same for cases 2/3/6 and is *supposed* to differ for case 1.
 - **`app_close_win` and `inst_minimize`** are called with the same arguments,
   under the same lock, from the same task. Only *when* moves.
 
-## 11. Proposed SPEC.md text
+## 11. SPEC.md — LANDED
 
-§13 currently carries one subsection heading (§13.4). **13.5 is free** —
-checked against SPEC.md, CLAUDE.md and the kernel sources. Draft, to land
-*with* the implementation per CLAUDE.md's "update SPEC.md before changing any
-interface":
+The text is in SPEC.md as **§13.5** (the release rule) and **§13.6** (which
+edge an element fires on), landed in the same commit as the code per CLAUDE.md's
+"update SPEC.md before changing any interface". They are no longer proposals,
+so this document cites them with a `§` like anything else.
 
-> **Why 13.5 and 13.6 are written here without a `§`.** `tools/checkdocs.py`
-> resolves every `§n.n` against SPEC.md's real headings and fails `make` on
-> one that does not resolve — which is correct, and which a plan document
-> proposing a *new* section trips by construction. So a section that does not
-> exist yet is named bare, and **the `§` goes on when the text lands.** The
-> same applies to `slot 0xNNNN`, which is checked against `os88api.inc` the
-> same way; write `cell 0xNNNN` until the cell is real.
+> **The convention for a plan document that proposes a section, and the trap
+> under it.** `tools/checkdocs.py` resolves every `§n.n` against SPEC.md's real
+> headings and fails `make` on one that does not resolve — which a document
+> proposing a *new* section trips by construction. So write a not-yet-existing
+> section bare (`13.7`) and add the `§` when the text lands; the same applies
+> to a not-yet-existing cell, which is a *cell* until `os88api.inc` has it.
 >
-> Note also that checkdocs takes its file list from `git ls-files`, so it
-> **cannot see an untracked file**. Running it on a plan document before the
-> first `git add` reports a clean tree it never opened. `git add` first, then
-> run the gate.
+> And checkdocs takes its file list from `git ls-files`, so it **cannot see an
+> untracked file.** Running it on a new plan document before the first
+> `git add` reports a clean tree it never opened — which is exactly how the
+> first version of this document was committed with three broken citations in
+> it and `make` failing for anyone who pulled. **`git add` first, then run the
+> gate.**
 
-> ### 13.5 The chrome boxes fire on the release, over the same box
->
-> `wm_hit`'s `AL=2` (close) and `AL=3` (minimize) are dispatched on
-> `EVT_MUP`, and only when `wm_hit` at the release point answers the same
-> window and the same region as the press. A press that lands on a chrome box
-> **arms** it and returns; anything else — a release elsewhere, a release on
-> the other box, a release on another window's box, the armed window going
-> away — discards the arm and draws nothing. The grow box is not in this
-> rule: `ui_grow` already commits on release (§11.1).
->
-> **Arm and return, never spin and track.** The handler must end its pass.
-> `kbm_ui` releases the keyboard mouse's latch and posts the `EVT_MUP` once
-> the pass that dispatched the mouse-down is over (§9.6.1), so a press that
-> returns is one keypress and a press that loops is two. It also keeps the
-> gfx lock out of a wait, so there is no pacing rule to obey (§7.1.3).
->
-> **The stale-arm fallback tests the QUEUE as well as the level**: arm set,
-> `mouse_btn` bit 0 clear *and* `evq_count` zero. A dropped `EVT_MUP` (the
-> ring is 16 and `evq_push` drops silently) would otherwise leave an arm for
-> the next unrelated release to fire — and without the queue half, the
-> keyboard mouse disarms itself on the very pass that armed, because
-> `kbm_ui`'s release is queued and not yet popped.
->
-> **`[ui_click_t]` is stamped on the DOWN edge only.** The `EVT_MUP` branch
-> must not touch it: §22/§26/§38's four detectors compare birth ticks and
-> double-click stays on the press (13.6), so stamping here would silently
-> make double-click spacing release-to-release.
+## 12. Order of work — DONE
 
-And a 13.6 for the boundary rule of §5, which is worth pinning because it is
-what keeps this work and the double-click work from ever meeting:
+1. ~~§6's four edits, no feedback.~~ **Done** — `kernel/ui.inc` only.
+2. ~~`make`; report the per-section delta and any rung crossed.~~ **Done** —
+   §8, and no rung was crossed.
+3. ~~`make marty`; cases 1–9 on CGA, then Hercules, then VGA.~~ **Done** — all
+   pass on `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga`,
+   with case 8 (the keyboard mouse, one keypress) additionally re-run on VGA.
+   The IBM-ROM machines are unavailable in a container — no ROM set ships —
+   so the GLaBIOS variants are what a CI or container run gets.
+4. ~~Land §11's SPEC text in the same commit.~~ **Done** — §13.5 and §13.6.
+5. Phase B (pressed-state feedback) is **not** part of this and remains
+   unbuilt (§7).
 
-> ### 13.6 Which edge an element fires on
->
-> An element may be dispatched on the **down** edge exactly when its
-> single-click action is a **prefix** of its double-click action — select
-> before open, raise before zoom — because then the first click's action is
-> safe to perform whether or not a second follows. Everything else fires on
-> the **release**, over the element the press landed on.
->
-> The two are exclusive by construction: **anything that fires on the release
-> has no double-click, and anything with a double-click fires its first
-> action on the press.** Buttons, checkboxes, radios and the chrome boxes
-> have no prefix action; rows, icons and title bars do.
+### 12.1 What the gate actually proved, and two corrections to it
 
-## 12. Order of work
+The harness lives in the session scratchpad rather than in `tests/`, because
+it drives the kernel from outside and needs no guest code — `tests/` is for
+packages. Cases run: 1 (click closes), 2 (press close → release on content →
+nothing), 3 (press content → release on close → nothing), 4 (press close →
+release on minimize → nothing), 5 (both for the minimize box), 6 (two windows,
+press A's close → release on B's close → neither closes), 8 (keyboard mouse,
+one keypress), 9 (drive-zone and title-bar double-clicks still work).
 
-1. §6's four edits, no feedback.
-2. `make`; report `kernsize.py`'s per-section delta and whether either build
-   crossed a rung (§8).
-3. `make marty`; cases 1–9 on **CGA**, then Hercules, then VGA mode 12h. CGA
-   first because it is the field machine's harder adapter and the one where a
-   title bar is pinstripes at 2.4:1.
-4. Land §11's SPEC text in the same commit.
-5. Phase B is not part of this.
+Two things went wrong in the *apparatus* first, and both are worth recording
+because both produced a confident wrong answer about working code:
+
+- **`m.sym()` returns a FLAT address**, and feeding it to `m.readseg(0x0060,
+  …)` adds the segment twice. The window table then read as all-zero and the
+  first run reported "no window is open" about a machine that plainly had one
+  on screen. `m.read(m.sym(x), n)` is the idiom, and `os88marty.py`'s own
+  docstring says so.
+- **A keyboard-mouse walk must not require pixel-exact arrival.** The step
+  accelerates on a run of repeats and resets on a change of direction
+  (§9.6), so the pointer oscillates about a target it cannot divide into.
+  Demanding equality tests the ramp; the controls are 11x11, so a 3px
+  tolerance tests the feature. The first run reported three failures against a
+  kernel whose actual outcomes — including the one that matters — had all
+  passed.
+
+**Case 7 (the window destroyed mid-gesture) was NOT run.** Setting it up needs
+a package worker tearing its own window down between the two passes, which is
+a gate package rather than a scripted click. The guard is in the code
+(`test word [bx+W_FLAGS], 2`) and `wm_hit` answers it first anyway, so this is
+an untested belt behind a tested braces — worth saying plainly rather than
+letting the matrix imply nine of nine.
+
+**And nothing here was run on the field machine.** Nothing in this change
+touches a disk, so CLAUDE.md's 5150 rule is not engaged, but the two 1bpp
+adapters have only been seen through an emulator's framebuffer.

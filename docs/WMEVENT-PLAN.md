@@ -210,13 +210,19 @@ mechanisms does not, and would be the thing to catch in review.
 | `.text` — **reclaimed**, 4 XMS cells + `VOL_PAINT` | **−40** |
 | **net `.text`** | **~+37**, plus whatever the four unreferenced `xm_*` bodies give back |
 
-Estimates from instruction shapes — **there is no `nasm` in this container**, so
-none of this is measured and `tools/kernsize.py` has not run. Report the real
-per-section delta at implementation, and note that removing the `xm_*` bodies
-could plausibly swing this negative on its own.
+Estimates from instruction shapes for this tier's own code; the **baseline is
+now measured** (Tier 1 installed `nasm` and built the tree). Removing the
+`xm_*` bodies could plausibly swing the net negative on its own.
 
-The pressure this is really about is Tier 4's: kern_big has 1,024 bytes spare
-and kern_small 512.
+**The pressure is the IMAGE RUNG, not the footprint.** kern_big's footprint
+spare is **1,536 bytes / three 512-byte steps** — an earlier draft said 1,024
+and two, taken from `docs/KERNEL-MEMORY.md` rather than a build — but after
+Tier 1 the image rung has **63 bytes left of 512**. So this tier's ~+37 bytes
+of `.text` almost certainly **crosses a rung** and takes the footprint spare to
+two steps, unless the withdrawals in §2 land first and pay for it. Doing the
+withdrawals *before* the callback is therefore not just tidy ordering: it is
+what keeps this change free. kern_small is a separate `KERN_SMALL=1` build and
+is still unmeasured.
 
 ## 7. Testing
 
@@ -247,7 +253,7 @@ press-drag-release and is what cases 2–4 need.
 
 ## 8. Proposed SPEC.md text
 
-13.5 and 13.6 are Tier 1's, 13.7 is Tier 2's. **13.8 is free.** Section numbers
+§13.5 and §13.6 are Tier 1's and are LANDED; 13.7 is Tier 2's. **13.8 is free.** Section numbers
 that do not exist yet are written without a `§`, and a not-yet-real cell as a
 *cell* — `MOUSEUP-PLAN.md` §11 has the note and the untracked-file trap.
 
@@ -275,7 +281,7 @@ four withdrawn cells.
 > here and does not try — it answers *the release for the press you were
 > given* and the package hit-tests it against what it drew.
 >
-> It shares 13.5's arm: `wm_hit`'s `AL` 2 and 3 fire the chrome, `AL` 0 fires
+> It shares §13.5's arm: `wm_hit`'s `AL` 2 and 3 fire the chrome, `AL` 0 fires
 > this, one word of state and one set of guards. A package that opts into this
 > **and** polls `OSAPI_MOUSE` in a tracking loop from its `W_ONCLICK` is doing
 > the same job twice; the loop consumes its own release.
@@ -291,7 +297,7 @@ four withdrawn cells.
 - **The XMS store's `CAPS` cell and everything the Task Manager displays.**
   Only the four uncalled cells go.
 - **Which edge anything fires on for existing code.** `W_ONCLICK` is still
-  dispatched on the press, and 13.6's boundary rule is untouched.
+  dispatched on the press, and §13.6's boundary rule is untouched.
 
 ## 10. Order of work
 
