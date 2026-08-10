@@ -63,6 +63,17 @@ Three findings:
 has been added to `kern_big`. The split is a *seam*, not a divergence, and the
 first thing through it is dual display.
 
+> **Superseded, and left standing as the record of the split commit.** The
+> paragraph above described the tree at step 0. Since then dual display has
+> gone through the seam into `kern_big`, and the **first removal from
+> `kern_small` has landed** — the extended-memory store above 1MB (SPEC.md
+> §41.11), which took `kern_small` to **81,017 bytes / 159 sectors** against
+> `kern_big`'s 86,011 / 168, with `kern_big` **byte-identical** to the build
+> before it. §6's open decision 4 carries what that first removal established
+> for the ones after it. The two builds are no longer the same bytes, so §0's
+> "BYTE-IDENTICAL" figures are history rather than a current gate; the current
+> gate is the one in §7's last paragraph, and it is unchanged.
+
 ---
 
 ## 1. What was built
@@ -319,12 +330,37 @@ current.
    makes it *possible* to move without touching the small machine, which is
    what the fourteenth move's comment said it was waiting for.
 3. **A 720KB big image** (§4).
-4. **What comes out of small, and when.** Nothing yet, on purpose.
-   docs/KERNEL-MEMORY.md already nominates the first candidate — SPEC.md
-   §9.6's keyboard mouse, 520 bytes and two steps — recorded there at the
-   owner's request precisely so this decision could be found rather than
+4. **What comes out of small, and when.** ~~Nothing yet, on purpose.~~
+   **The first removal has landed: the extended-memory store (SPEC.md
+   §41.11)**, asked for by the owner. docs/KERNEL-MEMORY.md also nominates
+   SPEC.md §9.6's keyboard mouse — 520 bytes and two steps — recorded there at
+   the owner's request precisely so this decision could be found rather than
    rediscovered. **It is a recommendation, not a plan**, and taking it is the
    owner's call.
+
+   What the first removal established, for the ones after it:
+
+   - **The seam is drawn by what code is FOR, not by which file it is in.**
+     §41 is two modules and the split runs *through* one of them: the CPU
+     tier stays in both builds (slot 0x0188 is a published ABI four packages
+     read), and the A20 and HMA routines go, because they exist only to reach
+     the store. The test that made that decision cheap was a grep —
+     `[cpu_feat]` and the `CPU_F_*` bits have no readers outside the two
+     modules, so nothing above them can observe the difference.
+   - **ABI parity is not "refuse"; it is "answer what the floor machine
+     answers".** §3's refusing stub was the right mechanism and the wrong
+     default value. The target machine is an 8088, so tier 0's answers are
+     already on every shipped package's tested path — which turns the stubs
+     from new behaviour into behaviour that has been in the field for as long
+     as the feature has. Verified by calling all five slots on both kernels
+     on the same 8088: identical, register for register.
+   - **A removal is worth measuring on the BOOT PATH and not only in bytes.**
+     Two probes came off `kern_small`'s boot — `int 15h` AH=88h and the A20
+     gate — and that is the only part of the feature that ever cost the
+     machine time rather than image.
+   - **The gate held exactly as designed**: `kern_big` came out
+     **byte-identical**, md5 and `cmp` both, so the removal is provably free
+     to the shipped product.
 
 ---
 
@@ -336,7 +372,7 @@ current.
 | 1 | ABI parity harness: the refusing stub and one `kern_big`-only slot behind it | one `.o88` runs on both; the slot answers CF=1 on small |
 | 2 | Dual display's kernel-side work behind `%ifdef KERN_BIG` | `kernsplit` reports small unchanged at every commit |
 | 3 | Second `kernsize` baseline, if and when both ship | — |
-| 4 | Removals from `kern_small`, one decision at a time | — |
+| 4 | Removals from `kern_small`, one decision at a time — **the extended-memory store is the first (SPEC.md §41.11)**; the rest still one decision at a time | big byte-identical; small −1,410 bytes and 2 rungs; the four slots answer tier 0's answers on both kernels |
 
 **The gate that matters is step 2's, and it is one line**: `make kernsplit`
 after every commit that touches the kernel. `kern_small`'s size moving in a

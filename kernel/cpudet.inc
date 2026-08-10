@@ -31,6 +31,12 @@
 ; decodes to whatever that machine happens to put there. cpu_a20_enable
 ; returns having touched no port at all, and cpu_hma_claim refuses.
 ;
+; THE MODULE IS SPLIT BETWEEN THE TWO BUILDS (SPEC.md 41.11): the tier -
+; cpu_detect, cpu_info, [cpu_tier], [cpu_feat] - is in both, and the A20 and
+; HMA routines are kern_big's, because they exist only to reach the store above
+; 1MB that kern_small does not have. The seam is at the %ifdef KERN_BIG below,
+; which carries the argument for where it falls.
+;
 ; This module is almost all BOOT OVERLAY (SPEC.md 2.5): cpu_detect,
 ; cpu_a20_enable and cpu_hma_claim run once from kmain - first thing, before
 ; sched_init hooks an ISR and before anything else may key off the tier - and
@@ -134,6 +140,35 @@ cpu_detect:
     pop cx
     pop ax
     ret
+
+%ifdef KERN_BIG
+; =============================================================================
+; THE A20 AND HMA HALF IS kern_big's (SPEC.md 41.11, docs/KERN-SPLIT-PLAN.md).
+;
+; Everything from here to cpu_info exists for ONE purpose: making a store above
+; 1MB reachable and sizing it. cpu_a20_enable is called from kmain and from
+; nowhere else, cpu_hma_claim from xm_init and from nowhere else, and the five
+; routines between them are those two's own helpers. kern_small has no xmem.inc
+; body (see that file's %else), so on that build every one of them would be
+; dead code that probes hardware nobody can use.
+;
+; What makes the seam clean is measurable rather than asserted: [cpu_feat] and
+; the CPU_F_* bits have NO readers anywhere outside this file and xmem.inc -
+; not in the kernel, not in a shipped package, not in a driver, not in the
+; benchmarks. So no code above this module can observe the difference, and the
+; one place the bits are still published - cpu_info's AH - answers 0 on
+; kern_small, which is the truth: no gate verified, no HMA claimed, no unreal
+; mode armed. It is also exactly what tier 0 answers.
+;
+; cpu_detect and cpu_info stay in BOTH builds and must. The TIER is a fact
+; about the CPU, not about this store: slot 0x0188 is a published ABI that
+; Note Pad (SPEC.md 27.3), Missile Command, Paint and tests/sysbench all read
+; to pick a code path, and none of them is asking about extended memory.
+;
+; The guard spans no `section` directive - .ovl is entered above for
+; cpu_detect and .text below for cpu_info - which is the rule
+; docs/KERN-SPLIT-PLAN.md 2.1 sets for where an %ifdef may go.
+; =============================================================================
 
 ; -----------------------------------------------------------------------------
 ; cpu_a20_probe - is the A20 line open RIGHT NOW? (SPEC.md 41.2)
@@ -416,6 +451,8 @@ cpu_hma_claim:
 .no:
     stc
     ret
+
+%endif  ; KERN_BIG - the A20 and HMA half ends here; the tier is both builds'
 
 ; -----------------------------------------------------------------------------
 ; cpu_info - the published tier and feature bits (osapi slot 0x0188's body)

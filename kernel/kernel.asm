@@ -766,10 +766,18 @@ section .ovl
 ovl_base:
 ovl_cpu_detect:     call cpu_detect
                     retf
+%ifdef KERN_BIG                 ; the A20 gate and the store above 1MB are
+                                ; kern_big's (SPEC.md 41.11). kmain's two calls
+                                ; to these are behind the same guard, so on
+                                ; kern_small neither the shim nor its caller
+                                ; is assembled - the overlay is free either
+                                ; way, but a shim to a body that does not
+                                ; exist would not assemble at all
 ovl_cpu_a20:        call cpu_a20_enable
                     retf
 ovl_xm_init:        call xm_init
                     retf
+%endif
 ovl_desk_init:      call desk_init
                     retf
 ovl_snd_init:       call snd_init
@@ -1682,8 +1690,10 @@ api_file_rename:
 ; and it has to stay resident for its own reasons: xm_arm because xm_copy
 ; re-arms unreal mode inside the window that uses it, dsk_vol_slot because
 ; every zone painter calls it on every repaint.
+%ifdef KERN_BIG                 ; xm_arm is kern_big's, so its shim is too
 ovw_xm_arm:         call xm_arm
                     retf
+%endif
 ovw_dsk_vol_slot:   call dsk_vol_slot
                     retf
 ovw_desk_rowcalc:   call desk_rowcalc
@@ -1770,6 +1780,15 @@ kmain:
                                 ; that may fire in it are the BIOS's own, and
                                 ; a tick lost here costs nothing ([ticks] is
                                 ; zeroed by sched_init anyway)
+%ifdef KERN_BIG                 ; the A20 gate and the store above 1MB are
+                                ; kern_big's alone (SPEC.md 41.11). kern_small
+                                ; is the 128KB-floor product, so it neither
+                                ; opens a gate nor sizes a store - and BOTH
+                                ; probes come off its boot path, which is the
+                                ; only part of this feature that ever cost the
+                                ; machine time rather than bytes. The tier is
+                                ; still detected above, in both builds: it is a
+                                ; fact about the CPU that packages read
     call FAT_SEG:ovl_cpu_a20    ; ...and VERIFY it: the feature bit is set by
                                 ; the wraparound probe, never by the poke
                                 ; (SPEC.md 41.2). A no-op on tier 0 - an 8088
@@ -1778,6 +1797,7 @@ kmain:
     call FAT_SEG:ovl_xm_init    ; size the store (int 15h AH=88h, on task 0
                                 ; per SPEC.md 7), claim the HMA, arm unreal
                                 ; mode on tier 2, publish [xm_kb] LAST
+%endif
 
     call dsk_dpt_init           ; int 1Eh becomes ours (SPEC.md 18.92) before
                                 ; any transfer: the ROM's EOT is 8, and every

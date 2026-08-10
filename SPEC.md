@@ -20850,6 +20850,97 @@ changes no code: COPY never reads `gfx_lock_flag`.)
 - `make clean && make`: both geometries, zero warnings, every §15.1 guard
   still passing.
 
+### 41.11 The store above 1MB is `kern_big`'s (binding)
+
+**`kern_small` has no extended-memory store at all**, and this is the first
+feature taken out of that build (docs/KERN-SPLIT-PLAN.md §7 step 4). The
+reason is not that the code is large — it is that the two products describe
+two different machines, and a store above 1MB is the one feature `kern_small`
+can never reach: it is the **128KB-floor** product, and a machine with RAM
+above 1MB is by definition not the machine it exists for. Every byte and every
+boot-time probe spent on it there buys nothing on any machine that will ever
+run it.
+
+**Where the seam falls, and why it is not "everything in §41".** The split is
+by *what the code is for*, not by which file it is in:
+
+| in both builds | `kern_big` only |
+|---|---|
+| `cpu_detect`, `cpu_info` (slot 0x0188), `[cpu_tier]`, `[cpu_feat]` | `cpu_a20_probe`/`_settle`, `cpu_kbc_wait`, `cpu_fast_a20`, `cpu_kbc_a20`, `cpu_a20_enable`, `cpu_hma_claim` |
+| — | the whole of `xmem.inc`'s body: `xm_init`, `xm_arm`, the allocator, `xm_copy` and both transports |
+| the four slots 0x0190..0x01A8, as cells | their real bodies |
+
+**The TIER stays in both and must.** It is a fact about the CPU, not about
+this store: slot 0x0188 is a published ABI that Note Pad (§27.3), Missile
+Command, Paint and `tests/sysbench` all read to pick a code path, and none of
+them is asking about extended memory. **The A20 and HMA routines go**, because
+they exist only to make a store above 1MB reachable and sizeable —
+`cpu_a20_enable` is called from `kmain` and nowhere else, `cpu_hma_claim` from
+`xm_init` and nowhere else, and the five routines between them are those two's
+own helpers.
+
+What makes that seam clean is **measurable rather than asserted**: `[cpu_feat]`
+and the `CPU_F_*` bits have no readers anywhere outside `cpudet.inc` and
+`xmem.inc` — not in the kernel, not in a shipped package, not in a driver, not
+in the benchmarks. So no code above those two modules can observe the
+difference, and the one place the bits are still published, `cpu_info`'s AH,
+answers 0 on `kern_small` — which is the truth (no gate verified, no HMA
+claimed, no unreal mode armed) and is also exactly what tier 0 answers.
+
+**The four slots keep their numbers AND their contracts** (§20.8 rule 4). The
+tables must stay the same length in both builds or a package built against one
+kernel far-calls into whatever follows the other's table — here the debug
+registry, not code — which assembles, loads, launches and dies somewhere
+unrelated. So `kern_small` carries the cells with bodies that answer, exactly
+as retired slot 0x01E8 does.
+
+**And the answers are TIER 0's, byte for byte**, which is the safety argument
+rather than a convenience. The target machine is an 8088, so a `kern_big`
+kernel on the machine this project is calibrated against already answers
+precisely this: `xm_init` stores its zeroes and returns before the first BIOS
+call, and every entry point then refuses on `[xm_kb]` = 0. Two things follow —
+no package can tell a `kern_small` kernel from the 8088 it was written for,
+and **every shipped package is already exercised against this path on real
+hardware**, which is a stronger statement than any harness could make about a
+refusal invented for this build. It is deliberately not one shared refuser:
+the codes differ and callers read them (§41.5) — ALLOC's "no store" is AX = 0,
+COPY's is AX = 1, and FREE answers CF alone with DX:AX preserved.
+
+`SK_XMS` out of `OSAPI_SYS_KB` is 0 for the same reason, so the Task
+Manager's line reads `XMS 0/0K` — the same words on the same build for the
+same reason it reads them on an 8088.
+
+**Cost, measured** (`make kernsplit`, and the figures are the change's own
+before/after rather than a doc baseline): `kern_big` is **byte-identical** —
+86,011 bytes, md5 unchanged, `cmp` reporting 0 differing bytes — which is the
+property docs/KERN-SPLIT-PLAN.md §2 exists to defend. `kern_small` goes
+**82,427 → 81,017 bytes, 161 → 159 sectors**: `.text` −1,035, `.bss` −124,
+`.ovl` −386, footprint `KERN_SIZE` 93,184 → 92,160, **two 512-byte rungs**,
+spare 1,024 → 2,048 (2 steps → 4, back to the fifth budget move's standard).
+`.text`+`.bss` 57,567 → 56,408. **Both boot probes come off `kern_small`'s
+boot path too** — `int 15h` AH=88h and the A20 gate — which is the only part
+of this feature that ever cost the machine time rather than bytes.
+
+### 41.11.1 Acceptance for the split
+
+- `make kernsplit`: `kern_big` byte-identical to the pre-split build, and
+  `kern_small` smaller. A `kern_small` size that moves in a commit about
+  `kern_big` is the whole failure mode of the design.
+- The four cells at 0x0190..0x01A8 exist in both, and **the slot after them
+  (0x01B0, `wm_geom`) has the same body in both** — that is what says the
+  table did not shift.
+- One `.o88` on both kernels: `make small` does not rebuild the apps disks.
+- Verified by **calling the slots on the running kernel** (a planted
+  `call far KERNEL_SEG:<slot>`, the CPU parked on it, run to a breakpoint):
+  `kern_big` on an 8088 and `kern_small` answer *identically* on all five —
+  CF, AX, and BH preserved through CAPS with BL = `XM_MAX_BLKS`.
+- `kern_small` carries **no** `int 15h`, no port-0x92 access and no `mov cr0`
+  — the last being the only way into or out of protected mode, so unreal mode
+  cannot exist there. `kern_big` carries exactly 2, 1+1 and 2 of them.
+- A settled desktop on a cycle-accurate 5150 with the real IBM Oct-82 BIOS:
+  CGA at **60.0% lit**, `desktop_up` field/rule/dock 0.93/0.00/0.96, and the
+  Task Manager opens and runs.
+
 ## 42. Paint — the seventh package (apps/paint/paint.asm)
 
 A bitmap editor over the published package ABI. Prefix `pt_`, embedded

@@ -51,7 +51,24 @@
 ; AH=87h (a BIOS call the kernel keeps on the UI task per SPEC.md 7; some 286
 ; BIOSes implement it by a transparent CPU reset), and the scratch it shares
 ; is serialized against a switch, not against re-entry.
+;
+; THIS WHOLE MODULE IS kern_big's (SPEC.md 41.11, docs/KERN-SPLIT-PLAN.md).
+; kern_small is the 128KB-floor product and a store above 1MB is the one
+; feature it can never reach - a machine with extended memory is by definition
+; not the machine that build exists for - so the body below is behind
+; %ifdef KERN_BIG and the %else at the foot of the file is what kern_small
+; publishes instead: the same four slots, at the same numbers, answering
+; TIER 0's answers. See that block for why parity is with tier 0 rather than
+; with a bare refusal.
+;
+; The A20 half of the feature lives in cpudet.inc and is split the same way
+; and for the same reason: cpu_a20_enable and cpu_hma_claim exist ONLY to make
+; a store above 1MB reachable, so they are kern_big's too, while cpu_detect
+; and cpu_info - the TIER, which is a fact about the CPU and not about this
+; store - stay in both builds.
 ; =============================================================================
+
+%ifdef KERN_BIG
 
 XM_SEL_FLAT     equ 0x08        ; GDT entry 1: base 0, limit 4GB, data r/w
 XM_MAX_COPY     equ 32768       ; bytes per xm_copy - a SCHEDULER rule, not a
@@ -1009,5 +1026,94 @@ xm_dst:     resd 1                      ; 32-bit linear addresses
 xm_x87:     resb 48                     ; int 15h AH=87h's descriptor block -
                                         ; it must itself be in conventional
                                         ; memory, and this is (SPEC.md 41.5)
+
+%else
+; =============================================================================
+; kern_small: the four slots keep their NUMBERS and their CONTRACTS
+; (SPEC.md 20.8 rule 4, SPEC.md 41.11, docs/KERN-SPLIT-PLAN.md 3)
+;
+; The tables must stay the same length in both builds, or a package built
+; against one kernel far-calls into whatever follows the other's table - which
+; here is the debug registry, not code. It assembles, it loads, it launches,
+; and it dies somewhere unrelated. So a kern_big-only slot is present here as
+; a cell pointing at a body that answers, exactly as retired slot 0x01E8 is.
+;
+; THE ANSWERS ARE TIER 0's, BYTE FOR BYTE, and that is the safety argument
+; rather than a convenience. The target machine is an 8088, so a kern_big
+; kernel on the machine this project is calibrated against ALREADY answers
+; precisely this: xm_init stores its zeroes and returns before the first BIOS
+; call, and every entry point above then refuses on [xm_kb] = 0. Two things
+; follow. No package can tell a kern_small kernel from the 8088 it was
+; written for - and every shipped package is already exercised against this
+; path on real hardware, which is a stronger statement than any harness here
+; could make about a refusal invented for this build.
+;
+; It is deliberately NOT one shared refuser, because the codes differ and
+; callers read them (SPEC.md 41.5): xm_alloc's "no store" is AX = 0, xm_copy's
+; is AX = 1, and xm_free answers CF alone with DX:AX preserved. A single stub
+; would be smaller and would quietly re-contract three slots.
+;
+; Cost to kern_small: these four bodies and nothing else. There is no .bss
+; here - no block table, no copy scratch, no AH=87h descriptor block - and no
+; boot-time probe, so nothing on the boot path either.
+; =============================================================================
+
+section .text
+
+; -----------------------------------------------------------------------------
+; xm_caps - what is left up there? (osapi slot 0x0190's body). Nothing.
+;
+; out:      AX = 0 (no store), DX:CX = 0 (the pool base), BL = XM_MAX_BLKS
+; clobbers: nothing else (BH is the caller's and stays that way; flags)
+;
+; AX = 0 is the figure a package branches on, and there is no CF in this
+; contract: it always answers. BL reports every entry of the block table free,
+; which is what tier 0 reports - a table with nothing in it, above a pool with
+; nothing in it. A package that reads BL and not AX was already broken on the
+; target machine.
+; -----------------------------------------------------------------------------
+xm_caps:
+    xor ax, ax
+    xor dx, dx
+    xor cx, cx
+    mov bl, XM_MAX_BLKS
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_alloc - first-fit a run of extended memory (slot 0x0198). There is none.
+;
+; in:       DX:AX = bytes wanted
+; out:      CF = 1 and AX = 0 - "no store", xm_alloc's .nostore answer
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+xm_alloc:
+    xor ax, ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_free - give a block back (slot 0x01A0). You cannot hold one.
+;
+; in:       DX:AX = a base this caller owns
+; out:      CF = 1 - not a base. DX:AX preserved, per the contract
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+xm_free:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_copy - move bytes to or from the store (slot 0x01A8). There is nowhere.
+;
+; in:       ES:SI, DX:AX, CX, DI as SPEC.md 41.8 documents them
+; out:      CF = 1 and AX = 1 - "no store", xm_copy's .e1 answer
+; clobbers: nothing else (ES untouched, so restored by construction; flags)
+; -----------------------------------------------------------------------------
+xm_copy:
+    mov ax, 1
+    stc
+    ret
+
+%endif  ; KERN_BIG
 
 section .text
