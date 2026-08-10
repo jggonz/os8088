@@ -15272,10 +15272,17 @@ next column instead. Three things about it:
   simply the end of the list and a pushed heading would be lost rather than
   moved.
 
-The memory view has the same defect — `Builtins` lands at the foot of
-column 1 with its first built-in at the top of column 2 — and deliberately
-has not been changed here; it is one call to `tm_mrow_nolast` at each of its
-two heading sites if that is wanted.
+**The memory view had the same defect and takes the same rule** — `Builtins`
+landed at the foot of a column with its first built-in at the top of the
+next — so `tm_rows_mem` calls it at both of its heading sites (`Builtins`,
+`Packages`). `System` does not need it: row 0 is a column's last only on a
+one-row column, which no screen here produces. `TMM_ROWS` is deliberately
+**not** raised for the row it can spend, because the window's HEIGHT is
+derived from it (§28.1) and raising it makes the window taller on every
+screen to buy a row that only a two-column layout can ever use. The cost of
+leaving it is bounded and rare: a machine running the full `INST_MAX`
+instances on a wrapped list loses the last row, which is the same clipping
+that layout already does.
 
 **Grouping is by OWNER, and a heading is not a claim.** `System` first, then
 one heading per live instance in slot order, each carrying that owner's total

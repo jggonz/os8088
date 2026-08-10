@@ -2162,6 +2162,8 @@ tm_rows_mem:
     call tm_buf_row
 
     ; --- the Builtins heading, then every live built-in -----------------------
+    call tm_mrow_nolast         ; ...not on a column's foot, where the rows it
+                                ; heads are in the next one (SPEC.md 28.4)
     call tm_mrow_open
     push si
     mov si, tm_s_bhdr
@@ -2193,6 +2195,7 @@ tm_rows_mem:
     ; the map above (SPEC.md 20.1/28).
     call tm_pool_kb             ; AX = KB of region held
     push ax
+    call tm_mrow_nolast
     call tm_mrow_open
     push si
     mov si, tm_s_phdr
