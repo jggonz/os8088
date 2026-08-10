@@ -360,27 +360,27 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4747,
+    "bss": 4751,
     "budget": 98304,
     "codemax": 65536,
-    "cold": 22477,
-    "coldpara": 1408,
+    "cold": 22688,
+    "coldpara": 1440,
     "fatpara": 288,
-    "imgpara": 3744,
-    "kend": 6112,
+    "imgpara": 3776,
+    "kend": 6176,
     "kseg": 96,
-    "ksize": 96256,
+    "ksize": 97280,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54999
+    "text": 55179
   },
   "small": {
-    "bss": 4662,
+    "bss": 4666,
     "budget": 94208,
     "codemax": 65536,
-    "cold": 21656,
+    "cold": 21658,
     "coldpara": 1376,
     "fatpara": 288,
     "imgpara": 3616,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52904
+    "text": 52928
   }
 }
 ```
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,460 | 36.7% |
-| the window system and its furniture | 16,254 | 21.0% |
-| drawing: adapters, primitives, glyphs, icons | 11,282 | 14.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,801 | 12.7% |
-| the kernel proper: API table, heap, scheduler, events | 5,877 | 7.6% |
-| the Control Panel | 4,426 | 5.7% |
+| the file system, end to end | 28,460 | 36.5% |
+| the window system and its furniture | 16,254 | 20.9% |
+| drawing: adapters, primitives, glyphs, icons | 11,378 | 14.6% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,848 | 12.6% |
+| the kernel proper: API table, heap, scheduler, events | 5,889 | 7.6% |
+| the Control Panel | 4,662 | 6.0% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,476** | |
+| **total** | **77,867** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -891,12 +891,12 @@ generated in the first place.
 | `wm.inc` — the window manager (§11) | 5,840 | — | **5,840** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
-| `ctrl.inc` — the Control Panel (§31) | 877 | 3,549 | **4,426** | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 902 | 3,760 | **4,662** | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,057 | — | **4,057** | 118 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,577 | — | **2,577** | 252 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,624 | — | **2,624** | 256 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 98 |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,403 | — | **2,403** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
@@ -906,8 +906,8 @@ generated in the first place.
 | `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,687 | — | **1,687** | 27 | — |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `icons.inc` — the icon renderer (§10) | 1,358 | — | **1,358** | 34 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,293 | — | **1,293** | 84 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,201 | — | **1,201** | 17 | 768 |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,197 | — | **1,197** | 84 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
@@ -922,8 +922,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,685 | — | **2,685** | — | — |
-| **total** | **54,999** | **22,477** | **77,476** | **4,747** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,697 | — | **2,697** | — | — |
+| **total** | **55,179** | **22,688** | **77,867** | **4,751** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
