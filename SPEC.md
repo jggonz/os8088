@@ -19512,6 +19512,32 @@ and each wasted rows at a different end:
 `wm_dmg_band` answers it for the dither and `ui_ylow` for the drag: display 0
 keeps the chrome's band, anything else gets its own `vy .. vy+ch-1`.
 
+**And the third site is the one that makes the other two a trap rather than a
+waste — the EVENT LADDER.** `ui_down` routed any press with `y < MBAR_H` into
+`menu_track`, and `ui_rdown` dropped one, wherever on the virtual desktop it
+landed. While the drag floor kept windows out of those rows that was
+unreachable; **fixing the floor is what opens the door**, and a window in the
+second monitor's top rows then cannot be grabbed at all, because every press
+on its title bar is swallowed by a menu bar on another screen. The three have
+to land together or the pair of them is worse than neither.
+
+The test is **one compare and no call**: display 0 is at the virtual origin
+(§39.19.2), so a point already known to have `y < MBAR_H` is on it exactly
+when `x < [vid_pw]` — a word `vid_apply` already publishes. It is on the
+mouse-down path rather than a drawing path, so it costs nothing that can be
+measured.
+
+**How it was found is the point.** `tests/dispband.py` asserted that the rows
+a window vacates come back, and that assertion failed for three runs against
+a `wm_dmg_band` that was working perfectly: an instrument in the fill showed
+`(680,0)-(980,231)`, band `0..347`, display 1 — the right rect, on the right
+display, every time. The window had simply never moved, because the drag that
+was meant to move it began with a press in those same top rows. *A repaint
+that never happened and a repaint that failed look identical from the
+framebuffer;* what separated them was reading the window's own record after
+the drag, by SLOT rather than by "the last visible window", which had silently
+become the Control Panel.
+
 **Nothing shifts, and that is the point.** The obvious reading of "give the
 second monitor back the menu bar space" is to move its origin up by `MBAR_H`,
 which would put it at a negative virtual y and break §39.19.2's non-negative

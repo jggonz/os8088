@@ -134,6 +134,15 @@ ui_task:
                                 ; plainly on screen unclickable
     cmp dx, MBAR_H              ; in the menu bar?
     jae .on_desktop
+%ifdef KERN_BIG
+    cmp cx, [vid_pw]            ; ...on the display that HAS one (39.16.2).
+    jae .on_desktop             ; Display 0 is at the virtual origin, so this
+                                ; one compare is the whole test - and without
+                                ; it a window in the second monitor's top rows
+                                ; cannot be grabbed at all, because every
+                                ; press there is swallowed by a menu bar that
+                                ; is on another screen
+%endif
     cmp cx, [vid_clk_hx]        ; the clock cell at the right end (SPEC 12.1)?
     jae .clock_cell             ; tested BEFORE menu_track: it is not a title
     call ui_loc_gate            ; ...and Locator's own items go grey or live
@@ -438,7 +447,14 @@ ui_rdown:
     call wm_fs_vis              ; a fullscreen window (SPEC.md 11.2) owns the
     jc .hit                     ; bar's rows like any other point (39.17.1)
     cmp dx, MBAR_H
-    jb .ret                     ; the menu bar has no right-button behaviour
+    jb .rbar                    ; the menu bar has no right-button behaviour
+    jmp short .hit
+.rbar:
+%ifdef KERN_BIG
+    cmp cx, [vid_pw]            ; ...but only where there IS a bar (39.16.2)
+    jae .hit
+%endif
+    jmp .ret
 .hit:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
     or bx, bx

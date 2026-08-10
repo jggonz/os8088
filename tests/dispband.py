@@ -45,6 +45,18 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
+def win_by(m, slot):
+    """The window in SLOT, which is the only stable handle there is.
+
+    `wins(m)[-1]` is "whatever is last in wm_wins", and that is a different
+    window as soon as anything else is open - it silently became the Control
+    Panel here and made a drag that never happened look like a repaint that
+    never repaired.
+    """
+    w = m.read(S("wm_wins") + slot * 26, 26)
+    return (u16(w, 2), u16(w, 4), u16(w, 6), u16(w, 8))
+
+
 def wins(m):
     w = m.read(S("wm_wins"), 12 * 26)
     return [(i, u16(w, i * 26 + 2), u16(w, i * 26 + 4), u16(w, i * 26 + 6),
@@ -52,12 +64,22 @@ def wins(m):
             if u16(w, i * 26) & 3 == 3]
 
 
-def band(px, w, x0, x1, y0, y1):
-    """The pixels of one rect of a framebuffer, as bytes."""
+def band(rows, x0, x1, y0, y1):
+    """One rect of the card's own VRAM, as bytes.
+
+    VRAM AND NOT `fbuf`: MartyPC's MDA aperture is offset (-16, +2) from the
+    guest origin in Hercules graphics (docs/MARTYPC-DEBUG.md), so a band
+    sampled off the rendered framebuffer at y = 0 is not the guest's row 0 at
+    all - it is two rows above the picture, which is border. The offset
+    cancels in a same-coordinates comparison right up until the thing being
+    compared is a 19-row band at the very top of the screen, which is exactly
+    what this test is about.
+    """
     out = bytearray()
     for y in range(y0, y1 + 1):
+        r = rows[y]
         for x in range(x0, x1 + 1):
-            out.append(px[(y * w + x) * 3])
+            out.append(r[x])
     return bytes(out)
 
 
@@ -100,25 +122,26 @@ def main(argv):
         w = wins(m)
         if not w:
             sys.exit("dispband: no window after About")
-        i, wx, wy, ww, wh = w[-1]
-        say("About at (%d,%d) %dx%d" % (wx, wy, ww, wh))
+        slot, wx, wy, ww, wh = w[-1]
+        say("About at (%d,%d) %dx%d, slot %d" % (wx, wy, ww, wh, slot))
 
         # ...the rows it is going to sit in, BEFORE it ever goes there, so
         # step 3 has a reference that is definitely desktop.
         tx = d1vx + 40
-        sw, sh, spx = m.fbuf(card=sec["idx"])
-        clean = band(spx, sw, 40, 40 + ww - 1, 0, TITLE_H)
+        skind = "herc" if sec["type"] == "mda" else "cga"
+        sw, sh, srows = m.vram(skind)
+        clean = band(srows, 40, 40 + ww - 1, 0, TITLE_H)
 
         mo.drag(wx + ww // 2, wy + TITLE_H // 2, tx + ww // 2,
                 wy + TITLE_H // 2)
         os88marty.settle(m, card=sec["idx"])
-        i, wx, wy, ww, wh = wins(m)[-1]
+        wx, wy, ww, wh = win_by(m, slot)
         say("...dragged onto display 1: (%d,%d)" % (wx, wy))
 
         # --- 1: drive it UP as hard as the clamp allows --------------------
         mo.drag(wx + ww // 2, wy + TITLE_H // 2, wx + ww // 2, 0)
         os88marty.settle(m, card=sec["idx"])
-        i, wx, wy, ww, wh = wins(m)[-1]
+        wx, wy, ww, wh = win_by(m, slot)
         say("pushed to the top of display 1: W_Y = %d (wanted %d)"
             % (wy, d1vy))
         if wy != d1vy:
@@ -127,8 +150,8 @@ def main(argv):
                         % (wy, d1vy))
 
         # --- 2: ...and the pixels are actually up there --------------------
-        sw, sh, spx = m.fbuf(card=sec["idx"])
-        top = band(spx, sw, wx - d1vx, wx - d1vx + ww - 1, 0, TITLE_H - 1)
+        sw, sh, srows = m.vram(skind)
+        top = band(srows, wx - d1vx, wx - d1vx + ww - 1, 0, TITLE_H - 1)
         litn = sum(1 for b in top if b)
         say("its title bar rows on display 1: %d of %d px lit"
             % (litn, len(top)))
@@ -140,8 +163,19 @@ def main(argv):
         # --- 3: and they come back when it leaves --------------------------
         mo.drag(wx + ww // 2, TITLE_H // 2, wx + ww // 2, 120)
         os88marty.settle(m, card=sec["idx"])
-        sw, sh, spx = m.fbuf(card=sec["idx"])
-        after = band(spx, sw, 40, 40 + ww - 1, 0, TITLE_H)
+        ax2, ay2, aw2, ah2 = win_by(m, slot)
+        say("...and it ended up at (%d,%d) %dx%d" % (ax2, ay2, aw2, ah2))
+        if ay2 < 60:
+            fail.append("the window did not move away (y=%d) - step 3 is "
+                        "measuring a drag that did not happen" % ay2)
+        sw, sh, srows = m.vram(skind)
+        after = band(srows, 40, 40 + ww - 1, 0, TITLE_H)
+        # a control: the same rows where the window has never been, so a
+        # "restored" band can be checked against real desktop rather than
+        # against a number that looks about right
+        ctl = band(srows, 400, 699, 0, TITLE_H)
+        say("control band (never visited, local x 400..699): %d of %d lit"
+            % (sum(1 for b in ctl if b), len(ctl)))
         d = sum(1 for x, y in zip(clean, after) if x != y)
         say("the rows it vacated: %d px of %d differ from the desktop it "
             "found there (lit: was %d, now %d)"
