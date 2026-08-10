@@ -606,3 +606,53 @@ name = "pcxt_1_360k_floppy"
 # 39.11.1's vid_cga_alias runs ONLY when the mono card is primary, and that
 # is still exactly the direction no emulator here can produce - which is the
 # same reason its bug survived in the first place. It is a 5150 question.
+
+# --- the two-card 5150 WITH ITS DISPLAY SWITCHES SET THE WAY THE FIELD ONE'S
+# --- ARE (SPEC.md 39.1, docs/FIELD-MACHINES.md)
+#
+# `video_dip` is OURS - patches/03 - and it exists because SW1-5/6 is a
+# SETTING and not a description of what is installed. Upstream derives those
+# bits from the card list ("any CGA present -> CGA hires"), which cannot
+# express a machine that holds BOTH cards with the switches set to mono, and
+# that is exactly the arrangement the calibration 5150 has: os8088 boots on
+# its Hercules there and on the CGA in every emulated two-card machine.
+#
+# It is the direction that MATTERS rather than a curiosity: SPEC.md 39.11.1's
+# vid_cga_alias runs ONLY when the mono card is primary, which is precisely
+# why its bug survived - "the direction the old emulator could reproduce was
+# CGA-primary, where the routine never runs". This machine reproduces it.
+[[machine]]
+name = "os8088_5150_both_gla_mono"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+video_dip = "mda"
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    # THE MDA IS LISTED FIRST, and that is about the HARNESS rather than the
+    # guest: MartyPC's own primary card is the first in this list, `fbuf` and
+    # the os88marty boot gate read the primary, and os8088 is driving the MDA
+    # here - so with the CGA first the gate watches an unprogrammed card,
+    # never sees a desktop, and `launch` times out on a machine that booted
+    # perfectly. The DIP above is what decides which card the GUEST picks;
+    # this order is what decides which one the TOOLING looks at, and on this
+    # machine they have to agree.
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"

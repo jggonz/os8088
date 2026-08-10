@@ -1380,12 +1380,18 @@ from card order, and exposes no DIP override. (Listing it first only moves
 gate watches a blank card and `launch` times out. `os8088_5150_herc_gla`
 reads `0x30` only because it has no CGA in it.)
 
-The consequence is specific and worth carrying: **SPEC.md §39.11.1's
-`vid_cga_alias` runs only when the mono card is primary**, so it is still
-reachable on the 5150 and nowhere else — which is the same reason its bug
-survived to begin with, "the direction the old emulator could reproduce was
-CGA-primary, where the routine never runs". Treat a dual-display change as
-field-verified or not verified.
+**That has since been fixed rather than lived with**, and the paragraph above
+is kept because it is the reasoning: `tools/martypc/patches/03-video-dip-config.patch`
+adds an optional `video_dip` to MartyPC's machine config, so SW1-5/6 can be
+*set* instead of derived from the card list. **`os8088_5150_both_gla_mono`**
+is the machine that uses it — both cards, switches mono, os8088 running
+Hercules with `avail = 0x06` — and it is the only one that reaches SPEC.md
+§39.11.1's `vid_cga_alias`, the routine whose bug survived because "the
+direction the old emulator could reproduce was CGA-primary, where the routine
+never runs". A dual-display change can be exercised here now; it is still
+worth a field run, but it is no longer *only* answerable there.
+docs/MARTYPC-DEBUG.md has the patch's reasoning and the one trap in the
+machine (its MDA is listed first, or the boot gate watches the wrong card).
 
 And one more that is not about time at all, and is the newest:
 
