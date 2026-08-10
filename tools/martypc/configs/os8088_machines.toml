@@ -588,3 +588,21 @@ name = "pcxt_1_360k_floppy"
     type = "IbmNec"
         [[overlay.fdc.drive]]
         type  = "360k"
+
+# --- WHY THERE IS NO MONO-PRIMARY TWO-CARD MACHINE HERE ------------------
+#
+# The field 5150 boots on its HERCULES, because SW1-5/6 say 11b = 80x25 mono
+# and vid_detect's last rung is int 11h bits 5:4 (SPEC.md 39.1). None of the
+# two-card machines above does, and it CANNOT BE FIXED FROM THIS FILE:
+# measured, os8088_5150_both_gla reports bits 5:4 = 0x20 (80x25 colour), and
+# so does the same machine with the MDA listed FIRST - MartyPC derives the
+# 5150's display switches from whether a CGA is in the config at all, not
+# from card order, and exposes no DIP override. Listing the MDA first only
+# moves MARTYPC's primary to it, which os8088 then does not drive (the DIP
+# still says colour), so the boot gate watches a blank card and `launch`
+# times out. os8088_5150_herc_gla reads 0x30 only because it has no CGA.
+#
+# The consequence is worth stating rather than rediscovering: SPEC.md
+# 39.11.1's vid_cga_alias runs ONLY when the mono card is primary, and that
+# is still exactly the direction no emulator here can produce - which is the
+# same reason its bug survived in the first place. It is a 5150 question.

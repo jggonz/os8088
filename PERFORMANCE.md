@@ -1732,7 +1732,7 @@ FAT walking for a "free" call and is worth a look.
 | | |
 |---|---|
 | machine | as Set 1 |
-| adapter | **CGA (640x200)**, `VIDEO=cga` forced — the probe finds the Hercules first |
+| adapter | **CGA (640x200)**, `VIDEO=cga` forced — this machine's SW1-5/6 say mono, so §39.1's `int 11h` rung boots it on the Hercules and the set needed a kernel told otherwise. Since §39.11 that forcing is unnecessary: the Display page switches the card at run time |
 | build | `62c4172` (so it carries Set 1's two bad rows too) |
 | reports | `GFXCGA.TXT`, a second `SYSBENCH.TXT` |
 

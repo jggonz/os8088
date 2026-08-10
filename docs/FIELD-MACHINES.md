@@ -85,7 +85,7 @@ by name in a dozen places.
 | motherboard | the 64–256K board, **256 KB populated** |
 | expansion | **AST SixPakPlus Rev 1** — carries the other **384 KB** (256 + 384 = the 640 KB every set reports) **and the clock**. That 640 is what `int 12h` answers, and since SPEC.md §2.7 the boot sector relocates itself to the top of it — so if this machine ever stops booting after a memory change, the first thing to check is the motherboard DIP switches, which are where an XT's RAM count comes from. A board the switches do not mention is a machine with plenty of RAM and a small answer, and the sector prints `RAM` and stops rather than loading a kernel over itself |
 | clock | the SixPakPlus's **MM58167 at 2C0h** — §37.90's **rung 2**, and the machine the whole ladder was written for: an XT BIOS implements `int 1Ah` AH=00h/01h and nothing else, so this BIOS knows nothing about a clock sitting in its own backplane. It is also what keeps rung 3 off a SixPakPlus — rung 3 is claimed only when the BIOS *can* read the clock, and here it cannot |
-| video | **Hercules GB101 → IBM 5151** (mono TTL) **and IBM CGA, new style → IBM 5153** (RGB). **Both cards and both monitors, always, in the machine.** So the second column costs a *build*, never a card swap — but the probe (§39.1) finds the Hercules first, so the CGA needs a kernel told to ignore it |
+| video | **Hercules GB101 → IBM 5151** (mono TTL) **and IBM CGA, new style → IBM 5153** (RGB). **Both cards and both monitors, always, in the machine.** It boots on the **Hercules**, and that is **SW1-5/6**, not a property of the probe: §39.1's last rung is `int 11h` bits 5:4, this machine's switches say `11b` = 80×25 mono, so `vid_detect` takes the `VID_HERC` branch. The second column costs neither a card swap **nor a build any more** — the Control Panel's Display page switches it at run time (§39.11) |
 | floppy | **one** — a **Tandon TM100-2**, 360 KB 5.25" DD. There is no drive B. **But SW1 says there are two**, and that is worth knowing rather than fixing quietly: the DIP pair is what `int 11h` reports, so this machine is the one that showed a `Disk B` icon which could never mount — and it is therefore the witness for SPEC.md §18.97's probe, which asks the FDC instead. Its expected `sysbench` rows are `claimed 2`, `probe stop 03` (Equipment Check) and `verdict 0`. **If the switches get corrected, the probe stops running** and those rows read `claimed 1 / probe ran 0` — still right, and no longer a test of anything, so say which way the switches are set when reporting a run |
 | hard disk | **Seagate ST-225**, 20 MB MFM, on a **Seagate ST11M** controller, in the second bay |
 | serial | **one port, at 0x3F8 (COM1)**, with the mouse on it — `sysbench`'s SPEC.md §9.4.2 block reports `COM1 03F8, COM2 0000`. Worth having written down, because it decides which half of a two-sided mouse change this machine can witness: with one port there is no §9.5 contest, `[mou_need]` is 1 by default, and everything §9.5.1 says about a modem on the other port is untestable here. The **Compaq Portable III** below is the two-port machine |
@@ -542,14 +542,28 @@ benchmarks on one bootable 360KB floppy — **304 of 354 clusters, so about
 compromise. It used to be two — `herc.img` and a `VIDEO=cga` `cga.img` —
 because both cards live in the 5150 permanently and the probe can only be
 asked one question at a time, so the card was a property of the *build*.
-Since §39.11 it is not: the probe picks one at boot (§39.1) and the Control
-Panel's **Display** page switches the primary to the other — or extends the
-desktop across both — with no rebuild, no second disk and no walk to the other
-room. **Do not assume which card it comes up on**; the page lists what
-`[vid_avail]` found and says which is running, and that is the thing to read.
-(Measured from this disk on MartyPC's two-card 5150: `avail = 0x06`, both
-cards seen, running CGA. On the iron it has come up Hercules. Either way the
-page is what settles it, which is the point.) The extended desktop is **off by default** (§39.19.1: the
+Since §39.11 it is not: the machine boots on whichever card §39.1 picks and
+the Control Panel's **Display** page switches the primary to the other — or
+extends the desktop across both — with no rebuild, no second disk and no walk
+to the other room.
+
+**Which card it boots on is a DIP SWITCH, and on the 5150 it is SW1-5/6.**
+`vid_detect`'s last rung is `int 11h` bits 5:4 (`11b` = 80×25 mono →
+`VID_HERC`, anything else → `VID_CGA`), and on a 5150 that field *is* the
+switch pair. The register's machine is set to mono, so it comes up Hercules —
+and that is a setting rather than a discovery, which is the thing to know
+before reading a difference between two machines as a bug. Measured, same
+kernel and same disk, on MartyPC: the two-card 5150 reads bits 5:4 = `0x20`
+(80×25 colour) and boots **CGA** with `avail = 0x06` — both cards seen — while
+the mono-switched machine reads `0x30` and boots **Hercules**.
+
+**This is the same SW1 byte §18.97 argues with, and the two are treated
+oppositely on purpose.** Bits 7:6 claim how many floppy drives are attached,
+which is a statement about what is *plugged in* — a thing the machine can
+check, and §18.97 checks it. Bits 5:4 say which display should be *primary*,
+which is a preference only the owner can hold: there is nothing to verify,
+both cards really are there, and the switch is the answer rather than a claim
+about one. So one gets probed and the other gets obeyed. The extended desktop is **off by default** (§39.19.1: the
 kernel can detect a second card and nothing can detect a second monitor), so
 on this machine that is one visit to the Display page.
 

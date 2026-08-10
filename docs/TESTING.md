@@ -1368,6 +1368,25 @@ And one the emulator reports as a **success**, which is worse:
   (SPEC.md §5.4, PERFORMANCE.md Part 9). The lesson above survives the
   correction intact. The numbers did not.
 
+**And one an emulator here cannot be configured into at all: a mono-primary
+two-card 5150.** The field machine boots on its Hercules because SW1-5/6 say
+`11b` = 80×25 mono and §39.1's last rung is `int 11h` bits 5:4. MartyPC's
+two-card machines report bits 5:4 = **`0x20`** (colour) and boot os8088 on the
+CGA — and that is not fixable from the machine config: measured, listing the
+MDA first changes nothing about the equipment word, because MartyPC derives
+the 5150's display switches from whether a CGA is present at all rather than
+from card order, and exposes no DIP override. (Listing it first only moves
+*MartyPC's* primary to the MDA, which os8088 then does not drive, so the boot
+gate watches a blank card and `launch` times out. `os8088_5150_herc_gla`
+reads `0x30` only because it has no CGA in it.)
+
+The consequence is specific and worth carrying: **SPEC.md §39.11.1's
+`vid_cga_alias` runs only when the mono card is primary**, so it is still
+reachable on the 5150 and nowhere else — which is the same reason its bug
+survived to begin with, "the direction the old emulator could reproduce was
+CGA-primary, where the routine never runs". Treat a dual-display change as
+field-verified or not verified.
+
 And one more that is not about time at all, and is the newest:
 
 - **A status line from hardware that is NOT THERE.** SPEC.md §18.97's floppy
