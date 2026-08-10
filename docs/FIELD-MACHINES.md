@@ -156,7 +156,22 @@ number was doing all three.
 - **The clock ladder's rung 2.** Already field-verified here (§37.90), and
   the only rung no emulator can reach.
 
-### The hard disk is a real DOS 3.3 install, and it is not yours
+### The hard disk is an os8088 install now, and it is still not yours
+
+**It WAS a real DOS 3.3 install, and its owner deliberately overwrote it** —
+they said so before the run that did it, and §52.10's installer partitioned,
+formatted and populated the ST-225 in one sitting. So C: is a 31 MB FAT16
+os8088 volume today, the machine boots from it (3,240 ms against 9,941 from
+the floppy — PERFORMANCE.md Part 9 Set 23), and the write rows a hard disk was
+never going to give us are measured at last.
+
+**What has NOT changed is whose disk it is.** The rules below still bind,
+minus the one the owner spent: `sysbench`'s hard-disk block still only reads,
+still puts the volume back, and still creates and deletes nothing, because
+"there is an OS on it rather than DOS" is not a reason to leave litter on
+somebody else's drive. Its write rows (§18.4) go to whatever volume is
+CURRENT, which is the operator's choice at the keyboard and not this
+document's to make.
 
 The rules for anything that touches C: on this machine, from its owner:
 
@@ -171,21 +186,27 @@ The rules for anything that touches C: on this machine, from its owner:
    does not ask gets `No volume at index 2 - no hard disk mounted`, which is
    the correct answer and not a fault. **If a change makes those rows
    necessary, ask in the message that carries the images.**
-1. **Do not format it. Do not partition it.** §52's disk tool is exactly the
-   thing that must not be pointed at it.
+1. **Do not format it. Do not partition it — unless the owner asks.** §52's
+   disk tool is exactly the thing that must not be pointed at it on your own
+   initiative. It has been pointed at it once, by request; that was a
+   decision its owner made in writing, and it is not a precedent.
 2. **Do not leave anything behind.** Whatever a test writes, it removes.
 3. **Do not delete anything you did not write.** Not even something that
    looks like scratch.
 
 That rules out a whole class of measurement, and it is the right trade — a
-20 MB drive with somebody's DOS install on it is not a scratch volume. What
-it leaves is **reads**, which is most of what is interesting anyway, and
+20 MB drive with somebody else's data on it is not a scratch volume. What it
+leaves is **reads**, which is most of what is interesting anyway, and
 `sysbench`'s hard-disk block is built to that constraint: it mounts, walks
-the FAT, reads one file that a DOS 3.3 disk is guaranteed to have
-(`COMMAND.COM`), and puts the current volume back. **It never writes, never
-creates and never deletes.** The write half of the picture stays unmeasured
-on purpose, because a run interrupted between creating a scratch file and
-removing it would break rule 2.
+the FAT, reads one file and puts the current volume back. **It never writes,
+never creates and never deletes.**
+
+**Which file it reads is asked of the volume, not assumed of it.** It used to
+be `COMMAND.COM`, which a DOS 3.3 system disk is guaranteed to have — and the
+moment C: stopped being one, that row answered `FERR_NOENT` and the block
+printed four lines while measuring nothing. `sb_hdpick` walks the root and
+takes the biggest ordinary file that fits the claim, which works on either
+kind of volume and gives the rate row something long enough to be a rate.
 
 Both of its paths were verified under QEMU before it was ever pointed at real
 hardware — with no hard disk it prints its refusal and the report still saves

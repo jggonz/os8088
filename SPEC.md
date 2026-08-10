@@ -1301,7 +1301,8 @@ the two mono adapters. On a 1bpp adapter at a byte-aligned x the cell owns
 its whole framebuffer byte, so there is nothing underneath to preserve: no
 shift, no read, no second byte, and no separate fill pass at all. Per plane
 the byte is `(glyph & ink) | (~glyph & background)` with each mask 00 or FF,
-which on mono reduces to the glyph or its complement. That is the path the
+which on mono reduces to the glyph or its complement — §6.1.5 is the loop
+taking that reduction, two instructions instead of five. That is the path the
 slow machines are on — `[vid_mono]` is permanently 1 there (§39.5) — and it is
 where the cost of text actually lives.
 
@@ -1522,6 +1523,143 @@ it general and is not worth what it would do to dragging", and §11.94 is the
 decision to do it anyway** — opt in, mono only, at the price of 8-pixel drag
 steps on the windows that ask. Three windows have: the Task Manager, Note Pad
 and the Timer (§14.1).
+
+#### 6.1.5 The compose is an XOR, and its two terms live in registers
+
+§6.1's `(glyph & ink) | (~glyph & background)` is what the byte **means**; it
+is not what the loop computes. The same byte is
+`(glyph & (ink ^ background)) ^ background` — checked exhaustively over all
+2^24 (glyph, ink, background) triples, so it does not rest on the masks being
+00 or FF and survives that invariant changing — and **both terms are constant
+for the whole plane**. So they are computed once above the eight rows and held
+in **CL and CH**, and a row body is a load, an `and`, an `xor` and a store:
+**two instructions where there were five**, with no branch and nothing in
+`.bss`.
+
+`font_rn_fm`/`font_rn_bm` went with it. Their comment said there was "no
+register to spare", which was true where it was written and not where it
+mattered: `CX` is dead from `.plane` onward, because `gfx_rowbase` has already
+clobbered `CL` and `font_ink`'s second call has finished with `CH`.
+
+**Measured** (`tests/gfxbench`, cycle-accurate 4.77MHz 8088, CGA):
+`FONT_RUN 10 aligned` **8,879.59 µs → 7,898.60 µs, −11.05%**, with every other
+row unmoved — `FONT_CHAR` −0.02%, `FONT_STR` −0.01%, `FONT_RUN` skewed +0.00%,
+`GFX_PIXEL` and both fills +0.00%. `.text` −12 bytes, `.bss` −2, no rung
+crossed, so it is *smaller* as well as faster. Framebuffer byte-identical on
+CGA and Hercules (PERFORMANCE.md Set 26).
+
+**What this deliberately does NOT do is skip a blank glyph row**, and that is
+worth writing down because it is the obvious next idea. `font_char` skips one
+because there a blank row means **no write at all**; here the cell owns its
+byte and a blank row is still *painted*, with the background — so there is no
+write to skip, only the compose, which is now two instructions. A guard costs
+`or al, al` + `jz`: the same four bytes the compose costs, plus a taken
+branch's prefetch flush, on the innermost loop of every string the slow
+machines draw. **The optimisation removed its own successor.**
+
+#### 6.1.6 A run is one y, one pair of colours and a column — so it pays once
+
+§6.1.5 took three instructions out of a row. This is the larger half of the
+same reading: **`font_run_cell` was deriving, per cell, everything a RUN
+shares.** A run is ONE y, ONE pair of colours, and a column that advances by
+exactly one byte a cell — and the cell body was calling `gfx_rowbase`, whose
+16-bit `MUL` an 8088 charges ~120 clocks for, and `font_ink` **twice**, for
+answers that cannot change until the run ends. Ten cells paid ten row bases
+and twenty ink reductions to draw one word.
+
+What moved up into `font_run_x`, once per run: the **y edge test** (every cell
+of a run has the run's y), both **ink reductions** — kept as §6.1.5's two
+derived masks, `[font_rn_xm]` and `[font_rn_bm]`, rather than as the colours —
+and **`gfx_rowbase`**. `DI` then holds the run's first framebuffer byte and
+the cell loop does `inc di`, because an aligned cell is one byte wide.
+
+What stays per cell is exactly what differs between two cells of one word:
+the character, the **x** edge test, the clip test (§6.1.2 — a cell is still
+clipped whole) and that one byte of `DI`.
+
+**The plane loop went with it.** It walked `[vid_planes]`, 4 or 1 — but this
+path is gated on `[vid_mono]` three instructions above the cell loop and a
+planar run takes `.slow` (§6.1), so the 4-plane walk could never execute. With
+one plane there is nothing to restart, which retires `[font_rn_si]`,
+`[font_rn_di]`, `[font_rn_fs]` and `[font_rn_bs]` as well.
+
+Two things are load-bearing and both look like bugs to a reader who does not
+know the contract. **The clip test spends CX and DX and does not put them
+back**: nothing below reads either, because the masks arrive in CX from memory
+and y is no longer wanted — restoring them would be two instructions per cell
+for a value that is dead. And **the run's x/8 uses three single-bit shifts
+rather than one by CL**: 6 clocks against 20 on an 8088, and CL stays the x it
+still has to be.
+
+Measured with §6.1.5's, in PERFORMANCE.md Set 27.
+
+#### 6.1.7 The run is drawn a ROW at a time, not a cell at a time
+
+§6.1.6 left the row body at 27 bytes of which **12 were the banked-row
+advance** — `add di, [cs:vid_rowadd]`, `test di, [cs:vid_wrapbit]`, `jz` —
+paid eight times per CELL. But **the cells of an aligned run are consecutive
+bytes within a row**, so that advance belongs to the row and not to the cell.
+
+`font_run_x` is two passes. **Pass 1** walks the string once into
+`font_rn_tab`, a glyph pointer per cell, stopping at the first cell past
+`[vid_cwm8]` — x only grows, so the drawn cells are a *prefix*, which is what
+makes them contiguous. **Pass 2** then runs eight times, once per glyph row,
+and each pass is a `lodsw`/`stosb` walk of the whole run with `gfx_nextrow`
+paid once at the end of it.
+
+**The table is what frees `ES`.** It holds the caller's string right up to the
+end of pass 1 (`font_run` is an X stub — the string is in the *package's*
+segment), so a cell-major loop must reload `ES` per cell to reach the
+framebuffer. Once the string has been read, `ES:DI` is the framebuffer for the
+whole run and the masks live in `DX` for all eight passes. That is 180 bytes
+of `.bss` — `FONT_RN_MAX` = 90 cells, `vid_w / 8` for the widest screen os8088
+drives — spent deliberately on the system's hottest text path.
+
+**Three things bound it, and each is a correctness argument rather than a
+tuning.** A **clip region** makes cells individually refusable, and one
+rejected in the middle breaks the run into pieces `stosb` cannot walk — so an
+armed region costs one `wm_clip_test` over the whole run, and a **cut** run
+goes per cell (§6.1.2's path, which is where a per-cell clip test belongs
+anyway). The **table overflow** cannot happen while `FONT_RN_MAX` covers
+`vid_w / 8`, and falls back to the per-cell path regardless, because a
+constant that is a bound on another module's geometry is one somebody will
+change. And **`BP` carries the glyph row**, so `font_run_x` saves it: §7.1.4.1
+is what a routine that forgets costs, a background task holding `BP` for its
+whole life.
+
+Measured in PERFORMANCE.md Set 28.
+
+#### 6.1.8 The trailing span is one `rep stosb`
+
+**This system pads on purpose**: §27.2 makes a Note Pad row's padding its
+*erase*, §12.9 composes the menu bar whole out to the clock, §28's columns are
+largely spaces, §48.9's score is three space-padded fields. So the last cells
+of a run are usually the *same cell repeated* — and repeated cells compose to
+one byte, which is a string instruction rather than a loop.
+
+Pass 1 finds the span once (`[font_rn_k]`, `[font_rn_n2]`), and the row pass
+draws `n2` cells singly and then `rep stosb`s the tail. **Two things keep it
+from costing the runs it cannot help.** The span is a property of the RUN, so
+the choice between the two row loops is made **once at `.rm`**, not per row —
+a per-row test charged every unpadded run eight times and measured **+3.06%**.
+And the search is gated on the last two entries matching, so a run with no
+span pays two words and a branch instead of a walk.
+
+`FONT_RN_KMIN` is 3: the tail block is 17 bytes against a plain cell's 14, so
+it breaks even at 2 and wins from 3.
+
+**It is a TRADE and the numbers are in PERFORMANCE.md Set 29**: −31.3% on a
+padded 20-cell run, **+1.4% on a run with no span at all** — the fixed cost of
+deciding. Measured over two scripted sessions, 34% and 28% of the cells
+`font_run` drew were inside a span.
+
+**The consumers it is for are the long-running ones**, which is the same reason
+§6.1.7 matters: `np_rflush` letters a Note Pad row padded to the whole band
+(§27.2), `tui_str` draws Tracker's FT2 screen, ModPlug composes four LCD lines
+a frame (§56.12). §28's Task Manager is the one that will show it least — it
+already skips rows that have not moved — and most packages have not been
+converted to `font_run` at all. docs/LAST-DROP.md records the candidate that
+was measured against this one and shelved.
 
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
@@ -4064,10 +4202,21 @@ keeps the pixel it already had.
 
 Four things are load-bearing.
 
-- **It is a superset of what is really uncovered.** `old` minus `new` is an L
-  and this is the whole of `old`, so a short drag still marks the window it
-  was sitting on. That is the safe direction and it costs a repaint nobody
-  will see coming.
+- **It is `old` minus the moved window's NEW FRAME, which is the L itself.**
+  The first cut tested the whole of `old` and called the over-marking "the
+  safe direction"; measured on a four-window desktop that was most of the
+  remaining waste, because a short drag leaves the window it was sitting on
+  entirely back underneath. So the test is two questions: did this window
+  overlap where the moved window WAS, and is that overlap now back inside
+  where it IS. Both yes means every pixel of it is written again by the move
+  and nothing is exposed.
+- **The second test is against the FRAME and not `wm_win_rect`'s box**, and
+  the difference is load-bearing rather than fussy. `wm_draw_win` writes every
+  pixel of the frame, while the drop shadow is two *lines* — so the occupied
+  box contains two corners, `(x+w, y)` and `(x, y+h)`, that nothing writes.
+  Claiming those would strand the old shadow's pixel on a rightward drag.
+  Under-claiming by two lines marks a window that only sat under a shadow,
+  which is the safe direction and costs almost nothing.
 - **The window that moved is marked unconditionally**, by pointer. A drag
   long enough to land clear of where it started does not overlap its own
   vacated rect, and the mechanism would otherwise decline to draw the one
@@ -8152,13 +8301,49 @@ end of the file is **not** an error — it answers zero bytes, which is how the
 caller's loop terminates.
 
 `dskw_append` also refuses a **protected** file with `FERR_PROT`, `DSKW_PROT`
-being read-only|hidden|system|label|directory — so there is no chunked path
-to a system file and §19.6.1's slot is the only way to write one. That is a
-constraint on §52.10.4 rather than an oversight: the installer writes
-`KERNEL.SYS` **whole**, in one `OSAPI_FILE_WRITE_SYS` call, which is also the
-strongest guarantee that it lands contiguously from cluster 2 the way
-§52.10.2 requires. Chunked I/O is for the *application* files, which are the
-big ones and are not protected.
+being read-only|hidden|system|label|directory. That is right for a package
+and it was **wrong for the one caller that can legitimately make a system
+file**, which is §19.6.1's — so `OSAPI_FILE_APPEND_SYS` is the other half of
+that fence and §18.4.4.1 is why it had to exist.
+
+#### 18.4.4.1 A system file could be created and never finished
+
+The pairing is what was missing. `OSAPI_FILE_WRITE_SYS` stamps hidden +
+system on the file it makes; `dskw_append` then met those exact bits in
+`DSKW_PROT` and answered `FERR_PROT`. So a system file **larger than the
+caller's buffer could not be written at all** — created, and then unable to
+be extended by the only verb that extends anything.
+
+Nothing looked broken, because the only writer of system files is the
+installer and it had been given a way around it: claim a buffer big enough
+for the whole of `KERNEL.SYS` and write it in one call (§52.10.4). The
+round-number ceiling in `hd_ibuf_get` — 96KB, against a kernel of 86,118
+bytes — was the *capability*, not a tuning, and its fallback path said so in
+its own comment: "let `hd_icopy_one` refuse the one file that needs more".
+Spelled out, that is **a machine short of heap cannot install os8088**, and
+**a kernel that grows past 96KB cannot be installed on any machine** — with
+the same sentence for both, `A file is too big for this machine`, about a
+file the disk it booted from is carrying.
+
+`OSAPI_FILE_APPEND_SYS` (slot 0x03A0) is `dskw_append` with `DSKW_SPROT` in
+place of `DSKW_PROT` — the identical relaxation `dskw_write_sys`'s replace
+already takes, keyed off the identical `[dskw_syswr]` byte, one shot and
+cleared on the way out. **Read-only, a volume label and a subdirectory still
+refuse**, and the cluster-multiple precondition is untouched.
+
+Three things keep §19.6's rule where it was. It is behind the **same fence**
+— `drv_owns_seg`, the caller's segment being a loaded driver's — and shares
+`api_file_write_sys`'s body rather than copying it, because a fence written
+twice is a fence that can be got wrong once. It **cannot create** anything:
+an append needs a directory entry that is already there, so the only way to
+make a file the user can neither see nor delete is still the write cell. And
+a package that calls it gets the answer it has always had, `FERR_PROT`.
+
+What it buys: the installer's copy has **no size limit left in it**,
+`HIW_KMAXKB` becomes a speed choice (one write instead of three), and
+`make INSTCHUNK=1` builds the driver at the fallback size so the chunked
+system-file path is exercised on a machine that has plenty of heap — which
+is every machine here, and is why that path had never run.
 
 ### 18.94 The transfer instrument, published at a fixed offset
 
@@ -9683,6 +9868,18 @@ Two consequences worth stating, because both are load-bearing for §52.10:
   in the calling instance's own directory; this one must not, because the
   installer is naming files on the volume it is building and a folder put
   underneath it would scatter them.
+
+**There are TWO cells behind this fence, and the second is what lets the
+first finish its job.** `OSAPI_FILE_APPEND_SYS` (slot 0x03A0) is
+`dskw_append` with the same `DSKW_SPROT` relaxation, and §18.4.4.1 is the
+whole argument: without it a system file could be *created* and never
+*extended*, so one bigger than the caller's buffer could not be written at
+all. It shares `api_file_write_sys`'s body — one fence, a byte
+(`[api_sysap]`, `.text` with a real initialiser, written through `CS`
+because the stub still holds the caller's `DS` when it lands) picking which
+`dskw_` verb runs at the end — because two copies of a fence is one that can
+be got wrong. It cannot **create** anything, an append needing an entry that
+is already there, so §19.6's rule is unmoved by it.
 
 ### 19.7 `README.TXT` — the manual is on the disk, and the reader sets its shape
 
@@ -28616,6 +28813,88 @@ by then the install is done and the click adds software. Nine characters is
 72px and the button was 72px, so it is 88 now and the other two moved right
 by 16 — `HIW_B0X`/`HIW_BW0` drive the hit test as well as the drawing, so
 that is one change and not two.
+
+### 52.10.11 No file is too big for this machine any more
+
+`hd_icopy_one` had one refusal in it and it is gone. The chunked shape began
+`cmp byte [hd_isys], 0 / jne .toobig` — *a system file cannot be appended
+to*, which was a true statement about the kernel it was written against
+(§18.4.4) and which made the whole install rest on `hd_ibuf_get` winning its
+96KB claim. The fallback claim of 32KB was therefore not a fallback at all:
+on a machine that took it, the installer reported **`A file is too big for
+this machine`** about `KERNEL.SYS`, the file on the disk it had just booted
+from. The same sentence was waiting for every machine on the day the kernel
+passed 96KB; it stands at 86,118 bytes.
+
+§18.4.4.1's `OSAPI_FILE_APPEND_SYS` removes the constraint rather than
+widening the buffer, so `hd_iwrite_chunk` takes the `_SYS` twin of both
+verbs when `[hd_isys]` is set — created hidden + system, then extended past
+those bits — and `HIW_KMAXKB` is a **speed** choice: one write instead of
+three, and the strongest guarantee that `KERNEL.SYS` lands contiguously from
+cluster 2 (§52.10.2), which is why it is still asked for first.
+
+**`make INSTCHUNK=1` is how that path is tested at all.** It builds the
+driver with the buffer at its fallback size and touches nothing else — the
+kernel is byte-identical — so the run that carries a system file across
+several writes happens on a machine with plenty of heap, which is every
+machine anyone develops on. A path that only executes on hardware nobody has
+is a path that has never executed.
+
+### 52.10.12 The apps phase never writes a system file
+
+`hd_icopy_one` asks whose file it is before it copies one, and in the **apps
+phase** anything hidden + system on the source is skipped — silently, with
+`CF = 0`, because a system file on the apps disk is not a failure, it is a
+file that is not the apps disk's business.
+
+The phases mean different things and this is the line between them. The
+system phase *is* the system files: `KERNEL.SYS` at cluster 2, every `*.DRV`,
+whatever `SYSTEM.CFG` and `ASSOC.DAT` the source carries. The apps phase adds
+**software to a machine that already boots** (§52.10.10), and everything
+hidden + system on that machine was put there by the phase before it and
+belongs to the volume rather than to the disk currently in the drive.
+
+Three things it prevents, in rising order of how much they cost:
+
+- **A stale driver over a fresh one.** Nothing says the disk offered as the
+  apps disk was built from the same tree as the one that was offered as the
+  system disk.
+- **A floppy's `ASSOC.DAT` on a hard disk.** §54.7's rows carry
+  `ASC_ROWCLUS`, the directory the program lives in — a **source** cluster
+  number, meaningless on the destination. The hint loses to a real lookup
+  (§54.7.2), so this costs searches rather than correctness, but writing it
+  is still writing a lie.
+- **`KERNEL.SYS` relocated off cluster 2.** A replace allocates a fresh chain
+  at the end of the volume and frees the one at the front, which is exactly
+  the failure §52.10.2's tree-walk skip exists to prevent — *and that skip is
+  by NAME*, so it protects one file and nothing else.
+
+**It is a species test rather than a name list**, so it needs no maintenance
+as files are added and it reads the same two bits every other boundary in
+this system reads (§19.6). The name skip in `hd_icopy_tree` stays: that one is
+about the system phase not copying, in its walk, the file it has already
+written first and alone.
+
+**And it is what a consolidated install disk needs.** On the larger floppy
+geometries a single disk can carry the system and the applications, so the
+"apps disk" may legitimately *be* a system disk — offered as the second half
+of a split install, or simply left in the drive because there is only one. A
+copy that then rewrote the system files would be doing the wrong thing in
+the normal case rather than in a mistake, which is why this is a protection
+in the installer and not advice in a document.
+
+`INSTBNCH.TXT` also names the **copy buffer's KB** now. Which size the claim
+got is invisible from outside and changes how every large file is written, and
+a field report that cannot say which one was in play cannot settle an argument
+about the heap. One has already had to be settled by guessing.
+
+**And `hd_ibuf_get` walks a LADDER rather than asking twice.** 96KB then 32
+is a cliff, and the heap is a continuum: a machine that could spare 64 was
+copied at 32 — three times the `int 13h` calls for nothing. It tries
+96, 64, 48, 32, 16, 8 and takes the first that answers, which costs a table
+and a loop and makes the installer degrade smoothly on exactly the small
+machines this OS is for. The top rung is `HIW_KMAXKB`, so where the heap
+allows it `KERNEL.SYS` still goes down in one write.
 
 
 ## 52.11 Two images: the transport, and the tool

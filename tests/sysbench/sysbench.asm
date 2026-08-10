@@ -3678,17 +3678,21 @@ sb_b_rdsml:
 ;
 ; THIS BLOCK NEVER WRITES. It does not format, does not partition, does not
 ; create a file, and does not delete one. That is not timidity about the code,
-; it is a fact about the disk: the machine this was written for
-; (docs/FIELD-MACHINES.md, E1) has a real DOS 3.3 install on its C:, with its
-; owner's data on it, and a benchmark has no business leaving anything behind
-; or removing anything it did not put there. What that costs is the write half
+; it is a fact about the disk: C: belongs to whoever is running this - it was
+; a real DOS 3.3 install on the machine this was written for
+; (docs/FIELD-MACHINES.md, E1) and is an os8088 install today - and a benchmark
+; has no business leaving anything behind or removing anything it did not put
+; there. What that costs is the write half
 ; of the picture - a `bytes/second written` row would need a scratch file, and
 ; a run interrupted between creating and deleting one would break that promise.
 ; Reads are the half that can be taken safely, so reads are what this takes.
 ;
-; The file it reads is COMMAND.COM, because a DOS 3.3 system disk has one and
-; reading it changes nothing. The report NAMES it, so nobody has to guess what
-; the throughput row was reading.
+; WHICH file it reads is ASKED of the volume (sb_hdpick, below) rather than
+; assumed of it - the biggest ordinary root file that fits the claim - and the
+; report NAMES it, so nobody has to guess what the throughput row was reading.
+; It used to be COMMAND.COM, on the reasoning that a DOS 3.3 system disk has
+; one; the field machine's C: is an os8088 volume now, so that row answered
+; FERR_NOENT and the block measured nothing while still printing four lines.
 ;
 ; IT MUST SURVIVE THERE BEING NO HARD DISK, which is every other machine
 ; including the one it was developed on. There is no cheaper way to ask than
@@ -3737,6 +3741,9 @@ sb_hdd:
     jc .noclaim
     mov [sb_bseg], dx
 
+    call sb_hdpick                  ; WHICH file, asked of the volume rather
+                                    ; than assumed of it (see the header)
+
     mov word [bl_n], 16             ; the FAT walk on a 20MB FAT16 volume. On
     mov word [bl_body], sb_b_dfree  ; a floppy the whole FAT is resident and
     mov si, sb_r_hdf                ; this is 40 ms; here the 9-sector window
@@ -3755,7 +3762,7 @@ sb_hdd:
     mov ax, [sb_hsz]
     call sb_num
     mov si, sb_l_hdfn
-    mov di, sb_f_cmd
+    mov di, sb_hname
     call bl_kvs
     cmp word [sb_hsz], 0            ; no file, no throughput to measure
     je .nofile
@@ -3973,7 +3980,7 @@ sb_b_hddrd:
     push es
     mov es, [sb_bseg]
     xor bx, bx
-    mov si, sb_f_cmd
+    mov si, sb_hname
     mov cx, SB_BIGKB * 1024
     xor dx, dx
     call OSAPI_FILE_READ            ; out CF=0 and DX:AX = the file's size
@@ -3991,6 +3998,66 @@ sb_b_hddrd:
 sb_b_hdmnt:
     call sb_hdd_go
     call sb_hdd_back
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_hdpick - name the biggest ordinary file in C:'s root that fits the claim
+; in:  volume 2 current, at its root
+; out: [sb_hname] = a NUL name, or the empty string if there is nothing to read
+;
+; It used to be `COMMAND.COM`, on the reasoning that a DOS 3.3 system disk has
+; one. The field machine's C: is an os8088 volume now (docs/FIELD-MACHINES.md)
+; and that row has been answering FERR_NOENT ever since, so the throughput
+; measurement this block exists for produced nothing at all - a benchmark that
+; silently measures no bytes is the worst of the three outcomes.
+;
+; BIGGEST-THAT-FITS rather than first-found, because the row is a RATE and a
+; 96-byte file measures the call and not the disk. Still read-only, still
+; creates nothing and deletes nothing, which is this block's whole contract.
+; -----------------------------------------------------------------------------
+sb_hdpick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [sb_hname], 0
+    mov word [sb_hbest], 0
+    xor cx, cx
+.next:
+    push cs
+    pop es
+    mov di, sb_hfind
+    call OSAPI_FILE_FIND
+    jc .done
+    cmp word [sb_hfind+14], OSAPI_FT_DIR
+    jae .next                       ; a folder or the synthesized '..'
+    cmp word [sb_hfind+20], 0       ; over 64KB: it cannot fit the claim and
+    jne .next                       ; the high word is the only cheap test
+    mov ax, [sb_hfind+18]
+    cmp ax, SB_BIGKB * 1024
+    ja .next
+    cmp ax, [sb_hbest]
+    jbe .next
+    mov [sb_hbest], ax
+    mov si, sb_hfind                ; bank the NAME: hd_ifind's lesson, since
+    mov di, sb_hname                ; the walk overwrites the record every pass
+    push cx
+    mov cx, 13
+    cld
+    rep movsb
+    pop cx
+    jmp short .next
+.done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 %include "benchlib.inc"
@@ -4071,7 +4138,7 @@ sb_c_mulm:    db 'mov ax,i + mul [m]', 0
 sb_c_div:     db 'xor+mov+div r16', 0
 
 sb_f_out:   db 'SYSBENCH.TXT', 0
-sb_f_cmd:   db 'COMMAND.COM', 0
+sb_hname:   times 14 db 0     ; sb_hdpick's answer, and what the report NAMES
 sb_f_big:   db 'BENCH.DAT', 0
 sb_f_sml:   db 'BENCHSML.DAT', 0
 
@@ -4355,7 +4422,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 214              ; ...and the scalars end at 213 now
+SB_O_SYSKB equ 240              ; ...and the scalars end at 239 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -4456,6 +4523,8 @@ sb_wkb      equ os88_image_end + 206   ; word: ...and the KB it actually got
 sb_werr     equ os88_image_end + 208   ; word: the FERR_* a write refused with
 sb_wfree    equ os88_image_end + 210   ; word: KB free on the volume before
 sb_wdone    equ os88_image_end + 212   ; word: KB appended so far
+sb_hbest    equ os88_image_end + 214   ; word: the biggest fitting file so far
+sb_hfind    equ os88_image_end + 216   ; OSAPI_FIND_SZ bytes (216..239)
 sb_syskb    equ os88_image_end + SB_O_SYSKB    ; SYSKB_SIZE bytes
 sb_res      equ os88_image_end + SB_O_RES      ; SB_NCPU dwords
 sb_rrow     equ os88_image_end + SB_O_RROW     ; SB_BWROWS words

@@ -360,27 +360,27 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4736,
+    "bss": 4916,
     "budget": 98304,
     "codemax": 65536,
-    "cold": 22442,
+    "cold": 22463,
     "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3744,
-    "kend": 6112,
+    "imgpara": 3776,
+    "kend": 6144,
     "kseg": 96,
-    "ksize": 96256,
+    "ksize": 96768,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 54905
+    "text": 55317
   },
   "small": {
     "bss": 4651,
     "budget": 94208,
     "codemax": 65536,
-    "cold": 21361,
+    "cold": 21382,
     "coldpara": 1344,
     "fatpara": 288,
     "imgpara": 3584,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52310
+    "text": 52447
   }
 }
 ```
@@ -874,23 +874,23 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,634 | 37.0% |
-| the window system and its furniture | 16,531 | 21.4% |
-| drawing: adapters, primitives, glyphs, icons | 10,981 | 14.2% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.7% |
-| the kernel proper: API table, heap, scheduler, events | 5,890 | 7.6% |
+| the file system, end to end | 28,655 | 36.8% |
+| the window system and its furniture | 16,627 | 21.4% |
+| drawing: adapters, primitives, glyphs, icons | 11,256 | 14.5% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.6% |
+| the kernel proper: API table, heap, scheduler, events | 5,931 | 7.6% |
 | the Control Panel | 4,120 | 5.3% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,347** | |
+| **total** | **77,780** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 917 | 7,304 | **8,221** | 336 | — |
-| `wm.inc` — the window manager (§11) | 6,052 | — | **6,052** | 635 | — |
+| `wm.inc` — the window manager (§11) | 6,148 | — | **6,148** | 635 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,298 | **5,471** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,542 | — | **4,542** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
@@ -903,10 +903,10 @@ generated in the first place.
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
+| `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `icons.inc` — the icon renderer (§10) | 1,342 | — | **1,342** | 34 | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,336 | — | **1,336** | 84 | — |
-| `font.inc` — the 8x8 text renderers (§6) | 1,252 | — | **1,252** | 17 | 768 |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
@@ -922,8 +922,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,698 | — | **2,698** | — | — |
-| **total** | **54,905** | **22,442** | **77,347** | **4,736** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,739 | — | **2,739** | — | — |
+| **total** | **55,317** | **22,463** | **77,780** | **4,916** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
