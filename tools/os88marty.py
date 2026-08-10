@@ -595,11 +595,23 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0):
     same guess in the same two directions.
 
     **KEEP `limit` UNDER 90 SECONDS unless there is a very good reason, and
-    write the reason down.** MartyPC runs FASTER than real time on an ordinary
-    host, so guest seconds arrive sooner than wall seconds and a generous
-    limit is not insurance - it is how long you wait to be told something went
-    wrong. The default 120 already covers a 360KB Hercules boot (16.1 s
-    measured) several times over.
+    write the reason down.** MartyPC runs the guest FASTER than real time -
+    **measured 4.87x and 4.81x** on this container, two 10-second samples of
+    the cycle counter against the 8088's own 4.772727 MHz (14.31818/3), which
+    is the only honest way to ask:
+
+        c0 = m.status()["cycles"]; time.sleep(10)
+        (m.status()["cycles"] - c0) / 10 / 4772727.0
+
+    So guest seconds arrive sooner than wall seconds, and a generous limit is
+    not insurance - it is how long you wait to be told something went wrong.
+    The whole of `tests/sysbench`, which is a minute and a half of guest time
+    including its floppy rows, is up in well under 90 s here. The default 120
+    already covers a 360KB Hercules boot (16.1 s) several times over.
+
+    The ratio is a property of THIS HOST and will move with its load, so
+    re-measure rather than quoting 4.8x; what does not move is that it is
+    above 1, and no `limit` should be sized as though it were below.
 
     The failure this guards against is not a truncated wait, it is a
     MISDIAGNOSIS. A session that sets `limit=1800` because "the emulator might
