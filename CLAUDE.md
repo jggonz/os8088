@@ -551,8 +551,19 @@ model is 8% and not the residual. **Two caveats.** 2:1 media is only on the
 `ibm5150_82_v4` machines - GLaBIOS abandons a floppy op after ~250 ms, so it
 keeps 1:1 - and those machines need an IBM ROM this tree cannot ship, so a
 container without one in `tools/martypc/roms/` runs the GLaBIOS twins only.
-**And it will still not catch a disk CORRECTNESS bug**, because the patch
-changes what a disk COSTS and never what it SAYS. SPEC.md 18.91's `AL` bug is the worked example - the BIOS
+**And it DOES catch a disk correctness bug now, which corrects what this file
+said a commit ago.** SPEC.md 18.91's `AL` bug reproduces on
+`os8088_5150_herc`: `make DISKAL=1` boots in **1152 ticks against 211**, and
+`os88marty.py`'s new `disk` counters - the controller's own traffic read from
+OUTSIDE the guest, so a SHIPPED image can be watched with no `DISKCNT=1`
+kernel and no test package - show **846 sectors in 177 reads against 177 in
+23, longest run 9 in both**. That is the field's exact signature (Set 15's
+4.6x traffic; this is 4.8x). It needed no emulator cleverness: the bug is in
+the IBM ROM and MartyPC RUNS the IBM ROM, where QEMU missed it because
+SeaBIOS is a different BIOS. **The boundary is now between the ROM and the
+CHIP** - what a real 765 puts in ST1, or whether a real drive ever returns
+short, is still the emulator author's belief and still the 5150's question.
+SPEC.md 18.91's `AL` bug is the worked example - the BIOS
 moved nine sectors and answered `AL = 1`, the kernel believed it and re-read
 the rest one at a time, and on the 5150 that was 148 sectors in 34 int 13h
 calls for a 32-sector file. **The same binary on the same image under QEMU

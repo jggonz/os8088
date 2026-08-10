@@ -3695,3 +3695,34 @@ before. Motor spin-up, the PCjr PIO paths and Format Track are unmodelled or
 uncalibrated, and the seek figures are the BIOS's own SPECIFY request rather
 than anything measured: the field's three rows all read one track and never
 seek, so nothing in Part 9 pins them. **Hard disks are untouched.**
+
+#### The `AL` bug reproduces here, and that was not expected
+
+Set 24 shipped saying MartyPC "will still not catch a disk CORRECTNESS bug".
+**That is wrong, and it is wrong in the useful direction.** With the IBM ROM in
+`tools/martypc/roms/`, MartyPC does not *model* the BIOS — it **executes** it,
+so a bug in IBM's `int 13h` is present by construction. Same image, same
+machine (`os8088_5150_herc`), shipped kernel against `make DISKAL=1`:
+
+| | shipped (trusts `CF`) | `DISKAL=1` (trusts `AL`) |
+|---|---|---|
+| int 13h-level reads | 23 | **177** |
+| sectors moved | 177 | **846** — 4.8x |
+| **longest run** | **9** | **9** |
+| `boot_ticks` | 211 | **1152** |
+
+`longest_run` = 9 in both is Set 16's finding restated by the emulator: the
+kernel asks for nine sectors, is given nine, and asks again. The 4.8x traffic
+is Set 15's 4.6x. **QEMU missed this because SeaBIOS is a different BIOS**, not
+because emulation cannot see it — and that distinction was never drawn here,
+which is why MartyPC inherited a blindness it does not have.
+
+The counters are the CONTROLLER's, read over the debug socket
+(`os88marty.py`'s `m.disk()`), so the guest needs no `DISKCNT=1` kernel and no
+test package: **§18.94's block, on a shipped image, from outside**.
+
+So the boundary is now between the ROM and the chip. **BIOS-level** behaviour —
+what `int 13h` returns, `int 1Eh`'s EOT, the ROM's own arithmetic — is
+reproduced because it is IBM's code. **Controller-level** behaviour — what a
+real 765 puts in ST1 on a CRC error, whether a real drive ever returns short —
+remains the emulator author's belief, and remains the 5150's question.

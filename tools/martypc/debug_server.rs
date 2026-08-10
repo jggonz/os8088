@@ -516,6 +516,7 @@ impl DebugServer {
         match cmd.as_str() {
             "ping" => json!({"ok": true, "pong": true}),
             "status" => status(machine, exec),
+            "disk" => disk_stats(machine, &req),
             "regs" => regs(machine),
             "setreg" => setreg(machine, &req),
             "read" => read_mem(machine, &req),
@@ -638,6 +639,41 @@ fn state_name(s: ExecutionState) -> &'static str {
         ExecutionState::StepOverHit => "stepover",
         ExecutionState::Running => "running",
         ExecutionState::Halted => "halted",
+    }
+}
+
+/// os8088: what the floppy controller has actually been asked to do.
+///
+/// SPEC.md §18.94's `DISKCNT` block, measured from OUTSIDE the guest - so it
+/// needs no counters in the kernel, no knob-built binary and no test package,
+/// and a SHIPPED image can be watched. That is what makes the §18.91 class
+/// cheap to catch: a kernel that re-reads sectors it was already given looks
+/// perfectly correct from inside itself, and shows up here as sectors nobody
+/// asked for. `reset: true` zeroes the counters so a region of a session can
+/// be bracketed.
+fn disk_stats(machine: &mut Machine, req: &Value) -> Value {
+    let clear = req.get("reset").and_then(Value::as_bool).unwrap_or(false);
+    match machine.bus_mut().fdc_mut().as_mut() {
+        Some(fdc) => {
+            let s = fdc.stat;
+            if clear {
+                fdc.stat = Default::default();
+            }
+            json!({
+                "ok": true,
+                "reads": s.reads,
+                "read_sectors": s.read_sectors,
+                "writes": s.writes,
+                "write_sectors": s.write_sectors,
+                "seeks": s.seeks,
+                "seek_cylinders": s.seek_cylinders,
+                "resets": s.resets,
+                "longest_run": s.longest_run,
+                "transfer_ms": s.transfer_us / 1000.0,
+                "seek_ms": s.seek_us / 1000.0,
+            })
+        }
+        None => err("no floppy controller in this machine"),
     }
 }
 

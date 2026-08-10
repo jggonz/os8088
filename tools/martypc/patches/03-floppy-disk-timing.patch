@@ -1,5 +1,5 @@
 diff --git a/crates/marty_core/src/devices/fdc/controller.rs b/crates/marty_core/src/devices/fdc/controller.rs
-index 40f78faa..a6ffc633 100644
+index 40f78faa..f9f53e2b 100644
 --- a/crates/marty_core/src/devices/fdc/controller.rs
 +++ b/crates/marty_core/src/devices/fdc/controller.rs
 @@ -75,6 +75,14 @@ pub const FDC_DATA_REGISTER: u16 = 0x05;
@@ -17,7 +17,37 @@ index 40f78faa..a6ffc633 100644
  // Main Status Register Bit Definitions
  // --------------------------------------------------------------------------------
  // The first four bits encode which drives are in 'positioning' mode, ie whether
-@@ -341,6 +349,16 @@ pub struct FloppyController {
+@@ -161,6 +169,29 @@ pub const ST3_TRACK0: u8 = 0b0001_0000;
+ pub const ST3_DOUBLESIDED: u8 = 0b0000_1000;
+ pub const ST3_HEAD: u8 = 0b0000_0100;
+ 
++/// os8088: what the controller has actually been asked to do.
++#[derive(Clone, Copy, Debug, Default)]
++pub struct FdcStats {
++    /// READ DATA commands accepted, and the sectors they asked for.
++    pub reads: u64,
++    pub read_sectors: u64,
++    /// WRITE DATA likewise.
++    pub writes: u64,
++    pub write_sectors: u64,
++    /// SEEK/RECALIBRATE, and the cylinders actually crossed.
++    pub seeks: u64,
++    pub seek_cylinders: u64,
++    /// Controller resets - a BIOS giving up looks like this.
++    pub resets: u64,
++    /// Modelled mechanical time, split the way the model charges it.
++    pub transfer_us: f64,
++    pub seek_us: f64,
++    /// The longest single run asked for, in sectors. A kernel that batches
++    /// well shows a run near the track length; §18.91's bug showed 9 here and
++    /// 4.6x the sectors, which is the shape that gives it away.
++    pub longest_run: u64,
++}
++
+ /// Represent the state of the DIO bit of the Main Status Register in a readable way.
+ #[derive(Copy, Clone, Debug, Default)]
+ pub enum IoMode {
+@@ -341,6 +372,24 @@ pub struct FloppyController {
      us_accumulator: f64,
      watchdog_accumulator: f64,
      operation_accumulator: f64,
@@ -29,12 +59,20 @@ index 40f78faa..a6ffc633 100644
 +    op_rotates: bool,
 +    /// os8088: how many sectors of the current run have been PACED.
 +    xfer_paced_sectors: usize,
++    /// os8088: host-side traffic counters, read out through the debug server.
++    ///
++    /// This is SPEC.md §18.94's `DISKCNT` block measured from OUTSIDE - the
++    /// guest needs no counters, no knob-built kernel and no test package, so a
++    /// SHIPPED binary can be watched. That is what catches the §18.91 class:
++    /// a kernel re-reading sectors it already has looks identical from inside
++    /// and shows up here as traffic nobody asked for.
++    pub stat: FdcStats,
 +    /// os8088: step rate the BIOS asked for through SPECIFY.
 +    step_rate_us: f64,
      fdc_type: FdcType,
      status_byte: u8,
      reset_flag: bool,
-@@ -471,6 +489,11 @@ impl Default for FloppyController {
+@@ -471,6 +520,12 @@ impl Default for FloppyController {
          Self {
              phase: ControllerPhase::CommandPhase,
              us_accumulator: 0.0,
@@ -42,11 +80,12 @@ index 40f78faa..a6ffc633 100644
 +            op_elapsed_us: 0.0,
 +            op_rotates: false,
 +            xfer_paced_sectors: 0,
++            stat: FdcStats::default(),
 +            step_rate_us: FDC_STEP_RATE_DEFAULT_US,
              watchdog_accumulator: 0.0,
              operation_accumulator: 0.0,
              fdc_type: FdcType::IbmNec,
-@@ -559,6 +582,8 @@ impl FloppyController {
+@@ -559,6 +614,8 @@ impl FloppyController {
  
          for (i, drive) in drives.iter().take(FDC_MAX_DRIVES).enumerate() {
              fdc.drives[i] = FloppyDiskDrive::new(i, drive.fd_type);
@@ -55,7 +94,23 @@ index 40f78faa..a6ffc633 100644
          }
  
          fdc
-@@ -1329,6 +1354,14 @@ impl FloppyController {
+@@ -781,6 +838,7 @@ impl FloppyController {
+             // Reset the FDC when the reset bit is *not* set
+             // Ignore all other commands
+             self.log_str(&format!("FDC Reset requested via DOR write: {:02X}", data));
++            self.stat.resets += 1;
+             self.operation_accumulator = 0.0;
+             self.operation = Operation::Reset;
+             self.mrq = false;
+@@ -826,6 +884,7 @@ impl FloppyController {
+             // Reset the FDC when the reset bit is *not* set
+             // Ignore all other commands
+             self.log_str(&format!("PCjr FDC Reset requested via DOR write: {:02X}", data));
++            self.stat.resets += 1;
+             self.operation_accumulator = 0.0;
+             self.operation = Operation::Reset;
+             self.mrq = false;
+@@ -1329,6 +1388,14 @@ impl FloppyController {
          );
  
          self.dma = !headload_ndm.non_dma();
@@ -70,7 +125,7 @@ index 40f78faa..a6ffc633 100644
          self.log_cmd(Command::FixDriveData, "command_fix_drive_data", &log_str);
  
          Continuation::CommandComplete
-@@ -1361,12 +1394,19 @@ impl FloppyController {
+@@ -1361,12 +1428,21 @@ impl FloppyController {
  
          // Set drive select and seek to cylinder 0
          self.drive_select = dhs.drive() as usize;
@@ -79,6 +134,8 @@ index 40f78faa..a6ffc633 100644
 +        // it costs whatever that distance costs - priced before the seek.
 +        let step_us = self.step_rate_us;
 +        let seek_us = self.drives[dhs.drive() as usize].seek_time_us(0, step_us, FDC_HEAD_SETTLE_US);
++        self.stat.seeks += 1;
++        self.stat.seek_cylinders += self.drives[dhs.drive() as usize].seek_distance(0) as u64;
 +
          self.drives[dhs.drive() as usize].seek(0);
  
@@ -90,7 +147,7 @@ index 40f78faa..a6ffc633 100644
          self.send_interrupt = true;
          self.operation = Operation::Calibrate;
          self.last_command = Command::CalibrateDrive;
-@@ -1397,6 +1437,12 @@ impl FloppyController {
+@@ -1397,6 +1473,14 @@ impl FloppyController {
              return Continuation::CommandComplete;
          }
  
@@ -99,11 +156,13 @@ index 40f78faa..a6ffc633 100644
 +        // seek, because afterwards the distance is zero.
 +        let step_us = self.step_rate_us;
 +        let seek_us = self.drives[self.drive_select].seek_time_us(cylinder as u16, step_us, FDC_HEAD_SETTLE_US);
++        self.stat.seeks += 1;
++        self.stat.seek_cylinders += self.drives[self.drive_select].seek_distance(cylinder as u16) as u64;
 +
          // Seek to cylinder given in command
          self.drives[self.drive_select].seek(cylinder as u16);
  
-@@ -1410,6 +1456,18 @@ impl FloppyController {
+@@ -1410,6 +1494,18 @@ impl FloppyController {
          self.log_cmd(Command::SeekParkHead, "command_seek_head", &log_str);
  
          self.last_error = DriveError::NoError;
@@ -122,10 +181,16 @@ index 40f78faa..a6ffc633 100644
          self.send_interrupt = true;
          Continuation::CommandComplete
      }
-@@ -1958,6 +2016,18 @@ impl FloppyController {
+@@ -1958,6 +2054,24 @@ impl FloppyController {
              self.xfer_size_bytes = xfer_sectors * sector_size_decoded;
              self.dma_bytes_left = xfer_sectors * sector_size_decoded;
              self.operation_init = true;
++
++            self.stat.reads += 1;
++            self.stat.read_sectors += xfer_sectors as u64;
++            if xfer_sectors as u64 > self.stat.longest_run {
++                self.stat.longest_run = xfer_sectors as u64;
++            }
 +
 +            // os8088: charge only the FIRST sector here. The rest are charged
 +            // one at a time as the run proceeds, which is how a drive delivers
@@ -141,7 +206,7 @@ index 40f78faa..a6ffc633 100644
          }
  
          if self.dma_bytes_left > 0 {
-@@ -1967,11 +2037,20 @@ impl FloppyController {
+@@ -1967,11 +2081,20 @@ impl FloppyController {
              if (self.dma_bytes_left < self.xfer_size_bytes) && (self.dma_bytes_left % sector_size_decoded == 0) {
                  // Completed one sector
  
@@ -167,10 +232,13 @@ index 40f78faa..a6ffc633 100644
              }
  
              // Check if DMA is ready
-@@ -2072,6 +2151,18 @@ impl FloppyController {
+@@ -2072,6 +2195,21 @@ impl FloppyController {
              self.xfer_size_bytes = self.xfer_size_sectors * sector_size_bytes;
              self.dma_bytes_left = self.xfer_size_bytes;
              self.operation_init = true;
++
++            self.stat.writes += 1;
++            self.stat.write_sectors += self.xfer_size_sectors as u64;
 +
 +            // os8088: a write waits for the sector to come round exactly as a
 +            // read does - the head can only lay bytes down as the platter
@@ -186,7 +254,7 @@ index 40f78faa..a6ffc633 100644
          }
  
          if self.dma_bytes_left == sector_size_bytes {
-@@ -2357,6 +2448,15 @@ impl FloppyController {
+@@ -2357,6 +2495,15 @@ impl FloppyController {
              self.xfer_size_bytes = xfer_sectors * sector_size_decoded;
              self.dma_bytes_left = xfer_sectors * sector_size_decoded;
              self.operation_init = true;
@@ -202,7 +270,7 @@ index 40f78faa..a6ffc633 100644
          }
  
          if self.dma_bytes_left > 0 {
-@@ -2416,6 +2516,37 @@ impl FloppyController {
+@@ -2416,6 +2563,43 @@ impl FloppyController {
          }
      }
  
@@ -215,6 +283,12 @@ index 40f78faa..a6ffc633 100644
 +    /// again would double-count; a SEEK has not, and the platter does not stop
 +    /// while the head steps.
 +    fn op_charge(&mut self, us: f64, rotates: bool) {
++        if rotates {
++            self.stat.seek_us += us;
++        }
++        else {
++            self.stat.transfer_us += us;
++        }
 +        self.op_delay_us = us;
 +        self.op_elapsed_us = 0.0;
 +        self.op_rotates = rotates;
@@ -240,7 +314,7 @@ index 40f78faa..a6ffc633 100644
      fn operation_reset(&mut self, delta_us: f64) {
          self.operation_accumulator += delta_us;
          if self.operation_accumulator > FDC_RESET_TIME {
-@@ -2428,6 +2559,20 @@ impl FloppyController {
+@@ -2428,6 +2612,20 @@ impl FloppyController {
      }
  
      fn operation_seek(&mut self, delta_us: f64) {
@@ -261,7 +335,7 @@ index 40f78faa..a6ffc633 100644
          self.operation_accumulator += delta_us;
          if self.operation_accumulator > FDC_SEEK_TIME {
              log::trace!("FDC Operation Seek/Calibrate complete");
-@@ -2642,6 +2787,22 @@ impl FloppyController {
+@@ -2642,6 +2840,22 @@ impl FloppyController {
      pub fn run(&mut self, dma: &mut dma::DMAController, bus: &mut BusInterface, us: f64) {
          self.us_accumulator += us;
  
@@ -285,7 +359,7 @@ index 40f78faa..a6ffc633 100644
              self.watchdog_accumulator += us;
              if self.watchdog_enabled && self.watchdog_accumulator > WATCHDOG_TIMEOUT {
 diff --git a/crates/marty_core/src/devices/floppy_drive.rs b/crates/marty_core/src/devices/floppy_drive.rs
-index fc9ee6db..222c4bd3 100644
+index fc9ee6db..9a4717a3 100644
 --- a/crates/marty_core/src/devices/floppy_drive.rs
 +++ b/crates/marty_core/src/devices/floppy_drive.rs
 @@ -170,6 +170,22 @@ pub struct FloppyDiskDrive {
@@ -400,7 +474,7 @@ index fc9ee6db..222c4bd3 100644
          self.disk_present = true;
  
          let image_arc = image.into_arc();
-@@ -790,6 +845,185 @@ impl FloppyDiskDrive {
+@@ -790,6 +845,190 @@ impl FloppyDiskDrive {
          self.chsn.set_c(c);
      }
  
@@ -567,6 +641,11 @@ index fc9ee6db..222c4bd3 100644
 +        let wait = (rev - self.angle_us) % rev;
 +        self.angle_us = 0.0;
 +        wait + rev
++    }
++
++    /// Cylinders between the head and `target_c`.
++    pub fn seek_distance(&self, target_c: u16) -> u32 {
++        (target_c as i32 - self.cylinder as i32).unsigned_abs()
 +    }
 +
 +    /// Head step time to `target_c`, plus the settle once it arrives.

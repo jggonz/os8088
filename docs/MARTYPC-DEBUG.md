@@ -76,16 +76,36 @@ The 3% left on row 2 is BIOS overhead the model does not claim to carry.
 
 ### What it does NOT fix, and this is the half that matters
 
-**It changes what the disk COSTS. It does not change what the disk SAYS.**
-SPEC.md §18.91's `AL` bug — the BIOS moving nine sectors and answering
-`AL = 1` — is a claim about what a real ROM *returns*, and no amount of
-platter modelling invents it. An emulator's floppy controller still returns
-what its author believed the hardware returns. So:
+**It changes what the disk COSTS, not what it SAYS** — and that matters far
+less than it sounds, because **the BIOS is not modelled at all: it is
+EXECUTED.** With the real ROM in `roms/`, MartyPC runs IBM's own `int 13h`, so
+a bug in that code is present by construction.
 
-- **timing** questions: MartyPC is now worth asking, and worth checking on the
-  5150 before anything goes in PERFORMANCE.md;
-- **correctness** questions — short reads, `int 1Eh`'s EOT, what `AL` holds,
-  BIOS interrupt stack depth — the 5150, exactly as before.
+**Measured: SPEC.md §18.91's `AL` bug reproduces here.** Same image, same
+machine (`os8088_5150_herc`), shipped kernel against `make DISKAL=1`:
+
+| | shipped (trusts `CF`) | `DISKAL=1` (trusts `AL`) |
+|---|---|---|
+| int 13h-level reads | 23 | **177** |
+| sectors moved | 177 | **846** — 4.8x |
+| **longest run** | **9** | **9** |
+| `boot_ticks` | 211 | **1152** |
+
+`longest_run` is 9 in both: the kernel asks for nine sectors, is given nine,
+and asks again — Set 16's finding restated by the emulator — and the 4.8x
+traffic is Set 15's 4.6x. **QEMU missed this because SeaBIOS is a different
+BIOS**, not because emulation cannot see it, and that distinction was never
+drawn here, which is why MartyPC inherited a blindness it does not have.
+
+So the boundary has moved, and it now runs between the ROM and the chip:
+
+- **BIOS-level** — what `int 13h` returns, `int 1Eh`'s EOT, the ROM's own
+  arithmetic: **reproduced**, because it is IBM's code executing.
+- **Controller-level** — what a real NEC 765 puts in ST1 on a CRC error,
+  whether a real drive ever returns short, what the result phase holds after
+  an odd request: still the emulator author's belief, still the 5150's.
+- **timing**: worth asking here, still checked on the 5150 before anything
+  goes in PERFORMANCE.md.
 
 Not modelled, and each is a place not to trust a number: **motor spin-up**
 (the BIOS's own ~1 s wait is a CPU-timed loop and so was always accurate, but
@@ -94,6 +114,27 @@ the drive itself comes up to speed instantly), **the PIO paths** (PCjr), and
 figures are the BIOS's own request rather than a measurement — the field's
 three rows all read one track and never seek, so nothing here pins them.
 **Hard disks are untouched**: this is the floppy alone.
+
+### Counting the traffic from outside: `m.disk()`
+
+The counters behind that table are the **controller's**, read over the debug
+socket, so the guest needs no `DISKCNT=1` kernel, no test package and no
+knowledge that it is being watched — which is the point, because a *shipped*
+image is what you want to measure and SPEC.md §18.94's block needs a
+knob-built one.
+
+```python
+m.disk(reset=True)          # ...drive the thing you care about...
+print(m.disk())
+# {'reads': 23, 'read_sectors': 177, 'longest_run': 9, 'writes': 0,
+#  'seeks': 28, 'seek_cylinders': 52, 'resets': 3,
+#  'transfer_ms': 7979.0, 'seek_ms': 716.0}
+```
+
+What to read in it: **`longest_run` near the track length** is a kernel
+batching properly; **`read_sectors` far above the payload** is §18.91's shape;
+**`resets`** is a BIOS giving up, which is how GLaBIOS's 250 ms limit was
+found.
 
 ### The GLaBIOS machines keep 1:1 media, and the reason is worth reading
 
