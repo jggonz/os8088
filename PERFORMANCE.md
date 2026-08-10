@@ -3645,3 +3645,336 @@ and back 302,091 us, one cluster 329,554 us. And `COMMAND.COM` answers
 `FERR_NOENT` — the DOS 3.3 install docs/FIELD-MACHINES.md used to warn about
 is gone, overwritten by an os8088 install, so that row measures nothing now
 and should be pointed at a file this OS puts there.
+### Set 25 — the typeface priced: tallx against the IBM ROM face (SPEC.md §6.2)
+
+`tests/gfxbench` on MartyPC, CGA, a **cycle-accurate 4.77MHz 8088 running the
+real IBM 5150 BIOS** (`BIOS_IBM5150_27OCT82_1501476_U33.BIN`, md5
+`f453eb2d…`, the ROM MartyPC knows as `ibm5150_82_v4`). Asked because tallx
+looks sparser than the ROM face and a blank glyph row is the one thing
+`font_char` skips whole — so the question was whether the baked typeface costs
+the machine anything.
+
+**Both faces were BAKED for the A/B.** Comparing tallx against a stock kernel
+would compare two different binaries — the ROM probe is assembled in one and
+not the other — so the ROM face was extracted from the U33 image at
+`F000:FA6E` and built as a `.f8` too. The two kernels are **85,384 bytes each
+and differ in 395 bytes, all of them inside the 760-byte glyph table**; the
+guest's live `font_glyphs` confirms it (the ROM build reads **760/760
+identical to the ROM**, the tallx build 365/760). Every non-text `gfxbench`
+row agrees to ±10 counts in ~200,000 — 0.005%, which is the noise floor and
+also the proof that nothing but the glyphs moved.
+
+| `gfxbench` row | IBM ROM | tallx | delta |
+|---|---|---|---|
+| `FONT_CHAR one cell` (`'W'`) | 895.46 µs | 880.17 µs | **−1.71%** |
+| `FONT_STR 10 aligned` | 8,403.00 µs | 8,297.39 µs | **−1.26%** |
+| `PAIR 10 aligned` | 10,152.95 µs | 10,047.35 µs | −1.04% |
+| **`FONT_RUN 10 aligned`** | 8,879.66 µs | 8,880.01 µs | **+0.00%** (+5 counts) |
+| `PAIR 10 skewed 5` | 10,659.09 µs | 10,433.22 µs | −2.12% |
+| `FONT_RUN 10 skewed` | 10,840.54 µs | 10,618.65 µs | −2.05% |
+| `FONT_WIDTH 10` | 217.91 µs | 217.91 µs | +0.00% |
+| `boot ticks` / `kernel span KB` | 60 / 94 | 60 / 94 | **identical** |
+
+**tallx is the CHEAPER face, and the direction was the surprise** — it has
+**32.0% blank rows against the ROM's 25.3%**. It is **rows and never
+columns**: `or ah, ah / jz` is the renderer's only content-dependent branch,
+and a row is a whole byte whatever is in it.
+
+**`FONT_RUN` aligned at +0.00% is the result, as much as the first row.** The
+fast path (SPEC.md §6.1, mono, `x & 7 == 0`) is branch-free — the cell owns
+its framebuffer byte, so it *stores* every row whether the glyph set any bits
+or not. A face's ink costs exactly nothing there, and that is the path every
+hot incremental redraw in the tree was moved to (§12.9's menu bar, §22.11's
+scroll, §27.2's Note Pad row, §11.94's `WF_SNAP` consumers). **Skewed, there
+is no fast path** — `font_run` falls back to the pair — so it becomes
+content-dependent again *and* picks up a second term: the low `x & 7` bits of
+a row spill into a second byte, which is the one place a face's COLUMNS cost
+anything and is what §6.1.4's blank column 7 is about. Predicted −0.62 spill
+writes a cell at `x & 7 = 5`, measured as the skewed delta being twice the
+aligned one.
+
+**The model predicts the measurement from the glyphs alone**, which is what
+makes `tools/os88fontcost.py` worth having: the bench string `'C-2 01 A0F'`
+differs by 7 drawn rows, ×81.0 clocks (Part 9's five-instruction step) = 118.8
+µs predicted against **105.61 µs measured**; `'W'` differs by one row, 17.0 µs
+predicted against **15.29 µs**. Inverted, the measurement prices **one drawn
+row at 15.09 µs** on this CGA — the same number from the other end, the gap
+being that a *skipped* row still pays its own load, test and branch.
+
+**And the honest figure for a session is HALF the bench's.** `'C-2 01 A0F'`
+is uppercase-and-digit heavy, which is exactly where tallx wins: its capitals
+are **6 rows against the ROM's 7**, and so are its digits. **Lowercase is a
+wash** — 5.77 rows against 5.81 — because tallx spends on a 5-row x-height
+what it saves on cap height. Weighted by os8088's own 29,082 characters of UI
+text, which is mostly lowercase, the face is **4.557 rows/glyph against 4.815,
+so −0.46% of an 840 µs cell**. Against a 2.50 s page of text that is 11 ms.
+
+**Nothing else moved.** Identical `boot ticks`, identical `kernel span`,
+identical `KERNEL.SYS` sector count — the glyph table is 760 bytes either way,
+so a face costs the same disk, the same RAM and the same boot on any machine.
+
+**What could NOT be measured, and it is worth knowing why.** An end-to-end UI
+operation cannot see this at all: opening a Disk window (~40 `font_str` calls)
+measured **18.29 s and 20.97 s on two trials of the SAME kernel**, a 15%
+spread against a 0.5% effect — the floppy mount dominates and MartyPC is not
+disk-accurate anyway (Set 11). A per-primitive harness with the interrupts off
+is the only instrument with the resolution, which is what `gfxbench` is for.
+
+### Set 26 — `font_run`'s compose, and the blank-row skip that does not transfer (SPEC.md §6.1.5)
+
+Asked directly, after Set 25: `font_char` skips a blank glyph row, so can
+`font_run`?
+
+**No, and the reason is what `font_run` IS.** It is *opaque* — the cell owns
+its framebuffer byte, so a blank glyph row is still **painted**, with the
+background. There is no write to skip. What could be skipped is the compose
+arithmetic, guarded by `or al, al` + `jz`: four bytes on every row to save
+eleven on the ~30% of rows that are blank, plus a taken branch's prefetch
+flush, on the innermost loop of every string the slow machines draw.
+Break-even at best.
+
+**The compose itself was the thing to fix, and §6.1 had already noticed it
+without the code taking it** — "which on mono reduces to the glyph or its
+complement". `(glyph & ink) | (~glyph & background)` is
+`(glyph & (ink ^ background)) ^ background`, both terms constant per plane; in
+CL and CH a row becomes a load, an `and`, an `xor` and a store.
+
+| `gfxbench` row, CGA | baseline | hoisted | delta |
+|---|---|---|---|
+| **`FONT_RUN` 10 aligned** | 8,879.59 µs | 7,898.60 µs | **−11.05%** |
+| `FONT_CHAR` one cell | 895.44 | 895.27 | −0.02% |
+| `FONT_STR` 10 aligned | 8,402.93 | 8,401.88 | −0.01% |
+| `PAIR` 10 aligned | 10,152.88 | 10,151.83 | −0.01% |
+| `FONT_RUN` 10 skewed 5 | 10,839.77 | 10,840.26 | +0.00% |
+| `PAIR` 10 skewed 5 | 10,658.81 | 10,659.02 | +0.00% |
+| `GFX_PIXEL` · `GFX_FILL 64x64` · `GFX_FILL 8x8` | — | — | +0.00% |
+
+**The unmoved rows are the result as much as the first one.** Skewed is
++0.00% because an unaligned run never reaches `font_run_cell` at all (§6.1's
+gate), and `FONT_CHAR`/`FONT_STR` are untouched code — so the change landed
+exactly where it was aimed and nowhere else. Cost: `.text` **−12** bytes,
+`.bss` **−2**, no rung crossed.
+
+**Byte-for-byte on both mono adapters**, a scripted desktop → chip menu →
+Disk-window session through each kernel: **Hercules 0 differing pixels of
+250,560 on all three screens**, CGA 0 on two.
+
+**The third CGA screen reported 31 differing pixels and is Set 23's trap, not
+a defect.** The bbox was x 624..630, y 6..12 — *one 8x8 cell*, which is the
+menu bar clock: with no RTC the fallback starts at `Jul 04 2026 00:00` and a
+run crossing the minute reads `00:01`. Cropped and read as pixels rather than
+believed, the baseline's last digit is `0` and the other's is `1`. Masking
+that field, every screen is 0 of 128,000. **A systematic, reproducible
+difference in one cell looks exactly like a real bug** — read it before
+reporting it.
+
+**What is left is bigger than what was taken, and it is NOT measured.**
+`font_run_cell` runs the whole prologue **per cell** — two edge compares, the
+clip test, the glyph address, `gfx_rowbase`, `font_ink` *twice* (each a
+further near call) and the plane setup — and across a run those all produce
+the same answers, because a run shares its y and both its colours and differs
+only by one byte of DI per cell. Priced against this measurement: a cell of an
+aligned run is ~888 µs of which the eight-row loop is ~270, so **~70% of
+`FONT_RUN` is a prologue a run could pay once**. Near `call`+`ret` alone is
+11.0–11.5 µs before any body (Part 9's table), so the ceiling is real — but so
+is the restructuring, and this figure is inferred rather than measured.
+
+### Set 27 — the run pays once: `FONT_RUN` is 1.86x (SPEC.md §6.1.6)
+
+Set 26 ended by naming what it had not taken: `font_run_cell` ran the whole
+prologue **per cell**, for values a RUN shares. This is that, measured.
+
+A run is ONE y, ONE pair of colours and a column that advances by one byte a
+cell — and the cell body was calling **`gfx_rowbase`**, whose 16-bit `MUL` an
+8088 charges ~120 clocks for, and **`font_ink` twice**, per cell. Ten cells
+paid ten row bases and twenty ink reductions to draw one word. All of it moved
+up into `font_run_x`; `DI` then holds the run's first byte and the cell loop
+does `inc di`.
+
+**The plane loop went with it** — it walked `[vid_planes]`, 4 or 1, but the
+path is gated on `[vid_mono]` three instructions above the cell loop, so the
+4-plane walk could never execute. With one plane there is nothing to restart,
+which retires `[font_rn_si]`, `[font_rn_di]`, `[font_rn_fs]` and
+`[font_rn_bs]` as well.
+
+| `gfxbench` row, CGA | original | §6.1.5 | §6.1.6 | vs original |
+|---|---|---|---|---|
+| **`FONT_RUN` 10 aligned** | 8,879.59 µs | 7,898.60 | **4,785.69** | **−46.10%, 1.86x** |
+| `FONT_CHAR` one cell | 895.44 | 895.27 | 895.50 | +0.01% |
+| `FONT_STR` 10 aligned | 8,402.93 | 8,401.88 | 8,402.93 | +0.00% |
+| `PAIR` 10 aligned | 10,152.88 | 10,151.83 | 10,152.88 | +0.00% |
+| `FONT_RUN` 10 skewed 5 | 10,839.77 | 10,840.26 | 10,840.47 | +0.01% |
+| `PAIR` 10 skewed 5 | 10,658.81 | 10,659.02 | 10,659.02 | +0.00% |
+| `GFX_PIXEL` · `GFX_FILL` 8x8 / 64x64 · `GFX_SCROLL` | — | — | — | ±0.01% |
+
+Cost across both changes: `.text` 54,597 → **54,540 (−57)**, `.bss` 4,736 →
+**4,730 (−6)**. No rung crossed. **Byte-for-byte identical to the ORIGINAL
+kernel** — the pre-§6.1.5 one, not the intermediate — over a scripted
+desktop → chip-menu → Disk-window session: CGA 0 differing pixels of 128,000
+on all three screens, Hercules 0 of 250,560 on all three. (The Disk window's
+31-pixel clock cell is Set 26's documented trap again.)
+
+**One real hole was found and closed before it shipped, and it is the reason
+to distrust a lockstep.** `DI` tracks x by `inc di`, and `(x+8)>>3 ==
+(x>>3)+1` holds for every x **except across the 16-bit wrap** — so a run at a
+NEGATIVE x (0xFFF0 = −16, which is byte-aligned and therefore takes the fast
+path) skips two cells on the unsigned edge test, wraps to x = 0, and then
+draws at `DI` = 0x2000 past where it belongs: a word rendered 8KB into the
+framebuffer. The old code recomputed `DI` per cell and could not have it. The
+guard is one compare per run — a run STARTING off screen goes per cell
+(§6.1.2's path, which recomputes both) — and it costs 9.85 µs on a ten-cell
+run, 0.2%. **It was found by arithmetic, not by a test**: every screen in the
+pixel gate passed before and after, because nothing in this tree draws text at
+a negative x today.
+
+**What is left, and it is NOT measured.** The row loop is now ~70% of a cell,
+and **44% of the row body is the banked-row advance** — `add di,
+[cs:vid_rowadd]` + `test di, [cs:vid_wrapbit]` + `jz`, 12 of 27 bytes, paid 8
+times per CELL. A run's cells are contiguous bytes *within* a row, so a
+ROW-MAJOR walk would pay it 8 times per RUN instead, and would open `rep
+stosb` for repeated glyphs — which §27.2's space-padding idiom makes common,
+since there the padding IS the erase. It needs a per-run array of glyph
+pointers (80 cells × 2 bytes of `.bss`) or 8x the glyph-address lookups, so it
+is a real trade rather than a free one.
+
+**docs/LAST-DROP.md carries the rejected one in full** — the patch, the
+figures, the price and what would have to change for the answer to flip — so
+the next session that has this idea can read it instead of building it.
+
+### Set 28 — the run is drawn a ROW at a time: `FONT_RUN` is 2.84x (SPEC.md §6.1.7)
+
+Set 27 named what it had left: the row body was 27 bytes of which **12 were the
+banked-row advance**, paid eight times per CELL. But the cells of an aligned run
+are consecutive bytes *within a row*, so that advance belongs to the row.
+
+`font_run_x` is two passes now. Pass 1 walks the string once into
+`font_rn_tab` — a glyph pointer per cell, stopping at the first cell past
+`[vid_cwm8]`, so the drawn cells are a *prefix* and therefore contiguous. Pass
+2 runs eight times, once per glyph row, each a `lodsw`/`stosb` walk of the whole
+run with `gfx_nextrow` paid **once at the end of it**.
+
+**The table is what frees `ES`**, which is the part that is not obvious: `ES`
+holds the caller's *string* right up to the end of pass 1 (`font_run` is an X
+stub — the string is in the package's segment), so a cell-major loop has to
+reload it per cell to reach the framebuffer. Once the string has been read,
+`ES:DI` is the framebuffer for the whole run and the masks sit in `DX` for all
+eight passes.
+
+| `gfxbench` row, CGA | original | §6.1.6 | §6.1.7 | vs §6.1.6 | vs original |
+|---|---|---|---|---|---|
+| **`FONT_RUN` 10 aligned** | 8,879.59 µs | 4,785.69 | **3,126.81** | **−34.66%** | **−64.79%, 2.84x** |
+| `FONT_CHAR` one cell | 895.44 | 895.50 | 895.27 | −0.03% | −0.02% |
+| `FONT_STR` 10 aligned | 8,402.93 | 8,402.93 | 8,402.93 | +0.00% | +0.00% |
+| `PAIR` 10 aligned | 10,152.88 | 10,152.88 | 10,151.83 | −0.01% | −0.01% |
+| `FONT_RUN` 10 skewed 5 | 10,839.77 | 10,840.47 | 10,843.40 | +0.03% | +0.03% |
+| `GFX_PIXEL` · `GFX_FILL` · `GFX_SCROLL` | — | — | — | +0.00% | ±0.00% |
+
+**Cost, and this one is NOT free.** `.text` **+137** and `.bss` **+176** against
+the pre-§6.1.5 baseline — the 180-byte table plus its count — and **the image
+rung CROSSED**: `KERN_SIZE` 95,744 → 96,256, spare 2,560 → **2,048, four
+steps**, which is the standard this tree keeps. That was authorised in advance
+for this path specifically. The three changes together are net **+137 `.text`**
+for **2.84x**.
+
+**Three bounds hold it up and each is a correctness argument.** A **clip
+region** makes cells individually refusable and one rejected in the middle
+breaks the run into pieces `stosb` cannot walk — so an armed region costs one
+`wm_clip_test` over the whole run and a **cut** run goes per cell (§6.1.2's
+path). **Table overflow** cannot happen while `FONT_RN_MAX` = 90 covers
+`vid_w / 8`, and falls back anyway. And **`BP` carries the glyph row**, so
+`font_run_x` saves it — §7.1.4.1 is what forgetting costs.
+
+**Verified against the ORIGINAL kernel**, three screens on each mono adapter,
+with a partly-occluded Task Manager behind the Disk window so the clip-region
+fallback is exercised too: **0 differing pixels** on four of six screens, and
+on the other two the difference is **8 pixels in one cell — and it is TRUE.**
+The Disk window reads `Free 248K` where the old kernel read `Free 249K`,
+because a kernel 512 bytes bigger takes one more 1 KB cluster: read out of the
+two images' FATs independently, 249 free clusters against 248. Set 26's clock
+cell was the same lesson and this is the second instance — **a systematic
+difference in one glyph cell is what BOTH a real defect and a correctly
+reported fact look like.** Read the cell.
+
+**What is left.** The inner loop is 14 bytes — `lodsw`, `xchg`, `add bx,bp`,
+`mov al,[ss:bx]`, `and`, `xor`, `stosb`, `loop`. Unrolling the eight row passes
+would make the row a disp8 on the glyph fetch and retire `BP` and the `add`,
+taking it to ~12; it costs ~240 bytes of `.text`, which is another rung, and at
+that point the fetch is nearly all of it. A `rep stosb` for a run of identical
+glyph rows (a span of spaces, which §27.2's padding makes common) is the other
+candidate and needs a compare per cell to find the span.
+
+### Set 29 — Set 28's two candidates, measured: one rejected, one kept
+
+Set 28 named two and measured neither. Both were built against the same kernel
+and run on the same machine — and **`gfxbench` had to grow two rows first**,
+because the existing one could not have answered the second question:
+`C-2 01 A0F` has no adjacent repeat, so a span optimisation measures as exactly
+nothing on it, while the text this system actually draws is padded on purpose.
+`FONT_RUN 20 text` and `FONT_RUN 20 padded` are the same LENGTH and differ only
+in content.
+
+**The baseline decomposes, which is what makes the rest readable**: 10 cells at
+3,131.77 µs and 20 at 5,394.84 µs, so **~872 µs is fixed per run and ~226 µs is
+per cell**. And `20 text` against `20 padded` is **0.02%** — content was free
+before any of this.
+
+| `gfxbench` row, CGA | baseline | A unrolled | B span |
+|---|---|---|---|
+| `FONT_RUN 10 aligned` | 3,131.77 µs | **−4.74%** | +1.44% |
+| `FONT_RUN 20 text` | 5,394.84 | **−4.44%** | +0.84% |
+| `FONT_RUN 20 padded` | 5,393.73 | −4.44% | **−31.33%** |
+| `FONT_CHAR` · `FONT_STR` · `PAIR` · skewed · every `GFX_*` | — | ±0.01% | ±0.03% |
+
+**A — unrolling the eight row passes: REJECTED.** The bar it was given was 5%
+and it returns **4.74%**, for **+267 bytes of `.text`** (against the ~240
+estimated) and a CROSSED rung — spare 2,048 → 1,536, three steps, under the
+four this tree keeps. Two things make it a clearer no than the headline
+suggests. The disp8 saves **one** byte a cell-row, not two: `mov al,[ss:bx+r]`
+is 4 bytes where `add bx,bp` + `mov al,[ss:bx]` is 5. And **it gets worse as
+runs get longer**, which is the direction real text goes — solving the two rows
+gives a **fixed** saving of 57.5 µs (the row counter, once a run) and **9.1 µs
+a cell**, so the percentage falls as the per-cell term dominates.
+
+**B — the trailing span as one `rep stosb`: KEPT.** +138 bytes of `.text`, +4
+of `.bss`, **no rung crossed**. It is a trade and both halves are real: −31.3%
+on a padded run, **+1.4% on a run with no span**, which is the fixed cost of
+deciding. Framebuffer **byte-identical** to the shipped kernel on both mono
+adapters.
+
+**The first version cost +3.06% on unpadded runs and the fix is the general
+lesson**: it tested for a span *per row*, and a span is a property of the RUN —
+so every unpadded run answered the same question eight times. Moving the branch
+to `.rm` took it to +1.50%. A second refinement, gating the backward search on
+the last two entries matching, took it only to +1.44% — **the diagnosis there
+was wrong**: what remains is not the search but the ~45 µs of *deciding at all*,
+and that is why the first fix was worth 1.5 points and the second 0.06.
+
+**How much of a real session HAS a span, measured rather than argued.** Four
+counters in a scratch kernel, two scripted sessions: **34%** of the cells
+`font_run` drew were inside a span (42 of 124), and **28%** in the other (53 of
+187); half the runs had one.
+
+**The probe also produced a claim that was WRONG, and correcting it is worth
+more than the original number.** In a 40-second session with the Task Manager
+open, unoccluded and refreshing, `font_run` was called **four times** — from
+which this entry first concluded that `FONT_RUN` is a burst cost that an idle
+system barely pays. **That generalises from the single most change-gated
+consumer in the tree.** §28 is the app that had `tm_rowok`, `tm_chunksum` and
+the per-chunk cell walk built for it precisely so that a refresh which changes
+nothing draws nothing; measuring text frequency with it is measuring how well
+§28 was optimised, not how often os8088 draws text.
+
+**The survey says the opposite.** Of fifteen shipped packages, **nine call
+`OSAPI_FONT_STR` and never `FONT_RUN` at all** — Paint, ArtfulType, Solitaire,
+Arkanoid, Fractal, Recorder, Piano, Minesweeper, Tamegram — so most of the
+system's text does not reach this path yet, and the apps that *have* converted
+are the ones that draw **long runs continuously while the user works**: Note
+Pad's `np_rflush` letters a row space-padded to the whole band (§27.2),
+Tracker's `tui_str` draws the FT2 screen, ModPlug composes four LCD lines an
+18 Hz frame (§56.12).
+
+So the right reading of Sets 25–28 is the reverse of the first one: **the 2.84x
+lands on the paths that are least gated and longest-running**, and §6.1.8's
+span is worth having for the same reason — a padded Note Pad row is exactly the
+shape it collapses. The Task Manager is the one consumer that had already
+solved the problem a different way.

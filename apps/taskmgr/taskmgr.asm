@@ -341,13 +341,16 @@ TMH_TIERC   equ 4               ; TIER - 'TRIV'/'LOW'/'MED'/'HIGH'/'-'
   %error "taskmgr: the heap row is wider than the chunk span it is padded to"
 %endif
 
-; This page's captions are shorter than either candidate TM_STRMAX takes its
-; max over - 22 for the totals line, 'HEAP ' + a kpair + two spaces + 'nnn'
-; + ' clm' - so the buffer did not have to grow. Said as a guard rather than
-; a comment, because the note beside TM_STRMAX is that it has ONE character
-; of slack, and a line added here is exactly how that gets spent silently.
-%if 5 + TM_L_KPAIR + 2 + 3 + 4 + 1 > TM_STRMAX
-  %error "taskmgr: the heap page's totals line no longer fits tm_str"
+; The widest of this page's three captions is the HELD/PURGE line, at 27
+; characters with two-digit counts:
+;   'HELD' nnn 'K(' nn ')' '  PURGE' nnn 'K(' nn ')'
+; which is exactly TM_STRMAX's limit, so a label lengthened there has to be
+; paid for somewhere. The other two have room - 21 for HEAP/AVAIL and 23 for
+; MAX RUN/FRAG. Said as a guard rather than a comment, because the note
+; beside TM_STRMAX is that it has ONE character of slack, and a caption grown
+; here is exactly how that gets spent silently.
+%if (4+3+2+2+1) + (7+3+2+2+1) > TM_STRMAX - 1
+  %error "taskmgr: the heap page's HELD/PURGE line no longer fits tm_str"
 %endif
 
 ; The CPU/scheduler caption is chunked too, and it borrows the row machinery
@@ -746,7 +749,12 @@ tm_s_havl:  db '  AVAIL ', 0    ; NOT 'FREE': this counts the purgeables, so
                                 ; it is what a claim can GET rather than what
                                 ; is unused, and the two differ by PURGE
                                 ; exactly (SPEC.md 28.4.1)
-tm_s_hmax:  db 'MAX ', 0        ; the LARGEST single run of AVAIL...
+tm_s_hmax:  db 'MAX RUN ', 0    ; the largest single RUN of AVAIL - not a
+                                ; maximum heap size, which is what a bare
+                                ; 'MAX' beside 'HEAP' reads as. It is the
+                                ; biggest claim that can succeed in ONE call,
+                                ; and 'run' is the kernel's own word for it
+                                ; (mem_run, SPEC.md 50.3)...
 tm_s_hfrag: db '  FRAG ', 0     ; ...and everything available OUTSIDE it, so
                                 ; the two SUM to AVAIL. Without it the page
                                 ; said '519K available, 515K max', which is

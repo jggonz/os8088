@@ -1301,7 +1301,8 @@ the two mono adapters. On a 1bpp adapter at a byte-aligned x the cell owns
 its whole framebuffer byte, so there is nothing underneath to preserve: no
 shift, no read, no second byte, and no separate fill pass at all. Per plane
 the byte is `(glyph & ink) | (~glyph & background)` with each mask 00 or FF,
-which on mono reduces to the glyph or its complement. That is the path the
+which on mono reduces to the glyph or its complement — §6.1.5 is the loop
+taking that reduction, two instructions instead of five. That is the path the
 slow machines are on — `[vid_mono]` is permanently 1 there (§39.5) — and it is
 where the cost of text actually lives.
 
@@ -1522,6 +1523,143 @@ it general and is not worth what it would do to dragging", and §11.94 is the
 decision to do it anyway** — opt in, mono only, at the price of 8-pixel drag
 steps on the windows that ask. Three windows have: the Task Manager, Note Pad
 and the Timer (§14.1).
+
+#### 6.1.5 The compose is an XOR, and its two terms live in registers
+
+§6.1's `(glyph & ink) | (~glyph & background)` is what the byte **means**; it
+is not what the loop computes. The same byte is
+`(glyph & (ink ^ background)) ^ background` — checked exhaustively over all
+2^24 (glyph, ink, background) triples, so it does not rest on the masks being
+00 or FF and survives that invariant changing — and **both terms are constant
+for the whole plane**. So they are computed once above the eight rows and held
+in **CL and CH**, and a row body is a load, an `and`, an `xor` and a store:
+**two instructions where there were five**, with no branch and nothing in
+`.bss`.
+
+`font_rn_fm`/`font_rn_bm` went with it. Their comment said there was "no
+register to spare", which was true where it was written and not where it
+mattered: `CX` is dead from `.plane` onward, because `gfx_rowbase` has already
+clobbered `CL` and `font_ink`'s second call has finished with `CH`.
+
+**Measured** (`tests/gfxbench`, cycle-accurate 4.77MHz 8088, CGA):
+`FONT_RUN 10 aligned` **8,879.59 µs → 7,898.60 µs, −11.05%**, with every other
+row unmoved — `FONT_CHAR` −0.02%, `FONT_STR` −0.01%, `FONT_RUN` skewed +0.00%,
+`GFX_PIXEL` and both fills +0.00%. `.text` −12 bytes, `.bss` −2, no rung
+crossed, so it is *smaller* as well as faster. Framebuffer byte-identical on
+CGA and Hercules (PERFORMANCE.md Set 26).
+
+**What this deliberately does NOT do is skip a blank glyph row**, and that is
+worth writing down because it is the obvious next idea. `font_char` skips one
+because there a blank row means **no write at all**; here the cell owns its
+byte and a blank row is still *painted*, with the background — so there is no
+write to skip, only the compose, which is now two instructions. A guard costs
+`or al, al` + `jz`: the same four bytes the compose costs, plus a taken
+branch's prefetch flush, on the innermost loop of every string the slow
+machines draw. **The optimisation removed its own successor.**
+
+#### 6.1.6 A run is one y, one pair of colours and a column — so it pays once
+
+§6.1.5 took three instructions out of a row. This is the larger half of the
+same reading: **`font_run_cell` was deriving, per cell, everything a RUN
+shares.** A run is ONE y, ONE pair of colours, and a column that advances by
+exactly one byte a cell — and the cell body was calling `gfx_rowbase`, whose
+16-bit `MUL` an 8088 charges ~120 clocks for, and `font_ink` **twice**, for
+answers that cannot change until the run ends. Ten cells paid ten row bases
+and twenty ink reductions to draw one word.
+
+What moved up into `font_run_x`, once per run: the **y edge test** (every cell
+of a run has the run's y), both **ink reductions** — kept as §6.1.5's two
+derived masks, `[font_rn_xm]` and `[font_rn_bm]`, rather than as the colours —
+and **`gfx_rowbase`**. `DI` then holds the run's first framebuffer byte and
+the cell loop does `inc di`, because an aligned cell is one byte wide.
+
+What stays per cell is exactly what differs between two cells of one word:
+the character, the **x** edge test, the clip test (§6.1.2 — a cell is still
+clipped whole) and that one byte of `DI`.
+
+**The plane loop went with it.** It walked `[vid_planes]`, 4 or 1 — but this
+path is gated on `[vid_mono]` three instructions above the cell loop and a
+planar run takes `.slow` (§6.1), so the 4-plane walk could never execute. With
+one plane there is nothing to restart, which retires `[font_rn_si]`,
+`[font_rn_di]`, `[font_rn_fs]` and `[font_rn_bs]` as well.
+
+Two things are load-bearing and both look like bugs to a reader who does not
+know the contract. **The clip test spends CX and DX and does not put them
+back**: nothing below reads either, because the masks arrive in CX from memory
+and y is no longer wanted — restoring them would be two instructions per cell
+for a value that is dead. And **the run's x/8 uses three single-bit shifts
+rather than one by CL**: 6 clocks against 20 on an 8088, and CL stays the x it
+still has to be.
+
+Measured with §6.1.5's, in PERFORMANCE.md Set 27.
+
+#### 6.1.7 The run is drawn a ROW at a time, not a cell at a time
+
+§6.1.6 left the row body at 27 bytes of which **12 were the banked-row
+advance** — `add di, [cs:vid_rowadd]`, `test di, [cs:vid_wrapbit]`, `jz` —
+paid eight times per CELL. But **the cells of an aligned run are consecutive
+bytes within a row**, so that advance belongs to the row and not to the cell.
+
+`font_run_x` is two passes. **Pass 1** walks the string once into
+`font_rn_tab`, a glyph pointer per cell, stopping at the first cell past
+`[vid_cwm8]` — x only grows, so the drawn cells are a *prefix*, which is what
+makes them contiguous. **Pass 2** then runs eight times, once per glyph row,
+and each pass is a `lodsw`/`stosb` walk of the whole run with `gfx_nextrow`
+paid once at the end of it.
+
+**The table is what frees `ES`.** It holds the caller's string right up to the
+end of pass 1 (`font_run` is an X stub — the string is in the *package's*
+segment), so a cell-major loop must reload `ES` per cell to reach the
+framebuffer. Once the string has been read, `ES:DI` is the framebuffer for the
+whole run and the masks live in `DX` for all eight passes. That is 180 bytes
+of `.bss` — `FONT_RN_MAX` = 90 cells, `vid_w / 8` for the widest screen os8088
+drives — spent deliberately on the system's hottest text path.
+
+**Three things bound it, and each is a correctness argument rather than a
+tuning.** A **clip region** makes cells individually refusable, and one
+rejected in the middle breaks the run into pieces `stosb` cannot walk — so an
+armed region costs one `wm_clip_test` over the whole run, and a **cut** run
+goes per cell (§6.1.2's path, which is where a per-cell clip test belongs
+anyway). The **table overflow** cannot happen while `FONT_RN_MAX` covers
+`vid_w / 8`, and falls back to the per-cell path regardless, because a
+constant that is a bound on another module's geometry is one somebody will
+change. And **`BP` carries the glyph row**, so `font_run_x` saves it: §7.1.4.1
+is what a routine that forgets costs, a background task holding `BP` for its
+whole life.
+
+Measured in PERFORMANCE.md Set 28.
+
+#### 6.1.8 The trailing span is one `rep stosb`
+
+**This system pads on purpose**: §27.2 makes a Note Pad row's padding its
+*erase*, §12.9 composes the menu bar whole out to the clock, §28's columns are
+largely spaces, §48.9's score is three space-padded fields. So the last cells
+of a run are usually the *same cell repeated* — and repeated cells compose to
+one byte, which is a string instruction rather than a loop.
+
+Pass 1 finds the span once (`[font_rn_k]`, `[font_rn_n2]`), and the row pass
+draws `n2` cells singly and then `rep stosb`s the tail. **Two things keep it
+from costing the runs it cannot help.** The span is a property of the RUN, so
+the choice between the two row loops is made **once at `.rm`**, not per row —
+a per-row test charged every unpadded run eight times and measured **+3.06%**.
+And the search is gated on the last two entries matching, so a run with no
+span pays two words and a branch instead of a walk.
+
+`FONT_RN_KMIN` is 3: the tail block is 17 bytes against a plain cell's 14, so
+it breaks even at 2 and wins from 3.
+
+**It is a TRADE and the numbers are in PERFORMANCE.md Set 29**: −31.3% on a
+padded 20-cell run, **+1.4% on a run with no span at all** — the fixed cost of
+deciding. Measured over two scripted sessions, 34% and 28% of the cells
+`font_run` drew were inside a span.
+
+**The consumers it is for are the long-running ones**, which is the same reason
+§6.1.7 matters: `np_rflush` letters a Note Pad row padded to the whole band
+(§27.2), `tui_str` draws Tracker's FT2 screen, ModPlug composes four LCD lines
+a frame (§56.12). §28's Task Manager is the one that will show it least — it
+already skips rows that have not moved — and most packages have not been
+converted to `font_run` at all. docs/LAST-DROP.md records the candidate that
+was measured against this one and shelved.
 
 ### 6.2 `BAKED_FONT` — a typeface the build carries, instead of one it borrows
 
@@ -8878,11 +9016,14 @@ registry entry, which are `.text` because a reader looks at them long after
 the overlay is gone. `kernel.bin` goes 85,094 → 85,499 and **167 sectors is
 still 167 sectors**, so it is not one extra sector of boot read either.
 
-**That last figure is now the tight one and the next person needs to know
-it**: the image's last sector had 410 bytes spare and has **5**. The overlay
-itself is fine — 3,067 of the FAT window's 4,608 — but the next thing added
-to `.ovl`, however small, buys a whole sector. `tools/kernsize.py` reports the
-rungs and not this, so it is written down here.
+**That last figure is the tight one and the next person needs to know it**:
+the image's last sector had 410 bytes spare and had **5** after this. The
+overlay itself is fine — 3,067 of the FAT window's 4,608 — but the next thing
+added to `.ovl`, however small, buys a whole sector. `tools/kernsize.py`
+reports the rungs and not this, so **docs/KERNEL-MEMORY.md carries the live
+figure** — read it there rather than trusting the number in this paragraph,
+because `.text` and `.ovl` round at different places in the same file and a
+change nowhere near the overlay can spend that tail.
 
 **Boot time: zero on a machine whose equipment word is right**, which is one
 compare. On a machine that claims a drive it does not have — the only one that
@@ -15865,16 +16006,22 @@ real memory at a real address whoever owns it.
 where a cache is the subject. Three caption lines, one question each:
 
 ```
-HEAP 544K  AVAIL 519K      the heap, and what a claim can GET out of it
-HELD 25K(5)  PURGE 69K(2)  what is claimed, on what terms, and how many records
-MAX  515K   FRAG    4K     how that AVAIL is SHAPED
+HEAP 544K  AVAIL 519K        the heap, and what a claim can GET out of it
+HELD 25K(5)  PURGE 69K(2)    what is claimed, on what terms, and how many
+MAX RUN 515K   FRAG    4K    how that AVAIL is SHAPED
 ```
 
 **Every line is a pair that closes**, and that is the layout's whole rule:
-`HEAP − AVAIL = HELD`, and `MAX + FRAG = AVAIL`. A figure the reader cannot
+`HEAP − AVAIL = HELD`, and `MAX RUN + FRAG = AVAIL`. A figure the reader cannot
 reconcile against its neighbours reads as a bug however sound the model
 behind it is — which is what `AVAIL 519K` beside `MAX 515K` did before `FRAG`
 existed, since "519K available, 515K maximum" is arithmetic nobody can close.
+
+**`MAX RUN`, not `MAX`.** Beside a figure labelled `HEAP` a bare `MAX` reads
+as a maximum heap SIZE, which is the one thing it is not: it is the largest
+claim that can succeed in **one call**. `run` is the kernel's own word for
+the quantity (`mem_run`, §50.3), and the line has the room — 23 characters
+against the 27 the HELD/PURGE line spends.
 `FRAG` is everything available *outside* the largest run: memory that is
 genuinely there and genuinely unclaimable in one piece, which is the number a
 refused claim wants and the only one that makes the pair add up. It reads
@@ -15903,7 +16050,7 @@ four figures then read as one statement: **`HEAP = HELD + AVAIL`**, with
 Total heap gets a line of its own because it is a property of the machine and
 the rest are properties of the moment.
 
-**`AVAIL` equal to `MAX` — so `FRAG 0K` — is the normal reading, not a
+**`AVAIL` equal to `MAX RUN` — so `FRAG 0K` — is the normal reading, not a
 fault.** They
 differ only when the heap is fragmented, and on a lightly loaded machine it
 is not: data claims pack up from the bottom, regions down from the top, and
@@ -15915,7 +16062,7 @@ one and the hole it leaves is cut off from the main span by the survivor:
 mem_base 17E0  mem_top A000  span 544K
   17E0 +0140 held   19E0 +0140 held   2000 +0FC0 PURGE
   1920 +00C0 held   1B20 +00C0 held   9CC0 +0240 held
-                    -> AVAIL 519K, MAX 515K, FRAG 4K   (the 4K above 9F00)
+                    -> AVAIL 519K, MAX RUN 515K, FRAG 4K   (the 4K above 9F00)
 ```
 
 **`TIER` reads `HELD` for an unpurgeable claim, never a dash.** The column

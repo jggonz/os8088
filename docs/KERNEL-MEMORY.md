@@ -360,21 +360,21 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4736,
+    "bss": 4916,
     "budget": 98304,
     "codemax": 65536,
     "cold": 22463,
     "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3744,
-    "kend": 6112,
+    "imgpara": 3776,
+    "kend": 6144,
     "kseg": 96,
-    "ksize": 96256,
+    "ksize": 96768,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 3067,
     "stk0": 1024,
-    "text": 55057
+    "text": 55332
   },
   "small": {
     "bss": 4651,
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,666 | 37.0% |
+| the file system, end to end | 28,666 | 36.8% |
 | the window system and its furniture | 16,627 | 21.4% |
-| drawing: adapters, primitives, glyphs, icons | 10,981 | 14.2% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.7% |
-| the kernel proper: API table, heap, scheduler, events | 5,935 | 7.7% |
+| drawing: adapters, primitives, glyphs, icons | 11,256 | 14.5% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.6% |
+| the kernel proper: API table, heap, scheduler, events | 5,935 | 7.6% |
 | the Control Panel | 4,120 | 5.3% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,520** | |
+| **total** | **77,795** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -903,10 +903,10 @@ generated in the first place.
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
+| `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `icons.inc` — the icon renderer (§10) | 1,342 | — | **1,342** | 34 | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,336 | — | **1,336** | 84 | — |
-| `font.inc` — the 8x8 text renderers (§6) | 1,252 | — | **1,252** | 17 | 768 |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
@@ -923,7 +923,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,743 | — | **2,743** | — | — |
-| **total** | **55,057** | **22,463** | **77,520** | **4,736** | **7,762** |
+| **total** | **55,332** | **22,463** | **77,795** | **4,916** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1126,13 +1126,21 @@ they are short by ~158 bytes that predate this note. Trust the total and the
 spare; treat a row as "roughly what this module put here".
 
 **The number to watch is NOT the 1,541 spare, it is the IMAGE's last sector.**
-`kernel.bin` is 85,499 bytes and the boot sector reads
-`(size + 511) / 512` = **167** of them, which hold 85,504 — so there are
-**5 bytes** of slack in the file and the next thing added to `.ovl`, however
-small, costs a whole sector of boot read (~65 ms on the field machine). It was
-410 bytes before §18.97. `tools/kernsize.py` reports the three *rungs* and not
-this, because the rungs are what the RAM ladder is built from; the file's tail
-is a separate question and this is where it is written down.
+`kernel.bin` is **86,011 bytes** and the boot sector reads
+`(size + 511) / 512` = **168** of them, which hold 86,016 — so there are
+**5 bytes** of slack in the file, and the next thing added to `.ovl`, however
+small, costs a whole sector of boot read (~65 ms on the field machine).
+`tools/kernsize.py` reports the three *rungs* and not this, because the rungs
+are what the RAM ladder is built from; the file's tail is a separate question
+and this is where it is written down.
+
+It has been under 100 bytes twice in one round now — 8 before §18.97's probe,
+5 after it, and 5 again after the `font_run` work crossed an image rung
+underneath it — which is worth reading as a pattern rather than as two
+coincidences: **`.text` and `.ovl` land in the same file and round at
+different places**, so the tail's slack is not a budget anyone is steering
+and it can be spent to nearly nothing by a change that never touches the
+overlay at all. Re-measure it; do not carry a figure from a commit message.
 
 `.ovl` is declared `start=OVL_START vstart=0`, and both halves matter.
 `start=` is the *file* offset, so NASM emits the gap as zeros and the boot

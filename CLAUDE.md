@@ -2668,9 +2668,11 @@ already in the boot overlay, which costs no RAM at all — `drv_snd_sniff` and
 `clk_init`'s RTC ladder are the precedents for a cheap port probe living
 there. **The 15 bytes are the published block**, which is `.text` because a
 reader looks at it long after the overlay is gone. **But the image's last
-sector now has 5 bytes of slack where it had 410**, so the next `.ovl`
-addition buys a whole sector; that is in docs/KERNEL-MEMORY.md because
-`kernsize.py` reports rungs and not this.
+sector went from 410 bytes of slack to 5**, so the next `.ovl` addition buys
+a whole sector. docs/KERNEL-MEMORY.md carries the LIVE figure and is the one
+to read: `kernsize.py` reports rungs and not this, and `.text` and `.ovl`
+round at different places in the same file, so a change nowhere near the
+overlay can spend that tail.
 
 **No emulator here can arbitrate it, so the verdict and its working are
 published** through §57's registry as `'FD'` (§57.5) and reported by
