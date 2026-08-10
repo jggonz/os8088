@@ -549,3 +549,42 @@ overlays = [
     io_base = 0x220
     irq = 7
     dsp_version = [2, 1]
+
+# --- SPEC.md 18.97's case: ONE drive, which is what the field 5150 has -------
+# The probe exists because the int 11h equipment word is a CLAIM. MartyPC has
+# no DIP override, so it derives the word from the drive list - which means
+# this machine reports ONE and the probe correctly declines to run on it. That
+# makes it the REGRESSION half of the test (an uncontested machine must be
+# untouched); the ABSENT half is this machine with a scratch kernel whose
+# count gate is forced, so that unit 1 is really not there when it is asked
+# about. docs/TESTING.md has the recipe.
+[[machine]]
+name = "os8088_5150_cga_1fd"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_1_360k_floppy",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...and the one-drive overlay itself, which upstream does not carry: every
+# stock profile is a two-floppy machine.
+[[overlay]]
+name = "pcxt_1_360k_floppy"
+    [overlay.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+        [[overlay.fdc.drive]]
+        type  = "360k"

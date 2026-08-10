@@ -377,6 +377,11 @@ sb_run:
     call sb_mouse
     call sb_ladder                  ; SPEC.md 37.92 - a state dump, like the
                                     ; mouse block above and for its reason
+    call sb_fdd                     ; ...and SPEC.md 57.5, for a reason that is
+                                    ; the same one a fourth time and sharper:
+                                    ; the block exists BECAUSE no emulator can
+                                    ; be asked what a 765 says about a drive
+                                    ; that is not plugged in
     call sb_video                   ; ...and SPEC.md 57.4, the third of them:
                                     ; two cards on two monitors is the field
                                     ; machine's own arrangement and the one
@@ -1733,6 +1738,104 @@ sb_ladder:
     pop si
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_fdd - is the second floppy drive really there? (SPEC.md 18.97/57.5)
+;
+; A STATE dump, like sb_mouse and sb_ladder above, and the one with the least
+; ambiguous reason of the four: the kernel now REMOVES a volume on the
+; strength of two status bytes read out of a uPD765, and an emulated FDC
+; answers what its author believed a real one answers. So the raw bytes go in
+; the report, and the field machine settles it.
+;
+; The field 5150 (docs/FIELD-MACHINES.md) is the case this was written for: it
+; has ONE drive and DIP switches that claim two, so its expected rows are
+; `claimed 2`, `probe stop 03` (Equipment Check) and `verdict 0` - and any
+; other combination there is the news. A machine whose switches are right
+; reads `claimed 1`, `probe ran 0` and nothing else, because there was nothing
+; to contest.
+;
+; READ `probe stop` FIRST. `verdict 1` means "the drive was kept", and that is
+; equally what a probe that PROVED it present and one that merely failed to
+; prove it absent both say - which is the difference between this working and
+; this being a fail-safe that never fires.
+; -----------------------------------------------------------------------------
+sb_fdd:
+    push ax
+    push bx
+    push si
+    push es
+    call bl_blank
+    mov si, sb_s_h_fdd
+    call bl_sline
+    mov si, sb_s_h_fdd2
+    call bl_sline
+    mov si, sb_s_h_fdd3
+    call bl_sline
+    mov si, sb_s_h_fdd4
+    call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
+
+    mov ax, DBG_TAG_FDD             ; SPEC.md 57's registry
+    call sb_dbgfind
+    jc .nodbg
+    mov ax, [es:bx+2]
+    mov [sb_fdstate], ax             ; -> the 7-byte state span
+
+    mov si, sb_l_feqp               ; what int 11h claimed...
+    xor al, al
+    call sb_fdb
+    mov si, sb_l_fran               ; ...whether it was contested at all
+    mov al, 1
+    call sb_fdb
+    mov si, sb_l_fst3               ; ...and the two bytes that decided it
+    mov al, 2
+    call sb_fdbx
+    mov si, sb_l_fst0
+    mov al, 3
+    call sb_fdbx
+    mov si, sb_l_fpcn
+    mov al, 4
+    call sb_fdbx
+    mov si, sb_l_fstep              ; THE row that carries
+    mov al, 5
+    call sb_fdbx
+    mov si, sb_l_fvrd
+    mov al, 6
+    call sb_fdb
+    jmp short .out
+.nodbg:
+    mov si, sb_s_fnone
+    call bl_sline
+.out:
+    pop es
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; sb_fdb / sb_fdbx - SI = label, AL = byte offset into the floppy block -> one row
+; as decimal / as hex. ES is KERNEL_SEG on entry (sb_fdd holds it).
+sb_fdb:
+    push bx
+    mov bl, al
+    xor bh, bh
+    add bx, [sb_fdstate]
+    mov al, [es:bx]
+    xor ah, ah
+    call sb_num
+    pop bx
+    ret
+
+sb_fdbx:
+    push bx
+    mov bl, al
+    xor bh, bh
+    add bx, [sb_fdstate]
+    mov al, [es:bx]
+    xor ah, ah
+    call sb_hex
+    pop bx
     ret
 
 ; sb_cb / sb_cbx - SI = label, AL = byte offset into the clock block -> one row
@@ -4241,6 +4344,19 @@ sb_l_msn:    db '  mouse found', 0
 sb_l_mpt:    db '  winning row (0/2)', 0
 sb_l_mln:    db '  winning IRQ hex 10=4', 0
 
+sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
+sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a DIP switch.', 0
+sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0; ST0 bit 4 = EQUIP CHECK, which IS the absent drive.', 0
+sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 seek ok 03 EQUIP CHECK 04-06 refused.', 0
+sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
+sb_l_feqp:   db '  drives int 11h claims', 0
+sb_l_fran:   db '  probe ran', 0
+sb_l_fst3:   db '  unit 1 ST3 hex', 0
+sb_l_fst0:   db '  unit 1 ST0 hex', 0
+sb_l_fpcn:   db '  unit 1 cyl hex', 0
+sb_l_fstep:  db '  probe stop hex', 0
+sb_l_fvrd:   db '  verdict 1=kept 0=gone', 0
+
 sb_s_h_lad:  db '-- the clock: which rung of the RTC ladder answered (SPEC.md 37.90) --', 0
 sb_s_h_lad2: db '   STATE, not a measurement. tier: 0 none 1 AT 2 MM58167 3 RP5C01 4 BIOS.', 0
 sb_s_h_lad3: db '   probe stop: 00 not run, FF passed, 01-07 the gate that refused.', 0
@@ -4422,7 +4538,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 240              ; ...and the scalars end at 239 now
+SB_O_SYSKB equ 242              ; ...and the scalars end at 241 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -4492,6 +4608,14 @@ sb_mbase    equ os88_image_end + 118   ; word: -> mou_bases (SPEC.md 9.4.2)
 sb_mstate   equ os88_image_end + 120   ; word: -> the mouse state span (121)
 sb_cstate   equ os88_image_end + 122   ; word: -> the clock state span (123),
                                        ; SPEC.md 37.92
+sb_fdstate  equ os88_image_end + 240   ; word: -> the floppy state span (241),
+                                       ; SPEC.md 57.5. MOVED at the merge: it
+                                       ; was 214, which is sb_hbest on the
+                                       ; branch this met - and two equs naming
+                                       ; one word assemble perfectly and
+                                       ; produce a report full of plausible
+                                       ; nonsense (docs/UPSTREAM.md's whole
+                                       ; point about a silent difference)
 sb_vkind    equ os88_image_end + 184   ; word: -> vid_kind    (SPEC.md 57.4)
 sb_vavail   equ os88_image_end + 186   ; word: -> vid_avail
 sb_vnd      equ os88_image_end + 188   ; word: -> ndisp/cur/ox/oy/dmode/dlay

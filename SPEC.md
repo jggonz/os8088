@@ -8790,6 +8790,129 @@ kernels. What `kern_small` loses is two items on one menu — the rule and
 and both point at `fm_c_nop`, so the two kernels differ by what a user can
 see rather than by a numbering nobody can.
 
+### 18.97 The equipment word is a CLAIM; the FDC is the fact
+
+`desk_init` has always sized the floppy half of the volume table from `int
+11h` — bit 0 for "any drives at all", bits 7..6 for how many, clamped to 2
+(§26.1). On a 5150 that word is **the SW1 DIP switches read back through the
+8255**, which is a statement about what somebody set, not about what is
+plugged in. The field machine (docs/FIELD-MACHINES.md) has **one** drive and
+switches that say two, so os8088 showed a `Disk B` that could never mount,
+took a full BIOS mount attempt — motor spin-up, timeout, retries, all under
+the gfx lock — every time it was reached, and offered it again from the
+Standard File dialog's Drive button afterwards.
+
+`dsk_fdd_probe` asks the hardware instead. It runs from `desk_init`, in the
+boot overlay, **only when the equipment word claims a second drive**, and
+only ever about **unit 1**: a machine that claims one drive is not contested
+and pays a compare, and unit 0 is where the kernel just came from and is not
+a question.
+
+**The discriminator is TRACK 0, and the reason is mechanical.** Every
+media-dependent signal answers the same for "no drive" and "drive with no
+disk in it" — an empty 5.25" DD drive delivers no index pulses, so a read or
+a verify times out identically either way, which is what rules out the
+obvious probe. TRK0 is a position sensor on the head carriage: a drive that
+is there asserts it whether or not anything is in the slot, and a
+drive-select line with nothing on the end of it is held inactive by the
+controller's own pull-up. So:
+
+1. Set the DOR (`3F2h`) to select unit 1, **preserving the BIOS's motor bits**
+   out of `0040:003F` and leaving the not-reset and DMA/IRQ bits alone.
+2. **SENSE DRIVE STATUS** (`04h`) → ST3 bit 4 is TRK0, straight off the
+   selected drive's line. Present → done, in microseconds, with no stepping
+   and no motor.
+3. Only if that is clear — which a *present* drive parked off track 0 also
+   reads — spin unit 1's motor up, wait `FDD_MOTORW`, then **RECALIBRATE**
+   (`07h`) and **SENSE INTERRUPT STATUS** (`08h`) → ST0 bit 4, Equipment
+   Check, which the 765 sets when it has stepped 77 times and never seen
+   TRK0. That is the absent drive, and this is the only path that costs
+   anything.
+
+**The motor is in step 3 and not step 1**, which is what makes a
+correctly-switched two-drive machine free: a drive parked at track 0 answers
+with no motor at all. It is there so that the step which can *remove* a drive
+runs under the most favourable conditions the probe can arrange — a drive
+that gated TRK0 on its spindle would be undocumented and contrary to every
+datasheet, and this costs a machine that is already misconfigured about
+660 ms to not have to bet on that. It is deliberately **not** a second ST3
+read: the recalibrate searches for the same TRK0 and answers the same
+question, so a second read could only name a case `FDD_S_SEEKOK` already
+covers.
+
+`int 13h` AH=08h and AH=15h are not on this ladder at all: neither exists on
+a 5150 ROM, and where they do exist they report the same configured count
+from CMOS — the same claim, one indirection further away.
+
+**Every failure resolves to "keep the drive", and that is the whole safety
+argument.** The two errors are not symmetric — a phantom icon costs a wasted
+click, a hidden real drive costs the user their second floppy — so a handshake
+that times out, a controller that never goes ready, a seek that does not
+finish inside `FDD_SEEKTO` ticks and any ST0 that is not an unambiguous
+Equipment Check all leave the row exactly as the equipment word asked for. The
+probe can only ever *remove* what `int 11h` claimed; it can never add one.
+
+**It disturbs nothing the BIOS believes.** There is no controller reset (that
+would invalidate unit 0's calibration and cost the next read a recalibrate),
+the DOR is restored with the same motor bits it was found with, and the only
+BIOS variable written is `0040:003E` — bit 1 cleared, so the BIOS re-seeks
+unit 1 if it ever uses it, and bit 7 cleared because our recalibrate's IRQ6
+set it. Unit 0 is never selected, never stepped and never asked anything.
+
+**Retirement is total, and that is the point** (§26.1 was only ever half of
+it). The row's `DV_KIND` goes to `DVK_FREE`, not just its `DV_FLAGS` bit 0 —
+so the desktop zone goes, and so does `fdlg_nextvol`'s Drive button, which
+walks `DV_KIND` and would otherwise still cycle the user onto a drive that is
+not there. `[disk_drive]` falls back to 0 if it named the row, which at that
+point in `kmain` it does: it is initialised to 1 and `drv_boot`'s
+`drv_mounted` has not run yet. This is `dsk_vol_del`'s existing "the mounted
+volume just went away" ending (§18.7), reached from the one place a **BIOS**
+row may be dropped — `dsk_vol_del` itself still refuses, because a driver
+must not be able to unmount a floppy.
+
+**Cost, measured: `.text` +15, `.ovl` +405, footprint +0, no rung crossed.**
+`desk_init` is already in the boot overlay (§2.5), which is read into the FAT
+window and dies at the first mount — so the probe costs no `KERN_BUDGET` and
+no `KERN_CODE_MAX` at all, and the 15 bytes are the published block and its
+registry entry, which are `.text` because a reader looks at them long after
+the overlay is gone. `kernel.bin` goes 85,094 → 85,499 and **167 sectors is
+still 167 sectors**, so it is not one extra sector of boot read either.
+
+**That last figure is now the tight one and the next person needs to know
+it**: the image's last sector had 410 bytes spare and has **5**. The overlay
+itself is fine — 3,067 of the FAT window's 4,608 — but the next thing added
+to `.ovl`, however small, buys a whole sector. `tools/kernsize.py` reports the
+rungs and not this, so it is written down here.
+
+**Boot time: zero on a machine whose equipment word is right**, which is one
+compare. On a machine that claims a drive it does not have — the only one that
+runs any of this — it is the motor wait plus a 77-step give-up, call it 1.2 s
+of a ~10 s boot, and it buys back the full BIOS mount attempt that reaching
+the phantom drive costs *every* time.
+
+**`make FDDPROBE=0` is the A/B**, and it exists because this is a claim about
+real silicon that no emulator here can arbitrate — an emulated FDC returns
+what its author believed a 765 returns, which is exactly §18.92's lesson and
+docs/FIELD-NOTES.md 5's. The verdict and its working are published through
+§57's registry as `'FD'` (§57.5) and reported by `tests/sysbench`, so a field
+run says what ST3 and ST0 actually answered on the iron rather than what this
+section assumes they do.
+
+**That is measured now, not anticipated: MartyPC cannot produce the absent
+verdict at all.** On a one-drive machine (`os8088_5150_cga_1fd`) with the
+count gate forced, a probe of unit 1 reads **`ST3 = 0x79`** — unit 1, ready,
+two-sided, **TRK0 set** — and a forced recalibrate reads **`ST0 = 0x29`**,
+IC = 00, seek end, no Equipment Check. Both are what a *present* drive
+answers: the FDC synthesizes drive status rather than modelling an
+unpopulated select line floating to inactive. So every emulator here takes
+the fail-safe branch and sees the pre-§18.97 behaviour exactly — verified as
+**0 differing pixels** of a booted desktop against a `FDDPROBE=0` kernel, on
+CGA (128,000) and Hercules (250,560) — and the EC branch has been exercised
+only as far as "the recalibrate completes and its interrupt code decodes"
+(`FDD_S_SEEKOK`, no hang). **The removal itself has never run.** The 5150
+whose SW1 claims a drive it does not have is the only machine that can fire
+it, which is what the field report is for.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
@@ -12843,8 +12966,18 @@ clicks over windows never reach desk_click.
 
 `desk_ndrives` is gone. A desktop zone is a row of `dsk_vtab` (§18.7) whose
 `DV_FLAGS` bit 0 is set — `desk_init` sets it for the floppies the int 11h
-equipment word admits to, and `osapi_vol_add` sets it for a driver's volume —
-so a hard disk appears by one flag going up and disappears by it going down.
+equipment word admits to **and the FDC then confirms** (§18.97: the word is a
+claim, and on a 5150 it is a DIP switch), and `osapi_vol_add` sets it for a
+driver's volume — so a hard disk appears by one flag going up and disappears
+by it going down.
+
+**A floppy the probe disproves loses its whole ROW, not just this flag.** The
+flag governs the desktop alone, and a drive that is not there must also stop
+being offered by `fdlg_nextvol`'s Drive button, which walks `DV_KIND` — so
+§18.97 retires the row to `DVK_FREE`. What this flag is still for is the
+other case, which has not changed: a drive the equipment word never claimed
+keeps a live row, because `[disk_drive]` may name it and a mount of an absent
+drive is an ordinary failed mount (§18.3).
 There is no second array to keep in step, the caption comes from the row's own
 inline `DV_LBL` ('HDD C') or is derived as `Disk X` from the index, and a
 driver-backed volume gets `ico_hdd32` instead of `ico_disk32` because a hard
@@ -30950,6 +31083,44 @@ origin, the content size, the stride and bank count, and the framebuffer
 segment — plus the desktop union against the chrome extent, which is the pair
 that says whether §39.16 is intact, and the dead zone's size, which is the
 question `ui_drag_dead` exists to answer.
+
+### 57.5 `FD` — the floppy-presence block (§18.97)
+
+Seven bytes and the tag: what `int 11h` claimed, whether the probe ran, the
+two status bytes it read off the 765, the present-cylinder byte beside them,
+how far it got, and the verdict.
+
+```
+fdd_dbg_eqp   drives the equipment word claimed, after the clamp (0..2)
+fdd_dbg_ran   0 = never ran (one drive claimed, or FDDPROBE=0), 1 = ran
+fdd_dbg_st3   SENSE DRIVE STATUS for unit 1; bit 4 is TRK0. FF = never read
+fdd_dbg_st0   SENSE INTERRUPT STATUS ST0 after RECALIBRATE; bit 4 is EC
+fdd_dbg_pcn   the present-cylinder byte beside it
+fdd_dbg_step  where it stopped: FDD_S_*, and the row that carries
+fdd_dbg_vrd   0 = absent, the row was retired; 1 = present, the row was kept
+```
+
+**`probe stop` is the row that carries**, exactly as the clock ladder's is
+(§37.92), and for the same reason: the verdict is one byte that reads
+identically whether the probe proved a drive present or merely failed to
+prove one absent, and those two are the difference between a working feature
+and a fail-safe that is quietly always taking the safe branch. `FDD_S_TRK0`
+means the motor-off read answered and nothing further ran, which is the row a
+correctly-switched two-drive machine should show; `FDD_S_EC` means the
+recalibrate came back with Equipment Check and the row went; `FDD_S_SEEKOK`
+means it came back *clean*, so the drive is there and was parked off track 0.
+Everything else is a refusal — a byte handshake that timed out, a controller
+that never went ready, a seek that outlived `FDD_SEEKTO` — and each keeps the
+drive.
+
+**Unconditional, for the mouse, clock and display blocks' reason** — and more
+plainly than any of them. This block exists *because* no emulator here can be
+trusted about what a 765 reports for an absent drive: the raw ST3 and ST0
+bytes are the evidence, and evidence that is only in the knob build is
+evidence the field machine is never sent. It costs no `.bss` beyond the seven
+bytes it publishes, which is rule 6's one permitted exception — there is no
+pre-existing kernel state to point at, because before §18.97 the kernel never
+asked.
 
 ## 58. debug.inc — DEBUG.DRV, the serial monitor (`drivers/debug/debug.asm`)
 

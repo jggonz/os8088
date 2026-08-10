@@ -372,9 +372,9 @@ Three things about it:
     "ksize": 96256,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 2662,
+    "ovl": 3067,
     "stk0": 1024,
-    "text": 55042
+    "text": 55057
   },
   "small": {
     "bss": 4651,
@@ -874,14 +874,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,655 | 37.0% |
-| the window system and its furniture | 16,627 | 21.5% |
+| the file system, end to end | 28,666 | 37.0% |
+| the window system and its furniture | 16,627 | 21.4% |
 | drawing: adapters, primitives, glyphs, icons | 10,981 | 14.2% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.7% |
-| the kernel proper: API table, heap, scheduler, events | 5,931 | 7.7% |
+| the kernel proper: API table, heap, scheduler, events | 5,935 | 7.7% |
 | the Control Panel | 4,120 | 5.3% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **77,505** | |
+| **total** | **77,520** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -889,7 +889,7 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 917 | 7,304 | **8,221** | 336 | — |
 | `wm.inc` — the window manager (§11) | 6,148 | — | **6,148** | 635 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,529 | — | **5,529** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,298 | **5,471** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,542 | — | **4,542** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
@@ -922,8 +922,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,739 | — | **2,739** | — | — |
-| **total** | **55,042** | **22,463** | **77,505** | **4,736** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,743 | — | **2,743** | — | — |
+| **total** | **55,057** | **22,463** | **77,520** | **4,736** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1109,7 +1109,7 @@ It works because of what the `FAT_SEG` window is doing at boot: nothing.
 `drv_boot` — the *last* thing `kmain` does before the first paint. So there
 is a 4,608-byte hole in the middle of the kernel's own ladder that is live
 for the whole of start-up and dead the instant the first volume mounts. The
-overlay is **2,504 bytes** of it, with 2,104 spare:
+overlay is **3,067 bytes** of it, with 1,541 spare:
 
 | | bytes | |
 |---|---:|---|
@@ -1117,8 +1117,22 @@ overlay is **2,504 bytes** of it, with 2,104 spare:
 | `cpudet.inc` minus `cpu_info` | 314 | the tier test and the whole A20 gate. `cpu_info` stays: it is API slot 0x0188 and answers all session long |
 | `xmem.inc` — `xm_init` | 123 | sizing the store is a once. `xm_arm` stays resident — `xm_copy` re-arms unreal mode inside the window that uses it — so it gets a shim |
 | `snd.inc` — `snd_init` | 107 | saving the boot 61h bits and publishing `snd_live`. `snd_unhook` is the shutdown path and stays |
-| `desk.inc` — `desk_init` | 97 | counting volumes and laying out their zones. `desk_ord` and `desk_zone_label` are called by the runtime painters and stay |
+| `disk.inc` — `dsk_fdd_probe` | 380 | asking the FDC whether drive B is really there (SPEC.md §18.97), and retiring its volume row if not. `make FDDPROBE=0` takes it out |
+| `desk.inc` — `desk_init` | 122 | counting volumes and laying out their zones, and the 21 bytes that contest the count against the probe above. `desk_ord` and `desk_zone_label` are called by the runtime painters and stay |
 | `kernel.asm` — the entry stubs | 24 | |
+
+**The rows are hand-kept and the total is measured, so they do not sum** —
+they are short by ~158 bytes that predate this note. Trust the total and the
+spare; treat a row as "roughly what this module put here".
+
+**The number to watch is NOT the 1,541 spare, it is the IMAGE's last sector.**
+`kernel.bin` is 85,499 bytes and the boot sector reads
+`(size + 511) / 512` = **167** of them, which hold 85,504 — so there are
+**5 bytes** of slack in the file and the next thing added to `.ovl`, however
+small, costs a whole sector of boot read (~65 ms on the field machine). It was
+410 bytes before §18.97. `tools/kernsize.py` reports the three *rungs* and not
+this, because the rungs are what the RAM ladder is built from; the file's tail
+is a separate question and this is where it is written down.
 
 `.ovl` is declared `start=OVL_START vstart=0`, and both halves matter.
 `start=` is the *file* offset, so NASM emits the gap as zeros and the boot

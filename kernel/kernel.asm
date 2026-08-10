@@ -785,6 +785,7 @@ DBG_TAG_MOUSE equ 0x4F4D          ; 'MO' - SPEC.md 9.4.2
 DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4
+DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5
 
 ; =============================================================================
 ; Fixed entry points
@@ -1412,6 +1413,13 @@ dbg_reg:
                                     ; a second monitor is plugged into a
                                     ; second card is the one question in
                                     ; SPEC.md 39 no emulator can be asked
+    dw DBG_TAG_FDD, fdd_dbg_blk     ; SPEC.md 57.5 - and the FOURTH, more
+                                    ; plainly than any of them: this block
+                                    ; exists BECAUSE no emulator here can be
+                                    ; trusted about what a 765 reports for a
+                                    ; drive that is not there, so its two raw
+                                    ; status bytes have to be in the build the
+                                    ; field machine is actually sent
 %ifdef DISK_COUNTERS
     dw DBG_TAG_DISK, dsk_dbg_blk    ; SPEC.md 18.94 - `make DISKCNT=1` only
 %endif

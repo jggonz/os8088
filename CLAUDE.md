@@ -2622,6 +2622,65 @@ it, and the gfx primitives clip to the SCREEN and will not stop it. The same
 applies to strings: every one in that driver fits its box, because `font_str`
 does not stop at a window edge either.
 
+### The equipment word is a CLAIM; the FDC is the fact (SPEC.md §18.97)
+
+`desk_init` sized the floppy half of the volume table from `int 11h`, and on a
+5150 that word is **the SW1 DIP switches**. The field machine's are set to two
+drives and it has one (docs/FIELD-MACHINES.md), so os8088 showed a `Disk B`
+that could never mount, spent a full BIOS mount attempt — motor, timeout,
+retries, all under the gfx lock — every time it was reached, and offered it
+again from the file dialog's Drive button afterwards. `dsk_fdd_probe` asks the
+drive instead.
+
+**The discriminator is TRACK 0 and the reason is mechanical.** Every
+media-dependent signal answers the same for "no drive" and "drive with no disk
+in it" — an empty 5.25" DD drive gives no index pulses, so a read or a verify
+times out identically either way, which is what rules out the obvious probe
+and what makes `int 13h` AH=08h/AH=15h useless twice over (neither exists on a
+5150 ROM, and where they do they re-report the same configured count). TRK0 is
+a position sensor on the head carriage: a drive that is there asserts it with
+or without media, and an unpopulated select line is held inactive by the
+controller's pull-up. So it is **SENSE DRIVE STATUS** (ST3 bit 4) with no
+motor, and only if that is inconclusive the motor and a **RECALIBRATE**, whose
+**ST0 bit 4 — Equipment Check, 77 steps and no TRK0 — is the absent drive**.
+
+Five things hold it up. **Every failure keeps the drive**, because the two
+errors are not symmetric: a phantom icon costs a click, a hidden real drive
+costs the user their second floppy — so a timeout, a controller that never
+goes ready, or any ST0 that is not an unambiguous EC all leave the row as the
+equipment word asked, and the probe can only ever *remove* what `int 11h`
+claimed. **It only runs when the word claims two**, and only ever about unit
+1 — a machine claiming one pays a compare, and unit 0 is where the kernel just
+came from. **The motor is step 3, not step 1**, which is what keeps a
+correctly-switched two-drive machine free (a drive parked at track 0 answers
+with no motor at all) while still letting the step that can *remove* a drive
+run under the best conditions the probe can arrange. **Retirement is the whole
+ROW** — `DV_KIND` to `DVK_FREE`, not just `DV_FLAGS` bit 0, or `fdlg_nextvol`
+still cycles onto it — and `[disk_drive]` falls back to 0, which is live
+rather than hypothetical because it is initialised to 1 and `drv_mounted` has
+not run yet. And **it disturbs nothing the BIOS believes**: no controller
+reset, the DOR restored with the motor bits it was found with, and only
+`0040:003E`'s bits 1 and 7 written.
+
+**Cost, measured: `.text` +15, `.ovl` +405, footprint +0, no rung crossed, and
+`kernel.bin` 85,094 → 85,499, which is still 167 sectors.** `desk_init` is
+already in the boot overlay, which costs no RAM at all — `drv_snd_sniff` and
+`clk_init`'s RTC ladder are the precedents for a cheap port probe living
+there. **The 15 bytes are the published block**, which is `.text` because a
+reader looks at it long after the overlay is gone. **But the image's last
+sector now has 5 bytes of slack where it had 410**, so the next `.ovl`
+addition buys a whole sector; that is in docs/KERNEL-MEMORY.md because
+`kernsize.py` reports rungs and not this.
+
+**No emulator here can arbitrate it, so the verdict and its working are
+published** through §57's registry as `'FD'` (§57.5) and reported by
+`tests/sysbench` — `claimed`, `probe ran`, the raw ST3 and ST0, `probe stop`
+and the verdict. Read **`probe stop`** first: `verdict 1` is what a probe that
+*proved* a drive present and one that merely *failed to prove one absent* both
+say, and telling those apart is the difference between this working and this
+being a fail-safe that never fires. `make FDDPROBE=0` is the A/B and removes
+the body, not just the call.
+
 ### Loadable drivers (SPEC.md §51, `kernel/driver.inc`)
 
 **A driver is a package that is not an application.** Same 32-byte header,

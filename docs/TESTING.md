@@ -1354,6 +1354,53 @@ And one the emulator reports as a **success**, which is worse:
   (SPEC.md §5.4, PERFORMANCE.md Part 9). The lesson above survives the
   correction intact. The numbers did not.
 
+And one more that is not about time at all, and is the newest:
+
+- **A status line from hardware that is NOT THERE.** SPEC.md §18.97's floppy
+  probe decides whether drive B exists by reading TRK0 out of the uPD765 —
+  ST3 bit 4, and ST0's Equipment Check after a recalibrate. **MartyPC
+  answers both for a drive its own config does not have.** Measured: on
+  `os8088_5150_cga_1fd`, a one-drive machine, a forced probe of unit 1 reads
+  `ST3 = 0x79` — unit 1, ready, two-sided, **TRK0 set** — and a forced
+  recalibrate reads `ST0 = 0x29`, IC = 00, normal termination, seek end, no
+  EC. Both are the answers a *present* drive gives. The FDC synthesizes drive
+  status rather than modelling an unpopulated select line floating to
+  inactive, so **no emulator here can ever produce the absent verdict**, and
+  the removal path is field-only.
+
+  This is the safe direction and that is the only reason it is a note rather
+  than a defect: the probe fails towards *keep*, so every emulator sees the
+  pre-§18.97 behaviour exactly. What it means for testing is that **the two
+  paths split** — everything except the EC branch is verifiable here (below),
+  and the EC branch itself is verifiable only on the 5150 whose SW1 claims a
+  drive it does not have (docs/FIELD-MACHINES.md).
+
+**Testing §18.97, then, is three runs and a report:**
+
+```
+# 1. a two-drive machine must be UNTOUCHED - the byte-identity check
+#    (0 differing pixels of 128,000 on CGA and 250,560 on Hercules)
+make && cp build/os8088-360.img /tmp/a.img
+make FDDPROBE=0 && cp build/os8088-360.img /tmp/b.img && make
+#    ...boot each on os8088_5150_cga_gla / _herc_gla and diff m.vram()
+
+# 2. a ONE-drive machine must not probe at all: os8088_5150_cga_1fd reads
+#    eqp=01 ran=00, and dsk_vtab row 1 stays DVK_BIOS with its zone off -
+#    which is the pre-existing behaviour for an unclaimed drive
+python3 tools/os88marty.py 127.0.0.1:9001 ...   # read the 'FD' block
+
+# 3. the mechanism, with the count gate forced in a SCRATCH kernel: the
+#    recalibrate path must complete and decode, not hang the boot
+```
+
+Run 3 is the one worth spelling out, because it is the only way to reach
+`fdd_wseek` and the ST0 decode here at all: temporarily make `desk_init`'s
+`cmp ah, 2` a `cmp ah, 0` so the probe always runs, and `dsk_fdd_probe`'s
+`test al, 0x10` a `test al, 0x00` so step 1 always falls through. Rebuild,
+boot the one-drive machine, and the block must read `step=02` (`FDD_S_SEEKOK`)
+with a plausible ST0 — **not** a hang, and not `step=05` (`FDD_S_NOSEEK`).
+Revert both.
+
 For all of these, the emulator's role is to prove *correctness* before you
 burn a floppy. The judgement is made on hardware.
 

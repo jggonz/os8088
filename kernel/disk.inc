@@ -186,6 +186,55 @@ dsk_dpt:
     db 0x08                      ; +10 motor start, 1/8 s
 DPT_LEN equ 11
 
+; --- the floppy-presence probe's published state (SPEC.md 18.97/57.5) --------
+; The int 11h equipment word is a CLAIM - on a 5150 it is the SW1 DIP switches
+; read back through the 8255 - and this is what the FDC answered when the
+; kernel asked it instead.
+;
+; UNCONDITIONAL, and not behind DISKCNT like the block below it: the whole
+; value of this one is that no emulator here can be trusted about what a 765
+; reports for a drive that is not there (SPEC.md 18.92 is the same lesson
+; about int 1Eh, docs/FIELD-NOTES.md 5 is what it cost), so the raw status
+; bytes have to be in the build the field machine is actually sent. It is also
+; the one block that costs bytes rather than pointing at state the kernel
+; already keeps - SPEC.md 57.3 rule 6's exception, and it exists because
+; before this the kernel never asked the question at all.
+;
+; In .text with real initialisers, like dsk_vtab and dsk_dpt above it and for
+; their reason: -f bin zeroes nothing, and a reader may well find this block on
+; a machine where the probe never ran.
+FDD_S_OFF    equ 0               ; never ran: one drive claimed, or FDDPROBE=0
+FDD_S_TRK0   equ 1               ; ST3 said TRACK 0 with the motor off - the
+                                 ; drive is there and nothing further ran
+FDD_S_SEEKOK equ 2               ; the recalibrate came back CLEAN: the drive
+                                 ; is there and was parked off track 0
+FDD_S_EC     equ 3               ; ...came back with Equipment Check - 77 steps
+                                 ; and no TRK0. THE absent drive, and the one
+                                 ; verdict in this list that removes anything
+FDD_S_NORDY  equ 4               ; the controller never asked for a byte  \ all
+FDD_S_NOSEEK equ 5               ; the seek outlived FDD_SEEKTO            | of
+FDD_S_BADIC  equ 6               ; ST0's interrupt code is not one we read / them
+                                 ; refusals, and every one keeps the drive
+fdd_dbg_blk:
+    dw DBG_TAG_FDD               ; 'FD' - the magic, and the block's own first
+    dw fdd_dbg_span              ; word, so a reader can check where it landed
+
+fdd_dbg_span:
+fdd_dbg_eqp:  db 0               ; drives int 11h claimed, after the clamp
+fdd_dbg_ran:  db 0               ; 0 = the probe never ran
+fdd_dbg_st3:  db 0xFF            ; SENSE DRIVE STATUS, unit 1. bit 4 = TRACK 0
+fdd_dbg_st0:  db 0xFF            ; SENSE INTERRUPT STATUS ST0. bit 4 = EC
+fdd_dbg_pcn:  db 0xFF            ; the present-cylinder byte beside it
+fdd_dbg_step: db FDD_S_OFF       ; where it stopped - THE row that carries, for
+                                 ; the reason clk_dbg_step is (SPEC.md 37.92):
+                                 ; the verdict alone cannot tell "proved
+                                 ; present" from "failed to prove absent"
+fdd_dbg_vrd:  db 1               ; 0 = absent, the row was retired; 1 = kept
+FDD_DBG_SPAN equ ($ - fdd_dbg_span)
+%if FDD_DBG_SPAN != 7
+  %error "disk: SPEC.md 57.5 block - the published span is not 7 bytes"
+%endif
+
 %ifdef DISK_COUNTERS
 ; The measurement instruments of docs/DISK-PERF-PLAN.md 2, compiled in only by
 ; `make DISKCNT=1` and never shipped. Read over QMP with `xp /3xh <linear>`;
@@ -4752,6 +4801,359 @@ dsk_get_icon:
     pop ax
     mov si, dsk_ico
     ret
+
+; =============================================================================
+; THE FLOPPY-PRESENCE PROBE (SPEC.md 18.97)
+;
+; In the BOOT OVERLAY (SPEC.md 2.5), which is where this belongs twice over:
+; it is asked once and never again, and the overlay costs no footprint and no
+; KERN_CODE_MAX at all - it is read into the FAT window and written over by
+; drv_boot's first mount. clk_init's RTC ladder and drv_snd_sniff's OPL2 dance
+; are the precedents; this is the same shape, a cheap port-level probe run
+; before the first paint to settle a default the machine can answer better
+; than a configuration byte can.
+;
+; Reached by a near call from desk_init, which is also .ovl (same section, same
+; vstart), and disk.inc is %included first so it is a backward reference.
+; =============================================================================
+section .ovl
+%ifndef NO_FDDPROBE              ; `make FDDPROBE=0` takes the BODY out too, not
+                                 ; just desk_init's call: the A/B is meant to be
+                                 ; the pre-18.97 kernel, and 381 bytes of
+                                 ; uncallable overlay is 381 bytes the boot
+                                 ; sector still reads off the floppy
+
+FDC_DOR      equ 0x3F2           ; digital output: motors, select, reset, DMA
+FDC_MSR      equ 0x3F4           ; main status
+FDC_FIFO     equ 0x3F5           ; data
+FDC_M1       equ 0x20            ; DOR bit 5: unit 1's motor
+
+FDD_HANDTO   equ 12000           ; spins waiting for RQM on one byte. Each is
+                                 ; an `in`, a mask, a compare and a branch -
+                                 ; call it 4us on a 4.77MHz 8088, so ~50ms,
+                                 ; against a handshake that really takes
+                                 ; microseconds. A ceiling, not a delay
+FDD_SEEKTO   equ 40              ; ticks (~2.2s) for the recalibrate. A 77-step
+                                 ; give-up is about half a second at the DPT's
+                                 ; rate; this is the bound, not the expectation
+FDD_MOTORW   equ 12              ; ticks (~660ms) for the motor line to take
+                                 ; effect. NOT dsk_dpt+10's 8 x 1/8 s: nothing
+                                 ; here reads a disk, so what this waits for is
+                                 ; a gate coming off, not a spindle reaching
+                                 ; speed - and only a machine heading for the
+                                 ; absent verdict ever pays it
+FDD_SELW     equ 4000            ; a short settle after the select reaches the
+                                 ; cable, before ST3 means anything
+
+; -----------------------------------------------------------------------------
+; dsk_fdd_probe - is unit 1 really there? (SPEC.md 18.97)
+; in:  nothing
+; out: AL = 0 the drive is ABSENT, 1 keep it
+; clobbers: AX, flags
+;
+; THE DISCRIMINATOR IS TRACK 0, and the reason is mechanical: every
+; media-dependent signal answers the same for "no drive" and "drive with no
+; disk in it" - an empty 5.25" DD drive delivers no index pulses, so a read or
+; a verify times out identically either way. TRK0 is a position sensor on the
+; head carriage, so a drive that is there asserts it with or without media,
+; and a select line with nothing on the end of it is held inactive by the
+; controller's own pull-up.
+;
+; EVERY FAILURE KEEPS THE DRIVE. The two errors are not symmetric - a phantom
+; icon costs a wasted click, a hidden real drive costs the user their second
+; floppy - so this can only ever remove what int 11h claimed, never add one,
+; and it is only ever asked about unit 1. Unit 0 is where the kernel just came
+; from and is not a question.
+;
+; THE MOTOR IS THE SECOND STEP AND NOT THE FIRST, which is the whole of why a
+; correctly-switched two-drive machine pays nothing: a drive parked at track 0
+; answers ST3 with no motor at all, in microseconds. Only an inconclusive read
+; spins one up and asks again - so the machine about to make the DESTRUCTIVE
+; decision is the one that pays for the most favourable conditions to make it
+; under, and a drive that (against every datasheet) needs its spindle turning
+; before it will report TRK0 still gets a second chance.
+;
+; IT DISTURBS NOTHING THE BIOS BELIEVES: no controller reset (that would
+; invalidate unit 0's calibration and cost the next read a recalibrate), the
+; DOR restored with the motor bits it was found with, and the only BIOS
+; variable written is 0040:003E - bit 1, so unit 1 is re-seeked if it is ever
+; used, and bit 7, which our own recalibrate's IRQ6 set.
+; -----------------------------------------------------------------------------
+dsk_fdd_probe:
+    push bx
+    push cx
+    push dx
+    push es
+
+    mov byte [fdd_dbg_ran], 1
+
+    mov ax, 0x40                ; there is no readable DOR, so the BIOS's own
+    mov es, ax                  ; MOTOR_STATUS is the only place the current
+    mov al, [es:0x3F]           ; motor state exists
+    and al, 0x0F
+    mov cl, 4
+    shl al, cl                  ; ...and the DOR keeps them in 4..7
+    mov bh, al                  ; BH = the motor bits, for the duration
+
+    mov al, bh
+    or  al, 0x0D                ; not-reset (2) + DMA/IRQ (3) + select unit 1
+    call fdd_dor
+    call fdd_st3                ; --- step 1: no motor, and usually enough ---
+    jc .nordy
+    test al, 0x10               ; TRACK 0
+    jz .motor
+    mov byte [fdd_dbg_step], FDD_S_TRK0
+    jmp .keep                   ; near: .recal below is longer than a short
+                                ; displacement reaches
+
+.motor:                         ; --- step 2: spin unit 1 up before deciding --
+    mov al, bh                  ; NOT to read ST3 again - the recalibrate below
+    or  al, 0x0D | FDC_M1       ; searches for the same TRK0 and answers the
+    call fdd_dor                ; same question, so a second read would only
+    mov cx, FDD_MOTORW          ; name a case SEEKOK already covers. This is
+    call fdd_wait               ; here so that the step that can REMOVE a drive
+                                ; runs under the most favourable conditions the
+                                ; probe can arrange, against the (undocumented,
+                                ; and on every datasheet untrue) possibility of
+                                ; a drive that gates TRK0 on its spindle
+.recal:                         ; --- step 3: make it go and find track 0 ----
+    mov al, 0x07                ; RECALIBRATE
+    call fdd_put
+    jc .nordy
+    mov al, 0x01                ; unit 1
+    call fdd_put
+    jc .nordy
+    call fdd_wseek
+    jc .noseek
+    mov al, 0x08                ; SENSE INTERRUPT STATUS
+    call fdd_put
+    jc .nordy
+    call fdd_get
+    jc .nordy
+    mov [fdd_dbg_st0], al
+    call fdd_get
+    jc .nordy
+    mov [fdd_dbg_pcn], al
+
+    mov al, [fdd_dbg_st0]       ; EQUIPMENT CHECK is the signal, and it is
+    mov ah, al                  ; reached WITHOUT dispatching on the interrupt
+    and al, 0xC0                ; code first, because the parts disagree about
+    cmp al, 0x80                ; which IC a failed recalibrate carries - 01 on
+    jae .badic                  ; the datasheet, 00 on some implementations, and
+                                ; a `jz .seekok` on 00 would silently never fire
+                                ; on the one machine this exists for. What IC
+                                ; still decides is whether the command RAN at
+                                ; all: 10 and 11 (ready changed, invalid) mean
+                                ; it did not, so they keep the drive
+    test ah, 0x20               ; SE - the seek really ended
+    jz .badic
+    test ah, 0x10               ; ...and EC: 77 steps and no TRK0
+    jz .seekok
+    mov byte [fdd_dbg_step], FDD_S_EC
+    mov byte [fdd_dbg_vrd], 0
+    xor al, al                  ; THE one path that removes a drive
+    jmp short .out
+.seekok:
+    mov byte [fdd_dbg_step], FDD_S_SEEKOK
+    jmp short .keep
+.badic:
+    mov byte [fdd_dbg_step], FDD_S_BADIC
+    jmp short .keep
+.nordy:
+    mov byte [fdd_dbg_step], FDD_S_NORDY
+    jmp short .keep
+.noseek:
+    mov byte [fdd_dbg_step], FDD_S_NOSEEK
+.keep:
+    mov byte [fdd_dbg_vrd], 1
+    mov al, 1
+.out:
+    push ax
+    mov al, bh                  ; the DOR back: the motor bits it was found
+    or  al, 0x0C                ; with, unit 0 selected, ours off
+    call fdd_dor
+    and byte [es:0x3E], 0x7D    ; re-seek unit 1 (bit 1); forget the interrupt
+    pop ax                      ; our recalibrate raised (bit 7)
+
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_fdd_retire - unit 1 is not there: take the whole ROW out (SPEC.md 18.97)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; DV_KIND and not merely DV_FLAGS, which is the difference between this and
+; what desk_init has always done to a floppy the equipment word did not claim:
+; the flag governs the DESKTOP alone, and fdlg_nextvol's Drive button walks
+; DV_KIND - so a zone-only retirement leaves the Standard File dialog still
+; cycling the user onto a drive that is not there.
+;
+; This is dsk_vol_del's "the mounted volume just went away" ending (SPEC.md
+; 18.7) reached from the one place a BIOS row may be dropped. dsk_vol_del
+; itself still refuses one and must: a DRIVER may not unmount a floppy. Only
+; the flag, the kind, the label and the two words a mount would fill are
+; touched - DV_UNIT stays, because a free row's unit is not read.
+;
+; [disk_drive] IS 1 here, so the fallback is the live case rather than a
+; hypothetical: it is initialised to B: and drv_boot's drv_mounted, which is
+; what moves it to the boot volume, has not run yet.
+; -----------------------------------------------------------------------------
+dsk_fdd_retire:
+    push bx
+    mov bx, dsk_vtab + DV_SIZE  ; row 1 - a compile-time constant, so this
+                                ; needs no ovw_dsk_vol_slot shim out here
+    mov byte [bx+DV_KIND], DVK_FREE
+    mov byte [bx+DV_FLAGS], 0
+    mov byte [bx+DV_LBL], 0     ; DV_SECS and DV_SEG are left alone: both still
+                                ; read 0 from the initialiser here, and a row
+                                ; dsk_vol_add later takes is filled by it
+    cmp byte [disk_drive], 1
+    jne .out
+    mov byte [disk_drive], 0    ; nothing may be left naming a free row
+.out:
+    pop bx
+    ret
+
+; fdd_dor - AL to the digital output register, then let the cable settle.
+;           Preserves everything but the flags.
+fdd_dor:
+    push cx
+    push dx
+    mov dx, FDC_DOR
+    out dx, al
+    mov cx, FDD_SELW
+.w: dec cx
+    jnz .w
+    pop dx
+    pop cx
+    ret
+
+; fdd_st3 - SENSE DRIVE STATUS on unit 1 -> AL, and banked for the field
+;           report. CF = 1: the controller never answered.
+fdd_st3:
+    mov al, 0x04
+    call fdd_put
+    jc .bad
+    mov al, 0x01                ; unit 1, head 0
+    call fdd_put
+    jc .bad
+    call fdd_get
+    jc .bad
+    mov [fdd_dbg_st3], al
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; fdd_put - hand one byte to the FDC, MSR-handshaked and BOUNDED: the one way
+;           to hang here is to wait forever for a bit that never changes on a
+;           machine where every read is 0FFh (SPEC.md 37.90's rule).
+; in:  AL = the byte.  out: CF = 1 = it was never asked for.
+fdd_put:
+    push ax
+    push cx
+    push dx
+    mov ah, al
+    mov dx, FDC_MSR
+    mov cx, FDD_HANDTO
+.wait:
+    in al, dx
+    and al, 0xC0                ; RQM (7) and DIO (6)
+    cmp al, 0x80                ; ready, and expecting a byte FROM us
+    je .go
+    dec cx
+    jnz .wait
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+.go:
+    mov dx, FDC_FIFO
+    mov al, ah
+    out dx, al
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+
+; fdd_get - take one result byte.  out: AL = it, CF = 1 = none came.
+fdd_get:
+    push cx
+    push dx
+    mov dx, FDC_MSR
+    mov cx, FDD_HANDTO
+.wait:
+    in al, dx
+    and al, 0xC0
+    cmp al, 0xC0                ; ready, and the byte is coming TO us
+    je .go
+    dec cx
+    jnz .wait
+    pop dx
+    pop cx
+    stc
+    ret
+.go:
+    mov dx, FDC_FIFO
+    in al, dx
+    pop dx
+    pop cx
+    clc
+    ret
+
+; fdd_wseek - wait for unit 1's seek to end.  out: CF = 1 = it outlived
+;             FDD_SEEKTO. A seek runs in the BACKGROUND, so the MSR goes
+;             not-busy at once and D1B is the bit that matters.
+fdd_wseek:
+    push ax
+    push cx
+    push dx
+    mov cx, [ticks]
+    add cx, FDD_SEEKTO
+.spin:
+    mov dx, FDC_MSR
+    in al, dx
+    test al, 0x02               ; D1B: unit 1 busy in seek mode
+    jz .done
+    mov ax, [ticks]
+    sub ax, cx
+    js .spin                    ; modular arithmetic between two free-running
+    pop dx                      ; words, so the SIGN decides (SPEC.md 45.15's
+    pop cx                      ; trap: jg honours the overflow flag)
+    pop ax
+    stc
+    ret
+.done:
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+
+; fdd_wait - CX ticks, and nothing else. The scheduler is live by now but
+;            task 0 is the only task there is (inst_init: a clean boot has no
+;            instances), so there is nobody to yield to.
+fdd_wait:
+    push ax
+    push cx
+    add cx, [ticks]
+.spin:
+    mov ax, [ticks]
+    sub ax, cx
+    js .spin
+    pop cx
+    pop ax
+    ret
+
+%endif                           ; NO_FDDPROBE
+section .text
 
 ; -----------------------------------------------------------------------------
 section .lowbss                 ; LOW_SEG: written by int 13h through ES:BX
