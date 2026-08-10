@@ -2417,6 +2417,8 @@ cw_wm_pkgcall:          call wm_pkgcall
                     retf
 cw_wm_show:             call wm_show
                     retf
+cw_wm_su_drop:          call wm_su_drop
+                    retf
 cw_wm_title_set:        call wm_title_set
                     retf
 cw_wm_win_rect:         call wm_win_rect

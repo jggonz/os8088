@@ -260,6 +260,25 @@ fm_kinit_x:
     mov ax, si
     add ax, I_NAME              ; the record's 16-byte name field, which
     mov [bx + W_TITLE], ax      ; inst_set_name zero-filled and NUL-capped
+%ifndef REDRAWFULL              ; the reference build (SPEC.md 22.14) leaves
+                                ; the Disk window off the raise cache, which
+                                ; is where it was before
+    or word [bx + W_FLAGS], WF_SAVEU
+%endif
+                                ; ...and it PROMISES its content stands still
+                                ; while it is not drawing (SPEC.md 11.96.1),
+                                ; so a window dragged over it and away again
+                                ; puts its pixels back with one blit instead
+                                ; of the most expensive W_PAINT in the system.
+                                ; 11.96.1 named this window as the one that
+                                ; could NOT make that promise, because 22.8
+                                ; re-lists a dirtied folder on the way to the
+                                ; front; the answer is that fmv_store is the
+                                ; one place a re-list lands and it drops the
+                                ; cache there, so the promise is kept by
+                                ; construction rather than by an app's word
+                                ; (SPEC.md 22.14). It has no worker, so the
+                                ; other disqualifier cannot arise
     mov word [bx + W_MENUS], fm_menus
                                 ; the Disk browser IS Locator's window
                                 ; (SPEC.md 12.3): fronting it keeps Locator
@@ -439,9 +458,54 @@ fmv_get_icon:
     ret
 
 ; -----------------------------------------------------------------------------
+; fmv_winof - which window owns the state block in DI? (the inst_tab walk)
+; in:  DI = state block
+; out: BX = its window ptr and CF = 0, or CF = 1 = no live record owns it
+; clobbers: nothing else (flags)
+;
+; fm_win_of answers the same question about [ld_pwin] by walking wm_zord for a
+; VISIBLE window, which is what files_poster wants; this one walks inst_tab and
+; finds a hidden window too, because a minimized Disk window still owns a
+; raise cache somebody has to drop.
+; -----------------------------------------------------------------------------
+fmv_winof:
+    push cx
+    push si
+    mov si, inst_tab
+    mov cx, INST_MAX
+.scan:
+    cmp byte [si+I_STATE], 1
+    jne .next
+    cmp byte [si+I_KIND], KIND_FILES
+    jne .next
+    cmp di, [si+I_SPTR]
+    je .found
+.next:
+    add si, I_RECSZ
+    loop .scan
+    pop si
+    pop cx
+    stc
+    ret
+.found:
+    mov bx, [si+I_WIN]
+    pop si
+    pop cx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; fmv_store - copy the global mount snapshot into one window's slot
 ; in:  DI = state block
 ; out: nothing (all registers preserved)
+;
+; THE ONE PLACE A WINDOW'S LISTING IS REPLACED, which is what makes it the one
+; place the RAISE CACHE (SPEC.md 11.96) has to be dropped: that cache is a
+; picture of this window drawn from the listing it is about to stop having, so
+; putting it back would be docs/FIELD-NOTES.md 4's bug with the stale half on
+; the glass. Every route in goes through here - fm_focus's re-list, a paste's
+; fmv_reload_all, a sibling adopting the snapshot in fmv_bcast, and every
+; navigation - so no new one can forget (SPEC.md 22.14).
 ; -----------------------------------------------------------------------------
 fmv_store:
     push ax
@@ -450,6 +514,10 @@ fmv_store:
     push dx
     push si
     push di
+    call fmv_winof              ; BEFORE the .none early-out: a window with no
+    jc .nowin                   ; view claim paints from the global snapshot,
+    call KERNEL_SEG:cw_wm_su_drop   ; which is changing under it too
+.nowin:
     call fmv_fit                ; the claim has to be big enough for THIS
     mov ax, [di+FS_VSEG]        ; volume's listing before anything is copied
     or ax, ax

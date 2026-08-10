@@ -683,6 +683,11 @@ ui_drag:
     mov dx, bx
     add dx, [ui_dragh]
     mov si, [ui_dragwin]
+    call wm_dmg_vacate          ; WHERE IT WAS is the whole of what can have
+                                ; gone stale (SPEC.md 11.91.2) - recorded
+                                ; BEFORE the union below grows AX..DX past it.
+                                ; It is what makes dragging a window ACROSS
+                                ; another one cost the other one nothing
     call wm_dmg_union           ; ...grown to cover where it is now
     call wm_paint_dmg           ; caller-held lock, per the wm contract
 .done:
