@@ -21363,6 +21363,13 @@ allow, from 32x16 up, and everything else follows from that:
   tool button, which a 110-row CGA canvas does not have, so `pt_szon` answers
   for the painter and the hit test both — a control that is not drawn is not
   clickable — and the two-line readout is what shows when they do not fit.
+  **Apply is drawn by the shared control** (§20.5.1) and is the only standard
+  labelled button in this module: everything else in Paint's chrome is
+  `pt_cwell`, a filled well with a 16x16 icon and no caption. It was already
+  centred horizontally without looking it — `'Apply'` is 40px in a 42px
+  button, so the literal x of 1 is exactly `(42-40)/2` — and its label sits
+  one row higher than it used to, the old `+3` in a 13-row box being what
+  `(13-8)/2` is standing in for.
 
   **The canvas height therefore has a floor of `PT_SZ_END`, not `PT_CH_MIN`.**
   The fields are the only way to make a canvas taller — there is no menu item

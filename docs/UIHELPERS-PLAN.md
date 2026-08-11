@@ -618,14 +618,21 @@ is unchanged** at 97,280 of 98,304.
 Six helpers across four packages and one driver, plus the survey's two
 corrections to §12's list (above).
 
+**Every one is pixel-diffed against a build from the commit before it.**
+
 | helper | what changed on screen |
 |---|---|
-| `pn_btn` (Piano) | **0 differing pixels of 34,720** — including the three coloured buttons |
-| `np_pbutton` (Note Pad) | panel closed: **0 px of 40,300**. Panel open: labels move **up 1px** |
-| `at_button` (ArtfulType) | the default ring, **3px out → 2px**. Frame and label untouched |
-| `hd_iw_button` (hdd installer) | expected identical — geometry, centring and greying all matched already |
-| `hd_tw_button` (partition tool) | labels **centred**, from a flush-left `x+4` |
-| `hd_page_button` / `hd_page_pm` (Disks page) | labels centred; the `+`/`-` glyph moves **up 1px** |
+| `hd_iw_button` (hdd installer) | **0 differing pixels of 45,000** — geometry, centring and greying all matched already |
+| `pn_btn` (Piano) | **0 of 34,720** — including the three coloured buttons |
+| `np_pbutton` (Note Pad) | panel closed **0 of 40,300**; panel open, labels move **up 1px** |
+| `pt_szdraw`'s Apply (Paint) | 54 px: the label moves **up 1px**. Frame untouched |
+| `at_button` (ArtfulType) | 304 px: the default ring, **3px out → 2px**. Frame and label untouched |
+| `hd_tw_button` (partition tool) | 480 px: `Format` and `Delete` **centred**, 4px right each |
+| `hd_page_button` / `hd_page_pm` (Disks page) | 322 px: `Format` +4px, `Mount` +12px, and the `+`/`-` glyph up 1px |
+
+The Drivers page — the same Control Panel window, one item row away — is
+**0 of 44,800** both before and after the hard-disk row is ticked, which is
+the control that says the harness is measuring the page and not the window.
 
 ### 14.1 `OS88UI_INK` — the first feature the shared control gained
 
@@ -672,7 +679,26 @@ and `mov` does not touch the carry.
 `hd_iw_button` lost its `hd_ibl` latch the same way — it existed to carry the
 label across the predicate call, and `SI` now goes straight through.
 
-### 14.4 Deliberately NOT converted
+### 14.4 Paint had one after all
+
+§12's list named `pt_btn_xy`, which is pure geometry and draws nothing, and
+the survey concluded Paint had no standard button anywhere. It has exactly
+one: **Apply**, under the `W` and `H` fields (SPEC.md §42). Everything else
+in Paint's chrome is `pt_cwell` — a filled well with a 16x16 icon and no
+caption — which is why a grep for a labelled button missed it and reading
+the size group found it.
+
+It is the third literal in this work that was standing in for the same
+arithmetic and the second that was already right in one axis: `'Apply'` is
+40px in a 42px button, so its x of 1 **is** `(42-40)/2`, and only the y
+moves — `+3` in a 13-row box against `(13-8)/2 = 2`.
+
+Reaching it needs **Hercules**, not CGA: `pt_szon` refuses to draw the size
+group at all on a 110-row CGA canvas (SPEC.md §42) and the two-line readout
+shows instead, so a CGA capture would have compared two pictures with no
+button in them and reported 0 pixels — a pass that measured nothing.
+
+### 14.5 Deliberately NOT converted
 
 - **ModPlug** (`mppl_btn_rect`, `mppu_btn_led`) — SPEC.md §56 ports
   ModPlugPlayer's bevelled face and LED transport on purpose.
@@ -682,17 +708,32 @@ label across the predicate call, and `SI` now goes straight through.
   colour table.
 - **Paint** — nothing to convert (see §12's correction).
 
-### 14.5 What is verified and what is not
+### 14.6 How each was reached
 
-Piano, Note Pad and ArtfulType were pixel-diffed against `.o88`s built from
-the previous commit, each alone in the root of its own 360KB image so the
-package resolves by name out of a fresh mount — a **folder dive would not
-work**, because a Disk window paints from its own cache and leaves the global
-snapshot stale (SPEC.md §18.9/§22.8), so `disk_dir` after one still answers
-about the root and the harness reads it as the package not being on the disk.
+**Packages**: each alone in the root of its own 360KB image, so it resolves
+by name out of a fresh mount. A **folder dive does not work** — a Disk window
+paints from its own cache and leaves the global snapshot stale (SPEC.md
+§18.9/§22.8), so `disk_dir` after one still answers about the root and the
+harness reads it as the package not being on the disk.
 
-The three `drivers/hdd` helpers are **assembled and reviewed, not
-pixel-diffed**: reaching them needs the driver ticked in the Control Panel
-and a disk attached, and two of the three windows are several steps past
-that. Their conversions are the same mechanical transformation as the three
-that were measured, and two of them carry a named pixel change anyway.
+**The hard-disk driver** took a harness of its own, `os8088_xt_hdd`:
+
+1. open the Control Panel from the chip menu;
+2. select the **Drivers** item row and tick the hard-disk row — SPEC.md
+   §51.3 means nothing is loaded that `SYSTEM.CFG` did not ask for, so
+   without this the driver's page does not exist at all (§31.9);
+3. confirm it actually loaded by reading `drv_tab[1].DRVR_SEG` — 0 is "not
+   loaded", and a page that is missing looks exactly like a page that is
+   empty;
+4. select item row `[cp_nst]`, which is where a driver's page is appended;
+5. click **Format** and **Install**, each of which only *opens* a window —
+   `hd_tool_open` reads the tool as a second image off the system volume and
+   nothing writes to a disk until a button inside is clicked, and none is.
+
+**Every coordinate is the module's own constant, and that is not fastidious
+— it is what made the difference.** A first pass estimated the Drivers
+page's row pitch, clicked the same row twice, and reported that the driver
+would not load. `cp_drv_click` divides `(y - CP_DBY1)` by `CP_DROWH` rather
+than laddering, so aiming at a band's middle is exact; and `cp_nitems` is a
+**routine**, not a variable, so reading a byte at its symbol answers with an
+opcode.
