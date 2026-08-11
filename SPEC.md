@@ -35161,11 +35161,16 @@ FSV_LIST    equ 0       ; append this folder's entries. The kernel still
 FSV_CHDIR   equ 2       ; AX = a handle out of an entry, or 0 = the root
                         ; out: CF=1 refuses; CF=0 and DX = THE PARENT'S
                         ; HANDLE (0 = the root, and 0 when AX was 0)
-FSV_STAT    equ 4       ; SI = name -> exists, size, attributes
-FSV_READ    equ 6       ; SI = name, DX:BX = buffer (NOT ES:BX - below)
+FSV_STAT    equ 4       ; SI = a NUL 8.3 name, in KERNEL_SEG
+                        ; out: CF=0, AX = THE HANDLE, DX:CX = size,
+                        ; BL = a FAT-style attribute byte (0x10 = directory)
+FSV_READ    equ 6       ; AX = a handle, DX:BX = buffer, DI:CX = capacity
+                        ; out: CF=0 and DX:AX = bytes read
 FSV_WRITE   equ 8       ; SI = name, DX:BX = bytes
 FSV_APPEND  equ 10      ; the chunked pair (§18.4.4), so a copy still streams
-FSV_READAT  equ 12      ; ...and its read half
+FSV_READAT  equ 12      ; AX = a handle, DX:BX = buffer, CX = capacity,
+                        ; DI:SI = the 32-bit offset. out: DX:AX = delivered,
+                        ; 0 = at or past the end
 FSV_DELETE  equ 14      ; SI = name
 FSV_RENAME  equ 16      ; SI = old, DI = new
 FSV_MKDIR   equ 18      ; SI = name
@@ -35173,6 +35178,27 @@ FSV_RMDIR   equ 20      ; SI = name
 FSV_DFREE   equ 22      ; -> DX:AX = free bytes, BX = the granule
 FSV_SIZE    equ 24
 ```
+
+**READS ARE BY HANDLE AND ONLY `FSV_STAT` TAKES A NAME.** Every other design
+here needs two contracts on one verb, because the two callers arrive with
+different things in hand: `dskw_rbody` and `dskw_read_at` have a name, and
+`dsk_read_chain` — the loader's and `assoc`'s path — has only the
+first-cluster word out of a staged entry, which on this volume is the
+driver's own opaque handle. So the kernel resolves a name through `FSV_STAT`
+first and then reads, which is `open` and `read` in the shape this ABI
+already had, and `dsk_read_chain` calls `FSV_READ` with the handle it is
+holding. **The cost is one extra round trip per named read and it is the
+right trade**: a verb that means "the thing in AX, unless AX is 0, in which
+case the string in SI" is the shape that gets called wrongly later, and a
+redirected volume's round trip is a message on a wire where the *data* it is
+about is kilobytes.
+
+**`FSV_STAT`'s `BL` IS A FAT ATTRIBUTE BYTE**, not the §19.1 type word, and
+that is deliberate: `dskw_rbody` already refuses `0x18` (a directory or a
+volume label) with `FERR_PROT` and `dskw_stat` already publishes the byte to
+packages, so a driver that answers `0x10` for a folder leaves both tests
+working verbatim rather than teaching the kernel a second vocabulary at the
+one site where the two would have to agree.
 
 **A BUFFER IS `DX:BX` AND NEVER `ES:BX`, WHICH IS `DSV_BLK`'S RULE AND NOT A
 NEW ONE.** This section pinned `ES:BX` for the four verbs that move bytes, and
@@ -35341,9 +35367,65 @@ will not open"** — four call layers and one whole subsystem away from the
 cause, with the mount itself completing correctly first. A `%if` on the
 table's own length is the guard, and it is the only kind that can catch this.
 
-**Milestones 2 and 3 land on this.** `FSV_STAT`/`READ`/`READAT` next, so a
-package launches off a redirected volume and a document opens; then the write
-verbs. The cable's file client is a second `DRVC_FILE` driver after that.
+**Milestone 3 lands on this.** The write verbs are what is left; the cable's
+file client is a second `DRVC_FILE` driver after that.
+
+#### 62.9.5 Milestone 2 as built — reads, by handle
+
+**Done and verified on the same machine: Minesweeper launches off a redirected
+volume, and Note Pad opens a document on one.** Those are the two halves §62.9.3
+names, and they are two different paths — the loader arrives holding a handle,
+an application arrives holding a name.
+
+**Measured: `.text` +42, `.cold` +205, `.bss` +0 — NO RUNG CROSSED, so the
+footprint is unchanged at 100,352 and the spare is still four steps.** The
+`.cold` rung has 147 bytes left, which is the number for the next feature to
+watch: milestone 3's six write verbs will cross it.
+
+Five branch sites, and only the first two were in §62.9.3's table:
+
+| site | what it does |
+|---|---|
+| `dskw_stat_x` | `FSV_STAT` — and it is the resolver everything else composes on |
+| `dskw_rbody` | `FSV_STAT` then `FSV_READ`, with the FAT path's own `0x18` and capacity refusals kept verbatim |
+| `dskw_read_at_x` | `FSV_STAT` then `FSV_READAT` |
+| `dsk_read_chain` | one `FSV_READ`, by the handle it already holds |
+| **`loader_run`'s header PEEK** | `FSV_READAT` at offset 0 |
+
+**That last one is the site the table missed, and it is the one that decides
+whether ANY package on such a volume loads.** SPEC.md §21 step 2 reads the
+file's first sector to validate the `.o88` header *before* claiming a region,
+through `dsk_clus2lba` and `disk_read` — and `dsk_xfer` refuses a redirected
+volume outright, so without a branch there every package is `Bad package`
+however well the rest works. It presented exactly that way: the listing was
+right, the sizes were right, and the double-click selected the row and did
+nothing.
+
+**Its neighbour is worse, because it would have been silent.** The same step
+re-validates the entry's first-cluster word against `[dsk_maxclus]` — and on
+a redirected volume that word is an opaque handle while `[dsk_maxclus]`
+belongs to *the last FAT volume mounted*. The check is not merely wrong, it
+is answered by a number from another disk: small handles pass by luck and a
+driver that numbered its files from 4,096 would have had every package
+refused, on a volume that listed and read perfectly. It is skipped on
+`DVK_FILE` now.
+
+**Two design points, both of which the ABI already implied.** Reads are BY
+HANDLE and only `FSV_STAT` takes a name, so the kernel resolves once and then
+reads — the cost is a round trip on a volume where the *data* is kilobytes,
+and what it buys is that no verb ever means two things. And the capacity is
+checked **twice**, once in `dskw_rbody` before it calls and once inside the
+driver: `dsk_read_chain` reaches `FSV_READ` without passing the first check at
+all, and a driver that trusts its caller's arithmetic writes past the end of
+somebody else's claim.
+
+**What a redirected read does NOT do yet is drive §12.8's activity widget on
+the by-name path.** `dsk_read_chain` takes the sector count as its scale and
+so still does; `dskw_rbody`'s redirected branch has no sector count to give
+and skips `fpg_begin` (`fpg_end` is gated on its own flag, so the pairing is
+safe). That costs nothing on a RAM disk and is worth fixing for the cable,
+where a 116KB read is half a minute of frozen screen — a byte-based scale is
+the obvious answer and it belongs with the cable's client.
 
 **One thing milestone 1 could not have and the next one must decide.**
 `RAMDISK.DRV` took **`DEBUG.DRV`'s `drv_tab` row**, because the Drivers page

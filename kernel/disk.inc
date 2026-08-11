@@ -4905,6 +4905,34 @@ dsk_read_chain:
                                 ; time (SPEC.md 12.8). One byte each way, and
                                 ; AX is the first cluster either side of it.
 
+    ; --- a REDIRECTED volume: ONE FSV_READ, by the handle in AX (62.9.1) ----
+    ; This is the loader's and assoc's path, and it is the one caller that
+    ; arrives holding a handle rather than a name - the staged entry's
+    ; first-cluster word IS the driver's handle on such a volume - so it reads
+    ; directly and never resolves. fpg_begin above has already taken the
+    ; sector count as its scale, which is as true of a cable as of a floppy.
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .walk
+    push ax                     ; the handle, across the arithmetic
+    mov ax, dx                  ; the capacity is exactly what was asked for:
+    mov cx, 512                 ; DX sectors, in 32 bits, so the driver can
+    mul cx                      ; clamp against it and can never overrun
+    mov di, dx                  ; DI:CX = the 32-bit capacity
+    mov cx, ax
+    mov dx, es                  ; DX:BX = the destination - DX and not ES,
+    pop ax                      ; because ES is KERNEL_SEG inside a driver
+    mov si, ax                  ; banked for [dsk_chain_end] below
+    push bp
+    mov bp, FSV_READ
+    call drv_fs_call
+    pop bp
+    jc .fsfail
+    jmp .done                   ; the shared tail: fpg_end, the pops, CF=0
+.fsfail:
+    jmp .fail1                  ; a refusal is LD_EDISK, the same verdict a
+                                ; failed sector read gets - the loader has no
+                                ; finer question to ask about a wire
+.walk:
     mov si, ax                  ; SI = current cluster
     xor cx, cx                  ; CX = run_len (0 = no pending run)
     xor di, di                  ; DI = run_lba (dead while run_len = 0)
@@ -4948,6 +4976,7 @@ dsk_read_chain:
 .final:
     call .flush
     jc .fail1
+.done:                          ; ...and where the redirected read above joins
     mov [dsk_chain_end], si     ; where a chunked caller resumes from
     clc
     call fpg_end                ; preserves CF, so it sits either side of the

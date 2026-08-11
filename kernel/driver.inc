@@ -249,11 +249,20 @@ FSV_CHDIR   equ 2               ; AX = a handle out of an entry, 0 = the root.
                                 ; out CF=1 refuses; CF=0 and DX = THE PARENT'S
                                 ; HANDLE, which is what pays for '..' - there
                                 ; is no directory sector here to read one from
-FSV_STAT    equ 4               ; SI = name -> exists, size, attributes
-FSV_READ    equ 6               ; SI = name, DX:BX = buffer (DSV_BLK's rule:
-FSV_WRITE   equ 8               ; ES is KERNEL_SEG on entry, so it cannot also
-FSV_APPEND  equ 10              ; be the buffer's segment - SPEC.md 51.8)
-FSV_READAT  equ 12
+FSV_STAT    equ 4               ; SI = a NUL 8.3 name, in KERNEL_SEG. out
+                                ; CF=0, AX = THE HANDLE, DX:CX = size, BL = a
+                                ; FAT-style attribute byte (0x10 = directory,
+                                ; so dskw_rbody's existing 0x18 test stands)
+FSV_READ    equ 6               ; AX = a handle, DX:BX = buffer (DSV_BLK's
+                                ; rule: ES is KERNEL_SEG on entry so it cannot
+                                ; also be the buffer's segment, SPEC.md 51.8),
+                                ; DI:CX = the 32-bit capacity.
+                                ; out CF=0 and DX:AX = bytes read
+FSV_WRITE   equ 8               ; SI = name, DX:BX = bytes
+FSV_APPEND  equ 10              ; the chunked pair (SPEC.md 18.4.4)
+FSV_READAT  equ 12              ; AX = a handle, DX:BX = buffer, CX = capacity,
+                                ; DI:SI = the 32-bit offset. out DX:AX =
+                                ; delivered, 0 = at or past the end
 FSV_DELETE  equ 14              ; SI = name
 FSV_RENAME  equ 16              ; SI = old, DI = new
 FSV_MKDIR   equ 18              ; SI = name

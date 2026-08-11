@@ -1573,6 +1573,11 @@ dskw_rbody:
     stc
     ret
 .gated:
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatname
+    jmp .fsread                 ; a REDIRECTED volume (SPEC.md 62.9): there is
+                                ; no chain to walk and no entry to walk it from
+.fatname:
     mov di, dskw_n83
     call dskw_name83
     jnc .named
@@ -1629,6 +1634,46 @@ dskw_rbody:
     mov dx, [dskw_lenhi]
     clc
     ret
+
+    ; --- a REDIRECTED volume: STAT to a handle, then READ (SPEC.md 62.9.1) ---
+    ; Reads are BY HANDLE and only FSV_STAT takes a name, so this is `open`
+    ; and `read` - which is also what makes the refusals below identical to
+    ; the FAT path's: the same 0x18 attribute test and the same 32-bit size
+    ; check against the caller's capacity, BOTH before a byte crosses.
+.fsread:
+    call dskw_norm              ; the destination becomes seg:0..15 + a run,
+                                ; exactly as it does for a chain walk - the
+                                ; driver is handed a normalised (seg, offset)
+                                ; and cannot be made to carry past 64KB
+    push bp
+    mov bp, FSV_STAT
+    call KERNEL_SEG:cw_drv_fs_call  ; SI = the name -> AX = the handle,
+    jc .fsfail                      ; DX:CX = size, BL = attributes
+    test bl, 0x18
+    jnz .fsprot                 ; a folder or a volume label, as .isfile says
+    cmp dx, [dskw_caphi]        ; the 32-bit size against the 32-bit capacity
+    jb .fsfits                  ; BEFORE any data I/O, so FERR_BIG always
+    ja .fsbig                   ; leaves the destination untouched
+    cmp cx, [dskw_cap]
+    jbe .fsfits
+.fsbig:
+    mov ax, FERR_BIG
+    jmp short .fsfail
+.fsprot:
+    mov ax, FERR_PROT
+.fsfail:
+    pop bp
+    stc
+    ret
+.fsfits:
+    mov bx, [dskw_src]          ; AX IS STILL THE HANDLE, which is the whole
+    mov dx, [dskw_seg]          ; reason the size test came first: every
+    mov cx, [dskw_cap]          ; register this loads is one the test needed,
+    mov di, [dskw_caphi]        ; and none of them is AX
+    mov bp, FSV_READ
+    call KERNEL_SEG:cw_drv_fs_call  ; -> DX:AX = bytes read
+    pop bp
+    ret                         ; CF and DX:AX are already the answer
 
 ; -----------------------------------------------------------------------------
 ; dskw_rdata - read [dskw_rem] sectors along the chain at [dskw_cur]
@@ -2151,6 +2196,32 @@ dskw_stat_x:
     push di
     cmp byte [dsk_mntok], 1
     jne .nodisk
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fat
+
+    ; --- a REDIRECTED volume: ASK (SPEC.md 62.9.1) --------------------------
+    ; The 8.3 name is handed over VERBATIM rather than through dskw_name83:
+    ; that routine's job is to build the 11-byte padded FAT field a directory
+    ; entry is compared against, and there is no directory here to compare it
+    ; to. The driver gets the caller's string and answers about it.
+    push bp
+    mov bp, FSV_STAT
+    call KERNEL_SEG:cw_drv_fs_call  ; -> AX = the handle, DX:CX = size, BL =
+    pop bp                          ; a FAT-style attribute byte
+    jc .fsbad
+    xchg ax, bx                 ; ...and this cell answers BX = the "first
+                                ; cluster" and AL = the attributes, so ONE
+                                ; instruction puts each where the contract
+                                ; says: AX takes the attribute byte in AL,
+                                ; BX takes the handle. DX:CX is already the
+                                ; size. `mov bx, ax` first would have eaten
+                                ; the attribute byte, BL being where it is
+    clc
+    jmp short .out
+.fsbad:
+    stc
+    jmp short .out
+.fat:
     mov di, dskw_n83
     call dskw_name83
     jc .badname
@@ -2237,6 +2308,13 @@ dskw_read_at_x:
     mov [dwr_off], ax
     mov [dwr_off+2], dx
 
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatat
+    jmp .fsat                   ; a REDIRECTED volume (SPEC.md 62.9): the
+                                ; driver serves any offset, so BOTH of this
+                                ; routine's cluster-alignment preconditions
+                                ; simply do not arise
+.fatat:
     call dskw_clbytes           ; AX = bytes per cluster on this volume
     mov [dwr_clb], ax
     test ax, ax
@@ -2353,6 +2431,31 @@ dskw_read_at_x:
     pop cx
     pop bx
     ret
+
+    ; --- a REDIRECTED volume: STAT to a handle, then READAT (62.9.1) --------
+    ; dskw_stat_x is redirected too, so this could have fallen through to the
+    ; code above and got the right handle and size out of it - and then walked
+    ; a cluster chain that does not exist. The branch is here rather than
+    ; after the stat because everything between them is FAT arithmetic.
+.fsat:
+    mov bp, FSV_STAT
+    call KERNEL_SEG:cw_drv_fs_call  ; SI = the name -> AX = the handle,
+    jc .fsbad                       ; DX:CX = size, BL = attributes
+    test bl, 0x18
+    jnz .fsprot                 ; a folder is not readable, as everywhere else
+    mov bx, [dwr_buf]           ; AX is still the handle
+    mov dx, es                  ; DX:BX = the buffer, ES being the caller's
+    mov cx, [dwr_cap]           ; and DX not carrying it into the driver
+    mov si, [dwr_off]           ; DI:SI = the 32-bit offset, and a driver is
+    mov di, [dwr_off+2]         ; free to answer 0 for "at or past the end"
+    mov bp, FSV_READAT
+    call KERNEL_SEG:cw_drv_fs_call  ; -> DX:AX = the bytes delivered
+    jmp short .out              ; CF and DX:AX are already the answer
+.fsprot:
+    mov ax, FERR_PROT
+.fsbad:
+    stc
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; dskw_append - add CX bytes to the end of an existing file (SPEC.md 22.5)

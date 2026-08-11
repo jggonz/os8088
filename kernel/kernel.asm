@@ -2568,6 +2568,12 @@ cw_dsk_next_clus:       call dsk_next_clus
                     retf
 cw_dsk_read_chain:      call dsk_read_chain
                     retf
+cw_drv_fs_call:         call drv_fs_call        ; BP = the FSV_* verb, and it
+                    retf                        ; is the ONE register the file
+                                                ; ABI leaves free (SPEC.md
+                                                ; 62.9.1) - so this shim may
+                                                ; not spend one either, and
+                                                ; `call`/`retf` spend none
 cw_dsk_relist:          call dsk_relist
                     retf
 cw_dsk_synth:           call dsk_synth

@@ -776,9 +776,27 @@ short, and presents as "the Disk window will not open" four call layers from
 the cause. That is precisely what block mode did not have, and why two of ITS
 bugs reached the field instead of the build.
 
-Milestones 2 and 3 (reads, then writes) follow on a kernel that is already
-proven, and the cable's file client is then a SECOND `DRVC_FILE` driver
-rather than the first.
+**MILESTONE 2 IS BUILT AND VERIFIED TOO** (SPEC.md §62.9.5): reads, by handle.
+Minesweeper launches off a redirected volume and Note Pad opens a document on
+one — the loader's path and an application's, which are different because one
+arrives holding a handle and the other a name. **`.text` +42, `.cold` +205, no
+rung crossed**, so the footprint is unchanged and the spare is still four
+steps; the `.cold` rung has 147 bytes left and milestone 3's six write verbs
+will cross it.
+
+The harness paid for itself twice more. §62.9.3's branch-site table was
+**missing the loader's header peek** — SPEC.md §21 step 2 reads a file's first
+sector to validate its `.o88` header before claiming a region, and `dsk_xfer`
+refuses a redirected volume, so every package was `Bad package` while the
+listing and the sizes were perfect. And the same step re-validates the entry's
+first-cluster word against `[dsk_maxclus]`, which on such a volume compares an
+opaque handle against **the last FAT volume's** cluster count: small handles
+pass by luck, and a driver numbering its files from 4,096 would have had every
+package refused on a volume that browsed and read correctly. Neither would
+have been found on a cable without first being blamed on the cable.
+
+Milestone 3 (writes) follows on a kernel that is already proven, and the
+cable's file client is then a SECOND `DRVC_FILE` driver rather than the first.
 
 ### 2.3 What was considered and rejected
 

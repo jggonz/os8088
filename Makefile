@@ -616,8 +616,9 @@ $(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
 # tested is not what ships - and it costs a machine that never ticks it one
 # drv_tab row and a file on the floppy.
 $(BUILD)/ramdisk.bin: drivers/ramdisk/ramdisk.asm drivers/os88drv.inc \
-                      apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/ramdisk/ -I drivers/ -I apps/ -o $@ $<
+                      apps/os88api.inc $(BUILD)/mines.o88 | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ramdisk/ -I drivers/ -I apps/ \
+	        -I $(BUILD)/ -o $@ $<
 	@echo "ramdisk: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/ramdisk.drv: $(BUILD)/ramdisk.bin tools/os88drv.py
