@@ -3136,6 +3136,78 @@ Everything above the kernel is handed out on demand. `mem_claim` takes KB and an
 - **The kernel is a client too**, with its own owner tags: the menu save-under (`MEM_K_SAVE`, claimed by `menu_drop` for exactly as long as a menu is on screen and released *before* the chosen item runs) and the clipboard (`MEM_K_CLIP`, SPEC.md §55). The retired back buffer was the third, and the "Not Enough Ram" greying it demonstrated is still the pattern to copy (SPEC.md §50.5): a kernel feature that speculatively wants memory asks the same allocator a package does, and is told no by the same answer — live state, not a boot-time verdict.
 - **Refusal is a normal path, not a panic.** Every claim in the tree has a fallback: the menu save-under repaints the menu's own rect instead of restoring it, a Disk window with no listing cache reads the global mount snapshot, Paint gives up features tier by tier and finally puts up a notice window.
 
+### Frotz — a Z-machine, and it rides no shipped floppy (SPEC.md §61, `apps/frotz/`)
+
+**It is §61 here and §59 on `main`, and that gap is this branch's doing.** It
+arrived through `elendilon-pr` carrying `main`'s number, which this tree had
+already spent on `toast.inc` (§59) and `cpudet.inc` (§60), so the package moved
+to the next free number the way ModPlug did at §56 — docs/UPSTREAM.md's
+standing answer, and the thing to check first the next time it comes home.
+
+**It is NOT a port of Frotz**, and the About box says so because a program that
+borrows a name and does not say where it came from is a misattribution. David
+Griffith's Frotz is C and this tree has no C toolchain by choice; this is an
+independent implementation of the *Z-Machine Standard 1.1* in 8086 assembly,
+named the way `dfrotz` and `wfrotz` are. Prefixes are one per module (`zm_`
+memory, `zt_` text, `zo_` objects, `zw_` windows, `zx_` execution, and six
+more), with `zf_` for the package's own state.
+
+**`ES` belongs to the story while the VM runs, and that is the one rule the
+rest of it is built on** (§61.3). A story address is 20 bits and there are no
+32-bit registers here, so the program counter is a live `ES:SI` and instruction
+fetch is a `lods`, renormalised only when SI crosses 0x8000 — once per 32KB of
+straight-line code. That is what makes an interpreter affordable on a 4.77MHz
+machine, and it collides head-on with the OS: **ES is exactly the register os8088
+does not preserve**, since the X stubs hand a callee the caller's DS *in* ES. So
+every kernel call from inside the VM saves and restores it, and every
+`[es:bx+W_*]` read of the window record puts ES back to `KERNEL_SEG` first.
+
+**§61.12 is the worked example and it is worth reading before trusting any
+guard in this package.** A real story ran its opening and halted two or three
+commands into play, reporting a segment *below* the story's claim, while
+conformance passed 44 of 44 at v3, v5 and v8. The diagnosis was wrong twice.
+Four genuine ES leaks were found and fixed by that reasoning, the segment was
+moved into `[zf_pcseg]` with only three routines allowed to write it, and **the
+halt did not move** — because the program counter had been correct the whole
+time. `zx_jrel`'s backwards branch fixed up a negative SI by subtracting
+0x1000 paragraphs and leaving SI up near 0xFFFF: `ES:SI` addressing exactly the
+right byte, in a form nothing downstream accepts. **A guard reporting a wrong
+segment can be reporting a correct address that is merely unnormalised**, and
+three guards agreeing did not make the reading true.
+
+**The story is RESIDENT and Frotz refuses rather than pretends** (§61.4). There
+is no paging and that is not a performance trade: an `int 13h` costs what it
+costs whatever it moves, and decoding one turn's text touches high memory
+hundreds of times, so paging here is broken rather than slow. The size is
+therefore checked **before any disk I/O** — §38.6's `DX:CX` from the file
+dialog's completion, against `OSAPI_MEM_AVAIL`'s largest free run — and a story
+that will not fit gets §47's refusal with the arithmetic in it
+(`Anchorhead needs 508K and this machine has 149K free.`), which is a normal
+outcome on a 256KB machine and not an error.
+
+**The VM is a worker task, so every claim is made before the worker exists**
+(§61.6). A turn is tens of thousands of instructions — seconds on the target —
+and running it in a key callback would hold the gfx lock for all of them. Two
+worker rules follow §20.6: the 256-byte slice means the VM keeps its own stack
+in a claim and nothing recurses, and **a worker may not touch a file slot,
+`OSAPI_FILE_DLG` or `OSAPI_MEM_*`** — so `zi_load` claims the story, the
+Z-stack, the save staging buffer, the undo snapshot and the scrollback on the
+UI task, up front. Files cannot be pre-arranged though, because `@save` and
+`@restore` are opcodes the **story** executes: the worker stages a Quetzal
+image into its claim (a memory copy, which it may do), sets `[zf_req]`, and
+waits on the ordinary input path until a key callback on the UI task sees the
+flag and raises the dialog.
+
+**It ships on its own floppy and no story file is in this repository**
+(§61.9). `make zdisk` builds it — the 360KB apps disk has ~100KB free and the
+interpreter alone is most of that — and `tools/getstories.py` fetches by a
+manifest of URL, SHA-256 and size into the ignored `build/stories/`, carrying
+only what its authors released freely (Mini-Zork I, both Samplers, *Zork: The
+Undiscovered Underground*; not Zork I–III or *Hitchhiker's*, which are
+Activision's and still sold). `STORIES=` puts your own copies on the disk.
+`make zh` is the development harness (§61.13) and `make zgfx` the graphics gate
+(§61.14); neither ships and `all` builds none of it.
+
 ### Three geometries of everything
 
 Every image is built three times: 1.44MB (18 spt, for QEMU), **720KB** (9 spt, 80 cylinders — a 3.5" DD drive, and what every USB floppy drive and Gotek reads) and 360KB (9 spt, 40 cylinders, for 86Box / a real XT). If you change the boot path or the FAT driver / disk layout, check all three. **720KB and 360KB share `boot360.bin`, and that is not a shortcut**: the boot sector's whole knowledge of a geometry is `-DSPT`/`-DHEADS`, both 9/2 here, and it derives the cylinder from the LBA rather than holding a count of them — what actually differs is the BPB (media byte F9h vs FDh, `TotSec16` 1440 vs 720, `FATSz16` 3 vs 2), which `tools/os88disk.py` writes over the first 62 bytes. A `boot720.bin` would be a byte-identical second artifact that can only ever say what `boot360.bin` already says. `make run-720` boots the pair in QEMU, which picks a floppy's geometry from the image SIZE — 737,280 bytes is a standard one, so nothing else was needed.
