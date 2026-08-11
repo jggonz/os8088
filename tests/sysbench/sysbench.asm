@@ -1798,6 +1798,8 @@ sb_fdd:
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
     mov si, sb_s_h_fdd6
     call bl_sline
+    mov si, sb_s_h_fdd7
+    call bl_sline
 
     mov ax, DBG_TAG_FDD             ; SPEC.md 57's registry
     call bl_dbgfind
@@ -1808,6 +1810,18 @@ sb_fdd:
     mov si, sb_l_feqp               ; what int 11h claimed...
     mov al, SB_FD_EQP
     call sb_fdb
+
+    ; ...and the WHOLE equipment word behind it, which on a 5150 is very
+    ; nearly SW1 itself. The derived count above cannot say WHICH switch
+    ; moved, and a field run that reads the expected number for an
+    ; unexpected reason is exactly the one that costs a second trip: bits
+    ; 7-6 are drives-1, 5-4 the display switches, 3-2 planar RAM, 1 the
+    ; 8087 and 0 "there is a diskette drive at all". Read straight from the
+    ; BIOS rather than from the kernel's banked byte, so the two disagreeing
+    ; would itself be news; nothing in os8088 writes 0040:0010.
+    mov si, sb_l_feqw
+    int 0x11
+    call sb_hex
     mov si, sb_l_fran               ; ...and which units were contested at all
     mov al, SB_FD_RAN
     call sb_fdbx
@@ -4657,8 +4671,10 @@ sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0. The SECOND read decides: no TRK0 afte
 sb_s_h_fdd5: db '   recalibrate is the absent drive. ST0 is drained, never branched on.', 0
 sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
 sb_s_h_fdd6: db '   ONE SUB-BLOCK PER UNIT: probe ran is a bitmap, bit n = unit n asked.', 0
+sb_s_h_fdd7: db '   equip 7-6=drives-1. AN EXTERNAL DRIVE IS UNIT 2: 1 int + 1 ext = 3.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
+sb_l_feqw:   db '  equip word hex', 0
 sb_l_fran:   db '  probe ran bitmap hex', 0
 sb_l_funit:  db '  --- unit', 0
 sb_l_fst3:   db '  ST3 motor off hex', 0

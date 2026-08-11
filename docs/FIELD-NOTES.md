@@ -1827,3 +1827,48 @@ removal set the drive COUNT to 1 as well as freeing row 1, which truncates
 would never have asked about the external pair. That is the field machine with
 a 4865 plugged in, i.e. the exact configuration this round exists to serve, and
 it would have cost the next field run for nothing.
+
+## 18. The switches were flipped and no external drive appeared (NOT A BUG — the count is the highest UNIT plus one)
+
+Reported off the second `combo.img` run: the operator set SW1 for the external
+4865 and no third drive showed up. The report is unambiguous about where the
+fault is not.
+
+```
+drives int 11h claims         2
+probe ran bitmap hex  0002
+--- unit 1   ST3 0021 / 0021   ST0 0071   probe stop 03 (ABSENT)   verdict 0
+```
+
+**The kernel is exonerated by the first row.** `desk_init` is
+`((AX >> 6) & 3) + 1` straight off `int 11h` with no clamp — the clamp to 2 is
+what §18.98 removed — so `claims 2` *is* the BIOS equipment word's bits 7:6.
+And §18.97's probe is demonstrably working in the same block: unit 1 answers
+`ST3 = 21` twice, `ST0 = 71`, stop 03, verdict 0, which is that section's exact
+documented signature, and drive B is correctly gone.
+
+**Nor were the switches set backwards**, and that is worth stating because it
+is the first thing anybody checks. Bits 7:6 carry exactly one encoding per
+count, so moving *either* switch necessarily changes the number: backwards
+would have read 1 or 4. Reading the same 2 as the previous run means those two
+bits did not move at all — a mechanical question (SW1 versus SW2, counting from
+the wrong end of an 8-way block, or a 40-year-old rocker that travels without
+making contact), not a polarity one.
+
+**And the likely misunderstanding is arithmetic, not electrical.** J1's first
+external drive is physical **#2**, so one internal drive plus one external is
+**three** claimed drives — units 0, 1 and 2, with nothing at unit 1 — not two.
+At a claim of two the word says "units 0 and 1" and §18.98's loop over the
+external pair correctly never runs. SPEC.md §18.98 now says so where the count
+is described.
+
+**What changed as a result**: `sysbench` prints the **raw equipment word** in
+hex beside the derived count, because the count alone cannot say *which* switch
+moved and a run that reads the expected number for an unexpected reason is the
+one that costs a second trip. Bits 7-6 drives-1, 5-4 display, 3-2 planar RAM,
+1 the 8087, 0 "there is a diskette drive at all" — so one hex word is very
+nearly SW1 itself, and flipping SW1-1 or SW1-2 by miscounting the block is
+visible rather than silent. It is read from the BIOS rather than from the
+kernel's banked byte, so the two disagreeing would itself be news. Verified on
+`os8088_5150_cga_ext720`: `equip word hex 04EF` beside `claims 4`, which is
+§18.98's own measured figure for a four-drive machine.

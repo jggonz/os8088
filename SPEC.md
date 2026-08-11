@@ -9616,6 +9616,21 @@ four-drive machine `04EF` (= 3). `desk_init` had read this since the beginning
 and then clamped the answer to 2, because there was no row to give the other
 two; the clamp is what went.
 
+**And the count is the machine's HIGHEST unit plus one, not how many drives
+you own** — which is the operational trap this section springs, and it has
+now cost a field run. J1's first drive is physical **#2**, so a machine with
+one internal drive and one external 4865 must claim **three**: units 0, 1 and
+2, with nothing at unit 1. Claim two and the word is saying "units 0 and 1",
+`.eloop` starts at `cl = 2` against a count of 2 and correctly never runs, and
+no external row is ever made — which reads on the desktop as the switches
+having done nothing. Nothing in the kernel can improve on this: drive selects
+are ordered and the count is all `int 11h` can say, so the missing unit 1 has
+to be claimed and then disproved by §18.97's probe, which is exactly what it
+does. `sysbench` prints the raw equipment word beside the derived count for
+this reason — the count alone cannot say *which* switch moved, and a run that
+reads the expected number for an unexpected reason is the one that costs a
+second trip.
+
 Three things follow, and the first is the one that decides the letters:
 
 - **The rows are claimed AFTER `dsk_boot_from` and before `drv_boot`.** That
