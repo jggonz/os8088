@@ -31382,6 +31382,17 @@ image rung); the flags are `.text` with real initialisers, because
 `menu_draw_bar` runs during `drv_boot` before any init routine of ours could
 have run and `-f bin` zeroes nothing — `[fpg_on]`'s reasoning exactly.
 
+**The copy is bounded twice, and the second bound is the security one.**
+`TOAST_MAX` counts characters *kept*; the filter branches (controls dropped,
+bit 7 is the inversion flag, §60.2) do not pass through it, so it bounds
+nothing about a string that never offers a printable byte. `TOAST_SCAN` (256)
+bounds bytes *examined* — the scan runs interrupts-off through a
+package-supplied far pointer, every byte off a package is hostile (§19), and
+without it a segment holding no NUL and no printable spins the copy forever
+with the machine off the air. A `CX` above 32767 is clamped, because the
+deadline compare below is signed and would read a longer life as already
+over.
+
 Four things are load-bearing:
 
 - **The deadline test is `js`, not `jg`.** `[ticks]` is a word that wraps at
@@ -31421,19 +31432,28 @@ Paint's own comment on it (*"say so BEFORE starting, not after"*) is what
 made this worth solving rather than dropping.
 
 So `toast_show` ends in `toast_now`, which draws on the spot **if the caller
-can be shown to hold the gfx lock**, and stages as normal otherwise. Both
-halves of that test are needed:
+can be shown to hold the gfx lock**, and stages as normal otherwise. The test
+is three compares:
 
 - `[gfx_lock_flag]` says the lock is held **by somebody**, not by the caller.
   A worker calling this while the UI task is drawing would race against it.
-- `[sch_cur] == 0` is the UI task. `gfx_lock` blocks by *yielding*, so a UI
-  task that is executing at all and sees the flag set **is** the task that
-  took it — it is inside a callback, which is where every app raises a toast
-  from.
+- `[sch_cur] == 0` is the UI task — a callback is where every app raises a
+  toast from, and the callback's own pen and clip region are banked (and the
+  region disarmed) across the draw, because the bar is inside no window's
+  region ever.
+- `[gfx_lock_own] == 0` says the UI task is the **holder**. This byte exists
+  because the first shipped version inferred it — "`gfx_lock` blocks by
+  yielding, so a UI task that runs at all and sees the flag set is the task
+  that took it" — and the inference is unsound: `gfx_lock` does `sti` after
+  the take, so a *worker* holding the lock can be pre-empted mid-draw while
+  the UI task runs a path that raises with no lock of its own (the Control
+  Panel's flush-on-reboot is one such path today). `gfx_lock` stamps
+  `[gfx_lock_own]` with `[sch_cur]` inside its take's `cli` window;
+  `gfx_unlock` resets it to 0xFF, owner store first, so no task switch can
+  observe the flag free with a stale owner named.
 
 A worker holding the lock simply takes the staged path and is one tick late,
-which is right for a background job and costs nothing. There is no owner word
-anywhere in the lock, and this needs none.
+which is right for a background job and costs nothing.
 
 It ends in `gfx_flush`, for `fpg_begin`'s reason and not for tidiness: the
 draw happens mid-lock and on a double-buffered machine (§32) the flush that

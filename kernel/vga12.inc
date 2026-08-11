@@ -50,6 +50,10 @@ gfx_pat         dw 0            ; gfx_fill_pat: near ptr to 8 row bytes,
 gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
                                 ; Initialized data, NOT .bss: nothing zeroes
                                 ; .bss at boot, and this byte must start clear.
+gfx_lock_own    db 0xFF         ; ...and WHICH task holds it ([sch_cur] at the
+                                ; take, 0xFF = nobody). toast_now's whole test
+                                ; (SPEC.md 60.4): the flag alone says somebody
+                                ; holds it, never that the CALLER does.
 
 ; -----------------------------------------------------------------------------
 ; GFXCLIP - the clip hook, at a public rect entry (SPEC.md 11.3)
@@ -2595,6 +2599,10 @@ gfx_lock:
     jmp .retry
 .take:
     mov byte [gfx_lock_flag], 1
+    push ax
+    mov al, [sch_cur]           ; the owner is stamped inside the cli window,
+    mov [gfx_lock_own], al      ; so flag and owner can never disagree
+    pop ax
     sti
     mov byte [cur_lazy], 1      ; PROMISE the hide (SPEC.md 7.1.4) - the ISR
     ret                         ; will not move the arrow while the flag is
@@ -2643,6 +2651,9 @@ gfx_unlock:
 .never:
     call cur_lazyend            ; ...but the ISR could not move it all hold
 .rel:
+    mov byte [gfx_lock_own], 0xFF   ; owner first: a task switch between the
+                                    ; two stores must not show flag-free with
+                                    ; a stale owner still named
     mov byte [gfx_lock_flag], 0
     mov byte [dsk_batch], 0     ; ANY UNLOCKING OF THE USER INTERFACE ENDS A
                                 ; BATCH (SPEC.md 18.9.3). One store, and it is
