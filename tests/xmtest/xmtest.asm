@@ -56,19 +56,21 @@ XT_KB      equ 4                    ; KB per block - small, so the gate runs on
 ; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear
 ;
-; THE CLAIMS ARE NOT MADE HERE, and finding out why is the first thing this
-; gate discovered. The entry proc has NO INSTANCE IDENTITY: inst_caller
-; (SPEC.md 34.3, which xm_owner goes through) answers with the dispatched
-; callback's stamp, or failing that with the RUNNING TASK's T_INST - and the
-; entry proc is far-called by the loader on the UI task, whose T_INST is 0xFF.
-; So a block claimed here is stamped XM_OWN_KERN and no teardown will ever
-; free it. Measured, not reasoned: three blocks claimed from this proc came
-; back owner 0xFF in xm_tab.
+; THE CLAIMS ARE MADE HERE, IN THE ENTRY PROC, and that is the sharp end of
+; this gate rather than the convenient place. The entry proc used to have NO
+; INSTANCE IDENTITY: inst_caller (SPEC.md 34.3, which xm_owner goes through)
+; answers with the dispatched callback's stamp or else the RUNNING TASK's
+; T_INST, and the loader far-calls the entry on the UI task, whose T_INST is
+; 0xFF - so a block claimed here came back stamped XM_OWN_KERN and no teardown
+; could ever free it. This gate is what found that (measured: owner 0xFF from
+; here, owner 0x01 from W_PAINT), and SPEC.md 41.5.1 is the fix: the loader
+; now brackets the entry call with the same snd_disp_set stamp every other
+; dispatch site uses.
 ;
-; That is a real gap and it is NOT this package's to fix - it is shared with
-; the sound tier and the file API, which ask inst_caller the same question -
-; so it is reported in SPEC.md 41.5.1 and the claims move to the first paint,
-; which IS a dispatched callback and does get the slot.
+; So claiming HERE tests two things at once - that the entry proc is
+; identified, and that its blocks are released - and claiming from a callback
+; would test only the second. The entry proc is also where an app naturally
+; sizes itself, which is what made the gap worth closing.
 ; -----------------------------------------------------------------------------
 xt_entry:
     push ax
@@ -79,6 +81,9 @@ xt_entry:
 
     mov si, xt_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
+    jc .out
+    call xt_claim                   ; ...and the blocks, as this instance
+    clc                             ; (xt_claim's own CF is not ours to return)
 .out:
     pop di                          ; BX is NOT restored: it is the output
     pop si                          ; (wm_create left the window ptr in it) and
@@ -100,8 +105,6 @@ xt_paint:
     push dx
     push si
     push di
-
-    call xt_claim                   ; ...once, on the first paint (see xt_entry)
 
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
@@ -161,8 +164,8 @@ xt_paint:
     ret
 
 ; -----------------------------------------------------------------------------
-; xt_claim - take XT_BLKS blocks above 1MB, ONCE, from inside a callback
-; in:  called from W_PAINT, so a callback IS being dispatched
+; xt_claim - take XT_BLKS blocks above 1MB, ONCE, from the entry proc
+; in:  called from xt_entry, which the loader now stamps (SPEC.md 41.5.1)
 ; out: [xt_got] = how many were granted; preserves all registers (flags)
 ;
 ; THREE blocks rather than one, deliberately: xm_release_inst walks the whole

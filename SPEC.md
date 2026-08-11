@@ -3654,6 +3654,13 @@ callback, never in a static, so nested paints (a W_ONCLICK that repaints
 every window) bill correctly. The callbacks' own register contracts below
 are unchanged — the sites restore AX/CX/DX/SI before calling.
 
+**The `snd_disp_set` half of that bracket has a fourth site**, and it is not
+a billing one: `loader_run` step 8's call to the **package entry proc**
+(§41.5.1). CPU time there is not billed to the instance — the record is not
+published yet — but the entry proc still has to be *identified*, or everything
+an app asks for while starting up is attributed to the kernel. The stamp
+brackets are otherwise identical, and nest the same way.
+
 Frame drawing (paint-all does this before calling W_PAINT):
 - 1px black outline around the whole frame; 1px black drop shadow along the
   right and bottom edges, offset (+1,+1), Mac-style.
@@ -21154,28 +21161,45 @@ know which build it is**, which matters because a conditional there is one a
 fourth teardown site could forget — and a missing `call` fails silently, which
 is how these three were lost in the first place.
 
-#### 41.5.1 The entry proc has no instance identity (binding)
+#### 41.5.1 The entry proc is a dispatched callback too (binding)
 
-**A block claimed in a package's entry proc is stamped `XM_OWN_KERN` and no
-teardown will ever free it.** `xm_owner` goes through `inst_caller` (§34.3),
-which answers with the dispatched callback's stamp or, failing that, the
-**running task's** `T_INST` — and the entry proc is far-called by the loader
-on the UI task, whose `T_INST` is 0xFF. Measured, not reasoned: three blocks
-claimed from an entry proc came back owner `0xFF` in `xm_tab`; the same three
-claimed from that package's `W_PAINT` came back owner `0x01`.
+**The loader stamps the entry proc with its instance, and it did not used to.**
+`xm_owner` goes through `inst_caller` (§34.3), which answers with the
+dispatched callback's stamp or, failing that, the **running task's** `T_INST` —
+and the entry proc is far-called by the loader on the UI task, whose `T_INST`
+is 0xFF. So everything an entry proc asked the kernel for came back attributed
+to the KERNEL. Measured, not reasoned: three blocks claimed from an entry proc
+came back owner `0xFF` in `xm_tab`, and the same three claimed from that
+package's `W_PAINT` came back owner `0x01`.
 
-So **claim from a callback, not from the entry proc** — and note that §41.8
-names the entry proc as a legal *context*, which it still is: the call
-succeeds and the memory is real. What it does not get is an owner, and the
-promise this section makes about teardown is an owner's promise.
+`loader_run` step 8 now brackets the entry call the way every other dispatch
+site does — `push word [snd_inst]` / `snd_disp_set` / call / `pop word
+[snd_inst]` — so the entry proc is identified like a `W_PAINT`.
 
-This is **not** an XMS quirk. `inst_caller` is the one "who is asking?"
-answer in the kernel, so the sound tier (§34.3) and the file API's
-`inst_vol_enter` (§19.2.1) read the entry proc the same way. Fixing it means
-stamping `[snd_inst]` around the loader's entry call, exactly as the callback
-billing sites do — one change that would move all three at once, and
-therefore one to make deliberately rather than as a side effect of this
-section.
+**It was never an XMS bug**, which is why the fix is not in `xmem.inc`.
+`inst_caller` is the kernel's one "who is asking?" answer, so the same gap ran
+through four subsystems and all four are fixed by the one stamp:
+
+| asked from an entry proc | before | now |
+|---|---|---|
+| `xm_alloc` (§41.5) | stamped kernel, never released | the instance's, released at teardown |
+| a sound grant (§34.3) | never released at teardown | released |
+| `toast_show` (§59) | outlived its app | retired with it |
+| `osapi_file_here` / `inst_vol_enter` (§19.2.1) | the machine's directory | the instance's |
+
+Every one of those is an improvement in the same direction, and none is a
+behaviour a package could have relied on: they are all "this belongs to
+nobody" becoming "this belongs to the app that asked".
+
+**The abort path had to follow.** An entry that claims and then returns CF=1
+now leaves blocks owned by a slot `ld_unreserve` is about to hand back, so
+`ld_unreserve` releases them alongside the two heap owners it already swept.
+Without that, the next package to take the slot would inherit them — a worse
+failure than the leak the stamp removed, and the reason the sweep is part of
+this change rather than a later one.
+
+The gate for all of it is §41.7's, and it claims **from the entry proc** so it
+tests the stamp and the release together.
 
 ### 41.6 What the Task Manager reports
 

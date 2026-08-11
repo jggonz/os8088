@@ -535,6 +535,15 @@ inst_alloc:
 ; app happened to be dispatching. So the stamp carries the task that wrote it
 ; and is spent only by that task; everyone else falls through to their own
 ; T_INST.
+;
+; THE PACKAGE ENTRY PROC IS A STAMPED DISPATCH TOO (SPEC.md 41.5.1), and for
+; a while it was the one that was not. It runs on the UI task, whose T_INST is
+; 0xFF, so before loader_run step 8 bracketed it this routine answered KERNEL
+; for everything an app asked while starting up - a sound grant that was never
+; released, a block above 1MB stranded for the session, a toast that outlived
+; its app, and the file API answering with the machine's directory instead of
+; the instance's. It is the FIRST thing a package runs and the natural place
+; to size itself, which is what made it worth the four instructions.
 ; -----------------------------------------------------------------------------
 inst_caller:
     push bx
