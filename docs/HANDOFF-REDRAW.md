@@ -23,6 +23,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §5.4.1.1 | …and then the runs go: the 1bpp pair decoder, no hybrid | 2,431 → **517 ms**, and CONSTANT in the content |
 | §5.4.1.2 | four pairs are one byte: an aligned body per x PARITY | 517 → **259 ms** even, 508 → **299** odd |
 | §11.96.11 | a window names a BAND; the kernel banks it, the app owes the rest | Paint raise 680.9 → **451.0 ms**, 1.51x |
+| §11.91.3 | **item D measured and NOT built** — the transitive mark it targets does not arise | 0 of 3 windows spared |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -337,11 +338,29 @@ not the default — a region that is neither cached nor claimed is the only thin
 needing blanking. §11.90.1 is the opt-out half; flipping the default needs every
 app audited, since the fill is what most `W_PAINT`s draw into.
 
-### D. §11.91's marking still keys on rects, not redrawn regions
+### D. §11.91's marking keys on rects — **MEASURED AND NOT BUILT, SPEC.md §11.91.3**
 
-The step REDRAW-SPEC Part 3 deferred. §11.96.6 accumulates a bounding box, so the
-bottom-most drawn window gains most and the saving tapers above it. Keying the
-marking on each window's *redrawn region* is a real change to the marking pass.
+The step REDRAW-SPEC Part 3 deferred: key the marking on each window's
+*redrawn region* instead of its rect. **It buys nothing here**, and the
+measurement is the deliverable — PERFORMANCE.md Set 45.
+
+It can only spare a window marked **transitively**, one that does not overlap
+the damage rect but does overlap a marked window below. On a session built to
+favour exactly that — three windows, Note Pad parked over a Disk window's
+INTERIOR and dragged off — the damage rect is (127,60)–(427,199) and **all
+three drawn windows overlap it: zero transitive marks.** A drag's damage rect
+is the union of where the mover was and is, so every window it uncovered
+overlaps it by construction; a two-window drag draws two, one of which is the
+mover and can never be spared.
+
+And the fix cannot be a bounding box — the frame outline's bbox IS the whole
+window rect — so it needs a rect list with union and intersection, in the
+routine where a wrong answer leaves STALE pixels rather than extra ones. The
+other half, §11.96.6's taper, needs the same region and is worth 19% of ONE
+restore, about 4 ms of a pass costing over 100.
+
+**What would flip it**: small windows floating over large ones — a palette, a
+tool window, an inspector. os8088 has none.
 
 ---
 

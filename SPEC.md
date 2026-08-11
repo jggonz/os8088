@@ -4656,6 +4656,52 @@ This composes with §11.96 rather than replacing it, and the two answer
 different questions: nothing uncovered → no work at all; something uncovered
 → one blit instead of a `W_PAINT`.
 
+#### 11.91.3 Why the marking still keys on RECTS — a measured negative result
+
+REDRAW-SPEC Part 3 deferred a step, and docs/HANDOFF-REDRAW.md carried it as
+item D: key this marking on each window's **redrawn region** instead of its
+rect, so that a window overlapping a marked window below is not itself redrawn
+when the part that was actually repainted is nowhere near it. **It is not
+built, and this section is why**, so that nobody re-derives it.
+
+**It can only ever spare a window marked TRANSITIVELY** — one that does not
+overlap the damage rect but does overlap a marked window below it. Everything
+the damage rect touches is damaged by definition.
+
+**And on a drag the damage rect is the union of where the mover WAS and where
+it IS, so every window it uncovered overlaps it by construction.** Measured
+(PERFORMANCE.md Set 45) on a session built to favour the transitive case —
+three windows, Note Pad parked over the *interior* of a Disk window, then
+dragged off it — the damage rect is (127,60)–(427,199) and **all three drawn
+windows overlap it. Zero transitive marks.** A two-window drag draws two, of
+which one is the mover, which is marked unconditionally and can never be
+spared.
+
+Two more things stand in the way even where the case does arise:
+
+- **`wm_draw_win` writes the outline, the drop shadow and the title bar WHOLE**
+  whatever the cache did (§11.96.6 says so, and §11.97 clips them but does not
+  narrow them). So a transitively-marked window is genuinely damaged unless it
+  sits strictly inside the lower window's *interior*, clear of its frame — and
+  windows here cascade 16px and overlap at their edges.
+- **The fix cannot be a bounding box**, which is what §11.96.6 accumulates: the
+  outline's bounding box IS the whole window rect, so no accumulation of rects
+  can ever come out smaller than what is there today. The accumulated damage
+  would have to become a rect LIST with union and intersection — several
+  hundred bytes in the routine where a wrong answer leaves STALE PIXELS rather
+  than extra ones.
+
+**The other half of item D is the same conclusion by another route.**
+§11.96.6's bounding box means the second window drawn restores the first
+window's whole rect as well as the damage — the taper its own text names. On
+the measured geometry that is 136 rows against an ideal 114, **19% of one
+restore**, or about 4 ms of a pass costing over 100. It needs the same region
+for the same reason, and it is not worth it either.
+
+**What WOULD flip this**: a UI with small windows floating over large ones —
+a palette, a tool window, an inspector — where the transitive case is the
+common one rather than the absent one. os8088 has none today.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was

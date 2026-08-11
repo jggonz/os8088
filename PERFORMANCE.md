@@ -5241,3 +5241,54 @@ crosses one image rung and stands at 1,024 spare (two steps); **`kern_small` is
 at 0 spare, exactly on `KERN_BUDGET`** — it builds, and there is not one byte
 left for the next feature. That is a decision to take with whoever asks for the
 next one, not a build fix.
+
+### Set 45 — item D measured, and not built (SPEC.md §11.91.3)
+
+docs/HANDOFF-REDRAW.md item D: key §11.91's marking on each window's **redrawn
+region** instead of its rect. **A negative result, and the measurement is the
+deliverable** — it costs one guest run and it stops the next session spending a
+budget step on it.
+
+**It can only ever spare a window marked TRANSITIVELY**, one that does not
+overlap the damage rect but does overlap a marked window below. So the question
+is how often that arises, and the session was built to favour it: three windows
+(Drive A, Drive B, Note Pad), Note Pad parked over the *interior* of a Disk
+window and clear of its frame, then dragged off. Cycle-accurate 5150/CGA, the
+damage rect read out of the guest at the `wm_dmg_wins` breakpoint:
+
+```
+damage         (127,60)-(427,199)
+win 0  Disk    (110,20) 320x155   overlaps the damage
+win 1  Disk    (126,20) 320x155   overlaps the damage
+win 2  NotePad (127,60) 260x155   the mover - marked unconditionally
+```
+
+**Three windows drawn, zero transitive marks.** A two-window drag draws two, of
+which one is again the mover. The reason is structural rather than lucky: a
+drag's damage rect is the union of where the mover WAS and where it IS, so
+every window it uncovered overlaps it *by construction*.
+
+Two more things stand in the way even where the case does arise. `wm_draw_win`
+writes the outline, the drop shadow and the title bar **whole** whatever the
+cache did, so a transitively-marked window is genuinely damaged unless it sits
+strictly inside the lower window's interior — and windows here cascade 16px and
+overlap at their edges. And **the fix cannot be a bounding box**: the outline's
+bbox IS the whole window rect, so no accumulation of rects comes out smaller
+than today's. It needs a rect LIST with union and intersection, in the routine
+where a wrong answer leaves STALE pixels rather than extra ones.
+
+**The other half of item D is the same conclusion by another route.**
+§11.96.6's accumulated bounding box means the second window drawn restores the
+first window's whole rect as well as the damage — the taper its own text names.
+Computed on the measured geometry: window 1 restores rows 38..173 where the
+ideal is 60..173, **136 against 114 — 19% of one restore**, about 4 ms of a pass
+costing over 100. Same region, same reason, same answer.
+
+**What would flip it**: a UI with small windows floating over large ones — a
+palette, a tool window, an inspector — where the transitive case is the common
+one rather than the absent one. os8088 has none.
+
+**Cost of finding out: 0 bytes and four guest runs**, against several hundred
+bytes and the riskiest routine in the window manager. That ratio is the argument
+for measuring the case before building the mechanism, and it is the third time
+this round has paid off (§19.2.3.1 and §48.18.1 are the others in this file).
