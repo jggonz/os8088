@@ -76,6 +76,15 @@ DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92, unconditional
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4, unconditional
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5, unconditional
 DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6, unconditional
+
+; What OSAPI_VOL_KIND answers (SPEC.md 18.7.2). The MEDIUM and the TRANSPORT
+; are two questions: "is this a hard disk" is the first, and inferring it from
+; the second is the bug that section exists to end - a hard disk booted
+; through the BIOS is int 13h transport and fixed medium at the same time.
+VK_REMOVABLE equ 0               ; AL: a floppy
+VK_FIXED     equ 1               ; AL: a hard disk, however it is reached
+VT_BIOS      equ 0               ; AH: int 13h
+VT_DRIVER    equ 1               ; AH: a DRVC_DISK driver (SPEC.md 52)
                             ; It is baked into every OSAPI_* far call, so a
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
@@ -476,15 +485,28 @@ VID_CGA    equ 2
                                  ; handler's offset (0 = none). Preserves every
                                  ; register and the flags
 
-; 0x01E8 is RETIRED and has NO %define (SPEC.md 18.4.1/20.8). It was
-; OSAPI_FILE_READBIG, the one file op with no 64KB ceiling; OSAPI_FILE_READ
-; has none either now, and the two contracts differed only in where the
-; destination's offset came from. The cell is still there and still answers -
-; CF=1 with AX = FERR_NAME - because a RELEASED slot keeps its contract and
-; "we no longer implement this" is a refusal, never a different routine at
-; the same address. Nothing above it moved. A source that still names
-; OSAPI_FILE_READBIG fails to assemble, which is the intended way to find
-; out: pass your base segment in ES with BX = 0 and call OSAPI_FILE_READ.
+%define OSAPI_VOL_KIND      KERNEL_SEG:0x01E8   ; AL = a volume index (0 = A:).
+                                 ; CF=1 = there is no such volume; CF=0 with
+                                 ; AL = VK_REMOVABLE / VK_FIXED and AH =
+                                 ; VT_BIOS / VT_DRIVER (SPEC.md 18.7.2). The
+                                 ; first thing a package can ask about a
+                                 ; volume without USING it: OSAPI_VOL_* are
+                                 ; the driver's and refuse you. Ask the MEDIUM
+                                 ; when you mean "is this a hard disk" - a
+                                 ; boot partition is VT_BIOS and VK_FIXED at
+                                 ; once.
+                                 ;
+                                 ; THIS NUMBER WAS OSAPI_FILE_READBIG, retired
+                                 ; at SPEC.md 18.4.1 when OSAPI_FILE_READ lost
+                                 ; its 64KB ceiling, and taken back here under
+                                 ; SPEC.md 20.3.1: a withdrawn cell has no
+                                 ; contract to collide with, its %define was
+                                 ; deleted, and nothing in the tree names it -
+                                 ; so a stale caller still fails to assemble
+                                 ; rather than calling this by accident. If
+                                 ; you were using readbig: pass your base
+                                 ; segment in ES with BX = 0 and call
+                                 ; OSAPI_FILE_READ.
 
                                  ; for your own drawing (SPEC.md 32): AL = 1
                                  ; on / 0 off, lock HELD. Out CF=0 and AL =
@@ -1966,9 +1988,10 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; read, the video probe, the mount and every
                                  ; driver SYSTEM.CFG asked for, which is most
                                  ; of what a boot IS on a floppy machine -
-                                 ; 65 ms a sector inside a run, and ~400 ms per int 13h
-                                 ; CALL, which is the unit that matters
-                                 ; (PERFORMANCE.md Part 2).
+                                 ; ~24 ms per 512 bytes delivered, and 199 ms per
+                                 ; int 13h CALL for one sector (384 for a whole
+                                 ; track) - the CALL is the unit that matters
+                                 ; (PERFORMANCE.md Part 2, Set 24).
                                  ; AX = 0xFFFF means the boot sector never
                                  ; stamped it: an image built before the timer
                                  ; existed. Report unknown, do not print it as

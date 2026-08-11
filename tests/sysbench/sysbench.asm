@@ -4111,9 +4111,10 @@ sb_b_rdsml:
 ;
 ; Every row in the floppy block above has a hard-disk twin nobody has ever
 ; seen, starting with the one that decides whether a hard disk is worth having
-; as a system volume at all: a floppy moves 7,457 bytes a second and takes
-; ~65 ms to fetch a sector in a run - 2,100 and 238 before SPEC.md 18.91's
-; AL fix, and that older pair is quoted all over this tree (PERFORMANCE.md
+; as a system volume at all: a floppy moves 21,307 bytes a second warm and
+; delivers 512 of them every ~24 ms (Set 24) - it was 7,457 / 65 ms at Set 17
+; and 2,100 / 238 ms before SPEC.md 18.91's AL fix, and BOTH of those older
+; pairs are quoted all over this tree (PERFORMANCE.md
 ; Part 2). It is also the only
 ; measurement of SPEC.md 52's driver on real spinning MFM - rung 0, the
 ; controller ROM, which is the only rung an 8088 can take at all.
@@ -4395,11 +4396,34 @@ sb_hddrate:
 sb_hdd_go:
     push ax
     push bx
+    push cx
     push dx
+    ; WHICH volume, asked rather than assumed (SPEC.md 18.7.2). This was a
+    ; hard-coded index 2, written when index 2 could only be a hard disk;
+    ; SPEC.md 18.98's external floppies made that false and this block began
+    ; timing a FLOPPY under the heading `the hard disk`. OSAPI_VOL_KIND is the
+    ; first call a package has ever had for the question.
+    mov cl, 2                   ; A: and B: are floppies by 18.7.1, so the
+.find:                          ; search starts past them
+    mov al, cl
+    call OSAPI_VOL_KIND
+    jc .nextv                   ; no volume in that slot
+    cmp al, VK_FIXED
+    je .found
+.nextv:
+    inc cl
+    cmp cl, 8                   ; DVOL_MAX, which the SDK does not publish -
+    jb .find                    ; an over-long walk just answers CF=1 more
+    stc                         ; nothing fixed is mounted
+    jmp short .goout
+.found:
+    mov [sb_hdvol], cl
     xor dx, dx
-    mov bl, 2
+    mov bl, cl
     call OSAPI_FILE_GOTO
+.goout:
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -4599,7 +4623,7 @@ sb_h_6b:    db '                          Bench menu writes it again, after a di
 sb_h_7:     db '   Space PgDn PgUp Up Dn Home End   page through it afterwards.', 0
 
 sb_s_h_hdd:  db '-- the hard disk (SPEC.md 52), if this machine has one --', 0
-sb_s_hddno:  db 'No volume at index 2 - no hard disk mounted. Rows skipped.', 0
+sb_s_hddno:  db '   No FIXED volume is mounted (18.7.2 asked, not assumed). Skipped.', 0
 
 sb_p_head:  db 'running: reading the machine...', 0
 sb_p_cpu:   db 'running: instruction timings (1 of 8)', 0
@@ -4988,9 +5012,12 @@ sb_fdstate  equ os88_image_end + 244   ; word: -> the floppy state span (245),
                                        ; (docs/UPSTREAM.md's whole point about
                                        ; a silent difference). Past every
                                        ; scalar now, with SB_O_SYSKB moved up
+sb_hdvol    equ os88_image_end + 247   ; byte: the FIXED volume sb_hdd found
+                                       ; (SPEC.md 18.7.2), which used to be a
+                                       ; hard-coded 2. 247 was the spare
 sb_fdrow    equ os88_image_end + 246   ; byte: the unit sub-block sb_fdu is
                                        ; printing, an offset into the span
-                                       ; above (SPEC.md 18.98). 247 spare
+                                       ; above (SPEC.md 18.98)
 sb_vkind    equ os88_image_end + 184   ; word: -> vid_kind    (SPEC.md 57.4)
 sb_vavail   equ os88_image_end + 186   ; word: -> vid_avail
 sb_vnd      equ os88_image_end + 188   ; word: -> ndisp/cur/ox/oy/dmode/dlay

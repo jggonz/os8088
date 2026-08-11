@@ -1,0 +1,363 @@
+; =============================================================================
+; netui.inc - NET.DRV's Control Panel page (SPEC.md 31.9)
+;
+; The page exists exactly while this driver is attached, which falls out of
+; DSV_CPNAME being published rather than being arranged: the kernel builds
+; cp_items from the five static rows plus one per loaded driver that publishes
+; a name, and clearing the publication at detach is what makes the row go.
+;
+; WHAT IT SAYS IS THE DIAGNOSIS, and that is the whole design. docs/NET-PLAN.md
+; 1.4.4: a port with nothing plugged into it and a port with a PRINTER on it
+; read as the same constant status byte, and only a live partner reads as
+; whatever we ask it to. So "not connected" on its own would send the user to
+; look at the wrong end of the cable, and the page names the port it found
+; before it says anything about the far end:
+;
+;   Port  0378          the base a latch probe answered at
+;   Link  No partner    ...and nobody home on it
+;   Link  Linked        a partner answered the magic, and here is its size
+;
+; **NOTHING ON THIS PAGE EVER GREYS, and that is SPEC.md 47 rule 3 rather than
+; an omission.** There is no state to grey FOR. `No parallel port` was a third
+; Link value here and it is unreachable by construction: DRVV_ATTACH refuses
+; when no port answers (the sound driver's shape - DRVE_HW, reported on the
+; Drivers page), so a machine with no port has no driver and therefore no page
+; at all. And whether a PARTNER is there cannot be greyed on either, because
+; rule 3's other half is that the only honest test is doing the thing: Connect
+; does it and the Link row reports. A branch that can only be entered by a
+; state the attach path forbids is dead code that looks tested, so it is gone.
+;
+; A PAGE DRAWS ITSELF AND THE KERNEL DOES NOT REPAINT AFTER A CLICK RETURNS
+; (SPEC.md 31.9), so the click path repaints the pane itself - hd_page_repaint's
+; shape, and for the same reason.
+; =============================================================================
+
+; THE PANE IS 221 x 132 PX - 27 CHARACTERS BY 14 ROWS - and every string here
+; fits it, which is page.inc's rule and for page.inc's reason: font_str clips
+; to the SCREEN and not to the pane (SPEC.md 5), so a caption one character
+; too long does not stop at the edge, it paints over the panel's border and
+; out the other side. The widest thing on this page is 'No partner' in the
+; value column at x = 48: 48 + 80 = 128 of 221.
+NP_W        equ 221             ; the pane, as ctrl.inc lays it out
+NP_H        equ 131             ; ...and its LAST ROW: the click repaint clears
+                                ; the whole pane, so a short one leaves a stale
+                                ; strip along the bottom and nothing says so
+NP_LX       equ 2               ; text inset - CP_PMX, the panel's own
+NP_HY       equ 4               ; the heading row, HDP_HY's
+NP_Y0       equ 20              ; the first value row
+NP_ROW      equ 12
+NP_VX       equ 48              ; where a value column starts
+NP_BY       equ 66              ; the button
+NP_BW       equ 92
+NP_BH       equ 16
+
+NS_NOPORT   equ 0               ; no parallel port answered at all
+NS_PORT     equ 1               ; a port, but nobody home on it
+NS_LINKED   equ 2               ; a partner answered the magic
+
+; -----------------------------------------------------------------------------
+; DSV_CPPAINT - DI = pane left, DX = pane top
+; -----------------------------------------------------------------------------
+net_cp_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [net_px], di
+    mov [net_py], dx
+
+    ; --- the heading, the same string the list row carries --------------------
+    mov si, net_cpname
+    mov bx, NP_HY
+    call net_lab
+
+    ; --- row 1: which port ---------------------------------------------------
+    ; It always found one, or there would be no driver to draw this (above).
+    mov si, s_port
+    mov bx, NP_Y0
+    call net_lab
+    mov ax, [lp_base]
+    mov bx, NP_Y0
+    call net_hex
+
+    ; --- row 2: what state the link is in ------------------------------------
+    mov si, s_state
+    mov bx, NP_Y0 + NP_ROW
+    call net_lab
+    mov si, s_sport
+    cmp byte [net_state], NS_LINKED
+    jne .st
+    mov si, s_slinked
+.st:
+    mov bx, NP_Y0 + NP_ROW
+    call net_val
+
+    ; --- row 3: how big it is, when there is one -----------------------------
+    cmp byte [net_state], NS_LINKED
+    jne .btn
+    mov si, s_size
+    mov bx, NP_Y0 + 2*NP_ROW
+    call net_lab
+    mov ax, [net_secs]
+    mov bx, NP_Y0 + 2*NP_ROW
+    call net_dec
+    test byte [net_flags], 1
+    jz  .btn
+    mov si, s_ro
+    mov bx, NP_Y0 + 2*NP_ROW
+    mov cx, NP_VX + 54
+    call net_txt
+
+    ; --- the button ----------------------------------------------------------
+.btn:
+    call net_draw_btn
+
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; DSV_CPCLICK - DI = pane left, DX = pane top, CX/BX = the click
+; -----------------------------------------------------------------------------
+net_cp_click:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [net_px], di
+    mov [net_py], dx
+
+    ; is it in the button? Its rect is the paint's own arithmetic, once.
+    mov ax, di
+    add ax, NP_LX
+    cmp cx, ax
+    jb  .out
+    add ax, NP_BW
+    cmp cx, ax
+    jae .out
+    mov ax, dx
+    add ax, NP_BY
+    cmp bx, ax
+    jb  .out
+    add ax, NP_BH
+    cmp bx, ax
+    jae .out
+
+    cmp byte [net_state], NS_LINKED
+    je  .disc
+    call net_connect            ; may fail: the page will say so
+    jmp short .redraw
+.disc:
+    call net_drop
+.redraw:
+    mov di, [net_px]
+    mov dx, [net_py]
+    call net_pane_clear
+    call net_cp_paint
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_pane_clear - white the pane. DI = left, DX = top.
+; -----------------------------------------------------------------------------
+net_pane_clear:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, di
+    mov bx, dx
+    mov cx, di
+    add cx, NP_W
+    add dx, NP_H
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_lab / net_val / net_txt - a string at a row
+;   net_lab: SI = string, BX = y offset            -> the label column
+;   net_val: SI = string, BX = y offset            -> the value column
+;   net_txt: SI = string, BX = y offset, CX = x offset
+; -----------------------------------------------------------------------------
+net_lab:
+    push cx
+    mov cx, NP_LX
+    call net_txt
+    pop cx
+    ret
+
+net_val:
+    push cx
+    mov cx, NP_VX
+    call net_txt
+    pop cx
+    ret
+
+net_txt:
+    push ax
+    push cx
+    push dx
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    add cx, [net_px]
+    mov dx, [net_py]
+    add dx, bx
+    call OSAPI_FONT_STR
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_hex - AX as four hex digits in the value column. BX = y offset.
+; -----------------------------------------------------------------------------
+net_hex:
+    push ax
+    push bx
+    push cx
+    push si
+    push bx                     ; the row, wanted again after the arithmetic
+    mov si, net_buf
+    mov cx, 4
+.d:
+    push cx
+    mov cl, 4
+    rol ax, cl                  ; the top nibble down; four of these leave AX
+    pop cx                      ; exactly as it arrived
+    push ax
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .p
+    add al, 7
+.p:
+    mov [si], al
+    inc si
+    pop ax
+    loop .d
+    mov byte [si], 0
+    pop bx
+    mov si, net_buf
+    call net_val
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_dec - AX as decimal in the value column. BX = y offset.
+; -----------------------------------------------------------------------------
+net_dec:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push bx                     ; the row, wanted again after the arithmetic
+    mov si, net_buf + 8
+    mov byte [si], 0
+    mov bx, 10
+    xor cx, cx
+.d:
+    xor dx, dx
+    div bx
+    add dl, '0'
+    dec si
+    mov [si], dl
+    inc cx
+    or  ax, ax
+    jnz .d
+    pop bx
+    call net_val
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_draw_btn - Connect / Disconnect
+;
+; IT NEVER GREYS - see the header. Both states are actions the user may take
+; and neither has a predicate that could refuse one, which is SPEC.md 47
+; rule 3: the only test of "is there a partner" is asking, so Connect asks and
+; the Link row answers. The pen is still set EXPLICITLY rather than left to
+; whatever drew last, because [gfx_dis] outlives a caller (rule 1), and
+; OSAPI_GFX_PEN is what carries the flag - OSAPI_SET_COLOR carries only the
+; colour, which on the two mono adapters is a solid-black caption inside a
+; dotted frame.
+; -----------------------------------------------------------------------------
+net_draw_btn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    clc                         ; live, in both states
+    call OSAPI_GFX_PEN
+
+    mov ax, [net_px]
+    add ax, NP_LX
+    mov bx, [net_py]
+    add bx, NP_BY
+    mov cx, ax
+    add cx, NP_BW
+    mov dx, bx
+    add dx, NP_BH
+    call OSAPI_GFX_FRAME
+
+    mov si, s_conn
+    cmp byte [net_state], NS_LINKED
+    jne .lab
+    mov si, s_disc
+.lab:
+    mov cx, [net_px]
+    add cx, NP_LX + 8
+    mov dx, [net_py]
+    add dx, NP_BY + 5
+    call OSAPI_FONT_STR
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- the page's strings ------------------------------------------------------
+s_port:     db 'Port', 0
+s_state:    db 'Link', 0
+s_size:     db 'Size', 0
+s_sport:    db 'No partner', 0
+s_slinked:  db 'Linked', 0
+s_ro:       db 'read only', 0
+s_conn:     db 'Connect', 0
+s_disc:     db 'Disconnect', 0
+net_buf:    db 0,0,0,0,0,0,0,0,0

@@ -170,11 +170,62 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 100352          ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 102400          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE EIGHTEENTH MOVE, 100,352 -> 102,400,
+                                ; ASKED FOR AND GRANTED, kern_big's alone and
+                                ; the third of those. 2KB on the thirteenth
+                                ; move's terms - headroom, half a step - for
+                                ; SPEC.md 62's NETWORK DRIVER
+                                ; (docs/NET-PLAN.md).
+                                ;
+                                ; WHAT IT HAS ALREADY SPENT is stage 1, which
+                                ; is on this branch and is 175 bytes: DV_CLASS
+                                ; and the per-class volume drop (18.7.3),
+                                ; DRVC_NET's publication slot (51.2.1), and
+                                ; the Control Panel window growing 140 -> 151
+                                ; to hold a third driver page (31.1). That
+                                ; landed INSIDE the rung the merge left, which
+                                ; is why the guard read one step against a
+                                ; standard of four before this move and not
+                                ; because of it.
+                                ;
+                                ; WHAT IT IS FOR is the rest: stage 2's file
+                                ; REDIRECTOR, estimated at ~400 bytes across
+                                ; twelve branch sites in the file layer, and
+                                ; stage 3's OSAPI_DRV_CALL - the cell that
+                                ; lets a PACKAGE reach a driver at all, which
+                                ; is what mTCP forwarding needs and which
+                                ; nothing else in the tree has ever wanted. On
+                                ; move 10's terms: granted ahead of the work,
+                                ; and whatever those two do not spend is
+                                ; handed back rather than kept. It leaves five
+                                ; steps, one above the standard four, and that
+                                ; extra step is the redirector's estimate plus
+                                ; the margin an estimate wants.
+                                ;
+                                ; kern_small is deliberately NOT moved, and it
+                                ; needs nothing: on the merged tree stage 1
+                                ; crosses NO rung there - 94,208, four steps,
+                                ; the standard - because its 175 bytes fit
+                                ; inside the rung this merge already had open.
+                                ; (Measured on the branch BEFORE the merge it
+                                ; did cross one, 113 -> 114 steps; that figure
+                                ; is a property of the tree it was taken on
+                                ; and not of the change, which is the whole
+                                ; reason a merge re-measures rather than
+                                ; carrying a number across.) The fifteenth
+                                ; move's drift says the small guard should
+                                ; stay the tighter of the two, and at 96,256
+                                ; against 102,400 it now is by 6KB. If the
+                                ; redirector turns out not to fit there, the
+                                ; question to ask is whether a 128KB machine
+                                ; wants a network drive at all - not whether
+                                ; the guard should follow.
                                 ;
                                 ; THE SEVENTEENTH MOVE, 98,304 -> 100,352,
                                 ; ASKED FOR AND GRANTED, and the first since
@@ -1076,13 +1127,20 @@ osapi_table:
                                   ;          no stub is needed
     OSAPI_SLOT wm_about_set       ; 0x01E0 - the app-name pull-down (12.2):
                                   ;          BX = win, SI = your About handler
-    OSAPI_SLOT dskw_gone          ; 0x01E8 - RETIRED (SPEC.md 18.4.1/20.8):
-                                  ;          this was readbig, the one file op
-                                  ;          with no 64KB ceiling. dskw_read
-                                  ;          has none either now, so the cell
-                                  ;          answers CF=1 / AX = FERR_NAME
-                                  ;          rather than being reused - a
-                                  ;          shipped slot keeps its contract
+    OSAPI_SLOT osapi_vol_kind     ; 0x01E8 - AL = a volume index. CF=1 = there
+                                  ;          is no such volume; CF=0 with AL =
+                                  ;          VK_REMOVABLE / VK_FIXED and AH =
+                                  ;          VT_BIOS / VT_DRIVER (SPEC.md
+                                  ;          18.7.2). The MEDIUM and the
+                                  ;          TRANSPORT are two questions, and
+                                  ;          a package asking "is this a hard
+                                  ;          disk" wants the first.
+                                  ;          WAS readbig (SPEC.md 18.4.1),
+                                  ;          retired when dskw_read lost its
+                                  ;          64KB ceiling - SPEC.md 20.3.1's
+                                  ;          free list, and taking it cost the
+                                  ;          table nothing where an append
+                                  ;          would have been eight bytes
     OSAPI_SLOT wm_onmouseup       ; 0x01F0 - BX = window, AX = a near proc in
                                   ;          YOUR segment (0 clears it): the
                                   ;          release half of a content click
@@ -2287,6 +2345,29 @@ osapi_file_goto_q:
 ; out: AX = width, BX = height, CX = first row the dock owns (so the usable
 ;      desktop is rows MBAR_H..CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
 ;      DH = bits per pixel, 4 or 1
+; -----------------------------------------------------------------------------
+; osapi_vol_kind - what KIND of volume is this? (SPEC.md 18.7.2, slot 0x01E8)
+; in:  AL = a volume index (0 = A:, 1 = B:, ...)
+; out: CF=1 = no such volume; CF=0 with AL = VK_* and AH = VT_*
+; clobbers: AX (the output), flags
+;
+; The first thing a package can ask about a volume other than by using it, and
+; it exists because sysbench could not: its hard-disk block probes volume
+; index 2 with a FILE_GOTO and assumed a hard disk, which SPEC.md 18.98's
+; external floppies made false. OSAPI_VOL_* are the DRIVER's and refuse a
+; package (SPEC.md 51), so there was no way to ask at all.
+;
+; TWO answers because they are two questions: a package wanting "is this a
+; hard disk" wants the MEDIUM, and one wanting "will this go through a driver"
+; wants the TRANSPORT. Conflating them is the bug this section exists for.
+; -----------------------------------------------------------------------------
+osapi_vol_kind:
+    push bx
+    mov bl, al
+    call dsk_vol_fixed          ; ...which answers BOTH, so this cell is the
+    pop bx                      ; index-to-BL and nothing else (a pop leaves
+    ret                         ; CF alone)
+
 osapi_video:
     mov ax, [vid_w]
     mov bx, [vid_h]

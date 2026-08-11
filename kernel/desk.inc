@@ -933,11 +933,12 @@ desk_draw_zone:
     mov si, [desk_pdisk]
     mov ax, [desk_zdrv]
     mov bl, al
-    call dsk_vol_slot
-    cmp byte [bx+DV_KIND], DVK_DRV
-    jne .icon
-    mov si, [desk_phdd]         ; a driver-backed volume is a HARD DISK to
-.icon:                          ; look at, not a floppy (SPEC.md 26)
+    call dsk_vol_fixed          ; the MEDIUM, not the transport (SPEC.md
+    jc .icon                    ; 18.7.2). This was `cmp DV_KIND, DVK_DRV`,
+    or al, al                   ; which is the TRANSPORT - so a hard disk
+    jz .icon                    ; booted through the BIOS (DVK_BIOS, unit
+    mov si, [desk_phdd]         ; 80h+) drew the FLOPPY icon, which is what a
+.icon:                          ; machine booting off its own disk always saw
     call icon_draw
 
     ; --- label: the white rect HUGS the caption (SPEC.md 26.4) ---------------

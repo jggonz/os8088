@@ -32,7 +32,7 @@ import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 
 TITLE_H = 18
-VID_CTX_SZ, VID_CTX_VX, VID_CTX_CW = 42, 36, 14
+VID_CTX_SZ, VID_CTX_VX, VID_CTX_VY, VID_CTX_CW = 42, 36, 38, 14
 S = os88sym.linear
 
 
@@ -41,13 +41,11 @@ def u16(b, i=0):
 
 
 def wins(m):
-    w = m.read(S("wm_wins"), 12 * 26)
-    return [i for i in range(12) if u16(w, i * 26) & 3 == 3]
+    return dispcp.win_list(m, S)                # ...and so does the check
 
 
 def win_by(m, slot):
-    w = m.read(S("wm_wins") + slot * 26, 26)
-    return (u16(w, 2), u16(w, 4), u16(w, 6), u16(w, 8))
+    return dispcp.win_rect(m, S, slot)          # WIN_SIZE lives in dispcp
 
 
 def cache_of(m, slot):
@@ -93,12 +91,13 @@ def main(argv):
         ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
         seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
         secw = u16(ctx, VID_CTX_SZ + VID_CTX_CW)
+        secy = u16(ctx, VID_CTX_SZ + VID_CTX_VY)   # SPEC.md 39.19.3: NOT 0
         say("secondary %s at x=%d, %d px wide" % (sec["type"], seam, secw))
 
         # two Disk windows - WF_SAVEU is theirs (SPEC.md 22.14), and they
         # stand perfectly still, which is subcheck.py's reasoning too
-        dispcp.open_drive(m, mo, S, os88marty.settle, 0, card=pri["idx"])
-        dispcp.open_drive(m, mo, S, os88marty.settle, 1, card=pri["idx"])
+        dispcp.open_drive(m, mo, S, os88marty.settle, "A", card=pri["idx"])
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri["idx"])
         w = wins(m)
         if len(w) < 2:
             sys.exit("dispsave: wanted two Disk windows, got %d" % len(w))
@@ -126,8 +125,11 @@ def main(argv):
 
         # the reference: the back window, uncovered, as it is now
         sw, sh, rows = m.vram(skind)
+        # BOTH axes come off the display's origin. y used to be taken raw,
+        # which was right only while VY was 0 (SPEC.md 39.19.3) and then
+        # compared two different bands and called it corruption.
         x0, x1 = bx - seam, min(bx + bw - 1, seam + secw - 1) - seam
-        y0, y1 = by, min(by + bh - 1, sh - 1)
+        y0, y1 = by - secy, min(by + bh - 1 - secy, sh - 1)
         ref = region(rows, x0, x1, y0, y1)
         say("reference: its %d..%d x %d..%d on the second card, %d px"
             % (x0, x1, y0, y1, len(ref)))

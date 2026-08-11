@@ -103,12 +103,21 @@ DVOL_MAX     equ 8               ; the FLOPPIES the machine has, and one per
 DV_KIND      equ 0               ; db: 0 = BIOS int 13h, 1 = driver, 0xFF free
 DV_UNIT      equ 1               ; db: the int 13h DL, or the driver's handle
 DV_FLAGS     equ 2               ; db: bit 0 = show a desktop zone (SPEC 26)
-DV_PAD       equ 3               ; db: (the stride stays a power of two)
-                                 ; Every kind-1 row belongs to the ONE
-                                 ; published DRVC_DISK driver - there is one
-                                 ; publication slot per class (SPEC.md
-                                 ; 51.2.1) - so nothing has to record WHICH
-                                 ; driver a volume came from
+DV_CLASS     equ 3               ; db: the DRVC_* whose published DSV_BLK owns
+                                 ; this row's transport; 0 on a BIOS volume.
+                                 ;
+                                 ; It was DV_PAD - "every kind-1 row belongs
+                                 ; to the ONE published DRVC_DISK driver, so
+                                 ; nothing has to record WHICH driver a volume
+                                 ; came from" - and that was true right up
+                                 ; until a SECOND class could serve blocks
+                                 ; (docs/NET-PLAN.md 2.1: a cable and a hard
+                                 ; disk have to coexist on the machine this
+                                 ; project is calibrated against, which has an
+                                 ; ST-225 in it). It costs NOTHING: the byte
+                                 ; was already here keeping the stride a power
+                                 ; of two, so DV_SIZE is still 16 and a row is
+                                 ; still reached with a shift
 DV_SECS      equ 4               ; dw: sectors in the volume, 0 = unknown.
                                  ;     BPB rule 13's replacement reads it
 DV_SEG       equ 6               ; dw: the listing claim its driver donated,
@@ -124,6 +133,16 @@ DV_SIZE      equ 16
 DVK_BIOS     equ 0
 DVK_DRV      equ 1
 DVK_FREE     equ 0xFF
+
+; --- and what a PACKAGE is told about a volume (SPEC.md 18.7.2) -------------
+; Deliberately NOT the DVK_* values: those are the transport and are kernel
+; internals, and a package asking OSAPI_VOL_KIND is nearly always asking about
+; the MEDIUM. Two separate answers in one call, so neither has to be inferred
+; from the other - which is the mistake this section was written to end.
+VK_REMOVABLE equ 0               ; AL: a floppy
+VK_FIXED     equ 1               ; AL: a hard disk, however it is reached
+VT_BIOS      equ 0               ; AH: int 13h
+VT_DRIVER    equ 1               ; AH: a DRVC_DISK driver (SPEC.md 52)
 
 ; .text and not .bss for the reason every other boot-reachable table is: -f bin
 ; zeroes nothing, and the first disk_mount runs before anything could.
@@ -902,10 +921,18 @@ dsk_xfer:
     mov bl, [disk_drive]
     call dsk_vol_row            ; BX = the row - and BX is also the buffer
     mov ah, [bx+DV_UNIT]        ; offset, so bank it across the lookup
+    mov al, [bx+DV_CLASS]       ; ...and so is the CLASS, which has to be read
+    mov [drv_blkcls], al        ; HERE, while BX is still the row
     pop bx
     mov al, [dsk_op]
     sub al, 2                   ; the int 13h function -> 0 read / 1 write
-    mov bp, [drv_svc+DSV_SIZE+DSV_BLK]  ; the DISK class's published copy
+    push di                     ; THE ROW SAYS WHICH CLASS (SPEC.md 18.7). This
+    push ax                     ; was `drv_svc + DSV_SIZE`, the DISK class's
+    mov al, [drv_blkcls]        ; entry hard-coded - right while one class
+    call drv_cls_svc            ; served blocks and silently wrong the moment
+    mov bp, [di+DSV_BLK]        ; two did: a network volume's sectors would
+    pop ax                      ; have been handed to the hard-disk driver
+    pop di
     call drv_blk_call
     jnc .success
     mov [dsk_ioerr], al         ; the driver reports int 13h's status byte,
@@ -1519,6 +1546,53 @@ dsk_flop_add:
     ret
 
 ; -----------------------------------------------------------------------------
+; dsk_vol_fixed - is this volume a HARD DISK? (SPEC.md 18.7.2)
+; in:  BL = volume index
+; out: CF=1 = no such volume (out of range, or a free row); CF=0 with AL = 0
+;      removable / 1 fixed, and AH = VT_BIOS / VT_DRIVER
+; clobbers: AX (the output), flags
+;
+; **DV_KIND IS THE TRANSPORT AND NOT THE MEDIUM**, which SPEC.md 18.7 has said
+; since the volume table existed and which nothing shared enforced. A hard
+; disk reached through a DRIVER is DVK_DRV; a hard disk reached through the
+; BIOS - a boot partition, SPEC.md 52.10.3 - is DVK_BIOS with unit 80h or
+; above, and every `cmp DV_KIND, DVK_DRV` in the tree read that as a floppy.
+; desk_draw_zone did, so a machine booted off its hard disk drew C: with the
+; FLOPPY icon.
+;
+; One predicate, so the desktop and OSAPI_VOL_KIND cannot drift: the same
+; question is now asked once and answered once.
+; -----------------------------------------------------------------------------
+dsk_vol_fixed:
+    push bx
+    call dsk_vol_slot
+    jc .no
+    mov ah, [bx+DV_KIND]
+    cmp ah, DVK_FREE
+    je .no                      ; AH IS the transport: VT_BIOS/VT_DRIVER are
+                                ; DVK_BIOS/DVK_DRV, asserted below rather than
+                                ; assumed, so a change to either breaks the
+                                ; BUILD instead of the published ABI
+    mov al, 1                   ; a driver volume is fixed by construction:
+    cmp ah, DVK_DRV             ; SPEC.md 52 mounts partitions and nothing else
+    je .out                     ; through DSV_BLK
+    xor al, al                  ; ...and a BIOS one is fixed exactly when its
+    test byte [bx+DV_UNIT], 0x80    ; int 13h drive says so - disk_mount's own
+    jz .out                     ; test, in the one place that owns it
+    mov al, 1
+.out:
+    pop bx
+    clc
+    ret
+.no:
+    pop bx
+    stc
+    ret
+%if VT_BIOS != DVK_BIOS || VT_DRIVER != DVK_DRV
+  %error "disk: SPEC.md 18.7.2 - VT_* must equal DVK_*, or dsk_vol_fixed lies"
+%endif
+
+; -----------------------------------------------------------------------------
 ; dsk_vol_slot - a volume index's row, live or not (module internal)
 ; in:  BL = volume index
 ; out: CF = 0 and BX = the row; CF = 1 = out of range
@@ -1609,6 +1683,9 @@ dsk_vol_add:
 .noname:
     mov byte [di], 0            ; no label: desk_zone_label derives 'Disk X'
 .live:
+    mov al, [dsk_vcls]          ; which CLASS's DSV_BLK serves this row - the
+    mov [bx+DV_CLASS], al       ; fence matched the caller's segment against a
+                                ; publication slot and left the class here
     mov byte [bx+DV_KIND], DVK_DRV      ; published LAST: the row is now live
     call desk_zmark             ; the desktop owes a zone - and a driver adds
                                 ; a volume from a page click, with the gfx
@@ -1698,12 +1775,25 @@ dsk_vol_del:
 ; -----------------------------------------------------------------------------
 dsk_vol_drop_drv:
     push ax
+    push bx
+    push cx
+    mov cl, al                  ; the class being torn down
     mov al, 2
 .next:
-    call dsk_vol_del
+    mov bl, al
+    call dsk_vol_slot           ; BX = the row; AX is untouched by it
+    jc .skip
+    cmp byte [bx+DV_KIND], DVK_DRV
+    jne .skip
+    cmp [bx+DV_CLASS], cl       ; ...and is it THIS driver's?
+    jne .skip
+    call dsk_vol_del            ; takes AL, which is still the index
+.skip:
     inc al
     cmp al, DVOL_MAX
     jb .next
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -1767,18 +1857,33 @@ dsk_list_pick:
 ; clobbers: nothing else (flags)
 ; -----------------------------------------------------------------------------
 osapi_vol_fence:
+    push ax
     push bx
+    push di
     mov bx, es
     or bx, bx
     jz .no
-    cmp bx, [drv_fseg2]         ; the DISK class's publication slot
-    jne .no
-    pop bx
-    clc
-    ret
+    mov al, 1                   ; WALK the classes rather than naming one. It
+.cls:                           ; tested [drv_fseg2] alone - the DISK class -
+    call drv_cls_fp             ; which is a fence that only one kind of
+    jc .no                      ; driver can ever pass, and a second
+    cmp bx, [di+2]              ; block-serving class (docs/NET-PLAN.md 2.1)
+    je .yes                     ; would have been refused its own volumes
+    inc al
+    cmp al, DRVC_MAX
+    jbe .cls
 .no:
+    pop di
     pop bx
+    pop ax
     stc
+    ret
+.yes:
+    mov [dsk_vcls], al          ; dsk_vol_add stamps the row with it
+    pop di
+    pop bx
+    pop ax
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4066,7 +4171,7 @@ dsk_rah_wr:
 ; Called from disk_mount, so a shed is repaired at the next mount rather than
 ; never. A machine with no room refuses here every time, which costs a
 ; mem_avail scan - no I/O - per mount, against a mount whose cheapest possible
-; outcome is several 65 ms sectors.
+; outcome is several ~24 ms sectors.
 ; -----------------------------------------------------------------------------
 dsk_rah_want:
     pushf
@@ -5431,6 +5536,8 @@ dsk_fatsz:    resw 1            ; = FATSz16 - capped at DSK_FAT_SECS only on
 dsk_fatwn:    resw 1            ; ...and how many are resident. On a floppy
                                 ; this is the whole FAT and the window never
                                 ; moves - the degenerate case, byte for byte
+dsk_vcls:     resb 1            ; the class osapi_vol_fence matched, for
+                                ; dsk_vol_add to stamp into DV_CLASS
 dsk_vkind:    resb 1            ; the mounted volume's DVK_* (SPEC.md 18.7):
                                 ; its TRANSPORT, which is what dsk_xfer needs
 dsk_vflop:    resb 1            ; ...and whether it is a FLOPPY, which is what
