@@ -742,6 +742,37 @@ and let §25's generic icon do its job, which is what `hello/` ships to prove.
 **Zero the slots first and measure before adding the harvest**: at ~30 ms a
 read it is a second of listing time for a folder of thirty packages.
 
+### 2.2.1 Where the build stands, and where it picks up
+
+**The interface is PINNED (SPEC.md §62.9) and the constants are in;
+no branch site is built yet.** `DVK_FILE`, `DRVC_FILE` = 5, `DSV_FS` as a
+pointer to the thirteen-verb table, and the fifth publication slot: 184 bytes,
+no rung crossed. What is done is the part §1's rule says must come first.
+
+Two design decisions were settled while pinning it and neither was in the
+original sketch above:
+
+- **`DSV_FS` is a POINTER, not thirteen more `DSV_*` cells.** The table is
+  copied per class into the kernel's `.bss`, so thirteen cells would be
+  charged to every machine including the ones with no driver at all.
+- **The driver APPENDS to the listing through `OSAPI_FS_ENT`** rather than
+  staging into it. `dsk_put_dir` is module-internal and knows whether this
+  volume's listing is the `.lowbss` floor or a donated claim (§22.6) — three
+  pieces of bookkeeping a driver must not hold. Gated to `FSV_LIST`.
+
+**The next session picks up at milestone 1**, which is a browsable read-only
+volume: `drv_fs_call`, `disk_mount`'s `DVK_FILE` branch (skip the BPB, the FAT
+window and the root scan; call `FSV_CHDIR` then `FSV_LIST`; let the kernel's
+own sort and `..` run), `dsk_xfer`'s refusal, `dsk_free_clus` → `FSV_DFREE`,
+`OSAPI_FS_ENT`, and **a RAM-disk `DRVC_FILE` driver as the harness**. That
+last is the point: it needs no hardware, so every branch site is exercised on
+a cycle-accurate 8088 in a container — which block mode never had, and which
+is why two of its bugs reached the field instead of the build.
+
+Milestones 2 and 3 (reads, then writes) follow on a kernel that is already
+proven, and the cable's file client is then a SECOND `DRVC_FILE` driver
+rather than the first.
+
 ### 2.3 What was considered and rejected
 
 **A synthetic FAT image in RAM.** The driver fetches the remote listing,

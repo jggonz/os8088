@@ -35098,11 +35098,11 @@ ones with no driver at all; one pointer costs `2 × DRVC_MAX` = 10.
 DSV_FS      equ 26      ; dw: -> the FSV_* table, in the driver's segment
 DSV_SIZE    equ 28
 
-FSV_LIST    equ 0       ; stage §19.1 entries into disk_dir/disk_icons and set
-                        ; disk_nfiles. The kernel still SORTS (§19.4) and still
-                        ; synthesizes `..` (§19.5), so the driver must do
-                        ; neither - two places deciding an order is how a
-                        ; display index stops meaning what the hit-test thinks
+FSV_LIST    equ 0       ; append this folder's entries. The kernel still
+                        ; SORTS (§19.4) and still synthesizes `..` (§19.5), so
+                        ; the driver must do neither - two places deciding an
+                        ; order is how a display index stops meaning what the
+                        ; hit-test thinks it means
 FSV_CHDIR   equ 2       ; AX = a handle out of an entry, or 0 = the root
 FSV_STAT    equ 4       ; SI = name -> exists, size, attributes
 FSV_READ    equ 6       ; SI = name, ES:BX = buffer, DX:CX = capacity
@@ -35116,6 +35116,36 @@ FSV_RMDIR   equ 20      ; SI = name
 FSV_DFREE   equ 22      ; -> DX:AX = free bytes, BX = the granule
 FSV_SIZE    equ 24
 ```
+
+**A DRIVER CANNOT WRITE THE LISTING AND MUST NOT LEARN HOW.** `FSV_LIST`
+reads as though the driver stages entries itself, and it cannot:
+`dsk_put_dir` is module-internal, it knows whether this volume's listing is
+the `.lowbss` floor or a claim its driver donated (§22.6), and the count is
+`disk_nfiles` — three pieces of kernel bookkeeping a driver has no business
+holding. So the driver **appends**, one entry at a time, through a cell of its
+own:
+
+```
+OSAPI_FS_ENT   ES:SI -> a 20-byte §19.1 staged entry, ES = the driver's DS
+               out: CF=0 and AX = the index it landed at
+                    CF=1 = the listing is full (§19's 32-entry cap, or
+                    whatever [dsk_nmax] says for this volume)
+```
+
+An **X stub** (§20.1), because the entry is in the driver's segment. It is
+legal **only from inside `FSV_LIST`** — `[dsk_fslist]` is the gate, raised
+around the call — for the reason every other listing writer is: an append
+outside a mount would leave `disk_nfiles` describing a listing the sort never
+saw. The kernel raises the gate, calls `FSV_LIST`, lowers it, and then sorts
+and synthesizes `..` exactly as it does for a FAT volume, which is what keeps
+§19.4 and §19.5 in one place.
+
+**The icon slot is NOT part of the entry**, and that falls out of §62.9.2:
+`disk_icons` is blanked at the top of every mount and a redirected volume
+simply leaves it blank, so §25's generic icon does its job. A driver that
+wants to harvest gets a second cell later, or does it with `FSV_READAT` and
+composes — but **measure first**: at ~30 ms a read it is a second of listing
+time for a folder of thirty packages.
 
 `DVK_FILE` = 2 joins `DVK_BIOS` and `DVK_DRV` in `DV_KIND`, and `DV_CLASS`
 (§18.7.3) says which class serves it — the same byte, doing the same job, for
