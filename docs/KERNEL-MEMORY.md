@@ -373,15 +373,15 @@ Three things about it:
     "cold": 22485,
     "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3808,
-    "kend": 6176,
+    "imgpara": 3840,
+    "kend": 6208,
     "kseg": 96,
-    "ksize": 97280,
+    "ksize": 97792,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 3067,
     "stk0": 1024,
-    "text": 56002
+    "text": 56059
   },
   "small": {
     "bss": 4717,
@@ -398,7 +398,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2681,
     "stk0": 1024,
-    "text": 52395
+    "text": 52383
   }
 }
 ```
@@ -894,24 +894,24 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,688 | 36.6% |
-| the window system and its furniture | 17,098 | 21.8% |
-| drawing: adapters, primitives, glyphs, icons | 11,435 | 14.6% |
+| the file system, end to end | 28,688 | 36.5% |
+| the window system and its furniture | 17,091 | 21.8% |
+| drawing: adapters, primitives, glyphs, icons | 11,499 | 14.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.5% |
 | the kernel proper: API table, heap, scheduler, events | 5,955 | 7.6% |
 | the Control Panel | 4,120 | 5.2% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **78,487** | |
+| **total** | **78,544** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 917 | 7,304 | **8,221** | 336 | — |
-| `wm.inc` — the window manager (§11) | 6,610 | — | **6,610** | 645 | — |
+| `wm.inc` — the window manager (§11) | 6,603 | — | **6,603** | 645 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,529 | — | **5,529** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,298 | **5,471** | 155 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,694 | — | **4,694** | 132 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,758 | — | **4,758** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
@@ -943,7 +943,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,763 | — | **2,763** | — | — |
-| **total** | **56,002** | **22,485** | **78,487** | **4,926** | **7,762** |
+| **total** | **56,059** | **22,485** | **78,544** | **4,926** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

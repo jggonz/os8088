@@ -2489,8 +2489,21 @@ vga_xor_fill_vram:
 gfx_save:
     call cur_unlazy             ; the menu save-under READS the screen, so
                                 ; the arrow must not be in what it banks
-    cmp byte [vid_mono], 0
-    jne sw_save
+    GFXDENTER                   ; ...and it reads it off ONE CARD (SPEC.md
+    GFXDORG cx, dx              ; 39.14.8): a save is pixels, and pixels live
+    call vga_save_vram          ; on a card rather than in a coordinate space,
+    GFXDLEAVE                   ; so this is whole-shape like gfx_scroll and
+    ret                         ; NOT split like a blit's runs. The caller owes
+                                ; the straddle test - wm_su_take asks
+                                ; vid_span_one - because a cut save and a cut
+                                ; restore agree with each other and leave the
+                                ; rest of the rect stale.
+                                ;
+                                ; BELOW the hook and reached directly by the
+                                ; CURSOR out of IRQ4, which must not take it:
+                                ; the arrow brackets itself (39.15.2), and a
+                                ; hook here would translate a rect that
+                                ; cur_geom has already resolved.
 vga_save_vram:
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
     jne sw_save                 ; on mono the framebuffer IS the renderer's
@@ -2688,8 +2701,11 @@ gfx_sub_off:
 ; -----------------------------------------------------------------------------
 gfx_restore:
     call cur_unlazy             ; ...and writes it back, unclipped
-    cmp byte [vid_mono], 0
-    jne sw_restore
+    GFXDENTER                   ; ...onto the card it came off (SPEC.md
+    GFXDORG cx, dx              ; 39.14.8) - gfx_save's twin, and it has to be
+    call vga_restore_vram       ; the same hook or a rect banked on one display
+    GFXDLEAVE                   ; could be put back on the other
+    ret
 vga_restore_vram:
     cmp byte [vid_mono], 0      ; see vga_save_vram
     jne sw_restore
