@@ -409,7 +409,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3126,
     "stk0": 1024,
-    "text": 56991
+    "text": 57074
   },
   "small": {
     "bss": 4857,
@@ -426,7 +426,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2740,
     "stk0": 1024,
-    "text": 53196
+    "text": 53279
   }
 }
 ```
@@ -923,20 +923,20 @@ generated in the first place.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 29,346 | 36.7% |
-| the window system and its furniture | 17,498 | 21.9% |
+| the window system and its furniture | 17,581 | 22.0% |
 | drawing: adapters, primitives, glyphs, icons | 11,810 | 14.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.3% |
-| the kernel proper: API table, heap, scheduler, events | 5,959 | 7.5% |
-| the Control Panel | 4,120 | 5.2% |
+| the kernel proper: API table, heap, scheduler, events | 5,959 | 7.4% |
+| the Control Panel | 4,120 | 5.1% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **79,924** | |
+| **total** | **80,007** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,004 | 7,620 | **8,624** | 336 | — |
-| `wm.inc` — the window manager (§11) | 6,945 | — | **6,945** | 645 | — |
+| `wm.inc` — the window manager (§11) | 7,028 | — | **7,028** | 645 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,646 | — | **5,646** | 892 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,430 | **5,609** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,841 | — | **4,841** | 136 | — |
@@ -971,7 +971,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,767 | — | **2,767** | — | — |
-| **total** | **56,991** | **22,933** | **79,924** | **5,066** | **7,762** |
+| **total** | **57,074** | **22,933** | **80,007** | **5,066** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

@@ -5542,6 +5542,87 @@ interlock, at the one geometry that escaped it. Latent before this: `wm_dmg_wins
 was the only caller that armed a rect and a fullscreen window is rarely marked,
 where `wm_front` can raise one.
 
+### 11.97 A window below does not draw chrome where something above will cover it
+
+Reported from the field alongside §11.96.9's ghost: **dragging a window, the one
+underneath shows its frame and drop shadow for a frame or two before being
+painted over.** It is `wm_draw_win`'s doing and it is not a race — the draw pass
+goes back to front, a marked window writes its outline, its drop shadow and its
+title bar **whole whether its cache hit or not** (§11.96.6 says so, because that
+is why the damage rect has to accumulate), and the mover is frontmost and so is
+drawn last. Everything the lower window puts inside the mover's new frame is
+therefore written and then immediately overwritten. On a 1bpp adapter that is a
+black 1px line on a grey dither, which is the most visible thing a redraw can
+flash.
+
+`wm_chrome_clip` is the answer: `wm_covered`'s region arithmetic (§11.3) seeded
+with the **frame** rect where `wm_clip_set` seeds with the *content* rect, armed
+across the outline and the drop shadow and disarmed before the title bar. Both
+are `gfx_fill`, which clips per pixel, so nothing new had to learn about regions
+— and §11.97.1 is why the region stops where it does.
+
+Five things are load-bearing:
+
+- **§11.91's marking is what makes it sound.** A window that overlaps a marked
+  window is marked too, transitively and upwards, so every visible window above
+  the one being drawn that overlaps it is drawn **later in the same pass**. A
+  pixel the region drops is a pixel somebody above is about to write anyway —
+  which is the identical argument that made drawing over it safe, read the other
+  way round.
+- **Not `wm_clip_set`.** That one drops the raise cache (§11.96), which is
+  exactly what this window is about to restore from. The seed and the occluder
+  walk are used directly, as `wm_covered` uses them.
+- **The region dies before the title bar** (§11.97.1), and so before the content
+  as well. The content restore is `gfx_restore`, deliberately off §11.3's
+  clipped list, and a `W_PAINT` that found a region armed under it would spring
+  §11.3's granularity rule on every application at once.
+- **`wm_obscured` is asked first**, because on the frontmost window — every
+  `wm_raise`, every `wm_show` — the answer is "all of it", and an armed region
+  costs `gfx_clip_run` a pass per primitive to arrive back at the rect it was
+  handed.
+- **The deferred cursor hide is spent** (§7.1.4). An armed region stops the
+  clipped primitives taking it themselves and the cursor is not confined to this
+  window, so without `cur_unlazy` the arrow is drawn over and smeared at the next
+  `cur_move`. Overflow degrades to *draw it*, `wm_covered`'s way.
+
+#### 11.97.1 …and it stops at the title bar, because `font_char` clips per CELL
+
+The plan for §11.97 said the region could cover the title bar too, on the
+argument that *"a title glyph dropped at a cut is a glyph inside somebody else's
+window"*. **That is false, and the gate caught it: a glyph the region cuts is a
+glyph that STRADDLES the cut**, so `font_char`'s whole-cell refusal (§11.3)
+throws away the rows this window can still see along with the rows it cannot.
+Measured on `callfront`'s three-window session: a window whose title bar is
+covered from its tenth row down came back with the top five rows of its caption
+missing as well — 112 differing pixels on CGA, 11 on VGA mode 12h, in the shape
+of the word `Note Pad`.
+
+So the region is armed across the outline and the drop shadow only. Both are
+`gfx_fill` and clip per pixel, which is what makes them safe to clip and the
+glyphs not — §11.3's granularity rule, arriving in the one place this feature's
+own plan had ruled it out. **It costs the measurement little**: in the drag the flash
+is priced on, the lower window's title bar is above the mover entirely, so
+what §11.97 removes there is the outline and the shadow alone.
+
+A title bar that IS covered therefore still flashes, and the honest fix for it
+is the same one the content needs — per-fragment drawing rather than a
+per-cell veto — not a second attempt at clipping this one.
+
+**What §11.97 deliberately does not cover is the CONTENT**, which is the larger
+half of the same flash and a different piece of work: `wm_su_try` restores one rect
+(§5.8) where the visible region is a list, so bounding it means one
+`gfx_restore` per fragment, each paying §5.7's per-call floor and §11.96.2's edge
+merge. The grow box is outside the armed span too, being drawn after `W_PAINT`;
+it is 13x13.
+
+Measured (PERFORMANCE.md Set 40, three runs of each build): the transient
+pixels of one drag **14,253 → 10,665, 1.34x**, with the frame count and the
+visible-redraw time unmoved — the same frames still change the same pixels, and
+what is gone is how many of them were written and then immediately overwritten.
+**The session has to be the right one**: §11.91.2 marks the window underneath on
+the rect the mover *vacated*, so a drag that does not leave ground inside it
+redraws the mover alone and measures nothing this is about.
+
 ### 12.05 The bar is redrawn only when its contents changed
 
 `menu_draw_bar` is on the same hot path as `dock_paint` — every window

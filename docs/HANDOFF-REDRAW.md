@@ -18,6 +18,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §11.90.1 | `WF_OWNBG` — the white fill in front of `W_PAINT` becomes opt-out | white hole 2,617 ms → **none** |
 | §11.90.2 | `OSAPI_WM_DAMAGE` — the app is told which rect it owes | canvas blit 8,670 → 6,759 ms, **1.28x** |
 | §11.96.10 | **a RAISE puts back only what was covered** (was item A) | Paint raise 9,090 → 5,948 ms, **1.53x** |
+| §11.97 | a window below draws no chrome where something above will cover it | drag flash 14,253 → 10,665 px, **1.34x** |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -65,62 +66,73 @@ with partial overlaps** to leave a large untouched region, which is what the fie
 session had. And a wrong cache is **invisible until it is used**: §11.96.7 says so
 in its own paragraph, and it caught the same author twice in one round.
 
-### 2. The window BELOW a drag flashes its edges and shadow
+### 2. The window BELOW a drag flashes its edges and shadow — FIXED, §11.97
 
 Reported alongside bug 1: dragging Note Pad, the window underneath shows its
 **frame and drop shadow** for a frame or two before being painted over.
 
-This one is understood without reproducing it, and it is `wm_draw_win`'s doing:
-the draw pass goes **back to front**, and a marked window draws its **chrome
-whole — outline, drop shadow and title bar — whether its cache hit or not**
-(§11.96.6 says so explicitly, because that is why the damage rect has to
-accumulate). So the lower window paints its frame across ground the mover is
-about to cover, and the mover, being frontmost, is drawn last.
+`wm_chrome_clip` arms `wm_covered`'s region over the **frame** rect — where
+`wm_clip_set` (§11.3) arms it over the *content* rect — across the outline and
+the drop shadow, and disarms before the title bar (§11.97.1). Both are
+`gfx_fill`, which clips per pixel, so nothing had to learn about regions. Measured
+(PERFORMANCE.md Set 40) on a drag across another window, three runs of each
+build: **transient pixels 14,253 → 10,665, 1.34x**, with the frame count and
+the visible-redraw time unmoved — which is the honest shape of it. The same
+frames still change the same pixels; what changed is how many are written and
+then immediately overwritten.
 
-**It is probably more visible since §11.96.6**, not less: the content restore got
-2x faster, so the chrome draw is now a larger share of the window in which the
-lower window is wrong.
+Five things the doing of it settled, against what this section predicted:
 
-The fix is to stop drawing chrome that something above will cover — and **the
-obvious shape of that is wrong, so read this before writing it.** "Ask
-`wm_covered`'s question per chrome element" is what this section said first, and
-a desk check says it would barely help: `wm_covered` answers *wholly* covered,
-the outline is a ring spanning the whole window, and the pixels that flash are
-by definition the ones the mover covers — so the element is nearly always
-PARTLY covered, the whole-element test says "draw it", and the flash stays
-exactly where it was.
+- **The prediction that mattered was right.** The whole-element `wm_covered`
+  test would not have helped; the region is what was wanted.
+- **§11.91's marking is the correctness argument**, and it is the same one that
+  made drawing over a window above safe, read the other way round: a window
+  overlapping a marked window is marked too, transitively upwards, so anything
+  above that overlaps you is drawn later in this same pass.
+- **`wm_clip_set` is the wrong entry point** — it drops the raise cache, which is
+  exactly what the window is about to restore from. Seed and occlude directly,
+  as `wm_covered` does. And **spend the deferred cursor hide** (§7.1.4): an armed
+  region stops the clipped primitives taking it themselves.
+- **The standalone `wm_draw_title` hazard did not arise**, because the arm lives
+  inside `wm_draw_win` and not in the title painter — but the title bar had to
+  come OUT of the armed span anyway (§11.97.1). `font_char` clips per whole
+  CELL, so a glyph the region cuts is a glyph that STRADDLES the cut and the
+  visible rows go with the covered ones: `callfront` caught a window's caption
+  losing its top five rows, 112 differing pixels on CGA. This section's claim
+  that the granularity rule could not bite here was simply wrong.
+- **The session has to be the right one, and it was not.** §11.91.2 marks the
+  window underneath on the rect the mover VACATED, so a drag that does not
+  leave ground inside it redraws **the mover alone** — and the flash then
+  measured is a residue of the desktop dither, worth 891, 280 and 902 across
+  three runs of ONE binary. The first before/after off that read as 3.97x and
+  was noise. Arm `wm_draw_win` and count the calls before believing a flicker
+  number.
 
-**What is wanted is the region, not the boolean.** `wm_covered` already seeds an
-arbitrary rect (`wm_clip_seed`) and subtracts the windows above it
-(`wm_clip_occl`); arming that over the **frame** rect — where `wm_clip_set`
-(§11.3) arms it over the *content* rect — makes the outline, the drop shadow and
-the title bar clipped draws, so each puts down only the fragments nothing above
-will cover. Two things make it sound: a pixel the region drops is a pixel some
-visible window above owns, and that window is either redrawn whole later in this
-pass (§11.91 marks transitively) or was never disturbed; and §11.3's granularity
-trap does not bite for the same reason — a title glyph dropped at a cut is a
-glyph inside somebody else's window.
+**What is left is the CONTENT**, which is the larger half of the same flash and
+a genuinely different piece of work: `wm_su_try` restores ONE rect (§5.8) where
+the visible region is a list, so bounding it is one `gfx_restore` per fragment,
+each paying §5.7's per-call floor and §11.96.2's edge merge. That is a trade to
+measure, not a free win. The residual bbox also names one row at
+`[vid_dock_y0]` — the dock strip — and the grow box is outside the armed span,
+being drawn after `W_PAINT`.
 
-Hazards, all of them things this round has already been caught by: `wm_draw_title`
-is **also called standalone** from `wm_raise` (§11.96.7's ordering), where the
-z-order may not yet be what the glass shows; `gfx_unlock` clears the clip, so the
-arm is valid for exactly one lock hold; the drag outline is XOR and must stay
-unclipped (§11.3 rule 2); and `WF_FULL` has no shadow. **Price it with
-`os88marty.py flicker` first** (PERFORMANCE.md Part 3.1) — it counts exactly this
-defect and the number goes in a Set — and note that the region arithmetic is the
-same arithmetic item A needs, so **doing A first may make this a call-site
-change rather than a mechanism**.
+### 3. Paint's `W_PAINT` runs twice per raise — IT DOES NOT, retired
 
-### 3. Paint's `W_PAINT` runs twice per raise
+Carried by four Sets and never traced. It is **one** `wm_draw_win`, **one**
+`W_PAINT`, and no `wm_front` re-entry of any kind — on the raise and on the
+drag-off alike. The two `wm_grow_paint` hits that read as two passes are two
+different callers: `pt_draw_strip` ends in `pt_growbox` → `OSAPI_WM_GROW`
+(§11.1 — the strip's white bed erases the box, so every path that repaints the
+strip owes it), and `wm_draw_win`'s own `.growbox` runs after `W_PAINT`. The
+~400 ms in front of the first is the palette, the colour strip and the divider,
+which is exactly what Set 32's own table calls it.
 
-Flagged four times now — Sets 32–35 — and never chased. Two `wm_draw_win` passes
-for Paint's window: a **402 ms** one that draws no canvas, then the real one.
-Almost certainly **`[pt_apend]`'s deferred-resize path calling `OSAPI_WM_FRONT`
-from inside `W_PAINT`**, which re-enters the raise. Set 39 has it on a
-breakpoint trace rather than as an inference, on both builds of the A/B, so it
-is 402 ms of every Paint repaint any of those Sets measured. **It is the cheapest
-remaining item in this round** — one flat 402 ms off every Paint raise, against
-item B's much larger but much harder number.
+**So there is no 402 ms of free money**, and the lesson is about the instrument:
+`os88span.py`'s Paint scenarios arm three symbols and `wm_grow_paint` was the
+last of them, so a second hit of it read as a second pass. **When a trace
+implies a control-flow shape, arm the symbol that shape would have to go
+through** — here `wm_draw_win` and `wm_front`, neither of which fires. Set 40
+has the traces.
 
 ---
 
@@ -248,6 +260,7 @@ pre-existing failure arrives looking exactly like your own.
 | `tools/rawdiff.py` | `show` / `diff` / `zoom` over the captures: **where** and **what**, not just how many |
 | `tools/callfront.py` | the §11.96.9 gate: three partially overlapping windows, capturing after every step |
 | `tools/mkbmp.py` | a 16-colour BMP with a chosen run density, for the Paint gates |
+| `tools/chromeflick.py` | the §11.97 gate: how much of a drag's repaint is written and then overwritten — **the one defect a 0-pixel diff can never see** |
 
 **Four harness traps, all of which cost a run in this round:**
 

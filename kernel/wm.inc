@@ -4367,6 +4367,83 @@ wm_su_owed:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_chrome_clip - the region a window's CHROME may draw in (SPEC.md 11.97)
+; in:  DI = the window wm_draw_win is about to draw; gfx lock held
+; out: nothing; every register and the flags preserved. The clip list is armed,
+;      or left DISARMED - which means "draw the lot" and is what every caller
+;      did before this existed.
+;
+; wm_draw_win writes the outline, the drop shadow and the title bar WHOLE,
+; whether the raise cache hit or not (11.96.6), and a damage pass draws back to
+; front. So a window below the mover puts its frame down across ground the mover
+; is about to cover, and the mover - being frontmost - is drawn last: the window
+; underneath shows its frame and drop shadow for a frame or two and then loses
+; them again. Reported from the field, priced by PERFORMANCE.md Part 3.1's
+; instrument, and it is 1px black lines on grey, which is the most visible thing
+; a redraw can flash.
+;
+; It is wm_covered's arithmetic (11.3) seeded with the FRAME rect where
+; wm_clip_set seeds with the CONTENT rect, and NOT wm_clip_set itself: that one
+; drops the raise cache, which is exactly what this window is about to restore
+; from.
+;
+; WHAT MAKES IT SOUND is 11.91's marking: a window that overlaps a marked window
+; is marked too, transitively and upwards, so every visible window above this one
+; that overlaps it is drawn LATER IN THIS SAME PASS. A pixel the region drops is
+; therefore a pixel somebody above is about to write anyway - which is the
+; identical argument that made drawing over it safe, read the other way round.
+;
+; wm_obscured first, because on the frontmost window - every wm_raise, every
+; wm_show - the answer is "all of it", and an armed region costs gfx_clip_run a
+; pass per primitive to arrive at the rect it was handed.
+; -----------------------------------------------------------------------------
+wm_chrome_clip:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [wm_clip_n], 0
+    mov bx, di
+    call wm_obscured
+    jnc .out                    ; nothing above us overlaps: draw the lot
+    call cur_unlazy             ; SPEND THE DEFERRED HIDE (7.1.4). An armed
+                                ; region stops the clipped primitives taking it
+                                ; themselves, and the cursor is not confined to
+                                ; this window - so without this it is drawn over
+                                ; and smeared at the next cur_move
+    mov ax, [di+W_X]
+    mov dx, [di+W_Y]
+    mov cx, ax
+    add cx, [di+W_W]            ; x .. x+w and y .. y+h: the frame plus its 1px
+    mov si, dx                  ; drop shadow, which wm_draw_win draws
+    add si, [di+W_H]
+    test word [di+W_FLAGS], WF_FULL
+    jz .seed
+    dec cx                      ; fullscreen has no shadow (SPEC.md 11.2)
+    dec si
+.seed:
+    call wm_clip_seed
+    call wm_clip_occl           ; BX = us; subtract every visible window above
+    jc .none                    ; overflowed: nothing about the list is valid
+    cmp word [wm_clip_n], 0
+    jne .out
+.none:
+    mov word [wm_clip_n], 0     ; OVERFLOW DEGRADES TO "DRAW IT", wm_covered's
+                                ; way and not wm_clip_set's: a dropped pixel
+                                ; here is one a background painter would have
+                                ; skipped, and here it is one this pass owes
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_cov_rect - the box of this window's CONTENT that something is sitting on
 ; in:  BX = window ptr (visible), gfx lock held, asked BEFORE wm_lift while the
 ;      z-order still says what is on top
@@ -5163,6 +5240,12 @@ wm_draw_win:
     jmp .paint
 
 .chrome:
+%ifndef REDRAWFULL
+    call wm_chrome_clip         ; THE OUTLINE AND THE DROP SHADOW, and not where
+%endif                          ; something above will cover them a moment from
+                                ; now (SPEC.md 11.97). Both are gfx_fill, which
+                                ; clips per PIXEL; the title bar below is not,
+                                ; and 11.97.1 is why the region stops short of it
     mov byte [gfx_color], CBLACK
     mov ax, [di+W_X]            ; 1px outline around the whole frame
     mov bx, [di+W_Y]
@@ -5189,6 +5272,16 @@ wm_draw_win:
     add dx, [di+W_H]
     call gfx_hline
 
+%ifndef REDRAWFULL
+    mov word [wm_clip_n], 0     ; ...AND THE REGION DIES BEFORE THE TITLE BAR,
+%endif                          ; not after it (SPEC.md 11.97.1). font_char
+                                ; clips per whole CELL, so a glyph the region
+                                ; cuts is dropped ENTIRELY - including the rows
+                                ; of it this window can still see. Measured: a
+                                ; window whose title bar was covered from its
+                                ; 10th row down lost its caption's top 5 rows
+                                ; as well. 11.3's granularity rule, in the one
+                                ; place the plan for this said it could not bite
     call wm_draw_title          ; the title bar, active or not (BP decides)
 
     call wm_su_try              ; THE RAISE CACHE (SPEC.md 11.96): if the

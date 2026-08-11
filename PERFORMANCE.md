@@ -4171,7 +4171,10 @@ fits. §11.90's unconditional white fill is what stands in front of it.
 **And two smaller things this run recorded**: the repaint issues **two**
 `wm_draw_win` passes for Paint's window (a 376 ms one that draws no canvas, then
 the 8,670 ms one), which is the `[pt_apend]` deferred-resize path calling
-`OSAPI_WM_FRONT` from inside `W_PAINT` and is worth its own look; and the
+`OSAPI_WM_FRONT` from inside `W_PAINT` and is worth its own look — **and that is
+WRONG, see Set 40**: it is one pass, and the two hits were `pt_growbox` and
+`wm_draw_win`'s own `.growbox`, the 376 ms in front of the first being the
+palette, strip and divider this very table names; and the
 ~376 ms of palette, colour strip and divider is **small in area** — a narrow
 left-hand column — so it is the part a cache would hold for about 1 KB.
 
@@ -4850,12 +4853,15 @@ proportional to how much was covered and there is no single number for it**: a
 window with a corner under something gains nearly everything, a window almost
 entirely buried gains almost nothing. Both rows above are quoted for that reason.
 
-**One thing the run confirms and does not fix.** Both `paintraise` traces show
-Paint's window drawn **twice** — a 402 ms pass with no canvas in it, then the
-real one — on the before build and the after one alike. That is REDRAW-SPEC Part
-3's open item (`[pt_apend]`'s deferred resize calling `OSAPI_WM_FRONT` from
-inside `W_PAINT`), it is 402 ms of every Paint repaint measured in Sets 32–35,
-and it is now on a trace rather than an inference.
+**One thing the run appeared to confirm, and Set 40 took back.** Both
+`paintraise` traces show two `wm_grow_paint` hits for Paint's window — one at
++402 ms with no canvas in front of it, then the real one — which this Set read
+as REDRAW-SPEC Part 3's open item, `[pt_apend]`'s deferred resize re-entering
+the raise. **It is not**: armed properly, there is one `wm_draw_win`, one
+`W_PAINT` and no `wm_front` at all, and the two hits are `pt_growbox` and
+`wm_draw_win`'s own `.growbox`. The 402 ms is the palette, the strip and the
+divider. Set 40 has the trace; this paragraph is left standing because a
+retracted claim is worth more than a deleted one.
 
 Verified at **0 differing pixels** on CGA, Hercules and VGA mode 12h against
 `make REDRAWFULL=1`, over all three gates — `subcheck` (11 steps), `ptcheck`
@@ -4879,3 +4885,90 @@ had never been seen; §11.96.10 stopped raises being whole and it stopped
 repairing.** The steps before the raise show it in *both* builds at 0 differing
 pixels, which is what proves it pre-dates the change. One `pt_org` after
 `pt_wfix` is the fix, and all three adapters then read 0.
+
+### Set 40 — the chrome flash under a drag, and a bug that was not there
+
+Two of the three open items in docs/HANDOFF-REDRAW.md, on a cycle-accurate
+5150/CGA. One was real and is fixed; one was a misreading of a trace and is
+retired.
+
+#### The flash — SPEC.md §11.97
+
+Reported from the field: *dragging a window, the one underneath shows its frame
+and drop shadow for a frame or two before being painted over.* Priced with Part
+3.1's instrument (`tools/chromeflick.py`) over one drag of a Disk window across
+another, the release captured at 50 frames of 16.4 ms, **three runs of each
+build**:
+
+| | before | after | |
+|---|---|---|---|
+| visible redraw | 19–21 frames, 317–344 ms | 20 frames, 327–332 ms | — |
+| frames with transient pixels | 17–18 | 18–21 | — |
+| **total transient pixels** | 14,509 / 14,614 / 13,637 | 10,953 / 10,353 / 10,688 | **1.34x** |
+| worst transient frame | 2,205 / 2,339 / 2,072 | 1,612 / 1,601 / 1,625 | **1.37x** |
+
+**Two statistics agreeing at ~1.35x, and neither of the other two columns
+moving — which is the honest shape of it.** The same frames still change the
+same pixels; what changed is how many are written and then immediately
+overwritten. What is removed is the lower window's outline and drop shadow
+inside the mover's new frame: 1px black lines on a grey dither, which is the
+most visible thing a redraw can flash.
+
+**Quote the SUM, not the worst frame, and read the tool's docstring before
+either.** A once-per-frame sampler catches whichever intermediate states happen
+to fall on a frame boundary, so one frame's peak is partly a coin toss — here
+the two statistics happen to agree because the session is stable, and that is
+worth checking rather than assuming.
+
+**What is left (10,665 of it) is the content restore and the title bar**, and
+both are different pieces of work. `wm_su_try` puts back ONE rect (§5.8) where
+the visible region is a list, so bounding it means one `gfx_restore` per
+fragment, each paying §5.7's per-call floor and §11.96.2's edge merge — a real
+trade rather than a free win. The title bar is §11.97.1's per-cell problem.
+
+**And the first version of this measurement was of the wrong operation**, which
+is the finding worth more than the number. SPEC.md §11.91.2 marks the window
+underneath on the rect the mover **vacated**, so a drag has to leave ground
+inside that window *and* still cover part of it afterwards. Dragged the other
+way, `wm_dmg_wins` redraws **the mover alone** — a trace with `wm_draw_win`
+armed says so in one line — and the flash then measured is a residue of the
+desktop dither, which is small and almost entirely sampling phase: the same
+binary returned worst-frame 891, 280 and 902 in three consecutive runs, and the
+first before/after pair off it read as a 3.97x win that did not exist. The
+corrected session is stable to ±3% on the sum and ±1% on the worst frame.
+**A flicker number is only as good as the assertion that the session performs
+the operation** — arm the symbol and count the calls.
+
+#### The bug that was not there — Paint's `W_PAINT` does NOT run twice
+
+Sets 32 and 34 both recorded *"the repaint issues two `wm_draw_win` passes for
+Paint's window, a ~376 ms one that draws no canvas and then the 8,670 ms one"*,
+and attributed it to `[pt_apend]`'s deferred resize calling `OSAPI_WM_FRONT`
+from inside `W_PAINT`. Traced with `wm_draw_win`, `wm_front`, `wm_raise`,
+`wm_paint_all`, `wm_paint_dmg`, `wm_grow_paint` and `gfx_blit4` all armed, on
+both the raise and the drag-off:
+
+```
+wm_raise      1 / 1              wm_paint_dmg   -    / -
+wm_draw_win     75.58   1 / 1    wm_draw_win     18.55   12 / 1
+wm_grow_paint  403.72   - / 1    wm_grow_paint  384.24    - / 1
+gfx_blit4       17.92   - / -    gfx_blit4        5.17    - / -
+wm_grow_paint 5527.13   1 / 1    wm_grow_paint 6758.76    1 / 1
+                                 wm_draw_win      0.89   12 / 0
+                                 wm_grow_paint  204.51    0 / 0
+```
+
+**One `wm_draw_win` for Paint, one `W_PAINT`, and no re-entry of any kind.** The
+two `wm_grow_paint` hits inside it are two different callers: `pt_draw_strip`
+ends in `pt_growbox` → `OSAPI_WM_GROW` (SPEC.md §11.1 — the strip's white bed
+erases the box, so every path that repaints the strip owes it), and
+`wm_draw_win`'s own `.growbox` runs after `W_PAINT`. The 403 ms in front of the
+first is not a pass, it is the palette, the colour strip and the divider — which
+is exactly what Set 32's own table calls it. **The prose turned two hits of one
+symbol into two passes, and four Sets carried it.**
+
+`os88span.py`'s `paint` and `paintraise` scenarios arm three symbols, which is
+what let this stand: `wm_grow_paint` was the last mark in both, so a second hit
+of it read as a second pass. **When a trace implies a control-flow shape, arm
+the symbol that shape would go through** — here `wm_draw_win` and `wm_front`,
+neither of which fires.
