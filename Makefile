@@ -404,10 +404,41 @@ $(ASSOCICO): tools/os88mini.py $(BUILD)/paint.o88 $(BUILD)/notepad.o88 \
 $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 	python3 tools/os88font.py $(FONTSRC) -o $@
 
-$(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) $(BUILDINC) tools/os88ovlchk.py | $(BUILD)
+# The on-demand modules (SPEC.md 2.8), in the order os88mod.py numbers them -
+# the index IS the kernel's MOD_* and the header carries it, so a mismatch
+# here is refused at build time rather than far-called at run time. Defined
+# above the rules because one of them is a target list, which make expands
+# when it PARSES rather than when it runs.
+# RECURSIVE, both of them, and that is the whole of how a second kernel gets
+# its own modules: a rule that builds a kernel somewhere other than $(BUILD)
+# sets KMODDIR for itself (see `small` and `field`), and DRIVERS - recursive
+# for the same reason - then names that directory's images instead of this
+# one's. A module carries the LAYOUT of the kernel it was cut out of
+# (SPEC.md 2.8.2), so shipping the wrong one is refused rather than executed;
+# this is what stops it happening in the first place.
+KMODDIR = $(BUILD)
+KMODS = $(KMODDIR)/ctrl.drv
+KMODARGS = -m 0=$(BUILD)/ctrl.drv
+
+# THE KERNEL IS ASSEMBLED WHOLE AND THEN CUT UP (SPEC.md 2.8). Everything
+# from .modc onward is an on-demand module: kernel code that ships as a file
+# instead of inside KERNEL.SYS. It is assembled HERE, with the kernel, because
+# a module is .cold code running with DS = KERNEL_SEG - so every kernel symbol
+# it names has to be the address the kernel itself uses, and one assembly is
+# what makes that true rather than claimed.
+$(BUILD)/kernel-full.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) $(BUILDINC) tools/os88ovlchk.py | $(BUILD)
 	@python3 tools/os88ovlchk.py
 	$(NASM) -f bin -w+error -I kernel/ -I apps/ -I $(BUILD)/ $(VIDDEF) -o $@ $(KERNEL_SRC)
+
+$(BUILD)/kernel.bin: $(BUILD)/kernel-full.bin tools/os88mod.py | $(BUILD)
+	python3 tools/os88mod.py $< -k $@ $(KMODARGS) --build $(BUILDNUM)
 	@echo "kernel: $(call FILESIZE,$@) bytes (image rung + boot overlay)$(if $(filter-out 0,$(BUILDNUM)), - build $(BUILDNUM), - NO build number: buildnum.py said why)"
+
+# The modules fall out of the rule above rather than having one of their own:
+# a second recipe would run os88mod.py a second time, and GNU make would run
+# it once PER TARGET for a multi-target rule, which is the classic way to get
+# a file written twice and a race with -j.
+$(KMODS): $(BUILD)/kernel.bin ;
 # What that cost, per section and in 512-byte rungs, against the baseline in
 # docs/KERNEL-MEMORY.md. A REPORT and never a gate: the guards inside
 # kernel.asm are what refuse an overrun, and this says how close you came and
@@ -481,11 +512,18 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 # ui_tm_open looks for (SPEC.md 28.3). Kernel machinery in a folder of its
 # own, so the root of a disk is the user's files - and the two disks agree,
 # because the chip menu cannot know which of them is in the drive.
-DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv $(BUILD)/net.drv
+DRIVERS = $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv $(BUILD)/net.drv
 # ...and the hard-disk driver's on-demand half, which rides every disk the
 # drivers do but is NOT one of them: nothing puts it in drv_tab, the Drivers
 # page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
 DRIVERS += $(BUILD)/hddtool.drv
+# ...and the ON-DEMAND KERNEL MODULES (SPEC.md 2.8), which are neither. They
+# are kernel code - cut out of the assembled kernel by tools/os88mod.py, not
+# assembled on their own - and they are .DRV for one reason: os88disk.py's
+# sys_attr stamps anything ending DRV read-only+hidden+system by EXTENSION
+# (SPEC.md 19.6), the installer's `*.DRV` copy rule picks them up, and
+# ld_check_hdr refuses to launch one. Nothing lists them as drivers.
+DRIVERS += $(KMODS)
 SYSAPPS := $(BUILD)/taskmgr.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
@@ -1724,6 +1762,9 @@ SMALLDIR := $(BUILD)/smallk
 small: $(BUILD)/small360.img $(BUILD)/small.img
 	@python3 tools/kernsplit.py $(SMALLDIR)/kernel.bin $(BUILD)/kernel.bin
 
+# its kernel is $(SMALLDIR)'s, so its modules are too
+$(BUILD)/small360.img: KMODDIR := $(SMALLDIR)
+
 $(BUILD)/small360.img: $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
@@ -1731,6 +1772,9 @@ $(BUILD)/small360.img: $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
 	@echo "small: $@ - kern_small on 360KB. Its apps disk is the ordinary"
 	@echo "       build/apps360.img: one package, both kernels"
+
+# its kernel is $(SMALLDIR)'s, so its modules are too
+$(BUILD)/small.img: KMODDIR := $(SMALLDIR)
 
 $(BUILD)/small.img: $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot.bin
@@ -1773,6 +1817,9 @@ kernsplit:
 FONTDIR = $(BUILD)/fontk-$(1)
 
 define FONT_TARGETS
+# its kernel is that face's
+$$(BUILD)/font-$(1)-360.img: KMODDIR := $$(call FONTDIR,$(1))
+
 $$(BUILD)/font-$(1)-360.img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $$(SYSDOC) \
                              tools/os88font.py tools/os88disk.py
 	@$$(MAKE) BUILD=$$(call FONTDIR,$(1)) FONT=$(1) $$(call FONTDIR,$(1))/boot360.bin
@@ -1781,6 +1828,9 @@ $$(BUILD)/font-$(1)-360.img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $$(SYSDOC) \
 		--kernel $$(call FONTDIR,$(1))/kernel.bin \
 		$$(DRIVERS) $$(SYSAPPSARGS) $$(SYSDOC) $$(MEDIAFOLDER)
 	@echo "font: $$@ - a 360KB system disk set in $(1)"
+
+# its kernel is that face's
+$$(BUILD)/font-$(1).img: KMODDIR := $$(call FONTDIR,$(1))
 
 $$(BUILD)/font-$(1).img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $$(SYSDOC) \
                          tools/os88font.py tools/os88disk.py
@@ -1836,6 +1886,9 @@ field: $(BUILD)/herc.img $(BUILD)/cga.img $(BUILD)/cga720.img $(BUILD)/flop1.img
 # shipped bytes on the next knobless make.
 FIELDDRV = @$(MAKE) $(FIELDKNOBS) $(DRIVERS)
 
+# its kernel is $(HERCDIR)'s, so its modules are too
+$(BUILD)/herc.img: KMODDIR := $(HERCDIR)
+
 $(BUILD)/herc.img: $(BUILD)/kernel.bin $(DRIVERS) \
                    $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
@@ -1846,6 +1899,9 @@ $(BUILD)/herc.img: $(BUILD)/kernel.bin $(DRIVERS) \
 	@python3 tools/fieldsize.py $(BUILD)/kernel.bin $(HERCDIR)/kernel.bin
 	@echo "field: $@ - the PROBE kernel; on a machine holding both cards it"
 	@echo "       finds the Hercules (SPEC.md 39.1)"
+
+# its kernel is $(CGADIR)'s, so its modules are too
+$(BUILD)/cga.img: KMODDIR := $(CGADIR)
 
 $(BUILD)/cga.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
@@ -1866,6 +1922,9 @@ $(BUILD)/cga.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 # CGA only, because that is what was asked for. The Hercules twin is this
 # rule with $(BUILD)/boot360.bin and $(BUILD)/kernel.bin - the probe build -
 # in place of $(CGADIR)'s, and nothing else.
+# its kernel is $(CGADIR)'s, so its modules are too
+$(BUILD)/cga720.img: KMODDIR := $(CGADIR)
+
 $(BUILD)/cga720.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
 	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin
@@ -1888,6 +1947,9 @@ $(BUILD)/cga720.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 # It is the PROBE kernel (so it boots either card) because the question has
 # nothing to do with video, and its `boot ticks` row is a second, independent
 # reading of the same thing.
+# its kernel is $(F1DIR)'s, so its modules are too
+$(BUILD)/flop1.img: KMODDIR := $(F1DIR)
+
 $(BUILD)/flop1.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
 	@$(MAKE) BUILD=$(F1DIR) FLOPPY1=1 $(FIELDKNOBS) $(F1DIR)/boot360.bin
@@ -1911,6 +1973,9 @@ $(BUILD)/flop1.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 # drive), 04 a sector the FDC never found (EOT / the multi-track flip), 09 a
 # transfer that crossed a 64KB DMA page, 80 a drive that never answered.
 # The sector has four spare bytes, which is why this is a knob.
+# its kernel is $(CQDIR)'s, so its modules are too
+$(BUILD)/cqdiag.img: KMODDIR := $(CQDIR)
+
 $(BUILD)/cqdiag.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	$(FIELDDRV)
 	@$(MAKE) BUILD=$(CQDIR) BOOTDIAG=1 $(FIELDKNOBS) $(CQDIR)/boot360.bin

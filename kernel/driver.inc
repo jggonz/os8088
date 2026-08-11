@@ -2780,8 +2780,12 @@ drv_notice:
     je .out
     mov byte [drv_nerr], 0
     mov byte [cp_sel], CP_IDRV
-    mov al, KIND_CTRL
-    call app_launch
+    call cp_open                ; SPEC.md 2.8.4. drv_notice runs BEFORE
+                                ; ui_task starts, so the system disk is still
+                                ; the one the machine booted from and this
+                                ; load is as reliable as the boot was - which
+                                ; is what makes the panel affordable as a
+                                ; module at all (docs/ONDEMAND-PLAN.md 2.2)
 .out:
     pop ax
     ret

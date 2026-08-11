@@ -1437,7 +1437,10 @@ dsk_ltrtab:                     ; every message that names the system disk
     dw ui_s_nodisk_l            ; the Task Manager's notice (SPEC.md 28.3)
     dw cp_s_dsdrv               ; the Control Panel's save refusal (51.5.1)
     dw drv_e1_l                 ; DRVE_DISK, the Drivers page's status (51)
-DSK_LTRN equ 3
+    dw cp_s_nodrv               ; ...and its OPEN refusal (SPEC.md 2.8.4), now
+                                ; that the panel's own code is a file on that
+                                ; same disk
+DSK_LTRN equ 4
 
 ; -----------------------------------------------------------------------------
 ; dsk_geom_pick - bank the current volume's partition base and cylinder bound

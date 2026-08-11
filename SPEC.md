@@ -516,6 +516,114 @@ sector to believe a different number — the low-memory boot and the refusal
 are both unreachable here otherwise (docs/TESTING.md). It costs the shipped
 sector nothing: unset, the `%ifdef` is not assembled.
 
+### 2.8 On-demand kernel modules — code that is not in KERNEL.SYS
+
+`kernel/mod.inc`, docs/ONDEMAND-PLAN.md.
+
+**A module is `.cold` code that ships as a file instead of as part of the
+kernel image.** It is read into a heap claim when its feature is asked for,
+far-called through a table of entry pointers, and freed when the feature is
+finished. Two exist: `CTRL.DRV`, the Control Panel (§31), and `FORMAT.DRV`,
+the floppy formatter (§18.96).
+
+**This is the fourth lever on the footprint, and the only one that relieves
+`KERN_BUDGET` without relieving nothing else.** §2.5's overlay is run-once
+code and §2.6's cold segment is still resident; moving a module cold to fix a
+footprint overrun is a no-op that looks like a fix. Taking it off the disk
+entirely is not.
+
+**What makes it work is that `.cold` was already ready.** Cold code is
+assembled at `vstart = 0`, contains no data at all, runs with `DS =
+KERNEL_SEG` and leaves itself only through the `cw_*` far shims — so it is
+already position-independent at paragraph granularity, and the only thing
+tying it to `COLD_SEG` is the constant in its inbound thunk. A module changes
+that constant for a word out of `mod_fp` and changes nothing else.
+
+**A module is assembled WITH the kernel**, in a section of its own
+(`.modc`, `.modf`), and `tools/os88mod.py` cuts it out of the binary
+afterwards. That is what makes every kernel address it names the address the
+kernel itself uses, rather than a second opinion out of a generated table.
+The sections are last and unpadded, so truncating at the first of them yields
+byte for byte the `kernel.bin` that would have been emitted with no modules
+in the tree.
+
+#### 2.8.1 The contract
+
+- `mod_need` — in AL = `MOD_*`; out CF = 0 loaded, CF = 1 not. **Preserves
+  every register including AX**, because it sits under a thunk whose caller's
+  arguments are already in them.
+- `mod_drop` — in AL = `MOD_*`. Frees the claim. Preserves every register.
+- Dispatch is `call far [mod_fp + K]` with K an assembly-time constant: no
+  register, no shared scratch word, re-entrant across modules by
+  construction. A slot that is not loaded points at `mod_gone`, which
+  refuses — never at zero, which is a far call to the divide-by-zero vector.
+- The loader itself is **`.cold`**. In `.text` it would be ~430 bytes against
+  a `KERN_CODE_MAX` nobody can raise, and being cold also means the thunks
+  that call it reach it with a near call.
+- A module's **data does not move**. It stays in `.text`, reached through DS
+  exactly as cold code's data is, which is what spares this mechanism §31.9's
+  string-staging question entirely.
+
+#### 2.8.2 Two stamps, because one cannot answer
+
+A module carries no dispatcher — the kernel knows its entry offsets, because
+it built them — and that is both cheaper than `call bp / retf` and the one
+hazard the design has: a module file beside a kernel it was not built with
+would be far-called at offsets that have moved. Header version is **5**, so
+`ld_check_hdr` (3) and `drv_check` (4) refuse it as well — two independent
+gates, §51.1's discipline — and the header carries **two** words that
+`mod_check` tests:
+
+- **`BUILD_NUM`** (§14.2), which changes on every commit. It answers *is this
+  module from another COMMIT*.
+- **`MOD_STAMP`** — `KTEXT_SIZE + KBSS_SIZE + COLD_SIZE + KLOW_SIZE` — which
+  answers the question the build number cannot: *is this module from another
+  BUILD of this commit*. `make small`, `make VIDEO=cga` and a `FONT=` build
+  are all the same commit with the kernel's data at different addresses, so a
+  module built for one would far-call correct offsets into the wrong
+  variables. Every image rule that builds a kernel outside `build/` therefore
+  builds its own modules beside it (`KMODDIR` in the Makefile), and this is
+  what refuses the mistake rather than executing it.
+
+`tools/os88mod.py` runs the same checks on the host at build time, and the
+duplication is deliberate: a module the kernel would refuse at run time is a
+machine whose Control Panel does not open, and finding that at `make` time
+costs nothing. The layout stamp is the kernel's to check — only the assembly
+knows the section sizes — but the tool does assert that every module cut out
+of one image carries the same one.
+
+#### 2.8.3 Lifetime: the feature decides, and the heap never does
+
+A module is freed by an explicit `mod_drop` from the feature's own end-of-life
+path — `cp_flush_close` for the panel — and by nothing else. It is
+deliberately **not** a purgeable claim (§50.6), attractive as that is:
+shed-and-retry fires on somebody else's refusal and takes the
+lowest-priority cache, which for a module that is on the call stack means
+freeing the code that is running. That does not fault. Making it purgeable
+needs a pin (a nesting count per module, held from entry to exit, and for the
+panel from open to close); docs/ONDEMAND-PLAN.md 7.1/7.2 carries that design
+and it is not built.
+
+#### 2.8.4 A refusal is a normal path, and the caller owes the reason
+
+No system disk, no heap, a short read, a stamp mismatch. Every one is CF = 1
+out of `mod_need` and **every caller owes the user something to act on**
+(§47 rule 3).
+
+The load is therefore placed where a failure can still be reported *instead
+of* the feature rather than *inside* it. `cp_open` loads **before**
+`app_launch`, so a machine with the wrong disk in the drive never gets a
+Control Panel window with no Control Panel in it — it gets no window and a
+toast naming the disk (§59), with the drive letter stamped by
+`dsk_bootltr` like every other message that names the system volume
+(§52.10.3).
+
+**Two Control Panel routines stay resident**, and both would otherwise force
+a load at a moment when there is no panel at all: `cp_tick_due` (called once
+a second from `ui_task`, panel or no panel) and `cp_drv_gone` (called from
+`drv_release` on any published driver's detach — including `drv_shutdown` on
+the way to a warm boot, *after* `cp_flush_close` has dropped the image).
+
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
 ```nasm

@@ -165,11 +165,10 @@ ui_task:
 
 .clock_cell:                    ; open the Control Panel on its Date/Time
     mov byte [cp_sel], CP_ITIME ; page (SPEC.md 31.5); no lock held here, so
-    mov al, KIND_CTRL           ; app_launch is called directly like any
-    call app_launch             ; other menu command - and fronts + repaints
-    jnc .yield                  ; an already-open panel, which is what makes
-    call snd_beep               ; the page swap visible
-    jmp .yield
+    call cp_open                ; cp_open is app_launch with the module load
+    jnc .yield                  ; in front of it (SPEC.md 2.8.4) - and it owns
+    jmp .yield                  ; the refusal, beep or toast, so there is
+                                ; nothing left here to say
 
 .on_desktop:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
@@ -1746,8 +1745,9 @@ ui_cmd:
     mov al, KIND_ABOUT
     jmp .launch
 .ctrl:
-    mov al, KIND_CTRL
-    jmp .launch
+    call cp_open                ; NOT .launch: the panel's code is a file now
+    ret                         ; (SPEC.md 2.8.4), so opening it can fail for
+                                ; a reason app_launch knows nothing about
 .timer:
     mov al, KIND_TIMER
     jmp .launch

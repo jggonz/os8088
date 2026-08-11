@@ -407,21 +407,21 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5704,
+    "bss": 5738,
     "budget": 104960,
     "codemax": 65536,
-    "cold": 23200,
-    "coldpara": 1472,
+    "cold": 20628,
+    "coldpara": 1312,
     "fatpara": 288,
     "imgpara": 4096,
-    "kend": 6528,
+    "kend": 6368,
     "kseg": 96,
-    "ksize": 102912,
+    "ksize": 100352,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 59394
+    "text": 59486
   },
   "small": {
     "bss": 5495,
@@ -934,14 +934,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,974 | 36.3% |
-| the window system and its furniture | 18,859 | 22.8% |
-| drawing: adapters, primitives, glyphs, icons | 12,628 | 15.3% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,892 | 12.0% |
-| the kernel proper: API table, heap, scheduler, events | 5,989 | 7.3% |
-| the Control Panel | 3,876 | 4.7% |
+| the file system, end to end | 29,980 | 37.4% |
+| the window system and its furniture | 18,854 | 23.5% |
+| drawing: adapters, primitives, glyphs, icons | 12,628 | 15.8% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,890 | 12.3% |
+| the kernel proper: API table, heap, scheduler, events | 6,023 | 7.5% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **82,594** | |
+| the Control Panel | 918 | 1.1% |
+| **total** | **80,114** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -949,15 +949,14 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,000 | 7,730 | **8,730** | 338 | — |
 | `wm.inc` — the window manager (§11) | 8,087 | — | **8,087** | 669 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,767 | — | **5,767** | 885 | 3,584 |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,769 | — | **5,769** | 885 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,449 | **5,628** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,203 | — | **5,203** | 653 | — |
-| `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,907 | **4,130** | 106 | — |
-| `ctrl.inc` — the Control Panel (§31) | 672 | 3,204 | **3,876** | — | — |
+| `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,911 | **4,134** | 106 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,660 | — | **2,660** | 341 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,658 | — | **2,658** | 341 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,622 | — | **2,622** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
@@ -973,17 +972,19 @@ generated in the first place.
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 1,000 | — | **1,000** | 18 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 718 | 200 | **918** | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 916 | — | **916** | 9 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `dock.inc` — the dock (§30) | 793 | — | **793** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 776 | **776** | 58 | — |
 | `toast.inc` — **(undescribed)** | 481 | — | **481** | 43 | — |
+| `mod.inc` — **(undescribed)** | 17 | 428 | **445** | 34 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,797 | — | **2,797** | — | — |
-| **total** | **59,394** | **23,200** | **82,594** | **5,704** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,831 | — | **2,831** | — | — |
+| **total** | **59,486** | **20,628** | **80,114** | **5,738** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1329,8 +1330,21 @@ thunks rather than through the window record.
 more except doing less. There is one precedent for doing less, and it is the
 Task Manager.
 
-> **A second lever has been costed and not yet built** —
-> docs/ONDEMAND-PLAN.md, on-demand kernel modules. It is this one without the
+> **A second lever exists now and the first thing has gone through it** —
+> SPEC.md §2.8, docs/ONDEMAND-PLAN.md. The **Control Panel** is a file
+> (`CTRL.DRV`, 3,185 bytes) read into a heap claim when it is opened and freed
+> when it closes: measured, `KERN_SIZE` **102,912 → 100,352, −2,560 bytes**,
+> five 512-byte steps, on both builds. What is left in the table below for
+> `ctrl.inc` is its DATA and the two routines that could not go
+> (`cp_tick_due`, `cp_drv_gone`) — 918 bytes against 3,876.
+>
+> It is not free against the other guard: `.text` + `.bss` went 65,098 →
+> 65,224, so `KERN_CODE_MAX`'s slack fell **438 → 312**. The loader is
+> `.cold`, so what landed in `.text` is the five `cw_*` shims it calls out
+> through, two thunks, the module table and the refusal string — and the
+> refusal is the feature rather than the mechanism.
+>
+> **On-demand kernel modules**, in the original note's words: It is this one without the
 > published ABI: `.cold` is already `vstart=0`, contains **zero data
 > directives**, runs with `DS = KERNEL_SEG` and calls out only through the 107
 > `cw_*` shims, so cold code is already position-independent at paragraph

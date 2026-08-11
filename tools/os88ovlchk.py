@@ -40,12 +40,26 @@ CALL = re.compile(r'\b(?:call|jmp|j[a-z]{1,3}|loop[a-z]{0,2})\s+'
 # an API cell macro whose body near-calls its LAST argument
 CELL = re.compile(r'^\s*OSAPI_(?:SLOT|NSTUB|XSTUB)\s+(?:\w+\s*,\s*)?'
                   r'([A-Za-z_]\w*)\s*$')
-FAR = ('.ovl', '.cold')     # sections with a vstart of their own
+FAR = ('.ovl', '.cold', '.modc', '.modf')   # sections with a vstart of their own
+
+
+# A file the kernel %includes from OUTSIDE kernel/, and the section its
+# contents therefore land in.  apps/os88ui.inc is the shared button and glyph
+# (SPEC.md 20.5.1): one source for two worlds, %included by fdlg.inc from
+# inside a `.cold` block, so every label in it is cold - and a NEAR call to
+# one from another address space is the exact bug this file exists to refuse.
+#
+# It was not scanned at all until an on-demand module (SPEC.md 2.8) near-called
+# os88ui_glyph from `.modc`.  The label was not in the map, so the call was
+# untested rather than reported, and the Control Panel painted itself and then
+# ran off the end of its own image into whatever was above it.  A file that
+# emits code into the kernel belongs here whatever directory it is in.
+EXTRA = {'apps/os88ui.inc': '.cold'}
 
 
 def sections(path):
     """yield (section, line-number, source-line) with comments stripped"""
-    cur = '.text'
+    cur = EXTRA.get(path, '.text')
     for n, raw in enumerate(open(path), 1):
         line = raw.split(';')[0]
         m = re.match(r'^\s*section\s+(\.\w+)', line)
@@ -56,7 +70,8 @@ def sections(path):
 
 
 def main():
-    files = sorted(glob.glob('kernel/*.inc')) + ['kernel/kernel.asm']
+    files = (sorted(glob.glob('kernel/*.inc')) + ['kernel/kernel.asm']
+             + sorted(EXTRA))
     where = {}                       # label -> section it is defined in
     for f in files:
         for sect, n, line in sections(f):
