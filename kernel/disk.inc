@@ -1314,7 +1314,15 @@ dsk_boot_from:
     pop dx
     pop cx
 
-    mov bx, dsk_vtab + 2*DV_SIZE    ; the row walks, as dsk_vol_add's does
+    mov bx, dsk_vtab + 2*DV_SIZE    ; the row walks, as dsk_vol_add's does -
+                                ; and from row 2, which at THIS point in kmain
+                                ; is always free, so a boot partition is
+                                ; always C:. That used to be a happy accident
+                                ; of the call order; SPEC.md 18.7.1 makes it
+                                ; the rule, and dsk_flop_add now skips row 2
+                                ; so a floppy cannot take it first. Do not
+                                ; "tidy" this to scan from 0: rows 0 and 1
+                                ; are the floppies' by that same rule
 .scan:
     cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
     jae .out                    ; no free row cannot happen at boot, nothing
@@ -1460,12 +1468,29 @@ dsk_flop_add:
     push bx
     push cx
     mov cl, al                  ; the unit, before AX becomes the answer
-    mov bx, dsk_vtab + 2*DV_SIZE    ; the ROW walks, as dsk_vol_add's does
+    mov bx, dsk_vtab            ; the ROW walks, as dsk_vol_add's does - and
+                                ; it starts at A: (SPEC.md 18.7.1). This was
+                                ; row 2, which made an external floppy C:
+                                ; even on a machine whose B: had been proven
+                                ; absent and freed: A and B are the first two
+                                ; FLOPPIES the machine has, wherever they are
+                                ; plugged in. Row 0 is never free (only
+                                ; dsk_fdd_retire frees one, and only row 1),
+                                ; so this cannot hand out A: by accident
 .scan:
     cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
     jae .full
+    cmp bx, dsk_vtab + 2*DV_SIZE
+    je .next                    ; ...and C: BELONGS TO THE HARD DISK, whether
+                                ; or not one ever turns up. dsk_vol_add still
+                                ; scans from row 2, so the first partition
+                                ; lands there the moment floppies stop taking
+                                ; it - and on a floppy-only machine with three
+                                ; drives the letters read A, B, D, which is
+                                ; the price and is paid on purpose
     cmp byte [bx+DV_KIND], DVK_FREE
     je .got
+.next:
     add bx, DV_SIZE
     jmp short .scan
 .got:

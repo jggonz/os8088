@@ -628,8 +628,6 @@ sb_cpu:
     call bl_blank
     mov si, sb_s_h_cpu
     call bl_sline
-    mov si, sb_s_h_cpu2
-    call bl_sline
     call bl_head
     mov word [sb_i], 0
 .next:
@@ -1062,8 +1060,6 @@ sb_isrload:
     call bl_blank
     mov si, sb_s_h_isr
     call bl_sline
-    mov si, sb_s_h_isr2
-    call bl_sline
     call bl_head
     mov ax, ds
     mov [sb_seg], ax
@@ -1290,9 +1286,7 @@ sb_mouse:
     mov si, sb_s_h_mou
     call bl_sline
     mov si, sb_s_h_mou2
-    call bl_sline
-    mov si, sb_s_h_mou3
-    call bl_sline                   ; ...and NO bl_head: that heading names
+    call bl_sline   ; ...and NO bl_head: that heading names
                                     ; N/counts/us-per-op, and not one row here
                                     ; is a measurement
 
@@ -1457,9 +1451,7 @@ sb_video:
     mov si, sb_s_h_vid
     call bl_sline
     mov si, sb_s_h_vid2
-    call bl_sline
-    mov si, sb_s_h_vid3
-    call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
+    call bl_sline   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_VIDEO           ; SPEC.md 57's registry
     call bl_dbgfind
@@ -1702,9 +1694,7 @@ sb_ladder:
     mov si, sb_s_h_lad
     call bl_sline
     mov si, sb_s_h_lad2
-    call bl_sline
-    mov si, sb_s_h_lad3
-    call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
+    call bl_sline   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_CLOCK           ; SPEC.md 57's registry
     call bl_dbgfind
@@ -1792,14 +1782,8 @@ sb_fdd:
     call bl_blank
     mov si, sb_s_h_fdd
     call bl_sline
-    mov si, sb_s_h_fdd2
-    call bl_sline
     mov si, sb_s_h_fdd3
-    call bl_sline
-    mov si, sb_s_h_fdd4
-    call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
-    mov si, sb_s_h_fdd6
-    call bl_sline
+    call bl_sline   ; ...and no bl_head, for sb_mouse's reason
     mov si, sb_s_h_fdd7
     call bl_sline
 
@@ -2592,22 +2576,6 @@ sb_raw13:
     call bl_blank
     mov si, sb_s_h_r13
     call bl_sline
-    mov si, sb_s_h_r132
-    call bl_sline
-    mov si, sb_s_h_r133
-    call bl_sline
-    mov si, sb_s_h_r134
-    call bl_sline
-    mov si, sb_s_h_r135
-    call bl_sline
-    mov si, sb_s_h_r136
-    call bl_sline
-    mov si, sb_s_h_r137
-    call bl_sline
-    mov si, sb_s_h_r138
-    call bl_sline
-    mov si, sb_s_h_r139
-    call bl_sline
 
     ; --- the diskette parameter table the BIOS is actually using (18.92) ----
     push es
@@ -2750,10 +2718,6 @@ sb_write:
     push es
     call bl_blank
     mov si, sb_s_h_wr
-    call bl_sline
-    mov si, sb_s_h_wr2
-    call bl_sline
-    mov si, sb_s_h_wr3
     call bl_sline
 
     call OSAPI_FILE_HERE            ; SAY where this landed: the whole point is
@@ -3052,16 +3016,6 @@ sb_rah:
     call bl_blank
     mov si, sb_s_h_rah
     call bl_sline
-    mov si, sb_s_h_rah2
-    call bl_sline
-    mov si, sb_s_h_rah3
-    call bl_sline
-    mov si, sb_s_h_rah4
-    call bl_sline
-    mov si, sb_s_h_rah5
-    call bl_sline
-    mov si, sb_s_h_rah6
-    call bl_sline
     cmp word [sb_dbgblk], 0         ; the whole answer is a call count
     je .nodbg
 
@@ -3317,12 +3271,6 @@ sb_find:
     call bl_blank
     mov si, sb_s_h_fnd
     call bl_sline
-    mov si, sb_s_h_fnd2
-    call bl_sline
-    mov si, sb_s_h_fnd3
-    call bl_sline
-    mov si, sb_s_h_fnd4
-    call bl_sline
 
     call sb_fcount                  ; how many entries are there to walk?
     mov si, sb_l_fn
@@ -3534,14 +3482,6 @@ sb_dbgctr:
     push si
     call bl_blank
     mov si, sb_s_h_ctr
-    call bl_sline
-    mov si, sb_s_h_ctr2
-    call bl_sline
-    mov si, sb_s_h_ctr3
-    call bl_sline
-    mov si, sb_s_h_ctr4
-    call bl_sline
-    mov si, sb_s_h_ctr5
     call bl_sline
 
     call sb_ctr_bank                ; --- one 16KB read
@@ -3998,10 +3938,6 @@ sb_seek:
     call bl_blank
     mov si, sb_s_h_sk
     call bl_sline
-    mov si, sb_s_h_sk2
-    call bl_sline
-    mov si, sb_s_h_sk3
-    call bl_sline
     call bl_head
 
     xor ch, ch                      ; warm the motor and park the head at 0, so
@@ -4120,10 +4056,6 @@ sb_motor:
     call bl_blank
     mov si, sb_s_h_mt
     call bl_sline
-    mov si, sb_s_h_mt2
-    call bl_sline
-    mov si, sb_s_h_mt3
-    call bl_sline
     call bl_head
 
     call sb_r13at                   ; touch the drive so the countdown is
@@ -4234,8 +4166,6 @@ sb_hdd:
     push si
     call bl_blank
     mov si, sb_s_h_hdd
-    call bl_sline
-    mov si, sb_s_h_hdd2
     call bl_sline
     call bl_head
 
@@ -4669,7 +4599,6 @@ sb_h_6b:    db '                          Bench menu writes it again, after a di
 sb_h_7:     db '   Space PgDn PgUp Up Dn Home End   page through it afterwards.', 0
 
 sb_s_h_hdd:  db '-- the hard disk (SPEC.md 52), if this machine has one --', 0
-sb_s_h_hdd2: db '   READ ONLY: nothing here formats, partitions, writes or deletes.', 0
 sb_s_hddno:  db 'No volume at index 2 - no hard disk mounted. Rows skipped.', 0
 
 sb_p_head:  db 'running: reading the machine...', 0
@@ -4713,8 +4642,7 @@ sb_l_hdsz:    db '  hdd bytes read', 0
 
 ; --- the mouse (SPEC.md 9.4.1/9.4.2) -----------------------------------------
 sb_s_h_vid:  db '-- the displays: what SPEC.md 39 arranged, and on which cards (39.19) --', 0
-sb_s_h_vid2: db '   STATE, not a measurement. kind/adapter: 0=Vga 1=Herc 2=Cga; avail is', 0
-sb_s_h_vid3: db '   a BITMAP of 1<<kind, so 6 = a Hercules AND a Cga. Read the PAIRS.', 0
+sb_s_h_vid2: db '   kind 0=Vga 1=Herc 2=Cga; avail is a BITMAP of 1<<kind, so 6 = both.', 0
 sb_s_vnone:  db '   this kernel publishes no display block (built before SPEC.md 57.4).', 0
 sb_s_vsmall: db '   kern_small: single-display by CONSTRUCTION, so there is nothing set.', 0
 sb_l_vkind:  db '  adapter running', 0
@@ -4733,8 +4661,7 @@ sb_l_vdb:    db '     stride banks', 0
 sb_l_vdf:    db '     framebuffer (hex)', 0
 sb_l_vdead:  db '  dead zone, 100s of px', 0
 sb_s_h_mou:  db '-- the mouse: the port contest and the identify burst (SPEC.md 9.4.1) --', 0
-sb_s_h_mou2: db '   STATE, not a measurement: base and first byte are HEX, rest decimal.', 0
-sb_s_h_mou3: db '   A mouse that identified reads: first byte 4D, identified 1, stamp 0.', 0
+sb_s_h_mou2: db '   base and first byte are HEX. Identified reads 4D / 1 / stamp 0.', 0
 sb_s_mnone:  db '   this kernel publishes no mouse block (built before SPEC.md 9.4.2).', 0
 sb_l_mb0:    db '  COM1 base (0=absent)', 0
 sb_l_mb1:    db '  COM2 base (0=absent)', 0
@@ -4753,11 +4680,8 @@ sb_l_mpt:    db '  winning row (0/2)', 0
 sb_l_mln:    db '  winning IRQ hex 10=4', 0
 
 sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
-sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a DIP switch.', 0
-sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0, and the SECOND read decides. ST0 is drained.', 0
-sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
-sb_s_h_fdd6: db '   ONE SUB-BLOCK PER UNIT: probe ran is a bitmap, bit n = unit n asked.', 0
-sb_s_h_fdd7: db '   equip 7-6=drives-1; SW1 (Ibm Pc) should match its low byte.', 0
+sb_s_h_fdd3: db '   probe stop 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
+sb_s_h_fdd7: db '   ST3 bit 4 = TRK0, 2nd read decides. probe ran = bitmap. equip 7-6+1.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
 sb_l_feqw:   db '  equip word hex', 0
@@ -4771,8 +4695,7 @@ sb_l_fstep:  db '  probe stop hex', 0
 sb_l_fvrd:   db '  verdict 1=kept 0=gone', 0
 
 sb_s_h_lad:  db '-- the clock: which rung of the RTC ladder answered (SPEC.md 37.90) --', 0
-sb_s_h_lad2: db '   STATE, not a measurement. tier: 0 none 1 AT 2 MM58167 3 RP5C01 4 BIOS.', 0
-sb_s_h_lad3: db '   probe stop: 00 not run, FF passed, 01-07 the gate that refused.', 0
+sb_s_h_lad2: db '   tier 0 none 1 AT 2 MM58167 3 RP5C01 4 BIOS; stop FF passed, 01-07 no.', 0
 sb_s_cnone:  db '   this kernel publishes no clock block (built before SPEC.md 37.92).', 0
 sb_l_ctier:  db '  tier that answered', 0
 sb_l_cref:   db '  int 1Ah readable', 0
@@ -4795,13 +4718,11 @@ sb_s_warn3: db 'A tick-timed (t) row of 0 counts means it finished inside one 55
 sb_s_warn4: db 'tick - true on a fast host, and never true on the machine this is for.', 0
 
 sb_s_h_cpu:  db '-- cpu: 32 copies of one instruction per iteration --', 0
-sb_s_h_cpu2: db '   (us/op is the whole 32, not one instruction - see the table below)', 0
 sb_s_h_der:  db '-- the same rows as clocks, against the 8086 book --', 0
 sb_s_h_der2: db 'instruction           measx100  nom x100  ratiox100', 0
 sb_s_h_mem:  db '-- RAM bandwidth: 2048 bytes an iteration (gfxbench has the VRAM) --', 0
 sb_s_h_clk:  db '-- the clock and the timers --', 0
 sb_s_h_isr:  db '-- what the kernel own interrupts cost --', 0
-sb_s_h_isr2: db '   the same work timed with interrupts off, then with them on', 0
 sb_s_h_os:   db '-- the API far-call floor and the scheduler --', 0
 sb_s_h_dsk:  db '-- the floppy: one int 13h per sector, so latency not bandwidth --', 0
 
@@ -4842,19 +4763,11 @@ sb_d_isr:    db 'interrupt load pct', 0
 sb_d_rate:   db 'floppy bytes/sec', 0
 
 sb_s_h_r13:  db '-- the same drive with NO kernel code in the way: raw int 13h --', 0
-sb_s_h_r132: db '   READ ONLY. A 9-sector track is 4,608 bytes. THE TURN DEPENDS ON', 0
-sb_s_h_r133: db '   THE DRIVE: a 360K drive is 300 RPM (200 ms), a 1.2M one 360 RPM', 0
-sb_s_h_r134: db '   (167 ms) even on 360K media. 1:1 / 2:1 / one-per-turn B/s are', 0
-sb_s_h_r135: db '   23040 / 11520 / 2560 at 300, and 27648 / 13824 / 3072 at 360.', 0
-sb_s_h_r136: db '   The B/s ROWS below are measured, not derived, so they are right', 0
-sb_s_h_r137: db '   either way - and `int 13h 1 sector` is ONE turn, so it says which.', 0
 ; It says which DRIVE and NOT which interleave, and that distinction cost this
 ; project four sets of wrong belief (PERFORMANCE.md Set 37): a B/s row divides
 ; by the WHOLE int 13h call, and a quarter of one is the ROM's head-settle
 ; delay loop, so 1:1 media reads as 2:1 and the arithmetic above agrees to
 ; 0.4%. Say so in the report, next to the numbers that invite it.
-sb_s_h_r138: db '   ...which DRIVE. NOT which interleave: a B/s row divides by the', 0
-sb_s_h_r139: db '   WHOLE call, and the ROM head-settle wait is a quarter of one.', 0
 sb_l_dptn:   db 'DPT EOT (18.92 patches)', 0
 sb_l_dpts:   db 'DPT step/head unload', 0
 sb_l_dpth:   db 'DPT head settle ms', 0
@@ -4864,8 +4777,6 @@ sb_r_139:    db 'int 13h track, 1 call', 0
 sb_r_13n:    db 'int 13h track, 9 calls', 0
 sb_l_r13st:  db 'int 13h last status AH', 0
 sb_s_h_sk:   db '-- what a HEAD STEP costs: the same read either side of a seek --', 0
-sb_s_h_sk2:  db '   Read as REVOLUTIONS. A seek hides inside the wait for sector 1', 0
-sb_s_h_sk3:  db '   to come round, so what to look for is WHERE the cost steps up.', 0
 sb_r_sk0:    db 'seek 0 cyl (baseline)', 0
 sb_r_sk1:    db 'seek 1 cyl, pair', 0
 sb_r_sk5:    db 'seek 5 cyl, pair', 0
@@ -4873,8 +4784,6 @@ sb_r_sk10:   db 'seek 10 cyl, pair', 0
 sb_r_sk20:   db 'seek 20 cyl, pair', 0
 sb_r_sk39:   db 'seek 39 cyl, pair', 0
 sb_s_h_mt:   db '-- what SPIN-UP costs: one sector cold, then the same one warm --', 0
-sb_s_h_mt2:  db '   cold - warm is spin-up plus the DPT motor-start wait above;', 0
-sb_s_h_mt3:  db '   cold NOT slower than warm means none is being paid at all.', 0
 sb_r_mtc:    db '1 sector, motor COLD', 0
 sb_r_mtw:    db '1 sector, motor warm', 0
 sb_l_mtst:   db 'motor status 40:3F', 0
@@ -4887,13 +4796,7 @@ sb_d_r13b:   db 'bios track 1 call B/s', 0
 sb_d_r13s:   db 'bios track 9 calls B/s', 0
 sb_s_nodbg:  db 'This kernel carries no disk instrument - build DISKCNT=1.', 0
 sb_s_h_ctr:  db '-- what os8088 own transfer path ISSUES, per operation --', 0
-sb_s_h_ctr2: db '   the 1-sector read is the same overhead with no data in it,', 0
-sb_s_h_ctr3: db '   and each REPEAT row prices SPEC.md 18.95 cache in int 13h:', 0
-sb_s_h_ctr4: db '   0 calls = the cache served it whole. The 16KB pair MATCH,', 0
-sb_s_h_ctr5: db '   or a stream was cached; the after-16KB row is 18.95.1.', 0
 sb_s_h_wr:   db '-- SPEC.md 18.4: what a LARGE WRITE costs, where you started --', 0
-sb_s_h_wr2:  db '   It writes to the CURRENT volume, so run it from A: for a', 0
-sb_s_h_wr3:  db '   floppy and from C: for a hard disk. Cleans up after itself.', 0
 sb_s_wnone:  db '   no room on the volume or in the heap: the write rows were skipped.', 0
 sb_s_wnorep: db '   replace SKIPPED: it needs TWICE the size free (SPEC.md 18.4).', 0
 sb_r_wsml:   db 'WRITE, one cluster', 0
@@ -4907,11 +4810,6 @@ sb_l_wchunk: db '  ...in chunks of KB', 0
 sb_l_werr:   db '  REFUSED, FERR_', 0
 sb_f_wr:     db 'SBWRITE.TMP', 0
 sb_s_h_rah:  db '-- SPEC.md 18.95.4: how many chunks does the sector cache hold --', 0
-sb_s_h_rah2: db '   W chunks written, then re-read. Round-robin plus the same', 0
-sb_s_h_rah3: db '   order is Belady worst case, so this is a CLIFF, not a slope.', 0
-sb_s_h_rah4: db '   It is a LOWER BOUND on DSK_RAH_RUNS: resolving the file by', 0
-sb_s_h_rah5: db '   name touches a directory sector and the FAT, and those take', 0
-sb_s_h_rah6: db '   slots as well, and the sweep stops at 12 (see SB_RAH_WMAX).', 0
 sb_s_rnofile: db '   BIGFILE.DAT is not on this volume: nothing wide to walk.', 0
 sb_s_rnoclaim: db '   no 8KB heap claim available: the cache rows were skipped.', 0
 sb_s_rerr:   db '   a read refused mid-sweep - the rows above are what stands.', 0
@@ -4924,9 +4822,6 @@ sb_l_rhold:  db '  MEASURED: widest kept', 0
 sb_l_rmiss:  db '  ...and the width miss', 0
 sb_f_bigger: db 'BIGFILE.DAT', 0
 sb_s_h_fnd:  db '-- SPEC.md 18.95.2: what a resumable FILE_FIND cursor would win --', 0
-sb_s_h_fnd2: db '   FIND is BY ORDINAL and re-seeks, so entry k walks past the k', 0
-sb_s_h_fnd3: db '   before it. Two rows at the two ends of THIS directory give the', 0
-sb_s_h_fnd4: db '   slope, so the answer scales to a directory of any size.', 0
 sb_s_fnfew:  db '   ...one entry or none: no slope to fit. Run it somewhere fuller.', 0
 sb_r_f0:     db 'FIND, first ordinal', 0
 sb_r_fl:     db 'FIND, last ordinal', 0
@@ -4990,21 +4885,34 @@ SB_BSS_OWN equ ((SB_O_RAM2 + SB_BWBYTES + 511) / 512) * 512   ; benchlib's base 
                                 ; costs up to 511 bytes of image and buys the
                                 ; alignment of every bss offset below
                                 ;
-                                ; **THIS PACKAGE IS AT ITS CEILING.** image +
-                                ; bss must fit APP_MAX_SIZE (60KB, the
-                                ; SEGMENT, unraisable), bss is 38,452, so the
-                                ; image may not cross 22,528 - and it is
-                                ; 22,519. NINE BYTES. Adding a row here
-                                ; means finding the bytes first, and the two
-                                ; obvious places are BOTH refused: benchlib's
-                                ; BL_MAXROWS and BL_ARENA each carry a comment
-                                ; about a report that TRUNCATED in the field.
-                                ; SPEC.md 57.5's SW1 row was paid for by
-                                ; merging two pairs of header lines and 57.6's
-                                ; build row by trimming a third and dropping
-                                ; two dead push/pop pairs. The prose is
-                                ; compressed now: the next row needs a real
-                                ; saving, not another tidy-up.
+                                ; **THIS PACKAGE WAS AT ITS CEILING**, and
+                                ; the way out was the PROSE. image + bss must
+                                ; fit APP_MAX_SIZE - the 60KB SEGMENT, which
+                                ; is unraisable - so with bss at 38,452 the
+                                ; image may not cross 22,528. It reached
+                                ; 22,519: nine bytes, with two rows fought for
+                                ; a byte at a time.
+                                ;
+                                ; 41% of the image was TEXT (9,270 bytes in
+                                ; 267 labels), and 3,893 of it was the three-
+                                ; to-five explanatory lines each block carried
+                                ; - restating SPEC.md to a reader who has
+                                ; SPEC.md. Thirty-five of those lines went and
+                                ; five legends were compressed to one line
+                                ; each: **20,029, so 2,499 spare**, and four
+                                ; 512-byte rungs off the package.
+                                ;
+                                ; What was KEPT is every section title and
+                                ; every legend that turns a hex column into
+                                ; meaning - probe stop codes, the RTC tiers,
+                                ; the adapter kinds, the equipment-word bits.
+                                ; Without those the numbers need a second
+                                ; document open beside them, which is not what
+                                ; a field report is for. NOTHING MEASURED WAS
+                                ; REMOVED: sysbench times no glyph work (all
+                                ; 28 bl_body routines are cpu, RAM, clock, API
+                                ; or disk), so the strings were never test
+                                ; data - that is tests/fontbench's job.
     OS88_BSS SB_BSS_OWN + BL_BSS_SIZE
     OS88_IMAGE_END
 
