@@ -72,6 +72,13 @@ TOAST_MAX   equ 40              ; characters. The narrowest segment is a
 TOAST_TICKS equ 55              ; ~3.0 s at 18.2 Hz: long enough to read eight
                                 ; words on a 4.77MHz machine, short enough
                                 ; that it is gone before it becomes furniture
+TOAST_SCAN  equ 256             ; bytes of the caller's string examined before
+                                ; the copy gives up. Generous against any real
+                                ; message (the buffer keeps 40) and the whole
+                                ; of the defence: the scan runs interrupts-off
+                                ; through a package-supplied pointer, and
+                                ; without a byte bound a segment holding no
+                                ; NUL and no printable would hang the machine
 
 toast_on:    db 0               ; a strip is composed into the bar
 toast_want:  db 0               ; staged by toast_show, not yet put up
@@ -122,14 +129,24 @@ toast_show:
     jnz .ttl
     mov cx, TOAST_TICKS
 .ttl:
+    cmp cx, 0x7FFF              ; toast_pass measures expiry with a SIGNED
+    jbe .ttlok                  ; subtract (the modular-clock compare), so a
+    mov cx, 0x7FFF              ; TTL past 32767 ticks would read as already
+.ttlok:                         ; over and the toast would die on first look
     mov [toast_ttl], cx
     mov di, toast_buf
     mov cx, TOAST_MAX
+    mov dx, TOAST_SCAN
 .cp:
     mov al, [es:si]
     or al, al
     jz .end
     inc si
+    dec dx                      ; the OTHER bound: CX counts characters KEPT,
+    jz .end                     ; so a string that never offers a printable
+                                ; byte or a NUL - and every byte from a
+                                ; package is hostile - would spin this loop
+                                ; around its segment forever, interrupts off
     cmp al, ' '                 ; a control character would letter as a glyph
     jb .cp                      ; and bit 7 is the inversion flag rather than
     cmp al, 0x7F                ; a character (see toast_compose), so only
@@ -221,28 +238,43 @@ toast_say:
 ; operation runs INSIDE a window callback on the UI task, so ui_task's loop
 ; does not come round again until it is over.
 ;
-; **The test is the lock flag AND the running task, and both halves are
-; needed.** [gfx_lock_flag] says the lock is held by SOMEBODY, not by the
-; caller - a worker calling this while the UI task is drawing would race
-; against it. But gfx_lock BLOCKS by yielding, so a UI task that is executing
-; at all and sees the flag set is the task that took it: it is inside a
-; callback, which is where every app raises a toast from. A worker holding
-; the lock simply takes the staged path and is one tick late, which is right
-; for a background job and costs nothing.
+; **The test is the lock's OWNER against the running task.** [gfx_lock_flag]
+; alone says the lock is held by SOMEBODY, not by the caller - and "the UI
+; task is running and the flag is set" does not close that gap either, the
+; way this first shipped believing: gfx_lock does `sti` after the take, so a
+; WORKER holding the lock can be pre-empted mid-draw and the UI task can run
+; a path that raises without the lock (the Control Panel's flush-on-reboot
+; is one today). So gfx_lock stamps [gfx_lock_own] with [sch_cur] at the
+; take, and this draws only when the task asking IS the task named - which
+; is a fact, not an inference. Anybody else takes the staged path and is one
+; tick late, which is right for a background job and costs nothing.
 ; -----------------------------------------------------------------------------
 toast_now:
-    cmp byte [gfx_lock_flag], 0
-    je .out
-    cmp byte [sch_cur], 0       ; task 0 is ui_task (kernel.asm's kmain tail)
-    jne .out
     push ax
+    cmp byte [gfx_lock_flag], 0
+    je .outa
+    cmp byte [sch_cur], 0       ; task 0 is ui_task (kernel.asm's kmain tail)
+    jne .outa
+    cmp byte [gfx_lock_own], 0  ; ...and the UI task is the HOLDER, not a
+    jne .outa                   ; bystander running while a pre-empted worker
+                                ; owns the glass
+    mov al, [gfx_color]         ; the caller is mid-callback: its pen and its
+    push ax                     ; clip region are ITS, and the bar is inside
+    mov ax, [wm_clip_n]         ; no window's region ever - drawn through an
+    push ax                     ; armed one the strip's cells would be dropped
+    mov word [wm_clip_n], 0     ; on the glass while menu_bcell records them
+                                ; composed, and no later pass would repair it
     call toast_arm
     call menu_draw_bar
                                 ; carry it to VRAM does not come until the
                                 ; operation this announces is over (SPEC.md
                                 ; 32) - fpg_begin's reasoning exactly
     pop ax
-.out:
+    mov [wm_clip_n], ax
+    pop ax
+    mov [gfx_color], al
+.outa:
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -309,6 +341,9 @@ toast_pass:
 ; -----------------------------------------------------------------------------
 toast_kill:
     pushf
+    cli                         ; check-then-act: a task switch between the
+                                ; tests and the stores could retire a toast
+                                ; some OTHER task staged in the gap
     cmp byte [toast_on], 0
     jne .go
     cmp byte [toast_want], 0
@@ -334,6 +369,9 @@ toast_kill:
 ; -----------------------------------------------------------------------------
 toast_owner_gone:
     pushf
+    cli                         ; same check-then-act window as toast_kill's:
+                                ; the instance compare must not race a fresh
+                                ; toast_show from another task
     push ax
     push cx
     cmp byte [toast_on], 0

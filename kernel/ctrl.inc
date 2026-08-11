@@ -132,7 +132,7 @@ cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
 cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
                                 ; wrong disk in A:, 2 = the write failed. Said
                                 ; as a TOAST at the moment it happens (SPEC.md
-                                ; 59.6) rather than carried to a page caption
+                                ; 60.6) rather than carried to a page caption
                                 ; to be found next session; what is left of
                                 ; its old job is telling cp_flush_close_x
                                 ; whether to keep [cp_wdirty] and retry

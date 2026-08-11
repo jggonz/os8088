@@ -50,6 +50,10 @@ gfx_pat         dw 0            ; gfx_fill_pat: near ptr to 8 row bytes,
 gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
                                 ; Initialized data, NOT .bss: nothing zeroes
                                 ; .bss at boot, and this byte must start clear.
+gfx_lock_own    db 0xFF         ; ...and WHICH task holds it ([sch_cur] at the
+                                ; take, 0xFF = nobody). toast_now's whole test
+                                ; (SPEC.md 59.4): the flag alone says somebody
+                                ; holds it, never that the CALLER does.
 
 ; -----------------------------------------------------------------------------
 ; GFXCLIP - the clip hook, at a public rect entry (SPEC.md 11.3)
@@ -1234,13 +1238,22 @@ gfx_line:
     mov di, [wm_clip_n]
 .frag:
     mov ax, [si+WCR_X1]         ; the rects are disjoint, so no pixel of the
-    mov [gfx_ln_cx1], ax        ; line is ever written twice
-    mov ax, [si+WCR_Y1]
-    mov [gfx_ln_cy1], ax
-    mov ax, [si+WCR_X2]
-    mov [gfx_ln_cx2], ax
-    mov ax, [si+WCR_Y2]
-    mov [gfx_ln_cy2], ax
+    mov bx, [si+WCR_Y1]         ; line is ever written twice
+    mov cx, [si+WCR_X2]
+    mov dx, [si+WCR_Y2]
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; the fragments are VIRTUAL and the endpoints
+    je .fv                      ; went display-local at GFXDORG, so each
+    sub ax, [vid_ox]            ; fragment follows them onto the display -
+    sub cx, [vid_ox]            ; gfx_clip_run's own idiom, which this loop
+    sub bx, [vid_oy]            ; replicated WITHOUT the translation: a local
+    sub dx, [vid_oy]            ; line clipped against virtual rects meets
+.fv:                            ; none of them on display 1 and vanishes
+%endif
+    mov [gfx_ln_cx1], ax
+    mov [gfx_ln_cy1], bx
+    mov [gfx_ln_cx2], cx
+    mov [gfx_ln_cy2], dx
     push si
     push di
     call gfx_line_raw
@@ -2882,6 +2895,10 @@ gfx_lock:
     jmp .retry
 .take:
     mov byte [gfx_lock_flag], 1
+    push ax
+    mov al, [sch_cur]           ; the owner is stamped inside the cli window,
+    mov [gfx_lock_own], al      ; so flag and owner can never disagree
+    pop ax
     sti
     mov byte [cur_lazy], 1      ; PROMISE the hide (SPEC.md 7.1.4) - the ISR
     ret                         ; will not move the arrow while the flag is
@@ -2926,6 +2943,9 @@ gfx_unlock:
 .never:
     call cur_lazyend            ; ...but the ISR could not move it all hold
 .rel:
+    mov byte [gfx_lock_own], 0xFF   ; owner first: a task switch between the
+                                    ; two stores must not show flag-free with
+                                    ; a stale owner still named
     mov byte [gfx_lock_flag], 0
     mov byte [dsk_batch], 0     ; ANY UNLOCKING OF THE USER INTERFACE ENDS A
                                 ; BATCH (SPEC.md 18.9.3). One store, and it is

@@ -417,7 +417,7 @@ hd_svc:
 ; what stops the tool naming a row that is not there.
 hd_svc_raw:
     mov al, [es:si+HRQ_DEV]
-    call hd_dev_row             ; DI = the row, CF = 1 = no such device
+    call hd_dev_row_ck          ; DI = the row, CF = 1 = no such device
     jc hd_svc_out
     mov al, [es:si+HRQ_OP]
     mov [hd_rawop], al
@@ -457,9 +457,16 @@ hd_svc_sync:
 ; do the whole job, which is why hd_vols crosses nothing.
 hd_svc_mount:
     mov al, [es:si+HRQ_DEV]
-    mov [hd_sel], al
-    call hd_dev_row             ; DI = the row, CF = 1 = no such device
-    jc hd_svc_out
+    call hd_dev_row_ck          ; DI = the row, CF = 1 = no such device -
+    jc hd_svc_out               ; a REAL check now, not the fiction the old
+                                ; comment described
+    mov ah, [hd_sel]            ; the panel's highlight is the USER's; it is
+    push ax                     ; borrowed below as hd_mount_one's routing
+    mov [hd_sel], al            ; register and put BACK whatever happens -
+                                ; hd_cfg_automount's own save/restore shape.
+                                ; Left moved, the next Format or Install
+                                ; click bound to a device the user never
+                                ; picked
     call hd_part_load           ; OUR copy of the table, as the format left it
     mov al, [es:si+HRQ_SLOT]
     mov [hd_pslot], al
@@ -469,7 +476,10 @@ hd_svc_mount:
     call hd_mount_one           ; came back was the ENTRY pointer and the
     pop si                      ; answer below was read from, and written to,
     pop es                      ; the tool's image at a garbage offset
-    jc hd_svc_out               ; (`pop` leaves CF alone)
+                                ; (`pop` leaves CF alone)
+    pop ax
+    mov [hd_sel], ah            ; (mov leaves CF: hd_mount_one's verdict)
+    jc hd_svc_out
     mov al, [es:si+HRQ_DEV]     ; which kernel volume did it become? The row
     mov ah, [es:si+HRQ_SLOT]    ; hd_mount_one filled says, and finding it here
     call hd_vol_of              ; is what spares the tool a sight of hd_vols
