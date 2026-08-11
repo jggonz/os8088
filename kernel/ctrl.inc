@@ -1375,13 +1375,12 @@ cp_vid_mode:
 ; white fill between the two pen calls neither carries the flag nor clears it.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; cp_brect - scratch for the two pages that draw a standard button
-;
-; os88ui_btn takes a POINTER to {x1,y1,x2,y2} so that the drawn control and a
-; hit test read the same four words (SPEC.md 22's fm_hit discipline). Both
-; pages build theirs here; neither draws two at once.
+; The two pages that draw a standard button build their rect in
+; os88ui_krect - the ONE kernel scratch, declared in .bss by os88ui.inc for
+; the reason its own comment gives (a word in .cold reached through DS is not
+; that word). Neither page draws two buttons at once, and neither does anyone
+; else on the UI task under the gfx lock.
 ; -----------------------------------------------------------------------------
-cp_brect:   dw 0, 0, 0, 0
 
 cp_vid_btn:
     push ax
@@ -1393,14 +1392,14 @@ cp_vid_btn:
 
     mov ax, di
     add ax, CPV_BTNX
-    mov [cp_brect+0], ax
+    mov [os88ui_krect+0], ax
     add ax, CPV_BTNW - 1
-    mov [cp_brect+4], ax
+    mov [os88ui_krect+4], ax
     mov ax, bp
     add ax, CPV_BTNY
-    mov [cp_brect+2], ax
+    mov [os88ui_krect+2], ax
     add ax, CPV_BTNH - 1
-    mov [cp_brect+6], ax
+    mov [os88ui_krect+6], ax
 
     call cpf_vidok              ; CF = 1 when there is nothing to activate
     mov di, OS88UI_FILL         ; the pane behind it is not white
@@ -1408,7 +1407,7 @@ cp_vid_btn:
     or di, OS88UI_DIS           ; SPEC.md 47 rule 1: the frame AND the label
 .live:                          ; dither together, which is one flag now
     mov si, cp_s_vact
-    mov bx, cp_brect
+    mov bx, os88ui_krect
     call os88ui_btn
 
     pop di
@@ -2071,17 +2070,17 @@ cp_timebtn:
 .have:
     mov ax, di
     add ax, CPT_BX
-    mov [cp_brect+0], ax
+    mov [os88ui_krect+0], ax
     add ax, CPT_BW - 1
-    mov [cp_brect+4], ax
+    mov [os88ui_krect+4], ax
     mov ax, bp
     add ax, dx
-    mov [cp_brect+2], ax
+    mov [os88ui_krect+2], ax
     add ax, CPT_BH - 1
-    mov [cp_brect+6], ax
+    mov [os88ui_krect+6], ax
 
     mov di, OS88UI_FILL         ; always live: a field is always adjustable
-    mov bx, cp_brect
+    mov bx, os88ui_krect
     call os88ui_btn
 
     pop di

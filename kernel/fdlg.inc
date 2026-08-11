@@ -1273,7 +1273,16 @@ fdlg_defbtn:
                                 ; time - the "looks available and refuses"
                                 ; failure rule 4 exists to prevent)
     mov bx, FD_BY0
-    mov al, 1                   ; the default button carries the outer frame
+    mov al, OS88UI_DEF | OS88UI_FILL
+                                ; the outer ring - and the FILL, because this
+                                ; is the one button in the kernel REDRAWN IN
+                                ; PLACE (fdlg_draw_name, on the edge where
+                                ; fdlg_actok moves). font_char is transparent,
+                                ; so without an erase a checkerboard caption
+                                ; is OR'd onto the solid one already there and
+                                ; the greyed label comes out pixel-identical
+                                ; to the live one - SPEC.md 47 rule 1 defeated
+                                ; downstream of a mechanism that works
     call fdlg_btn               ; ...and AH carries the greying (SPEC.md 47 r1)
     pop si
     pop bx
@@ -1282,20 +1291,26 @@ fdlg_defbtn:
 
 ; -----------------------------------------------------------------------------
 ; fdlg_btn - one button of the right-hand column (internal)
-; in:  BX = its top (content-relative), SI = label, AL non-zero = the
-;      default button (a second frame 2px out), AH non-zero = disabled
+; in:  BX = its top (content-relative), SI = label, AL = OS88UI_* flags
+;      (DEF and/or FILL), AH non-zero = disabled
 ; out: nothing (all registers preserved); the pen is left LIVE
 ;
 ; The drawing is os88ui_btn's now - the shared control, one source with every
 ; package (apps/os88ui.inc). What is left here is the adapter: the column's
 ; fixed x, this button's y, and the window origin, turned into the screen rect
-; the shared routine takes.
+; the shared routine takes. AL is the shared routine's OWN flag word rather
+; than a private encoding, so adding one is not two edits.
 ;
 ; The DISABLED state moved from the caller's pen to a flag, which is SPEC.md
 ; 47 rule 1 arriving properly: it used to be "set the pen, then call me", so
 ; the colour and [gfx_dis] were the caller's to get right and the label and
 ; the frame could disagree. Now one flag drives both and the pen comes back
 ; live by itself.
+;
+; Only the DEFAULT button passes FILL. Cancel, Drive and New Folder are drawn
+; once, by fdlg_paint, onto a pane wm_paint_all has already whited - and
+; nothing can change what they say - so an erase there is a gfx_fill nobody
+; needs. The default button is the exception because its state moves.
 ; -----------------------------------------------------------------------------
 fdlg_btn:
     push ax
@@ -1311,21 +1326,18 @@ fdlg_btn:
     mov dx, bx
     add dx, FD_BH
     call fdlg_off               ; AX..DX = the inclusive SCREEN rect
-    mov [fdlg_brect+0], ax
-    mov [fdlg_brect+2], bx
-    mov [fdlg_brect+4], cx
-    mov [fdlg_brect+6], dx
+    mov [os88ui_krect+0], ax
+    mov [os88ui_krect+2], bx
+    mov [os88ui_krect+4], cx
+    mov [os88ui_krect+6], dx
     mov ax, di
-    xor di, di
-    or al, al
-    jz .nodef
-    mov di, OS88UI_DEF
-.nodef:
-    or ah, ah
-    jz .live
-    or di, OS88UI_DIS
+    or ah, ah                   ; AL is already the flag word; the greying is
+    jz .live                    ; the one bit that arrived separately
+    or al, OS88UI_DIS
 .live:
-    mov bx, fdlg_brect
+    xor ah, ah
+    mov di, ax
+    mov bx, os88ui_krect
     call os88ui_btn
     pop di
     pop si
@@ -1334,8 +1346,6 @@ fdlg_btn:
     pop bx
     pop ax
     ret
-
-fdlg_brect: dw 0, 0, 0, 0       ; the button being drawn, in screen coordinates
 
 ; -----------------------------------------------------------------------------
 ; fdlg_btn2 - a TWO-LINE button of the same column (internal)

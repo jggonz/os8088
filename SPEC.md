@@ -414,10 +414,24 @@ name and the body takes an `_x` suffix, so no caller outside changes.
 Four rules, and every one of them is something that assembles cleanly and
 runs wrong:
 
-- **Data stays in `.text`.** DS is still `KERNEL_SEG`, so a string or table
-  that moved with its code would be addressed at the wrong segment. A module
-  with data islands toggles sections around each of them; `files.inc` does
-  it four times.
+- **Data stays in `.text`** (or `.bss`). DS is still `KERNEL_SEG`, so a
+  string or table that moved with its code would be addressed at the wrong
+  segment. A module with data islands toggles sections around each of them;
+  `files.inc` does it four times.
+
+  **This is the rule that has actually been broken, and the failure is
+  invisible** — which is why it is worth the worked example rather than the
+  sentence above alone. §20.5.1's three button-rect scratches were declared
+  beside their callers, two of which are cold. Nothing warns: `-w+error` is
+  clean, `os88ovlchk.py` passes (it checks calls and branches; this is a
+  *data* reference), and **the write and the read use the same wrong
+  address**, so the feature works perfectly. What happens instead is that
+  `fdlg_brect` at `COLD_SEG:4290` writes eight bytes of screen coordinates to
+  `KERNEL_SEG:4290`, which is the middle of **`sch_isr`** — the PIT tick
+  handler — and `cp_brect` writes into **`wm_destroy`**. Every gate passed for
+  a whole commit. The tell is a symbol dump: `python3 tools/os88sym.py --all`
+  prints each symbol's section, and any `.cold` name that a `mov`/`cmp`
+  reaches without a `cs:` override is this bug.
 - **Nothing may assume `CS` is `KERNEL_SEG`.** `push cs`/`pop es` and
   `[cs:x]` are the two spellings, and `loader.inc` had three of them —
   including a documented one, the far pointer it calls a package's
@@ -10877,10 +10891,37 @@ agreeing by hand.
 | `os88ui_arm` / `os88ui_fire` | the §13.7 press/release pair. `arm` records what the press landed on; `fire` answers it and **clears**. Package side only |
 
 Flags: `OS88UI_DIS` (dithered frame *and* label — §47 rule 1 and 2 together),
-`OS88UI_DEF` (the default button's outer ring), `OS88UI_FILL` (white the
-interior first, for a control on ground that is not already white).
+`OS88UI_DEF` (the default button's outer ring), and `OS88UI_FILL`, which
+wants its own paragraph:
 
-Six things are load-bearing:
+**`OS88UI_FILL` asks "can this button be drawn a second time without the
+ground being repainted first?", NOT "is my background white".** A button
+whose greying can move always can be, and **`font_char` is transparent** — it
+ORs ink in and erases nothing — so a redraw's checkerboard caption lands on
+top of the previous solid one and the union is the solid one. `gfx_frame`
+*writes* rather than ORs, so the frame dithers correctly either way, and that
+split is what makes the failure read as *§47 rule 1 is broken* when rule 1 is
+working perfectly. Measured on a cycle-accurate 5150/CGA, the same refused
+button reached two ways: **158 ink pixels redrawn in place against 116
+freshly painted**, 0 apart after the fix. In the kernel exactly one button
+needs it for this reason — the file dialog's default, redrawn by
+`fdlg_draw_name` on the edge where `fdlg_actok` moves; Cancel, Drive and New
+Folder are drawn once onto a pane `wm_paint_all` has already whited and can
+never change what they say. `tests/fdlggrey.py` is the gate and it
+discriminates: 42 pixels differ without the flag, 0 with it.
+
+Seven things are load-bearing:
+
+- **A word declared in `.cold` and reached through `DS` is not that word**
+  (§2.6), and this section is where that bit. The three rect scratches were
+  first declared beside their callers, two of which are cold — the write and
+  the read used the same wrong address, so the buttons drew *perfectly*
+  while `fdlg_brect` put eight bytes of screen coordinates through the middle
+  of **`sch_isr`** and `cp_brect` through **`wm_destroy`**. `-w+error` is
+  clean on it and `os88ovlchk.py` does not see it, because that tool checks
+  calls and branches and this is a data reference. There is one kernel
+  scratch now, `os88ui_krect`, declared here in `.bss`; no kernel caller
+  declares a rect at all.
 
 - **`BP` addresses `SS`, and in a package `SS != DS`** (§20.1), so every rect
   read in `os88ui_btn` carries a `ds:` override. Free in the kernel and

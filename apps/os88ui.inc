@@ -102,8 +102,23 @@
 
 OS88UI_DIS  equ 1               ; disabled: dithered frame AND label (47 r2)
 OS88UI_DEF  equ 2               ; the default button's outer ring, 2px out
-OS88UI_FILL equ 4               ; white the interior first (a control on
-                                ; ground that is not already white)
+OS88UI_FILL equ 4               ; ERASE THE INTERIOR FIRST - and the question
+                                ; it answers is NOT "is my background white".
+                                ; It is: CAN THIS BUTTON BE DRAWN A SECOND
+                                ; TIME WITHOUT THE GROUND BEING REPAINTED
+                                ; FIRST? A button whose greying can move
+                                ; always can be, and font_char is
+                                ; TRANSPARENT - it ors ink in and erases
+                                ; nothing - so the second draw's checkerboard
+                                ; caption lands on top of the first draw's
+                                ; solid one and the greyed label comes out
+                                ; PIXEL-IDENTICAL to the live one. The frame
+                                ; is not affected and so still dithers, which
+                                ; is what makes the failure read as "47 rule 1
+                                ; is broken" when the mechanism is fine and
+                                ; the erase is what is missing (SPEC.md 47,
+                                ; docs/UIHELPERS-PLAN.md 13.4). Set it unless
+                                ; the caller white-fills its content first.
 
 ; -----------------------------------------------------------------------------
 ; os88ui_btn - draw one standard button
@@ -311,6 +326,30 @@ os88ui_armw: dw 0
 
 
 %ifdef OS88UI_KERNEL
+section .bss
+; -----------------------------------------------------------------------------
+; os88ui_krect - THE kernel's button rect, and there is exactly one on purpose
+;
+; Every kernel caller builds its rect here and calls straight into os88ui_btn,
+; which only READS it - so one scratch serves the file dialog, both Control
+; Panel pages and the Timer. They are all UI-task, all under the gfx lock, and
+; nothing in the drawing path re-enters, so two can never be in flight.
+;
+; **IT IS IN .bss, AND THAT IS A RULE RATHER THAN A PREFERENCE.** A cold
+; module has a CS of its own and DS is STILL KERNEL_SEG (SPEC.md 2.6), so a
+; word declared in `.cold` and reached through DS is not that word at all - it
+; is whatever lives at the same offset in `.text`. Three of these were
+; declared in .cold for one commit, and the write and the read used the same
+; wrong address, so the buttons drew perfectly while `fdlg_brect` put eight
+; bytes of screen coordinates through the middle of **sch_isr** - the PIT tick
+; handler - and `cp_brect` through **wm_destroy**. Nothing failed, no gate
+; caught it, and the only reason it was found is that a symbol dump was open
+; for a different question. ctrl.inc's radio bitmaps carry the same rule in
+; their own comment and had it right; this is what forgetting it costs.
+; -----------------------------------------------------------------------------
+os88ui_krect: resw 4
+section .cold
+
 ; -----------------------------------------------------------------------------
 ; os88ui_btn_f - the far entry, for .text callers (SPEC.md 2.6)
 ;

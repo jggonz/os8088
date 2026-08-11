@@ -879,7 +879,7 @@ $(BUILD)/filetest.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 # because it has no way to know a package expected nothing.
 #
 #   make test TESTAPPS=build/muptest.img
-$(BUILD)/muptest.bin: tests/muptest/muptest.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/muptest.bin: tests/muptest/muptest.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/muptest/muptest.asm
 	@echo "muptest: $(call FILESIZE,$@) bytes"
 

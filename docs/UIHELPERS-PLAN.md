@@ -6,7 +6,9 @@
 > first package adopter and its buttons fire on the RELEASE now; the file
 > dialog, the Control Panel and the Timer are the kernel's. `tests/muptest`
 > gates the shared control on all three adapters. §11 is what was and was
-> not proved; §13.3 is what it cost, which is **not** what §9 predicted.
+> not proved; §13.3 is what it cost, which is **not** what §9 predicted, and
+> §13.4/§13.6 are the two defects the conversion turned up — the second of
+> them a live corruption of `sch_isr`.
 
 **Tier 4 of the mouse-up work**, and the one whose framing changed most under
 investigation. I ranked it *"biggest win and biggest risk — most of
@@ -444,22 +446,92 @@ explicitly. It is also **the second-to-last step** — 1,024 bytes of
 `KERN_BUDGET` spare, against the four-step standard the fifth move settled
 on. The next feature has to ask.
 
-### 13.4 A pre-existing §47 defect, found by the conversion
+### 13.4 The greyed caption — FIXED, and the first diagnosis was wrong
 
-Converting `fdlg_btn` meant looking at a greyed file-dialog button on 1bpp,
-and **its caption is pixel-identical to a live one** — the frame dithers,
-the label does not. 83 ink pixels greyed against 83 live, ASCII-dumped and
-compared cell by cell.
+**The finding, corrected.** The file dialog's greyed default button draws a
+dithered frame around a **solid** caption. I recorded that as a §47
+mechanism failure specific to `fdlg`'s path, and it is not: **`font_char` is
+transparent.** It ORs ink in and erases nothing, so when the button is
+*redrawn in place* the new checkerboard caption lands on top of the old
+solid one and the union is the solid one. The frame is a `gfx_frame`, which
+*writes* rather than ORs, so it dithers correctly — and that split is
+exactly what makes the failure read as "rule 1 is broken" when rule 1 is
+working perfectly.
 
-It is **pre-existing**: the kernel from before this branch measures
-identically, so the conversion neither caused it nor fixed it. And the
-discriminator for whoever investigates is already to hand — **the Control
-Panel's greyed `Activate Mode` label *does* checkerboard** (§7.1 verified
-that on `os8088_5150_both_gla`). So `font_ink`'s dither mechanism works and
-the defect is specific to the file dialog's path. Its own investigation;
-recorded here because the conversion is what surfaced it.
+Measured, on `os8088_5150_cga_gla`, the same button in the same state
+reached two ways:
 
-### 13.5 Traps
+| | ink |
+|---|---|
+| REFUSED, redrawn in place (backspace the name box empty) | **158** |
+| REFUSED, freshly painted (drag it → `fdlg_paint` white-fills first) | **116** |
+
+116 is a proper checkerboard `Save`; 158 is a solid one with the
+checkerboard OR'd invisibly into it. After the fix both are 116 and they are
+**0 pixels apart**.
+
+**The fix is `OS88UI_FILL` from `fdlg_defbtn`** — one `gfx_fill`, on the one
+button in the kernel that is redrawn in place, because it is the one whose
+state can move. Cancel, Drive and New Folder are drawn once onto a pane
+`wm_paint_all` already whited and can never change what they say, so they
+still pay nothing.
+
+**Two earlier claims of mine were wrong and are withdrawn.** It was never
+`fdlg`-specific — any button redrawn without an erase has it, and the reason
+the Control Panel's `Activate Mode` *does* checkerboard is simply that
+`cp_vid_btn` passes `OS88UI_FILL`. And the "83 ink greyed against 83 live"
+measurement was taken on a button that **was not greyed at all**:
+`fdlg_actok` answers LIVE while the name box holds anything, and the box
+arrives with a remembered name in it (§38.10), so both dumps were of a live
+button. Emptying the box is what makes the state reachable.
+
+`tests/fdlggrey.py` is the gate, and it discriminates: **42 pixels differ
+without the fix, 0 with it.** It checks both states, because a fix that made
+the greyed one right by breaking the live one would pass a one-sided test.
+
+### 13.5 …and the rule that follows is about the QUESTION, not the colour
+
+`OS88UI_FILL`'s question is **not** "is my background white". It is: *can
+this control be drawn a second time without the ground being repainted
+first?* A control whose greying can move always can be. That is a fact about
+the control, checkable at the call site, and it is written into the flag's
+own definition in `apps/os88ui.inc` rather than into a document.
+
+Recorder is the counter-example that proves the rule is about the caller and
+not the widget: `rc_repaint` white-fills its whole content before
+`rc_draw_btns`, so its four buttons are always on clean ground and need no
+fill — which is why the conversion diffed at 0 pixels there.
+
+### 13.6 A `.cold` word reached through `DS` is not that word
+
+Found by a symbol dump opened for a different question, and it is the worst
+thing in this branch's history. The three rect scratches the conversion
+added — `fdlg_brect`, `cp_brect`, `app_tmr_rect` — were declared where their
+callers were, and two of those callers are in `.cold`. **A cold module has a
+CS of its own and `DS` is still `KERNEL_SEG`** (SPEC.md §2.6), so a word
+declared in `.cold` and reached through `DS` is not that word at all: it is
+whatever lives at the same offset in `.text`.
+
+The write and the read used the same wrong address, so **the buttons drew
+perfectly** — and the eight bytes went somewhere else:
+
+| scratch | wrote 8 bytes of screen coordinates into |
+|---|---|
+| `fdlg_brect` (`COLD_SEG:4290`) | `KERNEL_SEG:4290` — the middle of **`sch_isr`**, the PIT tick handler |
+| `cp_brect` (`COLD_SEG:4F99`) | `KERNEL_SEG:4F99` — the middle of **`wm_destroy`** |
+
+Nothing failed. Every gate passed. `make` was clean, `-w+error` was clean,
+and `os88ovlchk.py` — which exists to catch cold/text boundary errors —
+passed, because it checks *calls and branches* and this is a *data*
+reference.
+
+There is **one** kernel scratch now, `os88ui_krect`, declared by
+`os88ui.inc` in `.bss` with the rule in its own comment, and no kernel
+caller declares a rect any more. `ctrl.inc`'s radio bitmaps carry the same
+rule in *their* comment and always had it right — which makes this a lesson
+about forgetting a written rule rather than about not having one.
+
+### 13.7 Traps
 
 - **The include must not go beside `os88api.inc` in a package** (§8.1), and
   in the kernel it must go in `.cold`, where its callers are. A `.text`

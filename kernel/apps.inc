@@ -503,10 +503,10 @@ app_tmr_btn:
     call app_tmr_brect          ; AX,BX,CX,DX = its inclusive screen rect
     call wm_clip_test
     jc .out
-    mov [app_tmr_rect+0], ax
-    mov [app_tmr_rect+2], bx
-    mov [app_tmr_rect+4], cx
-    mov [app_tmr_rect+6], dx
+    mov [os88ui_krect+0], ax
+    mov [os88ui_krect+2], bx
+    mov [os88ui_krect+4], cx
+    mov [os88ui_krect+6], dx
 
     mov si, bp                  ; the label for this index
     shl si, 1
@@ -520,7 +520,7 @@ app_tmr_btn:
     jnc .live
     or di, OS88UI_DIS           ; SPEC.md 47 rule 1, and rule 2's predicate is
 .live:                          ; the same one the click path refuses on
-    mov bx, app_tmr_rect
+    mov bx, os88ui_krect
     call COLD_SEG:os88ui_btn_f  ; the SHARED control (SPEC.md 2.6's far entry:
                                 ; the body is cold, where fdlg and ctrl are,
                                 ; and apps.inc is .text)
@@ -533,8 +533,6 @@ app_tmr_btn:
     pop bx
     pop ax
     ret
-
-app_tmr_rect: dw 0, 0, 0, 0     ; the button being drawn, screen coordinates
 
 ; -----------------------------------------------------------------------------
 ; app_tmr_brect - one button's inclusive screen rect
