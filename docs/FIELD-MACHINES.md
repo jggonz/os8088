@@ -88,6 +88,8 @@ by name in a dozen places.
 | video | **Hercules GB101 → IBM 5151** (mono TTL) **and IBM CGA, new style → IBM 5153** (RGB). **Both cards and both monitors, always, in the machine.** It boots on the **Hercules**, and that is **SW1-5/6**, not a property of the probe: §39.1's last rung is `int 11h` bits 5:4, this machine's switches say `11b` = 80×25 mono, so `vid_detect` takes the `VID_HERC` branch. The second column costs neither a card swap **nor a build any more** — the Control Panel's Display page switches it at run time (§39.11) |
 | floppy | **one** — a **Tandon TM100-2**, 360 KB 5.25" DD. There is no drive B. **But SW1 says there are two**, and that is worth knowing rather than fixing quietly: the DIP pair is what `int 11h` reports, so this machine is the one that showed a `Disk B` icon which could never mount — and it is therefore the witness for SPEC.md §18.97's probe, which asks the FDC instead. **Confirmed on the iron:** `claimed 2`, `ST3 = 21` both before and after the recalibrate, `ST0 = 71` (IC 01, SE, EC, unit 1), `probe stop 03`, `verdict 0` — and the desktop comes up with drive A alone. The first run came back `probe stop 06` and kept the drive; §18.97.1 is that round, and it is worth reading because the fault was the controller's interrupt *queue* rather than the signal. **If the switches get corrected, the probe stops running** and those rows read `claimed 1 / probe ran 0` — still right, and no longer a test of anything, so say which way the switches are set when reporting a run |
 | hard disk | **Seagate ST-225**, 20 MB MFM, on a **Seagate ST11M** controller, in the second bay |
+| the parallel CABLE to the DOS machine | **3,741 bytes/second** sending, **3,538** receiving, 0 errors (PERFORMANCE.md Part 9 **Set 39**) — a LapLink nibble cable to the DIO-500 at 0378. **5.7x slower than this machine's own floppy**, and worth having anyway: a 360 KB image crosses it in **99 seconds** against the seven-step path below |
+| parallel | **one port, at 0x3BC**, on the **Hercules GB101** — HGC-family cards carry an LPT and this one does. Confirmed with `tests/lptlink`: BIOS-listed, latch OK, `stat DD ctrl 88`. It is the reason docs/NET-PLAN.md §1.4 scans instead of assuming, because the DOS machine at the other end of the cable is at **0378** — and on a mono machine LPT1 *is* 3BC, so "LPT1" names different hardware on the two ends |
 | serial | **one port, at 0x3F8 (COM1)**, with the mouse on it — `sysbench`'s SPEC.md §9.4.2 block reports `COM1 03F8, COM2 0000`. Worth having written down, because it decides which half of a two-sided mouse change this machine can witness: with one port there is no §9.5 contest, `[mou_need]` is 1 by default, and everything §9.5.1 says about a modem on the other port is untestable here. The **Compaq Portable III** below is the two-port machine |
 | sound | none |
 | period | **intentionally, entirely period. No modern hardware is attached to the 5150.** No Gotek, no XT-IDE, no flash. That is the property that makes its floppy and disk timings mean what they say, and it is a deliberate constraint rather than an accident — do not propose "just put a Gotek in it" as a way to shorten a turnaround |
@@ -125,10 +127,12 @@ disagrees with them is recognisable as news rather than noise.
 | one 8×8 glyph cell | 901 µs Hercules, 909 µs CGA |
 | a solid fill | 177 µs/row + 0.28 µs/px Hercules; 182 + 0.33 CGA |
 | framebuffer read-modify-write | 79.6 clocks/byte Hercules, 81.0 CGA — only ~7 of them the bus |
-| floppy, sector inside a coalesced run | **65 ms**, **7,457 bytes/second** (Set 17; it was 238 ms / 2,100 B/s before SPEC.md §18.91's `AL` bug was fixed, and that older pair is quoted all over this tree's history) |
-| floppy, one `int 13h` call | **~400 ms** — 1–2 of the 200 ms revolutions, near enough whatever it moves |
+| floppy, `FILE_READ` throughput | **21,307 bytes/second** warm, **12,969** cold motor (**Set 24**; Set 22 says 19,883 warm). **It was 7,457 at Set 17 and 2,100 before that, and BOTH of those are quoted all over this tree's history** — check which side of Sets 17 and 22 a figure comes from before comparing anything to it |
+| floppy, 512 bytes delivered by that read | **24 ms** (Set 24) — bytes DELIVERED, not sectors moved: §18.95's cache means some are never read at all |
+| floppy, one `int 13h` call | **199 ms** for one sector — one 300 RPM revolution exactly — and **384 ms** for a whole 9-sector track (Sets 14/22) |
+| the BIOS's own best, a track in one call | **11,570 B/s** (Set 24). **os8088 is 1.84x this now**, because a `dsk_xfer` run crosses the track boundary with the multi-track bit set and the ROM's single call stops at EOT |
 | floppy, isolated single-sector access (LBA 0, a lone directory sector) | **~150–200 ms** modelled, seek + latency + settle — **not measured** |
-| floppy, open+read a one-sector file | 810 ms |
+| floppy, open+read a one-sector file | 796–810 ms — **Set 17, and not re-measured since §18.95's cache**. An upper bound, probably a loose one |
 | the kernel's own interrupts | 1–3% of a busy CPU |
 
 Two of those are the load-bearing ones. **756 µs** is the per-call floor
@@ -264,7 +268,10 @@ hardware.
 | serial | **two ports**, 3F8 and 2F8 — and the mouse is on **2F8 driving IRQ4**, the cross-wiring SPEC.md §9.5.2/§9.5.2.1 both exist for. `sysbench` reports it as `winning row 2` with `winning IRQ 0010` |
 
 What it has already been worth (PERFORMANCE.md Part 9 Set 18): **11,047 B/s**
-on a 16 KB read against the 5150's 7,457, because a 1.2 MB drive spins at
+on a 16 KB read against the 5150's 7,457 *at that time* — both figures are
+Set 17/18-era and the 5150 has since gone to 21,307 (Set 24) while this
+machine has not been re-run, so **the pair is a historical comparison and not
+a current ranking**. The mechanism is what matters: a 1.2 MB drive spins at
 **360 RPM** — a revolution is 166.7 ms, not 200 — so the same batched read
 costs 0.28 revolutions a sector. It is the second BIOS to confirm that
 trusting `CF` rather than `AL` reads the right bytes (`data check ... OK`),

@@ -395,10 +395,10 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5093,
-    "budget": 100352,
+    "bss": 5135,
+    "budget": 102400,
     "codemax": 65536,
-    "cold": 23087,
+    "cold": 23090,
     "coldpara": 1472,
     "fatpara": 288,
     "imgpara": 3904,
@@ -409,13 +409,13 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 56994
+    "text": 57124
   },
   "small": {
-    "bss": 4884,
+    "bss": 4926,
     "budget": 96256,
     "codemax": 65536,
-    "cold": 21540,
+    "cold": 21543,
     "coldpara": 1376,
     "fatpara": 288,
     "imgpara": 3648,
@@ -426,7 +426,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2752,
     "stk0": 1024,
-    "text": 53125
+    "text": 53255
   }
 }
 ```
@@ -922,14 +922,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,803 | 37.2% |
+| the file system, end to end | 29,868 | 37.2% |
 | the window system and its furniture | 17,379 | 21.7% |
 | drawing: adapters, primitives, glyphs, icons | 11,857 | 14.8% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,823 | 12.3% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,888 | 12.3% |
 | the kernel proper: API table, heap, scheduler, events | 5,981 | 7.5% |
-| the Control Panel | 3,873 | 4.8% |
+| the Control Panel | 3,876 | 4.8% |
 | the three built-in kinds | 1,365 | 1.7% |
-| **total** | **80,081** | |
+| **total** | **80,214** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -937,15 +937,15 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,004 | 7,620 | **8,624** | 336 | — |
 | `wm.inc` — the window manager (§11) | 6,645 | — | **6,645** | 669 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,702 | — | **5,702** | 884 | 3,584 |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,767 | — | **5,767** | 885 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,449 | **5,628** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,882 | — | **4,882** | 136 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,907 | **4,130** | 106 | — |
-| `ctrl.inc` — the Control Panel (§31) | 672 | 3,201 | **3,873** | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 672 | 3,204 | **3,876** | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,656 | — | **2,656** | 291 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,591 | — | **2,591** | 250 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
@@ -971,7 +971,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,789 | — | **2,789** | — | — |
-| **total** | **56,994** | **23,087** | **80,081** | **5,093** | **7,762** |
+| **total** | **57,124** | **23,090** | **80,214** | **5,135** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1386,7 +1386,18 @@ puts up a notice naming the reason.
 | raise 7 — file type associations (§54) and the disk path, costed in advance | 76.5 KB | 74.5 KB |
 | raise 8 — §54.4.1's notice, plus §18.92/§18.93/§18.4.2 | 78.5 KB | 76.5 KB |
 | raise 9 — the five file modules into `.cold` (§2.6) | **80.5 KB** | 78 KB |
-| ...the elendilon merge, and where it stands now | 80.5 KB | **78.5 KB** (80,384 B) |
+| ...the elendilon merge, and where it stood then | 80.5 KB | **78.5 KB** (80,384 B) |
+| moves 10–17 — see `KERN_BUDGET`'s own comment in `kernel/kernel.asm` | 80.5 → 98 KB | — |
+| raise 18 — SPEC.md §62's network driver, **`kern_big` only** | **100 KB** | 97.5 KB (99,840 B) |
+
+**Moves 10 through 17 are deliberately one row.** The table was written when
+there was one guard and the story fitted a line each; since the kern_big /
+kern_small split there are two figures per move and the reason for each is a
+paragraph, so the history that is maintained is `KERN_BUDGET`'s own comment in
+`kernel/kernel.asm` — which says, per move, what was asked for, what was
+granted, what spent the previous step and which guard moved. A summary table
+that has to be updated in a second place is a summary table that goes quietly
+wrong, and this one had: its last row read 78.5 KB against a kernel of 97.5.
 
 Every footprint from move 5 down was **measured at the commit where that
 raise took effect on `elendilon`**, by bisecting `KERN_BUDGET` in a throwaway

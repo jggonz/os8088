@@ -297,6 +297,14 @@ overlays = [
 #   cp build/martypc/run/media/hdds/default_xtide.vhd /tmp/scratch.vhd
 #   ./martypc_headless --machine-config-name os8088_xt_hdd \
 #       --mount fd:0:media/floppies/os8088-360.img --mount hd:0:/tmp/scratch.vhd
+#
+# IT HAS A PARALLEL PORT TOO, and that is not a stray: it makes this the only
+# machine here where TWO drivers publish a Control Panel page at once (SPEC.md
+# 31.9 - the hard disk's and the network link's), which is what exercises
+# drv_cp_class's ordinal-to-class walk rather than just asserting it. On a
+# machine with one page an off-by-one there is invisible. It costs the machine
+# nothing otherwise: no driver touches 0x378 unless NET.DRV is ticked, and no
+# row is wanted by default (SPEC.md 51.3).
 [[machine]]
 name = "os8088_xt_hdd"
 type = "Ibm5160"
@@ -307,6 +315,7 @@ overlays = [
     "pcxt_2_serial_ports",
     "us_modelf_keyboard",
     "microsoft_serial_mouse_com1",
+    "parallel_port",
 ]
 
     [machine.memory]
@@ -786,6 +795,49 @@ overlays = [
 
         [[machine.fdc.drive]]
         type = "360k"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# THE PARALLEL-PORT MACHINE (SPEC.md 51, docs/NET-PLAN.md 1.4). The CGA
+# GLaBIOS 5150 with a Centronics card at 0x378, which is the ONLY os8088
+# machine that has one - every other config here leaves the port range
+# unpopulated, so NET.DRV's latch probe correctly finds nothing and refuses
+# to attach. That is the right answer and it is not the one you want to be
+# testing against (the ADLIB= reasoning exactly), because a driver that never
+# attaches never publishes, so its Control Panel page never exists and the
+# whole of SPEC.md 31.9's path is unreachable.
+#
+# WHAT IT CAN AND CANNOT ANSWER. MartyPC's ParallelPort has a readable data
+# register and a writable status register, so `lp_latch` succeeds and the scan
+# finds 0x378 - which is the whole attach path, the publication, the page and
+# the desktop zone. It has NO PARTNER on the other end and there is no way to
+# give it one: the status lines read a constant, so `mst_hello` times out and
+# the page says `No partner`, which is docs/NET-PLAN.md 1.4.4's own
+# distinction being drawn by the machine rather than by an argument. The WIRE
+# is the 5150's question and `tests/lptlink` is how it is asked.
+#
+# GLaBIOS on purpose, unlike most of the file: nothing here is a TIMING
+# question - the wire is bit-banged and the BIOS never sees it - so this is
+# one of the machines that runs in a container with no IBM ROM in it.
+[[machine]]
+name = "os8088_5150_cga_lpt"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+    "parallel_port",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
 
     [[machine.video]]
     bus_type = "ISA"
