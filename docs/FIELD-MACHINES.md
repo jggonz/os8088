@@ -395,13 +395,16 @@ threshold dropped on the one port that answered like a mouse.
 
 **Its floppy drive is a 1.2MB 5.25", and that is a measurement fact, not
 trivia.** It turns at **360 RPM — 167 ms a revolution — even with 360KB media
-in it**, where every other machine here is a 300 RPM/200 ms drive, and its
-media is close to **1:1 interleaved** where the 5150's is 2:1. So it is the
-only machine in the register that can show a *latency* cost for what it is:
+in it**, where every other machine here is a 300 RPM/200 ms drive. So it is
+the only machine in the register that can show a *latency* cost for what it
+is:
 its BIOS streams a track at 22,368 B/s against the 5150's 11,984, os8088 gets
 11,047 against 8,062, and the gap to its own ceiling is therefore **2.03x
 against the 5150's 1.49x** for identical code issuing an identical 5 calls
-(PERFORMANCE.md Part 9 Set 19). A single calibration machine flatters a
+(PERFORMANCE.md Part 9 Set 19). Both machines' media is 1:1 and Set 19 said
+otherwise for a while: what separates a 1.24-revolution track read from a
+1.92 is per-call BIOS overhead, a 4.77MHz 8088 spending 52.5 ms in the IBM
+ROM's head-settle loop where a 12MHz 286 spends a fraction of it (Set 37). A single calibration machine flatters a
 latency bug, and this is the machine that says so.
 
 Read its reports with the revolution time in mind: `int 13h 1 sector` comes

@@ -922,7 +922,14 @@ every one landing on a whole number of the 200 ms revolution:
 So the media is **2:1 interleaved** — a whole track in one command takes two
 turns, 11,520 B/s by arithmetic against 11,985 measured — and **the drive,
 the controller and the BIOS all stream perfectly when asked for nine sectors
-at once**. `int 13h track, 1 call` *is* our batched read done right, and it
+at once**.
+
+> **The interleave sentence is wrong and PERFORMANCE.md Set 37 is the
+> correction.** The media is 1:1; the second turn is the IBM ROM's own
+> head-settle wait, 25 ms asked for and 52.5 ms of `LOOP $` delivered, once
+> per `int 13h`. The 11,520 agreement cannot discriminate, being bytes over
+> the whole call. Everything else in this note stands, including the
+> conclusion it exists for. `int 13h track, 1 call` *is* our batched read done right, and it
 is **6.3x faster than what `dsk_xfer` achieves**.
 
 The decisive comparison is the last two rows against each other. os8088 costs
@@ -1040,7 +1047,8 @@ the single 170 KB file off the same disk runs at **~13,390 B/s** (about 15
 seconds, 2 of them not spinning, stopping three times for a 64 KB buffer),
 the BIOS's own one-call track read is **11,570**, and 2:1 interleave by
 arithmetic is 11,520. Three independent figures within 16%. **11.5-13.4 KB/s
-is what this drive does.**
+is what this drive does.** (The third figure agrees by coincidence — see the
+correction above — and the target is the two measured ones.)
 
 ---
 

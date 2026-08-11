@@ -48,7 +48,7 @@ enum **no code anywhere references**, and `media_geom`'s sectors-per-track is
 hardcoded to `0` because until now nothing needed it. That is why it read a
 16 KB file ~30x faster than the 5150 (PERFORMANCE.md Part 9 Set 11).
 
-`tools/martypc/patches/03-floppy-disk-timing.patch` gives it a platter.
+`tools/martypc/patches/04-floppy-disk-timing.patch` gives it a platter.
 
 ### What it models
 
@@ -56,9 +56,9 @@ hardcoded to `0` because until now nothing needed it. That is why it read a
 |---|---|
 | **Rotation** | a head angle per drive, advanced while the motor turns. 300 RPM (360K/720K/1.44M drives) or 360 (a 1.2M), so a revolution is 200 ms or 167 |
 | **Data rate** | 250 kbit/s DD, 500 HD, and **300** for DD media in a 1.2M drive, which spins it 20% fast. 32 us a byte at 250, so a 512-byte sector's data field is 16.384 ms |
-| **Interleave** | the physical order of the logical sectors round the track, from the machine config — a raw sector image cannot supply it |
+| **Interleave** | the physical order of the logical sectors round the track, from the machine config — a raw sector image cannot supply it. **No os8088 machine sets one**: the field 5150's media is 1:1 and the second revolution its track read costs is the ROM's, not the platter's (Set 37) |
 | **Pacing** | one sector at a time: wait for it to come round, stream it, wait for the next. Not one lump per run — see the GLaBIOS note below |
-| **Seek** | a step per cylinder crossed at the rate the BIOS asked for through SPECIFY, plus a 25 ms settle. The platter keeps turning while the head steps |
+| **Seek** | a step per cylinder crossed at the rate the BIOS asked for through SPECIFY, and **no settle** — the settle is the BIOS's own software wait and charging it here counted it twice (Set 37). The platter keeps turning while the head steps |
 
 ### Why one mechanism gets all three field rows right
 
@@ -66,13 +66,25 @@ The 5150's three raw `int 13h` rows (Sets 14 and 22) are not three facts, they
 are one fact seen three ways — **a sector is readable only as it passes the
 head** — and the model reproduces them without being told any of them:
 
-| | field, IBM 5150 | this model, 2:1 |
-|---|---|---|
-| one sector, re-read | 199 ms = **1.00 rev** | **1.00 rev** — the same sector comes round once a turn |
-| a 9-sector track, one call | 384 ms = **1.92 rev** | 372 ms = **1.86 rev** |
-| the same nine, as nine calls | 2,005 ms = **10.02 rev** | ~1 rev per call, for the same reason as row 1 |
+| | field, IBM 5150 | this model |
+|---|---:|---:|
+| one sector, re-read | 199,106 us | **199,106** |
+| a 9-sector track, one call | 398,211 us | **384,480** |
+| the same nine, as nine calls | 1,991,057 us | **2,004,789** |
 
-The 3% left on row 2 is BIOS overhead the model does not claim to carry.
+Row 1 is exact and rows 2 and 3 are **one measurement quantum** out — 13,731
+us, which is `bl_run`'s tick over the row's four iterations rather than
+anything either machine did. Row 2 sits on that boundary: 384,480 is the
+figure the *field machine itself* reported for it in Set 14.
+
+The mechanism is worth stating because it is not the obvious one. A 9-sector
+1:1 track is **one** revolution of transfer and both machines take **two**,
+and the missing turn is not interleave: it is the IBM ROM asking for the
+diskette parameter table's 25 ms head settle and spending **52.5 ms** on it,
+in a `LOOP $` at `F000:EEB8`, once per `int 13h`. MartyPC reproduces that by
+running the ROM. PERFORMANCE.md Set 37 is how it was found and why the
+`11,570 B/s ≈ 11,520` agreement that had said "2:1 media" for four sets could
+never have discriminated.
 
 ### What it does NOT fix, and this is the half that matters
 
@@ -118,11 +130,13 @@ It took its step rate from what the BIOS asks for through SPECIFY and its
 settle from the DPT, because every raw row this project had read one track and
 never moved the head. `sysbench`'s seek block put the 5150 at **7.81 ms a
 cylinder against the model's 8.00**, with the break falling between 10 and 20
-cylinders exactly where the model puts it. What the same rows expose is that
-MartyPC's **39-cylinder row is 3.000 revolutions against the field's 2.138** —
-not a wrong step rate, but the per-call turnaround pushing a read past sector 1
-so it waits another whole turn. That is the track row's cliff again: **one
-cause, two symptoms**, and the residual behind the boot as well.
+cylinders exactly where the model puts it. What the same rows then exposed was
+MartyPC's **39-cylinder row at 3.000 revolutions against the field's 2.138** —
+one symptom of the same thing behind the track row and the boot, which Set 37
+identified as the 2:1 media the field machine never had plus a head settle
+charged twice. With both gone, **five of the six seek rows are exact** and the
+39-cylinder one is a tick short. The step rate is still 8.00 against the
+field's 7.81 and is the only part of the seek nothing has re-measured.
 
 ### Counting the traffic from outside: `m.disk()`
 
@@ -145,79 +159,79 @@ batching properly; **`read_sectors` far above the payload** is §18.91's shape;
 **`resets`** is a BIOS giving up, which is how GLaBIOS's 250 ms limit was
 found.
 
-### The GLaBIOS machines keep 1:1 media, and the reason is worth reading
+### GLaBIOS gives up on a floppy op after ~250 ms, and that is still true
 
-Only the `rom_set = "ibm5150_82_v4"` machines carry 2:1. The GLaBIOS ones
-cannot: measured here, **that BIOS abandons a floppy operation after ~250 ms
-and resets the controller**, three times in a row, and then the boot sector
-prints `os8088: disk error` — status **80**, a timeout, which `make BOOTDIAG=1`
-puts on the screen as two hex digits. A 6-sector 2:1 run legitimately takes
-305 ms and a 9-sector one 372, so under GLaBIOS such a read can never finish.
+It no longer forces a config difference — every machine here carries the same
+1:1 media (Set 37) — but it is why a disk number must not be taken off a
+GLaBIOS machine. Measured here: **that BIOS abandons a floppy operation after
+~250 ms and resets the controller**, three times in a row, after which the
+boot sector prints `os8088: disk error` — status **80**, a timeout, which
+`make BOOTDIAG=1` puts on the screen as two hex digits. It surfaced when the
+IBM machines were briefly given 2:1 media, where a 9-sector run takes 372 ms
+and can never finish under that BIOS; at 1:1 nothing here reaches the limit
+and `os8088_5150_cga_gla` boots `combo.img` in 175 ticks.
 
-Three things say this is the BIOS's behaviour and not the model's bug. The FDC
-presents a correctly BUSY status register for the whole delay (that bit comes
-from `self.busy`, which the patch does not touch). **Seeks of 329 ms complete
-fine on the same machine in the same boot** — so it is a read timeout, not an
-inability to wait. And **the IBM ROM boots the identical 2:1 configuration
-without complaint**, which was a prediction when this was written and is now
-measured: 211 ticks on `os8088_5150_herc`. docs/FIELD-MACHINES.md's 5150 runs
-that ROM and reads a whole 2:1 track in one `int 13h` in 384 ms every boot.
+Three things said it was the BIOS and not the model. The FDC presents a
+correctly BUSY status register for the whole delay (that bit comes from
+`self.busy`, which the patch does not touch). **Seeks of 329 ms complete fine
+on the same machine in the same boot** — so it is a read timeout, not an
+inability to wait. And the IBM ROM completed the identical reads.
 
-This also produced the one modelling correction worth keeping. The first
+That episode produced the one modelling correction worth keeping. The first
 version charged a whole multi-sector run as **one silent delay**, which is not
 how a drive behaves — a real controller starts DRQing the moment the first
 sector arrives and pauses only over the inter-sector gaps. Pacing it per
-sector is both more faithful and shorter-gapped, and it is what the `82.8 ms
-then 44.4 ms then 44.4 ms…` in the trace is: the first sector's latency, then
-two slots of 2:1 gap each time. It did not save GLaBIOS, because that BIOS's
-limit turned out to be on the whole operation rather than on silence — but the
-model is right for the reason it was changed.
+sector is both more faithful and shorter-gapped. It did not save GLaBIOS,
+because that BIOS's limit turned out to be on the whole operation rather than
+on silence — but the model is right for the reason it was changed.
 
 ### What it measures now
 
 `boot ticks`, os8088's own counter, on the 360KB image:
 
-| machine | media | before | after | field 5150 (Set 22) |
+| machine | stock | Set 35 (2:1) | **now** | field 5150 |
 |---|---|---|---|---|
-| `os8088_5150_cga_gla` (GLaBIOS) | 1:1 | 41 (2.25 s) | **130 (7.14 s)** | — |
-| `os8088_5150_cga` (IBM ROM) | 2:1 | — | **210 (11.53 s)** | 180 (9.886 s) |
-| `os8088_5150_herc` (IBM ROM) | 2:1 | — | **211 (11.59 s)** | **180 (9.886 s)** |
-| ...`combo.img` on both (Set 36) | 2:1 | — | **222** | **205** — 1.08x |
+| `os8088_5150_cga_gla` (GLaBIOS) | 41 (2.25 s) | 130 (7.14 s) | **175** | — |
+| `os8088_5150_cga` (IBM ROM) | — | 210 (11.53 s) | **185** | 180 (Set 22, `herc.img`) |
+| `os8088_5150_herc` (IBM ROM) | — | 211 (11.59 s) | **188** | **180** |
+| ...`combo.img`, the like-for-like | — | 222 | **188** | **205** — 0.92x |
 
-The last row is the like-for-like: the field's 180 is a Hercules boot off
-`herc.img`. **4.4x fast becomes 1.17x SLOW** — and the sign matters as much as
-the size. The error used to flatter every disk decision; it now costs a little,
-which is the safe direction to be wrong in.
+The last row is the one to quote: the same image on both machines. **4.4x fast
+became 1.17x slow, then 1.27x slow once the platter really turned, and is now
+0.92x** — and the middle step is the instructive one, because making the
+rotation unconditional was plainly correct and made the headline number
+*worse*. That is what said the residual was somewhere a frozen platter had
+been flattering, and it was the media (Set 37).
 
-**Where the remaining 17% is, measured rather than assumed.** Instrumenting the
-charge shows the boot spending **7.2 s in rotation and transfer across 161
-sector waits, against 0.62 s across 14 seeks** — so the seek model, the one
-part no field row pins, is 8% of disk time and cannot be the residual. The
-sector average is 44.9 ms against the 42.7 the field's 384 ms/9 implies, and
-that 5% is physical rather than error: a short run pays a full rotational
-latency for its first sector, and only a whole-track read amortises one. The
-rest is not disk at all. One caveat on the comparison itself: the field boots a
-`make field` disk and this boots the shipped one (167 sectors), so
-`tools/fieldsize.py`'s rung check is what says the two are comparable.
+**Where the residual is, measured rather than assumed.** The 8% left on the
+boot is not the seek model, which the field pinned in Set 36 at 7.81 ms a
+cylinder against the model's 8.00. It is also not the comparison itself,
+though that has one caveat worth stating: the field boots a `make field` disk
+and this boots the shipped one, so `tools/fieldsize.py`'s rung check is what
+says the two are comparable. The one raw row still more than a quantum out is
+the 39-cylinder seek, one tick short.
 
 So the standing rule is **relaxed, not withdrawn**: a disk figure from here is
 now worth having, and PERFORMANCE.md Part 9's disk rows still come off the
 5150.
 
-**It will not catch a disk CORRECTNESS bug either, and that is the sharper
-half.** SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the
+**And it DOES catch a disk correctness bug, which is where the boundary now
+falls.** SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the
 BIOS for nine sectors, the BIOS moved nine, and answered `AL = 1` — and the
 kernel believed `AL` and re-read the rest one sector at a time. On the 5150
 that was 148 sectors in 34 `int 13h` calls for a 32-sector file, 4.6x the
 traffic, and it made the *batching optimisation measure slower than no
 batching*. **The same binary on the same image under QEMU moved 34 sectors in
-6 calls** — correct, fast, and completely silent about the bug. The boot
-sector carried the identical bug for as long again and it took the 5150 plus
-SPEC.md §18.94's counters to find either. An emulator's floppy controller
-returns what its author believed the hardware returns; real hardware is under
-no such obligation, and the whole class — `int 1Eh`'s parameter table, short
-`int 13h` reads, BIOS interrupt stack depth — is behaviour an emulator smooths
-over rather than reproduces.
+6 calls** — correct, fast, and completely silent about the bug, because
+SeaBIOS is a different BIOS. MartyPC runs the IBM ROM, so it reproduces the
+signature: `make DISKAL=1` boots `os8088_5150_herc` in **893 ticks against
+188**, with `m.disk()` reporting **870 sectors in 183 reads against 183 in
+24**, longest run 9 in both — 4.75x the traffic against the field's 4.6x, and
+no test package or `DISKCNT=1` kernel involved.
+
+**The boundary is between the ROM and the CHIP.** What a real 765 puts in ST1,
+or whether a real drive ever returns short, is still the emulator author's
+belief and still the 5150's question.
 
 Read that as a boundary on the tool, not a complaint about it: everything on
 the CPU side agrees with the 5150 to within 0–4% across 45 of 47 `gfxbench`

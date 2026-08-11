@@ -53,30 +53,35 @@ platter, no seek and no interleave at all**, which is where these came from:
 | read 16 KB, cold motor | **8.07 s** | **0.27 s** — 30x fast |
 | boot | **38,886 ms** | **2,306 ms** — 17x fast |
 
-`tools/martypc/patches/03-floppy-disk-timing.patch` gives the drive a platter,
-an interleave and a data rate (Set 35, docs/MARTYPC-DEBUG.md), and on the IBM
-ROM with the 5150's own 2:1 media the boot is **211 ticks against the field's
-180**. So the error goes from **4.4x fast to 1.17x SLOW**, and the change of
-sign is worth as much as the size: it used to flatter every disk decision and
-now costs a little. So the rule is now:
+`tools/martypc/patches/04-floppy-disk-timing.patch` gives the drive a platter,
+a data rate, a seek and a configurable interleave (Set 35, docs/MARTYPC-DEBUG.md),
+and Set 37 then found the one number that had been *assumed* — that the field
+machine's 360KB media was 2:1, which it never was — and the doubled head
+settle sitting behind it. On the IBM ROM the boot is **188 ticks against the
+field's 205**, and `tests/sysbench`'s whole raw floppy block reproduces the
+field machine's own report to the measurement quantum, seven of thirteen
+rows exactly. The error went **4.4x fast → 1.17x slow → 0.92x**, and every change
+of sign on that road was worth as much as the size. So the rule is now:
 
 > **A disk TIMING figure from MartyPC is worth having, and is still checked on
 > the 5150 before it lands here.** Part 9's disk rows come off the 5150.
 >
-> **A disk CORRECTNESS question is unchanged and unmoved**: the patch changes
-> what a disk COSTS, never what it SAYS. §18.91's `AL` bug is a claim about
-> what a real ROM returns and no emulator here invents it.
+> **A disk CORRECTNESS question moved half way**: what the *ROM* does is
+> MartyPC's, because MartyPC runs the ROM — §18.91's `AL` bug reproduces
+> there (Set 35). What the *chip and the drive* do is still the emulator
+> author's belief, and still the 5150's question.
 
-**Nor will it catch a disk CORRECTNESS bug**, which is how the last two disk
-optimisations came to measure *worse* than what they replaced. §18.91's `AL`
-bug is the case: the BIOS moved nine sectors and answered `AL = 1`, the kernel
-believed `AL`, and re-read the rest one sector at a time — 148 sectors in 34
-`int 13h` calls for a 32-sector file on the 5150, while **the same binary on
-the same image under QEMU moved 34 sectors in 6 calls**. Correct, fast, and
-silent. It took the field machine plus §18.94's counters to see it, the boot
-sector carried the identical bug for as long again, and no emulator here would
-ever have shown either. An emulator's floppy controller returns what its
-author believed the hardware returns.
+**The correctness half is the one that changed, and this document said the
+opposite for two sets.** §18.91's `AL` bug is the case: the BIOS moved nine
+sectors and answered `AL = 1`, the kernel believed `AL`, and re-read the rest
+one sector at a time — 148 sectors in 34 `int 13h` calls for a 32-sector file
+on the 5150, while **the same binary on the same image under QEMU moved 34
+sectors in 6 calls**. Correct, fast, and silent. QEMU missed it because
+SeaBIOS is a different BIOS, not because emulation cannot see it: `make
+DISKAL=1` on `os8088_5150_herc` boots in **893 ticks against 188** and shows
+**870 sectors in 183 reads against 183 in 24** — 4.75x the traffic, against
+the field's measured 4.6x. What no emulator here invents is what a real 765
+puts in ST1, or whether a real drive ever returns short.
 
 ---
 
@@ -2767,6 +2772,13 @@ number of them. Read in order:
   **2:1 interleaved** (4,608 bytes in two turns is 11,520 B/s and we measured
   11,985), and the drive, the controller and the BIOS **stream perfectly
   well** when asked for nine sectors at once.
+
+  > **The interleave half of that is WRONG — see Set 37.** The media is 1:1
+  > and the missing revolution is the IBM ROM's own head-settle delay loop,
+  > 52.5 ms of `LOOP $` once per `int 13h`. The B/s agreement that seemed to
+  > confirm 2:1 is bytes over the *whole call*, overhead included, so it
+  > cannot tell the two apart. The rest of the bullet stands: nine sectors in
+  > one command does stream.
 - **The same nine sectors as nine calls costs 10.02 revolutions**, one per
   sector, because control returns to the caller and the next sector has gone
   past by the time the command is reissued.
@@ -2888,6 +2900,13 @@ copied out to the ST-225 between passes).
 
 Three independent numbers within 16% of each other, and the media is 2:1
 interleaved. **11.5–13.4 KB/s is what this drive does**; that is the target.
+
+> **Set 37 overturns the interleave line and keeps the target.** 11,570
+> against 11,520 is bytes over the *whole* `int 13h` call, and a quarter of
+> that call is the ROM's head-settle delay loop — so 1:1 media plus 52.5 ms
+> of BIOS produces the identical figure. The media is 1:1. What the drive
+> does is unchanged: 11.5–13.4 KB/s is still the target, because it is
+> measured rather than derived.
 
 #### The raw rows repeat, which is what makes them a measurement
 
@@ -3162,6 +3181,16 @@ the 5150's manages 11,984 — 1.87x, because its media is close to 1:1
 interleaved where the 5150's is 2:1. os8088 gets 11,047 against 8,062, only
 1.37x. So **the faster disk is the one os8088 wastes more of**: 2.03x off its
 ceiling against 1.49x.
+
+> **Set 37 changes the CAUSE and not the finding.** Both machines' media is
+> 1:1; what differs is the per-call BIOS overhead. Read the two track rows as
+> 1.00 revolution of transfer plus the rest: the 5150 spends **0.99 rev** of
+> overhead and latency, the Compaq **0.24**. That is what a 52.5 ms delay
+> loop on a 4.77 MHz 8088 looks like against the same nominal 25 ms wait on a
+> Compaq ROM and a 12 MHz 286 — big enough to overshoot sector 1 and cost a
+> whole turn on one machine, small enough to fit the slack on the other. The
+> 1.87x, the 1.37x and "the faster disk is the one os8088 wastes more of" are
+> all measurements and all stand. The `interleave that implies` row does not.
 
 The mechanism is per-call rotational latency, and both machines pay about the
 same number of *milliseconds* for it. A 33-sector read is 5 `int 13h` calls
@@ -4273,6 +4302,14 @@ statement in the machine config — the 5150's media is 2:1 (Set 14), the Compaq
 Portable III's ~1:1 (Set 19), and that difference is exactly why the Compaq
 streams a track in 1.24 revolutions where the 5150 needs 1.92.
 
+> **The first sentence stands and the rest is wrong — Set 37.** Interleave is
+> indeed a config statement and cannot be derived from an image. Neither
+> machine's media is interleaved: both are 1:1, the config sets none, and what
+> separates 1.24 revolutions from 1.92 is per-call BIOS overhead. Read this
+> whole set with that substituted — including the `model, 2:1` column above,
+> whose 2.95-revolution miss is the doubled turnaround and not a quantization
+> cliff the model was entitled to.
+
 #### Measured end to end
 
 `boot ticks`, 360KB image, os8088's own counter:
@@ -4311,6 +4348,12 @@ a correctly BUSY status register throughout, **seeks of 329 ms complete fine in
 the same boot**, and **the IBM ROM boots the identical 2:1 configuration** —
 which was a prediction when this was written and is now the 211 above. So 2:1
 goes only on the `ibm5150_82_v4` machines, and the GLaBIOS twins keep 1:1.
+
+> **The BIOS limit is real and the exception it forced is gone — Set 37.** No
+> machine carries 2:1 any more, because the field machine's media never did,
+> so no config has to distinguish the two ROMs and `os8088_5150_cga_gla`
+> boots `combo.img` in 175 ticks. The ~250 ms abandon is still a fact about
+> GLaBIOS and still the reason not to take a disk number off it.
 
 **And a run must be paced per SECTOR, not charged as one lump.** The first
 version delayed a whole multi-sector run in one silent block, which is not what
@@ -4456,6 +4499,13 @@ the model's 8.00. **The guess was right to 2%, and it is no longer a guess.**
 
 #### ...and the same rows locate what is still wrong
 
+> **Set 37 answers this whole subsection, and the answer is not the one it
+> guesses at below.** The turnaround was not too long: 2:1 media the machine
+> never had was making every read too long, and the drive was being charged a
+> 25 ms head settle the BIOS already spends in software. With both fixed,
+> every row of the ladder below is exact except the 39-cylinder one, which is
+> one tick short.
+
 MartyPC's 39-cylinder row is **3.000 revolutions against the field's 2.138**,
 a slope of 13.7 ms a cylinder against 7.8 — and the model is *not* using 13.7,
 it is using 8. What that gap measures is the same defect Set 35.1 found in the
@@ -4494,3 +4544,142 @@ contiguous LBAs 594/603/612, **no mounts and no resets** — 5 of the file's 32
 sectors served from §18.95's cache, and the repeat read identical. And the
 report came back at **343 rows of 380 and 14,867 arena bytes of 16,000**, 7%
 spare, which is Set 35's warning arriving on the machine it was about.
+
+### Set 37 — the media was never 2:1, and the whole floppy block now matches
+
+Set 36 left one thing wrong and named it: MartyPC's 39-cylinder seek row read
+**3.000 revolutions against the field's 2.138**, and its track read 590 ms
+against 384/398 — "one cause, two symptoms, and it is the residual behind the
+boot as well." That diagnosis was right about there being one cause and wrong
+about what it was. The cause is **this document**, and specifically Set 14's
+conclusion that the calibration 5150's 360KB media is 2:1 interleaved.
+
+It is not. It is 1:1, like every other 360KB floppy an IBM machine ever
+formatted.
+
+#### How a wrong inference got made, and what would have caught it
+
+Set 14 measured a whole 9-sector track in one `int 13h` at **398,211 µs** and
+read it as revolutions: a 1:1 track is one revolution (200 ms) and this was
+two, therefore the platter costs two turns to give up nine sectors, therefore
+2:1. The corroborating number was **11,570 bytes/second**, against 11,520 for
+2:1 by arithmetic — a 0.4% match, and `tests/sysbench` prints that arithmetic
+in its own header.
+
+Both numbers are real. Both have a second explanation that fits them exactly,
+and it is the right one: **1:1 media plus a quarter-revolution of BIOS overhead
+per `int 13h` call**, which locks the measured total to the same two
+revolutions and the same 11,520 B/s. The B/s figure cannot discriminate at all
+— it is bytes divided by the *whole call*, overhead included — and the
+revolution count only discriminates if you already know the overhead is small.
+
+Nobody had measured the overhead. It is not small.
+
+#### The overhead, measured in the ROM
+
+Sampling the guest's `CS:IP` through the debug server across the disk phase of
+a boot puts **8.8%** of it at `F000:EEBF`, which disassembles to
+
+```
+EEB8  mov cx, 0x226        ; 550
+EEBB  or  ah, ah
+EEBD  jz  eec5
+EEBF  loop eebf            ; <- 8.8% of the whole disk phase
+EEC1  dec ah
+EEC3  jmp short eeb8
+```
+
+— IBM's millisecond delay, called with `AH` = the diskette parameter table's
+head-settle byte. The ROM's own table (`F000:EFC7`,
+`CF 02 25 02 08 2A FF 50 F6 19 04`) asks for **25 ms**, and the field machine's
+`sysbench` reports the same 25. What it actually costs is another matter: 550
+iterations of `LOOP $` on an 8088 is ~18 clocks apiece, so IBM's "1 ms" is
+**2.1 ms** and the settle is **52.5 ms**. Tracing every FDC port access
+confirms it end to end — the gap between the last SENSE INTERRUPT result byte
+and the first READ DATA command byte is **52.48 ms with three MSR reads in
+it**, so the guest is not waiting on the controller, it is counting.
+
+That is a quarter of a revolution, once per `int 13h`, on both machines. It is
+the missing turn.
+
+#### What the correction is worth
+
+`interleave` set to 1 on every machine, and the drive's own `FDC_HEAD_SETTLE_US`
+taken to **zero** — the settle is the BIOS's and modelling it a second time in
+the drive is the same wait counted twice, which at 39 cylinders costs a whole
+extra revolution. Then `tests/sysbench` on `os8088_5150_herc`, against the
+field machine's own report from the identical `combo.img`:
+
+| row | 5150 | MartyPC | quanta |
+|---|---:|---:|---:|
+| `int 13h 1 sector` | 199,106 | **199,106** | **0** |
+| `int 13h track, 1 call` | 398,211 | 384,480 | −1 |
+| `int 13h track, 9 calls` | 1,991,057 | 2,004,789 | +1 |
+| `seek 0 cyl (baseline)` | 398,211 | **398,211** | **0** |
+| `seek 1 cyl, pair` | 398,211 | **398,211** | **0** |
+| `seek 5 cyl, pair` | 411,943 | **411,943** | **0** |
+| `seek 10 cyl, pair` | 398,211 | **398,211** | **0** |
+| `seek 20 cyl, pair` | 796,423 | **796,423** | **0** |
+| `seek 39 cyl, pair` | 851,349 | 796,423 | −4 |
+| `read 16K, warm` | 1,208,366 | 1,153,440 | −4 |
+| `read 16K, cold motor` | 1,592,846 | 1,647,772 | +4 |
+| `WRITE, create` | 4,668,686 | **4,668,686** | **0** |
+| `WRITE, append in chunks` | 11,259,773 | 11,040,070 | −16 |
+
+A quantum is 13,731 µs — one tick over the row's four iterations, which is
+`bl_run`'s resolution and not a property of either machine. **Seven of the
+thirteen are exact**, including every short seek and the one-sector read, and
+two more are one quantum out. The `track, 1 call` row is the sharpest case of
+what a quantum means: 384,480 is not merely close to the field's 398,211, it
+is *the number the field itself reported* for that row in Set 14 — the row sits
+on a quantum boundary and flips between runs.
+
+The 39-cylinder row is the one still worth a sentence: 4 quanta (one tick)
+short, where before this change it was **26 quanta** (1,208,366 against
+851,349). The residual is the step-rate slope, which Set 36 put at 7.81 ms a
+cylinder against the model's 8.00 and which nothing here has re-measured.
+
+Every CPU, memory, PIT and scheduler row in the same report matches to a count
+or two, as they already did.
+
+#### Boot, and what the honest sequence was
+
+`boot ticks` on `combo.img`, `os8088_5150_herc`, against the field's 205:
+
+| | ticks | vs field |
+|---|---:|---:|
+| Set 36's build (2:1, frozen platter) | 222 | 1.08x |
+| the platter turning, still 2:1 | **260** | 1.27x |
+| 1:1 and no doubled settle | **188** | **0.92x** |
+
+The middle row is the one to keep. Set 36's 222 was a *frozen* platter — the
+angle only advanced during a transfer, so every read found its sector exactly
+where the last one left it and no turnaround ever cost a revolution. Making
+the rotation unconditional is plainly correct and made the headline number
+**worse**, which is what said the error was somewhere the frozen platter had
+been flattering. Two more revolutions per track is not a number a plausible
+fix moves by 10%; it is a whole missing turn, and that is what sent this at
+the media.
+
+#### The rule this is an instance of
+
+**A ratio that matches an arithmetic prediction is not evidence unless
+everything the ratio divides by has been measured.** 11,570 against 11,520 is
+a 0.4% agreement and it identified the wrong mechanism, because the divisor
+was the whole `int 13h` call and a quarter of that call is a BIOS delay loop
+nobody had looked at. The instrument that settled it was not a better
+benchmark — it was `CS:IP` sampling plus the ROM's own disassembly, which is
+to say: go and find out what the machine is *doing*, not just how long it took.
+
+#### Two things it retired
+
+**The GLaBIOS exception.** Set 35 gave 2:1 media only to the IBM-ROM machines,
+because GLaBIOS abandons a floppy operation after ~250 ms and a 2:1 track read
+takes up to 400. At 1:1 no machine needs the exception and every config here
+carries the same disks; `os8088_5150_cga_gla` boots `combo.img` in 175 ticks.
+
+**"MartyPC's floppy is 1.17x slow."** It is 0.92x, and the sign changed twice
+on the way — 4.4x fast before Set 35, 1.17x slow after it, 1.27x slow once the
+platter really turned, and 0.92x now. `make marty` remains the place to *find*
+a disk regression and the 5150 remains the place a number lands, but the gap
+between them on this bench is now one measurement quantum on most rows.

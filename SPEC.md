@@ -10020,9 +10020,10 @@ reference copy:
 **Nothing moved the call count except the number of runs**, and on the sectors
 alignment is *behind*. Against the shipped fill at 8 runs, region+track is
 **+1 call and +20 sectors** and track-alone **+0 calls and +88 sectors** — and
-an extra sector inside an existing call is not free on 2:1 interleaved media:
-one revolution delivers 4.5 sectors, so it is **~44 ms** (PERFORMANCE.md's
-11,520 B/s row). That is ~1.3 s and ~3.9 s of pure waste respectively. The
+an extra sector inside an existing call is not free: one revolution delivers
+9 sectors on this 1:1 media, so it is **~22 ms** (PERFORMANCE.md Set 37,
+which corrected the 2:1 reading this figure was first taken from). That is
+~0.7 s and ~1.9 s of pure waste respectively. The
 first version of this section priced a sector at 20 ms from a two-point linear
 fit and still had alignment losing; the measured figure makes it lose by
 twice as much.

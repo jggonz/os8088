@@ -8,7 +8,8 @@ breakpoints, single-step and cycle counts, none of it costing the guest a
 cycle (docs/MARTYPC-DEBUG.md). It covers **all three** of SPEC.md §39's
 adapters, scripted input, screenshots and sound. **And for anything with a
 disk in its timing, the 5150 is where the number LANDS — though MartyPC's
-floppy now turns (PERFORMANCE.md Set 35), so it is 1.17x rather than 30x.**
+floppy now turns (PERFORMANCE.md Sets 35/37) and agrees with the iron's raw
+`int 13h` rows to the measurement quantum.**
 
 **Here is the whole of QEMU's remaining list**, stated as a list so that "a
 legitimate need" is something you can check rather than something you can
@@ -56,46 +57,35 @@ A tool that is wrong in the flattering direction does not announce itself.
 **MartyPC's floppy used to be a fiction and now it is a model.** Upstream it
 modelled no platter at all — a seek completed in the breath it was issued and
 a sector arrived the instant it was asked for — which is where Set 11's 30x
-came from. `tools/martypc/patches/03-floppy-disk-timing.patch` gives it
-rotation, an MFM data rate, a physical interleave and a per-cylinder seek
-(PERFORMANCE.md Set 35, docs/MARTYPC-DEBUG.md):
+came from. `tools/martypc/patches/04-floppy-disk-timing.patch` gives it
+rotation, an MFM data rate, a per-cylinder seek and a configurable interleave
+(PERFORMANCE.md Sets 35/37, docs/MARTYPC-DEBUG.md):
 
-| `boot ticks`, 360KB | before | after | real 5150 |
-|---|---|---|---|
-| `os8088_5150_cga_gla` (GLaBIOS, 1:1) | 41 (2.25 s) | **130 (7.14 s)** | — |
-| `os8088_5150_herc` (IBM ROM, 2:1) | — | **211 (11.59 s)** | 180 (9.886 s) |
+| `boot ticks`, 360KB `combo.img` | stock | Set 35 | **now** | real 5150 |
+|---|---|---|---|---|
+| `os8088_5150_cga_gla` (GLaBIOS) | 41 (2.25 s) | 130 (7.14 s) | **175** | — |
+| `os8088_5150_herc` (IBM ROM) | — | 222 | **188** | **205** |
 
-So the rule is now two rules, and the second has not moved at all:
+`tests/sysbench`'s whole raw `int 13h` block matches the field machine's own
+report off that identical image to within one measurement quantum on nine of
+thirteen rows, seven of them exactly (Set 37). So the rule is now two rules and
+**both** have moved:
 
-- **TIMING**: MartyPC is worth asking, at ~1.17x rather than 30x — and now
-  wrong in the *pessimistic* direction, which is the safe one. It still is not
-  where a figure LANDS: anything going into PERFORMANCE.md Part 9 comes off the
-  5150. PCem is no better and QEMU models none of it.
-- **CORRECTNESS**: unchanged, and the sharper half. The patch changes what a
-  disk COSTS and never what it SAYS, so §18.91's `AL` bug — a claim about what
-  a real ROM returns — is exactly as invisible here as it was. Short reads,
-  `int 1Eh`'s EOT and BIOS stack depth are the 5150's alone.
+- **TIMING**: MartyPC is worth asking. It still is not where a figure LANDS:
+  anything going into PERFORMANCE.md Part 9 comes off the 5150. PCem is no
+  better and QEMU models none of it.
+- **CORRECTNESS**: half of it moved. MartyPC runs the real IBM ROM, so what
+  the ROM does is reproduced — §18.91's `AL` bug shows here as **893 boot
+  ticks against 188** and 870 sectors in 183 reads against 183 in 24, the
+  field's own signature. What a real 765 puts in ST1, or whether a real drive
+  returns short, is still the emulator author's belief and still the 5150's
+  question, as are interrupt stack depth (SPEC.md §8) and anything QEMU's
+  SeaBIOS smooths over (docs/FIELD-NOTES.md 5).
 
-One caveat: 2:1 media is configured only on the `ibm5150_82_v4` machines,
-because GLaBIOS abandons a floppy op after ~250 ms and its machines keep 1:1.
-Those machines need an IBM ROM this tree cannot ship, so a container without
-one in `tools/martypc/roms/` can run the GLaBIOS twins only.
-
-**And it will not catch a disk CORRECTNESS bug either**, which is the sharper
-half. SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the
-BIOS for nine sectors, the BIOS moved nine and answered `AL = 1`, and the
-kernel believed `AL` and re-read the rest one sector at a time. On the 5150
-that was 148 sectors and 34 `int 13h` calls for a 32-sector file — 4.6x the
-traffic. **The same binary on the same image under QEMU moved 34 sectors in 6
-calls**: correct, fast, and completely silent about the bug. It took the real
-machine plus §18.94's counters to see it at all, and the boot sector carried
-the identical bug undiscovered for as long again. An emulator's BIOS returns
-what its author thought the hardware returns; the hardware is under no such
-obligation.
-
-The same caution applies to `int 1Eh`'s diskette parameter table, short
-`int 13h` reads, and interrupt stack depth — docs/FIELD-NOTES.md 5 and
-SPEC.md §8. All three are BIOS behaviours an emulator smooths over.
+One caveat: the `ibm5150_82_v4` machines need an IBM ROM this tree cannot
+ship, so a container without one in `tools/martypc/roms/` can run the GLaBIOS
+twins only — and a GLaBIOS machine is not where a disk number comes from, its
+BIOS abandoning a floppy op after ~250 ms.
 
 ---
 

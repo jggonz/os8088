@@ -1,40 +1,26 @@
-# --- the media the calibration machine actually carries ----------------------
-# Upstream's `pcxt_2_360k_floppies` with one thing added: the physical sector
-# INTERLEAVE of the floppies in the drives.
+# --- a note about INTERLEAVE, and why no machine here sets one ---------------
+# A drive's `interleave` (our patch 04, default 1) is the physical sector order
+# on the platter. A raw sector image records the LOGICAL order and says nothing
+# about where the sectors sit, so no emulator can derive it from the file - it
+# is a property of the disk the machine is being asked to model, and it is a
+# knob for exactly that reason.
 #
-# A raw sector image records the LOGICAL order of the sectors and says nothing
-# whatever about where they sit on the platter, so no emulator can derive this
-# from the file - it is a property of the disk the machine is being asked to
-# model. docs/FIELD-MACHINES.md's 5150 formats its 360KB media 2:1, which
-# PERFORMANCE.md Part 9 Set 14 measured directly: a whole 9-sector track in one
-# `int 13h` costs 1.92 revolutions there, where 1:1 media would cost 1.00 and
-# the Compaq Portable III's ~1:1 disks cost 1.24 (Set 19).
+# **Every machine below is 1:1, and that is a MEASUREMENT.** This file used to
+# carry an `os8088_2_360k_floppies` overlay putting 2:1 media in the IBM-ROM
+# machines, because PERFORMANCE.md read the field's `int 13h track, 1 call` -
+# 398 ms, 2.00 revolutions where a 1:1 track is 1.00 - as a 2:1 platter. It is
+# not: the missing revolution is the BIOS's own head-settle wait, 25 ms of
+# diskette-parameter-table asked for and ~52 ms of `LOOP $` at F000:EEB8
+# delivered, once per `int 13h`. With 1:1 media and that wait modelled by
+# simply running the ROM, `tests/sysbench` on this emulator reproduces the
+# field machine's whole raw floppy block to the measurement quantum -
+# `int 13h 1 sector` and all five short seek rows EXACTLY (PERFORMANCE.md
+# Part 9 Set 37). With 2:1 it did not, and the boot was 27% slow.
 #
-# The IBM-ROM machines below use this in place of the stock overlay.
-#
-# ...and the GLaBIOS machines deliberately do NOT use it. Measured on this
-# emulator: that BIOS abandons a floppy operation after ~250 ms and resets the
-# controller, and a 2:1 track read legitimately takes up to 400 ms - so a
-# GLaBIOS machine given 2:1 media cannot finish reading one and the boot ends
-# in `os8088: disk error`, status 80. The IBM ROM has no such limit, and that
-# is measured rather than assumed: os8088_5150_herc boots this exact 2:1
-# configuration in 211 ticks against the field machine's 180 (Set 35), and
-# docs/FIELD-MACHINES.md's 5150 runs that ROM and reads a whole 2:1 track in
-# one `int 13h` in 384 ms every time it boots (Set 14).
-# So 2:1 goes on the machines that model that 5150, and the GLaBIOS twins -
-# which exist to boot FAST rather than to boot the way the field machine does -
-# keep upstream's 1:1 overlay.
-[[overlay]]
-name = "os8088_2_360k_floppies"
-    [overlay.fdc]
-    bus_type = "ISA"
-    type = "IbmNec"
-        [[overlay.fdc.drive]]
-        type  = "360k"
-        interleave = 2
-        [[overlay.fdc.drive]]
-        type  = "360k"
-        interleave = 2
+# That also retired a caveat: GLaBIOS abandons a floppy operation after
+# ~250 ms and a 2:1 track read takes up to 400 ms, so the GLaBIOS machines had
+# to be given different media from the IBM ones. At 1:1 they need no exception
+# and every machine here carries the same disks.
 
 # --- os8088's calibration machine, as close as MartyPC gets ------------------
 # docs/FIELD-MACHINES.md's IBM 5150: 8088 at 4.77MHz, 256K on the board plus an
@@ -47,7 +33,7 @@ type = "Ibm5150v256K"
 rom_set = "ibm5150_82_v4"
 speaker = true
 overlays = [
-    "os8088_2_360k_floppies",
+    "pcxt_2_360k_floppies",
     "pcxt_2_serial_ports",
     "us_modelf_keyboard",
     "microsoft_serial_mouse_com1",
@@ -71,7 +57,7 @@ type = "Ibm5150v256K"
 rom_set = "ibm5150_82_v4"
 speaker = true
 overlays = [
-    "os8088_2_360k_floppies",
+    "pcxt_2_360k_floppies",
     "pcxt_2_serial_ports",
     "us_modelf_keyboard",
     "microsoft_serial_mouse_com1",
@@ -126,7 +112,7 @@ type = "Ibm5150v256K"
 rom_set = "ibm5150_82_v4"
 speaker = true
 overlays = [
-    "os8088_2_360k_floppies",
+    "pcxt_2_360k_floppies",
     "pcxt_2_serial_ports",
     "us_modelf_keyboard",
     "microsoft_serial_mouse_com1",
@@ -167,7 +153,7 @@ type = "Ibm5150v256K"
 rom_set = "ibm5150_82_v4"
 speaker = true
 overlays = [
-    "os8088_2_360k_floppies",
+    "pcxt_2_360k_floppies",
     "pcxt_2_serial_ports",
     "us_modelf_keyboard",
     "microsoft_serial_mouse_com1",
@@ -372,7 +358,7 @@ type = "Ibm5150v256K"
 rom_set = "ibm5150_82_v4"
 speaker = true
 overlays = [
-    "os8088_2_360k_floppies",
+    "pcxt_2_360k_floppies",
     "pcxt_2_serial_ports",
     "us_modelf_keyboard",
     "microsoft_serial_mouse_com1",
@@ -526,7 +512,7 @@ type = "Ibm5150v64K"
 rom_set = "ibm5150_82_v4"
 speaker = true
 overlays = [
-    "os8088_2_360k_floppies",
+    "pcxt_2_360k_floppies",
     "pcxt_2_serial_ports",
     "us_modelf_keyboard",
     "microsoft_serial_mouse_com1",
@@ -563,7 +549,7 @@ type = "Ibm5150v64K"
 rom_set = "ibm5150_82_v4"
 speaker = true
 overlays = [
-    "os8088_2_360k_floppies",
+    "pcxt_2_360k_floppies",
     "pcxt_2_serial_ports",
     "us_modelf_keyboard",
     "microsoft_serial_mouse_com1",

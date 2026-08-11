@@ -2443,6 +2443,10 @@ sb_raw13:
     call bl_sline
     mov si, sb_s_h_r137
     call bl_sline
+    mov si, sb_s_h_r138
+    call bl_sline
+    mov si, sb_s_h_r139
+    call bl_sline
 
     ; --- the diskette parameter table the BIOS is actually using (18.92) ----
     push es
@@ -4718,6 +4722,13 @@ sb_s_h_r134: db '   (167 ms) even on 360K media. 1:1 / 2:1 / one-per-turn B/s ar
 sb_s_h_r135: db '   23040 / 11520 / 2560 at 300, and 27648 / 13824 / 3072 at 360.', 0
 sb_s_h_r136: db '   The B/s ROWS below are measured, not derived, so they are right', 0
 sb_s_h_r137: db '   either way - and `int 13h 1 sector` is ONE turn, so it says which.', 0
+; It says which DRIVE and NOT which interleave, and that distinction cost this
+; project four sets of wrong belief (PERFORMANCE.md Set 37): a B/s row divides
+; by the WHOLE int 13h call, and a quarter of one is the ROM's head-settle
+; delay loop, so 1:1 media reads as 2:1 and the arithmetic above agrees to
+; 0.4%. Say so in the report, next to the numbers that invite it.
+sb_s_h_r138: db '   ...which DRIVE. NOT which interleave: a B/s row divides by the', 0
+sb_s_h_r139: db '   WHOLE call, and the ROM head-settle wait is a quarter of one.', 0
 sb_l_dptn:   db 'DPT EOT (18.92 patches)', 0
 sb_l_dpts:   db 'DPT step/head unload', 0
 sb_l_dpth:   db 'DPT head settle ms', 0
