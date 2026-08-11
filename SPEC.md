@@ -23559,6 +23559,208 @@ of this feature that ever cost the machine time rather than bytes.
   CGA at **60.0% lit**, `desktop_up` field/rule/dock 0.93/0.00/0.96, and the
   Task Manager opens and runs.
 
+### 41.12 The store is an OVERLAY, and only the machines that have one load it
+
+**`xmem.inc` is four API cells, a boot sniff and a dispatch. Everything else —
+the A20 gate, the HMA claim, the sizing, the allocator and both copy
+transports — is `XMEM.DRV`**, read off the system disk at boot on a machine
+with memory above 1MB and on no other.
+
+**The reason is the machine this project is calibrated against.** An 8088 has
+no A20 line and nothing above linear 0x0FFFFF, so every byte of this feature
+was reserved forever on a machine that can never reach it — about **1.2KB of
+kernel image**, which on the footprint guard is two 512-byte rungs and
+therefore **1,024 bytes of heap** that every XMS-less machine now keeps.
+§41.11 had already taken the whole feature out of `kern_small` for exactly
+that reason; this is the same removal for `kern_big`, without giving up the
+capability.
+
+**It is an OVERLAY and not a driver, and that is the load-bearing choice.** A
+`drv_tab` row buys *user management* — a Drivers-page tick, a `SYSTEM.CFG`
+bit, a caption, an unload — and there is nothing here for a user to decide: a
+machine either has memory up there or it does not, and §41.12.1's sniff
+answers that exactly. A tick box would only ever be a way to break a working
+machine. So this takes **`HDDTOOL.DRV`'s shape** (§52.11): the same header,
+the same `org 0`, the same three-byte dispatcher, the same one-claim load
+discipline, and a class byte `DRVC_OVL` the kernel deliberately does not know
+— no row, no publication slot, no page, no bitmap bit. The only difference
+from `HDDTOOL.DRV` is that **its owner is another driver and this one's is the
+kernel**.
+
+**`DRV_MAX` is still 4 and `DRVC_MAX` is still 5**, and that is the clearest
+statement that this did not touch the driver registry. It is also what the
+first draft of this change did not manage: a `drv_tab` row would have needed a
+hidden flag, and hiding a row is only cheap at the END of the table — a
+position already claimed twice over (§51.2.1's settings bitmap, and the
+Control Panel's own Display page at §31.10.1, which is last for precisely this
+reason). Not spending that constraint a third time is worth more than the
+~60 bytes the row and its class would have cost.
+
+**One loader, not two.** `drv_load_at` is `drv_load` with the row supplied
+instead of indexed — the volume bracket, the mount, `drv_find`, the single
+`MEM_K_DRV` claim, the read, `drv_check` and the shared failure tail. A
+`DRVC_OVL` row **stops after `drv_check`**: an overlay has no class, so it can
+neither publish nor be sent `DRVV_TIER` or `DRVV_READY`, and its owner
+attaches it. Copying that control flow instead would have been the shape that
+drifts, and the thing it drifts away from is `drv_vol_bank`/`drv_vol_back` —
+§51.5.2 is what a missing volume restore costs.
+
+**`[xm_kb]` is the one gate**, and it means two things at once on purpose:
+*there is a store* and *the overlay is attached*. The kernel writes it last,
+after the service table is staged, and only on a successful attach — so every
+cell tests one word and there is no second flag to fall out of step with it.
+It is also the identical test each of those routines made when they were
+resident, which is why not one of their published contracts moved.
+
+**`drv_check` needed no change**, which is what made this cheap: it compares
+the image's class byte against **the row's own** `DRVR_CLASS` rather than
+against a list, so an overlay-shaped image validates against a standalone
+record with no new code, while `drv_cls_idx` still refuses `DRVC_OVL` by range
+and it can never take a publication slot by mistake.
+
+#### 41.12.1 The sniff is EXACT, and it asks before it pokes
+
+`xm_sniff` is in the boot overlay (§2.5), called from `kmain` — `drv_snd_sniff`'s
+own home, and for its own reason: `drv_boot`'s first mount writes over the
+overlay, so a probe called from there would be running FAT.
+
+```
+    cmp byte [cpu_tier], CPU_8086   ; the target machine leaves here
+    je  .out
+    mov ah, 0x88
+    int 0x15                        ; AX = KB above 1MB
+    jc  .out
+    or  ax, ax
+    jz  .out
+    mov byte [xm_row+DRVR_WANT], 1
+```
+
+**It is exact rather than heuristic, and that is what separates it from
+§51.3.1's.** `drv_snd_sniff` runs an OPL2 timer dance that is merely
+*correlated* with the sound driver finding a card — it can be wrong in both
+directions, which is why the `SNDSNIFF=` knob exists. This runs **the same
+`int 15h` AH=88h the overlay sizes the store with**, so a machine it skips is
+a machine that would have published `[xm_kb] = 0` anyway. There are no false
+negatives by construction, not by testing.
+
+The one false positive is a machine whose BIOS reports KB and whose **A20 gate
+will not verify**. The overlay loads, fails the gate at attach, refuses, and
+the kernel frees the image — the same answer as before, having spent one
+four-sector read. Nobody is told (§41.12.4).
+
+**Asking AH=88h before the gate is a strict improvement on the boot path this
+replaced.** `xm_init` tested the *verified* `CPU_F_A20` bit and only then
+issued AH=88h, so a 286 with exactly 1MB poked port 0x92, raced the keyboard
+controller for D1h/DFh and paid two bounded 65,536-poll timeouts to be told
+there was nothing up there. AH=88h reads CMOS and needs no gate at all. So the
+whole A20 sequence — **including the one with the documented reboot hazard in
+it** (§41.2: a stray byte to 0x60 between the D1h and the DFh lands on the
+active-low CPU reset line) — now runs only on a machine that has already
+reported RAM above 1MB.
+
+| machine | before | now |
+|---|---|---|
+| 8088 — the target | one `cmp` | one `cmp`, and ~1.2KB of image back |
+| 286+, exactly 1MB | 0x92 poke, the KBC race, two timeouts, then AH=88h | one `int 15h` |
+| 286+ with XMS | all of that resident | one `int 15h`, then ~4 sectors, then the gate inside attach |
+
+**Boot ordering is not a constraint, and the old comment saying otherwise was
+a comfort.** `kmain` ran `xm_init` before `sched_init` because "this is the
+last moment at which no kernel ISR is installed". `xm_arm` masks NMI and runs
+the entire CR0.PE window inside one `pushf`/`cli` … `popf`, and it has
+**always** been called at run time from `xm_ucopy` — once per 1KB chunk, with
+`int 08h` hooked and IRQ3/IRQ4 live. If an ISR could break the transition the
+shipped transport would have been broken since it was written. `xm_boot` runs
+from `kmain` after `drv_boot`, still on the splash bar and still before the
+first paint.
+
+Two neighbours were checked with it. **The A20 probe's scratch is still free**
+at that point: it writes one word at linear `0x0500` and one through the alias
+at `HMA_SEG:0510`, saving and restoring both under `cli`, and `KERNEL_SEG` is
+0x0060 (the kernel starts at 0x600) while §18.92's diskette parameter table is
+at `0000:0580`. **And the GDT works from a heap segment**: `xm_arm` computes
+the `lgdt` base from DS at run time rather than baking `KERNEL_SEG` in, and
+the image is an ordinary claim well below 1MB, so the 24 base bits a 16-bit
+`lgdt` loads are exact.
+
+#### 41.12.2 What crosses the boundary
+
+Three things the resident code read out of kernel state, and what replaces
+each:
+
+- **`[sch_lock]` is raised by the KERNEL now.** Both transports used to raise
+  it themselves; a loaded image cannot reach it — there is no API slot, and
+  `drivers/debug/debug.asm` records in its own header what that costs it. The
+  `xm_copy` cell raises it around the whole dispatch, which is strictly wider
+  than the two windows it replaces and is exactly how `dsk_xfer` hands a
+  locked scheduler to a block driver before `DSV_BLK`. §41.8's context rule is
+  therefore the kernel's to enforce rather than the image's to document.
+- **The requesting instance is stamped by the KERNEL**, in `BL`, for
+  `osapi_snd_fm`'s documented reason: `snd_req_inst` reads `[snd_inst]` and
+  the running task's `T_INST`, both kernel state, and an image that had to ask
+  would need an API slot of its own. `BL` and not `AL` because `AX` is the low
+  half of a 32-bit argument to two of the three callers.
+- **The copy's two ends travel as 32-bit LINEAR addresses in a parameter
+  block**, and that is forced rather than chosen. Slot 0x01A8 takes the
+  conventional end as `ES:SI`, and the dispatcher loads `ES` with
+  `KERNEL_SEG` on its way in, so the caller's segment cannot survive the
+  crossing. The kernel folds it down — arithmetic `xm_copy` did internally
+  anyway — into a 12-byte `XMC_` block it passes in `SI`, because the ABI
+  wants seven registers (two 32-bit ends, a count, a direction, an instance)
+  and there are not seven to spare.
+
+**The feature bits come back the other way.** `CPU_F_A20` / `_HMA` /
+`_UNREAL` have no readers outside these two modules (§41.11 established that
+by grep), so the image is their only writer; it hands them to the kernel in
+`DL` at attach and the kernel stamps `[cpu_feat]`, so `cpu_info`'s AH (slot
+0x0188) keeps meaning what it always meant. On a machine where the overlay
+never loads it reads 0 — no gate verified, no HMA claimed, no unreal mode
+armed — which is true, and is exactly what tier 0 answers.
+
+**The dispatcher bakes the row in rather than taking it in `BX`**, unlike
+`drv_svc_call`. `BX` is an argument here, and `drv_svc_call`'s own header
+records that exact class of bug happening twice in the sound ABI: a routine
+that quietly ate the FM frequency, and then one that quietly ate a staging
+destination.
+
+#### 41.12.3 It may claim nothing bulk (binding)
+
+`XMEM.DRV`'s block table is 64 bytes **inside its own image**, and that is an
+invariant rather than an observation.
+
+`mem_sum_kb` counts the image under System **by its owner tag**
+(`MEM_K_DRV`), not by `drv_tab` membership — which is precisely what lets an
+overlay with no row account correctly. But a heap claim the image made for
+itself would carry **its own segment** as the owner word, and `drv_owns_seg`
+answers about `drv_tab` rows (§51.1). Such a claim would therefore belong to
+nobody: counted in the `HEAP` and `RAM` totals, drawn in the memory map's
+bands, and named in no line of the Task Manager's list.
+
+The day this wants a buffer of its own is the day it needs a row back, or the
+day `mem_own_drv` has to learn about `xm_row`. It will not announce itself.
+
+#### 41.12.4 A failure is silent, and that is the design
+
+Three things can leave a machine that reported extended memory without a
+store: the A20 gate not verifying, a heap that cannot fund the image, and the
+file missing from a hand-built disk. **None of them is said out loud.** The
+image is freed, the four cells answer tier 0's answers, and the Task Manager's
+`XMS 0/0K` line is the only trace.
+
+Bad memory is the system's fault rather than the user's, and a boot-time
+notice would make it the user's problem at every boot without giving them an
+action — there is no page to send them to, by construction. It is also
+consistent with what §41.8 already tells every package (*branch on the caps,
+never on the tier*) and with §47 rule 3, which refuses to report a guess where
+the only honest test is doing the thing.
+
+**The right surface for that diagnosis is an application, not a notice**: a
+System Info tool in the CheckIt idiom — CPU tier, adapters found, the memory
+ladder, the A20 state, the RTC rung that answered, drivers loaded — asked for
+once, by somebody diagnosing. It would read slots that already exist
+(`OSAPI_CPU_INFO`, `OSAPI_XMEM_CAPS`, `OSAPI_VIDEO`, `OSAPI_SYS_KB`). It is
+not part of this work and is recorded so the decision is findable.
+
 ## 42. Paint — the seventh package (apps/paint/paint.asm)
 
 A bitmap editor over the published package ABI. Prefix `pt_`, embedded

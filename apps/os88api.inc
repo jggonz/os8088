@@ -624,6 +624,20 @@ CPU_8086            equ 0        ; tier 0: 8086/8088. No A20 line, no memory
 CPU_286             equ 1        ; tier 1: A20 + BIOS block move
 CPU_386             equ 2        ; tier 2: the above, plus unreal mode
 ;
+; ...and OSAPI_CPU_INFO's AH, which this file described in prose and did not
+; name. They are one contract with three readers now - the kernel publishes
+; them, XMEM.DRV is the only thing that SETS them (SPEC.md 41.12.2), and a
+; package may test them - so they are spelled once here rather than three
+; times. NONE OF THEM IS THE THING TO BRANCH ON: a package asks
+; OSAPI_XMEM_CAPS for KB, always, because these say what the machine can do
+; and that one says what is actually there.
+CPU_F_A20           equ 0x01     ; the A20 line VERIFIED open - by a
+                                 ; wraparound read, never by "we wrote to the
+                                 ; gate" (SPEC.md 41.2)
+CPU_F_HMA           equ 0x02     ; the High Memory Area is claimed (41.3)
+CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
+                                 ; data limit (41.4). Tier 2 only
+;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
 ; A DRVC_DISK DRIVER's slots, not an application's: all four are fenced on the
 ; caller being the driver whose disk services are published, so a package gets

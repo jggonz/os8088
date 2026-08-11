@@ -1,6 +1,16 @@
 # Taking the store above 1MB out of the kernel image — an investigation
 
-**Research document. Nothing here is built.** SPEC.md is the binding contract
+> **BUILT. SPEC.md §41.12 is the contract; this is the study that produced
+> it.** What shipped is §0's recommendation with one change of shape found
+> while writing it — the overlay is loaded through `drv_load_at`, a two-line
+> factoring of `drv_load`, rather than through anything new. Measured on the
+> tree: `.text` −668, `.bss` −102, `.ovl` −357 = **−1,127 bytes**, two
+> 512-byte rungs, footprint spare 2,048 → 3,072, `KERN_CODE_MAX` 460 bytes
+> left → **1,230**, and the heap ladder 102.0 → 101.0 KB. `kern_small` is
+> **byte-identical** (md5 unchanged). §10 is what the build found that the
+> investigation did not.
+
+**Research document.** SPEC.md is the binding contract
 for what the kernel *is*; this is the study of moving the store above 1MB
 (SPEC.md §41) out of the kernel image and loading it on demand, and the record
 of what was measured while asking.
@@ -571,3 +581,67 @@ part of this work.
   build that still has the feature.
 - A settled desktop on a cycle-accurate 5150 with the real IBM Oct-82 BIOS: CGA
   at 60.0% lit, and the Task Manager opens and reads `XMS 0/0K`.
+
+---
+
+## 10. What the build found that the investigation did not
+
+Three things, and the first two are the reason this section exists.
+
+**1. A `%endif` 88 lines too low took the middle out of `drv_load` — in
+`kern_small` — and it assembled without a word.** Guarding `drv_load_at`
+behind `%ifdef KERN_BIG` is correct (§5's leak table, row 1: *a hook left
+outside its `%ifdef`*), but the guard closed after the `DRVC_OVL` test rather
+than after `drv_load_row:`, so the small build lost the mount, `drv_find`, the
+claim, the read and `drv_check`. It assembled because **every label the
+guarded region defined was also inside it**, so nothing was left dangling.
+
+What caught it was `make kernsplit` and nothing else: `kern_small`'s `.text`
+came out **92 bytes smaller** than HEAD in a commit that is entirely about
+`kern_big`, which is docs/KERN-SPLIT-PLAN.md §7's stated failure mode arriving
+exactly as described. Three earlier measurements had been *dismissed* as stale
+baselines before a clean build settled it — so the second lesson is the
+cheaper one: **when the split reporter and your expectation disagree, do the
+two clean builds before you explain the number away.**
+
+**2. A register the callee documents as clobbered, believed across a far
+call — and it worked on the first machine tested.** `xm_boot` handed
+`drv_call` the row in BX and then read `[bx+DRVR_SEG]` after it returned;
+`xm_attach` spends BX on the KB figure and says so in its own header. The
+staged service table was therefore ten bytes of whatever the heap held.
+
+Both halves of how it hid are worth keeping. **The visible outputs were all
+correct** — `xm_kb` right, `cpu_feat` right, the image loaded and freed
+properly — because AX and DL came back through the stack; only the table was
+wrong, and a table of near offsets that are not near offsets looks like
+nothing until something calls through it. And **the refusal path had the same
+bug and passed anyway**: a tier-0 refusal returns from `xm_attach` before
+anything spends BX, so `drv_release` got a valid row by luck. The machine that
+would have exposed it — a 386 whose A20 will not verify — is §41.12.1's one
+predicted false positive, i.e. the rarest path there is.
+
+**3. `int 15h` AH=88h on a period 5150 answers "none", which is the right
+answer and not a test.** Forcing the tier check out of the sniff changed
+nothing on MartyPC, because a real XT BIOS correctly reports no extended
+memory. Exercising the load on that machine needed the sniff stubbed to set
+`DRVR_WANT` unconditionally — and that run is worth keeping as a recipe,
+because it is the only way to drive §41.12.1's false-positive path on the
+target hardware: **7 extra sectors read, the overlay refused at attach, the
+image freed, `xm_kb` still 0, the desktop unchanged.**
+
+### 10.1 How it was verified
+
+| check | result |
+|---|---|
+| `make kernsplit` | `kern_small` **byte-identical** to HEAD, md5 `368160ab…` |
+| 8088, cycle-accurate (`os8088_5150_cga_gla`) | `cpu_tier` 0, `cpu_feat` 0, `xm_kb` 0, `DRVR_WANT` 0, `DRVR_SEG` 0 — **not one sector of `XMEM.DRV` read**, desktop settles in 2.06 s |
+| 8088 with the sniff forced | loads, refuses at attach, image freed, `xm_kb` 0, +7 sectors, desktop unchanged |
+| 386 (QEMU — §41.7's legitimate use) | `cpu_tier` 2, `cpu_feat` **0x7** (A20 verified, HMA claimed, unreal armed), `xm_kb` 64,448, `DRVR_SEG` 0x9dc0, `DRVR_KB` 2, service table five plausible offsets inside a 1,568-byte image |
+| `tests/xmtest` + `tests/xmcheck.py` | 3 instance-owned blocks live with the window open, **0 after the close** — so the whole chain runs: sniff → load → attach → staged table → slot dispatch → allocator → teardown dispatch |
+| the same gate, `call xm_release_rec` commented out of `instance.inc` | **FAIL, 3 blocks outlived their instance** — which is what makes the green run mean something |
+
+`tests/xmcheck.py` needed the rewrite §6.5 budgeted for: `xm_tab` is at a heap
+segment now, so it reads `xm_row`'s `DRVR_SEG` out of the guest and adds the
+offset from the **overlay's own** nasm map — assembled from a copy and
+required to be byte-identical to the `build/xmem.bin` that shipped, which is
+`os88sym.py`'s discipline applied to the other image.
