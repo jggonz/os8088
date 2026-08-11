@@ -9584,12 +9584,34 @@ Three things follow, and the first is the one that decides the letters:
   selects are ordered, so that is a fact about the cable rather than a
   limitation of the encoding. A machine that claims fewer drives gets fewer
   rows and therefore no zone, with nothing to hide afterwards.
-- **Probing the drives instead would cost the boot and answer no better.**
-  `AH=08h` is refused by this ROM for floppies (§18.96), and the honest
-  alternative — recalibrate each absent unit and wait for the failure — is
-  seconds of timeout on a real machine for a question the switches have already
-  answered. §51.3's reasoning exactly: nothing probes hardware that was not
-  asked about.
+- **The claim is worth no more about these two than about unit 1**, so
+  §18.97's probe asks them too. That was not the first answer here: this
+  section originally argued that probing costs the boot and answers no better,
+  because `AH=08h` is refused by this ROM (§18.96) and the honest alternative
+  looked like "recalibrate each absent unit and wait for the failure". §18.97
+  had already found the cheaper discriminator — **SENSE DRIVE STATUS, ST3 bit
+  4, TRK0**, microseconds and no motor for a drive that is there — so the
+  premise was wrong and the conclusion with it. An external drive on the
+  37-pin connector is, if anything, the one most worth asking about: it is the
+  one that gets unplugged, and its switches are the ones left set.
+
+  It is **cheaper here than §18.97's retire**, because the row does not exist
+  yet — a unit proven absent simply never gets one, so there is nothing to
+  take back and `dsk_fdd_retire` stays the unit-1 special case it was written
+  as. And only PROVEN absence skips a row: every other answer keeps the drive,
+  which is §18.97's fail-safe unchanged.
+
+**Parameterising the probe by unit is where this bit back**, and it is worth
+a paragraph because both halves assembled and booted. `dsk_fdd_probe` encoded
+unit 1 in **four** places — the DOR select, the motor bit, `RECALIBRATE`'s
+argument and `fdd_st3`'s — so it took no argument, and §18.97's own call site
+therefore set nothing in `AL`. Made to read `AL`, it inherited whatever was
+there: the **drive count**. A two-drive machine probed unit 2 and a four-drive
+one asked about unit 4, whose DOR select is `4 & 3` — unit 0, the drive the
+kernel had just booted off. Measured through `fdd_unit`, which is `.text` for
+exactly this reason: it started in `.ovl` beside the probe's own constants,
+where the first mount overwrites it, so it read back as its initialiser after
+a boot that had probed unit 3 and said nothing was wrong.
 
 `DVOL_MAX` went 6 → 8 for this. At 6 the external pair would have eaten two of
 the four partition rows, so a machine with four floppies could not reach all of

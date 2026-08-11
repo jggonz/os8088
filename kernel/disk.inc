@@ -196,6 +196,20 @@ dsk_dpt:
     db 0x08                      ; +10 motor start, 1/8 s
 DPT_LEN equ 11
 
+fdd_unit:    db 1                ; WHICH unit dsk_fdd_probe is asking about
+                                 ; (SPEC.md 18.98). It was unit 1 by
+                                 ; construction, in four places.
+                                 ;
+                                 ; HERE and not beside the probe's own
+                                 ; constants, which are .ovl: the overlay is
+                                 ; overwritten by the first mount, so a byte
+                                 ; there is FAT data by the time anything can
+                                 ; read it back - measured, it read 1 after a
+                                 ; boot that had probed unit 3. The probe does
+                                 ; not care (it runs before that mount) and a
+                                 ; test does, which is the same argument that
+                                 ; puts the fdd_dbg_* block below in .text.
+
 ; --- the floppy-presence probe's published state (SPEC.md 18.97/57.5) --------
 ; The int 11h equipment word is a CLAIM - on a 5150 it is the SW1 DIP switches
 ; read back through the 8255 - and this is what the FDC answered when the
@@ -4901,6 +4915,9 @@ FDC_DOR      equ 0x3F2           ; digital output: motors, select, reset, DMA
 FDC_MSR      equ 0x3F4           ; main status
 FDC_FIFO     equ 0x3F5           ; data
 FDC_M1       equ 0x20            ; DOR bit 5: unit 1's motor
+fdd_mbit:    db 0x10, 0x20, 0x40, 0x80  ; ...and one per unit (SPEC.md 18.98):
+                                 ; DOR bits 4..7 are motor enable for A..D,
+                                 ; which is the same four the BIOS drives
 
 FDD_HANDTO   equ 12000           ; spins waiting for RQM on one byte. Each is
                                  ; an `in`, a mask, a compare and a branch -
@@ -4962,6 +4979,10 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 ; -----------------------------------------------------------------------------
 dsk_fdd_probe:
     push bx
+    mov [fdd_unit], al          ; SPEC.md 18.98: which unit. It was unit 1 by
+                                ; construction - three encodings of it, in the
+                                ; DOR select, the motor bit and RECALIBRATE's
+                                ; argument, plus a fourth inside fdd_st3
     push cx
     push dx
     push es
@@ -4977,7 +4998,8 @@ dsk_fdd_probe:
     mov bh, al                  ; BH = the motor bits, for the duration
 
     mov al, bh
-    or  al, 0x0D                ; not-reset (2) + DMA/IRQ (3) + select unit 1
+    or  al, 0x0C                ; not-reset (2) + DMA/IRQ (3)...
+    or  al, [fdd_unit]          ; ...and DOR bits 0..1 select the unit
     call fdd_dor
     call fdd_st3                ; --- step 1: no motor, and usually enough ---
     jc .nordy
@@ -4992,8 +5014,14 @@ dsk_fdd_probe:
 
 .motor:                         ; --- step 2: spin unit 1 up before deciding --
     mov al, bh                  ; NOT to read ST3 again - the recalibrate below
-    or  al, 0x0D | FDC_M1       ; searches for the same TRK0 and answers the
-    call fdd_dor                ; same question, so a second read would only
+    or  al, 0x0C                ; searches for the same TRK0 and answers the
+    or  al, [fdd_unit]          ; same question, so a second read would only
+    push bx
+    mov bl, [fdd_unit]
+    xor bh, bh
+    or  al, [fdd_mbit+bx]       ; ...this unit's motor, not unit 1's
+    pop bx
+    call fdd_dor
     mov cx, FDD_MOTORW          ; name a case SEEKOK already covers. This is
     call fdd_wait               ; here so that the step that can REMOVE a drive
                                 ; runs under the most favourable conditions the
@@ -5007,7 +5035,7 @@ dsk_fdd_probe:
     mov al, 0x07                ; RECALIBRATE
     call fdd_put
     jc .nordy
-    mov al, 0x01                ; unit 1
+    mov al, [fdd_unit]          ; ...this unit
     call fdd_put
     jc .nordy
     mov cx, FDD_SEEKW           ; 77 steps at the DPT's rate is about half a
@@ -5115,7 +5143,7 @@ fdd_st3:
     mov al, 0x04
     call fdd_put
     jc .bad
-    mov al, 0x01                ; unit 1, head 0
+    mov al, [fdd_unit]          ; this unit, head 0
     call fdd_put
     jc .bad
     jmp short fdd_get           ; ...whose CF and AL are ours

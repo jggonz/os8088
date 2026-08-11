@@ -115,6 +115,14 @@ desk_init:
     cmp dh, 2
     jb .probed
     push ax
+    mov al, 1                   ; UNIT 1 - and this line is 18.98's, because
+                                ; the probe took no argument when it was
+                                ; written and this call site set nothing. Made
+                                ; to read AL, it inherited whatever was there:
+                                ; the drive COUNT, so a two-drive machine
+                                ; probed unit 2 and a four-drive one asked
+                                ; about unit 4, whose DOR select is `4 & 3` -
+                                ; unit 0, the drive the kernel just booted off
     call dsk_fdd_probe          ; preserves BX, CX, DX and ES, so the count
     mov cl, al                  ; is safe across it; the verdict comes out of
     pop ax                      ; AX's way because the probe answers in AL
@@ -154,8 +162,23 @@ desk_init:
     jae .edone                  ; the machine does not claim this many drives,
                                 ; so it gets no row and therefore no zone -
                                 ; there is nothing here to hide afterwards
+%ifndef NO_FDDPROBE
+    ; ...and the claim is worth no more about these two than about unit 1, so
+    ; ask them the same question (SPEC.md 18.97). It is worth MORE here, if
+    ; anything: an external drive on the 5.25" adapter's 37-pin connector is
+    ; the one that gets unplugged, and its switches are the ones left set.
+    ;
+    ; Cheaper than 18.97's retire, because the row does not exist yet: a unit
+    ; proven absent simply never gets one, so there is nothing to take back
+    ; and dsk_fdd_retire stays the unit-1 special case it was written as.
+    mov al, cl
+    call dsk_fdd_probe          ; preserves BX, CX, DX and ES: CL and the
+    or al, al                   ; count in DH both survive it
+    jz .eskip                   ; proven absent - and ONLY proven: every other
+%endif                          ; answer keeps the drive (18.97's fail-safe)
     mov al, cl
     call KERNEL_SEG:ovw_dsk_flop_add    ; FAR: overlay -> resident
+.eskip:
     inc cl
     cmp cl, 4
     jb .eloop
