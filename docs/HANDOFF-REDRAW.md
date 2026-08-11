@@ -25,6 +25,8 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §11.96.11 | a window names a BAND; the kernel banks it, the app owes the rest | Paint raise 680.9 → **451.0 ms**, 1.51x |
 | §11.96.11.1 | …and FOUR of them, held as a fragment list | Paint chrome 421.8 → **90.6 ms**, 4.7x |
 | §11.91.3 | **item D measured and NOT built** — the transitive mark it targets does not arise | 0 of 3 windows spared |
+| §43.9 | Solitaire: `WF_OWNBG`, and a full repaint stops filling every pile rect twice | move repaint 934.6 → **809.0 ms**, 13 fewer fills |
+| §43.9 | …and `wm_band` **measured and declined** there — its whole-content cache already answers | raise 97.5 ms, no `W_PAINT` at all |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -286,12 +288,17 @@ and there is no third factor of two here. The next real lever on a blit is
 `gfx_blit4` has three consumers besides Paint's canvas, and one of them is more
 latency-critical than Paint has ever been:
 
-- **Solitaire's card BACKS.** The source says what they cost — *"the back is a
-  lattice, so `gfx_blit4` coalesces it into 634 `gfx_fill` runs on the 32x44
-  metrics (336 on CGA's 28x28)"* — so priced with the measured constants a card
-  back was **278 ms on CGA** and is **125 ms** after §5.4.1, and would be
-  ~13 ms with the decoder. `sol_drawall` draws the whole tableau; `sol_cmd_deal`
-  already has a comment about how dear one back is.
+- **Solitaire's card BACKS — MEASURED, and the estimate above them was stale
+  by an order of magnitude.** This entry used to read *"a card back was 278 ms
+  on CGA and is 125 ms after §5.4.1, and would be ~13 ms with the decoder"*,
+  priced from the run count. The decoder landed (§5.4.1.1/§5.4.1.2) and nobody
+  came back to it. Measured (PERFORMANCE.md Set 49): a whole Solitaire repaint
+  issues **22 `gfx_blit4` calls in 562.6 ms** and the dearest single one is
+  **18.7 ms**, so the prediction was right and this line was two rounds behind
+  it. **There is nothing left to win here** — a back is no longer priced by
+  what is in it.
+  What the same measurement DID find is §43.9: the repaint is ~91% per-call
+  floor, and twelve of its fills were the same pixels twice.
 - **ArtfulType's KEYSTROKE PATH — TABLED, and it is a SESSION OF ITS OWN.**
   Do not pick this up as part of the redraw round: the owner has taken it out
   and will drive it separately, because the reported symptom (twenty characters
