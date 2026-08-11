@@ -149,6 +149,32 @@ TMM_XB_Y2   equ 51              ; figures - same shape as the RAM bar in the
                                 ; same question about a different pool
 TMM_HDR_Y   equ 55              ; "NAME    ADDR SIZE   HEAP" header line
 
+; --- ...and what all of that becomes on a machine with NO store above 1MB ----
+; A bar whose scale is zero is not a reading, it is an empty rectangle: on the
+; target machine the XMS row was 'XMS 0/ 0K' over a frame with nothing in it,
+; twenty-two pixels of window saying that a thing which cannot exist here does
+; not exist. So on a machine whose pool is 0 KB the bar is not drawn, the
+; figures come off the caption (the CPU TIER stays - it is the only place in
+; the UI that names it, and SPEC.md 60 is why it is a fact worth keeping), and
+; everything below moves UP by TMM_XSHIFT.
+;
+; This is SPEC.md 31.10.1's rule rather than a new one - "one adapter is not a
+; choice, so the page is not drawn at all" - and it is deliberately NOT
+; SPEC.md 47's greying: greying says "this control is unavailable", and there
+; is no control here and nothing unavailable. There is simply no such memory.
+;
+; TMM_XSHIFT is TM_ROW_H exactly, and that is the whole point rather than a
+; coincidence: the space the bar gave back is one process row, so a machine
+; that cannot show an XMS bar shows one more line of the list instead. It is
+; asserted below, because the two are separately plausible numbers.
+TMM_XSHIFT  equ 11              ; px the header, the rows and the frame rise
+%if TMM_XSHIFT != TM_ROW_H
+%error "TMM_XSHIFT must be one row pitch - the reclaimed space IS a row"
+%endif
+%if TMM_HDR_Y - TMM_XSHIFT <= TMM_XMS_Y + 8
+%error "the no-XMS header would land on the caption line above it"
+%endif
+
 ; --- what the periodic refresh checks before it draws (SPEC.md 28) -----------
 ; The rows have tm_rowck; these are the seven things AROUND them that cost
 ; real pixels and mostly do not move. A map interior is ~3,000 pixels of
@@ -447,6 +473,28 @@ tm_init:
     push dx
     int 0x12                    ; AX = conventional memory, KB
     mov [tm_totkb], ax
+
+    ; --- is there a store above 1MB at all? ----------------------------------
+    ; Asked ONCE, here, because everything below derives the frame from it and
+    ; the answer cannot change while the machine runs: xm_init sizes the pool
+    ; at boot and nothing resizes it (SPEC.md 41.5). Asked of the POOL SIZE and
+    ; never of xm_caps' free figure - a full pool answers 0 free and still very
+    ; much exists - and on kern_small the slot is a stub answering tier 0's
+    ; answers, so this needs no build-time test and gets that build right for
+    ; free (SPEC.md 41.11).
+    push di
+    push es
+    TM_ES_DATA
+    mov di, tm_kb
+    TM_SYS_KB
+    pop es
+    pop di
+    mov word [tm_xoff], 0
+    cmp word [tm_kb+SK_XMS], 0
+    jne .xms
+    mov word [tm_xoff], TMM_XSHIFT
+.xms:
+
     call OSAPI_VIDEO            ; and the live geometry (SPEC.md 39.2): AX =
     mov [tm_vw], ax             ; width, CX = the dock strip's top row. Banked
     mov [tm_vdock], cx          ; because everything below spends AX..DX
@@ -472,6 +520,10 @@ tm_init:
     mov ax, [tm_vdock]
     sub ax, MBAR_H + 1          ; AX = px available to the whole frame
     sub ax, TITLE_H + 1 + TMM_ROW_Y     ; ...less the chrome and the maps
+    add ax, [tm_xoff]           ; ...and back the bar's height on a machine
+                                ; with no store, which is what turns the
+                                ; reclaimed space into a ROW rather than into
+                                ; a shorter window (TMM_XSHIFT = TM_ROW_H)
     jbe .norows
     mov bl, TM_ROW_H
     div bl                      ; AL = rows that fit in ONE column
@@ -503,6 +555,7 @@ tm_init:
     mov dx, TM_ROW_H
     mul dx
     add ax, TITLE_H + 1 + TMM_ROW_Y
+    sub ax, [tm_xoff]           ; the list starts higher with no bar above it
     mov [tm_tpl+6], ax          ; the frame height the machine can take
 
     ; --- how deep is the HEAP page's column 0? --------------------------------
@@ -1680,6 +1733,10 @@ tm_draw_mem:
     call OSAPI_GFX_FRAME
 
 
+    cmp word [tm_xoff], 0       ; a machine with no store above 1MB draws no
+    jne .nobar                  ; bar at all - not an empty one. The figures
+                                ; come off the caption to match and everything
+                                ; below rises by TMM_XSHIFT
     mov ax, [tm_cx]             ; XMS bar frame (6,71)-(TM_RW,80) - here and
     add ax, 6                   ; not in tm_xbar, which is element-checked and
     mov bx, [tm_cy]             ; skips itself on an empty pool
@@ -1689,11 +1746,13 @@ tm_draw_mem:
     mov dx, [tm_cy]
     add dx, TMM_XB_Y2
     call OSAPI_GFX_FRAME
+.nobar:
 
     mov cx, [tm_cx]             ; header, at the rows' text x - once per
     mov bx, [tm_cols]           ; COLUMN, because each carries its own list
     mov dx, [tm_cy]
     add dx, TMM_HDR_Y           ; column 0's sits under the maps...
+    sub dx, [tm_xoff]           ; ...higher when there is no bar between them
 .hdr:
     push cx
     push dx
@@ -1795,6 +1854,12 @@ tm_cap_xms:
     mov si, tm_s_t386
 .tier:
     call tm_copy
+    cmp word [tm_xoff], 0       ; no store above 1MB: the line is the TIER and
+    je .figs                    ; nothing else. 'XMS 0/ 0K' is the same empty
+    pop bx                      ; statement the bar was making, and the tier is
+    pop ax                      ; what makes the absence legible - 'CPU 8086'
+    jmp short .term             ; IS the reason there is none (SPEC.md 60.2)
+.figs:
     mov si, tm_s_xms
     call tm_copy
     pop bx                      ; BX = total, AX = used
@@ -1806,6 +1871,7 @@ tm_cap_xms:
     call tm_put5
     mov byte [di], 'K'
     inc di
+.term:
     mov byte [di], 0
 
     call tm_rowsum              ; unchanged? then so are its pixels
@@ -3249,10 +3315,12 @@ tm_mrow_open:
     push bx
     mov ax, [tm_mrow]
     mov bx, TMM_ROW_Y           ; ...or the heap page's own first row, which is
-    cmp byte [tm_view], 2       ; 30px higher: what the memory view has above
-    jne .y                      ; its list is a MAP and a BAR, and this page
-    mov bx, TMH_ROW_Y           ; has two caption lines. Shared, the list sat a
-.y:                             ; map's height below its own header
+    sub bx, [tm_xoff]           ; 30px higher: what the memory view has above
+    cmp byte [tm_view], 2       ; its list is a MAP and a BAR, and this page
+    jne .y                      ; has two caption lines. Shared, the list sat a
+    mov bx, TMH_ROW_Y           ; map's height below its own header.
+.y:                             ; The heap page has no bar to lose, so
+                                ; [tm_xoff] is the memory view's alone
     call tm_row_place
     mov byte [tm_mfit], 1
     jnc .fits
@@ -4234,12 +4302,21 @@ tm_bar:
 ; rectangles and the refresh draws nothing at all - which on a desktop that
 ; is merely sitting there is every refresh, twice a second, forever.
 ;
-; On tier 0 the width is 0 and the bar stands empty beside the 'XMS 0/ 0K'
-; figures. That is deliberate - an absent bar would read as a missing feature
-; rather than an empty pool - and it is the reason the FRAME is drawn by
-; tm_draw_mem and not here, exactly as the perf view draws the RAM bar's. A
-; zero width matches the cleared check word, so this body skips on the very
-; first paint, and a frame drawn inside the gate would never appear at all.
+; ON A MACHINE WITH NO STORE THERE IS NO BAR AT ALL, and that REVERSES what
+; this comment used to say. The old reasoning was that "an absent bar would
+; read as a missing feature rather than an empty pool", so tier 0 got an empty
+; rectangle beside 'XMS 0/ 0K'. Looked at on the target machine that is the
+; wrong way round: it is twenty-two pixels of window devoted to saying that a
+; thing which cannot exist here does not exist, and an empty frame reads as a
+; reading of zero rather than as an absence. The pool's SIZE - not its free
+; figure - decides, once, in tm_init, and everything below rises to fill the
+; space (TMM_XSHIFT). SPEC.md 31.10.1 is the precedent: a Display page with one
+; adapter on it is not drawn either.
+;
+; The FRAME is still drawn by tm_draw_mem and not here, exactly as the perf
+; view draws the RAM bar's: a zero width matches the cleared check word, so
+; this body skips on the very first paint, and a frame drawn inside the gate
+; would never appear at all. tm_draw_mem carries the same [tm_xoff] test.
 ; -----------------------------------------------------------------------------
 tm_xbar:
     push ax
@@ -4247,6 +4324,10 @@ tm_xbar:
     push cx
     push dx
     push si
+
+    cmp word [tm_xoff], 0       ; no store: no bar, and the rows are DOWN there
+    jne .done                   ; now - ungated this would paint the interior
+                                ; across the process list
 
     mov ax, [tm_xbarw]
     mov bx, tm_elck + 2*TMC_XBAR
@@ -4985,5 +5066,17 @@ tm_hcolrows equ os88_image_end + 2169  ; the HEAP page's column-0 depth
                                        ; higher than the memory view's, so it
                                        ; wraps later. Frame-derived, never
                                        ; dock-derived: see tm_init
+tm_xoff     equ os88_image_end + 2175  ; 0, or TMM_XSHIFT on a machine with no
+                                       ; store above 1MB: how far the memory
+                                       ; view's header, rows and frame rise
+                                       ; where the XMS bar would have been.
+                                       ; SET ONCE, by tm_init, and never from
+                                       ; a draw - the frame is SIZED from it,
+                                       ; so a value that could change under a
+                                       ; live window would leave the height
+                                       ; and the row placement disagreeing.
+                                       ; Appended at the end of the block on
+                                       ; purpose: the offsets above are
+                                       ; hand-chained, and inserting renumbers
 
-TM_BSS_TOTAL equ 2175
+TM_BSS_TOTAL equ 2177

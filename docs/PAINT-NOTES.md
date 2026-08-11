@@ -514,3 +514,101 @@ Two things worth knowing before adding another message here:
   pixels and is a live progress bar rather than a static line, so it wins.
   That is why `Saving...` before a `pt_save` is redundant with the widget and
   only `Encoding...`, which precedes work the widget cannot see, is not.
+
+## The background is ours now (SPEC.md §11.90.1)
+
+`wm_draw_win` white-filled the whole content before every `W_PAINT`, and Paint
+sets **`WF_OWNBG`** (`OSAPI_WM_OWNBG`, slot 0x03A8) to stop it. The flag says
+*I paint every pixel of my content myself*, and Paint can, in four parts that
+already existed: `pt_fsbed` lays the tool column's bed and any band right of the
+canvas, `pt_draw_pal` and `pt_draw_strip` draw their own beds, `pt_cfill` draws
+the divider, and `pt_blit_all` covers the canvas.
+
+**`pt_fsbed` was already exactly this routine** — written for §53's bracket,
+which has no `wm_draw_win` in front of it — so windowed it was dead code the
+kernel's fill stood in for. Adopting the flag is calling it. The one addition is
+a fill in the `pt_mode` notice path, because two lines of black text is not
+every pixel of anything.
+
+**The reason is the FLASH, not the milliseconds.** The fill is one `gfx_fill`,
+~24 ms, which as work is noise. As a picture it is the first layer of a double
+draw whose second layer takes as long as `W_PAINT` does — and on a textured
+bitmap that is 8.7 s (PERFORMANCE.md Set 32). Measured with a canvas sample box
+on a cycle-accurate 5150/CGA: **fully white for 2,617 ms** before, and **never
+blank at all** after (peak whiteness 0.818, i.e. never uniform). The 2.6 s is
+the box's own figure — the blit works down the canvas in bands, so the bottom
+rows stay white until it reaches them, which is the whole 8.7 s.
+
+Verified against a build that still gets the fill: **0 differing pixels** on
+CGA, Hercules and VGA mode 12h, over a session that covers Paint, raises it,
+drags a Disk window across it and raises it again — `tools/ptcheck.py`, which
+uses a textured BMP on purpose, because a blank canvas is uniform white and
+therefore the one picture that cannot tell a kept promise from a broken one.
+
+## Refactor candidate: `gfx_blit4` still pays a drawing call per RUN
+
+Not a defect, and not a criticism of `gfx_blit4`, which was created for exactly
+this canvas and did the thing it was built to do: Paint used to coalesce runs
+itself and emit one `OSAPI_GFX_HLINE` per run, and since packages own a segment
+every one of those is a FAR call, so a detailed picture cost thousands. Moving
+the identical scan inside the kernel removed all of them.
+
+What it did **not** remove is the per-call floor on the other side. `gfx_blit4`
+still emits one `gfx_hline` per run, and §5.7 prices a drawing call at ~756 µs
+of arriving whatever it draws — so the blit costs `runs × ~0.77 ms` and the
+pixel count barely enters it. Measured (PERFORMANCE.md Set 32): a 492×133
+16-colour picture at 84.9 runs a row is **8,670 ms**, against 211 ms for the
+same canvas blank. That is now the single largest drawing cost in the system.
+
+The shape of the fix is to stop treating a blit as a sequence of rect
+primitives and let it write framebuffer bytes directly, the way `gfx_restore`
+does — priced per byte those two are **5.5 µs against 244 µs** (Set 32), a 45x
+gap that is entirely the per-call floor. It wants care on three fronts and is
+therefore its own piece of work:
+
+- **1bpp and VGA are different problems.** On a mono adapter the framebuffer IS
+  the renderer's target (§39.3), so a run becomes a byte span with edge masks —
+  `sw_xfer`'s shape. On VGA the four planes each want the run's bits, which is
+  Set/Reset and a Bit Mask per span rather than a `rep`.
+- **The banked layout** (§39.3) means a row walk must go through `gfx_nextrow`,
+  and PERFORMANCE.md Part 9 Set 3's rule applies: inline it in the row loop.
+- **It must stay byte-identical**, and the gate exists — `tools/ptcheck.py`
+  compares a textured canvas pixel for pixel across builds on all three
+  adapters, which is what a change of this kind needs and what a blank canvas
+  would silently pass.
+
+## It is told which rect it owes (SPEC.md §11.90.2)
+
+`WF_OWNBG` stopped the kernel whitening the content; `OSAPI_WM_DAMAGE` is the
+other half — asked once per paint (`pt_dmg_get`, right after `pt_org`) and spent
+two ways:
+
+- **Per element, for the small parts.** `pt_dmg_hit` tests a content-relative
+  rect against the damage, and the tool column, the colour strip, the divider and
+  `pt_fsbed`'s two beds are each drawn or skipped whole. That is `tm_row_draw`'s
+  answer (SPEC.md §11.3): each part is small and self-contained, so the part is
+  the unit and there is no fill-versus-glyph granularity trap to fall into.
+- **Narrowed, for the canvas.** `pt_blit_dmg` converts the rect to canvas
+  coordinates and hands it to `pt_blit`, which has always taken one. No clamping
+  is needed: `pt_clip` reads its four words as signed, floors at 0, caps at the
+  canvas and refuses an empty rect.
+
+Measured (PERFORMANCE.md Set 34) on a Disk window dragged off Paint: the canvas
+blit **8,669.8 ms → 6,758.8 ms**, the damage having covered 73% of the width.
+Proportional, which is the whole design — and bounded by geometry, because a
+drag's damage is at least the moving window's own rect.
+
+Three things in the adoption are load-bearing:
+
+- **A SELECTION disqualifies us.** The marquee is an XOR and every paint re-shows
+  it unconditionally, so a partial blit would leave the part outside the rect lit
+  and the re-show would then invert it *off*. `pt_dmg_get` asks for nothing while
+  `[pt_selon]` is set.
+- **The fullscreen bracket asks nothing**, there being no window damage on a
+  surface that is the machine's (§42.7). `[pt_fsx]` is the test, and it is what
+  keeps `pt_fsbed` drawing both its beds unconditionally in there.
+- **`pt_repaint` forces `[pt_dall]` back to 1**, because it is a FULL repaint and
+  must not inherit the last `W_PAINT`'s rect — which would skip whichever parts
+  that paint owed and this one does not. It also calls `pt_fsbed` itself now, so
+  that its own comment ("every part of this draws its own background") is true
+  rather than true-because-a-`W_PAINT`-ran-first.
