@@ -73,6 +73,9 @@
   %macro UI_PEN 0
     call KERNEL_SEG:cw_gfx_pen_cf
   %endmacro
+  %macro UI_PIXEL 0
+    call KERNEL_SEG:cw_gfx_pixel
+  %endmacro
   %macro UI_WHITE 0
     mov byte [gfx_color], CWHITE
   %endmacro
@@ -91,6 +94,9 @@
   %endmacro
   %macro UI_PEN 0
     call OSAPI_GFX_PEN
+  %endmacro
+  %macro UI_PIXEL 0
+    call OSAPI_GFX_PIXEL
   %endmacro
   %macro UI_WHITE 0
     push ax
@@ -247,6 +253,217 @@ os88ui_bhit:
 .no:
     stc
     ret
+
+; =============================================================================
+; The CHECK BOX and the RADIO BUTTON (SPEC.md 31.2)
+;
+; 12x12, one word a row, bit 15 = the leftmost pixel - menu_logo_bmp's
+; convention, and the low 4 bits of every word are unused. Four bitmaps and
+; one body, which is what the Control Panel has always had; what it did not
+; have is a way for a PACKAGE to draw the same control, so an app wanting a
+; checkbox drew its own and looked like a different operating system.
+;
+; They are a PAIR because a radio and a check are the same widget with
+; different pictures - same size, same white box, same walk - and splitting
+; them would be two bodies that have to agree about all three.
+; =============================================================================
+
+OS88UI_GRADIO equ 0             ; open ring / ring with a filled centre dot
+OS88UI_GCHECK equ 2             ; open square / square with a cross
+OS88UI_GON    equ 1             ; ...or'd into either: the SET state
+OS88UI_GW     equ 12            ; both are 12 x 12
+
+; -----------------------------------------------------------------------------
+; os88ui_glyph - one check box or radio button, over its own white box
+; in:  CX = x, DX = y (top-left, screen px), AL = OS88UI_G*,
+;      AH non-zero = disabled; caller holds the gfx lock
+; out: nothing; all registers preserved, and the pen is left LIVE
+;
+; THE FLAG RIDES IN AH rather than in DI, which is the one place this file
+; departs from os88ui_btn's shape. A glyph has exactly one flag, and every
+; Control Panel page is already holding the pane's left edge in DI - so DI
+; would cost a push and a pop at all six call sites to carry one bit that
+; fits beside the index for free.
+;
+; THE WHITE BOX IS UNCONDITIONAL, where the button's is a flag. A radio's
+; whole job is to be redrawn in place when the selection moves, so there is
+; no caller for whom the erase is waste - and drawing one bitmap over
+; another without it is the same defect the button's OS88UI_FILL note
+; describes, one layer down.
+;
+; It is not cheap: 44 set bits for an empty box and 64 for a crossed one,
+; one drawing call each, which at PERFORMANCE.md Part 2's ~756us of fixed
+; cost is 35-50ms on the field machine. Draw the ROW that changed, never the
+; page.
+; -----------------------------------------------------------------------------
+os88ui_glyph:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov di, ax                  ; DI = the whole argument: AX is about to be a
+                                ; rect corner for the white box, so the
+                                ; DISABLED byte cannot stay in AH. It did in
+                                ; the first version, `mov ax, cx` overwrote it
+                                ; with the high byte of an x coordinate, and
+                                ; every glyph on every page came out GREYED -
+                                ; which assembles, boots, and draws a
+                                ; perfectly plausible ring
+    mov si, di                  ; SI = the index, times the 24 bytes a bitmap
+    and si, 3                   ; is (8086: no shl by an immediate but 1)
+    shl si, 1
+    shl si, 1
+    shl si, 1                   ; SI = i * 8
+    mov bx, si
+    shl bx, 1                   ; BX = i * 16
+    add si, bx                  ; SI = i * 24
+    add si, os88ui_g_roff       ; ...and the four are contiguous, asserted
+                                ; below. A table of four pointers is SHORTER
+                                ; than this by two bytes, and it was one until
+                                ; it was measured: a table is DATA and lands
+                                ; in .text, which had THREE bytes of rung left,
+                                ; so eight bytes of table cost a whole
+                                ; 512-byte step of KERN_BUDGET. The arithmetic
+                                ; is CODE and lands in .cold beside the body,
+                                ; where there are 479 bytes going spare. Same
+                                ; kernel, one rung cheaper, and in a package
+                                ; the distinction does not exist at all
+    mov bp, cx                  ; BP = left x: every row's pen restarts here
+                                ; (a VALUE, never an address - SS is not DS
+                                ; in a package)
+
+    UI_WHITE                    ; the box first, so a glyph can be redrawn
+    mov ax, cx                  ; in place. [gfx_dis] does not reach a fill,
+    mov bx, dx                  ; so a stale one cannot tint it
+    add cx, OS88UI_GW - 1
+    add dx, OS88UI_GW - 1
+    UI_FILL                     ; AX,BX,CX,DX = x1,y1,x2,y2; BX survives it
+
+    test di, 0xFF00             ; ...then the pen, both halves at once
+    jz .live                    ; (SPEC.md 47 rule 1) - the disabled byte out
+                                ; of the bank above, never out of AH
+    stc
+    jmp short .set
+.live:
+    clc
+.set:
+    UI_PEN
+
+    mov dx, bx                  ; DX = pen y, back at the top row
+    mov bh, OS88UI_GW           ; BH = rows left
+.row:
+    lodsw                       ; AX = the row's bits, MSB leftmost (DF = 0
+    mov cx, bp                  ; by contract); CX = pen x
+    mov bl, OS88UI_GW           ; BL = columns left
+.col:
+    shl ax, 1
+    jnc .skip
+    UI_PIXEL
+.skip:
+    inc cx
+    dec bl
+    jnz .col
+    inc dx
+    dec bh
+    jnz .row
+
+    clc
+    UI_PEN                      ; ...and the pen back, always
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+%ifdef OS88UI_KERNEL
+section .text                   ; DATA, and SPEC.md 2.6 rule 1 is why: a table
+%endif                          ; declared in .cold and walked through DS is
+                                ; not that table. In a package there are no
+                                ; sections and the same text is simply inline
+; The four are ONE array, indexed by (kind | on), and os88ui_glyph reaches
+; them by arithmetic rather than through a table of pointers - so the order
+; and the spacing are load-bearing and are asserted at the bottom.
+os88ui_g_roff:                  ; radio, clear: an open ring
+    dw 0x0F00                   ;  0  ....####....
+    dw 0x30C0                   ;  1  ..##....##..
+    dw 0x4020                   ;  2  .#........#.
+    dw 0x4020                   ;  3  .#........#.
+    dw 0x8010                   ;  4  #..........#
+    dw 0x8010                   ;  5  #..........#
+    dw 0x8010                   ;  6  #..........#
+    dw 0x8010                   ;  7  #..........#
+    dw 0x4020                   ;  8  .#........#.
+    dw 0x4020                   ;  9  .#........#.
+    dw 0x30C0                   ; 10  ..##....##..
+    dw 0x0F00                   ; 11  ....####....
+
+os88ui_g_ron:                   ; radio, set: the same ring, 4x4 centre dot
+    dw 0x0F00                   ;  0  ....####....
+    dw 0x30C0                   ;  1  ..##....##..
+    dw 0x4020                   ;  2  .#........#.
+    dw 0x4020                   ;  3  .#........#.
+    dw 0x8F10                   ;  4  #...####...#
+    dw 0x8F10                   ;  5  #...####...#
+    dw 0x8F10                   ;  6  #...####...#
+    dw 0x8F10                   ;  7  #...####...#
+    dw 0x4020                   ;  8  .#........#.
+    dw 0x4020                   ;  9  .#........#.
+    dw 0x30C0                   ; 10  ..##....##..
+    dw 0x0F00                   ; 11  ....####....
+
+os88ui_g_coff:                  ; check, clear: an open square
+    dw 0xFFF0                   ;  0  ############
+    dw 0x8010                   ;  1  #..........#
+    dw 0x8010                   ;  2  #..........#
+    dw 0x8010                   ;  3  #..........#
+    dw 0x8010                   ;  4  #..........#
+    dw 0x8010                   ;  5  #..........#
+    dw 0x8010                   ;  6  #..........#
+    dw 0x8010                   ;  7  #..........#
+    dw 0x8010                   ;  8  #..........#
+    dw 0x8010                   ;  9  #..........#
+    dw 0x8010                   ; 10  #..........#
+    dw 0xFFF0                   ; 11  ############
+
+os88ui_g_con:                   ; check, set: the same square, crossed
+    dw 0xFFF0                   ;  0  ############
+    dw 0xC030                   ;  1  ##........##
+    dw 0xA050                   ;  2  #.#......#.#
+    dw 0x9090                   ;  3  #..#....#..#
+    dw 0x8910                   ;  4  #...#..#...#
+    dw 0x8610                   ;  5  #....##....#
+    dw 0x8610                   ;  6  #....##....#
+    dw 0x8910                   ;  7  #...#..#...#
+    dw 0x9090                   ;  8  #..#....#..#
+    dw 0xA050                   ;  9  #.#......#.#
+    dw 0xC030                   ; 10  ##........##
+    dw 0xFFF0                   ; 11  ############
+
+; ...and the invariant the arithmetic rests on, checked by the assembler
+; rather than by whoever edits the pictures. Reordering them or dropping a
+; row would otherwise draw a perfectly plausible wrong glyph.
+%if (os88ui_g_ron - os88ui_g_roff) != OS88UI_GW * 2
+  %error "os88ui: radio-on is not one bitmap past radio-off"
+%endif
+%if (os88ui_g_coff - os88ui_g_ron) != OS88UI_GW * 2
+  %error "os88ui: check-off is not one bitmap past radio-on"
+%endif
+%if (os88ui_g_con - os88ui_g_coff) != OS88UI_GW * 2
+  %error "os88ui: check-on is not one bitmap past check-off"
+%endif
+%if (OS88UI_GRADIO | OS88UI_GON) != 1 || OS88UI_GCHECK != 2
+  %error "os88ui: the glyph indices no longer walk the array in order"
+%endif
+%ifdef OS88UI_KERNEL
+section .cold
+%endif
 
 %ifndef OS88UI_KERNEL
 ; --- the package-side click machinery ----------------------------------------

@@ -301,7 +301,12 @@ $(shell mkdir -p $(BUILD); \
 FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 
 KERNEL_SRC := kernel/kernel.asm
-KERNEL_INC := $(wildcard kernel/*.inc)
+# apps/os88ui.inc is a KERNEL source too - SPEC.md 20.5.1's shared control
+# assembles into fdlg.inc with OS88UI_KERNEL defined. Without it here, editing
+# that file leaves build/kernel.bin untouched and every image stale, which is
+# indistinguishable from a change that did nothing: kernsize.py re-assembles
+# and so reports the NEW sizes while the booted kernel is the old one.
+KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \

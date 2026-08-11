@@ -376,8 +376,9 @@ what is left is packages. `at_button`, `pn_btn`, `np_pbutton`, `pt_btn_xy`,
 pixel diff, per §6; none is urgent, and a package that never adopts loses
 nothing.
 
-The check/radio glyphs — **unblocked by §13**, since `ctrl.inc` can include
-this file now. Still built with their first caller and not before.
+~~The check/radio glyphs~~ — done, §13.7: `os88ui_glyph`, with the whole
+Control Panel as its first caller. A **package** consumer is still wanted;
+the widget is published and nothing outside the kernel draws one yet.
 
 ~~And §7a~~ — done, and it is twelve bytes (§7.1). The budget room is still
 not here; §7.2 is where it is.
@@ -531,7 +532,74 @@ caller declares a rect any more. `ctrl.inc`'s radio bitmaps carry the same
 rule in *their* comment and always had it right — which makes this a lesson
 about forgetting a written rule rather than about not having one.
 
-### 13.7 Traps
+### 13.7 The check box and the radio button
+
+§4 scoped these in and §8 did not build them, on the reasoning that their
+only consumer was `ctrl.inc`, which is kernel code and could not include an
+SDK file. §13 removed that reason, so `os88ui_glyph` exists and the Control
+Panel is its first caller — every radio and every check in the machine, six
+sites across the Scheduler, Display, Date/Time, Sound and Drivers pages,
+plus the Sound page's Test button, which was the last framed control in the
+file still drawing itself.
+
+`cp_glyph` and its four bitmaps are gone. What changed at each site is that
+**the pen travels as a flag now instead of as a colour the caller sets
+first** — the Sound page's `cp_snd_rowok` result goes straight into `AH`,
+where it used to become a `gfx_pen_cf` call and a hope that nothing between
+there and the bitmap walk disturbed it.
+
+**Verified by byte identity against the previous commit's kernel**, on
+`os8088_5150_cga_gla`, six pages captured through the same scripted click
+sequence:
+
+| | |
+|---|---|
+| Scheduler, Display, Drivers, Sound | **0 differing pixels of 128,000** each |
+| Date/Time | 25 px, and see below |
+
+**The Date/Time difference is the clock, and that is measured rather than
+argued.** The same reference kernel captured twice gives the *identical*
+difference — 25 pixels, bounding box x 321..327, y 101..107, one digit cell
+in the time field. A control run is the only thing that separates "the clock
+moved" from "my change moved a digit", and it cost one more capture.
+
+The one deliberate pixel change is the Sound page's **Test** button, whose
+label sat at `CPS_BTX1 + 11` in a 45px box — 32px of glyph flush against the
+right frame, 1px clear. Through the shared control it is cell-centred at +6
+like every other button in the machine, so it moves 5px left. Named here
+because §6 rule 1 says a conversion that changes the look says so.
+
+### 13.8 The bug the diff caught, and the two the diff could not
+
+**`mov ax, cx` destroyed the flag.** The first `os88ui_glyph` took the
+disabled byte in `AH` and then used `AX` as the white box's `x1` — so `AH`
+became the high byte of a screen x, which is non-zero for any x above 255,
+and **every glyph on every page came out greyed**. It assembles, it boots,
+and it draws a perfectly plausible dithered ring. The pixel diff found it in
+one run (24 px per glyph, exactly one 12x12 cell); nothing else would have.
+The flag is banked in `DI` now.
+
+Two others were structural rather than visual and are worth stating because
+neither shows on a screen:
+
+- **`apps/os88ui.inc` was not a prerequisite of `build/kernel.bin`.**
+  `KERNEL_INC` is `$(wildcard kernel/*.inc)`, so editing the shared control
+  alone left the kernel and every image **stale**, while `kernsize.py` — which
+  re-assembles for itself — cheerfully reported the new sizes. That is a
+  change that appears to do nothing, and it is only luck that `os88sym.py`'s
+  byte-identity check refused first and said so in as many words.
+- **Eight bytes of lookup table cost a 512-byte rung.** `os88ui_glyph`
+  indexed four bitmaps through a table of pointers, which is two bytes
+  shorter than the arithmetic that replaced it — and a table is DATA, so it
+  lands in `.text`, which had **three bytes** of rung left. The arithmetic is
+  CODE and lands in `.cold` beside the body, where 479 were going spare. Same
+  kernel, same pixels, one rung cheaper. The contiguity the arithmetic rests
+  on is asserted at assembly time rather than trusted.
+
+Net: `.text` −8, `.bss` +8, `.cold` +112, **no rung moved and the footprint
+is unchanged** at 97,280 of 98,304.
+
+### 13.9 Traps
 
 - **The include must not go beside `os88api.inc` in a package** (§8.1), and
   in the kernel it must go in `.cold`, where its callers are. A `.text`

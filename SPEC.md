@@ -10889,6 +10889,22 @@ agreeing by hand.
 | `os88ui_bhit` | `BX` = rect, `CX`/`DX` = point (which is how `W_ONCLICK` and `W_ONMOUSEUP` hand it to you). CF = 0 inside |
 | `os88ui_bfind` | `BX` = an array of rects, `AX` = how many. Answers `AX` = the index **plus one**, 0 for none |
 | `os88ui_arm` / `os88ui_fire` | the §13.7 press/release pair. `arm` records what the press landed on; `fire` answers it and **clears**. Package side only |
+| `os88ui_glyph` | the 12x12 **check box or radio button** (§31.2). `CX`/`DX` = top-left, `AL` = `OS88UI_GRADIO`/`GCHECK` or'd with `OS88UI_GON`, `AH` non-zero = disabled |
+
+**The glyph's flag rides in `AH`, and its white box is unconditional** —
+both departures from the button above, and both for a reason. A glyph has
+exactly one flag, and every Control Panel page is already holding the pane's
+left edge in `DI`, so `DI` would cost a push and a pop at six call sites to
+carry one bit that fits beside the index for free. And a radio's whole job
+is to be redrawn in place when the selection moves, so there is no caller
+for whom the erase is waste. It is **not cheap** — 44 set bits for an empty
+box and 64 for a crossed one, one drawing call each, so 35–50 ms on the
+field machine: draw the ROW that changed, never the page. The four bitmaps
+are ONE array indexed by `(kind | on)` and reached by arithmetic rather than
+through a table of pointers, because a table is data and lands in `.text`
+where the kernel has three bytes of rung left, while the arithmetic is code
+and lands in `.cold` where it has hundreds; the contiguity that rests on is
+asserted at assembly time.
 
 Flags: `OS88UI_DIS` (dithered frame *and* label — §47 rule 1 and 2 together),
 `OS88UI_DEF` (the default button's outer ring), and `OS88UI_FILL`, which
@@ -16967,13 +16983,15 @@ CP_PCAPY equ 74      ; caption text row
   inside the 222px pane). No other text.
 
 **Radio glyphs.** Two hand-authored 12×12 bitmaps, one word per row, bit 15
-= leftmost pixel (the §12 logo / §25 icon convention): `cp_radio_off` (an
-open ring) and `cp_radio_on` (the same ring with a filled centre dot), 24
-bytes each. They are drawn by a module-internal `cp_glyph` — in CX = left
-x, DX = top y, SI = bitmap; 12 rows of `lodsw` + per-bit `gfx_pixel` in
-`[gfx_color]`, preserving all registers — because neither existing blitter
-fits: `menu_logo_glyph` hardcodes its top row at MENU_LOGO_Y, and
-`icon_draw16` wants a 16 mask + 16 data word body (§25). The glyph for the
+= leftmost pixel (the §12 logo / §25 icon convention): an open ring and the
+same ring with a filled centre dot, 24 bytes each. **They live in
+`apps/os88ui.inc` now and are drawn by `os88ui_glyph`** (§20.5.1) — 12 rows
+of `lodsw` + per-bit `gfx_pixel`, preserving all registers — because neither
+existing blitter fits: `menu_logo_glyph` hardcodes its top row at
+MENU_LOGO_Y, and `icon_draw16` wants a 16 mask + 16 data word body (§25).
+They were `cp_radio_off`/`cp_radio_on` behind a module-internal `cp_glyph`
+that took a bitmap POINTER, which is precisely why no package could draw a
+radio button: the pictures had no names outside this file. The glyph for the
 **live** mode is the filled one; the other is the ring. `sched_mode_get`
 (§8.2) is the only source of that truth — the page keeps no state of its
 own, so a mode changed from anywhere else still paints correctly.
@@ -16991,7 +17009,7 @@ own, so a mode changed from anywhere else still paints correctly.
 | `cp_page` | module-internal, in DI/BP, lock held. Preserves all registers. White-fills the right pane (divider column excluded), then calls the selected record's `CP_I_PAINT` with DI advanced by CP_RX — the redraw path when the selection moves. |
 | `cp_sched_paint` | Scheduler page paint (page contract above): heading, both radio rows (glyph + label, filled glyph per `sched_mode_get`) and the caption. |
 | `cp_sched_click` | Scheduler page click (page contract above). x is ignored — the two hit bands span the whole pane. A hit on the row whose mode is already live does nothing; a hit that changes the mode calls `sched_mode_set` with AL = the row index (0 = pre-emptive, 1 = cooperative), sets `[cp_dirty]` = 1, then redraws **only the two radio glyphs**. A click outside both bands does nothing. |
-| `cp_glyph` | module-internal 12×12 bitmap blit: in CX = x, DX = y, SI = bitmap. Preserves all registers. Lock held by the caller. |
+| `os88ui_glyph` | **the shared control's** (§20.5.1) 12×12 check or radio: in CX = x, DX = y, AL = `OS88UI_G*`, AH non-zero = disabled. Preserves all registers, white-fills its own box, and leaves the pen live. It was `cp_glyph`, module-internal and taking a bitmap POINTER in SI — which no package could name, and which is why the widget stayed the Control Panel's for as long as it did. |
 | `cp_sel` | byte, initialised `.text` data, init 0 (Scheduler). Written only by `cp_onclick`, and only to an index `< CP_ITEMS`. |
 | `cp_dirty` | byte, initialised `.text` data, init 0. Set to 1 by `cp_sched_click` only when the mode actually changed; drained by ui_task step 3 (§13), which zeroes it and does gfx_lock / `wm_paint_all` / gfx_unlock. Idempotent and coalescing: repeated flips inside one UI pass cost one repaint. |
 
@@ -17126,7 +17144,7 @@ selected one — white on a black `gfx_fill` box inset 2px around the glyphs
   tick.
 - `cp_time_paint` — heading, `cp_time_rows`, both buttons (`cp_timebtn`,
   a `gfx_frame` + white interior + centred `'+'`/`'-'` glyph), the two
-  option rows (12×12 `cp_chk_on`/`cp_chk_off` glyph at CP_PGX, label at
+  option rows (12×12 `os88ui_glyph` check at CP_PGX, label at
   CP_PLX — the Sound page's checkbox idiom, §31.4), and two captions:
   `'Click a field, then + or -'` at CPT_CAP1Y and, at CPT_CAP2Y,
   the `cp_rtcnam` row for `[clk_tier]` — `'Hardware clock: none'`,
@@ -17224,7 +17242,7 @@ CP_DSTDY equ CP_PLDY + 9   ; 11: the reason line, one text row under the label
 ```
 
 Row *i* draws the checkbox at (`CP_PGX`, `CP_DR0Y + i*CP_DROWH`) through
-`cp_glyph`, the driver's name at (`CP_PLX`, row top + `CP_PLDY`), and
+`os88ui_glyph`, the driver's name at (`CP_PLX`, row top + `CP_PLDY`), and
 `drv_status`'s sentence at (`CP_PLX`, row top + `CP_DSTDY`). Hit bands are the
 Scheduler page's shape: contiguous, whole-pane-wide, `CP_DB0Y1`..`CP_DB0Y2`
 and `CP_DB0Y2+1`..`CP_DB1Y2`.
@@ -17254,7 +17272,7 @@ behind whichever painter happens to get the order right.**
 `cp_drv_line1` for the row it hit; `cp_drv_boxes` is the loop over
 `cp_drv_box1` that `cp_drv_paint` still owes. Redrawing every row is a
 double-draw flash on controls that did not move, and it is not cheap:
-`cp_glyph` is a 12×12 fill and then one `gfx_pixel` per set bit — 44 of them
+`os88ui_glyph` is a 12×12 fill and then one `gfx_pixel` per set bit — 44 of them
 for the empty box, 64 for the crossed one — which at PERFORMANCE.md Part 2's
 ~756 µs of fixed cost per drawing call is 35–50 ms of the field machine's time
 **per box**. **The save caption is not redrawn on a click either**: only

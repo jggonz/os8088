@@ -77,7 +77,10 @@ CP_PRGT   equ CP_CW - CP_RX - 1 ; ...and its LAST COLUMN, as an offset from
 CP_PMX    equ 2                 ; left margin for the heading and the caption
 CP_PHY    equ 6                 ; 'Scheduler' heading text row
 CP_PGX    equ 4                 ; radio glyph left edge
-CP_GW     equ 12                ; radio glyph is 12x12
+CP_GW     equ OS88UI_GW         ; the shared control's 12x12 glyph
+                                ; (apps/os88ui.inc). NAMED rather
+                                ; than repeated: nine layout equs
+                                ; below derive row bottoms from it
 CP_PR0Y   equ 26                ; first radio row: glyph top
 CP_PROWH  equ 20                ; row pitch: row i glyph top = CP_PR0Y + i*20
 CP_PLX    equ CP_PGX + 18       ; 22: label text x
@@ -1073,7 +1076,7 @@ cp_sched_click:
 ; out: nothing
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
 ; Both glyphs are always drawn, so this doubles as the redraw path after a
-; mode change: cp_glyph white-fills its own 12x12 box first, which is what
+; mode change: os88ui_glyph white-fills its own 12x12 box first, which is what
 ; lets cp_sched_click repaint in place without touching the rest of the page.
 ; -----------------------------------------------------------------------------
 cp_radios:
@@ -1086,29 +1089,29 @@ cp_radios:
     call KERNEL_SEG:cw_sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
     mov bl, al                  ; BL = the row whose glyph is filled
 
-    mov byte [gfx_color], CBLACK ; the pen cp_glyph draws the bitmap with:
-                                ; set here, not inside cp_glyph, because the
-                                ; click path's entry pen is whatever the last
-                                ; drawing anywhere left behind
-    mov cx, di
-    add cx, CP_PGX              ; CX = glyph left x (same for both rows)
-    mov dx, bp
-    add dx, CP_PR0Y             ; DX = row 0 glyph top
+    mov cx, di                  ; the pen is os88ui_glyph's now, taken from
+    add cx, CP_PGX              ; AH so the colour and [gfx_dis] cannot be set
+    mov dx, bp                  ; apart (SPEC.md 47 rule 1) - it used to be
+    add dx, CP_PR0Y             ; set here because the click path's entry pen
+                                ; is whatever the last drawing left behind,
+                                ; and now that is nobody's business but the
+                                ; control's. CX = glyph left x (both rows),
+                                ; DX = row 0 glyph top
 
-    mov si, cp_radio_off        ; --- row 0: Pre-emptive ---
-    cmp bl, 0
+    mov ax, OS88UI_GRADIO       ; --- row 0: Pre-emptive --- (AH = 0: neither
+    cmp bl, 0                   ; mode is ever refused)
     jne .r0
-    mov si, cp_radio_on
+    mov al, OS88UI_GRADIO | OS88UI_GON
 .r0:
-    call cp_glyph
+    call os88ui_glyph
 
     add dx, CP_PROWH            ; --- row 1: Cooperative ---
-    mov si, cp_radio_off
+    mov ax, OS88UI_GRADIO
     cmp bl, 1
     jne .r1
-    mov si, cp_radio_on
+    mov al, OS88UI_GRADIO | OS88UI_GON
 .r1:
-    call cp_glyph
+    call os88ui_glyph
 
     pop si
     pop dx
@@ -1220,7 +1223,8 @@ cpf_vidok:
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
 ;
 ; The label is drawn BEFORE the glyph because both want SI - the name out of
-; cp_vidnam, then the 12-word bitmap - and cp_glyph fills its own box white
+; cp_vidnam, then AX becomes the glyph's own argument - and os88ui_glyph
+; fills its own box white
 ; first, so nothing is left half-erased between the two.
 ; -----------------------------------------------------------------------------
 cp_vid_rows:
@@ -1257,14 +1261,14 @@ cp_vid_rows:
     call KERNEL_SEG:cw_font_str
     pop dx
 
-    mov si, cp_radio_off        ; --- the glyph
-    cmp bh, [cp_vsel]
+    mov ax, OS88UI_GRADIO       ; --- the glyph (AH = 0: a listed adapter is
+    cmp bh, [cp_vsel]           ; one the machine has, so no row refuses)
     jne .g
-    mov si, cp_radio_on
+    mov al, OS88UI_GRADIO | OS88UI_GON
 .g:
     mov cx, di
     add cx, CP_PGX
-    call cp_glyph
+    call os88ui_glyph
 
     inc bl
     cmp bl, 3
@@ -1304,8 +1308,8 @@ cp_vid_msel:
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
 ;
 ; Drawn only where there is a choice - see the strings above. cp_vid_rows'
-; label-before-glyph order, for its reason: both want SI, and cp_glyph fills
-; its own box white first so nothing is left half-erased between the two.
+; label-before-glyph order, for its reason: both want AX, and os88ui_glyph
+; fills its own box white first so nothing is left half-erased between the two.
 ; -----------------------------------------------------------------------------
 cp_vid_mode:
     push ax
@@ -1339,17 +1343,17 @@ cp_vid_mode:
     call KERNEL_SEG:cw_font_str
     pop ax
 
-    mov si, cp_radio_off        ; --- the glyph
+    mov cx, di                  ; --- the glyph. The x offset is SPENT into CX
+    add cx, CP_PGX              ; before AX becomes the glyph's own argument,
+    add cx, ax                  ; which is the same both-want-AX shuffle the
+    mov dx, bp                  ; label above does one register over
+    add dx, CPV_MY
+    mov ax, OS88UI_GRADIO
     cmp bl, bh
     jne .g
-    mov si, cp_radio_on
+    mov al, OS88UI_GRADIO | OS88UI_GON
 .g:
-    mov cx, di
-    add cx, CP_PGX
-    add cx, ax
-    mov dx, bp
-    add dx, CPV_MY
-    call cp_glyph
+    call os88ui_glyph
 
     inc bl
     cmp bl, 3
@@ -2009,7 +2013,7 @@ cp_time_pick:
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
-; Both are always drawn and cp_glyph white-fills its own box, so this is
+; Both are always drawn and os88ui_glyph white-fills its own box, so this is
 ; also the redraw path after a toggle.
 ; -----------------------------------------------------------------------------
 cp_timechk:
@@ -2018,26 +2022,25 @@ cp_timechk:
     push dx
     push si
 
-    mov byte [gfx_color], CBLACK
     mov cx, di
     add cx, CP_PGX
     mov dx, bp
     add dx, CPT_O0Y
-    mov si, cp_chk_off          ; --- row 0: 12-hour clock ---
-    cmp byte [clk_h12], 0
+    mov ax, OS88UI_GCHECK       ; --- row 0: 12-hour clock --- (AH = 0: a
+    cmp byte [clk_h12], 0       ; clock option is never refused)
     je .r0
-    mov si, cp_chk_on
+    mov al, OS88UI_GCHECK | OS88UI_GON
 .r0:
-    call cp_glyph
+    call os88ui_glyph
 
     mov dx, bp
     add dx, CPT_O1Y
-    mov si, cp_chk_off          ; --- row 1: seconds in the menu bar ---
+    mov ax, OS88UI_GCHECK       ; --- row 1: seconds in the menu bar ---
     cmp byte [clk_secs], 0
     je .r1
-    mov si, cp_chk_on
+    mov al, OS88UI_GCHECK | OS88UI_GON
 .r1:
-    call cp_glyph
+    call os88ui_glyph
 
     pop si
     pop dx
@@ -2091,121 +2094,6 @@ cp_timebtn:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; cp_glyph - blit one 12x12 radio bitmap over a white box
-;
-; in:  CX = x, DX = y (top-left, screen px), SI -> 12 bitmap words, bitmap
-;      color in [gfx_color]; caller holds the gfx lock
-; out: nothing
-; clobbers: nothing (flags only; [gfx_color] is restored)
-; A menu_logo_glyph-style per-bit walk (bit 15 = leftmost pixel), preceded
-; by a white gfx_fill of the glyph's own 12x12 box so a glyph can be
-; redrawn in place. The caller's pen is saved across that fill and put back
-; for the bit walk (SPEC.md 31.2), so this routine leaves no global behind.
-; Written here rather than reused because menu_logo_glyph hardcodes both
-; its top row (MENU_APPLE_Y) and its bitmap, and icon_draw16 wants a 16
-; mask + 16 data word body (SPEC.md 25).
-; -----------------------------------------------------------------------------
-cp_glyph:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    mov di, cx                  ; DI = left x: each row's pen restarts here
-    mov bx, dx                  ; BX = top y (gfx_fill preserves DX, but the
-                                ; row loop needs BX for its counters)
-    mov al, [gfx_color]         ; the caller's pen, back after the white box
-    push ax
-    mov byte [gfx_color], CWHITE
-    mov ax, cx                  ; white box: (x,y) .. (x+11, y+11)
-    add cx, CP_GW - 1
-    add dx, CP_GW - 1
-    call KERNEL_SEG:cw_gfx_fill               ; in AX = x1, BX = y1, CX = x2, DX = y2
-    pop ax
-    mov [gfx_color], al
-
-    mov dx, bx                  ; DX = pen y, back at the top row
-    mov bh, CP_GW               ; BH = rows left
-.row:
-    lodsw                       ; AX = row bits, MSB = leftmost (DF=0 per
-    mov cx, di                  ; SPEC.md 1); CX = pen x
-    mov bl, CP_GW               ; BL = columns left
-.col:
-    shl ax, 1
-    jnc .skip
-    call KERNEL_SEG:cw_gfx_pixel              ; in CX = x, DX = y, color [gfx_color]
-.skip:
-    inc cx
-    dec bl
-    jnz .col
-    inc dx
-    dec bh
-    jnz .row
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-section .text
-
-
-; -----------------------------------------------------------------------------
-; radio bitmaps: 12x12, one word per row, bit 15 = x offset 0 (the
-; menu_logo_bmp convention). The low 4 bits of every word are unused.
-; DATA, so back to the kernel segment - cp_glyph walks them through DS.
-; -----------------------------------------------------------------------------
-
-
-; cp_radio_off - open ring (the mode that is NOT selected)
-cp_radio_off:
-    dw 0x0F00                   ;  0  ....####....
-    dw 0x30C0                   ;  1  ..##....##..
-    dw 0x4020                   ;  2  .#........#.
-    dw 0x4020                   ;  3  .#........#.
-    dw 0x8010                   ;  4  #..........#
-    dw 0x8010                   ;  5  #..........#
-    dw 0x8010                   ;  6  #..........#
-    dw 0x8010                   ;  7  #..........#
-    dw 0x4020                   ;  8  .#........#.
-    dw 0x4020                   ;  9  .#........#.
-    dw 0x30C0                   ; 10  ..##....##..
-    dw 0x0F00                   ; 11  ....####....
-
-; cp_radio_on - the same ring with a filled 4x4 centre dot (the live mode)
-cp_radio_on:
-    dw 0x0F00                   ;  0  ....####....
-    dw 0x30C0                   ;  1  ..##....##..
-    dw 0x4020                   ;  2  .#........#.
-    dw 0x4020                   ;  3  .#........#.
-    dw 0x8F10                   ;  4  #...####...#
-    dw 0x8F10                   ;  5  #...####...#
-    dw 0x8F10                   ;  6  #...####...#
-    dw 0x8F10                   ;  7  #...####...#
-    dw 0x4020                   ;  8  .#........#.
-    dw 0x4020                   ;  9  .#........#.
-    dw 0x30C0                   ; 10  ..##....##..
-    dw 0x0F00                   ; 11  ....####....
-
-; cp_chk_off - open square (the Sound page's unchecked box, SPEC.md 31.4)
-cp_chk_off:
-    dw 0xFFF0                   ;  0  ############
-    dw 0x8010                   ;  1  #..........#
-    dw 0x8010                   ;  2  #..........#
-    dw 0x8010                   ;  3  #..........#
-    dw 0x8010                   ;  4  #..........#
-    dw 0x8010                   ;  5  #..........#
-    dw 0x8010                   ;  6  #..........#
-    dw 0x8010                   ;  7  #..........#
-    dw 0x8010                   ;  8  #..........#
-    dw 0x8010                   ;  9  #..........#
-    dw 0x8010                   ; 10  #..........#
-    dw 0xFFF0                   ; 11  ############
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in
                                 ; its own segment. DS is still KERNEL_SEG, so
                                 ; every reference below - this module's own
@@ -2422,21 +2310,28 @@ cp_snd_paint:
     jb .lbl
     call KERNEL_SEG:cw_gfx_pen_live
 
-    mov ax, di                      ; the Test button: a plain framed box
-    add ax, CPS_BTX1
-    mov bx, bp
-    add bx, CPS_BTY1
-    mov cx, di
-    add cx, CPS_BTX2
-    mov dx, bp
-    add dx, CPS_BTY2
-    call KERNEL_SEG:cw_gfx_frame
+    mov ax, di                      ; the Test button, through the shared
+    add ax, CPS_BTX1                ; control (apps/os88ui.inc) like every
+    mov [os88ui_krect+0], ax        ; other button in the machine
+    mov ax, di
+    add ax, CPS_BTX2
+    mov [os88ui_krect+4], ax
+    mov ax, bp
+    add ax, CPS_BTY1
+    mov [os88ui_krect+2], ax
+    mov ax, bp
+    add ax, CPS_BTY2
+    mov [os88ui_krect+6], ax
     mov si, cp_s_stest
-    mov cx, di
-    add cx, CPS_BTX1 + 11
-    mov dx, bp
-    add dx, CPS_BTY1 + 4
-    call KERNEL_SEG:cw_font_str
+    mov bx, os88ui_krect
+    push di                         ; DI is the pane's left edge everywhere in
+    xor di, di                      ; this file and the flags word wants it -
+                                    ; the one site that had to bank it. No
+                                    ; fill: the page is painted once onto a
+                                    ; pane cp_page has already whited, and
+                                    ; nothing redraws this button in place
+    call os88ui_btn
+    pop di
 
     call cp_snd_radios
     call cp_snd_note
@@ -2552,19 +2447,22 @@ cp_snd_radios:
     add dx, CP_PR0Y
 .r:
     mov al, bl
-    call cp_snd_rowok           ; ...and the same pen cp_snd_paint gave the
-    call KERNEL_SEG:cw_gfx_pen_cf             ; label, so the two halves of a row can
-    mov si, cp_radio_off        ; never disagree about being disabled
+    call cp_snd_rowok           ; ...and the same predicate cp_snd_paint gave
+    mov ax, OS88UI_GRADIO       ; the label, so the two halves of a row can
+    adc ah, 0                   ; never disagree about being disabled - the
+                                ; answer travels as the FLAG now instead of as
+                                ; a pen the caller sets first, so AH = 1 when
+                                ; the row would refuse (ADC after a `mov` that
+                                ; does not touch CF)
     cmp bl, bh
     jne .draw
-    mov si, cp_radio_on
+    mov al, OS88UI_GRADIO | OS88UI_GON
 .draw:
-    call cp_glyph
-    add dx, CP_PROWH
-    inc bl
+    call os88ui_glyph           ; ...which leaves the pen LIVE by itself, so
+    add dx, CP_PROWH            ; the gfx_pen_live that used to close this
+    inc bl                      ; loop is gone too
     cmp bl, 3
     jb .r
-    call KERNEL_SEG:cw_gfx_pen_live
     pop si
     pop dx
     pop cx
@@ -2811,7 +2709,7 @@ cp_drv_rowy:
 ; what the settings file asks for. A driver the user enabled on a machine with
 ; no card is unchecked, and its caption says why.
 ;
-; Per ROW because a click changes one, and cp_glyph is not cheap: a white
+; Per ROW because a click changes one, and os88ui_glyph is not cheap: a white
 ; 12x12 fill and then one gfx_pixel per set bit - 44 of them for the empty
 ; box, 64 for the crossed one - which at PERFORMANCE.md Part 2's ~756us of
 ; fixed cost per drawing call is ~35-50ms of the field machine's time. Redrawn
@@ -2824,20 +2722,25 @@ cp_drv_box1:
     push cx
     push dx
     push si
-    mov byte [gfx_color], CBLACK    ; unconditionally, so the documented pen
-                                    ; holds for an empty row as well
+    mov byte [gfx_color], CBLACK    ; kept for the EMPTY-row path only: that
+                                    ; one draws nothing, so os88ui_glyph never
+                                    ; runs and the documented pen would not
+                                    ; hold. On the drawn path the control
+                                    ; leaves it live by itself
     call KERNEL_SEG:cw_drv_row      ; AL survives (drv_row preserves AX)
     cmp word [bx+DRVR_FILE], 0
     je .out                         ; an empty table row is not a control
-    mov si, cp_chk_off
-    cmp word [bx+DRVR_SEG], 0
-    je .off
-    mov si, cp_chk_on
-.off:
-    call cp_drv_rowy                ; DX = this row's glyph top
+    call cp_drv_rowy                ; DX = this row's glyph top - taken BEFORE
+                                    ; AX becomes the glyph's argument, because
+                                    ; both want AL (the row index)
     mov cx, di
     add cx, CP_PGX
-    call cp_glyph
+    mov ax, OS88UI_GCHECK           ; AH = 0: a driver row never greys - what
+    cmp word [bx+DRVR_SEG], 0       ; it cannot do, its caption says
+    je .off
+    mov al, OS88UI_GCHECK | OS88UI_GON
+.off:
+    call os88ui_glyph
 .out:
     pop si
     pop dx
@@ -3037,23 +2940,6 @@ cp_drv_wipe:
     pop bx
     pop ax
     ret
-section .text
-
-
-; cp_chk_on - the same square with an X through it (checked)
-cp_chk_on:
-    dw 0xFFF0                   ;  0  ############
-    dw 0xC030                   ;  1  ##........##
-    dw 0xA050                   ;  2  #.#......#.#
-    dw 0x9090                   ;  3  #..#....#..#
-    dw 0x8910                   ;  4  #...#..#...#
-    dw 0x8610                   ;  5  #....##....#
-    dw 0x8610                   ;  6  #....##....#
-    dw 0x8910                   ;  7  #...#..#...#
-    dw 0x9090                   ;  8  #..#....#..#
-    dw 0xA050                   ;  9  #.#......#.#
-    dw 0xC030                   ; 10  ##........##
-    dw 0xFFF0                   ; 11  ############
 
 section .cold                   ; far entries: the resident thunks in
                                 ; kernel.asm reach the bodies above through
