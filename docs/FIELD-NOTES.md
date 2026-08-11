@@ -2030,7 +2030,13 @@ tree built `REDRAWFULL=1`, and wrongly on the shipped build.
 
 **The discriminating probe is `OSAPI_EVQ_PENDING`** (slot 0x0338), or `evq`'s
 head and tail read straight out of the guest, sampled immediately before
-`drag()` sends its press: a non-zero depth there settles it in one run. If the
+`drag()` sends its press: a non-zero depth there settles it in one run.
+**Taken once, on an ISOLATED session — a single Disk window, one `to()`, no
+drag before it — the queue is EMPTY** (`head == tail == 32`) both before the
+move and after it. That is not the failing case and does not answer it: what
+the probe owes is the same two reads inside `dispsave`'s own session, where a
+drag has just finished and the UI task has just repainted two windows across a
+seam. If the
 queue is empty, the press really is being posted at a superseded position and
 the search moves back to the ISR; if it is not, the question becomes *why* a
 press outlives its dispatch — `ui_drag`'s own `.track` drains the queue looking
