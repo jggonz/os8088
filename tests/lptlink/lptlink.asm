@@ -12,7 +12,10 @@
 ;
 ;   1. which parallel ports does the BIOS say it found (0040:0008), and which
 ;      of 3BC / 378 / 278 answer a real probe? The two disagreeing is itself
-;      an answer - comscan's warn_outside, in the other connector
+;      an answer - comscan's warn_outside, in the other connector. FIELD
+;      RESULT: the 5150's GB101 is at 3BC and the DOS machine's DIO-500 is at
+;      378, which is why neither end of this may assume an address
+;      (docs/NET-PLAN.md 1.4.1)
 ;   2. is there a LapLink cable on one of them with a LIVE PARTNER - as
 ;      against nothing, or a printer, both of which read as a CONSTANT status
 ;      byte where a partner reads as whatever we ask it to (NET-PLAN 1.4.4)
@@ -48,7 +51,7 @@
     org 0                       ; loaded at KERNEL_SEG:0000 by boot/boot.asm
 %endif
 
-MAXCAND     equ 8               ; the BIOS table (4) plus the three standard
+MAXCAND     equ 8               ; the BIOS table (3) plus the three standard
                                 ; bases, deduped - so usually 3 or 4
 PROTO_VER   equ 1               ; what the reply carries, so a mismatched pair
                                 ; says so instead of desyncing
@@ -219,19 +222,33 @@ survey:
 
     mov byte [ncand], 0
 
-    ; --- what the POST found: 0040:0008..000F, four words, 0 = absent -------
+    ; --- what the POST found: 0040:0008, 000A, 000C - THREE words, 0 = absent
+    ;
+    ; NOT FOUR. 0040:000E is LPT4 only on a pre-PS/2 BIOS; on everything since
+    ; it is the SEGMENT OF THE EBDA, and the field machine duly reported a
+    ; parallel port at `9FC0` - which is 0x9FC00, an EBDA sitting just under
+    ; 640KB, and not an I/O address at all. The probe rejected it (its latch
+    ; column read `--`) so the fail-safe held, but the tool had already WRITTEN
+    ; 0xAA and 0x55 to I/O port 9FC0h to find that out, which is exactly the
+    ; unprovoked write to an unknown port that NET-PLAN 1.4.3 exists to forbid.
+    ;
+    ; The range test is the belt to that brace: a parallel port lives low in
+    ; ISA I/O space, so anything at or above 0x400 is not one whatever the
+    ; table says. A garbage BIOS can put nonsense in the first three too.
     mov ax, 0x0040
     mov es, ax
     xor di, di
 .bios:
     mov ax, [es:di+8]
     or  ax, ax
-    jz .bnext
+    jz .bnext                   ; absent
+    cmp ax, 0x0400
+    jae .bnext                  ; not an I/O port - see above
     mov bl, 1                   ; BIOS-listed
     call cand_add
 .bnext:
     add di, 2
-    cmp di, 8
+    cmp di, 6
     jb .bios
 
     push cs                     ; done with the BIOS data area
@@ -386,8 +403,18 @@ cand_add:
 lp_latch:
     push ax
     push bx
+    push cx
     push dx
     mov dx, ax
+    add dx, 2                   ; the CONTROL register first: a bidirectional
+    in  al, dx                  ; port left in INPUT mode reads its PINS rather
+    mov cl, al                  ; than its latch, so the two-value test below
+    and al, 0xDF                ; would probe a port that cannot answer. The
+    out dx, al                  ; DOS machine's DIO-500 came up at ctrl = EC,
+    sub dx, 2                   ; bit 5 SET - exactly that case, and it passed
+                                ; only because that card reads its latch back
+                                ; anyway. Read-modify-write, low nibble held:
+                                ; bit 2 is INIT and active low (NET-PLAN 1.4.3)
     in  al, dx
     mov bh, al                  ; whatever was there - put back on both paths
     mov al, 0xAA
@@ -407,13 +434,20 @@ lp_latch:
     mov al, bh
     out dx, al
     clc
-    jmp short .out
+    jmp short .ctl
 .no:
     mov al, bh
     out dx, al
     stc
+.ctl:
+    pushf                       ; the verdict is in CF and `out` does not touch
+    add dx, 2                   ; it - but the restore must not either, and a
+    mov al, cl                  ; caller reading a probe result through a
+    out dx, al                  ; clobbered flag is the shape of bug this file
+    popf                        ; has already had once
 .out:
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1404,11 +1438,19 @@ ticks:                          ; out AX = the BIOS tick counter
     pop es
     ret
 
+; getkey - wait for a key and RETURN IT
+; out: AL = ASCII, AH = the scan code
+;
+; IT MUST NOT PRESERVE AX, and that is the whole comment. comscan's getkey is
+; `push ax / xor ax,ax / int 16h / pop ax / ret` - correct there, because it is
+; a "press any key to continue" pause and the key is not wanted. Copied into a
+; MENU it is a program that reads a keystroke, throws it away, restores the
+; caller's AX, matches nothing, and loops - so it sits at its prompt EATING
+; every key while looking hung. Reported off both field machines as "neither
+; end responded to keyboard input (might be frozen?)". It was not frozen.
 getkey:
-    push ax
     xor ax, ax
     int 0x16
-    pop ax
     ret
 
 ; kbhit - CF=1 and AL = the key if one is waiting (it is consumed), else CF=0

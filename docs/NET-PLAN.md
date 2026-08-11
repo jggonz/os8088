@@ -306,6 +306,37 @@ exactly — probe every candidate, arm every one that answers, let the one that
 delivers win — and it is worth following closely, because §9.5 is the module
 in this tree that has already been through every way of getting this wrong.
 
+#### 1.4.0 FIELD RESULT: the two machines are at different addresses
+
+`tests/lptlink` has been run on both ends and this section's premise is
+confirmed rather than assumed:
+
+| machine | port | BIOS-listed | latch | status | control |
+|---|---|---|---|---|---|
+| **5150**, Hercules GB101 | **03BC** | yes | ok | DD | 88 |
+| **the DOS box**, DIO-500 | **0378** | yes | ok | D7 | EC |
+
+Neither found anything at the other's address. **That is the whole argument
+for §1.4 in one table** — a driver with a constant in it would have worked on
+exactly one of these two machines.
+
+Two things in those bytes are worth reading rather than skipping:
+
+- **The DOS box's control register is `EC`, and bit 5 is SET** — its data
+  register was left in INPUT mode. `lp_init` clears that bit by design, but
+  the *latch probe* ran before it and did not, so it was probing a port that
+  may not have been able to drive the pins at all. It passed anyway, because
+  that card reads its latch back regardless; another might not. Fixed — the
+  probe now forces output first and restores the control byte after.
+- **A phantom `9FC0` appeared in the DOS box's BIOS list.** `0040:000E` is
+  LPT4 only on a pre-PS/2 BIOS; on everything since it is the **segment of the
+  EBDA**, and 0x9FC00 is an EBDA sitting just under 640 KB. The probe rejected
+  it, so the fail-safe held — but the tool had already written 0xAA and 0x55
+  to I/O port 9FC0h to find that out, which is precisely the unprovoked write
+  to an unknown port §1.4.3 exists to forbid. The table is **three words**
+  now, and anything at or above 0x400 is refused as not-an-I/O-port whatever
+  the BIOS says.
+
 #### 1.4.1 The candidate set, and why the BIOS table is trusted here
 
 Three addresses are the whole universe in practice, and they are the three the
@@ -318,7 +349,12 @@ POST itself scans, in this order:
 | **278h** | the second one on a multi-I/O card |
 
 **The BIOS has already done this scan and published the answer** at
-`0040:0008`: four words, LPT1..LPT4, zero meaning absent. Read it first.
+`0040:0008`: **three** words — LPT1..LPT3, zero meaning absent. Read it first.
+
+**Three and not four**, which the field run caught: `0040:000E` is LPT4 only
+on a pre-PS/2 BIOS and is the **EBDA segment** on everything since. Reading
+four words invents a parallel port out of a memory address (§1.4.0), and
+worse, probes it.
 
 That is a *measurement* and not a claim, which is the opposite of §18.97's
 situation and worth being explicit about, because this tree's instinct is now
