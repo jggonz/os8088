@@ -760,14 +760,21 @@ original sketch above:
   volume's listing is the `.lowbss` floor or a donated claim (§22.6) — three
   pieces of bookkeeping a driver must not hold. Gated to `FSV_LIST`.
 
-**The next session picks up at milestone 1**, which is a browsable read-only
-volume: `drv_fs_call`, `disk_mount`'s `DVK_FILE` branch (skip the BPB, the FAT
-window and the root scan; call `FSV_CHDIR` then `FSV_LIST`; let the kernel's
-own sort and `..` run), `dsk_xfer`'s refusal, `dsk_free_clus` → `FSV_DFREE`,
-`OSAPI_FS_ENT`, and **a RAM-disk `DRVC_FILE` driver as the harness**. That
-last is the point: it needs no hardware, so every branch site is exercised on
-a cycle-accurate 8088 in a container — which block mode never had, and which
-is why two of its bugs reached the field instead of the build.
+**MILESTONE 1 IS BUILT AND VERIFIED** — SPEC.md §62.9.4 is the record, and it
+came in at **`.text` +341, `.bss` +5, `.cold` +0: one image rung, four steps
+of `KERN_BUDGET` left**, inside §0's 380–460 byte estimate. `drv_fs_call`,
+`disk_mount`'s `DVK_FILE` branch, `dsk_xfer`'s refusal, `dsk_free_clus` →
+`FSV_DFREE`, `OSAPI_FS_ENT`, `dsk_synth_up`'s banked parent handle, and
+`DVK_FILE` awareness in the five volume-table routines that had been asking
+`is this DVK_DRV` when they meant `is this a driver's`.
+
+**The harness earned its keep on its first run.** `RAMDISK.DRV` needs no
+hardware, so the whole path ran on a cycle-accurate 8088 in a container and
+found two bugs before any of it went near a cable — one of them a NASM
+line-continuation trap that assembles clean, leaves a service table one word
+short, and presents as "the Disk window will not open" four call layers from
+the cause. That is precisely what block mode did not have, and why two of ITS
+bugs reached the field instead of the build.
 
 Milestones 2 and 3 (reads, then writes) follow on a kernel that is already
 proven, and the cable's file client is then a SECOND `DRVC_FILE` driver

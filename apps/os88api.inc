@@ -649,6 +649,27 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; zones. It takes the gfx lock ITSELF, so
                                  ; never from a callback that holds one
 
+; --- a REDIRECTED volume's listing (SPEC.md 62.9.1) -------------------------
+; A DRVC_FILE DRIVER's slot, and the narrowest fence in the table: it is legal
+; only from inside FSV_LIST, which is a gate on the MOMENT rather than on the
+; caller. The kernel raises it around that one call and lowers it after.
+%define OSAPI_FS_ENT        KERNEL_SEG:0x03B8   ; ES:SI -> a DSK_DE_SIZE-byte
+                                 ; staged SPEC.md 19.1 entry in YOUR OWN
+                                 ; segment: name at 0 (NUL-terminated 8.3),
+                                 ; type at 16 (0 file / 1 package / 2 folder -
+                                 ; NEVER 3, the parent link is the kernel's),
+                                 ; YOUR OPAQUE HANDLE at 18, size dword at 20,
+                                 ; bytes 24..31 zero.
+                                 ; out CF=0 and AX = the index it landed at;
+                                 ; CF=1 = the listing is full, or you called it
+                                 ; from outside FSV_LIST.
+                                 ; THE KERNEL STILL SORTS (19.4) AND STILL
+                                 ; SYNTHESIZES '..' (19.5) - do neither, or a
+                                 ; display index stops meaning what the
+                                 ; hit-test thinks it means
+%define DSK_DE_SIZE         32   ; ...the entry's stride, which is the
+                                 ; LISTING's and not the meaningful prefix's
+
 ; --- a driver's settings, inside SYSTEM.CFG (SPEC.md 51.9) ------------------
 ; A DRIVER's slot, fenced like the four above. The kernel carries DRV_BLOB_SZ
 ; opaque bytes to disk and back with the rest of the Control Panel; it never

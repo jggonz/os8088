@@ -631,10 +631,20 @@ on real iron.** A loadable driver - not a `SERDBG=` kernel, because a knob
 kernel is a different binary and the machine you debugged is then not the
 machine that ships - owning COM4 at 2E8, because os8088 hooks the IRQ of every
 UART answering at 3F8/2F8 and a monitor on 2F8 fights the mouse prober for its
-own port. Not wanted by default, so a machine that never ticks it in the
-Control Panel pays one `drv_tab` row and a file on the floppy. The two are
-complementary: MartyPC costs the guest nothing and answers on a frozen
-machine, DEBUG.DRV goes where no emulator can.
+own port. The two are complementary: MartyPC costs the guest nothing and
+answers on a frozen machine, DEBUG.DRV goes where no emulator can.
+
+**IT IS UNLISTED AND UNSHIPPED AS OF SPEC.md 62.9.4, AND THE SOURCE IS KEPT.**
+It no longer has a `drv_tab` row and is on neither floppy: the Drivers page
+holds exactly FOUR rows on CGA - 26px pitch from y=24 in a 132px pane, and the
+panel is already at `wm_fit`'s 155-row ceiling (SPEC.md 31.1) - and the file
+redirector's RAM-disk harness took this one. `drivers/debug/` still builds
+(`make build/debug.drv`) and SPEC.md 58 still stands, so restoring it is a
+`drv_tab` row plus a `DRIVERS +=` line plus whichever row it displaces. **What
+that costs is worth naming rather than filing away**: on a machine outside the
+container - the 5150, a reader's clone - there is now no way at all to ask the
+kernel what it thinks. The fifth row wants SPEC.md 31.1's scrolling driver
+list, and that is the price the next driver-shaped feature pays.
 
 **Nothing in `build/` is tracked — never commit a binary.** `build/` is
 gitignored outright and no artifact inside it is force-added: not the kernel,

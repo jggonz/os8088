@@ -150,6 +150,13 @@ VK_REMOVABLE equ 0               ; AL: a floppy
 VK_FIXED     equ 1               ; AL: a hard disk, however it is reached
 VT_BIOS      equ 0               ; AH: int 13h
 VT_DRIVER    equ 1               ; AH: a DRVC_DISK driver (SPEC.md 52)
+VT_FILE      equ 2               ; AH: a DRVC_FILE driver ANSWERING QUESTIONS
+                                 ; ABOUT FILES (SPEC.md 62.9) - so there are no
+                                 ; sectors behind it and OSAPI_FILE_* is the
+                                 ; only way in. A package that does not know
+                                 ; this value reads "not 0 and not 1", which is
+                                 ; already the right conclusion for every
+                                 ; question it could be asking
 
 ; .text and not .bss for the reason every other boot-reachable table is: -f bin
 ; zeroes nothing, and the first disk_mount runs before anything could.
@@ -911,13 +918,23 @@ dsk_xfer:
                                 ; was right only because A: and B: are volumes
                                 ; 0 and 1 AND drives 0 and 1; a boot partition
                                 ; is volume 2 and drive 80h and ends that
-    cmp byte [bx+DV_KIND], DVK_DRV
+    mov al, [bx+DV_KIND]        ; AL is free: the unit went to [dsk_unit] above
     pop bx
+    cmp al, DVK_DRV
     je .drv
+    cmp al, DVK_FILE            ; A REDIRECTED VOLUME HAS NO SECTORS AT ALL
+    je .jfilevol                ; (SPEC.md 62.9). This REFUSES rather than
+                                ; falling back, because a caller that reaches
+                                ; dsk_xfer on one is a bug - and the fallback
+                                ; is the worst available answer: DV_UNIT on
+                                ; such a row is the DRIVER'S OWN HANDLE, so
+                                ; the LBA would go to whatever int 13h drive
+                                ; that number happens to name
     call dsk_geom_pick          ; [dsk_base] and [dsk_cylmax] for this volume
     jmp short .sector
 .jbadvol:
     pop bx
+.jfilevol:
     jmp .fail
 
 .drv:                           ; DI = LBA, SI = count, ES:BX = the buffer.
@@ -1580,9 +1597,21 @@ dsk_vol_fixed:
                                 ; DVK_BIOS/DVK_DRV, asserted below rather than
                                 ; assumed, so a change to either breaks the
                                 ; BUILD instead of the published ABI
-    mov al, 1                   ; a driver volume is fixed by construction:
-    cmp ah, DVK_DRV             ; SPEC.md 52 mounts partitions and nothing else
-    je .out                     ; through DSV_BLK
+    mov al, 1                   ; a driver volume is fixed by construction
+    cmp ah, DVK_BIOS            ; (SPEC.md 52 mounts partitions and nothing
+    jne .out                    ; else through DSV_BLK), and so is a REDIRECTED
+                                ; one, which has no medium at all to eject
+                                ; (SPEC.md 62.9).
+                                ;
+                                ; THE TEST IS "NOT BIOS" AND NOT "IS DVK_DRV",
+                                ; because DV_UNIT below is an int 13h DRIVE
+                                ; NUMBER on a BIOS row and THE DRIVER'S OWN
+                                ; HANDLE on every other one. Fallen through to,
+                                ; a handle with bit 7 set would have answered
+                                ; `fixed` by luck and one without it
+                                ; `removable` - which is a floppy icon on the
+                                ; desktop for a network drive, decided by a
+                                ; number the kernel does not get to interpret
     xor al, al                  ; ...and a BIOS one is fixed exactly when its
     test byte [bx+DV_UNIT], 0x80    ; int 13h drive says so - disk_mount's own
     jz .out                     ; test, in the one place that owns it
@@ -1595,7 +1624,7 @@ dsk_vol_fixed:
     pop bx
     stc
     ret
-%if VT_BIOS != DVK_BIOS || VT_DRIVER != DVK_DRV
+%if VT_BIOS != DVK_BIOS || VT_DRIVER != DVK_DRV || VT_FILE != DVK_FILE
   %error "disk: SPEC.md 18.7.2 - VT_* must equal DVK_*, or dsk_vol_fixed lies"
 %endif
 
@@ -1690,10 +1719,20 @@ dsk_vol_add:
 .noname:
     mov byte [di], 0            ; no label: desk_zone_label derives 'Disk X'
 .live:
-    mov al, [dsk_vcls]          ; which CLASS's DSV_BLK serves this row - the
-    mov [bx+DV_CLASS], al       ; fence matched the caller's segment against a
+    mov al, [dsk_vcls]          ; which CLASS serves this row - the fence
+    mov [bx+DV_CLASS], al       ; matched the caller's segment against a
                                 ; publication slot and left the class here
-    mov byte [bx+DV_KIND], DVK_DRV      ; published LAST: the row is now live
+    mov ah, DVK_DRV             ; ...AND THE KIND FOLLOWS THE CLASS. A
+    cmp al, DRVC_FILE           ; DRVC_FILE driver answers questions about
+    jne .kindpub                ; FILES (SPEC.md 62.9), so its volume has no
+    mov ah, DVK_FILE            ; sectors at all and dsk_xfer refuses it.
+.kindpub:                       ; DERIVED and not passed, because a driver
+    mov [bx+DV_KIND], ah        ; that published DSV_FS and then asked for a
+                                ; BLOCK volume is not a thing that can be
+                                ; meant - and an argument would be one more
+                                ; way for the row and the dispatch to
+                                ; disagree. Published LAST either way: the
+                                ; row is live from this store on
     call desk_zmark             ; the desktop owes a zone - and a driver adds
                                 ; a volume from a page click, with the gfx
                                 ; lock HELD, so the repaint is deferred to
@@ -1746,8 +1785,12 @@ dsk_vol_del:
     mov bl, al
     call dsk_vol_row
     jc .out
-    cmp byte [bx+DV_KIND], DVK_DRV
-    jne .out                    ; a BIOS floppy is not the driver's to drop
+    mov ah, [bx+DV_KIND]        ; EITHER kind of driver row: DVK_DRV serves
+    cmp ah, DVK_DRV             ; sectors, DVK_FILE serves FILES (SPEC.md
+    je .mine                    ; 62.9), and both were added by a driver and
+    cmp ah, DVK_FILE            ; are that driver's to take away. A BIOS
+    jne .out                    ; floppy is not, and neither is a free row
+.mine:
     call desk_zmark             ; ...and owes the zone's removal likewise -
                                 ; BEFORE the flag goes, so the mark counts the
                                 ; zone that is about to vanish. Its pixels are
@@ -1790,8 +1833,12 @@ dsk_vol_drop_drv:
     mov bl, al
     call dsk_vol_slot           ; BX = the row; AX is untouched by it
     jc .skip
-    cmp byte [bx+DV_KIND], DVK_DRV
-    jne .skip
+    mov ah, [bx+DV_KIND]        ; either kind of driver row (dsk_vol_del's
+    cmp ah, DVK_DRV             ; reasoning, and the same two compares): a
+    je .drvrow                  ; DRVC_FILE driver detaching has to take its
+    cmp ah, DVK_FILE            ; REDIRECTED volume with it, or the desktop
+    jne .skip                   ; keeps a zone whose transport has been freed
+.drvrow:
     cmp [bx+DV_CLASS], cl       ; ...and is it THIS driver's?
     jne .skip
     call dsk_vol_del            ; takes AL, which is still the index
@@ -1905,6 +1952,74 @@ osapi_vol_add:
     call dsk_vol_add
     ret
 .no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; osapi_fs_ent - slot 0x03B8 (X: ES = the caller's segment), SPEC.md 62.9.1
+; in:  ES:SI -> a DSK_DE_SIZE-byte staged SPEC.md 19.1 entry, in the DRIVER's
+;      own segment
+; out: CF = 0 and AX = the index it landed at; CF = 1 = the listing is full,
+;      or this was called from outside FSV_LIST
+; clobbers: AX (the output), flags
+;
+; THE DRIVER APPENDS, IT DOES NOT STAGE. dsk_put_dir is module-internal and
+; knows whether this volume's listing is the .lowbss floor or a claim the
+; driver itself donated (SPEC.md 22.6); the count is disk_nfiles'; and the
+; sort has not run yet. Three pieces of kernel bookkeeping, none of which a
+; driver may hold - so it hands over one entry and is told where it went.
+;
+; [dsk_fslist] IS THE WHOLE FENCE, and it is a gate on the MOMENT rather than
+; on the caller. There is no identity test here and there does not need to be:
+; the only window in which the flag is up is between disk_mount's two stores
+; around FSV_LIST, the kernel is inside a far call to the driver for all of
+; it, and nothing else on the machine is running - dsk_xfer's [sch_lock] is
+; not even needed, because a mount holds the gfx lock. Outside that window
+; every caller is refused, driver or not.
+; -----------------------------------------------------------------------------
+osapi_fs_ent:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [dsk_fslist], 0
+    je .no
+    mov ax, [dsk_fsn]
+    cmp ax, [dsk_nmax]
+    jae .no                     ; SPEC.md 19's cap for this volume: the extras
+                                ; are invisible, exactly as they are on a FAT
+                                ; volume whose folder overruns it
+    mov dx, es                  ; the driver's segment...
+    mov di, dsk_ent             ; ...into the mount's own staging entry, which
+    mov cx, DSK_DE_SIZE         ; is where every other producer puts one
+    push ax
+    mov ax, cs
+    call dsk_copy_seg
+    pop ax
+    mov byte [dsk_ent+15], 0    ; THE NAME TERMINATES, whatever arrived. Bytes
+                                ; 0..15 are it and font_str reads to a NUL, so
+                                ; a driver that filled all sixteen would send
+                                ; the renderer into the type word and on
+                                ; through the entry - one store against a
+                                ; whole class of bug, in the one place every
+                                ; redirected entry passes
+    call dsk_put_dir            ; AX = the index, and the listing's home is
+    inc word [dsk_fsn]          ; whatever dsk_list_pick chose
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    xor ax, ax
     stc
     ret
 
@@ -2218,6 +2333,11 @@ disk_mount:
 .cwd_kept:                      ; caller, which is how navigation reuses
                                 ; this whole validated pipeline (19.2)
 
+    cmp byte [dsk_vkind], DVK_FILE  ; a REDIRECTED volume (SPEC.md 62.9) has
+    jne .bpbread                    ; no boot sector, no BPB, no FAT window
+    jmp .fsmount                    ; and no directory to walk: everything
+.bpbread:                           ; between here and the listing is SECTORS
+
     ; --- 1. boot sector: read LBA 0, validate the BPB (SPEC.md 18.2) ---
     ; ...unless this volume is FIXED and we have validated it before, in which
     ; case the banked head is the same head and the read is a seek to cylinder
@@ -2414,6 +2534,15 @@ disk_mount:
     xor ax, ax
     cld
     rep stosw                   ; ES = [dsk_dseg]
+
+    cmp byte [dsk_vkind], DVK_FILE  ; ...and a REDIRECTED volume stops here
+    jne .harvest0                   ; with every slot blank: it has no sectors
+    jmp .done                       ; to peek at and no ASSOC.DAT to read, so
+.harvest0:                          ; 25's generic icon does its job and 54.3's
+                                    ; document pass has nothing to compose from
+                                    ; (SPEC.md 62.9.2 - the harvest is one of
+                                    ; the exactly two things this gives up)
+
     mov ax, LOW_SEG             ; ...and back to the sector buffer for the
     mov es, ax                  ; harvest's reads
 
@@ -2518,6 +2647,62 @@ disk_mount:
     mov byte [dsk_mntok], 1     ; ...and only now open the write gate
     clc
     jmp .out
+    ; --- A REDIRECTED VOLUME: ASK THE DRIVER, READ NO DISK (SPEC.md 62.9) ---
+    ; Everything the FAT path does between .cwd_kept and the listing is about
+    ; SECTORS - the boot sector, the BPB's seventeen rules, the FAT window,
+    ; the root directory's extent - and a DRVC_FILE volume has none of them.
+    ; What replaces the lot is one question: stand in this folder, and say
+    ; what is above it.
+.fsmount:
+    mov byte [dsk_spc], 1       ; FSV_DFREE answers BYTES and dsk_free_clus
+                                ; answers CLUSTERS, so a redirected volume's
+                                ; "cluster" is one sector and both consumers
+                                ; of the free figure are untouched (22.7)
+    mov ax, [dsk_cwd]           ; the opaque handle (62.9.1); 0 = the root
+    mov bp, FSV_CHDIR
+    call drv_fs_call
+    jc .fail                    ; no DRVC_FILE driver published, or it refuses
+                                ; this handle. THE MOUNT FAILS, exactly as an
+                                ; unreadable boot sector does and for the same
+                                ; reason: nothing below may run against a
+                                ; folder we are not standing in
+    mov [dsk_fsup], dx          ; the parent's handle, which dsk_synth_up
+                                ; spends - there is no '..' on a disk here to
+                                ; read one out of (62.9.1)
+
+    cmp byte [dsk_quiet], 0     ; 2b's gate, and 2b's reason exactly: a caller
+    je .fslist                  ; switching volumes to READ a file never looks
+    mov word [disk_nfiles], 0   ; at the listing, and an EMPTY one is a state
+    mov byte [dsk_lstale], 1    ; the whole kernel handles where a stale one
+    mov byte [dsk_mntok], 1     ; is not (SPEC.md 18.9)
+    clc
+    jmp .out
+
+.fslist:
+    mov ax, LOW_SEG             ; dsk_synth_up and dsk_put_dir both stage
+    mov es, ax                  ; through the kernel segment, so ES only has
+    xor bp, bp                  ; to hold something valid until .scan_done
+    cmp word [dsk_cwd], 0       ; reloads it from [dsk_dseg]
+    je .fsnoup
+    call dsk_synth_up           ; the parent link, type 3, opening the listing
+    xor ax, ax                  ; exactly as it does on a FAT volume - built
+    call dsk_put_dir            ; before the driver's entries so the sort below
+    mov bp, 1                   ; never has to keep it in place (19.5)
+.fsnoup:
+    mov [dsk_fsn], bp           ; THE DRIVER APPENDS AND THE KERNEL COUNTS
+    mov byte [dsk_fslist], 1    ; (62.9.1). osapi_fs_ent is legal only between
+    mov bp, FSV_LIST            ; these two stores, because an append outside a
+    call drv_fs_call            ; mount would leave disk_nfiles describing a
+    mov byte [dsk_fslist], 0    ; listing the sort never saw - and the gate is
+    jc .fail                    ; lowered whatever the driver answered, or one
+                                ; refusal leaves the cell open all session
+    mov bp, [dsk_fsn]           ; what it actually appended, parent link and
+    jmp .scan_done              ; all. The sort, the icon blank and the publish
+                                ; below are the FAT path's, untouched: two
+                                ; places deciding a listing's order is how a
+                                ; display index stops meaning what the
+                                ; hit-test thinks it means (19.4)
+
 .fail:
     mov word [disk_spt], 9      ; leave sane fallback geometry behind
     mov word [disk_heads], 2
@@ -3018,9 +3203,14 @@ dsk_synth_up:
     loop .zero
     mov word [dsk_ent+0], '..'  ; two bytes, then the padding already there
     mov word [dsk_ent+16], 3    ; type 3 = the parent link (SPEC.md 19)
-    call dsk_dotdot             ; AX = the parent's first cluster, validated
-    jnc .have                   ; against dsk_maxclus by the walker itself
-    xor ax, ax
+    cmp byte [dsk_vkind], DVK_FILE
+    je .fsup                    ; a REDIRECTED volume carries no '..' entry on
+    call dsk_dotdot             ; a disk to read one out of, so FSV_CHDIR
+    jnc .have                   ; answered it and disk_mount banked it in
+    xor ax, ax                  ; [dsk_fsup] (SPEC.md 62.9.1). The handle is
+    jmp short .have             ; opaque, so this is the ONLY source there is
+.fsup:
+    mov ax, [dsk_fsup]
 .have:
     mov [dsk_ent+18], ax
     pop di
@@ -3527,6 +3717,35 @@ dsk_free_clus:
     push es
     cmp byte [dsk_mntok], 1
     jne .bad
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fat
+
+    ; --- a REDIRECTED volume: ASK, do not count (SPEC.md 62.9) --------------
+    ; There is no FAT to walk, and FSV_DFREE answers in BYTES where this
+    ; routine answers in CLUSTERS. Both of its consumers - fm_measure's status
+    ; figure and dskw_dfree_x - multiply what comes back by [dsk_spc], so the
+    ; redirected mount sets [dsk_spc] = 1 and this answers SECTORS. Neither
+    ; consumer changes by a byte, and the two cannot drift, which is the whole
+    ; reason there is one counting body (SPEC.md 22.7).
+    push bp                     ; drv_fs_call clobbers BP, and this routine's
+    mov bp, FSV_DFREE           ; contract is that it clobbers AX and CF
+    call drv_fs_call            ; -> DX:AX = free bytes, BX = the granule
+    pop bp
+    jc .bad
+    mov cx, 9                   ; bytes -> sectors, in 32 bits
+.fsshr:
+    shr dx, 1
+    rcr ax, 1
+    loop .fsshr
+    or dx, dx
+    jz .fsok
+    mov ax, 0xFFFF              ; more free space than a word of sectors can
+.fsok:                          ; carry. SATURATE rather than wrap: 32MB is
+    mov di, ax                  ; already past what the status line's KB
+    jmp .counted                ; figure means, and a wrapped one would read
+                                ; as a nearly full volume on the emptiest
+                                ; possible remote disk
+.fat:
     xor di, di                  ; DI = free clusters
     mov si, 2                   ; SI = cluster under test
     cmp si, [dsk_maxclus]
@@ -4525,8 +4744,11 @@ dsk_here_ok:
     mov bl, dl
     call dsk_vol_row
     jc .no
-    cmp byte [bx+DV_KIND], DVK_DRV
-    je .yes                     ; not removable: nothing to re-validate
+    cmp byte [bx+DV_KIND], DVK_BIOS
+    jne .yes                    ; not removable: nothing to re-validate. Both
+                                ; non-BIOS kinds, and a REDIRECTED volume
+                                ; (SPEC.md 62.9) is the clearer case of the
+                                ; two - there is no BPB behind it to go stale
     mov bl, [bx+DV_UNIT]        ; the int 13h drive, for the motor bit
     test bl, 0x80               ; ...and a FIXED disk reached through the BIOS
     jnz .yes                    ; is not removable either (SPEC.md 52.10.3's
@@ -5554,6 +5776,21 @@ dsk_vflop:    resb 1            ; ...and whether it is a FLOPPY, which is what
                                 ; FAT, and rule 10 caps a floppy's at 9
 dsk_vsecs:    resw 1            ; ...and the sector count its driver declared,
                                 ; which is rule 13's replacement
+dsk_fslist:   resb 1            ; --- a REDIRECTED volume's mount (SPEC.md
+                                ; 62.9.1) --- 1 = we are inside FSV_LIST, and
+                                ; that is the whole gate on OSAPI_FS_ENT: an
+                                ; append outside a mount would leave
+                                ; disk_nfiles describing a listing the sort
+                                ; never saw
+dsk_fsn:      resw 1            ; how many entries have been appended, parent
+                                ; link included. THE KERNEL COUNTS, because
+                                ; the count is disk_nfiles' and a driver has
+                                ; no business holding it
+dsk_fsup:     resw 1            ; the current folder's PARENT handle, answered
+                                ; by FSV_CHDIR and spent by dsk_synth_up.
+                                ; Opaque: only the driver knows what it means,
+                                ; and there is no '..' on a disk to read it
+                                ; from
 dsk_nfats:    resb 1            ; 1 or 2
 dsk_totsec:   resw 1            ; TotSec16, the volume's extent in sectors
 dsk_rootlba:  resw 1            ; first root-dir LBA

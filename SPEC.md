@@ -33439,6 +33439,18 @@ sizes it cannot distinguish builds with.
 
 ## 58. debug.inc — DEBUG.DRV, the serial monitor (`drivers/debug/debug.asm`)
 
+> **UNLISTED AND UNSHIPPED SINCE §62.9.4, AND THE SOURCE IS KEPT.** This
+> driver no longer has a `drv_tab` row and `DEBUG.DRV` is not on either
+> floppy: the Drivers page holds exactly four rows on CGA (§31.1 — the panel
+> is at `wm_fit`'s ceiling already) and the file redirector's harness took
+> this one. `drivers/debug/` still builds — `make build/debug.drv` — and this
+> section still describes what it does, so bringing it back is a `drv_tab`
+> row, a `DRIVERS +=` line, and whichever row it displaces. **What it costs to
+> be without is real and is stated in the paragraph below**: on a machine
+> outside the container there is no other way to ask the kernel what it
+> thinks. The scrolling driver list §31.1 names is what makes this a choice
+> rather than a trade.
+
 A host-side tool reads and writes the machine's memory and I/O ports over a
 serial line. It exists because **there is nowhere else to ask the question**:
 86Box has no automation socket of any kind (no QMP, no monitor socket, no GDB
@@ -35147,9 +35159,11 @@ FSV_LIST    equ 0       ; append this folder's entries. The kernel still
                         ; order is how a display index stops meaning what the
                         ; hit-test thinks it means
 FSV_CHDIR   equ 2       ; AX = a handle out of an entry, or 0 = the root
+                        ; out: CF=1 refuses; CF=0 and DX = THE PARENT'S
+                        ; HANDLE (0 = the root, and 0 when AX was 0)
 FSV_STAT    equ 4       ; SI = name -> exists, size, attributes
-FSV_READ    equ 6       ; SI = name, ES:BX = buffer, DX:CX = capacity
-FSV_WRITE   equ 8       ; SI = name, ES:BX = bytes, DX:CX = count
+FSV_READ    equ 6       ; SI = name, DX:BX = buffer (NOT ES:BX - below)
+FSV_WRITE   equ 8       ; SI = name, DX:BX = bytes
 FSV_APPEND  equ 10      ; the chunked pair (§18.4.4), so a copy still streams
 FSV_READAT  equ 12      ; ...and its read half
 FSV_DELETE  equ 14      ; SI = name
@@ -35160,6 +35174,31 @@ FSV_DFREE   equ 22      ; -> DX:AX = free bytes, BX = the granule
 FSV_SIZE    equ 24
 ```
 
+**A BUFFER IS `DX:BX` AND NEVER `ES:BX`, WHICH IS `DSV_BLK`'S RULE AND NOT A
+NEW ONE.** This section pinned `ES:BX` for the four verbs that move bytes, and
+it cannot be: **`ES` is `KERNEL_SEG` on entry to everything the kernel
+far-calls into a driver** (§20.1) — that is what a driver reads the things it
+was handed through — and the buffer here is in `LOW_SEG`, the FAT window or a
+heap claim, so `ES` cannot carry two meanings at once. §51.8 states it
+outright for the block ABI and the file ABI inherits it verbatim: `DX:BX`, and
+`mov es, dx` is the driver's to do. The verbs that move bytes are milestone 2
+and 3, so nothing is built against the old wording; what the register carrying
+the *count* is settles when they are.
+
+**`FSV_CHDIR` ANSWERS THE PARENT'S HANDLE, AND THAT IS WHAT PAYS FOR `..`.**
+The kernel synthesizes the parent link itself (§19.5) and on a FAT volume it
+gets the cluster to put in it from `dsk_dotdot`, which **reads the
+directory's first sector** — every subdirectory carries `..` as its second
+entry by spec, so the disk itself records where up is and no path stack is
+needed. A redirected volume has no sectors, so that source does not exist,
+and the handle is opaque besides: only the driver knows what its own parent
+is. It is answered by `FSV_CHDIR` rather than by a verb of its own because
+**`dsk_chdir` is the only thing that ever moves `[dsk_cwd]`** — the driver is
+being told where to go at the exact moment it could say what is above it, so
+a fourteenth verb would ask a question the thirteenth has just answered.
+`disk_mount` banks it in `[dsk_fsup]` and `dsk_synth_up` spends it, which is
+one word of `.bss` against a whole round trip per listing.
+
 **A DRIVER CANNOT WRITE THE LISTING AND MUST NOT LEARN HOW.** `FSV_LIST`
 reads as though the driver stages entries itself, and it cannot:
 `dsk_put_dir` is module-internal, it knows whether this volume's listing is
@@ -35169,11 +35208,22 @@ holding. So the driver **appends**, one entry at a time, through a cell of its
 own:
 
 ```
-OSAPI_FS_ENT   ES:SI -> a 20-byte §19.1 staged entry, ES = the driver's DS
+OSAPI_FS_ENT   0x03B8   ES:SI -> a DSK_DE_SIZE-byte §19.1 staged entry, in
+               YOUR OWN segment (so ES = your DS)
                out: CF=0 and AX = the index it landed at
                     CF=1 = the listing is full (§19's 32-entry cap, or
                     whatever [dsk_nmax] says for this volume)
 ```
+
+**The entry is `DSK_DE_SIZE` = 32 bytes and not 20.** This section said 20
+while it was pinned and unbuilt, and 20 was the meaningful *prefix* of a
+§19.1 entry when it was written — the name, the type word at 16 and the
+first-cluster word at 18. The **size dword at 20..23** is inside it now, the
+stride the listing is indexed by has always been 32, and `dsk_put_dir` copies
+the stride. So a driver hands over 32 bytes, zeroed and then filled: name at
+0 (NUL-terminated 8.3, sanitized), **type at 16** (0 = file, 1 = package,
+2 = folder — never 3, which is the kernel's own parent link), **your handle
+at 18**, and the size at 20. Bytes 24..31 are reserved and must be zero.
 
 An **X stub** (§20.1), because the entry is in the driver's segment. It is
 legal **only from inside `FSV_LIST`** — `[dsk_fslist]` is the gate, raised
@@ -35240,3 +35290,68 @@ on a cycle-accurate 8088 in a container — which is the one thing block mode
 never had, and the reason two of its bugs reached the field. The cable's file
 client is then a second `DRVC_FILE` driver against a kernel that is already
 proven.
+
+#### 62.9.4 Milestone 1 as built — a volume that mounts and lists
+
+**Done and verified on a cycle-accurate 5150 running the period IBM ROM.**
+`RAMDISK.DRV` (521 bytes) publishes `FSV_LIST`, `FSV_CHDIR` and `FSV_DFREE`
+over a static two-level tree, and the whole Disk window works on it: the
+listing arrives **sorted by the kernel** (the driver hands its rows over
+deliberately out of order, so a sort that did not run would show), sizes and
+the `Size … Free …` line are right, `..` is synthesized, and every icon is
+§25's generic one because a redirected volume has no sectors to harvest from.
+
+What the kernel gained: `drv_fs_call`; `disk_mount`'s `DVK_FILE` branch;
+`dsk_xfer`'s refusal; `dsk_free_clus` → `FSV_DFREE`; `OSAPI_FS_ENT`;
+`dsk_synth_up`'s banked parent handle; and `DVK_FILE` awareness in
+`dsk_vol_fixed`, `dsk_vol_del`, `dsk_vol_drop_drv`, `dsk_vol_add` and
+`dsk_here_ok`. **Measured: `.text` +341, `.bss` +5, `.cold` +0 — one image
+rung, `KERN_SIZE` 99,840 → 100,352, spare 2,560 → 2,048 (four steps).** That
+is inside §0's 380–460 byte estimate and inside the budget move granted for
+this stage.
+
+**Three things fell out for free and are worth knowing.** `Format` greys on a
+redirected volume with no new code, because `files.inc` and `diskw.inc` both
+already refuse anything that is not `DVK_BIOS`. The volume reports **fixed**
+rather than removable — but only after `dsk_vol_fixed` was changed to ask
+"not BIOS" instead of "is `DVK_DRV`": fallen through to, its `DV_UNIT` test
+reads *the driver's own handle* as an int 13h drive number, so the icon would
+have been decided by whether that handle happened to have bit 7 set. And
+`dsk_free_clus` answers in **sectors** for such a volume, because the
+redirected mount sets `[dsk_spc] = 1` — which leaves `fm_measure` and
+`dskw_dfree_x` untouched rather than teaching two consumers a second unit.
+
+**The verification found one kernel-shaped bug and one that is a warning about
+NASM.** The kernel one is ordinary: `rd_stage` spent `CX`, which was
+`rd_list`'s loop counter, so the walk ran off the table and filled the listing
+to `DSK_NENT`; it presented as `disk_nfiles` = 32 for a three-entry root,
+which is *also* what a driver appending too much on purpose looks like — the
+cap held and refused the rest exactly as designed, and nothing said so. **It
+was invisible on the screen and obvious the moment the count was read out of
+the guest.**
+
+The other is worth a rule. **A trailing backslash in a NASM comment is a LINE
+CONTINUATION.** The `FSV_*` table was written with an ASCII-art brace down its
+right-hand side — `\` on the first row, `|` on the middle ones, `/` on the
+last — and the `\` silently swallowed the next `dw 0`. The table assembled one
+word short under `-w+error`, `rd_dfree` landed at index 10 instead of 11,
+`FSV_DFREE` read whatever followed the table, and the driver's own
+`call bp` dispatcher jumped to `0x6152`. The symptom was **"the Disk window
+will not open"** — four call layers and one whole subsystem away from the
+cause, with the mount itself completing correctly first. A `%if` on the
+table's own length is the guard, and it is the only kind that can catch this.
+
+**Milestones 2 and 3 land on this.** `FSV_STAT`/`READ`/`READAT` next, so a
+package launches off a redirected volume and a document opens; then the write
+verbs. The cable's file client is a second `DRVC_FILE` driver after that.
+
+**One thing milestone 1 could not have and the next one must decide.**
+`RAMDISK.DRV` took **`DEBUG.DRV`'s `drv_tab` row**, because the Drivers page
+holds exactly four: rows are `CP_DROWH` (26) apart from `CP_DR0Y` (24) in a
+`CP_CH` (132) pane, so a fifth row's glyphs start at 128 and its caption falls
+off the bottom — and the panel cannot grow, because CGA is 200 rows and
+`wm_fit`'s ceiling is 155 against a frame already at 151 (§31.1). §58's
+monitor keeps its source and its section; it is no longer listed and no longer
+ships. **A fifth driver wants the scrolling list §31.1 already names as the
+answer, not a taller window** — and that, not the redirector, is what the next
+driver-shaped feature has to pay for.

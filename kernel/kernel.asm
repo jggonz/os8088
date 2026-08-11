@@ -1551,7 +1551,25 @@ osapi_table:
                                   ;          Answers "whole" unless WF_OWNBG is
                                   ;          set, because without it the kernel
                                   ;          has already whitened the content
-osapi_table_end:                  ; 0x03B8
+    OSAPI_JSLOT api_fs_ent        ; 0x03B8 - X: a DRVC_FILE driver appends ONE
+                                  ;          entry to the listing being built
+                                  ;          (SPEC.md 62.9.1). ES:SI -> a
+                                  ;          DSK_DE_SIZE-byte staged SPEC.md
+                                  ;          19.1 entry in YOUR segment: name
+                                  ;          at 0 (NUL-terminated 8.3), type at
+                                  ;          16 (0 file / 1 package / 2 folder,
+                                  ;          never 3 - the parent link is the
+                                  ;          kernel's), YOUR OPAQUE HANDLE at
+                                  ;          18, size at 20. out CF=0 and AX =
+                                  ;          the index it landed at; CF=1 = the
+                                  ;          listing is full.
+                                  ;          LEGAL ONLY FROM INSIDE FSV_LIST -
+                                  ;          the kernel raises the gate around
+                                  ;          that call and lowers it after, and
+                                  ;          it still SORTS (19.4) and still
+                                  ;          synthesizes '..' (19.5), so do
+                                  ;          neither
+osapi_table_end:                  ; 0x03C0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1559,8 +1577,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 117 * 8
-%error "os8088 API jump table must be exactly 117 8-byte slots"
+%if OSAPI_TABLE_LEN != 118 * 8
+%error "os8088 API jump table must be exactly 118 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1666,6 +1684,7 @@ dbg_reg:
     OSAPI_XSTUB api_gfx_lstep,  gfx_lstep
     OSAPI_XSTUB api_gfx_lstepv, gfx_lstepv
     OSAPI_XSTUB api_vol_add,    osapi_vol_add
+    OSAPI_XSTUB api_fs_ent,     osapi_fs_ent
     OSAPI_XSTUB api_vol_del,    osapi_vol_del
     OSAPI_XSTUB api_vol_mount,  osapi_vol_mount
     OSAPI_XSTUB api_drv_cfg,    osapi_drv_cfg

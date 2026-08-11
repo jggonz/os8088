@@ -235,20 +235,42 @@ DSV_SIZE     equ 28
 ; THE KERNEL STILL SORTS (19.4) AND STILL SYNTHESIZES `..` (19.5). Do neither
 ; - two places deciding a listing's order is how a display index stops meaning
 ; what the hit-test thinks it means.
-FSV_LIST     equ 0              ; stage entries into disk_dir/disk_icons, set
-                                ; disk_nfiles
-FSV_CHDIR    equ 2              ; AX = a handle out of an entry, 0 = the root
+FSV_LIST     equ 0              ; APPEND this folder's entries, one at a time,
+                                ; through OSAPI_FS_ENT. You do not stage them
+                                ; and you cannot: dsk_put_dir knows whether
+                                ; this volume's listing is the kernel's floor
+                                ; or a claim YOU donated, and the count is
+                                ; disk_nfiles'
+FSV_CHDIR    equ 2              ; AX = a handle out of an entry, 0 = the root.
+                                ; out CF=1 refuses; CF=0 and DX = THE PARENT'S
+                                ; HANDLE - the kernel synthesizes `..` itself
+                                ; and has no directory sector to read one out
+                                ; of, and only you know what your handles mean.
+                                ; Answered HERE and not by a verb of its own
+                                ; because this is the only call that ever moves
+                                ; the current folder
 FSV_STAT     equ 4              ; SI = name -> exists, size, attributes
-FSV_READ     equ 6              ; SI = name, ES:BX = buffer, DX:CX = capacity
-FSV_WRITE    equ 8              ; SI = name, ES:BX = bytes, DX:CX = count
+FSV_READ     equ 6              ; SI = name, DX:BX = buffer (NOT ES:BX: ES is
+FSV_WRITE    equ 8              ; KERNEL_SEG on entry to everything the kernel
+                                ; far-calls into you, so it cannot also be the
+                                ; buffer's segment - DSV_BLK's rule, SPEC.md
+                                ; 51.8, and `mov es, dx` is yours to do)
 FSV_APPEND   equ 10             ; the chunked pair (18.4.4), so a copy streams
 FSV_READAT   equ 12             ; ...and its read half
 FSV_DELETE   equ 14             ; SI = name
 FSV_RENAME   equ 16             ; SI = old, DI = new
 FSV_MKDIR    equ 18             ; SI = name
 FSV_RMDIR    equ 20             ; SI = name
-FSV_DFREE    equ 22             ; -> DX:AX = free bytes, BX = the granule
+FSV_DFREE    equ 22             ; -> DX:AX = free BYTES, BX = the granule
 FSV_SIZE     equ 24
+
+; PUT A `%if` ON YOUR TABLE'S OWN LENGTH. A trailing backslash in a NASM
+; comment is a LINE CONTINUATION, so an ASCII-art brace drawn down the right
+; of a table of `dw 0` rows silently swallows the row below it: the table
+; assembles one word short under -w+error, every verb past the gap is read
+; from the wrong cell, and `call bp` in your dispatcher jumps into whatever
+; follows. drivers/ramdisk shipped that and it presented as an unrelated
+; window refusing to open (SPEC.md 62.9.4).
 
 ; --- DSV_BLK: one driver-backed volume's sectors (SPEC.md 51.8) -------------
 ;   in   AL = 0 read / 1 write
