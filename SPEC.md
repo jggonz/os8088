@@ -23591,6 +23591,50 @@ slowly than the window*, which yields. On a 1bpp adapter the renderer is
 possible (§32), so nothing is owed a present and nothing is being unlocked:
 there is nothing to wait for, and `pt_wait` returns at once.
 
+### 42.9 The canvas floor is the KERNEL's, and the size boxes stopped setting it
+
+`pt_sizeask` floored the height at **`PT_SZ_END` = 128** — *tall enough to
+still show the size boxes* — so **no picture under 128 rows ever opened at
+its own size on any adapter**. It arrived as a 466x110 file and became a
+466x128 canvas with 18 rows of white under it that were not in the file, and
+`File ▸ Save` would then have written them.
+
+The floor is `PT_CH_MIN` now, and `PT_CW_MIN`/`PT_CH_MIN` are **derived from
+`WMIN_W`/`WMIN_H`** (§11.1) rather than chosen: `WMIN_W - PT_CHROME_W` = 50
+and `WMIN_H - PT_CHROME_H` = 22. That is a second fix inside the first.
+`wm_resize` and `ui_grow` clamp a frame at `WMIN_*` **and neither tells the
+app they did it**, so Paint's old 32x16 floor was a canvas the window can
+never be: `pt_adopt` would set `[pt_ch]` = 16, ask for a 58-row frame, get a
+64-row one, and draw 16 rows of picture inside a 22-row content box — a strip
+of stale white that belongs to nobody. Deriving is what stops the two
+drifting again.
+
+**What the floor was really protecting is worth stating, because it is not
+what its comment said.** The comment claimed the size boxes are *"the ONLY
+way to make the canvas taller again — no menu item, no key"*, so a canvas
+short enough to hide them was stuck for the session. The first half is true:
+there is no Size menu item and no key. The second half stopped being true
+when `OSAPI_WM_ONSIZE` landed — **the grow box is the kernel's**, a 13x13 at
+the frame's bottom-right (`wm_grow_rect`) drawn *after* `W_PAINT` on the
+frontmost `WF_SIZABLE` window, and it hit-tests at every size the kernel
+allows. It does not consult `[pt_ch]` and cannot be hidden by a short canvas.
+A comment outliving the code it described, in the usual direction.
+
+Nothing else needed a floor to survive, because Paint's three stacked
+controls already draw what fits and nothing more: `pt_szon` hides the size
+boxes under `PT_SZ_END`, `pt_draw_dims` hides the two-line readout under
+`PT_DIM_Y + 17`, and **`pt_draw_pal` stops emitting tool buttons at
+`[pt_ch]`** — *"a short window shows fewer tools rather than drawing over its
+own strip"* — with `pt_pal_click` carrying the identical test, so the drawn
+control and the clickable one cannot drift (§22's `fm_hit` discipline). That
+last one is what makes the removal safe rather than merely desirable: the
+tool column wants ~86 rows and `pt_cprep` does **not** clip to the content
+box, so without that gate a 22-row canvas would paint tools straight through
+Paint's own strip and onto the desktop — §49's tamegram lesson exactly.
+
+At the floor a 22-row canvas still shows one row of tools, and the picture is
+its own size on every adapter.
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
@@ -35313,3 +35357,114 @@ on a cycle-accurate 8088 in a container — which is the one thing block mode
 never had, and the reason two of its bugs reached the field. The cable's file
 client is then a second `DRVC_FILE` driver against a kernel that is already
 proven.
+
+## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
+
+466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
+`MEDIA` on the three shipped system disks. It is **generated at build time
+and never committed** — `make` runs `tools/os88logo.py`, which draws the
+picture and writes the file.
+
+### 63.1 What it is for
+
+`MEDIA` is where the Standard File dialog opens (§38.10) and the system disk
+carried it **empty**, because a boot floppy has no media on it. So the first
+`File ▸ Open` a new user ever ran showed them an empty list, on a working
+machine, with no way to tell that apart from something being wrong. The logo
+is the disk answering that.
+
+It is a **picture** rather than a text file because the folder's other job is
+to be somewhere `Paint` (§42) can start, and because the thing that most
+needs saying on a first open — *this is os8088* — is a thing an OS says with
+its logo.
+
+### 63.2 What it draws
+
+An 8088 in its 40-pin DIP, on the desktop's 50% dither, with `os8088`
+knocked out of the package in white. The chip is this OS's own iconography
+already: it is what the System menu draws and what About shows.
+
+Every mark in it is one of §39.4's three classes — black, white, or the 50%
+checkerboard — so **nothing in it has to survive a colour reduction**; the
+picture a VGA shows and the picture a Hercules shows are the same bits, not
+two roundings of a third thing. The package is drawn on a white keyline for
+the reason §39.4 exists at all: a black body straight onto the dither has no
+edge of its own, and at CGA's 2.4:1 the checkerboard is a mid grey, so the
+two read as one texture.
+
+### 63.3 The three bounds it is drawn inside, all hard
+
+**The screen.** Paint's canvas *is* its content (§42) — there is no viewport
+and no scaling — so `pt_adopt` **crops** a picture bigger than the largest
+canvas the screen can show. That bound is Paint's own arithmetic and the
+smallest of the three adapters wins each axis: `640 - PT_CHROME_W` = **594**
+wide, and CGA's dock row `176 - PT_WIN_Y - PT_CHROME_H` = **110** tall. The
+tool checks its output against both and refuses rather than shipping a
+picture that opens cropped.
+
+**The height is drawn to that bound exactly**, because 110 is the tallest a
+picture can be and still open uncropped on every adapter, and there is no
+longer any reason to be shorter: since §42.9 removed Paint's `PT_SZ_END`
+height floor, a picture of *any* size opens at its own size. **This logo is
+what found that floor** — it arrived 110 tall and became a 128-tall canvas
+with 18 rows of white under it that were not in the file, on Hercules and
+VGA both, and the only choice then was which adapter got the band. There is
+no band now and no choice to make.
+
+Measured on cycle-accurate 8088s rather than reasoned — the file opened
+through the real dialog, off the real system disk, and the canvas read back
+out of the guest and diffed against the source bitmap:
+
+| machine | canvas | picture |
+|---------|--------|---------|
+| `os8088_5150_cga_gla` | `466 x 110` | 39 differing pixels, in one 8x12 box |
+| `os8088_5150_herc_gla` | `466 x 110` | **0** differing pixels of 51,260 |
+| `os8088_xt_vga` (mode 12h) | `466 x 110` | 31 differing pixels, in one 8x12 box |
+
+The two non-zero rows are the same thing and it is not the picture: `CUR_GW`
+x `CUR_GH` is **8x12** (§7.1) — the mouse arrow, parked on the canvas. A
+diff that is a count alone would have been evidence of nothing; the bounding
+box is what identifies it. On VGA the only two colours anywhere inside the
+picture are `(0,0,0)` and `(255,255,255)`, which is the two-entry palette
+arriving through `pt_map16` as `CBLACK` and `CWHITE` on a 16-colour screen.
+
+**The file.** 4KB, and checked rather than hoped for.
+
+**The decoder.** GIF87a, global colour table, LZW minimum code size 2..8,
+non-interlaced. The palette is two entries — pure white then pure black, the
+two colours `pt_map16` cannot map anywhere but `CWHITE` and `CBLACK` — and
+the minimum code size is 2, which is GIF's own floor and not a choice.
+
+The LZW follows **giflib's ordering**: a code is emitted at the *current*
+width and the width grows afterwards. That is what leaves the encoder and
+`pt_gdec` one entry apart in the same direction; the other order produces a
+file most decoders still read and this one does not, which is the worst
+available way to be wrong.
+
+### 63.4 The pixel is not square, and no bitmap can be right on all three
+
+A row is 1.00 pixel wide on VGA (640x480 in 4:3), **1.55** on Hercules
+(720x348) and **2.40** on CGA (640x200), so one bitmap is a long thin DIP on
+one adapter and a stubby one on another. There is no fix, only a choice, and
+the choice made here is **Hercules** — the middle of the three, and the card
+the calibration machine drives (docs/FIELD-MACHINES.md). It reads as a real
+40-pin package there, as a longer one on VGA and as a chunkier one on CGA.
+
+`--png` writes the preview at all three aspects, and that is the only way to
+make this decision: the proportions were picked by looking, and a change to
+`CAP` or `PAD_X` has to be looked at again the same way.
+
+### 63.5 Why the artwork is code
+
+The same reason `fonts/*.f8` is ASCII art rather than 760 bytes of hex
+(§6.2.1): **a picture's defects are entirely visual**, and a 2KB LZW blob in
+the tree is a thing nobody can review, diff or re-derive. Every proportion in
+it is a named constant, the layout is derived from the type size rather than
+hand-fitted around it, and the four glyphs are one pen dragged round four
+paths — which is what keeps their stroke weight identical through a change of
+size, the failure the eye reads first at this scale and the one four
+hand-drawn glyphs cannot be held against.
+
+That is the *opposite* of §6.2.1's conclusion for an 8x8 face, and both are
+right for their size: at 8 rows there is no curve to get right, only which of
+six pixels to light, so the hand wins. At 44 rows there is nothing but curve.
