@@ -59,6 +59,11 @@ DRVC_DEBUG   equ 3              ; the serial monitor (SPEC.md 58): no service
                                 ; page - but a class of its own, because a
                                 ; class is the publication slot and sharing
                                 ; one disconnects the driver already in it
+DRVC_FILE    equ 5              ; a volume served by somebody ANSWERING
+                                ; QUESTIONS ABOUT FILES rather than about
+                                ; sectors (SPEC.md 62.9). Its verbs are a
+                                ; table of their own, reached through DSV_FS
+                                ; below, because DSV_* is full
 DRVC_NET     equ 4              ; the parallel link (docs/NET-PLAN.md): a
                                 ; SECOND block-serving class beside DRVC_DISK,
                                 ; which is what dsk_vtab's DV_CLASS exists for
@@ -211,7 +216,39 @@ DSV_CPCLOSE  equ 24             ; near proc: "the Control Panel has been
                                 ; published, and the panel may be back in a
                                 ; second - so free what the PAGE was using, not
                                 ; what you are
-DSV_SIZE     equ 26
+DSV_FS       equ 26             ; dw: DRVC_FILE only - the FSV_* verb table,
+                                ; an offset in YOUR OWN segment (SPEC.md
+                                ; 62.9.1). A pointer rather than thirteen more
+                                ; cells here, because DSV_* is copied per
+                                ; class into the kernel's .bss and thirteen
+                                ; would be charged to every machine including
+                                ; the ones with no driver at all
+DSV_SIZE     equ 28
+
+; --- DSV_FS: the file redirector's verbs (SPEC.md 62.9) ----------------------
+; A DRVC_FILE volume has NO SECTORS - no BPB, no FAT, no directory to walk -
+; and dsk_xfer refuses one outright. What the kernel asks instead is these,
+; and the staged SPEC.md 19.1 entry's first-cluster word at offset 18 becomes
+; AN OPAQUE HANDLE YOU ASSIGN: only dsk_chdir and the loader ever interpret
+; it, and both are already redirect points.
+;
+; THE KERNEL STILL SORTS (19.4) AND STILL SYNTHESIZES `..` (19.5). Do neither
+; - two places deciding a listing's order is how a display index stops meaning
+; what the hit-test thinks it means.
+FSV_LIST     equ 0              ; stage entries into disk_dir/disk_icons, set
+                                ; disk_nfiles
+FSV_CHDIR    equ 2              ; AX = a handle out of an entry, 0 = the root
+FSV_STAT     equ 4              ; SI = name -> exists, size, attributes
+FSV_READ     equ 6              ; SI = name, ES:BX = buffer, DX:CX = capacity
+FSV_WRITE    equ 8              ; SI = name, ES:BX = bytes, DX:CX = count
+FSV_APPEND   equ 10             ; the chunked pair (18.4.4), so a copy streams
+FSV_READAT   equ 12             ; ...and its read half
+FSV_DELETE   equ 14             ; SI = name
+FSV_RENAME   equ 16             ; SI = old, DI = new
+FSV_MKDIR    equ 18             ; SI = name
+FSV_RMDIR    equ 20             ; SI = name
+FSV_DFREE    equ 22             ; -> DX:AX = free bytes, BX = the granule
+FSV_SIZE     equ 24
 
 ; --- DSV_BLK: one driver-backed volume's sectors (SPEC.md 51.8) -------------
 ;   in   AL = 0 read / 1 write

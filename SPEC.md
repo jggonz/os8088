@@ -7085,7 +7085,10 @@ Paint/onkey/onclick procs receive SI = window ptr (§11) and find their state vi
 the gfx lock) may stay shared. Kind behavior:
 
 - **About** — 300×120 at (170,140), title "About os8088". Paint: four
-  centered lines — "os8088 1.0", "a graphical OS for the 8086", the bare
+  centered lines — "os8088 1.0  Build 333" (the version, and the build
+  number after it — a commit count generated into the image, §14.2; a build
+  that could not determine one shows the bare "os8088 1.0"),
+  "a graphical OS for the 8086", the bare
   scheduling word, which **tracks the live mode** (§8.2, read with
   `sched_mode_get`): "pre-emptive" or "cooperative", and the adapter the
   boot probe found (§39.1): "VGA - 640x480 - 16 colors",
@@ -7255,6 +7258,76 @@ landed. They stay 0 after dragging the window 13 pixels, which is
 `ui_drag`'s `wm_snap_ax` doing its half. Priced with PERFORMANCE.md Part 2,
 a redraw was 8 × (756 + 8×177 + 901) us ≈ **24.7 ms twice a second** and is
 ~1.7 ms once a second.
+
+### 14.2 The build number — a commit count, generated into the image
+
+The About box's first line carries a **build number** after the version:
+`os8088 1.0  Build 333`. It is the number of commits behind the checkout the
+kernel was assembled from, so it goes up by one every time anybody commits,
+reads as a number rather than as a hash, and — the property the rest of this
+section is about — is the **same number on every machine that builds that
+commit**.
+
+**Why not a clock.** The obvious build number is a timestamp, and it would
+break the one thing this toolchain is built around: the same source produces
+the same bytes. `tools/os88disk.py` pins the volume serial and every FAT
+timestamp for exactly that reason, and CLAUDE.md's cheap resolution for "could
+this change a shipped byte" is to build twice and `md5sum` the six images. A
+clock inside the kernel image ends both — every build differs from every other
+and the comparison stops being able to say anything. A commit count is fixed
+for a given commit, so it costs that property nothing.
+
+**It is a GENERATED include, not a `-D`.** `tools/buildnum.py` writes
+`build/buildnum.inc` (`%define BUILD_NUM` and `BUILD_STR`), which `apps.inc`
+names unconditionally and `-I $(BUILD)/` finds — `associco.inc` (§54.3) and
+`font8x8.inc` (§6.2) are the same shape. A `-D` in `$(VIDDEF)` would have been
+one line shorter and would have broken `tools/os88sym.py` for every session
+that did not know to repeat it: that tool re-assembles the kernel and asserts
+byte-identity with `build/kernel.bin`, so a define it was not given reads as
+*the map describes a DIFFERENT kernel* rather than as a missing flag. As an
+include, `os88sym.py` and `kernsize.py` need no argument of their own, because
+both already pass `-I build/`.
+
+**It is generated at make's PARSE time, and rewritten only when it changed.**
+The thing it depends on is not a file: `HEAD` moves when you commit and no
+tracked file's mtime moves with it, so a rule would never fire and the image
+would carry the *previous* build's number — the `VIDSTAMP` trap (Commands, in
+CLAUDE.md) with a number in place of an adapter. Writing the file only when
+the number actually differs is what keeps an up-to-date tree from reassembling
+the kernel, both boot sectors and every image on every single `make`.
+
+**0 means "not known here", and the line reverts to the one that shipped
+before there was a build number.** Two cases produce it, and the second is the
+reason this rule exists at all:
+
+- no git checkout — a tarball, or git not installed;
+- a **shallow** clone. `git rev-list --count` does not fail there; it
+  confidently counts the commits that are present. This tree measured **281**
+  before `git fetch --unshallow` and **333** after, and a web session clones
+  shallow by default — so the number would silently disagree between two
+  machines building the identical commit. That is the failure class CLAUDE.md's
+  shallow-clone rule is about, and the answer is the same one: check
+  `--is-shallow-repository` first and decline to answer rather than answer
+  wrongly. A missing build number is a cosmetic gap; a wrong one is a false
+  statement about which bytes somebody is running, which on a project that
+  mails floppy images to one 5150 in another country is the more expensive of
+  the two. `make` says which case it hit, on the kernel rule's own banner.
+
+**Cost, measured:** `.text` +11 bytes (the extra characters — the number is
+assembled as text, there is no formatting code anywhere), `.bss`, `.cold`,
+`.lowbss` and `.ovl` all +0, **no rung crossed** — the image rung's slack goes
+131 → 120 bytes and `KERN_SIZE` does not move, so `KERN_BUDGET` is untouched at
+2,560 spare. `kernel.bin` is the same 89,154 bytes either way, so the boot
+sector's `KERNEL_SECTORS` does not change. The one thing that varies with the
+number itself is its digit count: build 1,000 costs one byte more than build
+999, out of that same rung slack.
+
+**The version and the build number are different things and stay separate.**
+`1.0` is edited by a human when the OS's version changes; the build number is
+never edited by anyone. The release process reads the former out of this file
+(`.claude/skills/release-os8088`, which greps `os8088` in `kernel/apps.inc`)
+and the string keeps `os8088 1.0` intact and ahead of the build number for
+exactly that reason.
 
 ## 15. kernel.asm — boot sequence
 
@@ -18182,7 +18255,8 @@ cursor — UI task only). All zeroed by `inst_init`.
 
 A taskbar-style strip along the bottom of the screen showing one tile per
 **running** instance (I_STATE = 1, §29), built-in or package. Clicking a
-tile restores a minimized instance (`inst_restore`) or fronts a visible one
+tile restores a minimized instance (`inst_restore`), minimizes one that is
+already frontmost (`inst_minimize`, §30.4) or fronts any other
 (`wm_front`). Label prefix `dock_`. The dock is not exposed to packages.
 
 A tile carries **two independent states**, drawn as two different kinds of
@@ -18269,7 +18343,7 @@ tile vanishes with the `wm_hide` repaint. Icon pointers must satisfy
 | `dock_force_x` | in: AX = x1, CX = x2 (inclusive). Only that span was. Repeated calls UNION. Preserves all registers. |
 | `dock_paint` | draw the rule, the strip and every live instance's tile. Called by wm_paint_all after `desk_paint`, before the menu bar and windows (lock held by caller) — windows cover the dock exactly like desktop icons (§26). |
 | `dock_hit`   | in CX=x, DX=y. Out: CF=1 = the point is not in the strip at all; CF=0 = the strip owns it, and then **DI = the live instance record under the pointer, or 0** for bare strip, an inter-tile gap, a slot past the last, and an empty or dying one. AL = the slot when DI ≠ 0. Clobbers AX and DI only. The one hit test both buttons use (§30.2). |
-| `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ `[vid_dock_y0]` — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click activates; no double-click logic. |
+| `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ `[vid_dock_y0]` — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; I_WIN == `wm_top` → gfx_lock, `inst_minimize` on I_WIN, gfx_unlock (§30.4); else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click; no double-click logic. |
 | `dock_rclick`| in CX=x, DX=y (no lock held; called by `ui_rdown` when wm_hit found no window). Out: CF as `dock_click`'s. A tile on a live instance → gfx_lock, `menu_popup` anchored at the press, `app_close_win` if `Close` was chosen, gfx_unlock. Bare strip: consumed, and nothing drops (§30.2). |
 
 Every dock-state transition (launch, quit, minimize, restore) — and every
@@ -18456,6 +18530,48 @@ to `wm_paint_dmg` over the menu's own rect (§12.4), and that path reaches
 `[vid_dock_y0]`, so it calls `dock_force` and `dock_paint` (§11.91) — the
 popup may cover the strip freely on the machine small enough to refuse
 `MENU_SAVE_KB`.
+
+### 30.4 The tile is a toggle — clicking the front window's tile minimizes it
+
+A tile has three states and the click does whatever the tile's own mark says
+is not currently true: **minimized** (inverted interior) → `inst_restore`;
+**active** (doubled border — this instance owns the frontmost visible
+window) → `inst_minimize`; **anything else** → `wm_front`. Clicking the
+active tile used to call `wm_front` on a window that was already frontmost,
+which by §11.90 repaints no window at all — a click that consumed itself and
+did nothing visible. The strip is the only place a minimized application can
+be reached from, so making the same tile put it back is the operation the
+dock was missing rather than a second way to spell the title bar's minimize
+box (§13).
+
+Four things about it.
+
+**The question is asked at click time, not read out of `[dock_act]`.**
+`dock_act` is `dock_paint`'s scratch — resolved once per paint and valid
+inside that one lock hold — so a click must call `wm_top` itself, under the
+lock it is about to act with. This is `fdlg_sel_bar`'s rule about
+`[fdlg_shown]` (§38.3) in another module: painter scratch answers about the
+last frame, and a click is not in it.
+
+**Comparing windows is the same test the mark is drawn from.**
+`inst_bind_win` is the only writer of `I_WIN` and of `wm_owner`, and it
+writes both in one breath, so a record and its window name each other:
+`wm_top == [di+I_WIN]` and `inst_win_owner(wm_top) == di` cannot disagree.
+The cheaper of the two is used here, and it is the same predicate
+`dock_key` folds into `DOCK_K_ACT` — so what the tile shows and what the
+click does can never come apart.
+
+**A window that is hidden without being minimized is untouched.** `wm_top`
+counts visible windows only (§11), so such a window is never its answer and
+the click still takes the `wm_front` path exactly as before — where
+`wm_front` itself declines to raise a hidden window and `wm_show` is the
+entry point for that (§11.90).
+
+**It costs what the minimize box costs and no new path.** `inst_minimize`
+sets I_FLAGS bit 0 and calls `wm_hide`, so the repaint is §11.91's damage
+rect over the vacated frame and the tile's interior inverts through §30.3's
+mark diff — one `gfx_xor_fill`, no icon redrawn. Going the other way,
+`inst_restore` is unchanged.
 
 ## 31. ctrl.inc — the Control Panel window
 
@@ -35566,8 +35682,19 @@ exact size — a Disk window lists its folders and files, and a text file
 **double-clicked open** resolved its association, loaded Note Pad and read
 the document, all across the cable. Everything above `dsk_xfer` worked
 unchanged, which was the whole bet of doing block mode before the
-redirector. The open took ~10 s, of which **3.7 s is `lp_turn`** at two
-reversals per sector — see §62.3.
+redirector. The open took ~10 s. **What it did NOT do is load the package
+over the cable**, and the first published breakdown of it said otherwise:
+`disk_mount` calls `asc_use` on every full mount, so booting from the combo
+disk seeded Note Pad's §54.4.2 hint to `A:\APPS` before the cable was
+touched, and rung 1 is that hint. `NOTEPAD.O88` came off the floppy. About 13
+sectors crossed — the document and `assoc_back`'s quiet mount — of which
+~1.4 s is `lp_turn` at two reversals per sector (§62.3).
+
+**So a package launched off the wire is still untested**, and opening a
+document can never be the test: the hint makes the network volume's own copy
+lose to the boot disk's, which is right, being 5.7x faster. Launching from
+the network Disk window is `loader_run` on that window's row and does not
+consult the hint at all.
 
 ### 62.8 `tests/dosstub` — a machine to run the DOS end on
 
@@ -35604,3 +35731,139 @@ first `DSF_KB` of the "file" is real memory and a read past it is answered
 
 It is `make dosstub`, on demand only; `all` builds nothing under `tests/` and
 nothing there ships.
+
+### 62.9 Stage 2 — the file redirector (`DVK_FILE` / `DRVC_FILE`)
+
+**PINNED HERE BEFORE IT IS BUILT**, because it is an interface and §1's rule
+is that SPEC.md moves first. Block mode (§62 above) is what ships today; this
+is what supersedes it, and docs/NET-PLAN.md §2.2 is the reasoning.
+
+**It is deliberately not a network feature and the name says so.** A volume
+whose contents are served by *somebody else answering questions about files*
+is a general shape, and the cable is only its first client. Three others need
+nothing new: a **serial** redirector over the port `comscan` already surveys,
+a **RAM disk** that needs no FAT at all, and a **host-filesystem passthrough**
+under an emulator — which is worth a great deal to this project's own harness,
+since it is the only one of the four that can be tested in a container.
+`DRVC_FILE` costs exactly what `DRVC_NET` would have and forecloses none of
+them.
+
+**The key insight that keeps the file manager at zero.** The staged §19.1
+directory entry carries a **first-cluster word at offset 18**, and only two
+consumers ever interpret it — `dsk_chdir` for a folder and the loader for a
+package. Both are already redirect points. So on a redirected volume that word
+is **an opaque handle the driver assigns**, the entry format does not change by
+one byte, and the Disk window's rows, icons, sort, view cache, `fm_hit`, the
+`..` synthesis (§19.5) and the file dialog are all untouched.
+
+#### 62.9.1 The dispatch, and why it is a pointer
+
+`DSV_SIZE` is 26 and every cell is spoken for, so a file driver does **not**
+get thirteen more: `DSV_FS` is one added word pointing at a verb table **in
+the driver's own segment**, and `drv_fs_call` resolves it. Thirteen cells
+would cost `13 × 2 × DRVC_MAX` bytes of `.bss` on every machine including the
+ones with no driver at all; one pointer costs `2 × DRVC_MAX` = 10.
+
+```
+DSV_FS      equ 26      ; dw: -> the FSV_* table, in the driver's segment
+DSV_SIZE    equ 28
+
+FSV_LIST    equ 0       ; append this folder's entries. The kernel still
+                        ; SORTS (§19.4) and still synthesizes `..` (§19.5), so
+                        ; the driver must do neither - two places deciding an
+                        ; order is how a display index stops meaning what the
+                        ; hit-test thinks it means
+FSV_CHDIR   equ 2       ; AX = a handle out of an entry, or 0 = the root
+FSV_STAT    equ 4       ; SI = name -> exists, size, attributes
+FSV_READ    equ 6       ; SI = name, ES:BX = buffer, DX:CX = capacity
+FSV_WRITE   equ 8       ; SI = name, ES:BX = bytes, DX:CX = count
+FSV_APPEND  equ 10      ; the chunked pair (§18.4.4), so a copy still streams
+FSV_READAT  equ 12      ; ...and its read half
+FSV_DELETE  equ 14      ; SI = name
+FSV_RENAME  equ 16      ; SI = old, DI = new
+FSV_MKDIR   equ 18      ; SI = name
+FSV_RMDIR   equ 20      ; SI = name
+FSV_DFREE   equ 22      ; -> DX:AX = free bytes, BX = the granule
+FSV_SIZE    equ 24
+```
+
+**A DRIVER CANNOT WRITE THE LISTING AND MUST NOT LEARN HOW.** `FSV_LIST`
+reads as though the driver stages entries itself, and it cannot:
+`dsk_put_dir` is module-internal, it knows whether this volume's listing is
+the `.lowbss` floor or a claim its driver donated (§22.6), and the count is
+`disk_nfiles` — three pieces of kernel bookkeeping a driver has no business
+holding. So the driver **appends**, one entry at a time, through a cell of its
+own:
+
+```
+OSAPI_FS_ENT   ES:SI -> a 20-byte §19.1 staged entry, ES = the driver's DS
+               out: CF=0 and AX = the index it landed at
+                    CF=1 = the listing is full (§19's 32-entry cap, or
+                    whatever [dsk_nmax] says for this volume)
+```
+
+An **X stub** (§20.1), because the entry is in the driver's segment. It is
+legal **only from inside `FSV_LIST`** — `[dsk_fslist]` is the gate, raised
+around the call — for the reason every other listing writer is: an append
+outside a mount would leave `disk_nfiles` describing a listing the sort never
+saw. The kernel raises the gate, calls `FSV_LIST`, lowers it, and then sorts
+and synthesizes `..` exactly as it does for a FAT volume, which is what keeps
+§19.4 and §19.5 in one place.
+
+**The icon slot is NOT part of the entry**, and that falls out of §62.9.2:
+`disk_icons` is blanked at the top of every mount and a redirected volume
+simply leaves it blank, so §25's generic icon does its job. A driver that
+wants to harvest gets a second cell later, or does it with `FSV_READAT` and
+composes — but **measure first**: at ~30 ms a read it is a second of listing
+time for a folder of thirty packages.
+
+`DVK_FILE` = 2 joins `DVK_BIOS` and `DVK_DRV` in `DV_KIND`, and `DV_CLASS`
+(§18.7.3) says which class serves it — the same byte, doing the same job, for
+the same reason. **`dsk_xfer` REFUSES a `DVK_FILE` volume outright**: there
+are no sectors to ask for, and a caller that reaches it is a bug rather than a
+fallback.
+
+#### 62.9.2 What it buys, and what it gives up
+
+Buys: any remote size with **no 32MB cap** (§18.2 rule 8 refuses
+`TotSec16 == 0`, so block mode can never exceed 65,535 sectors); **no
+coherency hazard** at all, because the far side does its own file I/O through
+`int 21h` and its caches stay coherent by construction, where block mode
+writing sectors under a live DOS is how a filesystem is corrupted; the remote
+machine's **real** filesystem rather than an image file; and the far side can
+serve anything DOS can reach, a CD-ROM or a network drive of its own included.
+
+Gives up: `ASSOC.DAT` (§54.7) and the icon harvest, both of which assume a
+volume whose sectors can be read. The driver may do the harvest itself — 64
+bytes at offset 32 of each `.O88`, one `FSV_READAT` per package — or hand back
+zeroed slots and let §25's generic icon do its job, which is what `hello/`
+ships to prove. **Zero the slots first and measure**: at ~30 ms a read that is
+a second of listing time for a folder of thirty packages, and it buys a
+picture.
+
+#### 62.9.3 The branch sites, and the order to build them in
+
+Each is a test of `DV_KIND` at the top of a routine that already exists, so
+the bodies below them are untouched:
+
+| site | verb |
+|---|---|
+| `disk_mount` | `FSV_LIST`, and skip the BPB, the FAT window and the root scan entirely |
+| `dsk_chdir` / `dsk_chdir_q` | `FSV_CHDIR` |
+| `dsk_free_clus` | `FSV_DFREE` |
+| `dskw_wbody` / `rbody` / `dbody` / `nbody` / `mkbody` / `rmbody` | the six |
+| `dskw_stat` / `dskw_apbody` / `dskw_read_at` | three more |
+| `dsk_read_chain` (the loader, `assoc`) | `FSV_READ` by handle |
+| `dsk_xfer` | refuse |
+
+**Build it in three milestones, and each is separately verifiable**: a volume
+that MOUNTS AND LISTS (`FSV_LIST`/`CHDIR`/`DFREE` — a browsable read-only
+drive, and the whole Disk window works on it); then READS (`STAT`/`READ`/
+`READAT` — a package launches off it and a document opens); then WRITES.
+
+**And the harness is a RAM DISK, not the cable.** A `DRVC_FILE` driver backed
+by a heap claim needs no hardware, so every branch site above can be exercised
+on a cycle-accurate 8088 in a container — which is the one thing block mode
+never had, and the reason two of its bugs reached the field. The cable's file
+client is then a second `DRVC_FILE` driver against a kernel that is already
+proven.

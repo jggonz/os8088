@@ -742,6 +742,37 @@ and let §25's generic icon do its job, which is what `hello/` ships to prove.
 **Zero the slots first and measure before adding the harvest**: at ~30 ms a
 read it is a second of listing time for a folder of thirty packages.
 
+### 2.2.1 Where the build stands, and where it picks up
+
+**The interface is PINNED (SPEC.md §62.9) and the constants are in;
+no branch site is built yet.** `DVK_FILE`, `DRVC_FILE` = 5, `DSV_FS` as a
+pointer to the thirteen-verb table, and the fifth publication slot: 184 bytes,
+no rung crossed. What is done is the part §1's rule says must come first.
+
+Two design decisions were settled while pinning it and neither was in the
+original sketch above:
+
+- **`DSV_FS` is a POINTER, not thirteen more `DSV_*` cells.** The table is
+  copied per class into the kernel's `.bss`, so thirteen cells would be
+  charged to every machine including the ones with no driver at all.
+- **The driver APPENDS to the listing through `OSAPI_FS_ENT`** rather than
+  staging into it. `dsk_put_dir` is module-internal and knows whether this
+  volume's listing is the `.lowbss` floor or a donated claim (§22.6) — three
+  pieces of bookkeeping a driver must not hold. Gated to `FSV_LIST`.
+
+**The next session picks up at milestone 1**, which is a browsable read-only
+volume: `drv_fs_call`, `disk_mount`'s `DVK_FILE` branch (skip the BPB, the FAT
+window and the root scan; call `FSV_CHDIR` then `FSV_LIST`; let the kernel's
+own sort and `..` run), `dsk_xfer`'s refusal, `dsk_free_clus` → `FSV_DFREE`,
+`OSAPI_FS_ENT`, and **a RAM-disk `DRVC_FILE` driver as the harness**. That
+last is the point: it needs no hardware, so every branch site is exercised on
+a cycle-accurate 8088 in a container — which block mode never had, and which
+is why two of its bugs reached the field instead of the build.
+
+Milestones 2 and 3 (reads, then writes) follow on a kernel that is already
+proven, and the cable's file client is then a SECOND `DRVC_FILE` driver
+rather than the first.
+
 ### 2.3 What was considered and rejected
 
 **A synthetic FAT image in RAM.** The driver fetches the remote listing,
@@ -1111,7 +1142,7 @@ free and sufficient.
 | # | build | proved by |
 |---|---|---|
 | **1** | **`tests/lptlink`** — §9.1 | **DONE.** Link up first try, 16 KB each way, **0 errors in four transfers**, at **3,741 B/s** after §1.2.0's fix. PERFORMANCE.md Part 9 **Set 39**. The wire, the scan, the handshake and both reversals are settled facts now |
-| **2** | **`NET.DRV` Stage 1 + `OS88NET`** | **DONE, on the iron.** A `Network` volume on the desktop, a Disk window listing it, and a text file DOUBLE-CLICKED open — the association resolved, Note Pad loaded and the document arrived, all across the cable (PERFORMANCE.md Part 9 **Set 40**). Everything above `dsk_xfer` worked unchanged, which was the whole bet. ~10 s for that open, of which **3.7 s is turnaround** the count byte can remove. The WRITE path too: a file copied on, the image carried back, `--verify` clean, four sectors changed and no others, and the file byte-identical to its source. Still owed: a re-run on the BATCHED protocol, whose framing is not the one any of this was measured on. *(Superseded detail:* The kernel half, the driver, the attach, the publication, the Control Panel page and the volume plumbing are all verified on a cycle-accurate 5150 (SPEC.md §62.7) — MartyPC has a parallel port with a readable data register but nothing on the far end of it, so `os8088_5150_cga_lpt` proves *everything except the partner*: the scan finds 0x378, the page says `No partner`, Connect fails in 2.1 s and the machine does not hang. The DOS end runs too, on `tests/dosstub` (SPEC.md §62.8) — which had to be built, because there is no DOS here and `OS88NET.COM` had therefore shipped twice without one instruction of it executing. the emulator half of this is SPEC.md §62.7's acceptance list, and `tests/dosstub` is how the DOS end is run without DOS.)* |
+| **2** | **`NET.DRV` Stage 1 + `OS88NET`** | **DONE, on the iron.** A `Network` volume on the desktop, a Disk window listing it, and a text file DOUBLE-CLICKED open — the association resolved, Note Pad loaded and the document arrived, all across the cable (PERFORMANCE.md Part 9 **Set 40**). Everything above `dsk_xfer` worked unchanged, which was the whole bet. ~10 s for that open — but **the package came off the FLOPPY, not the cable**: `disk_mount`'s `asc_use` seeds §54.4.2's hint from the boot disk's `ASSOC.DAT`, so rung 1 finds `A:\APPS\NOTEPAD.O88` first. ~13 sectors crossed, ~1.4 s of it turnaround. A package launched OFF the wire is still owed, and it is `loader_run` from the network Disk window rather than any document open. The WRITE path too: a file copied on, the image carried back, `--verify` clean, four sectors changed and no others, and the file byte-identical to its source. Still owed: a re-run on the BATCHED protocol, whose framing is not the one any of this was measured on. *(Superseded detail:* The kernel half, the driver, the attach, the publication, the Control Panel page and the volume plumbing are all verified on a cycle-accurate 5150 (SPEC.md §62.7) — MartyPC has a parallel port with a readable data register but nothing on the far end of it, so `os8088_5150_cga_lpt` proves *everything except the partner*: the scan finds 0x378, the page says `No partner`, Connect fails in 2.1 s and the machine does not hang. The DOS end runs too, on `tests/dosstub` (SPEC.md §62.8) — which had to be built, because there is no DOS here and `OS88NET.COM` had therefore shipped twice without one instruction of it executing. the emulator half of this is SPEC.md §62.7's acceptance list, and `tests/dosstub` is how the DOS end is run without DOS.)* |
 | 3 | `OSAPI_DRV_CALL` + `DSV_PKGCALL` | a package reaching a driver at all — testable with a stub verb before any networking exists |
 | 4 | Stage 2, the redirector | the same Disk window over `OS88NET /D:C:\` — and the same `tests/filetest` battery, which is the existing 25-case write gate and applies unchanged |
 | 5 | mTCP + a Telnet package | a connection, from a 1981 machine |

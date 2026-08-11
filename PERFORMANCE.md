@@ -4965,29 +4965,54 @@ opened it**: the file association resolved, the package loaded and the
 document arrived, all across the cable. **Everything above `dsk_xfer` worked
 unchanged**, which was the whole bet of doing block mode first.
 
-**The document open took about ten seconds**, and it decomposes:
+**The document open took about ten seconds**, and the first decomposition of
+it published here was WRONG — it is corrected below, and the correction is
+worth as much as the number.
+
+**`NOTEPAD.O88` DID NOT CROSS THE CABLE.** It was charged to the wire at 32
+sectors on the reasoning that the network volume's own `APPS` folder held a
+copy, so §54.4.2's rung 3 would find it there. It never got that far:
+`disk_mount` calls `asc_use` on every FULL mount, which reads that volume's
+`ASSOC.DAT` and stamps `assoc_drv`/`assoc_clus` for **every program it
+names** — so booting from the combo disk seeded Note Pad's hint to `A:\APPS`
+before the cable was touched at all, and **rung 1 is that hint**, tried first.
+The 15,904 bytes came off the floppy at 21,307 B/s, in about 0.75 s. The
+machine's owner spotted it from the drive light; the code says the same.
+
+So what actually crossed for that open is the **document** (809 bytes, 2
+sectors) and `assoc_back`'s **quiet mount** of the network volume — §18.9's
+BPB + FAT window + cwd, no listing and no harvest, so ~11 sectors. Call it 13:
 
 | | sectors | cost |
 |---|---:|---:|
-| `NOTEPAD.O88` | 32 | |
-| `NETTEST.TXT` | 2 | |
-| **data**, at Set 39's 3,741 B/s | 34 | **4.65 s** |
-| **turnaround**, 2 x 54.9 ms per SECTOR | 34 | **3.73 s** |
-| mounts and directory walks | | the rest |
+| **data**, at Set 39's 3,741 B/s | ~13 | **~1.8 s** |
+| **turnaround**, 2 x 54.9 ms per SECTOR | ~13 | **~1.4 s** |
+| `NOTEPAD.O88` off the FLOPPY | 32 | ~0.75 s |
+| the floppy's own mounts, and the volume switched twice | | the rest |
 
-**The turnaround is 37% of it and it is nearly all removable.** `lp_turn`
-spends one whole system tick per direction reversal — deliberately, and Set
-39's own header says why: a spin count cannot be made to hold between a 5150
-and an unknown far end, and a reversal was expected to be *"a handful per
-run"*. In block mode it is **two per sector**, because `net_blk` sends a
-count of **1** every time — even though the protocol carries a count byte and
-`dsk_xfer` hands it an already-coalesced run. A 9-sector run batched into one
-command is 2 reversals instead of 18: **3.73 s → 0.44 s** on this figure.
+**The turnaround conclusion survives the correction and the size of it does
+not.** `lp_turn` spends one whole system tick per direction reversal —
+deliberately, and Set 39's own header says why: a spin count cannot be made
+to hold between a 5150 and an unknown far end, and a reversal was expected to
+be *"a handful per run"*. In block mode it is **two per sector**, because
+`net_blk` sent a count of **1** every time even though the protocol carries a
+count byte and `dsk_xfer` hands it an already-coalesced run. Batching is worth
+**~1.4 s of this open**, not the 3.7 s first claimed — and much more on
+anything that actually streams off the wire, which this did not.
 
-That is the same shape as SPEC.md §18.91's floppy batching and it is worth
-recording as such: **a cost model built for streaming, met by a caller that
-does not stream.** The transport is not slow here; it is being asked the same
-question 34 times.
+That is still SPEC.md §18.91's floppy batching in a new place: **a cost model
+built for streaming, met by a caller that does not stream.**
+
+**And a package launched off the wire remains UNTESTED**, which is the other
+thing the correction says. The association hint makes a program on the
+network volume lose to the boot disk's copy of it — which is *right*, it is
+5.7x faster — so opening a document can never be the test for it. Launching
+`MINES.O88` from the network Disk window is, because that is `loader_run` on
+a row of that window rather than `assoc_locate`.
+
+**The measurement that would have settled it in one glance**: `OS88NET.COM`
+prints a dot per sector served, and 34 dots against 13 is not a subtle
+difference. Read the DOS side's screen, not the arithmetic.
 
 #### The write path, checked from OUTSIDE os8088
 

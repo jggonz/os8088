@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import os88marty
 from os88mouse import Mouse
+from os88geom import WIN_SIZE                                # noqa: F401
 import sucheck as su
 import subcheck as sc
 
@@ -65,6 +66,12 @@ PTROW = int(os.environ.get("PTROW", "2"))
 PTNUDGE = int(os.environ.get("PTNUDGE", "0"))
 
 CLK = 4772727.0                 # 4.77 MHz, so cycles -> ms
+# WIN_SIZE was 26 here, and wm.inc has said 28 since SPEC.md 13.7 added
+# W_ONMOUSEUP - so the `di`/`bx` window slots below were computed at the wrong
+# stride and reported nonsense as if it were a window index. os88geom carries
+# it now and checks itself against the kernel at import - the same fix this
+# branch made by deriving the stride out of the .bss layout, and the better
+# half of the two: it covers every mirrored constant rather than that one.
 
 
 def ms(cycles):
@@ -83,7 +90,6 @@ def collect(m, names, budget=200.0, limit=80):
     for n, a in marks.items():
         by_addr.setdefault(a, n)
     base = m.sym("wm_wins")
-    stride = su.win_geom(m)[1]      # DERIVED - sucheck's own docstring says why
     out, t0 = [], time.time()
     for _ in range(limit):
         m.run()
@@ -98,8 +104,8 @@ def collect(m, names, budget=200.0, limit=80):
         flat = ((st["cs"] << 4) + st["ip"]) & 0xFFFFF
         r = m.regs()
         out.append((by_addr.get(flat, "?%05X" % flat), st["cycles"],
-                    (r["di"] + 0x600 - base) // stride,
-                    (r["bx"] + 0x600 - base) // stride))
+                    (r["di"] + 0x600 - base) // WIN_SIZE,
+                    (r["bx"] + 0x600 - base) // WIN_SIZE))
     return out
 
 

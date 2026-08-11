@@ -13,7 +13,9 @@
 ; mutually exclusive in practice (a minimized window is not visible, so it
 ; cannot be frontmost) but nothing depends on that, and a heavier border
 ; survives the 1bpp reduction (SPEC.md 39.4) where a second colour would not.
-; Clicking a tile restores a minimized instance or fronts a visible one.
+; Clicking a tile does whatever its own mark says is not true yet (SPEC.md
+; 30.4): a minimized one restores, an ACTIVE one minimizes, any other comes
+; to the front.
 ;
 ; dock_paint runs inside wm_paint_all right after desk_paint, under the
 ; caller's gfx lock - windows paint over the dock exactly like they cover
@@ -562,8 +564,26 @@ dock_hit:
 ; out: CF = 1 the click was consumed (anywhere in the strip, tile or not),
 ;      CF = 0 not in the dock. All registers preserved.
 ;
-; Tile hit on a live instance: minimized -> inst_restore (clears the flag,
-; wm_show); visible -> wm_front on its window. Single click activates.
+; **The tile is a TOGGLE** (SPEC.md 30.4): the click does whatever the tile's
+; own mark says is not currently true. Minimized (inverted interior) ->
+; inst_restore; ACTIVE (doubled border - this instance owns the frontmost
+; visible window) -> inst_minimize; anything else -> wm_front. The active
+; tile used to call wm_front on a window that was already frontmost, which
+; repaints no window at all (SPEC.md 11.90) - a click that consumed itself
+; and did nothing.
+;
+; Two things about the active test. It asks wm_top HERE rather than reading
+; [dock_act], which is dock_paint's scratch and valid only inside the paint
+; that resolved it - fdlg_sel_bar's rule about [fdlg_shown] (SPEC.md 38.3) in
+; another module. And it compares WINDOWS where dock_key compares records:
+; inst_bind_win is the only writer of I_WIN and of wm_owner and writes both
+; together, so wm_top == [di+I_WIN] and inst_win_owner(wm_top) == di cannot
+; disagree - this is the same predicate the tile's own mark is drawn from,
+; taken the cheaper way round.
+;
+; A window hidden WITHOUT being minimized is never wm_top's answer (it counts
+; visible windows only), so it still takes the wm_front path exactly as
+; before.
 ; -----------------------------------------------------------------------------
 dock_click:
     push ax
@@ -584,9 +604,21 @@ dock_click:
     jmp .consumed
 
 .front:
-    call gfx_lock               ; visible: bring to front (idempotent)
-    mov bx, [di+I_WIN]
-    call wm_front
+    call gfx_lock               ; visible: front it - or minimize it, if it is
+    mov cx, [di+I_WIN]          ; already the front one (SPEC.md 30.4). CX is
+    jcxz .fdone                 ; free (the click x is on the stack) and holds
+                                ; the window across wm_top, which answers in BX
+    call wm_top                 ; BX = the frontmost VISIBLE window, or 0
+    cmp bx, cx
+    mov bx, cx                  ; mov does not touch flags: BX = our window for
+    je .fmin                    ; whichever of the two calls is taken
+    call wm_front               ; in: BX
+    jmp short .fdone
+.fmin:
+    call inst_minimize          ; in: BX; sets I_FLAGS bit0 and wm_hides, so
+                                ; the tile inverts (SPEC.md 30.3) and the
+                                ; repaint is 11.91's over the vacated frame
+.fdone:
     call gfx_unlock
 
 .consumed:

@@ -63,7 +63,15 @@ DRVC_DEBUG  equ 3               ; the serial monitor (SPEC.md 58). It publishes
                                 ; and giving it somebody else's would
                                 ; disconnect a sound card or a hard disk the
                                 ; moment the user ticked it (SPEC.md 51.2.1)
-DRVC_MAX    equ 4               ; classes, and so publication slots
+DRVC_FILE   equ 5               ; a volume served by somebody ANSWERING
+                                ; QUESTIONS ABOUT FILES rather than about
+                                ; sectors (SPEC.md 62.9). Deliberately not
+                                ; named for the cable: a serial redirector, a
+                                ; RAM disk and a host-filesystem passthrough
+                                ; under an emulator are the same shape, and
+                                ; the last of those is the only one of the
+                                ; four that can be tested in a container
+DRVC_MAX    equ 5               ; classes, and so publication slots
 
 ; --- driver table row, stride DRVR_SIZE --------------------------------------
 ; DRVR_DISP and DRVR_SEG are adjacent, in that order, ON PURPOSE: together
@@ -212,7 +220,14 @@ DSV_CPCLOSE equ 24              ; dw: near proc, "the Control Panel has been
                                 ; still loaded, its volumes are still mounted,
                                 ; and the panel may be opened again in a
                                 ; second
-DSV_SIZE    equ 26
+DSV_FS      equ 26              ; dw: DRVC_FILE only - the FSV_* verb table,
+                                ; an offset IN THE DRIVER'S OWN SEGMENT
+                                ; (SPEC.md 62.9.1). A pointer and not thirteen
+                                ; more cells here: thirteen would cost
+                                ; 13 x 2 x DRVC_MAX bytes of .bss on every
+                                ; machine including the ones with no driver at
+                                ; all, and this costs 2 x DRVC_MAX = 10
+DSV_SIZE    equ 28
 
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every
@@ -393,6 +408,8 @@ drv_fptr3:   dw PKG_DISP        ; class 3 (DRVC_DEBUG). drv_cls_fp indexes
 drv_fseg3:   dw 0               ; these contiguously, so a class is appended
 drv_fptr4:   dw PKG_DISP        ; here and nowhere else
 drv_fseg4:   dw 0               ; class 4 (DRVC_NET)
+drv_fptr5:   dw PKG_DISP
+drv_fseg5:   dw 0               ; class 5 (DRVC_FILE)
 
 drv_cfgname: db 'SYSTEM.CFG', 0
 drv_sysname: db 'KERNEL.SYS', 0 ; what makes a disk THE system disk (19.6): the

@@ -79,90 +79,24 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty
 from os88mouse import Mouse
 
-MEM_MAX, MC_SIZE = 32, 8
-RANK = {0xFB: "trivial", 0xFC: "low", 0xFD: "medium", 0xFE: "high"}
-
-# MAX_WIN and WIN_SIZE are DERIVED, never written down - see win_geom() below.
-# The W_* offsets are copied, and can be, because the record only ever grows at
-# the END: W_ONSIZE and W_ONMOUSEUP are both appended fields whose own comments
-# say so, precisely so that no existing template or reader moves.
-W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE, W_SEG = 0, 2, 4, 6, 8, 10, 22
-WF_USED, WF_VIS, WF_SAVEU = 1, 2, 32
-TITLE_H, KERNEL_SEG = 18, 0x0060
-
-DOCK_X0, DOCK_STEP, DOCK_TILE_W = 8, 28, 24     # kernel/dock.inc
-DESK_ZW, DESK_ZY0, DESK_COLW = 32, 32, 44       # kernel/desk.inc
-FM_ROW_Y0, FM_ROW_H = 22, 16                    # kernel/files.inc
+# EVERY MIRRORED CONSTANT COMES FROM os88geom, WHICH CHECKS ITSELF AGAINST THE
+# KERNEL AT IMPORT. This file used to carry its own copies and two of them had
+# gone stale - WIN_SIZE 26 against wm.inc's 28, so every window past index 0
+# decoded as garbage and read as unused, and the desk zone's pitch and width
+# from before SPEC.md 26.4's square CGA icon, so `zone` aimed 22px below a
+# 14-row zone. Both are silent, and both read as the feature under test being
+# broken rather than as the harness missing.
+from os88geom import (                                       # noqa: F401
+    MAX_WIN, WIN_SIZE, W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE, W_SEG,
+    WF_USED, WF_VIS, WF_SAVEU, TITLE_H, KERNEL_SEG,
+    DOCK_X0, DOCK_STEP, DOCK_TILE_W, DESK_ZW, DESK_ZY0, DESK_COLW,
+    FM_ROW_Y0, FM_ROW_H, MEM_MAX, MC_SIZE, RANK,
+    Win, windows, word, row_xy, drive_xy, drive_ordinal, tile_xy)
 
 VOL_B = 1                   # B:, the apps floppy
 ROW_GAMES = 1               # B: root, sorted: APPS GAMES MEDIA SYSTEM
 ROW_MINES = 2               # GAMES/, sorted: .. ARKANOID MINES MISSILE SOLITAIR
 ROW_SOLIT = 4
-
-
-def win_geom(m):
-    """MAX_WIN and WIN_SIZE, out of the .bss LAYOUT rather than copied.
-
-    `wm_wins` / `wm_zord` / `wm_zn` are declared adjacent and in that order and
-    all three are `resb`, so the gaps between their symbols ARE the two
-    constants. tools/notepad/pixcheck.py derived them this way first and its
-    reason has now happened twice: WIN_SIZE has been 18, 20, 26 and is 28, and
-    a harness holding the old one walks the wrong records and reads PLAUSIBLE
-    GARBAGE. The second time cost this session an hour - `W_ONMOUSEUP` took the
-    stride to 28 on the integration branch, every record after the first parsed
-    at the wrong offset, and the symptom was `subcheck` reporting that the
-    second Disk window had not opened on a screen that plainly showed two.
-    """
-    wins, zord, zn = m.sym("wm_wins"), m.sym("wm_zord"), m.sym("wm_zn")
-    maxwin, span = zn - zord, zord - wins
-    if maxwin <= 0 or span <= 0 or span % maxwin:
-        raise SystemExit("sucheck: wm_wins/wm_zord/wm_zn are not adjacent any "
-                         "more (%d, %d): derive the stride some other way"
-                         % (span, maxwin))
-    return maxwin, span // maxwin
-
-
-class Win(object):
-    def __init__(self, m, i, raw, stride):
-        b = i * stride
-        self.i = i
-        self.flags = struct.unpack_from("<H", raw, b + W_FLAGS)[0]
-        self.x, self.y, self.w, self.h = struct.unpack_from("<HHHH", raw,
-                                                            b + W_X)
-        tp, seg = struct.unpack_from("<H", raw, b + W_TITLE)[0], \
-            struct.unpack_from("<H", raw, b + W_SEG)[0]
-        s = m.readseg(seg or KERNEL_SEG, tp, 24)
-        self.title = bytes(s).split(b"\0")[0].decode("latin-1")
-
-    @property
-    def visible(self):
-        return bool(self.flags & WF_VIS)
-
-    @property
-    def promises(self):
-        return bool(self.flags & WF_SAVEU)
-
-    @property
-    def content(self):
-        """The rect wm_su_rect answers, which is what the cache holds."""
-        return (self.x + 1, self.y + TITLE_H, self.x + self.w - 2,
-                self.y + self.h - 2)
-
-    def covers(self, x, y):
-        return (self.x <= x < self.x + self.w
-                and self.y <= y < self.y + self.h)
-
-    def __repr__(self):
-        return "%s@%d(%d,%d,%d,%d)%s" % (self.title, self.i, self.x, self.y,
-                                         self.w, self.h,
-                                         "+saveu" if self.promises else "")
-
-
-def windows(m):
-    maxwin, stride = win_geom(m)
-    raw = m.read(m.sym("wm_wins"), maxwin * stride)
-    return [Win(m, i, raw, stride) for i in range(maxwin)
-            if struct.unpack_from("<H", raw, i * stride)[0] & WF_USED]
 
 
 def caches(m):
@@ -180,41 +114,11 @@ def trivial(m):
     return sorted(c for c in caches(m) if c[0] >> 8 == 0xFB)
 
 
-def word(m, sym):
-    return struct.unpack("<H", m.read(m.sym(sym), 2))[0]
-
-
-def tile(m, win):
-    """The dock tile of the instance owning a window (SPEC.md 30)."""
-    inst = m.read(m.sym("wm_owner"), win_geom(m)[0])[win.i]
-    if inst == 0xFF:
-        raise SystemExit("sucheck: %r has no instance, so no dock tile" % win)
-    return (DOCK_X0 + inst * DOCK_STEP + DOCK_TILE_W // 2,
-            word(m, "vid_dock_y0") + 10)
-
-
-def zone(m, ordinal):
-    """desk_ord_xy's arithmetic (SPEC.md 26.1), centred - zones fill a column
-    downwards and wrap to a new one on the LEFT, and how many fit is
-    [desk_rows]: 2 on CGA, 4 on Hercules, 7 on VGA.
-
-    THE PITCH AND THE HEIGHT ARE READ, NOT WRITTEN DOWN. SPEC.md 26.4 gave the
-    CGA a 14-row icon and a 34px pitch against the other adapters' 32 and 60,
-    so `desk_zstep` and `desk_zh1` are words the kernel picks at boot and
-    vid_switch re-picks. Hard-coded, this aimed 26px below B:'s zone on CGA and
-    the double-click landed on bare desktop - which reads as the window failing
-    to open rather than as the harness missing."""
-    rows = word(m, "desk_rows")
-    col, row = divmod(ordinal, rows)
-    x = word(m, "vid_desk_zx") - col * DESK_COLW
-    y = DESK_ZY0 + row * word(m, "desk_zstep")
-    return (x + DESK_ZW // 2, y + word(m, "desk_zh1") // 2)
-
-
-def row(win, i):
-    """fm_layout's list geometry: row i's middle, in the content."""
-    return (win.x + 60, win.y + TITLE_H + FM_ROW_Y0 + i * FM_ROW_H
-            + FM_ROW_H // 2)
+# tile / zone / row are os88geom's, under this module's older names - every
+# coordinate in them is either a live guest word or a checked constant.
+tile = tile_xy
+zone = drive_xy
+row = row_xy
 
 
 def cover_point(m, target):

@@ -407,38 +407,38 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5654,
+    "bss": 5704,
     "budget": 104960,
     "codemax": 65536,
     "cold": 23200,
     "coldpara": 1472,
     "fatpara": 288,
-    "imgpara": 4064,
-    "kend": 6496,
+    "imgpara": 4096,
+    "kend": 6528,
     "kseg": 96,
-    "ksize": 102400,
+    "ksize": 102912,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 59359
+    "text": 59390
   },
   "small": {
-    "bss": 5445,
+    "bss": 5495,
     "budget": 97280,
     "codemax": 65536,
     "cold": 21635,
     "coldpara": 1376,
     "fatpara": 288,
-    "imgpara": 3808,
-    "kend": 6144,
+    "imgpara": 3840,
+    "kend": 6176,
     "kseg": 96,
-    "ksize": 96768,
+    "ksize": 97280,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2752,
     "stk0": 1024,
-    "text": 55456
+    "text": 55487
   }
 }
 ```
@@ -935,13 +935,13 @@ generated in the first place.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 29,974 | 36.3% |
-| the window system and its furniture | 18,839 | 22.8% |
+| the window system and its furniture | 18,855 | 22.8% |
 | drawing: adapters, primitives, glyphs, icons | 12,628 | 15.3% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,888 | 12.0% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,892 | 12.0% |
 | the kernel proper: API table, heap, scheduler, events | 5,989 | 7.3% |
 | the Control Panel | 3,876 | 4.7% |
-| the three built-in kinds | 1,365 | 1.7% |
-| **total** | **82,559** | |
+| the three built-in kinds | 1,376 | 1.7% |
+| **total** | **82,590** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -956,7 +956,7 @@ generated in the first place.
 | `ctrl.inc` — the Control Panel (§31) | 672 | 3,204 | **3,876** | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,656 | — | **2,656** | 291 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,660 | — | **2,660** | 341 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
@@ -965,7 +965,7 @@ generated in the first place.
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
 | `icons.inc` — the icon renderer (§10) | 1,570 | — | **1,570** | 34 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
-| `apps.inc` — the three built-in kinds (§14) | 1,365 | — | **1,365** | 11 | 240 |
+| `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,347 | — | **1,347** | 84 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,205 | — | **1,205** | 4 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
@@ -975,7 +975,7 @@ generated in the first place.
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 916 | — | **916** | 9 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
-| `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
+| `dock.inc` — the dock (§30) | 793 | — | **793** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 776 | **776** | 58 | — |
 | `toast.inc` — **(undescribed)** | 481 | — | **481** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
@@ -983,7 +983,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,797 | — | **2,797** | — | — |
-| **total** | **59,359** | **23,200** | **82,559** | **5,654** | **7,762** |
+| **total** | **59,390** | **23,200** | **82,590** | **5,704** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
