@@ -370,7 +370,7 @@ Three things about it:
     "bss": 4926,
     "budget": 100352,
     "codemax": 65536,
-    "cold": 22463,
+    "cold": 22485,
     "coldpara": 1408,
     "fatpara": 288,
     "imgpara": 3840,
@@ -381,7 +381,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3067,
     "stk0": 1024,
-    "text": 56012
+    "text": 56025
   },
   "small": {
     "bss": 4717,
@@ -894,14 +894,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,666 | 36.5% |
-| the window system and its furniture | 17,089 | 21.8% |
+| the file system, end to end | 28,688 | 36.5% |
+| the window system and its furniture | 17,098 | 21.8% |
 | drawing: adapters, primitives, glyphs, icons | 11,458 | 14.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.5% |
-| the kernel proper: API table, heap, scheduler, events | 5,951 | 7.6% |
-| the Control Panel | 4,120 | 5.3% |
+| the kernel proper: API table, heap, scheduler, events | 5,955 | 7.6% |
+| the Control Panel | 4,120 | 5.2% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **78,475** | |
+| **total** | **78,510** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -921,7 +921,7 @@ generated in the first place.
 | `ui.inc` — the UI task and the event ladder (§13) | 2,493 | — | **2,493** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
-| `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
+| `instance.inc` — instances and the built-in kinds (§29) | 1,837 | — | **1,837** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
@@ -935,15 +935,15 @@ generated in the first place.
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 912 | — | **912** | 16 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
+| `loader.inc` — the package loader (§21) | — | 776 | **776** | 58 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 760 | — | **760** | 4 | — |
-| `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
 | `toast.inc` — **(undescribed)** | 435 | — | **435** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,759 | — | **2,759** | — | — |
-| **total** | **56,012** | **22,463** | **78,475** | **4,926** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,763 | — | **2,763** | — | — |
+| **total** | **56,025** | **22,485** | **78,510** | **4,926** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
