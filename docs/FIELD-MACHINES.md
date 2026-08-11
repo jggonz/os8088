@@ -125,10 +125,12 @@ disagrees with them is recognisable as news rather than noise.
 | one 8×8 glyph cell | 901 µs Hercules, 909 µs CGA |
 | a solid fill | 177 µs/row + 0.28 µs/px Hercules; 182 + 0.33 CGA |
 | framebuffer read-modify-write | 79.6 clocks/byte Hercules, 81.0 CGA — only ~7 of them the bus |
-| floppy, sector inside a coalesced run | **65 ms**, **7,457 bytes/second** (Set 17; it was 238 ms / 2,100 B/s before SPEC.md §18.91's `AL` bug was fixed, and that older pair is quoted all over this tree's history) |
-| floppy, one `int 13h` call | **~400 ms** — 1–2 of the 200 ms revolutions, near enough whatever it moves |
+| floppy, `FILE_READ` throughput | **21,307 bytes/second** warm, **12,969** cold motor (**Set 24**; Set 22 says 19,883 warm). **It was 7,457 at Set 17 and 2,100 before that, and BOTH of those are quoted all over this tree's history** — check which side of Sets 17 and 22 a figure comes from before comparing anything to it |
+| floppy, 512 bytes delivered by that read | **24 ms** (Set 24) — bytes DELIVERED, not sectors moved: §18.95's cache means some are never read at all |
+| floppy, one `int 13h` call | **199 ms** for one sector — one 300 RPM revolution exactly — and **384 ms** for a whole 9-sector track (Sets 14/22) |
+| the BIOS's own best, a track in one call | **11,570 B/s** (Set 24). **os8088 is 1.84x this now**, because a `dsk_xfer` run crosses the track boundary with the multi-track bit set and the ROM's single call stops at EOT |
 | floppy, isolated single-sector access (LBA 0, a lone directory sector) | **~150–200 ms** modelled, seek + latency + settle — **not measured** |
-| floppy, open+read a one-sector file | 810 ms |
+| floppy, open+read a one-sector file | 796–810 ms — **Set 17, and not re-measured since §18.95's cache**. An upper bound, probably a loose one |
 | the kernel's own interrupts | 1–3% of a busy CPU |
 
 Two of those are the load-bearing ones. **756 µs** is the per-call floor
@@ -264,7 +266,10 @@ hardware.
 | serial | **two ports**, 3F8 and 2F8 — and the mouse is on **2F8 driving IRQ4**, the cross-wiring SPEC.md §9.5.2/§9.5.2.1 both exist for. `sysbench` reports it as `winning row 2` with `winning IRQ 0010` |
 
 What it has already been worth (PERFORMANCE.md Part 9 Set 18): **11,047 B/s**
-on a 16 KB read against the 5150's 7,457, because a 1.2 MB drive spins at
+on a 16 KB read against the 5150's 7,457 *at that time* — both figures are
+Set 17/18-era and the 5150 has since gone to 21,307 (Set 24) while this
+machine has not been re-run, so **the pair is a historical comparison and not
+a current ranking**. The mechanism is what matters: a 1.2 MB drive spins at
 **360 RPM** — a revolution is 166.7 ms, not 200 — so the same batched read
 costs 0.28 revolutions a sector. It is the second BIOS to confirm that
 trusting `CF` rather than `AL` reads the right bytes (`data check ... OK`),

@@ -58,8 +58,9 @@ stands on its own without the memory table, and it is the better argument.
 
 **The one field-visible win is the boot.** SPEC.md §51.3 means nothing is
 wanted by default, so this applies to a machine that has ticked Hard Drive: the
-resident drops from 29 sectors to 12. At PERFORMANCE.md's ~65 ms per sector in
-a run that is **~1.1 seconds off every boot** — inferred from the per-sector
+resident drops from 29 sectors to 12. At PERFORMANCE.md's ~24 ms per 512 bytes
+(Part 2, Set 24 — this said 1.1 s from Set 17's 65 ms) that is **~0.4 seconds
+off every boot** — inferred from the per-sector
 figure, not measured on iron, and it belongs in a field run before it is
 quoted as fact. The reciprocal cost is that clicking **Format** or **Install**
 then reads ~18 sectors, about 1.2 s, once — paid at the start of an operation

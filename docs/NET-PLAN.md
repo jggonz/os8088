@@ -204,13 +204,15 @@ on a matched pair on the bench.
 
 PERFORMANCE.md's field table gives the one constant that decides this:
 
-| quantity | field 5150 |
-|---|---|
-| **An ISA status-port `in`** | **8.7 µs** |
-| Floppy throughput | 7,457 bytes/second |
-| Floppy, per 512-byte sector inside a coalesced run | 65 ms |
-| Floppy, per `int 13h` **call** | **~400 ms**, whatever it moves |
-| Floppy, open and read a one-sector file | 810 ms |
+| quantity | field 5150 | set |
+|---|---|---|
+| **An ISA status-port `in`** | **8.7 µs** | |
+| Floppy `FILE_READ` throughput, warm | **21,307 bytes/second** | **24** |
+| …cold motor | 12,969 B/s | 24 |
+| Floppy, per 512 bytes **delivered** | 24 ms | 24 |
+| Floppy, raw `int 13h`, ONE sector | **199 ms** — one whole revolution | 22 |
+| Floppy, raw `int 13h`, a 9-sector track | 384 ms | 14/22 |
+| Floppy, open and read a one-sector file | 796–810 ms, **not re-measured since §18.95's cache** | 17 |
 
 **This section's first estimate was 10–25 KB/s and it was too generous**,
 because it priced a two-phase handshake — six port accesses a nibble — and
@@ -227,32 +229,51 @@ one:
 
 `tests/lptlink/linksim.py`, which charges a modelled clock per poll at each
 end's own cost, says **6,499 bytes/second** for a 5150 against a modern far
-end — the second row. **That is slower than the floppy's 7,457 B/s**, and the
-honest reading is that four-phase bought correctness with about half the
-wire speed.
+end — the second row.
+
+### 1.2.1 The cable is SLOWER than the floppy, and the case survives anyway
+
+An earlier draft of this section said the link was "1.3× to 3.4× the floppy",
+and then that it was only "slightly slower". **Both were wrong, and by a lot,
+because they were priced against 7,457 B/s — PERFORMANCE.md Part 2's floppy
+throughput row, which was two Part 9 rounds stale.** The current figure is
+**21,307 B/s** (Set 24). So:
+
+| | bytes/second | |
+|---|---|---|
+| floppy `FILE_READ`, warm | **21,307** | Set 24 |
+| this cable, modelled | ~6,500 | linksim |
+| ratio | **the cable is 3.3× SLOWER** | |
+
+That is a real result and it is not fatal, but it does retire an argument this
+plan was leaning on. **The case for this feature was never the transfer rate,
+and §0 already says so: it is the TRIP.** A cable at 6.5 KB/s that needs no
+trip beats a floppy at 21 KB/s that needs the seven-step path in
+docs/FIELD-MACHINES.md — SD card, VHD mount, copy, unmount, writer machine,
+`dskimage`, carry it across the room. 16 KB over the cable is ~2.5 s; 16 KB
+onto a floppy that has to be walked to the 5150 is the rest of the afternoon.
+Nothing about the throughput comparison touches that.
+
+What DOES change is the two claims that leaned on the old number:
+
+- **"Faster than the floppy for metadata" is now marginal, not dramatic.** A
+  512-byte sector is ~79 ms on the wire against **199 ms** for an isolated
+  `int 13h` — still 2.5× better, but §18.95's sector cache is what took the
+  floppy from 7,457 to 21,307 in the first place, and it removes most repeat
+  metadata reads *before* either number applies. Do not build an argument on
+  this without measuring it.
+- **"A network drive is a fast hard disk for a floppy-only machine" is
+  false.** The ST-225 is 74,553 B/s (Set 24) — 11× this cable. Block mode's
+  value is that it needs no controller, not that it is quick.
 
 Every figure here is still a MODEL and PERFORMANCE.md Part 6's rule applies in
 full: **it must be measured on two real machines before it is quoted anywhere
-else**, which is what step 1 exists for.
-
-**And the number that actually decides this is latency, not throughput.**
-A 512-byte sector is **~79 ms on the wire** at the modelled rate. The floppy
-charges **~400 ms for any `int 13h` call at all**, whatever it moves. So a
-network volume is still *dramatically* faster than the floppy for exactly the
-traffic the FAT layer generates most of — a directory sector, a FAT sector, a
-one-sector stat — and roughly a wash when streaming a large file. Opening and
-reading a one-sector file is 810 ms on the floppy and would be ~150–250 ms
-over the cable.
-
-That is what makes Stage 1 worth shipping rather than merely worth
-prototyping, and it does not depend on the throughput figure being flattering.
-
-**If the measurement comes in near the floppy's rate and that is not enough**,
+else**, which is what step 1 exists for. If the real number lands near 6,500,
 the known optimisation is to go back to a two-phase toggle *keeping* §1.1.1's
 turnaround discipline — the race was at the reversal, not in the toggle, and
 `lp_turn` plus tick-based deadlines are what make a reversal safe. That is
-roughly a 2× win and it must not be attempted without the guard, because the
-guard is the part the simulation proved is load-bearing.
+roughly a 2× win, taking the cable to about a third of the floppy rather than
+a seventh, and it must not be attempted without the guard.
 
 ### 1.3 Three rules the transport has to obey
 
@@ -474,7 +495,7 @@ floppy geometry. A network block volume passes validation unchanged.
 
 | the DOS side serves | verdict |
 |---|---|
-| a **disk image file** (`OS8088.IMG`) on its hard disk | **Ship this.** No coherency hazard at all — DOS is not looking inside the file. Gives a 5150 with one floppy a 32 MB hard disk over a cable, which is a real feature on its own |
+| a **disk image file** (`OS8088.IMG`) on its hard disk | **Ship this.** No coherency hazard at all — DOS is not looking inside the file. Gives a 5150 with one floppy 32 MB of storage over a cable and no controller — but see §1.2.1: it is **a third the speed of that machine's own floppy and a eleventh of an ST-225**, so the value is that it needs no card, never that it is quick |
 | a **real DOS partition** via `int 25h`/`int 26h` | works, and is genuinely "the contents of the remote system" — but see the two limits below |
 | a **floppy in the DOS machine's drive** | works, and is the cheapest possible way to read a 1.44 MB disk on a 360 KB machine |
 

@@ -45,7 +45,7 @@ SPL_RESIDENT equ 8              ; sectors the boot sector waits for before
                                 ; buys one more collision; a sector buys 512.
                                 ;
                                 ; One more sector is one more BIOS read before
-                                ; the bar starts moving: ~65 ms on the field
+                                ; the bar starts moving: ~24 ms on the field
                                 ; machine (PERFORMANCE.md's measured sector
                                 ; inside a coalesced run), where the figure
                                 ; this comment used to quote - a fifth of a
@@ -55,9 +55,9 @@ SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 ; The bar counts SECTORS, and the boot sector's read is not the last of them:
 ; kmain's tail mounts A:, reads SYSTEM.CFG and loads whatever it asks for,
 ; which on the 1.44MB system disk is thirteen more sectors before a pixel of
-; desktop can be drawn - about three seconds at PERFORMANCE.md's measured
-; 65 ms per sector in a run (PERFORMANCE.md Part 2;
-; it was 238 before SPEC.md 18.91's AL fix). The bar used to reach 100% at the last sector of the
+; desktop can be drawn - about a second at PERFORMANCE.md's measured
+; 24 ms per 512 bytes delivered (Part 2, Set 24; it was quoted here as 65 from
+; Set 17, and 238 before SPEC.md 18.91's AL fix). The bar used to reach 100% at the last sector of the
 ; kernel and then sit there through all of it.
 ;
 ; So SPL_POST notches are added to the DENOMINATOR and spent after the load
@@ -151,7 +151,7 @@ spl_paint:
 ; A no-op unless the splash is on screen, which is the whole of its safety:
 ; after spl_finish this is a compare and a return, and it stays on the disk
 ; path for the life of the machine at that price (~13 us against a sector's
-; 65 ms).
+; ~24 ms).
 ; -----------------------------------------------------------------------------
 spl_step:
     pushf

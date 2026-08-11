@@ -403,9 +403,12 @@ drv_tab:
                                 ; which carries no SYSTEM.CFG at all - read
                                 ; the whole 5.5KB driver off the floppy on
                                 ; every boot to be told there was no card:
-                                ; 27 sectors, and a sector is ~65 ms in a run on the
-                                ; machine this is for (PERFORMANCE.md Part 2),
-                                ; so about six and a half seconds. Then it
+                                ; 27 sectors, and 512 bytes cost ~24 ms on the
+                                ; machine this is for (PERFORMANCE.md Part 2,
+                                ; Set 24), so about two thirds of a second -
+                                ; it was ~6.4 s under the pre-AL-fix 238 ms,
+                                ; which is the figure this decision was taken
+                                ; against and the reason it reads as large. Then it
                                 ; opened the Control Panel to report a failure
                                 ; nobody had asked for. NOTHING LOADS UNLESS
                                 ; SYSTEM.CFG ASKS FOR IT (SPEC.md 51.3), so

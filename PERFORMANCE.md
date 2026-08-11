@@ -292,10 +292,16 @@ row setup.
 | Framebuffer vs. RAM, read-modify-write | 1.09× (CGA 1.11×) |
 | An ISA status-port `in` | 8.7 us |
 | The kernel's own tick + mouse + scheduler | **1–3%** of a busy CPU |
-| Floppy throughput | **7,457 bytes/second** (was 2,100 before Set 17) |
-| Floppy, per `int 13h` CALL | **~400 ms — about 2 of the 200 ms revolutions**, whether it moves 1 sector or 9. THIS is the unit to estimate a disk change in |
-| Floppy, per 512-byte sector | **65 ms** inside a well-coalesced run (was 238 — see below) |
-| Floppy, open and read a one-sector file | 810 ms |
+| Floppy throughput, os8088's own `FILE_READ` | **21,307 bytes/second** warm (**Set 24**; Set 22 says 19,883 on the same machine, and it was 7,457 at Set 17 and 2,100 before it) |
+| …cold motor | **12,969 B/s** (16 KB in 1.263 s — Set 24) |
+| The BIOS's own best: a whole track in one `int 13h` | **11,570 B/s** (Set 24; 11,984 at Set 14) — **os8088 is now 1.84x THIS**, see below |
+| Floppy, raw `int 13h`, ONE sector | **199 ms** — one 300 RPM revolution exactly (Set 22) |
+| Floppy, raw `int 13h`, a 9-sector TRACK | **384 ms** — 1.92 revolutions (Sets 14/22). A call costs 1–2 revolutions near enough whatever it moves, so **calls are the unit to estimate a disk change in** |
+| Floppy, per 512 bytes DELIVERED by `FILE_READ` | **24 ms** (Set 24) — and read the note below before using it |
+| **Floppy WRITE throughput** | **7,020 bytes/second** — 32 KB created in 4.67 s (Set 24). **A write is 3.0x dearer than a read** and the tree carried one "floppy throughput" row for both until Set 24 split them; price a save with THIS |
+| Floppy, per 512 bytes WRITTEN | **73 ms** (Set 24) |
+| Floppy, the same bytes appended in 8 KB chunks | **2.36x** the one-call create (Set 24) — each chunk is a whole §18.4 commit |
+| Floppy, open and read a one-sector file | 796–810 ms — **Set 17, and NOT re-measured since §18.95's cache landed.** Treat as an upper bound |
 | System tick | 18.2065 Hz; **65,536 PIT counts, measured exactly** |
 | Serial mouse | 1200 baud |
 
@@ -304,8 +310,43 @@ row setup.
 rest is five 8088 instructions. The figure was low, and it was attributed to
 the wrong thing.
 
-**The floppy rows above carried the SAME kind of error for longer, and it
-was the bug rather than the measurement.** `238 ms per sector` and
+**AND THE FLOPPY ROWS WENT STALE A SECOND TIME, IN THIS TABLE, UNDER THE
+PARAGRAPH THAT WARNS ABOUT IT.** They read `7,457 B/s / 65 ms a sector` — Set
+17's — for the whole of Sets 22 and 24, which took the same read to 19,883 and
+then 21,307 B/s. Nothing was wrong with any measurement; the summary table
+simply was not edited when Part 9 moved, and every consumer of it inherited a
+figure **2.9x too pessimistic**. It reached docs/FIELD-MACHINES.md's machine
+register, `sysbench`'s own report text, `trklog.inc`, and a whole plan document
+(docs/NET-PLAN.md) that concluded a parallel cable would be *faster* than the
+floppy partly on the strength of it.
+
+**So every row in the table above now names the Set it came from**, and that
+is the rule rather than a tidy-up: a figure with no provenance cannot be
+checked for staleness by reading, only by re-deriving it, and nobody
+re-derives a number that looks settled. **When Part 9 gains a set that moves a
+row, the row moves in the same commit.** Part 6 rule 8 says every figure
+carries its machine; this is the same rule pointed at time instead of hardware.
+
+The two big consequences of the correction, because they invert conclusions
+this document had drawn:
+
+- **os8088 is no longer slower than the BIOS — it is 1.84x faster.** Set 17's
+  standing residual, *"1.55x still on the table against the ROM's 11,570"*,
+  is spent and reversed: a `dsk_xfer` run spans the track boundary with the
+  multi-track bit set, so it gets more than one track's sectors per
+  revolution where the ROM's single call stops at EOT, and §18.95's cache
+  answers a repeat with no revolution at all. Any text still framing the
+  floppy as *approaching* the BIOS figure is pre-Set-22.
+- **The sector has stopped being a meaningful unit**, which is the older
+  lesson taken one step further. §18.95's cache means some of a file's
+  sectors are not read at all — Set 22 measured a 16 KB read as **18 sectors
+  in 2 `int 13h`** where the file is 32 sectors — so "per sector" now
+  measures a mixture of a transfer and a cache hit. The 24 ms row above is
+  bytes DELIVERED, not sectors moved, and the honest units are the two raw
+  `int 13h` rows and the throughput.
+
+**The first time these rows went stale it was the bug rather than the
+measurement.** `238 ms per sector` and
 `2,100 bytes/second` were measured honestly and then outlived their cause:
 they are SPEC.md §18.91's `AL` bug, where the BIOS moved nine sectors,
 answered `AL = 1`, and the kernel re-asked for the other eight one at a time
@@ -339,15 +380,24 @@ the ACCESS SHAPE:
 
 | shape | cost | how known |
 |---|---|---|
-| a sector **inside a coalesced run** | **65 ms** (5150), 46 ms (Compaq III) | measured, Sets 17/18 |
-| an **`int 13h` call** in such a run | **~400 ms**, 1–2 revolutions, near enough whatever it moves | measured, Sets 14/17 |
+| 512 bytes **delivered by a warm `FILE_READ`** | **24 ms** (5150) | measured, **Set 24**. NOT a sector transferred — §18.95's cache means some are never read |
+| a sector **inside a coalesced run**, pre-cache | 65 ms (5150), 46 ms (Compaq III) | measured, Sets 17/18 — **superseded by the row above for any estimate made today**, and kept because pre-Set-22 reasoning all over this tree is derived from it |
+| an **`int 13h` call** in such a run | **199 ms** for one sector, **384 ms** for a 9-sector track — 1 to 1.92 revolutions, near enough whatever it moves | measured, Sets 14/22 |
 | an **isolated single-sector access** — a boot sector at LBA 0, a lone directory sector | **~150–200 ms once the motor is up**, and most of a second if it is not | **MODELLED, NOT MEASURED** (docs/ASSOC-PLAN.md): ~100 ms average rotational latency + ~80 ms average seek across 40 tracks at a 6 ms step + ~15 ms settle |
 
-The third row is the one that keeps getting confused with the first, and it
-is the one that matters for anything re-reading track 0: **an isolated
-first-sector read is not a 65 ms sector, because it is a seek**. A read of
-LBA 0 from wherever the heads were is up to a full 39-track stroke, so the
-~80 ms in that model is an *average* and the worst case is dearer.
+**A fourth quantity has since split off the first**, which is why the table
+grew a row rather than having one edited: §18.95's cache made *bytes
+delivered* and *sectors transferred* different things, and the throughput row
+in the summary table measures the first. A change that saves REVOLUTIONS is
+costed with the `int 13h` rows; a change that saves BYTES is costed with the
+24 ms row; and a change that saves cache MISSES is costed with neither until
+somebody measures it.
+
+The isolated-access row is the one that keeps getting confused with the
+others, and it is the one that matters for anything re-reading track 0: **an
+isolated first-sector read is not a streamed 24 ms, because it is a seek**. A
+read of LBA 0 from wherever the heads were is up to a full 39-track stroke, so
+the ~80 ms in that model is an *average* and the worst case is dearer.
 
 **`238 ms` is none of the three.** It is the AL bug — a revolution burned per
 sector because the kernel re-asked for eight of every nine — and it happened
@@ -1432,7 +1482,7 @@ worth taking:
 | `sysbench: boot ticks` / `boot ms` | **how long the machine takes to boot** (§15.4) — the one thing this project could never measure, because it is over before a package can run. On a floppy machine it is mostly the 125-sector kernel read, and Sets 17/18 took it from 39.88 s to **9.94 s** by fixing §18.91's `AL` bug in both transfer loops - so 238 ms a sector is the number this row was written against and NOT the one to expect now | a number at last. Resolution is one tick, 54.925 ms, which on a boot measured in seconds is quantisation rather than noise |
 | `gfxbench: GFX_LSTEP x8` vs **`GFX_LSTEPV x8`** | **§5.6.8's batching, which was argued from §5.7's floor and never measured.** The two rows draw the identical eight pixels and differ only in arriving eight times or once | it already contradicted its own prediction: **118** in instructions, not the ~800 the floor implies, because `gfx_lstep` is not a rect primitive and its arrival is a far-call cell rather than `vga_rect_setup`. Expect higher than 118 on iron — far-call cells are 46.7 µs for ~7 instructions — but §5.6.8's own field figures imply **356**, and nothing reconciles that yet. **This is the row most likely to find something** |
 | `gfxbench:` the four **`GFX_LINE`** rows | **§5.6.6's dilated-line optimisation, in microseconds.** The instruction answer is already in (below); this is the duration. The two geometries are the same line transposed, 128 pixels each, so the pair checks itself | the two **thin** rows to match; `line shal fat/thin` near **300** (three walks, the control); `line steep fat/thin` near **156**, which is the claim |
-| `sysbench:` the **hard-disk block** | **§52's driver on real spinning MFM, which has never been measured** — and the first hard-disk twin of the floppy rows. Read-only by construction: it mounts, walks the FAT, reads one file and puts the volume back, because the disk it will run against is somebody's DOS 3.3 install (docs/FIELD-MACHINES.md) | anything at all. The floppy is **7,457 bytes/second** post-Set-17 (2,100 before it, and that older pair is quoted all over this tree's history - check which side of the `AL` fix a figure comes from before comparing anything to it); whatever `hdd bytes/sec` says is the first number on the other side of that. `HDD FILE_DFREE` is the one to watch — the 9-sector FAT window (§18.8) has to page across a 41-sector FAT, which is what §18.8.1 was written against |
+| `sysbench:` the **hard-disk block** | **§52's driver on real spinning MFM, which has never been measured** — and the first hard-disk twin of the floppy rows. Read-only by construction: it mounts, walks the FAT, reads one file and puts the volume back, because the disk it will run against is somebody's DOS 3.3 install (docs/FIELD-MACHINES.md) | anything at all — **and it has since been measured: 74,553 B/s against the floppy's 21,307, 3.5x** (Set 24). The floppy figure moved twice while this row said 7,457: check which side of Set 17 (the `AL` fix) AND of Sets 22/24 (§18.95's cache) a figure comes from before comparing anything to it. `HDD FILE_DFREE` is the one to watch — the 9-sector FAT window (§18.8) has to page across a 41-sector FAT, which is what §18.8.1 was written against |
 
 None of them says anything on an emulator, and two say so loudly: under
 `-icount` both shift rows measure identically and the derived per-bit line

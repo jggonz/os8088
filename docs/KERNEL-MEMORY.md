@@ -1177,8 +1177,8 @@ spare; treat a row as "roughly what this module put here".
 sector.** `kernel.bin` is **88,115 bytes** and the boot sector reads
 `(size + 511) / 512` = **173** of them, which hold 88,576 — so there are
 **461 bytes** of slack in the file, and once that is gone the next thing added
-to `.ovl`, however small, costs a whole sector of boot read (~65 ms on the
-field machine). `tools/kernsize.py` reports the three *rungs* and not this,
+to `.ovl`, however small, costs a whole sector of boot read (~24 ms on the
+field machine — PERFORMANCE.md Part 2, Set 24; 65 at Set 17). `tools/kernsize.py` reports the three *rungs* and not this,
 because the rungs are what the RAM ladder is built from; the file's tail is a
 separate question and this is where it is written down.
 

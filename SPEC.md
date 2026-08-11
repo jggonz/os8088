@@ -1820,8 +1820,8 @@ build does not assemble. (It read 86,118 → 86,920 on the branch this face
 arrived on, before §32's double-buffering removal landed; the absolute numbers
 are worth re-measuring rather than quoting, the delta is not.)
 
-So the whole cost is **one floppy sector**, ~65 ms of a ~10 s boot on the
-5150 (PERFORMANCE.md Part 2). The one number worth watching is the overlay's
+So the whole cost is **one floppy sector**, ~24 ms of a ~10 s boot on the
+5150 (PERFORMANCE.md Part 2, Set 24; quoted here as 65 from Set 17). The one number worth watching is the overlay's
 own ceiling: it is 75% full afterwards, with 1,144 bytes left for whatever
 run-once code comes next, and `kernel.asm` refuses a build that overruns it.
 
@@ -5975,10 +5975,10 @@ away — §18 keeps the disk on the UI task, `dsk_xfer` raises `[sch_lock]`
 across every `int 13h`, and the caller is a window callback that has been
 holding the gfx lock since before it started (§22). So the cursor stops, no
 window paints, and nothing moves for as long as the disk takes. On the field
-machine a sector is **~65 ms** inside a run (PERFORMANCE.md Part 2; 238 ms
-before SPEC.md §18.91's `AL` fix, which is what the figure below was taken
-at) — a 116KB module is
-tens of seconds of a screen that looks hung.
+machine 512 bytes cost **~24 ms** (PERFORMANCE.md Part 2, Set 24; 65 at Set
+17 and 238 ms before SPEC.md §18.91's `AL` fix, which is what the figure
+below was taken at) — a 116KB module is
+several seconds of a screen that looks hung.
 
 What was missing was not concurrency but **feedback**. The widget is a file
 icon and a progress bar in a line box, drawn at the right end of the menu
@@ -6027,7 +6027,7 @@ Five things hold it up.
 
 - **`fpg_step` must not be able to cost anything when nothing is armed.**
   It is `pushf` / `cmp byte [fpg_on], 0` / `je` on the disk path for the life
-  of the machine, the same ~13us against a 65 ms sector that `spl_step`
+  of the machine, the same ~13us against a ~24 ms sector that `spl_step`
   settled for (§15.3). All of its state is in `.text` with real
   initialisers, **not `.bss`** — `-f bin` zeroes nothing, `drv_boot` reads
   the disk before any init routine could run, and a garbage `[fpg_on]` would
@@ -6823,8 +6823,8 @@ address.** `KERNEL_SEG` is the only constant `kernel/kernel.asm` and
 The progress bar used to reach 100% when the boot sector's final sector
 landed, and `vid_init`'s mode set then wiped the whole loading screen — with
 several seconds of kmain still to run. On the field machine (Part 2 of
-PERFORMANCE.md: **~65 ms per floppy sector** in a run, 238 before the `AL`
-fix this paragraph predates) that tail is:
+PERFORMANCE.md: **~24 ms per 512 bytes** delivered at Set 24, 65 at Set 17
+and 238 before the `AL` fix this paragraph predates) that tail is:
 
 | after the last sector of the kernel | cost |
 |---|---|
@@ -6850,7 +6850,7 @@ Three parts, all in `splash.inc` except the hooks:
   boundaries. It preserves **every register and the flags** — its hot caller
   is the middle of a transfer loop — and it is a compare and a `ret` once the
   splash is down, which is what makes leaving it on the disk path for the
-  life of the machine free (~13 us against a sector's 65 ms).
+  life of the machine free (~13 us against a sector's ~24 ms).
 - **`spl_finish`** forces the bar to 100%, repaints once and clears
   `[spl_live]`. kmain calls it immediately before the first `wm_paint_all`,
   which is the last moment a full bar is true — and no erase is needed,
@@ -8521,8 +8521,8 @@ something in this area is in doubt.
 > below is correctness rather than speed and is unaffected.
 
 `boot/boot.asm` read `AL = 1`. 131 sectors, one int 13h each, at
-PERFORMANCE.md's then-measured **238 ms per sector** (the `AL` bug; ~65 ms
-since) — **over thirty seconds**, and
+PERFORMANCE.md's then-measured **238 ms per sector** (the `AL` bug; ~24 ms
+per 512 bytes since — Set 24, and 65 at Set 17) — **over thirty seconds**, and
 the single largest cost in the boot of the machine this targets. PERFORMANCE.md
 already named the fix and priced it at "about 9x on every load in the system,
 which is the largest single number in this document"; §18.91 took it for the
@@ -8660,10 +8660,10 @@ ordinal, and the two were designed together.
 
 The price is walking the chain from the front on every call, and it is
 smaller than it looks: the walk is FAT lookups against a resident window,
-while the caller is spending **65 ms a sector** (PERFORMANCE.md — a sector
-inside a well-coalesced run; 238 was the `AL` bug, not the drive) on the data
-being handed to it. A 116KB file in 32KB chunks is four walks averaging ~116
-clusters — a few hundred word reads against twelve seconds of floppy.
+while the caller is spending **~24 ms per 512 bytes** (PERFORMANCE.md Part 2,
+Set 24; 65 at Set 17, and 238 was the `AL` bug rather than the drive) on the
+data being handed to it. A 116KB file in 32KB chunks is four walks averaging
+~116 clusters — a few hundred word reads against ~5.6 seconds of floppy.
 
 Both preconditions are **refused rather than mis-handled**, and both answer
 `FERR_NAME`: a non-cluster offset or capacity on the read, and a file whose
@@ -8731,8 +8731,8 @@ given for the separation was two things that have both since expired:
 
 - *"the counters are two instructions in the hot path of every transfer"* —
   measured, they are about twelve instructions per int 13h **call**, not per
-  sector, against a sector that costs **~65 ms** on the target machine (238
-  when this was written). And
+  sector, against 512 bytes that cost **~24 ms** on the target machine (65 at
+  Set 17 and 238 when this was written). And
   the image is **byte for byte the same size** either way, because the growth
   lands inside the padding to `OVL_START`: 72,199 bytes with them and without,
   the same 142-sector rung, so the memory ladder, the boot sector's read and
@@ -10789,8 +10789,8 @@ corrupt it.
 
 The cost is a directory re-seek per entry, and it is the right trade here: a
 directory is a few hundred entries at most, a seek reads whole sectors
-without decoding them, and the caller is spending 65 ms a sector
-(PERFORMANCE.md) moving the file data this is feeding.
+without decoding them, and the caller is spending ~24 ms per 512 bytes
+(PERFORMANCE.md Part 2, Set 24) moving the file data this is feeding.
 
 **Hidden and system entries are reported to a DRIVER only**, and that is the
 same boundary §19.6.1 draws in the other direction. Together they are one
@@ -29767,7 +29767,8 @@ the copy prompts for the disk swap rather than assuming two drives — unless
 
 **Progress is §12.8's widget.** A file operation freezes the machine by
 design, and this is the largest one in the system — both floppies is
-hundreds of sectors at **65 ms** each on the field machine — so `fpg_begin`'s
+hundreds of sectors at **~24 ms** each on the field machine (and ~73 ms
+WRITING, PERFORMANCE.md Part 2 Set 24) — so `fpg_begin`'s
 bar is stepped from inside the transfer loop, which is the one piece of code
 still running.
 

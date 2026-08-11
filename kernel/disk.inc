@@ -4024,7 +4024,7 @@ dsk_rah_wr:
 ; Called from disk_mount, so a shed is repaired at the next mount rather than
 ; never. A machine with no room refuses here every time, which costs a
 ; mem_avail scan - no I/O - per mount, against a mount whose cheapest possible
-; outcome is several 65 ms sectors.
+; outcome is several ~24 ms sectors.
 ; -----------------------------------------------------------------------------
 dsk_rah_want:
     pushf
