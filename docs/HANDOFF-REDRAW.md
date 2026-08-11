@@ -326,7 +326,14 @@ marking on each window's *redrawn region* is a real change to the marking pass.
 ## Before you write any code
 
 **Footprint spare is 2,560 bytes on `kern_big` — FIVE 512-byte steps — and
-3,584 on `kern_small`, which is seven and owes a conversation** (the raise met
+1,024 on `kern_small`, which is TWO and is the tight one now.** Both image
+rungs are nearly full as well: **63 bytes** left on `kern_big` and 497 on
+`kern_small`, so the next `.text` byte anywhere buys a whole 512-byte step on
+the big kernel. The paragraphs below are the history of how that was arrived
+at, and the figures in them are the ones each move reported at the time.
+
+The seventeenth move left 2,560 on `kern_big` and
+3,584 on `kern_small`, which was seven steps and owed a conversation (the raise met
 SPEC.md §41.11's removal on the integration branch; docs/KERNEL-MEMORY.md's
 "Where it goes" states the choice). That
 is `KERN_BUDGET`'s **seventeenth move**, asked for and granted for this work
@@ -345,6 +352,13 @@ spare went **3,584 → 3,072 (seven steps to six)**. That is the shape the move 
 asked for and it is the asymmetry to expect from anything in this round — the
 small kernel's rungs are closer together. Report both, and watch `kern_big`'s
 image rung: the next `.text` byte past 147 buys a whole 512 there too.
+
+**§5.4.1.1 and §5.4.1.2 spent the rest.** The eighteenth move (+512,
+`kern_big` only) was an ASK rather than a grant — the pair table landed exactly
+on the guard — and the nineteenth (+2,048) was granted with it as one piece of
+work, "blit4 rendering speed"; 148 of that is spent on the aligned bodies and
+`kern_small` crossed another rung for them (1,536 → 1,024). The live figures
+are at the top of this section.
 
 **Re-bless after every change** — `python3 tools/kernsize.py --bless` and,
 because the two builds have separate baselines, `python3 tools/kernsize.py
