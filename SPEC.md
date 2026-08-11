@@ -9631,6 +9631,23 @@ this reason — the count alone cannot say *which* switch moved, and a run that
 reads the expected number for an unexpected reason is the one that costs a
 second trip.
 
+**…and it prints SW1 ITSELF beside that**, read off the 8255's port A rather
+than out of the POST snapshot, because the two can disagree and nothing
+derived from `int 11h` can tell you so. On a 5150 the equipment word's low
+byte is very nearly SW1 verbatim, so the comparison is direct: **equal** means
+the BIOS is faithfully reporting the switches, and any surprise is then in the
+switches or their wiring; **different** means something rewrote `0040:0010`
+after POST, which on a machine carrying option ROMs is a real possibility and
+one no amount of re-reading `int 11h` can expose. It is IBM PC only — the
+model byte at `F000:FFFE` is the gate — because port B bit 7 is what moves
+port A from the keyboard to the switch block on a 5150, while on a 5160 that
+same bit *clears the keyboard* and SW1 lives on port C behind PB2. Port B
+carries the speaker gate, both parity enables and the keyboard clock, so it is
+banked and restored byte for byte inside an `IF = 0` window a few microseconds
+long. Measured on `os8088_5150_cga_ext720`: `equip word hex 04EF` and
+`SW1 direct hex 00EF` — the same byte, which is what says the instrument reads
+what it claims to.
+
 Three things follow, and the first is the one that decides the letters:
 
 - **The rows are claimed AFTER `dsk_boot_from` and before `drv_boot`.** That

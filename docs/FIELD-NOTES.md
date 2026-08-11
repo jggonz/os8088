@@ -1855,6 +1855,23 @@ bits did not move at all — a mechanical question (SW1 versus SW2, counting fro
 the wrong end of an 8-way block, or a 40-year-old rocker that travels without
 making contact), not a polarity one.
 
+**And then the operator supplied the fact that settles it**: the switches
+*were* moved, and the previous run — the one that reported `claims 2` and had
+drive B taken away by the probe — was taken with the DIPs set to **one drive**.
+So two different physical settings both produced bits 7:6 = `01`. Those bits
+are not tracking the switches at all, which is a stuck line or a wiring
+question rather than anything about the encoding, and it retires the "did you
+cold boot" and "which end of the block" questions together.
+
+It also explains something that had been read as os8088 being wrong: **drive B
+appeared on this machine before §18.97's probe existed**, on a machine with one
+floppy, because the equipment word claims two whatever the switches say. The
+probe removing it is not a workaround for a mis-set switch — it is the only
+thing on that machine that can answer the question at all. And it is why DOS
+never needed the switches either: `DRIVER.SYS` assigns a logical drive to a
+physical unit without consulting the equipment word, which is what "it just
+claimed it with the command line command" was.
+
 **And the likely misunderstanding is arithmetic, not electrical.** J1's first
 external drive is physical **#2**, so one internal drive plus one external is
 **three** claimed drives — units 0, 1 and 2, with nothing at unit 1 — not two.
@@ -1872,3 +1889,24 @@ visible rather than silent. It is read from the BIOS rather than from the
 kernel's banked byte, so the two disagreeing would itself be news. Verified on
 `os8088_5150_cga_ext720`: `equip word hex 04EF` beside `claims 4`, which is
 §18.98's own measured figure for a four-drive machine.
+
+**And SW1 itself**, read off the 8255's port A rather than out of the POST
+snapshot, because on this machine the interesting question is no longer "what
+did the BIOS latch" but "did the switches ever reach the chip". Equal to the
+equipment word's low byte ⇒ the BIOS is faithful and the fault is in the
+switches or their wiring; different ⇒ something rewrote `0040:0010` after
+POST, which a machine with an ST11M and a SixPakPlus in it can do and which
+`int 11h` can never reveal. IBM PC only, gated on the model byte at
+`F000:FFFE`: port B bit 7 moves port A onto the switch block on a 5150, and on
+a 5160 the same bit clears the keyboard while SW1 sits on port C. Port B is
+banked and restored byte for byte inside an `IF = 0` window. Verified on
+`os8088_5150_cga_ext720`, where the switches *do* reach the chip:
+`equip word hex 04EF` and `SW1 direct hex 00EF`, the same byte.
+
+**Paying for it emptied the package's last slack.** `sysbench` is at its
+ceiling — `image + bss` must fit `APP_MAX_SIZE`, which is the 60KB *segment*
+and unraisable, so with `bss` at 38,452 the image may not cross 22,528. Both
+obvious sources of relief are refused by their own comments: `BL_MAXROWS` and
+`BL_ARENA` each record a report that TRUNCATED in the field. The two rows were
+bought by merging two pairs of header lines instead, and the file now says so
+where the `align` is. **52 bytes left.**

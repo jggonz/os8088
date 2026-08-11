@@ -1792,8 +1792,6 @@ sb_fdd:
     call bl_sline
     mov si, sb_s_h_fdd3
     call bl_sline
-    mov si, sb_s_h_fdd5
-    call bl_sline
     mov si, sb_s_h_fdd4
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
     mov si, sb_s_h_fdd6
@@ -1822,6 +1820,20 @@ sb_fdd:
     mov si, sb_l_feqw
     int 0x11
     call sb_hex
+
+    ; ...and SW1 ITSELF, read off the 8255 rather than out of the POST
+    ; snapshot above. The two can DISAGREE, and one hex byte beside the other
+    ; says which half is at fault: a machine whose equipment word reads the
+    ; same drive count at two different switch positions is either not
+    ; reading its switches or is having the word rewritten after POST by an
+    ; option ROM, and nothing derived from int 11h can tell those apart.
+    ; On a 5150 the equipment word's LOW BYTE is very nearly SW1 verbatim,
+    ; so the comparison is direct.
+    call sb_sw1
+    jc .nosw1
+    mov si, sb_l_fsw1
+    call sb_hex
+.nosw1:
     mov si, sb_l_fran               ; ...and which units were contested at all
     mov al, SB_FD_RAN
     call sb_fdbx
@@ -1878,6 +1890,48 @@ sb_fdd:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_sw1 - the 5150's SW1 block, read straight off the 8255's port A
+; out: CF=0 with AX = the byte; CF=1 = not an IBM PC and NOTHING was touched
+;
+; **IBM PC ONLY, and the gate is the model byte** at F000:FFFE - FF is the
+; 5150, FE the 5160. It matters: on a 5150 port B bit 7 switches port A from
+; the keyboard to the switch block, which is exactly what the ROM's own POST
+; does; on a 5160 that same bit CLEARS the keyboard and SW1 lives on port C
+; behind PB2 instead. Running this there would reset the keyboard and read a
+; scan code as a switch setting.
+;
+; Port B carries the speaker gate, the two parity enables and the keyboard
+; clock as well, so it is banked and put back BYTE FOR BYTE, and the window
+; is a few microseconds with IF clear - a keystroke landing inside it would
+; otherwise be decoded as switches.
+; -----------------------------------------------------------------------------
+sb_sw1:
+    push es
+    mov ax, 0xF000
+    mov es, ax
+    cmp byte [es:0xFFFE], 0xFF
+    jne .no
+    pushf
+    cli
+    in  al, 0x61                ; ports 60h/61h take the IMMEDIATE form, which
+    mov ah, al                  ; is also what spares this routine a register:
+    or  al, 0x80                ; port B is banked in AH and nothing else is
+    out 0x61, al                ; touched
+    in  al, 0x60                ; ...the switches
+    xchg al, ah                 ; AL = port B again, AH = SW1
+    out 0x61, al                ; and back, before anything else can run
+    popf
+    mov al, ah
+    xor ah, ah
+    clc
+    jmp short .out
+.no:
+    stc
+.out:                           ; a pop cannot disturb CF
+    pop es
     ret
 
 ; sb_fdu / sb_fdux - SI = label, AL = a field offset within the unit row
@@ -4667,14 +4721,14 @@ sb_l_mln:    db '  winning IRQ hex 10=4', 0
 
 sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
 sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a DIP switch.', 0
-sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0. The SECOND read decides: no TRK0 after a', 0
-sb_s_h_fdd5: db '   recalibrate is the absent drive. ST0 is drained, never branched on.', 0
+sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0, and the SECOND read decides. ST0 is drained.', 0
 sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
 sb_s_h_fdd6: db '   ONE SUB-BLOCK PER UNIT: probe ran is a bitmap, bit n = unit n asked.', 0
-sb_s_h_fdd7: db '   equip 7-6=drives-1. AN EXTERNAL DRIVE IS UNIT 2: 1 int + 1 ext = 3.', 0
+sb_s_h_fdd7: db '   equip 7-6=drives-1; SW1 (Ibm Pc) should match its low byte. Ext=unit2.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
 sb_l_feqw:   db '  equip word hex', 0
+sb_l_fsw1:   db '  SW1 direct hex', 0
 sb_l_fran:   db '  probe ran bitmap hex', 0
 sb_l_funit:  db '  --- unit', 0
 sb_l_fst3:   db '  ST3 motor off hex', 0
@@ -4902,6 +4956,19 @@ SB_BSS_OWN equ ((SB_O_RAM2 + SB_BWBYTES + 511) / 512) * 512   ; benchlib's base 
     align 512                   ; ...and os88_image_end likewise, which this
                                 ; costs up to 511 bytes of image and buys the
                                 ; alignment of every bss offset below
+                                ;
+                                ; **THIS PACKAGE IS AT ITS CEILING.** image +
+                                ; bss must fit APP_MAX_SIZE (60KB, the
+                                ; SEGMENT, unraisable), bss is 38,452, so the
+                                ; image may not cross 22,528 - and it is
+                                ; 22,476. Fifty-two bytes. Adding a row here
+                                ; means finding the bytes first, and the two
+                                ; obvious places are BOTH refused: benchlib's
+                                ; BL_MAXROWS and BL_ARENA each carry a comment
+                                ; about a report that TRUNCATED in the field.
+                                ; SPEC.md 57.5's SW1 row was paid for by
+                                ; merging two pairs of header lines, which is
+                                ; a one-off - the prose is compressed now.
     OS88_BSS SB_BSS_OWN + BL_BSS_SIZE
     OS88_IMAGE_END
 
