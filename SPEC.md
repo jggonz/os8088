@@ -9302,13 +9302,19 @@ Four things are load-bearing:
   re-validates the whole thing through the one hostile-BPB pipeline (§18.2)
   rather than trusting the formatter's own arithmetic.
 
-**It cannot be reached with a mountable volume under it.** `dskw_format` is
-not on the API table and has no `OSAPI_*` slot: the only caller is §22.12's
-menu command, whose predicate is that this window's last mount FAILED. That
-is deliberate and is the same judgement §19.6 makes about `dskw_write_sys` —
-"erase this disk" is not a thing a package should be able to do to the disk
-it happens to be sitting on, and a formatter reachable from a package is one
-`FERR_*` away from being one that is reachable by accident.
+**It is not reachable from a package.** `dskw_format` is not on the API table
+and has no `OSAPI_*` slot: the only caller is §22.12's menu command, behind a
+confirmation. That is deliberate and is the same judgement §19.6 makes about
+`dskw_write_sys` — "erase this disk" is not a thing a package should be able
+to do to the disk it happens to be sitting on, and a formatter reachable from
+a package is one `FERR_*` away from being one that is reachable by accident.
+
+It **can** be reached with a mountable volume under it, and could not until
+docs/FIELD-NOTES.md 17.2; §22.12 carries that change and its fallout. What it
+means here is that `[disk_spt]`/`[disk_heads]` on the way in are now the live
+geometry of a real volume as often as they are the 9/2 a failed mount leaves,
+which is why `dskw_fmt_probe` **banks and restores** them rather than forcing
+the fallback (§18.96).
 
 **`kern_big` only, and it is the first thing through that seam**
 (docs/KERN-SPLIT-PLAN.md). It costs 1,024 bytes of footprint — one 512-byte
@@ -9328,11 +9334,15 @@ A 720KB pick that the drive cannot reach is the **worst** outcome this
 feature can produce, and it does not announce itself. A 720KB layout is boot
 + 6 FAT + 7 root = LBA 0..13, every byte of it inside **cylinder 0** — so on
 a 40-cylinder drive the format *completes*, the volume *mounts*, and the disk
-then lies about its size until something writes past cylinder 39. Worse, the
-disk is now mountable, so §22.12's predicate (`FS_MOK == 0`) **greys Format
-Disk… out** and the user has no way back. An unchecked assertion here does
-not risk an error message; it risks a disk that works until it does not, on a
-machine with no way to reformat it.
+then lies about its size until something writes past cylinder 39. An
+unchecked assertion here does not risk an error message; it risks a disk that
+works until it does not. (It used to be worse than that: the disk is now
+mountable, and §22.12's old `FS_MOK == 0` predicate **greyed Format Disk…
+out**, so the user had no way back at all. That greying is gone —
+docs/FIELD-NOTES.md 17.2 — which softens the consequence and removes none of
+the reason for the check, since a disk that silently loses whatever is
+written past cylinder 39 is not a thing to ship on the grounds that it can be
+reformatted afterwards.)
 
 So `dskw_fmt_reach` runs after a successful `dskw_format` of **row 2**, the
 only row the toggle can produce that a 40-cylinder drive cannot hold. It
@@ -9356,11 +9366,24 @@ that sector back and compares. Four things about it:
 - **It may only run on a disk already condemned.** It destroys the sector it
   tests, which is free here and would not be anywhere else — hence the
   contract line above, and hence no API slot, for `dskw_format`'s reason.
-- **Failure re-formats as 360KB rather than reporting and stopping**, because
-  of the greying trap in the first paragraph: stopping would leave the
-  mountable 720KB volume on screen with Format Disk… disabled. The user gets
-  a working disk and a toast that says what happened and why —
-  `Drive cannot reach 720K - made 360K`, §59.6's subject/outcome/cause.
+- **Failure re-formats as 360KB rather than reporting and stopping.** The
+  original reason was the greying trap in the first paragraph — stopping left
+  a mountable, lying 720KB volume on screen with Format Disk… disabled — and
+  that reason has expired (17.2). It is kept because the remaining one is
+  better: the user asked for a formatted disk, the drive cannot make the one
+  they asked for, and the useful answer is the one it CAN make plus a toast
+  saying what happened and why — `Drive cannot reach 720K - made 360K`,
+  §59.6's subject/outcome/cause. Stopping would leave them with a disk that
+  is neither.
+- **And the key is offered on units 2 and 3 ONLY** (`fm_fmt_sizeable`). The
+  toggle exists because `AH=08h` is refused and the drive cannot be asked how
+  many cylinders it has — but that ignorance is only *actionable* on a drive
+  the operator may have changed. Units 0 and 1 are the machine's own internal
+  drives, and offering a 720KB volume on the 5150's Tandon is offering
+  something the reach test will only take away again; units 2 and 3 are
+  §18.98's external pair, which is exactly where an 80-cylinder 3.5" drive
+  turns up. One predicate serves the line and the key, so what is named and
+  what is accepted cannot disagree — §47 rule 2's shape.
 
 The cost on the honest path is **two `int 13h` calls**, once per 720KB
 format, against a format that is already 7 writes and a remount.
@@ -9623,6 +9646,17 @@ Three things follow, and the first is the one that decides the letters:
   take back and `dsk_fdd_retire` stays the unit-1 special case it was written
   as. And only PROVEN absence skips a row: every other answer keeps the drive,
   which is §18.97's fail-safe unchanged.
+
+**A retired unit 1 must not truncate the count**, and it did. §18.97's removal
+path set the drive count to 1 as well as freeing the row — correct while two
+was the most a machine could claim, and wrong the moment units 2 and 3 became
+reachable, because the loop above is bounded by that count. A machine claiming
+three or four drives with no unit 1 therefore never asked about the external
+pair at all. That is not a corner: it is **one internal drive plus a 4865 on
+the 37-pin connector**, which is the field machine with the thing this section
+was written for plugged into it. The count stays the claim, and the zone pass
+reads the ROW instead — a row the probe retired is `DVK_FREE` and is not handed
+back, so only the row is taken away.
 
 **Parameterising the probe by unit is where this bit back**, and it is worth
 a paragraph because both halves assembled and booted. `dsk_fdd_probe` encoded
@@ -12698,14 +12732,27 @@ else — the window is a dead end with a perfectly good disk in it. **File ▸
 Format Disk…** is the way out, and the whole of it is §18.96's two routines
 behind §22's existing confirmation line.
 
-**The predicate is the mount's own verdict**, `FS_MOK == 0` on the acting
-window plus "this volume is a floppy", and both are stable, cheap facts the
-window already carries — §47 rule 5's own test, so `Format Disk…` is
-**greyed** rather than refusing a click. `fm_bar_gate` points the item at its
-`MENU_DIS` twin on the press that opens the bar, which is `ui_loc_gate`'s
-idiom exactly and for `ui_loc_gate`'s reason: nothing relays the bar out when
-a window's mount verdict changes, so a layout-time swap would keep whatever
-it last held.
+**The predicate is "this volume is a floppy" and nothing else** — a stable,
+cheap fact the window already carries, so §47 rule 5 applies and
+`Format Disk…` is **greyed** rather than refusing a click. `fm_bar_gate`
+points the item at its `MENU_DIS` twin on the press that opens the bar, which
+is `ui_loc_gate`'s idiom exactly and for `ui_loc_gate`'s reason: nothing
+relays the bar out when a window's state changes, so a layout-time swap would
+keep whatever it last held.
+
+**It used to test the mount's verdict as well** (`FS_MOK == 0` — "there is
+nothing here to format, and *erase this perfectly good disk* is a different
+feature with a different question"), and that was wrong in the plainest
+possible way: **os8088 could format any disk except one of its own**
+(docs/FIELD-NOTES.md 17.2). A user who formatted a disk and then wanted it
+back as a different size, or empty, found the item greyed for ever, with the
+greying unable to say why because it was not a refusal about the *hardware*.
+The different question is now **asked** rather than declined — a volume that
+mounted gets `ERASE and format A: as 360K?` where an unreadable one gets
+`Format A: as 360K?` — and everything else about the confirmation is
+unchanged, Enter still meaning yes and every other key no. The prompt's
+prefix is chosen from `[fm_lmok]`, the acting window's banked `FS_MOK`, at
+the one place the line is composed.
 
 **What is NOT in the predicate is whether the disk can be read**, and that is
 §47 rule 3 rather than an oversight: the only test is doing the thing, so the
@@ -12728,6 +12775,17 @@ is the 720KB/360KB pair and only ever that (§18.96); the size on the line is
 takes. Rows 0 and 1 have no partner, so Space keeps meaning *no* there and
 the second line drops `Spc=size` with it.
 
+**Escape has to repaint the WINDOW, not the status line.** `.cancel` ends in
+`.lineonly` — CF = 0, "the status line is all that moved" — and that is right
+for a one-line prompt and wrong for this one: it left `Format B: as 360K?` on
+the row above for ever, which is docs/FIELD-NOTES.md 17.1 and was reported as
+two separate faults, the prompt not clearing *and* corruption over it. They
+are the same line nobody erased. Mode 5 takes the full-repaint exit; modes 1,
+2 and 3 are one-line prompts and mode 4's two-line replace question never
+reaches `.cancel` at all. It never showed on the Enter path, because the
+format's own `fmv_load` repaints the whole window — which is exactly how every
+test in this tree missed it.
+
 **It is two lines because one no longer fits.** `fm_stat_line` truncates at
 `([fm_cw] - 12) / 8` characters and the Disk window's template is 320 wide,
 so 38 — where `Format A: as 720K? Spc=size Enter=yes Esc=no` is 44 and would
@@ -12749,6 +12807,22 @@ and `fmv_bcast` pushes it into any sibling window on the same drive — the
 same pair `fm_edit_commit` ends with, and for the same reason. On failure the
 `FERR_*` is said as a toast (§59.5) and the window is left showing exactly
 what it showed before, which is the disk it still cannot mount.
+
+**Every OTHER window on that drive is sent to the root too** (`fm_fmt_home`),
+and that is fallout from dropping the `FS_MOK` test rather than something
+that was ever missing: while only an unmountable volume could be formatted,
+no window could be showing a *folder* on the disk about to be replaced,
+because a Disk window on an unmountable volume is always at the root (§19.2).
+Now one can, and a sibling left holding its `FS_CWD` names a cluster that is
+free — or past the end of the volume entirely, if the format shrank it. Each
+gets `FS_CWD` = 0, no selection, no scroll, `FS_DIRTY` (§22.8, so the re-list
+is a mount paid when the window is looked at rather than three mounts paid
+now) and a caption put back to `Disk`. The **acting** window is skipped,
+because `fm_edit_commit` already does all of that to it and re-lists there and
+then. The caption is written directly rather than through `fm_settitle`,
+which reads the *published* window (`[fm_vp]`/`[fm_vinst]`) and would have to
+be aimed at each sibling in turn; `Disk` is `fm_settitle`'s own answer for a
+root, and `wm_title_set` with AX = 0 is `fm_title_flush`'s (§11.92).
 
 **A 720KB commit is checked before the window is re-listed**, and the check
 sits between `dskw_format` and `fmv_load` for a reason that is entirely about
