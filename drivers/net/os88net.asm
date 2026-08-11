@@ -36,6 +36,34 @@
     cpu 8086                    ; it may be serving from an XT
     org 0x100
 
+; DOS ENTERS A .COM AT OFFSET 0x100, WHICH IS THE FIRST BYTE OF THE FILE -
+; not at whichever label the author thinks of as the start. This jump is
+; therefore load-bearing and must stay the first thing emitted, because the
+; two %includes below put ~700 bytes of transport in front of `start`.
+;
+; It shipped without it. DOS ran `lp_latch` (lplink.inc's first routine) with
+; AX = whatever it had left there, so the program probed a garbage I/O port,
+; hit that routine's `ret`, popped the word DOS pushes at PSP:0000, landed on
+; the int 20h sitting there and terminated - **instantly, with nothing
+; printed, whatever arguments it was given**, because not one instruction of
+; this file's own code ran. The Makefile checks the first byte for exactly
+; this now (`comchk`), since the failure is silent, total, and looks like a
+; program that decided it had nothing to do.
+;
+; tests/lptlink/lptlink.asm has the same includes and did NOT have the bug,
+; because it puts them at the END of the file - which is the other way to be
+; safe and is not better: it depends on nobody adding a third include above.
+; A jump at the entry depends on nothing.
+com_entry:
+    times ($$ - com_entry) db 0 ; ASSERTS that this is offset 0x100 and emits
+                                ; NOTHING. If anything is ever put above it,
+                                ; nasm says `TIMES value -N is negative` and
+                                ; N is how many bytes got in front of the
+                                ; entry. A cryptic message that fails the
+                                ; BUILD beats a silent one that fails on a
+                                ; machine you have to walk to
+    jmp start
+
 %include "lplink.inc"           ; the transport, shared with NET.DRV and with
 %include "lplslv.inc"           ; tests/lptlink - one body, no drift
 

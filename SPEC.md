@@ -34761,8 +34761,22 @@ have hidden from the other:
   machines measure identically; `LP_SPIN` is only how often the deadline is
   re-read.
 
-### 62.6 …and three the field caught that it could not
+### 62.6 …and four the field caught that it could not
 
+- **DOS entered the program at a byte that was not its entry, and nothing in
+  it ever ran.** A `.COM` starts at offset 0x100, which is the **first byte of
+  the file**, and `os88net.asm` had its two `%include`s above `start:` — so
+  DOS ran the transport's first routine on a garbage port, hit that routine's
+  `ret`, popped the word DOS pushes at PSP:0000 and terminated on the `int 20h`
+  sitting there. It reported as *"returns to prompt instantly with nothing
+  printed, whatever parameters"*, and that is exactly what it was: every
+  argument behaved identically because the argument parser was never reached.
+  `tests/lptlink/lptlink.asm` has the same two includes and did **not** have
+  the bug, because it puts them at the END of the file — which is safe by
+  layout and one edit from not being. Both sources now assert their entry with
+  `times ($$ - com_entry) db 0`, which emits nothing and fails the build with
+  `TIMES value -N is negative`, N being how many bytes got in front. **It
+  shipped twice**, and §62.8 is the reason it could.
 - **`getkey` ate every keystroke.** Copied from `comscan`, where
   `push ax / xor ax,ax / int 16h / pop ax` is a correct "press any key" pause
   and fatal as a menu read. Both the boot disk and the DOS program read as
@@ -34795,3 +34809,46 @@ have hidden from the other:
   Hard Drive on row 5 and Network on row 6, with class 3 unpublished in
   between — which is what exercises `drv_cp_class`'s ordinal walk rather than
   asserting it. On a machine with one page an off-by-one there is invisible.
+- **The DOS end RUNS**, on `tests/dosstub` (§62.8): the banner, the default
+  image name, the `/RO` and `/P:` switches and a filename in the same tail,
+  the "cannot open" refusal, the sector arithmetic at all three of its
+  outcomes — **20,480** sectors for 10MB, **65,535** with the over-32MB
+  notice, and the under-one-sector refusal — and the real latch probe finding
+  0x378 with 0x3BC and 0x278 dark. `/P:3BC` pins a port that does not answer
+  and the program says `No parallel port to listen on.` and exits.
+
+### 62.8 `tests/dosstub` — a machine to run the DOS end on
+
+The bug in §62.6 shipped **twice**, and the reason is worth more than the bug:
+there is no DOS in this container and none this tree may ship, so `make` could
+report the DOS half was fine while nothing had ever executed a byte of it. An
+assertion stops that one bug; a machine stops the class.
+
+`tests/dosstub` is a bootable 360KB floppy carrying an `int 21h` stub and the
+`.COM` embedded in its own image, so it runs on the same cycle-accurate 4.77MHz
+8088 as everything else here — with a **real parallel port at 0x378**, which is
+why the latch probe and the port scan are genuinely exercised rather than
+simulated. It boots through `boot/boot.asm` like `tests/lptlink`, so it carries
+that loader's handoff contract: `jmp start`, a `retf` at 0x0008 for the splash
+tick and the timer word at 0x000C. **Leaving those out is not a crash** — the
+loader far-called four bytes into the first instruction, ran whatever that
+decoded as, returned, and the machine booted anyway with one line on the
+screen.
+
+It implements the seven functions `os88net.com` calls — 02h, 3Dh, 3Eh, 3Fh,
+40h, 42h, 4Ch — plus `int 20h`, and **refuses everything else loudly**: an
+unimplemented call prints its `AH` and halts. That is the rule the whole thing
+rests on. A stub that returns a plausible zero for a call it does not implement
+is a harness that has started lying about the program under test, and it would
+lie in exactly the direction that makes the test pass.
+
+Four knobs, because the paths worth testing are the ones a real file cannot
+easily produce: `FSIZE=` (the reported size is a constant pair, so the 32-bit
+byte count folded into a 16-bit sector count is driven over its whole range
+without a 32MB image), `FAILOPEN=1` (DOS says no), and `ARGS=` (the command
+tail — argument parsing is code nothing else in this tree executes). Only the
+first `DSF_KB` of the "file" is real memory and a read past it is answered
+**short** rather than with whatever was in RAM.
+
+It is `make dosstub`, on demand only; `all` builds nothing under `tests/` and
+nothing there ships.
