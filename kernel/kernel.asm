@@ -2584,14 +2584,22 @@ cw_clk_fld_str:         call clk_fld_str
                     retf
 cw_clk_snapshot:        call clk_snapshot
                     retf
+cw_desk_zmark:           call desk_zmark
+                     retf
+cw_desk_zones_paint:     call desk_zones_paint
+                     retf
 cw_disk_mount:          call disk_mount
                     retf
 cw_disk_read:           call disk_read
                     retf
 cw_disk_write:          call disk_write
                     retf
+cw_drv_blk_call:         call drv_blk_call
+                     retf
 cw_drv_cfg_save:        call drv_cfg_save
                     retf
+cw_drv_cls_fp:           call drv_cls_fp
+                     retf
 cw_drv_cls_svc:         call drv_cls_svc
                     retf
 cw_drv_cp_call:         call drv_cp_call
@@ -2664,6 +2672,8 @@ cw_fpg_begin:           call fpg_begin
                     retf
 cw_fpg_end:             call fpg_end
                     retf
+cw_fpg_step:             call fpg_step
+                     retf
 cw_gfx_fill:            call gfx_fill
                     retf
 cw_gfx_fill_gray:       call gfx_fill_gray
@@ -2712,6 +2722,8 @@ cw_inst_win_owner:      call inst_win_owner
                     retf
 cw_mem_avail:           call mem_avail
                     retf
+cw_mem_avail_lvl:        call mem_avail_lvl
+                     retf
 cw_mem_claim:           call mem_claim
                     retf
 cw_mem_claim_dma:       call mem_claim_dma
@@ -2738,6 +2750,8 @@ cw_snd_beep:            call snd_beep
                     retf
 cw_snd_disp_set:        call snd_disp_set
                     retf
+cw_spl_step:             call spl_step
+                     retf
 cw_task_yield:          call task_yield
                     retf
 cw_toast_show:          call toast_show
@@ -2932,6 +2946,84 @@ osapi_arg_file:       call COLD_SEG:acf_osapi_arg_file
                     ret
 osapi_assoc_set:      call COLD_SEG:acf_osapi_assoc_set
                     ret
+
+; --- ...and disk.inc's (SPEC.md 18-19). The FAT read path, mount, and the
+; volume table: everything here is bounded by a floppy, where SPEC.md 2.6's
+; far call is ~6us against a sector's ~24ms. dsk_xfer's per-sector spl_step
+; goes out through a cw_ shim and stays flag-transparent, which it must be
+; (SPEC.md 15.3) - call and retf touch no flags.
+disk_mount:       call COLD_SEG:dkf_disk_mount
+              ret
+disk_read:        call COLD_SEG:dkf_disk_read
+              ret
+disk_write:       call COLD_SEG:dkf_disk_write
+              ret
+dsk_batch_begin:  call COLD_SEG:dkf_dsk_batch_begin
+              ret
+dsk_batch_end:    call COLD_SEG:dkf_dsk_batch_end
+              ret
+dsk_boot_from:    call COLD_SEG:dkf_dsk_boot_from
+              ret
+dsk_chdir:        call COLD_SEG:dkf_dsk_chdir
+              ret
+dsk_chdir_q:      call COLD_SEG:dkf_dsk_chdir_q
+              ret
+dsk_clus2lba:     call COLD_SEG:dkf_dsk_clus2lba
+              ret
+dsk_copy_in:      call COLD_SEG:dkf_dsk_copy_in
+              ret
+dsk_copy_seg:     call COLD_SEG:dkf_dsk_copy_seg
+              ret
+dsk_dirw_get:     call COLD_SEG:dkf_dsk_dirw_get
+              ret
+dsk_dirw_next:    call COLD_SEG:dkf_dsk_dirw_next
+              ret
+dsk_dirw_start:   call COLD_SEG:dkf_dsk_dirw_start
+              ret
+dsk_dotdot:       call COLD_SEG:dkf_dsk_dotdot
+              ret
+dsk_dpt_init:     call COLD_SEG:dkf_dsk_dpt_init
+              ret
+dsk_fat_ofs:      call COLD_SEG:dkf_dsk_fat_ofs
+              ret
+dsk_find:         call COLD_SEG:dkf_dsk_find
+              ret
+dsk_find_name:    call COLD_SEG:dkf_dsk_find_name
+              ret
+dsk_flop_add:     call COLD_SEG:dkf_dsk_flop_add
+              ret
+dsk_free_clus:    call COLD_SEG:dkf_dsk_free_clus
+              ret
+dsk_get_dir:      call COLD_SEG:dkf_dsk_get_dir
+              ret
+dsk_get_icon:     call COLD_SEG:dkf_dsk_get_icon
+              ret
+dsk_next_clus:    call COLD_SEG:dkf_dsk_next_clus
+              ret
+dsk_put_icon_k:   call COLD_SEG:dkf_dsk_put_icon_k
+              ret
+dsk_read_chain:   call COLD_SEG:dkf_dsk_read_chain
+              ret
+dsk_relist:       call COLD_SEG:dkf_dsk_relist
+              ret
+dsk_synth:        call COLD_SEG:dkf_dsk_synth
+              ret
+dsk_vol_drop_drv: call COLD_SEG:dkf_dsk_vol_drop_drv
+              ret
+dsk_vol_fixed:    call COLD_SEG:dkf_dsk_vol_fixed
+              ret
+dsk_vol_row:      call COLD_SEG:dkf_dsk_vol_row
+              ret
+dsk_vol_slot:     call COLD_SEG:dkf_dsk_vol_slot
+              ret
+osapi_vol_add:    call COLD_SEG:dkf_osapi_vol_add
+              ret
+osapi_vol_del:    call COLD_SEG:dkf_osapi_vol_del
+              ret
+osapi_vol_mount:  call COLD_SEG:dkf_osapi_vol_mount
+              ret
+osapi_vol_paint:  call COLD_SEG:dkf_osapi_vol_paint
+              ret
 
 ; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
 ; Three words that change whenever any section's length does, so a field
