@@ -4856,3 +4856,96 @@ that is now in docs/MARTYPC-DEBUG.md's machine table:
 The 5150 is still where a number LANDS. What changed is that the gap is one
 measurement quantum on a machine of the right class, and 1.61x on a machine of
 the wrong one — and the second of those was invisible until it was measured.
+
+### Set 39 — the parallel cable measured, and 90% of it was arriving
+
+`tests/lptlink` between the **5150** (Hercules GB101's LPT at **03BC**) and
+the DOS machine (**DIO-500 at 0378**), a LapLink nibble cable between them.
+Two runs, the master role swapped between them. **docs/NET-PLAN.md step 1.**
+
+**Neither end is os8088**, which is the point: no kernel byte is involved, so
+a result here is a fact about the cable and the protocol and cannot be
+anything else.
+
+#### The link, and what it does
+
+16,128 bytes each way per run, **zero errors in all four transfers**, and the
+scan found the two machines at different addresses without being told either.
+
+| | first build | after the fix |
+|---|---|---|
+| 5150 **sending** | 1,536 B/s | **3,741 B/s** |
+| 5150 **receiving** | 1,595 B/s | **3,538 B/s** |
+| per nibble, sending | 325 us | **133.7 us** |
+
+**2.44x**, and the asymmetry is the confirming detail rather than noise: which
+direction is faster follows **the 5150's role, not who is master**. Swapping
+the master swapped the labels and left the numbers where they were, and the
+receiving direction reproduced to the *exact tick* in both runs — 83, and 83.
+`lp_rnib` does about six instructions more than `lp_snib` (three `shr`s, the
+mask, the `[lp_lastop]` store, the reversal branch); isolated that is ~12.7 us
+at Part 2's instruction-byte floor, measured it is **7.7**, and the difference
+is that the two ends run concurrently so some of the receiver's extra work
+happens while the sender is already waiting.
+
+#### Why the first build was 4.2x slower than its own model
+
+The model said 77 us a nibble and the machine said 325. **The model was not
+wrong about the wire — it was wrong about everything around it.** Counted
+against this Part's own constants (4.34 clocks per instruction byte, 4.77 MHz)
+the prediction is **360 us, within 11% of the measurement**:
+
+| per nibble, on the 5150 | us |
+|---|---|
+| `lp_wfar`, four calls | **289** |
+| …of which `ticks()`, four reads | **94** |
+| `lp_rnib`'s own body and frame | 71 |
+| **the wire** — two `in`s and three `out`s | **~30** |
+
+**Nine tenths of it was arriving, not working**, and the single worst item was
+reading the BIOS tick counter to build a deadline **that is almost never
+reached**. That deadline is *correct* — it had just replaced a poll-count
+timeout that broke between machines of different speeds — and what was wrong
+was paying for it on the fast path.
+
+This is §5.7's finding in a new place, and the third time this document has
+recorded it: one `gfx_pixel` was 196 guest instructions of generic rect
+machinery across eleven routines with no hot spot anywhere; a walk step's
+arrival, a one-pixel block and a marginal pixel were three quantities the tree
+had as one; and now a nibble's transport is 30 us of wire under 300 us of
+call frames. **When a measurement comes in several times its model, count the
+arriving before re-examining the work.**
+
+Four changes, none touching the protocol: the deadline is **lazy** (`ticks` is
+not read until a whole `LP_SPIN` of polls has gone unanswered, which on a
+working link never happens), the wait is a **macro rather than a called proc**,
+the poll body is 9 bytes rather than 16 (the level is a branch, not a compare
+against a variable), and `DX` walks between the two ports with `inc`/`dec`
+instead of being reloaded from memory.
+
+#### What is left, and why it was not spent
+
+Predicted after the fix was 93 us; measured is 134. The residual is the
+layering *above* the nibble — `lp_sbyte`'s frame and the benchmark's own byte
+loop, ~28 us a nibble by the same count — plus the far end's response latency.
+
+**The remaining lever is the handshake itself**: two phases instead of four
+halves both the waits and the `out`s per nibble, and NET-PLAN §1.1.1 records
+that it is safe *only* with the turnaround guard that four phases made
+unnecessary. That is worth perhaps another 1.5x and it is **not** being spent
+here, because the transport's home is a driver, where the code above it is
+real file I/O rather than a benchmark loop. Tune it there, against a file
+operation, or the harness gets optimised instead of the feature.
+
+#### For the record, against this machine's own disk
+
+| | bytes/second |
+|---|---|
+| floppy `FILE_READ`, warm (Set 24) | 21,307 |
+| **the cable** | **3,741** |
+| ST-225 (Set 24) | 74,553 |
+
+**The cable is 5.7x slower than the machine's own floppy** — and the case for
+it was never the rate. A 360 KB image crosses it in **99 seconds**; the same
+image reaches this machine any other way via the seven-step path in
+docs/FIELD-MACHINES.md.

@@ -238,13 +238,28 @@ box calling as master on 0378, 5150 answering as slave on 03BC. Scan,
 handshake, magic, turnaround guard and both direction reversals all confirmed
 on iron. What it measured:
 
-| | bytes | ticks | rate | errors |
-|---|---|---|---|---|
-| out (master → 5150) | 16,128 | 191 | **1,536 B/s** | 0 |
-| in (5150 → master) | 16,128 | 184 | **1,595 B/s** | 0 |
+| | ticks | rate | errors |
+|---|---|---|---|
+| 5150 **sending** | 79, 78 | **3,741 B/s** | 0 |
+| 5150 **receiving** | 83, 83 | **3,538 B/s** | 0 |
 
-**That is 4.2x slower than §1.2's model, and the model was not wrong about the
-wire — it was wrong about everything around it.** 325 µs per nibble, of which
+*(16,128 bytes each way, two runs with the master role swapped. The first
+build measured 1,536 / 1,595; the accounting below is why, and PERFORMANCE.md
+Part 9 Set 39 is the full record.)*
+
+**Which direction is faster follows the 5150's ROLE, not who is master.**
+Swapping the master swapped the labels and left the numbers where they were,
+and receiving reproduced to the exact tick in both runs. `lp_rnib` does about
+six instructions more than `lp_snib`; isolated that is ~12.7 µs at Part 2's
+floor and measured it is 7.7, the difference being that the two ends run
+concurrently so some of the receiver's extra work happens while the sender is
+already waiting. That the asymmetry tracks the *slow machine's* role is what
+confirms the 5150 is the bottleneck in both directions, which is what every
+estimate here assumed and none had checked.
+
+**The first build was 4.2x slower than §1.2's model, and the model was not
+wrong about the wire — it was wrong about everything around it.** 325 µs per
+nibble, of which
 the two `in`s and three `out`s that actually move data are about 30. Counted
 against PERFORMANCE.md Part 2's measured constants (4.34 clocks per instruction
 byte, 4.77 MHz) the prediction is **360 µs, within 11% of the measurement**,
@@ -268,13 +283,18 @@ whole `LP_SPIN` of polls has gone unanswered, which on a working link never
 happens), the wait is a **macro rather than a called proc** so there is no
 frame four times a nibble, the poll body is 9 bytes rather than 16 (the level
 is a branch now, not a compare against a variable), and `DX` walks between the
-two ports with `inc`/`dec` instead of being reloaded from memory. Predicted
-after: **93 µs a nibble, ~5,400 B/s** — and predicted is all it is until the
-next field run says otherwise.
+two ports with `inc`/`dec` instead of being reloaded from memory. **Measured
+after: 133.7 µs a nibble, 3,741 B/s, 2.44x** — against 93 µs predicted, the
+residual being the layering *above* the nibble (`lp_sbyte`'s frame and the
+benchmark's own byte loop, ~28 µs by the same count) plus the far end's
+latency.
 
-**The measurement stands as the number of record either way.** 1,536 B/s is
-what this protocol did on these two machines, and PERFORMANCE.md Part 6 rule 8
-applies to the *fix* exactly as it applied to the model it replaces.
+**The remaining lever is the handshake itself, and it is deliberately not
+spent here.** Two phases instead of four halves both the waits and the `out`s
+per nibble — §1.1.1 records that this is safe *only* with the turnaround
+guard — and it is worth perhaps another 1.5x. It belongs in the driver, where
+the code above the transport is real file I/O rather than a benchmark loop;
+tuned here, the harness gets optimised instead of the feature.
 
 ### 1.2.1 The cable is SLOWER than the floppy, and the case survives anyway
 
@@ -287,14 +307,14 @@ throughput row, which was two Part 9 rounds stale.** The current figure is
 | | bytes/second | |
 |---|---|---|
 | floppy `FILE_READ`, warm | **21,307** | Set 24 |
-| this cable, **measured** | **1,536** | §1.2.0, on the iron |
-| this cable, after §1.2.0's fix | ~5,400 predicted | not yet measured |
-| ratio | **the cable is 13.9× slower today, ~4× after the fix** | |
+| **this cable, measured** | **3,741** | §1.2.0, on the iron |
+| the ST-225 (Set 24) | 74,553 | for scale |
+| ratio | **the cable is 5.7× slower than the floppy** | |
 
 That is a real result and it is not fatal, but it does retire an argument this
-plan was leaning on. **The field figure is worse than the model, not better**
-(§1.2.0), so everything below is written against 1,536 B/s and re-reads the
-same way at 5,400. **The case for this feature was never the transfer rate,
+plan was leaning on. **A 360 KB image crosses the cable in 99 seconds**; the
+same image reaches the 5150 any other way via the seven-step path, which is
+the comparison that actually decides this. **The case for this feature was never the transfer rate,
 and §0 already says so: it is the TRIP.** A cable at 6.5 KB/s that needs no
 trip beats a floppy at 21 KB/s that needs the seven-step path in
 docs/FIELD-MACHINES.md — SD card, VHD mount, copy, unmount, writer machine,
@@ -1090,7 +1110,7 @@ free and sufficient.
 
 | # | build | proved by |
 |---|---|---|
-| **1** | **`tests/lptlink`** — §9.1, **BUILT AND RUN**. `make lptlink` | **DONE, §1.2.0**: link up first try, 16 KB each way, 0 errors, at 1,536 B/s. The rate is being re-measured after the hot-path fix; everything else about step 1 is settled |
+| **1** | **`tests/lptlink`** — §9.1 | **DONE.** Link up first try, 16 KB each way, **0 errors in four transfers**, at **3,741 B/s** after §1.2.0's fix. PERFORMANCE.md Part 9 **Set 39**. The wire, the scan, the handshake and both reversals are settled facts now |
 | 2 | `NET.DRV` Stage 1 + `OS88NET /IMG` | a `Network` icon on the desktop, a Disk window listing it, a package launched off it, a file written to it, `os88disk.py --verify` on the image afterwards from the host |
 | 3 | `OSAPI_DRV_CALL` + `DSV_PKGCALL` | a package reaching a driver at all — testable with a stub verb before any networking exists |
 | 4 | Stage 2, the redirector | the same Disk window over `OS88NET /D:C:\` — and the same `tests/filetest` battery, which is the existing 25-case write gate and applies unchanged |
