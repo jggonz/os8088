@@ -48,11 +48,15 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import os88marty
 from os88mouse import Mouse
+from os88geom import WIN_SIZE                                # noqa: F401
 import sucheck as su
 import subcheck as sc
 
 CLK = 4772727.0                 # 4.77 MHz, so cycles -> ms
-WIN_SIZE = 26
+# WIN_SIZE was 26 here, and wm.inc has said 28 since SPEC.md 13.7 added
+# W_ONMOUSEUP - so the `di`/`bx` window slots below were computed at the wrong
+# stride and reported nonsense as if it were a window index. os88geom carries
+# it now and checks itself against the kernel at import.
 
 
 def ms(cycles):

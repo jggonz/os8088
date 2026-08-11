@@ -61,14 +61,11 @@ import os88sym                                              # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispcp                                                # noqa: E402
 
-# desk.inc's zone layout, for the one double-click this needs. The column's x
-# is read out of the guest ([vid_desk_zx], SPEC.md 39.2) because it moves with
-# the adapter; the vertical pitch is a constant there.
-DESK_ZY0, DESK_ZSTEP, DESK_ZW, DESK_ZH = 32, 60, 48, 44
-# ...and files.inc's, for the second one: a Disk window's content starts one
-# pixel inside the frame and TITLE_H below its top, and row 0 begins
-# FM_ROW_Y0 into that.
-TITLE_H, FM_ROW_Y0, FM_ROW_H = 18, 22, 16
+# desk.inc's zone layout and files.inc's row layout both come from os88geom
+# now, and the zone's PITCH and HEIGHT are not constants at all - they were
+# written down here as 60 and 44, and SPEC.md 26.4's square CGA icon made them
+# 34 and 26, so this double-clicked bare desktop and then reported that
+# FSXTEST had not launched.
 
 
 def lit(px):
@@ -146,32 +143,24 @@ def main(argv):
             % (pri["idx"], pri["type"], sec["idx"], sec["type"]))
 
         mo = os88mouse.Mouse(marty=m)
-        zx = m.read(S("vid_desk_zx"), 2)
-        zx = zx[0] | (zx[1] << 8)
         # drive B: is zone ordinal 1 - A:, B:, then any driver volumes.
-        mo.dblclick(zx + DESK_ZW // 2, DESK_ZY0 + DESK_ZSTEP + DESK_ZH // 2)
+        mo.dblclick(*dispcp.drive_xy(m, S, 1))
         os88marty.settle(m, card=pri["idx"])
 
         # ...and FSXTEST.O88 is the only file on that image, so it is row 0 of
         # the Disk window that just opened. Its rect is read out of wm_wins
         # rather than assumed: SPEC.md 39.7 clamps a template onto the live
         # screen, so where a window lands is the adapter's business.
-        wins = m.read(S("wm_wins"), 12 * 26)
-        dsk = [i for i in range(12)
-               if (wins[i * 26] | (wins[i * 26 + 1] << 8)) & 3 == 3]
+        dsk = dispcp.win_list(m, S)
         if not dsk:
             sys.exit("fsxdisp: no Disk window after double-clicking B: - the "
                      "zone arithmetic above missed")
-        i = dsk[-1]
-        wx = wins[i * 26 + 2] | (wins[i * 26 + 3] << 8)
-        wy = wins[i * 26 + 4] | (wins[i * 26 + 5] << 8)
-        row0 = (wx + 1 + 60, wy + TITLE_H + 1 + FM_ROW_Y0 + FM_ROW_H // 2)
+        wx, wy = dispcp.win_rect(m, S, dsk[-1])[:2]
+        row0 = dispcp.row_xy(wx, wy, 0)
         say("Disk window at (%d,%d); row 0 at %s" % (wx, wy, row0))
         mo.dblclick(*row0)
         os88marty.settle(m, card=pri["idx"])
-        wins = m.read(S("wm_wins"), 12 * 26)
-        if len([j for j in range(12)
-                if (wins[j * 26] | (wins[j * 26 + 1] << 8)) & 3 == 3]) < 2:
+        if len(dispcp.win_list(m, S)) < 2:
             sys.exit("fsxdisp: FSXTEST did not launch - row 0 was not where "
                      "this thought it was")
 
