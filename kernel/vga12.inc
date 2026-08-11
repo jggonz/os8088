@@ -1547,15 +1547,29 @@ gfx_line_flush:
 ; Colour reduction on a 1bpp adapter happens in gfx_fill, per run (SPEC.md
 ; 39.4), so a 16-colour picture reads as black/dither/white there exactly as
 ; the rest of the UI does.
+;
+; ...and a DISPLAY SPLIT happens there too, per run, for the same reason
+; (SPEC.md 39.14.7). This routine takes no whole-shape hook of its own: it
+; keeps its destination in virtual coordinates and lets each run's gfx_fill
+; do the splitting, which costs a straddling block nothing but the runs it
+; was going to emit anyway. What that costs on a TWO-CARD machine is one
+; gfx_disp_run per run instead of GFXDISP's two compares - a few per cent of
+; a ~756us call - and on every one-card machine it costs nothing at all,
+; because GFXDISP short-circuits on [vid_ndisp].
 ; -----------------------------------------------------------------------------
 gfx_blit4:
     call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
-    GFXDENTER                   ; ...and off the display SPLIT for the same
-                                ; reason (SPEC.md 39.14.5): a blit cannot take
-                                ; a sub-rect without advancing its source to
-                                ; match, so it goes whole onto the display
-                                ; holding its top-left corner and is cut at
-                                ; that display's edge
+                                ; ...but NOT off the display split, and there
+                                ; is deliberately no GFXDENTER here: A RUN
+                                ; CARRIES NO SOURCE (SPEC.md 39.14.7). The
+                                ; destination stays VIRTUAL the whole way
+                                ; down, and each coalesced run is one solid
+                                ; gfx_hline that splits itself through
+                                ; gfx_fill's own GFXDISP - so a straddling
+                                ; block needs no source arithmetic at all.
+                                ; Nested (gfx_dnest != 0) the runs take
+                                ; GFXDISP's local path, which is what an
+                                ; outer whole-shape hook wants.
     push ax
     push bx
     push cx
@@ -1663,7 +1677,6 @@ gfx_blit4:
     pop cx
     pop bx
     pop ax
-    GFXDLEAVE
     ret
 
 ; -----------------------------------------------------------------------------
