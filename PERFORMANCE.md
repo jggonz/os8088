@@ -2428,6 +2428,12 @@ before it is worth running again is a **VGA** field disk, which does not exist.
 
 #### MartyPC is the real thing on the CPU and not on the disk
 
+> **The disk half of that heading expired at Set 37.** The `read 16K, cold
+> motor` row below — 0.27 s against the 5150's 8.07 — is upstream MartyPC
+> with no platter in it. Sets 35 and 37 gave it one; the same row now reads
+> 1.15–1.65 s against the field's 1.59 (Set 38, and it is an N = 1 row). The
+> CPU half stands unchanged.
+
 Against 11a, row for row, **MartyPC lands within 0–4% on 45 of 47 gfxbench
 rows** — the closest agreement any emulator has managed here, and enough that
 its "cycle accurate" claim survives contact with a 5150. PCem is uniformly
@@ -3376,10 +3382,12 @@ hitch ~744 ms into the first play after a load (the old pre-roll of two), so
 the 16KB grant is **a field bug fix expressed as a buffer size**, not slack.
 The 8KB row above only exists because the pre-roll was given back to get it.
 
-**And the harness cannot price the case the cushion is for.** MartyPC is
-cycle-accurate and 30x fast on disk (Set 11), and the transient a ring
-absorbs is mostly floppy: one ~12-sector mount at the 5150's ~65 ms/sector is
-**~780 ms ≈ 2.1 halves** at the XT rate. Against a 7-half target that is
+**And the harness could not price the case the cushion is for.** MartyPC was
+cycle-accurate and 30x fast on disk when this was written (Set 11), and the
+transient a ring absorbs is mostly floppy: one ~12-sector mount at the 5150's
+~65 ms/sector is **~780 ms ≈ 2.1 halves** at the XT rate. *Set 37 changed
+that half of it* — the floppy turns now and a mount costs real guest time, so
+this IS reachable on an IBM-ROM machine, and re-measuring it is open work. Against a 7-half target that is
 comfortable and against a 3-half one it is not. So *do not* read the third
 row as a licence to shrink the ring — that is a number this instrument is not
 entitled to give, and the 5150 is where it would have to come from.
@@ -3753,8 +3761,10 @@ so a face costs the same disk, the same RAM and the same boot on any machine.
 **What could NOT be measured, and it is worth knowing why.** An end-to-end UI
 operation cannot see this at all: opening a Disk window (~40 `font_str` calls)
 measured **18.29 s and 20.97 s on two trials of the SAME kernel**, a 15%
-spread against a 0.5% effect — the floppy mount dominates and MartyPC is not
-disk-accurate anyway (Set 11). A per-primitive harness with the interrupts off
+spread against a 0.5% effect — the floppy mount dominates it, and at the time
+MartyPC was not disk-accurate either (Set 11; it is, since Set 37 — but a
+mount dominating a 0.5% effect is a fact about the operation, not the
+instrument, so the conclusion is unchanged). A per-primitive harness with the interrupts off
 is the only instrument with the resolution, which is what `gfxbench` is for.
 
 ### Set 26 — `font_run`'s compose, and the blank-row skip that does not transfer (SPEC.md §6.1.5)
@@ -4684,3 +4694,115 @@ on the way — 4.4x fast before Set 35, 1.17x slow after it, 1.27x slow once the
 platter really turned, and 0.92x now. `make marty` remains the place to *find*
 a disk regression and the 5150 remains the place a number lands, but the gap
 between them on this bench is now one measurement quantum on most rows.
+
+### Set 38 — no machine here is "the calibration", and the drive proves it
+
+Set 37's whole result was taken on `os8088_5150_herc`, which invites two wrong
+readings: that Hercules is where the disk measures right, and that the other
+seventeen machines are uncalibrated. Both were worth checking rather than
+answering, because the drive being modelled is one **Tandon TM100-2** and its
+behaviour cannot depend on which video card is in the slot next to it.
+
+#### The controller's own traffic, all eighteen machines, one image
+
+`combo.img` booted on every machine, with `m.disk()` read from outside the
+guest afterwards — the FDC's own counters, so no guest code is involved and
+the workload is identical by construction. Grouped by traffic:
+
+| reads | sectors | run | seeks/cyl | seek ms | resets | machines |
+|---:|---:|---:|---:|---:|---:|---|
+| 24 | 186 | 9 | 29/54 | 432.0 | 3 | **`_cga`, `_herc`, `_both`, `_sbonly`, `_cga_720b`, `_cga_4fdd`** |
+| 26 | 199 | 9 | 31/80 | 640.0 | 3 | `_sb`, `_sb_256k` (a sound driver loads — §51.3.1) |
+| 31 | 195 | 9 | 36/80 | 640.0 | 3 | `_sb_128k` (128 KB: the OS does more disk work) |
+| 26 | 201 | 9 | 26/241 | 1928.0 | 6 | `_cga_gla`, `_both_gla`, `_xt_hdd` |
+| 25 | 195 | 9 | 25/241 | 1928.0 | 5 | `_herc_gla`, `_both_gla_mono`, `_xt_vga` |
+| 26 | 201 | 9 | 21/131 | 1048.0 | 6 | `_cga_1fd` (one drive: no B: to probe) |
+| 27/28 | 208/214 | 9 | 27–28/267 | 2136.0 | 5/6 | `_xt_vga_sb`, `_xt_hdd_sb` |
+
+**Six machines are bit-identical** — the same reads, the same sectors, the
+same longest run, the same seeks, the same cylinders crossed and the same
+432.0 ms of seek — across CGA, Hercules, a two-card machine, a Sound Blaster
+with no OPL, a 720 KB drive as B: and a four-drive machine. **The Tandon does
+not change across 5150s**, and that is now a measurement rather than an
+argument from the source.
+
+What *does* move inside that group is `transfer_ms`: 4,111.0 on CGA, 4,243.0
+on Hercules, 4,228.2 on the four-drive machine — a **3.2%** spread. That is
+rotational latency, not the drive: the counts are identical, so the same
+sectors were asked for in the same order, and what differed is how long the
+guest took between calls. A Hercules boot draws a different splash.
+
+Everything below the first group is the **BIOS or the OS**, never the drive.
+The `_sb` rows are §51.3.1's boot probe finding an OPL and loading a driver;
+`_sb_128k` is os8088 working harder in 128 KB; the GLaBIOS rows are a
+different ROM entirely, and the 241 cylinders against 54 is the tell.
+
+#### `tests/sysbench`'s raw block, five machines against the iron
+
+Same `combo.img`, driven through the UI, `int 13h` called with no kernel code
+in the way:
+
+| row | 5150 | `_cga` | `_herc` | `_sb_256k` | `_cga_gla` | `_xt_hdd` |
+|---|---:|---:|---:|---:|---:|---:|
+| `int 13h 1 sector` | 199,106 | **199,106** | **199,106** | 205,971 | **199,106** | **199,106** |
+| `track, 1 call` | 398,211 | **398,211** | 384,480 | 384,480 | 247,166 | 247,166 |
+| `track, 9 calls` | 1,991,057 | **1,991,057** | 2,004,789 | 2,004,789 | 247,166 | 247,166 |
+| `seek 0 cyl` | 398,211 | **398,211** | **398,211** | **398,211** | **398,211** | **398,211** |
+| `seek 1 cyl` | 398,211 | **398,211** | **398,211** | **398,211** | **398,211** | **398,211** |
+| `seek 5 cyl` | 411,943 | 398,211 | **411,943** | 398,211 | 398,211 | 398,211 |
+| `seek 10 cyl` | 398,211 | **398,211** | **398,211** | **398,211** | **398,211** | **398,211** |
+| `seek 20 cyl` | 796,423 | 810,154 | **796,423** | **796,423** | 810,154 | 810,154 |
+| `seek 39 cyl` | 851,349 | 796,423 | 796,423 | 796,423 | 796,423 | 796,423 |
+| `1 sector, motor COLD` | 164,777 | **164,777** | **164,777** | **164,777** | 219,703 | **164,777** |
+| `1 sector, motor warm` | 219,703 | **219,703** | 164,777 | **219,703** | 164,777 | 164,777 |
+| | **exact / within 1q** | **8 / 10** | 7 / 9 | 6 / 10 | 4 / 6 | 5 / 7 |
+
+**Which rows land exactly SHUFFLES between the three IBM machines**, and that
+is the finding. `_cga` nails both track rows and misses `seek 5`; `_herc`
+nails `seek 5` and misses both track rows; `_sb_256k` nails `seek 20` and
+`motor warm`. Nine or ten of eleven are inside one quantum on all three. So
+**the residual is phase, not model** — a row sitting on a 13,731 µs boundary
+falls whichever side the guest's turnaround happens to put it — and *no single
+machine is the calibration*. The right unit is the **class**: an IBM-ROM 5150,
+whichever card is in it.
+
+`_sb_256k`'s `int 13h 1 sector` at 205,971 is the one row outside that: half a
+quantum, and it is the only machine of the three with a **sound driver
+loaded**, so its worker is taking turns the others' do not.
+
+#### GLaBIOS is a different instrument, and by how much is now known
+
+`track, 1 call` is **247,166 against the IBM ROM's 398,211 — 1.61x lighter**,
+and `track, 9 calls` is *the same 247,166*, which looks impossible and is not.
+On 1:1 media sector *n+1* follows sector *n* immediately, so nine separate
+one-sector reads cost one revolution **if the BIOS can turn a call around
+inside one sector time (22 ms)**. GLaBIOS can; the IBM ROM cannot, because its
+head-settle loop alone is 52.5 ms (Set 37) — so it misses every time and pays
+ten revolutions for the same nine sectors. One number, both rows, and it is
+the same 52.5 ms that made the media look 2:1.
+
+That has a consequence for two figures already in SPEC.md. §18.95.3's cache
+table was measured on `os8088_5150_cga_gla` and §52.10's install counts on
+`os8088_xt_hdd` — **both GLaBIOS**. Their *call counts* are unaffected, a call
+being a call on any BIOS, and both sections say counts are the claim. A
+*timing* taken on either would be 1.61x light, and neither section says that.
+Both now do.
+
+#### So: should the other machines be "calibrated"?
+
+**No, and there is nothing to calibrate.** The drive is one model in
+`marty_core` and the first table proves it produces identical traffic wherever
+it is installed; there is no per-machine constant to tune and adding one would
+be inventing a difference the hardware does not have. What was actually
+missing was a **statement of which machines a disk number may come off**, and
+that is now in docs/MARTYPC-DEBUG.md's machine table:
+
+- **IBM-ROM 5150** (`_cga`, `_herc`, `_both`, `_sb`, `_sbonly`, `_sb_128k`,
+  `_sb_256k`, `_cga_720b`, `_cga_4fdd`) — field-comparable, ±1 quantum.
+- **GLaBIOS** (`_cga_gla`, `_herc_gla`, `_both_gla`, `_both_gla_mono`,
+  `_cga_1fd`, `_xt_vga`, `_xt_vga_sb`, `_xt_hdd`, `_xt_hdd_sb`) — the drive is
+  the same and the BIOS is not. Counts yes, seconds no.
+
+The 5150 is still where a number LANDS. What changed is that the gap is one
+measurement quantum on a machine of the right class, and 1.61x on a machine of
+the wrong one — and the second of those was invisible until it was measured.

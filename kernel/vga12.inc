@@ -1018,26 +1018,67 @@ gfx_ls_box:
     mov [gfx_ls_bx2], ax
     mov ax, [vid_chm1]
     mov [gfx_ls_by2], ax
-    jmp short .out
+    jmp .out                    ; NOT `jmp short`: 39.14.9's virtual-space
+                                ; scan put the armed branch out of reach
 .armed:
+%ifdef KERN_BIG
+    ; SPEC.md 39.14.9: THE POINT IS DISPLAY-LOCAL HERE AND wm_clip_tab IS
+    ; VIRTUAL. gfx_ls_one resolved the walk's display and translated before
+    ; the walk ran, so the scan has to be done in virtual space and the rect
+    ; it finds has to come back translated - which is 39.14.1's "below
+    ; GFXCLIP and not above it" in the one place the hook could not be put
+    ; below it. Untranslated, display 0 works (virtual IS local there) and
+    ; every other display matches NO rect, takes the empty box below, and
+    ; draws not one pixel while the walk advances normally.
+    ; Both terms are 0 on display 0, so a one-display machine pays two adds.
+    mov ax, si
+    add ax, [vid_ox]
+    mov [gfx_ls_vx], ax
+    mov ax, dx
+    add ax, [vid_oy]
+    mov [gfx_ls_vy], ax
+%else
+    mov [gfx_ls_vx], si
+    mov [gfx_ls_vy], dx
+%endif
     mov bx, wm_clip_tab
     mov cx, [wm_clip_n]
 .scan:
     mov ax, [bx + WCR_X1]
-    cmp si, ax
+    cmp [gfx_ls_vx], ax
     jl .next
-    cmp si, [bx + WCR_X2]
+    mov ax, [bx + WCR_X2]
+    cmp [gfx_ls_vx], ax
     jg .next
-    cmp dx, [bx + WCR_Y1]
+    mov ax, [bx + WCR_Y1]
+    cmp [gfx_ls_vy], ax
     jl .next
-    cmp dx, [bx + WCR_Y2]
+    mov ax, [bx + WCR_Y2]
+    cmp [gfx_ls_vy], ax
     jg .next
+    ; ...and the survivor comes back in the DISPLAY's coordinates, clamped to
+    ; the display: a clip rect may span the seam, and a box reaching past this
+    ; card's last column would have gfx_lstep_mono addressing off the end of
+    ; its own framebuffer.
+    mov ax, [bx + WCR_X1]
+    call gfx_ls_lx
     mov [gfx_ls_bx1], ax
     mov ax, [bx + WCR_Y1]
+    call gfx_ls_ly
     mov [gfx_ls_by1], ax
     mov ax, [bx + WCR_X2]
+    call gfx_ls_lx
+    cmp ax, [vid_cwm1]
+    jle .x2ok
+    mov ax, [vid_cwm1]
+.x2ok:
     mov [gfx_ls_bx2], ax
     mov ax, [bx + WCR_Y2]
+    call gfx_ls_ly
+    cmp ax, [vid_chm1]
+    jle .y2ok
+    mov ax, [vid_chm1]
+.y2ok:
     mov [gfx_ls_by2], ax
     jmp short .out
 .next:
@@ -1052,6 +1093,28 @@ gfx_ls_box:
     pop cx
     pop bx
     pop ax
+    ret
+
+; gfx_ls_lx / gfx_ls_ly - one virtual coordinate into the ACTIVE display's,
+; floored at 0. AX in, AX out; flags clobbered. Two names rather than one with
+; an argument because each has exactly one origin to subtract and the caller
+; is a straight run of four.
+gfx_ls_lx:
+%ifdef KERN_BIG
+    sub ax, [vid_ox]
+    jns .ok
+    xor ax, ax
+.ok:
+%endif
+    ret
+
+gfx_ls_ly:
+%ifdef KERN_BIG
+    sub ax, [vid_oy]
+    jns .ok
+    xor ax, ax
+.ok:
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3128,6 +3191,8 @@ gfx_ls_bx1      resw 1          ; the clip rect the walk is inside, re-resolved
 gfx_ls_by1      resw 1          ; only when a pixel steps out of it - a step is
 gfx_ls_bx2      resw 1          ; a handful of pixels, so this is one list walk
 gfx_ls_by2      resw 1          ; per CALL in every case that matters
+gfx_ls_vx       resw 1          ; ...and the point in VIRTUAL space, which is
+gfx_ls_vy       resw 1          ; what wm_clip_tab is in (SPEC.md 39.14.9)
 gfx_ls_cseg     resw 1          ; ...and where the caller's block came from,
 gfx_ls_coff     resw 1          ; because ES cannot hold it across the walk
 
