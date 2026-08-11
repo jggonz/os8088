@@ -4747,6 +4747,15 @@ wm_su_take:
     ja .out                     ; degenerate content: nothing to bank
     cmp bx, dx
     ja .out
+%ifdef KERN_BIG
+    call vid_span_one           ; WHOLLY INSIDE ONE DISPLAY or no cache, which
+    jc .out                     ; is the screen test on a one-card machine and
+                                ; a stronger one on two (SPEC.md 39.14.8).
+                                ; [vid_cw] is the display LAST DRAWN ON
+                                ; (39.14.3), not the screen, so the test this
+                                ; replaces asked a question whose answer
+                                ; depended on draw order
+%else
     cmp cx, [vid_cw]
     jae .out                    ; WHOLLY ON SCREEN or no cache: vga_rect_setup
     cmp dx, [vid_ch]            ; CLIPS, and wm_su_edge's row count and stride
@@ -4754,6 +4763,7 @@ wm_su_take:
                                 ; back out of it, so a clipped one would index
                                 ; the buffer wrongly. wm_fit keeps a window on
                                 ; screen, so this refuses nothing in practice
+%endif
     mov [wm_su_x1], ax
     mov [wm_su_y1], bx
     mov [wm_su_x2], cx

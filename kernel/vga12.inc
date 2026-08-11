@@ -1018,26 +1018,67 @@ gfx_ls_box:
     mov [gfx_ls_bx2], ax
     mov ax, [vid_chm1]
     mov [gfx_ls_by2], ax
-    jmp short .out
+    jmp .out                    ; NOT `jmp short`: 39.14.9's virtual-space
+                                ; scan put the armed branch out of reach
 .armed:
+%ifdef KERN_BIG
+    ; SPEC.md 39.14.9: THE POINT IS DISPLAY-LOCAL HERE AND wm_clip_tab IS
+    ; VIRTUAL. gfx_ls_one resolved the walk's display and translated before
+    ; the walk ran, so the scan has to be done in virtual space and the rect
+    ; it finds has to come back translated - which is 39.14.1's "below
+    ; GFXCLIP and not above it" in the one place the hook could not be put
+    ; below it. Untranslated, display 0 works (virtual IS local there) and
+    ; every other display matches NO rect, takes the empty box below, and
+    ; draws not one pixel while the walk advances normally.
+    ; Both terms are 0 on display 0, so a one-display machine pays two adds.
+    mov ax, si
+    add ax, [vid_ox]
+    mov [gfx_ls_vx], ax
+    mov ax, dx
+    add ax, [vid_oy]
+    mov [gfx_ls_vy], ax
+%else
+    mov [gfx_ls_vx], si
+    mov [gfx_ls_vy], dx
+%endif
     mov bx, wm_clip_tab
     mov cx, [wm_clip_n]
 .scan:
     mov ax, [bx + WCR_X1]
-    cmp si, ax
+    cmp [gfx_ls_vx], ax
     jl .next
-    cmp si, [bx + WCR_X2]
+    mov ax, [bx + WCR_X2]
+    cmp [gfx_ls_vx], ax
     jg .next
-    cmp dx, [bx + WCR_Y1]
+    mov ax, [bx + WCR_Y1]
+    cmp [gfx_ls_vy], ax
     jl .next
-    cmp dx, [bx + WCR_Y2]
+    mov ax, [bx + WCR_Y2]
+    cmp [gfx_ls_vy], ax
     jg .next
+    ; ...and the survivor comes back in the DISPLAY's coordinates, clamped to
+    ; the display: a clip rect may span the seam, and a box reaching past this
+    ; card's last column would have gfx_lstep_mono addressing off the end of
+    ; its own framebuffer.
+    mov ax, [bx + WCR_X1]
+    call gfx_ls_lx
     mov [gfx_ls_bx1], ax
     mov ax, [bx + WCR_Y1]
+    call gfx_ls_ly
     mov [gfx_ls_by1], ax
     mov ax, [bx + WCR_X2]
+    call gfx_ls_lx
+    cmp ax, [vid_cwm1]
+    jle .x2ok
+    mov ax, [vid_cwm1]
+.x2ok:
     mov [gfx_ls_bx2], ax
     mov ax, [bx + WCR_Y2]
+    call gfx_ls_ly
+    cmp ax, [vid_chm1]
+    jle .y2ok
+    mov ax, [vid_chm1]
+.y2ok:
     mov [gfx_ls_by2], ax
     jmp short .out
 .next:
@@ -1052,6 +1093,28 @@ gfx_ls_box:
     pop cx
     pop bx
     pop ax
+    ret
+
+; gfx_ls_lx / gfx_ls_ly - one virtual coordinate into the ACTIVE display's,
+; floored at 0. AX in, AX out; flags clobbered. Two names rather than one with
+; an argument because each has exactly one origin to subtract and the caller
+; is a straight run of four.
+gfx_ls_lx:
+%ifdef KERN_BIG
+    sub ax, [vid_ox]
+    jns .ok
+    xor ax, ax
+.ok:
+%endif
+    ret
+
+gfx_ls_ly:
+%ifdef KERN_BIG
+    sub ax, [vid_oy]
+    jns .ok
+    xor ax, ax
+.ok:
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1547,15 +1610,29 @@ gfx_line_flush:
 ; Colour reduction on a 1bpp adapter happens in gfx_fill, per run (SPEC.md
 ; 39.4), so a 16-colour picture reads as black/dither/white there exactly as
 ; the rest of the UI does.
+;
+; ...and a DISPLAY SPLIT happens there too, per run, for the same reason
+; (SPEC.md 39.14.7). This routine takes no whole-shape hook of its own: it
+; keeps its destination in virtual coordinates and lets each run's gfx_fill
+; do the splitting, which costs a straddling block nothing but the runs it
+; was going to emit anyway. What that costs on a TWO-CARD machine is one
+; gfx_disp_run per run instead of GFXDISP's two compares - a few per cent of
+; a ~756us call - and on every one-card machine it costs nothing at all,
+; because GFXDISP short-circuits on [vid_ndisp].
 ; -----------------------------------------------------------------------------
 gfx_blit4:
     call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
-    GFXDENTER                   ; ...and off the display SPLIT for the same
-                                ; reason (SPEC.md 39.14.5): a blit cannot take
-                                ; a sub-rect without advancing its source to
-                                ; match, so it goes whole onto the display
-                                ; holding its top-left corner and is cut at
-                                ; that display's edge
+                                ; ...but NOT off the display split, and there
+                                ; is deliberately no GFXDENTER here: A RUN
+                                ; CARRIES NO SOURCE (SPEC.md 39.14.7). The
+                                ; destination stays VIRTUAL the whole way
+                                ; down, and each coalesced run is one solid
+                                ; gfx_hline that splits itself through
+                                ; gfx_fill's own GFXDISP - so a straddling
+                                ; block needs no source arithmetic at all.
+                                ; Nested (gfx_dnest != 0) the runs take
+                                ; GFXDISP's local path, which is what an
+                                ; outer whole-shape hook wants.
     push ax
     push bx
     push cx
@@ -1663,7 +1740,6 @@ gfx_blit4:
     pop cx
     pop bx
     pop ax
-    GFXDLEAVE
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2476,8 +2552,21 @@ vga_xor_fill_vram:
 gfx_save:
     call cur_unlazy             ; the menu save-under READS the screen, so
                                 ; the arrow must not be in what it banks
-    cmp byte [vid_mono], 0
-    jne sw_save
+    GFXDENTER                   ; ...and it reads it off ONE CARD (SPEC.md
+    GFXDORG cx, dx              ; 39.14.8): a save is pixels, and pixels live
+    call vga_save_vram          ; on a card rather than in a coordinate space,
+    GFXDLEAVE                   ; so this is whole-shape like gfx_scroll and
+    ret                         ; NOT split like a blit's runs. The caller owes
+                                ; the straddle test - wm_su_take asks
+                                ; vid_span_one - because a cut save and a cut
+                                ; restore agree with each other and leave the
+                                ; rest of the rect stale.
+                                ;
+                                ; BELOW the hook and reached directly by the
+                                ; CURSOR out of IRQ4, which must not take it:
+                                ; the arrow brackets itself (39.15.2), and a
+                                ; hook here would translate a rect that
+                                ; cur_geom has already resolved.
 vga_save_vram:
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
     jne sw_save                 ; on mono the framebuffer IS the renderer's
@@ -2675,8 +2764,11 @@ gfx_sub_off:
 ; -----------------------------------------------------------------------------
 gfx_restore:
     call cur_unlazy             ; ...and writes it back, unclipped
-    cmp byte [vid_mono], 0
-    jne sw_restore
+    GFXDENTER                   ; ...onto the card it came off (SPEC.md
+    GFXDORG cx, dx              ; 39.14.8) - gfx_save's twin, and it has to be
+    call vga_restore_vram       ; the same hook or a rect banked on one display
+    GFXDLEAVE                   ; could be put back on the other
+    ret
 vga_restore_vram:
     cmp byte [vid_mono], 0      ; see vga_save_vram
     jne sw_restore
@@ -3099,6 +3191,8 @@ gfx_ls_bx1      resw 1          ; the clip rect the walk is inside, re-resolved
 gfx_ls_by1      resw 1          ; only when a pixel steps out of it - a step is
 gfx_ls_bx2      resw 1          ; a handful of pixels, so this is one list walk
 gfx_ls_by2      resw 1          ; per CALL in every case that matters
+gfx_ls_vx       resw 1          ; ...and the point in VIRTUAL space, which is
+gfx_ls_vy       resw 1          ; what wm_clip_tab is in (SPEC.md 39.14.9)
 gfx_ls_cseg     resw 1          ; ...and where the caller's block came from,
 gfx_ls_coff     resw 1          ; because ES cannot hold it across the walk
 

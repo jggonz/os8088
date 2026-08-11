@@ -88,8 +88,7 @@ WF_USED, WF_VIS, WF_SAVEU = 1, 2, 32
 TITLE_H, KERNEL_SEG = 18, 0x0060
 
 DOCK_X0, DOCK_STEP, DOCK_TILE_W = 8, 28, 24     # kernel/dock.inc
-DESK_ZW, DESK_ZH = 48, 44                       # kernel/desk.inc
-DESK_ZY0, DESK_ZSTEP, DESK_COLW = 32, 60, 56
+DESK_ZW, DESK_ZY0, DESK_COLW = 32, 32, 44       # kernel/desk.inc
 FM_ROW_Y0, FM_ROW_H = 22, 16                    # kernel/files.inc
 
 VOL_B = 1                   # B:, the apps floppy
@@ -171,12 +170,19 @@ def tile(m, win):
 def zone(m, ordinal):
     """desk_ord_xy's arithmetic (SPEC.md 26.1), centred - zones fill a column
     downwards and wrap to a new one on the LEFT, and how many fit is
-    [desk_rows]: 2 on CGA, 4 on Hercules, 7 on VGA."""
+    [desk_rows]: 2 on CGA, 4 on Hercules, 7 on VGA.
+
+    THE PITCH AND THE HEIGHT ARE READ, NOT WRITTEN DOWN. SPEC.md 26.4 gave the
+    CGA a 14-row icon and a 34px pitch against the other adapters' 32 and 60,
+    so `desk_zstep` and `desk_zh1` are words the kernel picks at boot and
+    vid_switch re-picks. Hard-coded, this aimed 26px below B:'s zone on CGA and
+    the double-click landed on bare desktop - which reads as the window failing
+    to open rather than as the harness missing."""
     rows = word(m, "desk_rows")
     col, row = divmod(ordinal, rows)
     x = word(m, "vid_desk_zx") - col * DESK_COLW
-    y = DESK_ZY0 + row * DESK_ZSTEP
-    return (x + DESK_ZW // 2, y + DESK_ZH // 2)
+    y = DESK_ZY0 + row * word(m, "desk_zstep")
+    return (x + DESK_ZW // 2, y + word(m, "desk_zh1") // 2)
 
 
 def row(win, i):

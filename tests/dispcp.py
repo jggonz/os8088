@@ -115,3 +115,43 @@ def set_primary(m, mo, S, settle, slot, card=None):
     wx, wy = _cp_win(m, S)              # RE-READ: see the module docstring
     mo.click(wx + 1 + CP_RX + CPV_BTNX + 40, wy + TITLE_H + 1 + CPV_BTNY + 9)
     settle(m, card=card)
+
+
+# --- the desktop's drive column (SPEC.md 26.1) -------------------------------
+#
+# EVERY NUMBER THAT CAN BE READ OUT OF THE GUEST IS READ OUT OF THE GUEST, and
+# that is not tidiness: this arithmetic was mirrored in two test scripts with
+# DESK_ZY0 = 24 / step 52 / width 60 baked in, and SPEC.md 26.4's square CGA
+# icon changed the pitch to 34 and the width to 32. Both scripts then
+# double-clicked bare desktop, one opened no Disk window and the other opened
+# one instead of two, and neither said anything about zones - they reported a
+# window that failed to appear. `desk_zstep`, `desk_zh1`, `desk_rows` and
+# `vid_desk_zx` are all live words, so only DESK_ZY0/DESK_ZW/DESK_COLW - which
+# are assembly-time constants with no published copy - are written down here.
+DESK_ZY0, DESK_ZW, DESK_COLW = 32, 32, 44
+
+
+def drive_xy(m, S, ordinal):
+    """The centre of volume `ordinal`'s desktop zone, in VIRTUAL coordinates.
+
+    desk_ord_xy's arithmetic: zones fill a column downwards and wrap LEFT from
+    the drive column, so ordinal 1 is BELOW ordinal 0 until [desk_rows] runs
+    out - which is 2 on a CGA with the tall icon and 4 with the square one.
+    """
+    def w(name):
+        b = m.read(S(name), 2)
+        return b[0] | (b[1] << 8)
+
+    rows, step, zh1, zx = (w("desk_rows"), w("desk_zstep"), w("desk_zh1"),
+                           w("vid_desk_zx"))
+    col, row = divmod(ordinal, rows)
+    return (zx - col * DESK_COLW + DESK_ZW // 2,
+            DESK_ZY0 + row * step + zh1 // 2)
+
+
+def open_drive(m, mo, S, settle, ordinal, card=None):
+    """Double-click a drive zone and settle. Drive B: is ordinal 1."""
+    x, y = drive_xy(m, S, ordinal)
+    mo.dblclick(x, y)
+    settle(m, card=card)
+    return x, y

@@ -116,7 +116,7 @@ change rather than a mechanism**.
 Flagged four times now — Sets 32–35 — and never chased. Two `wm_draw_win` passes
 for Paint's window: a **402 ms** one that draws no canvas, then the real one.
 Almost certainly **`[pt_apend]`'s deferred-resize path calling `OSAPI_WM_FRONT`
-from inside `W_PAINT`**, which re-enters the raise. Set 35 has it on a
+from inside `W_PAINT`**, which re-enters the raise. Set 39 has it on a
 breakpoint trace rather than as an inference, on both builds of the A/B, so it
 is 402 ms of every Paint repaint any of those Sets measured. **It is the cheapest
 remaining item in this round** — one flat 402 ms off every Paint raise, against
@@ -140,7 +140,7 @@ Three things came out of it that the next reader wants:
   visible" is 90% *covered*, and a raise owes the covered part — so that case is
   7.8 s, not 0.9. The win is proportional to how much was covered and there is no
   typical amount: 59.9% covered measures 1.53x, 95% covered measures 1.12x, both
-  exactly their own geometry (Set 35).
+  exactly their own geometry (Set 39).
 - **`wm_damage` had to learn about `WF_FULL`.** §11.2's branch of `wm_draw_win`
   white-fills the whole frame with no `WF_OWNBG` opt-out, so a partial answer
   there blanks the rest. Latent until now, because `wm_dmg_wins` rarely marks a

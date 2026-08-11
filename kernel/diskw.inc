@@ -3507,6 +3507,13 @@ dskw_fmt_tab:
     dw 9, 40, 720
     db 2, 0xFD
     dw 2, 112, 360              ; 360KB
+
+    ; the caller's live geometry, banked across dskw_fmt_probe's reads and put
+    ; back by its .undo. Three words rather than a constant, because the probe
+    ; is no longer only ever run over a volume that failed to mount (see .undo)
+dskw_fmt_bspt:  dw 9
+dskw_fmt_bhds:  dw 2
+dskw_fmt_btot:  dw 0
 section .cold                   ; ...and back to cold code
 
 ; -----------------------------------------------------------------------------
@@ -3569,6 +3576,14 @@ dskw_fmt_probe:
     push si
     push di
     push es
+
+    ; the three words .try writes, banked before anything is aimed anywhere
+    mov ax, [disk_spt]
+    mov [dskw_fmt_bspt], ax
+    mov ax, [disk_heads]
+    mov [dskw_fmt_bhds], ax
+    mov ax, [dsk_totsec]
+    mov [dskw_fmt_btot], ax
 
     ; --- is it a floppy at all? (SPEC.md 18.7: DV_KIND is the TRANSPORT,
     ;     and a BIOS unit below 80h is the MEDIUM - disk_mount's own test)
@@ -3717,9 +3732,9 @@ dskw_fmt_probe:
                                 ; leaves whatever the last good one set. It
                                 ; only ever shortens a fill, so a stale value
                                 ; cannot read wrong bytes - but it can make
-                                ; the probe's own surplus meaningless, and
-                                ; the mount that follows overwrites this from
-                                ; the BPB anyway
+                                ; the probe's own surplus meaningless. .undo
+                                ; puts the caller's back, and a format's own
+                                ; mount re-derives it from the BPB regardless
     dec ax                      ; LBA spt-1 = CHS (0,0,spt) under this spt
     mov bx, dsk_secbuf
     mov cx, 1
@@ -3744,13 +3759,25 @@ dskw_fmt_probe:
     ; both from the BPB - so this closes a trap rather than fixing a bug, and
     ; it is the cheap end of that trade.
     ;
-    ; 9/2 and not the values on the way in, because that is exactly what
-    ; disk_mount's own failure path leaves (SPEC.md 18.3) and this routine is
-    ; only ever called with a failed mount behind it. dskw_format sets the
-    ; row's geometry itself.
+    ; **The values on the way IN, and that is a correction.** It used to force
+    ; 9/2 - exactly what disk_mount's own failure path leaves (SPEC.md 18.3) -
+    ; on the reasoning that the probe is only ever called with a failed mount
+    ; behind it. docs/FIELD-NOTES.md 17.2 took that premise away: a volume that
+    ; mounted can be formatted now, so the probe runs over live geometry, and
+    ; forcing 9/2 there would leave a mounted 1.44MB volume claiming 9 sectors
+    ; a track after a CANCELLED confirmation - a raw read at the wrong CHS with
+    ; nothing at all to say so. Banking is two words more than the constant was
+    ; and it is right whichever way the caller arrived. dskw_format sets the
+    ; row's geometry itself and owes this nothing.
 .undo:
-    mov word [disk_spt], 9
-    mov word [disk_heads], 2
+    push ax
+    mov ax, [dskw_fmt_bspt]
+    mov [disk_spt], ax
+    mov ax, [dskw_fmt_bhds]
+    mov [disk_heads], ax
+    mov ax, [dskw_fmt_btot]
+    mov [dsk_totsec], ax
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3943,6 +3970,88 @@ dskw_fmt_zero:
     pop di
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_fmt_reach - can this drive actually reach the volume just declared?
+; in:  AL = the dskw_fmt_tab row that was written, [disk_drive] = the volume,
+;      [disk_spt]/[disk_heads] still the format's (dskw_format leaves them)
+; out: CF=0 = the last sector was written and read back intact; CF=1 = it was
+;      not. Clobbers AX, flags.
+;
+; SPEC.md 18.96.2. The size on the confirmation can be the USER's rather than
+; the probe's, and a 720KB pick on a 40-cylinder drive is the one wrong answer
+; that stays silent: the whole layout is boot + 6 FAT + 7 root = LBA 0..13,
+; all of it inside CYLINDER 0, so the format completes, the volume mounts and
+; the disk lies about its size until something writes past cylinder 39 - by
+; which time it is mountable, so 22.12's predicate has greyed Format Disk out
+; and there is no way back.
+;
+; **The LAST sector, not the 360KB boundary.** LBA 720 is cylinder 40, the
+; first sector a 360KB disk has not got, and it is too weak a test: plenty of
+; 40-track drives step to 41 or 42, so a probe there PASSES on exactly the
+; drive it exists to catch. No 40-cylinder mechanism reaches cylinder 79, it
+; is one seek either way, and it validates the extent the BPB just claimed.
+;
+; **It writes, and that is what makes it a POSITIVE test** (18.96.1's rule:
+; every test is a read SUCCEEDING). A bare read of cylinder 79 breaks that
+; twice - it rests on a failure, and a head stopped at track 39 can answer
+; with track 39's data. A marker written first removes both, and the buffer
+; is re-zeroed BETWEEN the write and the read so a read that never touched it
+; cannot compare equal against our own staging.
+;
+; It destroys the sector it tests, which is free here and nowhere else: the
+; only caller is a commit the user has already agreed to erase the disk for.
+; -----------------------------------------------------------------------------
+dskw_fmt_reach:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call dskw_fmt_row
+    mov di, [si+DFMT_TOT]
+    dec di                      ; DI = the last sector the BPB now claims
+    call dskw_fmt_zero
+    mov ax, LOW_SEG
+    mov es, ax                  ; dsk_secbuf is .lowbss (SPEC.md 2.1), so the
+    mov word [es:dsk_secbuf+0], 'o8'    ; marker goes in through ES and never
+    mov word [es:dsk_secbuf+2], '8R'    ; through DS - dskw_format's own trap
+    mov [es:dsk_secbuf+4], di   ; ...and the LBA, so a seek that landed on a
+                                ; DIFFERENT track cannot match by accident
+    mov ax, di
+    call dskw_fmt_put
+    jc .no
+    call dskw_fmt_zero          ; a read that never happened must not compare
+                                ; equal against what we staged for the write
+    mov ax, di
+    mov bx, dsk_secbuf
+    mov cx, 1
+    call KERNEL_SEG:cw_disk_read
+    jc .no
+    cmp word [es:dsk_secbuf+0], 'o8'
+    jne .no
+    cmp word [es:dsk_secbuf+2], '8R'
+    jne .no
+    cmp [es:dsk_secbuf+4], di
+    jne .no
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
     ret
 
 ; -----------------------------------------------------------------------------

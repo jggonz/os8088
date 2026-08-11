@@ -441,7 +441,7 @@ prerequisite to be avoided; it is the thing worth doing first.
 backwards.** What a raised window owes is the part that was *covered*, so the
 0.9 s case is a canvas 10% covered — 90% visible — and the "only 10% of the
 canvas was visible" the sections below quote is the *opposite* case and worth
-7.8 s. Measured, PERFORMANCE.md Set 35: 59.9% covered is 1.53x, and there is no
+7.8 s. Measured, PERFORMANCE.md Set 39: 59.9% covered is 1.53x, and there is no
 single number for it because there is no typical amount of covering.
 
 Two smaller things stand unchanged, and one is now the *shape* of the answer

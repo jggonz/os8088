@@ -1,0 +1,796 @@
+diff --git a/crates/marty_core/src/devices/fdc/controller.rs b/crates/marty_core/src/devices/fdc/controller.rs
+index 40f78faa..aeb68dd9 100644
+--- a/crates/marty_core/src/devices/fdc/controller.rs
++++ b/crates/marty_core/src/devices/fdc/controller.rs
+@@ -75,6 +75,25 @@ pub const FDC_DATA_REGISTER: u16 = 0x05;
+ pub const FDC_RESET_TIME: f64 = 1000.0; // 1ms in microseconds
+ pub const FDC_SEEK_TIME: f64 = 10000.0; // 10ms in microseconds
+ 
++// --- os8088: the mechanical timing model (see floppy_drive.rs) --------------
++/// Head settle after a seek, charged by the DRIVE.
++///
++/// **Zero, and that is a measurement rather than an omission.** The settle
++/// this would model is the BIOS's, not the drive's: the IBM 5150 ROM reads
++/// the diskette parameter table's byte 9 (25 ms) and spends it in a software
++/// delay loop at F000:EEB8 before it will issue the read - which MartyPC runs
++/// cycle-accurately, and which takes **52.5 ms** there because IBM's "1 ms"
++/// inner loop is 550 iterations of `LOOP $` and an 8088 takes ~18 clocks over
++/// that. Charging the drive another 25 ms on top is the same wait counted
++/// twice, and at a long seek distance the double count costs a whole extra
++/// revolution: the 39-cylinder row of `tests/sysbench` measured 6.07
++/// revolutions against the field machine's 4.28 with it, and matched with it
++/// gone (PERFORMANCE.md Part 9 Set 37).
++pub const FDC_HEAD_SETTLE_US: f64 = 0.0;
++/// Step rate used until the BIOS issues SPECIFY. A 360K drive's own spec is
++/// 6 ms a cylinder, which is what docs/ASSOC-PLAN.md's seek model assumes.
++pub const FDC_STEP_RATE_DEFAULT_US: f64 = 6_000.0;
++
+ // Main Status Register Bit Definitions
+ // --------------------------------------------------------------------------------
+ // The first four bits encode which drives are in 'positioning' mode, ie whether
+@@ -161,6 +180,29 @@ pub const ST3_TRACK0: u8 = 0b0001_0000;
+ pub const ST3_DOUBLESIDED: u8 = 0b0000_1000;
+ pub const ST3_HEAD: u8 = 0b0000_0100;
+ 
++/// os8088: what the controller has actually been asked to do.
++#[derive(Clone, Copy, Debug, Default)]
++pub struct FdcStats {
++    /// READ DATA commands accepted, and the sectors they asked for.
++    pub reads: u64,
++    pub read_sectors: u64,
++    /// WRITE DATA likewise.
++    pub writes: u64,
++    pub write_sectors: u64,
++    /// SEEK/RECALIBRATE, and the cylinders actually crossed.
++    pub seeks: u64,
++    pub seek_cylinders: u64,
++    /// Controller resets - a BIOS giving up looks like this.
++    pub resets: u64,
++    /// Modelled mechanical time, split the way the model charges it.
++    pub transfer_us: f64,
++    pub seek_us: f64,
++    /// The longest single run asked for, in sectors. A kernel that batches
++    /// well shows a run near the track length; §18.91's bug showed 9 here and
++    /// 4.6x the sectors, which is the shape that gives it away.
++    pub longest_run: u64,
++}
++
+ /// Represent the state of the DIO bit of the Main Status Register in a readable way.
+ #[derive(Copy, Clone, Debug, Default)]
+ pub enum IoMode {
+@@ -341,6 +383,27 @@ pub struct FloppyController {
+     us_accumulator: f64,
+     watchdog_accumulator: f64,
+     operation_accumulator: f64,
++    /// os8088: how long the drive needs for the operation in flight, and how
++    /// much of that has been served. `op_delay_us` of 0 means "no mechanical
++    /// delay pending", which is also the state a non-data command leaves.
++    op_delay_us: f64,
++    op_elapsed_us: f64,
++    /// os8088: how many sectors of the current run have been PACED.
++    xfer_paced_sectors: usize,
++    /// os8088: microseconds of credit toward the next DMA byte, so the data
++    /// moves at the MEDIA's rate rather than at the guest's polling rate.
++    stream_credit_us: f64,
++    stream_byte_us: f64,
++    /// os8088: host-side traffic counters, read out through the debug server.
++    ///
++    /// This is SPEC.md §18.94's `DISKCNT` block measured from OUTSIDE - the
++    /// guest needs no counters, no knob-built kernel and no test package, so a
++    /// SHIPPED binary can be watched. That is what catches the §18.91 class:
++    /// a kernel re-reading sectors it already has looks identical from inside
++    /// and shows up here as traffic nobody asked for.
++    pub stat: FdcStats,
++    /// os8088: step rate the BIOS asked for through SPECIFY.
++    step_rate_us: f64,
+     fdc_type: FdcType,
+     status_byte: u8,
+     reset_flag: bool,
+@@ -471,6 +534,13 @@ impl Default for FloppyController {
+         Self {
+             phase: ControllerPhase::CommandPhase,
+             us_accumulator: 0.0,
++            op_delay_us: 0.0,
++            op_elapsed_us: 0.0,
++            xfer_paced_sectors: 0,
++            stream_credit_us: 0.0,
++            stream_byte_us: 0.0,
++            stat: FdcStats::default(),
++            step_rate_us: FDC_STEP_RATE_DEFAULT_US,
+             watchdog_accumulator: 0.0,
+             operation_accumulator: 0.0,
+             fdc_type: FdcType::IbmNec,
+@@ -559,6 +629,8 @@ impl FloppyController {
+ 
+         for (i, drive) in drives.iter().take(FDC_MAX_DRIVES).enumerate() {
+             fdc.drives[i] = FloppyDiskDrive::new(i, drive.fd_type);
++            // os8088: the media's physical layout comes from the machine.
++            fdc.drives[i].interleave = drive.interleave.max(1);
+         }
+ 
+         fdc
+@@ -781,6 +853,7 @@ impl FloppyController {
+             // Reset the FDC when the reset bit is *not* set
+             // Ignore all other commands
+             self.log_str(&format!("FDC Reset requested via DOR write: {:02X}", data));
++            self.stat.resets += 1;
+             self.operation_accumulator = 0.0;
+             self.operation = Operation::Reset;
+             self.mrq = false;
+@@ -826,6 +899,7 @@ impl FloppyController {
+             // Reset the FDC when the reset bit is *not* set
+             // Ignore all other commands
+             self.log_str(&format!("PCjr FDC Reset requested via DOR write: {:02X}", data));
++            self.stat.resets += 1;
+             self.operation_accumulator = 0.0;
+             self.operation = Operation::Reset;
+             self.mrq = false;
+@@ -1329,6 +1403,14 @@ impl FloppyController {
+         );
+ 
+         self.dma = !headload_ndm.non_dma();
++
++        // os8088: the step rate IS a real drive timing and the BIOS has just
++        // told us which one it wants. The NEC 765's SRT field counts down from
++        // 16 in 1 ms units at the 500 kbit/s clock, so a 250 kbit/s DD machine
++        // - which every 5150 floppy is - runs it at half rate, 2 ms a step.
++        let srt = steprate_unload.step_rate() as f64;
++        self.step_rate_us = (16.0 - srt).max(1.0) * 2_000.0;
++
+         self.log_cmd(Command::FixDriveData, "command_fix_drive_data", &log_str);
+ 
+         Continuation::CommandComplete
+@@ -1361,12 +1443,21 @@ impl FloppyController {
+ 
+         // Set drive select and seek to cylinder 0
+         self.drive_select = dhs.drive() as usize;
++
++        // os8088: a recalibrate steps the head all the way back to track 0, so
++        // it costs whatever that distance costs - priced before the seek.
++        let step_us = self.step_rate_us;
++        let seek_us = self.drives[dhs.drive() as usize].seek_time_us(0, step_us, FDC_HEAD_SETTLE_US);
++        self.stat.seeks += 1;
++        self.stat.seek_cylinders += self.drives[dhs.drive() as usize].seek_distance(0) as u64;
++
+         self.drives[dhs.drive() as usize].seek(0);
+ 
+         let log_str = format!("drive_select: {}", self.drive_select);
+         self.log_cmd(Command::CalibrateDrive, "command_calibrate_drive", &log_str);
+ 
+         // Set up Calibrate operation
++        self.op_charge(seek_us, true);
+         self.send_interrupt = true;
+         self.operation = Operation::Calibrate;
+         self.last_command = Command::CalibrateDrive;
+@@ -1397,6 +1488,14 @@ impl FloppyController {
+             return Continuation::CommandComplete;
+         }
+ 
++        // os8088: a seek costs a step per cylinder crossed plus the head
++        // settle, and the platter keeps turning throughout. Priced BEFORE the
++        // seek, because afterwards the distance is zero.
++        let step_us = self.step_rate_us;
++        let seek_us = self.drives[self.drive_select].seek_time_us(cylinder as u16, step_us, FDC_HEAD_SETTLE_US);
++        self.stat.seeks += 1;
++        self.stat.seek_cylinders += self.drives[self.drive_select].seek_distance(cylinder as u16) as u64;
++
+         // Seek to cylinder given in command
+         self.drives[self.drive_select].seek(cylinder as u16);
+ 
+@@ -1410,6 +1509,18 @@ impl FloppyController {
+         self.log_cmd(Command::SeekParkHead, "command_seek_head", &log_str);
+ 
+         self.last_error = DriveError::NoError;
++
++        // os8088: a seek that actually moves the head becomes an operation, so
++        // the completion interrupt lands when the head arrives rather than at
++        // once. A seek to the cylinder the head is already on costs nothing,
++        // which is the common case on a re-read and must stay free.
++        if seek_us > 0.0 {
++            self.op_charge(seek_us, true);
++            self.operation = Operation::Seek;
++            self.last_command = Command::SeekParkHead;
++            return Continuation::ContinueAsOperation;
++        }
++
+         self.send_interrupt = true;
+         Continuation::CommandComplete
+     }
+@@ -1958,6 +2069,26 @@ impl FloppyController {
+             self.xfer_size_bytes = xfer_sectors * sector_size_decoded;
+             self.dma_bytes_left = xfer_sectors * sector_size_decoded;
+             self.operation_init = true;
++
++            self.stat.reads += 1;
++            self.stat.read_sectors += xfer_sectors as u64;
++            if xfer_sectors as u64 > self.stat.longest_run {
++                self.stat.longest_run = xfer_sectors as u64;
++            }
++
++            // os8088: charge only the FIRST sector here. The rest are charged
++            // one at a time as the run proceeds, which is how a drive delivers
++            // them - see `sector_time_us`.
++            self.xfer_paced_sectors = 0;
++            self.stream_credit_us = 0.0;
++            self.stream_byte_us = self.drives[self.drive_select].byte_us();
++            let mech_us = self.drives[self.drive_select].sector_latency_us(chs.s(), sector_size_decoded);
++            self.op_charge(mech_us, false);
++        }
++
++        // os8088: nothing crosses the head until the sector has come round.
++        if !self.op_ready() {
++            return;
+         }
+ 
+         if self.dma_bytes_left > 0 {
+@@ -1967,15 +2098,32 @@ impl FloppyController {
+             if (self.dma_bytes_left < self.xfer_size_bytes) && (self.dma_bytes_left % sector_size_decoded == 0) {
+                 // Completed one sector
+ 
+-                self.xfer_completed_sectors += 1;
+-                // log::trace!(
+-                //     "operation_read_sector: Transferred {} sectors.",
+-                //     self.xfer_completed_sectors
+-                // );
++                // os8088: `done` is derived from the byte count rather than
++                // counted up, so it is stable while the pacing gate below holds
++                // this branch re-entrant - a counter incremented here would run
++                // away every tick we spend waiting.
++                let done = (self.xfer_size_bytes - self.dma_bytes_left) / sector_size_decoded;
++                self.xfer_completed_sectors = done;
++
++                if done > self.xfer_paced_sectors {
++                    self.xfer_paced_sectors = done;
++                    let next = self.drives[self.drive_select].wrap_sid(chs.s(), done);
++                    let mech_us = self.drives[self.drive_select].sector_latency_us(next, sector_size_decoded);
++                    self.op_charge(mech_us, false);
++                    return;
++                }
++            }
++
++            // os8088: a byte only exists once the platter has carried it under
++            // the head, so it is released on media-rate credit rather than as
++            // fast as the guest can ask.
++            if self.stream_credit_us < self.stream_byte_us {
++                return;
+             }
+ 
+             // Check if DMA is ready
+             if dma.check_dma_ready(FDC_DMA) {
++                self.stream_credit_us -= self.stream_byte_us;
+                 let byte = self.drives[self.drive_select].read_operation_buf();
+ 
+                 dma.do_dma_write_u8(bus, FDC_DMA, byte);
+@@ -2008,6 +2156,7 @@ impl FloppyController {
+                 new_chs
+             );
+ 
++
+             self.dma_byte_count = 0;
+             self.dma_bytes_left = 0;
+ 
+@@ -2072,6 +2221,21 @@ impl FloppyController {
+             self.xfer_size_bytes = self.xfer_size_sectors * sector_size_bytes;
+             self.dma_bytes_left = self.xfer_size_bytes;
+             self.operation_init = true;
++
++            self.stat.writes += 1;
++            self.stat.write_sectors += self.xfer_size_sectors as u64;
++
++            // os8088: a write waits for the sector to come round exactly as a
++            // read does - the head can only lay bytes down as the platter
++            // presents them.
++            let sectors = self.xfer_size_sectors;
++            let mech_us = self.drives[self.drive_select].transfer_time_us(chs.s(), sectors, sector_size_bytes);
++            self.op_charge(mech_us, false);
++        }
++
++        // os8088: hold the write until the platter has turned.
++        if !self.op_ready() {
++            return;
+         }
+ 
+         if self.dma_bytes_left == sector_size_bytes {
+@@ -2357,6 +2521,15 @@ impl FloppyController {
+             self.xfer_size_bytes = xfer_sectors * sector_size_decoded;
+             self.dma_bytes_left = xfer_sectors * sector_size_decoded;
+             self.operation_init = true;
++
++            // os8088: Read Track streams from the index in physical order.
++            let mech_us = self.drives[self.drive_select].track_time_us();
++            self.op_charge(mech_us, false);
++        }
++
++        // os8088: hold the transfer until the platter has turned.
++        if !self.op_ready() {
++            return;
+         }
+ 
+         if self.dma_bytes_left > 0 {
+@@ -2416,6 +2589,41 @@ impl FloppyController {
+         }
+     }
+ 
++    /// os8088: charge the drive `us` of mechanical time for an operation that
++    /// is just starting.
++    ///
++    /// `seek` only says which counter to bill. Whether the platter turns
++    /// through the delay is decided in `run` from the OPERATION, because that
++    /// is the thing that knows - a transfer walks the angle itself and a seek
++    /// does not.
++    fn op_charge(&mut self, us: f64, seek: bool) {
++        if seek {
++            self.stat.seek_us += us;
++        }
++        else {
++            self.stat.transfer_us += us;
++        }
++        self.op_delay_us = us;
++        self.op_elapsed_us = 0.0;
++    }
++
++    /// os8088: has the platter finished turning for the operation in flight?
++    ///
++    /// Answers true once, clearing the debt, so the data phase that follows
++    /// runs at the speed the rest of the emulator runs at - what is being
++    /// modelled is when the sector reaches the head, not the ISA bus.
++    fn op_ready(&mut self) -> bool {
++        if self.op_delay_us <= 0.0 {
++            return true;
++        }
++        if self.op_elapsed_us >= self.op_delay_us {
++            self.op_delay_us = 0.0;
++            self.op_elapsed_us = 0.0;
++            return true;
++        }
++        false
++    }
++
+     fn operation_reset(&mut self, delta_us: f64) {
+         self.operation_accumulator += delta_us;
+         if self.operation_accumulator > FDC_RESET_TIME {
+@@ -2428,6 +2636,20 @@ impl FloppyController {
+     }
+ 
+     fn operation_seek(&mut self, delta_us: f64) {
++        // os8088: the head's travel was priced when the command was accepted,
++        // so wait that out rather than the flat FDC_SEEK_TIME. A zero-distance
++        // seek never reaches here (it completes in the command phase), and the
++        // flat constant is kept as the floor for anything that charges nothing.
++        if self.op_delay_us > 0.0 {
++            if self.op_ready() {
++                log::trace!("FDC Operation Seek/Calibrate complete");
++                self.operation_accumulator = 0.0;
++                self.operation = Operation::NoOperation;
++                self.send_interrupt = true;
++            }
++            return;
++        }
++
+         self.operation_accumulator += delta_us;
+         if self.operation_accumulator > FDC_SEEK_TIME {
+             log::trace!("FDC Operation Seek/Calibrate complete");
+@@ -2642,6 +2864,30 @@ impl FloppyController {
+     pub fn run(&mut self, dma: &mut dma::DMAController, bus: &mut BusInterface, us: f64) {
+         self.us_accumulator += us;
+ 
++        // os8088: serve any mechanical delay owed by the operation in flight.
++        // The platter itself turns unconditionally, below.
++        if self.op_delay_us > 0.0 {
++            self.op_elapsed_us += us;
++        }
++        else {
++            // Past the wait for this sector: its data is under the head now,
++            // so bytes become available at the media's rate.
++            self.stream_credit_us += us;
++        }
++
++        // The platter turns, always and unconditionally. A charge computed by
++        // `sector_time_from` is exactly the time until that sector's data has
++        // passed the head, so letting that time elapse puts the head where the
++        // charge said it would be - the angle needs setting by nobody, and the
++        // suppression this replaces existed only to stop a second opinion
++        // double-counting. That suppression is what stopped the disk between
++        // two reads, which is not a small error: a guest's turnaround has to
++        // SPEND rotational slack, and one that does not turns a 2-revolution
++        // track read into a 3-revolution one.
++        for drive in self.drives.iter_mut() {
++            drive.advance_rotation(us);
++        }
++
+         if self.watchdog_triggered {
+             self.watchdog_accumulator += us;
+             if self.watchdog_enabled && self.watchdog_accumulator > WATCHDOG_TIMEOUT {
+diff --git a/crates/marty_core/src/devices/floppy_drive.rs b/crates/marty_core/src/devices/floppy_drive.rs
+index fc9ee6db..f5917c51 100644
+--- a/crates/marty_core/src/devices/floppy_drive.rs
++++ b/crates/marty_core/src/devices/floppy_drive.rs
+@@ -170,6 +170,22 @@ pub struct FloppyDiskDrive {
+     pub(crate) supported_formats: Vec<FloppyImageType>,
+ 
+     ref_write: u64,
++
++    /// os8088: angular position of the head within one revolution, in
++    /// microseconds from the index hole. Advanced while the motor turns.
++    pub(crate) angle_us: f64,
++    /// os8088: physical sector interleave of the media in this drive. A raw
++    /// sector image carries no physical layout, so this is a property of the
++    /// machine config rather than of the file. The calibration 5150's media is
++    /// 2:1 (PERFORMANCE.md Part 9 Set 14).
++    pub(crate) interleave: u8,
++    /// os8088: sectors per track of the mounted media.
++    ///
++    /// `media_geom` cannot supply this - upstream builds it from the image's
++    /// `DiskDescriptor`, whose `geometry` is a cylinder/head pair with the
++    /// sector count hardcoded to 0 because nothing else needs it. The timing
++    /// model needs it for every angular calculation there is.
++    pub(crate) media_spt: u8,
+ }
+ 
+ impl Default for FloppyDiskDrive {
+@@ -195,10 +211,26 @@ impl Default for FloppyDiskDrive {
+             supported_formats: Vec::new(),
+ 
+             ref_write: 0,
++
++            angle_us: 0.0,
++            interleave: 1,
++            media_spt: 0,
+         }
+     }
+ }
+ impl FloppyDiskDrive {
++    /// os8088: sectors per track of the mounted media, taken from track 0 of
++    /// head 0. A whole-image sector map is built once at mount, never per
++    /// operation.
++    fn spt_from_image(image: &DiskImage) -> u8 {
++        image
++            .sector_map()
++            .first()
++            .and_then(|tracks| tracks.first())
++            .map(|sectors| sectors.len() as u8)
++            .unwrap_or(0)
++    }
++
+     pub fn new(drive_n: usize, drive_type: FloppyDriveType) -> Self {
+         // Should be safe to unwrap as we are limited by valid drive type enums.
+         let drive_geom = DRIVE_CAPABILITIES.get(&drive_type).unwrap().chs;
+@@ -238,6 +270,11 @@ impl FloppyDiskDrive {
+             positioning: false,
+             disk_image: image,
+             supported_formats: self.supported_formats.clone(),
++            // os8088: the interleave describes the MEDIA, so it survives a
++            // controller reset the way the mounted image does.
++            interleave: self.interleave,
++            angle_us: self.angle_us,
++            media_spt: self.media_spt,
+             ..Default::default()
+         };
+     }
+@@ -266,7 +303,14 @@ impl FloppyDiskDrive {
+             0u8,
+         ));
+ 
+-        log::debug!("Loaded floppy image, CHS: {}", self.media_geom,);
++        // os8088: the timing model needs the sector count the descriptor drops.
++        self.media_spt = Self::spt_from_image(&image);
++
++        log::debug!(
++            "Loaded floppy image, CHS: {} spt: {}",
++            self.media_geom,
++            self.media_spt
++        );
+         self.disk_present = true;
+         self.write_protected = write_protect;
+         let image_arc = image.into_arc();
+@@ -288,7 +332,14 @@ impl FloppyDiskDrive {
+             0u8,
+         ));
+ 
+-        log::debug!("Attached floppy image, CHS: {}", self.media_geom);
++        // os8088: as load_image.
++        self.media_spt = Self::spt_from_image(&image);
++
++        log::debug!(
++            "Attached floppy image, CHS: {} spt: {}",
++            self.media_geom,
++            self.media_spt
++        );
+         self.disk_present = true;
+         self.write_protected = write_protect;
+         let image_arc = image.into_arc();
+@@ -310,6 +361,8 @@ impl FloppyDiskDrive {
+     pub fn unload_image(&mut self) {
+         self.chsn = Default::default();
+         self.media_geom = DiskChs::default();
++        // os8088: an empty drive has no media geometry to time against.
++        self.media_spt = 0;
+         self.disk_present = false;
+         self.disk_image = None;
+     }
+@@ -333,6 +386,8 @@ impl FloppyDiskDrive {
+         let image = builder.build()?;
+         self.chsn = Default::default();
+         self.media_geom = format.chs();
++        // os8088: a StandardFormat does carry its sector count.
++        self.media_spt = format.chs().s();
+         self.disk_present = true;
+ 
+         let image_arc = image.into_arc();
+@@ -790,6 +845,240 @@ impl FloppyDiskDrive {
+         self.chsn.set_c(c);
+     }
+ 
++    // -----------------------------------------------------------------------
++    // os8088: the mechanical timing model.
++    //
++    // Stock MartyPC hands a sector over the instant it is asked for. There is
++    // no platter, no rotational latency and no interleave, which is why it
++    // reads a 16 KB file ~30x faster than the IBM 5150 this project is
++    // calibrated against (PERFORMANCE.md Part 9 Set 11). Everything below
++    // exists so that the three raw `int 13h` rows Sets 14/22 measured on that
++    // machine come out right, and they come out of ONE mechanism:
++    //
++    //   one sector, repeated  199 ms  = 1.00 revolution
++    //   a 9-sector track, 1 call      384 ms = 1.92 revolutions
++    //   the same 9 sectors, 9 calls   2,005 ms = 10.02 revolutions
++    //
++    // A sector is readable only as it passes the head, so all three are the
++    // same statement about where the platter is when the command arrives.
++    // -----------------------------------------------------------------------
++
++    /// The drive/media pair's rotational speed and MFM data rate.
++    ///
++    /// A 1.2M drive always spins at 360 RPM, so DD media in one streams at
++    /// 300 kbit/s rather than 250 - which is why the Compaq Portable III reads
++    /// a track in 1.24 revolutions where the 5150 needs 1.92 (Set 19).
++    fn media_timing(&self) -> (f64, f64) {
++        let hd_media = self.media_spt >= 15;
++        match self.drive_type {
++            FloppyDriveType::Floppy12M => {
++                if hd_media {
++                    (360.0, 500_000.0)
++                }
++                else {
++                    (360.0, 300_000.0)
++                }
++            }
++            FloppyDriveType::Floppy144M => {
++                if hd_media {
++                    (300.0, 500_000.0)
++                }
++                else {
++                    (300.0, 250_000.0)
++                }
++            }
++            // The 360K and 720K drives: 300 RPM, 250 kbit/s.
++            _ => (300.0, 250_000.0),
++        }
++    }
++
++    /// One revolution, in microseconds. 200,000 on a 300 RPM drive.
++    pub fn revolution_us(&self) -> f64 {
++        60_000_000.0 / self.media_timing().0
++    }
++
++    /// Microseconds for one byte to pass the head. 32.0 at 250 kbit/s, so a
++    /// 512-byte sector's data field is 16.384 ms of the 200 ms revolution.
++    pub fn byte_us(&self) -> f64 {
++        8.0 * 1_000_000.0 / self.media_timing().1
++    }
++
++    /// Turn the platter.
++    ///
++    /// **Deliberately NOT gated on `motor_on`.** Upstream keeps that flag for
++    /// `ready` and ST3 and nothing ever depended on it being right, so it is
++    /// not: measured, it reads FALSE through every one of the boot's reads and
++    /// TRUE through `sysbench`'s, on the same machine in the same session. A
++    /// rotation model that believed it froze the platter in one context and
++    /// turned it in the other - and a frozen platter is not conservative, it
++    /// is OPTIMISTIC, because it presents the head at the same ideal angle for
++    /// every read instead of wherever the disk happens to be.
++    ///
++    /// A stopped platter's angle is unknowable anyway, and this model does not
++    /// claim to know it: what it must get right is that the disk keeps turning
++    /// while the guest thinks, so that the guest's own overhead SPENDS
++    /// rotational slack rather than adding to it. That is the whole difference
++    /// between 2 revolutions and 3 on a track read.
++    pub fn advance_rotation(&mut self, us: f64) {
++        if !self.disk_present {
++            return;
++        }
++        let rev = self.revolution_us();
++        if rev > 0.0 {
++            self.angle_us = (self.angle_us + us) % rev;
++        }
++    }
++
++    /// The physical order of the logical sectors around one track.
++    ///
++    /// `map[slot]` is the logical sector ID sitting in that angular slot. This
++    /// is how a track is laid down at format time: place sector 1, step
++    /// `interleave` slots, place sector 2, and take the next free slot when
++    /// stepping lands on an occupied one. At 2:1 with 9 sectors it produces
++    /// 1,6,2,7,3,8,4,9,5 - the layout the calibration machine's media has.
++    fn interleave_map(&self, spt: u8) -> Vec<u8> {
++        let spt = spt as usize;
++        let mut map = vec![0u8; spt];
++        if spt == 0 {
++            return map;
++        }
++        let il = (self.interleave.max(1) as usize) % spt.max(1);
++        let il = if il == 0 { 1 } else { il };
++
++        let mut slot = 0usize;
++        for s in 1..=spt {
++            while map[slot] != 0 {
++                slot = (slot + 1) % spt;
++            }
++            map[slot] = s as u8;
++            slot = (slot + il) % spt;
++        }
++        map
++    }
++
++    /// The logical sector `n` places after `start_id`, wrapping within the track.
++    pub fn wrap_sid(&self, start_id: u8, n: usize) -> u8 {
++        let spt = self.media_spt.max(1) as usize;
++        ((start_id.max(1) as usize - 1 + n) % spt) as u8 + 1
++    }
++
++    /// Time until logical sector `id`'s data starts passing the head, plus the
++    /// time for it to pass - and leave the head at the end of it.
++    ///
++    /// This is the unit the transfer is PACED in, one sector at a time, because
++    /// that is how a real drive delivers one: the controller starts DRQing as
++    /// soon as the first sector arrives and then pauses over each inter-sector
++    /// gap. Charging a whole multi-sector run as one silent lump instead is not
++    /// merely less faithful - it makes the drive appear dead for the length of
++    /// the run, and a BIOS that is watching for activity gives up. GLaBIOS
++    /// abandons a read after ~250 ms of nothing, which is less than the 305 ms
++    /// a 6-sector 2:1 run legitimately takes.
++    pub fn sector_time_us(&self, id: u8, sector_bytes: usize) -> f64 {
++        self.sector_time_from(id, sector_bytes, self.angle_us).0
++    }
++
++    /// The same, from a stated angle, answering (cost, where the head ends up).
++    ///
++    /// **It does not move the head, and that is the point.** The angle is a
++    /// pure function of elapsed time (`advance_rotation`), so a caller that
++    /// charges this cost and then lets that many microseconds pass finds the
++    /// head exactly where this says it will be - once, not twice. Setting it
++    /// here as well was a second opinion about the same quantity, and it had
++    /// to be paid for with a rule suppressing rotation for the length of an
++    /// operation, which is how the platter came to stop while the guest was
++    /// between two reads.
++    pub fn sector_time_from(&self, id: u8, sector_bytes: usize, angle: f64) -> (f64, f64) {
++        let (lat, xfer, end) = self.sector_split_from(id, sector_bytes, angle);
++        (lat + xfer, end)
++    }
++
++    /// The same, split into the WAIT for the sector to arrive and the time its
++    /// data takes to pass the head - because the bytes move during the second
++    /// part and not after it.
++    ///
++    /// Charging `latency + transfer` as one delay and then handing the DMA its
++    /// 512 bytes as fast as the guest can poll is not what a drive does: it
++    /// serialises media time and bus traffic that physically overlap, and on a
++    /// 9-sector read that appends ~4,600 guest instructions of BIOS wait loop
++    /// to the operation. That time lands in the gap between two reads, where
++    /// 28 ms of rotational slack decides whether the next one catches its
++    /// sector or waits another whole revolution.
++    pub fn sector_split_from(&self, id: u8, sector_bytes: usize, angle: f64) -> (f64, f64, f64) {
++        let spt = self.media_spt;
++        if spt == 0 {
++            return (0.0, 0.0, angle);
++        }
++
++        let rev = self.revolution_us();
++        let slot_us = rev / spt as f64;
++        let xfer_us = sector_bytes as f64 * self.byte_us();
++        let map = self.interleave_map(spt);
++
++        let slot = map.iter().position(|&s| s == id).unwrap_or(0);
++        let sector_start = slot as f64 * slot_us;
++
++        let mut wait = sector_start - angle;
++        if wait < 0.0 {
++            wait += rev;
++        }
++
++        (wait, xfer_us, (sector_start + xfer_us) % rev)
++    }
++
++    /// Just the wait for logical sector `id` to reach the head, from here.
++    pub fn sector_latency_us(&self, id: u8, sector_bytes: usize) -> f64 {
++        self.sector_split_from(id, sector_bytes, self.angle_us).0
++    }
++
++    /// The whole of a `count`-sector run, for callers that want the total
++    /// rather than the pacing. Kept in terms of `sector_time_us` so the two can
++    /// never disagree about what a run costs.
++    pub fn transfer_time_us(&self, start_id: u8, count: usize, sector_bytes: usize) -> f64 {
++        if self.media_spt == 0 || count == 0 {
++            return 0.0;
++        }
++
++        let mut total = 0.0;
++        let mut angle = self.angle_us;          // a LOCAL walk: see sector_time_from
++        for i in 0..count {
++            let id = self.wrap_sid(start_id, i);
++            let (cost, end) = self.sector_time_from(id, sector_bytes, angle);
++            total += cost;
++            angle = end;
++        }
++        total
++    }
++
++    /// os8088: Read Track and Format Track both stream from the index hole in
++    /// PHYSICAL order, so each costs the wait for the index plus one whole
++    /// revolution - interleave cannot help or hurt them.
++    pub fn track_time_us(&self) -> f64 {
++        let rev = self.revolution_us();
++        if rev <= 0.0 {
++            return 0.0;
++        }
++        (rev - self.angle_us) % rev + rev
++    }
++
++    /// Cylinders between the head and `target_c`.
++    pub fn seek_distance(&self, target_c: u16) -> u32 {
++        (target_c as i32 - self.cylinder as i32).unsigned_abs()
++    }
++
++    /// Head step time to `target_c`, plus the settle once it arrives.
++    ///
++    /// Unlike the rotational rows above this one is NOT independently
++    /// calibrated - the field's three raw `int 13h` rows all read one track
++    /// and never seek - so the step rate is taken from what the BIOS asked for
++    /// through the FDC's SPECIFY command rather than invented here.
++    pub fn seek_time_us(&self, target_c: u16, step_us: f64, settle_us: f64) -> f64 {
++        let dist = (target_c as i32 - self.cylinder as i32).unsigned_abs();
++        if dist == 0 {
++            return 0.0;
++        }
++        dist as f64 * step_us + settle_us
++    }
++
+     pub fn advance_sector(&mut self) {
+         if let Some(next_sector) = self.get_next_sector(self.chsn.into()) {
+             log::warn!(
+diff --git a/crates/marty_core/src/machine_config.rs b/crates/marty_core/src/machine_config.rs
+index c34206ac..299a97e1 100644
+--- a/crates/marty_core/src/machine_config.rs
++++ b/crates/marty_core/src/machine_config.rs
+@@ -244,11 +244,31 @@ pub struct FloppyControllerConfig {
+     pub drive:    Vec<FloppyDriveConfig>,
+ }
+ 
++/// os8088: media laid down 1:1 unless the machine says otherwise.
++fn default_interleave() -> u8 {
++    1
++}
++
+ #[derive(Clone, Debug, Deserialize)]
+ pub struct FloppyDriveConfig {
+     #[serde(rename = "type")]
+     pub fd_type: FloppyDriveType,
+     pub image:   Option<String>,
++    /// os8088: physical sector interleave of the media this drive carries.
++    ///
++    /// A raw sector image records the logical order and says nothing at all
++    /// about the physical layout, so this cannot be derived from the file - it
++    /// is the machine's statement about its own floppies.
++    ///
++    /// **No os8088 machine config sets it**, and that is a measurement rather
++    /// than a default nobody got round to: the calibration 5150's 360KB media
++    /// was read as 2:1 for a while, from a track read costing 2.00 revolutions
++    /// where a 1:1 track costs 1.00 - and the missing revolution turned out to
++    /// be the IBM ROM's own per-`int 13h` head-settle wait, not the platter
++    /// (PERFORMANCE.md Part 9 Set 37). The knob stays because interleaved
++    /// media is a real thing to want to model.
++    #[serde(default = "default_interleave")]
++    pub interleave: u8,
+ }
+ 
+ #[derive(Clone, Debug, Deserialize)]

@@ -221,10 +221,17 @@ rule goes first:
 > (`MOUSEPORT=`, a socket chardev). "It is quicker to type" is not a reason;
 > neither is "I already know the QMP commands".
 >
-> **And for anything with a disk in its TIMING, neither one is the
-> instrument** — that is the 5150 (docs/FIELD-MACHINES.md), because no
-> emulator here is disk-accurate and MartyPC's error is 30x in the flattering
-> direction.
+> **And for anything with a disk in its TIMING, the 5150 is still where a
+> number LANDS** (docs/FIELD-MACHINES.md) — but MartyPC's floppy is no longer
+> a fiction: it turns at 300 RPM, charges a seek and moves bytes at the media
+> rate (PERFORMANCE.md Sets 35/37), which took the boot from 4.4x fast to
+> **0.92x** and `sysbench`'s raw floppy block to within one measurement
+> quantum of the iron. **Take that number off an IBM-ROM 5150 and no other
+> class** (Set 38, and docs/MARTYPC-DEBUG.md's table): the drive is one model
+> and six machines produce bit-identical controller traffic, but a GLaBIOS
+> machine's `int 13h` is **1.61x lighter** than the period ROM's — counts yes,
+> seconds no. Use it to find a disk regression; confirm it on the iron before
+> it goes in PERFORMANCE.md. QEMU remains 30x fast and models none of it.
 >
 > Why this is a rule and not a preference: QEMU is the emulator **furthest
 > from the target**. It runs the guest at host speed, on a CPU that is not an
@@ -551,12 +558,46 @@ sectors, so `dirty()` compares CONTENT; a bare `save(drive)` writes back over
 the mounted image and so destroys the reference `diff` needs; and the
 EMULATOR writes the file, so a relative path lands in the run tree.
 
-**MARTYPC IS CYCLE ACCURATE AND IT IS NOT DISK ACCURATE. If a disk is in the
-path, its timing is WRONG** - 30x fast on a 16KB read (0.27 s against the
-5150's 8.07) and 17x fast on a boot (PERFORMANCE.md Set 11) - and that catches
-plenty that is not obviously about disks: a boot time, a package launch, a
-Tracker module load, a `SYSTEM.CFG` save. **Nor will it catch a disk
-CORRECTNESS bug.** SPEC.md 18.91's `AL` bug is the worked example - the BIOS
+**MARTYPC'S FLOPPY NOW TURNS, AND IT AGREES WITH THE IRON TO THE MEASUREMENT
+QUANTUM.** It was 30x fast on a 16KB read and 17x on a boot (Set 11) because
+upstream models **no platter at all** - `command_seek_head` completes in the
+breath it is issued, `FloppyDriveMechanicalState` is an enum nothing
+references, and sectors-per-track is hardcoded 0.
+`tools/martypc/patches/04-floppy-disk-timing.patch` gives it rotation, an MFM
+data rate, a per-cylinder seek and a configurable interleave. **`tests/sysbench`
+on `os8088_5150_herc` now reproduces the field machine's whole raw floppy
+block off the identical `combo.img`** (Set 37): `int 13h 1 sector` and all
+five short seek rows EXACTLY, three more within one quantum - a quantum being
+`bl_run`'s own tick-over-four resolution, 13,731us, not a property of either
+machine - and the boot **188 ticks against the field's 205**.
+**Getting there needed one number thrown away, and it was this tree's own.**
+Set 14 read the field's 398 ms track read as 2:1 media (a 1:1 track is one
+revolution and this was two) with 11,570 B/s against 11,520 by arithmetic to
+confirm it. Both figures are real and both fit **1:1 media plus a quarter
+revolution of BIOS**: the IBM ROM spends the diskette parameter table's 25 ms
+head settle in a `LOOP $` at F000:EEB8 that costs **52.5 ms** on a 4.77MHz
+8088, once per `int 13h`. A B/s figure divides by the WHOLE call and so cannot
+tell the two apart. So no machine config sets an interleave, the drive charges
+**no** settle of its own (the BIOS's, counted twice, cost a whole extra
+revolution at 39 cylinders), and the GLaBIOS exception is gone with it - every
+config carries the same disks now. **A ratio that matches an arithmetic
+prediction is not evidence unless everything it divides by has been measured**;
+what settled it was `CS:IP` sampling plus the ROM's own disassembly.
+One caveat is left: the IBM-ROM machines need a ROM this tree cannot ship, so
+a container without one in `tools/martypc/roms/` runs the GLaBIOS twins only.
+**And it DOES catch a disk correctness bug, which corrects what this file
+said two commits ago.** SPEC.md 18.91's `AL` bug reproduces on
+`os8088_5150_herc`: `make DISKAL=1` boots in **893 ticks against 188**, and
+`os88marty.py`'s `disk` counters - the controller's own traffic read from
+OUTSIDE the guest, so a SHIPPED image can be watched with no `DISKCNT=1`
+kernel and no test package - show **870 sectors in 183 reads against 183 in
+24, longest run 9 in both**. That is the field's exact signature (Set 15's
+4.6x traffic; this is 4.75x). It needed no emulator cleverness: the bug is in
+the IBM ROM and MartyPC RUNS the IBM ROM, where QEMU missed it because
+SeaBIOS is a different BIOS. **The boundary is now between the ROM and the
+CHIP** - what a real 765 puts in ST1, or whether a real drive ever returns
+short, is still the emulator author's belief and still the 5150's question.
+SPEC.md 18.91's `AL` bug is the worked example - the BIOS
 moved nine sectors and answered `AL = 1`, the kernel believed it and re-read
 the rest one at a time, and on the 5150 that was 148 sectors in 34 int 13h
 calls for a 32-sector file. **The same binary on the same image under QEMU
@@ -747,9 +788,11 @@ and neither models rotational latency, so neither can arbitrate. **Do not
 cost a disk change against the 9x**. **The mechanism is now known and it is
 ours** (Set 14): `sysbench` calls `int 13h` itself, and on that machine a
 whole 9-sector track in ONE call is **384 ms — 1.92 revolutions, 11,985
-bytes/second** (the media is 2:1 interleaved), the same nine sectors as nine
+bytes/second** (which Set 14 read as 2:1 media and Set 37 corrected: the
+media is 1:1 and the second revolution is the ROM's own 52.5 ms head-settle
+loop, once per `int 13h`), the same nine sectors as nine
 calls is **10.02 revolutions**, and os8088's own read is **1.34 revolutions
-per sector**. So the drive, the controller, the interleave and the BIOS are
+per sector**. So the drive, the controller, the media and the BIOS are
 all exonerated — `int 13h track, 1 call` *is* the batched read done right and
 it is **6.3x faster than `dsk_xfer` achieves**. Whatever §18.91 is issuing is
 not reaching the hardware as multi-sector commands, and the next step is a
@@ -769,7 +812,10 @@ under QEMU moves 34 sectors in 6 calls with zero mounts, so the extra is
 machine-dependent, which is why reading the source never found it. The target
 is measured now too: DOS copying one 170KB file off that disk is **~13,390
 B/s**, the BIOS's own one-call track read **11,570**, 2:1 interleave by
-arithmetic 11,520 — three figures within 16%, against os8088's 1,912.
+arithmetic 11,520 — three figures within 16%, against os8088's 1,912. (The
+11,520 agreement is a coincidence and Set 37 is why: bytes over the *whole*
+`int 13h` call, a quarter of which is BIOS. The 11.5–13.4 KB/s target is
+measured and stands.)
 **And the (LBA, run) trace found it** (Set 16): the LBA advances by one while
 the run counts down, 34 calls over 33 distinct LBAs with nothing read twice —
 **`dsk_xfer` asked for nine sectors, the BIOS moved nine, and answered
@@ -906,8 +952,11 @@ Its **"Modelling the old machine from a fast one"** section is the part that
 has cost four bugs, and most of it is about QEMU: this container is ~1000x a
 4.77MHz 8088, so every constant sized while looking at it encodes the wrong
 range. MartyPC removes a good deal of that (a cycle-accurate 8088 does not
-have a clock that tells you nothing) and removes **none** of it for the disk,
-where its error is 30x and flattering. **FLICKER IS MEASURABLE NOW** and
+have a clock that tells you nothing), and since PERFORMANCE.md Sets 35/37 it
+removes most of it for the disk too - its floppy turns at 300 RPM and its raw
+`int 13h` rows land within a measurement quantum of the field machine's, so
+the error is a few percent rather than 30x. The 5150 is still where a disk
+number lands. **FLICKER IS MEASURABLE NOW** and
 PERFORMANCE.md Part 3.1 is the method: `os88marty.py flicker` samples the
 card's RENDERED framebuffer once per displayed frame - which is exactly how
 often an eye samples it, a CRT showing whatever the raster last read - and
@@ -2660,8 +2709,22 @@ and what makes `int 13h` AH=08h/AH=15h useless twice over (neither exists on a
 a position sensor on the head carriage: a drive that is there asserts it with
 or without media, and an unpopulated select line is held inactive by the
 controller's pull-up. So it is **SENSE DRIVE STATUS** (ST3 bit 4) with no
-motor, and only if that is inconclusive the motor and a **RECALIBRATE**, whose
-**ST0 bit 4 — Equipment Check, 77 steps and no TRK0 — is the absent drive**.
+motor, and only if that is inconclusive the motor, a **RECALIBRATE**, and
+**ST3 again** — the head has been told to go and find track 0, so if TRK0
+still has not come up there is nothing there to find it.
+
+**It decided on ST0's Equipment Check first, and the field killed that**
+(SPEC.md §18.97.1). `SENSE INTERRUPT STATUS` takes no argument and the 765
+queues one status-change result *per drive* after a reset, so a sense returns
+the head of the queue rather than an answer about the drive you commanded:
+the 5150 answered `ST0 = C2` — interrupt code 11, unit **two** — to a question
+about unit one, and the probe refused and kept the drive. A `SENSE DRIVE
+STATUS` is a *level read* of the selected unit's lines, so it has no queue to
+be at the wrong end of. The queue is drained at both ends anyway, and ST0 is
+still published: with the drain in place it reads `0x71` — IC 01, SE, EC,
+unit 1 — which is exactly the Equipment Check the first design wanted, so it
+now **corroborates** the ST3 decision instead of being a byte nothing could
+explain.
 
 Five things hold it up. **Every failure keeps the drive**, because the two
 errors are not symmetric: a phantom icon costs a click, a hidden real drive
@@ -2695,8 +2758,10 @@ overlay can spend that tail.
 
 **No emulator here can arbitrate it, so the verdict and its working are
 published** through §57's registry as `'FD'` (§57.5) and reported by
-`tests/sysbench` — `claimed`, `probe ran`, the raw ST3 and ST0, `probe stop`
-and the verdict. Read **`probe stop`** first: `verdict 1` is what a probe that
+`tests/sysbench` — `claimed`, `probe ran`, both ST3 reads, the drained ST0,
+`probe stop` and the verdict. **It is confirmed on the iron**: `ST3 = 21`
+before and after, `probe stop 03`, `verdict 0`, and a desktop with drive A
+alone. Read **`probe stop`** first: `verdict 1` is what a probe that
 *proved* a drive present and one that merely *failed to prove one absent* both
 say, and telling those apart is the difference between this working and this
 being a fail-safe that never fires. `make FDDPROBE=0` is the A/B and removes
