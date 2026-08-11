@@ -2548,6 +2548,51 @@ are the floppy's code, unchanged. A volume caps at 65,535 sectors (31.99MB),
 which is both BPB rule 8's existing refusal and the DOS 3.3 limit these
 machines ran; more capacity is more partitions.
 
+**…and a volume belongs to a CLASS now, because TWO drivers serve blocks**
+(SPEC.md §18.7.1/§61). `DV_PAD` became `DV_CLASS` — a spare byte in a 16-byte
+row, so it cost nothing — and it removed an assumption that was correct for
+exactly as long as one class served blocks. Three places had it baked in and
+each was silently wrong the moment `DRVC_NET` arrived: **`dsk_xfer`** sent
+every driver-backed sector through the DISK class's published `DSV_BLK`, hard
+coded (on a machine with a hard disk *and* a network link that is every
+network sector going to the hard-disk driver, which would add its own
+partition base to it); **`osapi_vol_add`** had no way to know who was calling,
+and now learns the class by walking the publication slots for the one whose
+`drv_fseg` names the caller's segment; and **`dsk_vol_drop_drv`** dropped
+EVERY driver-backed row, took no argument and wanted none — so on a machine
+with a sound card and a hard disk, unticking **Sound** unmounted every
+hard-disk partition, with the disk driver loaded and published the whole time
+and nothing on screen pointing anywhere near the cause. The one ordering that
+matters is that `dsk_xfer` reads the class **while BX is still the row**: the
+row pointer is spent a few instructions later and the class cannot be
+recovered from anything the call still holds. It is the sibling of the bug
+§51.2.1's per-class publication fixed, in the one place that was still
+class-blind — and the shape is worth recognising: **a structure that is
+one-of-a-kind by accident rather than by design, meeting its second instance
+years later with no diagnostic between the cause and the symptom.**
+
+**NET.DRV is that second instance, and it is a LapLink cable as a volume**
+(SPEC.md §61, docs/NET-PLAN.md). The DOS side (`OS88NET.COM`) serves 512-byte
+sectors out of an image file and everything above `dsk_xfer` works unchanged —
+which is why block mode is stage 1 and the file redirector is stage 2: this is
+~2KB of driver and **172 bytes of kernel**, the redirector is ~400 more across
+twelve branch sites, and it is worth building on a transport somebody has used
+in anger. **3,741 bytes/second measured** (PERFORMANCE.md Set 39), 5.7x slower
+than the 5150's own floppy; what it buys is not speed but that a file crosses
+it without docs/FIELD-MACHINES.md's seven-step path. Three things to know
+before touching it. The transport (`drivers/net/lplink.inc`) is `%include`d by
+**both** the driver and `tests/lptlink`, so a wire fix cannot drift between the
+diagnostic and the thing it diagnoses. **Every deadline is in TICKS and never
+in polls** — a poll is ~15us on a 4.77MHz 8088 and ~1us on anything modern, so
+a poll-counted timeout had the fast end giving up inside the slow end's
+ordinary response, and the whole point of this cable is that the two ends are
+not alike. And **MartyPC can test everything except the partner**:
+`os8088_5150_cga_lpt` and `os8088_xt_hdd` have Centronics cards with readable
+data registers, so the scan, the attach, the publication, the page and
+`net_connect`'s bounded failure are all verified there — but the status lines
+read a constant, so `mst_hello` always times out. The wire is the 5150's
+question.
+
 **Every volume can own its FAT window, floppies included** (SPEC.md
 §18.8.1/§18.8.2) — `DSK_FAT_SECS` sectors of heap, claimed at
 `osapi_vol_add` for a driver volume and at mount time for a floppy

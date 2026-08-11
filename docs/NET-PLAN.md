@@ -1111,13 +1111,24 @@ free and sufficient.
 | # | build | proved by |
 |---|---|---|
 | **1** | **`tests/lptlink`** — §9.1 | **DONE.** Link up first try, 16 KB each way, **0 errors in four transfers**, at **3,741 B/s** after §1.2.0's fix. PERFORMANCE.md Part 9 **Set 39**. The wire, the scan, the handshake and both reversals are settled facts now |
-| 2 | `NET.DRV` Stage 1 + `OS88NET /IMG` | a `Network` icon on the desktop, a Disk window listing it, a package launched off it, a file written to it, `os88disk.py --verify` on the image afterwards from the host |
+| **2** | **`NET.DRV` Stage 1 + `OS88NET`** | **BUILT; the wire half awaits a cable.** The kernel half, the driver, the attach, the publication, the Control Panel page and the volume plumbing are all verified on a cycle-accurate 5150 (SPEC.md §61.7) — MartyPC has a parallel port with a readable data register but nothing on the far end of it, so `os8088_5150_cga_lpt` proves *everything except the partner*: the scan finds 0x378, the page says `No partner`, Connect fails in 2.1 s and the machine does not hang. What is still owed is the field run: a `Network` icon on the desktop, a Disk window listing it, a package launched off it, a file written to it, and `os88disk.py --verify` on the image afterwards from the host |
 | 3 | `OSAPI_DRV_CALL` + `DSV_PKGCALL` | a package reaching a driver at all — testable with a stub verb before any networking exists |
 | 4 | Stage 2, the redirector | the same Disk window over `OS88NET /D:C:\` — and the same `tests/filetest` battery, which is the existing 25-case write gate and applies unchanged |
 | 5 | mTCP + a Telnet package | a connection, from a 1981 machine |
 
-**Nothing here can be tested under QEMU or MartyPC**, and that is the hard part
-of the whole plan: it needs two machines and a cable. 86Box has `char_pipe_lpt`
+**Nothing here can be tested END TO END under QEMU or MartyPC**, and that is
+the hard part of the whole plan: it needs two machines and a cable. But the
+line falls further along than this section first assumed, and it is worth
+being exact about where. MartyPC's `ParallelPort` has a readable data register
+and a writable status register, so **the whole os8088 side up to the wire is
+testable**: the latch probe, the port scan, `DRVV_ATTACH`'s refusal on a
+machine with no port, the publication of class 4, the Control Panel page, the
+bounded-timeout failure of `net_connect`, and the two-driver-page dispatch.
+Two machine configs carry it — `os8088_5150_cga_lpt` (a CGA 5150 with a
+Centronics card at 0x378) and `os8088_xt_hdd`, which gained one so that a hard
+disk and a network link publish pages at the same time. What no emulator here
+can do is answer as a PARTNER: the status lines read a constant, so
+`mst_hello` always times out. 86Box has `char_pipe_lpt`
 with nibble and DirectParallel modes (docs/DEBUG-PLAN.md §1.1 surveyed them),
 so a *host-side* stub server against 86Box is the closest thing to a harness
 and is worth building at step 1 — but the verdict on the protocol comes off

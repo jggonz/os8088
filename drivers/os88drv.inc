@@ -59,11 +59,20 @@ DRVC_DEBUG   equ 3              ; the serial monitor (SPEC.md 58): no service
                                 ; page - but a class of its own, because a
                                 ; class is the publication slot and sharing
                                 ; one disconnects the driver already in it
-DRVC_OVL     equ 4              ; NOT A KERNEL CLASS. A driver's own loadable
+DRVC_NET     equ 4              ; the parallel link (docs/NET-PLAN.md): a
+                                ; SECOND block-serving class beside DRVC_DISK,
+                                ; which is what dsk_vtab's DV_CLASS exists for
+DRVC_OVL     equ 0x40           ; NOT A KERNEL CLASS. A driver's own loadable
                                 ; half (OS88_OVERLAY below): the kernel never
                                 ; loads one and drv_check would refuse it, and
                                 ; the number is here so that saying so is a
-                                ; property of the file rather than a comment
+                                ; property of the file rather than a comment.
+                                ; It WAS 4 and moved when DRVC_NET took that
+                                ; number: a real class costs a publication
+                                ; slot (42 bytes) and burning one to leave a
+                                ; hole would have been the dearer half of the
+                                ; choice. Well clear of DRVC_MAX, so
+                                ; drv_cls_idx refuses it by range alone
 
 ; --- the capability bits a sound driver may ADD (SPEC.md 34.2) ---------------
 ; os88api.inc publishes the two the resident kernel already has (TONE and

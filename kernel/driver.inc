@@ -41,7 +41,7 @@
 ; happens.
 ; =============================================================================
 
-DRV_MAX     equ 3               ; rows in drv_tab. The settings word carries
+DRV_MAX     equ 4               ; rows in drv_tab. The settings word carries
                                 ; one bit per row, so this may grow to 16
                                 ; without touching the file format.
 
@@ -53,6 +53,9 @@ DRV_MAX     equ 3               ; rows in drv_tab. The settings word carries
 ; the first (SPEC.md 51.2.1).
 DRVC_SOUND  equ 1               ; fills the FM and STREAM tiers (SPEC.md 34)
 DRVC_DISK   equ 2               ; block volumes: hard disks (SPEC.md 51.8)
+DRVC_NET    equ 4               ; the parallel link (docs/NET-PLAN.md). A
+                                ; SECOND block-serving class beside DRVC_DISK,
+                                ; which is what DV_CLASS exists for
 DRVC_DEBUG  equ 3               ; the serial monitor (SPEC.md 58). It publishes
                                 ; no service the kernel dispatches - only a
                                 ; Control Panel page - so it needs a class for
@@ -60,7 +63,7 @@ DRVC_DEBUG  equ 3               ; the serial monitor (SPEC.md 58). It publishes
                                 ; and giving it somebody else's would
                                 ; disconnect a sound card or a hard disk the
                                 ; moment the user ticked it (SPEC.md 51.2.1)
-DRVC_MAX    equ 3               ; classes, and so publication slots
+DRVC_MAX    equ 4               ; classes, and so publication slots
 
 ; --- driver table row, stride DRVR_SIZE --------------------------------------
 ; DRVR_DISP and DRVR_SEG are adjacent, in that order, ON PURPOSE: together
@@ -360,6 +363,8 @@ drv_f_hdd:   db 'HDD.DRV', 0
 drv_t_hdd:   db 'Hard Drive', 0
 drv_f_debug: db 'DEBUG.DRV', 0
 drv_t_debug: db 'Debug', 0
+drv_f_net:   db 'NET.DRV', 0
+drv_t_net:   db 'Network', 0
 
 ; The published drivers' dispatchers, as FAR POINTERS - ONE PAIR PER CLASS.
 ; Adjacent and in this order because together they ARE the dword
@@ -386,7 +391,8 @@ drv_fptr2:   dw PKG_DISP        ; class 2 (DRVC_DISK)
 drv_fseg2:   dw 0
 drv_fptr3:   dw PKG_DISP        ; class 3 (DRVC_DEBUG). drv_cls_fp indexes
 drv_fseg3:   dw 0               ; these contiguously, so a class is appended
-                                ; here and nowhere else
+drv_fptr4:   dw PKG_DISP        ; here and nowhere else
+drv_fseg4:   dw 0               ; class 4 (DRVC_NET)
 
 drv_cfgname: db 'SYSTEM.CFG', 0
 drv_sysname: db 'KERNEL.SYS', 0 ; what makes a disk THE system disk (19.6): the
@@ -441,6 +447,17 @@ drv_tab:
                                 ; somebody has ticked it and SYSTEM.CFG says
                                 ; so. On a machine that never does, the whole
                                 ; cost is this row and a file on the disk
+    db DRVE_OK
+    db 0
+
+    dw PKG_DISP, 0              ; row 3: the parallel link (docs/NET-PLAN.md).
+    dw drv_f_net, drv_t_net     ; APPENDED, because the settings word carries
+    dw 0, 0                     ; one bit per row by INDEX and inserting one
+    db DRVC_NET                 ; would renumber every saved SYSTEM.CFG
+    db 0                        ; NOT wanted by default, like every other row
+                                ; (SPEC.md 51.3). This one WRITES to parallel
+                                ; ports to find its cable, and a port with a
+                                ; printer on it is a real machine
     db DRVE_OK
     db 0
 
@@ -786,23 +803,47 @@ drv_svc_call:
 ; A SECOND BODY rather than a class argument, and that is the register
 ; contract above taken seriously: the disk ABI (SPEC.md 51.8) spends AL, AH,
 ; BX, CX, DX and SI on the transfer itself, so there is no register left to
-; say which class this is. Twenty bytes of duplication buys a dispatcher that
-; still consumes nothing.
+; say which class this is.
+;
+; SO THE CLASS ARRIVES IN MEMORY, in [drv_blkcls], written by dsk_xfer out of
+; the volume row while BX still points at it. It was drv_fptr2/drv_fseg2 -
+; the DISK class - named outright, which is right while one class serves
+; blocks and silently wrong the moment two do: a network volume's sectors
+; would have gone to the hard-disk driver (docs/NET-PLAN.md 2.1).
 ; -----------------------------------------------------------------------------
 drv_blk_call:
     or bp, bp
     jz drv_svc_none
-    cmp word [drv_fseg2], 0
-    je drv_svc_none
+    push di
+    push ax
+    mov al, [drv_blkcls]
+    call drv_cls_fp             ; DI = &drv_fptr for that class
+    jc .none
+    mov di, [di+2]              ; ...of which only the SEGMENT varies: the
+    or di, di                   ; offset is always PKG_DISP, the three-byte
+    jz .none                    ; dispatcher, and BP is the near proc it calls
+    mov [drv_blkseg], di        ; stage it where a far call can reach it
+    pop ax
+    pop di
     push ds
     push es
     push cs
     pop es
-    mov ds, [es:drv_fseg2]
-    call far [es:drv_fptr2]
+    mov ds, [es:drv_blkseg]
+    call far [es:drv_blkfp]
     pop es
     pop ds
     ret
+.none:
+    pop ax
+    pop di
+    jmp drv_svc_none
+
+; The staged far pointer drv_blk_call assembles per call. Adjacent and in this
+; order because `call far [mem]` takes the offset from the word and the segment
+; from the one after it.
+drv_blkfp:   dw PKG_DISP
+drv_blkseg:  dw 0
 
 drv_svc_none:
     xor ax, ax
@@ -1800,14 +1841,17 @@ drv_release:
                                 ; longer, and [cp_sel] must not name it
                                 ; (SPEC.md 31.9)
 .norow:
-    cmp byte [bx+DRVR_CLASS], DRVC_DISK
-    jne .novol                  ; A VOLUME BELONGS TO THE DISK CLASS, and this
-                                ; test is what says so. dsk_vol_drop_drv drops
-                                ; EVERY driver-backed row - it has no argument
-                                ; and wants none, because every kind-1 volume
-                                ; belongs to the one published DRVC_DISK
-                                ; driver (SPEC.md 51.2.1, dsk_vtab's DV_PAD) -
-                                ; so unqualified it was correct for the disk
+    mov al, [bx+DRVR_CLASS]     ; A VOLUME BELONGS TO A CLASS, and this is
+    cmp al, DRVC_DISK           ; where it is named. dsk_vol_drop_drv used to
+    je .dropvol                 ; drop EVERY driver-backed row - no argument
+    cmp al, DRVC_NET            ; and it wanted none, because every kind-1
+    jne .novol                  ; volume belonged to the one published
+.dropvol:                       ; DRVC_DISK driver (51.2.1, dsk_vtab's old
+                                ; DV_PAD). A SECOND block-serving class ends
+                                ; that: it takes the class in AL now and drops
+                                ; only that driver's rows, or unticking the
+                                ; network driver would unmount the hard disk.
+                                ; Unqualified it was correct for the disk
                                 ; driver and pure damage for any other. On a
                                 ; machine with a sound card AND a hard disk,
                                 ; unticking SOUND in the Drivers page unmounted
@@ -2729,6 +2773,8 @@ drv_notice:
 section .bss
 
 drv_nerr:   resb 1              ; 1 = drv_notice owes the user a window
+drv_blkcls: resb 1              ; the class whose DSV_BLK drv_blk_call is to
+                                ; dispatch, set by dsk_xfer from DV_CLASS
 drv_wcnt:   resb 1              ; live driver worker tasks: +1 inside the
                                 ; spawn's IF=0 window, -1 inside task_exit's
                                 ; (drv_task). drv_unload waits for 0 before

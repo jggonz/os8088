@@ -39,11 +39,11 @@ HDR = 32
 MAGIC = 0x384F                  # 'O','8'
 DRV_VER = 4
 MAX_SIZE = 40 * 1024            # DRV_MAX_KB in kernel/driver.inc
-# 4 is NOT a kernel driver class: it is a driver's own loadable half
+# 0x40 is NOT a kernel driver class: it is a driver's own loadable half
 # (OS88_OVERLAY, SPEC.md 52.11), stamped by this tool because the header, the
 # dispatcher and the one-claim load discipline are identical. The kernel never
 # loads one - its OWNER does - so drv_check never sees it and would refuse it.
-CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "overlay"}
+CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 0x40: "overlay"}
 
 
 def fail(msg: str) -> None:

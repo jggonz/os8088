@@ -48,11 +48,23 @@
 
 ; --- content geometry, content-relative (pinned in SPEC.md 31.1) -------------
 CP_CW     equ 318               ; content width  (frame 320 - 2 borders)
-CP_CH     equ 121               ; content height (frame 140 - border - title;
+CP_CH     equ 132               ; content height (frame 151 - border - title;
                                 ; the frame grew from 120 when the Date/Time
                                 ; page took its two option rows - SPEC.md
-                                ; 31.5 - rather than that page being cramped.
-                                ; Every other page just has more white below.)
+                                ; 31.5 - rather than that page being cramped,
+                                ; and from 140 when a THIRD driver published a
+                                ; page and the list needed a ninth row. Every
+                                ; other page just has more white below.)
+                                ;
+                                ; 151 IS THE MINIMUM THAT HOLDS NINE ROWS and
+                                ; it was chosen as the minimum on purpose: CGA
+                                ; is 200 rows with a 20px bar and a 24px dock,
+                                ; so wm_fit's ceiling is 176 - 1 - 20 = 155 and
+                                ; the panel has 4px of margin left. The next
+                                ; page after this one does not fit the machine
+                                ; this project is calibrated against, and the
+                                ; answer then is a scrolling list, not a taller
+                                ; window.
 
 ; --- left pane: the item list -----------------------------------------------
 CP_DIVX   equ 88                ; divider column: left pane is x 0..CP_DIVX-1
@@ -96,8 +108,8 @@ section .text
 
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-; No onkey: the panel is mouse-only. Content is 318x121.
-cp_tpl:     dw 160, 130, 320, 140, cp_ttl, cp_paint, 0, cp_onclick
+; No onkey: the panel is mouse-only. Content is CP_CW x CP_CH (318x132).
+cp_tpl:     dw 160, 130, 320, 151, cp_ttl, cp_paint, 0, cp_onclick
 cp_ttl:     db 'Control Panel', 0
 cp_sname:   db 'Control', 0     ; KD_NAME: fits the memory view's 7-char
                                 ; NAME column, which is the tighter of the two
@@ -186,15 +198,20 @@ CP_ISND   equ 3                 ; ...and Sound, the tone tier's route (34.8)
 ; a row of somebody else's.
 cp_nst:   db CP_ITEMS
 
-; THE LIST HAS ROOM FOR EIGHT ROWS AND NO MORE: row i's bar runs
-; CP_I0Y + i*CP_IROWH .. + CP_IBH - 1, so row 7 ends at 116 inside a content
-; box 121 tall and row 8 would run through the bottom border onto the
-; desktop. Six static items plus the two drivers that publish a page
-; (SPEC.md 31.9 - the hard disk's and the debug monitor's; the sound driver
-; publishes none) is exactly eight. A THIRD driver page, or a seventh static
-; item, needs the window to grow first. CP_ITEMS and not [cp_nst], because
-; the guard has to hold on the machine that shows every row.
-%if CP_ITEMS + 2 > (CP_CH - CP_I0Y) / CP_IROWH
+; THE LIST HAS ROOM FOR NINE ROWS AND NO MORE: row i's bar runs
+; CP_I0Y + i*CP_IROWH .. + CP_IBH - 1, so row 8 ends at 129 inside a content
+; box 132 tall and row 9 would run through the bottom border onto the
+; desktop. Six static items plus the THREE drivers that publish a page
+; (SPEC.md 31.9 - the hard disk's, the debug monitor's and the network link's;
+; the sound driver publishes none) is exactly nine. The count was two until
+; NET.DRV (docs/NET-PLAN.md), and growing this constant is what the guard
+; below is FOR: it is a build-time %error, so the third page could not be
+; added without the window being made to hold it. CP_ITEMS and not [cp_nst],
+; because the guard has to hold on the machine that shows every row.
+;
+; A FOURTH page does not fit CGA (see CP_CH), so the answer then is a
+; scrolling list rather than another 14 rows of window.
+%if CP_ITEMS + 3 > (CP_CH - CP_I0Y) / CP_IROWH
 %error "ctrl: the item list can overflow its pane - grow CP_CH (SPEC.md 31.1)"
 %endif
 

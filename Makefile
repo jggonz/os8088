@@ -439,7 +439,7 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 # ui_tm_open looks for (SPEC.md 28.3). Kernel machinery in a folder of its
 # own, so the root of a disk is the user's files - and the two disks agree,
 # because the chip menu cannot know which of them is in the drive.
-DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv
+DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv $(BUILD)/net.drv
 # ...and the hard-disk driver's on-demand half, which rides every disk the
 # drivers do but is NOT one of them: nothing puts it in drv_tab, the Drivers
 # page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
@@ -571,6 +571,24 @@ $(BUILD)/debug.bin: drivers/debug/debug.asm drivers/os88drv.inc apps/os88api.inc
 
 $(BUILD)/debug.drv: $(BUILD)/debug.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/debug.bin -o $@
+
+# NET.DRV - a LapLink parallel cable as a block volume (docs/NET-PLAN.md stage
+# 1). Its transport is drivers/net/lplink.inc, which tests/lptlink includes
+# too, so the thing PERFORMANCE.md Part 9 Set 39 measured is the thing that
+# ships. OS88NET.COM is the other end of the cable and does NOT go on an
+# os8088 disk - it is a DOS program for the far machine, built here and sent.
+$(BUILD)/net.bin: drivers/net/net.asm drivers/net/netui.inc \
+                  drivers/net/lplink.inc drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
+	@echo "net:    $(call FILESIZE,$@) bytes"
+
+$(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/net.bin -o $@
+
+$(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
+                      drivers/net/lplslv.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/net/ -o $@ $<
+	@echo "os88net.com: $(call FILESIZE,$@) bytes - the DOS end, for the FAR machine"
 
 $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
@@ -1643,17 +1661,17 @@ $(BUILD)/comscan144.img: $(BUILD)/csboot144.bin $(BUILD)/comscan.bin \
 # and it is not optional reading before touching the handshake: three defects
 # in it were found there rather than in the field, and every one of them would
 # have presented as a cable fault.
-lptlink: $(BUILD)/lptlink.img $(BUILD)/lptlink144.img $(BUILD)/lptlink.com
+lptlink: $(BUILD)/lptlink.img $(BUILD)/lptlink144.img $(BUILD)/lptlink.com $(BUILD)/os88net.com
 	@python3 tests/lptlink/linksim.py
 	@echo "lptlink: build/lptlink.img (360K, bootable), lptlink144.img (1.44M),"
 	@echo "         and build/lptlink.com to run under DOS"
 
-$(BUILD)/lptlink.com: tests/lptlink/lptlink.asm | $(BUILD)
-	$(NASM) -f bin -w+error -DCOMFILE -o $@ tests/lptlink/lptlink.asm
+$(BUILD)/lptlink.com: tests/lptlink/lptlink.asm drivers/net/lplink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/net/ -DCOMFILE -o $@ tests/lptlink/lptlink.asm
 	@echo "lptlink.com: $(call FILESIZE,$@) bytes"
 
-$(BUILD)/lptlink.bin: tests/lptlink/lptlink.asm | $(BUILD)
-	$(NASM) -f bin -w+error -o $@ tests/lptlink/lptlink.asm
+$(BUILD)/lptlink.bin: tests/lptlink/lptlink.asm drivers/net/lplink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/net/ -o $@ tests/lptlink/lptlink.asm
 
 # Its own boot sectors, because the sector count is assembled in and lptlink
 # is a great deal smaller than the kernel.
@@ -2081,6 +2099,9 @@ marty: $(IMG360)
 	@echo "                 a Hercules, docs/DUAL-DISPLAY-PLAN.md) and _herc_gla"
 	@echo "                 is the single-card Hercules without the IBM ROM."
 	@echo "                 python3 tests/dualcheck.py is the two-card gate"
+	@echo "       _cga_lpt has a PARALLEL PORT at 378h (SPEC.md 61's NET.DRV)"
+	@echo "                 and so does _xt_hdd, which is then the one machine"
+	@echo "                 with TWO driver Control Panel pages at once"
 	@echo "       ..._sb has an AdLib AND a Sound Blaster, _sbonly has the DSP"
 	@echo "       and NOTHING at 388h - the SPEC.md 51.3.1 pair; _xt_vga_sb is"
 	@echo "       the one to run with --turbo (7.16MHz, the fastest MartyPC has;"
