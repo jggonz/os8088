@@ -1293,7 +1293,7 @@ sb_mouse:
                                     ; is a measurement
 
     mov ax, DBG_TAG_MOUSE           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_mbase], ax              ; -> mou_bases, 2 words, 0 = no UART there
@@ -1458,7 +1458,7 @@ sb_video:
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_VIDEO           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_vkind], ax              ; -> vid_kind, vid_mono, vid_planes
@@ -1703,7 +1703,7 @@ sb_ladder:
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_CLOCK           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_cstate], ax             ; -> the 7-byte state span
@@ -1773,11 +1773,13 @@ sb_fdd:
     call bl_sline
     mov si, sb_s_h_fdd3
     call bl_sline
+    mov si, sb_s_h_fdd5
+    call bl_sline
     mov si, sb_s_h_fdd4
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_FDD             ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_fdstate], ax             ; -> the 7-byte state span
@@ -1788,13 +1790,13 @@ sb_fdd:
     mov si, sb_l_fran               ; ...whether it was contested at all
     mov al, 1
     call sb_fdb
-    mov si, sb_l_fst3               ; ...and the two bytes that decided it
+    mov si, sb_l_fst3               ; ...and the line, read twice
     mov al, 2
     call sb_fdbx
-    mov si, sb_l_fst0
+    mov si, sb_l_fst3b
     mov al, 3
     call sb_fdbx
-    mov si, sb_l_fpcn
+    mov si, sb_l_fst0
     mov al, 4
     call sb_fdbx
     mov si, sb_l_fstep              ; THE row that carries
@@ -2375,7 +2377,7 @@ sb_raw13:
     ; --- find the kernel's instrument, or say there is none ----------------
     push es
     mov ax, DBG_TAG_DISK            ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov [sb_dbgblk], bx
     mov ax, [es:bx+12]
@@ -3637,47 +3639,6 @@ sb_verify:
     ret
 
 ; -----------------------------------------------------------------------------
-; sb_dbgfind - look a published block up in the debug registry (SPEC.md 57)
-; in:  AX = the block's tag ('MO', 'DD')
-; out: CF=0 with BX = its offset in KERNEL_SEG and ES = KERNEL_SEG;
-;      CF=1 if this kernel does not publish it
-; clobbers: BX, ES, CF
-;
-; One word at 0060:000E names a list of (tag, offset) pairs ended by tag 0.
-; The tag is also the block's own first word, so this checks that the offset
-; it followed landed where it meant to - which is the whole reason a reader
-; can trust a number it found by walking a pointer out of a fixed address.
-; -----------------------------------------------------------------------------
-sb_dbgfind:
-    push ax
-    push si
-    mov bx, KERNEL_SEG
-    mov es, bx
-    mov si, [es:0x000E]             ; the registry, or 0
-    or si, si
-    jz .none
-.scan:
-    mov bx, [es:si]                 ; the tag
-    or bx, bx
-    jz .none                        ; end of list: not published here
-    cmp bx, ax
-    je .hit
-    add si, 4
-    jmp short .scan
-.hit:
-    mov bx, [es:si+2]               ; ...and the block behind it
-    cmp [es:bx], ax                 ; which must lead with the same tag
-    jne .none
-    pop si
-    pop ax
-    clc
-    ret
-.none:
-    pop si
-    pop ax
-    stc
-    ret
-
 ; sb_r13rate - DX:AX = counts for CX bytes -> DX:AX = bytes per second
 sb_r13rate:
     push bx
@@ -4346,14 +4307,15 @@ sb_l_mln:    db '  winning IRQ hex 10=4', 0
 
 sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
 sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a DIP switch.', 0
-sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0; ST0 bit 4 = EQUIP CHECK, which IS the absent drive.', 0
-sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 seek ok 03 EQUIP CHECK 04-06 refused.', 0
+sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0. The SECOND read decides: no TRK0 after a', 0
+sb_s_h_fdd5: db '   recalibrate is the absent drive. ST0 is drained, never branched on.', 0
+sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
 sb_l_fran:   db '  probe ran', 0
-sb_l_fst3:   db '  unit 1 ST3 hex', 0
-sb_l_fst0:   db '  unit 1 ST0 hex', 0
-sb_l_fpcn:   db '  unit 1 cyl hex', 0
+sb_l_fst3:   db '  ST3 motor off hex', 0
+sb_l_fst3b:  db '  ST3 after seek hex', 0
+sb_l_fst0:   db '  ST0 drained hex', 0
 sb_l_fstep:  db '  probe stop hex', 0
 sb_l_fvrd:   db '  verdict 1=kept 0=gone', 0
 

@@ -9318,6 +9318,49 @@ kernels. What `kern_small` loses is two items on one menu — the rule and
 and both point at `fm_c_nop`, so the two kernels differ by what a user can
 see rather than by a numbering nobody can.
 
+#### 18.96.2 Trust the assertion, then check it — and the check is a WRITE
+
+A 720KB pick that the drive cannot reach is the **worst** outcome this
+feature can produce, and it does not announce itself. A 720KB layout is boot
++ 6 FAT + 7 root = LBA 0..13, every byte of it inside **cylinder 0** — so on
+a 40-cylinder drive the format *completes*, the volume *mounts*, and the disk
+then lies about its size until something writes past cylinder 39. Worse, the
+disk is now mountable, so §22.12's predicate (`FS_MOK == 0`) **greys Format
+Disk… out** and the user has no way back. An unchecked assertion here does
+not risk an error message; it risks a disk that works until it does not, on a
+machine with no way to reformat it.
+
+So `dskw_fmt_reach` runs after a successful `dskw_format` of **row 2**, the
+only row the toggle can produce that a 40-cylinder drive cannot hold. It
+writes a marker to the volume's **last** sector, re-zeroes the buffer, reads
+that sector back and compares. Four things about it:
+
+- **The last sector, not the 360KB boundary.** The obvious probe is LBA 720 —
+  cylinder 40, the first sector a 360KB disk has not got — and it is too
+  weak: a great many 40-track drives step happily to 41 or 42, so a test
+  there can PASS on exactly the drive it exists to catch. Cylinder 79 is
+  reachable by no 40-cylinder mechanism there is, it is one seek either way,
+  and it validates precisely the extent the BPB has just claimed.
+- **It is a write, and that is what makes it a positive test.** §18.96.1's
+  rule is that every test must be a read *succeeding*, and a bare read of
+  cylinder 79 would break it twice over — it rests on a failure, and a head
+  stopped at track 39 can answer with track 39's data. Writing a marker
+  first removes both: the compare succeeds only if the bytes that came back
+  are the bytes we put there, at the cylinder we named. The buffer is
+  **re-zeroed between the write and the read**, so a read that never touched
+  it cannot compare equal against our own staging.
+- **It may only run on a disk already condemned.** It destroys the sector it
+  tests, which is free here and would not be anywhere else — hence the
+  contract line above, and hence no API slot, for `dskw_format`'s reason.
+- **Failure re-formats as 360KB rather than reporting and stopping**, because
+  of the greying trap in the first paragraph: stopping would leave the
+  mountable 720KB volume on screen with Format Disk… disabled. The user gets
+  a working disk and a toast that says what happened and why —
+  `Drive cannot reach 720K - made 360K`, §59.6's subject/outcome/cause.
+
+The cost on the honest path is **two `int 13h` calls**, once per 720KB
+format, against a format that is already 7 writes and a remount.
+
 ### 18.97 The equipment word is a CLAIM; the FDC is the fact
 
 `desk_init` has always sized the floppy half of the volume table from `int
@@ -9351,11 +9394,18 @@ controller's own pull-up. So:
    selected drive's line. Present → done, in microseconds, with no stepping
    and no motor.
 3. Only if that is clear — which a *present* drive parked off track 0 also
-   reads — spin unit 1's motor up, wait `FDD_MOTORW`, then **RECALIBRATE**
-   (`07h`) and **SENSE INTERRUPT STATUS** (`08h`) → ST0 bit 4, Equipment
-   Check, which the 765 sets when it has stepped 77 times and never seen
-   TRK0. That is the absent drive, and this is the only path that costs
+   reads — spin unit 1's motor up, wait `FDD_MOTORW`, **RECALIBRATE** (`07h`),
+   wait `FDD_SEEKW`, and then **read ST3 again**. The head has been told to go
+   and find track 0; if TRK0 still has not come up, there is nothing there to
+   find it. That is the absent drive, and this is the only path that costs
    anything.
+
+**Step 3 asks the same LINE step 2 asked, and §18.97.1 is why.** The textbook
+answer is `SENSE INTERRUPT STATUS` and ST0's Equipment Check bit, this was
+built that way, and the field run measured it reading another drive's status
+out of the controller's queue. A `SENSE DRIVE STATUS` is a *level read* of the
+selected unit's own lines — no queue, no ordering, and the unit is in the
+command byte — so it cannot answer about somebody else.
 
 **The motor is in step 3 and not step 1**, which is what makes a
 correctly-switched two-drive machine free: a drive parked at track 0 answers
@@ -9444,48 +9494,48 @@ only as far as "the recalibrate completes and its interrupt code decodes"
 whose SW1 claims a drive it does not have is the only machine that can fire
 it, which is what the field report is for.
 
-#### 18.96.2 Trust the assertion, then check it — and the check is a WRITE
+### 18.97.1 What the field run found: a sense answers the QUEUE, not the question
 
-A 720KB pick that the drive cannot reach is the **worst** outcome this
-feature can produce, and it does not announce itself. A 720KB layout is boot
-+ 6 FAT + 7 root = LBA 0..13, every byte of it inside **cylinder 0** — so on
-a 40-cylinder drive the format *completes*, the volume *mounts*, and the disk
-then lies about its size until something writes past cylinder 39. Worse, the
-disk is now mountable, so §22.12's predicate (`FS_MOK == 0`) **greys Format
-Disk… out** and the user has no way back. An unchecked assertion here does
-not risk an error message; it risks a disk that works until it does not, on a
-machine with no way to reformat it.
+The first build of §18.97 decided on **ST0** after the recalibrate, testing
+Equipment Check — 77 steps and no TRK0 — with the interrupt code as a
+sanity gate. On the 5150 it published:
 
-So `dskw_fmt_reach` runs after a successful `dskw_format` of **row 2**, the
-only row the toggle can produce that a 40-cylinder drive cannot hold. It
-writes a marker to the volume's **last** sector, re-zeroes the buffer, reads
-that sector back and compares. Four things about it:
+```
+unit 1 ST3 hex        0021      probe stop hex        0006   (refused)
+unit 1 ST0 hex        00C2      verdict 1=kept 0=gone     1
+```
 
-- **The last sector, not the 360KB boundary.** The obvious probe is LBA 720 —
-  cylinder 40, the first sector a 360KB disk has not got — and it is too
-  weak: a great many 40-track drives step happily to 41 or 42, so a test
-  there can PASS on exactly the drive it exists to catch. Cylinder 79 is
-  reachable by no 40-cylinder mechanism there is, it is one seek either way,
-  and it validates precisely the extent the BPB has just claimed.
-- **It is a write, and that is what makes it a positive test.** §18.96.1's
-  rule is that every test must be a read *succeeding*, and a bare read of
-  cylinder 79 would break it twice over — it rests on a failure, and a head
-  stopped at track 39 can answer with track 39's data. Writing a marker
-  first removes both: the compare succeeds only if the bytes that came back
-  are the bytes we put there, at the cylinder we named. The buffer is
-  **re-zeroed between the write and the read**, so a read that never touched
-  it cannot compare equal against our own staging.
-- **It may only run on a disk already condemned.** It destroys the sector it
-  tests, which is free here and would not be anywhere else — hence the
-  contract line above, and hence no API slot, for `dskw_format`'s reason.
-- **Failure re-formats as 360KB rather than reporting and stopping**, because
-  of the greying trap in the first paragraph: stopping would leave the
-  mountable 720KB volume on screen with Format Disk… disabled. The user gets
-  a working disk and a toast that says what happened and why —
-  `Drive cannot reach 720K - made 360K`, §59.6's subject/outcome/cause.
+**Step 2 was right and step 3 read somebody else's answer.** `ST3 = 0x21` is
+unit 1, READY, **TRK0 clear** *and* two-side clear — the absent drive,
+reported correctly, and exactly what no emulator here could produce
+(MartyPC synthesises `0x79`, TRK0 set, for a drive its own config does not
+have). `ST0 = 0xC2` is interrupt code **11**, SE and EC both clear, and
+**US = 2**: a status-change result for unit *two*, in answer to a question
+about unit one.
 
-The cost on the honest path is **two `int 13h` calls**, once per 720KB
-format, against a format that is already 7 writes and a remount.
+That is the µPD765 behaving as specified. A controller reset leaves one
+status-change interrupt **per drive** pending, `SENSE INTERRUPT STATUS` hands
+them out one at a time in unit order, and the command carries no argument —
+so what comes back is whatever is at the head of the queue, not an answer
+about the drive you last commanded. Nothing in the sequence had drained them.
+
+Three things follow, and the third is the general one:
+
+- **The decision moved to ST3**, read a second time after the recalibrate.
+  It is a level read of the selected unit's lines, so it has no queue to be
+  at the wrong end of, and the unit is in the command byte rather than in the
+  reply. `FDD_S_NOTRK0` replaces `FDD_S_EC`, and `FDD_S_NOSEEK`/`FDD_S_BADIC`
+  are gone with the ladder that produced them.
+- **The queue is still drained, at both ends** (`fdd_sidrain`): before, so the
+  ST0 the block publishes is this probe's own, and after, so the next BIOS
+  floppy operation does not inherit an interrupt of ours. ST0 is reported and
+  **nothing branches on it**.
+- **The fail-safe is what makes this a bug report rather than a lost drive.**
+  Every unrecognised state keeps the drive, so the machine showed a `Disk B`
+  it should not have — a wasted click — instead of hiding a real one. The
+  design rule earned its keep the first time it was tested on hardware, and
+  that is the argument for writing refusals that way even when the code
+  "obviously" works.
 
 ### 18.98 The third and fourth floppy — a row, and nothing else
 
@@ -9548,6 +9598,7 @@ of `.bss`, every one of them scaling off the constant.
 
 **What this does not do is boot from one** — the adapter cannot, and neither
 can the BIOS.
+
 
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
@@ -20590,10 +20641,11 @@ its sandbox on the CGA against ~5,000us straddling — and 673us is not a fast
 rectangle, it is four strips clipped away to nothing.
 
 **`gfx_blit4`.** Off the clip list by §11.3's own argument — a blit cannot take
-a sub-rect without advancing its source to match — and off the display split
-for the same reason, so it takes `GFXDENTER`: one display, the one holding its
-top-left corner, cut at that display's edge. Solitaire's card backs are the
-consumer.
+a sub-rect without advancing its source to match — and it was given
+`GFXDENTER` **for the same reason, which does not hold**: one display, the one
+holding its top-left corner, cut at that display's edge. Solitaire's card
+backs, ArtfulType's lines and Paint's whole canvas are the consumers.
+§39.14.7 is what that turned out to cost and why the argument was wrong.
 
 **The rule the three of them are: a path that writes the framebuffer without
 passing a public entry is a hole**, and it is exactly §11.3's rule about
@@ -20662,6 +20714,104 @@ nothing; and an empty Note Pad repaints no text at all, so a session that
 never types before forcing the repaint measures a window with nothing in it.
 A null A/B is evidence about the test until the test is shown to contain the
 case.
+
+**Confirmed on the iron, and the half that looks like a miss is the model
+working.** Run on the two-card 5150: *the window refresh did not draw on the
+CGA, as expected — and backspace DID draw.* Both follow from the counters. A
+keystroke emits a short run at the caret, so 48 of 49 of them lie entirely
+inside one display and land correctly **with or without the split**; only the
+one whose caret crosses is lost, which is the +16 px column above. A repaint
+letters every row full width and crosses on all of them, which is the 73,818.
+So the field's original *"backspace does not erase"* was never a second
+defect: the repaint had already wiped that card's half of the window, and
+backspacing over characters that are not on screen erases nothing.
+
+**There was a THIRD way to get a null here and it was in the Makefile, not in
+the test.** `NOSPLIT` was missing from `VIDSTAMP` and from `KNOBS`, so
+`make NOSPLIT=1` after a plain `make` saw an up-to-date `kernel.bin`, rebuilt
+nothing, and drove the SPLIT kernel twice — the trap the `VIDEO=` stamp exists
+to prevent, in the one knob added since. It is in both lists now, so the knob
+rebuilds and the banner names it. **The table above is unaffected and can be
+told so from its own numbers**: a stale kernel produces two identical columns,
+and these two differ.
+
+#### 39.14.7 A RUN CARRIES NO SOURCE — what a straddled Paint canvas showed
+
+From the field, on the same machine: *Paint's canvas does not draw on the
+second screen when straddled.* §39.14.5 predicted it and called it a
+limitation; it is not one, and the argument that made it look like one is
+worth taking apart because it is the same sentence twice with two different
+meanings.
+
+**"A blit cannot take a sub-rect without advancing its source to match" is
+true of the DESTINATION RECT and false of a RUN.** `gfx_blit4` coalesces
+equal pixels and emits one `gfx_hline` per run — and a run is *one colour*.
+Nothing about where it is drawn refers to the source at all. So the runs can
+be split per display for free, by the mechanism that already splits every
+other rect in the machine: keep the destination in **virtual** coordinates
+the whole way down and let each run's `gfx_fill` take `GFXDISP`.
+
+The fix is therefore the *removal* of two macro invocations — `gfx_blit4`
+takes no whole-shape hook — and it is smaller than what it replaced. Three
+things fall out of it rather than being arranged:
+
+- **Every consumer is fixed at once and none was rebuilt.** Paint's canvas,
+  Solitaire's card backs, ArtfulType's three blits and `gfxbench`'s two rows
+  are the whole population; the slot's contract is unchanged, so no `.o88`
+  was invalidated.
+- **A nested caller still gets the local path.** `GFXDISP` tests
+  `[gfx_dnest]` and falls through when an outer whole-shape hook has already
+  translated, so a blit reached from inside one keeps behaving exactly as it
+  did. There is no new case to get wrong because the existing test already
+  covers it.
+- **The dead zone costs nothing here either**, for §39.14.1's reason: a run
+  no display claims is drawn by nobody, with no test anywhere.
+
+**And it fixes a register-contract bug on the way past.** `GFXDENTER` sat
+ABOVE this routine's `push ax`/`push bx`, so the values restored at the end
+were the TRANSLATED ones and `gfx_blit4` did not preserve AX/BX as its own
+header promises — on the second display only, where `[vid_ox]` is not 0. It
+was latent and is recorded as latent: all four callers reload their
+destination from memory before every blit and declare AX clobbered, so
+nothing ever saw it. With no hook there is nothing to translate and the
+question does not arise.
+
+**What it costs is per RUN and only on a two-card machine**: `gfx_disp_run`
+instead of `GFXDISP`'s two compares, against a call that already costs ~756us
+(§5.7). A one-card machine short-circuits on `[vid_ndisp]` and pays nothing —
+which is the whole population of machines that were drawing correctly before.
+A blit's price is still `runs x ~0.5 ms` and still decided by how flat the art
+is. **That per-run figure is MODELLED and is not a field number**: what would
+measure it is `gfxbench`'s `GFX_BLIT4 solid` (64 runs) and `GFX_BLIT4 4px
+runs` (1,024 runs) on a two-card machine with the sandbox clear of the seam,
+run against a kernel with the hook back in.
+
+**The obvious way to avoid even that was considered and NOT taken**, and it is
+recorded so it is not re-derived: gate the hook on §39.14.6's `vid_span_one`,
+so a block that fits one display keeps `GFXDENTER` and only a straddling one
+goes untranslated — which is exactly what `font_run` does one granularity
+down. It works, and it buys a few per cent of a call whose cost is
+overwhelmingly fixed, for a second path through the routine, a byte of state
+saying which path to leave by, and about 35 bytes. §48.18.1 is the precedent:
+shaving the arrival off a primitive that is nearly all arrival recovers ~4%
+and is not worth a structural change. One path, and the pixels decide.
+
+**Measured, and `tests/dispblit.py` is the gate.** Paint straddling a
+Hercules+CGA seam, four strokes drawn across it, then the window dragged away
+and back to the SAME place so the region compared is the same rectangle:
+**365 inked pixels on the second card before the repaint and 364 after**,
+against **365 and 0** on a kernel with the hook back in. The A/B is the point —
+the strokes reach both cards either way, because the pencil is `gfx_line` per
+mouse SAMPLE and each segment resolves its own display, so a test that only
+draws proves nothing. It is the REPAINT the two builds disagree about.
+
+**`gfx_scroll` is NOT the same case and must keep its hook.** It moves pixels
+that are already on a card; a source rect crossing the seam would have to move
+them *between* cards. Its refusal (CF = 1, the caller repaints) is the right
+answer and the reason `GFX_SCROLL 256x128` reads 368us in a straddled
+`gfxbench` — that is the refusal, not a fast scroll. `gfx_line` and the walk
+keep theirs too (§39.14.5): a line's unit is a pixel, and resolving a display
+per pixel is the inner loop §5.6.6 exists to keep tight.
 
 `gfx_scroll` and `gfx_blit4` keep REFUSING rather than falling back, and that
 stays right: a blit cannot take a sub-rect without advancing its source to
@@ -32079,9 +32229,9 @@ how far it got, and the verdict.
 ```
 fdd_dbg_eqp   drives the equipment word claimed, after the clamp (0..2)
 fdd_dbg_ran   0 = never ran (one drive claimed, or FDDPROBE=0), 1 = ran
-fdd_dbg_st3   SENSE DRIVE STATUS for unit 1; bit 4 is TRK0. FF = never read
-fdd_dbg_st0   SENSE INTERRUPT STATUS ST0 after RECALIBRATE; bit 4 is EC
-fdd_dbg_pcn   the present-cylinder byte beside it
+fdd_dbg_st3   SENSE DRIVE STATUS, unit 1, motor off; bit 4 is TRK0
+fdd_dbg_st3b  ...and again after the RECALIBRATE. THIS is what decides
+fdd_dbg_st0   a drained SENSE INTERRUPT STATUS ST0 - diagnostic only (§18.97.1)
 fdd_dbg_step  where it stopped: FDD_S_*, and the row that carries
 fdd_dbg_vrd   0 = absent, the row was retired; 1 = present, the row was kept
 ```
@@ -32092,12 +32242,11 @@ identically whether the probe proved a drive present or merely failed to
 prove one absent, and those two are the difference between a working feature
 and a fail-safe that is quietly always taking the safe branch. `FDD_S_TRK0`
 means the motor-off read answered and nothing further ran, which is the row a
-correctly-switched two-drive machine should show; `FDD_S_EC` means the
-recalibrate came back with Equipment Check and the row went; `FDD_S_SEEKOK`
-means it came back *clean*, so the drive is there and was parked off track 0.
-Everything else is a refusal — a byte handshake that timed out, a controller
-that never went ready, a seek that outlived `FDD_SEEKTO` — and each keeps the
-drive.
+correctly-switched two-drive machine should show; `FDD_S_SEEKOK` means TRK0
+came up after the recalibrate, so the drive is there and was parked off track
+0; `FDD_S_NOTRK0` means it never came up and the row went. `FDD_S_NORDY` is
+the only refusal left — the controller never took a byte or never offered
+one — and it keeps the drive, as every unrecognised state does.
 
 **Unconditional, for the mouse, clock and display blocks' reason** — and more
 plainly than any of them. This block exists *because* no emulator here can be

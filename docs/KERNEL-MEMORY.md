@@ -230,8 +230,8 @@ the direction move 15 said this figure should drift in.
 three over the standard, because §41.11's removal handed it two rungs the
 raise had not counted on. The floppy round (§18.96.2's user-picked format
 size, §18.98's third and fourth drives with `DVOL_MAX` 6 → 8, and §26.4's CGA
-icon and caption) has since spent one of them, so small stands at **six**. It
-still owes the rest of that decision.
+icon and caption) has since spent one of them. It still owes the rest of that
+decision.
 
 **`BOOT_RELOC` moved with the first five** — 0x0940 → 0x0AA0 → 0x0B80 →
 0x0C00 → **0x0D40** (linear 0x11000 → 0x12600 → 0x13400 → 0x13C00 →
@@ -407,15 +407,15 @@ Three things about it:
     "ksize": 98816,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 3081,
+    "ovl": 3083,
     "stk0": 1024,
-    "text": 56507
+    "text": 56484
   },
   "small": {
     "bss": 4717,
     "budget": 96256,
     "codemax": 65536,
-    "cold": 21382,
+    "cold": 21404,
     "coldpara": 1344,
     "fatpara": 288,
     "imgpara": 3584,
@@ -426,7 +426,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2681,
     "stk0": 1024,
-    "text": 52381
+    "text": 52395
   }
 }
 ```
@@ -922,14 +922,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,114 | 36.7% |
+| the file system, end to end | 29,114 | 36.8% |
 | the window system and its furniture | 17,163 | 21.7% |
-| drawing: adapters, primitives, glyphs, icons | 11,686 | 14.7% |
+| drawing: adapters, primitives, glyphs, icons | 11,663 | 14.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.4% |
 | the kernel proper: API table, heap, scheduler, events | 5,959 | 7.5% |
 | the Control Panel | 4,120 | 5.2% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **79,233** | |
+| **total** | **79,210** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -939,7 +939,7 @@ generated in the first place.
 | `wm.inc` — the window manager (§11) | 6,610 | — | **6,610** | 645 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,645 | — | **5,645** | 892 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,404 | **5,577** | 155 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,717 | — | **4,717** | 132 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,694 | — | **4,694** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
@@ -971,7 +971,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,767 | — | **2,767** | — | — |
-| **total** | **56,507** | **22,726** | **79,233** | **5,062** | **7,762** |
+| **total** | **56,484** | **22,726** | **79,210** | **5,062** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1157,7 +1157,7 @@ It works because of what the `FAT_SEG` window is doing at boot: nothing.
 `drv_boot` — the *last* thing `kmain` does before the first paint. So there
 is a 4,608-byte hole in the middle of the kernel's own ladder that is live
 for the whole of start-up and dead the instant the first volume mounts. The
-overlay is **3,067 bytes** of it, with 1,541 spare:
+overlay is **3,069 bytes** of it, with 1,539 spare:
 
 | | bytes | |
 |---|---:|---|
@@ -1165,7 +1165,7 @@ overlay is **3,067 bytes** of it, with 1,541 spare:
 | `cpudet.inc` minus `cpu_info` | 314 | the tier test and the whole A20 gate. `cpu_info` stays: it is API slot 0x0188 and answers all session long |
 | `xmem.inc` — `xm_init` | 123 | sizing the store is a once. `xm_arm` stays resident — `xm_copy` re-arms unreal mode inside the window that uses it — so it gets a shim |
 | `snd.inc` — `snd_init` | 107 | saving the boot 61h bits and publishing `snd_live`. `snd_unhook` is the shutdown path and stays |
-| `disk.inc` — `dsk_fdd_probe` | 380 | asking the FDC whether drive B is really there (SPEC.md §18.97), and retiring its volume row if not. `make FDDPROBE=0` takes it out |
+| `disk.inc` — `dsk_fdd_probe` | 382 | asking the FDC whether drive B is really there (SPEC.md §18.97), and retiring its volume row if not. `make FDDPROBE=0` takes it out |
 | `desk.inc` — `desk_init` | 122 | counting volumes and laying out their zones, and the 21 bytes that contest the count against the probe above. `desk_ord` and `desk_zone_label` are called by the runtime painters and stay |
 | `kernel.asm` — the entry stubs | 24 | |
 
@@ -1174,9 +1174,9 @@ they are short by ~158 bytes that predate this note. Trust the total and the
 spare; treat a row as "roughly what this module put here".
 
 **The number to watch is NOT the 1,541 spare, it is the IMAGE's last sector.**
-`kernel.bin` is **87,035 bytes** and the boot sector reads
-`(size + 511) / 512` = **170** of them, which hold 87,040 — so there are
-**5 bytes** of slack in the file, and the next thing added to `.ovl`, however
+`kernel.bin` is **86,525 bytes** and the boot sector reads
+`(size + 511) / 512` = **169** of them, which hold 86,528 — so there are
+**3 bytes** of slack in the file, and the next thing added to `.ovl`, however
 small, costs a whole sector of boot read (~65 ms on the field machine).
 `tools/kernsize.py` reports the three *rungs* and not this, because the rungs
 are what the RAM ladder is built from; the file's tail is a separate question

@@ -186,6 +186,12 @@ endif
 # one-display path it used to take. The picture is the claim - a run that
 # crosses a seam either lands on both cards or it does not - and only the
 # pair of builds can show that, which is REDRAWFULL's own reasoning.
+# IT IS IN $(VIDSTAMP) AND $(KNOBS) BELOW, and it shipped in neither: a knob
+# outside the stamp does not rebuild the kernel, so `make NOSPLIT=1` after a
+# plain `make` drove the SPLIT kernel twice and the A/B came back null. That
+# is the trap the VIDEO= stamp exists to prevent - a new knob belongs in both
+# lists on the day it is added, and a null A/B is one of the things it looks
+# like (SPEC.md 39.14.6).
 ifneq ($(NOSPLIT),)
 VIDDEF += -DNOSPLIT
 endif
@@ -286,9 +292,10 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 FDDPROBE REDRAWFULL SNDSNIFF RAMKB FONT INSTCHUNK,\
+                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB \
+                             FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
