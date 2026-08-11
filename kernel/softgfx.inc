@@ -419,6 +419,21 @@ sw_pairbuild:
 ; the nibble phase of every pair after it. Refusing an off-screen block costs
 ; nothing real - Paint, ArtfulType and Solitaire all clip their own blits - and
 ; buys the loop its simplicity.
+;
+; The general loop costs 19 bytes a PAIR and eight of them are the accounting -
+; `add ah,2 / cmp ah,8 / jb`, asked per pair to find a boundary that arrives
+; every fourth one. Once the FIRST destination byte has been stored the phase
+; is fixed for the rest of the row - nothing pending, or exactly one bit
+; pending, for ever - so four pairs are always the same shape and SPEC.md
+; 5.4.1.2 gives each phase a body of its own, past the `ret` below: .abyte (37
+; bytes per eight pixels) and .obyte (52, the carry epilogue being the whole
+; difference).
+;
+; NEITHER TESTS THE PHASE, because each is entered from the store that proves
+; its own precondition: an odd x can never reach the whole-byte store (AH steps
+; by 2 from an odd seed, so it hits 9 and carries, for ever) and an even one
+; can never reach the carry. Both are gated - tools/ptcheck.py's PTNUDGE is an
+; odd sideways drag, and without it a run proves half the routine.
 ; -----------------------------------------------------------------------------
 sw_blit_row:
     push ax
@@ -461,7 +476,7 @@ sw_blit_row:
 .primed:
     pop bx                      ; BX = the pair table (cs xlat's base)
     pop cx                      ; CX = whole pairs
-    jcxz .odd
+    jcxz .nomore
 .pair:
     lodsb                       ; DS:SI - the source byte, two pixels
     cs xlat                     ; ...and its two destination bits
@@ -476,7 +491,10 @@ sw_blit_row:
     mov [es:di], dl             ; the common case: eight bits, none over
     inc di
     xor dx, dx
-    jmp short .next
+    dec cx                      ; ...and the pair just consumed
+    jz .nomore
+    jmp .esplit                 ; SPEC.md 5.4.1.2: DI is on a byte with nothing
+                                ; pending, so four pairs are one whole byte
 .carry:
     mov al, dl                  ; AH = 1: one bit belongs to the NEXT byte, so
     and al, 1                   ; bank it, shift the completed byte down and
@@ -485,7 +503,13 @@ sw_blit_row:
     inc di
     xor dx, dx
     mov dl, al
-.next:
+    dec cx
+    jz .nomore
+    jmp .osplit                 ; ...and 5.4.1.2's other phase: four pairs are
+                                ; nine bits, a byte and the next pending one
+.nomore:
+    jmp short .odd              ; the bodies sit past the `ret`, out of `loop`'s
+.next:                          ; reach, so every exit trampolines through here
     loop .pair
 .odd:
     or bp, bp                   ; a trailing pixel with no partner
@@ -527,6 +551,89 @@ sw_blit_row:
     pop bx
     pop ax
     ret
+
+; --- SPEC.md 5.4.1.2's two aligned bodies. They live PAST the `ret` because
+; `loop .pair` is a short jump and cannot reach over them, and each is entered
+; from the store that proves its own precondition - so neither tests the phase.
+.esplit:
+    mov ah, cl                  ; AH = the pairs the body cannot take...
+    and ah, 3
+    shr cx, 1
+    shr cx, 1                   ; ...and CX = the whole destination bytes
+    jcxz .erest
+.abyte:
+    lodsb
+    cs xlat
+    mov dl, al
+    lodsb
+    cs xlat
+    shl dl, 1
+    shl dl, 1
+    or dl, al
+    lodsb
+    cs xlat
+    shl dl, 1
+    shl dl, 1
+    or dl, al
+    lodsb
+    cs xlat
+    shl dl, 1
+    shl dl, 1
+    or dl, al
+    mov al, dl
+    stosb                       ; ES:DI, and DI walks itself
+    loop .abyte
+.erest:
+    mov cl, ah                  ; the leftovers go back to the general loop,
+    xor ch, ch                  ; accumulator empty and DI on a byte
+    xor ax, ax
+    xor dx, dx
+    jcxz .backodd
+    jmp .pair
+.backodd:
+    jmp .odd
+.osplit:
+    mov al, cl                  ; AH is 1 here and has to STAY 1, so this one's
+    and al, 3                   ; leftover count rides the stack rather than AH
+    push ax
+    shr cx, 1
+    shr cx, 1
+    jcxz .orest
+.obyte:
+    lodsb
+    cs xlat
+    shl dx, 1
+    shl dx, 1
+    or dl, al
+    lodsb
+    cs xlat
+    shl dx, 1
+    shl dx, 1
+    or dl, al
+    lodsb
+    cs xlat
+    shl dx, 1
+    shl dx, 1
+    or dl, al
+    lodsb
+    cs xlat
+    shl dx, 1
+    shl dx, 1
+    or dl, al
+    mov al, dl                  ; nine bits: the top eight are the byte and the
+    and al, 1                   ; ninth is the next one's pending bit
+    shr dx, 1
+    mov [es:di], dl
+    inc di
+    xor dx, dx
+    mov dl, al
+    loop .obyte
+.orest:
+    pop ax                      ; AL = the leftover pairs, AH = 1 again
+    mov cl, al
+    xor ch, ch
+    jcxz .backodd
+    jmp .pair
 
 ; -----------------------------------------------------------------------------
 ; sw_fill_pat - software twin of gfx_fill_pat (SPEC.md 5/32): the 8-row

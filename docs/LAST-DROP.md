@@ -176,8 +176,10 @@ building. Nobody has found one.
 
 **Status:** costed against measured constants, **never built.**
 **Against:** SPEC.md §5.4.1's decoder (docs/HANDOFF-REDRAW.md item B2).
-**Verdict:** buys 1.8x on a row with **one run in it** and nothing at all on
-any other row, for ~366 bytes and a permanent second code path.
+**Verdict:** buys 1.96x on a row with **one run in it** and nothing at all on
+any other row, for ~366 bytes and a permanent second code path — and §5.4.1.2
+has since moved the crossover from ~10 runs a row to **~3**, so the band it
+wins in is narrower than when it was costed.
 
 ### What it does
 
@@ -191,14 +193,16 @@ and never mid-row, so the two paths have no seam to disagree at.
 
 ### Measured
 
-Both halves are built and measured now (PERFORMANCE.md Sets 41 and 42), so
-these are figures rather than estimates. The crossover is **~10 runs a row**:
+Both halves are built and measured now (PERFORMANCE.md Sets 41, 42 and 43), so
+these are figures rather than estimates. The run path costs `830 + 371 x runs`
+µs a row and the decoder 1,948 (259.1 ms over 133 rows), so the crossover is
+**~3 runs a row** — it was ~10 before §5.4.1.2's aligned bodies:
 
 | CGA, Paint's canvas | run path | decoder |
 |---|---|---|
-| flat, 1 run a row | **132.1 ms** | 517.6 |
-| textured, 85 runs a row | 2,430.7 ms | **516.6** |
-| fine, 308 runs a row | 8,364.9 ms | **517.6** |
+| flat, 1 run a row | **132.1 ms** | 259.1 |
+| textured, 85 runs a row | 2,430.7 ms | **259.1** |
+| fine, 308 runs a row | 8,364.9 ms | **260.2** |
 
 ### The price
 
@@ -221,7 +225,9 @@ are Paint's canvas, Solitaire's card backs (a lattice, 336 runs on CGA by the
 source's own count) and **ArtfulType's keystroke path**, which puts a whole
 line of TEXT on screen as one blit — and text is the least flat thing there
 is. The one case the hybrid protects is a blank Paint canvas, which is 132 ms
-against 518: an operation nobody is sitting through, made 386 ms slower.
+against 259: an operation nobody is sitting through, made 127 ms slower —
+half what it was when this was written, because §5.4.1.2 took the decoder's
+side of the comparison down and left the run path exactly where it was.
 
 There is also a property worth having on the other side of the ledger:
 decoder-only makes a blit **constant time in its content**. A UI with one
@@ -233,7 +239,7 @@ a rule anybody has to remember.
 
 - **A consumer that blits large flat areas often.** A picture viewer with
   letterboxing, a window background drawn as a blit, a game with flat sprites.
-  None exists today; the moment one does, this is 3.9x on it.
+  None exists today; the moment one does, this is 1.96x on it.
 - **A cheaper switch than "the previous row".** If the run count for a row
   were already known — say the source carried it — the switch would be a
   compare and the 30 bytes would be most of the cost. That is a change to the

@@ -800,9 +800,76 @@ this project is calibrated against has no VGA in it.
 
 **What is left is the loop's SIZE, not its instruction count** (§5.7's floor at
 4.34 clocks per instruction byte). ~20 instruction bytes a pair is ~9.6 µs a
-pixel measured, and the per-pair count test is 8 of those 20: an unrolled
-four-pairs-a-byte loop for even `x` would be about twice as fast and is the next
-step.
+pixel measured, and the per-pair count test is 8 of those 20 — which §5.4.1.2
+takes out.
+
+#### 5.4.1.2 The aligned bodies: four pairs are one byte, and each selects itself
+
+The general loop asks `add ah,2 / cmp ah,8 / jb` **per pair** to find a byte
+boundary that arrives every *fourth* pair, and on an 8088 those eight
+instruction bytes are 8 of the 19 the pair costs to FETCH. Once the first
+destination byte has been stored the phase is fixed for the rest of the row —
+nothing pending, or exactly one bit pending, for ever — so four pairs are
+always the same shape, and `sw_blit_row` has a body for each.
+
+**The even body** (`.abyte`, nothing pending) is four `lodsb`/`cs xlat`/shift/
+`or` groups and one `stosb`: **37 bytes per eight pixels against 76**.
+**The odd body** (`.obyte`, one bit pending) accumulates the same four pairs
+into `DX` — nine bits, of which the top eight are the byte and the ninth is
+the next pending one — which is 52 bytes per eight pixels, the carry epilogue
+being the difference.
+
+Measured (PERFORMANCE.md Set 43), same Paint raise on the same
+cycle-accurate 5150/CGA:
+
+| canvas x | §5.4.1.1 | §5.4.1.2 | |
+|---|---|---|---|
+| **74** (even) | 516.6 ms | **259.1 ms** | 1.99x |
+| **95** (odd) | 508.3 ms | **299.0 ms** | 1.70x |
+
+…and still flat across run density (259.1 ms at 85 runs a row, 260.2 at 308 —
+0.4%), which is §5.4.1.1's design property and had to survive. Against the run
+path this whole line of work replaced, that is 21.3x on a picture and 72.4x on
+detailed art.
+
+**Both phases exist and both are gated, because the parity is the WINDOW's.**
+Paint's template happens to land its canvas on an even x; a user dragging the
+window one pixel moves it to the other body. Building only the even one is
+tempting and leaves a 1.95x cliff under a one-pixel drag — which is the kind
+of thing that later reads as "the blit is slow sometimes". `tools/ptcheck.py`
+and `tools/os88span.py` both take `PTNUDGE` (an odd sideways drag) for exactly
+this: without it a gate proves the pixels of one half of the routine.
+
+Four things are load-bearing:
+
+- **Each body is entered from the store that proves its own precondition, so
+  they SELECT THEMSELVES.** An odd `x` can never reach the whole-byte store —
+  `AH` steps by 2 from an odd seed, so it hits 9 and carries, for ever — and
+  an even one can never reach the carry. So there is no test of the phase
+  anywhere, and no third entry path that has to be kept in step with the two.
+- **They live PAST the routine's `ret`.** `loop .pair` is a short jump and
+  cannot reach over 90 bytes of unrolled body, so the general loop stays
+  compact and the bodies are jumped to and from; the three exits that mean
+  "no pairs left" trampoline through one `.nomore`.
+- **The split is `and 3` then `shr` twice**, and the leftovers go back to the
+  general loop with `DI` on a byte. The even body may reuse `AH` for that
+  count (it is 0 and means nothing); the odd body may **not** — `AH` is 1 and
+  is the bit count — so its leftover rides the stack. Re-entering an aligned
+  body from those leftovers is impossible (three pairs take `AH` to 6) and
+  would be *correct* if it happened, which is the property to preserve.
+- **The shifts stay `shl dl,1` twice and must.** `shl dl,cl` is 2 bytes where
+  two of them are 4, but it is 16 clocks against 4 — 8 clocks per byte fetched,
+  which is *past* §5.7's 4.34 floor. The floor is a floor: an instruction that
+  is byte-cheap and clock-dear is slower, not faster, and this loop sits close
+  enough to balanced (≈153 clocks executing against ≈148 fetching per eight
+  pixels) that the trade would show.
+
+**Cost: 148 bytes of `.text`.** `kern_big` crosses no rung and has **63 bytes
+left** in its image rung against 211, so the next addition to `.text` anywhere
+buys a whole 512-byte step; `kern_small`'s rung *was* crossed (1,536 → 1,024
+spare, two steps). The one arm neither gate reaches is a blit under ~16 pixels wide, where
+the split finds no whole destination byte at all; it degenerates to the
+general loop, which every capture here exercises.
 
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 

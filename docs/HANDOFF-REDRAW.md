@@ -21,6 +21,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §11.97 | a window below draws no chrome where something above will cover it | drag flash 14,253 → 10,665 px, **1.34x** |
 | §5.4.1 | a blit run goes straight into the framebuffer, 1bpp and VGA | canvas blit 5,526 → 2,431 ms (CGA), 4,226 → 2,163 (VGA) |
 | §5.4.1.1 | …and then the runs go: the 1bpp pair decoder, no hybrid | 2,431 → **517 ms**, and CONSTANT in the content |
+| §5.4.1.2 | four pairs are one byte: an aligned body per x PARITY | 517 → **259 ms** even, 508 → **299** odd |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -249,12 +250,33 @@ the 8-bit bus starves the prefetch queue, so the SIZE of a tight loop is its
 speed. Every clock-count estimate of a loop in this document should be read as
 a lower bound.
 
-**The next step is in the same arithmetic.** The per-pair count test is 8 of
-the loop's ~20 bytes a pair; an unrolled four-pairs-a-byte loop, legal whenever
-`x` is even, is about twice as fast again (~260 ms) for a second loop body.
-
 **And VGA keeps the span writer** — four planes want the run's bits each, so
 its decoder is four Map Mask passes, a different routine.
+
+### B3. The aligned bodies — **BUILT, SPEC.md §5.4.1.2**
+
+B2's own closing arithmetic. The per-pair count test looks for a boundary that
+arrives every *fourth* pair, so once the first destination byte is stored and
+the phase is fixed, four pairs are one whole byte and the accounting goes.
+**259.1 ms at an even canvas x (1.99x), 299.0 at an odd one (1.70x)**, still
+flat in content (0.4% across 85 → 308 runs a row). PERFORMANCE.md Set 43.
+
+**Both phases had to be built, and finding that out is the transferable part.**
+The even body is reachable only at an even destination x; Paint's template
+lands its canvas on one; so every gate and every measurement in this round had
+been pricing *one half of the routine*, with the other half one pixel of drag
+away. `PTNUDGE` is now an argument to `tools/ptcheck.py` and
+`tools/os88span.py` — an odd sideways drag before the cover/raise — and the
+rule it encodes is that **a gate that never moves the thing it tests proves
+the alignment it happened to start at**. Set 40's chrome-flash drag was the
+same mistake in another place.
+
+**What is left in this loop is small.** The even body is 37 instruction bytes
+per eight pixels and about half of that is the four `lodsb`/`cs xlat` pairs,
+which are execution-bound rather than fetch-bound (25 clocks for 4 bytes); the
+whole loop is ≈153 clocks executing against ≈148 fetching, so it is balanced
+and there is no third factor of two here. The next real lever on a blit is
+**not** drawing it — §11.90.2's damage rect, already in.
 
 ### What else the blit is under
 

@@ -396,7 +396,7 @@ Three things about it:
 {
   "big": {
     "bss": 5583,
-    "budget": 100864,
+    "budget": 102912,
     "codemax": 65536,
     "cold": 22933,
     "coldpara": 1440,
@@ -409,7 +409,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3126,
     "stk0": 1024,
-    "text": 57694
+    "text": 57842
   },
   "small": {
     "bss": 5374,
@@ -418,15 +418,15 @@ Three things about it:
     "cold": 21404,
     "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3712,
-    "kend": 6016,
+    "imgpara": 3744,
+    "kend": 6048,
     "kseg": 96,
-    "ksize": 94720,
+    "ksize": 95232,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2740,
     "stk0": 1024,
-    "text": 53885
+    "text": 54033
   }
 }
 ```
@@ -922,14 +922,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,346 | 36.4% |
+| the file system, end to end | 29,346 | 36.3% |
 | the window system and its furniture | 17,581 | 21.8% |
-| drawing: adapters, primitives, glyphs, icons | 12,430 | 15.4% |
+| drawing: adapters, primitives, glyphs, icons | 12,578 | 15.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.2% |
 | the kernel proper: API table, heap, scheduler, events | 5,959 | 7.4% |
 | the Control Panel | 4,120 | 5.1% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **80,627** | |
+| **total** | **80,775** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -955,9 +955,9 @@ generated in the first place.
 | `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,336 | — | **1,336** | 84 | — |
+| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,207 | — | **1,207** | 4 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
-| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,059 | — | **1,059** | 4 | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 977 | — | **977** | 18 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
@@ -971,7 +971,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,767 | — | **2,767** | — | — |
-| **total** | **57,694** | **22,933** | **80,627** | **5,583** | **7,762** |
+| **total** | **57,842** | **22,933** | **80,775** | **5,583** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

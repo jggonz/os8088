@@ -50,6 +50,13 @@ import subcheck as sc
 # edge of it, which is SPEC.md 5.4.1's narrowest case and the one a picture
 # barely exercises.
 ROW_TEXTURE = int(os.environ.get("PTROW", "2"))
+
+# SPEC.md 5.4.1.2 has TWO aligned bodies and which one runs is decided by the
+# PARITY of the canvas's x - so a gate that never moves Paint proves the pixels
+# of one of them. Paint's template lands its canvas on an EVEN x, and `PTNUDGE`
+# is an odd sideways drag before the cover/raise, which flips it. Both phases
+# are gated; tools/os88span.py reads the same variable to price them.
+PTNUDGE = int(os.environ.get("PTNUDGE", "0"))
 MASK_Y = 18
 
 
@@ -82,6 +89,13 @@ def capture(out, machine, defines=()):
         if not pt:
             raise SystemExit("ptcheck: Paint did not launch")
         pt = pt[0]
+        if PTNUDGE:
+            tb = sc.titlebar(m, pt)
+            if not tb:
+                raise SystemExit("ptcheck: no title bar to nudge Paint by")
+            sc.pdrag(mo, tb[0], tb[1], tb[0] + PTNUDGE, tb[1])
+            os88marty.settle(m)
+            pt = [w for w in su.windows(m) if w.visible and w.i == pt.i][0]
         os88marty.settle(m)
         shot(m, "loaded", out, log, mo)
 

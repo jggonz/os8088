@@ -57,6 +57,13 @@ import subcheck as sc
 # narrowest case). tools/ptcheck.py reads the same variable.
 PTROW = int(os.environ.get("PTROW", "2"))
 
+# ...and how far to nudge Paint sideways before the raise. SPEC.md 5.4.1.2's
+# aligned body is reachable only at an EVEN destination x, and Paint's template
+# happens to put its canvas on one - so `PTNUDGE=21` (any odd number) is what
+# prices the other phase. tools/ptcheck.py reads it too, and must, or the gate
+# proves the pixels of one half of the routine.
+PTNUDGE = int(os.environ.get("PTNUDGE", "0"))
+
 CLK = 4772727.0                 # 4.77 MHz, so cycles -> ms
 WIN_SIZE = 26
 
@@ -165,6 +172,21 @@ def sc_dragoff(m, mo):
             lambda: m.mouse(0, 0, l=False), back.i)
 
 
+def pt_nudge(m, mo, pt):
+    """Drag Paint sideways by PTNUDGE and answer its window record again.
+    An odd nudge flips the canvas's x PARITY, which is the whole point."""
+    if not PTNUDGE:
+        return pt
+    tb = sc.titlebar(m, pt)
+    if not tb:
+        raise SystemExit("os88span: no title bar to nudge Paint by")
+    sc.pdrag(mo, tb[0], tb[1], tb[0] + PTNUDGE, tb[1])
+    os88marty.settle(m)
+    pt = [w for w in su.windows(m) if w.visible and w.i == pt.i][0]
+    print("nudged paint to %r" % (pt,))
+    return pt
+
+
 def sc_paintraise(m, mo):
     """Paint with a textured picture in it, COVERED by a Disk window and then
     raised - SPEC.md 11.96.10's case, and the one 11.90.2 could not reach.
@@ -180,6 +202,7 @@ def sc_paintraise(m, mo):
     if not pt:
         raise SystemExit("os88span: Paint did not launch - is pttest.img built?")
     pt = pt[0]
+    pt = pt_nudge(m, mo, pt)
     sc.pclick(mo, *su.tile(m, disk))            # cover Paint
     os88marty.settle(m)
     print("raising paint %r from under %r" % (pt, disk))

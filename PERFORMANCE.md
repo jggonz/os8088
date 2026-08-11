@@ -5116,3 +5116,65 @@ cluster and the drive-A window reports one kilobyte less free.
 `KERN_BUDGET`'s eighteenth move is one step to keep the tree buildable, and it
 is an **ask** rather than a grant — the constant's own comment carries the two
 ways to hand it back, both costed.
+
+### Set 43 — the aligned bodies, and the parity nobody had looked at (SPEC.md §5.4.1.2)
+
+Set 42's own closing arithmetic, built. The per-pair count test is 8 of the 19
+instruction bytes a pair costs to fetch, and the boundary it looks for arrives
+every *fourth* pair — so once the first destination byte is stored and the
+phase is fixed, four pairs are one whole byte and the accounting is not needed
+at all. Same Paint raise, same damage rect, cycle-accurate 5150/CGA:
+
+| canvas x | phase | §5.4.1.1 | **§5.4.1.2** | |
+|---|---|---|---|---|
+| **74** | even, nothing pending | 516.6 ms | **259.1 ms** | 1.99x |
+| **95** | odd, one bit pending | 508.3 ms | **299.0 ms** | 1.70x |
+
+…and the "one cost" property survives: **259.1 ms at 85 runs a row against
+260.2 at 308**, 0.4%. Against the run path this round started from, **21.3x**
+on a picture and **72.4x** on detailed art. Predicted 2.05x from the byte
+count and measured 1.99 — Set 42's *count bytes* rule holding on the first
+estimate made under it.
+
+**The finding is the second row, and it was invisible until it was looked
+for.** The even body is reachable only at an even destination x, Paint's
+template lands its canvas on one, and every gate and every measurement in this
+whole round had therefore priced *one half of the routine* — with the other
+half a **one-pixel drag away**. `PTNUDGE` (an odd sideways drag before the
+cover/raise) is now an argument to both `tools/ptcheck.py` and
+`tools/os88span.py`, and it is what showed the cliff: the same picture, the
+same window, one pixel over, **508.3 ms against 259.1**. The odd body is 52
+bytes per eight pixels against the even one's 37, the carry epilogue being the
+whole difference, and it takes the spread down to 15%.
+
+**The crossover moved with it, and docs/LAST-DROP.md 3 is re-costed**: the run
+path is still `830 + 371 x runs` µs a row and the decoder is now 1,948, so the
+hybrid's band is **~3 runs a row** rather than Set 42's ~10, and what it buys
+on flat art is 1.96x rather than 3.9x. Same verdict, less of it.
+
+**A harness rule falls out of it.** *A gate that never moves the thing it
+tests proves the alignment it happened to start at.* This is the second time
+this round — Set 40's chrome flash measured a drag that vacated nothing — and
+both had the same shape: a scripted session that reads as thorough because it
+has many steps, all of them at one phase of the thing under test.
+
+**One trap in the layout, and NASM catches it**: `loop .pair` is a short jump
+and cannot reach over 90 bytes of unrolled body, so the two bodies live past
+the routine's `ret` and the three "no pairs left" exits trampoline through one
+`.nomore`. The first attempt put them inline, which is `short jump is out of
+range` and not a silent wrong answer — the one class of layout mistake in this
+tree that fails loudly.
+
+Verified **0 differing pixels** with `tools/ptcheck.py` at **both phases** on
+CGA and Hercules (`PTNUDGE=21` against a reference build of the same commit
+without the change), at the even phase on VGA mode 12h and on CGA with
+`PTROW=1`, and with `tools/subcheck.py` on CGA — 11 steps, 0 pixels, so Set
+42's known 25-pixel free-space difference is gone with the cluster count back
+where it was.
+
+**Cost: `.text` +148.** `kern_big` crosses no rung and is left with **63 bytes**
+in its image rung against 211, so the next byte added to `.text` anywhere buys
+a whole 512-byte step; `kern_small` crossed one (1,536 → 1,024 spare, two
+steps, still inside its own budget). `KERN_BUDGET`'s nineteenth move (+2,048,
+granted with the eighteenth as one piece of work) is what that slack is drawn
+from.
