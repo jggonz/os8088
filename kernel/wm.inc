@@ -1807,13 +1807,23 @@ wm_sizable:
 
 ; -----------------------------------------------------------------------------
 ; wm_fullscreen - enter or leave fullscreen (public; API 0x0110, SPEC.md 11.2)
-; in:  AL = 1 enter (BX = window ptr) / 0 exit; caller HOLDS the gfx lock
-; out: CF = 1 enter refused (another window owns the screen), else CF = 0.
-;      All registers preserved.
+; in:  AL = 1 enter / 0 exit; BX = the caller's OWN window ptr either way;
+;      caller HOLDS the gfx lock
+; out: CF = 1 refused (the screen is another window's, entering or leaving),
+;      else CF = 0. All registers preserved.
 ; Enter saves the windowed geometry, grows the frame to the whole screen,
 ; sets WF_FULL and raises (wm_front repaints under the held lock).
 ; Re-entering with the same window is a CF=0 no-op, as is exiting with no
 ; owner. Exit restores through wm_fs_drop and repaints.
+;
+; BX BINDS ON EXIT, and it did not used to: the exit path opened by
+; overwriting BX with [wm_fs], so AL=0 dropped whatever window owned the
+; screen rather than the caller's - a package could take another package's
+; fullscreen down with its own window pointer, and the two would then
+; disagree about who was fullscreen with nothing on screen saying so. Every
+; caller in the tree already passed its own window (apps/artful, apps/missile
+; twice, tests/gfxbench), so honouring it changed no shipped behaviour; what
+; it removes is a way to be wrong that nothing could have reported.
 ; -----------------------------------------------------------------------------
 wm_fullscreen:
     push ax
@@ -1866,9 +1876,14 @@ wm_fullscreen:
     pop bp
     jmp .ok
 .exit:
-    mov bx, [wm_fs]
-    or bx, bx
+    mov ax, [wm_fs]
+    or ax, ax
     jz .ok                      ; nothing fullscreen: no-op
+    cmp ax, bx                  ; ...and it has to be YOURS to put down. BX is
+    je .drop                    ; the latch holder on this path, so wm_fs_drop
+    stc                         ; is handed exactly what it was handed before
+    jmp short .out
+.drop:
     call wm_fs_drop             ; restore geometry, clear latch
     call wm_paint_all
 .ok:

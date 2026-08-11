@@ -3901,7 +3901,7 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x0108 (§20.3). |
 | `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0118 (§20.3). |
 | `wm_zoom`      | in BX = win ptr (resizable and not fullscreen — the CALLER's check); **caller holds the gfx lock**. Toggles the window between the **standard** state — the whole desktop band, full width, `MBAR_H` down to one pixel short of the dock, honouring `WF_SNAP` — and the **user** state it was in before, banked per slot in `wm_zoomr`. Which state it is in is derived from the record, never tracked; `wm_ask_size` is asked for both, and a refused shrink leaves it standard with its bank intact. All registers preserved. Not `wm_fullscreen`: the window keeps its chrome and its place in the z-order. §11.95. |
-| `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0110 (§20.3). |
+| `wm_fullscreen`| in AL = 1 enter / AL = 0 exit, **BX = the caller's own win ptr either way**; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (the screen is another window's — entering *or* leaving), CF=0 done. API slot 0x0110 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
 | `wm_obscured`  | in BX = win ptr; out CF=1 if BX is not visible at all, or any visible window above it in z-order overlaps its frame rect (§11.3.1 — the visibility half is part of the answer, and was not). Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
 | `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects, and — since §11.3.1 — when the window is *hidden*, which this always claimed and did not deliver). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0170 (§20.3). |
@@ -4020,8 +4020,23 @@ entire screen and reports "covered" to everyone beneath it.
   (word, .bss, 0 = none — **the** fullscreen latch), set the frame to
   (0, 0, `[vid_w]`, `[vid_h]`), set WF_FULL, `wm_front` (raises + repaints
   under the held lock). Re-entering with the same window is CF=0 no-op.
-- **Exit** (AL=0): `[wm_fs]` zero → CF=0 no-op. Else restore the saved
-  geometry into the record, clear WF_FULL, zero `wm_fs`, `wm_paint_all`.
+- **Exit** (AL=0, BX = win ptr): `[wm_fs]` zero → CF=0 no-op. `[wm_fs]`
+  non-zero and ≠ BX → **CF=1, nothing changes** — the screen is somebody
+  else's and is not yours to put down. Else restore the saved geometry into
+  the record, clear WF_FULL, zero `wm_fs`, `wm_paint_all`.
+
+  **BX binds on exit**, and the symmetry with enter is the whole of the
+  reason. It used to be ignored: the exit path opened by overwriting BX with
+  `[wm_fs]`, so AL=0 dropped whatever window owned the screen — a package
+  could take another package's fullscreen down with its own window pointer,
+  leaving the two disagreeing about who was fullscreen and nothing on screen
+  saying so. Every caller in the tree already passed its own window
+  (`apps/artful`, `apps/missile` twice, `tests/gfxbench`), so honouring it
+  changed no shipped behaviour and no `.o88`; what it removes is a way to be
+  wrong that nothing could have reported. This is a *contract* change at a
+  live slot, which §20.8 rule 4 permits while the OS is in alpha and this
+  tree hosts every caller — and it is the benign direction of one, since it
+  can only start refusing a call that was already a bug.
 
 While WF_FULL is set: `wm_draw_win` draws **no chrome at all** — no frame,
 shadow, title bar, boxes or grow box; the content area is the whole frame
@@ -4039,14 +4054,59 @@ and the menu-bar branch of the event ladder (step 2) is bypassed so a
 click in rows 0..19 routes to wm_hit like any other. The mouse cursor
 stays live — a fullscreen app that wants it hidden draws its own.
 
-Leaving fullscreen is **the app's job** (recommend Esc in its W_ONKEY →
-`wm_fullscreen` AL=0; the menu bar is unreachable while it holds the
+Leaving fullscreen is **the app's job** (§11.2.1 is the binding: **F**, with
+Esc as the escape hatch; the menu bar is unreachable while it holds the
 screen). The kernel's safety net: `wm_destroy` and `wm_hide` both check
 BX against `[wm_fs]` and, on a match, restore the saved geometry, clear
 WF_FULL and zero `wm_fs` before repainting — closing, minimizing (no box
 is drawn, but app_close_win's die-flag path hides) or killing a
 fullscreen window can never strand the latch, and a re-shown window comes
 back windowed at its old place.
+
+#### 11.2.1 F is the fullscreen key, in both directions (binding)
+
+**The key that got you there is the key that leaves.** Every app that can
+go fullscreen — by this section's surface, by §53's bracket, or by both
+stacked the way Missile Command stacks them — binds **`f` and `F`** to
+*enter* it from the windowed state and to *leave* it from the fullscreen
+one, and binds **Esc** to leave. Both letters, always: an app that tests
+only one is an app whose fullscreen key stops working under Caps Lock.
+
+The rule is about the user rather than the mechanism, which is why it
+spans two mechanisms that share nothing in the kernel. §11.2 is a latch
+and §53 is a bracket; an app may be on either, or enter the first and put
+the second on top of it (§48.13), and none of that is visible from the
+front of the machine. What is visible is that the screen went big and
+some key has to give it back — so the answer may not depend on which of
+those an app happened to build with, and it may not depend on which way
+the user is going.
+
+**Esc is the escape hatch and not the door.** It stays because it is what
+a user presses when they want out of *anything*, and because an app that
+has given F away to a text run (below) still owes a way home. Where Esc
+already means *cancel* inside the app it keeps meaning that first, and is
+a way out only when it has nothing left to cancel — Paint's text run,
+selection and size-box edit are the worked example. F is the door because
+a door should not also be a cancel key.
+
+**The exception is an app that is taking typed text**, where a bare
+letter is not the app's to bind: pressing F in ArtfulType (§46) writes an
+`f`, and it must. Two shapes, both in the tree:
+
+- **The whole app is a writer.** ArtfulType is fullscreen *as its editing
+  mode* — the window is a splash and the document is the screen — so it
+  binds no F at all, enters on its splash's own verbs and leaves on Esc,
+  which is unambiguous there because the document survives it.
+- **The app takes text sometimes.** Paint (§42.7) is a bitmap editor with
+  a text tool, so F is free except while a caption is being typed or a
+  size box has the keyboard. It offers the bare letter under exactly that
+  gate — the one `pt_type` was already applying to the same keystroke —
+  and keeps **Ctrl+F** as the unconditional door. Ctrl+F is what the menu
+  item names, because a menu item's key hint has to be true in every
+  state and the bare letter is not.
+
+An app that reserves letters for gameplay is *not* an exception: Missile
+Command and Tracker both bind a dozen bare letters and F is one of them.
 
 ### 11.3 The clip region — what a background task may draw
 
@@ -12122,9 +12182,10 @@ Slot-specific contracts that are not simply their target routine's:
                          ES restored per §1.
 0x0108 wm_sizable        in BX = win ptr, AL = 0 clear / non-zero set
                          WF_SIZABLE (§11.1). UI-task context only.
-0x0110 wm_fullscreen     in AL = 1 enter (BX = win) / 0 exit; caller holds
-                         the gfx lock; out CF=1 = enter refused, screen
-                         already owned (§11.2).
+0x0110 wm_fullscreen     in AL = 1 enter / 0 exit, BX = your OWN win ptr
+                         either way; caller holds the gfx lock; out CF=1 =
+                         refused, the screen is another window's - entering
+                         or leaving (§11.2).
 0x0118 wm_grow_paint     in BX = win ptr; lock held. The grow-box restore
                          of §11: a resizable package's self-initiated
                          content repaint must end with this call. A no-op
@@ -32734,6 +32795,13 @@ Inside a foreign mode the video hardware is otherwise the app's: the
 6845/CRTC, sequencer, graphics controller, attribute controller and DAC
 ports may all be programmed directly, and the exit mode set reprograms
 everything they touch.
+
+**How the user leaves is §11.2.1's, not this section's**: the bracket ends
+when the app's exclusive main returns, and *what makes it return* is the
+same **F** (with Esc as the escape hatch) that a §11.2 app binds — because
+the rule is about the user, who cannot see which of the two an app was
+built with. An app's own polled loop is what tests those keys, since no
+events are dispatched in here.
 
 ### 53.8 The package ABI (§20.3 slots)
 

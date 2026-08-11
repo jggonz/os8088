@@ -1643,6 +1643,43 @@ What did NOT go is `kernel/softgfx.inc` itself — 65% of it is the 1bpp rendere
 
 ### Fullscreen exclusive — the app borrows the machine (SPEC.md §53, `kernel/fsx.inc`)
 
+**`F` is the fullscreen key in BOTH directions, and that is SPEC.md §11.2.1
+rather than a per-app taste.** The key that got you there is the key that
+leaves — both cases of the letter, so it does not stop working under Caps
+Lock — with **Esc** as the escape hatch, and it spans the two mechanisms
+*because the user cannot see which one an app was built with*: §11.2 is a
+latch, §53 is a bracket, Missile Command stacks the second on the first, and
+none of that is visible from the front of the machine. Missile and Tracker
+are the reference bindings. **The exception is an app taking typed text**,
+where a bare letter is not the app's to bind: ArtfulType (§46) is fullscreen
+*as its editing mode* and binds no F at all (splash verbs in, Esc out), and
+Paint (§42.7) offers the bare letter only while the text tool and the size
+box are not taking the keystroke — the gate `pt_type` was already applying to
+the same key — keeping **Ctrl+F** as the unconditional door, which is what
+the menu item names because a key hint has to be true in every state. An app
+that merely reserves letters for gameplay is *not* an exception. Verified on
+a cycle-accurate 5150/CGA by reading the kernel's own two latches — `wm_fs`
+and `fsx_task`, which between them cover both mechanisms and are readable
+from outside a guest a bracket has parked. **A screen-content heuristic is
+the wrong instrument here** and cost a round: "the menu bar's white field is
+gone" reads backwards on Paint, whose fullscreen bed is white, so all three
+keys measured as doing nothing while all three worked.
+
+**`wm_fullscreen`'s exit honours BX now, and it did not (SPEC.md §11.2).**
+AL=0 opened by overwriting BX with `[wm_fs]`, so it dropped whatever window
+owned the screen rather than the caller's — a package could take another
+package's fullscreen down with its own window pointer, leaving the two
+disagreeing with nothing on screen saying so. Every caller already passed
+its own window, so honouring it changed no shipped behaviour and no `.o88`;
+`.text` +6, no rung crossed, footprint +0. **The test for a guard like this
+cannot be "the real callers still work"** — that is the same evidence a
+build without the guard produces. Poke `[wm_fs]` to `0xFFFF` from outside
+the guest while an app is fullscreen and press its exit key: fixed, the
+call refuses and the stranger's latch is still `0xFFFF`; unfixed, it
+dereferences `0xFFFF` as a window record and `[wm_fs]` goes to 0. A/B'd
+against a reference kernel with the four instructions removed, and the two
+outcomes are unmistakable.
+
 §11.2's fullscreen surface is a real window in the desktop's mode; fsx is the
 other thing: `fsx_run` (slot 0x02C8) is a **bracket, not a latch** — called
 from a window callback with the gfx lock held, it far-calls the app's
