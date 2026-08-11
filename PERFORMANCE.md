@@ -4985,3 +4985,30 @@ recording as such: **a cost model built for streaming, met by a caller that
 does not stream.** The transport is not slow here; it is being asked the same
 question 34 times.
 
+#### The write path, checked from OUTSIDE os8088
+
+A file copied onto the network volume and the image carried back to the host.
+This is the check that cannot be made from inside: the writer and the reader
+are the same FAT12 code, so **both halves agreeing on the same wrong thing**
+is exactly the failure a self-consistent volume hides (docs/FIELD-NOTES.md 4
+is what that costs).
+
+| check | result |
+|---|---|
+| `os88disk.py --verify` | **OK** — FAT12, 713 clusters, 6 files, 24 in use |
+| sectors changed against the image that was sent out | **4** |
+| …which ones | FAT1, FAT2, the root directory sector, data cluster 25 |
+| the volume walked from the host, no os8088 code involved | clean; every pre-existing file unmoved, same clusters |
+| `BENCHSML.DAT` against the source it was copied from | **byte-identical**, md5 `ad4c06ff458c1c57df65d7fe63df735a` |
+
+Four sectors and no others: both FAT copies updated **symmetrically**, one
+directory entry, one data cluster, and nothing written anywhere else on a
+713-cluster volume. The commit ORDER (§18.4 rule 1 — data, FAT, then the
+directory entry) cannot be seen in a finished image, but its result can, and
+the result is coherent.
+
+**This was the pre-batching build.** The framing changed with Set 40's
+batching (one command per run, a fixed 512-byte frame per sector whatever the
+status), so the write path is verified for the protocol as it was and owes a
+second run on the protocol as it is.
+

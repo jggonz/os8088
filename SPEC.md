@@ -34998,6 +34998,14 @@ have hidden from the other:
   0x378 with 0x3BC and 0x278 dark. `/P:3BC` pins a port that does not answer
   and the program says `No parallel port to listen on.` and exits.
 
+**And the WRITE path is verified from outside os8088**: a file copied onto
+the volume, the image carried back to the host, `os88disk.py --verify` clean,
+the volume walked with no os8088 code near it, and the copied file
+**byte-identical** to its source. **Four sectors changed and no others** —
+both FAT copies symmetrically, one directory entry, one data cluster. That
+check has to happen outside, because the writer and the reader are the same
+FAT12 code and a self-consistent volume hides the one failure that matters.
+
 **And on the iron, which is the only place the wire exists** (PERFORMANCE.md
 Part 9 Set 40): the page reads `Linked` and **1440 sectors** — the image's
 exact size — a Disk window lists its folders and files, and a text file
