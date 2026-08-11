@@ -32,7 +32,6 @@ import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 
 TITLE_H = 18
-DESK_ZY0, DESK_ZSTEP, DESK_ZW, DESK_ZH = 24, 52, 60, 44
 VID_CTX_SZ, VID_CTX_VX, VID_CTX_CW = 42, 36, 14
 S = os88sym.linear
 
@@ -98,11 +97,8 @@ def main(argv):
 
         # two Disk windows - WF_SAVEU is theirs (SPEC.md 22.14), and they
         # stand perfectly still, which is subcheck.py's reasoning too
-        zx = u16(m.read(S("vid_desk_zx"), 2))
-        mo.dblclick(zx + DESK_ZW // 2, DESK_ZY0 + DESK_ZH // 2)
-        os88marty.settle(m, card=pri["idx"])
-        mo.dblclick(zx + DESK_ZW // 2, DESK_ZY0 + DESK_ZSTEP + DESK_ZH // 2)
-        os88marty.settle(m, card=pri["idx"])
+        dispcp.open_drive(m, mo, S, os88marty.settle, 0, card=pri["idx"])
+        dispcp.open_drive(m, mo, S, os88marty.settle, 1, card=pri["idx"])
         w = wins(m)
         if len(w) < 2:
             sys.exit("dispsave: wanted two Disk windows, got %d" % len(w))
