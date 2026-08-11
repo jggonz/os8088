@@ -238,31 +238,51 @@ FDD_S_NOTRK0 equ 3               ; the recalibrate ran and TRK0 never came up.
 FDD_S_NORDY  equ 4               ; the controller never took a byte, or never
                                  ; offered one - a refusal, and it KEEPS the
                                  ; drive like every other thing that goes wrong
+; ...and it is ONE ROW PER UNIT, because SPEC.md 18.98 made the probe run up
+; to three times. It was one set of bytes, written by every run, so on a
+; machine claiming three or four drives the block described the LAST unit
+; asked and said nothing at all about the others - and that is precisely the
+; configuration this diagnostic exists for, an internal drive plus a 4865 on
+; the 37-pin connector. Ten bytes of .text, no rung crossed.
+FDU_ST3      equ 0               ; SENSE DRIVE STATUS, motor off. bit 4 = TRACK
+                                 ; 0, and bit 3 = two-side, which the field 5150
+                                 ; also reads CLEAR on the drive it does not
+                                 ; have (ST3 = 21)
+FDU_ST3B     equ 1               ; ...and again after the recalibrate. THIS is
+                                 ; what decides: the same physical line, asked
+                                 ; once the head has been told to go and find it
+FDU_ST0      equ 2               ; a drained SENSE INTERRUPT STATUS ST0, taken
+                                 ; to leave the controller clean. DIAGNOSTIC
+                                 ; ONLY - nothing branches on it (18.97.1)
+FDU_STEP     equ 3               ; where it stopped - THE byte that carries, for
+                                 ; the reason clk_dbg_step is (SPEC.md 37.92):
+                                 ; the verdict alone cannot tell "proved
+                                 ; present" from "failed to prove absent"
+FDU_VRD      equ 4               ; 0 = absent (retired, or never given a row);
+                                 ; 1 = kept
+FDU_SIZE     equ 5
+
 fdd_dbg_blk:
     dw DBG_TAG_FDD               ; 'FD' - the magic, and the block's own first
     dw fdd_dbg_span              ; word, so a reader can check where it landed
 
 fdd_dbg_span:
 fdd_dbg_eqp:  db 0               ; drives int 11h claimed, after the clamp
-fdd_dbg_ran:  db 0               ; 0 = the probe never ran
-fdd_dbg_st3:  db 0xFF            ; SENSE DRIVE STATUS, unit 1, motor off.
-                                 ; bit 4 = TRACK 0, and bit 3 = two-side, which
-                                 ; the field 5150 also reads CLEAR on the drive
-                                 ; it does not have (ST3 = 21)
-fdd_dbg_st3b: db 0xFF            ; ...and again after the recalibrate. THIS is
-                                 ; what decides: the same physical line, asked
-                                 ; once the head has been told to go and find it
-fdd_dbg_st0:  db 0xFF            ; SENSE INTERRUPT STATUS ST0, taken to leave
-                                 ; the controller clean. DIAGNOSTIC ONLY -
-                                 ; nothing branches on it (SPEC.md 18.97.1)
-fdd_dbg_step: db FDD_S_OFF       ; where it stopped - THE row that carries, for
-                                 ; the reason clk_dbg_step is (SPEC.md 37.92):
-                                 ; the verdict alone cannot tell "proved
-                                 ; present" from "failed to prove absent"
-fdd_dbg_vrd:  db 1               ; 0 = absent, the row was retired; 1 = kept
+fdd_dbg_ran:  db 0               ; a BITMAP: bit n = the probe ran on unit n.
+                                 ; It was a flag, and a flag cannot answer for
+                                 ; three units - nor can `step != FDD_S_OFF`,
+                                 ; which is the same fact only while every exit
+                                 ; writes step, i.e. only until somebody adds
+                                 ; one that does not
+fdd_dbg_u:                       ; three FDU_SIZE rows: unit 1, unit 2, unit 3.
+                                 ; Unit 0 is where the kernel came from and is
+                                 ; never a question, so it has no row
+    db 0xFF, 0xFF, 0xFF, FDD_S_OFF, 1
+    db 0xFF, 0xFF, 0xFF, FDD_S_OFF, 1
+    db 0xFF, 0xFF, 0xFF, FDD_S_OFF, 1
 FDD_DBG_SPAN equ ($ - fdd_dbg_span)
-%if FDD_DBG_SPAN != 7
-  %error "disk: SPEC.md 57.5 block - the published span is not 7 bytes"
+%if FDD_DBG_SPAN != 2 + 3*FDU_SIZE
+  %error "disk: SPEC.md 57.5 block - the published span is not 17 bytes"
 %endif
 
 %ifdef DISK_COUNTERS
@@ -4985,9 +5005,25 @@ dsk_fdd_probe:
                                 ; argument, plus a fourth inside fdd_st3
     push cx
     push dx
+    push si
     push es
 
-    mov byte [fdd_dbg_ran], 1
+    ; SI = this unit's row in the published block, for the whole routine
+    ; (SPEC.md 57.5). Held in a register rather than recomputed because every
+    ; store below used to be an absolute address and a fifth encoding of "unit
+    ; 1" is exactly what 18.98 spent a paragraph removing. None of fdd_dor /
+    ; fdd_st3 / fdd_put / fdd_get / fdd_res / fdd_sidrain / fdd_wait touches SI.
+    mov bl, al
+    xor bh, bh
+    mov si, bx
+    shl si, 1
+    shl si, 1
+    add si, bx                  ; unit * FDU_SIZE...
+    add si, fdd_dbg_u - FDU_SIZE    ; ...and unit 1 is the first row
+    mov cl, al
+    mov al, 1
+    shl al, cl                  ; a BITMAP: this unit was asked
+    or [fdd_dbg_ran], al
 
     mov ax, 0x40                ; there is no readable DOR, so the BIOS's own
     mov es, ax                  ; MOTOR_STATUS is the only place the current
@@ -5003,12 +5039,12 @@ dsk_fdd_probe:
     call fdd_dor
     call fdd_st3                ; --- step 1: no motor, and usually enough ---
     jc .nordy
-    mov [fdd_dbg_st3], al       ; fdd_st3 ANSWERS in AL and banks nothing - it
+    mov [si+FDU_ST3], al       ; fdd_st3 ANSWERS in AL and banks nothing - it
                                 ; is called twice and the two reads are two
                                 ; different fields
     test al, 0x10               ; TRACK 0
     jz .motor
-    mov byte [fdd_dbg_step], FDD_S_TRK0
+    mov byte [si+FDU_STEP], FDD_S_TRK0
     jmp .keep                   ; near: .recal below is longer than a short
                                 ; displacement reaches
 
@@ -5046,27 +5082,27 @@ dsk_fdd_probe:
                                 ; accept it
     call fdd_st3                ; ...and ask the SAME LINE step 1 asked
     jc .nordy
-    mov [fdd_dbg_st3b], al
+    mov [si+FDU_ST3B], al
     push ax
     call fdd_res                ; our recalibrate's own interrupt, taken so the
     jc .nores                   ; next BIOS floppy operation does not find it
-    mov [fdd_dbg_st0], al       ; waiting. Reported, never branched on
+    mov [si+FDU_ST0], al       ; waiting. Reported, never branched on
 .nores:
     call fdd_sidrain
     pop ax
     test al, 0x10               ; TRACK 0: did the head reach it?
     jnz .seekok
-    mov byte [fdd_dbg_step], FDD_S_NOTRK0
-    mov byte [fdd_dbg_vrd], 0
+    mov byte [si+FDU_STEP], FDD_S_NOTRK0
+    mov byte [si+FDU_VRD], 0
     xor al, al                  ; THE one path that removes a drive
     jmp short .out
 .seekok:
-    mov byte [fdd_dbg_step], FDD_S_SEEKOK
+    mov byte [si+FDU_STEP], FDD_S_SEEKOK
     jmp short .keep
 .nordy:
-    mov byte [fdd_dbg_step], FDD_S_NORDY
+    mov byte [si+FDU_STEP], FDD_S_NORDY
 .keep:
-    mov byte [fdd_dbg_vrd], 1
+    mov byte [si+FDU_VRD], 1
     mov al, 1
 .out:
     push ax
@@ -5077,6 +5113,7 @@ dsk_fdd_probe:
     pop ax                      ; our recalibrate raised (bit 7)
 
     pop es
+    pop si
     pop dx
     pop cx
     pop bx

@@ -1679,11 +1679,25 @@ can appear at all (§18.98). Nothing is wrong here; it is worth writing down
 because "the probe for drive 2 did not run" and "the probe for drive 2 is
 broken" look identical in the report.
 
-**One gap it does expose**: `fdd_dbg_*` (§57.5) is a single set of bytes and
-§18.98 now probes up to three units, so the block describes the LAST one
-asked. On a machine claiming four drives the operator would see unit 3 and
-have no visibility into units 1 and 2. It wants either a per-unit block or a
-unit field beside the verdict.
+**One gap it did expose, now FIXED**: `fdd_dbg_*` (§57.5) was a single set of
+bytes while §18.98 probes up to three units, so the block described the LAST
+one asked — on a machine claiming four drives the operator saw unit 3 and had
+no visibility into units 1 and 2. That is a diagnostic going blank on exactly
+the configuration it exists for, an internal drive plus a 4865 on the 37-pin
+connector. It is **one five-byte row per unit** now, with `probe ran` a bitmap
+(bit n = unit n was asked) and a unit printed only if its bit is set — so a
+correctly-switched two-drive machine still reads five short rows and not
+twenty. Ten bytes of `.text`, sixteen of `.ovl`, no rung crossed. Verified on
+`os8088_5150_cga_ext720`: `claimed 4`, `probe ran 0E`, three rows whose `ST3`
+reads `79`, `7A`, `7B` — the low two bits being the unit, which is what says
+each row is about the drive it names.
+
+**And `sysbench`'s own reader had two equs on one word**, found while
+rewriting it: `sb_fdstate` and `sb_skcyl` were both `os88_image_end + 240`.
+It worked only because `sb_disk` runs before `sb_fdd` and `sb_fdd` reads that
+word in the same breath it writes it — neither of which anything enforces,
+and the comment above `sb_fdstate` is *about* the last time this happened.
+Moved past every scalar, with `SB_O_SYSKB` raised to match.
 
 ### 17.1 The format prompt does not clear on Escape (FIXED, verified on Hercules and CGA)
 

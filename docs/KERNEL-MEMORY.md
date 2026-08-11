@@ -407,9 +407,9 @@ Three things about it:
     "ksize": 98816,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 3126,
+    "ovl": 3142,
     "stk0": 1024,
-    "text": 56566
+    "text": 56576
   },
   "small": {
     "bss": 4853,
@@ -424,9 +424,9 @@ Three things about it:
     "ksize": 93184,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 2740,
+    "ovl": 2756,
     "stk0": 1024,
-    "text": 52797
+    "text": 52807
   }
 }
 ```
@@ -922,14 +922,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,346 | 36.9% |
+| the file system, end to end | 29,356 | 36.9% |
 | the window system and its furniture | 17,156 | 21.6% |
-| drawing: adapters, primitives, glyphs, icons | 11,727 | 14.8% |
+| drawing: adapters, primitives, glyphs, icons | 11,727 | 14.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.3% |
 | the kernel proper: API table, heap, scheduler, events | 5,959 | 7.5% |
 | the Control Panel | 4,120 | 5.2% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **79,499** | |
+| **total** | **79,509** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -937,7 +937,7 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,004 | 7,620 | **8,624** | 336 | — |
 | `wm.inc` — the window manager (§11) | 6,603 | — | **6,603** | 645 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,646 | — | **5,646** | 892 | 3,584 |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,656 | — | **5,656** | 892 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,430 | **5,609** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,758 | — | **4,758** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
@@ -971,7 +971,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,767 | — | **2,767** | — | — |
-| **total** | **56,566** | **22,933** | **79,499** | **5,062** | **7,762** |
+| **total** | **56,576** | **22,933** | **79,509** | **5,062** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1165,7 +1165,7 @@ overlay is **3,069 bytes** of it, with 1,539 spare:
 | `cpudet.inc` minus `cpu_info` | 314 | the tier test and the whole A20 gate. `cpu_info` stays: it is API slot 0x0188 and answers all session long |
 | `xmem.inc` — `xm_init` | 123 | sizing the store is a once. `xm_arm` stays resident — `xm_copy` re-arms unreal mode inside the window that uses it — so it gets a shim |
 | `snd.inc` — `snd_init` | 107 | saving the boot 61h bits and publishing `snd_live`. `snd_unhook` is the shutdown path and stays |
-| `disk.inc` — `dsk_fdd_probe` | 382 | asking the FDC whether drive B is really there (SPEC.md §18.97), and retiring its volume row if not. `make FDDPROBE=0` takes it out |
+| `disk.inc` — `dsk_fdd_probe` | 398 | asking the FDC whether a unit is really there (SPEC.md §18.97), retiring drive B's volume row if not, and filling that unit's row of §57.5's published block. `make FDDPROBE=0` takes it out |
 | `desk.inc` — `desk_init` | 122 | counting volumes and laying out their zones, and the 21 bytes that contest the count against the probe above. `desk_ord` and `desk_zone_label` are called by the runtime painters and stay |
 | `kernel.asm` — the entry stubs | 24 | |
 

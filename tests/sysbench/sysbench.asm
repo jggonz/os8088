@@ -1753,17 +1753,36 @@ sb_ladder:
 ; has ONE drive and DIP switches that claim two, so its expected rows are
 ; `claimed 2`, `probe stop 03` (Equipment Check) and `verdict 0` - and any
 ; other combination there is the news. A machine whose switches are right
-; reads `claimed 1`, `probe ran 0` and nothing else, because there was nothing
-; to contest.
+; reads `claimed 1`, `probe ran 00` and nothing else, because there was
+; nothing to contest.
 ;
 ; READ `probe stop` FIRST. `verdict 1` means "the drive was kept", and that is
 ; equally what a probe that PROVED it present and one that merely failed to
 ; prove it absent both say - which is the difference between this working and
 ; this being a fail-safe that never fires.
+;
+; ONE SUB-BLOCK PER UNIT (SPEC.md 18.98/57.5). The probe runs on units 1, 2
+; and 3, and the published block used to be a single set of bytes that every
+; run overwrote - so a machine with a 4865 on the 37-pin connector reported
+; only the LAST unit asked, which is exactly the machine this diagnostic is
+; for. `probe ran` is a BITMAP now (bit n = unit n was asked) and a unit is
+; printed only if its bit is set, so a correctly-switched two-drive machine
+; still reads five short rows and not twenty.
 ; -----------------------------------------------------------------------------
+SB_FD_EQP   equ 0                   ; the block, as kernel/disk.inc lays it out
+SB_FD_RAN   equ 1
+SB_FD_U     equ 2                   ; ...then three rows, unit 1 first
+SB_FDU_ST3  equ 0
+SB_FDU_ST3B equ 1
+SB_FDU_ST0  equ 2
+SB_FDU_STEP equ 3
+SB_FDU_VRD  equ 4
+SB_FDU_SIZE equ 5
+
 sb_fdd:
     push ax
     push bx
+    push cx
     push si
     push es
     call bl_blank
@@ -1777,34 +1796,64 @@ sb_fdd:
     call bl_sline
     mov si, sb_s_h_fdd4
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
+    mov si, sb_s_h_fdd6
+    call bl_sline
 
     mov ax, DBG_TAG_FDD             ; SPEC.md 57's registry
     call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
-    mov [sb_fdstate], ax             ; -> the 7-byte state span
+    mov [sb_fdstate], ax            ; -> the 17-byte state span
 
     mov si, sb_l_feqp               ; what int 11h claimed...
-    xor al, al
+    mov al, SB_FD_EQP
     call sb_fdb
-    mov si, sb_l_fran               ; ...whether it was contested at all
-    mov al, 1
-    call sb_fdb
+    mov si, sb_l_fran               ; ...and which units were contested at all
+    mov al, SB_FD_RAN
+    call sb_fdbx
+
+    mov cl, 1                       ; units 1..3; unit 0 has no row
+.unit:
+    mov bx, [sb_fdstate]
+    mov al, [es:bx+SB_FD_RAN]
+    mov ah, 1
+    shl ah, cl
+    test al, ah
+    jz .nextu                       ; never asked: nothing here but initialisers
+
+    mov al, cl                      ; the row's base offset in the block
+    dec al
+    mov ah, al
+    shl al, 1
+    shl al, 1
+    add al, ah                      ; (unit - 1) * SB_FDU_SIZE...
+    add al, SB_FD_U                 ; ...past the two scalars
+    mov [sb_fdrow], al
+
+    xor ah, ah                      ; a heading row whose VALUE is the unit,
+    mov al, cl                      ; which needs no third copy of five labels
+    mov si, sb_l_funit
+    call sb_num
+
     mov si, sb_l_fst3               ; ...and the line, read twice
-    mov al, 2
-    call sb_fdbx
+    mov al, SB_FDU_ST3
+    call sb_fdux
     mov si, sb_l_fst3b
-    mov al, 3
-    call sb_fdbx
+    mov al, SB_FDU_ST3B
+    call sb_fdux
     mov si, sb_l_fst0
-    mov al, 4
-    call sb_fdbx
+    mov al, SB_FDU_ST0
+    call sb_fdux
     mov si, sb_l_fstep              ; THE row that carries
-    mov al, 5
-    call sb_fdbx
+    mov al, SB_FDU_STEP
+    call sb_fdux
     mov si, sb_l_fvrd
-    mov al, 6
-    call sb_fdb
+    mov al, SB_FDU_VRD
+    call sb_fdu
+.nextu:
+    inc cl
+    cmp cl, 4
+    jb .unit
     jmp short .out
 .nodbg:
     mov si, sb_s_fnone
@@ -1812,9 +1861,19 @@ sb_fdd:
 .out:
     pop es
     pop si
+    pop cx
     pop bx
     pop ax
     ret
+
+; sb_fdu / sb_fdux - SI = label, AL = a field offset within the unit row
+; [sb_fdrow] names -> one row, as decimal / as hex.
+sb_fdu:
+    add al, [sb_fdrow]
+    jmp short sb_fdb
+sb_fdux:
+    add al, [sb_fdrow]
+    jmp short sb_fdbx
 
 ; sb_fdb / sb_fdbx - SI = label, AL = byte offset into the floppy block -> one row
 ; as decimal / as hex. ES is KERNEL_SEG on entry (sb_fdd holds it).
@@ -4597,9 +4656,11 @@ sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a D
 sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0. The SECOND read decides: no TRK0 after a', 0
 sb_s_h_fdd5: db '   recalibrate is the absent drive. ST0 is drained, never branched on.', 0
 sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
+sb_s_h_fdd6: db '   ONE SUB-BLOCK PER UNIT: probe ran is a bitmap, bit n = unit n asked.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
-sb_l_fran:   db '  probe ran', 0
+sb_l_fran:   db '  probe ran bitmap hex', 0
+sb_l_funit:  db '  --- unit', 0
 sb_l_fst3:   db '  ST3 motor off hex', 0
 sb_l_fst3b:  db '  ST3 after seek hex', 0
 sb_l_fst0:   db '  ST0 drained hex', 0
@@ -4814,7 +4875,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 244              ; ...and the scalars end at 243 now
+SB_O_SYSKB equ 248              ; ...and the scalars end at 247 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -4884,14 +4945,25 @@ sb_mbase    equ os88_image_end + 118   ; word: -> mou_bases (SPEC.md 9.4.2)
 sb_mstate   equ os88_image_end + 120   ; word: -> the mouse state span (121)
 sb_cstate   equ os88_image_end + 122   ; word: -> the clock state span (123),
                                        ; SPEC.md 37.92
-sb_fdstate  equ os88_image_end + 240   ; word: -> the floppy state span (241),
-                                       ; SPEC.md 57.5. MOVED at the merge: it
-                                       ; was 214, which is sb_hbest on the
-                                       ; branch this met - and two equs naming
-                                       ; one word assemble perfectly and
-                                       ; produce a report full of plausible
-                                       ; nonsense (docs/UPSTREAM.md's whole
-                                       ; point about a silent difference)
+sb_fdstate  equ os88_image_end + 244   ; word: -> the floppy state span (245),
+                                       ; SPEC.md 57.5. MOVED TWICE, and the
+                                       ; second time is the lesson: at the
+                                       ; merge it went from 214 (sb_hbest on
+                                       ; the branch this met) to 240 - which is
+                                       ; sb_skcyl, so the collision was carried
+                                       ; rather than fixed. It only ever worked
+                                       ; because sb_disk runs BEFORE sb_fdd and
+                                       ; sb_fdd reads this word in the same
+                                       ; breath it writes it: nothing enforces
+                                       ; either, and two equs naming one word
+                                       ; assemble perfectly and produce a
+                                       ; report full of plausible nonsense
+                                       ; (docs/UPSTREAM.md's whole point about
+                                       ; a silent difference). Past every
+                                       ; scalar now, with SB_O_SYSKB moved up
+sb_fdrow    equ os88_image_end + 246   ; byte: the unit sub-block sb_fdu is
+                                       ; printing, an offset into the span
+                                       ; above (SPEC.md 18.98). 247 spare
 sb_vkind    equ os88_image_end + 184   ; word: -> vid_kind    (SPEC.md 57.4)
 sb_vavail   equ os88_image_end + 186   ; word: -> vid_avail
 sb_vnd      equ os88_image_end + 188   ; word: -> ndisp/cur/ox/oy/dmode/dlay

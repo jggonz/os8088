@@ -9666,6 +9666,16 @@ exactly this reason: it started in `.ovl` beside the probe's own constants,
 where the first mount overwrites it, so it read back as its initialiser after
 a boot that had probed unit 3 and said nothing was wrong.
 
+**And the published block had to become one row per unit**, which is the same
+mistake from the other end: `fdd_dbg_*` was a single set of bytes written by
+every run, so on a machine claiming three or four drives §57.5 described the
+LAST unit asked and said nothing at all about the others — a diagnostic that
+goes blank exactly on the configuration it exists for. Three five-byte rows
+and a `probe ran` bitmap; §57.5 has the layout. Ten bytes of `.text`, sixteen
+of `.ovl`, no rung crossed. Verified on `os8088_5150_cga_ext720`: `claimed 4`,
+`probe ran 0E`, and three rows whose `ST3` reads `79`, `7A`, `7B` — the low two
+bits being the unit, which is what says each row is about the drive it names.
+
 `DVOL_MAX` went 6 → 8 for this. At 6 the external pair would have eaten two of
 the four partition rows, so a machine with four floppies could not reach all of
 a four-partition disk at once; the eighth row costs 54 bytes of `.text` and 2
@@ -32430,19 +32440,38 @@ question `ui_drag_dead` exists to answer.
 
 ### 57.5 `FD` — the floppy-presence block (§18.97)
 
-Seven bytes and the tag: what `int 11h` claimed, whether the probe ran, the
-two status bytes it read off the 765, the present-cylinder byte beside them,
-how far it got, and the verdict.
+Seventeen bytes and the tag: two scalars about the machine, then **one
+five-byte row per unit** — the two status bytes the probe read off the 765,
+the drained `ST0` beside them, how far it got, and the verdict.
 
 ```
-fdd_dbg_eqp   drives the equipment word claimed, after the clamp (0..2)
-fdd_dbg_ran   0 = never ran (one drive claimed, or FDDPROBE=0), 1 = ran
-fdd_dbg_st3   SENSE DRIVE STATUS, unit 1, motor off; bit 4 is TRK0
-fdd_dbg_st3b  ...and again after the RECALIBRATE. THIS is what decides
-fdd_dbg_st0   a drained SENSE INTERRUPT STATUS ST0 - diagnostic only (§18.97.1)
-fdd_dbg_step  where it stopped: FDD_S_*, and the row that carries
-fdd_dbg_vrd   0 = absent, the row was retired; 1 = present, the row was kept
+fdd_dbg_eqp   drives the equipment word claimed, after the clamp (0..4)
+fdd_dbg_ran   a BITMAP: bit n set = the probe ran on unit n (0 = never ran
+              at all - one drive claimed, or FDDPROBE=0)
+fdd_dbg_u     three rows, unit 1 first; unit 0 has none. Each is:
+  +0 st3      SENSE DRIVE STATUS, motor off; bit 4 is TRK0
+  +1 st3b     ...and again after the RECALIBRATE. THIS is what decides
+  +2 st0      a drained SENSE INTERRUPT STATUS ST0 - diagnostic (§18.97.1)
+  +3 step     where it stopped: FDD_S_*, and the byte that carries
+  +4 vrd      0 = absent (retired, or never given a row); 1 = kept
 ```
+
+**It is one row per unit because §18.98 made the probe run up to three
+times**, and it was one set of bytes that every run overwrote — so a machine
+claiming three or four drives published the LAST unit asked and nothing about
+the others. That is exactly the machine this block exists for: one internal
+drive plus a 4865 on the 5.25" adapter's 37-pin connector, where the external
+pair is the part no emulator can be asked about. Ten bytes of `.text` and
+sixteen of `.ovl`, no rung crossed.
+
+**`fdd_dbg_ran` is a bitmap and not a flag**, for the same reason. It is also
+deliberately not derived from `step != FDD_S_OFF`, which is the same fact
+only while every exit from the probe writes `step` — true today, and true
+until somebody adds an exit that does not.
+
+**A unit whose bit is clear carries its INITIALISERS**, not a verdict: `step`
+= `FDD_S_OFF` and `vrd` = 1. Read the bitmap first, exactly as you read
+`step` before `vrd`.
 
 **`probe stop` is the row that carries**, exactly as the clock ladder's is
 (§37.92), and for the same reason: the verdict is one byte that reads
@@ -32460,10 +32489,10 @@ one — and it keeps the drive, as every unrecognised state does.
 plainly than any of them. This block exists *because* no emulator here can be
 trusted about what a 765 reports for an absent drive: the raw ST3 and ST0
 bytes are the evidence, and evidence that is only in the knob build is
-evidence the field machine is never sent. It costs no `.bss` beyond the seven
-bytes it publishes, which is rule 6's one permitted exception — there is no
-pre-existing kernel state to point at, because before §18.97 the kernel never
-asked.
+evidence the field machine is never sent. It costs no `.bss` beyond the
+seventeen bytes it publishes, which is rule 6's one permitted exception —
+there is no pre-existing kernel state to point at, because before §18.97 the
+kernel never asked.
 
 ## 58. debug.inc — DEBUG.DRV, the serial monitor (`drivers/debug/debug.asm`)
 
