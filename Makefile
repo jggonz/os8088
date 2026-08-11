@@ -85,6 +85,17 @@ VIDDEF += -DDISK_COUNTERS
 DRVDEF += -DINSTBENCH
 endif
 
+# INSTCHUNK=1 puts the TOP of the hard-disk installer's copy-buffer ladder at
+# 32KB, so KERNEL.SYS - the biggest file it moves, and a hidden+system one -
+# goes down as a run of OSAPI_FILE_APPEND_SYS calls instead of a single write
+# (SPEC.md 18.4.4/52.10.11). That path only happens on a machine too short of
+# heap to fund 96KB, which is no machine here, so without this knob the one
+# code path that carries a system file across several writes is never run.
+# It touches the DRIVER only; the kernel is byte-identical either way.
+ifneq ($(INSTCHUNK),)
+DRVDEF += -DHIW_KMAXKB=32
+endif
+
 # FLOPPY1=1 puts the floppy transfer back to one sector per int 13h - the
 # pre-SPEC.md-18.91 loop, with nothing else changed. It exists so that the
 # batching can be A/B'd on real hardware without a source edit, which is the
@@ -120,6 +131,17 @@ ifneq ($(DIRW1),)
 VIDDEF += -DDIRW_ONE
 endif
 
+# FDDPROBE=0 never asks the FDC whether the second floppy drive is really there
+# (SPEC.md 18.97), so the int 11h equipment word decides on its own again - the
+# pre-18.97 behaviour, and the A/B for the whole probe. A knob for DIRW1's
+# reason turned up one further: this is a claim about what a real uPD765
+# reports for a drive that is NOT THERE, an emulated controller answers what
+# its author believed one answers (SPEC.md 18.92, docs/FIELD-NOTES.md 5), and
+# the machine that can settle it is the one whose desktop is wrong today.
+ifeq ($(FDDPROBE),0)
+VIDDEF += -DNO_FDDPROBE
+endif
+
 # KERN_SMALL=1 selects the SMALL build of the kernel (docs/KERN-SPLIT-PLAN.md).
 #
 # The split is the one docs/KERNEL-MEMORY.md and kernel.asm have named for
@@ -144,10 +166,11 @@ else
 VIDDEF += -DKERN_BIG
 endif
 
-# REDRAWFULL=1 puts the menu bar and the dock back on their pre-SPEC.md
-# 12.9/30.3 paths: every bar redraw is a full one (fill, logo, name, every
-# title and the clock), every changed dock tile is erased and rebuilt, and
-# every damage to the strip is the whole strip. It exists to be DIFFED
+# REDRAWFULL=1 puts the menu bar, the dock and the Disk window's command
+# path back on their pre-SPEC.md 12.9/30.3/22.13 paths: every bar redraw is a
+# full one (fill, logo, name, every title and the clock), every changed dock
+# tile is erased and rebuilt, every damage to the strip is the whole strip,
+# and every fm_docmd ends in a whole-window fm_repaint. It exists to be DIFFED
 # against - the incremental paths must be byte-identical to it, and "the
 # picture is the same, only the number of times it was drawn changed" is the
 # whole claim they make, which a screenshot of one build alone cannot check.
@@ -269,9 +292,10 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 REDRAWFULL NOSPLIT SNDSNIFF RAMKB FONT,\
+                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB \
+                             FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
@@ -585,6 +609,23 @@ $(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin tools/os88pkg.py
 
 $(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fmtest.o88
+
+# XMTEST: the extended-memory TEARDOWN gate (SPEC.md 41.5/29.4). It answers
+# "when an instance holding blocks above 1MB closes, are they freed?", which
+# needs a package because xm_alloc stamps a block with the CALLING INSTANCE -
+# nothing outside one can make a block that belongs to a slot. It must run on
+# a machine that HAS a store, so QEMU on a 386 rather than MartyPC's 8088:
+#   make test TESTAPPS=build/xmtest.img
+#   python3 tests/xmcheck.py build/qmp.sock
+$(BUILD)/xmtest.bin: tests/xmtest/xmtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/xmtest/xmtest.asm
+	@echo "xmtest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/xmtest.o88: $(BUILD)/xmtest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/xmtest.bin -o $@
+
+$(BUILD)/xmtest.img: $(BUILD)/xmtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/xmtest.o88
 
 # LINETEST: the gate for SPEC.md 5.6.6, the 1bpp three-column walk. A
 # deterministic fan of dilated steep lines and nothing else, so two kernels
@@ -1221,10 +1262,19 @@ $(BUILD)/bench360.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 
 # --- the FIELD disks: one BOOTABLE 360KB floppy per adapter ------------------
 #
-# `make field` -> build/herc.img and build/cga.img, and both are shaped by the
-# machine this project is calibrated against (docs/FIELD-MACHINES.md, E1: an
-# IBM PC 5150 with ONE floppy drive - the second bay is an ST-225 - and both a
-# Hercules and a CGA card in it at all times).
+# `make field` -> the NARROW disks, for the questions `make combo` cannot
+# answer. It is no longer the default ask (that is combo.img, below), and
+# herc.img/cga.img in particular are now the special case rather than the
+# ordinary one: SPEC.md 39.11's Display page switches the adapter at RUN TIME,
+# so a pinned-adapter build is only wanted when a run must fix the card at
+# BOOT, or must compare against an older set that was taken that way. What is
+# still only here: cga720 (a 720KB GEOMETRY, for the Toshiba T1100 Plus),
+# flop1 (FLOPPY1=1) and cqdiag (BOOTDIAG=1).
+#
+# All of them are shaped by the machine this project is calibrated against
+# (docs/FIELD-MACHINES.md, E1: an IBM PC 5150 with ONE floppy drive - the
+# second bay is an ST-225 - and both a Hercules and a CGA card in it at all
+# times).
 #
 # THE BENCHMARKS ARE ON THE BOOT DISK. With no drive B, the two-floppy shape
 # `make bench` produces would mean swapping disks mid-session on the one
@@ -1644,6 +1694,13 @@ $(APPSIMG360): $(APPS) tools/os88disk.py
 # `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
 # every application AND the four benchmarks on it.
 #
+# THIS IS THE DEFAULT DISK FOR A FIELD OR BENCH REQUEST. Build and send this
+# one unless the ask is a `make field` case (a 720KB geometry, a knob kernel,
+# or an adapter pinned at boot to match an older set). It used to be the
+# herc.img/cga.img pair, and what changed is SPEC.md 39.11: the adapter
+# stopped being a property of the BUILD, so one disk now takes a set from both
+# cards - see below.
+#
 # The field machine has ONE floppy drive (docs/FIELD-MACHINES.md), so the
 # three-disk shape `all` produces - system, apps, bench - is two disk swaps,
 # and on that machine a swap is a walk to another room. This is the whole
@@ -1663,10 +1720,17 @@ $(APPSIMG360): $(APPS) tools/os88disk.py
 #                      which is where that measurement belongs.
 #   README.TXT         16 cl - the manual, on a disk that is for running.
 #
-# ONE IMAGE AND NOT ONE PER CARD, unlike the field disks above, and that is
-# SPEC.md 39.19 rather than a compromise: the probe still finds the Hercules
-# first (39.1), and the Control Panel's Display page then switches the primary
-# to the CGA or extends the desktop across both without rebuilding anything.
+# ONE IMAGE AND NOT ONE PER CARD, and that is SPEC.md 39.19 rather than a
+# compromise: the probe still finds the Hercules first (39.1), and the Control
+# Panel's Display page then switches the primary to the CGA or extends the
+# desktop across both without rebuilding anything. So the operator runs
+# GFXBENCH, switches the display, and runs it again - and because gfxbench
+# names its report after the adapter it FOUND, both sets land on the one disk
+# without colliding. SYSBENCH is run once: none of its rows is about the
+# adapter. This is also the PLAINEST kernel of the lot - the shipped one, with
+# no VIDEO= forced - so a field request no longer hands anybody a
+# forced-adapter kernel at all, which is what put a VGA machine down the CGA
+# path and cost the Packard Bell 286 its first set.
 # The disk is NOT write-protected - SYSTEM.CFG is what remembers that choice.
 COMBOARGS := $(DRIVERS) $(SYSAPPSARGS) \
              $(addprefix APPS:,$(APPS_TOOLS)) \
@@ -1683,6 +1747,10 @@ $(BUILD)/combo.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
 		$(COMBOARGS)
 	@echo "combo: $@ - system + apps + benchmarks on ONE 360KB boot disk"
+	@echo "       THE DEFAULT DISK FOR A FIELD OR BENCH REQUEST. One image for"
+	@echo "       BOTH cards: Control Panel > Display switches the adapter at"
+	@echo "       run time, and gfxbench names its report after the one it"
+	@echo "       found - so run it, switch, run it again. sysbench once."
 	@echo "       no BEVERLY.MOD, no BIGFILE.DAT, no README.TXT (see the Makefile)"
 
 # The GUI reads a Microsoft serial mouse on COM1 or COM2 (SPEC.md 9.5); QEMU

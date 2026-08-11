@@ -377,6 +377,11 @@ sb_run:
     call sb_mouse
     call sb_ladder                  ; SPEC.md 37.92 - a state dump, like the
                                     ; mouse block above and for its reason
+    call sb_fdd                     ; ...and SPEC.md 57.5, for a reason that is
+                                    ; the same one a fourth time and sharper:
+                                    ; the block exists BECAUSE no emulator can
+                                    ; be asked what a 765 says about a drive
+                                    ; that is not plugged in
     call sb_video                   ; ...and SPEC.md 57.4, the third of them:
                                     ; two cards on two monitors is the field
                                     ; machine's own arrangement and the one
@@ -1733,6 +1738,104 @@ sb_ladder:
     pop si
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_fdd - is the second floppy drive really there? (SPEC.md 18.97/57.5)
+;
+; A STATE dump, like sb_mouse and sb_ladder above, and the one with the least
+; ambiguous reason of the four: the kernel now REMOVES a volume on the
+; strength of two status bytes read out of a uPD765, and an emulated FDC
+; answers what its author believed a real one answers. So the raw bytes go in
+; the report, and the field machine settles it.
+;
+; The field 5150 (docs/FIELD-MACHINES.md) is the case this was written for: it
+; has ONE drive and DIP switches that claim two, so its expected rows are
+; `claimed 2`, `probe stop 03` (Equipment Check) and `verdict 0` - and any
+; other combination there is the news. A machine whose switches are right
+; reads `claimed 1`, `probe ran 0` and nothing else, because there was nothing
+; to contest.
+;
+; READ `probe stop` FIRST. `verdict 1` means "the drive was kept", and that is
+; equally what a probe that PROVED it present and one that merely failed to
+; prove it absent both say - which is the difference between this working and
+; this being a fail-safe that never fires.
+; -----------------------------------------------------------------------------
+sb_fdd:
+    push ax
+    push bx
+    push si
+    push es
+    call bl_blank
+    mov si, sb_s_h_fdd
+    call bl_sline
+    mov si, sb_s_h_fdd2
+    call bl_sline
+    mov si, sb_s_h_fdd3
+    call bl_sline
+    mov si, sb_s_h_fdd4
+    call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
+
+    mov ax, DBG_TAG_FDD             ; SPEC.md 57's registry
+    call bl_dbgfind
+    jc .nodbg
+    mov ax, [es:bx+2]
+    mov [sb_fdstate], ax             ; -> the 7-byte state span
+
+    mov si, sb_l_feqp               ; what int 11h claimed...
+    xor al, al
+    call sb_fdb
+    mov si, sb_l_fran               ; ...whether it was contested at all
+    mov al, 1
+    call sb_fdb
+    mov si, sb_l_fst3               ; ...and the two bytes that decided it
+    mov al, 2
+    call sb_fdbx
+    mov si, sb_l_fst0
+    mov al, 3
+    call sb_fdbx
+    mov si, sb_l_fpcn
+    mov al, 4
+    call sb_fdbx
+    mov si, sb_l_fstep              ; THE row that carries
+    mov al, 5
+    call sb_fdbx
+    mov si, sb_l_fvrd
+    mov al, 6
+    call sb_fdb
+    jmp short .out
+.nodbg:
+    mov si, sb_s_fnone
+    call bl_sline
+.out:
+    pop es
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; sb_fdb / sb_fdbx - SI = label, AL = byte offset into the floppy block -> one row
+; as decimal / as hex. ES is KERNEL_SEG on entry (sb_fdd holds it).
+sb_fdb:
+    push bx
+    mov bl, al
+    xor bh, bh
+    add bx, [sb_fdstate]
+    mov al, [es:bx]
+    xor ah, ah
+    call sb_num
+    pop bx
+    ret
+
+sb_fdbx:
+    push bx
+    mov bl, al
+    xor bh, bh
+    add bx, [sb_fdstate]
+    mov al, [es:bx]
+    xor ah, ah
+    call sb_hex
+    pop bx
     ret
 
 ; sb_cb / sb_cbx - SI = label, AL = byte offset into the clock block -> one row
@@ -3637,17 +3740,21 @@ sb_b_rdsml:
 ;
 ; THIS BLOCK NEVER WRITES. It does not format, does not partition, does not
 ; create a file, and does not delete one. That is not timidity about the code,
-; it is a fact about the disk: the machine this was written for
-; (docs/FIELD-MACHINES.md, E1) has a real DOS 3.3 install on its C:, with its
-; owner's data on it, and a benchmark has no business leaving anything behind
-; or removing anything it did not put there. What that costs is the write half
+; it is a fact about the disk: C: belongs to whoever is running this - it was
+; a real DOS 3.3 install on the machine this was written for
+; (docs/FIELD-MACHINES.md, E1) and is an os8088 install today - and a benchmark
+; has no business leaving anything behind or removing anything it did not put
+; there. What that costs is the write half
 ; of the picture - a `bytes/second written` row would need a scratch file, and
 ; a run interrupted between creating and deleting one would break that promise.
 ; Reads are the half that can be taken safely, so reads are what this takes.
 ;
-; The file it reads is COMMAND.COM, because a DOS 3.3 system disk has one and
-; reading it changes nothing. The report NAMES it, so nobody has to guess what
-; the throughput row was reading.
+; WHICH file it reads is ASKED of the volume (sb_hdpick, below) rather than
+; assumed of it - the biggest ordinary root file that fits the claim - and the
+; report NAMES it, so nobody has to guess what the throughput row was reading.
+; It used to be COMMAND.COM, on the reasoning that a DOS 3.3 system disk has
+; one; the field machine's C: is an os8088 volume now, so that row answered
+; FERR_NOENT and the block measured nothing while still printing four lines.
 ;
 ; IT MUST SURVIVE THERE BEING NO HARD DISK, which is every other machine
 ; including the one it was developed on. There is no cheaper way to ask than
@@ -3696,6 +3803,9 @@ sb_hdd:
     jc .noclaim
     mov [sb_bseg], dx
 
+    call sb_hdpick                  ; WHICH file, asked of the volume rather
+                                    ; than assumed of it (see the header)
+
     mov word [bl_n], 16             ; the FAT walk on a 20MB FAT16 volume. On
     mov word [bl_body], sb_b_dfree  ; a floppy the whole FAT is resident and
     mov si, sb_r_hdf                ; this is 40 ms; here the 9-sector window
@@ -3714,7 +3824,7 @@ sb_hdd:
     mov ax, [sb_hsz]
     call sb_num
     mov si, sb_l_hdfn
-    mov di, sb_f_cmd
+    mov di, sb_hname
     call bl_kvs
     cmp word [sb_hsz], 0            ; no file, no throughput to measure
     je .nofile
@@ -3932,7 +4042,7 @@ sb_b_hddrd:
     push es
     mov es, [sb_bseg]
     xor bx, bx
-    mov si, sb_f_cmd
+    mov si, sb_hname
     mov cx, SB_BIGKB * 1024
     xor dx, dx
     call OSAPI_FILE_READ            ; out CF=0 and DX:AX = the file's size
@@ -3950,6 +4060,66 @@ sb_b_hddrd:
 sb_b_hdmnt:
     call sb_hdd_go
     call sb_hdd_back
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_hdpick - name the biggest ordinary file in C:'s root that fits the claim
+; in:  volume 2 current, at its root
+; out: [sb_hname] = a NUL name, or the empty string if there is nothing to read
+;
+; It used to be `COMMAND.COM`, on the reasoning that a DOS 3.3 system disk has
+; one. The field machine's C: is an os8088 volume now (docs/FIELD-MACHINES.md)
+; and that row has been answering FERR_NOENT ever since, so the throughput
+; measurement this block exists for produced nothing at all - a benchmark that
+; silently measures no bytes is the worst of the three outcomes.
+;
+; BIGGEST-THAT-FITS rather than first-found, because the row is a RATE and a
+; 96-byte file measures the call and not the disk. Still read-only, still
+; creates nothing and deletes nothing, which is this block's whole contract.
+; -----------------------------------------------------------------------------
+sb_hdpick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [sb_hname], 0
+    mov word [sb_hbest], 0
+    xor cx, cx
+.next:
+    push cs
+    pop es
+    mov di, sb_hfind
+    call OSAPI_FILE_FIND
+    jc .done
+    cmp word [sb_hfind+14], OSAPI_FT_DIR
+    jae .next                       ; a folder or the synthesized '..'
+    cmp word [sb_hfind+20], 0       ; over 64KB: it cannot fit the claim and
+    jne .next                       ; the high word is the only cheap test
+    mov ax, [sb_hfind+18]
+    cmp ax, SB_BIGKB * 1024
+    ja .next
+    cmp ax, [sb_hbest]
+    jbe .next
+    mov [sb_hbest], ax
+    mov si, sb_hfind                ; bank the NAME: hd_ifind's lesson, since
+    mov di, sb_hname                ; the walk overwrites the record every pass
+    push cx
+    mov cx, 13
+    cld
+    rep movsb
+    pop cx
+    jmp short .next
+.done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 %include "benchlib.inc"
@@ -4030,7 +4200,7 @@ sb_c_mulm:    db 'mov ax,i + mul [m]', 0
 sb_c_div:     db 'xor+mov+div r16', 0
 
 sb_f_out:   db 'SYSBENCH.TXT', 0
-sb_f_cmd:   db 'COMMAND.COM', 0
+sb_hname:   times 14 db 0     ; sb_hdpick's answer, and what the report NAMES
 sb_f_big:   db 'BENCH.DAT', 0
 sb_f_sml:   db 'BENCHSML.DAT', 0
 
@@ -4132,6 +4302,19 @@ sb_l_mhps:   db '  poller state', 0
 sb_l_msn:    db '  mouse found', 0
 sb_l_mpt:    db '  winning row (0/2)', 0
 sb_l_mln:    db '  winning IRQ hex 10=4', 0
+
+sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
+sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a DIP switch.', 0
+sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0; ST0 bit 4 = EQUIP CHECK, which IS the absent drive.', 0
+sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 seek ok 03 EQUIP CHECK 04-06 refused.', 0
+sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
+sb_l_feqp:   db '  drives int 11h claims', 0
+sb_l_fran:   db '  probe ran', 0
+sb_l_fst3:   db '  unit 1 ST3 hex', 0
+sb_l_fst0:   db '  unit 1 ST0 hex', 0
+sb_l_fpcn:   db '  unit 1 cyl hex', 0
+sb_l_fstep:  db '  probe stop hex', 0
+sb_l_fvrd:   db '  verdict 1=kept 0=gone', 0
 
 sb_s_h_lad:  db '-- the clock: which rung of the RTC ladder answered (SPEC.md 37.90) --', 0
 sb_s_h_lad2: db '   STATE, not a measurement. tier: 0 none 1 AT 2 MM58167 3 RP5C01 4 BIOS.', 0
@@ -4314,7 +4497,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 214              ; ...and the scalars end at 213 now
+SB_O_SYSKB equ 242              ; ...and the scalars end at 241 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -4384,6 +4567,14 @@ sb_mbase    equ os88_image_end + 118   ; word: -> mou_bases (SPEC.md 9.4.2)
 sb_mstate   equ os88_image_end + 120   ; word: -> the mouse state span (121)
 sb_cstate   equ os88_image_end + 122   ; word: -> the clock state span (123),
                                        ; SPEC.md 37.92
+sb_fdstate  equ os88_image_end + 240   ; word: -> the floppy state span (241),
+                                       ; SPEC.md 57.5. MOVED at the merge: it
+                                       ; was 214, which is sb_hbest on the
+                                       ; branch this met - and two equs naming
+                                       ; one word assemble perfectly and
+                                       ; produce a report full of plausible
+                                       ; nonsense (docs/UPSTREAM.md's whole
+                                       ; point about a silent difference)
 sb_vkind    equ os88_image_end + 184   ; word: -> vid_kind    (SPEC.md 57.4)
 sb_vavail   equ os88_image_end + 186   ; word: -> vid_avail
 sb_vnd      equ os88_image_end + 188   ; word: -> ndisp/cur/ox/oy/dmode/dlay
@@ -4415,6 +4606,8 @@ sb_wkb      equ os88_image_end + 206   ; word: ...and the KB it actually got
 sb_werr     equ os88_image_end + 208   ; word: the FERR_* a write refused with
 sb_wfree    equ os88_image_end + 210   ; word: KB free on the volume before
 sb_wdone    equ os88_image_end + 212   ; word: KB appended so far
+sb_hbest    equ os88_image_end + 214   ; word: the biggest fitting file so far
+sb_hfind    equ os88_image_end + 216   ; OSAPI_FIND_SZ bytes (216..239)
 sb_syskb    equ os88_image_end + SB_O_SYSKB    ; SYSKB_SIZE bytes
 sb_res      equ os88_image_end + SB_O_RES      ; SB_NCPU dwords
 sb_rrow     equ os88_image_end + SB_O_RROW     ; SB_BWROWS words

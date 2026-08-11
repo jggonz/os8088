@@ -2383,6 +2383,35 @@ dskw_read_at_x:
 ; size, which is the single sector write that makes those bytes part of the
 ; file.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; dskw_append_sys - dskw_append, for a file that belongs to the KERNEL
+; in/out: dskw_append's, exactly
+;
+; The other half of dskw_write_sys's door, and it exists because without it a
+; system file could be CREATED and never FINISHED. dskw_write_sys stamps
+; hidden + system on the file it makes; dskw_append then met those very bits
+; in DSKW_PROT and answered FERR_PROT - so a file too big for the caller's
+; buffer to hold in one piece could not be written AT ALL if it was one of the
+; kernel's own. The installer is where that bit: SPEC.md 52.10's copy moves
+; anything larger than its buffer as a run of appends, and KERNEL.SYS is both
+; the largest file it carries and a system file, so the whole feature rested
+; on the buffer claim being big enough for the kernel WHOLE - written down in
+; hd_ibuf_get as "let hd_icopy_one refuse the one file that needs more", which
+; spelt out is a machine that cannot install os8088 because it is short of
+; heap, and a kernel that stops being installable when it outgrows 96KB.
+;
+; ONE difference from the ordinary append, keyed off the same [dskw_syswr]
+; dskw_write_sys sets: the file being extended may already be hidden + system.
+; Nothing else relaxes - read-only, a volume label and a subdirectory still
+; refuse, and the precondition (the file's size is a whole number of clusters)
+; is unchanged. It CANNOT create one: an append needs an entry that is already
+; there, so the only way to make a system file is still dskw_write_sys, still
+; behind SPEC.md 19.6.1's fence.
+; -----------------------------------------------------------------------------
+dskw_append_sys_x:
+    mov byte [dskw_syswr], 1
+    jmp short dskw_append_x     ; ...which clears it again on the way out
+
 dskw_append_x:
     push bx
     push cx
@@ -2397,6 +2426,8 @@ dskw_append_x:
     mov word [dskw_lenhi], 0    ; a chunk is 16-bit by contract, above
     call dskw_apbody
     call KERNEL_SEG:cw_fpg_end  ; SPEC.md 12.8, as the other two pipelines
+    mov byte [dskw_syswr], 0    ; one shot, dskw_write_x's rule: it can never
+                                ; leak into the next caller's append
     pop es
     pop bp
     pop di
@@ -2418,8 +2449,12 @@ dskw_apbody:
     jc .badarg
     call dskw_find
     jc .out                     ; AX = FERR_NOENT / FERR_IO already
-    jc .out
-    test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT
+    mov al, DSKW_PROT
+    cmp byte [dskw_syswr], 0    ; a kernel file's own extension forgives the
+    je .pmask                   ; two bits dskw_write_sys stamped on it, and
+    mov al, DSKW_SPROT          ; nothing else - dskw_write's own replace mask
+.pmask:                         ; (SPEC.md 19.6.1)
+    test byte [dskw_raw+DSK_R_ATTR], al
     jnz .prot
 
     call dskw_clbytes           ; the precondition, checked not assumed: a
@@ -4141,6 +4176,8 @@ dwf_dskw_mkdir:         call dskw_mkdir_x
 dwf_dskw_read_at:       call dskw_read_at_x
                     retf
 dwf_dskw_append:        call dskw_append_x
+                    retf
+dwf_dskw_append_sys:    call dskw_append_sys_x
                     retf
 
 section .text

@@ -126,7 +126,9 @@ def check(glyphs, quiet=False):
     if blank < BLANK_ROW_FLOOR * total:
         warn.append("only %d of %d glyph rows are blank (%.0f%%, the ROM font "
                     "is 25%%) - a blank row is the one the renderer skips "
-                    "whole, so this face costs more per cell"
+                    "whole, so this face costs more per cell. "
+                    "tools/os88fontcost.py prices it in microseconds, and "
+                    "says which renderer that even applies to"
                     % (blank, total, 100.0 * blank / total))
     if not quiet:
         for w in warn:

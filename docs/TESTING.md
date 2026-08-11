@@ -767,6 +767,7 @@ checks referenced throughout this document:
 | `filetest` | the write path (§18.4) | `make test TESTAPPS=build/filetest.img` |
 | `fsxtest` | fullscreen exclusive (§53): keys 0–8 cycle every mode with an identifying pattern, `x` runs a same-mode bracket, `t` keys a duration-0 tone for the §53.3 legs; the window shows the `fsx_caps` mask (01EF/000F/0011 by adapter) and the last result (`K`/`R`/`F`/`S`) | `make test TESTAPPS=build/fsxtest.img` (also under `VIDEO=cga` / `VIDEO=herc`; `make test-snd` + two instances for the sound legs) |
 | `stackprobe` | the 256-byte task-stack margin (§8) | `make test TESTAPPS=build/stkprobe.img` |
+| `xmtest` | the extended-memory **teardown** (§41.5/§29.4): does a closed instance's blocks above 1MB get freed? Needs a machine with a store, so **QEMU on a 386** — the target machine can never have one. The assertion lives outside the package, in `tests/xmcheck.py`, which reads `xm_tab` over QMP around the close | `make test TESTAPPS=build/xmtest.img` then `python3 tests/xmcheck.py build/qmp.sock` |
 | `trklog` | not a gate — a **recorder**. Tracker itself, built with `-DTRKLOG`, logging one record per system tick and writing it to `TRKLOG.TXT` (SPEC.md §45.14) | `make test SB16=1 TESTAPPS=build/trklog.img` |
 
 `benchlib.inc` is the one shared source under `tests/` — the timing loop, the
@@ -945,6 +946,20 @@ rule. Two consequences that are easy to miss:
 `make bench`'s four harnesses ride a scratch `TESTAPPS=` image because they
 are driven under an emulator here, where there are two drives; the moment one
 of them is wanted on the 5150 it needs the treatment above.
+
+**The disk to send is `make combo`.** `build/combo.img` is one 360KB bootable
+floppy carrying the system, every application, every game and all four
+benchmarks, and it is the default for a field or bench request — not the
+`herc.img`/`cga.img` pair, which is what this used to be. The pair existed
+because both cards live in the 5150 permanently and the §39.1 probe can only
+be asked one question at a time, so the adapter was a property of the
+**build**; since §39.11 it is not. The Control Panel's **Display** page
+switches the primary at run time, so one disk takes a set from both cards —
+run `GFXBENCH.O88`, switch the display, run it again, and it names each report
+after the adapter it *found*. `sysbench` runs once: none of its rows is a
+question about the adapter. `make field` still builds the narrow disks
+(docs/FIELD-MACHINES.md has the table: a 720KB geometry, two knob kernels, and
+a pinned adapter for comparing against an older set).
 
 ### `gfxbench` and `sysbench` — the two that write a file
 
@@ -1360,6 +1375,78 @@ And one the emulator reports as a **success**, which is worse:
   what a blit costs is decided by how *flat* the art is, not how big it is
   (SPEC.md §5.4, PERFORMANCE.md Part 9). The lesson above survives the
   correction intact. The numbers did not.
+
+**And one an emulator here cannot be configured into at all: a mono-primary
+two-card 5150.** The field machine boots on its Hercules because SW1-5/6 say
+`11b` = 80×25 mono and §39.1's last rung is `int 11h` bits 5:4. MartyPC's
+two-card machines report bits 5:4 = **`0x20`** (colour) and boot os8088 on the
+CGA — and that is not fixable from the machine config: measured, listing the
+MDA first changes nothing about the equipment word, because MartyPC derives
+the 5150's display switches from whether a CGA is present at all rather than
+from card order, and exposes no DIP override. (Listing it first only moves
+*MartyPC's* primary to the MDA, which os8088 then does not drive, so the boot
+gate watches a blank card and `launch` times out. `os8088_5150_herc_gla`
+reads `0x30` only because it has no CGA in it.)
+
+**That has since been fixed rather than lived with**, and the paragraph above
+is kept because it is the reasoning: `tools/martypc/patches/03-video-dip-config.patch`
+adds an optional `video_dip` to MartyPC's machine config, so SW1-5/6 can be
+*set* instead of derived from the card list. **`os8088_5150_both_gla_mono`**
+is the machine that uses it — both cards, switches mono, os8088 running
+Hercules with `avail = 0x06` — and it is the only one that reaches SPEC.md
+§39.11.1's `vid_cga_alias`, the routine whose bug survived because "the
+direction the old emulator could reproduce was CGA-primary, where the routine
+never runs". A dual-display change can be exercised here now; it is still
+worth a field run, but it is no longer *only* answerable there.
+docs/MARTYPC-DEBUG.md has the patch's reasoning and the one trap in the
+machine (its MDA is listed first, or the boot gate watches the wrong card).
+
+And one more that is not about time at all, and is the newest:
+
+- **A status line from hardware that is NOT THERE.** SPEC.md §18.97's floppy
+  probe decides whether drive B exists by reading TRK0 out of the uPD765 —
+  ST3 bit 4, and ST0's Equipment Check after a recalibrate. **MartyPC
+  answers both for a drive its own config does not have.** Measured: on
+  `os8088_5150_cga_1fd`, a one-drive machine, a forced probe of unit 1 reads
+  `ST3 = 0x79` — unit 1, ready, two-sided, **TRK0 set** — and a forced
+  recalibrate reads `ST0 = 0x29`, IC = 00, normal termination, seek end, no
+  EC. Both are the answers a *present* drive gives. The FDC synthesizes drive
+  status rather than modelling an unpopulated select line floating to
+  inactive, so **no emulator here can ever produce the absent verdict**, and
+  the removal path is field-only.
+
+  This is the safe direction and that is the only reason it is a note rather
+  than a defect: the probe fails towards *keep*, so every emulator sees the
+  pre-§18.97 behaviour exactly. What it means for testing is that **the two
+  paths split** — everything except the EC branch is verifiable here (below),
+  and the EC branch itself is verifiable only on the 5150 whose SW1 claims a
+  drive it does not have (docs/FIELD-MACHINES.md).
+
+**Testing §18.97, then, is three runs and a report:**
+
+```
+# 1. a two-drive machine must be UNTOUCHED - the byte-identity check
+#    (0 differing pixels of 128,000 on CGA and 250,560 on Hercules)
+make && cp build/os8088-360.img /tmp/a.img
+make FDDPROBE=0 && cp build/os8088-360.img /tmp/b.img && make
+#    ...boot each on os8088_5150_cga_gla / _herc_gla and diff m.vram()
+
+# 2. a ONE-drive machine must not probe at all: os8088_5150_cga_1fd reads
+#    eqp=01 ran=00, and dsk_vtab row 1 stays DVK_BIOS with its zone off -
+#    which is the pre-existing behaviour for an unclaimed drive
+python3 tools/os88marty.py 127.0.0.1:9001 ...   # read the 'FD' block
+
+# 3. the mechanism, with the count gate forced in a SCRATCH kernel: the
+#    recalibrate path must complete and decode, not hang the boot
+```
+
+Run 3 is the one worth spelling out, because it is the only way to reach
+`fdd_wseek` and the ST0 decode here at all: temporarily make `desk_init`'s
+`cmp ah, 2` a `cmp ah, 0` so the probe always runs, and `dsk_fdd_probe`'s
+`test al, 0x10` a `test al, 0x00` so step 1 always falls through. Rebuild,
+boot the one-drive machine, and the block must read `step=02` (`FDD_S_SEEKOK`)
+with a plausible ST0 — **not** a hang, and not `step=05` (`FDD_S_NOSEEK`).
+Revert both.
 
 For all of these, the emulator's role is to prove *correctness* before you
 burn a floppy. The judgement is made on hardware.

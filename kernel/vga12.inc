@@ -2540,6 +2540,139 @@ vga_save_vram:
     ret
 
 ; -----------------------------------------------------------------------------
+; --- the SUB-RECT restore (SPEC.md 5.8) --------------------------------------
+;
+; Three words that make gfx_restore put back PART of a buffer instead of all of
+; it. They are in .text with real initialisers, not .bss: `-f bin` zeroes
+; nothing, and the mouse cursor reaches vga_restore_vram on the machine's first
+; pointer move, long before anything arms these (the cur_sptr trap, SPEC.md
+; 7.1.2).
+;
+; ALL THREE ARE 0 AT REST, which is what makes the whole feature additive: the
+; two restore bodies read them unconditionally and a zero skip is the walk they
+; had, so the cursor's own path and the menu save-under are byte-identical.
+gfx_sub_st  dw 0                ; buffer offset of the sub-rect's first byte
+gfx_sub_rs  dw 0                ; ...bytes to step the BUFFER past each row
+gfx_sub_ps  dw 0                ; ...and past each plane
+
+; -----------------------------------------------------------------------------
+; gfx_sub_arm - arm the next gfx_restore to put back only part of its buffer
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 - the sub-rect wanted; SI -> the four
+;      words (x1, y1, x2, y2) the buffer was SAVED over
+; out: CF = 0, armed; CF = 1 = refused and nothing armed, so the caller's
+;      gfx_restore puts the whole buffer back - which is always correct, only
+;      dearer. Preserves every register.
+;
+; gfx_save's buffer is plane-major, `full_row` bytes per row, x1 rounded down
+; and x2 up (SPEC.md 5), so a sub-rect is three numbers: where its first byte
+; is, how far past the end of each row its next row starts, and the same past
+; each plane. The SCREEN side needs nothing at all - vga_rect_setup recomputes
+; the geometry from whatever rect it is handed, so the caller passes the
+; sub-rect and it lands in the right place.
+;
+; IT REFUSES RATHER THAN CLAMPS a sub-rect that is not inside the saved one:
+; clamping would silently restore something the caller did not ask for, and
+; every refusal has a correct fallback one branch away.
+; -----------------------------------------------------------------------------
+gfx_sub_arm:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    cmp ax, [si]                ; inside the saved rect on all four sides, or
+    jl .no                      ; the arithmetic below indexes outside the
+    cmp bx, [si+2]              ; buffer - which is a claim of a few KB, so it
+    jl .no                      ; would be somebody else's memory
+    cmp cx, [si+4]
+    jg .no
+    cmp dx, [si+6]
+    jg .no
+    cmp ax, cx                  ; ...and not degenerate
+    jg .no
+    cmp bx, dx
+    jg .no
+
+    ; The three words double as the scratch this arithmetic needs, so it costs
+    ; no .bss: every register is wanted, CL has to be the shift count (an 8086
+    ; shifts by 1 or by CL and nothing else), and both `mul`s eat DX.
+    mov [gfx_sub_st], ax        ; S.x1
+    mov [gfx_sub_rs], cx        ; S.x2
+    mov [gfx_sub_ps], dx        ; S.y2
+    push bx                     ; S.y1
+    mov cl, 3
+
+    mov ax, [si+4]              ; DI = full_row, the buffer's bytes per row;
+    shr ax, cl                  ; BX = the saved rect's own left byte column
+    mov bx, [si]
+    shr bx, cl
+    mov di, ax
+    sub di, bx
+    inc di
+
+    mov ax, [gfx_sub_rs]        ; BP = sub_row, the bytes to move per row
+    shr ax, cl
+    mov bp, ax
+    mov ax, [gfx_sub_st]
+    shr ax, cl
+    sub bp, ax
+    inc bp
+    sub ax, bx                  ; AX = the sub-rect's byte column within a
+                                ; buffer row
+
+    pop bx                      ; CX = sub_rows, BX = the sub-rect's first row
+    mov cx, [gfx_sub_ps]        ; as an offset into the buffer. (CL was the
+    sub cx, bx                  ; shift count and every shift is done.)
+    inc cx
+    sub bx, [si+2]
+
+    push ax                     ; start = that row x full_row + that column.
+    mov ax, bx                  ; No overflow to worry about: wm_su_kb has
+    mul di                      ; already refused a buffer bigger than one
+    pop bx                      ; segment, so every offset in it fits a word
+    add ax, bx
+    mov [gfx_sub_st], ax
+
+    mov ax, di                  ; row_skip: what the row loop must step past
+    sub ax, bp                  ; after each rep movsb
+    mov [gfx_sub_rs], ax
+
+    mov ax, [si+6]              ; plane_skip: the saved rows this rect does not
+    sub ax, [si+2]              ; cover, one whole buffer row each
+    inc ax
+    sub ax, cx
+    mul di
+    mov [gfx_sub_ps], ax
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; gfx_sub_off - back to restoring whole buffers
+; Called by both restore bodies on their way out, so a caller CANNOT leave one
+; armed: the safe value is the one a forgetful caller inherits, which is
+; wm_dmg_dk's rule (SPEC.md 11.91). Preserves every register; clobbers flags,
+; which both callers have already finished with.
+; -----------------------------------------------------------------------------
+gfx_sub_off:
+    mov word [gfx_sub_st], 0
+    mov word [gfx_sub_rs], 0
+    mov word [gfx_sub_ps], 0
+    ret
+
+; -----------------------------------------------------------------------------
 ; gfx_restore - write a gfx_save buffer back to the screen
 ;
 ; Same rounding and buffer layout as gfx_save. Writes through the Sequencer
@@ -2568,6 +2701,9 @@ vga_restore_vram:
     push bp
     call vga_rect_setup
     jc .done
+    add si, [gfx_sub_st]        ; the SUB-RECT restore (SPEC.md 5.8), and 0 at
+                                ; rest: DS is still KERNEL_SEG out here, so
+                                ; this one needs no override
     mov byte [vga_plane], 1     ; plane mask bit, 1/2/4/8
 .plane:
     mov dx, VGA_SEQ
@@ -2587,12 +2723,15 @@ vga_restore_vram:
 .row:
     mov cx, bp
     rep movsb
+    add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
     add di, ROW_BYTES
     sub di, bp
     dec dx
     jnz .row
     pop es
     pop ds
+    add si, [gfx_sub_ps]        ; ...and past the rows this rect does not cover
+                                ; (DS is KERNEL_SEG again by here)
     mov al, [vga_plane]
     add al, al                  ; next plane bit
     mov [vga_plane], al
@@ -2602,6 +2741,7 @@ vga_restore_vram:
     mov ax, 0x0F02              ; SEQ2: Map Mask back to all planes
     out dx, ax
 .done:
+    call gfx_sub_off            ; a sub-rect is ONE restore (SPEC.md 5.8)
     pop bp
     pop di
     pop dx

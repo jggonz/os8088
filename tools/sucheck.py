@@ -271,7 +271,15 @@ def main():
         mo.dblclick(*row(disk, ROW_SOLIT)); time.sleep(14)
 
         sol = named(m, "SOLIT")
-        disk = [w for w in windows(m) if not w.promises and w.visible][0]
+        # THE ONE THAT IS NOT THE PACKAGE'S. This read
+        #     [w for w in windows(m) if not w.promises and w.visible][0]
+        # which identified the Disk window as the one WITHOUT WF_SAVEU - true
+        # when this gate was written and false since SPEC.md 22.14 put the Disk
+        # window on the raise cache. Every window then promised, the list was
+        # empty, and the gate died with an IndexError before testing anything.
+        # Not by title either: a Disk window is titled for the FOLDER it is
+        # showing, so by here it reads 'GAMES'.
+        disk = [w for w in windows(m) if w.visible and w.i != sol.i][0]
         print("windows           %r" % (windows(m),))
 
         # ---- phase 1: one window, the whole screen ------------------------

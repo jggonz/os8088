@@ -481,6 +481,9 @@ sw_xfer:
     jc .done
     cmp byte [sw_dir], 0
     je .geom
+    add si, [gfx_sub_st]        ; the SUB-RECT restore (SPEC.md 5.8), 0 at rest.
+                                ; OUT HERE, once - .rst below runs per plane,
+                                ; and DS is still KERNEL_SEG until it does
 .geom:
     mov bp, [vga_span]
     inc bp                      ; BP = bytes per row
@@ -517,6 +520,9 @@ sw_xfer:
 .rrow:
     mov cx, bp
     rep movsb
+    add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here,
+                                ; which is why the row walk below reads
+                                ; [cs:vid_rowadd] too
     sub di, bp
     add di, [cs:vid_rowadd]     ; ...and here on DI, which is what gfx_nextrow
     test di, [cs:vid_wrapbit]   ; takes, so this one saves only the call and
@@ -526,6 +532,10 @@ sw_xfer:
     dec dx
     jnz .rrow
     pop di
+    add si, [cs:gfx_sub_ps]     ; ...past the rows this rect does not cover. DS
+                                ; is the buffer until .pnext's `pop ds`, and
+                                ; the SAVE path jumps straight to .pnext, so
+                                ; this is the restore's alone
 .pnext:
     pop es
     pop ds
@@ -533,6 +543,13 @@ sw_xfer:
     cmp bx, [vid_rend]          ; would never terminate
     jb .plane
 .done:
+    cmp byte [sw_dir], 0        ; a sub-rect is ONE restore (SPEC.md 5.8), and
+    je .nosub                   ; clearing it HERE rather than at the call site
+    call gfx_sub_off            ; is what makes a forgetful caller inherit
+.nosub:                         ; "whole", the safe value. Restore only, or a
+                                ; gfx_save between the arm and the restore
+                                ; would disarm it - and wm_su_edge is exactly
+                                ; that, twice
     pop bp
     pop dx
     pop cx

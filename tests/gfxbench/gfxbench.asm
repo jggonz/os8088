@@ -1374,6 +1374,20 @@ gb_text:
     mov [gb_trun], ax
     mov [gb_trun+2], dx
 
+    ; SPEC.md 6.1.7's question: a run of 20, once as ordinary text and once
+    ; SPACE-PADDED, which is what this system actually draws - 27.2 makes a
+    ; Note Pad row's padding its ERASE, 12.9 composes the menu bar out to the
+    ; clock, and the Task Manager's columns are largely spaces. The two are the
+    ; same LENGTH so the pair isolates content from size.
+    mov word [bl_body], gb_b_frun20
+    mov si, gb_r_ru20
+    xor al, al
+    call bl_run
+    mov word [bl_body], gb_b_frunp
+    mov si, gb_r_rup
+    xor al, al
+    call bl_run
+
     mov ax, [gb_x]                  ; ...and the same two five pixels right.
     add ax, 5                       ; NOT one pixel: the ROM font's rightmost
     mov [gb_tx], ax                 ; column is blank in every glyph, so a
@@ -2342,6 +2356,24 @@ gb_b_frun:
     call OSAPI_FONT_RUN
     ret
 
+gb_b_frun20:
+    mov cx, [gb_tx]
+    mov dx, [gb_y]
+    mov si, gb_s_t20
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+    ret
+
+gb_b_frunp:
+    mov cx, [gb_tx]
+    mov dx, [gb_y]
+    mov si, gb_s_pad
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+    ret
+
 gb_b_fwidth:
     mov si, gb_s_test
     call OSAPI_FONT_WIDTH
@@ -2665,6 +2697,8 @@ gb_s_warn6: db 'on every read so a poll always terminates. On iron it is the ref
 gb_s_h_bw:    db '-- raw bandwidth: 32 rows x 64 bytes = 2048 bytes an iteration --', 0
 gb_s_h_prim:  db '-- primitives (two sizes wherever the cost has two terms) --', 0
 gb_s_h_text:  db '-- text: the same 10 characters, aligned and skewed 5 px --', 0
+gb_s_t20:  db 'C-2 01 A0FC-2 01 A0F', 0   ; 20 cells, no adjacent repeat
+gb_s_pad:  db 'PAINT               ', 0   ; 5 + 15, a padded field (27.2/12.9)
 gb_s_h_text2: db '   (tests/fontbench uses this string too, so the two harnesses check)', 0
 gb_s_h_api:   db '-- API cells that draw nothing: the far-call floor --', 0
 gb_s_h_comp:  db '-- composite: what a window operation costs --', 0
@@ -2710,6 +2744,8 @@ gb_r_ch:   db 'FONT_CHAR one cell', 0
 gb_r_st:   db 'FONT_STR 10 aligned', 0
 gb_r_pa:   db 'PAIR 10 aligned', 0
 gb_r_ru:   db 'FONT_RUN 10 aligned', 0
+gb_r_ru20: db 'FONT_RUN 20 text', 0
+gb_r_rup:  db 'FONT_RUN 20 padded', 0
 gb_r_pa5:  db 'PAIR 10 skewed 5', 0
 gb_r_ru5:  db 'FONT_RUN 10 skewed', 0
 gb_r_fw:   db 'FONT_WIDTH 10', 0

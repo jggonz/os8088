@@ -18,6 +18,18 @@ FONT_FIRST  equ 32              ; first glyph kept from the ROM set
 FONT_LAST   equ 126             ; last  glyph kept
 FONT_BYTES  equ (FONT_LAST - FONT_FIRST + 1) * 8    ; 95 glyphs x 8 rows = 760
 
+; SPEC.md 6.1.7: the widest run any adapter can show, in cells. A run stops at
+; [vid_cwm8], so this is vid_w / 8 for the widest screen os8088 drives -
+; Hercules at 720 - and the run-major scan can therefore never overflow the
+; table. It has a fallback for it anyway, because a constant that is a bound
+; on another module's geometry is one somebody will change.
+FONT_RN_MAX equ 90
+
+; SPEC.md 6.1.8: the shortest trailing span worth a `rep stosb`. The tail block
+; is 17 bytes against a plain cell's 14, so it breaks even at 2 and wins from
+; 3; below that the run takes the plain walk and pays nothing at all.
+FONT_RN_KMIN equ 3
+
 %ifndef BAKED_FONT
 ; -----------------------------------------------------------------------------
 ; font_init - copy the ROM 8x8 font's printable range into RAM
@@ -514,6 +526,27 @@ font_run:
     pop es
     ret
 
+; SPEC.md 6.1.7: one cell of a row pass, and the row advance after it. Macros
+; because the padded and unpadded row loops differ only in the tail, and two
+; copies of a five-instruction body that must agree is how they stop agreeing.
+%macro FONT_RN_PX 0
+    lodsw                       ; AX = this cell's glyph base (DS:SI, the table)
+    xchg ax, bx                 ; BX = it, in one byte
+    add bx, bp                  ; ...+ the row this pass is on
+    mov al, [ss:bx]             ; the glyph row byte (font_glyphs is LOW_SEG)
+    and al, dl
+    xor al, dh
+    stosb
+%endmacro
+
+%macro FONT_RN_NEXTROW 0
+    add di, [cs:vid_rowadd]     ; gfx_nextrow, ONCE a row
+    test di, [cs:vid_wrapbit]
+    jz %%nw
+    add di, [cs:vid_wrapfix]
+%%nw:
+%endmacro
+
 font_run_x:
     push ax
     push bx
@@ -521,6 +554,10 @@ font_run_x:
     push dx
     push si
     push di
+    push bp                     ; SPEC.md 6.1.7's row pass holds the glyph row
+                                ; in BP, and 7.1.4.1 is what a routine that
+                                ; forgets to save it costs: a background task
+                                ; keeps BP for its whole life
 %ifdef KERN_BIG
     ; --- SPEC.md 39.14.6: A RUN IS NOT A SHAPE. font_char is whole-cell
     ; because a cell is 8x8 and goes wholly onto one display; a run is up to a
@@ -593,14 +630,216 @@ font_run_x:
     mov al, [font_rn_bg]
     mov [gfx_color], al
     cld
-.cell:
+
+    ; --- what belongs to the RUN, done once (SPEC.md 6.1.6) ------------------
+    ; A run is ONE y, ONE pair of colours and a column that advances by one
+    ; byte a cell. font_run_cell used to derive all of it per cell - calling
+    ; gfx_rowbase, whose 16-bit MUL an 8088 charges ~120 clocks for, and
+    ; font_ink TWICE - for answers that cannot change until the run ends.
+    cmp dx, [vid_chm8]          ; the run's y is every cell's y, so the
+    ja .out                     ; vertical edge test is the run's too
+    cmp cx, [vid_cwm8]          ; ...but x is per cell, and DI only tracks it
+    jbe .xok                    ; by `inc di`. That lockstep is exact for a run
+    jmp .cells                  ; that STARTS on screen - x then cannot reach
+.xok:                           ; 0x10000 in 80 cells - and it breaks on the
+                                ; one run that can wrap: a NEGATIVE x, which
+                                ; this unsigned test catches. Two cells later x
+                                ; is 0 and DI is 0x2000 past where it belongs,
+                                ; so that run goes per cell (SPEC.md 6.1.2's
+                                ; path), which recomputes both and is the
+                                ; documented same-pixels fallback
+    push cx                     ; font_ink returns in CH and gfx_rowbase
+    push dx                     ; clobbers CL and DX - between them that is
+    mov ch, [font_rn_fg]        ; both of the coordinates
+    call font_ink               ; CH = 00/FF: the gate above is what makes
+    mov bl, ch                  ; that true (SPEC.md 39.5)
+    mov ch, [font_rn_bg]
+    call font_ink
+    mov [font_rn_bm], ch        ; the byte a CLEAR glyph bit composes to...
+    xor bl, ch
+    mov [font_rn_xm], bl        ; ...and ink XOR background (SPEC.md 6.1.5)
+    mov ax, dx                  ; DX is still y - font_ink does not touch it
+    call gfx_rowbase            ; AX = rowbase(y), once for the whole run
+    pop dx
+    pop cx
+    mov di, cx
+    shr di, 1                   ; three single shifts rather than one by CL:
+    shr di, 1                   ; 6 clocks against 20, and CL stays the x it
+    shr di, 1                   ; still needs to be
+    add di, ax                  ; DI = the run's first framebuffer byte
+
+    ; --- PASS 1: which cells get drawn, and where their glyphs live ----------
+    ; SPEC.md 6.1.7. The string is walked ONCE into a table of glyph pointers,
+    ; which is what frees ES - it holds the caller's string right up to here -
+    ; so the drawing pass can point it at the framebuffer for the whole run.
+    push si                     ; both wanted again if this falls back to the
+    push cx                     ; per-cell path below
+    mov bx, font_rn_tab
+    xor bp, bp                  ; BP = cells that will actually be drawn
+.p1:
     mov al, [es:si]
+    or al, al
+    jz .p1end
+    cmp cx, [vid_cwm8]          ; the first cell off the right edge ends the
+    ja .p1end                   ; run - x only grows, so the drawn cells are
+    cmp bp, FONT_RN_MAX         ; a PREFIX, which is what lets stosb walk them
+    jae .p1full
+    inc si
+    add cx, 8
+    cmp al, FONT_FIRST
+    jb .p1blank
+    cmp al, FONT_LAST
+    ja .p1blank
+    sub al, FONT_FIRST
+    mov ah, 0
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, font_glyphs
+    jmp short .p1put
+.p1blank:
+    mov ax, font_zero           ; an unprintable cell is still PAINTED
+.p1put:
+    mov [bx], ax
+    add bx, 2
+    inc bp
+    jmp short .p1
+.p1full:                        ; unreachable while the table covers the widest
+    pop cx                      ; screen, and a fallback rather than a truncation
+    pop si                      ; if that ever stops being true
+    jmp .cell                   ; NOT `jmp short`: it reaches by 12 bytes today
+                                ; and this is the cold path of the pair
+.p1end:
+    or bp, bp
+    jz .p1none
+    mov [font_rn_n], bp
+    mov [font_rn_n2], bp        ; the default is NO span: every cell drawn
+    mov word [font_rn_k], 0     ; singly, and the plain row walk below
+    cmp bp, 2
+    jb .p1none                  ; one cell cannot repeat anything
+    mov ax, [bx-2]              ; the last cell's glyph against the one before
+    cmp ax, [bx-4]              ; it. On a run with no span THIS is the whole
+    jne .p1none                 ; test - two words and a branch, not a walk,
+                                ; which is what took the unpadded rows from
+                                ; +1.50% back to the noise
+    ; --- the TRAILING SPAN, found once (SPEC.md 6.1.8) ----------------------
+    ; This system pads deliberately - 27.2 makes a Note Pad row's padding its
+    ; ERASE, 12.9 composes the bar out to the clock, 28's columns are largely
+    ; spaces - so the last cells of a run are usually the SAME cell repeated,
+    ; and repeated cells compose to one byte. That is a `rep stosb`. The scan
+    ; is here, once, rather than a compare per cell per row; SI and CX are
+    ; free because the values they held are on the stack.
+    mov si, bx                  ; AX already holds the repeated glyph
+    sub si, 4                   ; ...and the one before it
+    mov cx, 1                   ; the last cell always repeats itself
+.p1trl:
+    cmp cx, bp
+    jae .p1trle
+    cmp [si], ax
+    jne .p1trle
+    dec si
+    dec si
+    inc cx
+    jmp short .p1trl
+.p1trle:
+    mov [font_rn_k], cx         ; cells the tail writes...
+    mov ax, bp
+    sub ax, cx
+    mov [font_rn_n2], ax        ; ...and the ones drawn singly before it
+.p1none:
+    pop cx
+    pop si
+    or bp, bp
+    jz .out                     ; nothing on screen: no rows to write
+    cmp word [wm_clip_n], 0
+    je .rm
+    ; A region is armed. stosb walks CONSECUTIVE bytes, so it is only correct
+    ; if every cell is drawn - one rejected in the middle breaks the run into
+    ; pieces. So the whole run has to sit inside one fragment; a cut one goes
+    ; per cell, which is where a per-cell clip test lives anyway (SPEC.md 6.1.2).
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, cx                  ; AX = x1
+    mov bx, dx                  ; BX = y1
+    mov cx, bp
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, ax
+    dec cx                      ; CX = x2 = x + 8n - 1
+    mov dx, bx
+    add dx, 7                   ; DX = y2
+    call wm_clip_test
+    pop di
+    pop si
+    pop dx
+    pop cx
+    jc .cell
+
+    ; --- PASS 2: one ROW of the whole run at a time --------------------------
+    ; The cells of a run are CONSECUTIVE BYTES within a row, so a row is a
+    ; stosb walk and gfx_nextrow is paid once a row instead of once a row per
+    ; cell - 12 of the old 27-byte row body, eight times over, per cell.
+.rm:
+    mov dl, [font_rn_xm]        ; DL = ink XOR background, DH = background:
+    mov dh, [font_rn_bm]        ; the run's masks (SPEC.md 6.1.5) for all 8 rows
+    mov es, [vid_rseg]          ; ES:DI is the framebuffer from here on - the
+    xor bp, bp                  ; string has been read and will not be touched
+    cmp word [font_rn_k], FONT_RN_KMIN
+    jb .rmp                     ; no span worth a `rep`: take the plain walk,
+                                ; and take it at the RUN level. The span is a
+                                ; property of the run, so a per-ROW test would
+                                ; ask the same question eight times and charge
+                                ; every unpadded run for the answer - measured
+                                ; at +3.06% before this branch existed
+.rmrow:
+    mov si, font_rn_tab
+    mov cx, [font_rn_n2]        ; the cells before the trailing span
+    push di                     ; this row's first byte
+    jcxz .rmtail                ; ...of which there may be none at all
+.rmpx:
+    FONT_RN_PX
+    loop .rmpx
+.rmtail:
+    mov cx, [font_rn_k]         ; the repeated tail: one compose, then the
+    lodsw                       ; string instruction writes every byte of it.
+    xchg ax, bx                 ; SI already points at the first tail entry,
+    add bx, bp                  ; and they all carry the same glyph
+    mov al, [ss:bx]
+    and al, dl
+    xor al, dh
+    rep stosb
+    pop di
+    FONT_RN_NEXTROW
+    inc bp
+    cmp bp, 8
+    jb .rmrow
+    jmp .out
+.rmp:                           ; ...and the same rows with no tail at all
+    mov si, font_rn_tab
+    mov cx, [font_rn_n]
+    push di
+.rmppx:
+    FONT_RN_PX
+    loop .rmppx
+    pop di
+    FONT_RN_NEXTROW
+    inc bp
+    cmp bp, 8
+    jb .rmp
+    jmp .out
+
+.cell:                          ; the per-cell path: a clip-cut run, and the
+    mov al, [es:si]             ; overflow that cannot happen
     or al, al
     jz .out
     inc si
-    call font_run_cell          ; CX/DX = this cell; preserves both
+    call font_run_cell          ; CX/DX/DI = this cell; preserves all three
     add cx, 8
-    jmp short .cell
+    inc di                      ; an aligned cell is one byte wide, so the
+    jmp short .cell             ; next one is the next byte along
 
 .slow:
     ; The fallback: what every caller wrote by hand, one gfx_fill of the run's
@@ -660,6 +899,7 @@ font_run_x:
     jmp short .cells
 .out:
     GFXDLEAVE
+    pop bp
     pop di
     pop si
     pop dx
@@ -677,6 +917,7 @@ font_run_x:
     add cx, 8
     jmp short .cells_nx
 .out_nx:
+    pop bp
     pop di
     pop si
     pop dx
@@ -688,14 +929,25 @@ font_run_x:
 
 ; -----------------------------------------------------------------------------
 ; font_run_cell - internal: one opaque 8x8 cell, byte-aligned, [vid_mono] path
-; in:       AL = character, CX = x (multiple of 8), DX = y
+; in:       AL = character, CX = x (multiple of 8), DX = y, DI = the cell's
+;           first framebuffer byte, [font_rn_xm]/[font_rn_bm] = the run's masks
 ; out:      nothing (all registers preserved)
 ;
-; The plane loop is font_char_bb's with the read-modify-write replaced by a
+; The row loop is font_char_bb's with the read-modify-write replaced by a
 ; store: the cell owns its whole byte, so there is nothing underneath to
-; preserve, and the background arrives in the same write as the glyph. Per
-; plane the byte is (glyph & fg) | (~glyph & bg), each mask 00 or FF - on
-; mono that reduces to the glyph or its complement.
+; preserve, and the background arrives in the same write as the glyph. The
+; byte is (glyph & fg) | (~glyph & bg) computed as (glyph & (fg^bg)) ^ bg,
+; both terms handed in by the caller (SPEC.md 6.1.5).
+;
+; THERE IS NO PLANE LOOP, and that is font_run_x's gate rather than an
+; assumption here: [vid_mono] is tested three instructions above the .cell
+; loop, and a 1bpp target has one plane. A planar run takes .slow (SPEC.md
+; 6.1), so the 4-plane walk this used to carry could never run.
+;
+; What is left is exactly what differs between two cells of one word: the
+; character, the x edge test, the clip test and one byte of DI. Everything a
+; RUN shares - the y test, both masks, the row base - is the caller's, once
+; (SPEC.md 6.1.6).
 ; -----------------------------------------------------------------------------
 font_run_cell:
     push ax
@@ -706,12 +958,10 @@ font_run_cell:
     push di
     push es
 
-    cmp cx, [vid_cwm8]          ; the same whole-cell clipping font_char does,
-    ja .out                     ; screen edge and clip region alike - so a run
-    cmp dx, [vid_chm8]          ; clips exactly as its glyphs would, and its
-    ja .out                     ; background with them
-    cmp word [wm_clip_n], 0
-    je .noclip
+    cmp cx, [vid_cwm8]          ; x only: the run's y was tested once, by the
+    ja .out                     ; caller (SPEC.md 6.1.6)
+    cmp word [wm_clip_n], 0     ; the cell whole against the region, exactly as
+    je .noclip                  ; its glyphs would be, background with them
     push ax
     mov ax, cx
     mov bx, dx
@@ -719,11 +969,9 @@ font_run_cell:
     add cx, 7
     mov dx, bx
     add dx, 7
-    call wm_clip_test
-    mov cx, ax
-    mov dx, bx
-    pop ax
-    jc .out
+    call wm_clip_test           ; CX and DX are spent here and NOT put back:
+    pop ax                      ; nothing below reads them, the masks arriving
+    jc .out                     ; in CX from memory instead
 .noclip:
     cmp al, FONT_FIRST
     jb .blank
@@ -741,54 +989,15 @@ font_run_cell:
     mov si, font_zero           ; an unprintable character is a blank cell -
 .have:                          ; which still has to be PAINTED here
 
-    push cx                     ; x and y are still wanted below
-    push dx
-    mov ax, cx
-    mov cl, 3
-    shr ax, cl                  ; AX = this cell's byte column...
-    mov bx, ax                  ; ...and its right column: an aligned 8px cell
-    mov cx, dx                  ; is exactly one byte wide
-    add dx, 7                   ; CX/DX = the rows it covers, inclusive
-    pop dx
-    pop cx
-
-    mov di, cx                  ; DI = x/8 FIRST: gfx_rowbase clobbers CX
-    mov cl, 3                   ; (and AX and DX), and this cell's column has
-    shr di, cl                  ; to survive it
-    mov ax, dx
-    call gfx_rowbase            ; AX = rowbase(y)
-    add di, ax
-    mov [font_rn_si], si
-    mov [font_rn_di], di
-
-    mov ch, [font_rn_fg]        ; the per-plane bit sources, reduced the way
-    call font_ink               ; every other glyph draw reduces them
-    mov [font_rn_fs], ch
-    mov ch, [font_rn_bg]
-    call font_ink
-    mov [font_rn_bs], ch
-
-    mov dx, [vid_rseg]
-    mov bl, [vid_planes]        ; BL = plane counter: 4 or 1
-.plane:
-    mov es, dx
-    mov si, [font_rn_si]
-    mov di, [font_rn_di]
-    mov bh, 8
-    shr byte [font_rn_fs], 1    ; this plane's bit -> CF -> an 00/FF mask
-    sbb al, al
-    mov [font_rn_fm], al
-    shr byte [font_rn_bs], 1
-    sbb al, al
-    mov [font_rn_bm], al
+    mov es, [vid_rseg]          ; the framebuffer (SPEC.md 39.3); DI arrived
+    mov cl, [font_rn_xm]        ; pointing at this cell's first byte
+    mov ch, [font_rn_bm]        ; CL = ink XOR background, CH = background
+    mov bh, 8                   ; row counter
 .row:
     mov al, [ss:si]             ; AL = the glyph row
     inc si
-    mov ah, al
-    and al, [font_rn_fm]        ; ink where the glyph is set...
-    not ah
-    and ah, [font_rn_bm]        ; ...background where it is not
-    or al, ah
+    and al, cl                  ; a set bit picks ink, a clear bit background
+    xor al, ch                  ; - the same byte, three instructions fewer
     mov [es:di], al             ; the cell owns the byte: store, never merge
     add di, [cs:vid_rowadd]     ; (gfx_nextrow inlined - see font_char_bb)
     test di, [cs:vid_wrapbit]
@@ -797,9 +1006,6 @@ font_run_cell:
 .nw:
     dec bh
     jnz .row
-    add dx, [vid_rpara]
-    dec bl
-    jnz .plane
 .out:
     pop es
     pop di
@@ -906,17 +1112,24 @@ font_zero:      resb 8          ; the blank cell an unprintable character
                                 ; anything, so font_init clears it by hand
 
 section .bss
-font_rn_fg:     resb 1          ; font_run: the run's two colours, and the
-font_rn_bg:     resb 1          ; per-plane bit sources and 00/FF masks its
-font_rn_fs:     resb 1          ; cell loop consumes. In .bss for the same
-font_rn_bs:     resb 1          ; reason font_bb_si is: the row loop has no
-font_rn_fm:     resb 1          ; register to spare, and every caller holds
-font_rn_bm:     resb 1          ; the gfx lock (SPEC.md 1.6)
+font_rn_fg:     resb 1          ; font_run: the run's two colours as the
+font_rn_bg:     resb 1          ; caller gave them, for the .slow path
+font_rn_xm:     resb 1          ; ...and the run's reduced masks (SPEC.md
+font_rn_bm:     resb 1          ; 6.1.5/6.1.6): ink XOR background, and
+                                ; background. Derived ONCE per run and read
+                                ; into CX by every cell, which is why they are
+                                ; here and not in registers: CX is the x the
+                                ; cell loop is walking
 font_rn_ch:     resb 1          ; font_run_scell's character, parked because
                                 ; AL is the rect's low byte by the time the
                                 ; letter is drawn
-font_rn_si:     resw 1
-font_rn_di:     resw 1
+font_rn_n2:     resw 1          ; cells drawn singly, before the trailing span
+font_rn_k:      resw 1          ; ...the span's length, at least 1
+font_rn_n:      resw 1          ; SPEC.md 6.1.7: cells the run will draw, and
+font_rn_tab:    resw FONT_RN_MAX ; a glyph pointer for each. 180 bytes, taken
+                                ; deliberately: it is what lets the drawing
+                                ; pass go ROW-major, which pays gfx_nextrow
+                                ; once a row instead of once a row per cell
 font_bb_si:     resw 1          ; bb path: glyph pointer, reloaded per plane
 font_bb_di:     resw 1          ; bb path: cell offset, reloaded per plane
 font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
