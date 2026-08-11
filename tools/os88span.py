@@ -65,7 +65,6 @@ PTROW = int(os.environ.get("PTROW", "2"))
 PTNUDGE = int(os.environ.get("PTNUDGE", "0"))
 
 CLK = 4772727.0                 # 4.77 MHz, so cycles -> ms
-WIN_SIZE = 26
 
 
 def ms(cycles):
@@ -84,6 +83,7 @@ def collect(m, names, budget=200.0, limit=80):
     for n, a in marks.items():
         by_addr.setdefault(a, n)
     base = m.sym("wm_wins")
+    stride = su.win_geom(m)[1]      # DERIVED - sucheck's own docstring says why
     out, t0 = [], time.time()
     for _ in range(limit):
         m.run()
@@ -98,8 +98,8 @@ def collect(m, names, budget=200.0, limit=80):
         flat = ((st["cs"] << 4) + st["ip"]) & 0xFFFFF
         r = m.regs()
         out.append((by_addr.get(flat, "?%05X" % flat), st["cycles"],
-                    (r["di"] + 0x600 - base) // WIN_SIZE,
-                    (r["bx"] + 0x600 - base) // WIN_SIZE))
+                    (r["di"] + 0x600 - base) // stride,
+                    (r["bx"] + 0x600 - base) // stride))
     return out
 
 

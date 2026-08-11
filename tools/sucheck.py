@@ -82,7 +82,10 @@ from os88mouse import Mouse
 MEM_MAX, MC_SIZE = 32, 8
 RANK = {0xFB: "trivial", 0xFC: "low", 0xFD: "medium", 0xFE: "high"}
 
-MAX_WIN, WIN_SIZE = 12, 26
+# MAX_WIN and WIN_SIZE are DERIVED, never written down - see win_geom() below.
+# The W_* offsets are copied, and can be, because the record only ever grows at
+# the END: W_ONSIZE and W_ONMOUSEUP are both appended fields whose own comments
+# say so, precisely so that no existing template or reader moves.
 W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE, W_SEG = 0, 2, 4, 6, 8, 10, 22
 WF_USED, WF_VIS, WF_SAVEU = 1, 2, 32
 TITLE_H, KERNEL_SEG = 18, 0x0060
@@ -97,9 +100,31 @@ ROW_MINES = 2               # GAMES/, sorted: .. ARKANOID MINES MISSILE SOLITAIR
 ROW_SOLIT = 4
 
 
+def win_geom(m):
+    """MAX_WIN and WIN_SIZE, out of the .bss LAYOUT rather than copied.
+
+    `wm_wins` / `wm_zord` / `wm_zn` are declared adjacent and in that order and
+    all three are `resb`, so the gaps between their symbols ARE the two
+    constants. tools/notepad/pixcheck.py derived them this way first and its
+    reason has now happened twice: WIN_SIZE has been 18, 20, 26 and is 28, and
+    a harness holding the old one walks the wrong records and reads PLAUSIBLE
+    GARBAGE. The second time cost this session an hour - `W_ONMOUSEUP` took the
+    stride to 28 on the integration branch, every record after the first parsed
+    at the wrong offset, and the symptom was `subcheck` reporting that the
+    second Disk window had not opened on a screen that plainly showed two.
+    """
+    wins, zord, zn = m.sym("wm_wins"), m.sym("wm_zord"), m.sym("wm_zn")
+    maxwin, span = zn - zord, zord - wins
+    if maxwin <= 0 or span <= 0 or span % maxwin:
+        raise SystemExit("sucheck: wm_wins/wm_zord/wm_zn are not adjacent any "
+                         "more (%d, %d): derive the stride some other way"
+                         % (span, maxwin))
+    return maxwin, span // maxwin
+
+
 class Win(object):
-    def __init__(self, m, i, raw):
-        b = i * WIN_SIZE
+    def __init__(self, m, i, raw, stride):
+        b = i * stride
         self.i = i
         self.flags = struct.unpack_from("<H", raw, b + W_FLAGS)[0]
         self.x, self.y, self.w, self.h = struct.unpack_from("<HHHH", raw,
@@ -134,9 +159,10 @@ class Win(object):
 
 
 def windows(m):
-    raw = m.read(m.sym("wm_wins"), MAX_WIN * WIN_SIZE)
-    return [Win(m, i, raw) for i in range(MAX_WIN)
-            if struct.unpack_from("<H", raw, i * WIN_SIZE)[0] & WF_USED]
+    maxwin, stride = win_geom(m)
+    raw = m.read(m.sym("wm_wins"), maxwin * stride)
+    return [Win(m, i, raw, stride) for i in range(maxwin)
+            if struct.unpack_from("<H", raw, i * stride)[0] & WF_USED]
 
 
 def caches(m):
@@ -160,7 +186,7 @@ def word(m, sym):
 
 def tile(m, win):
     """The dock tile of the instance owning a window (SPEC.md 30)."""
-    inst = m.read(m.sym("wm_owner"), MAX_WIN)[win.i]
+    inst = m.read(m.sym("wm_owner"), win_geom(m)[0])[win.i]
     if inst == 0xFF:
         raise SystemExit("sucheck: %r has no instance, so no dock tile" % win)
     return (DOCK_X0 + inst * DOCK_STEP + DOCK_TILE_W // 2,
