@@ -132,6 +132,13 @@ DV_SIZE      equ 16
 
 DVK_BIOS     equ 0
 DVK_DRV      equ 1
+DVK_FILE     equ 2               ; a REDIRECTED volume (SPEC.md 62.9): its
+                                 ; contents come from a DRVC_FILE driver
+                                 ; answering questions about FILES, and it has
+                                 ; no sectors at all - no BPB, no FAT, no
+                                 ; directory to walk. dsk_xfer REFUSES one
+                                 ; rather than falling back, because a caller
+                                 ; that reaches it is a bug
 DVK_FREE     equ 0xFF
 
 ; --- and what a PACKAGE is told about a volume (SPEC.md 18.7.2) -------------

@@ -35061,3 +35061,109 @@ first `DSF_KB` of the "file" is real memory and a read past it is answered
 
 It is `make dosstub`, on demand only; `all` builds nothing under `tests/` and
 nothing there ships.
+
+### 62.9 Stage 2 — the file redirector (`DVK_FILE` / `DRVC_FILE`)
+
+**PINNED HERE BEFORE IT IS BUILT**, because it is an interface and §1's rule
+is that SPEC.md moves first. Block mode (§62 above) is what ships today; this
+is what supersedes it, and docs/NET-PLAN.md §2.2 is the reasoning.
+
+**It is deliberately not a network feature and the name says so.** A volume
+whose contents are served by *somebody else answering questions about files*
+is a general shape, and the cable is only its first client. Three others need
+nothing new: a **serial** redirector over the port `comscan` already surveys,
+a **RAM disk** that needs no FAT at all, and a **host-filesystem passthrough**
+under an emulator — which is worth a great deal to this project's own harness,
+since it is the only one of the four that can be tested in a container.
+`DRVC_FILE` costs exactly what `DRVC_NET` would have and forecloses none of
+them.
+
+**The key insight that keeps the file manager at zero.** The staged §19.1
+directory entry carries a **first-cluster word at offset 18**, and only two
+consumers ever interpret it — `dsk_chdir` for a folder and the loader for a
+package. Both are already redirect points. So on a redirected volume that word
+is **an opaque handle the driver assigns**, the entry format does not change by
+one byte, and the Disk window's rows, icons, sort, view cache, `fm_hit`, the
+`..` synthesis (§19.5) and the file dialog are all untouched.
+
+#### 62.9.1 The dispatch, and why it is a pointer
+
+`DSV_SIZE` is 26 and every cell is spoken for, so a file driver does **not**
+get thirteen more: `DSV_FS` is one added word pointing at a verb table **in
+the driver's own segment**, and `drv_fs_call` resolves it. Thirteen cells
+would cost `13 × 2 × DRVC_MAX` bytes of `.bss` on every machine including the
+ones with no driver at all; one pointer costs `2 × DRVC_MAX` = 10.
+
+```
+DSV_FS      equ 26      ; dw: -> the FSV_* table, in the driver's segment
+DSV_SIZE    equ 28
+
+FSV_LIST    equ 0       ; stage §19.1 entries into disk_dir/disk_icons and set
+                        ; disk_nfiles. The kernel still SORTS (§19.4) and still
+                        ; synthesizes `..` (§19.5), so the driver must do
+                        ; neither - two places deciding an order is how a
+                        ; display index stops meaning what the hit-test thinks
+FSV_CHDIR   equ 2       ; AX = a handle out of an entry, or 0 = the root
+FSV_STAT    equ 4       ; SI = name -> exists, size, attributes
+FSV_READ    equ 6       ; SI = name, ES:BX = buffer, DX:CX = capacity
+FSV_WRITE   equ 8       ; SI = name, ES:BX = bytes, DX:CX = count
+FSV_APPEND  equ 10      ; the chunked pair (§18.4.4), so a copy still streams
+FSV_READAT  equ 12      ; ...and its read half
+FSV_DELETE  equ 14      ; SI = name
+FSV_RENAME  equ 16      ; SI = old, DI = new
+FSV_MKDIR   equ 18      ; SI = name
+FSV_RMDIR   equ 20      ; SI = name
+FSV_DFREE   equ 22      ; -> DX:AX = free bytes, BX = the granule
+FSV_SIZE    equ 24
+```
+
+`DVK_FILE` = 2 joins `DVK_BIOS` and `DVK_DRV` in `DV_KIND`, and `DV_CLASS`
+(§18.7.3) says which class serves it — the same byte, doing the same job, for
+the same reason. **`dsk_xfer` REFUSES a `DVK_FILE` volume outright**: there
+are no sectors to ask for, and a caller that reaches it is a bug rather than a
+fallback.
+
+#### 62.9.2 What it buys, and what it gives up
+
+Buys: any remote size with **no 32MB cap** (§18.2 rule 8 refuses
+`TotSec16 == 0`, so block mode can never exceed 65,535 sectors); **no
+coherency hazard** at all, because the far side does its own file I/O through
+`int 21h` and its caches stay coherent by construction, where block mode
+writing sectors under a live DOS is how a filesystem is corrupted; the remote
+machine's **real** filesystem rather than an image file; and the far side can
+serve anything DOS can reach, a CD-ROM or a network drive of its own included.
+
+Gives up: `ASSOC.DAT` (§54.7) and the icon harvest, both of which assume a
+volume whose sectors can be read. The driver may do the harvest itself — 64
+bytes at offset 32 of each `.O88`, one `FSV_READAT` per package — or hand back
+zeroed slots and let §25's generic icon do its job, which is what `hello/`
+ships to prove. **Zero the slots first and measure**: at ~30 ms a read that is
+a second of listing time for a folder of thirty packages, and it buys a
+picture.
+
+#### 62.9.3 The branch sites, and the order to build them in
+
+Each is a test of `DV_KIND` at the top of a routine that already exists, so
+the bodies below them are untouched:
+
+| site | verb |
+|---|---|
+| `disk_mount` | `FSV_LIST`, and skip the BPB, the FAT window and the root scan entirely |
+| `dsk_chdir` / `dsk_chdir_q` | `FSV_CHDIR` |
+| `dsk_free_clus` | `FSV_DFREE` |
+| `dskw_wbody` / `rbody` / `dbody` / `nbody` / `mkbody` / `rmbody` | the six |
+| `dskw_stat` / `dskw_apbody` / `dskw_read_at` | three more |
+| `dsk_read_chain` (the loader, `assoc`) | `FSV_READ` by handle |
+| `dsk_xfer` | refuse |
+
+**Build it in three milestones, and each is separately verifiable**: a volume
+that MOUNTS AND LISTS (`FSV_LIST`/`CHDIR`/`DFREE` — a browsable read-only
+drive, and the whole Disk window works on it); then READS (`STAT`/`READ`/
+`READAT` — a package launches off it and a document opens); then WRITES.
+
+**And the harness is a RAM DISK, not the cable.** A `DRVC_FILE` driver backed
+by a heap claim needs no hardware, so every branch site above can be exercised
+on a cycle-accurate 8088 in a container — which is the one thing block mode
+never had, and the reason two of its bugs reached the field. The cable's file
+client is then a second `DRVC_FILE` driver against a kernel that is already
+proven.
