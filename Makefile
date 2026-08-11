@@ -33,6 +33,15 @@ VM386SND := $(CURDIR)/vm/386-sound
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
 VMPENT := $(CURDIR)/vm/pentium
+# The two Frotz machines (SPEC.md 61.9). Both carry a sound card, because
+# @sound_effect is part of what is being tested, and both have the FULL 640KB:
+# a Z-machine story is RESIDENT (SPEC.md 61.4) and 256KB does not hold the
+# interesting ones. xt-z is the honest target - the machine this OS is for,
+# with a 720KB 3.5" DD drive for B: because 360KB does not hold a library.
+# 386-z is the comfortable one: the same code, two 1.44MB drives, and the
+# machine where Anchorhead and Bronze are worth trying.
+VMXTZ := $(CURDIR)/vm/xt-z
+VM386Z := $(CURDIR)/vm/386-z
 
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
@@ -314,6 +323,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field stackprobe trklog npbench clicktest marty comscan \
         fonts fontsheets fontlist \
+        stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         checkdocs clean clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -921,6 +931,279 @@ $(BUILD)/assoctest.img: $(BUILD)/asstest.o88 $(BUILD)/test.ast tools/os88disk.py
 # of what --scramble exists to test.
 $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88 $(BUILD)/big.dat
+
+# =============================================================================
+# FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`
+# =============================================================================
+# Frotz does NOT ride the shipped apps disks. The 360KB one has about 100KB
+# free (tools/os88disk.py --verify says so) and the interpreter alone is most
+# of that, never mind a story; and a Z-machine with no story to play is a menu
+# item that disappoints. So it gets its own floppy, in all three geometries,
+# and `all` does not build any of them - the documented on-demand shape that
+# bench, trklog and npbench already use.
+#
+# NO STORY FILE IS COMMITTED TO THIS REPOSITORY. Every one of them is someone
+# else's work under someone else's copyright, so tools/getstories.py fetches
+# them into build/stories/ against a manifest of pinned SHA-256s and the disk
+# is built from there - the same decision build/big.dat made, for a stronger
+# reason. The manifest is limited to what the authors released freely, which
+# is why the Infocom titles are Mini-Zork I, both Samplers and Zork: The
+# Undiscovered Underground rather than Zork I-III and Planetfall.
+#
+# Adding your own: STORIES='path/to/ZORK1.DAT path/to/HHGG.DAT' puts them in
+# the disk's root beside the folders. They must already be valid 8.3 names -
+# os88disk.py has no long-name handling and fails hard rather than truncating.
+FROTZSRC := apps/frotz/frotz.asm apps/frotz/zbss.inc apps/frotz/zmem.inc \
+            apps/frotz/ztext.inc apps/frotz/zobj.inc apps/frotz/zdict.inc \
+            apps/frotz/zwin.inc apps/frotz/zwin6.inc apps/frotz/zpic.inc \
+            apps/frotz/zsnd.inc apps/frotz/zio.inc apps/frotz/zexec.inc
+
+$(BUILD)/frotz.bin: $(FROTZSRC) apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/frotz/ -o $@ apps/frotz/frotz.asm
+	@echo "frotz:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/frotz.o88: $(BUILD)/frotz.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/frotz.bin -o $@
+
+# The story cache. A stamp file rather than a directory, because make cannot
+# depend on "sixteen files in a directory" and a directory's mtime changes for
+# reasons that are not a fetch. getstories.py is idempotent and verifies every
+# hash on every run, so re-running it costs 0.4s and no network.
+STORYDIR := $(BUILD)/stories
+$(BUILD)/stories.stamp: tools/getstories.py | $(BUILD)
+	python3 tools/getstories.py -o $(STORYDIR)
+	@touch $@
+
+stories: $(BUILD)/stories.stamp
+
+# Which stories fit which floppy. These are chosen against the CLUSTER counts
+# os88disk.py reports, not against the byte totals: a 360KB and a 720KB disk
+# allocate in 1KB clusters and a 1.44MB one in 512B, so a 52,216-byte story
+# takes 51 clusters on the first two and 102 on the third. The whole library
+# is 2,713KB and no floppy holds it, so each geometry ships a subset and
+# os88disk.py refuses at build time if a list stops fitting - which is the
+# check, rather than a comment claiming it fits.
+#
+#   360KB   what a 256KB XT can also RUN: the v3 stories (SPEC.md 61.4)
+#   720KB   the xt-z disk
+#   1.44MB  the 386-z disk, plus a second library disk you swap in
+ZS_360  := INFOCOM:$(STORYDIR)/MINIZORK.Z3 CLASSIC:$(STORYDIR)/ADVENT.Z3 \
+           CLASSIC:$(STORYDIR)/ZORK285.Z5 CLASSIC:$(STORYDIR)/BALANCES.Z5
+ZS_720  := INFOCOM:$(STORYDIR)/MINIZORK.Z3 INFOCOM:$(STORYDIR)/ZTUU.Z5 \
+           CLASSIC:$(STORYDIR)/ADVENT.Z3 CLASSIC:$(STORYDIR)/ZORK285.Z5 \
+           MODERN:$(STORYDIR)/PHOTOPIA.Z5
+ZS_1440 := INFOCOM:$(STORYDIR)/MINIZORK.Z3 INFOCOM:$(STORYDIR)/SAMPLER1.Z3 \
+           INFOCOM:$(STORYDIR)/SAMPLER2.Z3 INFOCOM:$(STORYDIR)/ZTUU.Z5 \
+           CLASSIC:$(STORYDIR)/ADVENT.Z3 CLASSIC:$(STORYDIR)/ADVENT5.Z5 \
+           CLASSIC:$(STORYDIR)/ZORK285.Z5 CLASSIC:$(STORYDIR)/BALANCES.Z5 \
+           MODERN:$(STORYDIR)/PHOTOPIA.Z5 MODERN:$(STORYDIR)/905.Z5 \
+           MODERN:$(STORYDIR)/BEAR.Z5
+# Disk 2: the big ones, and it carries NO interpreter on purpose - it is a
+# library disk you swap into B: while Frotz is already running, and the 100
+# clusters a second copy would cost are 50KB of story.
+ZS_DISK2 := MODERN:$(STORYDIR)/BRONZE.Z8 MODERN:$(STORYDIR)/DREAMHLD.Z8 \
+            MODERN:$(STORYDIR)/LOSTPIG.Z8 CLASSIC:$(STORYDIR)/CURSES.Z5
+
+STORIES ?=
+
+zdisk: $(BUILD)/zork.img $(BUILD)/zork720.img $(BUILD)/zork360.img \
+       $(BUILD)/zork2.img
+
+# The catalogue is CATALOG.TXT on every disk - os88disk.py takes the 8.3 name
+# from the file's BASENAME, so the four of them need four directories rather
+# than four names. `make -j` safe: each rule creates only its own.
+$(BUILD)/zcat/360/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
+	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 ADVENT.Z3 ZORK285.Z5 BALANCES.Z5
+$(BUILD)/zcat/720/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
+	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 ZTUU.Z5 ADVENT.Z3 ZORK285.Z5 PHOTOPIA.Z5
+$(BUILD)/zcat/1440/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
+	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 SAMPLER1.Z3 SAMPLER2.Z3 ZTUU.Z5 \
+		ADVENT.Z3 ADVENT5.Z5 ZORK285.Z5 BALANCES.Z5 PHOTOPIA.Z5 905.Z5 BEAR.Z5
+$(BUILD)/zcat/disk2/CATALOG.TXT: tools/getstories.py
+	@mkdir -p $(dir $@)
+	python3 tools/getstories.py --catalog $@ BRONZE.Z8 DREAMHLD.Z8 LOSTPIG.Z8 CURSES.Z5
+
+$(BUILD)/zork.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/1440/CATALOG.TXT \
+                   tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat/1440/CATALOG.TXT $(ZS_1440) $(STORIES) \
+		--folder SAVES --folder ART
+
+$(BUILD)/zork720.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/720/CATALOG.TXT \
+                      tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat/720/CATALOG.TXT $(ZS_720) $(STORIES) \
+		--folder SAVES
+
+$(BUILD)/zork360.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat/360/CATALOG.TXT \
+                      tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat/360/CATALOG.TXT $(ZS_360) $(STORIES) \
+		--folder SAVES
+
+# BRONZE.PIX - the one picture archive a legally shippable game provides
+# (SPEC.md 61.7). Bronze arrives as a Blorb carrying both its Z-code and a
+# JPEG cover; tools/getstories.py takes the ZCOD chunk and this takes the
+# picture, so the v6 picture path is exercised by a real game rather than only
+# by a fixture. The Blorb is getstories' cached artifact, which is why the
+# stamp is the prerequisite: it is what guarantees the file is there and
+# hash-verified.
+$(BUILD)/BRONZE.PIX: $(BUILD)/stories.stamp tools/os88pix.py
+	python3 tools/os88pix.py -o $@ --release 3 \
+		--blorb $(STORYDIR)/.artifacts/Bronze.zblorb
+
+$(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat/disk2/CATALOG.TXT \
+                    $(BUILD)/BRONZE.PIX tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/zcat/disk2/CATALOG.TXT $(ZS_DISK2) \
+		ART:$(BUILD)/BRONZE.PIX --folder SAVES
+
+# --- the Frotz gate (ON DEMAND: `make ztest`) --------------------------------
+# tests/frotz/zopstest.inf is a STORY, not a package, because the thing under
+# test is an interpreter: the only way to ask whether @div truncates toward
+# zero is to make a Z-machine execute @div. It prints one "PASS name" or "FAIL
+# name got <n> want <n>" per check, so the transcript is a RESULT rather than
+# prose to eyeball, and the two interpreters are comparable by diff.
+#
+# The GOLD side is generated, never hand-written: dfrotz (Frotz 2.55) runs the
+# same story and its transcript is what os8088's has to match. A check that
+# fails on dfrotz is a bug in the .inf, which is exactly how three of them were
+# found - Inform folds constant comparisons UNSIGNED, so `(-4 < 3)` compiled to
+# a false the reference duly reported.
+#
+# Needs `inform` and `dfrotz`: `brew install inform6 frotz`. Both are host-side
+# only and nothing shipped depends on them.
+#
+#   make ztest                                  # build stories + gold
+#   make test TESTAPPS=build/ztest/ztest.img    # ...and boot it
+ZTESTDIR := $(BUILD)/ztest
+ZTESTVERS := 3 5 8
+
+ztest: $(ZTESTDIR)/gold3.txt $(ZTESTDIR)/gold5.txt $(ZTESTDIR)/gold8.txt \
+       $(ZTESTDIR)/ztest.img
+
+$(ZTESTDIR)/zopstest.z%: tests/frotz/zopstest.inf
+	@mkdir -p $(ZTESTDIR)
+	inform -v$* $< $@
+
+$(ZTESTDIR)/gold%.txt: $(ZTESTDIR)/zopstest.z%
+	dfrotz -w 80 -h 200 -p $< | grep -E '^(PASS|FAIL|TEXT|RESULT)' > $@
+	@grep -q '^RESULT pass .* fail 0$$' $@ || \
+		{ echo "ztest: the REFERENCE interpreter failed a check - the bug is in tests/frotz/zopstest.inf"; \
+		  grep '^FAIL' $@; false; }
+	@echo "ztest: v$* gold $$(grep -c . $@) lines, $$(grep -c '^PASS' $@) passing"
+
+$(ZTESTDIR)/ztest.img: $(BUILD)/frotz.o88 $(ZTESTDIR)/zopstest.z3 \
+                       $(ZTESTDIR)/zopstest.z5 $(ZTESTDIR)/zopstest.z8 \
+                       tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/frotz.o88 $(ZTESTDIR)/zopstest.z3 $(ZTESTDIR)/zopstest.z5 \
+		$(ZTESTDIR)/zopstest.z8 --folder SAVES
+
+# --- the Frotz story harness (ON DEMAND: `make zh` / `make zcheck`) ----------
+# `make ztest` above asks whether the opcodes are right one opcode at a time,
+# against a story written to be a test. This asks the other question - whether
+# a REAL story runs - by playing one to a script and diffing the transcript
+# against dfrotz. They fail differently and both are needed: zopstest.inf found
+# @div's rounding, and the harness found a branch that was decoded correctly,
+# executed correctly, and left the program counter in a form the next
+# instruction's guard rejected (apps/frotz/zexec.inc, zx_jrel).
+#
+# FROTZ.O88 HERE IS A DIFFERENT BINARY, built with -DZHARNESS: the story's
+# output goes out COM4 a byte at a time and its keystrokes come back the same
+# way, so the host plays the story over a socket instead of a person typing at
+# a window. Every line of that is inside %ifdef ZHARNESS and none of it is in
+# the shipped package - `nasm -f bin` twice, once each way, and the shipped
+# build's size is unchanged to the byte.
+#
+#   make zh                                 # build the harness interpreter
+#   python3 tools/zharness.py ADVENT.Z3     # play one story, print the log
+#   make zcheck                             # every story x its script, gated
+ZHDIR := $(BUILD)/zh
+
+zh: $(ZHDIR)/frotz.o88
+
+$(ZHDIR)/frotz.bin: $(FROTZSRC) apps/frotz/zharness.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(ZHDIR)
+	$(NASM) -f bin -w+error -DZHARNESS -I apps/ -I apps/frotz/ -o $@ apps/frotz/frotz.asm
+	@echo "zh:     $(call FILESIZE,$@) bytes (harness build, not shipped)"
+
+$(ZHDIR)/frotz.o88: $(ZHDIR)/frotz.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+
+# The B: disk the harness boots with. tools/zharness.py writes it - the story
+# has to arrive as STORY.DAT whatever it is called in build/stories, which is
+# a copy make cannot express as a pattern rule over eleven different names.
+#
+# ZHIMG names it, so `make zhboot ZHIMG=build/zh/advent.img` is the one line
+# the tool runs. It is `test` with one more chardev: COM4 at 0x3E8, the one
+# port SPEC.md 9.5's mouse probe and SPEC.md 58's monitor both leave alone.
+ZHIMG ?= $(ZHDIR)/story.img
+ZHDEV = -chardev socket,id=zh,path=$(BUILD)/zh.sock,server=on,wait=off \
+        -device isa-serial,chardev=zh,iobase=0x3e8,irq=3
+
+zhboot: $(IMG)
+	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+		-drive file=$(ZHIMG),format=raw,if=floppy,index=1 \
+		-display none -qmp unix:$(BUILD)/qmp.sock,server,nowait \
+		-daemonize -pidfile $(BUILD)/qemu.pid $(ZHDEV)
+
+# The gate. Every story on the 1.44MB library disk, each played to its script
+# in tests/frotz/scripts, each diffed against dfrotz. Needs the stories
+# (`make stories`, which fetches) and dfrotz on the host.
+zcheck: zh $(BUILD)/stories.stamp
+	python3 tools/zharness.py --all --compare
+
+# --- the GRAPHICS gate (ON DEMAND: `make zgfx`) ------------------------------
+# `make zcheck` above asks what the story PRINTED. This asks what the reader
+# can SEE, which is a different question and the one three defects hid behind:
+# a quote box drawn into the upper window and thrown away by the next
+# @split_window, a picture archive nothing ever loaded, and two routines in
+# apps/frotz/zpic.inc that pushed seven registers and popped six because
+# nothing had ever called them.
+#
+# Three checks per story, and only the third needs a reference interpreter:
+#
+#   model vs pixels  every row the interpreter says holds text is drawn, and
+#                    every row it says is blank is not. Read by UNIFORMITY, so
+#                    reverse video and @set_colour do not fool it
+#   across a repaint the same, on a window that has just been redrawn from the
+#                    model - which is what an uncover does, and where anything
+#                    on the glass the model does not hold disappears
+#   opening screen   against tests/frotz/screens, taken from the real curses
+#                    Frotz by tools/zref.py. Every word the reference shows
+#                    must be on our screen too
+#
+# It is slower than zcheck by a screendump per prompt and is a separate target
+# for that reason alone; it is not optional in any other sense.
+zgfx: zh zpic $(BUILD)/stories.stamp
+	python3 tools/zharness.py --all --graphics
+	python3 tools/zharness.py $(ZPICDIR)/zpictest.z6 --graphics
+
+# The v6 picture fixture: a story that draws, and three flat blocks to draw.
+# Needs `inform` (`brew install inform6`), which is host-side only.
+ZPICDIR := $(BUILD)/zpic
+
+zpic: $(ZPICDIR)/zpictest.z6 $(ZPICDIR)/zpictest.PIX
+
+$(ZPICDIR)/zpictest.z6: tests/frotz/zpictest.inf
+	@mkdir -p $(ZPICDIR)
+	inform -v6 $< $@
+
+$(ZPICDIR)/zpictest.PIX: tools/zpicgen.py tools/os88pix.py
+	@mkdir -p $(ZPICDIR)
+	python3 tools/zpicgen.py -o $(ZPICDIR)
+
+# The golden opening screens the graphics gate compares against. REGENERATING
+# them needs the curses frotz and pyte (`brew install frotz`, `pip3 install
+# pyte`); the gate itself needs neither, which is why they are committed.
+# Re-take them when the Frotz window's size changes - tools/zref.py writes the
+# geometry into each file and zharness.py refuses rather than guessing.
+zscreens: $(BUILD)/stories.stamp
+	python3 tools/zref.py --all -o tests/frotz/screens
 
 # --- the tracker log disk (ON DEMAND: `make trklog`) -------------------------
 # TRKLOG.O88 is apps/tracker built with -DTRKLOG, which is the ONLY difference:
@@ -2003,6 +2286,36 @@ xt-sound: $(IMG360) $(APPSIMG360)
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
+
+# The two FROTZ machines (SPEC.md 61.9), both with the Z-machine story floppy
+# in B: instead of the apps disk.
+#
+#   xt-z   An IBM XT at 4.77MHz with a Sound Blaster 2.0 and the FULL 640KB,
+#          booting the 360KB system floppy with a 720KB 3.5" DD story disk in
+#          B:. The 640KB is not a luxury: a story is RESIDENT (SPEC.md 61.4),
+#          and after the 92KB kernel that leaves about 549KB, which is what
+#          makes everything on the disk playable. The 3.5" DD drive is not an
+#          anachronism either - DOS 3.2 supported one on an XT, and 360KB does
+#          not hold a library.
+#
+#   386-z  The comfortable target the same code also has to be right on: a
+#          386 with an SB16 and TWO 1.44MB drives, so B: is the full library
+#          disk and `build/zork2.img` is the one you swap in for Anchorhead
+#          and Bronze. AT-class, so the first launch stops at the BIOS setup
+#          screen wanting a CMOS - pick EXIT FOR BOOT once and 86Box writes
+#          vm/386-z/nvr/ for every later boot.
+#
+# Both call $(UNPROTECT) for the reason every other 86Box target does: 86Box
+# rewrites its own config on exit and has twice re-added the wp:// prefix,
+# which makes every guest write fail as FERR_WPROT - and here that would be
+# every save game, reading as a Frotz bug rather than an emulator setting.
+xt-z: $(IMG360) $(BUILD)/zork720.img
+	@$(UNPROTECT) $(VMXTZ)/86box.cfg
+	$(BOX) -P $(VMXTZ) -N
+
+386-z: $(IMG) $(BUILD)/zork.img $(BUILD)/zork2.img
+	@$(UNPROTECT) $(VM386Z)/86box.cfg
+	$(BOX) -P $(VM386Z) -N
 
 # The MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug server bolted
 # into MartyPC's headless frontend, giving memory, registers, breakpoints,
