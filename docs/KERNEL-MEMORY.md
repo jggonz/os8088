@@ -1329,6 +1329,21 @@ thunks rather than through the window record.
 more except doing less. There is one precedent for doing less, and it is the
 Task Manager.
 
+> **A second lever has been costed and not yet built** —
+> docs/ONDEMAND-PLAN.md, on-demand kernel modules. It is this one without the
+> published ABI: `.cold` is already `vstart=0`, contains **zero data
+> directives**, runs with `DS = KERNEL_SEG` and calls out only through the 107
+> `cw_*` shims, so cold code is already position-independent at paragraph
+> granularity and could execute from a heap claim unchanged. Making the *cold*
+> thunk load-and-dispatch spends **no `.text`**, which is the guard with 438
+> bytes left. Measured: the file dialog, Cut/Copy/Paste and the Control Panel
+> together are ~8.7 KB of footprint on **both** builds, and they are never in
+> use at the same time. Read ONDEMAND-PLAN §4.1 and ONDEMAND-PLAN §5 before
+> acting on this
+> note: the Control Panel is where `drv_notice` sends a machine whose driver
+> would not load, and the floppy formatter — the feature that prompted the
+> idea — is the worst candidate in the kernel.
+
 A cold segment would have taken about 4,900 bytes off `KERN_CODE_MAX` and
 **nothing** off `KERN_BUDGET`. Making it a package on the system disk took
 6,040 off *both* — the span went 76 KB → 69 KB and the segment gained 5,380 —
