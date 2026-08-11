@@ -257,29 +257,25 @@ hd_tw_paint:
     cmp cl, 4
     jb .row
 
-    mov al, CBLACK              ; the pen for the buttons and the caption:
-    call OSAPI_SET_COLOR        ; hd_tw_button cannot set it (AX is the x)
-    mov si, hd_s_tfmt
-    mov ax, HTW_B0X
-    mov bx, HTW_BW0
+    mov si, hd_s_tfmt           ; the shared control takes the pen itself and
+    mov ax, HTW_B0X             ; leaves it live, so there is no CBLACK to set
+    mov bx, HTW_BW0             ; here and none to put back after Delete
+    xor cl, cl
     call hd_tw_button
     call hd_tw_delok            ; the ONE predicate (SPEC.md 47 rule 2): it
-    call OSAPI_GFX_PEN          ; greys the button here and refuses the click
-                                ; in hd_tw_delete, so a greyed Delete can never
+    mov cl, 0                   ; greys the button here and refuses the click
+    adc cl, 0                   ; in hd_tw_delete, so a greyed Delete can never
                                 ; be one that would have worked. CF is what
-                                ; both of them answer in, so the pen takes it
-                                ; with no test in between - and it carries
-                                ; [gfx_dis], so the label dithers on mono
-                                ; along with the frame (SPEC.md 47 rule 3)
+                                ; both answer in, and OS88UI_DIS is 1, so the
+                                ; flag IS the carry (`mov` does not touch it)
     mov si, hd_s_tdel
     mov ax, HTW_B1X
     mov bx, HTW_BW1
     call hd_tw_button
-    clc                         ; ...and back to the live pen for the rest:
-    call OSAPI_GFX_PEN          ; the flag would dither Close and the caption
     mov si, hd_s_close
     mov ax, HTW_B2X
     mov bx, HTW_BW2
+    xor cl, cl
     call hd_tw_button
 
     mov si, [hd_tmsg]
@@ -311,11 +307,17 @@ hd_tw_paint:
 ; button here with a predicate, and it is a fact rather than a guess: an empty
 ; slot has nothing to give back (SPEC.md 52.2.4).
 ;
-; **The pen is the CALLER's**, because AX is the x here and OSAPI_SET_COLOR
-; took its colour in AL: setting it inside drew both buttons at the same place,
-; one on top of the other. It is also what lets the caller grey one button and
-; not the others without this routine knowing any predicate - and what makes
-; the frame and the label share one pen, so on mono they dither together.
+; **The greying is a FLAG in CL now, not the caller's pen.** It used to be the
+; pen because AX is the x here and OSAPI_SET_COLOR took its colour in AL, so
+; setting it inside drew both buttons at the same place - which is a real
+; constraint that the shared control simply does not have, its rect arriving
+; as a pointer. The caller still owns the predicate, which is the half that
+; mattered: one predicate per control, shared with the click refusal.
+;
+; THE LABEL IS CENTRED NOW and it was flush left at x+4, so it moves - Format
+; and Delete (48px in 64) by 4px, Close (40px in 56) by 4px. Named because it
+; is visible: the labels were the only ones in the system not centred in their
+; buttons.
 ; -----------------------------------------------------------------------------
 hd_tw_button:
     push ax
@@ -323,34 +325,31 @@ hd_tw_button:
     push cx
     push dx
     push si
-    add ax, di                  ; AX = x1
-    mov cx, ax
-    add cx, bx
-    dec cx                      ; CX = x2
-    mov bx, bp
-    add bx, HTW_BY              ; BX = y1
-    mov dx, bx
-    add dx, HTW_BH - 1          ; DX = y2
-    push ax
-    push bx
-    push cx
-    push dx
-    call OSAPI_GFX_FRAME
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    add ax, 4                   ; the label, 4px in and centred vertically
-    mov cx, ax
-    mov dx, bx
-    add dx, 4
-    call OSAPI_FONT_STR
+    push di
+    add ax, di                  ; the rect, in screen coordinates
+    mov [hd_tbrect+0], ax
+    add ax, bx
+    dec ax
+    mov [hd_tbrect+4], ax
+    mov ax, bp
+    add ax, HTW_BY
+    mov [hd_tbrect+2], ax
+    add ax, HTW_BH - 1
+    mov [hd_tbrect+6], ax
+    mov dl, cl                  ; CL = the flag word; DI is about to be it
+    xor dh, dh
+    mov di, dx
+    mov bx, hd_tbrect           ; no OS88UI_FILL: hd_tw_repaint calls
+    call os88ui_btn             ; hd_win_erase before this ever runs twice
+    pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+
+hd_tbrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
 
 ; -----------------------------------------------------------------------------
 ; hd_tw_rowtext - one slot's line, into hd_line (module internal)

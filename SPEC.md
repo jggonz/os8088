@@ -10907,8 +10907,8 @@ and lands in `.cold` where it has hundreds; the contiguity that rests on is
 asserted at assembly time.
 
 Flags: `OS88UI_DIS` (dithered frame *and* label — §47 rule 1 and 2 together),
-`OS88UI_DEF` (the default button's outer ring), and `OS88UI_FILL`, which
-wants its own paragraph:
+`OS88UI_DEF` (the default button's outer ring), `OS88UI_INK` (below), and
+`OS88UI_FILL`, which wants its own paragraph:
 
 **`OS88UI_FILL` asks "can this button be drawn a second time without the
 ground being repainted first?", NOT "is my background white".** A button
@@ -10926,7 +10926,17 @@ Folder are drawn once onto a pane `wm_paint_all` has already whited and can
 never change what they say. `tests/fdlggrey.py` is the gate and it
 discriminates: 42 pixels differ without the flag, 0 with it.
 
-Seven things are load-bearing:
+**`OS88UI_INK` puts the label's colour in `DI`'s HIGH BYTE**, for a button
+whose caption is deliberately not black — Piano's song buttons, which §47
+names as its own example of a colour that is decoration rather than state.
+It is a flag plus a byte rather than `AL = the colour` because every existing
+caller reaches `os88ui_btn` with arbitrary `AX`, and a silent reinterpretation
+of a live register is the shape of bug this file has already produced twice;
+`DI` is the flag word, so its high byte is 0 by construction at every call
+site. **Disabled wins**: a greyed control is `CDGRAY` and dithered whatever
+ink it asked for, because rule 1 is about state and this is about decoration.
+
+Eight things are load-bearing:
 
 - **A word declared in `.cold` and reached through `DS` is not that word**
   (§2.6), and this section is where that bit. The three rect scratches were
@@ -23810,7 +23820,17 @@ and **every drawer quotes those instead of `mp_*`** — the graphics screen and
 the §45.13 text one alike, because the lag was never a property of one
 surface.
 
-Seven things are load-bearing:
+**`OS88UI_INK` puts the label's colour in `DI`'s HIGH BYTE**, for a button
+whose caption is deliberately not black — Piano's song buttons, which §47
+names as its own example of a colour that is decoration rather than state.
+It is a flag plus a byte rather than `AL = the colour` because every existing
+caller reaches `os88ui_btn` with arbitrary `AX`, and a silent reinterpretation
+of a live register is the shape of bug this file has already produced twice;
+`DI` is the flag word, so its high byte is 0 by construction at every call
+site. **Disabled wins**: a greyed control is `CDGRAY` and dithered whatever
+ink it asked for, because rule 1 is about state and this is about decoration.
+
+Eight things are load-bearing:
 
 - **The card's position is the WORKER's poll, not a new one.** `trk_feed`
   already asks verb 3 every wake for the lead calculation, so it publishes

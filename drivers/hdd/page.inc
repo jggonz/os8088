@@ -278,46 +278,40 @@ hd_page_button:
     push cx
     push dx
     push si
+    push di
     push ax
     push bx
     push si
     mov al, cl
     call hd_btn_ok              ; CF = 1 = this control is disabled, which is
-    call OSAPI_GFX_PEN          ; the shape the pen takes: one call, no test.
-                                ; It sets CDGRAY and [gfx_dis] together, and
-                                ; it colours the FRAME as well as the label -
-                                ; greying half a control is worse than not
-                                ; greying it, and on mono the flag is what
-                                ; stops the label being the half that is left
+    mov cx, 0                   ; the shape the shared control's flag takes:
+    adc cx, 0                   ; OS88UI_DIS is 1 and `mov` does not touch CF,
+                                ; so the flag IS the carry, with no test in
+                                ; between. It sets CDGRAY and [gfx_dis]
+                                ; together and colours the FRAME as well as
+                                ; the label - greying half a control is worse
+                                ; than not greying it, and on mono the flag is
+                                ; what stops the label being the half left
     pop si
     pop bx
     pop ax
-    add ax, di
-    mov cx, ax
-    add cx, bx
-    dec cx
-    mov bx, bp
-    add bx, HDP_BY
-    mov dx, bx
-    add dx, HDP_BH - 1
-    push ax
-    push bx
-    push cx
-    push dx
-    call OSAPI_GFX_FRAME
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    add ax, 4
-    mov cx, ax
-    mov dx, bx
-    add dx, 4
-    call OSAPI_FONT_STR
-    clc                         ; a button leaves the pen LIVE. The colour was
-    call OSAPI_GFX_PEN          ; put back by whatever drew next anyway; the
-                                ; FLAG is not, and a disabled Mount button
-                                ; would otherwise dither the caption under it
+    add ax, di                  ; ...and the rect, in screen coordinates
+    mov [hd_pbrect+0], ax
+    add ax, bx
+    dec ax
+    mov [hd_pbrect+4], ax
+    mov ax, bp
+    add ax, HDP_BY
+    mov [hd_pbrect+2], ax
+    add ax, HDP_BH - 1
+    mov [hd_pbrect+6], ax
+    mov di, cx
+    mov bx, hd_pbrect           ; no OS88UI_FILL: hd_page_repaint white-fills
+    call os88ui_btn             ; the pane before this ever runs twice - and
+                                ; the control leaves the pen live by itself,
+                                ; so the clc/GFX_PEN that used to close this
+                                ; routine is gone
+    pop di
     pop si
     pop dx
     pop cx
@@ -325,9 +319,20 @@ hd_page_button:
     pop ax
     ret
 
+hd_pbrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
+
 ; -----------------------------------------------------------------------------
 ; hd_page_pm - one of the two adjust buttons (module internal)
 ; in:  AX = x, SI = its label, DI/BP = the pane origin
+;
+; The Control Panel's Date/Time page has the same pair and draws it with the
+; same shared control (SPEC.md 31.2), which is the whole reason this one is
+; converted as well: two +/- pairs one page apart in the same window should
+; not be two different controls.
+;
+; ONE PIXEL: the glyph's y was the literal +3 in a 13-row box and the shared
+; control centres at (13-8)/2 = 2, so it sits one row higher. Horizontally it
+; already WAS centred - HDP_BTW/2 - 4 is (24-8)/2 - and never looked it.
 ; -----------------------------------------------------------------------------
 hd_page_pm:
     push ax
@@ -335,37 +340,21 @@ hd_page_pm:
     push cx
     push dx
     push si
+    push di
     add ax, di
-    mov cx, ax
-    add cx, HDP_BTW - 1
-    mov bx, bp
-    add bx, HDP_EY - 1
-    mov dx, bx
-    add dx, HDP_FH + 1
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    push ax
-    push bx
-    push cx
-    push dx
-    call OSAPI_GFX_FRAME
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    add ax, HDP_BTW/2 - 4
-    mov cx, ax
-    mov dx, bx
-    add dx, 3
-    call OSAPI_FONT_STR
+    mov [hd_pbrect+0], ax
+    add ax, HDP_BTW - 1
+    mov [hd_pbrect+4], ax
+    mov ax, bp
+    add ax, HDP_EY - 1
+    mov [hd_pbrect+2], ax
+    add ax, HDP_FH + 1
+    mov [hd_pbrect+6], ax
+    xor di, di                  ; always live, never the default, and the row
+                                ; behind it is erased by hd_page_repaint
+    mov bx, hd_pbrect
+    call os88ui_btn
+    pop di
     pop si
     pop dx
     pop cx

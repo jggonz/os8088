@@ -369,12 +369,14 @@ muptest's fourth case. Stated rather than contrived.
 
 ## 12. What is left
 
-The other nine standard-look buttons — ~~`fdlg`'s are kernel and out of
-reach~~, which §13 is the answer to: the kernel's three are converted and
-what is left is packages. `at_button`, `pn_btn`, `np_pbutton`, `pt_btn_xy`,
-`mppl_btn_rect` and the hdd tool's. Each wants its own commit and its own
-pixel diff, per §6; none is urgent, and a package that never adopts loses
-nothing.
+~~The other nine standard-look buttons~~ — done, §14. And the list in this
+paragraph was wrong twice, which is worth keeping rather than editing away:
+**`pt_btn_xy` is not a button at all** — it is pure geometry, returning
+`CX`/`DX` for a tool cell and drawing nothing; Paint's actual control is
+`pt_cwell`, a filled well with a 16x16 icon and no label, and Paint has no
+standard labelled button anywhere. And **`mppl_btn_rect` is skinned**
+(SPEC.md §56), so it was never a candidate. What the list missed, on the
+other hand, is the whole of `drivers/hdd` — three helpers, not one.
 
 ~~The check/radio glyphs~~ — done, §13.7: `os88ui_glyph`, with the whole
 Control Panel as its first caller. A **package** consumer is still wanted;
@@ -610,3 +612,87 @@ is unchanged** at 97,280 of 98,304.
 - **`tools/kernsize.py` and `tools/os88sym.py` re-assemble the kernel
   themselves** and needed `-I apps/` too. Without it they fail in a way that
   looks like a broken kernel rather than a broken tool.
+
+## 14. The package conversions — done, and one feature had to land first
+
+Six helpers across four packages and one driver, plus the survey's two
+corrections to §12's list (above).
+
+| helper | what changed on screen |
+|---|---|
+| `pn_btn` (Piano) | **0 differing pixels of 34,720** — including the three coloured buttons |
+| `np_pbutton` (Note Pad) | panel closed: **0 px of 40,300**. Panel open: labels move **up 1px** |
+| `at_button` (ArtfulType) | the default ring, **3px out → 2px**. Frame and label untouched |
+| `hd_iw_button` (hdd installer) | expected identical — geometry, centring and greying all matched already |
+| `hd_tw_button` (partition tool) | labels **centred**, from a flush-left `x+4` |
+| `hd_page_button` / `hd_page_pm` (Disks page) | labels centred; the `+`/`-` glyph moves **up 1px** |
+
+### 14.1 `OS88UI_INK` — the first feature the shared control gained
+
+Piano was the one conversion that could not be a conversion. Three of its
+five buttons are `CGREEN` / `CMAGENTA` / `CRED`, and SPEC.md §47 names that
+case explicitly — *"Piano's coloured letters want contrast"* — so it is
+decoration rather than state, and the shared control knew only live and
+disabled. Converting as-is would have turned three buttons black on VGA.
+
+`OS88UI_INK` is that: a flag, with the colour in **DI's high byte**. Not
+`AL = the colour`, because every existing caller reaches `os88ui_btn` with
+arbitrary `AX` and a silent reinterpretation of a live register is the exact
+shape of bug this file has already produced twice (§13.8). `DI` is the flag
+word — every caller either builds it from `OS88UI_*` constants or clears it —
+so its high byte is 0 by construction and no existing call site had to change.
+
+**Disabled wins.** A greyed control is `CDGRAY` and dithered whatever ink it
+asked for: rule 1 is about state, this is about decoration, and state is not
+negotiable.
+
+It cost about a dozen bytes and it is the thing §13.2 predicted — one edit,
+and the file dialog, the Control Panel, the Timer and every package can have
+a coloured caption. Piano is the only caller today.
+
+### 14.2 The two labels that were never centred
+
+`hd_tw_button` and `hd_page_button` put their labels at a flush-left `x+4`.
+Everything else in the system centres, so they now do — `Format` and `Delete`
+(48px in 64) and `Close` (40px in 56) each move 4px right. It is the §13.7
+Sound-page `Test` case a second time, and the same answer: a literal that was
+standing in for arithmetic, in a box whose width had moved on.
+
+### 14.3 The pen stopped being the caller's
+
+`hd_tw_button`'s header explained at length why **the pen belonged to the
+caller**: `AX` is the x, `OSAPI_SET_COLOR` took its colour in `AL`, and
+setting it inside drew both buttons at the same place. That is a real
+constraint and it is simply gone — the shared control's rect arrives as a
+*pointer*, so `AX` is free. The caller keeps the half that mattered, which is
+the predicate: `hd_tw_delok` still greys the button and refuses the click, and
+its `CF` becomes `OS88UI_DIS` with no test in between, because that flag is 1
+and `mov` does not touch the carry.
+
+`hd_iw_button` lost its `hd_ibl` latch the same way — it existed to carry the
+label across the predicate call, and `SI` now goes straight through.
+
+### 14.4 Deliberately NOT converted
+
+- **ModPlug** (`mppl_btn_rect`, `mppu_btn_led`) — SPEC.md §56 ports
+  ModPlugPlayer's bevelled face and LED transport on purpose.
+- **Tracker** (`tui_btn`) — FT2's bevel, SPEC.md §45; and its own header says
+  it is decorative, because every action there is a key.
+- **Minesweeper's cell** — SPEC.md §23, a Windows-style 3D bevel with its own
+  colour table.
+- **Paint** — nothing to convert (see §12's correction).
+
+### 14.5 What is verified and what is not
+
+Piano, Note Pad and ArtfulType were pixel-diffed against `.o88`s built from
+the previous commit, each alone in the root of its own 360KB image so the
+package resolves by name out of a fresh mount — a **folder dive would not
+work**, because a Disk window paints from its own cache and leaves the global
+snapshot stale (SPEC.md §18.9/§22.8), so `disk_dir` after one still answers
+about the root and the harness reads it as the package not being on the disk.
+
+The three `drivers/hdd` helpers are **assembled and reviewed, not
+pixel-diffed**: reaching them needs the driver ticked in the Control Panel
+and a disk attached, and two of the three windows are several steps past
+that. Their conversions are the same mechanical transformation as the three
+that were measured, and two of them carry a named pixel change anyway.

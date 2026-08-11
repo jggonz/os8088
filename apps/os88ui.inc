@@ -79,6 +79,9 @@
   %macro UI_WHITE 0
     mov byte [gfx_color], CWHITE
   %endmacro
+  %macro UI_INK 0
+    mov [gfx_color], al
+  %endmacro
 %else
   %macro UI_FRAME 0
     call OSAPI_GFX_FRAME
@@ -104,6 +107,9 @@
     call OSAPI_SET_COLOR
     pop ax
   %endmacro
+  %macro UI_INK 0
+    call OSAPI_SET_COLOR
+  %endmacro
 %endif
 
 OS88UI_DIS  equ 1               ; disabled: dithered frame AND label (47 r2)
@@ -125,6 +131,25 @@ OS88UI_FILL equ 4               ; ERASE THE INTERIOR FIRST - and the question
                                 ; the erase is what is missing (SPEC.md 47,
                                 ; docs/UIHELPERS-PLAN.md 13.4). Set it unless
                                 ; the caller white-fills its content first.
+OS88UI_INK  equ 8               ; ...and DI's HIGH BYTE is the ink, for a
+                                ; button whose label is deliberately not black
+                                ; (Piano's song buttons, SPEC.md 47's own
+                                ; example of a colour that is decoration
+                                ; rather than state). It is a flag plus a byte
+                                ; and not simply "AL = the colour", because
+                                ; every existing caller reaches here with
+                                ; ARBITRARY AX and a silent reinterpretation
+                                ; of a live register is the shape of bug this
+                                ; file has already produced twice. DI is the
+                                ; flag word: every caller either builds it
+                                ; from OS88UI_* constants or clears it, so its
+                                ; high byte is 0 by construction.
+                                ;
+                                ; DISABLED WINS. A greyed control is CDGRAY
+                                ; and dithered whatever colour it would
+                                ; otherwise be - 47 rule 1 is about state and
+                                ; this is about decoration, and state is not
+                                ; negotiable.
 
 ; -----------------------------------------------------------------------------
 ; os88ui_btn - draw one standard button
@@ -184,6 +209,15 @@ os88ui_btn:
     clc
 .set:
     UI_PEN
+    test di, OS88UI_DIS         ; a disabled control keeps CDGRAY whatever ink
+    jnz .rect                   ; it asked for - state outranks decoration
+    test di, OS88UI_INK
+    jz .rect
+    mov ax, di                  ; AL = the ink, out of DI's high byte
+    mov al, ah
+    xor ah, ah
+    UI_INK
+.rect:
     mov ax, [ds:bp+0]
     mov bx, [ds:bp+2]
     mov cx, [ds:bp+4]

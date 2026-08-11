@@ -527,7 +527,7 @@ $(BUILD)/boothd.bin: boot/boothd.asm | $(BUILD)
 # is what gives os88disk.py's sys_attr the read-only + hidden + system
 # attributes every kernel-owned file wants (SPEC.md 19.6), and what makes the
 # installer's "every *.DRV" copy pick it up (SPEC.md 52.10.4).
-$(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm drivers/hdd/hddabi.inc \
+$(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm apps/os88ui.inc drivers/hdd/hddabi.inc \
                   drivers/hdd/hdcom.inc drivers/hdd/hdsvc.inc drivers/hdd/hdsec.inc \
                   drivers/hdd/partw.inc drivers/hdd/fmt.inc drivers/hdd/tool.inc \
                   drivers/hdd/inst.inc drivers/os88drv.inc apps/os88api.inc \
@@ -543,7 +543,7 @@ $(BUILD)/hddtool.drv: $(BUILD)/hddtool.bin tools/os88drv.py
 # so a driver cannot ask how big a file is before it reads one. It is a
 # CEILING - a bigger tool on the disk is refused by OSAPI_FILE_READ before any
 # data moves, and a smaller one leaves the tail unread.
-$(BUILD)/hdd.bin: drivers/hdd/hdd.asm drivers/hdd/hddabi.inc drivers/hdd/hdcom.inc \
+$(BUILD)/hdd.bin: drivers/hdd/hdd.asm apps/os88ui.inc drivers/hdd/hddabi.inc drivers/hdd/hdcom.inc \
                   drivers/hdd/hdtool.inc drivers/hdd/hdsec.inc \
                   drivers/hdd/page.inc drivers/hdd/cfg.inc \
                   drivers/os88drv.inc apps/os88api.inc \
@@ -671,7 +671,7 @@ $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/hello.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
-$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/notepad/notepad.asm
 	@echo "notepad: $(call FILESIZE,$@) bytes"
 
@@ -681,7 +681,7 @@ $(BUILD)/notepad.o88: $(BUILD)/notepad.bin tools/os88pkg.py
 
 # Piano, the fifth shipped package (SPEC.md 36): a colorful playable piano
 # over the SPEC.md 34 tone tier (note viewer, replay, embedded songs).
-$(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/piano/piano.asm
 	@echo "piano:  $(call FILESIZE,$@) bytes"
 
@@ -748,7 +748,7 @@ $(BUILD)/modplug.o88: $(BUILD)/modplug.bin tools/os88pkg.py
 $(BUILD)/artful.bin: apps/artful/artful.asm apps/artful/atdoc.inc \
 		apps/artful/atrend.inc apps/artful/atui.inc apps/artful/atedit.inc \
 		apps/artful/atcmd.inc apps/artful/atfile.inc apps/artful/atimg.inc \
-		apps/os88api.inc | $(BUILD)
+		apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/artful/ -o $@ apps/artful/artful.asm
 	@echo "artful: $(call FILESIZE,$@) bytes"
 
