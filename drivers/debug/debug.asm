@@ -977,8 +977,8 @@ dbg_nibval:
 ; monitor nobody can see is a monitor nobody remembers to turn off.
 ; =============================================================================
 
-DBGP_LX     equ 8               ; the pane is 221 x 121 px - 27 characters by
-DBGP_Y0     equ 6               ; 13 rows (drivers/os88drv.inc)
+DBGP_LX     equ 8               ; the pane is 221 x 132 px - 27 characters by
+DBGP_Y0     equ 6               ; 14 rows (drivers/os88drv.inc)
 DBGP_ROWH   equ 10
 
 ; -----------------------------------------------------------------------------

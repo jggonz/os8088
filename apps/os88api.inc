@@ -1988,9 +1988,10 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; read, the video probe, the mount and every
                                  ; driver SYSTEM.CFG asked for, which is most
                                  ; of what a boot IS on a floppy machine -
-                                 ; 65 ms a sector inside a run, and ~400 ms per int 13h
-                                 ; CALL, which is the unit that matters
-                                 ; (PERFORMANCE.md Part 2).
+                                 ; ~24 ms per 512 bytes delivered, and 199 ms per
+                                 ; int 13h CALL for one sector (384 for a whole
+                                 ; track) - the CALL is the unit that matters
+                                 ; (PERFORMANCE.md Part 2, Set 24).
                                  ; AX = 0xFFFF means the boot sector never
                                  ; stamped it: an image built before the timer
                                  ; existed. Report unknown, do not print it as

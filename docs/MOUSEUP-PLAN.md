@@ -128,10 +128,22 @@ the lock before firing — the guard `ui_dispatch` already makes twice, at
 written out there: `wm_destroy` clears the bit under the lock we hold, and only
 the UI task calls `wm_create`, so the slot cannot be recycled behind the test.
 
-In practice `wm_hit` in §4.1 answers this already — a destroyed window is not
+~~In practice `wm_hit` in §4.1 answers this already — a destroyed window is not
 in `wm_zord` and cannot be hit — so this is belt-and-braces on the pointer
-comparison rather than a second mechanism. Keep it anyway; it costs a `test`
-and the failure it guards is a dispatch through a freed record.
+comparison rather than a second mechanism.~~ **That is true of the CHROME half
+and false of the package half, and the difference is the whole of §13.7.**
+
+The chrome path (`AL` 2/3) does call `wm_hit` at the release, so there the
+flags test really is belt-and-braces. `.mup_pkg` deliberately calls neither —
+a release outside the window is the contract, so there is no `wm_hit` and no
+pointer comparison to be second to. **The flags test is the only guard on that
+path**, and `wm_destroy` clears `W_FLAGS` and *not* `W_ONMOUSEUP`, so a freed
+slot still holds a live-looking callback pointer.
+
+Measured, and this is what case 7 was for: with the two lines deleted, the
+release dispatches through the freed record and the package's proc runs
+(`tests/mouseup.py` fails on exactly that check, and passes with them back).
+So: keep it, and not for the reason first written down.
 
 ### 4.3 A dropped `EVT_MUP` must not leave the arm standing
 
@@ -409,12 +421,28 @@ because both produced a confident wrong answer about working code:
   kernel whose actual outcomes — including the one that matters — had all
   passed.
 
-**Case 7 (the window destroyed mid-gesture) was NOT run.** Setting it up needs
-a package worker tearing its own window down between the two passes, which is
-a gate package rather than a scripted click. The guard is in the code
-(`test word [bx+W_FLAGS], 2`) and `wm_hit` answers it first anyway, so this is
-an untested belt behind a tested braces — worth saying plainly rather than
-letting the matrix imply nine of nine.
+**Case 7 IS RUN NOW** — `tests/mouseup.py`, and §4.2 above is what it found.
+`tests/muptest` grew a second, unbound window whose `W_ONCLICK` calls
+`OSAPI_WM_DESTROY` on itself, so the kernel arms the release against a record
+it has just freed; the main window's caption is the signal, because by then
+the window under test cannot report on itself. Five checks, and three of them
+exist to stop it passing vacuously: the press must have been DISPATCHED, it
+must have ARMED (`ui_armw` non-zero, read between the two edges), and the
+window must really have gone. The first run passed the release check while
+failing all three — a background window's press is spent on `wm_front`
+(§13), so nothing had armed at all.
+
+The paragraph this replaces said:
+
+> Setting it up needs a package worker tearing its own window down between
+> the two passes, which is a gate package rather than a scripted click. The
+> guard is in the code (`test word [bx+W_FLAGS], 2`) and `wm_hit` answers it
+> first anyway, so this is an untested belt behind a tested braces.
+
+Both halves of that turned out to be wrong. It did not need a worker — a
+`W_ONCLICK` that destroys its own window is synchronous and deterministic,
+and better for a test. And `wm_hit` does **not** answer it first on this
+path, which is §4.2.
 
 **And nothing here was run on the field machine.** Nothing in this change
 touches a disk, so CLAUDE.md's 5150 rule is not engaged, but the two 1bpp

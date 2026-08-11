@@ -2212,10 +2212,10 @@ dskw_clbytes:
 ;
 ; The price is walking the chain from the front on every call, and it is
 ; smaller than it looks: the walk is FAT lookups, the FAT window is resident,
-; and the caller is spending 65 ms a sector (PERFORMANCE.md - a sector inside
-; a well-coalesced run; 238 was the AL bug, not the drive) on the data
-; this is handing it. A 116KB file in 32KB chunks is four walks averaging
-; ~116 clusters - a few hundred word reads against twelve seconds of floppy.
+; and the caller is spending ~24 ms per 512 bytes (PERFORMANCE.md Part 2,
+; Set 24; it was 65 at Set 17 and 238 under the AL bug) on the data this is
+; handing it. A 116KB file in 32KB chunks is four walks averaging ~116
+; clusters - a few hundred word reads against ~5.6 seconds of floppy.
 ;
 ; TWO PRECONDITIONS, both refused rather than mis-read, and both the same
 ; discipline dskw_append carries at the other end: the offset and the

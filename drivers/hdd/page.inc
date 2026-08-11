@@ -8,7 +8,7 @@
 ; anywhere: it falls out of the kernel clearing the DISK class's publication
 ; slot at detach (SPEC.md 31.9/51.2.1).
 ;
-; The pane is 221 x 121 px - 27 characters by 13 rows - and the panel is not
+; The pane is 221 x 132 px - 27 characters by 14 rows - and the panel is not
 ; resizable, so this page is a list, an editor and two buttons, and anything
 ; that needs more room is a window of its own. Format opens the disk tool
 ; (tool.inc), which is partitioning and formatting in one window because they
@@ -785,10 +785,10 @@ hd_page_repaint:
     mov ax, di
     mov bx, bp
     mov cx, di
-    add cx, 221
-    mov dx, bp
-    add dx, 120
-    call OSAPI_GFX_FILL
+    add cx, 221                 ; the pane: 221 x 132, and it GREW when a third
+    mov dx, bp                  ; driver published a page (ctrl.inc's CP_CH).
+    add dx, 131                 ; A short clear here leaves a stale strip at the
+    call OSAPI_GFX_FILL         ; bottom of a click-repaint, and nothing says so
     mov dx, bp
     call hd_page_paint
     pop dx

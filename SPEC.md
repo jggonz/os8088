@@ -1844,8 +1844,8 @@ build does not assemble. (It read 86,118 → 86,920 on the branch this face
 arrived on, before §32's double-buffering removal landed; the absolute numbers
 are worth re-measuring rather than quoting, the delta is not.)
 
-So the whole cost is **one floppy sector**, ~65 ms of a ~10 s boot on the
-5150 (PERFORMANCE.md Part 2). The one number worth watching is the overlay's
+So the whole cost is **one floppy sector**, ~24 ms of a ~10 s boot on the
+5150 (PERFORMANCE.md Part 2, Set 24; quoted here as 65 from Set 17). The one number worth watching is the overlay's
 own ceiling: it is 75% full afterwards, with 1,144 bytes left for whatever
 run-once code comes next, and `kernel.asm` refuses a build that overruns it.
 
@@ -5999,10 +5999,10 @@ away — §18 keeps the disk on the UI task, `dsk_xfer` raises `[sch_lock]`
 across every `int 13h`, and the caller is a window callback that has been
 holding the gfx lock since before it started (§22). So the cursor stops, no
 window paints, and nothing moves for as long as the disk takes. On the field
-machine a sector is **~65 ms** inside a run (PERFORMANCE.md Part 2; 238 ms
-before SPEC.md §18.91's `AL` fix, which is what the figure below was taken
-at) — a 116KB module is
-tens of seconds of a screen that looks hung.
+machine 512 bytes cost **~24 ms** (PERFORMANCE.md Part 2, Set 24; 65 at Set
+17 and 238 ms before SPEC.md §18.91's `AL` fix, which is what the figure
+below was taken at) — a 116KB module is
+several seconds of a screen that looks hung.
 
 What was missing was not concurrency but **feedback**. The widget is a file
 icon and a progress bar in a line box, drawn at the right end of the menu
@@ -6051,7 +6051,7 @@ Five things hold it up.
 
 - **`fpg_step` must not be able to cost anything when nothing is armed.**
   It is `pushf` / `cmp byte [fpg_on], 0` / `je` on the disk path for the life
-  of the machine, the same ~13us against a 65 ms sector that `spl_step`
+  of the machine, the same ~13us against a ~24 ms sector that `spl_step`
   settled for (§15.3). All of its state is in `.text` with real
   initialisers, **not `.bss`** — `-f bin` zeroes nothing, `drv_boot` reads
   the disk before any init routine could run, and a garbage `[fpg_on]` would
@@ -6540,6 +6540,18 @@ this, one word of state and one `ui_arm_chk`. The chrome half re-tests
 identity at the release and this half does not, which is the only place the
 two paths differ.
 
+**And that is why the `W_FLAGS` visible-bit test in `.mup_pkg` is the ONLY
+thing guarding a freed record on this path.** The chrome half calls `wm_hit`
+first, so a destroyed window is not in `wm_zord` and cannot be hit; this half
+deliberately has no `wm_hit` and no pointer comparison, because a release
+outside the window is the contract. So when a package tears its own window
+down inside its `W_ONCLICK` — `OSAPI_WM_DESTROY` on an unbound second window
+is the reachable case — the arm is set to a slot whose `W_FLAGS` is 0 and
+whose `W_ONMOUSEUP` **`wm_destroy` does not clear**. Measured with the test
+deleted: the callback runs, through the freed record. `tests/mouseup.py`'s
+case 7 is that A/B, and docs/MOUSEUP-PLAN.md §4.2's description of the test
+as "belt-and-braces" was written about the chrome path and is wrong here.
+
 **A package that installs this and also polls `OSAPI_MOUSE` in a tracking loop
 from the same `W_ONCLICK` is doing the job twice** — the loop consumes its own
 release. Pick one; the callback is the one that costs the keyboard mouse a
@@ -6957,8 +6969,8 @@ address.** `KERNEL_SEG` is the only constant `kernel/kernel.asm` and
 The progress bar used to reach 100% when the boot sector's final sector
 landed, and `vid_init`'s mode set then wiped the whole loading screen — with
 several seconds of kmain still to run. On the field machine (Part 2 of
-PERFORMANCE.md: **~65 ms per floppy sector** in a run, 238 before the `AL`
-fix this paragraph predates) that tail is:
+PERFORMANCE.md: **~24 ms per 512 bytes** delivered at Set 24, 65 at Set 17
+and 238 before the `AL` fix this paragraph predates) that tail is:
 
 | after the last sector of the kernel | cost |
 |---|---|
@@ -6984,7 +6996,7 @@ Three parts, all in `splash.inc` except the hooks:
   boundaries. It preserves **every register and the flags** — its hot caller
   is the middle of a transfer loop — and it is a compare and a `ret` once the
   splash is down, which is what makes leaving it on the disk path for the
-  life of the machine free (~13 us against a sector's 65 ms).
+  life of the machine free (~13 us against a sector's ~24 ms).
 - **`spl_finish`** forces the bar to 100%, repaints once and clears
   `[spl_live]`. kmain calls it immediately before the first `wm_paint_all`,
   which is the last moment a full bar is true — and no erase is needed,
@@ -8024,6 +8036,7 @@ volume handle, lives in a row of `dsk_vtab`:
 DV_KIND   db  0 = BIOS int 13h, 1 = driver-backed, 0xFF = free
 DV_UNIT   db  the int 13h DL, or the driver's handle
 DV_FLAGS  db  bit 0 = show a desktop zone (§26.1)
+DV_CLASS  db  which DRVC_* serves it, when DV_KIND is 1 (§18.7.3)
 DV_SECS   dw  sectors in the volume (rule 13's replacement)
 DV_SEG    dw  the listing claim its driver donated, 0 = the floor (§22.6)
 DV_LBL    db[8]  the desktop label, NUL-terminated and INLINE
@@ -8057,10 +8070,10 @@ It also makes an invariant free: with `TotSec16` a word, `dsk_clus2lba`'s
 
 Rows 0 and 1 are the BIOS floppies and are never taken away — a mount of a
 drive the machine does not have is an ordinary failed mount. Rows 2 and up are
-registered by a `DRVC_DISK` driver through `osapi_vol_add` (§20.3) and dropped
-when it unloads, which `drv_release` does **before** freeing the driver's
-claims: a mounted volume whose transport has been freed is a read into
-whatever claims that memory next.
+registered by a block-serving driver through `osapi_vol_add` (§20.3) and
+dropped when it unloads, which `drv_release` does **before** freeing the
+driver's claims: a mounted volume whose transport has been freed is a read
+into whatever claims that memory next.
 
 #### 18.7.1 What the letters mean
 
@@ -8106,7 +8119,8 @@ row for the version above.
 #### 18.7.2 The medium and the transport are two questions
 
 `DV_KIND` is the **transport** — `DVK_BIOS` means int 13h, `DVK_DRV` means a
-`DRVC_DISK` driver — and §18.7 has said so since the volume table existed.
+block-serving *driver*, and `DV_CLASS` says which class of one (§18.7.3) — and
+§18.7 has said so since the volume table existed.
 Nothing shared enforced it, so `cmp byte [bx+DV_KIND], DVK_DRV` grew up in
 several places meaning *is this a hard disk*, which it is not: a **boot
 partition is reached through the BIOS** (§52.10.3), so it is `DVK_BIOS` with
@@ -8138,6 +8152,43 @@ what `tests/sysbench`'s hard-disk block does, on volume index 2, having been
 written when index 2 could only be a hard disk. §18.98's external floppies
 made that false and the block began timing a floppy under the heading *the
 hard disk*.
+
+#### 18.7.3 A volume belongs to a CLASS, because two of them serve blocks now
+
+`DV_CLASS` was `DV_PAD`, a spare byte in a 16-byte row, and it is now the
+`DRVC_*` of the driver that serves this volume. It costs nothing — the row
+was already 16 bytes and the byte was already there — and it removes an
+assumption that was correct for exactly as long as one class served blocks.
+
+Three places had that assumption baked in, and each was silently wrong the
+moment `DRVC_NET` (§62) arrived:
+
+- **`dsk_xfer` dispatched every `DVK_DRV` sector through the DISK class's
+  published `DSV_BLK`**, hard-coded. On a machine with a hard disk *and* a
+  network link that is every network sector going to the hard-disk driver,
+  with a volume-relative LBA it would happily add its own partition base to.
+  It reads the class out of the row now — **while BX is still the row**,
+  which is the one ordering that matters, because the row pointer is spent a
+  few instructions later and the class cannot be recovered from anything the
+  call still holds.
+- **`osapi_vol_add` had no way to know who was calling.** It answers a
+  driver, and a driver's identity at an API cell is its segment (the X stub's
+  ES) — so the fence walks the publication slots, finds the class whose
+  `drv_fseg` names that segment, and stamps it into the row. A driver whose
+  services are not published cannot register a volume, which was already true
+  and is now also how the class is learned.
+- **`dsk_vol_drop_drv` dropped EVERY driver-backed row**, took no argument and
+  wanted none. On a machine with a sound card and a hard disk, unticking
+  **Sound** unmounted every hard-disk partition: the zones went off the
+  desktop, C:'s FAT window was freed, and the disk driver stayed loaded and
+  published the whole time, so nothing on screen pointed anywhere near the
+  cause. It takes the class in AL and drops only that driver's rows.
+
+**The sibling of the bug §51.2.1's per-class publication fixed, in the one
+place that was still class-blind** — and worth reading together, because both
+are the same shape: a structure that was one-of-a-kind by accident rather than
+by design, and a second instance arriving years later with no diagnostic
+between the cause and the symptom.
 
 ### 18.8 The FAT is a window, not a snapshot
 
@@ -8732,8 +8783,8 @@ something in this area is in doubt.
 > below is correctness rather than speed and is unaffected.
 
 `boot/boot.asm` read `AL = 1`. 131 sectors, one int 13h each, at
-PERFORMANCE.md's then-measured **238 ms per sector** (the `AL` bug; ~65 ms
-since) — **over thirty seconds**, and
+PERFORMANCE.md's then-measured **238 ms per sector** (the `AL` bug; ~24 ms
+per 512 bytes since — Set 24, and 65 at Set 17) — **over thirty seconds**, and
 the single largest cost in the boot of the machine this targets. PERFORMANCE.md
 already named the fix and priced it at "about 9x on every load in the system,
 which is the largest single number in this document"; §18.91 took it for the
@@ -8871,10 +8922,10 @@ ordinal, and the two were designed together.
 
 The price is walking the chain from the front on every call, and it is
 smaller than it looks: the walk is FAT lookups against a resident window,
-while the caller is spending **65 ms a sector** (PERFORMANCE.md — a sector
-inside a well-coalesced run; 238 was the `AL` bug, not the drive) on the data
-being handed to it. A 116KB file in 32KB chunks is four walks averaging ~116
-clusters — a few hundred word reads against twelve seconds of floppy.
+while the caller is spending **~24 ms per 512 bytes** (PERFORMANCE.md Part 2,
+Set 24; 65 at Set 17, and 238 was the `AL` bug rather than the drive) on the
+data being handed to it. A 116KB file in 32KB chunks is four walks averaging
+~116 clusters — a few hundred word reads against ~5.6 seconds of floppy.
 
 Both preconditions are **refused rather than mis-handled**, and both answer
 `FERR_NAME`: a non-cluster offset or capacity on the read, and a file whose
@@ -8942,8 +8993,8 @@ given for the separation was two things that have both since expired:
 
 - *"the counters are two instructions in the hot path of every transfer"* —
   measured, they are about twelve instructions per int 13h **call**, not per
-  sector, against a sector that costs **~65 ms** on the target machine (238
-  when this was written). And
+  sector, against 512 bytes that cost **~24 ms** on the target machine (65 at
+  Set 17 and 238 when this was written). And
   the image is **byte for byte the same size** either way, because the growth
   lands inside the padding to `OVL_START`: 72,199 bytes with them and without,
   the same 142-sector rung, so the memory ladder, the boot sector's read and
@@ -11065,8 +11116,8 @@ corrupt it.
 
 The cost is a directory re-seek per entry, and it is the right trade here: a
 directory is a few hundred entries at most, a seek reads whole sectors
-without decoding them, and the caller is spending 65 ms a sector
-(PERFORMANCE.md) moving the file data this is feeding.
+without decoding them, and the caller is spending ~24 ms per 512 bytes
+(PERFORMANCE.md Part 2, Set 24) moving the file data this is feeding.
 
 **Hidden and system entries are reported to a DRIVER only**, and that is the
 same boundary §19.6.1 draws in the other direction. Together they are one
@@ -14501,9 +14552,49 @@ adapter's mode rather than of how many rows it has. And it is re-asked in
 `desk_rowcalc` rather than at boot, because that is the routine `vid_switch`
 re-runs (§39.11.2) — so a machine moved from its CGA to its Hercules gets the
 tall pair back with no second site to remember. `[desk_icoh]`, `[desk_zh1]`,
-`[desk_zstep]`, `[desk_pdisk]` and `[desk_phdd]` are `.text` with real
-initialisers for the reason every boot-reachable table here is: `-f bin`
-zeroes nothing, and a zero icon pointer draws the interrupt vector table.
+`[desk_zstep]`, `[desk_pdisk]`, `[desk_phdd]` and `[desk_zgap]` (§26.5) are
+`.text` with real initialisers for the reason every boot-reachable table here
+is: `-f bin` zeroes nothing, and a zero icon pointer draws the interrupt
+vector table.
+
+### 26.5 The caption sits a gap below the icon
+
+`DESK_ZGAP` rows of desktop between the bottom of the icon's cell and the top
+of the label's white rect — **2** on the 32-row icons and `DESK_ZGAP_S` = **1**
+on the CGA's 14-row pair, which is the same 2.4:1 pixel-aspect argument §26.4
+makes about the icon itself.
+
+It was 0, and that was invisible while the caption was `Disk A`: the white
+rect was the zone's full 48px width, so it read as a *band* under the icon
+whatever it touched. §26.4 made the rect two glyphs wide and hugging, and a
+20px white block flush against `ico_disk32`'s solid black bottom edge (row 31)
+reads as part of the diskette rather than as its name.
+
+**The gap is uniform, and the hard disk did not need it.** The asymmetry is
+real and is in the artwork: `ico_hdd32` ends its ink at row 25 (the feet) and
+leaves rows 26..31 blank, so that icon always had six rows of air under it and
+only the diskette was flush — on the CGA `ico_hdd14`'s last row is the feet,
+which are 2px wide at each end and so clear of a centred caption, while
+`ico_disk14`'s is another solid edge. Keying the gap off *which icon was
+drawn* is therefore the tempting shape and is rejected twice over: two labels
+in a wrapped grid (§26.1) would sit on different baselines — a column holds
+four zones on Hercules and on CGA, so a fifth volume is *beside* the first,
+not under it — and `desk_zone_rect`, `desk_dmg_zones` and `desk_zone_hilite`
+would each gain a second geometry to agree about, which is the class of
+divergence §26.4's "nothing else moved" exists to avoid. One constant in
+`desk_rowcalc` costs the hard disk two rows it can spare.
+
+**The zone grows and the pitch does not.** `[desk_zh1]` is
+`icon + DESK_ZGAP + DESK_LBLH - 1`, so the gap is inside the rect
+`desk_draw_zone` fills gray (which is what makes it *desktop* rather than
+white), inside the rect `desk_zone_rect` erases, inside `desk_dmg_zones`'
+growth and inside `desk_zone_hilite`'s XOR — every one of those already
+derives from `[desk_zh1]`, so none of them changed. `[desk_zstep]` is
+untouched, so `desk_rowcalc`'s `(dock_y0 - DESK_ZY0) / pitch` still answers 7
+on VGA and 4 on Hercules and CGA, and nothing about the wrap moves. That holds
+only while a zone still fits its pitch — 45 against 60, 26 against 34 — and a
+gap large enough to break that would have zones overlapping before it had rows
+to spare.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 
@@ -17866,7 +17957,7 @@ third mode and not a setting.
 
 ### 31.1 Content layout (pinned, content-relative)
 
-Content is 318×121 (frame 320×140 minus the 1px borders and the 18px title
+Content is 318×132 (frame 320×151 minus the 1px borders and the 18px title
 bar). Every coordinate below is relative to the window's content origin,
 which `cp_paint`/`cp_onclick` derive from the live `W_X`/`W_Y` — **never
 hardcoded screen coords**, because the window drags. Both callbacks receive
@@ -17877,7 +17968,7 @@ the module takes it in.
 
 ```nasm
 CP_CW    equ 318     ; content width          CP_RX   equ 96   ; right pane x
-CP_CH    equ 121     ; content height
+CP_CH    equ 132     ; content height
 CP_DIVX  equ 88      ; divider column: left pane is x 0..CP_DIVX-1
 CP_IX    equ 6       ; item label x           CP_I0Y  equ 6    ; row 0 top
 CP_IROWH equ 14      ; row pitch = hit band   CP_IBH  equ 12   ; sel bar height
@@ -17922,6 +18013,24 @@ CP_ISND    equ 5     ; ...and Sound (§34.8)
 CP_IBX1 to CP_IBX2 = 85 and the name starts at CP_IX = 6, so a tenth glyph
 would cross the divider. `'Scheduler'` and `'Date/Time'` are both exactly
 at that limit.
+
+**The list holds NINE rows and no more, and that is a build-time guard.**
+Row *i*'s bar runs `CP_I0Y + i*CP_IROWH .. + CP_IBH - 1`, so row 8 ends at 129
+inside a 132-tall content box and row 9 would run through the bottom border
+onto the desktop. Six static items plus the **three** drivers that publish a
+page (§31.9 — the hard disk's, the debug monitor's and the network link's; the
+sound driver publishes none) is exactly nine, and `%if CP_ITEMS + 3 > (CP_CH -
+CP_I0Y) / CP_IROWH` is what makes a fourth fail to assemble rather than fail
+on the glass. It has fired twice and grown the window twice — 120 → 140 when
+Date/Time took its two option rows (§31.5), 140 → 151 when `DRVC_NET` (§62)
+became a third driver page.
+
+**151 is the minimum that holds nine, and it was chosen as the minimum on
+purpose.** CGA is 200 rows with a 20px menu bar and a 24px dock, so `wm_fit`'s
+ceiling is `176 - 1 - 20 = 155` and the panel now has 4px of margin on the
+machine this project is calibrated against. There is no room for a fourth
+page's row, so the answer then is a **scrolling list**, not a taller window —
+which is worth knowing before adding a fifth static item as well.
 
 **Page contract.** A page proc is called with **DI = pane left (absolute
 screen x), BP = pane top (absolute screen y = the content top)**, the gfx
@@ -29041,6 +29150,25 @@ attach returns and a worker spawned from inside attach would outlive a
 refusal. And `drv_release` clears the right class's pointer, and only that
 one.
 
+**`DRVC_NET` = 4 is the fourth class** (§62), and adding it was three
+constants and one `dw` pair: `DRVC_MAX` 3 → 4, `DRV_MAX` 3 → 4, and
+`drv_fptr4`/`drv_fseg4` appended to the contiguous run `drv_cls_fp` indexes.
+The three `.bss` arrays are all sized `× DRVC_MAX`, so they followed by
+themselves — which is the property to preserve when a fifth arrives, because
+the failure if one of them does not is that the new class's publish writes
+into whatever `.bss` sits behind it.
+
+**`drv_blk_call` is now the second body AND takes a class**, which reads like
+a contradiction with the paragraph above and is not: the class is passed in
+`[drv_blkcls]`, a byte in `.bss` that `dsk_xfer` stores while BX is still the
+volume row (§18.7.3), precisely because there is no register free to carry it.
+A memory cell is what a full register file leaves you.
+
+**The new row goes at the END of `drv_tab`.** Row order is not cosmetic:
+`SYSTEM.CFG`'s driver bitmap is one bit per row index (§51.5), so inserting a
+class in the middle would renumber every user's saved settings and turn "I
+had the hard disk on" into "I had the debug monitor on". Appending cannot.
+
 ### 51.2.2 `DRVV_READY` — the earliest point a driver may call back
 
 Attach happens **before** `drv_publish` arms the class's slot, and that is
@@ -30367,7 +30495,8 @@ the copy prompts for the disk swap rather than assuming two drives — unless
 
 **Progress is §12.8's widget.** A file operation freezes the machine by
 design, and this is the largest one in the system — both floppies is
-hundreds of sectors at **65 ms** each on the field machine — so `fpg_begin`'s
+hundreds of sectors at **~24 ms** each on the field machine (and ~73 ms
+WRITING, PERFORMANCE.md Part 2 Set 24) — so `fpg_begin`'s
 bar is stepped from inside the transfer loop, which is the one piece of code
 still running.
 
@@ -34646,3 +34775,179 @@ under it (§61.7), the Flags 1 bit that turned a clock into a move counter, and
 the quote box a shrink threw away (both §61.5). The last two were invisible for
 the same reason: they are about the upper window, and the upper window is not
 the transcript.
+
+## 62. NET.DRV — the parallel link (`drivers/net/net.asm`)
+
+**A LapLink cable between the parallel ports of an os8088 machine and a DOS
+machine, as a mounted volume.** The DOS side runs `OS88NET.COM`, which serves
+512-byte sectors out of an image file; os8088 mounts them and everything above
+`dsk_xfer` — the BPB validator, the FAT window, the directory walker, the whole
+write path with its commit ordering, the Disk window, the Standard File dialog,
+the copy engine, the loader and the association cache — works unchanged.
+
+This is **stage 1** of `docs/NET-PLAN.md`. Stage 2 is the file redirector that
+supersedes block mode (a remote machine's real filesystem, not an image file);
+stage 3 is forwarding to an mTCP connection on the DOS side. The staging is
+deliberate and the order is not arbitrary: block mode is ~2KB of driver and
+**172 bytes of kernel**, and it proves the wire, the framing, the Control Panel
+page and the desktop zone with no new failure mode anywhere above the
+transport. The redirector is ~400 more bytes of kernel across twelve branch
+sites, and it is worth building on a transport somebody has already used in
+anger.
+
+### 62.1 What it costs a machine that does not use it
+
+One `drv_tab` row and a file on the floppy. `DRVR_WANT` ships 0 like every
+other row (§51.3), and this row has a particular reason to stay that way:
+finding its cable means **writing to parallel ports**, and a port with a
+printer on it is a real machine. §51.3.1's boot-time sniff is deliberately not
+extended to it — the sound sniff is a read of a timer flag, and this is not.
+
+### 62.2 The kernel changes, and there are two
+
+`DV_CLASS` (§18.7.3) and `DRVC_NET` (§51.2.1). Both are the same discovery:
+three structures in the kernel were one-of-a-kind by accident rather than by
+design, and this is the second instance arriving. Neither is about networking.
+
+### 62.3 Speed, measured
+
+**3,741 bytes/second** (PERFORMANCE.md Part 9 Set 39), which is **5.7× slower
+than the 5150's own floppy** at 21,307 B/s (Set 24). That is the honest figure
+and the feature is not about it: what the cable buys is that a file crosses it
+without the seven-step path in `docs/FIELD-MACHINES.md`. A 512-byte sector is
+~137 ms, so a mount is a second or two — the same order as the floppy it sits
+beside, because a floppy pays revolutions where this pays nibbles.
+
+**The asymmetry is what proves the model.** Whichever end is master reads
+faster than it writes, consistently, on both machines — measured in the field
+and reproduced in `tests/lptlink/linksim.py`. Nine tenths of the original
+1,536 B/s was `lp_wfar` *arriving* rather than working (289 µs per nibble, 94
+of it a `ticks()` read), and a lazy deadline plus a 9-byte poll took it to
+3,741 without changing one line of the protocol.
+
+### 62.4 The transport is shared with the diagnostic, by construction
+
+`drivers/net/lplink.inc` is `%include`d by **both** `net.asm` and
+`tests/lptlink/lptlink.asm`. It is not a copy: the nibble codec, the four-phase
+interlocked handshake, `lp_turn`'s turnaround guard, the port scan and the
+hello magic all have exactly one implementation, so a wire bug fixed in the
+field diagnostic is fixed in the driver and cannot drift. §56.1 records the
+opposite decision for two MOD replayers and why it was accepted there; this one
+had no such reason.
+
+`tests/lptlink` is the field instrument (`make lptlink`): a bootable 360KB
+survey disk that needs no DOS, no os8088 and no mouse — because the thing being
+diagnosed is the cable, and anything you would have to click is unreachable
+when it is broken.
+
+### 62.5 Three defects the simulator caught before any hardware ran
+
+`tests/lptlink/linksim.py` models both ends as coroutines over one microsecond
+clock. All three are timing bugs that a fast host and a slow guest would each
+have hidden from the other:
+
+- **A two-phase toggle handshake races at direction reversal.** The receiver
+  acks and then immediately drives the same line as the new sender. Fixed with
+  a fully interlocked four-phase exchange.
+- **Four phases still race at the seam** — ack-down and the first strobe-up are
+  microseconds apart. `lp_turn` waits two tick edges, and it is called **from
+  `lp_snib` on `[lp_lastop]`** rather than from the call sites, so no caller
+  can forget it.
+- **Timeouts counted in POLLS, not time.** A poll is ~15 µs on a 4.77MHz 8088
+  and ~1 µs on anything modern, so the fast end's patience ran out inside the
+  slow end's ordinary response — and the whole point of this cable is that the
+  two ends are *not* alike. Every deadline is in **system ticks**, which both
+  machines measure identically; `LP_SPIN` is only how often the deadline is
+  re-read.
+
+### 62.6 …and four the field caught that it could not
+
+- **DOS entered the program at a byte that was not its entry, and nothing in
+  it ever ran.** A `.COM` starts at offset 0x100, which is the **first byte of
+  the file**, and `os88net.asm` had its two `%include`s above `start:` — so
+  DOS ran the transport's first routine on a garbage port, hit that routine's
+  `ret`, popped the word DOS pushes at PSP:0000 and terminated on the `int 20h`
+  sitting there. It reported as *"returns to prompt instantly with nothing
+  printed, whatever parameters"*, and that is exactly what it was: every
+  argument behaved identically because the argument parser was never reached.
+  `tests/lptlink/lptlink.asm` has the same two includes and did **not** have
+  the bug, because it puts them at the END of the file — which is safe by
+  layout and one edit from not being. Both sources now assert their entry with
+  `times ($$ - com_entry) db 0`, which emits nothing and fails the build with
+  `TIMES value -N is negative`, N being how many bytes got in front. **It
+  shipped twice**, and §62.8 is the reason it could.
+- **`getkey` ate every keystroke.** Copied from `comscan`, where
+  `push ax / xor ax,ax / int 16h / pop ax` is a correct "press any key" pause
+  and fatal as a menu read. Both the boot disk and the DOS program read as
+  *frozen*.
+- **Port 9FC0 is not a parallel port.** `0040:000E` is the EBDA segment on any
+  PS/2-or-later BIOS, not LPT4. The scan reads three words and rejects anything
+  ≥ 0x400.
+- **`lp_latch` probed a port left in INPUT mode.** The DIO-500 comes up with
+  control = EC (bit 5 set), so the data register would not read back what was
+  written and a real port failed its own presence test. It forces the direction
+  out first and restores the control byte after, preserving flags (§51.6's
+  all-or-nothing rule reaches the probe as well as the attach).
+
+### 62.7 Acceptance
+
+- With no parallel port, `DRVV_ATTACH` **refuses** — the sound driver's shape,
+  `DRVE_HW`, reported on the Drivers page — so the driver is freed and its
+  Control Panel page never exists. Nothing on that page greys, and §47 rule 3
+  is why: there is no state to grey *for*, and whether a partner is there can
+  only be learned by asking.
+- With a port and no partner, `net_connect` fails in **bounded time** and the
+  page says `No partner`. Measured on `os8088_5150_cga_lpt`: a Connect click
+  returns in 2.1 s and the machine does not hang — the property a bit-banged
+  transport under `[sch_lock]` and the gfx lock has to have.
+- Ticking and unticking the row publishes and clears class 4's slot, and the
+  page's row appears in and disappears from the Control Panel list with it
+  (`fseg`, `DSV_CPNAME` and the staged name all read back, both ways).
+- **Two driver pages coexist and dispatch to the right one.** Verified on
+  `os8088_xt_hdd` (CGA, XT-IDE, and a parallel port added for exactly this):
+  Hard Drive on row 5 and Network on row 6, with class 3 unpublished in
+  between — which is what exercises `drv_cp_class`'s ordinal walk rather than
+  asserting it. On a machine with one page an off-by-one there is invisible.
+- **The DOS end RUNS**, on `tests/dosstub` (§62.8): the banner, the default
+  image name, the `/RO` and `/P:` switches and a filename in the same tail,
+  the "cannot open" refusal, the sector arithmetic at all three of its
+  outcomes — **20,480** sectors for 10MB, **65,535** with the over-32MB
+  notice, and the under-one-sector refusal — and the real latch probe finding
+  0x378 with 0x3BC and 0x278 dark. `/P:3BC` pins a port that does not answer
+  and the program says `No parallel port to listen on.` and exits.
+
+### 62.8 `tests/dosstub` — a machine to run the DOS end on
+
+The bug in §62.6 shipped **twice**, and the reason is worth more than the bug:
+there is no DOS in this container and none this tree may ship, so `make` could
+report the DOS half was fine while nothing had ever executed a byte of it. An
+assertion stops that one bug; a machine stops the class.
+
+`tests/dosstub` is a bootable 360KB floppy carrying an `int 21h` stub and the
+`.COM` embedded in its own image, so it runs on the same cycle-accurate 4.77MHz
+8088 as everything else here — with a **real parallel port at 0x378**, which is
+why the latch probe and the port scan are genuinely exercised rather than
+simulated. It boots through `boot/boot.asm` like `tests/lptlink`, so it carries
+that loader's handoff contract: `jmp start`, a `retf` at 0x0008 for the splash
+tick and the timer word at 0x000C. **Leaving those out is not a crash** — the
+loader far-called four bytes into the first instruction, ran whatever that
+decoded as, returned, and the machine booted anyway with one line on the
+screen.
+
+It implements the seven functions `os88net.com` calls — 02h, 3Dh, 3Eh, 3Fh,
+40h, 42h, 4Ch — plus `int 20h`, and **refuses everything else loudly**: an
+unimplemented call prints its `AH` and halts. That is the rule the whole thing
+rests on. A stub that returns a plausible zero for a call it does not implement
+is a harness that has started lying about the program under test, and it would
+lie in exactly the direction that makes the test pass.
+
+Four knobs, because the paths worth testing are the ones a real file cannot
+easily produce: `FSIZE=` (the reported size is a constant pair, so the 32-bit
+byte count folded into a 16-bit sector count is driven over its whole range
+without a 32MB image), `FAILOPEN=1` (DOS says no), and `ARGS=` (the command
+tail — argument parsing is code nothing else in this tree executes). Only the
+first `DSF_KB` of the "file" is real memory and a read past it is answered
+**short** rather than with whatever was in RAM.
+
+It is `make dosstub`, on demand only; `all` builds nothing under `tests/` and
+nothing there ships.

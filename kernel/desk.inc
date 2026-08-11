@@ -12,9 +12,10 @@
 ;   hit zone   x zx..zx+31, y (32+step*i) .. +[desk_zh1], where
 ;              zx = [vid_desk_zx] = screen width - 56 (584 at 640 wide)
 ;   icon       [desk_pdisk] / [desk_phdd] at (zx, top), 32 px wide
-;   label      8px text under it, black on a white rect that HUGS the
-;              caption - measured with font_width and clamped to the zone
-;              plus its 2px overhang, which is what desk_zone_rect erases
+;   label      [desk_zgap] rows of desktop under the icon (SPEC.md 26.5),
+;              then 8px text, black on a white rect that HUGS the caption -
+;              measured with font_width and clamped to the zone plus its
+;              2px overhang, which is what desk_zone_rect erases
 ;
 ; desk_paint runs under the caller's gfx lock (from wm_paint_all, right
 ; after the desktop fill, before any window). desk_click runs with NO lock
@@ -37,6 +38,15 @@ DESK_ZW     equ 32              ; hit zone width (zx .. zx+31) - the icon's
 DESK_ZOVER  equ 2               ; label overhang each side
 DESK_ZY0    equ 32              ; first zone top
 DESK_LBLH   equ 12              ; the label band: 2px gap + 8px text + 2px gap
+DESK_ZGAP   equ 2               ; desktop between the icon's cell and the
+                                ; label's white rect (SPEC.md 26.5). It was 0,
+                                ; which read as a band under the icon while
+                                ; the caption filled the zone and reads as
+                                ; PART OF THE DISKETTE now that it hugs: the
+                                ; floppy's last row is a solid black edge, so
+                                ; the white rect touched it
+DESK_ZGAP_S equ 1               ; ...and on the CGA, whose pixels are 2.4:1
+                                ; tall - 26.4's argument about the icon
 DESK_ZSTEP  equ 60              ; zone pitch with the 32-row icon...
 DESK_ZSTEP_S equ 34             ; ...and with SPEC.md 26.4's 14-row one
 DESK_COLW   equ 44              ; column-to-column pitch, leftwards: the zone
@@ -272,21 +282,31 @@ desk_rowcalc:
     ; moved from its CGA to its Hercules gets the tall pair back for free.
     mov ax, 32
     mov bx, DESK_ZSTEP
+    mov cx, DESK_ZGAP
     mov si, ico_disk32
     mov di, ico_hdd32
     cmp byte [vid_kind], VID_CGA
     jne .set
     mov ax, 14
     mov bx, DESK_ZSTEP_S
+    mov cx, DESK_ZGAP_S
     mov si, ico_disk14
     mov di, ico_hdd14
 .set:
     mov [desk_icoh], ax
     mov [desk_zstep], bx
+    mov [desk_zgap], cx
     mov [desk_pdisk], si
     mov [desk_phdd], di
-    add ax, DESK_LBLH - 1       ; the zone is the icon plus the label band,
-    mov [desk_zh1], ax          ; and every reader wants it MINUS ONE
+    add ax, cx                  ; the zone is the icon, SPEC.md 26.5's gap and
+    add ax, DESK_LBLH - 1       ; the label band, and every reader wants it
+    mov [desk_zh1], ax          ; MINUS ONE. The gap is inside the zone rather
+                                ; than beside it, so the erase, the damage
+                                ; growth and the XOR highlight - all of which
+                                ; derive from [desk_zh1] - cover it for free
+                                ; and [desk_zstep] does not move: a zone still
+                                ; fits its pitch (45 of 60, 26 of 34), so
+                                ; the row count below is unchanged
 
     mov ax, [vid_dock_y0]
     sub ax, DESK_ZY0
@@ -980,9 +1000,13 @@ desk_draw_zone:
     mov ax, bx
 .rl:
     mov bx, [desk_zy]
-    add bx, [desk_icoh]         ; y1: just under the icon, whichever it is
+    add bx, [desk_icoh]         ; y1: under the icon, whichever it is, plus
+    add bx, [desk_zgap]         ; SPEC.md 26.5's gap of desktop - the gray
+                                ; fill above has already laid it down, so
+                                ; this rect simply starts below it
     mov dx, bx
-    add dx, DESK_LBLH - 1       ; y2: 2px gap + 8px text + 2px gap
+    add dx, DESK_LBLH - 1       ; y2: 2px gap + 8px text + 2px gap, which is
+                                ; [desk_zy] + [desk_zh1] exactly
     mov byte [gfx_color], CWHITE
     call gfx_fill
 
@@ -992,7 +1016,8 @@ desk_draw_zone:
     mov cx, [desk_lblx]
     mov dx, [desk_zy]
     add dx, [desk_icoh]
-    add dx, 2                   ; the 2px gap above the text
+    add dx, [desk_zgap]         ; 26.5's gap of desktop...
+    add dx, 2                   ; ...and the 2px of white above the text
     call font_str
 
     ; --- selection highlight: XOR the whole hit zone --------------------------
@@ -1022,8 +1047,9 @@ desk_lbl_gen db "A:", 0         ; scratch for desk_zone_label's derived form:
 ; is: -f bin zeroes nothing, and a zero [desk_pdisk] draws the interrupt
 ; vector table as an icon.
 desk_icoh   dw 32               ; the icon's height in rows
-desk_zh1    dw 32 + DESK_LBLH - 1   ; ...the zone's, MINUS ONE: every reader
-                                ; wants the inclusive bottom
+desk_zgap   dw DESK_ZGAP        ; ...and the desktop under it (SPEC.md 26.5)
+desk_zh1    dw 32 + DESK_ZGAP + DESK_LBLH - 1   ; ...the zone's, MINUS ONE:
+                                ; every reader wants the inclusive bottom
 desk_zstep  dw DESK_ZSTEP       ; zone-to-zone pitch
 desk_pdisk  dw ico_disk32       ; the diskette at that height...
 desk_phdd   dw ico_hdd32        ; ...and the hard disk
