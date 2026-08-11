@@ -395,16 +395,37 @@ fix a footprint overrun is a no-op that looks like a fix. The two rungs it
 moves between round separately, so a large move usually costs one 512-byte
 step rather than nothing.
 
-Two things live there. The Control Panel's three code runs — large, cold
-enough that a far call per entry costs nothing measurable, and needed on
-exactly the machine where things are going wrong, so it must stay resident.
-And the five **file modules**: `loader.inc` (§21), `diskw.inc` (§18.4),
-`files.inc` (§22), `filecp.inc` (§22.3) and `fdlg.inc` (§38), ~16.6KB
-between them, moved together because they mostly call each other — a call
-inside the set stays near, and only the ones that leave it pay a shim.
-Growing the set makes the ones already in it *cheaper*: `fdlg.inc` joining
-turned its calls to `fm_ultoa`, `dskw_mkdir` and `dskw_char` from a double
-crossing into a near call, and retired those three thunks.
+**Eleven modules live there**, and the set has grown in two rounds. The
+original three groups: the Control Panel's code runs — large, cold enough
+that a far call per entry costs nothing measurable, and needed on exactly the
+machine where things are going wrong, so it must stay resident — and the five
+**file modules**, `loader.inc` (§21), `diskw.inc` (§18.4), `files.inc` (§22),
+`filecp.inc` (§22.3) and `fdlg.inc` (§38), moved together because they mostly
+call each other.
+
+The second round added five more when `.text` + `.bss` came within **471
+bytes** of `KERN_CODE_MAX`, which is the guard that cannot be raised:
+`assoc.inc` (§54), `disk.inc` (§18–19), `driver.inc` (§51), `memory.inc`
+(§50) and `desk.inc` (§26.1). What made them the right five is not their size
+but their **cadence** — a double-click, a mount, a driver load, a heap claim
+and a drive-zone click are all human-scale or floppy-bound, where a far call
+is microseconds against milliseconds. The drawing primitives, the schedulerticks
+and the two ISRs are deliberately NOT here for the same reason, and
+`splash.inc` and `viddet.inc` *cannot* be: both must be resident inside the
+image's opening sectors and the cold segment lands after the image rung.
+
+Together: **`.text` + `.bss` 65,065 → 52,838, so the headroom under
+`KERN_CODE_MAX` went 471 → 12,698.** It cost `KERN_BUDGET` two 512-byte
+steps, which is the trade this mechanism always makes and never hides.
+
+**Growing the set makes the ones already in it cheaper**, and by the second
+round that is most of what it buys: `fdlg.inc` joining turned its calls to
+`fm_ultoa`, `dskw_mkdir` and `dskw_char` from a double crossing into a near
+call, and `assoc.inc` joining did the same for `ld_run_name`, `files_poster`,
+`files_refresh` and `dskw_stat`. A call that leaves cold code for a resident
+*thunk* is a double crossing — out through a `cw_` shim and straight back in
+through the thunk — so when a target joins the set, its callers here should
+be pointed at the `_x` body instead.
 
 Calls out use four-byte `cw_*` shims; calls *in* use six-byte resident
 thunks (`call SEG:x` / `ret`), because `wm_pkgcall` sets DS from `W_SEG` and
@@ -412,7 +433,18 @@ that is the wrong contract for cold code. The thunk keeps the **public**
 name and the body takes an `_x` suffix, so no caller outside changes.
 
 Four rules, and every one of them is something that assembles cleanly and
-runs wrong:
+runs wrong.
+
+**`tools/os88ovlchk.py` now refuses four of the five ways to break them**, and
+`make` runs it: a near control transfer across the boundary, a **CS
+assumption** in `.cold`, a **data directive** in `.cold`, and a **tail call to
+a `cw_` shim**. Each is a clean invariant rather than a heuristic — the whole
+kernel satisfies all four — and each was verified to fire by reintroducing the
+bug. The one that is still review-only is the fifth below, the pointer table,
+because it cannot be told from a legitimate one mechanically.
+
+The three added after the near-call check all came out of the second round of
+moves, and each had already shipped a failure by the time it was written:
 
 - **Data stays in `.text`** (or `.bss`). DS is still `KERNEL_SEG`, so a
   string or table that moved with its code would be addressed at the wrong
@@ -432,11 +464,42 @@ runs wrong:
   a whole commit. The tell is a symbol dump: `python3 tools/os88sym.py --all`
   prints each symbol's section, and any `.cold` name that a `mov`/`cmp`
   reaches without a `cs:` override is this bug.
+
+  **And the trap that hides the data in the first place: NASM does not
+  require the colon.** `desk_phdd   dw ico_hdd32` is a label and a `dw`, and
+  it does not look like either at a glance — so a scan keyed on `name:` walks
+  straight past it. Moving `desk.inc` cold took seven such lines with it,
+  including the per-adapter icon pointers, and the comment sitting directly
+  above them had already predicted the result: *"a zero `[desk_pdisk]` draws
+  the interrupt vector table as an icon"*. `os88ovlchk.py` refuses any data
+  directive in `.cold` now, colon or no colon, which is why this one is
+  mechanical rather than a reading exercise.
 - **Nothing may assume `CS` is `KERNEL_SEG`.** `push cs`/`pop es` and
   `[cs:x]` are the two spellings, and `loader.inc` had three of them —
   including a documented one, the far pointer it calls a package's
   dispatcher through. It reads that through ES now, which is the only
   register still naming the kernel at that point.
+
+  **`disk.inc` is the worked example, and the assumption was written out in
+  the comment**: `mov ax, cs   ; destination = the kernel segment (this code
+  is in .text, so CS is it)`. Cold, CS is `COLD_SEG`, so `dsk_copy_in` staged
+  the boot sector 64 bytes into the middle of the cold segment instead of into
+  `dsk_bpb`; every BPB field stayed 0, `disk_mount` refused, and a Disk window
+  on a perfectly good floppy said *No os8088 disk (A:)*. Five sites in that
+  one file. **Name the segment** — `mov ax, KERNEL_SEG` — or, where AX is
+  live, take it from DS, which cold code still keeps: `push ds` / `pop es` is
+  the same two instructions and no register at all (`driver.inc` has six).
+- **No tail call to a `cw_` shim.** A shim is `call <target>` / `retf`, built
+  to turn a far CALL into a near call plus a far return. A `jmp` to one leaves
+  no far frame, so its `retf` pops the jumping routine's **near** return
+  address as `CS:IP`. It is easy to write by accident because a near tail call
+  is an ordinary idiom here and the conversion looks mechanical:
+  `desk_zone_hilite` ended `jmp gfx_xor_fill`, became
+  `jmp KERNEL_SEG:cw_gfx_xor_fill`, and froze the machine on the first click
+  on a drive zone — at `cs=77F2` executing zeros, with IF clear and the gfx
+  lock held, so it read as a hang rather than a crash. Use `call` + `ret`. The
+  near-call check cannot see it: it IS a far transfer, which is what that
+  check wants.
 - **A table of cold pointers may live in `.text` only if cold code alone
   dispatches through it.** There are four: `ctrl.inc`'s page table, and
   `files.inc`'s `fm_jmp` and two `fm_ctx_*` sets. The mirror rule is the one
