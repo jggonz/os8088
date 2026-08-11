@@ -41,13 +41,11 @@ def u16(b, i=0):
 
 
 def wins(m):
-    w = m.read(S("wm_wins"), 12 * 26)
-    return [i for i in range(12) if u16(w, i * 26) & 3 == 3]
+    return dispcp.win_list(m, S)                # ...and so does the check
 
 
 def win_by(m, slot):
-    w = m.read(S("wm_wins") + slot * 26, 26)
-    return (u16(w, 2), u16(w, 4), u16(w, 6), u16(w, 8))
+    return dispcp.win_rect(m, S, slot)          # WIN_SIZE lives in dispcp
 
 
 def cache_of(m, slot):
@@ -97,8 +95,8 @@ def main(argv):
 
         # two Disk windows - WF_SAVEU is theirs (SPEC.md 22.14), and they
         # stand perfectly still, which is subcheck.py's reasoning too
-        dispcp.open_drive(m, mo, S, os88marty.settle, 0, card=pri["idx"])
-        dispcp.open_drive(m, mo, S, os88marty.settle, 1, card=pri["idx"])
+        dispcp.open_drive(m, mo, S, os88marty.settle, "A", card=pri["idx"])
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri["idx"])
         w = wins(m)
         if len(w) < 2:
             sys.exit("dispsave: wanted two Disk windows, got %d" % len(w))

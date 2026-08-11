@@ -894,6 +894,20 @@ at_mdbuttons:
 ; at_button - one classic push button
 ; in:  AX = x, BX = y, SI = label, DX = 1 for the default ring
 ; out: CX = the button's width (label + 24); preserves all else
+;
+; The drawing is os88ui_btn's (apps/os88ui.inc). What stays here is the SIZE:
+; artful's buttons grow to their label rather than being laid out at a fixed
+; width, so this measures first and answers CX, which every caller latches.
+;
+; ONE PIXEL MOVED, and it is named because it is visible: the default ring
+; was 3px outside the frame and the shared control's is 2px - the file
+; dialog's inset, which is the one the rest of the system shows. Everything
+; else matches already: the whole-rect white fill is OS88UI_FILL (identical
+; picture once the frame is drawn over the border), the label was centred at
+; runtime horizontally, and its literal +6 in a 20px box IS (20-8)/2.
+;
+; It gains a greyed state it does not use yet - at_button has never had one -
+; and that is the point of the shared control rather than an accident of it.
 ; -----------------------------------------------------------------------------
 at_button:
     push ax
@@ -901,48 +915,30 @@ at_button:
     push dx
     push si
     push di
-    mov di, dx                      ; DI = default flag
+    mov di, dx                      ; DI = the default flag
     mov [at_btx], ax
     mov [at_bty], bx
-    call OSAPI_FONT_WIDTH
-    mov cx, ax
-    add cx, 24
-    mov [at_xw], cx                 ; (idle scratch: the width)
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [at_btx]
-    mov bx, [at_bty]
-    mov cx, ax
-    add cx, [at_xw]
-    dec cx
-    mov dx, bx
-    add dx, 19
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, [at_btx]
-    call OSAPI_GFX_FRAME
-    or di, di
-    jz .label
-    mov ax, [at_btx]                ; the default button's outer ring
-    sub ax, 3
-    mov bx, [at_bty]
-    sub bx, 3
-    mov cx, [at_btx]
-    add cx, [at_xw]
-    add cx, 2
-    mov dx, [at_bty]
-    add dx, 22
-    call OSAPI_GFX_FRAME
-.label:
-    call OSAPI_FONT_WIDTH           ; SI intact: the label
-    mov cx, [at_xw]
-    sub cx, ax
-    shr cx, 1
-    add cx, [at_btx]
-    mov dx, [at_bty]
-    add dx, 6
-    call OSAPI_FONT_STR
+    call OSAPI_FONT_WIDTH           ; AX = the label's width; SI intact
+    add ax, 24
+    mov [at_xw], ax                 ; = the button's width, and the answer
+
+    mov ax, [at_btx]                ; ...as a rect, in screen coordinates
+    mov [at_brect+0], ax
+    add ax, [at_xw]
+    dec ax
+    mov [at_brect+4], ax
+    mov ax, [at_bty]
+    mov [at_brect+2], ax
+    add ax, 19
+    mov [at_brect+6], ax
+
+    or di, di                       ; ZF from the flag, and `mov` does not
+    mov di, OS88UI_FILL             ; touch flags - so the test survives the
+    jz .go                          ; register being reused for the answer
+    or di, OS88UI_DEF
+.go:
+    mov bx, at_brect
+    call os88ui_btn
     mov cx, [at_xw]
     pop di
     pop si
@@ -950,6 +946,8 @@ at_button:
     pop bx
     pop ax
     ret
+
+at_brect:   dw 0, 0, 0, 0           ; the button being drawn
 
 ; -----------------------------------------------------------------------------
 ; at_btnhit - is the point (CX,DX) inside button (BX=x, AX=y, SI=width)?

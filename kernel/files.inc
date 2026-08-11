@@ -3193,7 +3193,7 @@ fm_c_format:                    ; File > Format Disk... (SPEC.md 22.12)
     jmp fm_edit_arm
 .bad:
     push bx                     ; an unreadable medium is a verdict about what
-    push cx                     ; just happened, so it is a toast (59.5) - and
+    push cx                     ; just happened, so it is a toast (60.5) - and
     mov bx, fm_errtab           ; nothing is armed, so the window is left
     mov cx, FM_NERR             ; exactly as it was
     call KERNEL_SEG:cw_toast_say

@@ -53,15 +53,11 @@ def win_by(m, slot):
     Panel here and made a drag that never happened look like a repaint that
     never repaired.
     """
-    w = m.read(S("wm_wins") + slot * 26, 26)
-    return (u16(w, 2), u16(w, 4), u16(w, 6), u16(w, 8))
+    return dispcp.win_rect(m, S, slot)
 
 
 def wins(m):
-    w = m.read(S("wm_wins"), 12 * 26)
-    return [(i, u16(w, i * 26 + 2), u16(w, i * 26 + 4), u16(w, i * 26 + 6),
-             u16(w, i * 26 + 8)) for i in range(12)
-            if u16(w, i * 26) & 3 == 3]
+    return [(i,) + dispcp.win_rect(m, S, i) for i in dispcp.win_list(m, S)]
 
 
 def band(rows, x0, x1, y0, y1):

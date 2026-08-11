@@ -210,4 +210,7 @@ hd_win_live:
 
 %include "hdsec.inc"
 
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%include "os88ui.inc"
+
     OS88_DRV_END

@@ -49,7 +49,6 @@ MBAR_H, TITLE_H = 20, 18
 # vid_ctx: an 18-word run with vid_cw/vid_ch inside it, then VX/VY/KIND.
 VID_CTX_CW, VID_CTX_CH, VID_CTX_SZ = 14, 16, 42
 VID_CTX_VX, VID_CTX_VY = 36, 38
-FM_ROW_Y0, FM_ROW_H = 26, 16
 PT_CV_X, PT_CHROME_W, PT_CHROME_H = 44, 46, 42
 S = os88sym.linear
 
@@ -59,13 +58,11 @@ def u16(b, i=0):
 
 
 def win_by(m, slot):
-    w = m.read(S("wm_wins") + slot * 26, 26)
-    return (u16(w, 2), u16(w, 4), u16(w, 6), u16(w, 8))
+    return dispcp.win_rect(m, S, slot)          # WIN_SIZE lives in dispcp
 
 
 def wins(m):
-    w = m.read(S("wm_wins"), 12 * 26)
-    return [i for i in range(12) if u16(w, i * 26) & 3 == 3]
+    return dispcp.win_list(m, S)                # ...and so does the check
 
 
 def region(rows, x0, x1, y0, y1):
@@ -118,14 +115,14 @@ def main(argv):
             % (pri["type"], sec["type"], seam, secw, sech))
 
         # --- Paint, off a disk whose only file is Paint ----------------------
-        dispcp.open_drive(m, mo, S, os88marty.settle, 1, card=pri["idx"])
+        dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri["idx"])
         w = wins(m)
         if not w:
             sys.exit("dispblit: no Disk window after double-clicking B:")
         dslot = w[-1]
         dx, dy, dw, dh = win_by(m, dslot)
-        mo.dblclick(dx + 1 + 60, dy + TITLE_H + 1 + FM_ROW_Y0 + FM_ROW_H // 2)
-        os88marty.settle(m, card=pri["idx"])
+        dispcp.open_row(m, mo, S, os88marty.settle, dx, dy,
+                        card=pri["idx"])
         w = wins(m)
         if dslot == w[-1]:
             sys.exit("dispblit: PAINT.O88 did not launch from row 0")
