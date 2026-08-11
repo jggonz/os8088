@@ -1146,8 +1146,8 @@ they are short by ~158 bytes that predate this note. Trust the total and the
 spare; treat a row as "roughly what this module put here".
 
 **The number to watch is NOT the 1,541 spare, it is the IMAGE's last sector.**
-`kernel.bin` is **87,037 bytes** and the boot sector reads
-`(size + 511) / 512` = **170** of them, which hold 87,040 — so there are
+`kernel.bin` is **86,525 bytes** and the boot sector reads
+`(size + 511) / 512` = **169** of them, which hold 86,528 — so there are
 **3 bytes** of slack in the file, and the next thing added to `.ovl`, however
 small, costs a whole sector of boot read (~65 ms on the field machine).
 `tools/kernsize.py` reports the three *rungs* and not this, because the rungs
