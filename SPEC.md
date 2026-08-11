@@ -20434,10 +20434,11 @@ its sandbox on the CGA against ~5,000us straddling — and 673us is not a fast
 rectangle, it is four strips clipped away to nothing.
 
 **`gfx_blit4`.** Off the clip list by §11.3's own argument — a blit cannot take
-a sub-rect without advancing its source to match — and off the display split
-for the same reason, so it takes `GFXDENTER`: one display, the one holding its
-top-left corner, cut at that display's edge. Solitaire's card backs are the
-consumer.
+a sub-rect without advancing its source to match — and it was given
+`GFXDENTER` **for the same reason, which does not hold**: one display, the one
+holding its top-left corner, cut at that display's edge. Solitaire's card
+backs, ArtfulType's lines and Paint's whole canvas are the consumers.
+§39.14.7 is what that turned out to cost and why the argument was wrong.
 
 **The rule the three of them are: a path that writes the framebuffer without
 passing a public entry is a hole**, and it is exactly §11.3's rule about
@@ -20506,6 +20507,104 @@ nothing; and an empty Note Pad repaints no text at all, so a session that
 never types before forcing the repaint measures a window with nothing in it.
 A null A/B is evidence about the test until the test is shown to contain the
 case.
+
+**Confirmed on the iron, and the half that looks like a miss is the model
+working.** Run on the two-card 5150: *the window refresh did not draw on the
+CGA, as expected — and backspace DID draw.* Both follow from the counters. A
+keystroke emits a short run at the caret, so 48 of 49 of them lie entirely
+inside one display and land correctly **with or without the split**; only the
+one whose caret crosses is lost, which is the +16 px column above. A repaint
+letters every row full width and crosses on all of them, which is the 73,818.
+So the field's original *"backspace does not erase"* was never a second
+defect: the repaint had already wiped that card's half of the window, and
+backspacing over characters that are not on screen erases nothing.
+
+**There was a THIRD way to get a null here and it was in the Makefile, not in
+the test.** `NOSPLIT` was missing from `VIDSTAMP` and from `KNOBS`, so
+`make NOSPLIT=1` after a plain `make` saw an up-to-date `kernel.bin`, rebuilt
+nothing, and drove the SPLIT kernel twice — the trap the `VIDEO=` stamp exists
+to prevent, in the one knob added since. It is in both lists now, so the knob
+rebuilds and the banner names it. **The table above is unaffected and can be
+told so from its own numbers**: a stale kernel produces two identical columns,
+and these two differ.
+
+#### 39.14.7 A RUN CARRIES NO SOURCE — what a straddled Paint canvas showed
+
+From the field, on the same machine: *Paint's canvas does not draw on the
+second screen when straddled.* §39.14.5 predicted it and called it a
+limitation; it is not one, and the argument that made it look like one is
+worth taking apart because it is the same sentence twice with two different
+meanings.
+
+**"A blit cannot take a sub-rect without advancing its source to match" is
+true of the DESTINATION RECT and false of a RUN.** `gfx_blit4` coalesces
+equal pixels and emits one `gfx_hline` per run — and a run is *one colour*.
+Nothing about where it is drawn refers to the source at all. So the runs can
+be split per display for free, by the mechanism that already splits every
+other rect in the machine: keep the destination in **virtual** coordinates
+the whole way down and let each run's `gfx_fill` take `GFXDISP`.
+
+The fix is therefore the *removal* of two macro invocations — `gfx_blit4`
+takes no whole-shape hook — and it is smaller than what it replaced. Three
+things fall out of it rather than being arranged:
+
+- **Every consumer is fixed at once and none was rebuilt.** Paint's canvas,
+  Solitaire's card backs, ArtfulType's three blits and `gfxbench`'s two rows
+  are the whole population; the slot's contract is unchanged, so no `.o88`
+  was invalidated.
+- **A nested caller still gets the local path.** `GFXDISP` tests
+  `[gfx_dnest]` and falls through when an outer whole-shape hook has already
+  translated, so a blit reached from inside one keeps behaving exactly as it
+  did. There is no new case to get wrong because the existing test already
+  covers it.
+- **The dead zone costs nothing here either**, for §39.14.1's reason: a run
+  no display claims is drawn by nobody, with no test anywhere.
+
+**And it fixes a register-contract bug on the way past.** `GFXDENTER` sat
+ABOVE this routine's `push ax`/`push bx`, so the values restored at the end
+were the TRANSLATED ones and `gfx_blit4` did not preserve AX/BX as its own
+header promises — on the second display only, where `[vid_ox]` is not 0. It
+was latent and is recorded as latent: all four callers reload their
+destination from memory before every blit and declare AX clobbered, so
+nothing ever saw it. With no hook there is nothing to translate and the
+question does not arise.
+
+**What it costs is per RUN and only on a two-card machine**: `gfx_disp_run`
+instead of `GFXDISP`'s two compares, against a call that already costs ~756us
+(§5.7). A one-card machine short-circuits on `[vid_ndisp]` and pays nothing —
+which is the whole population of machines that were drawing correctly before.
+A blit's price is still `runs x ~0.5 ms` and still decided by how flat the art
+is. **That per-run figure is MODELLED and is not a field number**: what would
+measure it is `gfxbench`'s `GFX_BLIT4 solid` (64 runs) and `GFX_BLIT4 4px
+runs` (1,024 runs) on a two-card machine with the sandbox clear of the seam,
+run against a kernel with the hook back in.
+
+**The obvious way to avoid even that was considered and NOT taken**, and it is
+recorded so it is not re-derived: gate the hook on §39.14.6's `vid_span_one`,
+so a block that fits one display keeps `GFXDENTER` and only a straddling one
+goes untranslated — which is exactly what `font_run` does one granularity
+down. It works, and it buys a few per cent of a call whose cost is
+overwhelmingly fixed, for a second path through the routine, a byte of state
+saying which path to leave by, and about 35 bytes. §48.18.1 is the precedent:
+shaving the arrival off a primitive that is nearly all arrival recovers ~4%
+and is not worth a structural change. One path, and the pixels decide.
+
+**Measured, and `tests/dispblit.py` is the gate.** Paint straddling a
+Hercules+CGA seam, four strokes drawn across it, then the window dragged away
+and back to the SAME place so the region compared is the same rectangle:
+**365 inked pixels on the second card before the repaint and 364 after**,
+against **365 and 0** on a kernel with the hook back in. The A/B is the point —
+the strokes reach both cards either way, because the pencil is `gfx_line` per
+mouse SAMPLE and each segment resolves its own display, so a test that only
+draws proves nothing. It is the REPAINT the two builds disagree about.
+
+**`gfx_scroll` is NOT the same case and must keep its hook.** It moves pixels
+that are already on a card; a source rect crossing the seam would have to move
+them *between* cards. Its refusal (CF = 1, the caller repaints) is the right
+answer and the reason `GFX_SCROLL 256x128` reads 368us in a straddled
+`gfxbench` — that is the refusal, not a fast scroll. `gfx_line` and the walk
+keep theirs too (§39.14.5): a line's unit is a pixel, and resolving a display
+per pixel is the inner loop §5.6.6 exists to keep tight.
 
 `gfx_scroll` and `gfx_blit4` keep REFUSING rather than falling back, and that
 stays right: a blit cannot take a sub-rect without advancing its source to

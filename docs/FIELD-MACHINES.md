@@ -661,6 +661,17 @@ updates, which is exactly why the shipped images stopped being tracked.
   from `OSAPI_VIDEO` at run time, so the second run is the same measurement
   on the other card and it names its own file. That is the whole reason the
   ask is one disk now.
+- **On an EXTENDED desktop, do not even switch: drag the window across.**
+  `gfxbench` names the card its **sandbox** is on rather than the machine's
+  primary (SPEC.md §39.19), so `R`, drag onto the other monitor, `R` again is
+  a set from both cards in one launch. That is not only the file name — the
+  framebuffer segment, the stride, the bank count and the status port are
+  that display's too, and the raw VRAM rows are addressed in its own
+  coordinates. **Read the `sandbox straddles` row before comparing two
+  reports**: a 1 means the window crossed the seam, so the primitives in that
+  run were being split per display, refused, or drawn per cell
+  (§39.14.6/§39.14.7), and it is not the same measurement as a run that
+  reads 0.
 - Then `SYSBENCH.O88`, likewise, to `SYSBENCH.TXT`. **Once, not per card** —
   its rows are the CPU, the bus, memory, the clock, the scheduler and the
   floppy, and none of them is a question about the adapter.
