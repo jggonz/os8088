@@ -2708,18 +2708,23 @@ cur_draw:
 ; CUR_GW/CUR_GH/CUR_SPAN are what every walk in this file is bounded by, and a
 ; shape that needed a bigger cell would give SPEC.md 7.1's third-byte and
 ; row-count savings back on EVERY lock hold in the machine, for every app.
+; The gap in the horizontal stroke must fall on the SAME column as the
+; vertical one - both are the hot spot, (CUR_XHX, CUR_XHY), and drawn a column
+; apart the cross reads as broken rather than as aiming at anything. Nothing
+; can assert that: it is a statement about which column means the hot spot,
+; and the tables do not know. Look at it.
 %macro CUR_CROSS 0
-    CUR_ROW 0x7000,             0x2000      ; .***....  ..#.....
-    CUR_ROW 0x7000,             0x2000
-    CUR_ROW 0x7000,             0x2000
-    CUR_ROW 0x7000,             0x2000
+    CUR_ROW 0x3800,             0x1000      ; ..***...  ...#....
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
     CUR_ROW 0xFF00,             0x0000      ; ********  ........
-    CUR_ROW 0xFF00,             0xEE00      ; ********  ###.###.
+    CUR_ROW 0xFF00,             0xEF00      ; ********  ###.####
     CUR_ROW 0xFF00,             0x0000      ; ********  ........
-    CUR_ROW 0x7000,             0x2000
-    CUR_ROW 0x7000,             0x2000
-    CUR_ROW 0x7000,             0x2000
-    CUR_ROW 0x7000,             0x2000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
     CUR_ROW 0x0000,             0x0000
     CUR_ROW 0x0000,             0x0000
     CUR_ROW 0x0000,             0x0000
