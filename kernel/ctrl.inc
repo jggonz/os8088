@@ -152,8 +152,12 @@ cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
                                 ; its old job is telling cp_flush_close_x
                                 ; whether to keep [cp_wdirty] and retry
 
-; Selected item, index into cp_items. Inline .text data for the same reason;
-; 0 = Scheduler is the boot selection, so the panel opens on it.
+; The selected item, as a RECORD index into cp_items - never as a position in
+; the drawn list (SPEC.md 31.10.1). That distinction is what lets a hidden row
+; sit anywhere in the table, and it is why ui.inc and drv_boot may keep saying
+; CP_ITIME and CP_IDRV: those name pages, and a page does not move because
+; another one is not being shown. Inline .text data for the same reason as the
+; rest; 0 = Scheduler is the boot selection, so the panel opens on it.
 cp_sel:     db 0
 
 ; --- item table: one 8-byte record per panel item (SPEC.md 31.1) ------------
@@ -164,14 +168,21 @@ CP_I_PAINT  equ 2               ; -> page paint proc (in DI/BP = pane origin)
 CP_I_CLICK  equ 4               ; -> page click proc (in DI/BP, CX/DX = rel)
 CP_ISTRIDE  equ 8
 
-; DISPLAY IS LAST, AND THAT IS WHAT MAKES IT HIDEABLE (SPEC.md 31.10.1). A
-; machine with one adapter has nothing to choose between, so the page is not
-; shown at all - and "hidden" for a row in the MIDDLE of this table would mean
-; every row below it maps to a different record, which is a second opinion
-; about what the user clicked on at four call sites. Last, it is simply a
-; shorter list: [cp_nst] falls by one, row -> record stays the identity, and
-; cp_entry does not change. It also leaves the four indices below at the
-; values they had before this page existed.
+; ANY ROW HERE MAY BE HIDDEN, AND ITS POSITION DOES NOT MATTER (SPEC.md
+; 31.10.1). Display is the one that is - a machine with one adapter has
+; nothing to choose between - and it USED to have to be last, because
+; [cp_sel] and every consumer of it indexed this table by the row's position
+; in the DRAWN LIST. Hiding a row in the middle then renumbered every row
+; below it, which is a second opinion about what the user clicked on at four
+; call sites, so "last" was doing real work and was a real constraint: it had
+; been spent here and by drv_tab's settings bitmap (SPEC.md 51.2.1), and
+; SPEC.md 41.12 nearly spent it a third time.
+;
+; The two spaces are separated now. [cp_sel] and every routine below name a
+; RECORD (an index into this table, stable for the life of the build);
+; cp_list and cp_pick work in VISIBLE ORDINALS, and cp_v2r is the one place
+; that converts. So [cp_hide] can carry a bit for any row, and the order here
+; is free.
 cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
     dw cp_s_time,  cp_time_paint,  cp_time_click,  0
@@ -187,6 +198,11 @@ CP_IDRV   equ 2                 ; ...and the Drivers item, which drv_notice
                                 ; opens the panel on when a driver did not
                                 ; load at boot (SPEC.md 51.3)
 CP_ISND   equ 3                 ; ...and Sound, the tone tier's route (34.8)
+CP_IVID   equ 4                 ; ...and Display, the one row that is HIDDEN
+                                ; on a machine with a single adapter (SPEC.md
+                                ; 39.11.1). vid_probe_avail names it by this
+                                ; rather than by "the last one", which is what
+                                ; frees the order above
 
 ; How many static rows the list is showing RIGHT NOW - CP_ITEMS, or one fewer
 ; when the Display page is hidden. It is the boundary between a static row and
@@ -200,6 +216,17 @@ CP_ISND   equ 3                 ; ...and Sound, the tone tier's route (34.8)
 ; SAFE answer: a build whose probe never ran shows the page rather than losing
 ; a row of somebody else's.
 cp_nst:   db CP_ITEMS
+
+; ...and WHICH of them are not shown: bit n = static record n is hidden. One
+; byte, so CP_ITEMS may reach 8 before this needs to be a word - and the
+; %error below already stops the list growing that far.
+;
+; It is the reason cp_items has no ordering rule any more. [cp_nst] alone
+; could only ever say HOW MANY rows are shown, which is enough to draw a
+; shorter list and not enough to say WHICH row a drawn one is; that gap is
+; exactly what forced the hidden row to be last. Written once, beside
+; [cp_nst], by the same single writer.
+cp_hide:  db 0
 
 ; THE LIST HAS ROOM FOR NINE ROWS AND NO MORE: row i's bar runs
 ; CP_I0Y + i*CP_IROWH .. + CP_IBH - 1, so row 8 ends at 129 inside a content
@@ -586,6 +613,8 @@ cp_onclick_x:
 
     call cp_pick                ; --- left pane: which row? ---
     jc .done                    ; below the last row: nothing
+    call cp_v2r                 ; ...and which RECORD that row names
+    jc .done
     cmp al, [cp_sel]
     je .done                    ; already showing: change nothing
     mov [cp_sel], al
@@ -649,6 +678,89 @@ cp_entry:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
+; cp_hidden - is this static row one the machine does not show?
+; in:  AL = record index (0..CP_ITEMS-1)
+; out: CF = 1 hidden, CF = 0 shown
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+cp_hidden:
+    push ax
+    push cx
+    mov cl, al
+    mov al, 1
+    shl al, cl                  ; CP_ITEMS < 8, so the bit is in one byte
+    test [cp_hide], al
+    pop cx                      ; pop touches no flag, so the test survives
+    pop ax
+    jnz .hid
+    clc
+    ret
+.hid:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_v2r - a VISIBLE list ordinal -> the RECORD it names (SPEC.md 31.10.1)
+;
+; in:  AL = the ordinal, 0 = the top row on screen
+; out: CF = 0 and AL = the record index; CF = 1 = there is no such row
+; clobbers: AL (the output), flags
+;
+; THE ONE PLACE THE TWO SPACES MEET, and that is the whole design. cp_list
+; draws ordinals and cp_pick returns one; [cp_sel], cp_entry, cp_item_name,
+; cp_item_paint, cp_item_click and cp_drv_item all name records. Keeping a
+; second opinion about which is which - which is what indexing cp_items by a
+; drawn position was - is what made a hidden row have to be LAST.
+;
+; Statics come first and may be hidden; driver pages follow and never are, so
+; past the statics the answer is arithmetic. [cp_nst] is the count of statics
+; actually shown, which is what makes that last step one subtraction.
+; -----------------------------------------------------------------------------
+cp_v2r:
+    push bx
+    push cx
+    mov ch, al                  ; CH = the ordinal wanted
+    xor cl, cl                  ; CL = ordinals counted so far
+    xor bl, bl                  ; BL = the record being considered
+.scan:
+    cmp bl, CP_ITEMS
+    jae .drv
+    mov al, bl
+    call cp_hidden
+    jc .next                    ; not on screen: it takes no ordinal
+    cmp cl, ch
+    je .hit
+    inc cl
+.next:
+    inc bl
+    jmp short .scan
+.drv:
+    mov al, ch                  ; past every static: a driver's page, and
+    sub al, [cp_nst]            ; those are never hidden
+    jc .miss                    ; (an ordinal below the shown statics cannot
+                                ; reach here, but the borrow is free)
+    push ax
+    call KERNEL_SEG:cw_drv_cp_count
+    mov bh, al
+    pop ax
+    cmp al, bh
+    jae .miss
+    add al, CP_ITEMS
+    jmp short .out
+.hit:
+    mov al, bl
+.out:
+    pop cx
+    pop bx
+    clc
+    ret
+.miss:
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; cp_nitems - how many rows the list has right now
 ; in:  nothing
 ; out: AL = the count
@@ -666,14 +778,14 @@ cp_nitems:
 ; clobbers: AL (on a hit), flags
 ; -----------------------------------------------------------------------------
 cp_drv_item:
-    cmp al, [cp_nst]
-    jb .static
-    sub al, [cp_nst]
+    cmp al, CP_ITEMS            ; the static/driver boundary is a RECORD-space
+    jb .static                  ; question, so it is the table's length and
+    sub al, CP_ITEMS            ; not the count of rows on screen
     call KERNEL_SEG:cw_drv_cp_class           ; CF=1 if the driver went away under us
     jc .gone
     ret
 .gone:
-    add al, [cp_nst]            ; hand back the ROW index, not the rebased
+    add al, CP_ITEMS            ; hand back the ROW index, not the rebased
     stc                         ; one (add clears CF): a CF=1 answer carrying
     ret                         ; the rebased index read as "static row 5 ->
                                 ; dispatch the Scheduler page", and the
@@ -696,7 +808,7 @@ cp_item_name:
     pop ax
     ret
 .static:
-    cmp al, [cp_nst]            ; a vanished driver's row has no name; the
+    cmp al, CP_ITEMS            ; a vanished driver's row has no name; the
     jae .gone                   ; empty string letters as a blank row
     call cp_entry
     mov si, [si + CP_I_NAME]
@@ -733,7 +845,7 @@ cp_item_paint:
     call KERNEL_SEG:cw_drv_cp_call
     jmp short .done
 .static:
-    cmp al, [cp_nst]            ; a vanished driver's row paints nothing -
+    cmp al, CP_ITEMS            ; a vanished driver's row paints nothing -
     jae .done                   ; unreachable while cp_drv_gone_x clamps
     call cp_entry               ; [cp_sel] at detach, and checked anyway
     call [si + CP_I_PAINT]
@@ -767,7 +879,7 @@ cp_item_click:
     call KERNEL_SEG:cw_drv_cp_call
     jmp short .done
 .static:
-    cmp al, [cp_nst]            ; a vanished driver's row refuses the click
+    cmp al, CP_ITEMS            ; a vanished driver's row refuses the click
     jae .done                   ; (same reasoning as cp_item_paint's guard)
     call cp_entry
     call [si + CP_I_CLICK]
@@ -796,7 +908,7 @@ cp_drv_gone_x:
     mov al, [cp_sel]
     call cp_drv_item
     jnc .out                    ; still a live page: this was another class
-    mov al, [cp_nst]
+    mov al, CP_ITEMS
     cmp [cp_sel], al
     jb .out
     mov byte [cp_sel], 0        ; Scheduler: the boot selection, always there
@@ -876,9 +988,11 @@ cp_list:
     call cp_nitems
     mov bp, ax
     and bp, 0x00FF              ; BP = how many rows there are
-    xor bx, bx                  ; BX = the index being drawn
+    xor bx, bx                  ; BX = the ORDINAL being drawn
 .row:
     mov al, bl
+    call cp_v2r                 ; ...and BH = the record it names, resolved
+    mov bh, al                  ; ONCE for both the bar and the name
     cmp al, [cp_sel]
     jne .plain
 
@@ -903,7 +1017,7 @@ cp_list:
 .plain:
     mov byte [gfx_color], CBLACK
 .text:
-    mov al, bl
+    mov al, bh
     call cp_item_name           ; SI -> it, static or staged (SPEC.md 31.9)
     mov cx, di
     add cx, CP_IX
@@ -913,7 +1027,8 @@ cp_list:
     pop dx
 
     add dx, CP_IROWH
-    inc bx
+    mov bh, 0                   ; BX is the ordinal again: the resolved record
+    inc bx                      ; lived in BH for the length of one row
     cmp bx, bp
     jb .row
 

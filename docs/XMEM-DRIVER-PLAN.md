@@ -645,3 +645,63 @@ segment now, so it reads `xm_row`'s `DRVR_SEG` out of the guest and adds the
 offset from the **overlay's own** nasm map — assembled from a copy and
 required to be byte-identical to the `build/xmem.bin` that shipped, which is
 `os88sym.py`'s discipline applied to the other image.
+
+---
+
+## 11. The constraint itself, fixed (SPEC.md §31.10.1)
+
+§5.3 scoped this and recommended not coupling it; it was taken next, on its
+own, and the shape it needed is **not** the one §5.3 guessed.
+
+**§5.3 was wrong about where the problem was.** It read `cp_drv_click`'s
+divide against `cp_drv_paint`'s walk as two representations of one mapping —
+the drift shape. They are not: both derive from the same two constants
+(`CP_DR0Y`, `CP_DROWH`), so they are exact inverses and *cannot* disagree
+numerically. What they cannot express is a hole, which is a different
+complaint. And `cp_pick` — the item list's hit-test, the one that actually
+matters — was already a subtract-loop mirroring `cp_list`'s add-loop, so
+there was no divide to remove there at all.
+
+**The real constraint was one line of arithmetic**: `cp_entry` turned a row
+index into a record with `index << 3`, an identity mapping. That is what made
+a hidden row renumber everything below it, and it is why the hidden row had
+to be last.
+
+**The fix separates two index spaces that were one number.** A row has a
+RECORD index (its position in `cp_items`, stable) and a VISIBLE ORDINAL (its
+position in the list on screen). `[cp_sel]` and the six routines that reach
+pages name records; `cp_list` and `cp_pick` work in ordinals; **`cp_v2r` is
+the one place they meet.** `[cp_hide]` — one byte, one bit per static record
+— carries what `[cp_nst]` could not: a count can only make the list shorter,
+never say *which* row is missing, and that gap was the whole constraint. The
+static/driver boundary went back to `CP_ITEMS`, because it is a question
+about the table rather than about the screen.
+
+`CP_ITIME` and `CP_IDRV` still work unchanged at their five call sites, which
+is the test that the split is the right way round: those name pages, and a
+page does not move because another one is not being shown.
+
+**Verified twice, and the second one is the point.** The same scripted
+session on a cycle-accurate 5150/CGA where Display IS hidden — chip menu →
+Control Panel, then Drivers, Sound and back to Scheduler — gave **four
+framebuffer captures identical before and after**, digest for digest. Then
+`[cp_hide]` was seeded to hide **Date/Time, record 1, a MIDDLE row**, on top
+of Display: the list drew Scheduler / Drivers / Sound contiguously and
+clicking the second visible row selected **Drivers** and painted the Drivers
+page. That is the case the old mapping could not express — it would have
+selected Date/Time while the list drew "Drivers" over it.
+
+**Cost, and who pays it.** `.text` +6, `.cold` +84 — and **`kern_small` pays
+it too**, because `ctrl.inc` and `vidsel.inc` are in both builds. That is not
+docs/KERN-SPLIT-PLAN.md §2's leak: this is shared code improved for both
+products, not a `kern_big` feature charged to the floor machine. No rung
+moved in either build. `kern_small` boots and opens the panel.
+
+**What was deliberately left alone: the Drivers page.** It has no hidden rows
+and no way to acquire one, its bands are uniform, and its two sides share
+their constants — so adding skip machinery there would be speculative
+generality for a hole that does not exist. If a driver row ever needs hiding,
+`cp_v2r`'s shape is the answer and `drv_tab` would want a bitmap of its own.
+The third claimant, §51.2.1's settings bitmap, is untouched and should stay:
+append-only is the correct discipline for a file that survives across
+versions, and no index-space split helps with it.

@@ -19410,20 +19410,54 @@ not to draw it. So `[cp_nst]` — the number of static rows the list is
 showing — is `CP_ITEMS` normally and one fewer when `[vid_avail]` has a
 single bit set.
 
-**The Display item is LAST in `cp_items` and that is what makes it
-hideable.** Hiding a row in the *middle* of the table would mean every row
-below it maps to a different record, which is a second opinion about what the
-user just clicked on at four separate call sites. Last, it is simply a
-shorter list: row → record stays the identity and `cp_entry` does not change.
-It also leaves `CP_ITIME`/`CP_IDRV`/`CP_ISND` at the values they had before
-this page existed.
+**ANY row here may be hidden, and its position does not matter.** That is a
+change: the Display item had to be LAST, because hiding a row in the *middle*
+of the table renumbered every row below it — a second opinion about what the
+user just clicked on, at four separate call sites. "Last" was therefore doing
+real work, and it was a constraint that had already been spent twice
+elsewhere (`drv_tab`'s settings bitmap, §51.2.1) and was nearly spent a third
+time by §41.12.
 
-**`[cp_nst]` is the static/driver boundary, not just a row count.** §31.9's
-rebasing (`cmp al, CP_ITEMS` → `sub al, CP_ITEMS` → the class) is what
-decides whether a row is a static page or a driver's, so every one of those
-sites reads the byte instead of the constant — otherwise, on a machine with
-the page hidden, the first driver's row would dispatch as static item 5 and
-paint the Display page over it.
+**The fix is to stop conflating two index spaces.** A row has a RECORD index
+— its position in `cp_items`, stable for the life of the build — and a
+VISIBLE ORDINAL, its position in the list actually on screen. They were the
+same number, which is exactly why a hole could not be expressed.
+
+- `[cp_sel]`, `cp_entry`, `cp_item_name`, `cp_item_paint`, `cp_item_click`,
+  `cp_drv_item` and `cp_drv_gone_x` all name **records**. So `CP_ITIME` and
+  `CP_IDRV` still work as written at their five call sites: they name pages,
+  and a page does not move because another one is not shown.
+- `cp_list` and `cp_pick` work in **ordinals**, because that is what the
+  screen has.
+- **`cp_v2r` is the one place they meet.** It walks the statics skipping
+  `[cp_hide]`'s bits and, past them, subtracts `[cp_nst]` to reach a driver's
+  page — those are never hidden, so beyond the statics the answer is
+  arithmetic.
+
+**`[cp_hide]` is what `[cp_nst]` could not say.** A count can only make the
+list *shorter*; it cannot say WHICH row is missing, and that gap is precisely
+what forced the hidden row to the end. One byte, one bit per static record,
+written beside `[cp_nst]` by the same single writer.
+
+**The static/driver boundary went back to being `CP_ITEMS`.** §31.9's
+rebasing (`cmp al, CP_ITEMS` → `sub al, CP_ITEMS` → the class) is a question
+about the *table*, so it is the table's length again; it read `[cp_nst]` only
+because the two spaces used to be one, and a count of rows on screen is the
+wrong thing to ask there.
+
+**Verified by byte identity and then by doing the thing it exists for.** The
+same scripted Control Panel session — open it from the chip menu, click
+Drivers, click Sound, click back to Scheduler — on a cycle-accurate 5150/CGA
+where the Display page IS hidden: **four framebuffer captures, identical
+before and after**, digest for digest. (The Date/Time page is excluded on
+purpose: its live clock means it cannot be byte-compared between two runs,
+and a capture that caught it differed by exactly one second.) Then the case
+the old code could not express — `[cp_hide]` seeded to hide **Date/Time,
+record 1, a middle row**, on top of Display already being hidden: the list
+draws Scheduler / Drivers / Sound contiguously, and clicking the second
+visible row selects **Drivers** and paints the Drivers page. Under the old
+mapping that click would have selected Date/Time while the list drew
+"Drivers" over it.
 
 **One writer, and it is the only routine that could answer the question:**
 `vid_probe_avail` (§39.11.1), which sets it in the same pass that fills
