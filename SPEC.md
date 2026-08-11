@@ -9475,6 +9475,25 @@ Three things follow, and the third is the general one:
   that is the argument for writing refusals that way even when the code
   "obviously" works.
 
+**The second field run closed it, and it vindicates the signal it replaced:**
+
+```
+ST3 motor off hex     0021      probe stop hex        0003
+ST3 after seek hex    0021      verdict 1=kept 0=gone    0
+ST0 drained hex       0071
+```
+
+TRK0 clear before the recalibrate and **still clear after it**, so the row was
+retired and the desktop came up with drive A alone — the first time the
+removal has run anywhere. And `ST0 = 0x71` is **interrupt code 01, SE set, EC
+set, US = 1**: precisely the Equipment Check the first design was testing for,
+now that the drain has made it *ours*. So the original reading of the
+datasheet was right and only the queue was wrong. The decision stays on ST3 —
+a level read cannot be got at by ordering, which is worth more than being
+textbook — but ST0 is now an **independent corroboration** in the same block
+rather than a byte nothing could explain, and that is why it is still
+published.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
