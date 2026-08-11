@@ -27,6 +27,13 @@
 ; It also records what it was HANDED, at a fixed offset in its own bss, so a
 ; harness that wants the coordinates can find them - mup_log is the first
 ; thing in bss and the loader reports the package's segment.
+;
+; SINCE apps/os88ui.inc IT IS THE GATE FOR THAT TOO: the two buttons are
+; drawn by os88ui_btn, hit by os88ui_bfind and armed/fired by the pair, so
+; the release rules above and the shared control's arm are proved by the same
+; four gestures. Hiding on a MATCHED press-and-release is what makes
+; "released over the same button" a question the harness can answer with a
+; memory read.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -70,6 +77,15 @@ mu_paint:
     call OSAPI_SET_COLOR
     mov si, mu_s_wait
     call OSAPI_FONT_STR
+    call mu_layout                  ; the two buttons follow the window
+    mov bx, mu_rects
+    mov si, mu_l_a
+    xor di, di
+    call os88ui_btn
+    mov bx, mu_rects+8
+    mov si, mu_l_b
+    mov di, OS88UI_DEF              ; ...and one of them proves the ring
+    call os88ui_btn
     pop si
     pop dx
     pop cx
@@ -86,9 +102,19 @@ mu_paint:
 ; being the only signal.
 ; -----------------------------------------------------------------------------
 mu_onclick:
+    push ax
+    push bx
     mov [mu_log + 0], cx
     mov [mu_log + 2], dx
     inc word [mu_log + 8]           ; presses seen
+    call mu_layout
+    mov ax, 2
+    mov bx, mu_rects
+    call os88ui_bfind               ; AX = button+1, 0 = off both
+    mov [mu_log + 12], ax
+    call os88ui_arm                 ; a press ACTS ON NOTHING
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -102,14 +128,80 @@ mu_onclick:
 ; OSAPI_WM_HIDE wants the gfx lock held, which it is (SPEC.md 11).
 ; -----------------------------------------------------------------------------
 mu_onup:
+    push ax
+    push bx
+    push di
     mov [mu_log + 4], cx
     mov [mu_log + 6], dx
     inc word [mu_log + 10]          ; releases seen
-    push bx
-    mov bx, si
-    call OSAPI_WM_HIDE
+    call mu_layout
+    call os88ui_fire                ; AX = what the press armed, cleared
+    mov [mu_log + 14], ax
+    or ax, ax
+    jz .out                         ; the press was on neither button
+    mov di, ax
+    mov ax, 2
+    mov bx, mu_rects
+    call os88ui_bfind               ; ...and the release?
+    cmp ax, di
+    jne .cancel                     ; a different button, or none: CANCELLED
+    mov bx, si                      ; matched: hide, which is the harness's
+    call OSAPI_WM_HIDE              ; whole signal
+    jmp short .out
+.cancel:
+    mov bx, si                      ; the release ARRIVED and was refused, and
+    mov ax, mu_t_no                 ; those are different facts, so the caption
+    xor byte [mu_tog], 1            ; says so - and it TOGGLES between two
+    jz .t2                          ; strings rather than latching, because a
+    mov ax, mu_t_no2                ; harness has to see EVERY refused release
+.t2:                                ; and not just the first (SPEC.md 11.92)
+    call OSAPI_WM_TITLE
+.out:
+    pop di
     pop bx
+    pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; mu_layout - the two button rects, from the live content origin
+; in:  SI = window (mu_onclick/mu_onup/mu_paint all have it)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+mu_layout:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    mov cx, ax
+    add cx, 16
+    mov [mu_rects+0], cx
+    add cx, 63
+    mov [mu_rects+4], cx
+    mov cx, ax
+    add cx, 100
+    mov [mu_rects+8], cx
+    add cx, 63
+    mov [mu_rects+12], cx
+    mov cx, dx
+    add cx, 40
+    mov [mu_rects+2], cx
+    mov [mu_rects+10], cx
+    add cx, 19
+    mov [mu_rects+6], cx
+    mov [mu_rects+14], cx
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+mu_rects:   times 8 dw 0            ; two {x1,y1,x2,y2}, screen coords
+mu_l_a:     db 'One', 0
+mu_l_b:     db 'Two', 0
 
 ; -----------------------------------------------------------------------------
 mu_tpl:
@@ -117,9 +209,15 @@ mu_tpl:
     dw mu_title, mu_paint, 0, mu_onclick
 
 mu_title:   db 'MupTest', 0
+mu_t_no:    db 'Cancelled', 0
+mu_t_no2:   db 'Cancelled.', 0
+mu_tog:     db 0
 mu_s_wait:  db 'press me', 0
 
-    OS88_BSS 12
+; --- the shared controls ------------------------------------------------------
+%include "os88ui.inc"
+
+    OS88_BSS 16
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -----------------------------------
@@ -128,4 +226,6 @@ mu_s_wait:  db 'press me', 0
 ; thing in bss" is the only address it can derive without a map.
 mu_log      equ os88_image_end + 0   ; +0 press x, +2 press y,
                                      ; +4 release x, +6 release y,
-                                     ; +8 presses seen, +10 releases seen
+                                     ; +8 presses seen, +10 releases seen,
+                                     ; +12 button under the press,
+                                     ; +14 what fire() answered

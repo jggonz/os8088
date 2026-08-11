@@ -1,5 +1,10 @@
 # UI element helpers — investigation and plan
 
+> **STATUS: IMPLEMENTED** as `apps/os88ui.inc` — an SDK include, so
+> `KERN_BUDGET` pays **zero** (§10). Recorder is the first adopter and its
+> buttons fire on the RELEASE now; `tests/muptest` gates the shared control
+> on all three adapters. §11 is what was and was not proved.
+
 **Tier 4 of the mouse-up work**, and the one whose framing changed most under
 investigation. I ranked it *"biggest win and biggest risk — most of
 `KERN_BUDGET`'s remaining spare."* Measured, **it is not a performance change
@@ -216,30 +221,100 @@ all.** It can be done at any time, in any order, and does not need this
 document's SDK work to land first. If the budget gets tight before Tier 4 is
 scheduled, do this and skip the rest.
 
-## 8. Order of work
+## 8. Order of work — DONE
 
-1. **Tier 3 first**, or the arm has nothing to talk to.
-2. `apps/os88ui.inc` — button draw + hit + arm, and the glyph pair.
-3. Convert **one** package (Recorder or Piano: small, plain buttons, already
-   pen-correct) and prove byte-identity on all three adapters before touching a
-   second.
-4. Convert the rest of the standard-look set. Each its own commit with its own
-   capture, because a visual regression here is per-site and a batch commit
-   hides which one.
-5. §7a whenever convenient, independently.
+1. ~~Tier 3 first, or the arm has nothing to talk to.~~ Done.
+2. ~~`apps/os88ui.inc` — button draw + hit + arm.~~ Done: `os88ui_btn`,
+   `os88ui_bhit`, `os88ui_bfind`, `os88ui_arm`/`os88ui_fire`. **The
+   check/radio glyph pair was NOT built** — §4 scoped it in, and it has
+   exactly one consumer (`ctrl.inc`) which is *kernel* code and cannot
+   include this. Building it for nobody is what §20.8's old rule cost this
+   project; it goes in with its first package-side caller.
+3. ~~Convert one package and prove byte-identity before touching a second.~~
+   Done — Recorder, **0 differing pixels of 128,000**.
+4. Convert the rest of the standard-look set. **NOT done** — see §12.
+5. §7a (the kernel's own helpers) — untouched, still available.
 
-## 9. Recommendation
+### 8.1 Two design points that only appeared in the writing
 
-**Do it, and do it in the SDK.** But it is the weakest-value tier of the four
-and it should be scheduled last:
+**The rect is a POINTER, not four registers.** `os88ui_btn` takes
+`BX = {x1,y1,x2,y2}` and so does `os88ui_bhit`, so the drawn control and the
+clickable control read the same four words — SPEC.md §22's `fm_hit`
+discipline. Recorder is the argument: its drawing used `4 / 58 / 112 / 166`
+and `RC_BTN_W`, while its hit test used `4/56, 58/110, 112/164, 166` — two
+descriptions of one row of buttons, agreeing by hand. They cannot disagree
+now.
 
-- Tier 1 is a safety fix, ~115 bytes, no ABI.
-- Tier 2 is a capability a package genuinely cannot have (twelve bytes, and no
-  consumer yet — `DBLCLICK-PLAN.md` §9).
-- Tier 3 is a mechanism.
-- **Tier 4 is ergonomics** — it makes Tier 3 usable and makes a recurring bug
-  class structural, and it changes nothing a user can see.
+**The include goes at the END of your source, just before `OS88_BSS`.** Not
+up beside `os88api.inc`: the header and an `OS88_ICON16` block are at fixed
+image offsets (SPEC.md §20.2) and code emitted between them fails the icon
+macro's own assertion — which is how the first build of the Recorder
+conversion failed.
 
-Its value is entirely conditional on Tier 3 landing. Built before it, the arm
-half has no callback to hang off and the tier reduces to a shared button
-painter, which is worth having and is not worth prioritising.
+## 9. Measured cost
+
+| | |
+|---|---|
+| `KERN_BUDGET` | **0** — it is source in the package, not a slot |
+| the include, assembled | **~190 bytes** of a 60KB `APP_MAX_SIZE` |
+| Recorder, `.o88` | 2,422 → 2,704 bytes (**+282**) |
+
+**Adoption GROWS a small package, and §5 said it would be "near a wash".**
+That was wrong for the first adopter: Recorder deleted a ~50-byte private
+helper and gained ~190 bytes of shared code plus the rect table and the
+release handler. The wash arrives for a package with several controls, or
+never — **and it does not matter**, because the value is §1.3's greying and
+§2's arm, not size, and a package's image is heap rather than
+`KERN_BUDGET`.
+
+## 10. What it does NOT cost
+
+The kernel: nothing at all. No API cell, no table revision, no `.o88`
+invalidated by *this* tier, and `os88api.inc` stays code-free — which is
+worth keeping, because every package includes that one unconditionally.
+
+## 11. What the gate proved, and what it did not
+
+`tests/muptest` carries the shared control now as well as SPEC.md §13.7: two
+buttons drawn by `os88ui_btn`, hit by `os88ui_bfind`, armed and fired by the
+pair. Four gestures, **all passing on CGA, Hercules and VGA**:
+
+| | |
+|---|---|
+| press off both buttons, release on One | **not fired** — the press armed nothing |
+| press One, release on **Two** | not fired, **and the caption changed** — so the release arrived and the arm refused it, which are different facts |
+| press One, release **outside the window** | not fired, caption changed again — §13.7's second rule |
+| press One, release **One** | **fired** (the window hides) |
+
+The caption **toggles** between two strings rather than latching, because a
+harness has to see every refused release and not just the first. And the
+hiding case runs **last**, so nothing relaunches — a double-click on a
+background Disk window spends its first click on `wm_front`, so the row
+never opens, and that cost two adapters' worth of false failures before it
+was noticed.
+
+**Recorder: the drawing is proved and the FIRE is not.** Pixels first — the
+converted `rc_btn` was diffed against the pre-conversion build through a full
+launch on CGA: **0 differing pixels of 128,000**. Then the cancel: press REC,
+slide off, release — the button row is untouched, which is the gesture this
+whole tier exists for. What is **not** automated is Recorder's *fire*:
+`rc_do_rec` opens a stream that `rc_poll` retires within a second, so
+`M.settle`'s two-identical-frames-a-second-apart always outlives the state it
+is trying to observe. It was confirmed by eye in a capture taken without the
+settle (REC greyed, STOP live), and the mechanism itself is gated by
+muptest's fourth case. Stated rather than contrived.
+
+## 12. What is left
+
+The other nine standard-look buttons — `fdlg`'s are kernel and out of reach,
+so it is `at_button`, `pn_btn`, `np_pbutton`, `pt_btn_xy`, `mppl_btn_rect`
+and the hdd tool's. Each wants its own commit and its own pixel diff, per §6;
+none is urgent, and a package that never adopts loses nothing.
+
+The check/radio glyphs, when a package wants one.
+
+And §7a, the kernel's own `fdlg`/`ctrl`/`apps` helpers — independent of all
+of this, no ABI, ~200-300 bytes of `.text`, and **the only part of this tier
+that helps the budget.** With the image rung at zero bytes left after Tier 3,
+that is now the cheapest room in the kernel that does not need an
+investigation first.
