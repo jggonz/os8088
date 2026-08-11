@@ -727,12 +727,17 @@ more than one display (§39.14.7 — a run splits itself through `gfx_fill`'s ow
 already been translated). Refusing is the *existing* path, so the fallback
 needs no argument of its own.
 
-**VGA is deliberately not done here.** The four planes want the run's bits
-each, which is Set/Reset and a bit mask per span rather than a byte pattern —
-a different routine with a different correctness argument, and the machine this
-project is calibrated against has no VGA in it (docs/FIELD-MACHINES.md). The
-gate covers it either way: `tools/ptcheck.py` compares a textured canvas pixel
-for pixel on all three adapters, and VGA simply measures unchanged.
+**VGA is `vga_blit_span`, and it is the same routine with the byte pattern
+replaced by a port write.** The four planes take their data from Set/Reset
+rather than from the CPU byte, so a run is one `out` for the colour and then the
+identical masked-byte shape — left edge, `rep stosb`, right edge — and the
+interior can be a `rep stosb` of a byte whose *value* is irrelevant, exactly as
+`gfx_fill`'s own interior is. **Enable Set/Reset (GC1) is armed once a CALL**
+(`vga_sr_on`) and cleared at the end with `vga_gc_reset`, because it is the half
+that does not change between runs; `vga_set_color` writes both halves together,
+which is right for a primitive that arrives once and a wasted `out` per run
+here. It is a little behind the 1bpp figure for the obvious reason: a run costs
+two to four `out`s here against none there.
 
 **`sw_span` swaps `ES` and puts it back**, which is the one thing in it that
 looks like waste and is not. `gfx_blit4` holds the CALLER's source segment in

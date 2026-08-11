@@ -5026,14 +5026,31 @@ roughly 44 clocks a pixel. On `FINE.BMP`'s damage rect that is ~394 ms against
 So the end state is a hybrid keyed on the row's run density, and this change is
 the half of it that is unconditionally right.
 
-**VGA is deliberately untouched** (§5.4.1): four planes want the run's bits
-each, which is Set/Reset and a bit mask per span rather than a byte pattern —
-a different routine with a different correctness argument — and the machine
-this project is calibrated against has no VGA in it. It measures unchanged and
-gates identically.
+**And VGA followed**, `vga_blit_span`: the four planes take their data from
+Set/Reset rather than from the CPU byte, so a run is one `out` for the colour
+and then the same masked-byte shape the 1bpp writer has — which is why its
+interior can be a `rep stosb` of a byte whose *value* is irrelevant, exactly as
+`gfx_fill`'s own interior is. Enable Set/Reset is armed **once a call** and
+cleared at the end, because it is the half that does not change between runs.
+
+| the canvas, on `os8088_xt_vga` | runs/row | before | after | |
+|---|---|---|---|---|
+| `TEXTURE.BMP` | 84.9 | 4,226.2 ms | **2,163.5 ms** | **1.95x** |
+| `FINE.BMP` | 308.0 | 14,401.6 ms | **7,151.1 ms** | **2.01x** |
+
+Slightly under the 1bpp figure and for the obvious reason: a run costs two to
+four `out`s here against none there, and an ISA `out` is not free.
 
 Verified **0 differing pixels** on CGA, Hercules and VGA mode 12h with
-`tools/ptcheck.py` (5 steps) and `tools/subcheck.py` (11), and separately on
-CGA against `PTROW=1` — `FINE.BMP`'s 1–2 pixel runs, where every run sits
+`tools/ptcheck.py` (5 steps) and `tools/subcheck.py` (11), and separately with
+`PTROW=1` on CGA and on VGA — `FINE.BMP`'s 1–2 pixel runs, where every run sits
 inside ONE framebuffer byte and touches neither edge of it, which is the
 narrowest case §5.4.1 has and the one a picture barely exercises.
+
+**One 25-pixel `subcheck` difference is NOT a defect and is worth knowing
+about**, because it will recur on every kernel-size change that crosses a
+cluster: the drive-A Disk window shows `Free ...` for the SYSTEM disk, which
+carries `KERNEL.SYS`, so this commit's 174 → 175 sectors is 139 → 140 clusters
+used and one kilobyte less free. It appears in exactly the five steps where that
+window's status line is on screen and in none of the others, which is what
+identifies it; `make`'s own `N/354 clusters` line confirms it in one command.

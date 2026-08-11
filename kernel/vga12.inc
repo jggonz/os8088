@@ -1640,6 +1640,9 @@ gfx_blit4:
     push si
     push di
     push bp
+    mov byte [gfx_blit_fst], 0  ; BEFORE the two guards below, or a call that
+                                ; draws nothing inherits the last one's answer
+                                ; and .out resets a VGA that was never armed
     or cx, cx
     jz .out
     or dx, dx
@@ -1650,9 +1653,6 @@ gfx_blit4:
     mov [gfx_blit_sv], si
 
     ; --- may a run go straight into the framebuffer? (SPEC.md 5.4.1) -------
-    mov byte [gfx_blit_fst], 0
-    cmp byte [vid_mono], 0
-    je .slow                    ; VGA's four planes are a different problem
     cmp word [wm_clip_n], 0
     jne .slow                   ; a region is armed, and each run has to clip
                                 ; itself against it - which only gfx_fill does
@@ -1662,7 +1662,12 @@ gfx_blit4:
     cmp byte [gfx_dnest], 0     ; gfx_fill's own GFXDISP (SPEC.md 39.14.7), and
     jne .slow                   ; a nested hook has already translated
 %endif
-    mov byte [gfx_blit_fst], 1
+    mov byte [gfx_blit_fst], 1  ; 1 = the 1bpp writer...
+    cmp byte [vid_mono], 0
+    jne .slow
+    mov byte [gfx_blit_fst], 2  ; ...2 = the planar one, whose Enable Set/Reset
+    call vga_sr_on              ; is armed ONCE here and cleared at .out: only
+                                ; the colour and the bit mask change per run
 .slow:
 .row:
     mov si, [gfx_blit_sv]       ; ES:SI = this row's first byte
@@ -1759,12 +1764,16 @@ gfx_blit4:
     add di, dx                  ; DI = the run's first x, on screen
     mov ah, [gfx_blit_c]
     mov dx, [gfx_blit_e]        ; DX = one past its last pixel, row-relative
-    cmp byte [gfx_blit_fst], 0  ; (which is where the next run starts)
-    jne .emitf
+    cmp byte [gfx_blit_fst], 1  ; (which is where the next run starts)
+    je .emit1                   ; 1 = the 1bpp writer, 2 = the planar one,
+    ja .emitv                   ; 0 = neither, so gfx_fill as it always was
     call gfx_blit_run
     jmp short .emitd
-.emitf:
+.emit1:
     call sw_blit_span           ; SPEC.md 5.4.1
+    jmp short .emitd
+.emitv:
+    call vga_blit_span
 .emitd:
     cmp dx, [gfx_blit_w]
     jb .run
@@ -1777,7 +1786,133 @@ gfx_blit4:
     dec word [gfx_blit_h]
     jnz .row
 .out:
+    cmp byte [gfx_blit_fst], 2  ; the planar writer left Enable Set/Reset on
+    jne .done                   ; for the whole call (SPEC.md 5.4.1)
+    call vga_gc_reset
+.done:
     pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vga_sr_on - internal: Enable Set/Reset on all four planes, and nothing else
+;
+; gfx_blit4's planar fast path arms this ONCE for the whole call and clears it
+; with vga_gc_reset at the end (SPEC.md 5.4.1). vga_set_color writes GC0 and
+; GC1 together, which is right for a primitive that arrives once and is a
+; wasted `out` per RUN here - the colour is the only half that changes.
+; -----------------------------------------------------------------------------
+vga_sr_on:
+    push ax
+    push dx
+    mov dx, VGA_GC
+    mov ax, 0x0F01              ; GC1: enable Set/Reset on all planes
+    out dx, ax
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vga_blit_span - gfx_blit_run's direct twin on VGA (SPEC.md 5.4.1)
+; in:  DI = the run's first x, DX = one past its last pixel (row-relative),
+;      AH = its colour, [gfx_blit_x] = the block's left edge, [gfx_blit_ro] =
+;      the row's base byte, GC1 already armed by vga_sr_on, ES = the CALLER's
+;      source segment, DF clear
+; out: nothing; every register preserved, ES included
+;
+; sw_blit_span's planar half, and the same argument: gfx_hline is a gfx_fill and
+; a gfx_fill is SPEC.md 5.7's per-call floor before a byte is written, per RUN.
+;
+; What a run costs here instead is TWO to FOUR `out`s and as many writes. The
+; four planes take their data from Set/Reset rather than from the CPU byte, so
+; a run is one colour write (GC0) and then the same masked-byte shape the 1bpp
+; writer has - which is why the interior can be a `rep stosb` of a byte whose
+; VALUE is irrelevant, exactly as gfx_fill's own interior is.
+;
+; Enable Set/Reset (GC1) is NOT written here: it does not change between runs,
+; and hoisting it is the difference between two `out`s a run and three.
+; -----------------------------------------------------------------------------
+vga_blit_span:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov al, ah                  ; the documented contract: gfx_blit4 leaves
+    mov [gfx_color], al         ; [gfx_color] holding the last colour drawn
+    mov ax, di                  ; AX = x1
+    mov cx, [gfx_blit_x]
+    add cx, dx
+    dec cx                      ; CX = x2, the last pixel drawn
+    or ax, ax                   ; x1 < 0 -> 0
+    jns .x1ok
+    xor ax, ax
+.x1ok:
+    cmp cx, [vid_cw]            ; x2 past the last column -> the last column
+    jl .x2ok
+    mov cx, [vid_cwm1]
+.x2ok:
+    cmp cx, ax
+    jl .out                     ; entirely off the screen (or an empty run)
+    mov si, ax                  ; BH = left edge mask, BL = right, by table
+    and si, 7
+    mov bh, [si + vga_lmtab]
+    mov si, cx
+    and si, 7
+    mov bl, [si + vga_rmtab]
+    shr cx, 1                   ; CX = right byte column
+    shr cx, 1
+    shr cx, 1
+    shr ax, 1                   ; AX = left byte column
+    shr ax, 1
+    shr ax, 1
+    mov di, [gfx_blit_ro]
+    add di, ax                  ; DI = the run's first byte
+    sub cx, ax
+    mov si, cx                  ; SI = byte span; 0 = inside one byte
+    mov dx, VGA_GC
+    mov ah, [gfx_color]
+    xor al, al                  ; GC0: Set/Reset = this run's colour
+    out dx, ax
+    mov ax, VGA_SEG
+    mov es, ax                  ; ...and only NOW is ES not the source
+    or si, si
+    jnz .multi
+    mov ah, bh                  ; one byte: the two edges are one mask
+    and ah, bl
+    mov al, 8
+    out dx, ax
+    mov al, [es:di]             ; the read loads the latches; the write is what
+    mov [es:di], al             ; the ALU and the bit mask act on
+    jmp short .out
+.multi:
+    mov ah, bh                  ; --- the left edge byte
+    mov al, 8
+    out dx, ax
+    mov al, [es:di]
+    mov [es:di], al
+    inc di
+    dec si
+    jz .right
+    mov ax, 0xFF08              ; --- whole bytes: latches irrelevant, and the
+    out dx, ax                  ; CPU byte with them - Set/Reset supplies all
+    mov cx, si                  ; four planes, so AL's value does not matter
+    rep stosb
+.right:
+    mov ah, bl                  ; --- and the right edge byte
+    mov al, 8
+    out dx, ax
+    mov al, [es:di]
+    mov [es:di], al
+.out:
+    pop es
     pop di
     pop si
     pop dx

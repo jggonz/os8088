@@ -51,6 +51,17 @@ Four things cost a run each, and all four are REDRAW-SPEC Part 3's:
     written down: half the harness time in this round went on clicks that
     missed. It also means the two kernels are asked for the same session even
     if a window lands somewhere new.
+
+  ONE GLYPH IN A DISK WINDOW'S STATUS LINE IS A FACT ABOUT THE KERNEL. The
+    drive-A window shows `Size ... Free ...` for the SYSTEM disk, which carries
+    KERNEL.SYS - so a build that crosses a 1KB cluster reports one kilobyte less
+    free, and the gate sees a 7x7 box of differing pixels that is not a redraw
+    defect at all. Measured: 25 pixels on all three adapters, at the drive-A
+    window's status line and only in the steps where that line is ON SCREEN.
+    Confirm it in one command rather than guessing - `make` prints
+    `os88disk: ... N/354 clusters` for os8088-360.img, and if N differs between
+    the two builds that is the whole of it. The same shape reaches callfront.py
+    through a package's SIZE in a folder listing.
 """
 import os
 import struct

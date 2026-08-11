@@ -19,7 +19,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §11.90.2 | `OSAPI_WM_DAMAGE` — the app is told which rect it owes | canvas blit 8,670 → 6,759 ms, **1.28x** |
 | §11.96.10 | **a RAISE puts back only what was covered** (was item A) | Paint raise 9,090 → 5,948 ms, **1.53x** |
 | §11.97 | a window below draws no chrome where something above will cover it | drag flash 14,253 → 10,665 px, **1.34x** |
-| §5.4.1 | a blit run goes straight into the framebuffer (1bpp) | canvas blit 5,526 → 2,431 ms, **2.27x** |
+| §5.4.1 | a blit run goes straight into the framebuffer, 1bpp and VGA | canvas blit 5,526 → 2,431 ms (CGA), 4,226 → 2,163 (VGA) |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -193,7 +193,7 @@ is what proved it pre-dated the change), and **an optimisation that stops
 something being redrawn inherits every defect that redraw was hiding** —
 §48.9.1's rule, arriving from the other direction.
 
-### B. `gfx_blit4` paid a drawing call per RUN — **1bpp DONE, SPEC.md §5.4.1**
+### B. `gfx_blit4` paid a drawing call per RUN — **DONE, SPEC.md §5.4.1**
 
 The 8.7 s itself, and it was **the single largest drawing cost in the system**.
 `sw_blit_span` writes a run into the 1bpp framebuffer itself, so §5.7's per-call
@@ -216,10 +216,10 @@ Three things to carry forward:
   20x on `FINE.BMP`'s art and **fifteen times worse on a flat row**, where the
   run path draws 492 pixels in one span. So the end state is keyed on the row's
   run density, and this change is the half that is unconditionally right.
-- **VGA is not done.** Four planes want the run's bits each — Set/Reset and a bit
-  mask per span, a different routine with its own correctness argument. It
-  measures unchanged and gates identically, and the calibration machine has no
-  VGA in it.
+- **VGA is `vga_blit_span`**, the same routine with the byte pattern replaced by
+  a port write: Enable Set/Reset armed once a CALL, the colour one `out` a run,
+  and the same left-edge / `rep stosb` / right-edge shape. **1.95–2.01x**, a
+  little behind 1bpp because an ISA `out` is not free.
 
 **`PTROW=1` belongs in any future run of this gate**: `FINE.BMP`'s 1–2 pixel runs
 put every run inside ONE framebuffer byte touching neither edge, which is the
