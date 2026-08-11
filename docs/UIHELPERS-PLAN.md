@@ -288,15 +288,16 @@ wants its own investigation rather than a refactor.
 
 1. ~~Tier 3 first, or the arm has nothing to talk to.~~ Done.
 2. ~~`apps/os88ui.inc` — button draw + hit + arm.~~ Done: `os88ui_btn`,
-   `os88ui_bhit`, `os88ui_bfind`, `os88ui_arm`/`os88ui_fire`. **The
-   check/radio glyph pair was NOT built** — §4 scoped it in, and it has
-   exactly one consumer (`ctrl.inc`) which is *kernel* code and cannot
-   include this. Building it for nobody is what §20.8's old rule cost this
-   project; it goes in with its first package-side caller.
+   `os88ui_bhit`, `os88ui_bfind`, `os88ui_arm`/`os88ui_fire`. The
+   check/radio glyph pair was **deferred here and built in §13.7** — the
+   reason it was deferred (its only consumer was kernel code that could not
+   include an SDK file) is exactly what §13's unified source removed.
 3. ~~Convert one package and prove byte-identity before touching a second.~~
    Done — Recorder, **0 differing pixels of 128,000**.
-4. Convert the rest of the standard-look set. **NOT done** — see §12.
-5. §7a (the kernel's own helpers) — untouched, still available.
+4. ~~Convert the rest of the standard-look set.~~ Done — §14, seven helpers,
+   every one pixel-diffed.
+5. ~~§7a (the kernel's own helpers).~~ Done — §7.1, and then subsumed by
+   §13's unified source, which deleted the `cp_boxbtn` it produced.
 
 ### 8.1 Two design points that only appeared in the writing
 
@@ -372,9 +373,11 @@ muptest's fourth case. Stated rather than contrived.
 ~~The other nine standard-look buttons~~ — done, §14. And the list in this
 paragraph was wrong twice, which is worth keeping rather than editing away:
 **`pt_btn_xy` is not a button at all** — it is pure geometry, returning
-`CX`/`DX` for a tool cell and drawing nothing; Paint's actual control is
-`pt_cwell`, a filled well with a 16x16 icon and no label, and Paint has no
-standard labelled button anywhere. And **`mppl_btn_rect` is skinned**
+`CX`/`DX` for a tool cell and drawing nothing. What the survey then concluded
+from that — *"Paint has no standard labelled button anywhere"* — **was wrong
+in its turn**: Paint has exactly one, the size group's **Apply** (§14.4),
+which a grep for a labelled button missed because everything else in that
+module's chrome is `pt_cwell`. And **`mppl_btn_rect` is skinned**
 (SPEC.md §56), so it was never a candidate. What the list missed, on the
 other hand, is the whole of `drivers/hdd` — three helpers, not one.
 
