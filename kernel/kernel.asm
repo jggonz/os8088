@@ -2734,12 +2734,16 @@ cw_mem_free:            call mem_free
                     retf
 cw_mem_free_owner:      call mem_free_owner
                     retf
+cw_mem_owner_of:         call mem_owner_of
+                     retf
 cw_menu_activate:       call menu_activate
                     retf
 cw_menu_draw_bar:       call menu_draw_bar
                     retf
 cw_menu_popup:          call menu_popup
                     retf
+cw_osapi_file_here:      call osapi_file_here
+                     retf
 cw_osapi_snd_tone:      call osapi_snd_tone
                     retf
 cw_sched_mode_get:      call sched_mode_get
@@ -2750,7 +2754,13 @@ cw_snd_beep:            call snd_beep
                     retf
 cw_snd_disp_set:        call snd_disp_set
                     retf
+cw_spl_reset:            call spl_reset
+                     retf
 cw_spl_step:             call spl_step
+                     retf
+cw_task_exit:            call task_exit
+                     retf
+cw_task_spawn:           call task_spawn
                      retf
 cw_task_yield:          call task_yield
                     retf
@@ -2766,6 +2776,8 @@ cw_vga_xor_rect_vram:   call vga_xor_rect_vram
                     retf
 cw_vid_avail_test:      call vid_avail_test
                     retf
+cw_vid_disp_init:        call vid_disp_init
+                     retf
 cw_vid_switch:          call vid_switch
                     retf
 %ifdef KERN_BIG
@@ -3024,6 +3036,56 @@ osapi_vol_mount:  call COLD_SEG:dkf_osapi_vol_mount
               ret
 osapi_vol_paint:  call COLD_SEG:dkf_osapi_vol_paint
               ret
+
+; --- ...and driver.inc's (SPEC.md 51). Boot-time loading, the Control Panel
+; pages and the class dispatch. One entry is reached from an ISR:
+; drv_svc_call is called by snd_tick inside IRQ0, so it pays a far call 18.2
+; times a second (54.6 under 53.2.1 FSXF_FASTTICK) - ~6us on a tick that has
+; a whole 55ms, and it does nothing at all when no driver publishes a stream.
+drv_blk_call:  call COLD_SEG:dvf_drv_blk_call
+           ret
+drv_boot:      call COLD_SEG:dvf_drv_boot
+           ret
+drv_cfg_save:  call COLD_SEG:dvf_drv_cfg_save
+           ret
+drv_cls_fp:    call COLD_SEG:dvf_drv_cls_fp
+           ret
+drv_cls_svc:   call COLD_SEG:dvf_drv_cls_svc
+           ret
+drv_cp_call:   call COLD_SEG:dvf_drv_cp_call
+           ret
+drv_cp_class:  call COLD_SEG:dvf_drv_cp_class
+           ret
+drv_cp_closed: call COLD_SEG:dvf_drv_cp_closed
+           ret
+drv_cp_count:  call COLD_SEG:dvf_drv_cp_count
+           ret
+drv_cp_name:   call COLD_SEG:dvf_drv_cp_name
+           ret
+drv_init:      call COLD_SEG:dvf_drv_init
+           ret
+drv_load:      call COLD_SEG:dvf_drv_load
+           ret
+drv_notice:    call COLD_SEG:dvf_drv_notice
+           ret
+drv_owns_seg:  call COLD_SEG:dvf_drv_owns_seg
+           ret
+drv_row:       call COLD_SEG:dvf_drv_row
+           ret
+drv_shutdown:  call COLD_SEG:dvf_drv_shutdown
+           ret
+drv_status:    call COLD_SEG:dvf_drv_status
+           ret
+drv_svc_call:  call COLD_SEG:dvf_drv_svc_call
+           ret
+drv_task:      call COLD_SEG:dvf_drv_task
+           ret
+drv_tier:      call COLD_SEG:dvf_drv_tier
+           ret
+drv_unload:    call COLD_SEG:dvf_drv_unload
+           ret
+osapi_drv_cfg: call COLD_SEG:dvf_osapi_drv_cfg
+           ret
 
 ; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
 ; Three words that change whenever any section's length does, so a field

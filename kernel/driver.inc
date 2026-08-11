@@ -494,6 +494,10 @@ drv_e4: db 'Not enough memory', 0
 drv_e5: db 'No hardware found', 0
 drv_e6: db 'Port or IRQ in use', 0
 drv_e7: db 'Attached twice (bug)', 0    ; 20 chars, drv_e1's width - the widest
+section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
+                                ; segment of its own. DS is still KERNEL_SEG,
+                                ; so the DATA stays in .text at every toggle
+
                                 ; the Drivers page caption takes
 
 ; -----------------------------------------------------------------------------
@@ -501,7 +505,7 @@ drv_e7: db 'Attached twice (bug)', 0    ; 20 chars, drv_e1's width - the widest
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-drv_init:
+drv_init_x:
     push ax
     push bx
     push cx
@@ -542,7 +546,7 @@ drv_init:
 ;      CF = 1 and DI = 0 if the class is out of range (an empty table row)
 ; clobbers: DI (the output), flags
 ; -----------------------------------------------------------------------------
-drv_cls_fp:
+drv_cls_fp_x:
     push ax
     call drv_cls_idx            ; DI = class-1, CF set if bad
     jc .bad
@@ -558,7 +562,7 @@ drv_cls_fp:
     stc
     jmp short .out
 
-drv_cls_svc:
+drv_cls_svc_x:
     push ax
     push cx
     call drv_cls_idx
@@ -632,7 +636,7 @@ drv_pub_seg:
     mov al, 1
 .scan:
     push ax
-    call drv_cls_fp
+    call drv_cls_fp_x
     pop ax
     jc .next
     mov cx, [di+2]
@@ -654,14 +658,14 @@ drv_pub_seg:
     pop ax
     ret
 
-drv_owns_seg:
+drv_owns_seg_x:
     push ax
     push bx                     ; BX is banked because the second pass BELOW
     push cx                     ; rewrites it, and this is an input-only
     push si                     ; register to every caller
     call drv_seg_scan
     jnc .out
-    call mem_owner_of           ; SPEC.md 52.11.6: not a driver image itself -
+    call KERNEL_SEG:cw_mem_owner_of           ; SPEC.md 52.11.6: not a driver image itself -
     jc .out                     ; is it a claim OWNED by one? A driver's SECOND
     call drv_seg_scan           ; image (52.11) is exactly that, and it is not
 .out:                           ; in drv_tab by design. ONE level, like
@@ -710,7 +714,7 @@ drv_seg_scan:
 ; nothing went wrong" is the absence of both. Only a FAILURE has a stored
 ; code, which is the only one of the three that could not be re-derived.
 ; -----------------------------------------------------------------------------
-drv_status:
+drv_status_x:
     push ax
     mov al, [bx+DRVR_ERR]       ; A REPORTED REASON OUTRANKS 'Loaded', which is
     cmp al, DRVE_OK             ; the one thing that changed here: a driver can
@@ -740,7 +744,7 @@ drv_status:
 ; out: BX = drv_tab + index*DRVR_SIZE
 ; clobbers: nothing else (flags)
 ; -----------------------------------------------------------------------------
-drv_row:
+drv_row_x:
     push ax
     push cx
     mov ah, 0
@@ -768,7 +772,7 @@ drv_row:
 drv_call:
     push ds
     push es
-    push cs
+    push ds
     pop es
     mov ds, [es:bx+DRVR_SEG]
     call far [es:bx+DRVR_DISP]
@@ -798,14 +802,14 @@ drv_call:
 ; far pointer lives in memory and the selector arrives in BP, which nothing
 ; in the ABI uses and which this routine is documented to clobber anyway.
 ; -----------------------------------------------------------------------------
-drv_svc_call:
+drv_svc_call_x:
     or bp, bp
     jz drv_svc_none
     cmp word [drv_fseg], 0
     je drv_svc_none
     push ds
     push es
-    push cs
+    push ds
     pop es                      ; ES = KERNEL_SEG: what the driver reads the
     mov ds, [es:drv_fseg]       ; things it was handed through
     call far [es:drv_fptr]
@@ -828,13 +832,13 @@ drv_svc_call:
 ; blocks and silently wrong the moment two do: a network volume's sectors
 ; would have gone to the hard-disk driver (docs/NET-PLAN.md 2.1).
 ; -----------------------------------------------------------------------------
-drv_blk_call:
+drv_blk_call_x:
     or bp, bp
     jz drv_svc_none
     push di
     push ax
     mov al, [drv_blkcls]
-    call drv_cls_fp             ; DI = &drv_fptr for that class
+    call drv_cls_fp_x             ; DI = &drv_fptr for that class
     jc .none
     mov di, [di+2]              ; ...of which only the SEGMENT varies: the
     or di, di                   ; offset is always PKG_DISP, the three-byte
@@ -844,7 +848,7 @@ drv_blk_call:
     pop di
     push ds
     push es
-    push cs
+    push ds
     pop es
     mov ds, [es:drv_blkseg]
     call far [es:drv_blkfp]
@@ -855,12 +859,19 @@ drv_blk_call:
     pop ax
     pop di
     jmp drv_svc_none
+section .text                   ; DATA, so back to the kernel segment
+                                ; (SPEC.md 2.6 rule 1)
+
 
 ; The staged far pointer drv_blk_call assembles per call. Adjacent and in this
 ; order because `call far [mem]` takes the offset from the word and the segment
 ; from the one after it.
 drv_blkfp:   dw PKG_DISP
 drv_blkseg:  dw 0
+section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
+                                ; segment of its own. DS is still KERNEL_SEG,
+                                ; so the DATA stays in .text at every toggle
+
 
 drv_svc_none:
     xor ax, ax
@@ -879,12 +890,12 @@ drv_svc_none:
 ; register there is. That is why drv_svc_call and drv_blk_call are two bodies
 ; and this is one.
 ; -----------------------------------------------------------------------------
-drv_cp_call:
+drv_cp_call_x:
     push si
     push di                     ; DI is the PAGE's argument (the pane left)
     or bp, bp                   ; and drv_cls_fp answers in it, so it has to
     jz .out                     ; come back before the call
-    call drv_cls_fp
+    call drv_cls_fp_x
     jc .out
     cmp word [di+2], 0
     je .out
@@ -893,7 +904,7 @@ drv_cp_call:
     push di                     ; ...and DI is the pane left again
     push ds
     push es
-    push cs
+    push ds
     pop es
     mov ds, [es:si+2]
     call far [es:si]
@@ -920,7 +931,7 @@ drv_cp_call:
 ; cp_flush_close is reached: drv_shutdown detaches every driver a few
 ; instructions later, and a detach frees strictly more than this does.
 ; -----------------------------------------------------------------------------
-drv_cp_closed:
+drv_cp_closed_x:
     push ax
     push bx
     push cx
@@ -931,7 +942,7 @@ drv_cp_closed:
     mov cl, 1                   ; classes are 1..DRVC_MAX
 .cls:
     mov al, cl
-    call drv_cls_svc            ; DI = that class's copied table
+    call drv_cls_svc_x            ; DI = that class's copied table
     jc .next
     mov bp, [di+DSV_CPCLOSE]
     or bp, bp
@@ -939,7 +950,7 @@ drv_cp_closed:
     mov al, cl
     xor di, di                  ; the page ABI's pane origin means nothing
     xor dx, dx                  ; here, and a driver must not read it
-    call drv_cp_call
+    call drv_cp_call_x
 .next:
     inc cl
     cmp cl, DRVC_MAX
@@ -985,7 +996,7 @@ drv_cp_closed:
 ; failing (SPEC.md 20.8 rule 4: a shipped slot keeps its contract; this is a
 ; narrowing of when the bytes reach the disk, not of what the call does).
 ; -----------------------------------------------------------------------------
-osapi_drv_cfg:
+osapi_drv_cfg_x:
     push ax
     push bx
     push si
@@ -1012,7 +1023,7 @@ osapi_drv_cfg:
     mov di, drv_cfg + CFG_DBLOB ; segments swapped, rather than a second loop
     push ds
     push es
-    push cs
+    push ds
     pop es                      ; ES = the kernel...
     mov ds, bx                  ; ...DS = the caller, whose segment is BX
     rep movsb
@@ -1048,14 +1059,14 @@ osapi_drv_cfg:
 ; Derived and not stored, so a page can never outlive the driver that owns it:
 ; the answer is a walk of the publication slots, and drv_release clears one.
 ; -----------------------------------------------------------------------------
-drv_cp_count:
+drv_cp_count_x:
     push bx
     push di
     xor bx, bx                  ; BL = the count, BH = the class
     mov bh, 1
 .next:
     mov al, bh
-    call drv_cls_svc
+    call drv_cls_svc_x
     jc .done
     cmp word [di+DSV_CPNAME], 0
     je .skip
@@ -1070,14 +1081,14 @@ drv_cp_count:
     pop bx
     ret
 
-drv_cp_class:
+drv_cp_class_x:
     push bx
     push di
     mov bl, al                  ; BL = the ordinal wanted
     mov bh, 1
 .next:
     mov al, bh
-    call drv_cls_svc
+    call drv_cls_svc_x
     jc .no
     cmp word [di+DSV_CPNAME], 0
     je .skip
@@ -1106,7 +1117,7 @@ drv_cp_class:
 ; out: SI -> a NUL string in the kernel segment ('' if none)
 ; clobbers: SI (the output), flags
 ; -----------------------------------------------------------------------------
-drv_cp_name:
+drv_cp_name_x:
     push ax
     push dx
     mov ah, DRV_CPNSZ
@@ -1134,7 +1145,7 @@ drv_cp_stage:
     push di
     push di
     mov al, [bx+DRVR_CLASS]
-    call drv_cp_name            ; SI = the staged slot
+    call drv_cp_name_x            ; SI = the staged slot
     pop di
     mov cx, [di+DSV_CPNAME]
     mov di, si
@@ -1172,7 +1183,7 @@ drv_svc_clear:
     push ds
     pop es
     mov bl, al                  ; BL = the class, for the second lookup
-    call drv_cls_fp
+    call drv_cls_fp_x
     jc .out
     mov word [di+2], 0          ; the segment half: dispatch disarmed
     mov al, bl
@@ -1180,14 +1191,14 @@ drv_svc_clear:
     shl di, 1
     mov word [di+drv_owner], 0
     mov al, bl
-    call drv_cls_svc
+    call drv_cls_svc_x
     mov cx, DSV_SIZE            ; the table alone: the 16-byte staged sink
     xor al, al                  ; name this once also cleared is gone, and
                                 ; drv_cfg now sits right behind drv_svc
     cld
     rep stosb
     mov al, bl                  ; ...and the staged page name with it, which
-    call drv_cp_name            ; is what makes drv_cp_count stop counting
+    call drv_cp_name_x            ; is what makes drv_cp_count stop counting
     mov byte [si], 0            ; this class
 .out:
     pop es
@@ -1234,7 +1245,7 @@ drv_mounted:
                                 ; from its hard disk (SPEC.md 52.10.3)
     xor ax, ax                  ; ...at its root, which is where 19.6 puts
                                 ; KERNEL.SYS, SYSTEM.CFG and every *.DRV
-    call dsk_chdir_q            ; QUIET (SPEC.md 18.9): all three callers here
+    call dsk_chdir_q_x            ; QUIET (SPEC.md 18.9): all three callers here
                                 ; read or write a file BY NAME - drv_find is
                                 ; dskw_stat and drv_cfg_* are dskw_read /
                                 ; dskw_write_sys, none of which look at the
@@ -1285,7 +1296,7 @@ drv_vol_bank:
     push ax
     push bx
     push dx
-    call osapi_file_here        ; DX = the directory cluster, BL = the drive
+    call KERNEL_SEG:cw_osapi_file_here        ; DX = the directory cluster, BL = the drive
     mov [drv_vol_cwd], dx
     mov [drv_vol_drv], bl
     pop dx
@@ -1304,7 +1315,7 @@ drv_vol_back:
     cmp ax, [dsk_cwd]           ; whole cost
     je .out
 .go:
-    call dsk_chdir_q            ; CF = the remount failed; swallowed by the
+    call dsk_chdir_q_x            ; CF = the remount failed; swallowed by the
                                 ; popf below, deliberately.
                                 ;
                                 ; QUIET (SPEC.md 18.9), because putting the
@@ -1319,9 +1330,16 @@ drv_vol_back:
     pop ax
     popf
     ret
+section .text                   ; DATA, so back to the kernel segment
+                                ; (SPEC.md 2.6 rule 1)
+
 
 drv_vol_cwd: dw 0               ; the directory and drive to go back to
 drv_vol_drv: db 0
+section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
+                                ; segment of its own. DS is still KERNEL_SEG,
+                                ; so the DATA stays in .text at every toggle
+
 
 ; -----------------------------------------------------------------------------
 ; drv_find - a file's byte size, straight out of the directory
@@ -1348,7 +1366,7 @@ drv_find:
     push cx
     push dx
     push si
-    call dskw_stat              ; AL = attribute, BX = first cluster,
+    call dskw_stat_x              ; AL = attribute, BX = first cluster,
     jc .no                      ; DX:CX = the size
     test dx, dx
     jnz .no
@@ -1385,7 +1403,7 @@ drv_find:
 ; far call into code the kernel did not write, and the Control Panel's Drivers
 ; page calls this holding both as its pane origin.
 ; -----------------------------------------------------------------------------
-drv_load:
+drv_load_x:
     push ax
     push bx
     push cx
@@ -1397,7 +1415,7 @@ drv_load:
 
     call drv_vol_bank           ; this goes to A: to find the .DRV, and the
                                 ; user may have been anywhere (SPEC.md 51.5.2)
-    call drv_row                ; BX = the row for the whole routine
+    call drv_row_x                ; BX = the row for the whole routine
     cmp word [bx+DRVR_SEG], 0
     jne .already
     cmp word [bx+DRVR_FILE], 0
@@ -1419,7 +1437,7 @@ drv_load:
     ja .big
     push bx
     mov bx, MEM_K_DRV
-    call mem_claim_hi           ; a driver's base IS its CS, so it can never
+    call KERNEL_SEG:cw_mem_claim_hi           ; a driver's base IS its CS, so it can never
     pop bx                      ; move: top-down, like a package's region
     jc .nomem
     mov [bx+DRVR_SEG], dx       ; ...which also arms drv_call
@@ -1431,7 +1449,7 @@ drv_load:
     mov cx, [drv_fsz]
     xor bx, bx
     xor dx, dx                  ; DX:CX = the capacity, DX:AX the answer -
-    call dskw_read              ; the whole file, by name, in A:'s root
+    call dskw_read_x              ; the whole file, by name, in A:'s root
     pop bx
     jc .ioerr
     cmp ax, [drv_fsz]           ; DX is 0 or the read would have refused: a
@@ -1579,7 +1597,7 @@ drv_attach:
                                 ; would hand the SOUND driver's own row a
                                 ; verb on the disk driver's attach
     mov ah, [snd_route]         ; ...then hand it the persisted tier, which
-    call drv_tier               ; may take memory back off it (SPEC.md 34.8).
+    call drv_tier_x               ; may take memory back off it (SPEC.md 34.8).
 .notier:
     mov bp, [bx+DRVR_ENT]       ; ...and only now, when the slot is armed and
     mov al, DRVV_READY          ; every API cell will answer it, tell the
@@ -1642,7 +1660,7 @@ drv_attach:
 ; for the same reason and gives this the clobber list its header claims - the
 ; caller's requested tier is what it stores on the way out.
 ; -----------------------------------------------------------------------------
-drv_tier:
+drv_tier_x:
     push bx
     push cx
     push dx
@@ -1703,7 +1721,7 @@ drv_publish:
     push si
     push di
     mov al, [bx+DRVR_CLASS]
-    call drv_cls_svc            ; DI = this CLASS's copy, not the one copy
+    call drv_cls_svc_x            ; DI = this CLASS's copy, not the one copy
     jc .out
     mov cx, DSV_SIZE / 2
 .copy:
@@ -1720,11 +1738,11 @@ drv_publish:
     shl di, 1
     mov [di+drv_owner], bx
     mov al, [bx+DRVR_CLASS]     ; ...and the far pointer this class's
-    call drv_cls_fp             ; dispatcher goes through
+    call drv_cls_fp_x             ; dispatcher goes through
     mov ax, [bx+DRVR_SEG]
     mov [di+2], ax
     mov al, [bx+DRVR_CLASS]     ; the Control Panel page's NAME is staged
-    call drv_cls_svc            ; here and its two procs dispatched through
+    call drv_cls_svc_x            ; here and its two procs dispatched through
     call drv_cp_stage           ; the far pointer above (SPEC.md 31.9)
 .out:
     pop di
@@ -1748,7 +1766,7 @@ drv_publish:
 ; code the kernel did not write, and the Drivers page calls this holding DI and
 ; BP as its pane origin.
 ; -----------------------------------------------------------------------------
-drv_unload:
+drv_unload_x:
     push ax
     push bx
     push cx
@@ -1756,7 +1774,7 @@ drv_unload:
     push si
     push di
     push bp
-    call drv_row
+    call drv_row_x
     cmp word [bx+DRVR_SEG], 0
     je .out
     mov bp, [bx+DRVR_ENT]
@@ -1775,7 +1793,7 @@ drv_unload:
     je .free
     mov dx, [ticks]
 .tk:
-    call task_yield
+    call KERNEL_SEG:cw_task_yield
     cmp byte [drv_wcnt], 0
     je .free
     cmp dx, [ticks]
@@ -1809,18 +1827,18 @@ drv_unload:
 ; there is exactly ONE teardown path - main's snd_unhook did this for the
 ; resident card code, and the obligation moved here with the code.
 ; -----------------------------------------------------------------------------
-drv_shutdown:
+drv_shutdown_x:
     push ax
     push bx
     push cx
     xor cx, cx
 .next:
     mov al, cl
-    call drv_row                ; BX = the row
+    call drv_row_x                ; BX = the row
     cmp word [bx+DRVR_SEG], 0
     je .skip
     mov al, cl
-    call drv_unload
+    call drv_unload_x
 .skip:
     inc cx
     cmp cx, DRV_MAX
@@ -1850,11 +1868,11 @@ drv_release:
     cmp bx, [di+drv_owner]      ; single word store is atomic against it
     jne .norow
     mov al, [bx+DRVR_CLASS]
-    call drv_cls_fp
+    call drv_cls_fp_x
     mov word [di+2], 0
     mov al, [bx+DRVR_CLASS]
     call drv_svc_clear
-    call cp_drv_gone            ; a page this driver owned is on screen no
+    call cp_drv_gone_x            ; a page this driver owned is on screen no
                                 ; longer, and [cp_sel] must not name it
                                 ; (SPEC.md 31.9)
 .norow:
@@ -1879,7 +1897,7 @@ drv_release:
                                 ; anywhere near the cause. The sibling of the
                                 ; bug 51.2.1's per-class publication fixed, in
                                 ; the one place that was still class-blind
-    call dsk_vol_drop_drv       ; every volume this driver registered goes
+    call dsk_vol_drop_drv_x       ; every volume this driver registered goes
                                 ; BEFORE its claims do (SPEC.md 51.8): a
                                 ; mounted volume whose transport has been
                                 ; freed is a read into whatever claims that
@@ -1889,9 +1907,9 @@ drv_release:
     mov word [bx+DRVR_KB], 0
     push bx                     ; anything the DRIVER itself claimed is owned
     mov bx, dx                  ; by its segment (mem_own), so sweep those
-    call mem_free_owner         ; FIRST - the image's own free below takes
+    call KERNEL_SEG:cw_mem_free_owner         ; FIRST - the image's own free below takes
     mov bx, MEM_K_DRV           ; that segment out of existence, and a claim
-    call mem_free               ; whose owner word no longer names anything
+    call KERNEL_SEG:cw_mem_free               ; whose owner word no longer names anything
     pop bx                      ; could never be found again. The mem_free_rec
 .out:                           ; fence (SPEC.md 50.4), for a driver
     pop di
@@ -1949,7 +1967,7 @@ drv_release:
 ; segment" (drv_owns_seg), not on [drv_fseg] alone - a second driver's worker
 ; exiting while another driver's services are published still dies cleanly.
 ; -----------------------------------------------------------------------------
-drv_task:
+drv_task_x:
     push bx
     push dx
     mov bx, es
@@ -1969,7 +1987,7 @@ drv_task:
     pushf
     cli                         ; count-then-spawn in one IF=0 window: counted
     inc byte [drv_wcnt]         ; BEFORE the task can run, so the count never
-    call task_spawn             ; lags a worker that spawned and died at once
+    call KERNEL_SEG:cw_task_spawn             ; lags a worker that spawned and died at once
     jc .spfail                  ; (task_spawn preserves IF, so nothing runs
     push bx                     ; until our popf)
     mov bl, al                  ; AL = the slot: a driver's worker is service
@@ -1988,13 +2006,13 @@ drv_task:
     stc
     jmp short .out
 .exit:
-    call drv_owns_seg           ; CF = 0: ES is some loaded row's image
+    call drv_owns_seg_x           ; CF = 0: ES is some loaded row's image
     jc .fail
 .die:
     cli                         ; IF=0 through task_exit (it would cli again
     dec byte [drv_wcnt]         ; anyway): the count moves in the SAME window
     xor bx, bx                  ; as the death publish, and this NEVER
-    jmp task_exit               ; RETURNS - the two pushes above die with the
+    jmp KERNEL_SEG:cw_task_exit               ; RETURNS - the two pushes above die with the
                                 ; task's stack
 .fail:
     stc
@@ -2038,7 +2056,7 @@ drv_cfg_pack:
     loop .p
     call drv_want_get
     mov [drv_cfg+CFG_WANT], ax
-    call sched_mode_get
+    call KERNEL_SEG:cw_sched_mode_get
     mov [drv_cfg+CFG_SCH], al
     mov al, [vid_kind]          ; the adapter the machine is RUNNING as, which
     mov [drv_cfg+CFG_VID], al   ; on a machine that has never been asked is
@@ -2079,7 +2097,7 @@ drv_cfg_unpack:
     mov al, [drv_cfg+CFG_SCH]
     cmp al, 1
     ja .out                     ; a byte from a future version: leave the
-    call sched_mode_set         ; mode alone rather than pick nonsense
+    call KERNEL_SEG:cw_sched_mode_set         ; mode alone rather than pick nonsense
 .out:
     pop di
     pop si
@@ -2102,13 +2120,13 @@ drv_cfg_load:
     push si                     ; and its size high word coming back (18.4.1)
     push di
     push es
-    push cs
+    push ds
     pop es                      ; a 64-byte .bss buffer, not a heap claim: this
     mov bx, drv_cfgbuf          ; runs at boot and a claim can be refused, and
     mov cx, CFG_FBUF            ; the read takes ES:BX for exactly that reason
     xor dx, dx
     mov si, drv_cfgname
-    call dskw_read              ; AX = bytes actually read (DX = 0: CFG_FBUF)
+    call dskw_read_x              ; AX = bytes actually read (DX = 0: CFG_FBUF)
     jc .out                     ; no file: the defaults stand
     call drv_cfg_pack           ; the LIVE state into the struct first: that
                                 ; is what a key the file does not carry - or
@@ -2391,7 +2409,7 @@ drv_cfg_ser:
 ; today - so the day the kernel passes 64KB, the check would start reporting
 ; that the system disk is not the system disk. Existence is the question here.
 ; -----------------------------------------------------------------------------
-drv_cfg_save:
+drv_cfg_save_x:
     push bx
     push cx
     push dx                     ; DX is the write's count high word (18.4.1)
@@ -2406,7 +2424,7 @@ drv_cfg_save:
     call drv_mounted
     jc .nodisk
     mov si, drv_sysname
-    call dskw_stat              ; the disk in A: is not guaranteed to be ours
+    call dskw_stat_x              ; the disk in A: is not guaranteed to be ours
     jc .notsys
 
     push ds                     ; rebuild the whole file: a settings file is
@@ -2417,7 +2435,7 @@ drv_cfg_save:
     mov bx, drv_cfgbuf
     xor dx, dx                  ; DX:CX = the count; a settings file is bytes
     mov si, drv_cfgname
-    call dskw_write_sys         ; ES is already ours, which is where it reads.
+    call dskw_write_sys_x         ; ES is already ours, which is where it reads.
                                 ; _sys: SYSTEM.CFG is hidden + system, so it
                                 ; is neither listed nor deletable, and only
                                 ; this entry point may rewrite one (19.6)
@@ -2633,7 +2651,9 @@ drvp_reset:
     ret
 %endif
 
-section .text
+section .cold                   ; ...and back to cold code: drv_boot and
+                                ; drv_notice are the boot-time half, run once
+                                ; from kmain, and could not be more cold
 
 ; -----------------------------------------------------------------------------
 ; drv_boot - load every driver the settings file asks for
@@ -2644,7 +2664,7 @@ section .text
 ; disk that is not there, a file that is not on it and a card that is not in
 ; the machine are all recorded in the row and reported afterwards.
 ; -----------------------------------------------------------------------------
-drv_boot:
+drv_boot_x:
     push ax
     push bx
     push cx
@@ -2689,13 +2709,13 @@ drv_boot:
 %ifdef KERN_BIG
     mov ah, [vid_kind]
 %endif
-    call vid_switch
+    call KERNEL_SEG:cw_vid_switch
     jc .vnosw                   ; no such adapter here: stay on the probe's
 %ifdef KERN_BIG                 ; answer
     cmp ah, [vid_kind]
     je .vnosw                   ; already that adapter: nothing was cleared
 %endif
-    call spl_reset              ; ...otherwise redraw the loading screen onto
+    call KERNEL_SEG:cw_spl_reset              ; ...otherwise redraw the loading screen onto
     jmp short .load             ; the framebuffer the mode set just wiped
 .vnosw:
 %ifdef KERN_BIG
@@ -2703,19 +2723,19 @@ drv_boot:
     ; applies: the adapter was already right, or was refused, and neither is a
     ; statement about the desktop. No spl_reset - the primary's card is never
     ; re-programmed here, so the loading screen is untouched.
-    call vid_disp_init
+    call KERNEL_SEG:cw_vid_disp_init
 %endif
 .load:
     xor cl, cl
 .next:
     mov al, cl
-    call drv_row
+    call drv_row_x
     cmp word [bx+DRVR_FILE], 0
     je .skip
     cmp byte [bx+DRVR_WANT], 0
     je .skip
     mov al, cl
-    call drv_load
+    call drv_load_x
     jnc .skip
     mov byte [drv_nerr], 1      ; something to say once there is a screen
 .skip:
@@ -2741,7 +2761,7 @@ drv_boot:
     xor cx, cx
 .dnext:
     mov al, cl
-    call drv_row
+    call drv_row_x
     cmp word [bx+DRVR_FILE], 0
     je .dskip
     cmp byte [bx+DRVR_WANT], 0
@@ -2774,17 +2794,68 @@ drv_boot:
 ; (SPEC.md 31.5): app_launch takes its own locks, so this must run with none
 ; held - which is why it is the last thing kmain does before ui_task.
 ; -----------------------------------------------------------------------------
-drv_notice:
+drv_notice_x:
     push ax
     cmp byte [drv_nerr], 0
     je .out
     mov byte [drv_nerr], 0
     mov byte [cp_sel], CP_IDRV
     mov al, KIND_CTRL
-    call app_launch
+    call KERNEL_SEG:cw_app_launch
 .out:
     pop ax
     ret
+
+; =============================================================================
+; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,
+; and these near-call the bodies above, so every routine here keeps its
+; ordinary near `ret`.
+; =============================================================================
+dvf_drv_blk_call:  call drv_blk_call_x
+               retf
+dvf_drv_boot:      call drv_boot_x
+               retf
+dvf_drv_cfg_save:  call drv_cfg_save_x
+               retf
+dvf_drv_cls_fp:    call drv_cls_fp_x
+               retf
+dvf_drv_cls_svc:   call drv_cls_svc_x
+               retf
+dvf_drv_cp_call:   call drv_cp_call_x
+               retf
+dvf_drv_cp_class:  call drv_cp_class_x
+               retf
+dvf_drv_cp_closed: call drv_cp_closed_x
+               retf
+dvf_drv_cp_count:  call drv_cp_count_x
+               retf
+dvf_drv_cp_name:   call drv_cp_name_x
+               retf
+dvf_drv_init:      call drv_init_x
+               retf
+dvf_drv_load:      call drv_load_x
+               retf
+dvf_drv_notice:    call drv_notice_x
+               retf
+dvf_drv_owns_seg:  call drv_owns_seg_x
+               retf
+dvf_drv_row:       call drv_row_x
+               retf
+dvf_drv_shutdown:  call drv_shutdown_x
+               retf
+dvf_drv_status:    call drv_status_x
+               retf
+dvf_drv_svc_call:  call drv_svc_call_x
+               retf
+dvf_drv_task:      call drv_task_x
+               retf
+dvf_drv_tier:      call drv_tier_x
+               retf
+dvf_drv_unload:    call drv_unload_x
+               retf
+dvf_osapi_drv_cfg: call osapi_drv_cfg_x
+               retf
+
 
 ; -----------------------------------------------------------------------------
 section .bss
