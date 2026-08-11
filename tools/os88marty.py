@@ -712,6 +712,34 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0, card=None):
     screen every few seconds, not to sleep through it.
     """
     import time
+    # A STILLNESS WINDOW WIDER THAN THE CLOCK'S OWN PERIOD CAN NEVER CLOSE,
+    # and that is the paragraph above happening rather than being warned
+    # about. `stable` identical samples `quiet` apart is (stable * quiet) HOST
+    # seconds of unchanged screen; the menu bar's clock changes once a GUEST
+    # minute, and the guest runs FASTER than real time - so at 3.3x a
+    # 60-host-second window spans three clock ticks and every pair of samples
+    # differs, for ever. `settle(m, quiet=30, limit=2400)` after a hard-disk
+    # install sat out its full 40 minutes with the install long finished, and
+    # was duly reported as the GUEST being slow: the install was 64 guest
+    # seconds. Measured rather than assumed, because the ratio is a property
+    # of this host, and only when the window is wide enough to be at risk.
+    if quiet * stable > 4.0:
+        c0 = m.status()["cycles"]
+        time.sleep(0.5)
+        # 4.772727 MHz is every machine in this tree bar --turbo, which only
+        # makes this over-estimate and so err towards raising.
+        rate = (m.status()["cycles"] - c0) / 0.5 / 4772727.0
+        if rate > 0.0 and quiet * stable * rate >= 55.0:
+            raise MartyError(
+                "settle(quiet=%g, stable=%d) asks for %.0f GUEST seconds of "
+                "unchanged screen (this host runs the guest at %.1fx), and the "
+                "menu bar's clock changes every 60 - so this can never return "
+                "and would wait out the whole %.0fs limit. Use a smaller "
+                "`quiet`; and if you are waiting on something that holds the "
+                "gfx lock while it works - a hard-disk install, a big copy - "
+                "`settle` is the wrong tool anyway, because the screen is "
+                "MORE still while it is busy. Use `until(m, cond)`."
+                % (quiet, stable, quiet * stable * rate, rate, limit))
     t0 = time.time()
     last, run, seen = None, 0, None
     while time.time() - t0 < limit:
