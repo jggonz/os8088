@@ -84,12 +84,22 @@ DSK_R_SIZE   equ 28              ; file size, dword
 ; dsk_read_chain's run coalescer, dskw_flush - is untouched by capacity, and
 ; a volume is capped at 65,535 sectors (31.99MB) by BPB rule 8, which is also
 ; the DOS 3.3 partition limit these machines ran.
-DVOL_MAX     equ 6               ; A:, B:, and one per PARTITION a disk
-                                 ; driver can mount: four primaries is the
-                                 ; whole of what a partition table holds
-                                 ; (SPEC.md 52.2), and each is its own volume,
-                                 ; its own drive letter and its own desktop
-                                 ; icon - so C: through F:
+DVOL_MAX     equ 8               ; the FLOPPIES the machine has, and one per
+                                 ; PARTITION a disk driver can mount: four
+                                 ; primaries is the whole of what a partition
+                                 ; table holds (SPEC.md 52.2), and each is its
+                                 ; own volume, its own drive letter and its
+                                 ; own desktop icon.
+                                 ;
+                                 ; It was 6 - A:, B: and the four partitions -
+                                 ; and SPEC.md 18.98's external pair would have
+                                 ; eaten two of them, so a machine with four
+                                 ; floppies could not reach all of a
+                                 ; four-partition disk at once. 8 is 54 bytes
+                                 ; of .text (this table, dsk_vbase and 18.8.1's
+                                 ; three per-volume words) and 2 of .bss, and
+                                 ; every one of them scales off this constant
+                                 ; rather than being written out
 DV_KIND      equ 0               ; db: 0 = BIOS int 13h, 1 = driver, 0xFF free
 DV_UNIT      equ 1               ; db: the int 13h DL, or the driver's handle
 DV_FLAGS     equ 2               ; db: bit 0 = show a desktop zone (SPEC 26)
@@ -120,10 +130,10 @@ DVK_FREE     equ 0xFF
 dsk_vtab:
     db DVK_BIOS, 0, 0, 0         ; volume 0 = A:
     dw 0, 0
-    db 'Disk A', 0, 0
+    db 0, 0, 0, 0, 0, 0, 0, 0   ; named by the kernel (SPEC.md 26.4)
     db DVK_BIOS, 1, 0, 0         ; volume 1 = B:
     dw 0, 0
-    db 'Disk B', 0, 0
+    db 0, 0, 0, 0, 0, 0, 0, 0   ; ...as every other volume already was
     times DVOL_MAX - 2 db DVK_FREE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 ; --- the BOOT VOLUME's partition base (SPEC.md 52.10.3) ----------------------
@@ -1372,6 +1382,64 @@ dsk_geom_pick:
     mov [dsk_cylmax], ax
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_flop_add - register a BIOS floppy beyond A: and B: (SPEC.md 18.98)
+; in:  AL = the int 13h drive number (2 or 3)
+; out: CF=0 and AL = the volume index it took; CF=1 = no free row
+; clobbers: AX (the output), flags
+;
+; The pair on the 5.25" adapter's external 37-pin connector. Nothing about
+; the transport is new - a floppy is already "a DVK_BIOS row whose unit is
+; below 80h" everywhere that asks (disk_mount's medium test, dsk_geom_pick's
+; cylinder bound, dsk_here_ok's motor bit, dskw_fmt_probe's refusal), and
+; dsk_mbit has had four entries since SPEC.md 18.9.1. All that was missing is
+; a ROW.
+;
+; It takes the first FREE row rather than row AL, and that is what keeps
+; SPEC.md 52.10.3's boot partition at C: on a machine that booted from a hard
+; disk: dsk_boot_from runs first and has already taken row 2 there, so the
+; externals land at D: and E: and the volume the machine booted from keeps the
+; letter dsk_bootltr has already stamped into three messages. On a floppy
+; machine nothing has taken a row yet, so they are C: and D: - which is what
+; DOS 4 and earlier called them, and what the drive-select lines mean.
+; -----------------------------------------------------------------------------
+dsk_flop_add:
+    push bx
+    push cx
+    mov cl, al                  ; the unit, before AX becomes the answer
+    mov bx, dsk_vtab + 2*DV_SIZE    ; the ROW walks, as dsk_vol_add's does
+.scan:
+    cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
+    jae .full
+    cmp byte [bx+DV_KIND], DVK_FREE
+    je .got
+    add bx, DV_SIZE
+    jmp short .scan
+.got:
+    mov [bx+DV_UNIT], cl
+    mov word [bx+DV_SECS], 0    ; unknown, like every other floppy's
+    mov word [bx+DV_SEG], 0     ; no donated listing claim: the .lowbss floor
+    mov byte [bx+DV_FLAGS], 1   ; shown on the desktop - the caller only calls
+                                ; for a drive the equipment word claims
+    mov byte [bx+DV_LBL], 0     ; ...and NAMED by the kernel, not here: an
+                                ; empty label is what makes desk_zone_label
+                                ; derive 'Disk C' from the index, the same
+                                ; courtesy dsk_vol_add extends a driver
+    mov byte [bx+DV_KIND], DVK_BIOS ; published LAST, dsk_vol_add's discipline
+    mov ax, bx
+    sub ax, dsk_vtab
+    mov cl, 4
+    shr ax, cl                  ; DV_SIZE = 16: the row back to an index
+    pop cx
+    pop bx
+    clc
+    ret
+.full:
+    pop cx
+    pop bx
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5181,10 +5249,19 @@ section .bss
 ; I/O at all; dsk_bpbsg keeps the signature dsk_fatw_pick needs to decide window
 ; reuse, which is otherwise computed off the sector we would have read.
 ;
-; NOT for floppies, which is the whole point of the split: a floppy is exactly
-; the volume that CAN be swapped between two operations, and the batch bracket
-; is what will let one skip this - under an assertion a caller makes,
-; not one the kernel invents.
+; **FLOPPIES BANK HERE TOO, and this comment used to say they did not.** It was
+; written before SPEC.md 18.9.3 landed and left in the future tense - "the batch
+; bracket is what WILL let one skip this" - so it read as a statement that rows
+; 0 and 1 never touch this array. They are its HEAVIEST users: inside a batch a
+; floppy banks with [dsk_bpbok] = 2, and that is the whole of 18.9.3's measured
+; win (an install's BPB reads 41 -> 2, the floppy side 356 -> 163 sectors).
+;
+; So this is DVOL_MAX * 64 and cannot be indexed from volume 2 to save the two
+; rows 18.98 added. That was proposed, on the strength of the stale comment
+; above, and it would have taken the bracket away from A: and B: - the two
+; volumes it was written for. The split 18.9.2 makes is between PERMANENT
+; (fixed, 1) and BATCH-SCOPED (floppy, 2), not between volumes that use this
+; and volumes that do not.
 dsk_bpbv:     resb DVOL_MAX * 64
 dsk_bpbsg:    resw DVOL_MAX
 dsk_bpbok:    resb DVOL_MAX     ; 0 = nothing banked, 1 = banked and good

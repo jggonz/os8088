@@ -9197,6 +9197,7 @@ on a 1.44MB one**, all of them metadata, and the data area is not touched.
 |---------|----------|
 | `dskw_fmt_probe` | in: `[disk_drive]` = the volume. Out: CF=0 with AL = a row of `dskw_fmt_tab`; CF=1 with AX = `FERR_*` — the medium could not be read at all (`FERR_IO`), or the volume is not a floppy (`FERR_PROT`). Clobbers AX, flags. **Reads only**, so it is safe to call before the user has agreed to anything, and that is the point: the confirmation names the size it is about to make. |
 | `dskw_format` | in: AL = a `dskw_fmt_tab` row, `[disk_drive]` = the volume. Out: CF=0; CF=1 with AX = `FERR_IO` / `FERR_WPROT` / `FERR_PROT`. Clobbers flags. Writes the boot sector **first** and the root directory last. |
+| `dskw_fmt_reach` | in: AL = the row just written, `[disk_drive]` = the volume, `[disk_spt]`/`[disk_heads]` still the format's. Out: CF=0 — the volume's **last** sector was written and read back intact; CF=1 — it was not. Clobbers AX, flags. Destroys that sector's contents, so it is callable only on a disk the user has already agreed to erase (§18.96.2). |
 
 **The geometry is two questions and they have two different answers.** How
 many sectors a track holds is a property of the MEDIUM and is read off it —
@@ -9216,6 +9217,24 @@ undecidable case — 9-sector media in a 1.2MB drive, where 360KB and 720KB are
 indistinguishable — is resolved **downward, to 360KB**, because a 360KB layout
 on 720KB media wastes half a disk and a 720KB layout on 360KB media is a
 volume whose second half does not exist.
+
+**…and the user can overrule that, because on the target machine the
+inference above is sometimes simply wrong.** An IBM 4865 or any other 3.5"
+drive on the 5.25" adapter's external 37-pin connector is an
+**80-cylinder drive on a ROM that answers no questions about it**, so
+`AH=08h` refuses, the probe reads a 360KB machine, and the only 720KB disk
+the machine can make is one it will not offer. §22.12's confirmation
+therefore carries a **Space** key that offers the other row with the same
+media sectors-per-track. That pair exists for 9-sector media alone — rows 2
+and 3 — so "the other row with the same spt" *is* the 720KB/360KB toggle and
+nothing else: it can never offer 1.44MB on 720-sector media, which is
+§18.96.1's disaster case made unreachable by construction rather than
+guarded against. Rows 0 and 1 have no partner and the line does not name a
+key that would do nothing (§47).
+
+This is an **assertion about hardware**, not a probe, and it is the same
+assertion DOS took at face value from `DRIVER.SYS /d:2 /t:80 /s:9`. The
+difference is what §18.96.2 does with it.
 
 #### 18.96.1 Reading cylinder 40 to settle it is WRONG — the negative result
 
@@ -9424,6 +9443,111 @@ only as far as "the recalibrate completes and its interrupt code decodes"
 (`FDD_S_SEEKOK`, no hang). **The removal itself has never run.** The 5150
 whose SW1 claims a drive it does not have is the only machine that can fire
 it, which is what the field report is for.
+
+#### 18.96.2 Trust the assertion, then check it — and the check is a WRITE
+
+A 720KB pick that the drive cannot reach is the **worst** outcome this
+feature can produce, and it does not announce itself. A 720KB layout is boot
++ 6 FAT + 7 root = LBA 0..13, every byte of it inside **cylinder 0** — so on
+a 40-cylinder drive the format *completes*, the volume *mounts*, and the disk
+then lies about its size until something writes past cylinder 39. Worse, the
+disk is now mountable, so §22.12's predicate (`FS_MOK == 0`) **greys Format
+Disk… out** and the user has no way back. An unchecked assertion here does
+not risk an error message; it risks a disk that works until it does not, on a
+machine with no way to reformat it.
+
+So `dskw_fmt_reach` runs after a successful `dskw_format` of **row 2**, the
+only row the toggle can produce that a 40-cylinder drive cannot hold. It
+writes a marker to the volume's **last** sector, re-zeroes the buffer, reads
+that sector back and compares. Four things about it:
+
+- **The last sector, not the 360KB boundary.** The obvious probe is LBA 720 —
+  cylinder 40, the first sector a 360KB disk has not got — and it is too
+  weak: a great many 40-track drives step happily to 41 or 42, so a test
+  there can PASS on exactly the drive it exists to catch. Cylinder 79 is
+  reachable by no 40-cylinder mechanism there is, it is one seek either way,
+  and it validates precisely the extent the BPB has just claimed.
+- **It is a write, and that is what makes it a positive test.** §18.96.1's
+  rule is that every test must be a read *succeeding*, and a bare read of
+  cylinder 79 would break it twice over — it rests on a failure, and a head
+  stopped at track 39 can answer with track 39's data. Writing a marker
+  first removes both: the compare succeeds only if the bytes that came back
+  are the bytes we put there, at the cylinder we named. The buffer is
+  **re-zeroed between the write and the read**, so a read that never touched
+  it cannot compare equal against our own staging.
+- **It may only run on a disk already condemned.** It destroys the sector it
+  tests, which is free here and would not be anywhere else — hence the
+  contract line above, and hence no API slot, for `dskw_format`'s reason.
+- **Failure re-formats as 360KB rather than reporting and stopping**, because
+  of the greying trap in the first paragraph: stopping would leave the
+  mountable 720KB volume on screen with Format Disk… disabled. The user gets
+  a working disk and a toast that says what happened and why —
+  `Drive cannot reach 720K - made 360K`, §59.6's subject/outcome/cause.
+
+The cost on the honest path is **two `int 13h` calls**, once per 720KB
+format, against a format that is already 7 writes and a remount.
+
+### 18.98 The third and fourth floppy — a row, and nothing else
+
+The IBM 5.25" Diskette Drive Adapter has an **external 37-pin D connector**
+(J1) beside its internal edge connector, and it carries two more drives —
+physical **#2 and #3**, same twisted cable and termination as the internal
+pair, no power, and no booting from them. An IBM 4865 lives there. DOS 4 and
+earlier lettered them C: and D: ahead of any hard disk.
+
+**The BIOS has always supported them.** `DISKETTE_IO` in the 27 Oct 82 ROM
+gates the drive number at `cmp dl,4 / jae <invalid>`, and its motor and select
+path is generic over `DL` — `mov cl,dl / mov al,1 / shl al,cl` for the
+`0040:003F` motor bit, then `mov al,0x10 / shl al,cl / or al,dl` for the DOR
+at 3F2h, whose bits 4..7 are motor-enable for drives A..D. It clears the other
+motor bits as it goes, so **one motor spins at a time** — which is the fact
+`dsk_here_ok` was already relying on.
+
+**And almost nothing in this kernel had to change**, because the volume layer
+never encoded "a floppy is row 0 or row 1". A floppy is *a `DVK_BIOS` row whose
+unit is below 80h* at every site that asks — `disk_mount`'s medium test,
+`dsk_geom_pick`'s cylinder bound, `dsk_here_ok`'s motor test, `dskw_fmt_probe`'s
+refusal, `fm_fmt_ok`'s greying — and `dsk_mbit` has held four entries since
+§18.9.1. What was missing was a **row**: `dsk_flop_add` takes the first free
+one per drive the machine claims, and everything above follows.
+
+**Detection is `int 11h` and there is nothing to add to it.** Bits 6–7 of the
+equipment word are the drive count less one, and on a 5150/5160 that word is
+the motherboard's **SW1** — so it is already the user's assertion, delivered
+by the hardware, and it is the same source DOS reads. Measured on the 1982 ROM
+under MartyPC: a two-drive machine answers `046F` (bits 6–7 = 1) and a
+four-drive machine `04EF` (= 3). `desk_init` had read this since the beginning
+and then clamped the answer to 2, because there was no row to give the other
+two; the clamp is what went.
+
+Three things follow, and the first is the one that decides the letters:
+
+- **The rows are claimed AFTER `dsk_boot_from` and before `drv_boot`.** That
+  ordering is the whole of §52.10.3's boot partition keeping C: on an installed
+  machine: `dsk_boot_from` has already taken row 2 there, so the externals land
+  at D: and E: and `dsk_bootltr`'s three messages still name the right disk. On
+  a floppy machine nothing has taken a row yet, so they are C: and D: — DOS 4's
+  own answer. `desk_init` is where that falls out for free, which is why the
+  code is there rather than beside `dsk_boot_from` where it reads as belonging.
+- **A count is not a map, and it does not need to be.** The equipment word says
+  *how many*, not *which*, so there is no drive 3 without a drive 2 — and drive
+  selects are ordered, so that is a fact about the cable rather than a
+  limitation of the encoding. A machine that claims fewer drives gets fewer
+  rows and therefore no zone, with nothing to hide afterwards.
+- **Probing the drives instead would cost the boot and answer no better.**
+  `AH=08h` is refused by this ROM for floppies (§18.96), and the honest
+  alternative — recalibrate each absent unit and wait for the failure — is
+  seconds of timeout on a real machine for a question the switches have already
+  answered. §51.3's reasoning exactly: nothing probes hardware that was not
+  asked about.
+
+`DVOL_MAX` went 6 → 8 for this. At 6 the external pair would have eaten two of
+the four partition rows, so a machine with four floppies could not reach all of
+a four-partition disk at once; the eighth row costs 54 bytes of `.text` and 2
+of `.bss`, every one of them scaling off the constant.
+
+**What this does not do is boot from one** — the adapter cannot, and neither
+can the BIOS.
 
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
@@ -12494,11 +12618,26 @@ and no armed confirmation. A medium that answers gets a confirmation naming
 the size the probe chose:
 
 ```
-Format A: as 360K? Enter=yes Esc=no
+Format A: as 720K?
+Spc=size  Enter=yes  Esc=no
 ```
 
 which is the one place the user can catch §18.96's undecidable case before it
-costs them anything.
+costs them anything — and, with **Space**, the one place they can overrule
+it. Space offers the other row with the same media sectors-per-track, which
+is the 720KB/360KB pair and only ever that (§18.96); the size on the line is
+`[fm_fmtrow]`'s, so the toggle is `xor byte [fm_fmtrow], 1` and the redraw is
+`.lineonly` — the same one-status-line path a typed rename character already
+takes. Rows 0 and 1 have no partner, so Space keeps meaning *no* there and
+the second line drops `Spc=size` with it.
+
+**It is two lines because one no longer fits.** `fm_stat_line` truncates at
+`([fm_cw] - 12) / 8` characters and the Disk window's template is 320 wide,
+so 38 — where `Format A: as 720K? Spc=size Enter=yes Esc=no` is 44 and would
+lose `Esc=no`, which is the half §22 insists on naming. The question takes
+the row above the status line and the answers take the status line itself,
+which is exactly what the replace question (§22.3) already does and is the
+reason `fm_stat_line` is a proc at all.
 
 **The confirmation is `FS_EDIT = 5` and it is Delete's, not Rename's.** Enter
 says yes and *every other key* says no — the asymmetry §22 already argues
@@ -12513,6 +12652,14 @@ and `fmv_bcast` pushes it into any sibling window on the same drive — the
 same pair `fm_edit_commit` ends with, and for the same reason. On failure the
 `FERR_*` is said as a toast (§59.5) and the window is left showing exactly
 what it showed before, which is the disk it still cannot mount.
+
+**A 720KB commit is checked before the window is re-listed**, and the check
+sits between `dskw_format` and `fmv_load` for a reason that is entirely about
+ordering: §18.96.2 may have to format the disk a *second* time, and the
+re-list must describe the volume that ends up on the platter rather than the
+one the user asked for. `fm_fmtrow` is rewritten to 3 on that path so the
+window's new caption and listing follow the 360KB volume that was actually
+made.
 
 Two things are worth knowing before touching it. On the machine this project
 is calibrated against the probe costs **no doomed read at all** — `AH=08h`
@@ -13626,6 +13773,65 @@ six volumes are two columns of four and two — the last ordinal sits in row 1,
 two whole zones above the bottom of the first column, and a rect sized to it
 would cut them off. Taking the deepest row any column reaches costs at most
 one unused row of slack, in the safe direction.
+
+### 26.4 The caption is `A:`, and on the CGA the icon is square
+
+Two columns of drive zones on a CGA read as **one run of text** — `Disk C`
+followed by `Disk A` with a single space between them — and §18.98's third
+and fourth floppies made that the ordinary case rather than the hard-disk
+one. The gap is `DESK_COLW - (DESK_ZW + 2 × DESK_ZOVER)` = 56 − 52 = **4
+pixels**, so it is set by the *caption*, and the caption was six glyphs
+because `'Disk '` prefixed a letter the icon had already told you about: a
+driver-backed volume is drawn with the hard disk, a floppy with the diskette.
+The prefix carried no information and cost the whole column pitch.
+
+So the label is the drive letter — **`A:`, not `A`**, because that is how
+every other surface in this OS writes a drive. Three things fall out:
+
+- **`DESK_ZW` 48 → 32**, which is the icon's own width, so the zone is the
+  picture again; and `DESK_COLW` 56 → 44, which is the zone plus its overhang
+  plus one clear glyph cell.
+- **The white rect HUGS the caption.** It was the zone's full width whatever
+  was in it — right while six glyphs exactly filled it, and a bar with a
+  letter lost in the middle at two. `desk_draw_zone` already measured with
+  `font_width` to centre the text, so the rect follows the same number. It is
+  **clamped** to the zone plus overhang, because that is the bound
+  `desk_zone_rect` and `desk_dmg_zones` erase; nothing gives a volume a
+  `DV_LBL` of its own today (§52.4 — the kernel names them), but a driver
+  that did would otherwise letter outside the rect that cleans up after it.
+- **Nothing else moved.** The painter's centring, the hit test, the damage
+  rect and the XOR highlight all derive from `DESK_ZW`/`[desk_zh1]`.
+
+**And on the CGA the icon is 32 × 14 rather than 32 × 32.** That adapter's
+pixels are **2.4:1 tall** — 640×200 on a 4:3 tube — so `ico_disk32` renders
+about 32 wide by 77 high there: a stretched column that is not a diskette
+shape at all, costing 60 rows of pitch for the privilege. 14 rows is 33.6
+real units against 32, square to within 5%, and a 3.5" diskette is 90 × 94mm
+anyway. The same argument gives `ico_hdd14`.
+
+It is **drawn, not squashed**, and that is the part worth keeping. Halving
+`ico_disk32` by OR-ing row pairs is nearly free and thickens every 1-pixel
+feature into 2 — the shutter window, the label box and the two vertical rules
+are all single lines, so what comes out has the diskette's outline and none of
+its detail. Selecting alternate rows loses them instead. No new draw path was
+needed either way: `icon_draw` reads a `wwords, height` header, so a shorter
+icon is **pure data**.
+
+The pitch follows the icon, and that is the second half of the win: a zone is
+`icon + DESK_LBLH`, so CGA goes from a 60-row pitch to 34, and
+`desk_rowcalc`'s `(dock_y0 - DESK_ZY0) / pitch` from **2 zones a column to
+4** — which halves the columns for any given number of volumes, exactly when
+§18.98 and `DVOL_MAX` 8 made eight of them possible.
+
+Two things about where that decision lives. It keys on **`[vid_kind]`, not
+`[vid_h]`**: the question is the pixel aspect, which is a property of the
+adapter's mode rather than of how many rows it has. And it is re-asked in
+`desk_rowcalc` rather than at boot, because that is the routine `vid_switch`
+re-runs (§39.11.2) — so a machine moved from its CGA to its Hercules gets the
+tall pair back with no second site to remember. `[desk_icoh]`, `[desk_zh1]`,
+`[desk_zstep]`, `[desk_pdisk]` and `[desk_phdd]` are `.text` with real
+initialisers for the reason every boot-reachable table here is: `-f bin`
+zeroes nothing, and a zero icon pointer draws the interrupt vector table.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 
