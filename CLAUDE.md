@@ -1665,6 +1665,21 @@ the wrong instrument here** and cost a round: "the menu bar's white field is
 gone" reads backwards on Paint, whose fullscreen bed is white, so all three
 keys measured as doing nothing while all three worked.
 
+**`wm_fullscreen`'s exit honours BX now, and it did not (SPEC.md §11.2).**
+AL=0 opened by overwriting BX with `[wm_fs]`, so it dropped whatever window
+owned the screen rather than the caller's — a package could take another
+package's fullscreen down with its own window pointer, leaving the two
+disagreeing with nothing on screen saying so. Every caller already passed
+its own window, so honouring it changed no shipped behaviour and no `.o88`;
+`.text` +6, no rung crossed, footprint +0. **The test for a guard like this
+cannot be "the real callers still work"** — that is the same evidence a
+build without the guard produces. Poke `[wm_fs]` to `0xFFFF` from outside
+the guest while an app is fullscreen and press its exit key: fixed, the
+call refuses and the stranger's latch is still `0xFFFF`; unfixed, it
+dereferences `0xFFFF` as a window record and `[wm_fs]` goes to 0. A/B'd
+against a reference kernel with the four instructions removed, and the two
+outcomes are unmistakable.
+
 §11.2's fullscreen surface is a real window in the desktop's mode; fsx is the
 other thing: `fsx_run` (slot 0x02C8) is a **bracket, not a latch** — called
 from a window callback with the gfx lock held, it far-calls the app's

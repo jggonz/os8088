@@ -2435,12 +2435,12 @@ pt_szapply:
     je .nomove                      ; that shortens too takes the half it can,
     cmp byte [pt_fs], 0             ; and skipping the frame here left the
     jne .fsdraw                     ; window at one size and the canvas at
-    mov bx, [pt_win]                ; another (SPEC.md 11.1) - unless the
-    mov cx, [pt_cw]                 ; KERNEL owns the frame, which is the whole
-    add cx, PT_CHROME_W             ; screen and did not move (SPEC.md 42.7):
-    mov dx, [pt_ch]                 ; then the content box is unchanged and all
-    add dx, PT_CHROME_H             ; that is owed is the repaint OSAPI_WM_RESIZE
-    call OSAPI_WM_RESIZE            ; would have brought with it
+    mov bx, [pt_win]                ; another (SPEC.md 11.1) - unless we are
+    mov cx, [pt_cw]                 ; FULL SCREEN, where the record is not what
+    add cx, PT_CHROME_W             ; anything lays out from (pt_org answers the
+    mov dx, [pt_ch]                 ; screen, SPEC.md 42.7) and still holds the
+    add dx, PT_CHROME_H             ; windowed size to come back TO. pt_fsx_main
+    call OSAPI_WM_RESIZE            ; settles it on the way out; here, just draw
     jmp short .said
 .fsdraw:
     call pt_repaint
@@ -3129,31 +3129,42 @@ pt_wait_tick:
     ret
 
 ; =============================================================================
-; Full screen - the SPEC.md 11.2 surface, and the SPEC.md 53 bracket on it
+; Full screen - the SPEC.md 53 bracket, and NOT the SPEC.md 11.2 surface
 ;
-; Two calls, in that order, and each does a different half of the job.
+; ONE call: OSAPI_FSX_RUN. There is no OSAPI_FULLSCREEN anywhere in this file,
+; and that is the decision SPEC.md 42.7 records rather than an omission.
 ;
-; OSAPI_FULLSCREEN goes FIRST because it is what makes the window RECORD say
-; "the whole screen". Every coordinate in this app comes out of that record -
-; pt_org asks OSAPI_WM_GEOM for the content box and OSAPI_WM_CONTENT for its
-; origin, and the palette, the divider, the canvas, the strip and the entire
-; click ladder are derived from those two answers - so the layout follows with
-; no fullscreen branch anywhere in the drawing or hit-testing code. wm_raise
-; then paints us whole, which runs our own W_PAINT, which is where pt_track
-; adopts the bigger content as a bigger canvas. By the time the bracket starts,
-; the screen is already right and pt_fsx_main has nothing to draw.
+; The obvious design is 11.2 THEN the bracket - Missile Command's (SPEC.md
+; 48.13) - and it is genuinely tidier: wm_fullscreen writes the screen's
+; geometry into the window RECORD, so pt_org's OSAPI_WM_GEOM and
+; OSAPI_WM_CONTENT answer the whole screen by themselves and the palette, the
+; divider, the canvas, the strip and the entire click ladder follow with no
+; fullscreen branch anywhere. It was built that way first. What kills it is
+; coming HOME: SPEC.md 53.6 step 4 owes the desktop one wm_paint_all, the
+; window is still WF_FULL when it runs, so that repaint draws the FULL-SCREEN
+; Paint - which the OSAPI_FULLSCREEN AL=0 after it throws away and repaints
+; again as a window. Counted at gfx_blit4/gfx_fill/font_char over one round
+; trip, leaving cost 3 full-canvas draws and 1,496 fills against 1 and 770.
 ;
-; OSAPI_FSX_RUN goes SECOND and is where the win is. It is a SAME-MODE bracket
-; (SPEC.md 53.7): no OSAPI_FSX_MODE call, so every drawing slot stays legal and
-; one body serves VGA, Hercules and CGA. That is also why nothing here consults
-; OSAPI_FSX_CAPS and why the menu item never greys - the caps mask answers a
-; question about MODES and this sets none, so there is no fact to grey on
-; (SPEC.md 47 rule 3). What the bracket buys is exclusivity, and for a paint
-; program that is the largest item there is: pt_wait runs once per mouse sample
-; of every stroke and windowed it is an unlock/yield/lock round trip, which
-; PERFORMANCE.md Set 4 priced at 21.8% of a Missile Command session with no
-; pixel of the game in it. A drag here issues more of those than a game frame
-; does, and on top of it every one repaints the system arrow twice.
+; So the geometry lives HERE instead, in one branch in one routine: pt_org
+; answers origin (0,0) and content [pt_scrw] x [pt_scrh] while [pt_fsx] is
+; set, and asks the kernel otherwise. Two things follow from the kernel not
+; knowing - pt_repaint skips OSAPI_WM_GROW (wm_grow_paint would put a grow box
+; at the record's own corner, a window nobody can see) and the first paint
+; clears its own bed (pt_fsbed: there is no wm_draw_win white fill in front of
+; it).
+;
+; It is a SAME-MODE bracket (SPEC.md 53.7): no OSAPI_FSX_MODE call, so every
+; drawing slot stays legal and one body serves VGA, Hercules and CGA. That is
+; also why nothing here consults OSAPI_FSX_CAPS and why the menu item never
+; greys - the caps mask answers a question about MODES and this sets none, so
+; there is no fact to grey on (SPEC.md 47 rule 3). What the bracket buys is
+; exclusivity, and for a paint program that is the largest item there is:
+; pt_wait runs once per mouse sample of every stroke and windowed it is an
+; unlock/yield/lock round trip, which PERFORMANCE.md Set 4 priced at 21.8% of
+; a Missile Command session with no pixel of the game in it. A drag here
+; issues more of those than a game frame does, and on top of it every one
+; repaints the system arrow twice.
 ;
 ; What the bracket costs is two things a window gets for free, and they are the
 ; only new code below: the pointer (the held lock keeps the mouse ISR off the
@@ -6297,13 +6308,15 @@ pt_track:
     sub dx, PT_STRIP_H + 1
     call pt_setsize
     jnc .out
-    cmp byte [pt_fs], 0             ; on the fullscreen surface the frame is
-    jne .fsonly                     ; the KERNEL's - wm_fs_drop is about to
-                                    ; overwrite whatever we wrote into it - so
-                                    ; a refusal owes the toast and nothing
-                                    ; else. pt_cmd_fs re-sizes the window
-                                    ; afterwards, from outside a paint proc,
-                                    ; where OSAPI_WM_RESIZE is legal
+    cmp byte [pt_fs], 0             ; full screen: the record is not what this
+    jne .fsonly                     ; lays out from (pt_org answers the screen,
+                                    ; SPEC.md 42.7) and it still holds the
+                                    ; windowed size to come back TO, so a
+                                    ; refusal owes the toast and nothing else.
+                                    ; pt_fsx_main squares the frame on the way
+                                    ; out, after [pt_fs] is clear and from
+                                    ; outside a paint proc, which is where
+                                    ; pt_wfix is legal
     call pt_wfix                    ; the frame follows the canvas, not the drag
     call pt_org                     ; ...AND THE REST OF THIS PAINT LAYS OUT AT
                                     ; THE NEW SIZE. pt_org ran before pt_track
@@ -10079,8 +10092,13 @@ pt_ic_text:
     PTBYTE pt_selshown              ; ...and its marquee is on the glass
     PTBYTE pt_txton                 ; a text run is open
     PTBYTE pt_careton               ; ...and its caret is on the glass
-    PTBYTE pt_fs                    ; we own the SPEC.md 11.2 fullscreen surface
-    PTBYTE pt_fsx                   ; ...and are inside the SPEC.md 53 bracket
+    PTBYTE pt_fs                    ; a full-screen session is on: set by
+                                    ; pt_cmd_fs BEFORE the bracket, so the
+                                    ; W_PAINT inside it already knows. NOT the
+                                    ; SPEC.md 11.2 surface - this app never
+                                    ; takes one (SPEC.md 42.7)
+    PTBYTE pt_fsx                   ; ...and pt_fsx_main is actually running,
+                                    ; which is what pt_org branches on
     PTBYTE pt_ptron                 ; the bracket's crosshair is on the glass
     PTBYTE pt_pbtn                  ; ...and the mouse buttons it last saw
     PTBYTE pt_undo_ok               ; the undo image holds something

@@ -3901,7 +3901,7 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x0108 (§20.3). |
 | `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0118 (§20.3). |
 | `wm_zoom`      | in BX = win ptr (resizable and not fullscreen — the CALLER's check); **caller holds the gfx lock**. Toggles the window between the **standard** state — the whole desktop band, full width, `MBAR_H` down to one pixel short of the dock, honouring `WF_SNAP` — and the **user** state it was in before, banked per slot in `wm_zoomr`. Which state it is in is derived from the record, never tracked; `wm_ask_size` is asked for both, and a refused shrink leaves it standard with its bank intact. All registers preserved. Not `wm_fullscreen`: the window keeps its chrome and its place in the z-order. §11.95. |
-| `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0110 (§20.3). |
+| `wm_fullscreen`| in AL = 1 enter / AL = 0 exit, **BX = the caller's own win ptr either way**; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (the screen is another window's — entering *or* leaving), CF=0 done. API slot 0x0110 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
 | `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect. Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
 | `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0170 (§20.3). |
@@ -4020,8 +4020,23 @@ entire screen and reports "covered" to everyone beneath it.
   (word, .bss, 0 = none — **the** fullscreen latch), set the frame to
   (0, 0, `[vid_w]`, `[vid_h]`), set WF_FULL, `wm_front` (raises + repaints
   under the held lock). Re-entering with the same window is CF=0 no-op.
-- **Exit** (AL=0): `[wm_fs]` zero → CF=0 no-op. Else restore the saved
-  geometry into the record, clear WF_FULL, zero `wm_fs`, `wm_paint_all`.
+- **Exit** (AL=0, BX = win ptr): `[wm_fs]` zero → CF=0 no-op. `[wm_fs]`
+  non-zero and ≠ BX → **CF=1, nothing changes** — the screen is somebody
+  else's and is not yours to put down. Else restore the saved geometry into
+  the record, clear WF_FULL, zero `wm_fs`, `wm_paint_all`.
+
+  **BX binds on exit**, and the symmetry with enter is the whole of the
+  reason. It used to be ignored: the exit path opened by overwriting BX with
+  `[wm_fs]`, so AL=0 dropped whatever window owned the screen — a package
+  could take another package's fullscreen down with its own window pointer,
+  leaving the two disagreeing about who was fullscreen and nothing on screen
+  saying so. Every caller in the tree already passed its own window
+  (`apps/artful`, `apps/missile` twice, `tests/gfxbench`), so honouring it
+  changed no shipped behaviour and no `.o88`; what it removes is a way to be
+  wrong that nothing could have reported. This is a *contract* change at a
+  live slot, which §20.8 rule 4 permits while the OS is in alpha and this
+  tree hosts every caller — and it is the benign direction of one, since it
+  can only start refusing a call that was already a bug.
 
 While WF_FULL is set: `wm_draw_win` draws **no chrome at all** — no frame,
 shadow, title bar, boxes or grow box; the content area is the whole frame
@@ -12098,9 +12113,10 @@ Slot-specific contracts that are not simply their target routine's:
                          ES restored per §1.
 0x0108 wm_sizable        in BX = win ptr, AL = 0 clear / non-zero set
                          WF_SIZABLE (§11.1). UI-task context only.
-0x0110 wm_fullscreen     in AL = 1 enter (BX = win) / 0 exit; caller holds
-                         the gfx lock; out CF=1 = enter refused, screen
-                         already owned (§11.2).
+0x0110 wm_fullscreen     in AL = 1 enter / 0 exit, BX = your OWN win ptr
+                         either way; caller holds the gfx lock; out CF=1 =
+                         refused, the screen is another window's - entering
+                         or leaving (§11.2).
 0x0118 wm_grow_paint     in BX = win ptr; lock held. The grow-box restore
                          of §11: a resizable package's self-initiated
                          content repaint must end with this call. A no-op
