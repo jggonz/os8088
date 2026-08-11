@@ -18262,9 +18262,9 @@ address whoever owns it.
 where a cache is the subject. Three caption lines, one question each:
 
 ```
-HEAP 544K  AVAIL 519K        the heap, and what a claim can GET out of it
-HELD 25K(5)  PURGE 69K(2)    what is claimed, on what terms, and how many
-MAX RUN 515K   FRAG    4K    how that AVAIL is SHAPED
+HEAP 544K    AVAIL 519K        the heap, and what a claim can GET out of it
+HELD 25K( 5) PURGE  69K( 2)    what is claimed, on what terms, and how many
+MAX RUN 515K FRAG    4K        how that AVAIL is SHAPED
 ```
 
 **Every line is a pair that closes**, and that is the layout's whole rule:
@@ -18289,10 +18289,10 @@ and that is the point rather than a layout accident: their sum answers no
 question. `HELD` is memory nothing can get back; `PURGE` is memory the next
 claim can have for the price in the TIER column. **The record count is split
 with them** for the same reason — one `8 clm` was a sum across the only
-distinction this page exists to draw — and it is `tm_putn` rather than
-`tm_put3` because a parenthesised count wants its own width: `(5)`, not
-`(  5)`. At two-digit counts the line is exactly 27 characters, which is
-`TM_STRMAX`'s limit.
+distinction this page exists to draw — and it is `tm_put2` rather than
+`tm_put3` because a parenthesised count wants its own width: `( 5)`, not
+`(  5)`. It is not `tm_putn` either, and §28.4.2 is why. The line is exactly
+27 characters, which is `TM_STRMAX`'s limit.
 
 **`AVAIL`, never `FREE`.** It counts the purgeables (§50.6.3), so it is what a
 claim can *get* rather than what is unused, and the two differ by `PURGE`
@@ -18330,6 +18330,49 @@ cache at all. The alternative considered and rejected was `TOP`, which keeps
 the ordering explicit and matches the constant, but reads as *purge this
 last* rather than *this is not purgeable* — ambiguous in exactly the place
 the column has to be plain.
+
+### 28.4.2 The three captions are a table, so the second column is a column
+
+Every line here is a *pair* (§28.4.1), and three pairs stacked are a table
+whether or not they are drawn as one. They were not: each right-hand label
+began wherever its own left half happened to stop, so `AVAIL`, `PURGE` and
+`FRAG` started at columns 11, 13 and 14 and their figures at 17, 18 and 19.
+Nothing was wrong with any single line and the three together read as a
+ragged edge — the eye has to find the second figure on each row instead of
+running down one column.
+
+**The right label starts at column 13 on all three and the right figure at
+19.** The pads that buy it live in the strings (`tm_s_havl`, `tm_s_hpurg`,
+`tm_s_hfrag`), because that is where the arithmetic is checkable by looking:
+each line's left half plus the pad in front of its right label comes to 13,
+as 9+4, 12+1 and 12+1. `FRAG` carries two trailing spaces rather than one —
+it is a letter shorter than the other two, and it is the **figures** that
+have to line up, not the labels.
+
+**One of the three was not merely misaligned but MOVING.** The record counts
+are the only variable-width field on the page, so at nine held records the
+HELD line is a character shorter than at ten and `PURGE` slid sideways as
+claims were made and released — on a page whose whole subject is claims being
+made and released. `tm_put2` fixes the field at two columns, which is the
+narrowest width that holds `MEM_MAX`; the guard is at the routine. That also
+makes the line one fixed width at every count, which is what lets the
+27-character limit be checked once rather than argued about per count.
+
+**Aligning the LEFT column too does not fit, and the arithmetic is why.** A
+common left column needs 8 (the widest label, `MAX RUN `) + 4 (`nnnK`) + 4
+(`(nn)`) + 1 gutter + 6 (`PURGE `) + 4 + 4 = 31 characters against
+`TM_STRMAX`'s 27 — and raising `TM_STRMAX` would not reach it either, because
+the caption is drawn with `font_str`, which does not clip to a window: the
+window's content is `TM_W − 2` = 230 px and the pen sits at +6, so the line
+has **28** cells however big the buffer is. So the choice was one aligned
+column or none, and the right one is where the figures that get compared
+live. The left labels stay left-aligned with their figures against them,
+which is how a label reads anyway.
+
+Cost, measured: the package image is **6,903 → 6,916 bytes**, 13 of them the
+longer strings and `tm_put2`'s five instructions. That is heap while the
+window is open and nothing when it is closed (§28), it is charged against no
+kernel guard, and the widest caption is 27 characters before and after.
 
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
