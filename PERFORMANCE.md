@@ -4191,7 +4191,8 @@ obvious next step. `wm_raise` arms no damage rect — there is none to arm — s
 the part that **was covered**, which is computable: it is the complement of
 §11.3's visible region taken *before* `wm_lift`. That is the case where "only 10%
 of the canvas was visible" turns 8.7 s into ~0.9 s, and nothing in this set
-reaches it.
+reaches it. (**Set 35 built it and that last sentence is backwards** — 10%
+visible is 90% covered and costs 7.8 s; the 0.9 s case is 10% *covered*.)
 
 Verified with `tools/ptcheck.py` against a build that asks for nothing: **0
 differing pixels** on CGA, Hercules and VGA mode 12h.
@@ -4205,3 +4206,75 @@ catches it depends on where `settle` lands relative to the last one. Measured:
 **the same build captured twice differed by 45 arrow-shaped pixels** over a dock
 tile. Both gates now blank a 16x16 box at the published cursor position. A gate
 that fails at random is worse than no gate.
+
+### Set 35 — a RAISE puts back only what was covered (SPEC.md §11.96.10)
+
+Set 34's own last paragraph names this as the gap it could not reach: `wm_raise`
+armed no rect, so both consumers — the raise cache's restore and §11.90.2's
+`OSAPI_WM_DAMAGE` — answered *whole* however little of the window had been
+covered. `wm_cov_rect` computes the covered box before `wm_lift`, and
+`tools/os88span.py`'s `raise` and its new `paintraise` price the two ends of what
+that is worth. Cycle-accurate 5150/CGA, `pttest.img`'s textured 492×133 BMP:
+
+| span | before | after | |
+|---|---|---|---|
+| **a covered Disk window raised** (`raise`) | | | |
+| `wm_su_try` → `gfx_restore` (the edge merge) | 18.57 | **9.46** | 1.96x |
+| `gfx_restore` → `wm_grow_paint` (the blit) | 30.72 | **29.44** | 1.04x |
+| the whole `wm_draw_win` | 98.17 ms | **87.77 ms** | **1.12x** |
+| **Paint raised from under a Disk window** (`paintraise`) | | | |
+| the canvas blit | 8,668.7 | **5,526.2** | 1.57x |
+| the whole `wm_draw_win` | 9,090.1 ms | **5,947.8 ms** | **1.53x** |
+
+**Both rows are their own geometry and neither is a surprise, which is what says
+the feature does what it claims.** `sc_raise`'s two Disk windows cascade 16 px
+apart, so the covering window takes **95% of the raised one's content width and
+all of its rows**: a restore is `rep movsb` per row, 95% of the bytes is 95% of
+the cost, and 30.72 → 29.44 is exactly that. The merge halves for §11.96.8's
+reason rather than a proportional one — *an edge column the restore does not
+reach is not merged at all*, and this sub-rect's left edge is inside the window,
+so one column is merged instead of two.
+
+`paintraise` is the case the work was granted for: a 536-wide canvas with a
+320-wide Disk window over part of it. The covered box is **321 of 536 columns,
+59.9%**, and the blit comes in at **63.7%** of whole, `pt_blit` being linear in
+the runs it covers.
+
+**And the estimate this was costed against was the wrong way round.** Set 34 and
+REDRAW-SPEC Part 3 both quote *"only 10% of the canvas was visible turns 8.7 s
+into ~0.9 s"* — but 10% visible is 90% **covered**, and what a raise owes is the
+covered part, so that case is 7.8 s and the one worth 0.9 s is 10% covered. The
+mechanism was right and the arithmetic in front of it was not. **The win is
+proportional to how much was covered and there is no single number for it**: a
+window with a corner under something gains nearly everything, a window almost
+entirely buried gains almost nothing. Both rows above are quoted for that reason.
+
+**One thing the run confirms and does not fix.** Both `paintraise` traces show
+Paint's window drawn **twice** — a 402 ms pass with no canvas in it, then the
+real one — on the before build and the after one alike. That is REDRAW-SPEC Part
+3's open item (`[pt_apend]`'s deferred resize calling `OSAPI_WM_FRONT` from
+inside `W_PAINT`), it is 402 ms of every Paint repaint measured in Sets 32–35,
+and it is now on a trace rather than an inference.
+
+Verified at **0 differing pixels** on CGA, Hercules and VGA mode 12h against
+`make REDRAWFULL=1`, over all three gates — `subcheck` (11 steps), `ptcheck`
+(5, the two raises among them) and `callfront` (11).
+
+**A harness rule the run cost itself once: do not edit the tree while a capture
+is running.** `os88sym` asserts its map against `build/kernel.bin` and refuses
+rather than answering with a plausible wrong address, so an edit made during a
+sequence of captures fails every one after it — at the first symbol lookup, which
+is before any window is opened, so the run leaves nothing to look at.
+
+**And the gate found a defect in Paint that was nowhere near it** — SPEC.md
+§42.9. `ptcheck` came back with 2,218 differing pixels on VGA (655 on Hercules)
+in a region **outside** the covered box entirely: 41 columns of desktop dither
+inside Paint's own content, the full height of the colour strip. `pt_wfix`
+rewrites `W_W`/`W_H` from `pt_track`, which runs at the *top* of `W_PAINT` after
+`pt_org` has already derived `[pt_contw]`, so a window that grew laid out the
+rest of that paint at the width it used to be — and under `WF_OWNBG` nobody
+fills the band. **It repaired itself on any later WHOLE repaint, which is why it
+had never been seen; §11.96.10 stopped raises being whole and it stopped
+repairing.** The steps before the raise show it in *both* builds at 0 differing
+pixels, which is what proves it pre-dates the change. One `pt_org` after
+`pt_wfix` is the fix, and all three adapters then read 0.

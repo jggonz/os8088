@@ -226,6 +226,7 @@ a Disk window it repaints in full.
 | j | **the raise cache restores only what the pass painted** | §11.96.6 | 30.63 → 15.27 ms, 2.01x |
 | k | **a bank is only worth what was on the glass** | §11.96.7 | a real bug: 3,876 stale px |
 | l | **the edge merge is bounded by the same rect** | §11.96.8 | 18.59 → 8.09 ms, 2.30x |
+| m | **a RAISE puts back only what was covered** | §11.96.10 | Paint 9,090 → 5,948 ms, 1.53x |
 
 (i) and (j) are the primitive and its first consumer, below. **(k) was not on
 anyone's list**: verifying (j) against `REDRAWFULL=1` turned up 7,907 differing
@@ -357,6 +358,15 @@ no damage rect, and what a raised window owes is the part that was *covered*,
 which is the complement of §11.3's visible region rather than anything this
 pass computed. That is a separate consumer and it is not built.
 
+**It is built now — SPEC.md §11.96.10**, and it turned out to need no region
+arithmetic at all: the *bounding box* of the covered part is the union of the
+windows above us intersected with our content, which is one walk of `wm_zord`
+(`wm_cov_rect`) rather than a complement of `wm_clip_tab`. It is asked before
+`wm_lift` and spent into `wm_su_sub` immediately before `wm_draw_win`, because
+everything in between — the bar, the dock, the outgoing window's chrome — can
+itself reach `wm_draw_win` and would consume a one-shot armed any earlier. Both
+consumers took it unchanged, which is what (j) and §11.90.2 were built for.
+
 #### Consumer 2 — Paint, which cannot use the cache and should not
 
 Paint holds a canvas, an undo image and a clipboard. A raise cache would be a
@@ -426,6 +436,13 @@ owes 10% of the canvas costs ~10% of the blit — about 0.9 s against 8.7 — at
 memory cost at all**, on every adapter and every machine size, and it stacks with
 a cache wherever a cache fits. So the erase contract is not the expensive
 prerequisite to be avoided; it is the thing worth doing first.
+
+**Read "owes 10%" literally, because every later paraphrase of it here got it
+backwards.** What a raised window owes is the part that was *covered*, so the
+0.9 s case is a canvas 10% covered — 90% visible — and the "only 10% of the
+canvas was visible" the sections below quote is the *opposite* case and worth
+7.8 s. Measured, PERFORMANCE.md Set 35: 59.9% covered is 1.53x, and there is no
+single number for it because there is no typical amount of covering.
 
 Two smaller things stand unchanged, and one is now the *shape* of the answer
 rather than an alternative to it:

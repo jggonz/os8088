@@ -6210,6 +6210,17 @@ pt_track:
                                     ; afterwards, from outside a paint proc,
                                     ; where OSAPI_WM_RESIZE is legal
     call pt_wfix                    ; the frame follows the canvas, not the drag
+    call pt_org                     ; ...AND THE REST OF THIS PAINT LAYS OUT AT
+                                    ; THE NEW SIZE. pt_org ran before pt_track
+                                    ; and pt_wfix has just rewritten W_W/W_H
+                                    ; under it, so [pt_contw] and everything
+                                    ; derived from it - the strip's bed, its
+                                    ; right-hand controls, [pt_stripy] - were
+                                    ; the size the window used to be. Under
+                                    ; WF_OWNBG the kernel fills nothing, so the
+                                    ; band between the two widths held the
+                                    ; DESKTOP until some later whole repaint
+                                    ; covered it (SPEC.md 42.9)
     mov al, 1
     cmp byte [pt_szchg], 0
     je .say

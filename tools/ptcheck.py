@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """The WF_OWNBG gate (SPEC.md 11.90.1) - does Paint still paint EVERY PIXEL?
 
-    python3 tools/ptcheck.py capture DIR [machine]
+    python3 tools/ptcheck.py capture DIR [machine [-D...]]
     python3 tools/ptcheck.py diff DIR-A DIR-B
+
+It is SPEC.md 11.96.10's gate as well, and for the same reason: the raise this
+session drives is where a covered window is told what it owes, and Paint is the
+consumer that acts on it. `make REDRAWFULL=1` is the reference either way (pass
+REDRAWFULL as the third argument for that run, or every symbol lookup answers
+for the wrong binary).
 
 The flag skips `wm_draw_win`'s white fill, so the whole contract is that the
 window covers its content itself. The only honest test is a pixel comparison
@@ -49,12 +55,19 @@ MASK_Y = 18
 shot = sc.shot
 
 
-def capture(out, machine):
+def capture(out, machine, defines=()):
     os.makedirs(out, exist_ok=True)
     log = []
     with os88marty.launch(os.path.join(ROOT, "build/os8088-360.img"),
                           apps=os.path.join(ROOT, "build/pttest.img"),
                           machine=machine) as m:
+        # subcheck's rule: the reference kernel is a DIFFERENT binary, so every
+        # symbol has to be looked up with the knob that built it - os88sym
+        # asserts its map against build/kernel.bin and refuses rather than
+        # answering with a plausible wrong address.
+        if defines:
+            plain = m.sym
+            m.sym = lambda n, d=tuple(defines): plain(n, d)
         mo = Mouse(marty=m)
         mo.dblclick(*su.zone(m, 1)); time.sleep(4)
         disk = [w for w in su.windows(m) if w.visible][0]
@@ -95,7 +108,8 @@ def capture(out, machine):
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "capture":
         capture(sys.argv[2],
-                sys.argv[3] if len(sys.argv) > 3 else "os8088_5150_cga_gla")
+                sys.argv[3] if len(sys.argv) > 3 else "os8088_5150_cga_gla",
+                sys.argv[4:])         # any -D the kernel was built with
     elif len(sys.argv) == 4 and sys.argv[1] == "diff":
         sc.diff(sys.argv[2], sys.argv[3])
     else:

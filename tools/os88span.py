@@ -4,6 +4,7 @@
     python3 tools/os88span.py raise    [machine]   # a covered Disk window raised
     python3 tools/os88span.py dragoff  [machine]   # a window dragged off another
     python3 tools/os88span.py paint    [machine]   # Paint repainted (needs pttest)
+    python3 tools/os88span.py paintraise [machine] # ...and Paint RAISED (11.96.10)
 
 This is the instrument PERFORMANCE.md Sets 30-34 were taken with, and it exists
 because the two obvious alternatives cannot answer the question:
@@ -159,11 +160,34 @@ def sc_dragoff(m, mo):
             lambda: m.mouse(0, 0, l=False), back.i)
 
 
+def sc_paintraise(m, mo):
+    """Paint with a textured picture in it, COVERED by a Disk window and then
+    raised - SPEC.md 11.96.10's case, and the one 11.90.2 could not reach.
+
+    Before 11.96.10 a raise armed no rect at all, so OSAPI_WM_DAMAGE answered
+    "whole" and the canvas was blitted entire however little of it had been
+    covered. Needs build/pttest.img (tools/ptcheck.py's docstring)."""
+    mo.dblclick(*su.zone(m, 1)); time.sleep(4)
+    disk = [w for w in su.windows(m) if w.visible][0]
+    mo.dblclick(*su.row(disk, 2)); time.sleep(45)
+    pt = [w for w in su.windows(m) if w.visible
+          and w.title.upper().startswith("PAINT")]
+    if not pt:
+        raise SystemExit("os88span: Paint did not launch - is pttest.img built?")
+    pt = pt[0]
+    sc.pclick(mo, *su.tile(m, disk))            # cover Paint
+    os88marty.settle(m)
+    print("raising paint %r from under %r" % (pt, disk))
+    mo.to(*su.tile(m, pt))
+    return (("wm_draw_win", "gfx_blit4", "wm_grow_paint"),
+            lambda: m.mouse(0, 0, l=True), pt.i)
+
+
 def sc_paint(m, mo):
     """Paint with a textured picture in it, then a window dragged off it.
     Needs build/pttest.img - see tools/ptcheck.py's docstring for how to build
-    it. A RAISE would price nothing here: wm_raise arms no damage rect, so
-    OSAPI_WM_DAMAGE answers "whole" (SPEC.md 11.90.2)."""
+    it. `paintraise` below is the RAISE half, which priced nothing until
+    SPEC.md 11.96.10 gave wm_raise a rect to arm."""
     mo.dblclick(*su.zone(m, 1)); time.sleep(4)
     disk = [w for w in su.windows(m) if w.visible][0]
     mo.dblclick(*su.row(disk, 2)); time.sleep(45)
@@ -186,7 +210,8 @@ def sc_paint(m, mo):
 
 SCENARIOS = {"raise": (sc_raise, "os8088-360.img", "apps360.img"),
              "dragoff": (sc_dragoff, "os8088-360.img", "apps360.img"),
-             "paint": (sc_paint, "os8088-360.img", "pttest.img")}
+             "paint": (sc_paint, "os8088-360.img", "pttest.img"),
+             "paintraise": (sc_paintraise, "os8088-360.img", "pttest.img")}
 
 
 def main():

@@ -17,6 +17,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §11.96.7 | **a bug**: a bank is only worth what was on the glass when it was taken | 7,907 stale px → 0 |
 | §11.90.1 | `WF_OWNBG` — the white fill in front of `W_PAINT` becomes opt-out | white hole 2,617 ms → **none** |
 | §11.90.2 | `OSAPI_WM_DAMAGE` — the app is told which rect it owes | canvas blit 8,670 → 6,759 ms, **1.28x** |
+| §11.96.10 | **a RAISE puts back only what was covered** (was item A) | Paint raise 9,090 → 5,948 ms, **1.53x** |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -112,29 +113,54 @@ change rather than a mechanism**.
 
 ### 3. Paint's `W_PAINT` runs twice per raise
 
-Flagged three times in Sets 32–34 and never chased. Two `wm_draw_win` passes for
-Paint's window — a ~376 ms one that draws no canvas, then the real one. Almost
-certainly **`[pt_apend]`'s deferred-resize path calling `OSAPI_WM_FRONT` from
-inside `W_PAINT`**, which re-enters the raise. It doubles the cost of every
-measurement in those Sets.
+Flagged four times now — Sets 32–35 — and never chased. Two `wm_draw_win` passes
+for Paint's window: a **402 ms** one that draws no canvas, then the real one.
+Almost certainly **`[pt_apend]`'s deferred-resize path calling `OSAPI_WM_FRONT`
+from inside `W_PAINT`**, which re-enters the raise. Set 35 has it on a
+breakpoint trace rather than as an inference, on both builds of the A/B, so it
+is 402 ms of every Paint repaint any of those Sets measured. **It is the cheapest
+remaining item in this round** — one flat 402 ms off every Paint raise, against
+item B's much larger but much harder number.
 
 ---
 
 ## Outstanding work, biggest first
 
-### A. A raise should restore only what was covered
+### A. A raise should restore only what was covered — **DONE, SPEC.md §11.96.10**
 
-**The biggest number left.** Both new features answer "whole" on a raise, and
-correctly: `wm_raise` arms no damage rect because there is none. But what a raised
-window owes is the part that **was covered**, which is computable — the complement
-of §11.3's visible region, taken **before `wm_lift`** while the z-order still
-agrees with the glass. That is the case the reporter described as "only 10% of the
-canvas visible", and it turns 8.7 s into ~0.9 s for Paint and shrinks every
-cached restore as well.
+`wm_cov_rect` walks the windows above us before `wm_lift`, intersects each one's
+frame with our content and accumulates a bounding box; `wm_raise` spends it into
+`wm_su_sub` immediately before `wm_draw_win`. Both consumers took it unchanged.
+**No region arithmetic was needed** — the complement of `wm_clip_tab` was the
+plan and the union's bounding box is the same answer for one walk.
 
-Both consumers are already built and waiting for it: `wm_su_sub` (§11.96.6) and
-`OSAPI_WM_DAMAGE` (§11.90.2) both take a rect and neither cares where it came
-from. **This is a `wm_raise` change, not a new mechanism.**
+Three things came out of it that the next reader wants:
+
+- **The estimate was backwards and the code is not.** "Only 10% of the canvas
+  visible" is 90% *covered*, and a raise owes the covered part — so that case is
+  7.8 s, not 0.9. The win is proportional to how much was covered and there is no
+  typical amount: 59.9% covered measures 1.53x, 95% covered measures 1.12x, both
+  exactly their own geometry (Set 35).
+- **`wm_damage` had to learn about `WF_FULL`.** §11.2's branch of `wm_draw_win`
+  white-fills the whole frame with no `WF_OWNBG` opt-out, so a partial answer
+  there blanks the rest. Latent until now, because `wm_dmg_wins` rarely marks a
+  fullscreen window and `wm_front` can raise one.
+- **`AL = 2` is the argument**, on `wm_raise`'s existing 0/1, so only `wm_front`
+  can ask: `wm_show`'s window has no pixels on the glass to keep. That is the
+  whole safety condition and it is a property of the *caller*, which is why it is
+  an argument and not a test inside `wm_raise`.
+
+**And it found a defect in Paint on its way through** — SPEC.md §42.9,
+docs/PAINT-NOTES.md. A window that resizes itself inside its own `W_PAINT` was
+laying out the rest of that paint at the size it used to be, so 41 columns of
+Paint's colour strip showed the **desktop dither** through `WF_OWNBG`. It had
+always repaired itself on the next whole repaint; this change stopped raises
+being whole and it stopped repairing. Two things to carry forward: **a gate
+failure whose bbox is nowhere near your change is evidence about the tree** (the
+steps *before* the raise showed it in both builds at 0 differing pixels, which
+is what proved it pre-dated the change), and **an optimisation that stops
+something being redrawn inherits every defect that redraw was hiding** —
+§48.9.1's rule, arriving from the other direction.
 
 ### B. `gfx_blit4` still pays a drawing call per RUN
 
@@ -184,11 +210,20 @@ because a redraw optimisation is worth most on the slowest machine** — the
 machine that feels a 49 ms restore is the 4.77MHz one at the RAM floor — so
 nothing in this round may be put behind `%ifndef KERN_SMALL`.
 
-Item A is what the raise was granted for; spend it there. **Re-bless after every
-change** — `python3 tools/kernsize.py --bless` and, because the two builds have
-separate baselines, `python3 tools/kernsize.py --build build/smallk --bless
--DKERN_SMALL` after `make kernsplit`. `docs/KERNEL-MEMORY.md` has the accounting
-rule: report both numbers and never call a change that crossed no rung "free".
+Item A was what the raise was granted for, and it spent **one of the two
+steps — on `kern_small` only**. §11.96.10 cost `.text` +355 and `.cold` +22:
+`kern_big` crossed no rung and stands at **2,560 spare (five steps), 147 bytes
+left in the image rung** (was 502); `kern_small`'s image rung **CROSSED**, so its
+spare went **3,584 → 3,072 (seven steps to six)**. That is the shape the move was
+asked for and it is the asymmetry to expect from anything in this round — the
+small kernel's rungs are closer together. Report both, and watch `kern_big`'s
+image rung: the next `.text` byte past 147 buys a whole 512 there too.
+
+**Re-bless after every change** — `python3 tools/kernsize.py --bless` and,
+because the two builds have separate baselines, `python3 tools/kernsize.py
+--build build/smallk --bless -DKERN_SMALL` after `make kernsplit`.
+`docs/KERNEL-MEMORY.md` has the accounting rule: report both numbers and never
+call a change that crossed no rung "free".
 
 **Verify by pixel diff, on all three adapters, or not at all.** `make
 REDRAWFULL=1` is the reference kernel for this round's paths. The standard is **0
@@ -234,6 +269,11 @@ pre-existing failure arrives looking exactly like your own.
    a row; it is 41x cheaper and it is uniform white, which is exactly the colour a
    missing fill would have left — the one picture that cannot tell a kept promise
    from a broken one.
+5. **Do not edit the tree while a capture is running.** `os88sym` asserts its map
+   against `build/kernel.bin` and refuses rather than answering with a plausible
+   wrong address, so one edit made during a batch of captures fails every run
+   after it — at the first symbol lookup, before a window is open, so there is
+   nothing left to look at. Cost this round one full six-capture sweep.
 
 **And the machines.** MartyPC's Hercules and CGA are the GLaBIOS configs
 (`os8088_5150_herc_gla`, `os8088_5150_cga_gla`), because the IBM 5150 ROM is not

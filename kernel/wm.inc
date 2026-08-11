@@ -1362,7 +1362,10 @@ wm_fs_zpos:
 ; wm_raise - the paint half of "this window is coming to the front"
 ; in:  BX = DI = the window (its visible bit already set), BP = the window
 ;      that was frontmost BEFORE this one moved (0 or == DI = there was none),
-;      AL = 1 draw the window whole / 0 its title bar is all that changed.
+;      AL = 1 draw the window whole / 0 its title bar is all that changed /
+;      2 draw it, but it was ALREADY ON THE GLASS, so only the part something
+;      was sitting on has to be put back (SPEC.md 11.96.10). Only wm_front may
+;      say 2: wm_show's window has no pixels on screen to keep.
 ;      Caller holds the gfx lock and has already passed wm_fast_ok.
 ; out: nothing; AX/BX/BP/DI clobbered (both callers saved them)
 ;
@@ -1386,8 +1389,16 @@ wm_raise:
     pop ax                      ; than the old one and then the new. AL = 0:
     jnc .listed                 ; the drawing below is ours, not its (22.8)
     mov al, 1                   ; and CF = 1 upgrades a title-bar raise to a
-.listed:                        ; whole-window one - the CONTENT changed too
+.listed:                        ; whole-window one - the CONTENT changed too, so
+                                ; AL = 2 is downgraded here as well and a
+                                ; re-listed window is drawn whole
     push ax
+%ifndef REDRAWFULL
+    cmp al, 2                   ; AL = 2: put back only what was COVERED
+    jne .nocov                  ; (SPEC.md 11.96.10). Computed HERE, because
+    call wm_cov_rect            ; wm_lift below makes this window the top of the
+.nocov:                         ; z-order and the answer is then always "nothing"
+%endif
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
 
     ; --- the OUTGOING front window is finished with first (SPEC.md 11.96.7) --
@@ -1437,6 +1448,18 @@ wm_raise:
     pop ax
     or al, al
     jz .titleonly
+%ifndef REDRAWFULL
+    cmp al, 2
+    jne .whole
+    push bx                     ; BX IS THE WINDOW wm_draw_win is about to be
+    mov ax, [wm_cov_x1]         ; handed and a rect argument spends four
+    mov bx, [wm_cov_y1]         ; registers - the same trap 11.96.6's arming
+    mov cx, [wm_cov_x2]         ; site sprang, which assembles and then freezes
+    mov dx, [wm_cov_y2]         ; the machine inside a garbage W_PAINT
+    call wm_su_sub
+    pop bx
+.whole:
+%endif
     jmp wm_draw_win             ; tail call
 .titleonly:
     jmp wm_draw_title           ; tail call: DI == BP, so it gains its stripes
@@ -1836,7 +1859,13 @@ wm_front:
     call wm_obscured            ; BEFORE wm_lift: was anything on top of us?
     mov al, 0
     jnc .titled
-    mov al, 1                   ; yes: whatever it covered has to come back
+    mov al, 2                   ; yes: whatever it covered has to come back -
+                                ; and only that, which wm_cov_rect works out
+                                ; from the same z-order this just asked about
+                                ; (SPEC.md 11.96.10). This window was on the
+                                ; glass a moment ago (the visible test above),
+                                ; which is what separates it from wm_show's
+                                ; AL = 1 - a window with no pixels on screen
 .titled:
     push ax
     call wm_top                 ; BX = the outgoing front (may be us)
@@ -4164,6 +4193,16 @@ wm_damage:
     push di
     mov di, bx                  ; the window: wm_su_rect writes all four
     call wm_su_rect             ; AX/BX/CX/DX = its content rect
+    test word [di+W_FLAGS], WF_FULL
+    jnz .whole                  ; ...AND WHOLE ON A FULLSCREEN WINDOW, whatever
+                                ; WF_OWNBG says: wm_draw_win's 11.2 branch fills
+                                ; the WHOLE FRAME white and has no opt-out, so a
+                                ; partial answer there leaves the rest blank -
+                                ; the interlock below, at the one geometry that
+                                ; escapes it. Latent until 11.96.10, because
+                                ; wm_dmg_wins was the only caller that armed a
+                                ; rect and a fullscreen window is rarely marked;
+                                ; wm_front can raise one
     test word [di+W_FLAGS], WF_OWNBG
     jz .whole
     cmp word [wm_su_son], 0
@@ -4278,6 +4317,20 @@ wm_su_sy1: dw 0                 ; anything in the machine has written it)
 wm_su_sx2: dw 0
 wm_su_sy2: dw 0
 
+; --- ...and what a RAISE owes, which is what was COVERED (SPEC.md 11.96.10) --
+; Written by wm_cov_rect before wm_lift and spent by wm_raise into wm_su_sub
+; above, because everything between the two - the bar, the dock, the outgoing
+; window's chrome - may itself call wm_draw_win and would consume a one-shot
+; armed any earlier.
+wm_cov_x1: dw 0                 ; the covered box, accumulated
+wm_cov_y1: dw 0
+wm_cov_x2: dw 0
+wm_cov_y2: dw 0
+wm_cov_c1: dw 0                 ; ...and our content rect, held across the walk
+wm_cov_c2: dw 0                 ; so the fold can do one axis at a time
+wm_cov_c3: dw 0
+wm_cov_c4: dw 0
+
 ; -----------------------------------------------------------------------------
 ; wm_su_owed - the rect window SI owes in this pass (SPEC.md 11.96.6)
 ; in:  SI = window ptr; wm_dmg_x1..y2 = everything the pass has painted
@@ -4310,6 +4363,179 @@ wm_su_owed:
     cmp bx, [vid_dock_y0]
     jle .out
     mov bx, [vid_dock_y0]
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_cov_rect - the box of this window's CONTENT that something is sitting on
+; in:  BX = window ptr (visible), gfx lock held, asked BEFORE wm_lift while the
+;      z-order still says what is on top
+; out: wm_cov_x1..y2 = the box, inclusive - and EMPTY (x1 > x2) when nothing
+;      above reaches the content, which is a real answer and not a failure.
+;      All registers preserved.
+;
+; SPEC.md 11.96.10. A raise repaints what was COVERED, and that is the union of
+; the windows above us intersected with our content - a bounding box of it here,
+; the same shape wm_dmg_x1..y2 already accumulates.
+;
+; IT IS wm_obscured'S OWN ASSERTION AT A FINER GRAIN, not a new one. wm_front
+; has always drawn only the title bar when nothing was on top, which says in so
+; many words that an uncovered window's content on screen is already right; this
+; asks the same question per region instead of per window, and the AL = 0 path
+; is now the degenerate case of it (an empty box - nothing to put back).
+;
+; The box is the CONTENT's because that is all either consumer owns: the cache
+; holds content and wm_damage answers a content rect, while wm_draw_win draws
+; the outline, the shadow and the title bar whole either way.
+;
+; The union's bounding box is exact - the smallest rect holding every covered
+; pixel - so this cannot under-report; the occluder's rect includes its drop
+; shadow, for wm_obscured's reason.
+; -----------------------------------------------------------------------------
+wm_cov_rect:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, bx                  ; DI = us, for the walk and for wm_su_rect
+    call wm_su_rect             ; AX/BX/CX/DX = our content rect
+    test word [di+W_FLAGS], WF_FULL
+    jz .rect
+    mov ax, [di+W_X]            ; ...except fullscreen, where the FRAME is the
+    mov bx, [di+W_Y]            ; content and wm_su_rect insets a title bar that
+    mov cx, ax                  ; is not there (SPEC.md 11.2). Not wm_win_rect:
+    add cx, [di+W_W]            ; that takes SI, and the walk below is holding it
+    dec cx
+    mov dx, bx
+    add dx, [di+W_H]
+    dec dx
+.rect:
+    mov [wm_cov_c1], ax
+    mov [wm_cov_c2], bx
+    mov [wm_cov_c3], cx
+    mov [wm_cov_c4], dx
+    mov word [wm_cov_x1], 0x7FFF; seeded EMPTY, and left that way by a window
+    mov word [wm_cov_y1], 0x7FFF; nothing overlaps - which wm_su_srect reads as
+    mov word [wm_cov_x2], -1    ; "no pixel needs writing" and wm_damage as
+    mov word [wm_cov_y2], -1    ; "draw nothing", both correct
+    mov ax, di                  ; AL = our index
+    sub ax, wm_wins
+    mov cl, WIN_SIZE
+    div cl                      ; (AH = 0: a window ptr is record-aligned)
+    mov ch, 0
+    mov cl, [wm_zn]
+    mov si, wm_zord
+    jcxz .out
+.find:
+    cmp [si], al
+    je .found
+    inc si
+    loop .find
+    jmp short .out              ; not in the z-order (cannot happen)
+.found:
+    inc si                      ; first entry above us
+    dec cx
+.scan:
+    jcxz .out
+    dec cx
+    mov al, [si]
+    inc si
+    call wm_idx2ptr             ; BX = the window above (AX and CX preserved)
+    test word [bx+W_FLAGS], 2
+    jz .scan
+    call wm_cov_add
+    jmp short .scan
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_cov_add - fold (window BX's frame INTERSECT wm_cov_c1..c4) into the box
+; in:  BX = an occluder above us, visible; wm_cov_c1..c4 = our content rect
+; out: nothing; AX/CX/SI/DI preserved (the walk above holds all four)
+;
+; The overlap is settled FIRST, by four compares, and only then is each edge
+; clamped and folded - which is what lets the four axes be done one at a time
+; with two registers instead of holding a whole intersection rect.
+; -----------------------------------------------------------------------------
+wm_cov_add:
+    push ax
+    push dx
+    mov ax, [bx+W_X]
+    cmp ax, [wm_cov_c3]
+    jg .out                     ; entirely to our right
+    mov ax, [bx+W_Y]
+    cmp ax, [wm_cov_c4]
+    jg .out                     ; entirely below us
+    call wm_cov_ox2             ; AX = its right edge, drop shadow included
+    cmp ax, [wm_cov_c1]
+    jl .out                     ; entirely to our left
+    mov dx, ax                  ; ...banked: the y test clobbers AX
+    call wm_cov_oy2
+    cmp ax, [wm_cov_c2]
+    jl .out                     ; entirely above us
+    cmp ax, [wm_cov_c4]         ; --- y2 = min(its bottom, our bottom)
+    jle .y2
+    mov ax, [wm_cov_c4]
+.y2:
+    cmp ax, [wm_cov_y2]
+    jle .x2
+    mov [wm_cov_y2], ax
+.x2:
+    cmp dx, [wm_cov_c3]         ; --- x2 = min(its right, our right)
+    jle .x2f
+    mov dx, [wm_cov_c3]
+.x2f:
+    cmp dx, [wm_cov_x2]
+    jle .y1
+    mov [wm_cov_x2], dx
+.y1:
+    mov ax, [bx+W_Y]            ; --- y1 = max(its top, our top)
+    cmp ax, [wm_cov_c2]
+    jge .y1f
+    mov ax, [wm_cov_c2]
+.y1f:
+    cmp ax, [wm_cov_y1]
+    jge .x1
+    mov [wm_cov_y1], ax
+.x1:
+    mov ax, [bx+W_X]            ; --- x1 = max(its left, our left)
+    cmp ax, [wm_cov_c1]
+    jge .x1f
+    mov ax, [wm_cov_c1]
+.x1f:
+    cmp ax, [wm_cov_x1]
+    jge .out
+    mov [wm_cov_x1], ax
+.out:
+    pop dx
+    pop ax
+    ret
+
+; wm_cov_ox2 / wm_cov_oy2 - window BX's right and bottom edges in AX, drop
+; shadow included: x+w and y+h, one less on a fullscreen window, which has no
+; shadow (SPEC.md 11.2). wm_obscured tests the same two edges the same way.
+wm_cov_ox2:
+    mov ax, [bx+W_X]
+    add ax, [bx+W_W]
+    test word [bx+W_FLAGS], WF_FULL
+    jz .out
+    dec ax
+.out:
+    ret
+wm_cov_oy2:
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]
+    test word [bx+W_FLAGS], WF_FULL
+    jz .out
+    dec ax
 .out:
     ret
 
@@ -5015,6 +5241,19 @@ wm_draw_win:
     call wm_su_bank             ; ...and THIS is the moment its pixels are
                                 ; both correct and finished with (SPEC.md
                                 ; 11.96.4)
+%ifndef REDRAWFULL
+    mov word [wm_su_son], 0     ; THE ONE-SHOT DIES WITH THE DRAW IT WAS ARMED
+                                ; FOR, at the one site every window in the system
+                                ; is drawn through. wm_su_srect spends it, but
+                                ; only when there is a cache to restore from: on
+                                ; a MISS it is read by wm_damage and left set,
+                                ; and would then be inherited by the next
+                                ; wm_draw_win from anywhere - wm_paint_all, a
+                                ; wm_show - as somebody else's rect. wm_dmg_wins
+                                ; still clears it at .wdone for the case that
+                                ; does not reach here at all, a window wm_covered
+                                ; skipped (SPEC.md 11.96.6/11.96.10)
+%endif
     pop di
     pop si
     pop dx

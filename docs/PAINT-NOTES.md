@@ -612,3 +612,31 @@ Three things in the adoption are load-bearing:
   that paint owed and this one does not. It also calls `pt_fsbed` itself now, so
   that its own comment ("every part of this draws its own background") is true
   rather than true-because-a-`W_PAINT`-ran-first.
+
+## A window that resizes itself inside its own paint (SPEC.md §42.9)
+
+Found by §11.96.10's gate and **not caused by it**: on a picture that makes the
+window grow, `pt_wfix` rewrites `W_W`/`W_H` from `pt_track` — which runs at the
+top of `W_PAINT`, *after* `pt_org` has already derived `[pt_contw]`,
+`[pt_conth]`, `[pt_stripy]` and the strip's right-hand controls. So the rest of
+that paint laid out at the width the window used to be, and the band between the
+two widths was written by nobody: `WF_OWNBG` means the kernel fills nothing, so
+what showed through, inside Paint's own content, was **the desktop dither**.
+Measured on VGA with the 492×133 test bitmap: 41 columns of it, the full height
+of the colour strip.
+
+Two things about it are worth more than the one-line fix (`pt_org` again,
+straight after `pt_wfix`):
+
+- **It repaired itself, which is why nobody saw it.** Any later WHOLE repaint —
+  a raise, a `wm_paint_all` — re-derived from the corrected record and covered
+  the band. §11.96.10 stopped a raise being whole, and the defect became
+  permanent; `ptcheck` then reported it as 2,218 differing pixels against the
+  reference, in a region **outside** the rect the change was about. *A gate
+  failure whose bbox is nowhere near your change is evidence about the tree, not
+  about your change.*
+- **`[pt_apend]`'s `OSAPI_WM_FRONT` was supposed to be the repair and never
+  was.** `wm_front` on a window that is already frontmost and unobscured draws no
+  window at all (SPEC.md §11.90) — which is precisely the situation at launch,
+  where this defect is born. The deferred call still earns its keep for the
+  frame; it was never the thing that put those pixels down.

@@ -5481,6 +5481,67 @@ puts back has changed. Keying the marking on each window's *redrawn region*
 instead of its rect is the further step REDRAW-SPEC Part 3 names, and it is a
 real change to the marking pass rather than an extension of this one.
 
+#### 11.96.10 …and a RAISE puts back only what was covered
+
+§11.96.6 names the rect for a damage pass, where one exists. `wm_raise` has no
+damage rect and so answered *whole* for both consumers — the cache restore and
+§11.90.2's `OSAPI_WM_DAMAGE` — which is correct and is the largest thing left in
+the round: raising a window is the commonest operation in the system, and what a
+raised window actually owes is **the part something was sitting on**.
+
+`wm_cov_rect` computes it: the windows above us, each one's frame rect (drop
+shadow included) intersected with our content, accumulated into a bounding box.
+It is asked **before `wm_lift`** — after the lift this window is the top of the
+z-order and the answer is always "nothing" — and `wm_raise` spends it into
+`wm_su_sub` immediately before `wm_draw_win`, because everything in between (the
+bar, the dock, the outgoing window's chrome) may itself reach `wm_draw_win` and
+would consume a one-shot armed any earlier. It is `AL = 2` on the existing 0/1
+argument rather than a new call, so **only `wm_front` can ask for it**: `wm_show`
+and the fullscreen path pass 1, their window having no pixels on screen to keep.
+
+**It is `wm_obscured`'s own assertion at a finer grain, not a new one.**
+`wm_front` has always drawn only the title bar when nothing was on top — which
+says in so many words that an *uncovered* window's content on screen is already
+right — and this asks the same question per region instead of per window. The
+`AL = 0` path is now the degenerate case of it: an empty box, nothing to put
+back. What licenses that assertion in the first place is §11.96.1's promise, that
+a covered window cannot change its pixels without the kernel finding out
+(`wm_clip_set` drops the cache), plus the ordering §11.96.7 fixed.
+
+Four things about it are load-bearing:
+
+- **The box is over the CONTENT**, because that is all either consumer owns —
+  the cache holds content and `wm_damage` answers a content rect — while
+  `wm_draw_win` draws the outline, the drop shadow and the title bar whole
+  either way. So an occluder that reaches only our title bar contributes
+  nothing, and the empty answer that leaves is right.
+- **An empty box writes no pixel at all**, on both paths: `wm_su_srect` reads it
+  as "nothing this pass painted reached the content" and `wm_damage` as "draw
+  nothing", both of which they already documented.
+- **The bounding box of the union is exact** — the smallest rect holding every
+  covered pixel — so this cannot under-report. It over-reports in the ordinary
+  bounding-box way: two occluders at opposite corners give a box covering the
+  middle as well.
+- **`fm_focus` still downgrades it to 1.** A Disk window re-listed on the way in
+  has stale *content*, not stale pixels, and the covered box says nothing about
+  that.
+
+**The win is proportional to how much was covered and there is no single number
+for it**, which is worth stating because the figure this was estimated from was
+the wrong way round: a window with a corner under something gains nearly
+everything, a window almost entirely buried gains almost nothing. Measured
+(PERFORMANCE.md Set 35), Paint raised from under a Disk window covering 59.9% of
+its canvas is **9,090 ms → 5,948 ms, 1.53x**, and two Disk windows cascaded 16 px
+apart — where the covering window takes 95% of the content — is 98.2 → 87.8,
+1.12x. Both are exactly their own geometry.
+
+**One thing it does NOT do is make `wm_damage` partial on a fullscreen window.**
+`wm_draw_win`'s §11.2 branch fills the whole frame white and has no `WF_OWNBG`
+opt-out, so a partial answer there would leave the rest blank — the same
+interlock, at the one geometry that escaped it. Latent before this: `wm_dmg_wins`
+was the only caller that armed a rect and a fullscreen window is rarely marked,
+where `wm_front` can raise one.
+
 ### 12.05 The bar is redrawn only when its contents changed
 
 `menu_draw_bar` is on the same hot path as `dock_paint` — every window
@@ -22092,6 +22153,34 @@ slowly than the window*, which yields. On a 1bpp adapter the renderer is
 possible (§32), so nothing is owed a present and nothing is being unlocked:
 there is nothing to wait for, and `pt_wait` returns at once.
 
+### 42.9 A window that resizes itself inside its own paint must re-derive its layout
+
+`pt_track` runs at the top of every `W_PAINT` (there is no resize callback in
+the window ABI, §11.1), and when the canvas and the content box disagree
+`pt_wfix` rewrites `W_W`/`W_H` **under the `pt_org` that has already run**. So
+everything `pt_org` derives — `[pt_contw]`, `[pt_conth]`, `[pt_stripy]` and the
+strip's right-hand controls, which are anchored to the content's right edge —
+described the window as it *was* for the rest of that paint. The strip's white
+bed is `[pt_contw]` wide, so on a window that grew, the band between the old
+width and the new one was **never written by anybody**: under `WF_OWNBG`
+(§11.90.1) the kernel fills nothing, and what showed through was the desktop
+dither, inside Paint's own content.
+
+It survived because it repaired itself: any later WHOLE repaint — a raise, a
+`wm_paint_all` — ran `pt_org` against the corrected record and covered the band.
+§11.96.10 stopped raises being whole, which is what turned a transient defect
+into a permanent one and is how it was found.
+
+The fix is one call: `pt_org` again, immediately after `pt_wfix`. **`pt_track`'s
+own contract is what makes that safe** — it runs before anything is drawn, and
+`pt_org` reads the record and derives, touching no pixel and preserving every
+register. The alternative shape, deferring the whole repaint to `[pt_apend]`'s
+`OSAPI_WM_FRONT`, does not work and is why this was not noticed: `wm_front` on a
+window that is already frontmost and unobscured draws no window at all (§11.90),
+which is exactly the case at launch.
+
+
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
@@ -22103,7 +22192,6 @@ what the Task Manager and the dock show, is still `SOLITAIRE`.
 
 It owns no worker task and claims no heap. Everything it does happens inside
 `W_PAINT`, `W_ONKEY`, `W_ONCLICK` and its `AM_ONCMD`, under the caller's lock.
-
 ### 43.1 The card
 
 One byte: rank in bits 0..3 (0 = ace .. 12 = king), suit in bits 4..5, bit 6
