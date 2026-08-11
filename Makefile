@@ -312,7 +312,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
-        bench field stackprobe trklog npbench clicktest marty comscan \
+        bench field stackprobe trklog npbench clicktest marty comscan lptlink \
         fonts fontsheets fontlist \
         checkdocs clean clean-marty distclean
 
@@ -1625,6 +1625,59 @@ $(BUILD)/comscan144.img: $(BUILD)/csboot144.bin $(BUILD)/comscan.bin \
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/csboot144.bin --kernel $(BUILD)/comscan.bin \
 		$(BUILD)/comscan.com
+
+# LPTLINK surveys the machine's PARALLEL ports and then measures the cable
+# between two of them (tests/lptlink) - step 1 of docs/NET-PLAN.md. Same shape
+# as comscan above and for the same reason: NEITHER END IS os8088, so a
+# failure is a failure of the cable or the protocol and cannot be anything
+# else. Run it on both machines - one Slave, one Master, SLAVE FIRST.
+#
+#   build/lptlink.com   a DOS program. `LPTLINK > LPTLINK.TXT` captures the
+#                       report, because its output goes through int 21h
+#   build/lptlink.img   a BOOTABLE 360KB floppy carrying the same code as its
+#                       "kernel", so the 5150 needs no DOS and no os8088 to be
+#                       one end of the link. LPTLINK.COM rides along for the
+#                       DOS route
+#
+# `python3 tests/lptlink/linksim.py` is the host-side model of its link layer,
+# and it is not optional reading before touching the handshake: three defects
+# in it were found there rather than in the field, and every one of them would
+# have presented as a cable fault.
+lptlink: $(BUILD)/lptlink.img $(BUILD)/lptlink144.img $(BUILD)/lptlink.com
+	@python3 tests/lptlink/linksim.py
+	@echo "lptlink: build/lptlink.img (360K, bootable), lptlink144.img (1.44M),"
+	@echo "         and build/lptlink.com to run under DOS"
+
+$(BUILD)/lptlink.com: tests/lptlink/lptlink.asm | $(BUILD)
+	$(NASM) -f bin -w+error -DCOMFILE -o $@ tests/lptlink/lptlink.asm
+	@echo "lptlink.com: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/lptlink.bin: tests/lptlink/lptlink.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/lptlink/lptlink.asm
+
+# Its own boot sectors, because the sector count is assembled in and lptlink
+# is a great deal smaller than the kernel.
+$(BUILD)/llboot360.bin: boot/boot.asm $(BUILD)/lptlink.bin | $(BUILD)
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
+		-o $@ boot/boot.asm
+
+$(BUILD)/llboot144.bin: boot/boot.asm $(BUILD)/lptlink.bin | $(BUILD)
+	$(NASM) -f bin $(BOOTDEF) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
+		-o $@ boot/boot.asm
+
+$(BUILD)/lptlink.img: $(BUILD)/llboot360.bin $(BUILD)/lptlink.bin \
+                      $(BUILD)/lptlink.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/llboot360.bin --kernel $(BUILD)/lptlink.bin \
+		$(BUILD)/lptlink.com
+
+$(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
+                         $(BUILD)/lptlink.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/llboot144.bin --kernel $(BUILD)/lptlink.bin \
+		$(BUILD)/lptlink.com
 
 # There WAS a third image here - the same package on a FAT16 volume, built on
 # the 2.88MB test geometry, which exercised the one part of the write path

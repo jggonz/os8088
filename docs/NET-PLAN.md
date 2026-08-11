@@ -57,8 +57,8 @@ and a rung is 512 bytes. That is the arithmetic every estimate below is against.
 
 | # | Why the driver cannot do it | Kernel change | Est. | Needed by |
 |---|---|---|---|---|
-| 1 | `dsk_xfer`'s driver branch dispatches through `[drv_svc + DSV_SIZE + DSV_BLK]` — **class 2, hard-coded**. A `DRVC_DISK` driver is a singleton (§51.2.1), so a network driver either *is* HDD.DRV's class and cannot coexist with it, or its block calls dispatch into HDD.DRV's table | a volume kind that names its own class | **~40 B** | **Stage 1** |
-| 2 | The mount is `disk_mount` — BPB, FAT window, root scan. A volume whose remote side has *files* and no sectors has nothing for it to read | a `DVK_NET` branch at the mount, `dsk_chdir`, `dsk_free_clus` and nine `dskw_*` bodies | **~380–460 B** | Stage 2 |
+| 1 | `dsk_xfer`'s driver branch dispatches through `[drv_svc + DSV_SIZE + DSV_BLK]` — **class 2, hard-coded**. A `DRVC_DISK` driver is a singleton (§51.2.1), so a network driver either *is* HDD.DRV's class and cannot coexist with it, or its block calls dispatch into HDD.DRV's table | a volume ROW that names its own class (§2.1) | **~40 B** | **Stage 1** |
+| 2 | The mount is `disk_mount` — BPB, FAT window, root scan. A volume whose remote side has *files* and no sectors has nothing for it to read | a `DVK_FILE` branch at the mount, `dsk_chdir`, `dsk_free_clus` and nine `dskw_*` bodies | **~380–460 B** | Stage 2 |
 | 3 | **There is no generic package→driver call.** `OSAPI_VOL_*` and `OSAPI_DRV_CFG` are fenced *to drivers*; nothing lets a package reach a driver's own service at all | one opaque slot at 0x03B8 | **~60 B** | Stage 3 (mTCP) |
 
 Item 1 is the surprise. **Block mode is not free after all** — it is nearly
@@ -72,12 +72,33 @@ real collision on the one machine that matters most.
 
 | stage | what it is | kernel cost | what it buys |
 |---|---|---|---|
-| **1** | **Block volume** over the cable. The DOS side serves 512-byte sectors from an image file. `DVK_NET` + class-aware dispatch, and nothing else | **~40 B** | a working `Network` drive, read **and** write, with the whole FAT layer, the Disk window, the file dialog, package launching and the association cache **already working**. Proves the wire, the framing, the timing, the Control Panel page and the desktop zone at near-zero kernel risk |
-| **2** | **File redirector.** A `DRVC_NET` service table the kernel dispatches for listing, chdir, read, write, delete, rename, mkdir, rmdir, stat and free space | **~380–460 B**, one image rung + one cold rung | the *actual contents of the remote system*, at any size, with no coherency hazard and no 32 MB cap |
+| **1** | **Block volume** over the cable. The DOS side serves 512-byte sectors from an image file. `DV_CLASS` + class-aware dispatch, and nothing else | **~40 B** | a working `Network` drive, read **and** write, with the whole FAT layer, the Disk window, the file dialog, package launching and the association cache **already working**. Proves the wire, the framing, the timing, the Control Panel page and the desktop zone at near-zero kernel risk |
+| **2** | **File redirector.** A `DRVC_FILE` service table the kernel dispatches for listing, chdir, read, write, delete, rename, mkdir, rmdir, stat and free space | **~380–460 B**, one image rung + one cold rung | the *actual contents of the remote system*, at any size, with no coherency hazard and no 32 MB cap |
 | **3** | **mTCP forwarding.** One opaque `OSAPI_DRV_CALL` slot; the socket API itself lives entirely in the driver and its SDK header | **~60 B** | packages get TCP. The kernel learns nothing about networking, which is the point |
 
 Stage 1 is worth building **even though Stage 2 supersedes it**, and §2.1 is
 the argument. Stage 3 is independent of both and could be built second.
+
+### Decisions taken
+
+Four questions in §10 have been answered by the owner and the plan below is
+written to them rather than around them.
+
+- **Go all the way to Stage 2**, because a remote drive cannot be assumed to
+  be under 32 MB — and because the redirector is useful to something other
+  than a cable. **That second reason changes the design and §2.2 follows it**:
+  the class is `DRVC_FILE` rather than a `DRVC_NET`, the volume row names its own
+  class rather than encoding one in a new kind, and networking is the first
+  client of a general hook instead of being the hook.
+- **`kern_small` gets all of it.** §7.1 is the arithmetic, and it says
+  something better than "the risk of leaving it out": **`kern_small` can
+  afford this within its standing headroom and `kern_big` cannot.**
+- **One driver.** The user-facing question is *"is network on?"*, not *"is the
+  particular part of networking I want on?"* — one `drv_tab` row, one Control
+  Panel page, one file. §5.5 is how that is reconciled with a 128 KB machine
+  not paying for TCP it never uses.
+- Step 0 and step 1 of §9 **merge into one artifact**, `tests/lptlink`, for
+  the reason §9.1 gives.
 
 ### And the reason to want this at all is in docs/FIELD-MACHINES.md
 
@@ -126,10 +147,58 @@ output-only data register, and so do most XT-era cards. A PS/2 bidirectional
 port could do byte-at-a-time, but the target class cannot, so the fast path is
 not worth having two protocols for.
 
-**The status bits are scattered and one is inverted**, so decoding a nibble is
-`in al, dx` / `shr al, 3` / `xlat` against a 32-entry table, not a mask and a
-shift. The table costs 32 bytes and removes five instructions from the hottest
-loop in the driver.
+**The status bits are contiguous and the inverted one is the top one**, which
+is luckier than it sounds. The five received bits land in status bits 3..7,
+and BUSY — the inverted one — is bit 7, so it becomes bit 4 after a shift of
+3. One `xor` fixes it *before* the shift and the whole decode is three
+instructions:
+
+```
+    in  al, dx          ; status
+    xor al, 0x80        ; BUSY is inverted in hardware, and it is the top bit
+    shr al, 1 / 1 / 1   ; (8086: no shl reg, imm - CL or three ones)
+    and al, 0x1F        ; D4..D0 as the far end drove them
+```
+
+An earlier draft of this section called for a 32-entry `xlat` table on the
+assumption that the bits were scattered. They are not, and the table is not
+needed — worth recording because the same wrong assumption is what makes
+people reach for bidirectional mode.
+
+#### 1.1.1 The handshake is fully interlocked, and that is not the obvious choice
+
+Four phases per nibble: the sender puts the nibble, raises its strobe, waits
+for the ack to rise, drops the strobe, waits for the ack to fall. Both ends
+idle at D4 = 0 between nibbles and **neither leaves until the other has
+confirmed**.
+
+The obvious design is half that — a two-phase toggle, where the sender puts
+nibble+phase and the receiver echoes the phase back as its ack, one wait each.
+It is correct within one direction and **racy at a direction reversal**: the
+old receiver acks and then, as the new sender, immediately drives the same
+line, so the old sender never sees the ack and waits for ever. Between two
+machines of similar speed it mostly works; between a 4.77 MHz 8088 and
+anything modern it is the usual outcome rather than a rare one — which is to
+say it fails on exactly the pairing this exists for, and presents as a cable
+fault.
+
+Four phases fix the race *within* a direction and leave the same one at the
+seam, because the receiver's ack-down and its first strobe-up are microseconds
+apart. **`lp_turn` is the answer**: an end that has just been receiving waits
+a whole system tick before it drives anything. It costs one tick per reversal
+— a handful per transfer, not one per nibble — and it is called *from*
+`lp_snib` on a flag rather than from the six places that reverse direction,
+because a guard a call site can forget is a hang on somebody else's machines.
+
+**And the deadlines are in TICKS, not in poll counts.** A poll is ~15 µs on a
+5150 and ~1 µs on anything modern, so a fixed iteration count is a different
+length of time at each end — and the fast end's patience ran out inside the
+guard that exists to protect it. Both machines measure a tick identically;
+`LP_SPIN` survives only as the granularity at which the deadline is re-checked.
+
+All three of those were found in `tests/lptlink/linksim.py`, a host-side model
+of the link layer, before any of it reached hardware. None would have shown up
+on a matched pair on the bench.
 
 ### 1.2 What it costs, priced against this project's own measured numbers
 
@@ -143,31 +212,47 @@ PERFORMANCE.md's field table gives the one constant that decides this:
 | Floppy, per `int 13h` **call** | **~400 ms**, whatever it moves |
 | Floppy, open and read a one-sector file | 810 ms |
 
-A nibble handshake is roughly two `out`s and four `in`s — send data+strobe,
-poll for the far side's acknowledge, read, acknowledge back, poll for release.
-Six port accesses.
+**This section's first estimate was 10–25 KB/s and it was too generous**,
+because it priced a two-phase handshake — six port accesses a nibble — and
+§1.1.1's is four-phase. The 5150 pays, per nibble: two `out`s to put the
+nibble and raise the strobe, a poll for the ack to rise, an `out` to drop the
+strobe, and a poll for the ack to fall. Every one of those is an ISA access at
+the measured 8.7 µs, and a poll that finds its answer immediately still costs
+one:
 
-| model | per nibble | per byte | throughput |
+| | per nibble | per byte | throughput |
 |---|---|---|---|
-| pessimistic — every access costs the measured 8.7 µs | 52 µs | 104 µs | **9.6 KB/s** |
-| tuned — unrolled, `dx` held, `xlat` decode, ~5 µs/access, 4 accesses | 20 µs | 40 µs | **25 KB/s** |
+| 3 `out` + 2 polls, all at 8.7 µs, far end responding instantly | ~44 µs | ~87 µs | **~11.5 KB/s** |
+| the same with realistic loop overhead (~15 µs a poll iteration) | ~77 µs | ~154 µs | **~6.5 KB/s** |
 
-So **10–25 KB/s**, or **1.3× to 3.4× the floppy**. Both figures are modelled
-and PERFORMANCE.md Part 6's rule applies in full: **this must be measured
-before it is quoted anywhere else.** The 8.7 µs figure is itself a poll-loop
-iteration rather than a bare `in`, so the pessimistic column is a genuine
-ceiling on the cost and not a guess in the other direction.
+`tests/lptlink/linksim.py`, which charges a modelled clock per poll at each
+end's own cost, says **6,499 bytes/second** for a 5150 against a modern far
+end — the second row. **That is slower than the floppy's 7,457 B/s**, and the
+honest reading is that four-phase bought correctness with about half the
+wire speed.
 
-**The number that actually decides it is latency, not throughput.** A 512-byte
-sector is **20–52 ms on the wire**. The floppy charges **~400 ms for any
-`int 13h` call at all**. So a network volume is *dramatically* faster than the
-floppy for exactly the traffic the FAT layer generates most of — a directory
-sector, a FAT sector, a one-sector stat — and roughly comparable when
-streaming a file. Opening and reading a one-sector file is 810 ms on the
-floppy and would be ~60–150 ms over the cable.
+Every figure here is still a MODEL and PERFORMANCE.md Part 6's rule applies in
+full: **it must be measured on two real machines before it is quoted anywhere
+else**, which is what step 1 exists for.
 
-That is a better result than it first looks, and it is what makes Stage 1
-worth shipping rather than merely worth prototyping.
+**And the number that actually decides this is latency, not throughput.**
+A 512-byte sector is **~79 ms on the wire** at the modelled rate. The floppy
+charges **~400 ms for any `int 13h` call at all**, whatever it moves. So a
+network volume is still *dramatically* faster than the floppy for exactly the
+traffic the FAT layer generates most of — a directory sector, a FAT sector, a
+one-sector stat — and roughly a wash when streaming a large file. Opening and
+reading a one-sector file is 810 ms on the floppy and would be ~150–250 ms
+over the cable.
+
+That is what makes Stage 1 worth shipping rather than merely worth
+prototyping, and it does not depend on the throughput figure being flattering.
+
+**If the measurement comes in near the floppy's rate and that is not enough**,
+the known optimisation is to go back to a two-phase toggle *keeping* §1.1.1's
+turnaround discipline — the race was at the reversal, not in the toggle, and
+`lp_turn` plus tick-based deadlines are what make a reversal safe. That is
+roughly a 2× win and it must not be attempted without the guard, because the
+guard is the part the simulation proved is load-bearing.
 
 ### 1.3 Three rules the transport has to obey
 
@@ -412,35 +497,67 @@ driver must either declare itself `DRVC_DISK`, in which case attaching it
 disconnects HDD.DRV (§51.2.1 is explicit that a class is a publication slot),
 or the volume row must say which class owns it.
 
-The cheap fix is a **new volume kind rather than a new field**. `DV_KIND`
-already exists and the row is exactly 16 bytes with no spare
-(`KIND`,`UNIT`,`FLAGS`,pad,`SECS`,`SEG`,`LBL[8]`), so growing it costs
-`DVOL_MAX` × 4 = 32 bytes of `.bss` and touches every reader. `DVK_NET = 2`
-costs one `cmp`/`je` in `dsk_xfer` and one in `dsk_vol_drop_drv`'s class gate:
+**The fix is that the row names its own class**, and the first draft of this
+plan got it wrong by proposing a new *kind* (`DVK_NET`) instead. A kind
+answers "how is this volume reached"; the question here is "*by whom*", and
+those are different — Stage 2 needs a file-served volume that could belong to
+any class too, and encoding each combination as a kind is how you end up with
+four of them.
+
+The row is exactly 16 bytes and full:
 
 ```
-DVK_BIOS  equ 0
-DVK_DRV   equ 1     ; DRVC_DISK's
-DVK_NET   equ 2     ; DRVC_NET's - same DSV_BLK contract, different class row
-DVK_FREE  equ 0xFF
+DV_KIND(1) DV_UNIT(1) DV_FLAGS(1) pad(1) DV_SECS(2) DV_SEG(2) DV_LBL(8) = 16
 ```
 
-`dsk_vol_drop_drv`'s comment already warns about this exact shape — "a
-teardown that says *this driver's* while meaning *every driver's* reads
-correctly right up until a second driver exists". A second block-capable class
-is that second driver, and the gate has to learn the kind or unticking the
-network driver will unmount the hard disk.
+…but **`DV_LBL` is 8 bytes for a label nothing sets.** §26.4 is explicit:
+"nothing gives a volume a `DV_LBL` of its own today (§52.4 — the kernel names
+them)", and since that section the caption is `A:` rather than `Disk A`. The
+longest string the kernel ever puts there is `HDD C` — five characters and a
+NUL. So:
+
+```
+DV_KIND(1) DV_UNIT(1) DV_FLAGS(1) DV_CLASS(1) DV_SECS(2) DV_SEG(2) DV_LBL(7) = 16
+                                  ^^^^^^^^^^                       ^^^^^^^^
+                                  the pad byte, spent               8 -> 7
+```
+
+**`DV_CLASS` costs zero bytes of `.bss` and zero instructions**: it takes the
+existing pad byte, `DV_SIZE` stays 16 so `dsk_vol_row`'s index stays a
+shift rather than a multiply, and `DV_LBL` keeps a byte of slack over the
+longest label there is. `dsk_xfer`'s `mov bp, [drv_svc + DSV_SIZE + DSV_BLK]`
+becomes a lookup through `drv_cls_svc` on `[bx+DV_CLASS]` — which is a routine
+that already exists, because §51.2.1's per-class publication needed it.
+
+Two consequences to hold on to. **`DV_CLASS` = 0 on a BIOS volume**, so a row
+that was never set carries the value that can never dispatch anywhere.
+And **`dsk_vol_drop_drv` takes the class as an argument** instead of dropping
+every kind-1 row: its own comment warns about exactly this shape — "a teardown
+that says *this driver's* while meaning *every driver's* reads correctly right
+up until a second driver exists" — and §51.8 records what it cost the last
+time, when unticking *sound* unmounted every hard-disk partition.
 
 ### 2.2 File mode — the redirector
 
 This is what the ask actually describes, and it is a redirect at the **file
-layer**, not the block layer. The kernel branches on `DVK_NET` and calls out
-to a `DRVC_NET` service table.
+layer**, not the block layer. The kernel branches on `DVK_FILE` and calls out
+to a `DRVC_FILE` service table.
+
+**It is deliberately not a network feature, and the name says so.** A volume
+whose contents are served by *somebody else answering questions about files*
+is a general shape, and the cable is only its first client. Three others are
+plausible without inventing anything: a **serial** redirector over the port
+`comscan` already surveys, a **RAM disk** that needs no FAT at all, and a
+**host-filesystem passthrough** under an emulator, which would be worth a
+great deal to this project's own harness. `DRVC_FILE` costs exactly what
+`DRVC_NET` would have cost and forecloses none of them, so the general name
+is free — and §20.8 rule 4 means it is free *now* and expensive later, because
+the day a `.DRV` ships against `DRVC_NET` is the day the number is frozen.
 
 **The key insight that keeps File Manager at zero:** the staged §19.1
 directory entry carries a **"first cluster" word at offset 18**, and only two
 consumers ever interpret it — `dsk_chdir` for a folder, and the loader for a
-package. Both of those are already redirect points. So on a network volume
+package. Both of those are already redirect points. So on a redirected volume
 that word is **an opaque handle the driver assigns**, the §19.1 entry format
 does not change by one byte, and every consumer above it — the Disk window's
 rows, its icons, its sort, the file dialog, the `..` synthesis, the type word,
@@ -449,34 +566,34 @@ rows, its icons, its sort, the file dialog, the `..` synthesis, the type word,
 The service table:
 
 ```
-NSV_LIST    list the current folder into disk_dir/disk_icons/disk_nfiles
+FSV_LIST    list the current folder into disk_dir/disk_icons/disk_nfiles
             (the driver stages §19.1 entries; the kernel already owns the
             sort, §19.4, so the driver must NOT sort)
-NSV_CHDIR   AX = a folder handle from an entry, or 0 = the root; DX = up
-NSV_STAT    SI = name -> exists, size, attributes
-NSV_READ    SI = name, ES:BX = buffer, DX:CX = capacity -> DX:AX = size
-NSV_WRITE   SI = name, ES:BX = bytes, DX:CX = count
-NSV_APPEND  the chunked pair (§18.4.4), so a copy still streams
-NSV_READAT  ...and its read half
-NSV_DELETE  SI = name
-NSV_RENAME  SI = old, DI = new
-NSV_MKDIR   SI = name
-NSV_RMDIR   SI = name
-NSV_DFREE   -> DX:AX = free bytes, BX = the granule
-NSV_CPNAME/CPPAINT/CPCLICK/CPCLOSE   the Control Panel page (§31.9)
+FSV_CHDIR   AX = a folder handle from an entry, or 0 = the root; DX = up
+FSV_STAT    SI = name -> exists, size, attributes
+FSV_READ    SI = name, ES:BX = buffer, DX:CX = capacity -> DX:AX = size
+FSV_WRITE   SI = name, ES:BX = bytes, DX:CX = count
+FSV_APPEND  the chunked pair (§18.4.4), so a copy still streams
+FSV_READAT  ...and its read half
+FSV_DELETE  SI = name
+FSV_RENAME  SI = old, DI = new
+FSV_MKDIR   SI = name
+FSV_RMDIR   SI = name
+FSV_DFREE   -> DX:AX = free bytes, BX = the granule
+FSV_CPNAME/CPPAINT/CPCLICK/CPCLOSE   the Control Panel page (§31.9)
 ```
 
 The branch sites in the kernel, counted:
 
 | site | what the branch does | est. |
 |---|---|---|
-| `disk_mount` | `DVK_NET` → `NSV_LIST`, skip BPB/FAT/root scan entirely | 30 B |
-| `dsk_chdir` / `dsk_chdir_q` | → `NSV_CHDIR` | 30 B |
-| `dsk_free_clus` | → `NSV_DFREE` | 20 B |
+| `disk_mount` | `DVK_FILE` → `FSV_LIST`, skip BPB/FAT/root scan entirely | 30 B |
+| `dsk_chdir` / `dsk_chdir_q` | → `FSV_CHDIR` | 30 B |
+| `dsk_free_clus` | → `FSV_DFREE` | 20 B |
 | `dskw_wbody` / `rbody` / `dbody` / `nbody` / `mkbody` / `rmbody` | → the six verbs | 90 B |
 | `dskw_stat` / `dskw_apbody` / `dskw_read_at` | → three more | 45 B |
-| `dsk_read_chain` (the loader, `assoc`) | → `NSV_READ` by handle | 25 B |
-| class table, `DRVC_NET`, `drv_net_call`, `DVK_NET` in `dsk_xfer` | the dispatch | 100 B |
+| `dsk_read_chain` (the loader, `assoc`) | → `FSV_READ` by handle | 25 B |
+| class table, `DRVC_FILE`, `drv_fs_call`, `DV_CLASS` in `dsk_xfer` | the dispatch | 100 B |
 | `desk.inc` — a network icon and its `[desk_pnet]` pointer | data, plus one branch | 40 B + icon |
 | **total** | | **~380–460 B** |
 
@@ -495,7 +612,7 @@ CD-ROM, a RAM disk or a network drive of its own.
 **What it gives up:** the association cache and the icon harvest. `ASSOC.DAT`
 (§54.7) and the first-sector icon harvest both assume a volume you can read
 sectors of. The driver can do the harvest itself — 64 bytes at offset 32 of
-each `.O88`, which is one `NSV_READAT` per package — or hand back zeroed slots
+each `.O88`, which is one `FSV_READAT` per package — or hand back zeroed slots
 and let §25's generic icon do its job, which is what `hello/` ships to prove.
 **Zero the slots first and measure before adding the harvest**: at ~30 ms a
 read it is a second of listing time for a folder of thirty packages.
@@ -547,7 +664,7 @@ Three consequences worth stating because they are free and look like work:
   than failing on click, and rule 1 means `gfx_pen_cf` and not a bare
   `CDGRAY`. §52.2.2 is the worked example of getting this wrong.
 - **The status line's `Size … Free …`** comes from `cw_dsk_free_clus`, which is
-  `NSV_DFREE`. It costs a round trip, so the driver should cache the answer
+  `FSV_DFREE`. It costs a round trip, so the driver should cache the answer
   per listing rather than per paint.
 - **§22.8's dirty-folder mark works unchanged**, because it hangs off
   `dskw_sync`, which every successful file operation passes through.
@@ -678,6 +795,33 @@ TCP connection. Scope the first package accordingly: a Telnet client is about
 the right size and it exercises `OPEN`, `SEND`, `RECV`, `STATUS` and `CLOSE`
 with nothing else in the way.
 
+### 5.5 One driver, and the socket half is an overlay
+
+**One driver is the decision, and it is the right one for the reason it was
+given**: the question a user should have to answer is *"is network on?"*, not
+*"is the particular part of networking I want to use on?"* — so one `drv_tab`
+row, one Control Panel page, one `.DRV`, one tick.
+
+That collides with §7.1's real constraint, which is the 128 KB machine's
+35.5 KB heap, and the collision is resolved the way this tree has already
+resolved it twice. **The socket layer is an `OS88_OVERLAY`** (§52.11): a
+second `.DRV` that `NET.DRV` loads *itself*, on first use, and frees when the
+last handle closes. `hddtool.drv` is 10,753 bytes doing exactly this, and the
+mechanism, the macro and the loader path all exist.
+
+So the user still sees one thing to turn on, and a machine that only ever uses
+the *drive* never has the TCP code in memory at all. The seam is where §5.1's
+slot already puts it: `OSAPI_DRV_CALL` arrives at `NET.DRV`, which loads the
+overlay if it is not resident and forwards. A package cannot tell, and should
+not be able to.
+
+**Two rules come with the overlay and both are §51.7's.** A load can be
+refused — a 128 KB machine with a Disk window open may genuinely not have the
+room — so `NETV_OPEN` returning "no memory" is an ordinary path a package must
+handle, exactly as `mem_claim`'s refusal is everywhere else in this OS. And
+`DRVV_DETACH` must not return until the overlay is unloaded and the worker is
+gone, because `drv_unload` frees the image the moment detach returns.
+
 ---
 
 ## 6. The desktop, the page, and the icon
@@ -692,7 +836,7 @@ with nothing else in the way.
 - **A new icon, and it is pure data.** `icon_draw` reads a `words, height`
   header, so `ico_net32` plus a CGA-aspect `ico_net14` (§26.4 — the CGA's
   pixels are 2.4:1, which is why the disk icon is 32×14 there) is a table and
-  one pointer, not a draw path. Keying it off `DVK_NET` is one `cmp` in
+  one pointer, not a draw path. Keying it off `DV_KIND`/`DV_CLASS` is one `cmp` in
   `desk_draw_zone`'s icon pick.
 - **The Control Panel page is the driver's** (§31.9), and it should show the
   port, the link state, the far side's directory, bytes moved, and a
@@ -713,20 +857,56 @@ with nothing else in the way.
 
 | | image `.text` | `.cold` | `.bss` | rungs crossed |
 |---|---|---|---|---|
-| Stage 1 — `DVK_NET`, class-aware dispatch, `NT` cfg key, icon | ~40 B | 0 | ~38 B | **image: yes** (227 left) |
+| Stage 1 — `DV_CLASS`, class-aware dispatch, `NT` cfg key, icon | ~40 B | 0 | ~38 B | **image: yes** (227 left) |
 | Stage 2 — the redirector | ~120 B | ~300 B | ~30 B | **image and cold** |
 | Stage 3 — `OSAPI_DRV_CALL` | ~60 B | 0 | 0 | folded into Stage 1's rung |
 
 Stage 1 crosses the image rung on its own (227 bytes of slack, ~78 bytes of
-growth plus the icon data). Stages 1–3 together are **two rungs, 1,024 bytes,
-leaving one step of the three `kern_big` has spare.**
+growth plus the icon data). Stages 1–3 together are **two rungs, 1,024 bytes**.
 
-**`kern_small` must be checked separately and may say no.** It has 135 bytes of
-image slack and 100 of cold against 6 steps of budget, and the whole reason
-the split exists (docs/KERN-SPLIT-PLAN.md) is that the small build is allowed
-to drift tighter. A parallel network driver on a 128 KB machine is a
-reasonable thing to want and a reasonable thing to refuse; that is the owner's
-call and it should be asked, not assumed.
+### 7.1 …and `kern_small` can afford it where `kern_big` cannot
+
+The obvious worry is that the small build is the one that has to decline this.
+Run the arithmetic and it comes out the other way:
+
+| | spare before | rungs crossed | spare after | against the standard of four |
+|---|---|---|---|---|
+| `kern_big` | 1,536 (3 steps) | image + cold = 1,024 | **512 (1 step)** | **below — needs a raise** |
+| `kern_small` | 3,072 (6 steps) | image + cold = 1,024 | **2,048 (4 steps)** | **exactly at it** |
+
+Both builds cross the same two rungs, because both have less slack in each
+than the change adds (big 227/107, small 135/100, against ~288 of image and
+~300 of cold). But `kern_small` starts with twice the headroom, so it lands on
+the four-step standard CLAUDE.md names, and `kern_big` lands one step under it
+and owes the `KERN_BUDGET` conversation — the seventeenth, and the same shape
+as the sixteenth.
+
+**So "leave it out of `kern_small` to be safe" would have been the expensive
+choice**, and not only on the arithmetic. Three further reasons, in the order
+they matter:
+
+- **The redirector is structural, not a feature.** The branch sites are inside
+  `disk_mount`, `dsk_chdir` and nine `dskw_*` bodies — routines *both* builds
+  run on every file operation. `%ifdef KERN_SMALL` around twelve of those
+  leaves the two builds with **different file layers**, so every future change
+  down there has to be reasoned about twice and tested twice, for ever. That
+  is a permanent tax, where a missing feature is a one-line refusal.
+- **The 128 KB machine wants this most.** It is the machine least likely to
+  have a hard disk and most likely to be shuffling floppies — the case in §0
+  is *strongest* on the smallest machine. This is KERNEL-MEMORY move 17's
+  argument exactly ("a redraw optimisation is worth most on the slowest
+  machine", which is why that move raised *both* guards), and move 15's
+  "small should drift tighter" does not apply in this direction.
+- **The `.DRV` is optional and the hook is not.** A 128 KB machine that never
+  ticks the row pays one `drv_tab` entry and a file on the floppy. The hook
+  being present costs it two rungs whether or not it is ever used, which is
+  the honest price and is what the table above is measuring.
+
+**The real constraint on a 128 KB machine is the heap, not the guard.** Its
+heap is `int 12h` − 92.5 KB ≈ **35.5 KB**, and a three-stage `NET.DRV` at
+~8 KB plus its buffers is a fifth of it — which is precisely the argument
+§34.8 makes about the Sound Blaster tier's 12 KB DMA buffer. §5.5 is what to
+do about that, and it is the same answer: make the expensive half optional.
 
 ### Disk
 
@@ -805,8 +985,7 @@ free and sufficient.
 
 | # | build | proved by |
 |---|---|---|
-| 0 | **`comscan` learns LPT** (§1.4.8). The BIOS table, the latch probe and the status byte, per candidate base | a report from the 5150 naming 3BCh, and one from the DOS machine naming whatever the DIO-500 is at. **No longer a gate** — the 5150's port is confirmed — but it is what tells the two ends where to start |
-| 1 | The wire: a `tests/lptbench` that clocks bytes both ways | a measured KB/s figure, on the iron, into PERFORMANCE.md Part 9. Not the model in §1.2 |
+| **1** | **`tests/lptlink`** — §9.1, **BUILT**. `make lptlink`: the survey and the wire in one artifact, on neither side of which is os8088 involved | a port report from both machines, a link that comes up by itself, and **a measured KB/s figure on the iron** into PERFORMANCE.md Part 9. Not §1.2's model. `python3 tests/lptlink/linksim.py` is its host-side gate and passes today |
 | 2 | `NET.DRV` Stage 1 + `OS88NET /IMG` | a `Network` icon on the desktop, a Disk window listing it, a package launched off it, a file written to it, `os88disk.py --verify` on the image afterwards from the host |
 | 3 | `OSAPI_DRV_CALL` + `DSV_PKGCALL` | a package reaching a driver at all — testable with a stub verb before any networking exists |
 | 4 | Stage 2, the redirector | the same Disk window over `OS88NET /D:C:\` — and the same `tests/filetest` battery, which is the existing 25-case write gate and applies unchanged |
@@ -819,26 +998,70 @@ so a *host-side* stub server against 86Box is the closest thing to a harness
 and is worth building at step 1 — but the verdict on the protocol comes off
 two period boxes and nowhere else.
 
+### 9.1 Why the survey and the benchmark are one artifact
+
+They were two steps and they are one, because they want the same code and the
+same trip. A port survey that stops at "there is a latch here" cannot answer
+§1.4.4's question — *is there a computer on the other end* — and answering it
+means implementing the handshake; and once the handshake works, the throughput
+figure is a loop around it. Splitting them means writing the transport twice
+and asking for two trips to the machines to run them.
+
+So `tests/lptlink` is **one source built two ways**, which is `comscan`'s own
+shape (`-DCOMFILE` for a DOS `.COM`, plain for a **bootable** image whose
+"kernel" is the diagnostic itself):
+
+- `build/lptlink.com` — runs on the DOS machine, and is also the far end.
+- `build/lptlink.img` — a bootable 360 KB floppy for the 5150, and
+  `lptlink144.img` for a 1.44 MB drive.
+
+**Neither end is os8088**, which is the whole point at this step: no kernel
+byte moves, no driver exists yet, and a failure is a failure of the cable or
+the protocol and cannot be anything else. It also survives as the permanent
+field diagnostic, the way `comscan` did — the tool you reach for when this
+does not work on somebody's machine, and the one that runs on a machine that
+will not boot os8088 at all.
+
 ---
 
-## 10. Questions for the owner
+## 10. Questions, and what was answered
 
-1. ~~**Does the 5150 have a parallel port?**~~ **Answered: yes, on the GB101**
-   — the Hercules-family LPT at 3BCh. The far end is a **DIO-500** multi-I/O
-   card at an address that has not been read off it yet, which is why §1.4 is
-   a scan on both sides rather than a constant anywhere.
-2. **Is the writer machine the intended far end?** The case in §0 assumes so,
-   and it is much the strongest case. If the far end is a modern PC with a
-   USB parallel adapter, most of those are printer-class devices that cannot
-   do bit-level I/O and the answer is no.
-3. **Stage 1 only, or Stage 1 → 2?** Stage 1 is ~40 bytes of kernel and gives a
-   working network drive over an image file. Stage 2 is ~400 more and two rungs
-   for the remote machine's real filesystem. Both are defensible; Stage 2 is
-   what the ask describes.
-4. **`kern_small` too, or `kern_big` only?** §7. The small build has 135 bytes
-   of image slack and this is exactly the sort of feature the split exists to
-   let it decline.
-5. **Does mTCP forwarding go in the same driver, or a second one?** One driver
-   is one file and one Control Panel page; two means `DRVC_NET` for the drive
-   and another class for sockets, and classes are a scarce, `.bss`-costing
-   resource. One driver with a `/NET`-capable server is the recommendation.
+**Answered by the owner, and the plan above is written to them:**
+
+1. **Does the 5150 have a parallel port?** — **Yes, on the GB101**, the
+   Hercules-family LPT at 3BCh. The far end is a **DIO-500** multi-I/O card at
+   an address nobody has read off it, and the point was never one machine
+   anyway, which is why §1.4 is a scan on both sides rather than a constant
+   anywhere.
+2. **Stage 1 only, or all the way to Stage 2?** — **Stage 2**, on two grounds:
+   a remote drive cannot be assumed to be under 32 MB, and *"this setup could
+   be useful for other redirectors"*. The second reshaped §2.2 — the class is
+   `DRVC_FILE`, the volume row names its class in a byte that already existed,
+   and a cable is the first client of a general hook rather than the hook
+   itself.
+3. **`kern_small` too?** — **Yes, both builds.** §7.1 is the arithmetic, and it
+   supports the decision more strongly than the reason given: `kern_small`
+   lands *exactly* on the four-step standard and `kern_big` lands one step
+   under it. The deciding argument is that the redirector is **structural** —
+   the branch sites are inside routines both builds run on every file
+   operation, so an `%ifdef` would leave the two builds with different file
+   layers and tax every future change down there for ever.
+4. **One driver, or two?** — **One.** *"Is network on?"*, not *"is the
+   particular feature of networking I want to use on?"*. §5.5 reconciles that
+   with a 128 KB machine's 35.5 KB heap by making the socket half an
+   `OS88_OVERLAY` the driver loads on first use — one thing to turn on, and
+   the TCP code is not in memory on a machine that only uses the drive.
+
+**Still open:**
+
+5. **Is the writer machine the intended far end?** The case in §0 assumes so,
+   and it is much the strongest case. If the far end is a modern PC with a USB
+   parallel adapter, most of those are printer-class devices that cannot do
+   bit-level I/O and the answer is no. This does not block step 1 — `lptlink`
+   will say what any given machine can do — but it decides how much the
+   feature is worth.
+6. **`kern_big`'s raise.** §7.1 says Stage 2 leaves it one step under the
+   four-step standard, so it owes `KERN_BUDGET`'s seventeenth move. That is a
+   conversation to have with these numbers in front of you, at the point Stage
+   2's code is written and its real cost is measured rather than estimated —
+   not now, and not by discovering it in a `kernsize` line.
