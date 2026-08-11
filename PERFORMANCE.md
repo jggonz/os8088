@@ -4423,3 +4423,74 @@ failure is a wall of `word data exceeds bounds` at unrelated lines rather than
 anything naming the constant. The next round wants a row dropped or the suite
 split, and now that decision can be taken from the report rather than from a
 truncated one coming back off a machine nobody can re-run cheaply.
+
+### Set 36 — the seek measured on the iron: the model's one guess was right
+
+One `sysbench` run on the IBM 5150 off `combo.img` built `DISKCNT=1`, Hercules
+primary. The build is identified rather than assumed — `kernel span KB 97` and
+`kernel image KB 83` match that build's 97.0 / 83.4, `free on it, KB 45` is its
+309-of-354 clusters, and the MM58167 answering at tier 2 with
+`adapters avail 0006` is docs/FIELD-MACHINES.md's machine and no emulator.
+
+#### The head step, which nothing had ever measured
+
+Set 35's model took its step rate from what the BIOS asks for through SPECIFY
+(`00CF` → SRT 12 → 8 ms a cylinder at 250 kbit/s) and its settle from the DPT,
+both on trust, because every raw row in this document reads one track and
+never moves the head. In revolutions per read, against the model:
+
+| cylinders | **5150** | MartyPC |
+|---:|---:|---:|
+| 0 (baseline) | **1.000** | 1.000 |
+| 1 | **1.000** | 1.000 |
+| 5 | **1.034** | 1.000 |
+| 10 | **1.000** | 1.000 |
+| 20 | **2.000** | 2.034 |
+| 39 | **2.138** | 3.000 |
+
+**The break falls between 10 and 20 cylinders, which is exactly where the
+model puts it** — 10 cylinders is 105 ms and fits inside the ~184 ms of
+rotational slack a 1-sector read leaves; 20 is 185 ms and does not. Read as a
+slope instead, 10 → 39 cylinders costs the 5150 **7.81 ms a cylinder** against
+the model's 8.00. **The guess was right to 2%, and it is no longer a guess.**
+
+#### ...and the same rows locate what is still wrong
+
+MartyPC's 39-cylinder row is **3.000 revolutions against the field's 2.138**,
+a slope of 13.7 ms a cylinder against 7.8 — and the model is *not* using 13.7,
+it is using 8. What that gap measures is the same defect Set 35.1 found in the
+track row: **MartyPC's per-call turnaround is too long, so a read that should
+just catch sector 1 misses it and waits another whole revolution.** The field's
+2.138 is not a whole number and MartyPC's 3.000 is, which is the tell. One
+cause, two symptoms, and it is the residual behind the boot as well.
+
+**Boot, on the identical disk**: 205 ticks on the 5150, **222 on MartyPC** —
+**1.08x**, against the 1.17x Set 35 reported off a different pair of images.
+
+#### The spin-up rows did not answer, and say so
+
+`1 sector, motor COLD` is **164,777 us** and warm **219,702** — cold *faster*,
+with `motor status 40:3F` reading `0000`. Both are exact tick multiples (3 and
+4), so at N = 1 the ±1 revolution of rotational luck is larger than the effect.
+
+But the row is not merely noisy, it is **impossible as stated**: a read that
+completes in 165 ms is **under one revolution**, and no platter starts from
+rest inside one. So either the drive was still turning, or no motor-start wait
+is paid on this path — and `0040:003F` is the **BIOS's belief**, not the
+hardware: the DOR at 0x3F2 is write-only, so a package cannot confirm it.
+That is a limit of the instrument and is recorded rather than worked around.
+Raising N does not fix it either: the wait for the motor to stop would land
+inside the timed region.
+
+#### Two smaller things this settles
+
+**`DPT motor start /8 s` is 8** on the machine — one full second, as Set 14
+read. MartyPC's ROM reports **4**. Same 27 OCT 82 dump, different answer, so
+something between the ROM and `int 1Eh` differs in the emulator; it is worth
+knowing and it is not what the boot gap is made of.
+
+**One 16 KB `FILE_READ` is 27 sectors in 3 `int 13h`**, runs of 9 at
+contiguous LBAs 594/603/612, **no mounts and no resets** — 5 of the file's 32
+sectors served from §18.95's cache, and the repeat read identical. And the
+report came back at **343 rows of 380 and 14,867 arena bytes of 16,000**, 7%
+spare, which is Set 35's warning arriving on the machine it was about.
