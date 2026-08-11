@@ -187,24 +187,184 @@ worth shipping rather than merely worth prototyping.
   Polling is both simpler and the only portable answer, and the transfers are
   short enough that it costs nothing the floppy does not already cost.
 
-### 1.4 The first thing to find out, and we do not know it
+### 1.4 Finding the port, on both sides
 
-**Nobody has recorded whether the field 5150 has a parallel port.** Its video
-row is a *Hercules GB101*, and Hercules-family cards usually carry an LPT at
-3BCh — but "usually" is not a hardware inventory, and docs/FIELD-MACHINES.md
-is explicit that its table is not to be filled in from what a machine
-generally has.
+**The 5150's port is confirmed: it is on the GB101**, which is the
+Hercules-family LPT at 3BCh. That answers step 0's blocking question and
+retires it — but it also makes the *general* problem the design problem,
+because the far end in the room is a DIO-500 multi-I/O card that is almost
+certainly not at 3BCh, and neither end may assume the other's address.
 
-There is an exact precedent for answering this: **`make comscan`**, the serial
-port survey, which exists because "the mouse was not detected on real
-hardware" could not be answered any other way. The same tool should learn to
-report LPT — the BIOS already publishes the addresses it found at
-`0040:0008..000F`, and probing a parallel port for real is a two-line write/
-read of the data register at each of 3BCh / 378h / 278h.
+**So neither side is configured; both sides scan.** That is §9.5's shape
+exactly — probe every candidate, arm every one that answers, let the one that
+delivers win — and it is worth following closely, because §9.5 is the module
+in this tree that has already been through every way of getting this wrong.
 
-**That is a ~30-line addition to an existing bootable diagnostic and it should
-be the first commit of this work**, because everything after it is wasted if
-the answer is "no port".
+#### 1.4.1 The candidate set, and why the BIOS table is trusted here
+
+Three addresses are the whole universe in practice, and they are the three the
+POST itself scans, in this order:
+
+| base | what puts it there |
+|---|---|
+| **3BCh** | the MDA / Hercules family — **the GB101, so the 5150's** |
+| **378h** | the usual dedicated or multi-I/O card address |
+| **278h** | the second one on a multi-I/O card |
+
+**The BIOS has already done this scan and published the answer** at
+`0040:0008`: four words, LPT1..LPT4, zero meaning absent. Read it first.
+
+That is a *measurement* and not a claim, which is the opposite of §18.97's
+situation and worth being explicit about, because this tree's instinct is now
+to distrust the BIOS data area. §18.97 exists because `int 11h`'s floppy count
+comes from **SW1's DIP switches** — a human's assertion about the machine, and
+on the field 5150 a wrong one. The parallel table is filled by the POST
+*probing* each address with a write and a read-back. It is the same test §1.4.2
+does, already done, and it costs a memory read to consult.
+
+It is still verified rather than trusted outright, for three reasons that are
+all real: an XT-clone BIOS may scan fewer addresses than three, a card can sit
+at a base the POST never looks at, and a port the BIOS found may have been
+shadowed since. So: **the candidate list is the BIOS table plus the three
+standard bases, deduped** — and the port that is in one and not the other is
+worth *reporting*, because a disagreement between the two is information (it is
+`comscan`'s `warn_outside`, which exists for exactly the serial version of this).
+
+**One rule falls out and it is easy to get wrong: work in addresses, never in
+LPT numbers.** On a machine with a mono card, LPT1 *is* 3BCh and a card at 378h
+is LPT2 — so "LPT1" on the 5150 and "LPT1" on a machine with no mono card are
+different hardware. The 5150 is precisely the machine that breaks the
+assumption, and it is the machine this is for. Nothing in either half of this
+should contain the string "LPT1" outside a message to a human.
+
+#### 1.4.2 Is a port there? The data latch, two values
+
+`base+0` is a readable latch on every parallel port from the original IBM
+Printer Adapter onward — the *bidirectional* data path is the later extension,
+not the readback. So:
+
+```
+save    = in  base+0
+          out base+0, 0xAA   ->  in base+0 must read 0xAA
+          out base+0, 0x55   ->  in base+0 must read 0x55
+          out base+0, save
+```
+
+**Two values, not one, and for §9.5's stated reason**: an unpopulated ISA
+address answers 0FFh, but a bus that happens to float to whatever single value
+you wrote would otherwise pass. This is the third place in the tree to use that
+idiom — the UART's divisor latch (§9.5), the CGA-alias test's two writes
+through two segments (§39.11.1), and now this — and in all three the failure
+the second value catches is the same one.
+
+**It restores what it found**, which is not politeness: a printer on that port
+sees its data lines change, and because nothing strobes, nothing prints.
+
+#### 1.4.3 The control register is read-modify-write, and a bare store resets a printer
+
+The one genuine footgun in parallel-port programming, and it belongs in the
+plan rather than being discovered:
+
+| control bit | signal | writing 0 does |
+|---|---|---|
+| 0 | STROBE | — |
+| 1 | AUTOFEED | — |
+| **2** | **INIT, active LOW** | **pulses reset at an attached printer** |
+| 3 | SELECT-IN | — |
+| 5 | direction (bidirectional ports only) | selects output — what we want |
+
+So `out base+2, 0` — the obvious way to put a port in a known state — **resets
+whatever printer is on it**. The driver reads the control register, clears bit
+5, preserves the low four bits exactly as found, writes that back, and restores
+the saved byte at detach. It never writes a constant.
+
+That is §9.4's "put DTR/RTS back up first" in the other connector, and it is
+also why nibble mode uses **D4 as its strobe** rather than the control
+register's STROBE line: the data register is ours to drive and the control
+register is the printer's to be left alone.
+
+#### 1.4.4 Presence is not the question — the *cable* is
+
+A port that answers §1.4.2 tells you nothing about what is plugged into it.
+Four states, and only one of them is a link:
+
+| on the port | the status register reads |
+|---|---|
+| nothing at all | a constant — the pull-ups' idle value |
+| a printer | a constant — that printer's idle status |
+| the cable, far end powered, **server not running** | a constant — whatever the far side's data latch was left holding |
+| the cable **and a running server** | **whatever we ask it to be** |
+
+**So the discriminator is: can I make the far side's status change on demand?**
+Drive one pattern on our five data lines, read status; drive a different one,
+read status. A far end that is polling echoes; two different reads mean a live,
+cooperating, correctly-wired partner and nothing else can produce them.
+
+**It is the two-value probe a third time**, now applied to the far machine
+instead of to a chip, and that is the pleasing part: the same shape answers "is
+there a latch here", "is there a card here" and "is there a *computer* here".
+
+And the diagnosis falls out for free, which matters more than the detection
+does. The three failing rows above are distinguishable, so the Control Panel
+page can say **which** — `No port`, `Port, no cable`, `Cable, no server`,
+`Linked` — instead of a single unhelpful refusal. That is §47's say-why-not
+applied to a connection, and it is the thing that will save the most time when
+somebody's cable is in the wrong socket.
+
+#### 1.4.5 Two sweepers can miss each other forever
+
+os8088 is the master (§1.3), so os8088 sweeps its candidates *issuing* a hello
+and the DOS side sweeps its candidates *listening*. Both sides scanning at once
+is the obvious design and it has a real failure: **two sweeps running at
+similar rates can stay out of phase indefinitely**, each arriving at the right
+port just after the other has left it, and the symptom is a link that connects
+"sometimes" and looks like a cable fault.
+
+The fix is that the two sweeps must not be the same speed. **The DOS side's
+dwell on each candidate is longer than os8088's entire sweep**, so a full
+os8088 pass happens inside one DOS dwell and cannot be missed twice. The DOS
+side is the one with a whole machine to spend, so it is the right side to make
+patient.
+
+#### 1.4.6 What it costs, and when it runs
+
+**Nothing against the kernel** — all of §1.4 is inside the driver, and the
+estimates in §0 are unchanged by it.
+
+Against the machine: reading `0040:0008` is a memory read, so deciding whether
+the Drivers-page row is even worth offering is free and happens at boot. The
+*probe* writes to ports, so it happens at **attach**, when the user has ticked
+the row — which is §51.3's rule, and unlike §51.3.1's FM sniff there is no case
+for making an exception, because a write to a port with a printer on it is
+exactly the class of thing §51.3.1 gated behind a knob.
+
+**And the answer is remembered.** §51.9's blob holds the base that worked, so
+the next attach tries that one first and only sweeps if it has gone away — a
+`NT` key beside `HD`, because §51.9 says a second claimant is a second key and
+not a bigger blob.
+
+#### 1.4.7 ECP, EPP, and not caring
+
+A multi-I/O card of the DIO-500's generation may come up in ECP or EPP mode.
+**Nibble mode needs nothing from either**: SPP-compatible access at `base+0`,
+`+1` and `+2` works in every mode on real hardware, which is what makes nibble
+mode the universal transport in the first place. Do not negotiate a mode, do
+not touch the ECP extended registers at `base+0x400`, and do not assume the
+card is at a base that has a `+0x400` at all.
+
+#### 1.4.8 The survey is still worth building — as a diagnostic, not a gate
+
+Step 0 was written as a gate ("stop if there is no port") and that is answered.
+It should still be built, for the reason `comscan` exists: when this does not
+work on somebody's machine, the question "what is actually on this machine's
+parallel ports" needs an answer that does not require os8088 to boot.
+
+`make comscan` already builds three ways — a DOS `.com` whose output redirects
+to a file, a **bootable** 360KB floppy that needs no DOS and no mouse, and a
+1.44MB twin — and the field machine's owner already knows how to run it. Adding
+a parallel section to it is much cheaper than a second tool and puts both port
+surveys in one report. It should print, per candidate base: whether the BIOS
+listed it, the §1.4.2 latch result, the raw status byte, and the §1.4.4 verdict.
 
 ---
 
@@ -405,6 +565,13 @@ and the machine it runs on is a transfer station, not somebody's desktop.
 OS88NET [/P:378] [/D:C:\OS8088] [/IMG:file] [/RO] [/NET]
 ```
 
+- **`/P`** — the port, and it is an **override, not a requirement**. With no
+  `/P` the program runs §1.4's scan for itself: read its own `0040:0008`, add
+  3BCh / 378h / 278h, dedupe, latch-probe each, and then **listen on every
+  survivor round-robin** until one of them carries a hello. That is §9.5's
+  "arm every candidate and let the one that delivers win", and on a DOS box
+  with a whole machine to spend there is no reason to do anything cheaper.
+  §1.4.5's dwell rule binds here: this side is the patient one.
 - **`/D`** — the directory it exports as the root of the Network volume.
   Everything is resolved beneath it and `..` cannot escape it. That is the one
   security property this program has and it must be enforced on the *server*
@@ -592,14 +759,25 @@ free and sufficient.
 
 ## 8. What will break, in the order it is likely to
 
-1. **The unplugged cable.** Every wait is bounded or the machine hangs with
+1. **`out base+2, 0`.** §1.4.3 — control bit 2 is INIT and it is **active
+   low**, so the obvious way to put a parallel port into a known state resets
+   whatever printer is on it. Read-modify-write preserving the low nibble,
+   always, and restore the saved byte at detach. It is first on this list
+   because it is the only item that damages something outside the two
+   machines, and because the probe in §1.4.2 runs on ports the user has not
+   told us anything about.
+2. **The unplugged cable.** Every wait is bounded or the machine hangs with
    the gfx lock held. Test it by pulling the cable mid-transfer, not by
    never plugging it in.
-2. **The `dsk_vol_drop_drv` class gate.** Unticking the network driver must
+3. **Two sweeps in phase.** §1.4.5 — both ends scanning at similar rates can
+   miss each other indefinitely, and it presents as an intermittent cable
+   fault rather than as a timing bug. The DOS side's dwell on one candidate
+   must exceed os8088's whole sweep.
+4. **The `dsk_vol_drop_drv` class gate.** Unticking the network driver must
    not unmount the hard disk. Its own comment predicts this bug; §51.8 records
    the last time it happened, when unticking *sound* unmounted every
    partition.
-3. **The sector cache skips driver volumes on purpose, and this is the one
+5. **The sector cache skips driver volumes on purpose, and this is the one
    volume that wants it.** `dsk_xfer` has `cmp byte [dsk_vkind], DVK_DRV /
    je .nocache`, on the reasoning that "a driver splits its own runs and has
    no revolution to save". That reasoning holds for IDE and is wrong for a
@@ -607,16 +785,16 @@ free and sufficient.
    notional track is nearly free. **Measure it before changing it** — §18.95
    was simulated against a 400-entry real trace before it was built, and
    §19.2.3.1 is the negative result that came from not doing that.
-4. **A DOS side that lies.** Every name, size, attribute and handle coming
+6. **A DOS side that lies.** Every name, size, attribute and handle coming
    over the wire is attacker-controlled in exactly the sense §18.2 means it —
    an entry with a 40-character name or a size of 0xFFFFFFFF must be refused
    at the staging step, not passed to `font_str`. §19.1's "every byte outside
    0x21..0x7E replaced with `_`" rule applies to a remote name for the same
    reason it applies to a FAT one.
-5. **Two masters on one filesystem** (Stage 1 with a live partition). Serve an
+7. **Two masters on one filesystem** (Stage 1 with a live partition). Serve an
    image file first, and treat live-partition service as a separate decision
    with its own testing.
-6. **`ES` on entry.** Every driver callback gets `ES = KERNEL_SEG`, and a
+8. **`ES` on entry.** Every driver callback gets `ES = KERNEL_SEG`, and a
    `rep stosb` through it writes into the kernel. §56 records that exact bug
    in ModPlug; a protocol driver full of buffer fills is where it will happen
    next.
@@ -627,7 +805,7 @@ free and sufficient.
 
 | # | build | proved by |
 |---|---|---|
-| 0 | **`comscan` learns LPT.** Report `0040:0008`'s table and probe 3BCh/378h/278h | run it on the 5150 and the writer machine. **If either has no port, stop here** |
+| 0 | **`comscan` learns LPT** (§1.4.8). The BIOS table, the latch probe and the status byte, per candidate base | a report from the 5150 naming 3BCh, and one from the DOS machine naming whatever the DIO-500 is at. **No longer a gate** — the 5150's port is confirmed — but it is what tells the two ends where to start |
 | 1 | The wire: a `tests/lptbench` that clocks bytes both ways | a measured KB/s figure, on the iron, into PERFORMANCE.md Part 9. Not the model in §1.2 |
 | 2 | `NET.DRV` Stage 1 + `OS88NET /IMG` | a `Network` icon on the desktop, a Disk window listing it, a package launched off it, a file written to it, `os88disk.py --verify` on the image afterwards from the host |
 | 3 | `OSAPI_DRV_CALL` + `DSV_PKGCALL` | a package reaching a driver at all — testable with a stub verb before any networking exists |
@@ -645,8 +823,10 @@ two period boxes and nowhere else.
 
 ## 10. Questions for the owner
 
-1. **Does the 5150 have a parallel port, and does the writer machine?** §1.4.
-   Everything depends on this and nothing in the repo records it.
+1. ~~**Does the 5150 have a parallel port?**~~ **Answered: yes, on the GB101**
+   — the Hercules-family LPT at 3BCh. The far end is a **DIO-500** multi-I/O
+   card at an address that has not been read off it yet, which is why §1.4 is
+   a scan on both sides rather than a constant anywhere.
 2. **Is the writer machine the intended far end?** The case in §0 assumes so,
    and it is much the strongest case. If the far end is a modern PC with a
    USB parallel adapter, most of those are printer-class devices that cannot
