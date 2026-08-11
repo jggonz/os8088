@@ -1029,6 +1029,19 @@ pn_draw_msg:
 ; pn_btn - one button: 1px frame + centered label, both in the given color
 ; in:  AX = content x1, BX = content y1, DX = width, SI = label, CL = color
 ; out: nothing; preserves all registers
+;
+; The drawing is os88ui_btn's (apps/os88ui.inc); this is the adapter, and
+; what it adapts is the ORIGIN - Piano works in content-relative coordinates
+; and the shared control takes screen ones in a 4-word rect, so this is what
+; pn_cframe/pn_cstr were doing per primitive, done once per button.
+;
+; THE COLOUR IS WHY THIS CONVERSION NEEDED A FEATURE. Three of the five
+; buttons are CGREEN/CMAGENTA/CRED - SPEC.md 47's own example of a colour
+; that is decoration rather than state - and the shared control knew only
+; live and disabled, so converting as-is would have turned them black on
+; VGA. OS88UI_INK is that, and it is the first feature added to the shared
+; control since it existed: one edit, and the file dialog, the Control
+; Panel, the Timer and every package can have a coloured caption.
 ; -----------------------------------------------------------------------------
 pn_btn:
     push ax
@@ -1037,40 +1050,38 @@ pn_btn:
     push dx
     push si
     push di
-    mov di, ax                      ; DI = x1
-    push bx
-    push dx
-    mov al, cl
-    call OSAPI_SET_COLOR
-    pop dx
-    pop bx
-    mov ax, di
-    mov cx, di
-    add cx, dx
-    dec cx
-    push dx
-    mov dx, bx
-    add dx, PN_BTN_H-1
-    call pn_cframe
-    pop dx
-    push bx                         ; center the label: BX = y1 kept below
-    push dx
-    call OSAPI_FONT_WIDTH           ; AX = label pixel width
-    pop dx                          ; DX = button width
-    sub dx, ax
-    shr dx, 1
-    mov cx, di
-    add cx, dx
-    pop dx                          ; DX = y1
-    add dx, 4
-    call pn_cstr
-    pop di
+    add ax, [pn_ox]                 ; the rect, in SCREEN coordinates
+    mov [pn_brect+0], ax
+    add ax, dx
+    dec ax                          ; ...x2 inclusive, so width - 1
+    mov [pn_brect+4], ax
+    add bx, [pn_oy]
+    mov [pn_brect+2], bx
+    add bx, PN_BTN_H-1
+    mov [pn_brect+6], bx
+    xor di, di
+    cmp cl, CBLACK                  ; black is the control's own ink, so the
+    je .go                          ; two plain buttons carry no flag at all
+    mov dh, cl                      ; ...and a coloured one rides in DI's high
+    mov dl, OS88UI_INK              ; byte beside the flag (os88ui.inc)
+    mov di, dx
+.go:
+    mov bx, pn_brect                ; no OS88UI_FILL: pn_draw_btns runs only
+    call os88ui_btn                 ; from pn_paint, where the content arrives
+    pop di                          ; white
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+
+pn_brect:   dw 0, 0, 0, 0           ; the button being drawn. ONE rect and not
+                                    ; a table, because Piano's five buttons are
+                                    ; laid out by five literal argument sets in
+                                    ; pn_draw_btns and nothing hit-tests them
+                                    ; against a stored rect - pn_onclick has
+                                    ; its own bands (SPEC.md 36)
 
 ; -----------------------------------------------------------------------------
 ; content-relative drawing helpers: add the stashed origin, call the API,
@@ -1249,6 +1260,9 @@ pn_song_mary:                       ; Mary Had a Little Lamb (26 notes)
     db 4,6, 2,6, 0,6, 2,6, 4,6, 4,6, 4,6, 4,6
     db 2,6, 2,6, 4,6, 2,6, 0,12
     db 0xFF
+
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%include "os88ui.inc"
 
     OS88_BSS PN_BSS_TOTAL
     OS88_IMAGE_END

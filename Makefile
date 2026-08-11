@@ -317,7 +317,12 @@ $(shell mkdir -p $(BUILD); \
 FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 
 KERNEL_SRC := kernel/kernel.asm
-KERNEL_INC := $(wildcard kernel/*.inc)
+# apps/os88ui.inc is a KERNEL source too - SPEC.md 20.5.1's shared control
+# assembles into fdlg.inc with OS88UI_KERNEL defined. Without it here, editing
+# that file leaves build/kernel.bin untouched and every image stale, which is
+# indistinguishable from a change that did nothing: kernsize.py re-assembles
+# and so reports the NEW sizes while the booted kernel is the old one.
+KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
@@ -374,7 +379,7 @@ $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 
 $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) tools/os88ovlchk.py | $(BUILD)
 	@python3 tools/os88ovlchk.py
-	$(NASM) -f bin -w+error -I kernel/ -I $(BUILD)/ $(VIDDEF) -o $@ $(KERNEL_SRC)
+	$(NASM) -f bin -w+error -I kernel/ -I apps/ -I $(BUILD)/ $(VIDDEF) -o $@ $(KERNEL_SRC)
 	@echo "kernel: $(call FILESIZE,$@) bytes (image rung + boot overlay)"
 # What that cost, per section and in 512-byte rungs, against the baseline in
 # docs/KERNEL-MEMORY.md. A REPORT and never a gate: the guards inside
@@ -539,7 +544,7 @@ $(BUILD)/boothd.bin: boot/boothd.asm | $(BUILD)
 # is what gives os88disk.py's sys_attr the read-only + hidden + system
 # attributes every kernel-owned file wants (SPEC.md 19.6), and what makes the
 # installer's "every *.DRV" copy pick it up (SPEC.md 52.10.4).
-$(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm drivers/hdd/hddabi.inc \
+$(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm apps/os88ui.inc drivers/hdd/hddabi.inc \
                   drivers/hdd/hdcom.inc drivers/hdd/hdsvc.inc drivers/hdd/hdsec.inc \
                   drivers/hdd/partw.inc drivers/hdd/fmt.inc drivers/hdd/tool.inc \
                   drivers/hdd/inst.inc drivers/os88drv.inc apps/os88api.inc \
@@ -555,7 +560,7 @@ $(BUILD)/hddtool.drv: $(BUILD)/hddtool.bin tools/os88drv.py
 # so a driver cannot ask how big a file is before it reads one. It is a
 # CEILING - a bigger tool on the disk is refused by OSAPI_FILE_READ before any
 # data moves, and a smaller one leaves the tail unread.
-$(BUILD)/hdd.bin: drivers/hdd/hdd.asm drivers/hdd/hddabi.inc drivers/hdd/hdcom.inc \
+$(BUILD)/hdd.bin: drivers/hdd/hdd.asm apps/os88ui.inc drivers/hdd/hddabi.inc drivers/hdd/hdcom.inc \
                   drivers/hdd/hdtool.inc drivers/hdd/hdsec.inc \
                   drivers/hdd/page.inc drivers/hdd/cfg.inc \
                   drivers/os88drv.inc apps/os88api.inc \
@@ -700,7 +705,7 @@ $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/hello.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
-$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/notepad/notepad.asm
 	@echo "notepad: $(call FILESIZE,$@) bytes"
 
@@ -710,7 +715,7 @@ $(BUILD)/notepad.o88: $(BUILD)/notepad.bin tools/os88pkg.py
 
 # Piano, the fifth shipped package (SPEC.md 36): a colorful playable piano
 # over the SPEC.md 34 tone tier (note viewer, replay, embedded songs).
-$(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/piano/piano.asm
 	@echo "piano:  $(call FILESIZE,$@) bytes"
 
@@ -777,7 +782,7 @@ $(BUILD)/modplug.o88: $(BUILD)/modplug.bin tools/os88pkg.py
 $(BUILD)/artful.bin: apps/artful/artful.asm apps/artful/atdoc.inc \
 		apps/artful/atrend.inc apps/artful/atui.inc apps/artful/atedit.inc \
 		apps/artful/atcmd.inc apps/artful/atfile.inc apps/artful/atimg.inc \
-		apps/os88api.inc | $(BUILD)
+		apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/artful/ -o $@ apps/artful/artful.asm
 	@echo "artful: $(call FILESIZE,$@) bytes"
 
@@ -800,7 +805,7 @@ $(BUILD)/fractal.o88: $(BUILD)/fractal.bin tools/os88pkg.py
 # BMP load/save through the Standard File dialog. Needs ~620KB of conventional
 # memory for its canvas (int 12h decides; a smaller machine gets a notice
 # window instead), so `make run-640` is the way to exercise it.
-$(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/paint/paint.asm
 	@echo "paint:  $(call FILESIZE,$@) bytes"
 
@@ -905,6 +910,23 @@ $(BUILD)/big.dat: Makefile | $(BUILD)
 
 $(BUILD)/filetest.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88 $(BUILD)/big.dat
+
+# muptest: the SPEC.md 13.7 gate - a package's mouse-up. Its answers are a
+# WINDOW that is there or not, so a harness reads wm_wins rather than pixels.
+# The case only a package can prove is the FIRST rule: a press that ran no
+# W_ONCLICK owes no release, which the kernel cannot test from its own side
+# because it has no way to know a package expected nothing.
+#
+#   make test TESTAPPS=build/muptest.img
+$(BUILD)/muptest.bin: tests/muptest/muptest.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/muptest/muptest.asm
+	@echo "muptest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/muptest.o88: $(BUILD)/muptest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/muptest.bin -o $@
+
+$(BUILD)/muptest.img: $(BUILD)/muptest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/muptest.o88
 
 # assoctest: the SPEC.md 54 gate. Its own scratch image, and a TEST.AST for it
 # to be opened WITH - the point of the gate is what happens on a document

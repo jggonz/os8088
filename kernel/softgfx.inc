@@ -53,13 +53,6 @@
 ;               mask, interior bytes are complemented.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; gfx_dbuf_gone - the retired double-buffer cell (slot 0x01F0, 20.8 rule 4)
-; out: CF=1
-; -----------------------------------------------------------------------------
-gfx_dbuf_gone:
-    stc
-    ret
-
 SWM_SOLID equ 0
 SWM_GRAY  equ 1
 SWM_XOR   equ 2

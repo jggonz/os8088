@@ -9071,6 +9071,16 @@ np_pdrawn:
 ; np_pbutton - draw button BX with label SI
 ; in:  BX = 0..3, SI = its NUL label; np_fpgeom run, lock held
 ; out: nothing; preserves all registers
+;
+; The drawing is os88ui_btn's (apps/os88ui.inc); this turns np_fpgeom's
+; parallel x/width arrays into the 4-word rect the shared control takes. A
+; zero width or a zero x still means "this button is not shown" and returns
+; before anything is drawn.
+;
+; ONE PIXEL MOVED, and deliberately: the label's y was the literal +2 in an
+; NP_FP_BTNH = 11 box, and the shared control centres at (11-8)/2 = 1, so
+; every caption in the panel sits one row higher. That is the arithmetic the
+; literal was standing in for.
 ; -----------------------------------------------------------------------------
 np_pbutton:
     push ax
@@ -9079,48 +9089,28 @@ np_pbutton:
     push dx
     push si
     push di
-    push bp
     shl bx, 1
     mov cx, [bx+np_pbw]
     jcxz .out
     mov di, [bx+np_pbx]
     or di, di
     jz .out
-    mov bp, cx                  ; BP = the width, as a VALUE: SS is not DS in
-                                ; a package, so it may never address anything
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, di
-    mov bx, [np_pbtny]
-    mov cx, di
-    add cx, bp
-    dec cx
-    mov dx, bx
-    add dx, NP_FP_BTNH - 1
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, di
-    mov bx, [np_pbtny]
-    mov cx, di
-    add cx, bp
-    dec cx
-    mov dx, bx
-    add dx, NP_FP_BTNH - 1
-    call OSAPI_GFX_FRAME
-    call OSAPI_FONT_WIDTH       ; SI is still the label; out AX = its width
-    mov cx, bp
-    sub cx, ax
-    jns .c
-    xor cx, cx                  ; a label wider than its button: start at the
-.c:                             ; left edge and let it run, which is visible
-    shr cx, 1                   ; and therefore fixable
-    add cx, di
-    mov dx, [np_pbtny]
-    add dx, 2
-    call OSAPI_FONT_STR
+    mov [np_brect+0], di
+    add di, cx
+    dec di                      ; ...x2 inclusive
+    mov [np_brect+4], di
+    mov ax, [np_pbtny]
+    mov [np_brect+2], ax
+    add ax, NP_FP_BTNH - 1
+    mov [np_brect+6], ax
+    mov bx, np_brect
+    mov di, OS88UI_FILL         ; np_fpaint fills the panel band before the
+                                ; first button, but a button REDRAWN in place
+                                ; would or its caption onto the old one
+                                ; (os88ui.inc's own note), and this is the
+                                ; cheapest way for that never to become true
+    call os88ui_btn
 .out:
-    pop bp
     pop di
     pop si
     pop dx
@@ -9128,6 +9118,8 @@ np_pbutton:
     pop bx
     pop ax
     ret
+
+np_brect:   dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
 
 ; -----------------------------------------------------------------------------
 ; np_fpaint - draw the whole panel
@@ -10271,6 +10263,9 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 %endif
 
 %assign NP_BSS_TOTAL NPB
+
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%include "os88ui.inc"
 
     OS88_BSS NP_BSS_TOTAL
     OS88_IMAGE_END

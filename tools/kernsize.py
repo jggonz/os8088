@@ -165,6 +165,7 @@ def measure(nasm_args=()):
     try:
         cmd = ["nasm", "-f", "bin", "-w+error", "-w-error=user", "-DKERNSIZE",
                "-I", os.path.join(ROOT, "kernel") + os.sep,
+               "-I", os.path.join(ROOT, "apps") + os.sep,
                "-I", BUILDDIR + os.sep,
                *nasm_args, "-o", out_path, KERNEL]
         r = subprocess.run(cmd, capture_output=True, text=True)
@@ -230,6 +231,7 @@ def _nasm(path, out_path, nasm_args=()):
     return subprocess.run(
         ["nasm", "-f", "bin", "-w+error", "-w-error=user",
          "-I", os.path.join(ROOT, "kernel") + os.sep,
+         "-I", os.path.join(ROOT, "apps") + os.sep,
          "-I", BUILDDIR + os.sep,
          *nasm_args, "-o", out_path, path],
         capture_output=True, text=True)

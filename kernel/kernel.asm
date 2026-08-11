@@ -1083,10 +1083,24 @@ osapi_table:
                                   ;          answers CF=1 / AX = FERR_NAME
                                   ;          rather than being reused - a
                                   ;          shipped slot keeps its contract
-    OSAPI_SLOT gfx_dbuf_gone      ; 0x01F0 - RETIRED (SPEC.md 32/20.8 rule 4):
-                                  ;          was a package's own sw_set. The
-                                  ;          cell answers CF=1 rather than
-                                  ;          being reused
+    OSAPI_SLOT wm_onmouseup       ; 0x01F0 - BX = window, AX = a near proc in
+                                  ;          YOUR segment (0 clears it): the
+                                  ;          release half of a content click
+                                  ;          (SPEC.md 13.7). Call it after
+                                  ;          OSAPI_WM_CREATE, like
+                                  ;          OSAPI_WM_ONSIZE - W_ONMOUSEUP is
+                                  ;          not a template word.
+                                  ;
+                                  ;          THIS CELL IS REUSED, and it is
+                                  ;          the worked example of SPEC.md
+                                  ;          20.3.1's free list: it held the
+                                  ;          RETIRED gfx_dbuf_gone (32), whose
+                                  ;          contract was withdrawn, whose SDK
+                                  ;          name was removed, and which
+                                  ;          therefore had no caller that
+                                  ;          could exist. Reuse cost the table
+                                  ;          nothing where an append would
+                                  ;          have grown it
     OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows

@@ -342,8 +342,9 @@ hd_iw_button:
     push si
     push di
     mov [hd_ibx], ax
-    mov [hd_ibw], bx
-    mov [hd_ibl], si
+    mov [hd_ibw], bx            ; latched across the predicate call; SI is not
+                                ; any more - os88ui_btn takes the label there,
+                                ; so hd_ibl went with the drawing
     cmp cl, 1
     je .live
     ja .rest
@@ -355,28 +356,23 @@ hd_iw_button:
 .live:
     clc
 .pen:
-    call OSAPI_GFX_PEN          ; CF IS the argument (SPEC.md 47 rule 1)
-    mov ax, di
+    mov cx, 0                   ; CF -> the shared control's DIS flag. `mov`
+    adc cx, 0                   ; does not touch flags, so the carry the
+                                ; predicate answered in survives into the adc
+    mov ax, di                  ; ...and the rect, in screen coordinates
     add ax, [hd_ibx]
-    mov bx, bp
-    add bx, HIW_BY
-    mov cx, ax
-    add cx, [hd_ibw]
-    dec cx
-    mov dx, bx
-    add dx, HIW_BH - 1
-    call OSAPI_GFX_FRAME
-    mov si, [hd_ibl]
-    call OSAPI_FONT_WIDTH       ; AX = its pixels, for centring
-    mov cx, [hd_ibw]
-    sub cx, ax
-    shr cx, 1
-    add cx, di
-    add cx, [hd_ibx]
-    mov dx, bp
-    add dx, HIW_BY + 4
-    mov si, [hd_ibl]
-    call OSAPI_FONT_STR
+    mov [hd_ibrect+0], ax
+    add ax, [hd_ibw]
+    dec ax
+    mov [hd_ibrect+4], ax
+    mov ax, bp
+    add ax, HIW_BY
+    mov [hd_ibrect+2], ax
+    add ax, HIW_BH - 1
+    mov [hd_ibrect+6], ax
+    mov di, cx
+    mov bx, hd_ibrect           ; no OS88UI_FILL: hd_ibtns_draw white-fills
+    call os88ui_btn             ; the whole 16px band before re-emitting
     pop di
     pop si
     pop dx
@@ -384,6 +380,8 @@ hd_iw_button:
     pop bx
     pop ax
     ret
+
+hd_ibrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
 
 ; =============================================================================
 ; Drawing the face a piece at a time (SPEC.md 52.10.6)
@@ -2903,7 +2901,6 @@ hd_iclx:      dw 0
 hd_icly:      dw 0
 hd_ibx:       dw 0
 hd_ibw:       dw 0
-hd_ibl:       dw 0
 hd_ibufseg:   dw 0
 hd_ibufkb:    dw 0
 hd_idrv:      db 0              ; the destination's kernel volume index

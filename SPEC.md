@@ -19,11 +19,21 @@ as much as in prose, and `tools/checkdocs.py` would only catch the ones that
 stopped resolving — not the ones that resolved to something else. That is the
 whole reason to leave them.
 
-The same rule governs the API table (§20.3): **a RELEASED slot keeps its
-contract**, and "we no longer implement this" is a refusing stub, not a reuse
-(§20.8 rule 4). A slot introduced since the last release is not shipped and
-may still be changed freely — the obligation is to get a contract right
-before it goes out, not to freeze it the moment it is typed.
+**The API table (§20.3) is the exception, and only for now.** It is
+**UNFROZEN while the OS is in alpha** (§20.8 rule 4): a slot may be
+renumbered, re-contracted or withdrawn, released or not, for as long as this
+tree hosts every package written for this OS — `make` rebuilds every caller
+there is, so a contract change is a rebuild rather than a compatibility
+event. The obligation to get a contract right *before* it goes out is
+unchanged; what is suspended is having to live for ever with one that was
+not. The freeze — *a released slot keeps its contract*, and "we no longer
+implement this" is a refusing stub rather than a reuse — comes back at the
+first release to a world that builds packages outside this tree, and comes
+back by being **written into §20.8 rule 4**, not by being inferred.
+
+Note that this does not extend to the §-numbering above: renumbering a
+section breaks citations silently, which is a different failure from
+renumbering a slot, and `make` cannot rebuild prose.
 
 ## 0. Goal
 
@@ -404,10 +414,24 @@ name and the body takes an `_x` suffix, so no caller outside changes.
 Four rules, and every one of them is something that assembles cleanly and
 runs wrong:
 
-- **Data stays in `.text`.** DS is still `KERNEL_SEG`, so a string or table
-  that moved with its code would be addressed at the wrong segment. A module
-  with data islands toggles sections around each of them; `files.inc` does
-  it four times.
+- **Data stays in `.text`** (or `.bss`). DS is still `KERNEL_SEG`, so a
+  string or table that moved with its code would be addressed at the wrong
+  segment. A module with data islands toggles sections around each of them;
+  `files.inc` does it four times.
+
+  **This is the rule that has actually been broken, and the failure is
+  invisible** — which is why it is worth the worked example rather than the
+  sentence above alone. §20.5.1's three button-rect scratches were declared
+  beside their callers, two of which are cold. Nothing warns: `-w+error` is
+  clean, `os88ovlchk.py` passes (it checks calls and branches; this is a
+  *data* reference), and **the write and the read use the same wrong
+  address**, so the feature works perfectly. What happens instead is that
+  `fdlg_brect` at `COLD_SEG:4290` writes eight bytes of screen coordinates to
+  `KERNEL_SEG:4290`, which is the middle of **`sch_isr`** — the PIT tick
+  handler — and `cp_brect` writes into **`wm_destroy`**. Every gate passed for
+  a whole commit. The tell is a symbol dump: `python3 tools/os88sym.py --all`
+  prints each symbol's section, and any `.cold` name that a `mov`/`cmp`
+  reaches without a `cs:` override is this bug.
 - **Nothing may assume `CS` is `KERNEL_SEG`.** `push cs`/`pop es` and
   `[cs:x]` are the two spellings, and `loader.inc` had three of them —
   including a documented one, the far pointer it calls a package's
@@ -6411,6 +6435,116 @@ it may belong to another window and this one would then never be drawn at
 all. Owe it to a worker, not to the next event of your own — §27.7.8 is the
 reference consumer.
 
+### 13.5 The chrome boxes fire on the release, over the same box
+
+`wm_hit`'s **AL=2** (close) and **AL=3** (minimize) are dispatched on
+`EVT_MUP`, and only when `wm_hit` at the release point still answers the
+**same window and the same region** as the press. A press on a chrome box
+**arms** it — `[ui_armw]` the window, `[ui_armr]` the region — and returns
+having drawn nothing. Anything else discards the arm: a release elsewhere on
+the title bar, on the *other* box, over another window, over the desktop, or
+the armed window going away in between.
+
+Both halves of the comparison are load-bearing. Two stacked windows' close
+boxes can occupy the same screen point, and the two boxes of one window share
+the same eleven rows of one title bar — `W_Y+4 .. W_Y+14`, columns
+`W_X+8 .. W_X+18` and `W_X+W_W-19 .. W_X+W_W-9`.
+
+**The grow box is not in this rule.** `ui_grow` already commits `W_W`/`W_H` on
+release and repaints only when the size changed (§11.1), so it has both the
+release edge and the slide-back already; arming it would wrap a working
+tracker in a no-op.
+
+**Arm and return, never spin and track.** The press handler must end its
+`ui_task` pass. `kbm_ui` releases the keyboard mouse's latch and posts the
+`EVT_MUP` *once the pass that dispatched the mouse-down is over* (§9.6.1), so
+a handler that returns costs one keypress and one that loops costs two — and
+a button that stays down is the thing §9.6.1 describes as reading "as broken
+everywhere else". It also keeps the gfx lock out of a wait, so §7.1.3's
+pacing rule never arises: there is no loop to pace.
+
+**The stale-arm fallback tests the QUEUE as well as the level.** `ui_arm_chk`,
+run from the deferred ladder, drops the arm only when it is set, `mouse_btn`
+bit 0 is clear **and** `evq_count` is zero. `evq_push` drops silently when the
+ring is full (§10), and an arm nobody spends would be fired by the next
+unrelated release. Without the queue half the keyboard mouse could never close
+a window at all — `kbm_ui` posts its `EVT_MUP` at the end of the very pass
+that armed, so a level-only test sees the button already up and throws the arm
+away before the release it just queued is popped. With it, the only case that
+could depend on where in the ladder the check sits is exactly the case the
+queue is non-empty in, so the placement is free.
+
+**`[ui_click_t]` is stamped on the DOWN edge only.** The `EVT_MUP` branch must
+not touch it: §22/§26/§38's four detectors compare press birth ticks and the
+double-click stays on the press (§13.6). Stamping here would silently make
+double-click spacing release-to-release, and `tools/os88mouse.py`'s `dblclick`
+measures press-to-press and would keep passing.
+
+Nothing else changes edge. `W_ONCLICK` is still dispatched on the press, the
+title bar still drags, menus still commit at the hovered item on release, and
+the right button has no chrome path at all (§12.4).
+
+### 13.6 Which edge an element fires on
+
+An element may be dispatched on the **down** edge exactly when its
+single-click action is a **prefix** of its double-click action — select before
+open, raise before zoom — because then the first click's action is safe to
+perform whether or not a second follows. It is also where the down edge
+belongs on a slow machine, being the more responsive of the two. Everything
+else fires on the **release**, over the element the press landed on.
+
+The two are exclusive by construction:
+
+> **Anything that fires on the release has no double-click, and anything with
+> a double-click fires its first action on the press.**
+
+Buttons, checkboxes, radios and the chrome boxes of §13.5 have no prefix
+action — there is nothing safe to do on the press — which is exactly why they
+want the release. Rows, icons and title bars have one: §22.2's file row,
+§26.2's drive zone, §38.3's dialog row and §11.95's title bar all select or
+raise first and open or zoom second.
+
+### 13.7 A package's mouse-up — `W_ONMOUSEUP` (API 0x01F0)
+
+`W_ONMOUSEUP` is the release half of a content click. Installed with
+`OSAPI_WM_ONMOUSEUP` (BX = window, AX = a near proc in the caller's segment,
+0 clears it) **after** `wm_create` — it is **not a template word**, because
+`wm_create`'s template copy is eight words and growing it would read one word
+past every existing package's template. `wm_create` zeroes it, as it does
+`W_MENUS` and `W_ONSIZE`.
+
+It is called with **CX = x, DX = y, SI = window**, in `W_ONCLICK`'s
+environment exactly: the UI task, under the gfx lock, billed to the owning
+instance with the dispatched instance stamped for sound grants (§34.3). The
+two share one dispatcher, `ui_ptcall`, so their environments cannot drift.
+
+Two rules, and they are the whole of it:
+
+- **Delivered only if this window's `W_ONCLICK` ran for the matching press.**
+  A press that merely raised a background window, or landed on the chrome, or
+  was swallowed by a modal dialog (§38.2), or that the window declined by
+  having no `W_ONCLICK`, arms nothing and produces no release.
+- **Delivered even when the release lands outside the window.** That is the
+  point rather than an edge case: a package must be able to un-draw a pressed
+  state and decline to act, and it can do neither if the release is dropped.
+  `CX`/`DX` are screen coordinates and may fall outside the content box, or
+  go negative once the caller subtracts its origin. Range-testing them is the
+  caller's job.
+
+**The kernel guarantees delivery; the package decides identity.** There is no
+widget layer, so the kernel cannot know what "the same control" means here and
+does not try — it answers *the release for the press you were given*.
+
+It shares §13.5's arm: `wm_hit`'s `AL` 2 and 3 fire the chrome, `AL` 0 fires
+this, one word of state and one `ui_arm_chk`. The chrome half re-tests
+identity at the release and this half does not, which is the only place the
+two paths differ.
+
+**A package that installs this and also polls `OSAPI_MOUSE` in a tracking loop
+from the same `W_ONCLICK` is doing the job twice** — the loop consumes its own
+release. Pick one; the callback is the one that costs the keyboard mouse a
+single keypress (§9.6.1) and holds no lock across a wait (§7.1.3).
+
 ## 14. apps.inc
 
 The built-in app **kinds**: About, Timer, Bounce. Nothing is
@@ -11142,7 +11276,7 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 0x01B0 wm_geom         0x01D8 gfx_blit4         0x0200 mem_claim      (X)
 0x01B8 cm_alloc    (X) 0x01E0 wm_about_set      0x0208 mem_free       (X)
 0x01C0 cm_free     (X) 0x01E8 (retired)         0x0210 mem_avail
-0x01C8 cm_caps         0x01F0 RETIRED (§32)     0x0218 osapi_font_glyphs
+0x01C8 cm_caps         0x01F0 wm_onmouseup      0x0218 osapi_font_glyphs
 0x01D0 wm_resize       0x01F8 gfx_scroll        0x0220 wm_onsize
                                                 0x0228 osapi_file_here
                                                 0x0230 osapi_file_goto
@@ -11174,19 +11308,65 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                                                 0x0318 gfx_lstepv  X
 ```
 
-**Every RELEASED slot keeps its number and contract** (§20.8 rule 4), on the
-rule that **a slot number must never mean two contracts**: a released number
-keeps its meaning, and the answer to "we no longer implement this" is a wrapper or a
-refusing stub, never a reuse. Reusing 0x01C8 for a KB-counting `mem_avail`
-where it once held a paragraph-counting one would fail silently and by a
-factor of 64, which is the whole class of bug the rule exists to prevent. So
-the three v3 arena slots at 0x01B8..0x01C8 stay live as `osapi_cm_*`
+**A slot number must never mean two contracts** — which survives §20.8 rule
+4's alpha unfreeze intact, because it was always the sharper half of that
+rule. The table being open means a number may be *withdrawn* or the whole
+block *renumbered* and every `.o88` rebuilt; it does not mean a live number
+may quietly start meaning something else. Reusing 0x01C8 for a KB-counting
+`mem_avail` where it once held a paragraph-counting one would fail silently
+and by a factor of 64 — a package that assembles cleanly and runs wrong,
+which is the class of bug this exists to prevent and the one thing a rebuild
+cannot catch. The answer to "we no longer implement this" is therefore still
+a wrapper or a refusing stub rather than a reuse. So the three v3 arena slots
+at 0x01B8..0x01C8 stay live as `osapi_cm_*`
 (kernel/memory.inc) — paragraph-counting wrappers over the claim heap that
 keep their original register contracts exactly — and `OSAPI_SND_FM` /
 `OSAPI_SND_STREAM` at 0x00F8/0x0100, once refusing stubs, carry the loadable
 sound driver's (§51.4) real contracts. New code should prefer the KB slots
 (§50.3) over the arena wrappers: they are the native shape, they work from
 the entry proc, and only they carry the DMA-page and regrow contracts.
+
+### 20.3.1 A RETIRED cell is a free list — take one before appending
+
+A slot whose contract has been **withdrawn** is not dead weight to be worked
+around: it is **the next slot number**, and a new cell SHOULD take one before
+growing the table. `wm_onmouseup` (§13.7) at **0x01F0** is the worked example
+— it holds what was `gfx_dbuf_gone`, retired with §32's back buffer — and it
+cost the table nothing where an append would have added eight bytes and moved
+`osapi_table_end`.
+
+**This does not contradict the paragraph above, and the difference is the
+whole rule.** *A slot number must never mean two contracts* is about a **live**
+number: 0x01C8 quietly changing from paragraphs to KB is a package that
+assembles cleanly and runs wrong. A retired cell has **no contract to
+collide with** — it was withdrawn, its SDK name was deleted, and therefore no
+source that assembles can be naming it.
+
+**Three conditions, and all three are mechanically checkable:**
+
+1. **The contract is WITHDRAWN, not merely uncalled.** A cell with zero
+   callers today may still be a capability somebody is told they have —
+   `OSAPI_VOL_PAINT` (0x0288) is a real body a driver is invited to call and
+   `OSAPI_BATCH_END` (0x0390) is optional *by design* (§18.9.3). Neither is
+   free. Only a cell this spec has retired is.
+2. **The SDK publishes no name for it**, and the reuse must not add one back.
+   That is what turns a stale caller from a silent wrong call into a **failed
+   assembly**, and it is the guard doing the real work here — it was already
+   the reason §18.4.1 deleted `OSAPI_FILE_READBIG` rather than leaving it
+   pointing at a stub.
+3. **Zero callers in `apps/`, `drivers/` and `tests/`** — which is the whole
+   population, because this tree hosts every package written for this OS
+   (§20.8 rule 4). One grep settles it.
+
+**The free list today is exactly one cell: 0x01E8** (`dskw_gone`, §18.4.1).
+0x01F0 has just been spent. Three more — 0x0198, 0x01A0, 0x01A8, the XMS
+allocator's — would join it if §41 is ever resolved, and are NOT free until
+then: their contracts stand and `xm_caps` beside them is live.
+
+**Record the reuse where the cell is**, in `kernel.asm`'s comment and in this
+spec's map, naming what the number used to be. A number that has meant two
+things across a release boundary is exactly the archaeology the next reader
+needs, and it costs a line.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -11452,6 +11632,147 @@ comment block beside them — rule 2 (never return, never self-exit) and rule
 4 (ALIVE under the lock deadlocks) especially, because neither is
 detectable from the kernel and both are unrecoverable.
 
+### 20.5.1 apps/os88ui.inc — the standard control, one source for two worlds
+
+A **second** shared include in `apps/`, and the first carrying code.
+`os88api.inc` stays instruction-free on purpose — every package includes it
+unconditionally, so a byte there is a byte on every package — and this one is
+**optional**: a package pulls it in if it wants the System-1 standard button.
+
+**It assembles into the kernel too, from the same text.** Define
+`OS88UI_KERNEL` before including it and its six primitive calls become the
+kernel's own cold-to-text shims (`cw_gfx_frame`, `cw_gfx_fill`, `cw_font_str`,
+`cw_font_width`, `cw_gfx_pen_cf`, and a direct `[gfx_color]` store); leave it
+undefined and they become `OSAPI_GFX_FRAME`, `OSAPI_GFX_FILL`,
+`OSAPI_FONT_STR`, `OSAPI_FONT_WIDTH`, `OSAPI_GFX_PEN` and `OSAPI_SET_COLOR`.
+Nothing else differs. The kernel includes it **once, into `.cold`**, from
+`fdlg.inc`; `ctrl.inc` is cold too and calls it directly, and `apps.inc` is
+`.text` and crosses through `os88ui_btn_f`, a `call`/`retf` shim — the
+`fdf_`/`cpf_` pattern of §2.6.
+
+**It is NOT an API slot, deliberately.** A slot would cost a cell, a published
+contract and a table revision; an include costs the kernel one copy in `.cold`
+and each package its own, and can be revised freely because it is source.
+§20.3.1's free list would have paid for the cell — the cell is not the
+expensive part of a slot, the contract is.
+
+**Why it exists is not size.** Measured, consolidating the kernel's four
+private button helpers was worth *twelve bytes* on its own, and unifying them
+with the package side **cost a 512-byte `.cold` rung** — `KERN_BUDGET` spare
+1,536 to 1,024, two steps (docs/UIHELPERS-PLAN.md, sections 7.1 and 13.3, has
+the per-section figures). The argument is that a feature added to
+the button — a pressed state, a focus ring, a different disabled treatment —
+lands in the Standard File dialog, the Control Panel, the Timer and every
+package at once, because there is one body rather than ten that agree by hand.
+**§47's greying rule was fixed five separate times in this tree**, each as its
+own bug, always `CDGRAY` without `[gfx_dis]`; here the pen is taken once, in
+one place, and rule 1 stops being something to remember.
+
+**Geometry is a POINTER.** Every routine takes `BX` = a 4-word rect
+`{x1, y1, x2, y2}`, **inclusive**, in screen coordinates — `gfx_frame`'s own
+convention — so the drawn control and the clickable control read the same four
+words and cannot drift. That is §22's `fm_hit` discipline applied everywhere at
+once, and Recorder is the argument for it: its drawing used one set of
+constants and its hit test another, two descriptions of one row of buttons
+agreeing by hand.
+
+| | |
+|---|---|
+| `os88ui_btn` | `BX` = rect, `SI` = NUL label, `DI` = flags. Optional white interior, frame, optional default ring 2px out, label **centred in both axes**. Caller holds the gfx lock. All registers preserved, and **the pen is put back live on every path** |
+| `os88ui_bhit` | `BX` = rect, `CX`/`DX` = point (which is how `W_ONCLICK` and `W_ONMOUSEUP` hand it to you). CF = 0 inside |
+| `os88ui_bfind` | `BX` = an array of rects, `AX` = how many. Answers `AX` = the index **plus one**, 0 for none |
+| `os88ui_arm` / `os88ui_fire` | the §13.7 press/release pair. `arm` records what the press landed on; `fire` answers it and **clears**. Package side only |
+| `os88ui_glyph` | the 12x12 **check box or radio button** (§31.2). `CX`/`DX` = top-left, `AL` = `OS88UI_GRADIO`/`GCHECK` or'd with `OS88UI_GON`, `AH` non-zero = disabled |
+
+**The glyph's flag rides in `AH`, and its white box is unconditional** —
+both departures from the button above, and both for a reason. A glyph has
+exactly one flag, and every Control Panel page is already holding the pane's
+left edge in `DI`, so `DI` would cost a push and a pop at six call sites to
+carry one bit that fits beside the index for free. And a radio's whole job
+is to be redrawn in place when the selection moves, so there is no caller
+for whom the erase is waste. It is **not cheap** — 44 set bits for an empty
+box and 64 for a crossed one, one drawing call each, so 35–50 ms on the
+field machine: draw the ROW that changed, never the page. The four bitmaps
+are ONE array indexed by `(kind | on)` and reached by arithmetic rather than
+through a table of pointers, because a table is data and lands in `.text`
+where the kernel has three bytes of rung left, while the arithmetic is code
+and lands in `.cold` where it has hundreds; the contiguity that rests on is
+asserted at assembly time.
+
+Flags: `OS88UI_DIS` (dithered frame *and* label — §47 rule 1 and 2 together),
+`OS88UI_DEF` (the default button's outer ring), `OS88UI_INK` (below), and
+`OS88UI_FILL`, which wants its own paragraph:
+
+**`OS88UI_FILL` asks "can this button be drawn a second time without the
+ground being repainted first?", NOT "is my background white".** A button
+whose greying can move always can be, and **`font_char` is transparent** — it
+ORs ink in and erases nothing — so a redraw's checkerboard caption lands on
+top of the previous solid one and the union is the solid one. `gfx_frame`
+*writes* rather than ORs, so the frame dithers correctly either way, and that
+split is what makes the failure read as *§47 rule 1 is broken* when rule 1 is
+working perfectly. Measured on a cycle-accurate 5150/CGA, the same refused
+button reached two ways: **158 ink pixels redrawn in place against 116
+freshly painted**, 0 apart after the fix. In the kernel exactly one button
+needs it for this reason — the file dialog's default, redrawn by
+`fdlg_draw_name` on the edge where `fdlg_actok` moves; Cancel, Drive and New
+Folder are drawn once onto a pane `wm_paint_all` has already whited and can
+never change what they say. `tests/fdlggrey.py` is the gate and it
+discriminates: 42 pixels differ without the flag, 0 with it.
+
+**`OS88UI_INK` puts the label's colour in `DI`'s HIGH BYTE**, for a button
+whose caption is deliberately not black — Piano's song buttons, which §47
+names as its own example of a colour that is decoration rather than state.
+It is a flag plus a byte rather than `AL = the colour` because every existing
+caller reaches `os88ui_btn` with arbitrary `AX`, and a silent reinterpretation
+of a live register is the shape of bug this file has already produced twice;
+`DI` is the flag word, so its high byte is 0 by construction at every call
+site. **Disabled wins**: a greyed control is `CDGRAY` and dithered whatever
+ink it asked for, because rule 1 is about state and this is about decoration.
+
+Eight things are load-bearing:
+
+- **A word declared in `.cold` and reached through `DS` is not that word**
+  (§2.6), and this section is where that bit. The three rect scratches were
+  first declared beside their callers, two of which are cold — the write and
+  the read used the same wrong address, so the buttons drew *perfectly*
+  while `fdlg_brect` put eight bytes of screen coordinates through the middle
+  of **`sch_isr`** and `cp_brect` through **`wm_destroy`**. `-w+error` is
+  clean on it and `os88ovlchk.py` does not see it, because that tool checks
+  calls and branches and this is a data reference. There is one kernel
+  scratch now, `os88ui_krect`, declared here in `.bss`; no kernel caller
+  declares a rect at all.
+
+- **`BP` addresses `SS`, and in a package `SS != DS`** (§20.1), so every rect
+  read in `os88ui_btn` carries a `ds:` override. Free in the kernel and
+  mandatory in a package, from one text.
+- **The include goes at the END of a package's source, just before
+  `OS88_BSS`** — not beside `os88api.inc`. The header and an `OS88_ICON16`
+  block are at fixed image offsets (§20.2), and code emitted between them
+  fails the icon macro's own assertion.
+- **A whole-rect fill and an interior fill are the same picture** once the
+  frame is drawn over the border, so `OS88UI_FILL` covers both and the Timer's
+  whole-rect version needed no flag of its own.
+- **Centring is not imposed** — it is what all four kernel buttons were
+  already doing with the arithmetic precomputed as a literal, which is what
+  made one body possible: `(116-104)/2` = `+6`, `(14-8)/2` = `+3`, and
+  `APP_TMR_LT = (APP_TMR_BH-8)/2`. Three literals and one formula, all the
+  same number.
+- **A label wider than its button** would make the halved padding a huge
+  unsigned number and put the text off screen; the guard is three bytes and is
+  kept.
+- **`os88ui_arm`'s word is DATA, not bss.** A package declares its bss as one
+  total with `equ` offsets (`OS88_BSS`), and a shared include cannot reserve
+  part of that without the package agreeing where. Two bytes of image is
+  cheaper than a convention.
+
+**What it is not for**: a skinned control. ModPlug's bevelled well and LED
+transport are a deliberate port of ModPlugPlayer's look (§56), and
+Minesweeper's cell is its own game's chrome — converting those would be
+undoing intended design rather than consolidating it.
+
+`tests/muptest` is the gate, and it gates §13.7's release rules and this
+control's arm with the same four gestures.
+
 ### 20.6 Worker tasks — one background task per package instance
 
 A package may claim **exactly one** worker task, so that the work it does
@@ -11673,42 +11994,53 @@ without anyone noticing it was a rule.
    contended register in this kernel and those bodies serve kernel-internal
    callers whose pointers are plain DS. The override version of this feature is
    where the bugs would have lived.
-4. **A RELEASED slot keeps its contract.** The table is 8 bytes per cell from
-   0x0010, and a number that has gone out in a release never means something
-   else afterwards — retired functionality gets a **refusing stub**, not a
-   reuse. What this rule is *not* is a promise that the numbers match another
-   tree's: they did while two branches were live and stopped when they merged
-   (§20.3), and closing that gap moved every cell above 0x01B0 down 88 bytes.
-   Renumbering is therefore possible but expensive and deliberate: it
-   invalidates every `.o88` at once, and it is only survivable because every
-   package is in this tree and `make` rebuilds all of them. It has happened
-   three times.
+4. **The API table is UNFROZEN while the OS is in alpha.** The table is 8
+   bytes per cell from 0x0010, and any slot may be renumbered, re-contracted
+   or withdrawn — **including one that has already gone out in a release** —
+   for as long as this tree hosts *every package written for this OS*.
 
-   **A slot introduced since the last release is not shipped and may still be
-   changed freely** — renumbered, re-contracted or withdrawn — because nothing
-   outside this tree can have been built against it yet. That is the whole
-   reason the rule says *released* rather than *written*: a development cycle
-   that cannot edit its own API spends its slots defensively and ends up
-   carrying every first draft forever. The obligation is to get the contract
-   right **before** it goes out, not to freeze it the moment it is typed. Once
-   a release carries it, the first paragraph binds and nothing relaxes it
-   again.
+   That condition is the whole justification, and it is a fact about the repo
+   rather than a hope: `apps/`, `drivers/` and `tests/` are the complete set
+   of things that call these cells, `make` rebuilds all of them from source,
+   and the toolchain is deterministic (§24), so a contract change is a
+   rebuild rather than a compatibility event. A freeze whose beneficiaries do
+   not exist protects nobody, and it costs the development cycle every first
+   draft it ever typed: a slot spent defensively is carried forever, and the
+   alternative to editing a wrong contract is *shipping around* it — a
+   successor slot beside a permanent no-consumer path, which is a worse spec
+   than the one the freeze was defending.
 
-   `gfx_line` (0x02E0) is the worked example: introduced after the last
-   release, so its `SI = 0/1` thin-or-dilated contract may be replaced
-   outright by a resumable walk rather than kept alongside one. Under the old
-   wording that would have meant a second slot and a permanent dilation path
-   with no consumer left to use it.
+   **What still binds, and it is most of the rule.** Get the contract right
+   **before** it goes out anyway — this is a licence to fix a mistake, not to
+   skip the design. A change is still expensive and still deliberate:
+   renumbering **invalidates every `.o88` at once**, so every package is
+   rebuilt and every shipped image reissued together, and it has happened
+   three times. Prefer *appending* to renumbering; prefer a *new number* to a
+   silent change of meaning at an old one, because a re-contracted cell fails
+   in the worst available way — a package that assembles cleanly and runs
+   wrong. Reusing 0x01C8 for a KB-counting `mem_avail` where a
+   paragraph-counting one had been published would be wrong by a factor of 64
+   and say nothing, which is why that block was *moved* rather than overlaid
+   (§20.3). And this rule was never a promise that the numbers match another
+   tree's: they did while two branches were live and stopped when they merged.
 
-   **The unification of §18.4.1 is the one recorded exception, and it is an
-   exception to the first sentence, not to the rest of the rule.** Slots
-   0x0120 and 0x0128 kept their numbers and *changed* their register
-   contracts: CX became DX:CX, and `dskw_read`'s answer became DX:AX. That is
-   exactly what this rule forbids, and it was taken deliberately, before
-   anything outside this tree can have been built against them — the whole
-   point of doing it now rather than later. The retired third slot, 0x01E8,
-   obeys the rule as written: a refusing stub, not a reuse. Nothing else may
-   read this as licence; the next contract change is a new number.
+   **When the freeze comes back.** The rule reverts to *a released slot keeps
+   its contract* — retired functionality getting a **refusing stub** rather
+   than a reuse — at the first release this project makes to a world that
+   builds packages outside this tree. **That is a decision to record here when
+   it is taken, not one to infer** from a version number, a tag, or the
+   passage of time. Until it is written in this paragraph, the table is open.
+
+   Two things in the table are history and stay as they are. The refusing
+   stubs already built are correct and re-treading them buys nothing; what
+   changes is that a *new* retirement need not add another. **And a retired
+   cell is a FREE LIST rather than a headstone** — §20.3.1: 0x01F0
+   (`gfx_dbuf_gone`, §32) has been reused for `wm_onmouseup`, and 0x01E8
+   (`dskw_gone`, §18.4.1) is what is left of it. And the
+   §18.4.1 unification of 0x0120/0x0128, which kept two numbers while
+   changing their register contracts (CX became DX:CX, `dskw_read`'s answer
+   became DX:AX), is no longer an exception to anything — it is kept in the
+   record because *what* it did to those two cells is still worth knowing.
 5. **No `retf` from a package proc the kernel calls.** The
    kernel reaches a package through the three-byte `call bp` / `retf`
    dispatcher in its own header (§20.2), so entry, paint, onkey, onclick, menu
@@ -17576,13 +17908,15 @@ CP_PCAPY equ 74      ; caption text row
   inside the 222px pane). No other text.
 
 **Radio glyphs.** Two hand-authored 12×12 bitmaps, one word per row, bit 15
-= leftmost pixel (the §12 logo / §25 icon convention): `cp_radio_off` (an
-open ring) and `cp_radio_on` (the same ring with a filled centre dot), 24
-bytes each. They are drawn by a module-internal `cp_glyph` — in CX = left
-x, DX = top y, SI = bitmap; 12 rows of `lodsw` + per-bit `gfx_pixel` in
-`[gfx_color]`, preserving all registers — because neither existing blitter
-fits: `menu_logo_glyph` hardcodes its top row at MENU_LOGO_Y, and
-`icon_draw16` wants a 16 mask + 16 data word body (§25). The glyph for the
+= leftmost pixel (the §12 logo / §25 icon convention): an open ring and the
+same ring with a filled centre dot, 24 bytes each. **They live in
+`apps/os88ui.inc` now and are drawn by `os88ui_glyph`** (§20.5.1) — 12 rows
+of `lodsw` + per-bit `gfx_pixel`, preserving all registers — because neither
+existing blitter fits: `menu_logo_glyph` hardcodes its top row at
+MENU_LOGO_Y, and `icon_draw16` wants a 16 mask + 16 data word body (§25).
+They were `cp_radio_off`/`cp_radio_on` behind a module-internal `cp_glyph`
+that took a bitmap POINTER, which is precisely why no package could draw a
+radio button: the pictures had no names outside this file. The glyph for the
 **live** mode is the filled one; the other is the ring. `sched_mode_get`
 (§8.2) is the only source of that truth — the page keeps no state of its
 own, so a mode changed from anywhere else still paints correctly.
@@ -17600,7 +17934,7 @@ own, so a mode changed from anywhere else still paints correctly.
 | `cp_page` | module-internal, in DI/BP, lock held. Preserves all registers. White-fills the right pane (divider column excluded), then calls the selected record's `CP_I_PAINT` with DI advanced by CP_RX — the redraw path when the selection moves. |
 | `cp_sched_paint` | Scheduler page paint (page contract above): heading, both radio rows (glyph + label, filled glyph per `sched_mode_get`) and the caption. |
 | `cp_sched_click` | Scheduler page click (page contract above). x is ignored — the two hit bands span the whole pane. A hit on the row whose mode is already live does nothing; a hit that changes the mode calls `sched_mode_set` with AL = the row index (0 = pre-emptive, 1 = cooperative), sets `[cp_dirty]` = 1, then redraws **only the two radio glyphs**. A click outside both bands does nothing. |
-| `cp_glyph` | module-internal 12×12 bitmap blit: in CX = x, DX = y, SI = bitmap. Preserves all registers. Lock held by the caller. |
+| `os88ui_glyph` | **the shared control's** (§20.5.1) 12×12 check or radio: in CX = x, DX = y, AL = `OS88UI_G*`, AH non-zero = disabled. Preserves all registers, white-fills its own box, and leaves the pen live. It was `cp_glyph`, module-internal and taking a bitmap POINTER in SI — which no package could name, and which is why the widget stayed the Control Panel's for as long as it did. |
 | `cp_sel` | byte, initialised `.text` data, init 0 (Scheduler). Written only by `cp_onclick`, and only to an index `< CP_ITEMS`. |
 | `cp_dirty` | byte, initialised `.text` data, init 0. Set to 1 by `cp_sched_click` only when the mode actually changed; drained by ui_task step 3 (§13), which zeroes it and does gfx_lock / `wm_paint_all` / gfx_unlock. Idempotent and coalescing: repeated flips inside one UI pass cost one repaint. |
 
@@ -17735,7 +18069,7 @@ selected one — white on a black `gfx_fill` box inset 2px around the glyphs
   tick.
 - `cp_time_paint` — heading, `cp_time_rows`, both buttons (`cp_timebtn`,
   a `gfx_frame` + white interior + centred `'+'`/`'-'` glyph), the two
-  option rows (12×12 `cp_chk_on`/`cp_chk_off` glyph at CP_PGX, label at
+  option rows (12×12 `os88ui_glyph` check at CP_PGX, label at
   CP_PLX — the Sound page's checkbox idiom, §31.4), and two captions:
   `'Click a field, then + or -'` at CPT_CAP1Y and, at CPT_CAP2Y,
   the `cp_rtcnam` row for `[clk_tier]` — `'Hardware clock: none'`,
@@ -17833,7 +18167,7 @@ CP_DSTDY equ CP_PLDY + 9   ; 11: the reason line, one text row under the label
 ```
 
 Row *i* draws the checkbox at (`CP_PGX`, `CP_DR0Y + i*CP_DROWH`) through
-`cp_glyph`, the driver's name at (`CP_PLX`, row top + `CP_PLDY`), and
+`os88ui_glyph`, the driver's name at (`CP_PLX`, row top + `CP_PLDY`), and
 `drv_status`'s sentence at (`CP_PLX`, row top + `CP_DSTDY`). Hit bands are the
 Scheduler page's shape: contiguous, whole-pane-wide, `CP_DB0Y1`..`CP_DB0Y2`
 and `CP_DB0Y2+1`..`CP_DB1Y2`.
@@ -17863,7 +18197,7 @@ behind whichever painter happens to get the order right.**
 `cp_drv_line1` for the row it hit; `cp_drv_boxes` is the loop over
 `cp_drv_box1` that `cp_drv_paint` still owes. Redrawing every row is a
 double-draw flash on controls that did not move, and it is not cheap:
-`cp_glyph` is a 12×12 fill and then one `gfx_pixel` per set bit — 44 of them
+`os88ui_glyph` is a 12×12 fill and then one `gfx_pixel` per set bit — 44 of them
 for the empty box, 64 for the crossed one — which at PERFORMANCE.md Part 2's
 ~756 µs of fixed cost per drawing call is 35–50 ms of the field machine's time
 **per box**. **The save caption is not redrawn on a click either**: only
@@ -18300,8 +18634,12 @@ cycle-accurate 5150 and comparing framebuffers with the build before it: **0
 differing bytes** on CGA (128,000), Hercules (250,560), VGA mode 12h (921,600
 rendered) and on the dual-display machine's **both** cards.
 
-**Slot 0x01F0 is RETIRED, not reused** (§20.8 rule 4): the cell answers CF=1,
-and `apps/os88api.inc` publishes no `OSAPI_GFX_DBUF`, so a source that still
+**Slot 0x01F0 was retired here and has since been REUSED** — it carries
+`wm_onmouseup` (§13.7) now, on §20.3.1's free-list rule: a withdrawn contract
+whose SDK name was deleted has no caller that can exist, so the number was the
+next one to hand rather than an append. What follows is the retirement as it
+stood, and the reason the cell was safe to take: it answered CF=1,
+and `apps/os88api.inc` published no `OSAPI_GFX_DBUF`, so a source that still
 names it fails to assemble rather than silently getting a different call.
 
 ### 32.1 What the renderer does
@@ -19771,10 +20109,14 @@ answer — so typing the first character or deleting the last one flips it, and
 and a frame plus a label per keypress is real money on the machines this runs
 on.
 
-`fdlg_btn` takes the **caller's** pen rather than forcing `CBLACK`, so the
-disabled frame greys with the label — and because that pen comes from
-`gfx_pen_cf`, it carries `[gfx_dis]` too, so on a mono adapter the frame goes
-dotted and the label goes to a checkerboard together (§47 rule 2/3).
+`fdlg_btn` takes the disabled state as a **flag** (`AH`) and hands it to
+`os88ui_btn` (§20.5.1), which takes the pen through `gfx_pen_cf` once — so the
+colour and `[gfx_dis]` are set together and the frame greys with the label
+(§47 rule 1/2). It used to force `CBLACK`, which is fine for three of the four
+buttons and wrong for the one that can be disabled; then it took the
+**caller's** pen, which fixed that and left the colour and the flag as the
+caller's to get right. The flag is the third and last shape: one predicate,
+one call, and the pen comes back live by itself.
 
 `fdlg_paint` calls the **bodies**, because `wm_paint_all` already handed it a
 white content; everything else calls the wrappers. Neither erase touches its
@@ -22428,6 +22770,13 @@ allow, from 32x16 up, and everything else follows from that:
   tool button, which a 110-row CGA canvas does not have, so `pt_szon` answers
   for the painter and the hit test both — a control that is not drawn is not
   clickable — and the two-line readout is what shows when they do not fit.
+  **Apply is drawn by the shared control** (§20.5.1) and is the only standard
+  labelled button in this module: everything else in Paint's chrome is
+  `pt_cwell`, a filled well with a 16x16 icon and no caption. It was already
+  centred horizontally without looking it — `'Apply'` is 40px in a 42px
+  button, so the literal x of 1 is exactly `(42-40)/2` — and its label sits
+  one row higher than it used to, the old `+3` in a 13-row box being what
+  `(13-8)/2` is standing in for.
 
   **The canvas height therefore has a floor of `PT_SZ_END`, not `PT_CH_MIN`.**
   The fields are the only way to make a canvas taller — there is no menu item
@@ -24885,7 +25234,17 @@ and **every drawer quotes those instead of `mp_*`** — the graphics screen and
 the §45.13 text one alike, because the lag was never a property of one
 surface.
 
-Seven things are load-bearing:
+**`OS88UI_INK` puts the label's colour in `DI`'s HIGH BYTE**, for a button
+whose caption is deliberately not black — Piano's song buttons, which §47
+names as its own example of a colour that is decoration rather than state.
+It is a flag plus a byte rather than `AL = the colour` because every existing
+caller reaches `os88ui_btn` with arbitrary `AX`, and a silent reinterpretation
+of a live register is the shape of bug this file has already produced twice;
+`DI` is the flag word, so its high byte is 0 by construction at every call
+site. **Disabled wins**: a greyed control is `CDGRAY` and dithered whatever
+ink it asked for, because rule 1 is about state and this is about decoration.
+
+Eight things are load-bearing:
 
 - **The card's position is the WORKER's poll, not a new one.** `trk_feed`
   already asks verb 3 every wake for the lead calculation, so it publishes
@@ -26101,7 +26460,9 @@ Conformant, and worth reading as the reference:
 - **"Close Window"** (§12.3) — greys from `wm_top` rather than beeping.
 - **The file dialog's default button** (§38.8) — `fdlg_actok` behind the pen,
   the click and the Enter key alike, greyed while the name box is empty and no
-  row is chosen. `fdlg_btn` stopped forcing `CBLACK` so the frame greys too.
+  row is chosen. `fdlg_btn` stopped forcing `CBLACK` so the frame greys too,
+  and carries the state as a flag into `os88ui_btn` now (§20.5.1) so the
+  colour and `[gfx_dis]` cannot be set apart.
 
 **Left as beeps, deliberately.** The second half of the sweep asked which
 refusals *ought* to grey and do not, and three answer no:

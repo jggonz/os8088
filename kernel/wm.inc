@@ -51,7 +51,18 @@ W_ONSIZE equ 24                 ; word: near ptr or 0 - the resize negotiator
                                 ; anything in between. NOT a template word:
                                 ; wm_create zeroes it and wm_onsize sets it,
                                 ; so no existing window template changes.
-WIN_SIZE equ 26                 ; NOT a power of two: never shift, multiply
+W_ONMOUSEUP equ 26              ; word: near ptr or 0 - the release half of a
+                                ; content click (SPEC.md 13.7). CX = x, DX = y,
+                                ; SI = window, same environment as W_ONCLICK.
+                                ; Called ONLY if this window's W_ONCLICK ran
+                                ; for the matching press, and called EVEN IF
+                                ; the release landed outside the window - a
+                                ; package that is never told cannot un-draw a
+                                ; pressed state or decline to act. NOT a
+                                ; template word: wm_create zeroes it and
+                                ; wm_onmouseup sets it, so no existing window
+                                ; template changes (the W_ONSIZE precedent)
+WIN_SIZE equ 28                 ; NOT a power of two: never shift, multiply
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
@@ -619,6 +630,10 @@ wm_create:
     pop es
     mov word [bx+W_MENUS], 0    ; menus are NOT a template word (SPEC 11/12.2)
     mov word [bx+W_ONSIZE], 0   ; ...and neither is the resize negotiator
+    mov word [bx+W_ONMOUSEUP], 0    ; ...nor the release handler (SPEC.md 13.7).
+                                ; The template copy above is EIGHT words and
+                                ; must stay eight: growing it would read one
+                                ; word past every existing package's template
     mov word [bx+W_DISP], PKG_DISP  ; the far pointer wm_pkgcall uses: the
     mov ax, es                      ; dispatcher's fixed offset, and the
     mov cx, cs                      ; segment the caller called us in. Ours
@@ -658,6 +673,15 @@ wm_create:
 ; -----------------------------------------------------------------------------
 wm_onsize:
     mov [bx+W_ONSIZE], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_onmouseup - install (or clear) a window's release handler (SPEC.md 13.7)
+; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+wm_onmouseup:
+    mov [bx+W_ONMOUSEUP], ax
     ret
 
 ; -----------------------------------------------------------------------------
