@@ -1146,18 +1146,18 @@ they are short by ~158 bytes that predate this note. Trust the total and the
 spare; treat a row as "roughly what this module put here".
 
 **The number to watch is NOT the 1,541 spare, it is the IMAGE's last sector.**
-`kernel.bin` is **86,011 bytes** and the boot sector reads
-`(size + 511) / 512` = **168** of them, which hold 86,016 — so there are
+`kernel.bin` is **87,035 bytes** and the boot sector reads
+`(size + 511) / 512` = **170** of them, which hold 87,040 — so there are
 **5 bytes** of slack in the file, and the next thing added to `.ovl`, however
 small, costs a whole sector of boot read (~65 ms on the field machine).
 `tools/kernsize.py` reports the three *rungs* and not this, because the rungs
 are what the RAM ladder is built from; the file's tail is a separate question
 and this is where it is written down.
 
-It has been under 100 bytes twice in one round now — 8 before §18.97's probe,
-5 after it, and 5 again after the `font_run` work crossed an image rung
-underneath it — which is worth reading as a pattern rather than as two
-coincidences: **`.text` and `.ovl` land in the same file and round at
+It has been under 100 bytes at every measurement of one round now — 8 before
+§18.97's probe, 5 after it, 5 again after the `font_run` work crossed an image
+rung underneath it, and 5 again after the redraw round and move 17 — which is
+worth reading as a pattern rather than as a run of coincidences: **`.text` and `.ovl` land in the same file and round at
 different places**, so the tail's slack is not a budget anyone is steering
 and it can be spent to nearly nothing by a change that never touches the
 overlay at all. Re-measure it; do not carry a figure from a commit message.
