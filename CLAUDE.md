@@ -120,11 +120,12 @@ cross-references, and a merge that leaves a §-number pointing at nothing fails
 tools/checkdocs.py` is that gate on its own, in a second.
 
 **The test is "could this change a byte under `build/`", and it is NOT "is it
-under `tools/`".** Four tools write shipped bytes and a merge touching any of
+under `tools/`".** Five tools write shipped bytes and a merge touching any of
 them needs the full treatment: **`os88disk.py`** (builds every FAT12 image),
 **`os88pkg.py`** (stamps each `.o88`), **`os88drv.py`** (stamps each `.drv`)
-and **`os88mini.py`** — the least obvious of the four, because it generates
-`$(ASSOCICO)`, which is a *prerequisite of the kernel*. Several others are
+and the two least obvious, which generate *prerequisites of the kernel* —
+**`os88mini.py`** (`$(ASSOCICO)`) and **`buildnum.py`** (`$(BUILDINC)`, the
+About box's build number, SPEC.md §14.2). Several others are
 build GATES rather than producers (`os88ovlchk.py`, `checkdocs.py`,
 `checkreadme.py`), and a change there can turn a tree that built into one that
 does not, so run `make` for those too — it is the boot they do not need.
@@ -132,6 +133,14 @@ does not, so run `make` for those too — it is the boot they do not need.
 When in doubt the cheap resolution is not an argument: the toolchain is
 deterministic on purpose, so build, `md5sum` the six images against the ones
 you already had, and the answer is a yes or a no rather than a judgement.
+**Do that comparison at ONE commit, though** — the About box carries a build
+number now (SPEC.md §14.2) and it is the commit count, so *every* commit
+moves three bytes of `.text` and every image with them, a merge commit on a
+documentation-only merge included. That does not make such a merge one that
+needs building and booting: what changed is a string of digits nothing
+branches on, and no test can cover it that did not already. It does mean the
+`md5sum` shortcut answers "yes, a byte moved" across any commit and so can
+only be read within one.
 
 **Either way the merge commits nothing under `build/`**, which is gitignored
 outright (see below): the two "Rebuild the shipped images" commits in this
