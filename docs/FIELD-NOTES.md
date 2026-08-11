@@ -1909,4 +1909,49 @@ and unraisable, so with `bss` at 38,452 the image may not cross 22,528. Both
 obvious sources of relief are refused by their own comments: `BL_MAXROWS` and
 `BL_ARENA` each record a report that TRUNCATED in the field. The two rows were
 bought by merging two pairs of header lines instead, and the file now says so
-where the `align` is. **52 bytes left.**
+where the `align` is. **9 bytes left**, after §57.6's build row took the rest.
+
+## 19. The 765 cannot see the external drive that DOS reads fine (OPEN — routed around)
+
+The field 5150's IBM 4865 on the 5.25" adapter's 37-pin connector is powered,
+cabled and **works**: with a disk in it, os8088 mounts it, the file manager
+lists it, and `sysbench` reads a file off it. Every one of those goes through
+`int 13h` with `DL = 2`.
+
+`dsk_fdd_probe`, which drives the FDC directly, cannot see it at all:
+
+```
+  --- unit 2
+  ST3 motor off hex     0022      bit 4 (TRK0) CLEAR
+  ST3 after seek hex    0022      ...and still clear after a RECALIBRATE
+  ST0 drained hex       0072      IC 01, SE, EC - the 765's Equipment Check
+  probe stop hex        0003      ABSENT
+```
+
+The unit-select bits in both answers (`ST3` low two bits = 10, `ST0` low two
+= 10) say the commands really did address unit 2, and `ST0`'s EC is the
+controller reporting that it issued the step pulses and never saw track 0.
+So the command reached the chip and the chip found nothing on the far end.
+
+**Media has been ruled out**, which is what makes this interesting rather than
+merely inconvenient. §18.97's whole premise is that TRK0 is a position sensor
+that answers with or without a disk; the obvious explanation was that this
+drive gates it on media. It does not — the capture above was taken **with a
+formatted disk in the drive, in the same boot that mounted and read it**.
+
+Ruled out so far: the drive (DOS and os8088 both use it), power (it has its
+own — J1 supplies none), the cable and the select jumper (`int 13h DL=2`
+reaches it), and media.
+
+Still open: why the ROM's own select sequence reaches unit 2 and ours does
+not. The next step is to disassemble the 27 Oct 82 ROM's motor-on/select/seek
+and diff it against `dsk_fdd_probe`'s — the ROM image is the one thing about
+this machine that is already in hand. Candidates worth carrying into that
+read: whether the IBM adapter decodes DOR bits 4–7 as motor enables for units
+2 and 3 the way a stock FDC does, and whether the drive's status outputs need
+something we are not asserting before it will drive TRK0.
+
+**It is routed around rather than fixed** (SPEC.md §18.98.1): units 2 and 3
+trust the equipment word, so the drive appears and works. The probe still runs
+for the published state above, which is the only reason any of this could be
+diagnosed at all. Unit 1 is unaffected and still contested.

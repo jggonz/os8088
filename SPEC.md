@@ -9742,10 +9742,18 @@ is the drive the operator has just installed.
 under DOS, answers `ST3 = 22` with TRK0 clear **before and after** a
 RECALIBRATE, and `ST0 = 72` — the 765's own Equipment Check, meaning it issued
 the step pulses and never saw track 0. The unit-select bits in both answers
-say the command really did address unit 2. Whatever that is — a drive that
-gates TRK0 on media, or a select line our direct FDC path drives differently
-from the ROM's — the probe cannot see past it, and §18.97's own fail-safe is
-the rule that should have been governing.
+say the command really did address unit 2.
+
+**And MEDIA is not the variable**, which is the one thing that could have made
+the probe fixable rather than merely wrong. Re-run with a formatted disk in
+that drive, on the build that creates the row anyway: the volume mounts, the
+file manager lists it, `sysbench` reads a file off it — and unit 2 still
+answers `ST3 = 22` / `ST0 = 72` / `probe stop 03`. So the drive is working,
+addressable through `int 13h`, and invisible to our direct FDC path at the
+same moment. §18.97's TRK0 test cannot see the external pair on this adapter,
+which makes trusting the switches the permanent answer here and not a
+stopgap. What is left open — why the ROM can select unit 2 and we cannot — is
+docs/FIELD-NOTES.md 19.
 
 **The probe still RUNS; its verdict is just not acted on.** §57.5's ST3/ST0
 for units 2 and 3 is the only way anybody can see what an external drive
