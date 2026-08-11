@@ -6540,6 +6540,18 @@ this, one word of state and one `ui_arm_chk`. The chrome half re-tests
 identity at the release and this half does not, which is the only place the
 two paths differ.
 
+**And that is why the `W_FLAGS` visible-bit test in `.mup_pkg` is the ONLY
+thing guarding a freed record on this path.** The chrome half calls `wm_hit`
+first, so a destroyed window is not in `wm_zord` and cannot be hit; this half
+deliberately has no `wm_hit` and no pointer comparison, because a release
+outside the window is the contract. So when a package tears its own window
+down inside its `W_ONCLICK` — `OSAPI_WM_DESTROY` on an unbound second window
+is the reachable case — the arm is set to a slot whose `W_FLAGS` is 0 and
+whose `W_ONMOUSEUP` **`wm_destroy` does not clear**. Measured with the test
+deleted: the callback runs, through the freed record. `tests/mouseup.py`'s
+case 7 is that A/B, and docs/MOUSEUP-PLAN.md §4.2's description of the test
+as "belt-and-braces" was written about the chrome path and is wrong here.
+
 **A package that installs this and also polls `OSAPI_MOUSE` in a tracking loop
 from the same `W_ONCLICK` is doing the job twice** — the loop consumes its own
 release. Pick one; the callback is the one that costs the keyboard mouse a
