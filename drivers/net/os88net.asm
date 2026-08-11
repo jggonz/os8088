@@ -214,19 +214,34 @@ serve:
     jmp .cmd
 
 .read:
-    call get_req                ; DX = LBA, CL = count (always 1 for now)
+    ; ONE COMMAND, `count` FRAMES OF {status, 512 bytes}. Every frame is 512
+    ; bytes whatever the status says, so a sector this side refuses cannot
+    ; leave the master waiting for data that is not coming - see net.asm's
+    ; protocol header.
+    call get_req                ; DX = LBA, CL = count
     jc  .out
+    mov [nrun], cl
+    or  cl, cl
+    jz  .cmd
+.rsec:
+    mov byte [rstat], NST_OK
     call seek_lba
     jc  .rbad
+    push dx
     mov ah, 0x3F                ; DOS read
     mov bx, [fh]
     mov cx, 512
     mov dx, secbuf
     int 0x21
+    pop dx
     jc  .rbad
     cmp ax, 512
-    jne .rbad
-    mov al, NST_OK
+    je  .rgo
+.rbad:
+    mov byte [rstat], NST_NOSEC
+    call zero_buf               ; a refused sector still carries its 512 bytes
+.rgo:
+    mov al, [rstat]
     call lp_sbyte
     jc  .out
     mov si, secbuf
@@ -236,26 +251,37 @@ serve:
     call lp_sbyte
     jc  .out
     loop .rsend
-    call tick_dot
-    jmp .cmd
-.rbad:
-    mov al, NST_NOSEC
-    call lp_sbyte
-    jmp .cmd
+    inc dx
+    dec byte [nrun]
+    jnz .rsec
+    call tick_dot               ; one dot per RUN now, not per sector: it is
+    jmp .cmd                    ; console output in the middle of a transfer,
+                                ; and the master is waiting through it
 
 .write:
+    ; The mirror: the whole run's data arrives first, then one status byte per
+    ; sector goes back. The bytes are consumed whether or not they are kept,
+    ; for the reason above.
     call get_req
     jc  .out
-    mov di, secbuf              ; the data arrives whether or not we will keep
-    mov cx, 512                 ; it: a refusal AFTER the bytes is what keeps
-.wrecv:                         ; the two ends in step
+    mov [nrun], cl
+    mov [nrun2], cl
+    or  cl, cl
+    jz  .cmd
+    mov si, dx                  ; SI = the LBA, so DX is free for int 21h
+.wsec:
+    mov di, secbuf
+    mov cx, 512
+.wrecv:
     call lp_rbyte
     jc  .out
     mov [di], al
     inc di
     loop .wrecv
+    mov byte [rstat], NST_OK
     cmp byte [roflag], 0
     jne .wprot
+    mov dx, si
     call seek_lba
     jc  .wbad
     mov ah, 0x40                ; DOS write
@@ -265,18 +291,31 @@ serve:
     int 0x21
     jc  .wbad
     cmp ax, 512
-    jne .wbad
-    mov al, NST_OK
-    call lp_sbyte
-    call tick_dot
-    jmp .cmd
-.wprot:
-    mov al, NST_WPROT
-    call lp_sbyte
-    jmp .cmd
+    je  .wnext
 .wbad:
-    mov al, NST_NOSEC
+    mov byte [rstat], NST_NOSEC
+    jmp short .wnext
+.wprot:
+    mov byte [rstat], NST_WPROT
+.wnext:
+    mov bl, [nrun2]             ; bank this sector's verdict; they all go back
+    sub bl, [nrun]              ; together, after the data
+    xor bh, bh
+    add bx, wstat
+    mov al, [rstat]
+    mov [bx], al
+    inc si
+    dec byte [nrun]
+    jnz .wsec
+    mov cl, [nrun2]             ; ...and now the verdicts
+    xor ch, ch
+    mov si, wstat
+.wsend:
+    lodsb
     call lp_sbyte
+    jc  .out
+    loop .wsend
+    call tick_dot
     jmp .cmd
 
 .bye:
@@ -636,7 +675,32 @@ report_ports:
     pop ax
     ret
 
-tick_dot:                       ; one dot per sector, so a long transfer looks
+; -----------------------------------------------------------------------------
+; zero_buf - secbuf to zeros, for a sector we are refusing
+;
+; The frame is 512 bytes whether or not the read worked, so the master stays
+; in step; ZEROS rather than the previous sector's contents is what stops a
+; refusal looking like data to anything that ignores the status.
+; -----------------------------------------------------------------------------
+zero_buf:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, secbuf
+    mov cx, 512
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+tick_dot:                       ; one dot per RUN, so a long transfer looks
     push ax                     ; alive rather than hung
     mov al, '.'
     call putc
@@ -782,4 +846,14 @@ nsecs:      dw 0
 roflag:     db 0
 pinned:     db 0
 pinbase:    dw 0
+nrun:       db 0                ; sectors left in the run being served
+nrun2:      db 0                ; ...and how many it started with
+rstat:      db 0                ; this sector's verdict
+wstat:      times 256 db 0      ; a write run's verdicts. 256 and not NET_RUN,
+                                ; because the count crosses as ONE BYTE and
+                                ; that is the protocol's own ceiling: sized to
+                                ; net.asm's constant instead, the two programs
+                                ; would be coupled across a cable by a number
+                                ; neither can see, and raising it at one end
+                                ; would overrun this at the other
 secbuf:     times 512 db 0

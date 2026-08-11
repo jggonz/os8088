@@ -34,6 +34,16 @@
 ; without the seven-step path in docs/FIELD-MACHINES.md. A 512-byte sector is
 ; ~137 ms, so a mount is a second or two - the same order as the floppy it
 ; sits beside, because a floppy pays revolutions where this pays nibbles.
+;
+; ...AND A RUN IS ONE COMMAND, which is the other 37%. Set 40 measured a
+; document open at ~10 s and found 3.73 s of it was `lp_turn` - a whole system
+; tick per direction reversal, twice per SECTOR, because this asked for one
+; sector at a time. The protocol always carried a count byte and dsk_xfer
+; always handed over a coalesced run; the driver threw it away. Batched, a
+; 34-sector open is 2 reversals instead of 68: 3.73 s -> ~0.1 s. It is
+; SPEC.md 18.91's floppy batching in a new place, and the shape is worth
+; recognising - a cost model built for streaming, met by a caller that does
+; not stream.
 ; =============================================================================
 
 %include "os88drv.inc"
@@ -46,12 +56,22 @@
 ; NET-PLAN 5.3 will need for sockets is a busy flag and nothing more.
 ;
 ;   'I'  -> reply: status, sectors word, flags byte (bit 0 = read-only)
-;   'R'  -> LBA word, count byte; reply: status, then count*512 bytes
-;   'W'  -> LBA word, count byte, then count*512 bytes; reply: status
+;   'R'  -> LBA word, count byte; reply: count x {status, 512 bytes}
+;   'W'  -> LBA word, count byte, count x 512 bytes; reply: count status bytes
 ;   'X'  -> the far side may go back to listening
 ;
 ; `status` is shaped like an int 13h one because that is what DSV_BLK answers
 ; with (SPEC.md 51.8): 0 = ok, 03h = write protected, 04h = sector not found.
+;
+; **A RUN IS ONE COMMAND, AND EVERY FRAME IN IT IS A FIXED SIZE WHATEVER THE
+; STATUS SAYS.** Both halves of that matter. One command per run is the point
+; of the batching - lp_turn spends a whole system tick per direction reversal,
+; so a per-sector command was two ticks of turnaround on top of 137 ms of data
+; (PERFORMANCE.md Set 40). And the fixed frame is what makes a REFUSAL safe:
+; a refused sector still carries its 512 bytes, so neither end can be left
+; talking into one that has stopped listening. The master remembers the first
+; refusal, consumes the rest of the run, and answers with it - the link stays
+; up, and only the transfer failed.
 NC_INFO     equ 'I'
 NC_READ     equ 'R'
 NC_WRITE    equ 'W'
@@ -61,6 +81,8 @@ NST_OK      equ 0x00
 NST_WPROT   equ 0x03
 NST_NOSEC   equ 0x04
 NST_IO      equ 0x20            ; the link went away mid-transfer
+
+NET_RUN     equ 64              ; sectors per command - see net_runlen
 
 ; -----------------------------------------------------------------------------
 ; The service table (SPEC.md 51.2). DSV_BLK is the whole of what the kernel
@@ -404,34 +426,58 @@ net_blk:
     or  al, al
     jnz .write
 
+    mov byte [net_st], 0        ; the first refusal of the whole transfer
+
 ; --- read ---------------------------------------------------------------------
-.rloop:
+; ONE COMMAND FOR THE RUN, then `count` frames of {status, 512 bytes} coming
+; the other way. Two direction reversals for the whole run instead of two per
+; sector, which is what this change is for (PERFORMANCE.md Set 40).
+.rrun:
+    call net_runlen             ; [net_rlen] = min(BP, NET_RUN), AL = it
     mov al, NC_READ
-    call net_cmd                ; command + LBA + a count of ONE
+    call net_cmd
     jc  .lost
-    call lp_rbyte               ; status
+    mov al, [net_rlen]
+    mov [net_rcnt], al
+.rsec:
+    call lp_rbyte               ; this sector's status
     jc  .lost
     or  al, al
-    jnz .status
-    mov cx, 512
-.rbyte:
+    jz  .rok
+    cmp byte [net_st], 0        ; remember the FIRST one and KEEP CONSUMING:
+    jne .rok                    ; the frame is fixed at 512 bytes whatever the
+    mov [net_st], al            ; far side thinks of the sector, so bailing
+.rok:                           ; out here would leave it sending into a
+    mov cx, 512                 ; master that has stopped listening - a desync
+.rbyte:                         ; rather than an error
     call lp_rbyte
     jc  .lost
-    stosb                       ; ES:DI, which is why cld matters below
+    stosb                       ; ES:DI, which is why cld matters above
     loop .rbyte
     inc dx
     dec bp
-    jnz .rloop
-    jmp short .ok
+    dec byte [net_rcnt]
+    jnz .rsec
+    or  bp, bp
+    jnz .rrun
+    jmp short .done
 
 ; --- write --------------------------------------------------------------------
+; The mirror: one command, then `count` x 512 bytes out, then `count` status
+; bytes back. The statuses cannot come per sector without a reversal per
+; sector, which is the cost this is removing.
 .write:
     test byte [net_flags], 1
     jnz .wprot
-.wloop:
+    mov byte [net_st], 0
+.wrun:
+    call net_runlen
     mov al, NC_WRITE
     call net_cmd
     jc  .lost
+    mov al, [net_rlen]
+    mov [net_rcnt], al
+.wsec:
     mov cx, 512
 .wbyte:
     mov al, [es:di]
@@ -439,14 +485,30 @@ net_blk:
     call lp_sbyte
     jc  .lost
     loop .wbyte
-    call lp_rbyte               ; status, after the data
-    jc  .lost
-    or  al, al
-    jnz .status
     inc dx
     dec bp
-    jnz .wloop
+    dec byte [net_rcnt]
+    jnz .wsec
+    mov al, [net_rlen]          ; ...and now the run's verdicts, one per sector
+    mov [net_rcnt], al
+.wst:
+    call lp_rbyte
+    jc  .lost
+    or  al, al
+    jz  .wok
+    cmp byte [net_st], 0
+    jne .wok
+    mov [net_st], al
+.wok:
+    dec byte [net_rcnt]
+    jnz .wst
+    or  bp, bp
+    jnz .wrun
 
+.done:
+    mov al, [net_st]            ; a refusal anywhere in the transfer is the
+    or  al, al                  ; transfer's answer, and the LINK is still up
+    jnz .status
 .ok:
     xor al, al
     clc
@@ -477,7 +539,31 @@ net_blk:
     ret
 
 ; -----------------------------------------------------------------------------
-; net_cmd - AL = the command, DX = the LBA. One sector per command.
+; net_runlen - how many sectors the next command carries
+; in:  BP = sectors still wanted
+; out: [net_rlen] = min(BP, NET_RUN); AX preserved
+;
+; NET_RUN caps it for two reasons and neither is the wire. The count crosses
+; as ONE BYTE, so 255 is the protocol's own ceiling; and dsk_xfer hands a
+; driver volume the WHOLE request uncapped (SPEC.md 18.7 - a driver has no
+; revolution to save and splits its own runs), so a big file read would
+; otherwise arrive as one enormous frame. 64 sectors is 32KB, which is two
+; reversals per 8.8 s of data: the turnaround is already down in the noise
+; there and a shorter frame loses less when a cable is pulled mid-run.
+; -----------------------------------------------------------------------------
+net_runlen:
+    push ax
+    mov al, NET_RUN
+    cmp bp, NET_RUN
+    jae .cap
+    mov ax, bp                  ; BP < NET_RUN, so its low byte IS the count
+.cap:
+    mov [net_rlen], al
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_cmd - AL = the command, DX = the LBA, [net_rlen] = the count.
 ; out: CF=1 = the link went away
 ;
 ; ONE SECTOR AT A TIME, deliberately, and it is not the obvious choice. The
@@ -497,7 +583,7 @@ net_cmd:
     mov ax, dx
     call lp_sword               ; the LBA, low byte first
     jc  .bad
-    mov al, 1                   ; ...and a count of one
+    mov al, [net_rlen]          ; ...and how many sectors this run carries
     call lp_sbyte
     jc  .bad
     pop ax
@@ -548,6 +634,9 @@ net_secs:   dw 0                ; what the far side says its image holds
 net_flags:  db 0                ; bit 0 = it will not take writes
 net_lost_f: db 0                ; 1 = the last link ended by dying, not by us
 net_lastlba: dw 0               ; ...and the sector it was on when it did
+net_rlen:   db 0                ; sectors in the command just sent
+net_rcnt:   db 0                ; ...and how many of them are still to go
+net_st:     db 0                ; the FIRST refusal in this transfer
 net_px:     dw 0
 net_py:     dw 0
 
