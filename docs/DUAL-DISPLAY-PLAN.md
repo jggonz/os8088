@@ -666,6 +666,9 @@ at B8000* (SPEC.md §39.6). Order stops deciding anything.
 | `card=` on `settle`/`launch`/`_sample`/`_bar_up` | which card the BOOT GATE watches — os8088 need not be driving MartyPC's primary (§11.3) |
 | `tests/dualcheck.py` | the gate on the EMULATOR: two cards that are genuinely two |
 | `tests/dispcheck.py` | the gate on the KERNEL: did it bring the second one up? (§11.3) |
+| `tests/dispband.py` | can a window use the second display's top rows? (SPEC.md §39.16.2) |
+| `tests/dispblit.py` | does a straddled canvas survive its own repaint? (SPEC.md §39.14.7) |
+| `tests/dispsave.py` | is the raise cache taken, and right, on the second display? (SPEC.md §39.14.8) |
 
 **`park` is there because `setreg ip` cannot be made to work.** `Register16::PC`
 is settable, and setting it is not enough: `pc` is the *fetch* pointer and the

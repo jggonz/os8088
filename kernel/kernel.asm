@@ -262,6 +262,19 @@ KERN_BUDGET equ 96256           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
                                 ;
+                                ; **AND WHEN IT DOES GROW, IT GROWS BY 1KB -
+                                ; NOT BY THE 2KB kern_big MOVES BY.** A
+                                ; standing rule rather than a property of any
+                                ; one raise, and the point of the split: this
+                                ; is the guard the 128KB machine lives under,
+                                ; so it is the one that has to be defended and
+                                ; it should be asked for in the smallest
+                                ; useful unit. Two 512-byte rungs is enough
+                                ; room for ordinary growth to continue and not
+                                ; enough to pre-authorise a feature. It is
+                                ; also the direction the fifteenth move said
+                                ; this figure should drift in.
+                                ;
                                 ; THE SEVENTEENTH MOVE, 94,208 -> 96,256, is
                                 ; the first this figure has taken since the two
                                 ; guards were split - the fifteenth and
@@ -1790,6 +1803,8 @@ ovw_xm_arm:         call xm_arm
 %endif
 ovw_dsk_vol_slot:   call dsk_vol_slot
                     retf
+ovw_dsk_flop_add:   call dsk_flop_add
+                    retf
 ovw_desk_rowcalc:   call desk_rowcalc
                     retf
 
@@ -2567,6 +2582,8 @@ cw_wm_paint_all:        call wm_paint_all
 cw_wm_pkgcall:          call wm_pkgcall
                     retf
 cw_wm_show:             call wm_show
+                    retf
+cw_xm_release_rec:      call xm_release_rec
                     retf
 cw_wm_su_drop:          call wm_su_drop
                     retf

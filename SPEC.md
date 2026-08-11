@@ -3654,6 +3654,13 @@ callback, never in a static, so nested paints (a W_ONCLICK that repaints
 every window) bill correctly. The callbacks' own register contracts below
 are unchanged — the sites restore AX/CX/DX/SI before calling.
 
+**The `snd_disp_set` half of that bracket has a fourth site**, and it is not
+a billing one: `loader_run` step 8's call to the **package entry proc**
+(§41.5.1). CPU time there is not billed to the instance — the record is not
+published yet — but the entry proc still has to be *identified*, or everything
+an app asks for while starting up is attributed to the kernel. The stamp
+brackets are otherwise identical, and nest the same way.
+
 Frame drawing (paint-all does this before calling W_PAINT):
 - 1px black outline around the whole frame; 1px black drop shadow along the
   right and bottom edges, offset (+1,+1), Mac-style.
@@ -9190,6 +9197,7 @@ on a 1.44MB one**, all of them metadata, and the data area is not touched.
 |---------|----------|
 | `dskw_fmt_probe` | in: `[disk_drive]` = the volume. Out: CF=0 with AL = a row of `dskw_fmt_tab`; CF=1 with AX = `FERR_*` — the medium could not be read at all (`FERR_IO`), or the volume is not a floppy (`FERR_PROT`). Clobbers AX, flags. **Reads only**, so it is safe to call before the user has agreed to anything, and that is the point: the confirmation names the size it is about to make. |
 | `dskw_format` | in: AL = a `dskw_fmt_tab` row, `[disk_drive]` = the volume. Out: CF=0; CF=1 with AX = `FERR_IO` / `FERR_WPROT` / `FERR_PROT`. Clobbers flags. Writes the boot sector **first** and the root directory last. |
+| `dskw_fmt_reach` | in: AL = the row just written, `[disk_drive]` = the volume, `[disk_spt]`/`[disk_heads]` still the format's. Out: CF=0 — the volume's **last** sector was written and read back intact; CF=1 — it was not. Clobbers AX, flags. Destroys that sector's contents, so it is callable only on a disk the user has already agreed to erase (§18.96.2). |
 
 **The geometry is two questions and they have two different answers.** How
 many sectors a track holds is a property of the MEDIUM and is read off it —
@@ -9209,6 +9217,24 @@ undecidable case — 9-sector media in a 1.2MB drive, where 360KB and 720KB are
 indistinguishable — is resolved **downward, to 360KB**, because a 360KB layout
 on 720KB media wastes half a disk and a 720KB layout on 360KB media is a
 volume whose second half does not exist.
+
+**…and the user can overrule that, because on the target machine the
+inference above is sometimes simply wrong.** An IBM 4865 or any other 3.5"
+drive on the 5.25" adapter's external 37-pin connector is an
+**80-cylinder drive on a ROM that answers no questions about it**, so
+`AH=08h` refuses, the probe reads a 360KB machine, and the only 720KB disk
+the machine can make is one it will not offer. §22.12's confirmation
+therefore carries a **Space** key that offers the other row with the same
+media sectors-per-track. That pair exists for 9-sector media alone — rows 2
+and 3 — so "the other row with the same spt" *is* the 720KB/360KB toggle and
+nothing else: it can never offer 1.44MB on 720-sector media, which is
+§18.96.1's disaster case made unreachable by construction rather than
+guarded against. Rows 0 and 1 have no partner and the line does not name a
+key that would do nothing (§47).
+
+This is an **assertion about hardware**, not a probe, and it is the same
+assertion DOS took at face value from `DRIVER.SYS /d:2 /t:80 /s:9`. The
+difference is what §18.96.2 does with it.
 
 #### 18.96.1 Reading cylinder 40 to settle it is WRONG — the negative result
 
@@ -9292,6 +9318,49 @@ kernels. What `kern_small` loses is two items on one menu — the rule and
 and both point at `fm_c_nop`, so the two kernels differ by what a user can
 see rather than by a numbering nobody can.
 
+#### 18.96.2 Trust the assertion, then check it — and the check is a WRITE
+
+A 720KB pick that the drive cannot reach is the **worst** outcome this
+feature can produce, and it does not announce itself. A 720KB layout is boot
++ 6 FAT + 7 root = LBA 0..13, every byte of it inside **cylinder 0** — so on
+a 40-cylinder drive the format *completes*, the volume *mounts*, and the disk
+then lies about its size until something writes past cylinder 39. Worse, the
+disk is now mountable, so §22.12's predicate (`FS_MOK == 0`) **greys Format
+Disk… out** and the user has no way back. An unchecked assertion here does
+not risk an error message; it risks a disk that works until it does not, on a
+machine with no way to reformat it.
+
+So `dskw_fmt_reach` runs after a successful `dskw_format` of **row 2**, the
+only row the toggle can produce that a 40-cylinder drive cannot hold. It
+writes a marker to the volume's **last** sector, re-zeroes the buffer, reads
+that sector back and compares. Four things about it:
+
+- **The last sector, not the 360KB boundary.** The obvious probe is LBA 720 —
+  cylinder 40, the first sector a 360KB disk has not got — and it is too
+  weak: a great many 40-track drives step happily to 41 or 42, so a test
+  there can PASS on exactly the drive it exists to catch. Cylinder 79 is
+  reachable by no 40-cylinder mechanism there is, it is one seek either way,
+  and it validates precisely the extent the BPB has just claimed.
+- **It is a write, and that is what makes it a positive test.** §18.96.1's
+  rule is that every test must be a read *succeeding*, and a bare read of
+  cylinder 79 would break it twice over — it rests on a failure, and a head
+  stopped at track 39 can answer with track 39's data. Writing a marker
+  first removes both: the compare succeeds only if the bytes that came back
+  are the bytes we put there, at the cylinder we named. The buffer is
+  **re-zeroed between the write and the read**, so a read that never touched
+  it cannot compare equal against our own staging.
+- **It may only run on a disk already condemned.** It destroys the sector it
+  tests, which is free here and would not be anywhere else — hence the
+  contract line above, and hence no API slot, for `dskw_format`'s reason.
+- **Failure re-formats as 360KB rather than reporting and stopping**, because
+  of the greying trap in the first paragraph: stopping would leave the
+  mountable 720KB volume on screen with Format Disk… disabled. The user gets
+  a working disk and a toast that says what happened and why —
+  `Drive cannot reach 720K - made 360K`, §59.6's subject/outcome/cause.
+
+The cost on the honest path is **two `int 13h` calls**, once per 720KB
+format, against a format that is already 7 writes and a remount.
+
 ### 18.97 The equipment word is a CLAIM; the FDC is the fact
 
 `desk_init` has always sized the floppy half of the volume table from `int
@@ -9325,11 +9394,18 @@ controller's own pull-up. So:
    selected drive's line. Present → done, in microseconds, with no stepping
    and no motor.
 3. Only if that is clear — which a *present* drive parked off track 0 also
-   reads — spin unit 1's motor up, wait `FDD_MOTORW`, then **RECALIBRATE**
-   (`07h`) and **SENSE INTERRUPT STATUS** (`08h`) → ST0 bit 4, Equipment
-   Check, which the 765 sets when it has stepped 77 times and never seen
-   TRK0. That is the absent drive, and this is the only path that costs
+   reads — spin unit 1's motor up, wait `FDD_MOTORW`, **RECALIBRATE** (`07h`),
+   wait `FDD_SEEKW`, and then **read ST3 again**. The head has been told to go
+   and find track 0; if TRK0 still has not come up, there is nothing there to
+   find it. That is the absent drive, and this is the only path that costs
    anything.
+
+**Step 3 asks the same LINE step 2 asked, and §18.97.1 is why.** The textbook
+answer is `SENSE INTERRUPT STATUS` and ST0's Equipment Check bit, this was
+built that way, and the field run measured it reading another drive's status
+out of the controller's queue. A `SENSE DRIVE STATUS` is a *level read* of the
+selected unit's own lines — no queue, no ordering, and the unit is in the
+command byte — so it cannot answer about somebody else.
 
 **The motor is in step 3 and not step 1**, which is what makes a
 correctly-switched two-drive machine free: a drive parked at track 0 answers
@@ -9417,6 +9493,153 @@ only as far as "the recalibrate completes and its interrupt code decodes"
 (`FDD_S_SEEKOK`, no hang). **The removal itself has never run.** The 5150
 whose SW1 claims a drive it does not have is the only machine that can fire
 it, which is what the field report is for.
+
+### 18.97.1 What the field run found: a sense answers the QUEUE, not the question
+
+The first build of §18.97 decided on **ST0** after the recalibrate, testing
+Equipment Check — 77 steps and no TRK0 — with the interrupt code as a
+sanity gate. On the 5150 it published:
+
+```
+unit 1 ST3 hex        0021      probe stop hex        0006   (refused)
+unit 1 ST0 hex        00C2      verdict 1=kept 0=gone     1
+```
+
+**Step 2 was right and step 3 read somebody else's answer.** `ST3 = 0x21` is
+unit 1, READY, **TRK0 clear** *and* two-side clear — the absent drive,
+reported correctly, and exactly what no emulator here could produce
+(MartyPC synthesises `0x79`, TRK0 set, for a drive its own config does not
+have). `ST0 = 0xC2` is interrupt code **11**, SE and EC both clear, and
+**US = 2**: a status-change result for unit *two*, in answer to a question
+about unit one.
+
+That is the µPD765 behaving as specified. A controller reset leaves one
+status-change interrupt **per drive** pending, `SENSE INTERRUPT STATUS` hands
+them out one at a time in unit order, and the command carries no argument —
+so what comes back is whatever is at the head of the queue, not an answer
+about the drive you last commanded. Nothing in the sequence had drained them.
+
+Three things follow, and the third is the general one:
+
+- **The decision moved to ST3**, read a second time after the recalibrate.
+  It is a level read of the selected unit's lines, so it has no queue to be
+  at the wrong end of, and the unit is in the command byte rather than in the
+  reply. `FDD_S_NOTRK0` replaces `FDD_S_EC`, and `FDD_S_NOSEEK`/`FDD_S_BADIC`
+  are gone with the ladder that produced them.
+- **The queue is still drained, at both ends** (`fdd_sidrain`): before, so the
+  ST0 the block publishes is this probe's own, and after, so the next BIOS
+  floppy operation does not inherit an interrupt of ours. ST0 is reported and
+  **nothing branches on it**.
+- **The fail-safe is what makes this a bug report rather than a lost drive.**
+  Every unrecognised state keeps the drive, so the machine showed a `Disk B`
+  it should not have — a wasted click — instead of hiding a real one. The
+  design rule earned its keep the first time it was tested on hardware, and
+  that is the argument for writing refusals that way even when the code
+  "obviously" works.
+
+**The second field run closed it, and it vindicates the signal it replaced:**
+
+```
+ST3 motor off hex     0021      probe stop hex        0003
+ST3 after seek hex    0021      verdict 1=kept 0=gone    0
+ST0 drained hex       0071
+```
+
+TRK0 clear before the recalibrate and **still clear after it**, so the row was
+retired and the desktop came up with drive A alone — the first time the
+removal has run anywhere. And `ST0 = 0x71` is **interrupt code 01, SE set, EC
+set, US = 1**: precisely the Equipment Check the first design was testing for,
+now that the drain has made it *ours*. So the original reading of the
+datasheet was right and only the queue was wrong. The decision stays on ST3 —
+a level read cannot be got at by ordering, which is worth more than being
+textbook — but ST0 is now an **independent corroboration** in the same block
+rather than a byte nothing could explain, and that is why it is still
+published.
+
+### 18.98 The third and fourth floppy — a row, and nothing else
+
+The IBM 5.25" Diskette Drive Adapter has an **external 37-pin D connector**
+(J1) beside its internal edge connector, and it carries two more drives —
+physical **#2 and #3**, same twisted cable and termination as the internal
+pair, no power, and no booting from them. An IBM 4865 lives there. DOS 4 and
+earlier lettered them C: and D: ahead of any hard disk.
+
+**The BIOS has always supported them.** `DISKETTE_IO` in the 27 Oct 82 ROM
+gates the drive number at `cmp dl,4 / jae <invalid>`, and its motor and select
+path is generic over `DL` — `mov cl,dl / mov al,1 / shl al,cl` for the
+`0040:003F` motor bit, then `mov al,0x10 / shl al,cl / or al,dl` for the DOR
+at 3F2h, whose bits 4..7 are motor-enable for drives A..D. It clears the other
+motor bits as it goes, so **one motor spins at a time** — which is the fact
+`dsk_here_ok` was already relying on.
+
+**And almost nothing in this kernel had to change**, because the volume layer
+never encoded "a floppy is row 0 or row 1". A floppy is *a `DVK_BIOS` row whose
+unit is below 80h* at every site that asks — `disk_mount`'s medium test,
+`dsk_geom_pick`'s cylinder bound, `dsk_here_ok`'s motor test, `dskw_fmt_probe`'s
+refusal, `fm_fmt_ok`'s greying — and `dsk_mbit` has held four entries since
+§18.9.1. What was missing was a **row**: `dsk_flop_add` takes the first free
+one per drive the machine claims, and everything above follows.
+
+**Detection is `int 11h` and there is nothing to add to it.** Bits 6–7 of the
+equipment word are the drive count less one, and on a 5150/5160 that word is
+the motherboard's **SW1** — so it is already the user's assertion, delivered
+by the hardware, and it is the same source DOS reads. Measured on the 1982 ROM
+under MartyPC: a two-drive machine answers `046F` (bits 6–7 = 1) and a
+four-drive machine `04EF` (= 3). `desk_init` had read this since the beginning
+and then clamped the answer to 2, because there was no row to give the other
+two; the clamp is what went.
+
+Three things follow, and the first is the one that decides the letters:
+
+- **The rows are claimed AFTER `dsk_boot_from` and before `drv_boot`.** That
+  ordering is the whole of §52.10.3's boot partition keeping C: on an installed
+  machine: `dsk_boot_from` has already taken row 2 there, so the externals land
+  at D: and E: and `dsk_bootltr`'s three messages still name the right disk. On
+  a floppy machine nothing has taken a row yet, so they are C: and D: — DOS 4's
+  own answer. `desk_init` is where that falls out for free, which is why the
+  code is there rather than beside `dsk_boot_from` where it reads as belonging.
+- **A count is not a map, and it does not need to be.** The equipment word says
+  *how many*, not *which*, so there is no drive 3 without a drive 2 — and drive
+  selects are ordered, so that is a fact about the cable rather than a
+  limitation of the encoding. A machine that claims fewer drives gets fewer
+  rows and therefore no zone, with nothing to hide afterwards.
+- **The claim is worth no more about these two than about unit 1**, so
+  §18.97's probe asks them too. That was not the first answer here: this
+  section originally argued that probing costs the boot and answers no better,
+  because `AH=08h` is refused by this ROM (§18.96) and the honest alternative
+  looked like "recalibrate each absent unit and wait for the failure". §18.97
+  had already found the cheaper discriminator — **SENSE DRIVE STATUS, ST3 bit
+  4, TRK0**, microseconds and no motor for a drive that is there — so the
+  premise was wrong and the conclusion with it. An external drive on the
+  37-pin connector is, if anything, the one most worth asking about: it is the
+  one that gets unplugged, and its switches are the ones left set.
+
+  It is **cheaper here than §18.97's retire**, because the row does not exist
+  yet — a unit proven absent simply never gets one, so there is nothing to
+  take back and `dsk_fdd_retire` stays the unit-1 special case it was written
+  as. And only PROVEN absence skips a row: every other answer keeps the drive,
+  which is §18.97's fail-safe unchanged.
+
+**Parameterising the probe by unit is where this bit back**, and it is worth
+a paragraph because both halves assembled and booted. `dsk_fdd_probe` encoded
+unit 1 in **four** places — the DOR select, the motor bit, `RECALIBRATE`'s
+argument and `fdd_st3`'s — so it took no argument, and §18.97's own call site
+therefore set nothing in `AL`. Made to read `AL`, it inherited whatever was
+there: the **drive count**. A two-drive machine probed unit 2 and a four-drive
+one asked about unit 4, whose DOR select is `4 & 3` — unit 0, the drive the
+kernel had just booted off. Measured through `fdd_unit`, which is `.text` for
+exactly this reason: it started in `.ovl` beside the probe's own constants,
+where the first mount overwrites it, so it read back as its initialiser after
+a boot that had probed unit 3 and said nothing was wrong.
+
+`DVOL_MAX` went 6 → 8 for this. At 6 the external pair would have eaten two of
+the four partition rows, so a machine with four floppies could not reach all of
+a four-partition disk at once; the eighth row costs 54 bytes of `.text` and 2
+of `.bss`, every one of them scaling off the constant.
+
+**What this does not do is boot from one** — the adapter cannot, and neither
+can the BIOS.
+
 
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
@@ -12488,11 +12711,26 @@ and no armed confirmation. A medium that answers gets a confirmation naming
 the size the probe chose:
 
 ```
-Format A: as 360K? Enter=yes Esc=no
+Format A: as 720K?
+Spc=size  Enter=yes  Esc=no
 ```
 
 which is the one place the user can catch §18.96's undecidable case before it
-costs them anything.
+costs them anything — and, with **Space**, the one place they can overrule
+it. Space offers the other row with the same media sectors-per-track, which
+is the 720KB/360KB pair and only ever that (§18.96); the size on the line is
+`[fm_fmtrow]`'s, so the toggle is `xor byte [fm_fmtrow], 1` and the redraw is
+`.lineonly` — the same one-status-line path a typed rename character already
+takes. Rows 0 and 1 have no partner, so Space keeps meaning *no* there and
+the second line drops `Spc=size` with it.
+
+**It is two lines because one no longer fits.** `fm_stat_line` truncates at
+`([fm_cw] - 12) / 8` characters and the Disk window's template is 320 wide,
+so 38 — where `Format A: as 720K? Spc=size Enter=yes Esc=no` is 44 and would
+lose `Esc=no`, which is the half §22 insists on naming. The question takes
+the row above the status line and the answers take the status line itself,
+which is exactly what the replace question (§22.3) already does and is the
+reason `fm_stat_line` is a proc at all.
 
 **The confirmation is `FS_EDIT = 5` and it is Delete's, not Rename's.** Enter
 says yes and *every other key* says no — the asymmetry §22 already argues
@@ -12507,6 +12745,14 @@ and `fmv_bcast` pushes it into any sibling window on the same drive — the
 same pair `fm_edit_commit` ends with, and for the same reason. On failure the
 `FERR_*` is said as a toast (§59.5) and the window is left showing exactly
 what it showed before, which is the disk it still cannot mount.
+
+**A 720KB commit is checked before the window is re-listed**, and the check
+sits between `dskw_format` and `fmv_load` for a reason that is entirely about
+ordering: §18.96.2 may have to format the disk a *second* time, and the
+re-list must describe the volume that ends up on the platter rather than the
+one the user asked for. `fm_fmtrow` is rewritten to 3 on that path so the
+window's new caption and listing follow the 360KB volume that was actually
+made.
 
 Two things are worth knowing before touching it. On the machine this project
 is calibrated against the probe costs **no doomed read at all** — `AH=08h`
@@ -13620,6 +13866,65 @@ six volumes are two columns of four and two — the last ordinal sits in row 1,
 two whole zones above the bottom of the first column, and a rect sized to it
 would cut them off. Taking the deepest row any column reaches costs at most
 one unused row of slack, in the safe direction.
+
+### 26.4 The caption is `A:`, and on the CGA the icon is square
+
+Two columns of drive zones on a CGA read as **one run of text** — `Disk C`
+followed by `Disk A` with a single space between them — and §18.98's third
+and fourth floppies made that the ordinary case rather than the hard-disk
+one. The gap is `DESK_COLW - (DESK_ZW + 2 × DESK_ZOVER)` = 56 − 52 = **4
+pixels**, so it is set by the *caption*, and the caption was six glyphs
+because `'Disk '` prefixed a letter the icon had already told you about: a
+driver-backed volume is drawn with the hard disk, a floppy with the diskette.
+The prefix carried no information and cost the whole column pitch.
+
+So the label is the drive letter — **`A:`, not `A`**, because that is how
+every other surface in this OS writes a drive. Three things fall out:
+
+- **`DESK_ZW` 48 → 32**, which is the icon's own width, so the zone is the
+  picture again; and `DESK_COLW` 56 → 44, which is the zone plus its overhang
+  plus one clear glyph cell.
+- **The white rect HUGS the caption.** It was the zone's full width whatever
+  was in it — right while six glyphs exactly filled it, and a bar with a
+  letter lost in the middle at two. `desk_draw_zone` already measured with
+  `font_width` to centre the text, so the rect follows the same number. It is
+  **clamped** to the zone plus overhang, because that is the bound
+  `desk_zone_rect` and `desk_dmg_zones` erase; nothing gives a volume a
+  `DV_LBL` of its own today (§52.4 — the kernel names them), but a driver
+  that did would otherwise letter outside the rect that cleans up after it.
+- **Nothing else moved.** The painter's centring, the hit test, the damage
+  rect and the XOR highlight all derive from `DESK_ZW`/`[desk_zh1]`.
+
+**And on the CGA the icon is 32 × 14 rather than 32 × 32.** That adapter's
+pixels are **2.4:1 tall** — 640×200 on a 4:3 tube — so `ico_disk32` renders
+about 32 wide by 77 high there: a stretched column that is not a diskette
+shape at all, costing 60 rows of pitch for the privilege. 14 rows is 33.6
+real units against 32, square to within 5%, and a 3.5" diskette is 90 × 94mm
+anyway. The same argument gives `ico_hdd14`.
+
+It is **drawn, not squashed**, and that is the part worth keeping. Halving
+`ico_disk32` by OR-ing row pairs is nearly free and thickens every 1-pixel
+feature into 2 — the shutter window, the label box and the two vertical rules
+are all single lines, so what comes out has the diskette's outline and none of
+its detail. Selecting alternate rows loses them instead. No new draw path was
+needed either way: `icon_draw` reads a `wwords, height` header, so a shorter
+icon is **pure data**.
+
+The pitch follows the icon, and that is the second half of the win: a zone is
+`icon + DESK_LBLH`, so CGA goes from a 60-row pitch to 34, and
+`desk_rowcalc`'s `(dock_y0 - DESK_ZY0) / pitch` from **2 zones a column to
+4** — which halves the columns for any given number of volumes, exactly when
+§18.98 and `DVOL_MAX` 8 made eight of them possible.
+
+Two things about where that decision lives. It keys on **`[vid_kind]`, not
+`[vid_h]`**: the question is the pixel aspect, which is a property of the
+adapter's mode rather than of how many rows it has. And it is re-asked in
+`desk_rowcalc` rather than at boot, because that is the routine `vid_switch`
+re-runs (§39.11.2) — so a machine moved from its CGA to its Hercules gets the
+tall pair back with no second site to remember. `[desk_icoh]`, `[desk_zh1]`,
+`[desk_zstep]`, `[desk_pdisk]` and `[desk_phdd]` are `.text` with real
+initialisers for the reason every boot-reachable table here is: `-f bin`
+zeroes nothing, and a zero icon pointer draws the interrupt vector table.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 
@@ -20378,10 +20683,11 @@ its sandbox on the CGA against ~5,000us straddling — and 673us is not a fast
 rectangle, it is four strips clipped away to nothing.
 
 **`gfx_blit4`.** Off the clip list by §11.3's own argument — a blit cannot take
-a sub-rect without advancing its source to match — and off the display split
-for the same reason, so it takes `GFXDENTER`: one display, the one holding its
-top-left corner, cut at that display's edge. Solitaire's card backs are the
-consumer.
+a sub-rect without advancing its source to match — and it was given
+`GFXDENTER` **for the same reason, which does not hold**: one display, the one
+holding its top-left corner, cut at that display's edge. Solitaire's card
+backs, ArtfulType's lines and Paint's whole canvas are the consumers.
+§39.14.7 is what that turned out to cost and why the argument was wrong.
 
 **The rule the three of them are: a path that writes the framebuffer without
 passing a public entry is a hole**, and it is exactly §11.3's rule about
@@ -20450,6 +20756,196 @@ nothing; and an empty Note Pad repaints no text at all, so a session that
 never types before forcing the repaint measures a window with nothing in it.
 A null A/B is evidence about the test until the test is shown to contain the
 case.
+
+**Confirmed on the iron, and the half that looks like a miss is the model
+working.** Run on the two-card 5150: *the window refresh did not draw on the
+CGA, as expected — and backspace DID draw.* Both follow from the counters. A
+keystroke emits a short run at the caret, so 48 of 49 of them lie entirely
+inside one display and land correctly **with or without the split**; only the
+one whose caret crosses is lost, which is the +16 px column above. A repaint
+letters every row full width and crosses on all of them, which is the 73,818.
+So the field's original *"backspace does not erase"* was never a second
+defect: the repaint had already wiped that card's half of the window, and
+backspacing over characters that are not on screen erases nothing.
+
+**There was a THIRD way to get a null here and it was in the Makefile, not in
+the test.** `NOSPLIT` was missing from `VIDSTAMP` and from `KNOBS`, so
+`make NOSPLIT=1` after a plain `make` saw an up-to-date `kernel.bin`, rebuilt
+nothing, and drove the SPLIT kernel twice — the trap the `VIDEO=` stamp exists
+to prevent, in the one knob added since. It is in both lists now, so the knob
+rebuilds and the banner names it. **The table above is unaffected and can be
+told so from its own numbers**: a stale kernel produces two identical columns,
+and these two differ.
+
+#### 39.14.7 A RUN CARRIES NO SOURCE — what a straddled Paint canvas showed
+
+From the field, on the same machine: *Paint's canvas does not draw on the
+second screen when straddled.* §39.14.5 predicted it and called it a
+limitation; it is not one, and the argument that made it look like one is
+worth taking apart because it is the same sentence twice with two different
+meanings.
+
+**"A blit cannot take a sub-rect without advancing its source to match" is
+true of the DESTINATION RECT and false of a RUN.** `gfx_blit4` coalesces
+equal pixels and emits one `gfx_hline` per run — and a run is *one colour*.
+Nothing about where it is drawn refers to the source at all. So the runs can
+be split per display for free, by the mechanism that already splits every
+other rect in the machine: keep the destination in **virtual** coordinates
+the whole way down and let each run's `gfx_fill` take `GFXDISP`.
+
+The fix is therefore the *removal* of two macro invocations — `gfx_blit4`
+takes no whole-shape hook — and it is smaller than what it replaced. Three
+things fall out of it rather than being arranged:
+
+- **Every consumer is fixed at once and none was rebuilt.** Paint's canvas,
+  Solitaire's card backs, ArtfulType's three blits and `gfxbench`'s two rows
+  are the whole population; the slot's contract is unchanged, so no `.o88`
+  was invalidated.
+- **A nested caller still gets the local path.** `GFXDISP` tests
+  `[gfx_dnest]` and falls through when an outer whole-shape hook has already
+  translated, so a blit reached from inside one keeps behaving exactly as it
+  did. There is no new case to get wrong because the existing test already
+  covers it.
+- **The dead zone costs nothing here either**, for §39.14.1's reason: a run
+  no display claims is drawn by nobody, with no test anywhere.
+
+**And it fixes a register-contract bug on the way past.** `GFXDENTER` sat
+ABOVE this routine's `push ax`/`push bx`, so the values restored at the end
+were the TRANSLATED ones and `gfx_blit4` did not preserve AX/BX as its own
+header promises — on the second display only, where `[vid_ox]` is not 0. It
+was latent and is recorded as latent: all four callers reload their
+destination from memory before every blit and declare AX clobbered, so
+nothing ever saw it. With no hook there is nothing to translate and the
+question does not arise.
+
+**What it costs is per RUN and only on a two-card machine**: `gfx_disp_run`
+instead of `GFXDISP`'s two compares, against a call that already costs ~756us
+(§5.7). A one-card machine short-circuits on `[vid_ndisp]` and pays nothing —
+which is the whole population of machines that were drawing correctly before.
+A blit's price is still `runs x ~0.5 ms` and still decided by how flat the art
+is. **That per-run figure is MODELLED and is not a field number**: what would
+measure it is `gfxbench`'s `GFX_BLIT4 solid` (64 runs) and `GFX_BLIT4 4px
+runs` (1,024 runs) on a two-card machine with the sandbox clear of the seam,
+run against a kernel with the hook back in.
+
+**The obvious way to avoid even that was considered and NOT taken**, and it is
+recorded so it is not re-derived: gate the hook on §39.14.6's `vid_span_one`,
+so a block that fits one display keeps `GFXDENTER` and only a straddling one
+goes untranslated — which is exactly what `font_run` does one granularity
+down. It works, and it buys a few per cent of a call whose cost is
+overwhelmingly fixed, for a second path through the routine, a byte of state
+saying which path to leave by, and about 35 bytes. §48.18.1 is the precedent:
+shaving the arrival off a primitive that is nearly all arrival recovers ~4%
+and is not worth a structural change. One path, and the pixels decide.
+
+**Measured, and `tests/dispblit.py` is the gate.** Paint straddling a
+Hercules+CGA seam, four strokes drawn across it, then the window dragged away
+and back to the SAME place so the region compared is the same rectangle:
+**365 inked pixels on the second card before the repaint and 364 after**,
+against **365 and 0** on a kernel with the hook back in. The A/B is the point —
+the strokes reach both cards either way, because the pencil is `gfx_line` per
+mouse SAMPLE and each segment resolves its own display, so a test that only
+draws proves nothing. It is the REPAINT the two builds disagree about.
+
+**`gfx_scroll` is NOT the same case and must keep its hook.** It moves pixels
+that are already on a card; a source rect crossing the seam would have to move
+them *between* cards. Its refusal (CF = 1, the caller repaints) is the right
+answer and the reason `GFX_SCROLL 256x128` reads 368us in a straddled
+`gfxbench` — that is the refusal, not a fast scroll. `gfx_line` and the walk
+keep theirs too (§39.14.5): a line's unit is a pixel, and resolving a display
+per pixel is the inner loop §5.6.6 exists to keep tight.
+
+#### 39.14.8 `gfx_save` / `gfx_restore` — the two writers the audit missed
+
+§39.14.5's rule is **a path that writes the framebuffer without passing a
+public entry is a hole, and the audit that finds them is by WRITER and not by
+entry point.** It named three. There was a fourth pair, and §39.14.2's own
+prose had been listing them as hooked all along — *"for font_char, font_run,
+ico_core, gfx_scroll, gfx_save/restore and gfx_line"* — while `gfx_save` and
+`gfx_restore` took no hook at all. A comment is not a mechanism.
+
+**The failure depends on draw order, which is what made it invisible.** Both
+routines reach `vga_rect_setup`, which clips against `[vid_cw]`/`[vid_ch]` —
+the display **last drawn on** (§39.14.3), not the screen — while the rect
+handed in is VIRTUAL. So the same call goes two different ways:
+
+- **the rect is on display 1, display 0 is current** → it clips away to
+  nothing, the save banks nothing, and the restore draws nothing;
+- **the rect is on display 0, display 1 is current** → it does not clip at
+  all, and reads or writes the *other card's* framebuffer at coordinates that
+  are legal there. Hercules pixels get banked as if they were the CGA's, and
+  put back on whichever card is current at restore time.
+
+The consumer is the **window raise cache** (§11.96), which banks what is under
+a window so a raise can put it back instead of repainting — for *any* window,
+including one on the second display. The menu save-under was safe by accident:
+a pull-down hangs off the menu bar and the bar is the primary's (§39.16.2), so
+its rect is display 0's, whose origin is (0,0) and whose translation is the
+identity. It is safe by mechanism now.
+
+**It is whole-shape like `gfx_scroll`, not split like a blit's runs**, and
+§39.14.7 is exactly the test that says which: a run carries no source, and a
+save IS the source. The buffer is one plane-major image with one stride, the
+two cards have different strides and different bank shapes, and §5.8's
+sub-rect restore addresses into that buffer with arithmetic derived from the
+rect — so half a row from each card is not a thing the buffer can hold.
+
+**The caller owes the straddle test, and that is the one asymmetry with
+`gfx_scroll`.** A scroll REFUSES a rect it cannot serve and the caller
+repaints. A save cannot usefully refuse, because `wm_su_edge` calls it on
+single-byte columns inside a rect the caller has already approved — and
+because the failure it would be refusing is silent in a way a scroll's is not:
+**a cut save and a cut restore agree with each other.** The pixels that were
+banked go back exactly; the ones past the seam were never banked, are never
+put back, and nothing anywhere notices. So the test belongs where the decision
+to use a cache is made.
+
+**And the gate was already there, asking the wrong question.** `wm_su_take`
+tested `cx >= [vid_cw]` under a comment explaining that a clipped rect would
+index the buffer wrongly — right about the hazard, and reading a word that
+means "the display last drawn on". It is `vid_span_one` now (§39.14.6's
+predicate, its third consumer), which is the same screen test on a one-card
+machine and a stronger one on two; `kern_small` keeps the old pair, being
+single-display by construction and having no `vid_span_one` to call.
+
+**The cursor must not take the hook**, and does not: `mouse.inc` enters at
+`vga_save_vram`/`vga_restore_vram`, *below* it, out of IRQ4. The arrow
+brackets itself (§39.15.2) and `cur_geom` has already resolved its display, so
+a hook there would translate a rect that is translated.
+
+**What it actually WAS, measured, because the two directions are not the same
+bug and only one of them fired.** `tests/dispsave.py` reads `wm_su_segs[slot]`
+out of the guest — a word per window, non-zero exactly when a cache is held —
+for a Disk window sitting on the second display and then covered:
+
+| | cache taken | pixels after the raise |
+|---|---|---|
+| the hook | `0x9E80` | **0 px of 49,600 differ** from the uncovered reference |
+| no hook | **`0x0000`** | 0 px differ |
+
+So what shipped was **the raise cache silently switched off across the whole
+second display**, not corruption: a window's virtual x there is past any one
+display's width, the gate refused, and the fallback is a full repaint, which
+is correct and slower. That is the direction the gate happened to block.
+
+**It did not block the other one**, and this is the part to hold on to rather
+than the table: a rect on display **0** passes `cx >= [vid_cw]` whatever is
+current, so if display 1 was the last drawn on, the save reads *its*
+framebuffer at coordinates that are legal there. Two of the three
+`wm_su_take` sites cannot reach it — `wm_raise` banks the outgoing front
+window immediately after `wm_draw_title`/`wm_grow_erase` drew on *that same
+window*, and `wm_su_bank` banks a window that was just drawn, so in both the
+current display and the rect's display agree by construction. `wm_hide` has
+no such guarantee. **It was not observed firing, and it is closed either
+way** — which is the honest shape of it: one measured defect, one latent
+path, and a fix that does not need to know which of them a user hit.
+
+**Cost: `.text` +57 on `kern_big`, crossing one image rung** — 97,280 →
+97,792 of `KERN_BUDGET`, 2,560 spare (5 steps). The rung had **0 bytes left**
+when this started, §39.14.7 having just landed exactly on the boundary, so
+any addition at all cost the same 512. `kern_small` is **−12**: the hook
+compiles out there and the restructure retires a duplicated
+`cmp byte [vid_mono], 0` in each of the two entries.
 
 `gfx_scroll` and `gfx_blit4` keep REFUSING rather than falling back, and that
 stays right: a blit cannot take a sub-rect without advancing its source to
@@ -21130,20 +21626,70 @@ entry covers — so a freed block merges with its neighbours for nothing.
 `xm_copy` carries **one ABI over two transports**: `int 15h AH=87h` on tier
 1, unreal mode on tier 2. The caller cannot tell which ran and must not care.
 
-**Nothing allocates out of this pool today, and the teardown leg is not
-wired.** Exactly one consumer has ever existed — §53.6.1's fullscreen desktop
-stash, kernel-side, 286+/VGA — and it was removed. `xm_release_inst` /
-`xm_release_rec` are correct and are called from nowhere: they had three call
-sites in `instance.inc`, beside each `snd_release_rec`, from the commit that
-introduced them until the **#51 integration merge dropped all three** — which
-is docs/UPSTREAM.md's hazard exactly, a merge that assembles, boots and says
-nothing, because a call that is simply absent breaks no build. It has cost
-nothing, and not by luck: the stash arrived *after* that merge and no instance
-has ever held a block. **So the paragraph above states the design and not the
-present behaviour, and the first consumer's first job is to wire those three
-sites back** rather than write the release again. Recorded here rather than
-fixed because a call that can only ever scan a table of zeroes is not worth
-three instructions until something fills it.
+**Nothing allocates out of this pool today, and the teardown leg is wired
+again.** Exactly one consumer has ever existed — §53.6.1's fullscreen desktop
+stash, kernel-side, 286+/VGA — and it was removed. `xm_release_rec` had three
+call sites in `instance.inc`, beside each `snd_release_rec`, from the commit
+that introduced it until the **#51 integration merge dropped all three** —
+docs/UPSTREAM.md's hazard exactly, a merge that assembles, boots and says
+nothing, because a call that is simply absent breaks no build. It cost nothing
+only because the stash arrived *after* that merge and no instance has ever
+held a block.
+
+The three calls are back, and **`tests/xmtest` + `tests/xmcheck.py` is the
+gate that makes the next such loss loud** (§41.7). It needs a package for a
+structural reason: `xm_alloc` stamps a block with the calling instance, so
+nothing outside one can make a block that belongs to a slot. Measured on QEMU
+with a 386 — three blocks, owner `0x01`, all three freed on the close — and
+**verified to FAIL**, which is the only thing that makes a green run mean
+anything: with the three calls commented out, the same run leaves all three
+live at KB=4 owner=1 after the window has gone.
+
+`kern_small` gets `xm_release_rec` as a `ret` in xmem.inc's `%else` rather
+than three `%ifdef`s in `instance.inc` (§41.11). **The teardown path does not
+know which build it is**, which matters because a conditional there is one a
+fourth teardown site could forget — and a missing `call` fails silently, which
+is how these three were lost in the first place.
+
+#### 41.5.1 The entry proc is a dispatched callback too (binding)
+
+**The loader stamps the entry proc with its instance, and it did not used to.**
+`xm_owner` goes through `inst_caller` (§34.3), which answers with the
+dispatched callback's stamp or, failing that, the **running task's** `T_INST` —
+and the entry proc is far-called by the loader on the UI task, whose `T_INST`
+is 0xFF. So everything an entry proc asked the kernel for came back attributed
+to the KERNEL. Measured, not reasoned: three blocks claimed from an entry proc
+came back owner `0xFF` in `xm_tab`, and the same three claimed from that
+package's `W_PAINT` came back owner `0x01`.
+
+`loader_run` step 8 now brackets the entry call the way every other dispatch
+site does — `push word [snd_inst]` / `snd_disp_set` / call / `pop word
+[snd_inst]` — so the entry proc is identified like a `W_PAINT`.
+
+**It was never an XMS bug**, which is why the fix is not in `xmem.inc`.
+`inst_caller` is the kernel's one "who is asking?" answer, so the same gap ran
+through four subsystems and all four are fixed by the one stamp:
+
+| asked from an entry proc | before | now |
+|---|---|---|
+| `xm_alloc` (§41.5) | stamped kernel, never released | the instance's, released at teardown |
+| a sound grant (§34.3) | never released at teardown | released |
+| `toast_show` (§59) | outlived its app | retired with it |
+| `osapi_file_here` / `inst_vol_enter` (§19.2.1) | the machine's directory | the instance's |
+
+Every one of those is an improvement in the same direction, and none is a
+behaviour a package could have relied on: they are all "this belongs to
+nobody" becoming "this belongs to the app that asked".
+
+**The abort path had to follow.** An entry that claims and then returns CF=1
+now leaves blocks owned by a slot `ld_unreserve` is about to hand back, so
+`ld_unreserve` releases them alongside the two heap owners it already swept.
+Without that, the next package to take the slot would inherit them — a worse
+failure than the leak the stamp removed, and the reason the sweep is part of
+this change rather than a later one.
+
+The gate for all of it is §41.7's, and it claims **from the entry proc** so it
+tests the stamp and the release together.
 
 ### 41.6 What the Task Manager reports
 
@@ -21254,6 +21800,31 @@ allocator slots refuse, and the Task Manager shows the tier alone with no bar
 under it — §41.6.1) and with
 `-m 2M` for a small non-zero store, where an allocator that gets its
 subtraction wrong will hand out a base past the top of RAM.
+
+**The teardown has a gate of its own**, because it is the one thing here that
+no amount of reading `xm_caps` can check:
+
+```
+make test TESTAPPS=build/xmtest.img
+python3 tests/xmcheck.py build/qmp.sock
+```
+
+`tests/xmtest` claims **three** blocks (one would pass a release that stopped
+at the first match) from inside a `W_PAINT` — a *dispatched callback*, which
+is what gets them stamped with the instance rather than the kernel (§41.5.1) —
+and `tests/xmcheck.py` drives the launch and the close and reads `xm_tab`
+over QMP. It has to be a package: `xm_alloc` stamps a block with the calling
+instance, so nothing outside one can make a block that belongs to a slot.
+
+**The assertion is deliberately outside the package.** A package asking the
+kernel "did you free my blocks?" is the writer and the reader being the same
+code, and both agreeing on the same wrong answer is the failure this area has
+already had once (docs/FIELD-NOTES.md 4).
+
+**And the gate is verified to FAIL**, which is the only thing that makes a
+green run mean anything: with the three `call xm_release_rec` commented out of
+`instance.inc`, the same run leaves all three blocks live at KB=4 owner=1
+after the window has gone.
 
 ### 41.8 The package ABI
 
@@ -31792,9 +32363,9 @@ how far it got, and the verdict.
 ```
 fdd_dbg_eqp   drives the equipment word claimed, after the clamp (0..2)
 fdd_dbg_ran   0 = never ran (one drive claimed, or FDDPROBE=0), 1 = ran
-fdd_dbg_st3   SENSE DRIVE STATUS for unit 1; bit 4 is TRK0. FF = never read
-fdd_dbg_st0   SENSE INTERRUPT STATUS ST0 after RECALIBRATE; bit 4 is EC
-fdd_dbg_pcn   the present-cylinder byte beside it
+fdd_dbg_st3   SENSE DRIVE STATUS, unit 1, motor off; bit 4 is TRK0
+fdd_dbg_st3b  ...and again after the RECALIBRATE. THIS is what decides
+fdd_dbg_st0   a drained SENSE INTERRUPT STATUS ST0 - diagnostic only (§18.97.1)
 fdd_dbg_step  where it stopped: FDD_S_*, and the row that carries
 fdd_dbg_vrd   0 = absent, the row was retired; 1 = present, the row was kept
 ```
@@ -31805,12 +32376,11 @@ identically whether the probe proved a drive present or merely failed to
 prove one absent, and those two are the difference between a working feature
 and a fail-safe that is quietly always taking the safe branch. `FDD_S_TRK0`
 means the motor-off read answered and nothing further ran, which is the row a
-correctly-switched two-drive machine should show; `FDD_S_EC` means the
-recalibrate came back with Equipment Check and the row went; `FDD_S_SEEKOK`
-means it came back *clean*, so the drive is there and was parked off track 0.
-Everything else is a refusal — a byte handshake that timed out, a controller
-that never went ready, a seek that outlived `FDD_SEEKTO` — and each keeps the
-drive.
+correctly-switched two-drive machine should show; `FDD_S_SEEKOK` means TRK0
+came up after the recalibrate, so the drive is there and was parked off track
+0; `FDD_S_NOTRK0` means it never came up and the row went. `FDD_S_NORDY` is
+the only refusal left — the controller never took a byte or never offered
+one — and it keeps the drive, as every unrecognised state does.
 
 **Unconditional, for the mouse, clock and display blocks' reason** — and more
 plainly than any of them. This block exists *because* no emulator here can be

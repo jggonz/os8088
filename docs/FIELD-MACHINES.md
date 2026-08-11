@@ -86,7 +86,7 @@ by name in a dozen places.
 | expansion | **AST SixPakPlus Rev 1** — carries the other **384 KB** (256 + 384 = the 640 KB every set reports) **and the clock**. That 640 is what `int 12h` answers, and since SPEC.md §2.7 the boot sector relocates itself to the top of it — so if this machine ever stops booting after a memory change, the first thing to check is the motherboard DIP switches, which are where an XT's RAM count comes from. A board the switches do not mention is a machine with plenty of RAM and a small answer, and the sector prints `RAM` and stops rather than loading a kernel over itself |
 | clock | the SixPakPlus's **MM58167 at 2C0h** — §37.90's **rung 2**, and the machine the whole ladder was written for: an XT BIOS implements `int 1Ah` AH=00h/01h and nothing else, so this BIOS knows nothing about a clock sitting in its own backplane. It is also what keeps rung 3 off a SixPakPlus — rung 3 is claimed only when the BIOS *can* read the clock, and here it cannot |
 | video | **Hercules GB101 → IBM 5151** (mono TTL) **and IBM CGA, new style → IBM 5153** (RGB). **Both cards and both monitors, always, in the machine.** It boots on the **Hercules**, and that is **SW1-5/6**, not a property of the probe: §39.1's last rung is `int 11h` bits 5:4, this machine's switches say `11b` = 80×25 mono, so `vid_detect` takes the `VID_HERC` branch. The second column costs neither a card swap **nor a build any more** — the Control Panel's Display page switches it at run time (§39.11) |
-| floppy | **one** — a **Tandon TM100-2**, 360 KB 5.25" DD. There is no drive B. **But SW1 says there are two**, and that is worth knowing rather than fixing quietly: the DIP pair is what `int 11h` reports, so this machine is the one that showed a `Disk B` icon which could never mount — and it is therefore the witness for SPEC.md §18.97's probe, which asks the FDC instead. Its expected `sysbench` rows are `claimed 2`, `probe stop 03` (Equipment Check) and `verdict 0`. **If the switches get corrected, the probe stops running** and those rows read `claimed 1 / probe ran 0` — still right, and no longer a test of anything, so say which way the switches are set when reporting a run |
+| floppy | **one** — a **Tandon TM100-2**, 360 KB 5.25" DD. There is no drive B. **But SW1 says there are two**, and that is worth knowing rather than fixing quietly: the DIP pair is what `int 11h` reports, so this machine is the one that showed a `Disk B` icon which could never mount — and it is therefore the witness for SPEC.md §18.97's probe, which asks the FDC instead. **Confirmed on the iron:** `claimed 2`, `ST3 = 21` both before and after the recalibrate, `ST0 = 71` (IC 01, SE, EC, unit 1), `probe stop 03`, `verdict 0` — and the desktop comes up with drive A alone. The first run came back `probe stop 06` and kept the drive; §18.97.1 is that round, and it is worth reading because the fault was the controller's interrupt *queue* rather than the signal. **If the switches get corrected, the probe stops running** and those rows read `claimed 1 / probe ran 0` — still right, and no longer a test of anything, so say which way the switches are set when reporting a run |
 | hard disk | **Seagate ST-225**, 20 MB MFM, on a **Seagate ST11M** controller, in the second bay |
 | serial | **one port, at 0x3F8 (COM1)**, with the mouse on it — `sysbench`'s SPEC.md §9.4.2 block reports `COM1 03F8, COM2 0000`. Worth having written down, because it decides which half of a two-sided mouse change this machine can witness: with one port there is no §9.5 contest, `[mou_need]` is 1 by default, and everything §9.5.1 says about a modem on the other port is untestable here. The **Compaq Portable III** below is the two-port machine |
 | sound | none |
@@ -665,6 +665,17 @@ updates, which is exactly why the shipped images stopped being tracked.
   from `OSAPI_VIDEO` at run time, so the second run is the same measurement
   on the other card and it names its own file. That is the whole reason the
   ask is one disk now.
+- **On an EXTENDED desktop, do not even switch: drag the window across.**
+  `gfxbench` names the card its **sandbox** is on rather than the machine's
+  primary (SPEC.md §39.19), so `R`, drag onto the other monitor, `R` again is
+  a set from both cards in one launch. That is not only the file name — the
+  framebuffer segment, the stride, the bank count and the status port are
+  that display's too, and the raw VRAM rows are addressed in its own
+  coordinates. **Read the `sandbox straddles` row before comparing two
+  reports**: a 1 means the window crossed the seam, so the primitives in that
+  run were being split per display, refused, or drawn per cell
+  (§39.14.6/§39.14.7), and it is not the same measurement as a run that
+  reads 0.
 - Then `SYSBENCH.O88`, likewise, to `SYSBENCH.TXT`. **Once, not per card** —
   its rows are the CPU, the bus, memory, the clock, the scheduler and the
   floppy, and none of them is a question about the adapter.

@@ -1461,6 +1461,57 @@ bl_drive:
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; bl_dbgfind - look a published block up in the debug registry (SPEC.md 57)
+; in:       AX = the two-character tag
+; out:      CF=0 and ES:BX -> the block; CF=1 = not published in this build
+; clobbers: BX, ES, flags
+;
+; A TEST package reads kernel state this way and shipped software never does
+; (SPEC.md 57). A reader that cannot find its block SAYS SO AND CONTINUES,
+; which is what lets one build of a harness run against a plain kernel and a
+; knob-built one - so every caller here treats CF=1 as a row it cannot fill
+; rather than as a failure.
+;
+; It checks the tag TWICE: once in the registry pair and again as the block's
+; own first word, which is SPEC.md 57's whole reason for putting it there. An
+; offset followed to the wrong place then answers "not published" instead of
+; handing back somebody else's words.
+;
+; It lives in benchlib because BOTH harnesses want it - sysbench for its four
+; state dumps, gfxbench to find out which DISPLAY its sandbox is on (39.14.7's
+; report, and the reason gfxbench used to name its file after the primary).
+; -----------------------------------------------------------------------------
+bl_dbgfind:
+    push ax
+    push si
+    mov bx, KERNEL_SEG
+    mov es, bx
+    mov si, [es:0x000E]         ; the registry, or 0
+    or si, si
+    jz .none
+.scan:
+    mov bx, [es:si]             ; the tag
+    or bx, bx
+    jz .none                    ; end of list: not published here
+    cmp bx, ax
+    je .hit
+    add si, 4
+    jmp short .scan
+.hit:
+    mov bx, [es:si+2]           ; ...and the block behind it
+    cmp [es:bx], ax             ; which must lead with the same tag
+    jne .none
+    pop si
+    pop ax
+    clc
+    ret
+.none:
+    pop si
+    pop ax
+    stc
+    ret
+
 ; --- benchlib data -----------------------------------------------------------
 
 bl_s_nul:   db 0

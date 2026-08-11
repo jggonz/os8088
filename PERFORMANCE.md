@@ -4246,7 +4246,8 @@ that fails at random is worse than no gate.
 ### Set 35 — MartyPC's floppy is given a platter
 
 Not a field report: a change to the **instrument**, measured against the field
-reports that already exist. `tools/martypc/patches/03-floppy-disk-timing.patch`,
+reports that already exist. `tools/martypc/patches/04-floppy-disk-timing.patch`
+(`03-` when this was written; renumbered when elendilon's video-DIP patch landed),
 docs/MARTYPC-DEBUG.md.
 
 #### What was actually there

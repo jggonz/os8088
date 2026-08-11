@@ -680,3 +680,72 @@ overlays = [
     bus_type = "ISA"
     type = "CGA"
     clock_mode = "Dynamic"
+# ...and the machine SPEC.md 18.96.2's size override exists for: the field
+# 5150's own 27 Oct 82 ROM with an 80-CYLINDER drive as B. That ROM answers no
+# AH=08h for a floppy, so dskw_fmt_probe reads a 360KB machine and offers 360K
+# for a disk that could hold 720K - which is exactly what the confirmation's
+# Space key is for, and exactly what nothing here could exercise before.
+#
+# The floppy overlay is dropped rather than listed, because the drives ARE the
+# point: upstream's pcxt_2_360k_floppies is two 360k drives and the FDC takes a
+# maximum of four (its pcxt_4_360k_floppies is the other one worth knowing
+# about). Drive 0 stays 360k so the boot is the shipped 360KB system disk.
+[[machine]]
+name = "os8088_5150_cga_720b"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+        [[machine.fdc.drive]]
+        type = "720k"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...and the FOUR-drive 5150: two internal and the pair on the 5.25" adapter's
+# external 37-pin connector (SPEC.md 18.97). Upstream's own overlay, because
+# the FDC takes four and this is what four looks like. Drives 2 and 3 carry no
+# image, which is the honest case - a drive that is present and empty, whose
+# mount fails like any other (18.3).
+#
+# What it exists to answer is whether the equipment word can be believed: the
+# 1982 ROM copies SW1 into 0040:0010 and its bits 6-7 are the drive COUNT, so
+# this machine must report 4 where os8088_5150_cga reports 2.
+[[machine]]
+name = "os8088_5150_cga_4fdd"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_4_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"

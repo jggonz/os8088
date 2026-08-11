@@ -186,6 +186,12 @@ endif
 # one-display path it used to take. The picture is the claim - a run that
 # crosses a seam either lands on both cards or it does not - and only the
 # pair of builds can show that, which is REDRAWFULL's own reasoning.
+# IT IS IN $(VIDSTAMP) AND $(KNOBS) BELOW, and it shipped in neither: a knob
+# outside the stamp does not rebuild the kernel, so `make NOSPLIT=1` after a
+# plain `make` drove the SPLIT kernel twice and the A/B came back null. That
+# is the trap the VIDEO= stamp exists to prevent - a new knob belongs in both
+# lists on the day it is added, and a null A/B is one of the things it looks
+# like (SPEC.md 39.14.6).
 ifneq ($(NOSPLIT),)
 VIDDEF += -DNOSPLIT
 endif
@@ -286,9 +292,10 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 FDDPROBE REDRAWFULL SNDSNIFF RAMKB FONT INSTCHUNK,\
+                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB \
+                             FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
@@ -602,6 +609,23 @@ $(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin tools/os88pkg.py
 
 $(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fmtest.o88
+
+# XMTEST: the extended-memory TEARDOWN gate (SPEC.md 41.5/29.4). It answers
+# "when an instance holding blocks above 1MB closes, are they freed?", which
+# needs a package because xm_alloc stamps a block with the CALLING INSTANCE -
+# nothing outside one can make a block that belongs to a slot. It must run on
+# a machine that HAS a store, so QEMU on a 386 rather than MartyPC's 8088:
+#   make test TESTAPPS=build/xmtest.img
+#   python3 tests/xmcheck.py build/qmp.sock
+$(BUILD)/xmtest.bin: tests/xmtest/xmtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/xmtest/xmtest.asm
+	@echo "xmtest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/xmtest.o88: $(BUILD)/xmtest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/xmtest.bin -o $@
+
+$(BUILD)/xmtest.img: $(BUILD)/xmtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/xmtest.o88
 
 # LINETEST: the gate for SPEC.md 5.6.6, the 1bpp three-column walk. A
 # deterministic fan of dilated steep lines and nothing else, so two kernels

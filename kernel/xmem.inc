@@ -14,10 +14,13 @@
 ; stash, kernel-side, on a 286+ with a VGA - and it was removed. What remains
 ; is a published package ABI (SPEC.md 20.8 rule 4: the four slots are shipped
 ; and keep their contracts) with no caller inside the kernel, which is a
-; deliberate state and not an oversight. The practical consequence is that
-; every path here is exercised only by tests/sysbench asking for the KB figure
-; and by the Task Manager's XMS line, so anything relying on a second reader
-; having checked it is relying on nothing.
+; deliberate state and not an oversight.
+;
+; So the ALLOCATOR and the TEARDOWN are exercised by nothing shipped, and that
+; is exactly why tests/xmtest exists (SPEC.md 41.7): it claims three blocks,
+; closes, and tests/xmcheck.py reads xm_tab to see whether they were freed.
+; The read paths are exercised by tests/sysbench and the Task Manager's XMS
+; line, and by nothing else.
 ;
 ; THE HARD CEILING, because it is the rule most likely to be violated later:
 ; real mode forms an address as seg<<4 + off, so the highest byte any CS:IP
@@ -905,21 +908,18 @@ xm_free:
 ; entry. Safe on a slot that holds nothing, and safe on tier 0 (the table is
 ; all zeroes).
 ;
-; NOTHING CALLS IT TODAY, and the comment here said otherwise for a year.
-; It had three call sites in instance.inc - beside each snd_release_rec - from
-; the commit that introduced it until the #51 integration merge dropped all
-; three, which is docs/UPSTREAM.md's own hazard in its purest form: the merge
-; assembled, booted and said nothing, because a call that is simply absent
-; breaks no build. The comment describing them survived the code.
+; Called from SPEC.md 29.4's three teardown sites, via xm_release_rec below.
+; It was called from none of them for a year: the #51 integration merge
+; dropped all three and the comment describing them survived the code, which
+; is docs/UPSTREAM.md's hazard in its purest form - the merge assembled,
+; booted and said nothing, because a call that is simply absent breaks no
+; build. It cost nothing only because the one consumer that ever existed
+; (SPEC.md 53.6.1's fullscreen desktop stash) arrived after that merge and has
+; since been removed, so no instance had a block to strand.
 ;
-; It has never cost anything, and that is a fact about the CONSUMERS rather
-; than luck: the only thing that ever allocated out of this pool was SPEC.md
-; 53.6.1's fullscreen desktop stash, which arrived two days AFTER that merge
-; and has itself since been removed. So no instance has ever held a block for
-; this to release. That is also why it is left in place rather than deleted -
-; it is the teardown leg SPEC.md 41.5 specifies, it is correct, and the first
-; consumer needs it wired back into the three SPEC.md 29.4 sites rather than
-; written again.
+; tests/xmtest + tests/xmcheck.py is the gate that makes the next such loss
+; loud, and it is verified to FAIL with the three calls removed - see
+; SPEC.md 41.5.
 ; -----------------------------------------------------------------------------
 xm_release_inst:
     push cx
@@ -955,13 +955,16 @@ xm_release_inst:
 ; and the conversion belongs beside the release rather than at three call
 ; sites.
 ;
-; ALSO UNCALLED - see xm_release_inst above for the whole story. It belongs at
-; the three sites snd_release_rec is called from (app_close_win's synchronous
-; leg, inst_task_die, and inst_pkg_alive's winless leg), and `git grep
-; snd_release_rec kernel/instance.inc` is the list. Wiring it back is the
-; first job of whatever next allocates out of this pool - and until something
-; does, adding the calls would be three instructions that can only ever scan a
-; table of zeroes.
+; Called from the three sites snd_release_rec is called from, immediately
+; beside it: app_close_win's synchronous leg, inst_task_die, and
+; inst_pkg_alive's winless leg. `git grep snd_release_rec kernel/instance.inc`
+; is still the list, and a fourth teardown site owes both.
+;
+; ONE TRAP, and it is not this routine's: a block claimed in a package's ENTRY
+; PROC is stamped XM_OWN_KERN, not the instance, because inst_caller answers
+; with the running task's T_INST when no callback is being dispatched - and
+; the loader far-calls the entry on the UI task. Such a block matches no slot
+; and this will never free it. Claim from a callback (SPEC.md 41.5.1).
 ; -----------------------------------------------------------------------------
 xm_release_rec:
     push ax
@@ -1469,6 +1472,28 @@ xm_free:
 xm_copy:
     mov ax, 1
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_release_rec - free every block an instance holds. It holds none.
+;
+; in:       DI = instance record ptr
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; NOT an API slot - this one is internal, called from SPEC.md 29.4's three
+; teardown sites. It is a `ret` here rather than three %ifdefs in
+; instance.inc, and that is the point: THE TEARDOWN PATH DOES NOT KNOW WHICH
+; BUILD IT IS. instance.inc is not a file about extended memory, and a
+; conditional there is one a fourth teardown site could forget - where a
+; missing `call` fails silently, which is exactly how these three were lost in
+; the first place (SPEC.md 41.5).
+;
+; Cost to kern_small: this byte, and three near calls at 3 bytes each. That is
+; the same trade the four slot stubs above make and it is made for the same
+; reason - one shape of code, no build-time branching outside this file.
+; -----------------------------------------------------------------------------
+xm_release_rec:
     ret
 
 %endif  ; KERN_BIG
