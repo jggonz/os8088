@@ -573,15 +573,17 @@ scan's three 4-bit shifts, the `repe scasb` setup, the tail nibble decode, the
 span writer's own forty instructions). **The 45x was a per-BYTE figure and this
 is a per-RUN change**, which is why the two numbers are so far apart and why the
 ratio is identical on 85-runs-a-row art and on 308. Getting the rest means not
-working per run at all — a byte-by-byte decoder at ~44 clocks a pixel, which is
-another 20x on detailed art and **fifteen times worse on a flat row**, so the end
-state is a hybrid keyed on run density. Two of the three fronts below are
-therefore still open, and the third is answered:
+working per run at all — a byte-by-byte decoder, **costed in
+docs/HANDOFF-REDRAW.md item B2** against two-point fits of the measured per-run
+cost: 20.8 clocks a pixel, a crossover at one run per 85 pixels on 1bpp, 15.8x
+further on textured art and **3.8x WORSE on a flat row**, so the end state is a
+hybrid keyed on run density and it wants a `KERN_BUDGET` step for its table. All
+three fronts below are now answered:
 
 - **1bpp and VGA are different problems**, and that is exactly how it went: the
   1bpp side is `sw_blit_span`, a byte span with table-driven edge masks; the VGA
-  side — Set/Reset and a Bit Mask per span — is not built, and the machine this
-  project is calibrated against has no VGA in it.
+  side is `vga_blit_span`, the same shape with Set/Reset supplying the four
+  planes and Enable Set/Reset hoisted to once a CALL.
 - **The banked layout** (§39.3) means a row walk must go through `gfx_nextrow`,
   and PERFORMANCE.md Part 9 Set 3's rule applies: inline it in the row loop.
 - **It must stay byte-identical**, and the gate exists — `tools/ptcheck.py`

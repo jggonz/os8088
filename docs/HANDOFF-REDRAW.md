@@ -225,6 +225,85 @@ Three things to carry forward:
 put every run inside ONE framebuffer byte touching neither edge, which is the
 narrowest case the masks have and one a picture barely reaches.
 
+### B2. The byte decoder — costed, not built
+
+§5.4.1 removed the per-CALL floor from a blit and left a per-RUN cost. This is
+the design that removes *that*, and it is written down with its arithmetic
+because the number it was originally justified by — "45x" — is a **per-byte**
+figure and this is not going to reach it.
+
+**The measured constants it is designed against**, two-point fits from Set 41
+(the same session at two run densities, so per-row and per-pixel terms cancel):
+
+| | per run, before §5.4.1 | after | removed |
+|---|---|---|---|
+| 1bpp (CGA) | 828 µs | **371 µs** | 457 |
+| VGA | 526 µs | **258 µs** | 268 |
+
+**The design.** Stop emitting per run and walk the DESTINATION byte by byte. A
+source byte is two pixels and maps, through §39.4's reduction, to a **two-bit**
+destination pattern that depends only on the byte's value and one parity bit —
+so a 256-byte table answers it outright and the inner loop is four table reads
+and a store per destination byte:
+
+```
+    mov al, [es:si]     ; the source byte (2 px); ES is the source, so not lodsb
+    inc si
+    cs xlat             ; AL = its 2-bit pattern
+    shl dl, 1
+    shl dl, 1
+    or  dl, al          ; ...four times, then `mov [di], dl`
+```
+
+Counted on an 8088 that is **~166 clocks per 8 pixels = 20.8 clocks a pixel =
+4.36 µs**, against 371 µs a run. So:
+
+| | decoder | crossover |
+|---|---|---|
+| 1bpp | 4.36 µs/px | **one run per 85 pixels** |
+| VGA, four Map Mask passes | 17.43 µs/px | one run per 15 pixels |
+
+Priced on Set 41's own damage rect, where the decoder would cost **154 ms on
+1bpp** and 744 on VGA:
+
+| | now | with the decoder | | against the pre-§5.4.1 figure |
+|---|---|---|---|---|
+| CGA, 85 runs/row | 2,430.7 ms | 153.9 | **15.8x** | 36x |
+| CGA, 308 runs/row | 8,364.9 ms | 153.9 | **54.4x** | 122x |
+| VGA, 85 runs/row | 2,163.5 ms | 744.2 | 2.9x | 6x |
+| VGA, 308 runs/row | 7,151.1 ms | 744.2 | 9.6x | 19x |
+
+**It MUST be a hybrid, and that is the whole design risk.** A flat row is one
+run — 371 µs today — and the decoder would take 1,412 µs for the same 321
+pixels: **3.8x WORSE**. The switch wants the row's run count *before* the row is
+drawn, which the scan only discovers as it goes; the cheap answer is the
+**previous row's** count, pictures being locally coherent, with the first row on
+the run path and a wrong guess costing one row. Per ROW and never mid-row, so
+there is no seam for the two paths to disagree at.
+
+**What it costs.**
+
+- **~150–200 bytes of `.text`** for the 1bpp decoder (the aligned inner loop,
+  the leading and trailing partial bytes, and the odd-`x0` case), ~30 for the
+  hybrid switch, ~40 for the table build. ~250 more for VGA's four-pass twin.
+- **512 bytes of table** for 1bpp (two parities x 256), 512–1,024 more for VGA.
+- **And it has to live in `.text`, not on the heap**, which is the part that
+  costs real budget. `xlat` is DS-relative and the loop already needs three
+  segments at once — source (ES), framebuffer, table — so the table goes in CS
+  and is read with `cs xlat`, leaving DS for the framebuffer. A purgeable heap
+  claim (§50.6) would be free against the budget and cannot be addressed here.
+- **So: one 512-byte step of `KERN_BUDGET` for 1bpp alone, about three for
+  both** — against **512 bytes spare on `kern_big` today**. It needs a raise,
+  which is docs/KERNEL-MEMORY.md's conversation and not a build fix.
+- **Verification is the existing gates and no new ones**: `ptcheck` on three
+  adapters plus `PTROW=1`, which is exactly the shape §5.4.1 was proved with.
+  The new failure modes are bit phase (`x0` mod 2 and mod 8), the dither parity
+  the table bakes in, and the partial bytes at each end.
+
+**The honest summary is that 1bpp is worth it and VGA is marginal.** 15.8x on
+the machine this project is calibrated against, for one budget step; 2.9x on
+VGA for two more, on an adapter the calibration machine does not have.
+
 ### C. Registered cache regions and exclusions
 
 The design the reporter proposed, of which §11.90.2 is half: a window registers
