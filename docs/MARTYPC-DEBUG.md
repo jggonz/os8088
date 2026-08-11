@@ -519,6 +519,30 @@ wrong thing.
 or a repaint; `until` for a format, a copy, an install, a save — anything
 whose progress is on a disk rather than on the glass.
 
+**And widening `settle`'s window to cope is the trap on the other side, which
+now raises.** Reaching for `settle(m, quiet=30, limit=2400)` on an install
+looks like patience and is unsatisfiable: `stable` identical samples `quiet`
+apart is `stable * quiet` **host** seconds of unchanged screen, the menu
+bar's clock changes once a **guest** minute, and the guest runs *faster* than
+real time — so at 3.3x a 60-host-second window spans three ticks and no two
+samples can ever agree. It waits out the whole limit and then blames the
+guest. Measured: an install driven that way sat for **40 minutes** with the
+install long finished, and was reported as os8088 being slow. `settle` now
+samples the cycle counter first and refuses a window it can prove cannot
+close, naming `until` in the message.
+
+**The install itself is 64 guest seconds** (counters polled rather than
+pixels watched: floppy traffic goes quiet 63.6 s after the confirm click,
+1,250 sectors in 162 reads, 100 seeks over 583 cylinders, ending on *Done —
+remove the floppy, Restart* with C: mounted). That is ~19 s of host time
+here, and it matches the field machine's "under two minutes". **So the floppy
+timing patch is NOT implicated in that 40 minutes** — worth stating because
+it is the natural suspect, being the most recent thing to make the disk
+slower on purpose. Its modelled cost for that run is 28.1 s of transfer and
+4.7 s of seek: 22.4 ms per sector against the field's measured ~24 ms
+(Set 24's 21,307 B/s), and 8.0 ms per cylinder stepped. Both are right, and
+neither adds up to 40 minutes of anything.
+
 ### Naming a kernel flag: `os88sym`
 
 `m.sym("fpg_on")` is the address of a kernel symbol, and `python3
