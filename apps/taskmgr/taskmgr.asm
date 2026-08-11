@@ -336,10 +336,20 @@ TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
 ; one line running them together is what made the memory view's single HEAP
 ; figure ambiguous in the first place (SPEC.md 28.4.1): how big is the heap,
 ; how much of it is spoken for and on what terms, and how much is left.
-TMH_TOT_Y   equ 4               ; 'HEAP nnnK  nn clm' - the SIZE, on its own
-TMH_SPL_Y   equ 15              ; 'HELD nnnK  PURGE nnnK' - claimed, split by
-                                ; whether the kernel can take it back
-TMH_FRG_Y   equ 26              ; 'FREE nnnK  MAX nnnK' - the fragmentation
+; ...and the three read DOWN as well as across (SPEC.md 28.4.2): the right
+; label starts at column 13 on every one of them and the right figure at 19,
+; so the second column is a column. The pads that buy that are in the strings
+; themselves (tm_s_havl, tm_s_hpurg, tm_s_hfrag), which is where the sums are.
+;   col  0            13    19
+;        |            |     |
+;        HEAP  84K    AVAIL  60K
+;        HELD 24K( 3) PURGE   0K( 0)
+;        MAX RUN  60K FRAG    0K
+TMH_TOT_Y   equ 4               ; 'HEAP nnnK    AVAIL nnnK' - the SIZE against
+                                ; what a claim can still get out of it
+TMH_SPL_Y   equ 15              ; 'HELD nnnK(nn) PURGE nnnK(nn)' - claimed,
+                                ; split by whether the kernel can take it back
+TMH_FRG_Y   equ 26              ; 'MAX RUN nnnK  FRAG nnnK' - the fragmentation
                                 ; pair, and the reading this page exists for
                                 ; (docs/FIELD-NOTES.md 2)
 TMH_HDR_Y   equ 37              ; 'TYPE      ADDR SIZE TIER'
@@ -368,16 +378,28 @@ TMH_TIERC   equ 4               ; TIER - 'TRIV'/'LOW'/'MED'/'HIGH'/'-'
 %endif
 
 ; The widest of this page's three captions is the HELD/PURGE line, at 27
-; characters with two-digit counts:
-;   'HELD' nnn 'K(' nn ')' '  PURGE' nnn 'K(' nn ')'
+; characters - and since tm_put2 it is 27 at EVERY count, not just two-digit
+; ones:
+;   'HELD' nnn 'K(' nn ')' ' PURGE ' nnn 'K(' nn ')'
 ; which is exactly TM_STRMAX's limit, so a label lengthened there has to be
-; paid for somewhere. The other two have room - 21 for HEAP/AVAIL and 23 for
-; MAX RUN/FRAG. Said as a guard rather than a comment, because the note
-; beside TM_STRMAX is that it has ONE character of slack, and a caption grown
-; here is exactly how that gets spent silently.
+; paid for somewhere. The other two are 23 and have four characters spare.
+; Said as a guard rather than a comment, because the note beside TM_STRMAX is
+; that it has ONE character of slack, and a caption grown here is exactly how
+; that gets spent silently.
 %if (4+3+2+2+1) + (7+3+2+2+1) > TM_STRMAX - 1
   %error "taskmgr: the heap page's HELD/PURGE line no longer fits tm_str"
 %endif
+%if (5+3+1) + (10+3+1) > TM_STRMAX - 1
+  %error "taskmgr: the heap page's HEAP/AVAIL line no longer fits tm_str"
+%endif
+%if (8+3+1) + (7+3+1) > TM_STRMAX - 1
+  %error "taskmgr: the heap page's MAX RUN/FRAG line no longer fits tm_str"
+%endif
+; What no guard here can check is the ALIGNMENT, because both sides of it are
+; characters inside string literals rather than constants: each line's left
+; half plus the pad leading its right-hand label has to come to 13, and the
+; three arrive there as 9+4, 12+1 and 12+1. That sum is stated at tm_s_havl,
+; beside the spaces that carry it, and it is verified by looking at the page.
 
 ; The CPU/scheduler caption is chunked too, and it borrows the row machinery
 ; whole by being a row that no list draws: it is a 20-character line whose
@@ -793,12 +815,22 @@ tm_s_bfat:  db '  FAT snap', 0
 ; and TIER at 19 - exactly where tm_hclaim composes them, and where a heading
 ; row's tm_kcol total lands too.
 tm_s_hhdr:  db 'TYPE      ADDR SIZE TIER', 0
+; The three captions are a two-column TABLE and the gaps below are what make
+; them one (SPEC.md 28.4.2). Each right-hand label starts at column 13 and
+; each right-hand figure at 19, whatever the left half of its own line spent -
+; so AVAIL, PURGE and FRAG read down the page instead of stepping across it.
+; The leading spaces here are therefore load-bearing arithmetic, not spacing:
+; change a left-hand label and the pad in front of the right-hand one owes the
+; same number back. The left figures are deliberately NOT aligned with each
+; other - a common left column would need 8 (label) + 4 (nnnK) + 4 ('(nn)')
+; + 1 + 6 + 4 + 4 = 31 characters and the line has 27 (TM_STRMAX), so the
+; choice was one aligned column or none.
 tm_s_hheap: db 'HEAP ', 0
 tm_s_hheld: db 'HELD', 0        ; the two halves of what is claimed, never one
-tm_s_hpurg: db '  PURGE', 0     ; figure: they are owed on different terms.
-                                ; No trailing space - tm_put3 right-aligns
-                                ; into three and brings its own
-tm_s_havl:  db '  AVAIL ', 0    ; NOT 'FREE': this counts the purgeables, so
+tm_s_hpurg: db ' PURGE ', 0     ; figure: they are owed on different terms.
+                                ; 'HELD' takes no trailing space - tm_put3
+                                ; right-aligns into three and brings its own
+tm_s_havl:  db '    AVAIL ', 0  ; NOT 'FREE': this counts the purgeables, so
                                 ; it is what a claim can GET rather than what
                                 ; is unused, and the two differ by PURGE
                                 ; exactly (SPEC.md 28.4.1)
@@ -808,10 +840,13 @@ tm_s_hmax:  db 'MAX RUN ', 0    ; the largest single RUN of AVAIL - not a
                                 ; biggest claim that can succeed in ONE call,
                                 ; and 'run' is the kernel's own word for it
                                 ; (mem_run, SPEC.md 50.3)...
-tm_s_hfrag: db '  FRAG ', 0     ; ...and everything available OUTSIDE it, so
+tm_s_hfrag: db ' FRAG  ', 0     ; ...and everything available OUTSIDE it, so
                                 ; the two SUM to AVAIL. Without it the page
                                 ; said '519K available, 515K max', which is
                                 ; arithmetic nobody can close (SPEC.md 28.4.1)
+                                ; Two trailing spaces: FRAG is a character
+                                ; shorter than AVAIL and PURGE, and it is the
+                                ; FIGURES that have to line up, not the label
 
 ; TYPE names, seven columns. A claim the table does not know prints its owner
 ; word in hex instead (tm_htype) - a debug page must not label an unknown tag
@@ -2613,6 +2648,37 @@ tm_hsum:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_put2 - a record count in exactly two columns, right-aligned
+; in:  AX = value (0..99), DI = dest
+; out: DI advanced by 2
+; clobbers: nothing else (flags)
+;
+; The parenthesised counts on the HELD/PURGE caption are the one variable-width
+; field on the heap page's three caption lines, and a variable width is what
+; stopped PURGE lining up with AVAIL and FRAG: at nine records the line is a
+; character shorter than at ten, so the label moved sideways as claims came
+; and went (SPEC.md 28.4.2). Two columns is the NARROWEST fixed field that
+; holds MEM_MAX, which is what tm_putn's note about '(  5)' was really
+; objecting to - three columns of padding, not the idea of a column. The
+; guard below is the whole of what makes two enough.
+;
+; It JUMPS to tm_putn rather than falling through into it, though tm_putn is
+; the next thing in the file and three bytes cheaper that way: a routine
+; inserted between the two would assemble cleanly, boot, and pad every count
+; with whatever that routine left at DI.
+; -----------------------------------------------------------------------------
+%if MEM_MAX > 99
+  %error "taskmgr: MEM_MAX no longer fits tm_put2's two columns"
+%endif
+tm_put2:
+    cmp ax, 10                  ; AX survives a cmp, and tm_putn clobbers no
+    jae .n                      ; more than the flags this just spent
+    mov byte [di], ' '
+    inc di
+.n:
+    jmp tm_putn
+
+; -----------------------------------------------------------------------------
 ; tm_putn - an unsigned count in as few digits as it needs
 ; in:  AX = value, DI = dest
 ; out: DI advanced by 1..5
@@ -2962,11 +3028,12 @@ tm_rows_heap:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_cap_htot - 'HEAP uuu/tttK  nn clm' (SPEC.md 28.4)
+; tm_cap_htot - 'HEAP nnnK    AVAIL nnnK' (SPEC.md 28.4)
 ;
-; The record count is the honest half: this list can be longer than the window,
-; and the count is what says so without spending a row on a truncation marker
-; that would itself need one.
+; How big the heap is, against how much of it a claim can still get. The pad
+; inside tm_s_havl is what puts AVAIL on the same column as PURGE and FRAG
+; below (SPEC.md 28.4.2); this line spends 9 characters before it, so the
+; string carries 4.
 ; in:  nothing
 ; out: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -3021,12 +3088,17 @@ tm_cap_htot:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_cap_hspl - 'HELD nnnK  PURGE nnnK' (SPEC.md 28.4.1)
+; tm_cap_hspl - 'HELD nnnK(nn) PURGE nnnK(nn)' (SPEC.md 28.4.1)
 ;
 ; What is claimed, and on what terms. One figure could not say it: HELD is
 ; memory nothing can get back, PURGE is memory the next claim can have for the
 ; price in the TIER column, and adding them produces a number that answers no
 ; question anybody has.
+;
+; The record counts go through tm_put2 rather than tm_putn, so this is 27
+; characters at any count and PURGE cannot slide off AVAIL's and FRAG's column
+; when a claim is made or released (SPEC.md 28.4.2). It is the widest of the
+; three captions and has no slack at all - see the guard beside TMH_ROWS.
 ; in:  nothing
 ; out: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -3051,7 +3123,7 @@ tm_cap_hspl:
     mov byte [di], '('
     inc di
     pop ax                      ; held records
-    call tm_putn
+    call tm_put2                ; two columns, so PURGE below cannot move
     mov byte [di], ')'
     inc di
     mov si, tm_s_hpurg
@@ -3065,7 +3137,7 @@ tm_cap_hspl:
     mov byte [di], '('
     inc di
     pop ax
-    call tm_putn
+    call tm_put2                ; ...and so the line is one fixed width
     mov byte [di], ')'
     inc di
     mov byte [di], 0
@@ -3098,13 +3170,17 @@ tm_cap_hspl:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_cap_hfrg - 'FREE nnnK  MAX nnnK' (SPEC.md 28.4)
+; tm_cap_hfrg - 'MAX RUN nnnK  FRAG nnnK' (SPEC.md 28.4)
 ;
-; Total free against the LARGEST single run, from one OSAPI_MEM_AVAIL. That
-; pair IS the fragmentation reading, and it is the one thing this page exists
-; to put on screen: docs/FIELD-NOTES.md 2 is a refusal where the total says
-; there is room and the largest run does not, and nothing in the OS showed both
-; at once until here.
+; The LARGEST single run against everything available outside it, from one
+; OSAPI_MEM_AVAIL. That pair IS the fragmentation reading, and it is the one
+; thing this page exists to put on screen: docs/FIELD-NOTES.md 2 is a refusal
+; where the total says there is room and the largest run does not, and nothing
+; in the OS showed both at once until here.
+;
+; tm_s_hfrag carries a leading space and two trailing ones: one to reach
+; column 13, where AVAIL and PURGE start, and one to make up FRAG's missing
+; fourth letter so the FIGURES line up too (SPEC.md 28.4.2).
 ; in:  nothing
 ; out: nothing (flags only)
 ; -----------------------------------------------------------------------------
