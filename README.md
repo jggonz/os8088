@@ -117,6 +117,17 @@ Timer and Bounce are built into the kernel rather than loaded. **Drivers**
 load the same way packages do — hard disk, sound, and a serial debug
 monitor.
 
+**Frotz** ships separately, on a story floppy of its own (`make zdisk`): an
+interpreter for Infocom's Z-machine, v1–v8, windowed, with a scrollback,
+sound and pictures. It is not a port of David Griffith's Frotz — this tree
+has no C toolchain — but an independent implementation of the Z-Machine
+Standard 1.1 in 8086 assembly, named in the same tradition as `dfrotz`. The
+whole story stays resident (a floppy seek costs ~400ms here, so paging would
+mean minutes per turn), which is why it wants a 640KB machine and says so
+plainly when a story will not fit. **No story file is committed to this
+repository** — `tools/getstories.py` fetches fifteen freely-released ones
+into `build/`, and `STORIES=` puts your own beside them.
+
 **Hardware**
 
 - **One binary drives three adapters**, picked at boot: VGA (640x480, 16
@@ -281,6 +292,7 @@ slot.
 | `build/apps.img`       | 1.44MB FAT12             | QEMU software floppy (B:)       |
 | `build/apps720.img`    | 720KB FAT12              | 3.5" DD software floppy         |
 | `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
+| `build/zork*.img`      | 1.44MB / 720KB / 360KB   | Frotz story floppies (`make zdisk`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -381,9 +393,14 @@ All twelve, at a glance:
 | `386-sound` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | Sound Blaster 16 |
 | `486` | AMI SiS 471 | 486DX2 @ 66MHz | 8MB | OTI-067 VGA | Sound Blaster 16 |
 | `pentium` | ASUS P/I-P55TP4XE | Pentium P54C @ 133MHz | 16MB | OTI-067 VGA | Sound Blaster 16 |
+| `xt-z` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 2.0 |
+| `386-z` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | Sound Blaster 16 |
 
 The XT-class machines boot the 360KB pair; the AT-class ones boot the 1.44MB
-pair. None of them can be scripted — 86Box has no automation socket, so
+pair. The last two are the Frotz machines and put a **story floppy** in B:
+instead of the apps disk — `xt-z` with a 720KB 3.5" DD drive (360KB does not
+hold a library), `386-z` with two 1.44MB drives and a second library disk to
+swap in. Both carry the full 640KB, because a Z-machine story is resident. None of them can be scripted — 86Box has no automation socket, so
 these are all interactive, and `make test` over QMP remains the only way to
 drive the system from a script.
 

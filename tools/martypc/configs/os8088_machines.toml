@@ -1,3 +1,27 @@
+# --- a note about INTERLEAVE, and why no machine here sets one ---------------
+# A drive's `interleave` (our patch 04, default 1) is the physical sector order
+# on the platter. A raw sector image records the LOGICAL order and says nothing
+# about where the sectors sit, so no emulator can derive it from the file - it
+# is a property of the disk the machine is being asked to model, and it is a
+# knob for exactly that reason.
+#
+# **Every machine below is 1:1, and that is a MEASUREMENT.** This file used to
+# carry an `os8088_2_360k_floppies` overlay putting 2:1 media in the IBM-ROM
+# machines, because PERFORMANCE.md read the field's `int 13h track, 1 call` -
+# 398 ms, 2.00 revolutions where a 1:1 track is 1.00 - as a 2:1 platter. It is
+# not: the missing revolution is the BIOS's own head-settle wait, 25 ms of
+# diskette-parameter-table asked for and ~52 ms of `LOOP $` at F000:EEB8
+# delivered, once per `int 13h`. With 1:1 media and that wait modelled by
+# simply running the ROM, `tests/sysbench` on this emulator reproduces the
+# field machine's whole raw floppy block to the measurement quantum -
+# `int 13h 1 sector` and all five short seek rows EXACTLY (PERFORMANCE.md
+# Part 9 Set 37). With 2:1 it did not, and the boot was 27% slow.
+#
+# That also retired a caveat: GLaBIOS abandons a floppy operation after
+# ~250 ms and a 2:1 track read takes up to 400 ms, so the GLaBIOS machines had
+# to be given different media from the IBM ones. At 1:1 they need no exception
+# and every machine here carries the same disks.
+
 # --- os8088's calibration machine, as close as MartyPC gets ------------------
 # docs/FIELD-MACHINES.md's IBM 5150: 8088 at 4.77MHz, 256K on the board plus an
 # AST SixPakPlus making 640K, and a CGA. (The real machine also carries a
@@ -606,3 +630,164 @@ name = "pcxt_1_360k_floppy"
 # 39.11.1's vid_cga_alias runs ONLY when the mono card is primary, and that
 # is still exactly the direction no emulator here can produce - which is the
 # same reason its bug survived in the first place. It is a 5150 question.
+
+# --- the two-card 5150 WITH ITS DISPLAY SWITCHES SET THE WAY THE FIELD ONE'S
+# --- ARE (SPEC.md 39.1, docs/FIELD-MACHINES.md)
+#
+# `video_dip` is OURS - patches/03 - and it exists because SW1-5/6 is a
+# SETTING and not a description of what is installed. Upstream derives those
+# bits from the card list ("any CGA present -> CGA hires"), which cannot
+# express a machine that holds BOTH cards with the switches set to mono, and
+# that is exactly the arrangement the calibration 5150 has: os8088 boots on
+# its Hercules there and on the CGA in every emulated two-card machine.
+#
+# It is the direction that MATTERS rather than a curiosity: SPEC.md 39.11.1's
+# vid_cga_alias runs ONLY when the mono card is primary, which is precisely
+# why its bug survived - "the direction the old emulator could reproduce was
+# CGA-primary, where the routine never runs". This machine reproduces it.
+[[machine]]
+name = "os8088_5150_both_gla_mono"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+video_dip = "mda"
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    # THE MDA IS LISTED FIRST, and that is about the HARNESS rather than the
+    # guest: MartyPC's own primary card is the first in this list, `fbuf` and
+    # the os88marty boot gate read the primary, and os8088 is driving the MDA
+    # here - so with the CGA first the gate watches an unprogrammed card,
+    # never sees a desktop, and `launch` times out on a machine that booted
+    # perfectly. The DIP above is what decides which card the GUEST picks;
+    # this order is what decides which one the TOOLING looks at, and on this
+    # machine they have to agree.
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+# ...and the machine SPEC.md 18.96.2's size override exists for: the field
+# 5150's own 27 Oct 82 ROM with an 80-CYLINDER drive as B. That ROM answers no
+# AH=08h for a floppy, so dskw_fmt_probe reads a 360KB machine and offers 360K
+# for a disk that could hold 720K - which is exactly what the confirmation's
+# Space key is for, and exactly what nothing here could exercise before.
+#
+# The floppy overlay is dropped rather than listed, because the drives ARE the
+# point: upstream's pcxt_2_360k_floppies is two 360k drives and the FDC takes a
+# maximum of four (its pcxt_4_360k_floppies is the other one worth knowing
+# about). Drive 0 stays 360k so the boot is the shipped 360KB system disk.
+[[machine]]
+name = "os8088_5150_cga_720b"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+        [[machine.fdc.drive]]
+        type = "720k"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...and the FOUR-drive 5150: two internal and the pair on the 5.25" adapter's
+# external 37-pin connector (SPEC.md 18.97). Upstream's own overlay, because
+# the FDC takes four and this is what four looks like. Drives 2 and 3 carry no
+# image, which is the honest case - a drive that is present and empty, whose
+# mount fails like any other (18.3).
+#
+# What it exists to answer is whether the equipment word can be believed: the
+# 1982 ROM copies SW1 into 0040:0010 and its bits 6-7 are the drive COUNT, so
+# this machine must report 4 where os8088_5150_cga reports 2.
+[[machine]]
+name = "os8088_5150_cga_4fdd"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_4_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...and THE configuration SPEC.md 18.98 exists for: the field 5150's own
+# drives plus an IBM 4865 on the 5.25" adapter's external 37-pin connector.
+# Two internal 360k and an 80-CYLINDER 720k as unit 2, which is the only place
+# 18.96.2's size override is offered and the only drive that can pass its
+# reach test. Unit 3 is a 360k, so one machine carries both answers: the
+# toggle stands on C: and falls back on D:.
+[[machine]]
+name = "os8088_5150_cga_ext720"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+        [[machine.fdc.drive]]
+        type = "720k"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"

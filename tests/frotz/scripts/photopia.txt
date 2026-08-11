@@ -1,0 +1,21 @@
+# Photopia asks "Would you like instructions?" before it will do ANYTHING, and
+# it re-asks until it gets yes or no. Without this script the generic one
+# spends all thirteen of its commands being told to answer the question, and
+# the run exercises the parser's refusal path and nothing else - a story that
+# passed every check by never starting.
+#
+# It is also the story worth reaching. Photopia's scenes are told in COLOUR -
+# @set_colour over whole screens - so it is the one game on the disk that
+# drives the window's background as hard as its text, and the graphics checks
+# read a row by whether it is uniform rather than by how dark it is precisely
+# so that a white-on-blue scene is not mistaken for a blank one.
+no
+wait
+look
+wait
+wait
+look
+wait
+wait
+look
+wait

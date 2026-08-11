@@ -7,8 +7,9 @@ period BIOS, with a debugger attached: memory, registers, I/O ports,
 breakpoints, single-step and cycle counts, none of it costing the guest a
 cycle (docs/MARTYPC-DEBUG.md). It covers **all three** of SPEC.md §39's
 adapters, scripted input, screenshots and sound. **And for anything with a
-disk in its timing, go to the 5150 — no emulator here is disk-accurate,
-MartyPC included.**
+disk in its timing, the 5150 is where the number LANDS — though MartyPC's
+floppy now turns (PERFORMANCE.md Sets 35/37) and agrees with the iron's raw
+`int 13h` rows to the measurement quantum.**
 
 **Here is the whole of QEMU's remaining list**, stated as a list so that "a
 legitimate need" is something you can check rather than something you can
@@ -51,40 +52,45 @@ A tool that is wrong in the flattering direction does not announce itself.
 | **86Box** | a machine that is **not an 8088** (the 286 and 386 targets), real sound cards on a period bus, a second opinion on the video probe | period-correct whole machines, and the widest hardware library |
 | **the 5150** | anything with a **disk** in it, and the three defects no emulator shows | docs/FIELD-MACHINES.md |
 
-## The one rule that outranks the table: no emulator here is disk-accurate
+## The one rule that outranks the table: a disk number lands on the 5150
 
-**MartyPC is cycle-accurate on the CPU and it is not a floppy drive.** It
-models instruction timing, the prefetch queue and bus contention; it does not
-model a disk that spins at 300 rpm, a head that has to seek, or an interleave.
-PERFORMANCE.md Set 11 measured the gap on the same test and the same media:
+**MartyPC's floppy used to be a fiction and now it is a model.** Upstream it
+modelled no platter at all — a seek completed in the breath it was issued and
+a sector arrived the instant it was asked for — which is where Set 11's 30x
+came from. `tools/martypc/patches/04-floppy-disk-timing.patch` gives it
+rotation, an MFM data rate, a per-cylinder seek and a configurable interleave
+(PERFORMANCE.md Sets 35/37, docs/MARTYPC-DEBUG.md):
 
-| | real 5150 | MartyPC |
-|---|---|---|
-| read 16 KB, cold motor | **8.07 s** | **0.27 s** — 30x fast |
-| boot | **38,886 ms** | **2,306 ms** — 17x fast |
+| `boot ticks`, 360KB `combo.img` | stock | Set 35 | **now** | real 5150 |
+|---|---|---|---|---|
+| `os8088_5150_cga_gla` (GLaBIOS) | 41 (2.25 s) | 130 (7.14 s) | **175** | — |
+| `os8088_5150_herc` (IBM ROM) | — | 222 | **188** | **205** |
 
-So **if a disk is in the path, MartyPC's number is wrong** and it is wrong by
-more than an order of magnitude. That includes anything that *contains* a
-disk read without being about one — a boot time, a package launch, a Tracker
-module load, a Control Panel save. PCem is no better and QEMU is worse. There
-is exactly one instrument for disk timing and it is the machine in
-docs/FIELD-MACHINES.md.
+`tests/sysbench`'s whole raw `int 13h` block matches the field machine's own
+report off that identical image to within one measurement quantum on nine of
+thirteen rows, seven of them exactly (Set 37). So the rule is now two rules and
+**both** have moved:
 
-**And it will not catch a disk CORRECTNESS bug either**, which is the sharper
-half. SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the
-BIOS for nine sectors, the BIOS moved nine and answered `AL = 1`, and the
-kernel believed `AL` and re-read the rest one sector at a time. On the 5150
-that was 148 sectors and 34 `int 13h` calls for a 32-sector file — 4.6x the
-traffic. **The same binary on the same image under QEMU moved 34 sectors in 6
-calls**: correct, fast, and completely silent about the bug. It took the real
-machine plus §18.94's counters to see it at all, and the boot sector carried
-the identical bug undiscovered for as long again. An emulator's BIOS returns
-what its author thought the hardware returns; the hardware is under no such
-obligation.
+- **TIMING**: MartyPC is worth asking. It still is not where a figure LANDS:
+  anything going into PERFORMANCE.md Part 9 comes off the 5150. PCem is no
+  better and QEMU models none of it.
+- **CORRECTNESS**: half of it moved. MartyPC runs the real IBM ROM, so what
+  the ROM does is reproduced — §18.91's `AL` bug shows here as **893 boot
+  ticks against 188** and 870 sectors in 183 reads against 183 in 24, the
+  field's own signature. What a real 765 puts in ST1, or whether a real drive
+  returns short, is still the emulator author's belief and still the 5150's
+  question, as are interrupt stack depth (SPEC.md §8) and anything QEMU's
+  SeaBIOS smooths over (docs/FIELD-NOTES.md 5).
 
-The same caution applies to `int 1Eh`'s diskette parameter table, short
-`int 13h` reads, and interrupt stack depth — docs/FIELD-NOTES.md 5 and
-SPEC.md §8. All three are BIOS behaviours an emulator smooths over.
+Two caveats. **A disk TIMING comes off an IBM-ROM 5150 and no other class**
+(Set 38): the drive is one model and six machines give bit-identical
+controller traffic, but GLaBIOS turns an `int 13h` around **1.61x** faster
+than the 1982 ROM — enough that nine one-sector reads cost the same as one
+whole track there and ten revolutions here. Counts are fine on any machine; a
+timing is not. docs/MARTYPC-DEBUG.md carries the per-machine table. And the
+`ibm5150_82_v4` machines need an IBM ROM this tree cannot ship, so a container
+without one in `tools/martypc/roms/` can run only the GLaBIOS twins — which
+is the class you must not take that timing from.
 
 ---
 
@@ -767,6 +773,7 @@ checks referenced throughout this document:
 | `filetest` | the write path (§18.4) | `make test TESTAPPS=build/filetest.img` |
 | `fsxtest` | fullscreen exclusive (§53): keys 0–8 cycle every mode with an identifying pattern, `x` runs a same-mode bracket, `t` keys a duration-0 tone for the §53.3 legs; the window shows the `fsx_caps` mask (01EF/000F/0011 by adapter) and the last result (`K`/`R`/`F`/`S`) | `make test TESTAPPS=build/fsxtest.img` (also under `VIDEO=cga` / `VIDEO=herc`; `make test-snd` + two instances for the sound legs) |
 | `stackprobe` | the 256-byte task-stack margin (§8) | `make test TESTAPPS=build/stkprobe.img` |
+| `xmtest` | the extended-memory **teardown** (§41.5/§29.4): does a closed instance's blocks above 1MB get freed? Needs a machine with a store, so **QEMU on a 386** — the target machine can never have one. The assertion lives outside the package, in `tests/xmcheck.py`, which reads `xm_tab` over QMP around the close | `make test TESTAPPS=build/xmtest.img` then `python3 tests/xmcheck.py build/qmp.sock` |
 | `trklog` | not a gate — a **recorder**. Tracker itself, built with `-DTRKLOG`, logging one record per system tick and writing it to `TRKLOG.TXT` (SPEC.md §45.14) | `make test SB16=1 TESTAPPS=build/trklog.img` |
 
 `benchlib.inc` is the one shared source under `tests/` — the timing loop, the
@@ -878,6 +885,120 @@ write-protected**, for the same reason the bench disks must not be. The log
 buffer is a heap claim taken at D and given back at D, so an unarmed log costs
 no memory and cannot split the heap.
 
+### Frotz: the story harness, which is `trklog`'s shape again
+
+`apps/frotz` built a second time with `-DZHARNESS` (SPEC.md 61.13), for the
+same reason `trklog` exists: the thing measured is the shipped code and not a
+copy that can drift from it. Every hook is inside `%ifdef ZHARNESS` and the
+shipped `FROTZ.O88` is unchanged to the byte — which is checkable, by building
+it both ways and comparing sizes.
+
+What it adds is a **teletype on COM4 (`0x3E8`)**: the story's output goes out a
+byte at a time, its keystrokes come back in, and four markers say where it is.
+So a story is playable from the host over a socket, and the answer to "does a
+real story run" stops being a person reading a screendump.
+
+```sh
+make zh                                     # the harness interpreter
+python3 tools/zharness.py ADVENT.Z3         # play its script, print the log
+python3 tools/zharness.py ADVENT.Z3 --repl  # ...or type at it yourself
+python3 tools/zharness.py --all --compare   # every story, diffed vs dfrotz
+make zcheck                                 # the same, as a gate
+```
+
+It boots QEMU itself, builds the B: disk itself (the story arrives as
+`STORY.DAT`, which is what lets one binary play all of them), and double-clicks
+its way in — os8088 has no way to start a package from outside, so the launch
+is a scripted GUI walk and the coordinates live in `tools/zharness.py`. **A
+timeout waiting for `[[ZH:READY]]` is that walk, not the interpreter**;
+`--shot` writes what the screen actually had on it. The walk is retried once
+before it gives up: a double-click landing before the desktop has finished
+drawing is decoded as two single clicks, and the giveaway is a screendump of a
+bare desktop with the icon not even selected.
+
+Three differences from a real session, each deliberate and each documented at
+its `%ifdef`: no `[MORE]` paging (it waits on a key the script has no reason to
+send, and the run deadlocks around the sixth room), no echo on the wire, and no
+status line on the wire. The last two are what make the transcript comparable
+to `dfrotz -p`, which prints neither in a form that survives normalisation.
+
+`--compare` diffs the WORDS in order, not the lines: `dfrotz` wraps at its
+`-w`, os8088 wraps at whatever the window is, and the harness sends the
+pre-wrap stream. A wrong opcode changes the words; a different column count
+does not. Both sides' commentary is dropped — `dfrotz`'s `Warning:` lines
+(Balances calls `@get_child` on object 0 every turn and says so) and os8088's
+own notices (`No room for undo; play continues.`) — and neither side's halt
+ever is.
+
+**`refused, with a reason` is a pass.** A story too big to be resident is
+turned down on purpose (§61.4/§47), so `BRONZE.Z8` reports `No room for the
+scrollback.` on a 640KB machine and the gate counts that as correct. A gate
+that failed on it would be arguing with the design.
+
+The reference's upper window is recognised **by its padding** and dropped:
+`dfrotz` positions that text with spaces, and its own prose never carries a run
+of three because it wraps at `-w` and separates words by one. That is what lets
+a story whose upper window holds a quote box rather than a status line —
+`BEAR.Z5`, `CURSES.Z5` — be compared at all. It fails safe: a story that
+indents in the *lower* window loses those words from the reference and keeps
+them here, so the error is a divergence to investigate, never a silent pass.
+There is no way to opt a story out of the diff, on purpose: an opt-out is a
+place for a real divergence to hide, and both of the ones this found are real.
+
+**`make zgfx` is the other half, and it asks what the transcript cannot**
+(SPEC.md 61.14). Every check above is about characters the story *printed*; a
+story that draws a quote box into the upper window and then loses it prints
+exactly the same characters as one that keeps it, so `zcheck` is structurally
+blind to a whole class of defect. `zgfx` compares the interpreter's own model
+of each row against the pixels under it, does it again on a freshly repainted
+window, and holds each story's opening screen against the real curses Frotz's.
+
+```sh
+make zgfx                                     # the gate, stories + the fixture
+python3 tools/zharness.py BEAR.Z5 --graphics  # one story
+make zscreens                                 # re-take the golden screens
+```
+
+Three things about running it are worth knowing before a failure confuses you:
+
+- **it is slower**, by a screendump per prompt. That is the only reason it is a
+  separate target;
+- **every complaint leaves a PNG** in `build/zh/`, named for the story, and the
+  raw wire — markers, both windows' grids, every split and repaint — is in
+  `build/zh/<story>.wire`. The `.log` beside it is the prose with all of that
+  taken out, which is the wrong file to open when the question is graphical;
+- **`make zscreens` is the only part that needs anything installed** (`brew
+  install frotz`, `pip3 install pyte`). The goldens are committed, so the gate
+  itself is still nasm + qemu + python3. Re-take them when the Frotz window's
+  size changes — the geometry is in each file's header and the gate refuses,
+  with the reason, rather than reporting the mismatch as a story failure;
+- **each golden is two takes, and the gate wants the words common to both.**
+  A story may roll for its opening — `CURSES.Z5` draws a different epigraph
+  every time — so the file measures how much of the screen is settled instead
+  of assuming all of it is. Fourteen of fifteen come out fully stable.
+
+**Do not make it send keys.** An earlier version forced the repaint check by
+sending `PgUp`/`PgDn` — which the interpreter takes before the story's input
+ring, so they cannot be mistaken for the story's own input. It nonetheless left
+`DREAMHLD.Z8` with no further prompt inside a seven-minute budget, every time,
+where the same run without it finished cleanly. That is worth chasing on its
+own (SPEC.md 61.14); it is not worth a gate that fails for two reasons at
+once. The check now rides on the repaints stories provoke themselves.
+
+**A `@random` story can diverge run to run in `zcheck`, and that is not a
+regression.** Both interpreters seed from the clock (Standard 2.4,
+`zx_seedclock`), so a word diff over a story that rolls dice is not
+reproducible — `ZTUU.Z5` diverged on one lamp message in one run and matched on
+the next. Re-run before believing a divergence that names a random event; the
+graphics gate is unaffected, because its golden knows which words were rolled
+for.
+
+It found four defects on its first run over the library, and the two that
+matter most to a reader were both about the upper window — a quote box erased
+by the shrink that follows it, and a `Flags 1` bit that turned 905's clock into
+a move counter (SPEC.md 61.5). Neither changed one character of any
+transcript, which is the argument for the gate in one sentence.
+
 `filetest` also has a fragmented-volume variant, `build/filetest-frag.img`,
 and its results are worth pairing with the host-side fsck — the in-kernel
 free-space check and `python3 tools/os88disk.py --verify <img>` catch
@@ -974,6 +1095,13 @@ pasted into [PERFORMANCE.md](../PERFORMANCE.md).
 | `gfxbench` on VGA / Hercules / CGA | `GFXVGA.TXT` / `GFXHERC.TXT` / `GFXCGA.TXT` |
 | `sysbench` | `SYSBENCH.TXT` |
 
+**On an extended desktop the name is the card the SANDBOX is on**, not
+`[vid_kind]` — `gfxbench` resolves its own window's origin against §57.4's
+`VD` block, and the framebuffer segment, stride, bank count, status port and
+the raw VRAM rows' addressing all follow it. So two cards give two reports
+from one launch: run, drag the window onto the other monitor, run again.
+Check the new **`sandbox straddles`** row before comparing two of them.
+
 **The file goes to the CURRENT volume and directory** (SPEC.md §19.2), which
 right after launching a package off the bench disk is that disk's root — so
 the ordinary thing works. It means the bench floppy must **not** be
@@ -1028,6 +1156,27 @@ bandwidth, the clock ladder, the API's far-call floor, **what the kernel's
 own interrupts cost per second of ordinary work** (the same workload timed
 with interrupts off and then on), and the floppy — twice, because the first
 read pays the motor spin-up and quoting either figure alone misleads.
+
+**Two of its floppy blocks exist to pin the two numbers the MartyPC disk model
+has no measurement for** (PERFORMANCE.md Set 35, `tools/martypc/patches/04-*`).
+Both go through the kernel's `dsk_dbg_raw`, so both need a `DISKCNT=1` kernel
+and are silent on any other — which is what every `make field` disk is.
+
+- **The head step.** Every other raw row reads one track and never moves the
+  head, so the model's step rate is the BIOS's own SPECIFY request and its
+  settle is the DPT's, both on trust. `seek N cyl, pair` reads cylinder 0 and
+  then cylinder N, so an op holds two seeks of that distance. **Read the rows
+  as revolutions and expect whole ones**: a read ends at a fixed angular
+  position, so the seek happens inside the wait for sector 1 to come round and
+  is invisible until it is longer than that wait. What the block measures is
+  therefore *the distance at which the cost steps up*, not a slope — and the
+  `seek 0 cyl` row is the zero of that scale rather than something to trust.
+- **Spin-up.** `1 sector, motor COLD` waits for the BIOS's own motor countdown
+  at `0040:0040` to expire, checks `0040:003F` and prints it, then times one
+  sector; `1 sector, motor warm` is the same read with the platter already
+  turning. Both are N = 1 and must be — the event happens once. A `motor
+  status 40:3F` of anything but `00` means the drive never stopped and the
+  cold row is not cold, which is the one way this can lie and so is printed.
 
 Three things about reading their output:
 
@@ -1380,12 +1529,18 @@ from card order, and exposes no DIP override. (Listing it first only moves
 gate watches a blank card and `launch` times out. `os8088_5150_herc_gla`
 reads `0x30` only because it has no CGA in it.)
 
-The consequence is specific and worth carrying: **SPEC.md §39.11.1's
-`vid_cga_alias` runs only when the mono card is primary**, so it is still
-reachable on the 5150 and nowhere else — which is the same reason its bug
-survived to begin with, "the direction the old emulator could reproduce was
-CGA-primary, where the routine never runs". Treat a dual-display change as
-field-verified or not verified.
+**That has since been fixed rather than lived with**, and the paragraph above
+is kept because it is the reasoning: `tools/martypc/patches/03-video-dip-config.patch`
+adds an optional `video_dip` to MartyPC's machine config, so SW1-5/6 can be
+*set* instead of derived from the card list. **`os8088_5150_both_gla_mono`**
+is the machine that uses it — both cards, switches mono, os8088 running
+Hercules with `avail = 0x06` — and it is the only one that reaches SPEC.md
+§39.11.1's `vid_cga_alias`, the routine whose bug survived because "the
+direction the old emulator could reproduce was CGA-primary, where the routine
+never runs". A dual-display change can be exercised here now; it is still
+worth a field run, but it is no longer *only* answerable there.
+docs/MARTYPC-DEBUG.md has the patch's reasoning and the one trap in the
+machine (its MDA is listed first, or the boot gate watches the wrong card).
 
 And one more that is not about time at all, and is the newest:
 
@@ -1614,7 +1769,15 @@ the sound cards: **a machine that is not an 8088** (the 286, 386, 486 and
 Pentium targets), a **period bus** under a card rather than a modelled one,
 and a second opinion on the video probe. `make xt`,
 `xt-640`, `xt-cga`, `xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`,
-`386`, `386-sound`, `486`, `pentium`.
+`386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`.
+
+The last pair are the Frotz machines (SPEC.md 61.9) and are the only targets
+that put something other than the apps disk in B:. They also cover a drive
+geometry nothing else does — `xt-z` gives the XT a 720KB 3.5" DD drive as B:,
+because a 360KB disk does not hold a story library and DOS 3.2 supported one
+on an XT. 86Box takes it as `fdd_02_type = 35_2dd`, and that was established
+the way every other machine setting in this file was: launch a throwaway copy
+of the config, `kill -TERM`, read the file back and see what it kept.
 
 The last two are the *fast* end rather than the period end: a 486DX2/66 and a
 Pentium 133, both with an SB16. 8086 real-mode code runs on them verbatim, so

@@ -1103,6 +1103,15 @@ dbg_services:
     dw dbg_p_title              ; DSV_CPNAME  - and so the page exists
     dw dbg_page_paint           ; DSV_CPPAINT
     dw dbg_page_click           ; DSV_CPCLICK
+    times DSV_SIZE - ($ - dbg_services) db 0
+                                ; drv_publish copies DSV_SIZE bytes whether or
+                                ; not the driver filled them - unpadded, the
+                                ; two bytes after this table were dbg_up (=1
+                                ; by publish time) and dbg_busy, and the
+                                ; kernel read that 0x0001 as a DSV_CPCLOSE
+                                ; entry: every Control Panel close far-called
+                                ; offset 1 of this image. sound.asm's pad,
+                                ; for sound.asm's reason.
 
 dbg_up      db 0                ; attached, and therefore hooked
 dbg_busy    db 0                ; a command is running with interrupts on

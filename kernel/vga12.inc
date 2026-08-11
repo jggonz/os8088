@@ -50,6 +50,10 @@ gfx_pat         dw 0            ; gfx_fill_pat: near ptr to 8 row bytes,
 gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
                                 ; Initialized data, NOT .bss: nothing zeroes
                                 ; .bss at boot, and this byte must start clear.
+gfx_lock_own    db 0xFF         ; ...and WHICH task holds it ([sch_cur] at the
+                                ; take, 0xFF = nobody). toast_now's whole test
+                                ; (SPEC.md 59.4): the flag alone says somebody
+                                ; holds it, never that the CALLER does.
 
 ; -----------------------------------------------------------------------------
 ; GFXCLIP - the clip hook, at a public rect entry (SPEC.md 11.3)
@@ -1018,26 +1022,67 @@ gfx_ls_box:
     mov [gfx_ls_bx2], ax
     mov ax, [vid_chm1]
     mov [gfx_ls_by2], ax
-    jmp short .out
+    jmp .out                    ; NOT `jmp short`: 39.14.9's virtual-space
+                                ; scan put the armed branch out of reach
 .armed:
+%ifdef KERN_BIG
+    ; SPEC.md 39.14.9: THE POINT IS DISPLAY-LOCAL HERE AND wm_clip_tab IS
+    ; VIRTUAL. gfx_ls_one resolved the walk's display and translated before
+    ; the walk ran, so the scan has to be done in virtual space and the rect
+    ; it finds has to come back translated - which is 39.14.1's "below
+    ; GFXCLIP and not above it" in the one place the hook could not be put
+    ; below it. Untranslated, display 0 works (virtual IS local there) and
+    ; every other display matches NO rect, takes the empty box below, and
+    ; draws not one pixel while the walk advances normally.
+    ; Both terms are 0 on display 0, so a one-display machine pays two adds.
+    mov ax, si
+    add ax, [vid_ox]
+    mov [gfx_ls_vx], ax
+    mov ax, dx
+    add ax, [vid_oy]
+    mov [gfx_ls_vy], ax
+%else
+    mov [gfx_ls_vx], si
+    mov [gfx_ls_vy], dx
+%endif
     mov bx, wm_clip_tab
     mov cx, [wm_clip_n]
 .scan:
     mov ax, [bx + WCR_X1]
-    cmp si, ax
+    cmp [gfx_ls_vx], ax
     jl .next
-    cmp si, [bx + WCR_X2]
+    mov ax, [bx + WCR_X2]
+    cmp [gfx_ls_vx], ax
     jg .next
-    cmp dx, [bx + WCR_Y1]
+    mov ax, [bx + WCR_Y1]
+    cmp [gfx_ls_vy], ax
     jl .next
-    cmp dx, [bx + WCR_Y2]
+    mov ax, [bx + WCR_Y2]
+    cmp [gfx_ls_vy], ax
     jg .next
+    ; ...and the survivor comes back in the DISPLAY's coordinates, clamped to
+    ; the display: a clip rect may span the seam, and a box reaching past this
+    ; card's last column would have gfx_lstep_mono addressing off the end of
+    ; its own framebuffer.
+    mov ax, [bx + WCR_X1]
+    call gfx_ls_lx
     mov [gfx_ls_bx1], ax
     mov ax, [bx + WCR_Y1]
+    call gfx_ls_ly
     mov [gfx_ls_by1], ax
     mov ax, [bx + WCR_X2]
+    call gfx_ls_lx
+    cmp ax, [vid_cwm1]
+    jle .x2ok
+    mov ax, [vid_cwm1]
+.x2ok:
     mov [gfx_ls_bx2], ax
     mov ax, [bx + WCR_Y2]
+    call gfx_ls_ly
+    cmp ax, [vid_chm1]
+    jle .y2ok
+    mov ax, [vid_chm1]
+.y2ok:
     mov [gfx_ls_by2], ax
     jmp short .out
 .next:
@@ -1052,6 +1097,28 @@ gfx_ls_box:
     pop cx
     pop bx
     pop ax
+    ret
+
+; gfx_ls_lx / gfx_ls_ly - one virtual coordinate into the ACTIVE display's,
+; floored at 0. AX in, AX out; flags clobbered. Two names rather than one with
+; an argument because each has exactly one origin to subtract and the caller
+; is a straight run of four.
+gfx_ls_lx:
+%ifdef KERN_BIG
+    sub ax, [vid_ox]
+    jns .ok
+    xor ax, ax
+.ok:
+%endif
+    ret
+
+gfx_ls_ly:
+%ifdef KERN_BIG
+    sub ax, [vid_oy]
+    jns .ok
+    xor ax, ax
+.ok:
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1171,13 +1238,22 @@ gfx_line:
     mov di, [wm_clip_n]
 .frag:
     mov ax, [si+WCR_X1]         ; the rects are disjoint, so no pixel of the
-    mov [gfx_ln_cx1], ax        ; line is ever written twice
-    mov ax, [si+WCR_Y1]
-    mov [gfx_ln_cy1], ax
-    mov ax, [si+WCR_X2]
-    mov [gfx_ln_cx2], ax
-    mov ax, [si+WCR_Y2]
-    mov [gfx_ln_cy2], ax
+    mov bx, [si+WCR_Y1]         ; line is ever written twice
+    mov cx, [si+WCR_X2]
+    mov dx, [si+WCR_Y2]
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; the fragments are VIRTUAL and the endpoints
+    je .fv                      ; went display-local at GFXDORG, so each
+    sub ax, [vid_ox]            ; fragment follows them onto the display -
+    sub cx, [vid_ox]            ; gfx_clip_run's own idiom, which this loop
+    sub bx, [vid_oy]            ; replicated WITHOUT the translation: a local
+    sub dx, [vid_oy]            ; line clipped against virtual rects meets
+.fv:                            ; none of them on display 1 and vanishes
+%endif
+    mov [gfx_ln_cx1], ax
+    mov [gfx_ln_cy1], bx
+    mov [gfx_ln_cx2], cx
+    mov [gfx_ln_cy2], dx
     push si
     push di
     call gfx_line_raw
@@ -1547,15 +1623,29 @@ gfx_line_flush:
 ; Colour reduction on a 1bpp adapter happens in gfx_fill, per run (SPEC.md
 ; 39.4), so a 16-colour picture reads as black/dither/white there exactly as
 ; the rest of the UI does.
+;
+; ...and a DISPLAY SPLIT happens there too, per run, for the same reason
+; (SPEC.md 39.14.7). This routine takes no whole-shape hook of its own: it
+; keeps its destination in virtual coordinates and lets each run's gfx_fill
+; do the splitting, which costs a straddling block nothing but the runs it
+; was going to emit anyway. What that costs on a TWO-CARD machine is one
+; gfx_disp_run per run instead of GFXDISP's two compares - a few per cent of
+; a ~756us call - and on every one-card machine it costs nothing at all,
+; because GFXDISP short-circuits on [vid_ndisp].
 ; -----------------------------------------------------------------------------
 gfx_blit4:
     call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
-    GFXDENTER                   ; ...and off the display SPLIT for the same
-                                ; reason (SPEC.md 39.14.5): a blit cannot take
-                                ; a sub-rect without advancing its source to
-                                ; match, so it goes whole onto the display
-                                ; holding its top-left corner and is cut at
-                                ; that display's edge
+                                ; ...but NOT off the display split, and there
+                                ; is deliberately no GFXDENTER here: A RUN
+                                ; CARRIES NO SOURCE (SPEC.md 39.14.7). The
+                                ; destination stays VIRTUAL the whole way
+                                ; down, and each coalesced run is one solid
+                                ; gfx_hline that splits itself through
+                                ; gfx_fill's own GFXDISP - so a straddling
+                                ; block needs no source arithmetic at all.
+                                ; Nested (gfx_dnest != 0) the runs take
+                                ; GFXDISP's local path, which is what an
+                                ; outer whole-shape hook wants.
     push ax
     push bx
     push cx
@@ -1663,7 +1753,6 @@ gfx_blit4:
     pop cx
     pop bx
     pop ax
-    GFXDLEAVE
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2476,8 +2565,21 @@ vga_xor_fill_vram:
 gfx_save:
     call cur_unlazy             ; the menu save-under READS the screen, so
                                 ; the arrow must not be in what it banks
-    cmp byte [vid_mono], 0
-    jne sw_save
+    GFXDENTER                   ; ...and it reads it off ONE CARD (SPEC.md
+    GFXDORG cx, dx              ; 39.14.8): a save is pixels, and pixels live
+    call vga_save_vram          ; on a card rather than in a coordinate space,
+    GFXDLEAVE                   ; so this is whole-shape like gfx_scroll and
+    ret                         ; NOT split like a blit's runs. The caller owes
+                                ; the straddle test - wm_su_take asks
+                                ; vid_span_one - because a cut save and a cut
+                                ; restore agree with each other and leave the
+                                ; rest of the rect stale.
+                                ;
+                                ; BELOW the hook and reached directly by the
+                                ; CURSOR out of IRQ4, which must not take it:
+                                ; the arrow brackets itself (39.15.2), and a
+                                ; hook here would translate a rect that
+                                ; cur_geom has already resolved.
 vga_save_vram:
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
     jne sw_save                 ; on mono the framebuffer IS the renderer's
@@ -2527,6 +2629,139 @@ vga_save_vram:
     ret
 
 ; -----------------------------------------------------------------------------
+; --- the SUB-RECT restore (SPEC.md 5.8) --------------------------------------
+;
+; Three words that make gfx_restore put back PART of a buffer instead of all of
+; it. They are in .text with real initialisers, not .bss: `-f bin` zeroes
+; nothing, and the mouse cursor reaches vga_restore_vram on the machine's first
+; pointer move, long before anything arms these (the cur_sptr trap, SPEC.md
+; 7.1.2).
+;
+; ALL THREE ARE 0 AT REST, which is what makes the whole feature additive: the
+; two restore bodies read them unconditionally and a zero skip is the walk they
+; had, so the cursor's own path and the menu save-under are byte-identical.
+gfx_sub_st  dw 0                ; buffer offset of the sub-rect's first byte
+gfx_sub_rs  dw 0                ; ...bytes to step the BUFFER past each row
+gfx_sub_ps  dw 0                ; ...and past each plane
+
+; -----------------------------------------------------------------------------
+; gfx_sub_arm - arm the next gfx_restore to put back only part of its buffer
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 - the sub-rect wanted; SI -> the four
+;      words (x1, y1, x2, y2) the buffer was SAVED over
+; out: CF = 0, armed; CF = 1 = refused and nothing armed, so the caller's
+;      gfx_restore puts the whole buffer back - which is always correct, only
+;      dearer. Preserves every register.
+;
+; gfx_save's buffer is plane-major, `full_row` bytes per row, x1 rounded down
+; and x2 up (SPEC.md 5), so a sub-rect is three numbers: where its first byte
+; is, how far past the end of each row its next row starts, and the same past
+; each plane. The SCREEN side needs nothing at all - vga_rect_setup recomputes
+; the geometry from whatever rect it is handed, so the caller passes the
+; sub-rect and it lands in the right place.
+;
+; IT REFUSES RATHER THAN CLAMPS a sub-rect that is not inside the saved one:
+; clamping would silently restore something the caller did not ask for, and
+; every refusal has a correct fallback one branch away.
+; -----------------------------------------------------------------------------
+gfx_sub_arm:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    cmp ax, [si]                ; inside the saved rect on all four sides, or
+    jl .no                      ; the arithmetic below indexes outside the
+    cmp bx, [si+2]              ; buffer - which is a claim of a few KB, so it
+    jl .no                      ; would be somebody else's memory
+    cmp cx, [si+4]
+    jg .no
+    cmp dx, [si+6]
+    jg .no
+    cmp ax, cx                  ; ...and not degenerate
+    jg .no
+    cmp bx, dx
+    jg .no
+
+    ; The three words double as the scratch this arithmetic needs, so it costs
+    ; no .bss: every register is wanted, CL has to be the shift count (an 8086
+    ; shifts by 1 or by CL and nothing else), and both `mul`s eat DX.
+    mov [gfx_sub_st], ax        ; S.x1
+    mov [gfx_sub_rs], cx        ; S.x2
+    mov [gfx_sub_ps], dx        ; S.y2
+    push bx                     ; S.y1
+    mov cl, 3
+
+    mov ax, [si+4]              ; DI = full_row, the buffer's bytes per row;
+    shr ax, cl                  ; BX = the saved rect's own left byte column
+    mov bx, [si]
+    shr bx, cl
+    mov di, ax
+    sub di, bx
+    inc di
+
+    mov ax, [gfx_sub_rs]        ; BP = sub_row, the bytes to move per row
+    shr ax, cl
+    mov bp, ax
+    mov ax, [gfx_sub_st]
+    shr ax, cl
+    sub bp, ax
+    inc bp
+    sub ax, bx                  ; AX = the sub-rect's byte column within a
+                                ; buffer row
+
+    pop bx                      ; CX = sub_rows, BX = the sub-rect's first row
+    mov cx, [gfx_sub_ps]        ; as an offset into the buffer. (CL was the
+    sub cx, bx                  ; shift count and every shift is done.)
+    inc cx
+    sub bx, [si+2]
+
+    push ax                     ; start = that row x full_row + that column.
+    mov ax, bx                  ; No overflow to worry about: wm_su_kb has
+    mul di                      ; already refused a buffer bigger than one
+    pop bx                      ; segment, so every offset in it fits a word
+    add ax, bx
+    mov [gfx_sub_st], ax
+
+    mov ax, di                  ; row_skip: what the row loop must step past
+    sub ax, bp                  ; after each rep movsb
+    mov [gfx_sub_rs], ax
+
+    mov ax, [si+6]              ; plane_skip: the saved rows this rect does not
+    sub ax, [si+2]              ; cover, one whole buffer row each
+    inc ax
+    sub ax, cx
+    mul di
+    mov [gfx_sub_ps], ax
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; gfx_sub_off - back to restoring whole buffers
+; Called by both restore bodies on their way out, so a caller CANNOT leave one
+; armed: the safe value is the one a forgetful caller inherits, which is
+; wm_dmg_dk's rule (SPEC.md 11.91). Preserves every register; clobbers flags,
+; which both callers have already finished with.
+; -----------------------------------------------------------------------------
+gfx_sub_off:
+    mov word [gfx_sub_st], 0
+    mov word [gfx_sub_rs], 0
+    mov word [gfx_sub_ps], 0
+    ret
+
+; -----------------------------------------------------------------------------
 ; gfx_restore - write a gfx_save buffer back to the screen
 ;
 ; Same rounding and buffer layout as gfx_save. Writes through the Sequencer
@@ -2542,8 +2777,11 @@ vga_save_vram:
 ; -----------------------------------------------------------------------------
 gfx_restore:
     call cur_unlazy             ; ...and writes it back, unclipped
-    cmp byte [vid_mono], 0
-    jne sw_restore
+    GFXDENTER                   ; ...onto the card it came off (SPEC.md
+    GFXDORG cx, dx              ; 39.14.8) - gfx_save's twin, and it has to be
+    call vga_restore_vram       ; the same hook or a rect banked on one display
+    GFXDLEAVE                   ; could be put back on the other
+    ret
 vga_restore_vram:
     cmp byte [vid_mono], 0      ; see vga_save_vram
     jne sw_restore
@@ -2555,6 +2793,9 @@ vga_restore_vram:
     push bp
     call vga_rect_setup
     jc .done
+    add si, [gfx_sub_st]        ; the SUB-RECT restore (SPEC.md 5.8), and 0 at
+                                ; rest: DS is still KERNEL_SEG out here, so
+                                ; this one needs no override
     mov byte [vga_plane], 1     ; plane mask bit, 1/2/4/8
 .plane:
     mov dx, VGA_SEQ
@@ -2574,12 +2815,15 @@ vga_restore_vram:
 .row:
     mov cx, bp
     rep movsb
+    add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
     add di, ROW_BYTES
     sub di, bp
     dec dx
     jnz .row
     pop es
     pop ds
+    add si, [gfx_sub_ps]        ; ...and past the rows this rect does not cover
+                                ; (DS is KERNEL_SEG again by here)
     mov al, [vga_plane]
     add al, al                  ; next plane bit
     mov [vga_plane], al
@@ -2589,6 +2833,7 @@ vga_restore_vram:
     mov ax, 0x0F02              ; SEQ2: Map Mask back to all planes
     out dx, ax
 .done:
+    call gfx_sub_off            ; a sub-rect is ONE restore (SPEC.md 5.8)
     pop bp
     pop di
     pop dx
@@ -2650,6 +2895,10 @@ gfx_lock:
     jmp .retry
 .take:
     mov byte [gfx_lock_flag], 1
+    push ax
+    mov al, [sch_cur]           ; the owner is stamped inside the cli window,
+    mov [gfx_lock_own], al      ; so flag and owner can never disagree
+    pop ax
     sti
     mov byte [cur_lazy], 1      ; PROMISE the hide (SPEC.md 7.1.4) - the ISR
     ret                         ; will not move the arrow while the flag is
@@ -2694,6 +2943,9 @@ gfx_unlock:
 .never:
     call cur_lazyend            ; ...but the ISR could not move it all hold
 .rel:
+    mov byte [gfx_lock_own], 0xFF   ; owner first: a task switch between the
+                                    ; two stores must not show flag-free with
+                                    ; a stale owner still named
     mov byte [gfx_lock_flag], 0
     mov byte [dsk_batch], 0     ; ANY UNLOCKING OF THE USER INTERFACE ENDS A
                                 ; BATCH (SPEC.md 18.9.3). One store, and it is
@@ -2959,6 +3211,8 @@ gfx_ls_bx1      resw 1          ; the clip rect the walk is inside, re-resolved
 gfx_ls_by1      resw 1          ; only when a pixel steps out of it - a step is
 gfx_ls_bx2      resw 1          ; a handful of pixels, so this is one list walk
 gfx_ls_by2      resw 1          ; per CALL in every case that matters
+gfx_ls_vx       resw 1          ; ...and the point in VIRTUAL space, which is
+gfx_ls_vy       resw 1          ; what wm_clip_tab is in (SPEC.md 39.14.9)
 gfx_ls_cseg     resw 1          ; ...and where the caller's block came from,
 gfx_ls_coff     resw 1          ; because ES cannot hold it across the walk
 

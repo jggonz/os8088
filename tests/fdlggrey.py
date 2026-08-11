@@ -17,6 +17,21 @@ sys.path.insert(0, "tools")
 import os88marty as M
 from os88mouse import Mouse
 
+
+def drive_y(m, n=1):
+    """The middle of drive zone n, read from the KERNEL rather than assumed.
+
+    The zone pitch is [desk_zstep] and SPEC.md 26.4 made it adapter-dependent
+    - 60 rows with the 32-row icon, 34 with the CGA's short one - so a
+    hard-coded y that worked on every adapter for months silently started
+    landing one zone out. DESK_ZY0 is 32 and [desk_zh1] is the zone's height
+    less one, both from desk.inc.
+    """
+    step = int.from_bytes(m.read(m.sym("desk_zstep"), 2), "little")
+    h1 = int.from_bytes(m.read(m.sym("desk_zh1"), 2), "little")
+    return 32 + n * step + h1 // 2
+
+
 MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 WIN_SIZE, MAX_WIN = 28, 12
 FD_BX1, FD_BX2, FD_BY0, FD_BH, TITLE_H = 224, 286, 20, 13, 18
@@ -85,7 +100,7 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
     vw = int.from_bytes(m.read(m.sym("vid_w"), 2), "little")
     print(f"== {MACHINE} : fdlg default button, redraw vs repaint ==")
 
-    mo.dblclick(vw - 40, 110)
+    mo.dblclick(vw - 40, drive_y(m))
     M.settle(m)
     d = disk_win(m)
     mo.click(d[0] + d[2] // 2, d[1] + 9)

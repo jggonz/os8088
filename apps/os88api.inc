@@ -75,6 +75,7 @@ DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94, `make DISKCNT=1`
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92, unconditional
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4, unconditional
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5, unconditional
+DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6, unconditional
                             ; It is baked into every OSAPI_* far call, so a
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
@@ -1651,6 +1652,39 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; heap that is the difference between a paste
                                  ; that works and one that half-arrives.
                                  ; Preserves all but AX.
+%define OSAPI_WM_DAMAGE     KERNEL_SEG:0x03B0   ; BX = your window ptr, called
+                                                ; from inside your own W_PAINT.
+                                                ; CF=1 = draw the WHOLE content
+                                                ; and AX/BX/CX/DX are it; CF=0 =
+                                                ; draw AX/BX/CX/DX and no more,
+                                                ; absolute and inclusive, and it
+                                                ; may be EMPTY (x1 > x2) meaning
+                                                ; draw NOTHING. An empty rect is
+                                                ; safe to hand any primitive -
+                                                ; they read it as nothing to do
+                                                ; - so forgetting to test cannot
+                                                ; paint anything wrong, only
+                                                ; waste the answer. Requires
+                                                ; OSAPI_WM_OWNBG: without it the
+                                                ; kernel has already whitened
+                                                ; your content and the only
+                                                ; correct answer is "whole"
+                                                ; (SPEC.md 11.90.2)
+%define OSAPI_WM_OWNBG      KERNEL_SEG:0x03A8   ; BX = window ptr, AL = 0 clear
+                                                ; / non-0 set. "I paint EVERY
+                                                ; PIXEL of my content myself",
+                                                ; so the kernel's white fill in
+                                                ; front of W_PAINT is skipped
+                                                ; (SPEC.md 11.90.1). Worth
+                                                ; having for the FLASH before
+                                                ; the milliseconds: a window
+                                                ; whose paint takes seconds is
+                                                ; a white hole for that long
+                                                ; otherwise. Set it and leave a
+                                                ; pixel unwritten and you show
+                                                ; whatever was there before -
+                                                ; after a move, another
+                                                ; window's
 %define OSAPI_WM_SAVEU      KERNEL_SEG:0x0378   ; BX = window ptr, AL = 0 clear
                                                  ; / non-0 set. A PROMISE: this
                                                  ; window's content does not

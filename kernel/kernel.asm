@@ -170,11 +170,47 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 100352          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE SEVENTEENTH MOVE, 98,304 -> 100,352,
+                                ; ASKED FOR AND GRANTED, and the first since
+                                ; the fourteenth to move BOTH guards: 2KB here
+                                ; and 2KB on kern_small, which is deliberate
+                                ; and is the whole argument for the raise. What
+                                ; it buys is WINDOW DRAWING OPTIMIZATIONS -
+                                ; SPEC.md 5.8's partial restore, 11.96.6's
+                                ; cache restoring only what the pass painted,
+                                ; 11.96.8's bounded edge merge, 11.90.1's
+                                ; opt-out fill and 11.90.2's damage rect - and
+                                ; those are not a feature a big machine enjoys
+                                ; and a small one does without. They are what
+                                ; makes the OS FEEL SNAPPY, and the machine
+                                ; that feels a 49 ms restore becoming 23 is the
+                                ; 4.77MHz one at the RAM floor. So kern_small
+                                ; cannot be the build that goes without them,
+                                ; and this is the direction the fifteenth
+                                ; move's drift does not apply in.
+                                ;
+                                ; WHAT SPENT THE PRIOR STEP is the same work,
+                                ; and it is worth naming because the guard had
+                                ; fallen to ONE step against a standard of
+                                ; four: 11.96.9's fix - a partial draw may not
+                                ; re-bank, the field bug 11.96.6 introduced -
+                                ; crossed the rung the image had 15 bytes left
+                                ; of, so the next .text byte anywhere paid 512
+                                ; whatever it was for. Granted at 2KB on the
+                                ; thirteenth move's terms (headroom, half a
+                                ; step) with the round's biggest item still to
+                                ; come: a raise restoring only what was
+                                ; COVERED (docs/HANDOFF-REDRAW.md item A),
+                                ; which is a wm_raise change and not a new
+                                ; mechanism, and which turns Paint's 8.7 s
+                                ; canvas into ~0.9 s on the case the reporter
+                                ; described.
                                 ;
                                 ; THE SIXTEENTH MOVE, 96,256 -> 98,304, ASKED
                                 ; FOR AND GRANTED, and the second that is
@@ -222,10 +258,56 @@ KERN_BUDGET equ 98304           ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; the two by 2KB, which is the direction it
                                 ; should drift from here.
 %else
-KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 96256           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
-                                ; It has moved fourteen times, every raise asked
+                                ;
+                                ; **AND WHEN IT DOES GROW, IT GROWS BY 1KB -
+                                ; NOT BY THE 2KB kern_big MOVES BY.** A
+                                ; standing rule rather than a property of any
+                                ; one raise, and the point of the split: this
+                                ; is the guard the 128KB machine lives under,
+                                ; so it is the one that has to be defended and
+                                ; it should be asked for in the smallest
+                                ; useful unit. Two 512-byte rungs is enough
+                                ; room for ordinary growth to continue and not
+                                ; enough to pre-authorise a feature. It is
+                                ; also the direction the fifteenth move said
+                                ; this figure should drift in.
+                                ;
+                                ; THE SEVENTEENTH MOVE, 94,208 -> 96,256, is
+                                ; the first this figure has taken since the two
+                                ; guards were split - the fifteenth and
+                                ; sixteenth were kern_big's alone - and the
+                                ; reason it moves here is stated at kern_big's
+                                ; copy above: what the 2KB buys is WINDOW
+                                ; DRAWING OPTIMIZATIONS, and the machine that
+                                ; feels those most is this one. A 128KB machine
+                                ; is a 4.77MHz machine, where a window restore
+                                ; going 49 ms to 23 and a white flash
+                                ; disappearing are the difference between an OS
+                                ; that feels snappy and one that does not. The
+                                ; fifth move's rule still binds it: headroom
+                                ; for ordinary growth, not an invitation.
+                                ;
+                                ; AND ON THE INTEGRATION BRANCH IT LANDED ON
+                                ; TOP OF A REMOVAL IT DID NOT KNOW ABOUT.
+                                ; SPEC.md 41.11 had just taken the store above
+                                ; 1MB out of this build - .text -1,035, .bss
+                                ; -124, .ovl -386, two whole rungs - so the
+                                ; raise was granted against a one-step figure
+                                ; that had already moved. Small comes out at
+                                ; SEVEN steps, three over the standard, which
+                                ; is the fifth move's "guard switched off" and
+                                ; owes a decision: hand a step or two back on
+                                ; the eleventh move's terms, or spend it on the
+                                ; round the raise was granted for.
+                                ; docs/KERNEL-MEMORY.md's "Where it goes"
+                                ; carries it, because a figure nobody re-asks
+                                ; about is exactly how the fifth move's 2,048
+                                ; became 512.
+                                ;
+                                ; It had moved fourteen times before that, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
                                 ; SPEC.md 41 store and the two API surfaces
                                 ; that came with it (wm_geom, wm_about_set);
@@ -531,7 +613,7 @@ KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
                                 ; machine can still install, just slowly.
 %endif                          ; KERN_BIG
 
-KERN_SMALL_BUDGET equ 94208     ; ...and kern_small's, named separately so it
+KERN_SMALL_BUDGET equ 96256     ; ...and kern_small's, named separately so it
                                 ; can be REPORTED on a big build rather than
                                 ; only enforced on a small one. tools/
                                 ; kernsplit.py reads both out of the map and
@@ -547,6 +629,14 @@ KERN_SMALL_BUDGET equ 94208     ; ...and kern_small's, named separately so it
                                 ; written for, and nothing may be added to
                                 ; kern_small without the conversation every
                                 ; budget move so far has had.
+                                ;
+                                ; It moved at the seventeenth, 94,208 ->
+                                ; 96,256, for the window drawing
+                                ; optimisations - the argument is at
+                                ; KERN_BUDGET above, and the short form is that
+                                ; a redraw optimisation is worth most on the
+                                ; slowest machine, so this is not a figure that
+                                ; work may be kept out of.
 
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
@@ -702,7 +792,7 @@ HMA_BYTES   equ 0xFFF0          ; HMA_SEG:FFFF is linear 0x10FFEF - the
                                 ; 65,520 bytes, DATA ONLY: the near model
                                 ; pins CS = DS = KERNEL_SEG, so no code ever
                                 ; lives up there (SPEC.md 41.3/41.9 rule 3)
-XM_HMA_KB   equ 64              ; what a successful cpu_hma_claim takes off
+XM_HMA_KB   equ 64              ; what a successful xm_hma_claim takes off
                                 ; the xm pool - the HMA is the first 64KB of
                                 ; exactly the RAM AH=88h sizes (SPEC.md 2.4)
 XM_MAX_BLKS equ 8               ; xm_alloc's fixed block table, entries: a
@@ -766,10 +856,18 @@ section .ovl
 ovl_base:
 ovl_cpu_detect:     call cpu_detect
                     retf
-ovl_cpu_a20:        call cpu_a20_enable
+%ifdef KERN_BIG                 ; the A20 gate and the store above 1MB are
+                                ; kern_big's (SPEC.md 41.11). kmain's two calls
+                                ; to these are behind the same guard, so on
+                                ; kern_small neither the shim nor its caller
+                                ; is assembled - the overlay is free either
+                                ; way, but a shim to a body that does not
+                                ; exist would not assemble at all
+ovl_xm_a20:        call xm_a20_enable
                     retf
 ovl_xm_init:        call xm_init
                     retf
+%endif
 ovl_desk_init:      call desk_init
                     retf
 ovl_snd_init:       call snd_init
@@ -786,6 +884,7 @@ DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5
+DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6
 
 ; =============================================================================
 ; Fixed entry points
@@ -1377,7 +1476,24 @@ osapi_table:
                                   ;         what lets a system file too big for
                                   ;         the caller's buffer be finished at
                                   ;         all (SPEC.md 18.4.4)
-osapi_table_end:                  ; 0x03A8
+    OSAPI_SLOT wm_ownbg           ; 0x03A8 - BX = window, AL = 0 clear / non-0
+                                  ;          set. "I paint every pixel of my
+                                  ;          content myself", which skips
+                                  ;          wm_draw_win's white fill for it
+                                  ;          (SPEC.md 11.90.1). A window that
+                                  ;          sets it and leaves a pixel unwritten
+                                  ;          shows whatever was there before -
+                                  ;          after a move, another window's
+    OSAPI_SLOT wm_damage          ; 0x03B0 - BX = your window, inside your own
+                                  ;          W_PAINT. CF=1 = draw the whole
+                                  ;          content (AX/BX/CX/DX = it); CF=0 =
+                                  ;          draw AX/BX/CX/DX only, absolute and
+                                  ;          inclusive, possibly EMPTY meaning
+                                  ;          draw nothing (SPEC.md 11.90.2).
+                                  ;          Answers "whole" unless WF_OWNBG is
+                                  ;          set, because without it the kernel
+                                  ;          has already whitened the content
+osapi_table_end:                  ; 0x03B8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1385,8 +1501,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 115 * 8
-%error "os8088 API jump table must be exactly 115 8-byte slots"
+%if OSAPI_TABLE_LEN != 117 * 8
+%error "os8088 API jump table must be exactly 117 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1427,6 +1543,14 @@ dbg_reg:
                                     ; a second monitor is plugged into a
                                     ; second card is the one question in
                                     ; SPEC.md 39 no emulator can be asked
+    dw DBG_TAG_BUILD, kbld_dbg_blk  ; SPEC.md 57.6 - WHICH KERNEL IS THIS. A
+                                    ; report that cannot name its own build is
+                                    ; a report somebody has to take on trust,
+                                    ; and this session lost a day to exactly
+                                    ; that: three field disks whose KERNEL.SYS
+                                    ; is 88,134 bytes apiece, because the image
+                                    ; rounds to a 512-byte rung, so not one row
+                                    ; in the report could tell them apart
     dw DBG_TAG_FDD, fdd_dbg_blk     ; SPEC.md 57.5 - and the FOURTH, more
                                     ; plainly than any of them: this block
                                     ; exists BECAUSE no emulator here can be
@@ -1696,9 +1820,13 @@ api_file_rename:
 ; and it has to stay resident for its own reasons: xm_arm because xm_copy
 ; re-arms unreal mode inside the window that uses it, dsk_vol_slot because
 ; every zone painter calls it on every repaint.
+%ifdef KERN_BIG                 ; xm_arm is kern_big's, so its shim is too
 ovw_xm_arm:         call xm_arm
                     retf
+%endif
 ovw_dsk_vol_slot:   call dsk_vol_slot
+                    retf
+ovw_dsk_flop_add:   call dsk_flop_add
                     retf
 ovw_desk_rowcalc:   call desk_rowcalc
                     retf
@@ -1784,7 +1912,16 @@ kmain:
                                 ; that may fire in it are the BIOS's own, and
                                 ; a tick lost here costs nothing ([ticks] is
                                 ; zeroed by sched_init anyway)
-    call FAT_SEG:ovl_cpu_a20    ; ...and VERIFY it: the feature bit is set by
+%ifdef KERN_BIG                 ; the A20 gate and the store above 1MB are
+                                ; kern_big's alone (SPEC.md 41.11). kern_small
+                                ; is the 128KB-floor product, so it neither
+                                ; opens a gate nor sizes a store - and BOTH
+                                ; probes come off its boot path, which is the
+                                ; only part of this feature that ever cost the
+                                ; machine time rather than bytes. The tier is
+                                ; still detected above, in both builds: it is a
+                                ; fact about the CPU that packages read
+    call FAT_SEG:ovl_xm_a20    ; ...and VERIFY it: the feature bit is set by
                                 ; the wraparound probe, never by the poke
                                 ; (SPEC.md 41.2). A no-op on tier 0 - an 8088
                                 ; has no gate and port 0x92 belongs to
@@ -1792,6 +1929,7 @@ kmain:
     call FAT_SEG:ovl_xm_init    ; size the store (int 15h AH=88h, on task 0
                                 ; per SPEC.md 7), claim the HMA, arm unreal
                                 ; mode on tier 2, publish [xm_kb] LAST
+%endif
 
     call dsk_dpt_init           ; int 1Eh becomes ours (SPEC.md 18.92) before
                                 ; any transfer: the ROM's EOT is 8, and every
@@ -2178,7 +2316,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "cpudet.inc"           ; CPU tiers + the A20 line (SPEC.md 41.1-41.3)
 %include "xmem.inc"             ; memory above 1MB (SPEC.md 41.4/41.5): after
                                 ; cpudet.inc, whose tier and feature bits it
-                                ; branches on and whose cpu_hma_claim it calls
+                                ; branches on and whose xm_hma_claim it calls
 %include "vga12.inc"
 %include "softgfx.inc"
 %include "font.inc"
@@ -2468,6 +2606,8 @@ cw_wm_pkgcall:          call wm_pkgcall
                     retf
 cw_wm_show:             call wm_show
                     retf
+cw_xm_release_rec:      call xm_release_rec
+                    retf
 cw_wm_su_drop:          call wm_su_drop
                     retf
 cw_wm_title_set:        call wm_title_set
@@ -2585,6 +2725,44 @@ fdlg_reap:            call COLD_SEG:fdf_fdlg_reap
                     ret
 fdlg_top:             call COLD_SEG:fdf_fdlg_top
                     ret
+
+; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
+; Three words that change whenever any section's length does, so a field
+; report can name the build that produced it. They are SECTION-END LABELS, so
+; they cost the machine no cycles at all, and they are STABLE in a way a
+; checksum of the running image could not be - .text here carries
+; mutable data on purpose (dsk_vtab, vid_w, fdd_dbg_*, fm_fchk), so a sum of
+; it would depend on the adapter the machine booted on and on when it was
+; taken.
+;
+; What it is NOT is a content hash: a byte-neutral edit - two instructions
+; swapped - leaves every length alone and every term equal. That is the price
+; of costing nothing, and it is the right trade, because the question this
+; answers in practice is "is the disk in the drive the one I think it is",
+; and an ordinary change moves at least one of these.
+;
+; Forward references: each label is an offset in a `vstart 0` section, so each
+; IS that section's length, and a `dw` is not a critical expression - nasm
+; resolves them in a later pass.
+kbld_dbg_blk:
+    dw DBG_TAG_BUILD                ; 'ID' - the magic, and the block's own
+    dw kbld_dbg_span                ; first word (SPEC.md 57)
+kbld_dbg_span:
+kbld_text: dw kernel_text_end       ; THREE PLAIN WORDS, not one hashed one:
+kbld_cold: dw cold_end              ; nasm refuses arithmetic between
+kbld_ovl:  dw ovl_end               ; relocatable symbols ("expression is not
+                                    ; simple or relocatable"), and the `equ`s
+                                    ; that hold these lengths are defined
+                                    ; BELOW - after `kernel_text_end`, which
+                                    ; must stay the last thing in .text. Three
+                                    ; words is the better answer anyway: a
+                                    ; reader gets the sections themselves and
+                                    ; can see WHICH one moved, where a hash
+                                    ; only says that something did
+KBLD_DBG_SPAN equ ($ - kbld_dbg_span)
+%if KBLD_DBG_SPAN != 6
+  %error "kernel: SPEC.md 57.6 block - the published span is not 6 bytes"
+%endif
 
 ; =============================================================================
 ; Size guards (SPEC.md 15.1). Same-section label differences bound via equ -

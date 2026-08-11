@@ -124,8 +124,32 @@ BL_MAXROWS  equ 380             ; report lines. Sized for the longest suite,
                                 ; is a report that truncates on somebody
                                 ; else's machine, and it happened a THIRD
                                 ; time at 300 when SPEC.md 18.4's write block
-                                ; landed. 380 for 305.
-BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text
+                                ; landed. 380 for 305, and 337 after Set 35's
+                                ; seek and spin-up blocks.
+BL_ARENA    equ 16000           ; bytes of packed NUL-terminated line text.
+                                ; **THIS CEILING IS INVISIBLE UNTIL IT IS
+                                ; HIT, AND IT CANNOT SIMPLY BE RAISED**, which
+                                ; together are why it needs a paragraph. The
+                                ; row ceiling above was raised three times
+                                ; after the fact; this one never has been,
+                                ; because `bl_full` says a report TRUNCATED
+                                ; and nothing said how close a report that did
+                                ; not had come. Set 35's two blocks landed it
+                                ; at 14,806 of 16,000 - 7% spare.
+                                ;
+                                ; And raising it costs TWICE what it looks
+                                ; like: `bl_out` below is BL_ARENA-sized too,
+                                ; so every byte here is two, and sysbench's
+                                ; image plus bss is already within ~5KB of the
+                                ; 64KB SEGMENT a package gets (SPEC.md 20.1).
+                                ; +3,456 here overflows it, and the failure is
+                                ; a wall of `word data exceeds bounds` at
+                                ; unrelated lines rather than anything naming
+                                ; this constant. The next round wants a row
+                                ; DROPPED, or the suite split - not a bigger
+                                ; number here. sysbench's trailer prints both
+                                ; figures so that decision can be taken before
+                                ; a field report truncates rather than after.
 BL_OUTSZ    equ BL_ARENA + BL_MAXROWS * 2 + 64   ; ...plus a CR LF each
 BL_BASE_N   equ 400             ; iterations of the empty body, for the
                                 ; overhead every method-P row is net of
@@ -1435,6 +1459,57 @@ bl_drive:
     add al, 'A'
     pop dx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; bl_dbgfind - look a published block up in the debug registry (SPEC.md 57)
+; in:       AX = the two-character tag
+; out:      CF=0 and ES:BX -> the block; CF=1 = not published in this build
+; clobbers: BX, ES, flags
+;
+; A TEST package reads kernel state this way and shipped software never does
+; (SPEC.md 57). A reader that cannot find its block SAYS SO AND CONTINUES,
+; which is what lets one build of a harness run against a plain kernel and a
+; knob-built one - so every caller here treats CF=1 as a row it cannot fill
+; rather than as a failure.
+;
+; It checks the tag TWICE: once in the registry pair and again as the block's
+; own first word, which is SPEC.md 57's whole reason for putting it there. An
+; offset followed to the wrong place then answers "not published" instead of
+; handing back somebody else's words.
+;
+; It lives in benchlib because BOTH harnesses want it - sysbench for its four
+; state dumps, gfxbench to find out which DISPLAY its sandbox is on (39.14.7's
+; report, and the reason gfxbench used to name its file after the primary).
+; -----------------------------------------------------------------------------
+bl_dbgfind:
+    push ax
+    push si
+    mov bx, KERNEL_SEG
+    mov es, bx
+    mov si, [es:0x000E]         ; the registry, or 0
+    or si, si
+    jz .none
+.scan:
+    mov bx, [es:si]             ; the tag
+    or bx, bx
+    jz .none                    ; end of list: not published here
+    cmp bx, ax
+    je .hit
+    add si, 4
+    jmp short .scan
+.hit:
+    mov bx, [es:si+2]           ; ...and the block behind it
+    cmp [es:bx], ax             ; which must lead with the same tag
+    jne .none
+    pop si
+    pop ax
+    clc
+    ret
+.none:
+    pop si
+    pop ax
+    stc
     ret
 
 ; --- benchlib data -----------------------------------------------------------

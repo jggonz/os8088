@@ -105,6 +105,25 @@ class Marty:
     def status(self):
         return self.cmd(cmd="status")
 
+    def disk(self, reset=False):
+        """What the FLOPPY CONTROLLER has been asked to do, from OUTSIDE.
+
+        SPEC.md 18.94's DISKCNT block without the guest's help: no counters in
+        the kernel, no knob-built binary, no test package on the floppy, so a
+        SHIPPED image can be watched. That is what makes SPEC.md 18.91's class
+        cheap to find - a kernel re-reading sectors it was already handed looks
+        entirely correct from inside itself and shows up here as traffic
+        nobody asked for. `reset=True` zeroes the counters, so a region of a
+        session can be bracketed:
+
+            m.disk(reset=True)          # ...do the thing...
+            print(m.disk())             # {'reads': 6, 'read_sectors': 34, ...}
+
+        `longest_run` near the track length is a kernel batching properly;
+        `read_sectors` far above the file's own size is the 18.91 shape.
+        """
+        return self.cmd(cmd="disk", reset=bool(reset))
+
     def regs(self):
         return self.cmd(cmd="regs")
 

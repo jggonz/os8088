@@ -43,32 +43,45 @@ you may finally *time* work rather than only count it. The debugger attached
 to it costs the guest no cycles at all, so measuring does not change the
 measurement.
 
-**It is cycle-accurate and it is NOT disk-accurate, and that distinction is
-load-bearing enough to sit at the top of this document rather than in Set 11
-where it was measured.** MartyPC models instruction timing, the prefetch queue
-and bus contention; it models no platter, no seek and no interleave:
+**It was cycle-accurate and NOT disk-accurate, and that half has now been
+fixed — read Set 35 before quoting the old ratio.** MartyPC models instruction
+timing, the prefetch queue and bus contention; upstream it modelled **no
+platter, no seek and no interleave at all**, which is where these came from:
 
-| | real 5150 | MartyPC |
+| | real 5150 | MartyPC, upstream |
 |---|---|---|
 | read 16 KB, cold motor | **8.07 s** | **0.27 s** — 30x fast |
 | boot | **38,886 ms** | **2,306 ms** — 17x fast |
 
-So **any figure with a disk in its path is wrong on MartyPC, by more than an
-order of magnitude and in the flattering direction** — and that reaches a lot
-that is not obviously about disks: a boot time, a package launch, a Tracker
-module load, a `SYSTEM.CFG` write, the Control Panel closing. Part 9's disk
-rows come off the 5150 and nowhere else.
+`tools/martypc/patches/04-floppy-disk-timing.patch` gives the drive a platter,
+a data rate, a seek and a configurable interleave (Set 35, docs/MARTYPC-DEBUG.md),
+and Set 37 then found the one number that had been *assumed* — that the field
+machine's 360KB media was 2:1, which it never was — and the doubled head
+settle sitting behind it. On the IBM ROM the boot is **188 ticks against the
+field's 205**, and `tests/sysbench`'s whole raw floppy block reproduces the
+field machine's own report to the measurement quantum, seven of thirteen
+rows exactly. The error went **4.4x fast → 1.17x slow → 0.92x**, and every change
+of sign on that road was worth as much as the size. So the rule is now:
 
-**Nor will it catch a disk CORRECTNESS bug**, which is how the last two disk
-optimisations came to measure *worse* than what they replaced. §18.91's `AL`
-bug is the case: the BIOS moved nine sectors and answered `AL = 1`, the kernel
-believed `AL`, and re-read the rest one sector at a time — 148 sectors in 34
-`int 13h` calls for a 32-sector file on the 5150, while **the same binary on
-the same image under QEMU moved 34 sectors in 6 calls**. Correct, fast, and
-silent. It took the field machine plus §18.94's counters to see it, the boot
-sector carried the identical bug for as long again, and no emulator here would
-ever have shown either. An emulator's floppy controller returns what its
-author believed the hardware returns.
+> **A disk TIMING figure from MartyPC is worth having, and is still checked on
+> the 5150 before it lands here.** Part 9's disk rows come off the 5150.
+>
+> **A disk CORRECTNESS question moved half way**: what the *ROM* does is
+> MartyPC's, because MartyPC runs the ROM — §18.91's `AL` bug reproduces
+> there (Set 35). What the *chip and the drive* do is still the emulator
+> author's belief, and still the 5150's question.
+
+**The correctness half is the one that changed, and this document said the
+opposite for two sets.** §18.91's `AL` bug is the case: the BIOS moved nine
+sectors and answered `AL = 1`, the kernel believed `AL`, and re-read the rest
+one sector at a time — 148 sectors in 34 `int 13h` calls for a 32-sector file
+on the 5150, while **the same binary on the same image under QEMU moved 34
+sectors in 6 calls**. Correct, fast, and silent. QEMU missed it because
+SeaBIOS is a different BIOS, not because emulation cannot see it: `make
+DISKAL=1` on `os8088_5150_herc` boots in **893 ticks against 188** and shows
+**870 sectors in 183 reads against 183 in 24** — 4.75x the traffic, against
+the field's measured 4.6x. What no emulator here invents is what a real 765
+puts in ST1, or whether a real drive ever returns short.
 
 ---
 
@@ -2415,6 +2428,12 @@ before it is worth running again is a **VGA** field disk, which does not exist.
 
 #### MartyPC is the real thing on the CPU and not on the disk
 
+> **The disk half of that heading expired at Set 37.** The `read 16K, cold
+> motor` row below — 0.27 s against the 5150's 8.07 — is upstream MartyPC
+> with no platter in it. Sets 35 and 37 gave it one; the same row now reads
+> 1.15–1.65 s against the field's 1.59 (Set 38, and it is an N = 1 row). The
+> CPU half stands unchanged.
+
 Against 11a, row for row, **MartyPC lands within 0–4% on 45 of 47 gfxbench
 rows** — the closest agreement any emulator has managed here, and enough that
 its "cycle accurate" claim survives contact with a 5150. PCem is uniformly
@@ -2759,6 +2778,13 @@ number of them. Read in order:
   **2:1 interleaved** (4,608 bytes in two turns is 11,520 B/s and we measured
   11,985), and the drive, the controller and the BIOS **stream perfectly
   well** when asked for nine sectors at once.
+
+  > **The interleave half of that is WRONG — see Set 37.** The media is 1:1
+  > and the missing revolution is the IBM ROM's own head-settle delay loop,
+  > 52.5 ms of `LOOP $` once per `int 13h`. The B/s agreement that seemed to
+  > confirm 2:1 is bytes over the *whole call*, overhead included, so it
+  > cannot tell the two apart. The rest of the bullet stands: nine sectors in
+  > one command does stream.
 - **The same nine sectors as nine calls costs 10.02 revolutions**, one per
   sector, because control returns to the caller and the next sector has gone
   past by the time the command is reissued.
@@ -2880,6 +2906,13 @@ copied out to the ST-225 between passes).
 
 Three independent numbers within 16% of each other, and the media is 2:1
 interleaved. **11.5–13.4 KB/s is what this drive does**; that is the target.
+
+> **Set 37 overturns the interleave line and keeps the target.** 11,570
+> against 11,520 is bytes over the *whole* `int 13h` call, and a quarter of
+> that call is the ROM's head-settle delay loop — so 1:1 media plus 52.5 ms
+> of BIOS produces the identical figure. The media is 1:1. What the drive
+> does is unchanged: 11.5–13.4 KB/s is still the target, because it is
+> measured rather than derived.
 
 #### The raw rows repeat, which is what makes them a measurement
 
@@ -3155,6 +3188,16 @@ interleaved where the 5150's is 2:1. os8088 gets 11,047 against 8,062, only
 1.37x. So **the faster disk is the one os8088 wastes more of**: 2.03x off its
 ceiling against 1.49x.
 
+> **Set 37 changes the CAUSE and not the finding.** Both machines' media is
+> 1:1; what differs is the per-call BIOS overhead. Read the two track rows as
+> 1.00 revolution of transfer plus the rest: the 5150 spends **0.99 rev** of
+> overhead and latency, the Compaq **0.24**. That is what a 52.5 ms delay
+> loop on a 4.77 MHz 8088 looks like against the same nominal 25 ms wait on a
+> Compaq ROM and a 12 MHz 286 — big enough to overshoot sector 1 and cost a
+> whole turn on one machine, small enough to fit the slack on the other. The
+> 1.87x, the 1.37x and "the faster disk is the one os8088 wastes more of" are
+> all measurements and all stand. The `interleave that implies` row does not.
+
 The mechanism is per-call rotational latency, and both machines pay about the
 same number of *milliseconds* for it. A 33-sector read is 5 `int 13h` calls
 (1, 6, 9, 9, 8 — identical on both machines, as the trace confirms), and
@@ -3339,10 +3382,12 @@ hitch ~744 ms into the first play after a load (the old pre-roll of two), so
 the 16KB grant is **a field bug fix expressed as a buffer size**, not slack.
 The 8KB row above only exists because the pre-roll was given back to get it.
 
-**And the harness cannot price the case the cushion is for.** MartyPC is
-cycle-accurate and 30x fast on disk (Set 11), and the transient a ring
-absorbs is mostly floppy: one ~12-sector mount at the 5150's ~65 ms/sector is
-**~780 ms ≈ 2.1 halves** at the XT rate. Against a 7-half target that is
+**And the harness could not price the case the cushion is for.** MartyPC was
+cycle-accurate and 30x fast on disk when this was written (Set 11), and the
+transient a ring absorbs is mostly floppy: one ~12-sector mount at the 5150's
+~65 ms/sector is **~780 ms ≈ 2.1 halves** at the XT rate. *Set 37 changed
+that half of it* — the floppy turns now and a mount costs real guest time, so
+this IS reachable on an IBM-ROM machine, and re-measuring it is open work. Against a 7-half target that is
 comfortable and against a 3-half one it is not. So *do not* read the third
 row as a licence to shrink the ring — that is a number this instrument is not
 entitled to give, and the 5150 is where it would have to come from.
@@ -3716,8 +3761,10 @@ so a face costs the same disk, the same RAM and the same boot on any machine.
 **What could NOT be measured, and it is worth knowing why.** An end-to-end UI
 operation cannot see this at all: opening a Disk window (~40 `font_str` calls)
 measured **18.29 s and 20.97 s on two trials of the SAME kernel**, a 15%
-spread against a 0.5% effect — the floppy mount dominates and MartyPC is not
-disk-accurate anyway (Set 11). A per-primitive harness with the interrupts off
+spread against a 0.5% effect — the floppy mount dominates it, and at the time
+MartyPC was not disk-accurate either (Set 11; it is, since Set 37 — but a
+mount dominating a 0.5% effect is a fact about the operation, not the
+instrument, so the conclusion is unchanged). A per-primitive harness with the interrupts off
 is the only instrument with the resolution, which is what `gfxbench` is for.
 
 ### Set 26 — `font_run`'s compose, and the blank-row skip that does not transfer (SPEC.md §6.1.5)
@@ -3978,3 +4025,784 @@ lands on the paths that are least gated and longest-running**, and §6.1.8's
 span is worth having for the same reason — a padded Note Pad row is exactly the
 shape it collapses. The Task Manager is the one consumer that had already
 solved the problem a different way.
+
+### Set 30 — the raise cache's restore, and the sub-rect that halves it (SPEC.md §5.8/§11.96.6)
+
+REDRAW-SPEC Part 3 left one instruction for whoever picked it up: *do not spend
+the sub-rect work on the strength of the 644 → 215 ms figure — that is the
+cache's win and it is already banked. Measure the restore itself first.* So this
+set starts there, and the measurement is three exec breakpoints inside one
+`wm_draw_win` on a cycle-accurate 5150/CGA, with `cycles` read at each.
+
+A 318×136 Disk window content, raised with its cache live:
+
+| span | cycles | ms |
+|---|---|---|
+| `wm_draw_win` → `wm_su_try` (all the chrome: frame, shadow, title bar) | 233,108 | 48.84 |
+| `wm_su_try` → `gfx_restore` (`wm_su_ck` + `wm_su_edge`, the edge merge) | 86,962 | **18.22** |
+| `gfx_restore` → `wm_grow_paint` (the blit) | 141,465 | **29.64** |
+
+So the restore is **47.86 ms** against 48.84 for everything around it — the
+blit is not a rounding error on a raise, and the **edge merge is 38% of it**,
+which nothing had priced before.
+
+**What the sub-rect is worth, on the case it is for.** Two Disk windows, the
+front one dragged clear and then dragged *away* so it genuinely uncovers an L
+(dragged the other way, §11.91.2 marks nothing at all and the whole question
+does not arise). Same session, same machine, breakpoints on `gfx_restore` and
+`gfx_sub_off`, which bracket the blit:
+
+| build | rect restored | cycles | ms |
+|---|---|---|---|
+| whole content | (111,38,428,173) — 41 B/row × 136 | 146,212 | 30.63 |
+| sub-rect | (216,80,428,173) — 27 B/row × 94 | 72,860 | **15.27** |
+
+**2.01x**, against 2.20x predicted by the byte counts — the difference is the
+per-row overhead the narrower band still pays 94 times.
+
+**The dock strip cost 1.4x of that on its own, and finding out was the whole
+lesson.** The first version folded the strip into the shared painted rect
+whenever `dock_paint` had drawn, and the strip is *full width*, so every
+window's owed rect became full width — including a window nowhere near the
+dock. Measured: 21.28 ms rather than 15.27, a 41-byte row where 27 would do.
+The marking pass one screen up had already got this right (`.mnodock` tests
+each window's own `y+h`), and `wm_su_owed` follows it. **A term that is only
+true of some windows does not belong in a rect they all share** — §26.3's
+phantom drive-zone columns are the same mistake, and this is the second time
+the answer has been "ask per window".
+
+**What is NOT measured here, and should be next**: the 18.22 ms edge merge is
+still done over the *whole* banked rect's rows even when the restore is a
+94-row band, because `wm_su_edge` walks the buffer with one stride and bounding
+it to the sub-rect's rows needs the two-level walk the plane skip implies. That
+is the larger of the two remaining halves — bigger than what the blit has left
+to give. **Set 31 is that, done.**
+
+### Set 31 — the edge merge bounded to the rect being restored (SPEC.md §11.96.8)
+
+Set 30 halved the blit and named what it had left alone: `wm_su_edge`, walking
+the whole banked rect however small a strip the restore put back. Same machine
+(cycle-accurate 5150/CGA), same session, same drag — the two Disk windows with
+the front one dragged *away* so it genuinely uncovers — and the span is
+`wm_su_try` → `gfx_restore`, which is `wm_su_ck` plus the merge:
+
+| build | cycles | ms |
+|---|---|---|
+| the whole banked rect (136 rows, both columns) | 88,736 | 18.59 |
+| bounded to the restored rect | 38,596 | **8.09** |
+
+**2.30x**, and the blit beside it is unchanged at 15.27 ms, which is the check
+that the two halves are independent. So one restore on this drag:
+
+| | edge | blit | restore |
+|---|---|---|---|
+| before the round | 18.59 | 30.63 | 49.22 ms |
+| after §11.96.6 | 18.59 | 15.27 | 33.86 ms |
+| after §11.96.8 | **8.09** | 15.27 | **23.36 ms** |
+
+**2.11x on the restore**, from two changes that are each provably the same
+pixels.
+
+**Two things in the 2.30x are not the row count**, and they are worth separating
+because the second is free where the first is not. The rows walked drop 136 → 94
+(a 1.45x), and the **left edge column is not merged at all**: this restore's
+`x1` is 216, which is byte column 27 against the banked rect's 13, so there is
+no overhang on that side to repair — those pixels are the window's own content,
+which the pass did not paint, so the cache and the screen already agree. A
+sub-rect in the middle of a window does *no* edge work whatever its height. That
+is the half of the win the row bound alone would not have found, and it is why
+the figure beats the 1.45x the geometry suggests.
+
+**What is left of the restore is now the blit again**, 15.27 against 8.09 — and
+there is no obvious next cut in it: it is `rep movsb` over exactly the bytes that
+changed, at 27 bytes a row for 94 rows, and the per-row overhead is the row loop
+the two renderers already share with the cursor.
+
+### Set 32 — Paint's repaint with a PICTURE in it: blank was the very cheap case
+
+Set 30's Paint figures were taken on a **blank** canvas, and that turns out to
+be the wrong end of a 41x range. Same machine (cycle-accurate 5150/CGA), same
+window, same cover-and-raise — the only difference is what is in the canvas. The
+picture arrives by **double-clicking it**: `assoc.inc` ships `BMP` → PAINT, so
+§54.5's launch-with-a-document path loads it with no file dialog to drive.
+
+| canvas | runs/row | the canvas blit |
+|---|---|---|
+| blank (one run a row) | 1 | **211 ms** |
+| a textured 492×133 16-colour BMP | 84.9 | **8,670 ms** |
+
+**8.7 seconds**, and the model holds: 11,298 runs at ~0.77 ms each against
+`pt_blit`'s own quoted ~0.5 ms per `gfx_hline`, the balance being the 4bpp source
+scan. A picture with ~30 runs a row — an ordinary drawing rather than this
+deliberately noisy one — lands near the three seconds the field reports.
+
+**What this settles about `WF_SAVEU` for Paint, which is the opposite of the
+guess on record.** "Paint is already drawing a blit, so a restore cannot be
+faster" is false by two orders of magnitude, because the two are not the same
+kind of operation: `gfx_blit4` costs **per RUN** (a `gfx_hline` per run, ~756 µs
+of arriving each, §5.7), while `gfx_restore` is a flat `rep movsb` with no
+per-run cost at all. Priced per byte off Set 30 and this set:
+
+| | bytes moved | ms | per byte |
+|---|---|---|---|
+| `gfx_restore`, whole content (Set 30) | 5,576 | 30.63 | **5.5 µs** |
+| `gfx_blit4`, textured canvas | ~35,600 | 8,670 | **244 µs** |
+
+So a raise cache over Paint's content would be ~9 KB and ~50 ms on a 1bpp
+adapter against 8,670 — **170x** — and ~36 KB and ~200 ms on VGA, 43x.
+
+**The objection that survives is memory, and it is adapter-shaped.** `wm_su_kb`'s
+`(bpr + 2) × rows × planes`: Paint's stock content on CGA/Hercules is ~9 KB, on
+VGA ~36 KB, and a window grown to most of a 640×480 screen is ~150 KB. Paint
+itself already holds canvas + undo + clipboard, ~127 KB at stock size — so on a
+**256 KB machine** (heap ≈ 160 KB after the kernel) there is no room for the VGA
+figure and only just room for the 1bpp one, and the claim being purgeable
+(§50.6) means it is simply refused rather than damaging. The cache is therefore
+a **640 KB-machine** optimisation on VGA and a marginal one on the machines this
+project is calibrated against.
+
+**Which is why drawing LESS of the canvas beats caching it, and composes with
+everything.** The blit is linear in the runs it covers, so a repaint that owes
+10% of the canvas costs ~10% of 8,670 ms — about **0.9 s** — at **no memory cost
+at all**, on every adapter and every machine size. That is a bigger win than the
+cache can give on a 256 KB machine and it stacks with the cache where the cache
+fits. §11.90's unconditional white fill is what stands in front of it.
+
+**And two smaller things this run recorded**: the repaint issues **two**
+`wm_draw_win` passes for Paint's window (a 376 ms one that draws no canvas, then
+the 8,670 ms one), which is the `[pt_apend]` deferred-resize path calling
+`OSAPI_WM_FRONT` from inside `W_PAINT` and is worth its own look; and the
+~376 ms of palette, colour strip and divider is **small in area** — a narrow
+left-hand column — so it is the part a cache would hold for about 1 KB.
+
+### Set 33 — the white fill measured as a PICTURE, not as work (SPEC.md §11.90.1)
+
+`wm_draw_win`'s fill is one `gfx_fill` — ~24 ms on a Disk-window-sized content —
+so as *work* there is nothing here. As a *picture* it is PERFORMANCE.md Part 1's
+double draw in its purest form, and the gap between its two layers is however
+long `W_PAINT` takes. Sampled on a cycle-accurate 5150/CGA over a Paint raise
+with Set 32's textured bitmap, an interior box of the canvas:
+
+| | the sample box |
+|---|---|
+| the kernel fills (before) | **fully white from +350 ms to +2,967 ms — 2,617 ms** |
+| `WF_OWNBG` (after) | **never blank**: peak whiteness 0.818, never uniform |
+
+**The 2,617 ms is the BOX's figure and not the window's.** `pt_blit` works down
+the canvas in bands, so a given row is white from the fill until the blit reaches
+it: the box sampled here is in the upper middle and clears at 2.6 s, and the
+bottom rows stay white for the whole 8,670 ms. Which is the shape of the defect —
+the user watches their picture vanish and then wipe back down the screen.
+
+**So the flag's value is not the 24 ms and quoting it that way would be
+misleading.** It is that a repaint stops being visible as a blank-then-fill. The
+same argument applies to every window whose `W_PAINT` is slow, and to none whose
+`W_PAINT` is fast — which is why it is opt-in per window rather than a default
+(§11.90.1).
+
+Verified against a build that still gets the fill: **0 differing pixels** on CGA,
+Hercules and VGA mode 12h across cover / raise / drag-across / re-raise
+(`tools/ptcheck.py`). The gate uses a **textured** BMP deliberately: a blank
+canvas is uniform white, which is precisely the colour the fill would have left,
+so it is the one picture that cannot tell a kept promise from a broken one.
+
+### Set 34 — Paint told which rect it owes (SPEC.md §11.90.2)
+
+§11.90.1 stopped the kernel whitening Paint's content; this hands Paint
+§11.96.6's accumulated damage so it blits only the part it owes. Measured on a
+cycle-accurate 5150/CGA with Set 32's textured bitmap, the Disk window dragged
+**off** Paint by (+70, +45) — a `wm_dmg_wins` pass, which is where a damage rect
+exists at all:
+
+| | Paint's `W_PAINT` | its canvas blit |
+|---|---|---|
+| the whole content | 9,024.5 ms | 8,669.8 ms |
+| the damage rect | **7,114.1 ms** | **6,758.8 ms** |
+
+**1.28x, and it is exactly proportional rather than surprising**: the damage
+covered 73% of Paint's content width and the blit came in at 78% of the whole.
+That is the feature working as designed — the blit is linear in the runs it
+covers — and it is also the honest ceiling, because two things bound how small
+the rect can get.
+
+**A drag's damage is at least the MOVER's own rect.** `ui_drag` passes the union
+of where the window was and where it is, so the saving is bounded by how much
+smaller the moving window is than the one underneath: a Disk window 320 wide
+dragged over a Paint 536 wide can only ever uncover so little of it, and 1.28x is
+what that geometry allows. A small window dragged across a full-screen Paint
+saves nearly everything; that is the same arithmetic, not a different feature.
+
+**And a RAISE still repaints whole**, which is the bigger of the two gaps and the
+obvious next step. `wm_raise` arms no damage rect — there is none to arm — so
+`wm_damage` answers "whole", correctly. But what a raised window actually owes is
+the part that **was covered**, which is computable: it is the complement of
+§11.3's visible region taken *before* `wm_lift`. That is the case where "only 10%
+of the canvas was visible" turns 8.7 s into ~0.9 s, and nothing in this set
+reaches it.
+
+Verified with `tools/ptcheck.py` against a build that asks for nothing: **0
+differing pixels** on CGA, Hercules and VGA mode 12h.
+
+**A harness correction came out of it, and it is the second time this round that
+the arrow has cost a run.** `subcheck`'s docstring argued the mouse arrow needed
+no masking because both runs drive the pointer to the same derived coordinates.
+True of its POSITION and silent about whether it is DRAWN — the cursor is erased
+under the gfx lock and put back at the unlock (§7.1.4), so whether a capture
+catches it depends on where `settle` lands relative to the last one. Measured:
+**the same build captured twice differed by 45 arrow-shaped pixels** over a dock
+tile. Both gates now blank a 16x16 box at the published cursor position. A gate
+that fails at random is worse than no gate.
+
+### Set 35 — MartyPC's floppy is given a platter
+
+Not a field report: a change to the **instrument**, measured against the field
+reports that already exist. `tools/martypc/patches/04-floppy-disk-timing.patch`
+(`03-` when this was written; renumbered when elendilon's video-DIP patch landed),
+docs/MARTYPC-DEBUG.md.
+
+#### What was actually there
+
+Upstream MartyPC models no floppy mechanism whatever, and the source says so
+plainly once you look: `operation_read_data` calls the drive once and streams
+the whole run to DMA as fast as the CPU turns; `command_seek_head` returns
+`CommandComplete` in the same breath it is issued, so **a seek is free**;
+`FloppyDriveMechanicalState`, with its `MotorSpinningUp` and `HeadSeeking`
+arms, is an enum **nothing in the tree references**; and `media_geom`'s
+sectors-per-track is hardcoded `0`, because until now no code wanted it. Set
+11's 30x was not a calibration error. There was nothing to calibrate.
+
+#### One mechanism, three rows
+
+The patch models rotation (a head angle per drive), the MFM data rate (32 us a
+byte at 250 kbit/s, so a 512-byte sector's data field is 16.384 ms), the
+physical **interleave**, and a per-cylinder seek. Sets 14 and 22's three raw
+`int 13h` rows then fall out of it together, which is the point — they were
+never three facts:
+
+| | field, IBM 5150 | model, 2:1 |
+|---|---|---|
+| one sector, re-read | 199.1 ms = **1.00 rev** | **199.106 ms = 1.00 rev** |
+| a 9-sector track, one call | 384.5 ms = **1.92 rev** | **590.5 ms = 2.95 rev** |
+| the same nine as nine calls | 2,004.8 ms = **10.02 rev** | **2,197.0 ms = 10.99 rev** |
+
+**The middle row is a MISS and the right column is measured, not modelled.**
+An earlier draft of this set put 1.86 rev there, which was this document's
+author working the mechanism out on paper rather than reading it off the
+machine — `sysbench` on MartyPC says 2.95. The single-sector row is exact to
+four digits and the nine-call row is within 10%, so the per-sector arithmetic
+is right; what the track row exposes is a **quantization boundary**. The model
+finishes the ninth sector 28 ms before sector 1 comes round again, and its
+turnaround — the real IBM ROM returning from `int 13h` and being re-entered,
+which is cycle-accurate — does not fit in 28 ms, so every iteration waits a
+further whole revolution. The 5150 catches that same sector. **So the media
+model is sound and the miss is one of tens of milliseconds at a
+revolution-sized cliff**, which is precisely the shape that makes the boot
+17% slow rather than 3x, and precisely why a rotational model has to be
+checked against a rotational measurement instead of against its own algebra.
+
+**Also measured and NOT the cause**: the platter was being turned during a
+transfer's byte-streaming phase as well as by the transfer's own per-sector
+walk, which double-counts. Fixing it is right — the operation owns the angle —
+and it is worth **2%**, not the miss above. It measured as nothing against a
+7,980 ms boot transfer total and is recorded here so the next reader does not
+re-derive it as the explanation.
+
+**The interleave cannot come from the image and does not.** A raw sector image
+records the LOGICAL order and says nothing about the platter, so 2:1 is a
+statement in the machine config — the 5150's media is 2:1 (Set 14), the Compaq
+Portable III's ~1:1 (Set 19), and that difference is exactly why the Compaq
+streams a track in 1.24 revolutions where the 5150 needs 1.92.
+
+> **The first sentence stands and the rest is wrong — Set 37.** Interleave is
+> indeed a config statement and cannot be derived from an image. Neither
+> machine's media is interleaved: both are 1:1, the config sets none, and what
+> separates 1.24 revolutions from 1.92 is per-call BIOS overhead. Read this
+> whole set with that substituted — including the `model, 2:1` column above,
+> whose 2.95-revolution miss is the doubled turnaround and not a quantization
+> cliff the model was entitled to.
+
+#### Measured end to end
+
+`boot ticks`, 360KB image, os8088's own counter:
+
+| machine | media | before | after | field (Set 22) |
+|---|---|---|---|---|
+| `os8088_5150_cga_gla` (GLaBIOS) | 1:1 | 41 (2.25 s) | **130 (7.14 s)** | — |
+| `os8088_5150_cga` (IBM ROM) | 2:1 | — | **210 (11.53 s)** | 180 (9.886 s) |
+| `os8088_5150_herc` (IBM ROM) | 2:1 | — | **211 (11.59 s)** | **180 (9.886 s)** |
+
+The last row is the like-for-like — the field's 180 is a Hercules boot off
+`herc.img` — and **4.4x fast becomes 1.17x SLOW**. The sign matters as much as
+the magnitude: the old error flattered every disk decision taken on it, and
+this one costs a little instead.
+
+**The residual is attributed rather than assumed.** Instrumenting the charge
+puts the boot at **7.2 s of rotation and transfer over 161 sector waits against
+0.62 s over 14 seeks** — so the seek model, the one part no row in this
+document pins, is 8% of disk time and cannot be the 17%. The sector average is
+44.9 ms against the 42.7 that this document's own 384 ms/9 implies, and that
+5% is physical: a short run pays a full rotational latency for its first
+sector and only a whole-track read amortises one. The rest is not disk.
+One caveat on the comparison: the field boots a `make field` disk and this
+boots the shipped one (167 sectors), so `tools/fieldsize.py`'s rung check is
+what licenses putting the two side by side.
+
+#### Two things it found
+
+**GLaBIOS abandons a floppy operation after ~250 ms.** Measured three times
+running, at 250.2 / 245.8 / 245.8 ms, after which it resets the controller and
+the boot sector prints `os8088: disk error` — status **80**, read off the
+screen with `make BOOTDIAG=1`, which is precisely the boot this knob exists
+for. A 6-sector 2:1 run takes 305 ms, so under that BIOS it can never
+complete. It is the BIOS and not the model, on three counts: the FDC presents
+a correctly BUSY status register throughout, **seeks of 329 ms complete fine in
+the same boot**, and **the IBM ROM boots the identical 2:1 configuration** —
+which was a prediction when this was written and is now the 211 above. So 2:1
+goes only on the `ibm5150_82_v4` machines, and the GLaBIOS twins keep 1:1.
+
+> **The BIOS limit is real and the exception it forced is gone — Set 37.** No
+> machine carries 2:1 any more, because the field machine's media never did,
+> so no config has to distinguish the two ROMs and `os8088_5150_cga_gla`
+> boots `combo.img` in 175 ticks. The ~250 ms abandon is still a fact about
+> GLaBIOS and still the reason not to take a disk number off it.
+
+**And a run must be paced per SECTOR, not charged as one lump.** The first
+version delayed a whole multi-sector run in one silent block, which is not what
+a drive does — a controller starts DRQing as the first sector arrives and
+pauses only over the inter-sector gaps. Per-sector pacing reads out of the
+trace as `82.8 ms, 44.4, 44.4, …`: the first sector's rotational latency, then
+two slots of 2:1 gap apiece. It did not rescue GLaBIOS, whose limit is on the
+whole operation rather than on silence, but it is the honest model and the
+totals are identical by construction.
+
+#### What it does not touch
+
+The patch changes what a disk **costs** and never what it **says**. §18.91's
+`AL` bug is a claim about what a real ROM returns; an emulator returns what its
+author believed, and this one still does. Correctness questions — short reads,
+`int 1Eh`'s EOT, BIOS interrupt stack depth — remain the 5150's, exactly as
+before. Motor spin-up, the PCjr PIO paths and Format Track are unmodelled or
+uncalibrated, and the seek figures are the BIOS's own SPECIFY request rather
+than anything measured: the field's three rows all read one track and never
+seek, so nothing in Part 9 pins them. **Hard disks are untouched.**
+
+#### The `AL` bug reproduces here, and that was not expected
+
+Set 35 shipped saying MartyPC "will still not catch a disk CORRECTNESS bug".
+**That is wrong, and it is wrong in the useful direction.** With the IBM ROM in
+`tools/martypc/roms/`, MartyPC does not *model* the BIOS — it **executes** it,
+so a bug in IBM's `int 13h` is present by construction. Same image, same
+machine (`os8088_5150_herc`), shipped kernel against `make DISKAL=1`:
+
+| | shipped (trusts `CF`) | `DISKAL=1` (trusts `AL`) |
+|---|---|---|
+| int 13h-level reads | 23 | **177** |
+| sectors moved | 177 | **846** — 4.8x |
+| **longest run** | **9** | **9** |
+| `boot_ticks` | 211 | **1152** |
+
+`longest_run` = 9 in both is Set 16's finding restated by the emulator: the
+kernel asks for nine sectors, is given nine, and asks again. The 4.8x traffic
+is Set 15's 4.6x. **QEMU missed this because SeaBIOS is a different BIOS**, not
+because emulation cannot see it — and that distinction was never drawn here,
+which is why MartyPC inherited a blindness it does not have.
+
+The counters are the CONTROLLER's, read over the debug socket
+(`os88marty.py`'s `m.disk()`), so the guest needs no `DISKCNT=1` kernel and no
+test package: **§18.94's block, on a shipped image, from outside**.
+
+So the boundary is now between the ROM and the chip. **BIOS-level** behaviour —
+what `int 13h` returns, `int 1Eh`'s EOT, the ROM's own arithmetic — is
+reproduced because it is IBM's code. **Controller-level** behaviour — what a
+real 765 puts in ST1 on a CRC error, whether a real drive ever returns short —
+remains the emulator author's belief, and remains the 5150's question.
+
+#### Set 35.1 — the seek and the spin-up get an instrument
+
+The model's two untested numbers now have `sysbench` blocks
+(docs/TESTING.md, `make field`). Run here on `cga.img` under the IBM ROM with
+2:1 media, so this is **what the model predicts, not what the drive does** —
+the 5150 is what turns it into a measurement.
+
+**The seek rows come out as a staircase, which is the design and not an
+accident.** A read ends at a fixed angular position, so the seek hides inside
+the wait for sector 1 to come round and the rows can only step in whole
+revolutions:
+
+| row | us/op (a pair of reads) | revolutions per read |
+|---|---:|---:|
+| `seek 0 cyl (baseline)` | 398,211 | **1.00** |
+| `seek 1 cyl, pair` | 398,211 | 1.00 |
+| `seek 5 cyl, pair` | 398,211 | 1.00 |
+| `seek 10 cyl, pair` | 398,211 | 1.00 |
+| `seek 20 cyl, pair` | 810,154 | **2.03** |
+| `seek 39 cyl, pair` | 1,194,634 | **2.99** |
+
+The baseline is 1.00 revolution per read to three digits, which is what says
+the instrument is sound — it is the same check `int 13h 1 sector` has always
+been. **The break falls between 10 and 20 cylinders**, and that is the whole
+datum: at the DPT's `00CF` (SRT = 12, so 8 ms a cylinder at 250 kbit/s) plus a
+25 ms settle, a 20-cylinder seek is 185 ms against the ~184 ms of rotational
+slack a 1-sector read leaves — so it steps up *just*, exactly where the model
+says. **If the 5150's break falls lower, its drive steps slower than the BIOS
+asked for; if there is no break at all, it steps faster than 5.1 ms and the
+model is overcharging every seek in the system.**
+
+**The spin-up rows read INVERTED here, and that is the correct answer for this
+machine**: cold 164,777 us against warm 219,702, with `motor status 40:3F` =
+`0000` so the drive really had stopped. MartyPC models no spin-up — the header
+says a cold row not slower than the warm one means none is being paid — and
+the two rows are one revolution apart in either direction because N = 1 and
+each catches the platter wherever it was. On the 5150 the cold row should be
+**about a second longer**, that being what the DPT asks for, and the size of
+the gap over and above it is the platter itself.
+
+**One thing to check on the iron while it is running.** MartyPC's ROM reports
+`DPT motor start /8 s` = **4** — half a second — where Set 14 read **8** on the
+field machine off the same 27 OCT 82 ROM. One of those two readings is wrong
+and the report prints the byte, so the next field run settles it.
+
+#### ...and the report is one round from its own ceiling
+
+`SYSBENCH.TXT` is **337 rows of 380 and 14,806 arena bytes of 16,000** — 7%
+spare. That ceiling has never been visible: `bl_full` says a report
+*truncated* and nothing said how close one that did not had come, which is why
+the ROW ceiling was raised three times after the fact and the arena's never
+was. Both figures are printed in the trailer now.
+
+**And it cannot simply be raised.** `bl_out` is `BL_ARENA`-sized too, so every
+byte costs two, and sysbench's image plus bss is already within ~5KB of the
+64KB **segment** a package gets (SPEC.md §20.1): +3,456 overflows it, and the
+failure is a wall of `word data exceeds bounds` at unrelated lines rather than
+anything naming the constant. The next round wants a row dropped or the suite
+split, and now that decision can be taken from the report rather than from a
+truncated one coming back off a machine nobody can re-run cheaply.
+
+### Set 36 — the seek measured on the iron: the model's one guess was right
+
+One `sysbench` run on the IBM 5150 off `combo.img` built `DISKCNT=1`, Hercules
+primary. The build is identified rather than assumed — `kernel span KB 97` and
+`kernel image KB 83` match that build's 97.0 / 83.4, `free on it, KB 45` is its
+309-of-354 clusters, and the MM58167 answering at tier 2 with
+`adapters avail 0006` is docs/FIELD-MACHINES.md's machine and no emulator.
+
+#### The head step, which nothing had ever measured
+
+Set 35's model took its step rate from what the BIOS asks for through SPECIFY
+(`00CF` → SRT 12 → 8 ms a cylinder at 250 kbit/s) and its settle from the DPT,
+both on trust, because every raw row in this document reads one track and
+never moves the head. In revolutions per read, against the model:
+
+| cylinders | **5150** | MartyPC |
+|---:|---:|---:|
+| 0 (baseline) | **1.000** | 1.000 |
+| 1 | **1.000** | 1.000 |
+| 5 | **1.034** | 1.000 |
+| 10 | **1.000** | 1.000 |
+| 20 | **2.000** | 2.034 |
+| 39 | **2.138** | 3.000 |
+
+**The break falls between 10 and 20 cylinders, which is exactly where the
+model puts it** — 10 cylinders is 105 ms and fits inside the ~184 ms of
+rotational slack a 1-sector read leaves; 20 is 185 ms and does not. Read as a
+slope instead, 10 → 39 cylinders costs the 5150 **7.81 ms a cylinder** against
+the model's 8.00. **The guess was right to 2%, and it is no longer a guess.**
+
+#### ...and the same rows locate what is still wrong
+
+> **Set 37 answers this whole subsection, and the answer is not the one it
+> guesses at below.** The turnaround was not too long: 2:1 media the machine
+> never had was making every read too long, and the drive was being charged a
+> 25 ms head settle the BIOS already spends in software. With both fixed,
+> every row of the ladder below is exact except the 39-cylinder one, which is
+> one tick short.
+
+MartyPC's 39-cylinder row is **3.000 revolutions against the field's 2.138**,
+a slope of 13.7 ms a cylinder against 7.8 — and the model is *not* using 13.7,
+it is using 8. What that gap measures is the same defect Set 35.1 found in the
+track row: **MartyPC's per-call turnaround is too long, so a read that should
+just catch sector 1 misses it and waits another whole revolution.** The field's
+2.138 is not a whole number and MartyPC's 3.000 is, which is the tell. One
+cause, two symptoms, and it is the residual behind the boot as well.
+
+**Boot, on the identical disk**: 205 ticks on the 5150, **222 on MartyPC** —
+**1.08x**, against the 1.17x Set 35 reported off a different pair of images.
+
+#### The spin-up rows did not answer, and say so
+
+`1 sector, motor COLD` is **164,777 us** and warm **219,702** — cold *faster*,
+with `motor status 40:3F` reading `0000`. Both are exact tick multiples (3 and
+4), so at N = 1 the ±1 revolution of rotational luck is larger than the effect.
+
+But the row is not merely noisy, it is **impossible as stated**: a read that
+completes in 165 ms is **under one revolution**, and no platter starts from
+rest inside one. So either the drive was still turning, or no motor-start wait
+is paid on this path — and `0040:003F` is the **BIOS's belief**, not the
+hardware: the DOR at 0x3F2 is write-only, so a package cannot confirm it.
+That is a limit of the instrument and is recorded rather than worked around.
+Raising N does not fix it either: the wait for the motor to stop would land
+inside the timed region.
+
+#### Two smaller things this settles
+
+**`DPT motor start /8 s` is 8** on the machine — one full second, as Set 14
+read. MartyPC's ROM reports **4**. Same 27 OCT 82 dump, different answer, so
+something between the ROM and `int 1Eh` differs in the emulator; it is worth
+knowing and it is not what the boot gap is made of.
+
+**One 16 KB `FILE_READ` is 27 sectors in 3 `int 13h`**, runs of 9 at
+contiguous LBAs 594/603/612, **no mounts and no resets** — 5 of the file's 32
+sectors served from §18.95's cache, and the repeat read identical. And the
+report came back at **343 rows of 380 and 14,867 arena bytes of 16,000**, 7%
+spare, which is Set 35's warning arriving on the machine it was about.
+
+### Set 37 — the media was never 2:1, and the whole floppy block now matches
+
+Set 36 left one thing wrong and named it: MartyPC's 39-cylinder seek row read
+**3.000 revolutions against the field's 2.138**, and its track read 590 ms
+against 384/398 — "one cause, two symptoms, and it is the residual behind the
+boot as well." That diagnosis was right about there being one cause and wrong
+about what it was. The cause is **this document**, and specifically Set 14's
+conclusion that the calibration 5150's 360KB media is 2:1 interleaved.
+
+It is not. It is 1:1, like every other 360KB floppy an IBM machine ever
+formatted.
+
+#### How a wrong inference got made, and what would have caught it
+
+Set 14 measured a whole 9-sector track in one `int 13h` at **398,211 µs** and
+read it as revolutions: a 1:1 track is one revolution (200 ms) and this was
+two, therefore the platter costs two turns to give up nine sectors, therefore
+2:1. The corroborating number was **11,570 bytes/second**, against 11,520 for
+2:1 by arithmetic — a 0.4% match, and `tests/sysbench` prints that arithmetic
+in its own header.
+
+Both numbers are real. Both have a second explanation that fits them exactly,
+and it is the right one: **1:1 media plus a quarter-revolution of BIOS overhead
+per `int 13h` call**, which locks the measured total to the same two
+revolutions and the same 11,520 B/s. The B/s figure cannot discriminate at all
+— it is bytes divided by the *whole call*, overhead included — and the
+revolution count only discriminates if you already know the overhead is small.
+
+Nobody had measured the overhead. It is not small.
+
+#### The overhead, measured in the ROM
+
+Sampling the guest's `CS:IP` through the debug server across the disk phase of
+a boot puts **8.8%** of it at `F000:EEBF`, which disassembles to
+
+```
+EEB8  mov cx, 0x226        ; 550
+EEBB  or  ah, ah
+EEBD  jz  eec5
+EEBF  loop eebf            ; <- 8.8% of the whole disk phase
+EEC1  dec ah
+EEC3  jmp short eeb8
+```
+
+— IBM's millisecond delay, called with `AH` = the diskette parameter table's
+head-settle byte. The ROM's own table (`F000:EFC7`,
+`CF 02 25 02 08 2A FF 50 F6 19 04`) asks for **25 ms**, and the field machine's
+`sysbench` reports the same 25. What it actually costs is another matter: 550
+iterations of `LOOP $` on an 8088 is ~18 clocks apiece, so IBM's "1 ms" is
+**2.1 ms** and the settle is **52.5 ms**. Tracing every FDC port access
+confirms it end to end — the gap between the last SENSE INTERRUPT result byte
+and the first READ DATA command byte is **52.48 ms with three MSR reads in
+it**, so the guest is not waiting on the controller, it is counting.
+
+That is a quarter of a revolution, once per `int 13h`, on both machines. It is
+the missing turn.
+
+#### What the correction is worth
+
+`interleave` set to 1 on every machine, and the drive's own `FDC_HEAD_SETTLE_US`
+taken to **zero** — the settle is the BIOS's and modelling it a second time in
+the drive is the same wait counted twice, which at 39 cylinders costs a whole
+extra revolution. Then `tests/sysbench` on `os8088_5150_herc`, against the
+field machine's own report from the identical `combo.img`:
+
+| row | 5150 | MartyPC | quanta |
+|---|---:|---:|---:|
+| `int 13h 1 sector` | 199,106 | **199,106** | **0** |
+| `int 13h track, 1 call` | 398,211 | 384,480 | −1 |
+| `int 13h track, 9 calls` | 1,991,057 | 2,004,789 | +1 |
+| `seek 0 cyl (baseline)` | 398,211 | **398,211** | **0** |
+| `seek 1 cyl, pair` | 398,211 | **398,211** | **0** |
+| `seek 5 cyl, pair` | 411,943 | **411,943** | **0** |
+| `seek 10 cyl, pair` | 398,211 | **398,211** | **0** |
+| `seek 20 cyl, pair` | 796,423 | **796,423** | **0** |
+| `seek 39 cyl, pair` | 851,349 | 796,423 | −4 |
+| `read 16K, warm` | 1,208,366 | 1,153,440 | −4 |
+| `read 16K, cold motor` | 1,592,846 | 1,647,772 | +4 |
+| `WRITE, create` | 4,668,686 | **4,668,686** | **0** |
+| `WRITE, append in chunks` | 11,259,773 | 11,040,070 | −16 |
+
+A quantum is 13,731 µs — one tick over the row's four iterations, which is
+`bl_run`'s resolution and not a property of either machine. **Seven of the
+thirteen are exact**, including every short seek and the one-sector read, and
+two more are one quantum out. The `track, 1 call` row is the sharpest case of
+what a quantum means: 384,480 is not merely close to the field's 398,211, it
+is *the number the field itself reported* for that row in Set 14 — the row sits
+on a quantum boundary and flips between runs.
+
+The 39-cylinder row is the one still worth a sentence: 4 quanta (one tick)
+short, where before this change it was **26 quanta** (1,208,366 against
+851,349). The residual is the step-rate slope, which Set 36 put at 7.81 ms a
+cylinder against the model's 8.00 and which nothing here has re-measured.
+
+Every CPU, memory, PIT and scheduler row in the same report matches to a count
+or two, as they already did.
+
+#### Boot, and what the honest sequence was
+
+`boot ticks` on `combo.img`, `os8088_5150_herc`, against the field's 205:
+
+| | ticks | vs field |
+|---|---:|---:|
+| Set 36's build (2:1, frozen platter) | 222 | 1.08x |
+| the platter turning, still 2:1 | **260** | 1.27x |
+| 1:1 and no doubled settle | **188** | **0.92x** |
+
+The middle row is the one to keep. Set 36's 222 was a *frozen* platter — the
+angle only advanced during a transfer, so every read found its sector exactly
+where the last one left it and no turnaround ever cost a revolution. Making
+the rotation unconditional is plainly correct and made the headline number
+**worse**, which is what said the error was somewhere the frozen platter had
+been flattering. Two more revolutions per track is not a number a plausible
+fix moves by 10%; it is a whole missing turn, and that is what sent this at
+the media.
+
+#### The rule this is an instance of
+
+**A ratio that matches an arithmetic prediction is not evidence unless
+everything the ratio divides by has been measured.** 11,570 against 11,520 is
+a 0.4% agreement and it identified the wrong mechanism, because the divisor
+was the whole `int 13h` call and a quarter of that call is a BIOS delay loop
+nobody had looked at. The instrument that settled it was not a better
+benchmark — it was `CS:IP` sampling plus the ROM's own disassembly, which is
+to say: go and find out what the machine is *doing*, not just how long it took.
+
+#### Two things it retired
+
+**The GLaBIOS exception.** Set 35 gave 2:1 media only to the IBM-ROM machines,
+because GLaBIOS abandons a floppy operation after ~250 ms and a 2:1 track read
+takes up to 400. At 1:1 no machine needs the exception and every config here
+carries the same disks; `os8088_5150_cga_gla` boots `combo.img` in 175 ticks.
+
+**"MartyPC's floppy is 1.17x slow."** It is 0.92x, and the sign changed twice
+on the way — 4.4x fast before Set 35, 1.17x slow after it, 1.27x slow once the
+platter really turned, and 0.92x now. `make marty` remains the place to *find*
+a disk regression and the 5150 remains the place a number lands, but the gap
+between them on this bench is now one measurement quantum on most rows.
+
+### Set 38 — no machine here is "the calibration", and the drive proves it
+
+Set 37's whole result was taken on `os8088_5150_herc`, which invites two wrong
+readings: that Hercules is where the disk measures right, and that the other
+seventeen machines are uncalibrated. Both were worth checking rather than
+answering, because the drive being modelled is one **Tandon TM100-2** and its
+behaviour cannot depend on which video card is in the slot next to it.
+
+#### The controller's own traffic, all eighteen machines, one image
+
+`combo.img` booted on every machine, with `m.disk()` read from outside the
+guest afterwards — the FDC's own counters, so no guest code is involved and
+the workload is identical by construction. Grouped by traffic:
+
+| reads | sectors | run | seeks/cyl | seek ms | resets | machines |
+|---:|---:|---:|---:|---:|---:|---|
+| 24 | 186 | 9 | 29/54 | 432.0 | 3 | **`_cga`, `_herc`, `_both`, `_sbonly`, `_cga_720b`, `_cga_4fdd`** |
+| 26 | 199 | 9 | 31/80 | 640.0 | 3 | `_sb`, `_sb_256k` (a sound driver loads — §51.3.1) |
+| 31 | 195 | 9 | 36/80 | 640.0 | 3 | `_sb_128k` (128 KB: the OS does more disk work) |
+| 26 | 201 | 9 | 26/241 | 1928.0 | 6 | `_cga_gla`, `_both_gla`, `_xt_hdd` |
+| 25 | 195 | 9 | 25/241 | 1928.0 | 5 | `_herc_gla`, `_both_gla_mono`, `_xt_vga` |
+| 26 | 201 | 9 | 21/131 | 1048.0 | 6 | `_cga_1fd` (one drive: no B: to probe) |
+| 27/28 | 208/214 | 9 | 27–28/267 | 2136.0 | 5/6 | `_xt_vga_sb`, `_xt_hdd_sb` |
+
+**Six machines are bit-identical** — the same reads, the same sectors, the
+same longest run, the same seeks, the same cylinders crossed and the same
+432.0 ms of seek — across CGA, Hercules, a two-card machine, a Sound Blaster
+with no OPL, a 720 KB drive as B: and a four-drive machine. **The Tandon does
+not change across 5150s**, and that is now a measurement rather than an
+argument from the source.
+
+What *does* move inside that group is `transfer_ms`: 4,111.0 on CGA, 4,243.0
+on Hercules, 4,228.2 on the four-drive machine — a **3.2%** spread. That is
+rotational latency, not the drive: the counts are identical, so the same
+sectors were asked for in the same order, and what differed is how long the
+guest took between calls. A Hercules boot draws a different splash.
+
+Everything below the first group is the **BIOS or the OS**, never the drive.
+The `_sb` rows are §51.3.1's boot probe finding an OPL and loading a driver;
+`_sb_128k` is os8088 working harder in 128 KB; the GLaBIOS rows are a
+different ROM entirely, and the 241 cylinders against 54 is the tell.
+
+#### `tests/sysbench`'s raw block, five machines against the iron
+
+Same `combo.img`, driven through the UI, `int 13h` called with no kernel code
+in the way:
+
+| row | 5150 | `_cga` | `_herc` | `_sb_256k` | `_cga_gla` | `_xt_hdd` |
+|---|---:|---:|---:|---:|---:|---:|
+| `int 13h 1 sector` | 199,106 | **199,106** | **199,106** | 205,971 | **199,106** | **199,106** |
+| `track, 1 call` | 398,211 | **398,211** | 384,480 | 384,480 | 247,166 | 247,166 |
+| `track, 9 calls` | 1,991,057 | **1,991,057** | 2,004,789 | 2,004,789 | 247,166 | 247,166 |
+| `seek 0 cyl` | 398,211 | **398,211** | **398,211** | **398,211** | **398,211** | **398,211** |
+| `seek 1 cyl` | 398,211 | **398,211** | **398,211** | **398,211** | **398,211** | **398,211** |
+| `seek 5 cyl` | 411,943 | 398,211 | **411,943** | 398,211 | 398,211 | 398,211 |
+| `seek 10 cyl` | 398,211 | **398,211** | **398,211** | **398,211** | **398,211** | **398,211** |
+| `seek 20 cyl` | 796,423 | 810,154 | **796,423** | **796,423** | 810,154 | 810,154 |
+| `seek 39 cyl` | 851,349 | 796,423 | 796,423 | 796,423 | 796,423 | 796,423 |
+| `1 sector, motor COLD` | 164,777 | **164,777** | **164,777** | **164,777** | 219,703 | **164,777** |
+| `1 sector, motor warm` | 219,703 | **219,703** | 164,777 | **219,703** | 164,777 | 164,777 |
+| | **exact / within 1q** | **8 / 10** | 7 / 9 | 6 / 10 | 4 / 6 | 5 / 7 |
+
+**Which rows land exactly SHUFFLES between the three IBM machines**, and that
+is the finding. `_cga` nails both track rows and misses `seek 5`; `_herc`
+nails `seek 5` and misses both track rows; `_sb_256k` nails `seek 20` and
+`motor warm`. Nine or ten of eleven are inside one quantum on all three. So
+**the residual is phase, not model** — a row sitting on a 13,731 µs boundary
+falls whichever side the guest's turnaround happens to put it — and *no single
+machine is the calibration*. The right unit is the **class**: an IBM-ROM 5150,
+whichever card is in it.
+
+`_sb_256k`'s `int 13h 1 sector` at 205,971 is the one row outside that: half a
+quantum, and it is the only machine of the three with a **sound driver
+loaded**, so its worker is taking turns the others' do not.
+
+#### GLaBIOS is a different instrument, and by how much is now known
+
+`track, 1 call` is **247,166 against the IBM ROM's 398,211 — 1.61x lighter**,
+and `track, 9 calls` is *the same 247,166*, which looks impossible and is not.
+On 1:1 media sector *n+1* follows sector *n* immediately, so nine separate
+one-sector reads cost one revolution **if the BIOS can turn a call around
+inside one sector time (22 ms)**. GLaBIOS can; the IBM ROM cannot, because its
+head-settle loop alone is 52.5 ms (Set 37) — so it misses every time and pays
+ten revolutions for the same nine sectors. One number, both rows, and it is
+the same 52.5 ms that made the media look 2:1.
+
+That has a consequence for two figures already in SPEC.md. §18.95.3's cache
+table was measured on `os8088_5150_cga_gla` and §52.10's install counts on
+`os8088_xt_hdd` — **both GLaBIOS**. Their *call counts* are unaffected, a call
+being a call on any BIOS, and both sections say counts are the claim. A
+*timing* taken on either would be 1.61x light, and neither section says that.
+Both now do.
+
+#### So: should the other machines be "calibrated"?
+
+**No, and there is nothing to calibrate.** The drive is one model in
+`marty_core` and the first table proves it produces identical traffic wherever
+it is installed; there is no per-machine constant to tune and adding one would
+be inventing a difference the hardware does not have. What was actually
+missing was a **statement of which machines a disk number may come off**, and
+that is now in docs/MARTYPC-DEBUG.md's machine table:
+
+- **IBM-ROM 5150** (`_cga`, `_herc`, `_both`, `_sb`, `_sbonly`, `_sb_128k`,
+  `_sb_256k`, `_cga_720b`, `_cga_4fdd`) — field-comparable, ±1 quantum.
+- **GLaBIOS** (`_cga_gla`, `_herc_gla`, `_both_gla`, `_both_gla_mono`,
+  `_cga_1fd`, `_xt_vga`, `_xt_vga_sb`, `_xt_hdd`, `_xt_hdd_sb`) — the drive is
+  the same and the BIOS is not. Counts yes, seconds no.
+
+The 5150 is still where a number LANDS. What changed is that the gap is one
+measurement quantum on a machine of the right class, and 1.61x on a machine of
+the wrong one — and the second of those was invisible until it was measured.

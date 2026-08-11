@@ -534,6 +534,10 @@ sb_header:
     mov si, sb_l_img
     mov ax, [sb_syskb + SK_IMG]
     call sb_num
+    call sb_build                   ; ...and WHICH BUILD (SPEC.md 57.6), which
+                                    ; the two KB rows above cannot say: they
+                                    ; round, and three disks whose kernels
+                                    ; differ can print the same numbers
     mov si, sb_l_buf
     mov ax, [sb_syskb + SK_BUF]
     call sb_num
@@ -1293,7 +1297,7 @@ sb_mouse:
                                     ; is a measurement
 
     mov ax, DBG_TAG_MOUSE           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_mbase], ax              ; -> mou_bases, 2 words, 0 = no UART there
@@ -1458,7 +1462,7 @@ sb_video:
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_VIDEO           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_vkind], ax              ; -> vid_kind, vid_mono, vid_planes
@@ -1703,7 +1707,7 @@ sb_ladder:
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_CLOCK           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_cstate], ax             ; -> the 7-byte state span
@@ -1753,17 +1757,36 @@ sb_ladder:
 ; has ONE drive and DIP switches that claim two, so its expected rows are
 ; `claimed 2`, `probe stop 03` (Equipment Check) and `verdict 0` - and any
 ; other combination there is the news. A machine whose switches are right
-; reads `claimed 1`, `probe ran 0` and nothing else, because there was nothing
-; to contest.
+; reads `claimed 1`, `probe ran 00` and nothing else, because there was
+; nothing to contest.
 ;
 ; READ `probe stop` FIRST. `verdict 1` means "the drive was kept", and that is
 ; equally what a probe that PROVED it present and one that merely failed to
 ; prove it absent both say - which is the difference between this working and
 ; this being a fail-safe that never fires.
+;
+; ONE SUB-BLOCK PER UNIT (SPEC.md 18.98/57.5). The probe runs on units 1, 2
+; and 3, and the published block used to be a single set of bytes that every
+; run overwrote - so a machine with a 4865 on the 37-pin connector reported
+; only the LAST unit asked, which is exactly the machine this diagnostic is
+; for. `probe ran` is a BITMAP now (bit n = unit n was asked) and a unit is
+; printed only if its bit is set, so a correctly-switched two-drive machine
+; still reads five short rows and not twenty.
 ; -----------------------------------------------------------------------------
+SB_FD_EQP   equ 0                   ; the block, as kernel/disk.inc lays it out
+SB_FD_RAN   equ 1
+SB_FD_U     equ 2                   ; ...then three rows, unit 1 first
+SB_FDU_ST3  equ 0
+SB_FDU_ST3B equ 1
+SB_FDU_ST0  equ 2
+SB_FDU_STEP equ 3
+SB_FDU_VRD  equ 4
+SB_FDU_SIZE equ 5
+
 sb_fdd:
     push ax
     push bx
+    push cx
     push si
     push es
     call bl_blank
@@ -1775,34 +1798,92 @@ sb_fdd:
     call bl_sline
     mov si, sb_s_h_fdd4
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
+    mov si, sb_s_h_fdd6
+    call bl_sline
+    mov si, sb_s_h_fdd7
+    call bl_sline
 
     mov ax, DBG_TAG_FDD             ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
-    mov [sb_fdstate], ax             ; -> the 7-byte state span
+    mov [sb_fdstate], ax            ; -> the 17-byte state span
 
     mov si, sb_l_feqp               ; what int 11h claimed...
-    xor al, al
+    mov al, SB_FD_EQP
     call sb_fdb
-    mov si, sb_l_fran               ; ...whether it was contested at all
-    mov al, 1
-    call sb_fdb
-    mov si, sb_l_fst3               ; ...and the two bytes that decided it
-    mov al, 2
+
+    ; ...and the WHOLE equipment word behind it, which on a 5150 is very
+    ; nearly SW1 itself. The derived count above cannot say WHICH switch
+    ; moved, and a field run that reads the expected number for an
+    ; unexpected reason is exactly the one that costs a second trip: bits
+    ; 7-6 are drives-1, 5-4 the display switches, 3-2 planar RAM, 1 the
+    ; 8087 and 0 "there is a diskette drive at all". Read straight from the
+    ; BIOS rather than from the kernel's banked byte, so the two disagreeing
+    ; would itself be news; nothing in os8088 writes 0040:0010.
+    mov si, sb_l_feqw
+    int 0x11
+    call sb_hex
+
+    ; ...and SW1 ITSELF, read off the 8255 rather than out of the POST
+    ; snapshot above. The two can DISAGREE, and one hex byte beside the other
+    ; says which half is at fault: a machine whose equipment word reads the
+    ; same drive count at two different switch positions is either not
+    ; reading its switches or is having the word rewritten after POST by an
+    ; option ROM, and nothing derived from int 11h can tell those apart.
+    ; On a 5150 the equipment word's LOW BYTE is very nearly SW1 verbatim,
+    ; so the comparison is direct.
+    call sb_sw1
+    jc .nosw1
+    mov si, sb_l_fsw1
+    call sb_hex
+.nosw1:
+    mov si, sb_l_fran               ; ...and which units were contested at all
+    mov al, SB_FD_RAN
     call sb_fdbx
+
+    mov cl, 1                       ; units 1..3; unit 0 has no row
+.unit:
+    mov bx, [sb_fdstate]
+    mov al, [es:bx+SB_FD_RAN]
+    mov ah, 1
+    shl ah, cl
+    test al, ah
+    jz .nextu                       ; never asked: nothing here but initialisers
+
+    mov al, cl                      ; the row's base offset in the block
+    dec al
+    mov ah, al
+    shl al, 1
+    shl al, 1
+    add al, ah                      ; (unit - 1) * SB_FDU_SIZE...
+    add al, SB_FD_U                 ; ...past the two scalars
+    mov [sb_fdrow], al
+
+    xor ah, ah                      ; a heading row whose VALUE is the unit,
+    mov al, cl                      ; which needs no third copy of five labels
+    mov si, sb_l_funit
+    call sb_num
+
+    mov si, sb_l_fst3               ; ...and the line, read twice
+    mov al, SB_FDU_ST3
+    call sb_fdux
+    mov si, sb_l_fst3b
+    mov al, SB_FDU_ST3B
+    call sb_fdux
     mov si, sb_l_fst0
-    mov al, 3
-    call sb_fdbx
-    mov si, sb_l_fpcn
-    mov al, 4
-    call sb_fdbx
+    mov al, SB_FDU_ST0
+    call sb_fdux
     mov si, sb_l_fstep              ; THE row that carries
-    mov al, 5
-    call sb_fdbx
+    mov al, SB_FDU_STEP
+    call sb_fdux
     mov si, sb_l_fvrd
-    mov al, 6
-    call sb_fdb
+    mov al, SB_FDU_VRD
+    call sb_fdu
+.nextu:
+    inc cl
+    cmp cl, 4
+    jb .unit
     jmp short .out
 .nodbg:
     mov si, sb_s_fnone
@@ -1810,9 +1891,89 @@ sb_fdd:
 .out:
     pop es
     pop si
+    pop cx
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; sb_build - one row naming the kernel this report came off (SPEC.md 57.6)
+;
+; The SUM of the three published section lengths. The block holds them
+; separately - a debugger sees which section moved - but the report has room
+; for one row, and a sum separates builds in practice: measured on the three
+; disks that prompted this, .text alone was 56,576 / 56,798 / 56,776.
+;
+; A kernel too old to publish the block prints no row at all, rather than a
+; zero somebody could read as a build.
+; -----------------------------------------------------------------------------
+sb_build:                       ; AX and SI are NOT banked: every row around
+    push bx                     ; this one loads both fresh, and this package
+    push es                     ; has five bytes of image left (see the align)
+    mov ax, DBG_TAG_BUILD
+    call bl_dbgfind
+    jc .out
+    mov bx, [es:bx+2]
+    mov ax, [es:bx]
+    add ax, [es:bx+2]
+    add ax, [es:bx+4]
+    mov si, sb_l_bld
+    call sb_hex
+.out:
+    pop es
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_sw1 - the 5150's SW1 block, read straight off the 8255's port A
+; out: CF=0 with AX = the byte; CF=1 = not an IBM PC and NOTHING was touched
+;
+; **IBM PC ONLY, and the gate is the model byte** at F000:FFFE - FF is the
+; 5150, FE the 5160. It matters: on a 5150 port B bit 7 switches port A from
+; the keyboard to the switch block, which is exactly what the ROM's own POST
+; does; on a 5160 that same bit CLEARS the keyboard and SW1 lives on port C
+; behind PB2 instead. Running this there would reset the keyboard and read a
+; scan code as a switch setting.
+;
+; Port B carries the speaker gate, the two parity enables and the keyboard
+; clock as well, so it is banked and put back BYTE FOR BYTE, and the window
+; is a few microseconds with IF clear - a keystroke landing inside it would
+; otherwise be decoded as switches.
+; -----------------------------------------------------------------------------
+sb_sw1:
+    push es
+    mov ax, 0xF000
+    mov es, ax
+    cmp byte [es:0xFFFE], 0xFF
+    jne .no
+    pushf
+    cli
+    in  al, 0x61                ; ports 60h/61h take the IMMEDIATE form, which
+    mov ah, al                  ; is also what spares this routine a register:
+    or  al, 0x80                ; port B is banked in AH and nothing else is
+    out 0x61, al                ; touched
+    in  al, 0x60                ; ...the switches
+    xchg al, ah                 ; AL = port B again, AH = SW1
+    out 0x61, al                ; and back, before anything else can run
+    popf
+    mov al, ah
+    xor ah, ah
+    clc
+    jmp short .out
+.no:
+    stc
+.out:                           ; a pop cannot disturb CF
+    pop es
+    ret
+
+; sb_fdu / sb_fdux - SI = label, AL = a field offset within the unit row
+; [sb_fdrow] names -> one row, as decimal / as hex.
+sb_fdu:
+    add al, [sb_fdrow]
+    jmp short sb_fdb
+sb_fdux:
+    add al, [sb_fdrow]
+    jmp short sb_fdbx
 
 ; sb_fdb / sb_fdbx - SI = label, AL = byte offset into the floppy block -> one row
 ; as decimal / as hex. ES is KERNEL_SEG on entry (sb_fdd holds it).
@@ -1864,6 +2025,29 @@ sb_cbx:
 
 sb_trailer:
     push si
+    push ax
+
+    ; How close this report came to its own ceilings. `bl_full` already says a
+    ; report TRUNCATED; nothing said how near one that did not had come, which
+    ; is why the row ceiling was raised three times after the fact and the
+    ; arena ceiling never was. Both are printed now.
+    call bl_blank
+    mov si, sb_s_h_cap
+    call bl_sline
+    mov si, sb_l_caprow
+    mov ax, [bl_nrow]
+    call sb_num
+    mov si, sb_l_caprmx
+    mov ax, BL_MAXROWS
+    call sb_num
+    mov si, sb_l_capuse
+    mov ax, [bl_used]
+    call sb_num
+    mov si, sb_l_capmax
+    mov ax, BL_ARENA
+    call sb_num
+
+    pop ax
     call bl_blank
     mov si, sb_s_end1
     call bl_sline
@@ -2375,7 +2559,7 @@ sb_raw13:
     ; --- find the kernel's instrument, or say there is none ----------------
     push es
     mov ax, DBG_TAG_DISK            ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov [sb_dbgblk], bx
     mov ax, [es:bx+12]
@@ -2419,6 +2603,10 @@ sb_raw13:
     mov si, sb_s_h_r136
     call bl_sline
     mov si, sb_s_h_r137
+    call bl_sline
+    mov si, sb_s_h_r138
+    call bl_sline
+    mov si, sb_s_h_r139
     call bl_sline
 
     ; --- the diskette parameter table the BIOS is actually using (18.92) ----
@@ -2508,6 +2696,8 @@ sb_raw13:
     mov cx, 9
     call bl_kv
 
+    call sb_seek                    ; ...what a head STEP costs
+    call sb_motor                   ; ...and what SPIN-UP costs
     call sb_dbgctr                  ; ...and what os8088's own path issued
     call sb_find                    ; ...and what a FIND cursor would win
     call sb_rah                     ; ...and how many chunks the cache holds
@@ -3637,47 +3827,6 @@ sb_verify:
     ret
 
 ; -----------------------------------------------------------------------------
-; sb_dbgfind - look a published block up in the debug registry (SPEC.md 57)
-; in:  AX = the block's tag ('MO', 'DD')
-; out: CF=0 with BX = its offset in KERNEL_SEG and ES = KERNEL_SEG;
-;      CF=1 if this kernel does not publish it
-; clobbers: BX, ES, CF
-;
-; One word at 0060:000E names a list of (tag, offset) pairs ended by tag 0.
-; The tag is also the block's own first word, so this checks that the offset
-; it followed landed where it meant to - which is the whole reason a reader
-; can trust a number it found by walking a pointer out of a fixed address.
-; -----------------------------------------------------------------------------
-sb_dbgfind:
-    push ax
-    push si
-    mov bx, KERNEL_SEG
-    mov es, bx
-    mov si, [es:0x000E]             ; the registry, or 0
-    or si, si
-    jz .none
-.scan:
-    mov bx, [es:si]                 ; the tag
-    or bx, bx
-    jz .none                        ; end of list: not published here
-    cmp bx, ax
-    je .hit
-    add si, 4
-    jmp short .scan
-.hit:
-    mov bx, [es:si+2]               ; ...and the block behind it
-    cmp [es:bx], ax                 ; which must lead with the same tag
-    jne .none
-    pop si
-    pop ax
-    clc
-    ret
-.none:
-    pop si
-    pop ax
-    stc
-    ret
-
 ; sb_r13rate - DX:AX = counts for CX bytes -> DX:AX = bytes per second
 sb_r13rate:
     push bx
@@ -3756,6 +3905,264 @@ sb_b_r13nine:
     mov word [sb_r13off], 0
     pop cx
     ret
+
+; -----------------------------------------------------------------------------
+; sb_r13at - one raw single-sector read at a GIVEN cylinder
+; in:  CH = cylinder. Sector 1, head 0, drive 0, through the kernel's entry.
+;
+; sb_r13go above always reads SB_R13_CYL, because the rows it serves are about
+; what a track costs once the head is on it. The seek rows below are about
+; getting there, so they need to name the cylinder.
+; -----------------------------------------------------------------------------
+sb_r13at:
+    push ax
+    push es
+    push bx
+    push cx
+    push dx
+    mov es, [sb_bseg2]
+    mov bx, [sb_r13off]
+    mov al, 1                       ; one sector...
+    mov cl, 1                       ; ...the first one on the track
+    xor dx, dx                      ; head 0, drive 0 (A:)
+    call far [sb_r13ent]            ; KERNEL_SEG:dsk_dbg_raw - holds sch_lock
+    mov al, ah
+    xor ah, ah
+    mov [sb_st13], ax
+    pop dx
+    pop cx
+    pop bx
+    pop es
+    pop ax
+    ret
+
+; sb_b_seek - ONE OP IS A PAIR: cylinder 0, then [sb_skcyl]. So an op contains
+; two seeks of that distance, and the row's us/op is twice one of them plus
+; twice whatever rotational wait follows.
+sb_b_seek:
+    xor ch, ch
+    call sb_r13at
+    mov ch, [sb_skcyl]
+    call sb_r13at
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_seek - what a HEAD STEP costs (PERFORMANCE.md Part 9 Set 35)
+;
+; This block exists because the floppy timing model in
+; tools/martypc/patches/03-floppy-disk-timing.patch has exactly one number in
+; it that no measurement anywhere pins: the seek. Every raw row above reads a
+; single track and never moves the head, so the step rate there is the BIOS's
+; own SPECIFY request (the DPT byte printed above) and the settle is the DPT's
+; - both taken on trust. This says what the DRIVE actually does with them.
+;
+; **READ THE ROWS AS REVOLUTIONS, AND EXPECT THEM TO BE WHOLE ONES.** A read
+; ends at a fixed angular position, so the next read of sector 1 waits for
+; sector 1 to come round again: the seek happens INSIDE that wait and is
+; invisible until it is longer than the wait. Every row is therefore quantized
+; to whole revolutions, and what the block measures is the DISTANCE AT WHICH
+; THE COST STEPS UP, not a smooth slope:
+;
+;   all rows == the baseline    every seek fits inside one revolution, so the
+;                               step rate is bounded ABOVE by (rev / cyls)
+;   a row costs one rev more    that seek does NOT fit; the step rate is
+;                               bounded BELOW between it and the row under it
+;
+; On the calibration 5150 (200 ms a turn) an 8 ms/cylinder step predicts the
+; break between 20 cylinders (160 ms + settle) and 39 (312 ms + settle), so a
+; report where 1/5/10/20 match the baseline and 39 does not is the model being
+; right. A break lower than that says the drive steps SLOWER than the BIOS
+; asked for, and a report with no break at all says it steps faster than
+; 200 ms / 39 = 5.1 ms and the model is charging too much.
+;
+; The baseline row reads cylinder 0 TWICE - same work, same rotational wait,
+; no head movement - so it is the zero of the scale and not a separate thing
+; the reader has to trust.
+;
+; It never writes, reads only cylinders the booted disk already holds, and goes
+; through the kernel's entry like every raw row here (docs/FIELD-NOTES.md 10).
+; -----------------------------------------------------------------------------
+SB_SK_ROWS  equ 5
+
+sb_seek:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    cmp word [sb_dbgblk], 0         ; the raw entry is the debug block's; with
+    je .out                         ; no block there is nothing to call
+
+    call bl_blank
+    mov si, sb_s_h_sk
+    call bl_sline
+    mov si, sb_s_h_sk2
+    call bl_sline
+    mov si, sb_s_h_sk3
+    call bl_sline
+    call bl_head
+
+    xor ch, ch                      ; warm the motor and park the head at 0, so
+    call sb_r13at                   ; the baseline row below is a pure pair of
+                                    ; rotations with no seek in it at all
+
+    mov word [sb_skcyl], 0          ; --- the zero of the scale ---
+    mov word [bl_n], 4
+    mov word [bl_body], sb_b_seek
+    mov si, sb_r_sk0
+    mov al, 1
+    call bl_run
+
+    mov di, sb_sktab                ; --- and the distances ---
+    mov cx, SB_SK_ROWS
+.row:
+    push cx
+    mov ax, [di]
+    mov [sb_skcyl], ax
+
+    mov ch, [sb_skcyl]              ; PARK THE HEAD AT THE FAR CYLINDER FIRST.
+    call sb_r13at                   ; An op is (read 0, read N) = two seeks of
+                                    ; N - but only if the head is ALREADY at N
+                                    ; when the op starts. Left at 0 by the row
+                                    ; before, the first op of every row
+                                    ; contains one seek instead of two and the
+                                    ; row reads 12.5% short at N = 4 ops.
+
+    mov si, [di+2]
+    mov word [bl_n], 4
+    mov word [bl_body], sb_b_seek
+    mov al, 1
+    call bl_run
+    add di, 4
+    pop cx
+    loop .row
+
+    mov si, sb_l_r13st              ; ...and whether the BIOS stayed happy,
+    mov ax, [sb_st13]               ; because a row that FAILED is fast
+    call sb_hex
+
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_motor - what SPIN-UP costs (PERFORMANCE.md Part 9 Set 35)
+;
+; The other number the model does not have. A stopped drive has to reach
+; 300 RPM before anything can be read, and the BIOS additionally waits the
+; DPT's motor-start time (printed above as eighths of a second - the IBM ROM
+; asks for 8, a whole second) before it will believe the platter. Nothing in
+; this suite has ever separated those two from each other or from the read.
+;
+; `16K read, cold motor` above is a cold read, but it is a 32-sector one, so
+; the spin-up is a fifth of it and buried. This is the same event with one
+; sector under it, which is as close to isolating it as a package can get.
+;
+; **The wait is the machine's own, not ours.** The BIOS reloads a countdown at
+; 0040:0040 on every disk operation and its tick handler turns the motor off
+; when that reaches zero; 0040:003F bit 0 is drive 0's motor. So this waits for
+; that byte to clear rather than forcing anything - and reports what it saw, so
+; a run where the motor never stopped is legible as such instead of quietly
+; reporting a warm read as a cold one. Bounded at SB_MT_WAIT ticks.
+;
+; Both rows are N = 1 and must be: the event only happens once, and a second
+; iteration would be measuring a warm drive. The pair is the measurement -
+; cold minus warm is spin-up plus the BIOS's motor-start wait, and the DPT row
+; above says how much of it the BIOS asked for.
+; -----------------------------------------------------------------------------
+SB_MT_WAIT  equ 110                 ; ~6 s at 18.2065 Hz, well past the ~2 s
+                                    ; the BIOS reloads
+
+sb_mwait:
+    push ax
+    push bx
+    push es
+    call OSAPI_GET_TICKS
+    mov bx, ax
+.spin:
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x3F]               ; diskette motor status, bits 0..3
+    test al, 0x0F
+    jz .off
+    call OSAPI_GET_TICKS
+    sub ax, bx
+    cmp ax, SB_MT_WAIT
+    jb .spin
+.off:
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x3F]
+    xor ah, ah
+    mov [sb_mtst], ax               ; 0 = it really did stop
+    pop es
+    pop bx
+    pop ax
+    ret
+
+sb_motor:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    cmp word [sb_dbgblk], 0
+    je .out
+
+    call bl_blank
+    mov si, sb_s_h_mt
+    call bl_sline
+    mov si, sb_s_h_mt2
+    call bl_sline
+    mov si, sb_s_h_mt3
+    call bl_sline
+    call bl_head
+
+    call sb_r13at                   ; touch the drive so the countdown is
+                                    ; loaded, then wait for it to expire
+    call sb_mwait
+
+    mov word [bl_n], 1              ; the cold one - spin-up, the BIOS's
+    mov word [bl_body], sb_b_r13one ; motor-start wait, a seek and a turn
+    mov si, sb_r_mtc
+    mov al, 1
+    call bl_run
+
+    mov word [bl_n], 1              ; ...and the same read with the motor
+    mov word [bl_body], sb_b_r13one ; already turning. The SAME body, said
+    mov si, sb_r_mtw                ; twice rather than carried
+    mov al, 1
+    call bl_run
+
+    mov si, sb_l_mtst               ; 00 = the motor really was off. Anything
+    mov ax, [sb_mtst]               ; else and the cold row is not cold
+    call sb_hex
+    mov si, sb_l_r13st
+    mov ax, [sb_st13]
+    call sb_hex
+
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sb_sktab:
+    dw 1,  sb_r_sk1
+    dw 5,  sb_r_sk5
+    dw 10, sb_r_sk10
+    dw 20, sb_r_sk20
+    dw 39, sb_r_sk39
 
 sb_b_rdsml:
     push es
@@ -4287,6 +4694,7 @@ sb_l_boott:   db 'boot ticks', 0
 sb_l_bootms:  db 'boot ms', 0
 sb_l_kern:    db 'kernel span KB', 0
 sb_l_img:     db 'kernel image KB', 0
+sb_l_bld:     db 'kernel build hex', 0
 sb_l_buf:     db 'fat+stacks+bufs KB', 0
 sb_l_heap:    db 'claim heap KB', 0
 sb_l_claim:   db 'claimed out of it KB', 0
@@ -4346,14 +4754,19 @@ sb_l_mln:    db '  winning IRQ hex 10=4', 0
 
 sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
 sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a DIP switch.', 0
-sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0; ST0 bit 4 = EQUIP CHECK, which IS the absent drive.', 0
-sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 seek ok 03 EQUIP CHECK 04-06 refused.', 0
+sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0, and the SECOND read decides. ST0 is drained.', 0
+sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
+sb_s_h_fdd6: db '   ONE SUB-BLOCK PER UNIT: probe ran is a bitmap, bit n = unit n asked.', 0
+sb_s_h_fdd7: db '   equip 7-6=drives-1; SW1 (Ibm Pc) should match its low byte.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
-sb_l_fran:   db '  probe ran', 0
-sb_l_fst3:   db '  unit 1 ST3 hex', 0
-sb_l_fst0:   db '  unit 1 ST0 hex', 0
-sb_l_fpcn:   db '  unit 1 cyl hex', 0
+sb_l_feqw:   db '  equip word hex', 0
+sb_l_fsw1:   db '  SW1 direct hex', 0
+sb_l_fran:   db '  probe ran bitmap hex', 0
+sb_l_funit:  db '  --- unit', 0
+sb_l_fst3:   db '  ST3 motor off hex', 0
+sb_l_fst3b:  db '  ST3 after seek hex', 0
+sb_l_fst0:   db '  ST0 drained hex', 0
 sb_l_fstep:  db '  probe stop hex', 0
 sb_l_fvrd:   db '  verdict 1=kept 0=gone', 0
 
@@ -4435,6 +4848,13 @@ sb_s_h_r134: db '   (167 ms) even on 360K media. 1:1 / 2:1 / one-per-turn B/s ar
 sb_s_h_r135: db '   23040 / 11520 / 2560 at 300, and 27648 / 13824 / 3072 at 360.', 0
 sb_s_h_r136: db '   The B/s ROWS below are measured, not derived, so they are right', 0
 sb_s_h_r137: db '   either way - and `int 13h 1 sector` is ONE turn, so it says which.', 0
+; It says which DRIVE and NOT which interleave, and that distinction cost this
+; project four sets of wrong belief (PERFORMANCE.md Set 37): a B/s row divides
+; by the WHOLE int 13h call, and a quarter of one is the ROM's head-settle
+; delay loop, so 1:1 media reads as 2:1 and the arithmetic above agrees to
+; 0.4%. Say so in the report, next to the numbers that invite it.
+sb_s_h_r138: db '   ...which DRIVE. NOT which interleave: a B/s row divides by the', 0
+sb_s_h_r139: db '   WHOLE call, and the ROM head-settle wait is a quarter of one.', 0
 sb_l_dptn:   db 'DPT EOT (18.92 patches)', 0
 sb_l_dpts:   db 'DPT step/head unload', 0
 sb_l_dpth:   db 'DPT head settle ms', 0
@@ -4443,6 +4863,26 @@ sb_r_131:    db 'int 13h 1 sector', 0
 sb_r_139:    db 'int 13h track, 1 call', 0
 sb_r_13n:    db 'int 13h track, 9 calls', 0
 sb_l_r13st:  db 'int 13h last status AH', 0
+sb_s_h_sk:   db '-- what a HEAD STEP costs: the same read either side of a seek --', 0
+sb_s_h_sk2:  db '   Read as REVOLUTIONS. A seek hides inside the wait for sector 1', 0
+sb_s_h_sk3:  db '   to come round, so what to look for is WHERE the cost steps up.', 0
+sb_r_sk0:    db 'seek 0 cyl (baseline)', 0
+sb_r_sk1:    db 'seek 1 cyl, pair', 0
+sb_r_sk5:    db 'seek 5 cyl, pair', 0
+sb_r_sk10:   db 'seek 10 cyl, pair', 0
+sb_r_sk20:   db 'seek 20 cyl, pair', 0
+sb_r_sk39:   db 'seek 39 cyl, pair', 0
+sb_s_h_mt:   db '-- what SPIN-UP costs: one sector cold, then the same one warm --', 0
+sb_s_h_mt2:  db '   cold - warm is spin-up plus the DPT motor-start wait above;', 0
+sb_s_h_mt3:  db '   cold NOT slower than warm means none is being paid at all.', 0
+sb_r_mtc:    db '1 sector, motor COLD', 0
+sb_r_mtw:    db '1 sector, motor warm', 0
+sb_l_mtst:   db 'motor status 40:3F', 0
+sb_s_h_cap:  db '-- how close this report came to its own ceilings --', 0
+sb_l_caprow: db 'report rows used', 0
+sb_l_caprmx: db '  ...of BL_MAXROWS', 0
+sb_l_capuse: db 'arena bytes used', 0
+sb_l_capmax: db '  ...of BL_ARENA', 0
 sb_d_r13b:   db 'bios track 1 call B/s', 0
 sb_d_r13s:   db 'bios track 9 calls B/s', 0
 sb_s_nodbg:  db 'This kernel carries no disk instrument - build DISKCNT=1.', 0
@@ -4538,7 +4978,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 242              ; ...and the scalars end at 241 now
+SB_O_SYSKB equ 248              ; ...and the scalars end at 247 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -4549,6 +4989,22 @@ SB_BSS_OWN equ ((SB_O_RAM2 + SB_BWBYTES + 511) / 512) * 512   ; benchlib's base 
     align 512                   ; ...and os88_image_end likewise, which this
                                 ; costs up to 511 bytes of image and buys the
                                 ; alignment of every bss offset below
+                                ;
+                                ; **THIS PACKAGE IS AT ITS CEILING.** image +
+                                ; bss must fit APP_MAX_SIZE (60KB, the
+                                ; SEGMENT, unraisable), bss is 38,452, so the
+                                ; image may not cross 22,528 - and it is
+                                ; 22,519. NINE BYTES. Adding a row here
+                                ; means finding the bytes first, and the two
+                                ; obvious places are BOTH refused: benchlib's
+                                ; BL_MAXROWS and BL_ARENA each carry a comment
+                                ; about a report that TRUNCATED in the field.
+                                ; SPEC.md 57.5's SW1 row was paid for by
+                                ; merging two pairs of header lines and 57.6's
+                                ; build row by trimming a third and dropping
+                                ; two dead push/pop pairs. The prose is
+                                ; compressed now: the next row needs a real
+                                ; saving, not another tidy-up.
     OS88_BSS SB_BSS_OWN + BL_BSS_SIZE
     OS88_IMAGE_END
 
@@ -4608,14 +5064,25 @@ sb_mbase    equ os88_image_end + 118   ; word: -> mou_bases (SPEC.md 9.4.2)
 sb_mstate   equ os88_image_end + 120   ; word: -> the mouse state span (121)
 sb_cstate   equ os88_image_end + 122   ; word: -> the clock state span (123),
                                        ; SPEC.md 37.92
-sb_fdstate  equ os88_image_end + 240   ; word: -> the floppy state span (241),
-                                       ; SPEC.md 57.5. MOVED at the merge: it
-                                       ; was 214, which is sb_hbest on the
-                                       ; branch this met - and two equs naming
-                                       ; one word assemble perfectly and
-                                       ; produce a report full of plausible
-                                       ; nonsense (docs/UPSTREAM.md's whole
-                                       ; point about a silent difference)
+sb_fdstate  equ os88_image_end + 244   ; word: -> the floppy state span (245),
+                                       ; SPEC.md 57.5. MOVED TWICE, and the
+                                       ; second time is the lesson: at the
+                                       ; merge it went from 214 (sb_hbest on
+                                       ; the branch this met) to 240 - which is
+                                       ; sb_skcyl, so the collision was carried
+                                       ; rather than fixed. It only ever worked
+                                       ; because sb_disk runs BEFORE sb_fdd and
+                                       ; sb_fdd reads this word in the same
+                                       ; breath it writes it: nothing enforces
+                                       ; either, and two equs naming one word
+                                       ; assemble perfectly and produce a
+                                       ; report full of plausible nonsense
+                                       ; (docs/UPSTREAM.md's whole point about
+                                       ; a silent difference). Past every
+                                       ; scalar now, with SB_O_SYSKB moved up
+sb_fdrow    equ os88_image_end + 246   ; byte: the unit sub-block sb_fdu is
+                                       ; printing, an offset into the span
+                                       ; above (SPEC.md 18.98). 247 spare
 sb_vkind    equ os88_image_end + 184   ; word: -> vid_kind    (SPEC.md 57.4)
 sb_vavail   equ os88_image_end + 186   ; word: -> vid_avail
 sb_vnd      equ os88_image_end + 188   ; word: -> ndisp/cur/ox/oy/dmode/dlay
@@ -4649,6 +5116,10 @@ sb_wfree    equ os88_image_end + 210   ; word: KB free on the volume before
 sb_wdone    equ os88_image_end + 212   ; word: KB appended so far
 sb_hbest    equ os88_image_end + 214   ; word: the biggest fitting file so far
 sb_hfind    equ os88_image_end + 216   ; OSAPI_FIND_SZ bytes (216..239)
+sb_skcyl    equ os88_image_end + 240   ; word: the cylinder the seek pair steps
+                                       ; to, 0 for the baseline row
+sb_mtst     equ os88_image_end + 242   ; word: 40:3F before the cold row - 0 if
+                                       ; the motor really had stopped (242..243)
 sb_syskb    equ os88_image_end + SB_O_SYSKB    ; SYSKB_SIZE bytes
 sb_res      equ os88_image_end + SB_O_RES      ; SB_NCPU dwords
 sb_rrow     equ os88_image_end + SB_O_RROW     ; SB_BWROWS words

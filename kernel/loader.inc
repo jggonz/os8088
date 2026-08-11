@@ -114,9 +114,20 @@ ld_slot:
 ; I_SPTR, which step 9 has not written yet. Both owner words are known here
 ; anyway - the slot for the region, [ld_base] for whatever the entry proc
 ; claimed before it failed.
+;
+; THE BLOCKS ABOVE 1MB ARE SWEPT HERE TOO, and they have to be: since step 8
+; stamps the entry proc with this instance (SPEC.md 41.5.1), an entry that
+; claims extended memory and then returns CF=1 leaves blocks owned by a slot
+; that is about to be handed to somebody else - so the NEXT package to take
+; this slot would inherit them, and the one after that would have them freed
+; out from under it. That is a worse failure than the leak it replaces, and it
+; is the price of the stamp being right; it costs a table scan on a path that
+; only runs when a load has already failed.
 ; -----------------------------------------------------------------------------
 ld_unreserve:
     push bx
+    call KERNEL_SEG:cw_xm_release_rec   ; DI = the record, as this routine's
+                                        ; own contract already promises
     call ld_slot
     call KERNEL_SEG:cw_mem_free_owner
     mov bx, [ld_base]
@@ -526,6 +537,33 @@ ld_run_body_x:
     ; every other package callback is - through the dispatcher in its header
     ; (SPEC.md 20.1) - so an entry proc is an ordinary near proc ending in an
     ; ordinary `ret`, and returns BX = its window / CF set.
+    ;
+    ; AND IT IS STAMPED LIKE ONE (SPEC.md 34.3/41.5.1). Without this the entry
+    ; proc has NO INSTANCE IDENTITY: inst_caller answers with the dispatched
+    ; callback's stamp or else the RUNNING TASK's T_INST, and this runs on the
+    ; UI task, whose T_INST is 0xFF - so everything an entry proc asked the
+    ; kernel for came back attributed to the KERNEL. A sound grant was never
+    ; released at teardown, a block above 1MB was stamped XM_OWN_KERN and
+    ; stranded for the session, a toast outlived its app, and the file API
+    ; answered with the machine's directory instead of the instance's. The
+    ; entry proc is the FIRST thing a package runs and the natural place to
+    ; size itself, so it was the one dispatch that most needed identifying and
+    ; the only one that lacked it.
+    ;
+    ; The push/call/pop bracket is wm.inc's, exactly (SPEC.md 34.3): the outer
+    ; stamp is restored whatever the entry does, and it nests inside the
+    ; `push ds`/`pop ds` below rather than around it, so both unwind in order.
+    ; `pop` leaves the flags alone, so the entry's CF still reaches .abort.
+    ;
+    ; The record is UNPUBLISHED here (step 9 writes I_STATE), and that is fine:
+    ; the stamp is the slot INDEX, which is fixed the moment the record was
+    ; reserved. What it does mean is that an aborting entry's claims have to be
+    ; swept by ld_unreserve, which is where the XMS release joins the two heap
+    ; ones - the slot is about to be handed to somebody else.
+    push word [snd_inst]        ; the outer dispatch's stamp
+    mov di, [ld_rec]
+    call KERNEL_SEG:cw_snd_disp_set     ; DI = record: this instance is asking
+
     mov ax, [ld_base]
     mov [ld_fp+2], ax           ; a module-local far pointer: loader_run is
     mov word [ld_fp], PKG_DISP  ; UI-task-only and one load at a time
@@ -539,6 +577,7 @@ ld_run_body_x:
     mov ds, ax                  ; DS = the package's own segment - so the far
     call far [es:ld_fp]         ; pointer is read through ES, the only
     pop ds                      ; register still naming KERNEL_SEG here
+    pop word [snd_inst]         ; ...and the stamp comes off, CF untouched
     jc .abort
 
     ; --- 9. register + publish the instance, show the window ---------------------

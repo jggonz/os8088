@@ -84,12 +84,22 @@ DSK_R_SIZE   equ 28              ; file size, dword
 ; dsk_read_chain's run coalescer, dskw_flush - is untouched by capacity, and
 ; a volume is capped at 65,535 sectors (31.99MB) by BPB rule 8, which is also
 ; the DOS 3.3 partition limit these machines ran.
-DVOL_MAX     equ 6               ; A:, B:, and one per PARTITION a disk
-                                 ; driver can mount: four primaries is the
-                                 ; whole of what a partition table holds
-                                 ; (SPEC.md 52.2), and each is its own volume,
-                                 ; its own drive letter and its own desktop
-                                 ; icon - so C: through F:
+DVOL_MAX     equ 8               ; the FLOPPIES the machine has, and one per
+                                 ; PARTITION a disk driver can mount: four
+                                 ; primaries is the whole of what a partition
+                                 ; table holds (SPEC.md 52.2), and each is its
+                                 ; own volume, its own drive letter and its
+                                 ; own desktop icon.
+                                 ;
+                                 ; It was 6 - A:, B: and the four partitions -
+                                 ; and SPEC.md 18.98's external pair would have
+                                 ; eaten two of them, so a machine with four
+                                 ; floppies could not reach all of a
+                                 ; four-partition disk at once. 8 is 54 bytes
+                                 ; of .text (this table, dsk_vbase and 18.8.1's
+                                 ; three per-volume words) and 2 of .bss, and
+                                 ; every one of them scales off this constant
+                                 ; rather than being written out
 DV_KIND      equ 0               ; db: 0 = BIOS int 13h, 1 = driver, 0xFF free
 DV_UNIT      equ 1               ; db: the int 13h DL, or the driver's handle
 DV_FLAGS     equ 2               ; db: bit 0 = show a desktop zone (SPEC 26)
@@ -120,10 +130,10 @@ DVK_FREE     equ 0xFF
 dsk_vtab:
     db DVK_BIOS, 0, 0, 0         ; volume 0 = A:
     dw 0, 0
-    db 'Disk A', 0, 0
+    db 0, 0, 0, 0, 0, 0, 0, 0   ; named by the kernel (SPEC.md 26.4)
     db DVK_BIOS, 1, 0, 0         ; volume 1 = B:
     dw 0, 0
-    db 'Disk B', 0, 0
+    db 0, 0, 0, 0, 0, 0, 0, 0   ; ...as every other volume already was
     times DVOL_MAX - 2 db DVK_FREE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 ; --- the BOOT VOLUME's partition base (SPEC.md 52.10.3) ----------------------
@@ -186,6 +196,20 @@ dsk_dpt:
     db 0x08                      ; +10 motor start, 1/8 s
 DPT_LEN equ 11
 
+fdd_unit:    db 1                ; WHICH unit dsk_fdd_probe is asking about
+                                 ; (SPEC.md 18.98). It was unit 1 by
+                                 ; construction, in four places.
+                                 ;
+                                 ; HERE and not beside the probe's own
+                                 ; constants, which are .ovl: the overlay is
+                                 ; overwritten by the first mount, so a byte
+                                 ; there is FAT data by the time anything can
+                                 ; read it back - measured, it read 1 after a
+                                 ; boot that had probed unit 3. The probe does
+                                 ; not care (it runs before that mount) and a
+                                 ; test does, which is the same argument that
+                                 ; puts the fdd_dbg_* block below in .text.
+
 ; --- the floppy-presence probe's published state (SPEC.md 18.97/57.5) --------
 ; The int 11h equipment word is a CLAIM - on a 5150 it is the SW1 DIP switches
 ; read back through the 8255 - and this is what the FDC answered when the
@@ -206,33 +230,59 @@ DPT_LEN equ 11
 FDD_S_OFF    equ 0               ; never ran: one drive claimed, or FDDPROBE=0
 FDD_S_TRK0   equ 1               ; ST3 said TRACK 0 with the motor off - the
                                  ; drive is there and nothing further ran
-FDD_S_SEEKOK equ 2               ; the recalibrate came back CLEAN: the drive
+FDD_S_SEEKOK equ 2               ; ...said it after the recalibrate: the drive
                                  ; is there and was parked off track 0
-FDD_S_EC     equ 3               ; ...came back with Equipment Check - 77 steps
-                                 ; and no TRK0. THE absent drive, and the one
-                                 ; verdict in this list that removes anything
-FDD_S_NORDY  equ 4               ; the controller never asked for a byte  \ all
-FDD_S_NOSEEK equ 5               ; the seek outlived FDD_SEEKTO            | of
-FDD_S_BADIC  equ 6               ; ST0's interrupt code is not one we read / them
-                                 ; refusals, and every one keeps the drive
+FDD_S_NOTRK0 equ 3               ; the recalibrate ran and TRK0 never came up.
+                                 ; THE absent drive, and the one verdict in
+                                 ; this list that removes anything
+FDD_S_NORDY  equ 4               ; the controller never took a byte, or never
+                                 ; offered one - a refusal, and it KEEPS the
+                                 ; drive like every other thing that goes wrong
+; ...and it is ONE ROW PER UNIT, because SPEC.md 18.98 made the probe run up
+; to three times. It was one set of bytes, written by every run, so on a
+; machine claiming three or four drives the block described the LAST unit
+; asked and said nothing at all about the others - and that is precisely the
+; configuration this diagnostic exists for, an internal drive plus a 4865 on
+; the 37-pin connector. Ten bytes of .text, no rung crossed.
+FDU_ST3      equ 0               ; SENSE DRIVE STATUS, motor off. bit 4 = TRACK
+                                 ; 0, and bit 3 = two-side, which the field 5150
+                                 ; also reads CLEAR on the drive it does not
+                                 ; have (ST3 = 21)
+FDU_ST3B     equ 1               ; ...and again after the recalibrate. THIS is
+                                 ; what decides: the same physical line, asked
+                                 ; once the head has been told to go and find it
+FDU_ST0      equ 2               ; a drained SENSE INTERRUPT STATUS ST0, taken
+                                 ; to leave the controller clean. DIAGNOSTIC
+                                 ; ONLY - nothing branches on it (18.97.1)
+FDU_STEP     equ 3               ; where it stopped - THE byte that carries, for
+                                 ; the reason clk_dbg_step is (SPEC.md 37.92):
+                                 ; the verdict alone cannot tell "proved
+                                 ; present" from "failed to prove absent"
+FDU_VRD      equ 4               ; 0 = absent (retired, or never given a row);
+                                 ; 1 = kept
+FDU_SIZE     equ 5
+
 fdd_dbg_blk:
     dw DBG_TAG_FDD               ; 'FD' - the magic, and the block's own first
     dw fdd_dbg_span              ; word, so a reader can check where it landed
 
 fdd_dbg_span:
 fdd_dbg_eqp:  db 0               ; drives int 11h claimed, after the clamp
-fdd_dbg_ran:  db 0               ; 0 = the probe never ran
-fdd_dbg_st3:  db 0xFF            ; SENSE DRIVE STATUS, unit 1. bit 4 = TRACK 0
-fdd_dbg_st0:  db 0xFF            ; SENSE INTERRUPT STATUS ST0. bit 4 = EC
-fdd_dbg_pcn:  db 0xFF            ; the present-cylinder byte beside it
-fdd_dbg_step: db FDD_S_OFF       ; where it stopped - THE row that carries, for
-                                 ; the reason clk_dbg_step is (SPEC.md 37.92):
-                                 ; the verdict alone cannot tell "proved
-                                 ; present" from "failed to prove absent"
-fdd_dbg_vrd:  db 1               ; 0 = absent, the row was retired; 1 = kept
+fdd_dbg_ran:  db 0               ; a BITMAP: bit n = the probe ran on unit n.
+                                 ; It was a flag, and a flag cannot answer for
+                                 ; three units - nor can `step != FDD_S_OFF`,
+                                 ; which is the same fact only while every exit
+                                 ; writes step, i.e. only until somebody adds
+                                 ; one that does not
+fdd_dbg_u:                       ; three FDU_SIZE rows: unit 1, unit 2, unit 3.
+                                 ; Unit 0 is where the kernel came from and is
+                                 ; never a question, so it has no row
+    db 0xFF, 0xFF, 0xFF, FDD_S_OFF, 1
+    db 0xFF, 0xFF, 0xFF, FDD_S_OFF, 1
+    db 0xFF, 0xFF, 0xFF, FDD_S_OFF, 1
 FDD_DBG_SPAN equ ($ - fdd_dbg_span)
-%if FDD_DBG_SPAN != 7
-  %error "disk: SPEC.md 57.5 block - the published span is not 7 bytes"
+%if FDD_DBG_SPAN != 2 + 3*FDU_SIZE
+  %error "disk: SPEC.md 57.5 block - the published span is not 17 bytes"
 %endif
 
 %ifdef DISK_COUNTERS
@@ -571,12 +621,17 @@ dsk_bpb_bank_get:
 ; out: nothing; every register AND the flags preserved
 ; -----------------------------------------------------------------------------
 dsk_bpb_bank_put:
+    pushf                       ; FIRST - the flags are part of the contract,
+                                ; and the common exit (a floppy outside a
+                                ; batch) is a compare away from clobbering
+                                ; the CF a caller may be carrying
     cmp byte [dsk_vflop], 1
     jne .keep                   ; a floppy is banked only inside a batch, and
     cmp byte [dsk_batch], 0     ; only for as long as it runs (SPEC.md 18.9.3)
-    je .out
+    jne .keep
+    popf
+    ret
 .keep:
-    pushf
     push ax
     push bx
     push cx
@@ -887,9 +942,15 @@ dsk_xfer:
                                 ; a copy - and it is why the payload pays no
                                 ; copy at all (SPEC.md 18.95.1)
     call dsk_rah_fill           ; yes: read to the end of DI's track
-    jc .fail
+    jc .nocache                 ; a failed fill is a fact about the
+                                ; SPECULATIVE tail, not about the sector
+                                ; asked for: fall through and read exactly
+                                ; what the caller wanted, with the retry
+                                ; ladder it always had (18.91: one bad
+                                ; sector costs its own 512 bytes, not the
+                                ; good ones beside it)
     call dsk_rah_take           ; ...which covers DI by construction
-    jc .fail
+    jc .nocache
 .served:
     add di, ax                  ; the same advance .ok makes, and no int 13h
     sub si, ax
@@ -1372,6 +1433,64 @@ dsk_geom_pick:
     mov [dsk_cylmax], ax
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_flop_add - register a BIOS floppy beyond A: and B: (SPEC.md 18.98)
+; in:  AL = the int 13h drive number (2 or 3)
+; out: CF=0 and AL = the volume index it took; CF=1 = no free row
+; clobbers: AX (the output), flags
+;
+; The pair on the 5.25" adapter's external 37-pin connector. Nothing about
+; the transport is new - a floppy is already "a DVK_BIOS row whose unit is
+; below 80h" everywhere that asks (disk_mount's medium test, dsk_geom_pick's
+; cylinder bound, dsk_here_ok's motor bit, dskw_fmt_probe's refusal), and
+; dsk_mbit has had four entries since SPEC.md 18.9.1. All that was missing is
+; a ROW.
+;
+; It takes the first FREE row rather than row AL, and that is what keeps
+; SPEC.md 52.10.3's boot partition at C: on a machine that booted from a hard
+; disk: dsk_boot_from runs first and has already taken row 2 there, so the
+; externals land at D: and E: and the volume the machine booted from keeps the
+; letter dsk_bootltr has already stamped into three messages. On a floppy
+; machine nothing has taken a row yet, so they are C: and D: - which is what
+; DOS 4 and earlier called them, and what the drive-select lines mean.
+; -----------------------------------------------------------------------------
+dsk_flop_add:
+    push bx
+    push cx
+    mov cl, al                  ; the unit, before AX becomes the answer
+    mov bx, dsk_vtab + 2*DV_SIZE    ; the ROW walks, as dsk_vol_add's does
+.scan:
+    cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
+    jae .full
+    cmp byte [bx+DV_KIND], DVK_FREE
+    je .got
+    add bx, DV_SIZE
+    jmp short .scan
+.got:
+    mov [bx+DV_UNIT], cl
+    mov word [bx+DV_SECS], 0    ; unknown, like every other floppy's
+    mov word [bx+DV_SEG], 0     ; no donated listing claim: the .lowbss floor
+    mov byte [bx+DV_FLAGS], 1   ; shown on the desktop - the caller only calls
+                                ; for a drive the equipment word claims
+    mov byte [bx+DV_LBL], 0     ; ...and NAMED by the kernel, not here: an
+                                ; empty label is what makes desk_zone_label
+                                ; derive 'Disk C' from the index, the same
+                                ; courtesy dsk_vol_add extends a driver
+    mov byte [bx+DV_KIND], DVK_BIOS ; published LAST, dsk_vol_add's discipline
+    mov ax, bx
+    sub ax, dsk_vtab
+    mov cl, 4
+    shr ax, cl                  ; DV_SIZE = 16: the row back to an index
+    pop cx
+    pop bx
+    clc
+    ret
+.full:
+    pop cx
+    pop bx
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1974,7 +2093,13 @@ disk_mount:
     xor ax, ax                  ; LBA 0
     mov cx, 1
     mov bx, dsk_secbuf
-    call disk_read
+    inc byte [dsk_rah_busy]     ; NEVER from §18.95's cache: this read is the
+    call disk_read              ; swap detector itself. Served from a cached
+    dec byte [dsk_rah_busy]     ; chunk it would re-sign the OLD disk's boot
+                                ; sector, [dsk_sigcur] would never move, and
+                                ; every later hit - FAT window included -
+                                ; would be the old disk's bytes laid onto the
+                                ; new one by the next write. (dec leaves CF)
     jc .jfail
     call dsk_bpb_sig            ; [dsk_sigcur] = which disk this is (18.8.2),
                                 ; off the sector we have just read anyway.
@@ -4827,15 +4952,25 @@ FDC_DOR      equ 0x3F2           ; digital output: motors, select, reset, DMA
 FDC_MSR      equ 0x3F4           ; main status
 FDC_FIFO     equ 0x3F5           ; data
 FDC_M1       equ 0x20            ; DOR bit 5: unit 1's motor
+fdd_mbit:    db 0x10, 0x20, 0x40, 0x80  ; ...and one per unit (SPEC.md 18.98):
+                                 ; DOR bits 4..7 are motor enable for A..D,
+                                 ; which is the same four the BIOS drives
 
 FDD_HANDTO   equ 12000           ; spins waiting for RQM on one byte. Each is
                                  ; an `in`, a mask, a compare and a branch -
                                  ; call it 4us on a 4.77MHz 8088, so ~50ms,
                                  ; against a handshake that really takes
                                  ; microseconds. A ceiling, not a delay
-FDD_SEEKTO   equ 40              ; ticks (~2.2s) for the recalibrate. A 77-step
-                                 ; give-up is about half a second at the DPT's
-                                 ; rate; this is the bound, not the expectation
+FDD_SEEKW    equ 20              ; ticks (~1.1s) to let the recalibrate finish.
+                                 ; 77 steps at the DPT's rate is about half a
+                                 ; second, so this is generous on purpose - and
+                                 ; only a machine heading for the absent verdict
+                                 ; ever waits it out
+FDD_SIN      equ 6               ; sense-interrupt results to drain before
+                                 ; giving up on the queue ever emptying: four
+                                 ; is one per drive after a reset, and the
+                                 ; bound is what stops a controller answering
+                                 ; 0FFh from spinning here for ever
 FDD_MOTORW   equ 12              ; ticks (~660ms) for the motor line to take
                                  ; effect. NOT dsk_dpt+10's 8 x 1/8 s: nothing
                                  ; here reads a disk, so what this waits for is
@@ -4881,11 +5016,31 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 ; -----------------------------------------------------------------------------
 dsk_fdd_probe:
     push bx
+    mov [fdd_unit], al          ; SPEC.md 18.98: which unit. It was unit 1 by
+                                ; construction - three encodings of it, in the
+                                ; DOR select, the motor bit and RECALIBRATE's
+                                ; argument, plus a fourth inside fdd_st3
     push cx
     push dx
+    push si
     push es
 
-    mov byte [fdd_dbg_ran], 1
+    ; SI = this unit's row in the published block, for the whole routine
+    ; (SPEC.md 57.5). Held in a register rather than recomputed because every
+    ; store below used to be an absolute address and a fifth encoding of "unit
+    ; 1" is exactly what 18.98 spent a paragraph removing. None of fdd_dor /
+    ; fdd_st3 / fdd_put / fdd_get / fdd_res / fdd_sidrain / fdd_wait touches SI.
+    mov bl, al
+    xor bh, bh
+    mov si, bx
+    shl si, 1
+    shl si, 1
+    add si, bx                  ; unit * FDU_SIZE...
+    add si, fdd_dbg_u - FDU_SIZE    ; ...and unit 1 is the first row
+    mov cl, al
+    mov al, 1
+    shl al, cl                  ; a BITMAP: this unit was asked
+    or [fdd_dbg_ran], al
 
     mov ax, 0x40                ; there is no readable DOR, so the BIOS's own
     mov es, ax                  ; MOTOR_STATUS is the only place the current
@@ -4896,76 +5051,75 @@ dsk_fdd_probe:
     mov bh, al                  ; BH = the motor bits, for the duration
 
     mov al, bh
-    or  al, 0x0D                ; not-reset (2) + DMA/IRQ (3) + select unit 1
+    or  al, 0x0C                ; not-reset (2) + DMA/IRQ (3)...
+    or  al, [fdd_unit]          ; ...and DOR bits 0..1 select the unit
     call fdd_dor
     call fdd_st3                ; --- step 1: no motor, and usually enough ---
     jc .nordy
+    mov [si+FDU_ST3], al       ; fdd_st3 ANSWERS in AL and banks nothing - it
+                                ; is called twice and the two reads are two
+                                ; different fields
     test al, 0x10               ; TRACK 0
     jz .motor
-    mov byte [fdd_dbg_step], FDD_S_TRK0
+    mov byte [si+FDU_STEP], FDD_S_TRK0
     jmp .keep                   ; near: .recal below is longer than a short
                                 ; displacement reaches
 
 .motor:                         ; --- step 2: spin unit 1 up before deciding --
     mov al, bh                  ; NOT to read ST3 again - the recalibrate below
-    or  al, 0x0D | FDC_M1       ; searches for the same TRK0 and answers the
-    call fdd_dor                ; same question, so a second read would only
+    or  al, 0x0C                ; searches for the same TRK0 and answers the
+    or  al, [fdd_unit]          ; same question, so a second read would only
+    push bx
+    mov bl, [fdd_unit]
+    xor bh, bh
+    or  al, [fdd_mbit+bx]       ; ...this unit's motor, not unit 1's
+    pop bx
+    call fdd_dor
     mov cx, FDD_MOTORW          ; name a case SEEKOK already covers. This is
     call fdd_wait               ; here so that the step that can REMOVE a drive
                                 ; runs under the most favourable conditions the
                                 ; probe can arrange, against the (undocumented,
                                 ; and on every datasheet untrue) possibility of
                                 ; a drive that gates TRK0 on its spindle
-.recal:                         ; --- step 3: make it go and find track 0 ----
+.recal:                         ; --- step 3: make it step, then ask the LINE
+    call fdd_sidrain            ; whatever the controller still has queued is
+                                ; not ours - see fdd_sidrain, and SPEC.md
+                                ; 18.97.1 for the field run that found it
     mov al, 0x07                ; RECALIBRATE
     call fdd_put
     jc .nordy
-    mov al, 0x01                ; unit 1
+    mov al, [fdd_unit]          ; ...this unit
     call fdd_put
     jc .nordy
-    call fdd_wseek
-    jc .noseek
-    mov al, 0x08                ; SENSE INTERRUPT STATUS
-    call fdd_put
+    mov cx, FDD_SEEKW           ; 77 steps at the DPT's rate is about half a
+    call fdd_wait               ; second. A FIXED bound and not a poll: MSR's
+                                ; drive-busy bit is a promise about a seek the
+                                ; controller accepted, and the case this exists
+                                ; for is the one where there is no drive to
+                                ; accept it
+    call fdd_st3                ; ...and ask the SAME LINE step 1 asked
     jc .nordy
-    call fdd_get
-    jc .nordy
-    mov [fdd_dbg_st0], al
-    call fdd_get
-    jc .nordy
-    mov [fdd_dbg_pcn], al
-
-    mov al, [fdd_dbg_st0]       ; EQUIPMENT CHECK is the signal, and it is
-    mov ah, al                  ; reached WITHOUT dispatching on the interrupt
-    and al, 0xC0                ; code first, because the parts disagree about
-    cmp al, 0x80                ; which IC a failed recalibrate carries - 01 on
-    jae .badic                  ; the datasheet, 00 on some implementations, and
-                                ; a `jz .seekok` on 00 would silently never fire
-                                ; on the one machine this exists for. What IC
-                                ; still decides is whether the command RAN at
-                                ; all: 10 and 11 (ready changed, invalid) mean
-                                ; it did not, so they keep the drive
-    test ah, 0x20               ; SE - the seek really ended
-    jz .badic
-    test ah, 0x10               ; ...and EC: 77 steps and no TRK0
-    jz .seekok
-    mov byte [fdd_dbg_step], FDD_S_EC
-    mov byte [fdd_dbg_vrd], 0
+    mov [si+FDU_ST3B], al
+    push ax
+    call fdd_res                ; our recalibrate's own interrupt, taken so the
+    jc .nores                   ; next BIOS floppy operation does not find it
+    mov [si+FDU_ST0], al       ; waiting. Reported, never branched on
+.nores:
+    call fdd_sidrain
+    pop ax
+    test al, 0x10               ; TRACK 0: did the head reach it?
+    jnz .seekok
+    mov byte [si+FDU_STEP], FDD_S_NOTRK0
+    mov byte [si+FDU_VRD], 0
     xor al, al                  ; THE one path that removes a drive
     jmp short .out
 .seekok:
-    mov byte [fdd_dbg_step], FDD_S_SEEKOK
-    jmp short .keep
-.badic:
-    mov byte [fdd_dbg_step], FDD_S_BADIC
+    mov byte [si+FDU_STEP], FDD_S_SEEKOK
     jmp short .keep
 .nordy:
-    mov byte [fdd_dbg_step], FDD_S_NORDY
-    jmp short .keep
-.noseek:
-    mov byte [fdd_dbg_step], FDD_S_NOSEEK
+    mov byte [si+FDU_STEP], FDD_S_NORDY
 .keep:
-    mov byte [fdd_dbg_vrd], 1
+    mov byte [si+FDU_VRD], 1
     mov al, 1
 .out:
     push ax
@@ -4976,6 +5130,7 @@ dsk_fdd_probe:
     pop ax                      ; our recalibrate raised (bit 7)
 
     pop es
+    pop si
     pop dx
     pop cx
     pop bx
@@ -5032,22 +5187,86 @@ fdd_dor:
     pop cx
     ret
 
-; fdd_st3 - SENSE DRIVE STATUS on unit 1 -> AL, and banked for the field
-;           report. CF = 1: the controller never answered.
+; fdd_st3 - SENSE DRIVE STATUS on unit 1 -> AL. CF = 1: no answer.
+;
+; A LEVEL READ of the selected drive's own status lines, which is the whole
+; reason the decision hangs off it rather than off SENSE INTERRUPT STATUS: it
+; has no queue, no ordering and no unit ambiguity - the unit is in the command
+; byte and the answer is whatever that drive is putting on the bus right now.
 fdd_st3:
     mov al, 0x04
     call fdd_put
     jc .bad
-    mov al, 0x01                ; unit 1, head 0
+    mov al, [fdd_unit]          ; this unit, head 0
+    call fdd_put
+    jc .bad
+    jmp short fdd_get           ; ...whose CF and AL are ours
+.bad:
+    stc
+    ret
+
+; fdd_res - ONE SENSE INTERRUPT STATUS result. AL = ST0, CF = 1 = no answer.
+;
+; The second result byte (PCN) is taken only if the controller offers one: a
+; sense with nothing pending answers with ST0 alone, so a blind second read
+; sits out a whole handshake timeout for a byte that is not coming.
+fdd_res:
+    push cx
+    push dx
+    mov al, 0x08
     call fdd_put
     jc .bad
     call fdd_get
     jc .bad
-    mov [fdd_dbg_st3], al
+    push ax
+    mov cx, FDD_SELW
+.w: dec cx
+    jnz .w                      ; let the MSR settle before asking again
+    mov dx, FDC_MSR
+    in al, dx
+    and al, 0xC0
+    cmp al, 0xC0                ; is a second byte on offer?
+    jne .one
+    mov dx, FDC_FIFO
+    in al, dx                   ; PCN, discarded
+.one:
+    pop ax
+    pop dx
+    pop cx
     clc
     ret
 .bad:
+    pop dx
+    pop cx
     stc
+    ret
+
+; fdd_sidrain - take every queued SENSE INTERRUPT STATUS result and drop it.
+;
+; SPEC.md 18.97.1: a controller reset leaves one status-change result PER
+; DRIVE and the 765 hands them out in order, so a single sense answers the
+; question the QUEUE is on rather than the one you asked. Measured on the
+; field 5150: a sense issued after a recalibrate of unit 1 returned ST0 = C2 -
+; interrupt code 11, and unit TWO. Nothing branches on ST0 any more, but the
+; queue is still drained: at both ends, so the one this probe publishes is its
+; own, and so the next BIOS floppy operation does not inherit ours.
+fdd_sidrain:
+    push ax
+    push cx
+    mov cx, FDD_SIN
+    call fdd_res
+    jc .out
+.next:
+    and al, 0xC0
+    cmp al, 0x80                ; interrupt code 10 = invalid, i.e. the
+    je .out                     ; controller has nothing left to hand over
+    dec cx
+    jz .out
+    call fdd_res
+    jnc .next
+.out:
+    pop cx
+    pop ax
     ret
 
 ; fdd_put - hand one byte to the FDC, MSR-handshaked and BOUNDED: the one way
@@ -5108,35 +5327,6 @@ fdd_get:
     clc
     ret
 
-; fdd_wseek - wait for unit 1's seek to end.  out: CF = 1 = it outlived
-;             FDD_SEEKTO. A seek runs in the BACKGROUND, so the MSR goes
-;             not-busy at once and D1B is the bit that matters.
-fdd_wseek:
-    push ax
-    push cx
-    push dx
-    mov cx, [ticks]
-    add cx, FDD_SEEKTO
-.spin:
-    mov dx, FDC_MSR
-    in al, dx
-    test al, 0x02               ; D1B: unit 1 busy in seek mode
-    jz .done
-    mov ax, [ticks]
-    sub ax, cx
-    js .spin                    ; modular arithmetic between two free-running
-    pop dx                      ; words, so the SIGN decides (SPEC.md 45.15's
-    pop cx                      ; trap: jg honours the overflow flag)
-    pop ax
-    stc
-    ret
-.done:
-    pop dx
-    pop cx
-    pop ax
-    clc
-    ret
-
 ; fdd_wait - CX ticks, and nothing else. The scheduler is live by now but
 ;            task 0 is the only task there is (inst_init: a clean boot has no
 ;            instances), so there is nobody to yield to.
@@ -5181,10 +5371,19 @@ section .bss
 ; I/O at all; dsk_bpbsg keeps the signature dsk_fatw_pick needs to decide window
 ; reuse, which is otherwise computed off the sector we would have read.
 ;
-; NOT for floppies, which is the whole point of the split: a floppy is exactly
-; the volume that CAN be swapped between two operations, and the batch bracket
-; is what will let one skip this - under an assertion a caller makes,
-; not one the kernel invents.
+; **FLOPPIES BANK HERE TOO, and this comment used to say they did not.** It was
+; written before SPEC.md 18.9.3 landed and left in the future tense - "the batch
+; bracket is what WILL let one skip this" - so it read as a statement that rows
+; 0 and 1 never touch this array. They are its HEAVIEST users: inside a batch a
+; floppy banks with [dsk_bpbok] = 2, and that is the whole of 18.9.3's measured
+; win (an install's BPB reads 41 -> 2, the floppy side 356 -> 163 sectors).
+;
+; So this is DVOL_MAX * 64 and cannot be indexed from volume 2 to save the two
+; rows 18.98 added. That was proposed, on the strength of the stale comment
+; above, and it would have taken the bracket away from A: and B: - the two
+; volumes it was written for. The split 18.9.2 makes is between PERMANENT
+; (fixed, 1) and BATCH-SCOPED (floppy, 2), not between volumes that use this
+; and volumes that do not.
 dsk_bpbv:     resb DVOL_MAX * 64
 dsk_bpbsg:    resw DVOL_MAX
 dsk_bpbok:    resb DVOL_MAX     ; 0 = nothing banked, 1 = banked and good
@@ -5234,22 +5433,18 @@ dsk_wclus:    resw 1            ; dirw: the cluster being walked, 0 = root
 dsk_wsec:     resw 1            ; dirw: sector index inside it
 dsk_wguard:   resw 1            ; dirw: sectors left before the walk gives up
 
-; --- the read-ahead window's bookkeeping (SPEC.md 19.2.3) -------------------
-; Safe in .bss for the same reason: dsk_dirw_start zeroes dsk_rah_n before any
-; walk, and dsk_dirw_fill writes the other five before anything reads them.
-; [dsk_rah_seg] is NOT - it is in .text with a real initialiser, because a
-; shed reads it and mem_pg_own names it.
+; --- the read-ahead cache's bookkeeping (SPEC.md 18.95) ---------------------
+; Safe in .bss because nothing reads any of it while [dsk_rah_seg] is 0, and
+; the claim that sets that word non-zero (dsk_rah_want) flushes the table and
+; zeroes dsk_rah_next before anything can look. [dsk_rah_seg] itself is NOT -
+; it is in .text with a real initialiser, because a shed reads it and
+; mem_pg_own names it.
 dsk_rah_tab:  resb DSK_RAH_RUNS * RAH_REC   ; one record per cached chunk
 dsk_rah_next: resw 1            ; the next slot to spend (round robin)
 dsk_rah_slot: resw 1            ; ...and the one being filled, in bytes
 dsk_rah_rem:  resw 1            ; dsk_rah_have's second answer: sectors of the
                                 ; chunk from the wanted one on, itself included
 dsk_rah_got:  resw 1            ; ...and how many dsk_rah_take actually copied
-dsk_rah_bc:   resw 1            ; the cursor banked across one speculative
-dsk_rah_bs:   resw 1            ; step: cluster, sector index and guard, put
-dsk_rah_bg:   resw 1            ; back when the step is not contiguous
-dsk_rah_max:  resw 1            ; ...and what ONE int 13h may carry from the
-                                ; run's first sector (dsk_rah_cap)
 dsk_op:       resb 1            ; int 13h function for dsk_xfer: 02h / 03h
 dsk_run:      resw 1            ; sectors in the int 13h call being issued
                                 ; (SPEC.md 18.91). A module word for the same
