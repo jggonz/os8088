@@ -35012,8 +35012,19 @@ exact size — a Disk window lists its folders and files, and a text file
 **double-clicked open** resolved its association, loaded Note Pad and read
 the document, all across the cable. Everything above `dsk_xfer` worked
 unchanged, which was the whole bet of doing block mode before the
-redirector. The open took ~10 s, of which **3.7 s is `lp_turn`** at two
-reversals per sector — see §62.3.
+redirector. The open took ~10 s. **What it did NOT do is load the package
+over the cable**, and the first published breakdown of it said otherwise:
+`disk_mount` calls `asc_use` on every full mount, so booting from the combo
+disk seeded Note Pad's §54.4.2 hint to `A:\APPS` before the cable was
+touched, and rung 1 is that hint. `NOTEPAD.O88` came off the floppy. About 13
+sectors crossed — the document and `assoc_back`'s quiet mount — of which
+~1.4 s is `lp_turn` at two reversals per sector (§62.3).
+
+**So a package launched off the wire is still untested**, and opening a
+document can never be the test: the hint makes the network volume's own copy
+lose to the boot disk's, which is right, being 5.7x faster. Launching from
+the network Disk window is `loader_run` on that window's row and does not
+consult the hint at all.
 
 ### 62.8 `tests/dosstub` — a machine to run the DOS end on
 
