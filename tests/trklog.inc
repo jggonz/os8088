@@ -669,9 +669,13 @@ tlog_dec4:
 ; bracket owns the machine until it returns (SPEC.md 53.7), so Esc first. The
 ; text is a TRANSIENT claim held across this one call - 44KB of it, which has
 ; no business living in a region that caps at 60 (SPEC.md 27.6's rule, and
-; Note Pad's) - and the write itself is ~20 seconds of floppy at the measured
-; 7,457 bytes/second (PERFORMANCE.md Part 2), which is why the status line
-; says so before it starts.
+; Note Pad's) - and the write itself is several seconds of floppy, which is why
+; the status line says so before it starts. It was estimated here at ~20 s from
+; a 7,457 bytes/second read figure that was two Part 9 rounds stale (Set 17
+; against Sets 22/24's 21,307); the honest figure is that a WRITE is not a read
+; and this path has never been timed - PERFORMANCE.md Set 24 prices a 32KB
+; create at 4.67 s and an 8KB-chunked append at 11.04 s for the same bytes, so
+; the answer depends entirely on which of those shapes this is.
 ; -----------------------------------------------------------------------------
 tlog_save:
     push ax

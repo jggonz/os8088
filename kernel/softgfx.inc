@@ -303,7 +303,7 @@ sw_col:
 ; shift per two pixels. It costs the same whatever is in the row.
 ;
 ; THERE IS NO HYBRID and docs/LAST-DROP.md 3 is why. The run path is cheaper
-; only below 1.84 runs a row (PERFORMANCE.md Set 41's two-term fit), nothing
+; only below 1.84 runs a row (PERFORMANCE.md Set 43's two-term fit), nothing
 ; anyone waits on draws flat art through this - Paint's canvas, Solitaire's
 ; lattice card backs, ArtfulType's line of TEXT per keystroke - and keeping
 ; both paths costs 336 bytes and a permanent second opinion about the pixels.

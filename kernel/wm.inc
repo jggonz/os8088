@@ -5456,20 +5456,21 @@ wm_su_take:
     jnz .out                    ; a fullscreen window is not usefully covered
                                 ; by what is being raised over it, and it is
                                 ; the biggest block there is
-%ifdef KERN_BIG
-    cmp byte [vid_ndisp], 1
-    ja .out                     ; an EXTENDED desktop refuses the bank
-                                ; outright: the extent checks below compare
-                                ; against the ACTIVE display's [vid_cw]/
-                                ; [vid_ch], and gfx_save/gfx_restore carry no
-                                ; display hook - a bank taken while the other
-                                ; card was current saved, and would later
-                                ; restore, the wrong band of the wrong
-                                ; monitor at untranslated virtual offsets. A
-                                ; refusal is the designed fallback (11.96):
-                                ; the raise repaints, exactly as it did
-                                ; before the cache existed
-%endif
+                                ; THERE WAS A BLANKET `[vid_ndisp] > 1 -> .out`
+                                ; HERE and it is deliberately gone (SPEC.md
+                                ; 39.14.8). It was right when it was written -
+                                ; gfx_save/gfx_restore carried no display hook,
+                                ; so a bank taken while the other card was
+                                ; current saved the wrong band of the wrong
+                                ; monitor - and both halves of that reason have
+                                ; since been removed: the two routines take
+                                ; GFXDENTER now, and vid_span_one below refuses
+                                ; exactly the rects that cannot be banked
+                                ; instead of every rect on the second display.
+                                ; Two trees fixed one bug, one bluntly and one
+                                ; precisely, in different lines - so git merged
+                                ; both and the blunt one won by being first.
+                                ; tests/dispsave.py is what noticed.
     mov bx, di
     call wm_su_drop             ; whatever THIS window banked before: one
                                 ; window, one claim, or the old one leaks

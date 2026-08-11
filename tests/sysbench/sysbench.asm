@@ -4111,9 +4111,10 @@ sb_b_rdsml:
 ;
 ; Every row in the floppy block above has a hard-disk twin nobody has ever
 ; seen, starting with the one that decides whether a hard disk is worth having
-; as a system volume at all: a floppy moves 7,457 bytes a second and takes
-; ~65 ms to fetch a sector in a run - 2,100 and 238 before SPEC.md 18.91's
-; AL fix, and that older pair is quoted all over this tree (PERFORMANCE.md
+; as a system volume at all: a floppy moves 21,307 bytes a second warm and
+; delivers 512 of them every ~24 ms (Set 24) - it was 7,457 / 65 ms at Set 17
+; and 2,100 / 238 ms before SPEC.md 18.91's AL fix, and BOTH of those older
+; pairs are quoted all over this tree (PERFORMANCE.md
 ; Part 2). It is also the only
 ; measurement of SPEC.md 52's driver on real spinning MFM - rung 0, the
 ; controller ROM, which is the only rung an 8088 can take at all.

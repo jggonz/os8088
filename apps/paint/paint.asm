@@ -7219,7 +7219,7 @@ pt_repaint:
 ; move without moving the window, so it is named from here - every paint, which
 ; costs a compare, because OSAPI_WM_BAND drops nothing when the figure has not
 ; changed. It is 451 of a repaint's 604 drawing calls that the column saves and
-; 131 that the strip does (PERFORMANCE.md Set 44).
+; 131 that the strip does (PERFORMANCE.md Set 46).
 ; -----------------------------------------------------------------------------
 pt_bands:
     pushf

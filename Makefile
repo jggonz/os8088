@@ -316,6 +316,7 @@ $(shell mkdir -p $(BUILD); \
 # BSD/macOS stat, and this gets built on both. Try GNU first, fall back to BSD.
 FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 
+
 KERNEL_SRC := kernel/kernel.asm
 # apps/os88ui.inc is a KERNEL source too - SPEC.md 20.5.1's shared control
 # assembles into fdlg.inc with OS88UI_KERNEL defined. Without it here, editing
@@ -326,7 +327,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
-        bench field stackprobe trklog npbench clicktest marty comscan \
+        bench field stackprobe trklog npbench clicktest marty comscan lptlink \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         checkdocs clean clean-marty distclean
@@ -454,7 +455,7 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 # ui_tm_open looks for (SPEC.md 28.3). Kernel machinery in a folder of its
 # own, so the root of a disk is the user's files - and the two disks agree,
 # because the chip menu cannot know which of them is in the drive.
-DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv
+DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv $(BUILD)/net.drv
 # ...and the hard-disk driver's on-demand half, which rides every disk the
 # drivers do but is NOT one of them: nothing puts it in drv_tab, the Drivers
 # page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
@@ -586,6 +587,25 @@ $(BUILD)/debug.bin: drivers/debug/debug.asm drivers/os88drv.inc apps/os88api.inc
 
 $(BUILD)/debug.drv: $(BUILD)/debug.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/debug.bin -o $@
+
+# NET.DRV - a LapLink parallel cable as a block volume (docs/NET-PLAN.md stage
+# 1). Its transport is drivers/net/lplink.inc, which tests/lptlink includes
+# too, so the thing PERFORMANCE.md Part 9 Set 39 measured is the thing that
+# ships. OS88NET.COM is the other end of the cable and does NOT go on an
+# os8088 disk - it is a DOS program for the far machine, built here and sent.
+$(BUILD)/net.bin: drivers/net/net.asm drivers/net/netui.inc \
+                  drivers/net/lplink.inc drivers/os88drv.inc apps/os88api.inc \
+                  apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
+	@echo "net:    $(call FILESIZE,$@) bytes"
+
+$(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/net.bin -o $@
+
+$(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
+                      drivers/net/lplslv.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/net/ -o $@ $<
+	@echo "os88net.com: $(call FILESIZE,$@) bytes - the DOS end, for the FAR machine"
 
 $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
@@ -1931,6 +1951,108 @@ $(BUILD)/comscan144.img: $(BUILD)/csboot144.bin $(BUILD)/comscan.bin \
 		--boot $(BUILD)/csboot144.bin --kernel $(BUILD)/comscan.bin \
 		$(BUILD)/comscan.com
 
+# LPTLINK surveys the machine's PARALLEL ports and then measures the cable
+# between two of them (tests/lptlink) - step 1 of docs/NET-PLAN.md. Same shape
+# as comscan above and for the same reason: NEITHER END IS os8088, so a
+# failure is a failure of the cable or the protocol and cannot be anything
+# else. Run it on both machines - one Slave, one Master, SLAVE FIRST.
+#
+#   build/lptlink.com   a DOS program. `LPTLINK > LPTLINK.TXT` captures the
+#                       report, because its output goes through int 21h
+#   build/lptlink.img   a BOOTABLE 360KB floppy carrying the same code as its
+#                       "kernel", so the 5150 needs no DOS and no os8088 to be
+#                       one end of the link. LPTLINK.COM rides along for the
+#                       DOS route
+#
+# `python3 tests/lptlink/linksim.py` is the host-side model of its link layer,
+# and it is not optional reading before touching the handshake: three defects
+# in it were found there rather than in the field, and every one of them would
+# have presented as a cable fault.
+lptlink: $(BUILD)/lptlink.img $(BUILD)/lptlink144.img $(BUILD)/lptlink.com $(BUILD)/os88net.com
+	@python3 tests/lptlink/linksim.py
+	@echo "lptlink: build/lptlink.img (360K, bootable), lptlink144.img (1.44M),"
+	@echo "         and build/lptlink.com to run under DOS"
+
+$(BUILD)/lptlink.com: tests/lptlink/lptlink.asm drivers/net/lplink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/net/ -DCOMFILE -o $@ tests/lptlink/lptlink.asm
+	@echo "lptlink.com: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/lptlink.bin: tests/lptlink/lptlink.asm drivers/net/lplink.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/net/ -o $@ tests/lptlink/lptlink.asm
+
+# Its own boot sectors, because the sector count is assembled in and lptlink
+# is a great deal smaller than the kernel.
+$(BUILD)/llboot360.bin: boot/boot.asm $(BUILD)/lptlink.bin | $(BUILD)
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
+		-o $@ boot/boot.asm
+
+$(BUILD)/llboot144.bin: boot/boot.asm $(BUILD)/lptlink.bin | $(BUILD)
+	$(NASM) -f bin $(BOOTDEF) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
+		-o $@ boot/boot.asm
+
+# THE DOS-LITE HARNESS (tests/dosstub): a bootable floppy that runs
+# OS88NET.COM on a machine with no DOS on it.
+#
+# It exists because the DOS end was written, assembled, packaged and SENT TO
+# THE FIELD TWICE without one instruction of it ever executing - there is no
+# DOS in this container and none this tree may ship, so `make` could say the
+# program was fine while DOS entered it at a byte that was not its entry.
+#
+#   make dosstub                     10MB image: 20,480 sectors
+#   make dosstub FSIZE=64M           past os8088's cap: 65,535, and it says so
+#   make dosstub FSIZE=256           under one sector: the refusal
+#   make dosstub FAILOPEN=1          DOS says no: the error path
+#   make dosstub ARGS='/RO /P:378'   the command tail
+#
+# ON DEMAND ONLY. `all` never builds tests/ and nothing under it ships.
+DOSSTUB_DEF :=
+ifeq ($(FSIZE),64M)
+DOSSTUB_DEF += -DFSIZE_HI=0x0400 -DFSIZE_LO=0x0000
+endif
+ifeq ($(FSIZE),256)
+DOSSTUB_DEF += -DFSIZE_HI=0x0000 -DFSIZE_LO=0x0100
+endif
+ifneq ($(ARGS),)
+DOSSTUB_DEF += -DARGS='"$(ARGS)"'
+endif
+ifneq ($(FAILOPEN),)
+DOSSTUB_DEF += -DFAILOPEN=1
+endif
+
+$(BUILD)/dosstub.bin: tests/dosstub/dosstub.asm $(BUILD)/os88net.com | $(BUILD)
+	$(NASM) -f bin -w+error $(DOSSTUB_DEF) -o $@ tests/dosstub/dosstub.asm
+
+$(BUILD)/dsboot.bin: boot/boot.asm $(BUILD)/dosstub.bin | $(BUILD)
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/dosstub.bin) + 511 ) / 512 )) \
+		-o $@ boot/boot.asm
+
+$(BUILD)/dosstub.img: $(BUILD)/dsboot.bin $(BUILD)/dosstub.bin tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/dsboot.bin --kernel $(BUILD)/dosstub.bin
+
+.PHONY: dosstub
+dosstub: $(BUILD)/dosstub.img
+	@echo "dosstub: $(BUILD)/dosstub.img - boots and runs OS88NET.COM with no DOS"
+	@echo "  cd $(BUILD)/martypc/run && MARTYPC_DEBUG_ADDR=127.0.0.1:9001 \\"
+	@echo "    ./martypc_headless --machine-config-name os8088_5150_cga_lpt \\"
+	@echo "    --mount fd:0:media/floppies/dosstub.img &"
+	@echo "  python3 tools/os88marty.py 127.0.0.1:9001 screen"
+
+$(BUILD)/lptlink.img: $(BUILD)/llboot360.bin $(BUILD)/lptlink.bin \
+                      $(BUILD)/lptlink.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/llboot360.bin --kernel $(BUILD)/lptlink.bin \
+		$(BUILD)/lptlink.com
+
+$(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
+                         $(BUILD)/lptlink.com tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/llboot144.bin --kernel $(BUILD)/lptlink.bin \
+		$(BUILD)/lptlink.com
+
 # There WAS a third image here - the same package on a FAT16 volume, built on
 # the 2.88MB test geometry, which exercised the one part of the write path
 # FAT12 cannot. It went with DSK_FAT_SECS: at 10 sectors the mount's rule 10
@@ -2363,6 +2485,9 @@ marty: $(IMG360)
 	@echo "                 a Hercules, docs/DUAL-DISPLAY-PLAN.md) and _herc_gla"
 	@echo "                 is the single-card Hercules without the IBM ROM."
 	@echo "                 python3 tests/dualcheck.py is the two-card gate"
+	@echo "       _cga_lpt has a PARALLEL PORT at 378h (SPEC.md 62's NET.DRV)"
+	@echo "                 and so does _xt_hdd, which is then the one machine"
+	@echo "                 with TWO driver Control Panel pages at once"
 	@echo "       ..._sb has an AdLib AND a Sound Blaster, _sbonly has the DSP"
 	@echo "       and NOTHING at 388h - the SPEC.md 51.3.1 pair; _xt_vga_sb is"
 	@echo "       the one to run with --turbo (7.16MHz, the fastest MartyPC has;"

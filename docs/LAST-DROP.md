@@ -185,7 +185,7 @@ wins in is narrower than when it was costed.
 
 The byte decoder walks the destination byte by byte and costs the same
 whatever is in the row. The run path costs `830 + 371 x runs` µs a row
-(PERFORMANCE.md Set 41, fitted to three measured densities within 3%), so it
+(PERFORMANCE.md Set 43, fitted to three measured densities within 3%), so it
 is *cheaper* on rows with almost nothing in them. The hybrid keeps both and
 picks per row — from the PREVIOUS row's run count, pictures being locally
 coherent, first row on the run path, a wrong guess costing one row. Per row

@@ -82,7 +82,7 @@ Reported alongside bug 1: dragging Note Pad, the window underneath shows its
 `wm_clip_set` (§11.3) arms it over the *content* rect — across the outline and
 the drop shadow, and disarms before the title bar (§11.97.1). Both are
 `gfx_fill`, which clips per pixel, so nothing had to learn about regions. Measured
-(PERFORMANCE.md Set 40) on a drag across another window, three runs of each
+(PERFORMANCE.md Set 42) on a drag across another window, three runs of each
 build: **transient pixels 14,253 → 10,665, 1.34x**, with the frame count and
 the visible-redraw time unmoved — which is the honest shape of it. The same
 frames still change the same pixels; what changed is how many are written and
@@ -156,7 +156,7 @@ Paint repaint and none of the multi-second ones.
 `os88span.py`'s Paint scenarios arm three symbols and `wm_grow_paint` was the
 last of them, so a second hit of it read as a second pass. **When a trace
 implies a control-flow shape, arm the symbol that shape would have to go
-through** — here `wm_draw_win` and `wm_front`, neither of which fires. Set 40
+through** — here `wm_draw_win` and `wm_front`, neither of which fires. Set 42
 has the traces.
 
 ---
@@ -177,7 +177,7 @@ Three things came out of it that the next reader wants:
   visible" is 90% *covered*, and a raise owes the covered part — so that case is
   7.8 s, not 0.9. The win is proportional to how much was covered and there is no
   typical amount: 59.9% covered measures 1.53x, 95% covered measures 1.12x, both
-  exactly their own geometry (Set 39).
+  exactly their own geometry (Set 41).
 - **`wm_damage` had to learn about `WF_FULL`.** §11.2's branch of `wm_draw_win`
   white-fills the whole frame with no `WF_OWNBG` opt-out, so a partial answer
   there blanks the rest. Latent until now, because `wm_dmg_wins` rarely marks a
@@ -205,7 +205,7 @@ The 8.7 s itself, and it was **the single largest drawing cost in the system**.
 `sw_blit_span` writes a run into the 1bpp framebuffer itself, so §5.7's per-call
 floor is paid once a CALL rather than once a run: the row base and the dither
 phase are worked out once a row, §39.4's reduction is a table read, and what is
-left is two masked bytes and a `rep stosb`. Measured (PERFORMANCE.md Set 41) on a
+left is two masked bytes and a `rep stosb`. Measured (PERFORMANCE.md Set 43) on a
 cycle-accurate 5150/CGA: the canvas blit **5,526 → 2,431 ms on 85-runs-a-row art
 and 18,777 → 8,365 on 308**, the same 2.25x both times, because what goes is a
 fixed cost per run.
@@ -236,7 +236,7 @@ narrowest case the masks have and one a picture barely reaches.
 `sw_blit_row` walks the destination byte by byte; a source byte is two pixels
 and a 256-byte table turns it into two destination bits. **No hybrid** —
 docs/LAST-DROP.md 3 is the costing, kept as the record of a deliberate
-omission. Measured (PERFORMANCE.md Set 42):
+omission. Measured (PERFORMANCE.md Set 44):
 
 | Paint's canvas | pre-§5.4.1 | span writer | **decoder** |
 |---|---|---|---|
@@ -262,7 +262,7 @@ B2's own closing arithmetic. The per-pair count test looks for a boundary that
 arrives every *fourth* pair, so once the first destination byte is stored and
 the phase is fixed, four pairs are one whole byte and the accounting goes.
 **259.1 ms at an even canvas x (1.99x), 299.0 at an odd one (1.70x)**, still
-flat in content (0.4% across 85 → 308 runs a row). PERFORMANCE.md Set 43.
+flat in content (0.4% across 85 → 308 runs a row). PERFORMANCE.md Set 45.
 
 **Both phases had to be built, and finding that out is the transferable part.**
 The even body is reachable only at an even destination x; Paint's template
@@ -271,7 +271,7 @@ been pricing *one half of the routine*, with the other half one pixel of drag
 away. `PTNUDGE` is now an argument to `tools/ptcheck.py` and
 `tools/os88span.py` — an odd sideways drag before the cover/raise — and the
 rule it encodes is that **a gate that never moves the thing it tests proves
-the alignment it happened to start at**. Set 40's chrome-flash drag was the
+the alignment it happened to start at**. Set 42's chrome-flash drag was the
 same mistake in another place.
 
 **What is left in this loop is small.** The even body is 37 instruction bytes
@@ -328,12 +328,12 @@ palette**; the bottom strip is 131 calls and 99 ms. So the built half is a
 RECTANGLES and so needs no region arithmetic anywhere: `wm_band` (slot 0x03B8),
 the cache banks the band, `wm_damage` hands the app the content minus it.
 **Paint raise 680.9 → 451.0 ms, 1.51x**, and Paint needed no drawing change —
-`pt_draw_pal` was already gated on the damage rect. PERFORMANCE.md Set 44.
+`pt_draw_pal` was already gated on the damage rect. PERFORMANCE.md Set 46.
 
 The remaining 22% is §11.96.11.1: **four** bands rather than one, held as a
 fragment list in the cache. `KERN_SMALL_BUDGET`'s twentieth move paid for it.
 **Chrome 421.8 → 90.6 ms, 4.7x; the whole raise 680.9 → 350.8, 1.94x**
-(PERFORMANCE.md Set 46), and the three bugs it sprang are all one mistake —
+(PERFORMANCE.md Set 48), and the three bugs it sprang are all one mistake —
 a routine that was right about "the buffer" is wrong about "a fragment of it".
 Two of them showed only on Hercules, because the two adapters' sessions restore
 a different set of fragments.
@@ -347,7 +347,7 @@ app audited, since the fill is what most `W_PAINT`s draw into.
 
 The step REDRAW-SPEC Part 3 deferred: key the marking on each window's
 *redrawn region* instead of its rect. **It buys nothing here**, and the
-measurement is the deliverable — PERFORMANCE.md Set 45.
+measurement is the deliverable — PERFORMANCE.md Set 47.
 
 It can only spare a window marked **transitively**, one that does not overlap
 the damage rect but does overlap a marked window below. On a session built to
@@ -371,8 +371,13 @@ tool window, an inspector. os8088 has none.
 
 ## Before you write any code
 
-**Footprint spare is 512 bytes on EACH kernel — ONE 512-byte step, and both
-image rungs were crossed by §11.96.11.1.**
+**Footprint spare is 2,560 bytes on `kern_big` — five steps, after the merge
+that brought the network driver's own raise — and 512 on `kern_small`, which is
+ONE.** `KERN_CODE_MAX` is the one to watch on the big kernel now: `.text` +
+`.bss` is **64,965 of 65,536, 571 bytes left**, and that ceiling is 16-bit
+offsets and cannot be raised. The next thing that does not fit there goes to
+`.cold` (§2.6) or the boot overlay (§2.5), neither of which relieves the
+footprint.
 `KERN_SMALL_BUDGET`'s **twentieth move**, 96,256 → 97,280, was asked for and
 granted and is **allocated to window redraw improvements**: §11.96.11 had left
 the small build exactly on the old figure with 0 spare, and the items below are

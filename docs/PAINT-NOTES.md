@@ -566,7 +566,7 @@ does — priced per byte those two are **5.5 µs against 244 µs** (Set 32), a 4
 gap that is entirely the per-call floor. It wants care on three fronts and is
 therefore its own piece of work:
 
-**The 1bpp half of that landed — SPEC.md §5.4.1, PERFORMANCE.md Set 41 —
+**The 1bpp half of that landed — SPEC.md §5.4.1, PERFORMANCE.md Set 43 —
 and it is worth 2.25–2.27x, not 45x.** `sw_blit_span` writes the run itself,
 so the ~756 µs of *arriving* goes; what stays is ~315 µs of per-RUN work (the
 scan's three 4-bit shifts, the `repe scasb` setup, the tail nibble decode, the
@@ -659,7 +659,7 @@ straight after `pt_wfix`):
 
 ## Deferred: the grow box is drawn twice per repaint
 
-Found while retiring the "`W_PAINT` runs twice" bug (PERFORMANCE.md Set 40) and
+Found while retiring the "`W_PAINT` runs twice" bug (PERFORMANCE.md Set 42) and
 left alone on purpose. `pt_draw_strip` ends in `pt_growbox` because **the
 strip's white bed erases the box and the click paths have no `W_PAINT` behind
 them** — a tool, colour, width or toggle click repaints the strip and nothing

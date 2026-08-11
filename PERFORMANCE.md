@@ -292,10 +292,16 @@ row setup.
 | Framebuffer vs. RAM, read-modify-write | 1.09× (CGA 1.11×) |
 | An ISA status-port `in` | 8.7 us |
 | The kernel's own tick + mouse + scheduler | **1–3%** of a busy CPU |
-| Floppy throughput | **7,457 bytes/second** (was 2,100 before Set 17) |
-| Floppy, per `int 13h` CALL | **~400 ms — about 2 of the 200 ms revolutions**, whether it moves 1 sector or 9. THIS is the unit to estimate a disk change in |
-| Floppy, per 512-byte sector | **65 ms** inside a well-coalesced run (was 238 — see below) |
-| Floppy, open and read a one-sector file | 810 ms |
+| Floppy throughput, os8088's own `FILE_READ` | **21,307 bytes/second** warm (**Set 24**; Set 22 says 19,883 on the same machine, and it was 7,457 at Set 17 and 2,100 before it) |
+| …cold motor | **12,969 B/s** (16 KB in 1.263 s — Set 24) |
+| The BIOS's own best: a whole track in one `int 13h` | **11,570 B/s** (Set 24; 11,984 at Set 14) — **os8088 is now 1.84x THIS**, see below |
+| Floppy, raw `int 13h`, ONE sector | **199 ms** — one 300 RPM revolution exactly (Set 22) |
+| Floppy, raw `int 13h`, a 9-sector TRACK | **384 ms** — 1.92 revolutions (Sets 14/22). A call costs 1–2 revolutions near enough whatever it moves, so **calls are the unit to estimate a disk change in** |
+| Floppy, per 512 bytes DELIVERED by `FILE_READ` | **24 ms** (Set 24) — and read the note below before using it |
+| **Floppy WRITE throughput** | **7,020 bytes/second** — 32 KB created in 4.67 s (Set 24). **A write is 3.0x dearer than a read** and the tree carried one "floppy throughput" row for both until Set 24 split them; price a save with THIS |
+| Floppy, per 512 bytes WRITTEN | **73 ms** (Set 24) |
+| Floppy, the same bytes appended in 8 KB chunks | **2.36x** the one-call create (Set 24) — each chunk is a whole §18.4 commit |
+| Floppy, open and read a one-sector file | 796–810 ms — **Set 17, and NOT re-measured since §18.95's cache landed.** Treat as an upper bound |
 | System tick | 18.2065 Hz; **65,536 PIT counts, measured exactly** |
 | Serial mouse | 1200 baud |
 
@@ -304,8 +310,43 @@ row setup.
 rest is five 8088 instructions. The figure was low, and it was attributed to
 the wrong thing.
 
-**The floppy rows above carried the SAME kind of error for longer, and it
-was the bug rather than the measurement.** `238 ms per sector` and
+**AND THE FLOPPY ROWS WENT STALE A SECOND TIME, IN THIS TABLE, UNDER THE
+PARAGRAPH THAT WARNS ABOUT IT.** They read `7,457 B/s / 65 ms a sector` — Set
+17's — for the whole of Sets 22 and 24, which took the same read to 19,883 and
+then 21,307 B/s. Nothing was wrong with any measurement; the summary table
+simply was not edited when Part 9 moved, and every consumer of it inherited a
+figure **2.9x too pessimistic**. It reached docs/FIELD-MACHINES.md's machine
+register, `sysbench`'s own report text, `trklog.inc`, and a whole plan document
+(docs/NET-PLAN.md) that concluded a parallel cable would be *faster* than the
+floppy partly on the strength of it.
+
+**So every row in the table above now names the Set it came from**, and that
+is the rule rather than a tidy-up: a figure with no provenance cannot be
+checked for staleness by reading, only by re-deriving it, and nobody
+re-derives a number that looks settled. **When Part 9 gains a set that moves a
+row, the row moves in the same commit.** Part 6 rule 8 says every figure
+carries its machine; this is the same rule pointed at time instead of hardware.
+
+The two big consequences of the correction, because they invert conclusions
+this document had drawn:
+
+- **os8088 is no longer slower than the BIOS — it is 1.84x faster.** Set 17's
+  standing residual, *"1.55x still on the table against the ROM's 11,570"*,
+  is spent and reversed: a `dsk_xfer` run spans the track boundary with the
+  multi-track bit set, so it gets more than one track's sectors per
+  revolution where the ROM's single call stops at EOT, and §18.95's cache
+  answers a repeat with no revolution at all. Any text still framing the
+  floppy as *approaching* the BIOS figure is pre-Set-22.
+- **The sector has stopped being a meaningful unit**, which is the older
+  lesson taken one step further. §18.95's cache means some of a file's
+  sectors are not read at all — Set 22 measured a 16 KB read as **18 sectors
+  in 2 `int 13h`** where the file is 32 sectors — so "per sector" now
+  measures a mixture of a transfer and a cache hit. The 24 ms row above is
+  bytes DELIVERED, not sectors moved, and the honest units are the two raw
+  `int 13h` rows and the throughput.
+
+**The first time these rows went stale it was the bug rather than the
+measurement.** `238 ms per sector` and
 `2,100 bytes/second` were measured honestly and then outlived their cause:
 they are SPEC.md §18.91's `AL` bug, where the BIOS moved nine sectors,
 answered `AL = 1`, and the kernel re-asked for the other eight one at a time
@@ -339,15 +380,24 @@ the ACCESS SHAPE:
 
 | shape | cost | how known |
 |---|---|---|
-| a sector **inside a coalesced run** | **65 ms** (5150), 46 ms (Compaq III) | measured, Sets 17/18 |
-| an **`int 13h` call** in such a run | **~400 ms**, 1–2 revolutions, near enough whatever it moves | measured, Sets 14/17 |
+| 512 bytes **delivered by a warm `FILE_READ`** | **24 ms** (5150) | measured, **Set 24**. NOT a sector transferred — §18.95's cache means some are never read |
+| a sector **inside a coalesced run**, pre-cache | 65 ms (5150), 46 ms (Compaq III) | measured, Sets 17/18 — **superseded by the row above for any estimate made today**, and kept because pre-Set-22 reasoning all over this tree is derived from it |
+| an **`int 13h` call** in such a run | **199 ms** for one sector, **384 ms** for a 9-sector track — 1 to 1.92 revolutions, near enough whatever it moves | measured, Sets 14/22 |
 | an **isolated single-sector access** — a boot sector at LBA 0, a lone directory sector | **~150–200 ms once the motor is up**, and most of a second if it is not | **MODELLED, NOT MEASURED** (docs/ASSOC-PLAN.md): ~100 ms average rotational latency + ~80 ms average seek across 40 tracks at a 6 ms step + ~15 ms settle |
 
-The third row is the one that keeps getting confused with the first, and it
-is the one that matters for anything re-reading track 0: **an isolated
-first-sector read is not a 65 ms sector, because it is a seek**. A read of
-LBA 0 from wherever the heads were is up to a full 39-track stroke, so the
-~80 ms in that model is an *average* and the worst case is dearer.
+**A fourth quantity has since split off the first**, which is why the table
+grew a row rather than having one edited: §18.95's cache made *bytes
+delivered* and *sectors transferred* different things, and the throughput row
+in the summary table measures the first. A change that saves REVOLUTIONS is
+costed with the `int 13h` rows; a change that saves BYTES is costed with the
+24 ms row; and a change that saves cache MISSES is costed with neither until
+somebody measures it.
+
+The isolated-access row is the one that keeps getting confused with the
+others, and it is the one that matters for anything re-reading track 0: **an
+isolated first-sector read is not a streamed 24 ms, because it is a seek**. A
+read of LBA 0 from wherever the heads were is up to a full 39-track stroke, so
+the ~80 ms in that model is an *average* and the worst case is dearer.
 
 **`238 ms` is none of the three.** It is the AL bug — a revolution burned per
 sector because the kernel re-asked for eight of every nine — and it happened
@@ -1432,7 +1482,7 @@ worth taking:
 | `sysbench: boot ticks` / `boot ms` | **how long the machine takes to boot** (§15.4) — the one thing this project could never measure, because it is over before a package can run. On a floppy machine it is mostly the 125-sector kernel read, and Sets 17/18 took it from 39.88 s to **9.94 s** by fixing §18.91's `AL` bug in both transfer loops - so 238 ms a sector is the number this row was written against and NOT the one to expect now | a number at last. Resolution is one tick, 54.925 ms, which on a boot measured in seconds is quantisation rather than noise |
 | `gfxbench: GFX_LSTEP x8` vs **`GFX_LSTEPV x8`** | **§5.6.8's batching, which was argued from §5.7's floor and never measured.** The two rows draw the identical eight pixels and differ only in arriving eight times or once | it already contradicted its own prediction: **118** in instructions, not the ~800 the floor implies, because `gfx_lstep` is not a rect primitive and its arrival is a far-call cell rather than `vga_rect_setup`. Expect higher than 118 on iron — far-call cells are 46.7 µs for ~7 instructions — but §5.6.8's own field figures imply **356**, and nothing reconciles that yet. **This is the row most likely to find something** |
 | `gfxbench:` the four **`GFX_LINE`** rows | **§5.6.6's dilated-line optimisation, in microseconds.** The instruction answer is already in (below); this is the duration. The two geometries are the same line transposed, 128 pixels each, so the pair checks itself | the two **thin** rows to match; `line shal fat/thin` near **300** (three walks, the control); `line steep fat/thin` near **156**, which is the claim |
-| `sysbench:` the **hard-disk block** | **§52's driver on real spinning MFM, which has never been measured** — and the first hard-disk twin of the floppy rows. Read-only by construction: it mounts, walks the FAT, reads one file and puts the volume back, because the disk it will run against is somebody's DOS 3.3 install (docs/FIELD-MACHINES.md) | anything at all. The floppy is **7,457 bytes/second** post-Set-17 (2,100 before it, and that older pair is quoted all over this tree's history - check which side of the `AL` fix a figure comes from before comparing anything to it); whatever `hdd bytes/sec` says is the first number on the other side of that. `HDD FILE_DFREE` is the one to watch — the 9-sector FAT window (§18.8) has to page across a 41-sector FAT, which is what §18.8.1 was written against |
+| `sysbench:` the **hard-disk block** | **§52's driver on real spinning MFM, which has never been measured** — and the first hard-disk twin of the floppy rows. Read-only by construction: it mounts, walks the FAT, reads one file and puts the volume back, because the disk it will run against is somebody's DOS 3.3 install (docs/FIELD-MACHINES.md) | anything at all — **and it has since been measured: 74,553 B/s against the floppy's 21,307, 3.5x** (Set 24). The floppy figure moved twice while this row said 7,457: check which side of Set 17 (the `AL` fix) AND of Sets 22/24 (§18.95's cache) a figure comes from before comparing anything to it. `HDD FILE_DFREE` is the one to watch — the 9-sector FAT window (§18.8) has to page across a 41-sector FAT, which is what §18.8.1 was written against |
 
 None of them says anything on an emulator, and two say so loudly: under
 `-icount` both shift rows measure identically and the derived per-bit line
@@ -4811,7 +4861,162 @@ The 5150 is still where a number LANDS. What changed is that the gap is one
 measurement quantum on a machine of the right class, and 1.61x on a machine of
 the wrong one — and the second of those was invisible until it was measured.
 
-### Set 39 — a RAISE puts back only what was covered (SPEC.md §11.96.10)
+### Set 39 — the parallel cable measured, and 90% of it was arriving
+
+`tests/lptlink` between the **5150** (Hercules GB101's LPT at **03BC**) and
+the DOS machine (**DIO-500 at 0378**), a LapLink nibble cable between them.
+Two runs, the master role swapped between them. **docs/NET-PLAN.md step 1.**
+
+**Neither end is os8088**, which is the point: no kernel byte is involved, so
+a result here is a fact about the cable and the protocol and cannot be
+anything else.
+
+#### The link, and what it does
+
+16,128 bytes each way per run, **zero errors in all four transfers**, and the
+scan found the two machines at different addresses without being told either.
+
+| | first build | after the fix |
+|---|---|---|
+| 5150 **sending** | 1,536 B/s | **3,741 B/s** |
+| 5150 **receiving** | 1,595 B/s | **3,538 B/s** |
+| per nibble, sending | 325 us | **133.7 us** |
+
+**2.44x**, and the asymmetry is the confirming detail rather than noise: which
+direction is faster follows **the 5150's role, not who is master**. Swapping
+the master swapped the labels and left the numbers where they were, and the
+receiving direction reproduced to the *exact tick* in both runs — 83, and 83.
+`lp_rnib` does about six instructions more than `lp_snib` (three `shr`s, the
+mask, the `[lp_lastop]` store, the reversal branch); isolated that is ~12.7 us
+at Part 2's instruction-byte floor, measured it is **7.7**, and the difference
+is that the two ends run concurrently so some of the receiver's extra work
+happens while the sender is already waiting.
+
+#### Why the first build was 4.2x slower than its own model
+
+The model said 77 us a nibble and the machine said 325. **The model was not
+wrong about the wire — it was wrong about everything around it.** Counted
+against this Part's own constants (4.34 clocks per instruction byte, 4.77 MHz)
+the prediction is **360 us, within 11% of the measurement**:
+
+| per nibble, on the 5150 | us |
+|---|---|
+| `lp_wfar`, four calls | **289** |
+| …of which `ticks()`, four reads | **94** |
+| `lp_rnib`'s own body and frame | 71 |
+| **the wire** — two `in`s and three `out`s | **~30** |
+
+**Nine tenths of it was arriving, not working**, and the single worst item was
+reading the BIOS tick counter to build a deadline **that is almost never
+reached**. That deadline is *correct* — it had just replaced a poll-count
+timeout that broke between machines of different speeds — and what was wrong
+was paying for it on the fast path.
+
+This is §5.7's finding in a new place, and the third time this document has
+recorded it: one `gfx_pixel` was 196 guest instructions of generic rect
+machinery across eleven routines with no hot spot anywhere; a walk step's
+arrival, a one-pixel block and a marginal pixel were three quantities the tree
+had as one; and now a nibble's transport is 30 us of wire under 300 us of
+call frames. **When a measurement comes in several times its model, count the
+arriving before re-examining the work.**
+
+Four changes, none touching the protocol: the deadline is **lazy** (`ticks` is
+not read until a whole `LP_SPIN` of polls has gone unanswered, which on a
+working link never happens), the wait is a **macro rather than a called proc**,
+the poll body is 9 bytes rather than 16 (the level is a branch, not a compare
+against a variable), and `DX` walks between the two ports with `inc`/`dec`
+instead of being reloaded from memory.
+
+#### What is left, and why it was not spent
+
+Predicted after the fix was 93 us; measured is 134. The residual is the
+layering *above* the nibble — `lp_sbyte`'s frame and the benchmark's own byte
+loop, ~28 us a nibble by the same count — plus the far end's response latency.
+
+**The remaining lever is the handshake itself**: two phases instead of four
+halves both the waits and the `out`s per nibble, and NET-PLAN §1.1.1 records
+that it is safe *only* with the turnaround guard that four phases made
+unnecessary. That is worth perhaps another 1.5x and it is **not** being spent
+here, because the transport's home is a driver, where the code above it is
+real file I/O rather than a benchmark loop. Tune it there, against a file
+operation, or the harness gets optimised instead of the feature.
+
+#### For the record, against this machine's own disk
+
+| | bytes/second |
+|---|---|
+| floppy `FILE_READ`, warm (Set 24) | 21,307 |
+| **the cable** | **3,741** |
+| ST-225 (Set 24) | 74,553 |
+
+**The cable is 5.7x slower than the machine's own floppy** — and the case for
+it was never the rate. A 360 KB image crosses it in **99 seconds**; the same
+image reaches this machine any other way via the seven-step path in
+docs/FIELD-MACHINES.md.
+
+### Set 40 — the network drive works, and a third of it is turnaround
+
+**docs/NET-PLAN.md step 2, on the iron**: the 5150 (GB101's LPT at **03BC**)
+against the DOS machine (DIO-500 at **0378**), NET.DRV loaded and
+`OS88NET.COM` serving a 720KB image. The Control Panel reads **Linked, 1440
+sectors** — the image's exact size — a Disk window lists `APPS`, `MEDIA` and
+`NETTEST.TXT`, and **double-clicking the text file launched Note Pad and
+opened it**: the file association resolved, the package loaded and the
+document arrived, all across the cable. **Everything above `dsk_xfer` worked
+unchanged**, which was the whole bet of doing block mode first.
+
+**The document open took about ten seconds**, and it decomposes:
+
+| | sectors | cost |
+|---|---:|---:|
+| `NOTEPAD.O88` | 32 | |
+| `NETTEST.TXT` | 2 | |
+| **data**, at Set 39's 3,741 B/s | 34 | **4.65 s** |
+| **turnaround**, 2 x 54.9 ms per SECTOR | 34 | **3.73 s** |
+| mounts and directory walks | | the rest |
+
+**The turnaround is 37% of it and it is nearly all removable.** `lp_turn`
+spends one whole system tick per direction reversal — deliberately, and Set
+39's own header says why: a spin count cannot be made to hold between a 5150
+and an unknown far end, and a reversal was expected to be *"a handful per
+run"*. In block mode it is **two per sector**, because `net_blk` sends a
+count of **1** every time — even though the protocol carries a count byte and
+`dsk_xfer` hands it an already-coalesced run. A 9-sector run batched into one
+command is 2 reversals instead of 18: **3.73 s → 0.44 s** on this figure.
+
+That is the same shape as SPEC.md §18.91's floppy batching and it is worth
+recording as such: **a cost model built for streaming, met by a caller that
+does not stream.** The transport is not slow here; it is being asked the same
+question 34 times.
+
+#### The write path, checked from OUTSIDE os8088
+
+A file copied onto the network volume and the image carried back to the host.
+This is the check that cannot be made from inside: the writer and the reader
+are the same FAT12 code, so **both halves agreeing on the same wrong thing**
+is exactly the failure a self-consistent volume hides (docs/FIELD-NOTES.md 4
+is what that costs).
+
+| check | result |
+|---|---|
+| `os88disk.py --verify` | **OK** — FAT12, 713 clusters, 6 files, 24 in use |
+| sectors changed against the image that was sent out | **4** |
+| …which ones | FAT1, FAT2, the root directory sector, data cluster 25 |
+| the volume walked from the host, no os8088 code involved | clean; every pre-existing file unmoved, same clusters |
+| `BENCHSML.DAT` against the source it was copied from | **byte-identical**, md5 `ad4c06ff458c1c57df65d7fe63df735a` |
+
+Four sectors and no others: both FAT copies updated **symmetrically**, one
+directory entry, one data cluster, and nothing written anywhere else on a
+713-cluster volume. The commit ORDER (§18.4 rule 1 — data, FAT, then the
+directory entry) cannot be seen in a finished image, but its result can, and
+the result is coherent.
+
+**This was the pre-batching build.** The framing changed with Set 40's
+batching (one command per run, a fixed 512-byte frame per sector whatever the
+status), so the write path is verified for the protocol as it was and owes a
+second run on the protocol as it is.
+
+### Set 41 — a RAISE puts back only what was covered (SPEC.md §11.96.10)
 
 Set 34's own last paragraph names this as the gap it could not reach: `wm_raise`
 armed no rect, so both consumers — the raise cache's restore and §11.90.2's
@@ -4853,14 +5058,14 @@ proportional to how much was covered and there is no single number for it**: a
 window with a corner under something gains nearly everything, a window almost
 entirely buried gains almost nothing. Both rows above are quoted for that reason.
 
-**One thing the run appeared to confirm, and Set 40 took back.** Both
+**One thing the run appeared to confirm, and Set 42 took back.** Both
 `paintraise` traces show two `wm_grow_paint` hits for Paint's window — one at
 +402 ms with no canvas in front of it, then the real one — which this Set read
 as REDRAW-SPEC Part 3's open item, `[pt_apend]`'s deferred resize re-entering
 the raise. **It is not**: armed properly, there is one `wm_draw_win`, one
 `W_PAINT` and no `wm_front` at all, and the two hits are `pt_growbox` and
 `wm_draw_win`'s own `.growbox`. The 402 ms is the palette, the strip and the
-divider. Set 40 has the trace; this paragraph is left standing because a
+divider. Set 42 has the trace; this paragraph is left standing because a
 retracted claim is worth more than a deleted one.
 
 Verified at **0 differing pixels** on CGA, Hercules and VGA mode 12h against
@@ -4886,7 +5091,7 @@ repairing.** The steps before the raise show it in *both* builds at 0 differing
 pixels, which is what proves it pre-dates the change. One `pt_org` after
 `pt_wfix` is the fix, and all three adapters then read 0.
 
-### Set 40 — the chrome flash under a drag, and a bug that was not there
+### Set 42 — the chrome flash under a drag, and a bug that was not there
 
 Two of the three open items in docs/HANDOFF-REDRAW.md, on a cycle-accurate
 5150/CGA. One was real and is fixed; one was a misreading of a trace and is
@@ -4973,7 +5178,7 @@ of it read as a second pass. **When a trace implies a control-flow shape, arm
 the symbol that shape would go through** — here `wm_draw_win` and `wm_front`,
 neither of which fires.
 
-### Set 41 — a blit run goes straight into the framebuffer (SPEC.md §5.4.1)
+### Set 43 — a blit run goes straight into the framebuffer (SPEC.md §5.4.1)
 
 docs/HANDOFF-REDRAW.md's item B, and the largest single drawing cost in the
 system. `gfx_blit4` coalesces runs of equal pixels and emits one `gfx_hline`
@@ -5064,7 +5269,7 @@ used and one kilobyte less free. It appears in exactly the five steps where that
 window's status line is on screen and in none of the others, which is what
 identifies it; `make`'s own `N/354 clusters` line confirms it in one command.
 
-### Set 42 — the blit stops working per run (SPEC.md §5.4.1.1)
+### Set 44 — the blit stops working per run (SPEC.md §5.4.1.1)
 
 docs/HANDOFF-REDRAW.md item B2, built without its hybrid. Same session, same
 damage rect, cycle-accurate 5150/CGA, three run densities:
@@ -5109,7 +5314,7 @@ far deeper defect than a single `xor al, 1`.
 
 Verified **0 differing pixels** with `tools/ptcheck.py` on CGA, Hercules and
 VGA mode 12h, and on CGA with `PTROW=1` (`FINE.BMP`'s 1–2 pixel runs). The
-`subcheck` 25-pixel difference is Set 41's known one — `KERNEL.SYS` grew a
+`subcheck` 25-pixel difference is Set 43's known one — `KERNEL.SYS` grew a
 cluster and the drive-A window reports one kilobyte less free.
 
 **Cost: `.text` +169, `.bss` +513, and it lands exactly ON `KERN_BUDGET`.**
@@ -5117,9 +5322,9 @@ cluster and the drive-A window reports one kilobyte less free.
 is an **ask** rather than a grant — the constant's own comment carries the two
 ways to hand it back, both costed.
 
-### Set 43 — the aligned bodies, and the parity nobody had looked at (SPEC.md §5.4.1.2)
+### Set 45 — the aligned bodies, and the parity nobody had looked at (SPEC.md §5.4.1.2)
 
-Set 42's own closing arithmetic, built. The per-pair count test is 8 of the 19
+Set 44's own closing arithmetic, built. The per-pair count test is 8 of the 19
 instruction bytes a pair costs to fetch, and the boundary it looks for arrives
 every *fourth* pair — so once the first destination byte is stored and the
 phase is fixed, four pairs are one whole byte and the accounting is not needed
@@ -5133,7 +5338,7 @@ at all. Same Paint raise, same damage rect, cycle-accurate 5150/CGA:
 …and the "one cost" property survives: **259.1 ms at 85 runs a row against
 260.2 at 308**, 0.4%. Against the run path this round started from, **21.3x**
 on a picture and **72.4x** on detailed art. Predicted 2.05x from the byte
-count and measured 1.99 — Set 42's *count bytes* rule holding on the first
+count and measured 1.99 — Set 44's *count bytes* rule holding on the first
 estimate made under it.
 
 **The finding is the second row, and it was invisible until it was looked
@@ -5149,12 +5354,12 @@ whole difference, and it takes the spread down to 15%.
 
 **The crossover moved with it, and docs/LAST-DROP.md 3 is re-costed**: the run
 path is still `830 + 371 x runs` µs a row and the decoder is now 1,948, so the
-hybrid's band is **~3 runs a row** rather than Set 42's ~10, and what it buys
+hybrid's band is **~3 runs a row** rather than Set 44's ~10, and what it buys
 on flat art is 1.96x rather than 3.9x. Same verdict, less of it.
 
 **A harness rule falls out of it.** *A gate that never moves the thing it
 tests proves the alignment it happened to start at.* This is the second time
-this round — Set 40's chrome flash measured a drag that vacated nothing — and
+this round — Set 42's chrome flash measured a drag that vacated nothing — and
 both had the same shape: a scripted session that reads as thorough because it
 has many steps, all of them at one phase of the thing under test.
 
@@ -5179,7 +5384,7 @@ steps, still inside its own budget). `KERN_BUDGET`'s nineteenth move (+2,048,
 granted with the eighteenth as one piece of work) is what that slack is drawn
 from.
 
-### Set 44 — Paint's palette stops being drawn (SPEC.md §11.96.11)
+### Set 46 — Paint's palette stops being drawn (SPEC.md §11.96.11)
 
 docs/HANDOFF-REDRAW.md item C, in the half that fits. **Paint has no raise
 cache at all and the reason is memory** — over its whole content that is ~9 KB
@@ -5242,7 +5447,7 @@ at 0 spare, exactly on `KERN_BUDGET`** — it builds, and there is not one byte
 left for the next feature. That is a decision to take with whoever asks for the
 next one, not a build fix.
 
-### Set 45 — item D measured, and not built (SPEC.md §11.91.3)
+### Set 47 — item D measured, and not built (SPEC.md §11.91.3)
 
 docs/HANDOFF-REDRAW.md item D: key §11.91's marking on each window's **redrawn
 region** instead of its rect. **A negative result, and the measurement is the
@@ -5293,13 +5498,13 @@ bytes and the riskiest routine in the window manager. That ratio is the argument
 for measuring the case before building the mechanism, and it is the third time
 this round has paid off (§19.2.3.1 and §48.18.1 are the others in this file).
 
-### Set 46 — the cache holds four fragments, and Paint's chrome is 4.7x (SPEC.md §11.96.11.1)
+### Set 48 — the cache holds four fragments, and Paint's chrome is 4.7x (SPEC.md §11.96.11.1)
 
-Set 44 gave a window ONE band on one edge and took Paint's tool column out of
+Set 46 gave a window ONE band on one edge and took Paint's tool column out of
 its repaint. This gives it four, so the bottom strip goes too. Same Paint
 raise, same cycle-accurate 5150/CGA:
 
-| | before the round | one band (Set 44) | **four (Set 46)** |
+| | before the round | one band (Set 46) | **four (Set 48)** |
 |---|---:|---:|---:|
 | chrome, up to the canvas blit | 421.8 ms | 191.9 ms | **90.6 ms** |
 | the canvas blit | 259.1 ms | 259.1 ms | 259.1 ms |
@@ -5340,3 +5545,4 @@ exactly the path it always did (fragment 0 is then the whole content).
 **Cost: `.text` +559 over Set 44.** Both kernels cross one image rung and stand
 at **512 spare, one step** — `KERN_SMALL_BUDGET`'s twentieth move is what paid
 for it, and it is spent.
+

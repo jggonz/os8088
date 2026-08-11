@@ -204,9 +204,18 @@ docs/KERN-SPLIT-PLAN.md, so a row says which of them moved: 15 and 16 are
 | 15 | **big** 94,208 → **96,256** | 2KB for the rest of SPEC.md §39's dual display (docs/DUAL-DISPLAY-PLAN.md): estimated at 1,400–1,900 bytes against a spare that had fallen to 1,024. **The first move that is one build's alone** — `kern_small` stayed at 94,208, which is the whole reason the split exists |
 | 16 | **big** 96,256 → **98,304** | 2KB again, on move 15's terms, for §39.16's union and what follows it |
 | 17 | **both** big 98,304 → **100,352**, small 94,208 → **96,256** | 2KB each for **window drawing optimizations** — SPEC.md §5.8's partial restore, §11.96.6's cache restoring only what the pass painted, §11.96.8's bounded edge merge, §11.90.1's opt-out fill and §11.90.2's damage rect. One window restore went **49.22 → 23.36 ms (2.11x)**, a raise's white flash disappeared, and Paint's canvas 8,670 → 6,759 ms. **It moves BOTH guards, and that is the argument rather than a convenience**: a redraw optimisation is worth most on the slowest machine, and the machine that feels a 49 ms restore is the 4.77MHz one at the RAM floor — so this is not work `kern_small` may be kept out of, and move 15's "small should drift tighter" does not apply in this direction. What spent the PRIOR step is the same round: §11.96.9's fix (a partial draw may not re-bank — the field bug §11.96.6 introduced) crossed the rung the image had 15 bytes left of, taking the spare to ONE step against a standard of four. Granted at 2KB on move 13's terms, with the round's biggest item still to come — a raise restoring only what was **covered** (docs/HANDOFF-REDRAW.md item A), which is a `wm_raise` change and not a new mechanism. **On the integration branch it lands on top of §41.11's removal, which had just handed small two rungs of its own**, so small comes out at SEVEN steps and owes the conversation the "Where it goes" section below names — the raise was asked for and granted against a one-step figure, and that figure had moved underneath it |
-| 18 | **big** 100,352 → **100,864** | One step, and an **ASK rather than a grant**: SPEC.md §5.4.1.1's pair decoder landed the kernel EXACTLY on the guard, so without it the next byte anywhere failed to build. What the step buys is 512 bytes of **pair table** — a source byte is two pixels and maps to a two-bit destination pattern, so 2 × 256 entries make the blit's inner loop a read, an `xlat` and a shift. The constant's own comment carries two costed ways to hand it back |
-| 19 | **big** 100,864 → **102,912** | 2KB asked for and granted for the rest of that work, **"blit4 rendering speed"** — `gfx_blit4` is the largest single drawing cost in the system and it is under Paint's canvas, Solitaire's card backs and ArtfulType's keystroke. Measured: a Paint canvas 5,526 → 2,431 → 517 → **259 ms** and CONSTANT in the content (PERFORMANCE.md Sets 41–43). 148 of it went on §5.4.1.2's aligned bodies and 417 on §11.96.11's cache band — which is not blit work, and is charged here because this is the step that was open |
-| 20 | **small** 96,256 → **97,280** | 1KB asked for and granted, **allocated to window redraw improvements** — and this figure's FIRST move at the 1KB unit its own rule sets, `kern_big` having moved by 2KB throughout. SPEC.md §11.96.11 had landed the small build EXACTLY on the old figure, 0 spare and not one byte, so the next addition to `.text` or `.bss` anywhere would have failed to assemble there and only there. The ask was made with what the last of the old figure bought already measured (a Paint raise **680.9 → 451.0 ms**, PERFORMANCE.md Set 44). It is move 17's allocation continued rather than a new one, and what is left over is bound by move 5's rule: headroom for ordinary growth, not an invitation |
+| 18 | **big** 100,352 → **102,400** | 2KB on move 13's terms — headroom, half a step — for SPEC.md §62's **network driver** (docs/NET-PLAN.md), `kern_big`'s alone. Stage 1's 175 bytes landed inside a rung the merge had already opened; what it is FOR is stage 2's file redirector |
+| 19 | **big** 102,400 → **102,912** | One step, and an **ASK rather than a grant**: SPEC.md §5.4.1.1's pair decoder landed the kernel EXACTLY on the guard, so without it the next byte anywhere failed to build. What the step buys is 512 bytes of **pair table** — a source byte is two pixels and maps to a two-bit destination pattern, so 2 × 256 entries make the blit's inner loop a read, an `xlat` and a shift. The constant's own comment carries two costed ways to hand it back |
+| 20 | **big** 102,912 → **104,960** | 2KB asked for and granted for the rest of that work, **"blit4 rendering speed"** — `gfx_blit4` is the largest single drawing cost in the system and it is under Paint's canvas, Solitaire's card backs and ArtfulType's keystroke. Measured: a Paint canvas 5,526 → 2,431 → 517 → **259 ms** and CONSTANT in the content (PERFORMANCE.md Sets 41–43). 148 of it went on §5.4.1.2's aligned bodies and 417 on §11.96.11's cache band — which is not blit work, and is charged here because this is the step that was open |
+| 21 | **small** 96,256 → **97,280** | 1KB asked for and granted, **allocated to window redraw improvements** — and this figure's FIRST move at the 1KB unit its own rule sets, `kern_big` having moved by 2KB throughout. SPEC.md §11.96.11 had landed the small build EXACTLY on the old figure, 0 spare and not one byte, so the next addition to `.text` or `.bss` anywhere would have failed to assemble there and only there. The ask was made with what the last of the old figure bought already measured (a Paint raise **680.9 → 451.0 ms**, PERFORMANCE.md Set 46). It is move 17's allocation continued rather than a new one, and what is left over is bound by move 5's rule: headroom for ordinary growth, not an invitation |
+
+**Moves 18, 19 and 20 met in ONE MERGE and none of them cancels another.** The
+network driver's raise and the blit's were granted against the same 100,352
+base on different branches, so taking the larger of the two answers would have
+silently revoked one — the network driver's, whose spending is mostly still
+ahead of it. The figure is the base plus all three, and the numbering follows
+the integration branch's; the merged tree measures 102,400 against it, five
+steps.
 
 **And one place NOT to go looking for bytes.** §18.98's `DVOL_MAX` 6 → 8
 costs `.bss` 134, of which 128 are `dsk_bpbv` — a **64-byte banked BPB per
@@ -398,10 +407,10 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5610,
-    "budget": 102912,
+    "bss": 5654,
+    "budget": 104960,
     "codemax": 65536,
-    "cold": 23087,
+    "cold": 23200,
     "coldpara": 1472,
     "fatpara": 288,
     "imgpara": 4064,
@@ -412,13 +421,13 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 59162
+    "text": 59311
   },
   "small": {
-    "bss": 5401,
+    "bss": 5445,
     "budget": 97280,
     "codemax": 65536,
-    "cold": 21540,
+    "cold": 21635,
     "coldpara": 1376,
     "fatpara": 288,
     "imgpara": 3808,
@@ -429,7 +438,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2752,
     "stk0": 1024,
-    "text": 55280
+    "text": 55428
   }
 }
 ```
@@ -925,30 +934,30 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,803 | 36.2% |
-| the window system and its furniture | 18,779 | 22.8% |
-| drawing: adapters, primitives, glyphs, icons | 12,617 | 15.3% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,823 | 11.9% |
+| the file system, end to end | 29,974 | 36.3% |
+| the window system and its furniture | 18,794 | 22.8% |
+| drawing: adapters, primitives, glyphs, icons | 12,625 | 15.3% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,888 | 12.0% |
 | the kernel proper: API table, heap, scheduler, events | 5,989 | 7.3% |
-| the Control Panel | 3,873 | 4.7% |
+| the Control Panel | 3,876 | 4.7% |
 | the three built-in kinds | 1,365 | 1.7% |
-| **total** | **82,249** | |
+| **total** | **82,511** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 1,004 | 7,620 | **8,624** | 336 | — |
-| `wm.inc` — the window manager (§11) | 8,045 | — | **8,045** | 669 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,702 | — | **5,702** | 884 | 3,584 |
+| `files.inc` — the Disk window (§22) | 1,000 | 7,730 | **8,730** | 338 | — |
+| `wm.inc` — the window manager (§11) | 8,038 | — | **8,038** | 669 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,767 | — | **5,767** | 885 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,449 | **5,628** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,203 | — | **5,203** | 653 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,907 | **4,130** | 106 | — |
-| `ctrl.inc` — the Control Panel (§31) | 672 | 3,201 | **3,873** | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 672 | 3,204 | **3,876** | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,656 | — | **2,656** | 291 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,591 | — | **2,591** | 250 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
@@ -957,12 +966,12 @@ generated in the first place.
 | `icons.inc` — the icon renderer (§10) | 1,570 | — | **1,570** | 34 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,365 | — | **1,365** | 11 | 240 |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,336 | — | **1,336** | 84 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,344 | — | **1,344** | 84 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,205 | — | **1,205** | 4 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 978 | — | **978** | 18 | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 1,000 | — | **1,000** | 18 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 916 | — | **916** | 9 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
@@ -974,7 +983,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,797 | — | **2,797** | — | — |
-| **total** | **59,162** | **23,087** | **82,249** | **5,610** | **7,762** |
+| **total** | **59,311** | **23,200** | **82,511** | **5,654** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1389,7 +1398,18 @@ puts up a notice naming the reason.
 | raise 7 — file type associations (§54) and the disk path, costed in advance | 76.5 KB | 74.5 KB |
 | raise 8 — §54.4.1's notice, plus §18.92/§18.93/§18.4.2 | 78.5 KB | 76.5 KB |
 | raise 9 — the five file modules into `.cold` (§2.6) | **80.5 KB** | 78 KB |
-| ...the elendilon merge, and where it stands now | 80.5 KB | **78.5 KB** (80,384 B) |
+| ...the elendilon merge, and where it stood then | 80.5 KB | **78.5 KB** (80,384 B) |
+| moves 10–17 — see `KERN_BUDGET`'s own comment in `kernel/kernel.asm` | 80.5 → 98 KB | — |
+| raise 18 — SPEC.md §62's network driver, **`kern_big` only** | **100 KB** | 97.5 KB (99,840 B) |
+
+**Moves 10 through 17 are deliberately one row.** The table was written when
+there was one guard and the story fitted a line each; since the kern_big /
+kern_small split there are two figures per move and the reason for each is a
+paragraph, so the history that is maintained is `KERN_BUDGET`'s own comment in
+`kernel/kernel.asm` — which says, per move, what was asked for, what was
+granted, what spent the previous step and which guard moved. A summary table
+that has to be updated in a second place is a summary table that goes quietly
+wrong, and this one had: its last row read 78.5 KB against a kernel of 97.5.
 
 Every footprint from move 5 down was **measured at the commit where that
 raise took effect on `elendilon`**, by bisecting `KERN_BUDGET` in a throwaway
