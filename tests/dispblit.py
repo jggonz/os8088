@@ -49,7 +49,6 @@ MBAR_H, TITLE_H = 20, 18
 # vid_ctx: an 18-word run with vid_cw/vid_ch inside it, then VX/VY/KIND.
 VID_CTX_CW, VID_CTX_CH, VID_CTX_SZ = 14, 16, 42
 VID_CTX_VX, VID_CTX_VY = 36, 38
-DESK_ZY0, DESK_ZSTEP, DESK_ZW, DESK_ZH = 24, 52, 60, 44
 FM_ROW_Y0, FM_ROW_H = 26, 16
 PT_CV_X, PT_CHROME_W, PT_CHROME_H = 44, 46, 42
 S = os88sym.linear
@@ -119,9 +118,7 @@ def main(argv):
             % (pri["type"], sec["type"], seam, secw, sech))
 
         # --- Paint, off a disk whose only file is Paint ----------------------
-        zx = u16(m.read(S("vid_desk_zx"), 2))
-        mo.dblclick(zx + DESK_ZW // 2, DESK_ZY0 + DESK_ZSTEP + DESK_ZH // 2)
-        os88marty.settle(m, card=pri["idx"])
+        dispcp.open_drive(m, mo, S, os88marty.settle, 1, card=pri["idx"])
         w = wins(m)
         if not w:
             sys.exit("dispblit: no Disk window after double-clicking B:")
