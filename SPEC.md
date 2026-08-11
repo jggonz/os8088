@@ -24413,6 +24413,60 @@ register. The alternative shape, deferring the whole repaint to `[pt_apend]`'s
 window that is already frontmost and unobscured draws no window at all (§11.90),
 which is exactly the case at launch.
 
+### 42.11 A document handed over at launch is read BEFORE `wm_create`
+
+A picture double-clicked in a Disk window (§54.4) reached Paint as a name, and
+Paint spent it from its **first `W_PAINT`**. That is a paint the kernel has
+already drawn a frame for, so the picture's size arrived after the window's was
+decided, and every way out of that is a repair:
+
+- `pt_load` ends in `pt_wfollow`, which sizes `pt_tpl` and raises `[pt_wchg]`
+  for a caller to spend on `OSAPI_WM_RESIZE`. **That path had no caller.**
+  `pt_ondlg` spends it; `pt_argload` did not, and could not — `wm_resize`
+  repaints, so calling it from inside a paint proc re-enters the paint proc.
+- What ran instead was `pt_track`, a few instructions later, whose whole job is
+  to follow a **grow box** (§42.10): it found a canvas that disagreed with the
+  window and dragged the canvas back out to the window. The ink guard pinned
+  the *width* to the picture and let the *height* grow, so the 466x110 logo on
+  the system disk opened as a 466x110 picture in a **466x258** canvas — the
+  right width, the wrong height, and a white band under the artwork that is not
+  in the file. §42.9's own case, arriving down a different road.
+- `[pt_wchg]` then stayed raised for the session, so the next `File ▸ Open`
+  inherited a resize nothing had asked for.
+
+**So the load moved to the entry proc, above `wm_create`, and the repair
+disappears rather than being fixed**: `pt_tpl` carries the picture's size and
+its centred origin before the window exists, `wm_create` makes the window at
+it, `pt_track` finds canvas and content already equal, and there is no resize,
+no second repaint and no stale frame anywhere. The dialog path was always
+correct and is untouched — it has a window, holds the lock, and `OSAPI_WM_RESIZE`
+is exactly the right call there.
+
+**The entry proc may do this, and §20.2's contract is what says so.** It
+forbids `wm_show`/`wm_hide`/`wm_front`, spawning, and **drawing**; it explicitly
+permits heap claims "precisely so an app can size itself before it has one",
+which is this. Nothing in a load draws: the decoders write the canvas claim
+(`pt_line_put` — *canvas only, no screen*), `pt_caret_hide` and `pt_marq_hide`
+are gated on flags a freshly zeroed bss holds at 0, and the outcome is a
+**toast**, which §59.3 stages when no lock is held. The file API is legal on the
+UI task and the loader's own image read — with no lock held either — is a few
+hundred instructions behind us.
+
+Three things it needed. `pt_canvas_init` and `pt_font_init` move above
+`wm_create` too, because a decoder needs a canvas to decode INTO and the DIB
+header stamped; they took a `pushf`/`popf` pair with them, since the CF
+`wm_create` owes the loader is no longer in flight where they run.
+`pt_argload` **clears `[pt_wchg]` itself** — the template *is* the answer here,
+so the debt is paid before it is owed. And it shows `[pt_msgp]`, which the old
+path set and nobody read: a double-clicked picture that failed to decode used
+to say nothing at all.
+
+Measured on a cycle-accurate 5150 with a Hercules card, double-clicking
+`MEDIA/OS8088.GIF`: frame **494x300 → 512x152**, canvas **466x258 → 466x110**,
+`[pt_wchg]` **1 → 0** — identical, now, to what the same file through
+`File ▸ Open` has always produced. A Paint launched with no document is
+byte-identical either way.
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
