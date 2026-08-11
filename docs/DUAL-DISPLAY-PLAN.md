@@ -670,6 +670,7 @@ at B8000* (SPEC.md §39.6). Order stops deciding anything.
 | `tests/dispblit.py` | does a straddled canvas survive its own repaint? (SPEC.md §39.14.7) |
 | `tests/dispsave.py` | is the raise cache taken, and right, on the second display? (SPEC.md §39.14.8) |
 | `tests/dispvy.py` | can a STRADDLING window reach the second monitor's first row? (SPEC.md §39.19.3) |
+| `tests/dispnp.py` | does a WIDE straddling window letter its whole row? (SPEC.md §27.2.2) |
 
 **`park` is there because `setreg ip` cannot be made to work.** `Register16::PC`
 is settable, and setting it is not enough: `pc` is the *fetch* pointer and the
