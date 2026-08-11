@@ -1,65 +1,130 @@
 ; =============================================================================
 ; os8088 - apps/os88ui.inc
 ;
-; THE STANDARD CONTROLS, as source. Optional: `%include "os88ui.inc"` only if
-; you want them. It emits near procs and a word of data into YOUR image - it
-; is not an API slot and costs the kernel nothing at all.
+; THE STANDARD CONTROL, and it is ONE SOURCE FOR TWO WORLDS: this file
+; assembles into the KERNEL's own dialogs and into any package that wants it,
+; from the same text. Define OS88UI_KERNEL before including it and every
+; primitive call below becomes the kernel's own (`KERNEL_SEG:cw_*`, the
+; cold-to-text shims of SPEC.md 2.6); leave it undefined and they become
+; `OSAPI_*` far calls. Nothing else differs.
 ;
-; PUT THE INCLUDE AT THE END OF YOUR CODE, just before OS88_BSS. Not up beside
-; os88api.inc: the header, and an OS88_ICON16 block if you have one, are at
-; FIXED OFFSETS in the image (SPEC.md 20.2), and code emitted between them
-; fails the icon macro's own offset assertion. Anywhere after the icon block
-; works; the end is where a library belongs anyway.
+; THAT IS THE WHOLE POINT OF THE FILE. Saving bytes was never the argument -
+; measured, consolidating the kernel's private helpers was worth twelve
+; (docs/UIHELPERS-PLAN.md 7.1). The argument is that a feature added to the
+; button - a pressed state, a focus ring, a different disabled treatment -
+; lands in the Standard File dialog, the Control Panel, the Timer AND every
+; package at once, because there is one body rather than ten that agree by
+; hand. SPEC.md 47's greying rule was fixed FIVE separate times in this tree,
+; each as its own bug, always CDGRAY without [gfx_dis] - a real grey on VGA
+; and SOLID BLACK on both 1bpp adapters, so the greyed caption came out
+; pixel-identical to a live one on the machine this OS is for. Here the pen
+; is taken once, in one place, and rule 1 stops being something to remember.
 ;
-; os88api.inc stays code-free on purpose: every package includes it
+; IT IS NOT AN API SLOT, deliberately. A slot would cost a cell, a published
+; contract and a table revision; an include costs the kernel one copy in
+; .cold and each package its own, and can be revised freely because it is
+; source. (SPEC.md 20.3.1's free list would have paid for a cell - but the
+; cell is not the expensive part of a slot, the contract is.)
+;
+; --- IN A PACKAGE ------------------------------------------------------------
+; `%include "os88ui.inc"` AT THE END OF YOUR CODE, just before OS88_BSS. Not
+; up beside os88api.inc: the header, and an OS88_ICON16 block if you have one,
+; are at FIXED OFFSETS in the image (SPEC.md 20.2), and code emitted between
+; them fails the icon macro's own offset assertion.
+;
+; os88api.inc stays code-free on purpose - every package includes it
 ; unconditionally, so a byte there is a byte on every package. This is the
 ; second shared include in apps/ and the first carrying code.
 ;
-; WHAT IT IS FOR. Two things, and the second is the one that needed a kernel
-; change to be possible at all:
-;
-;   1. ONE button. There were about ten hand-rolled ones and SPEC.md 47's
-;      greying rule had been fixed FIVE separate times, each as its own bug -
-;      always CDGRAY without [gfx_dis], which is a real grey on VGA and SOLID
-;      BLACK on both 1bpp adapters, so the greyed caption came out
-;      pixel-identical to a live one on the machine this OS is for. Here the
-;      pen is taken through OSAPI_GFX_PEN once, in one place, and rule 1 stops
-;      being something to remember.
-;   2. The ARM. SPEC.md 13.7 gives a package W_ONMOUSEUP; that is a callback,
-;      not a button - the package still has to record what the press landed
-;      on, re-test at the release and clear on every path that does not fire.
-;      os88ui_arm / os88ui_fire is that, in nine instructions, so it is
-;      written once instead of in every package that wants a control which
-;      cancels when you slide off it.
+; --- IN THE KERNEL -----------------------------------------------------------
+; Included ONCE, into `.cold`, with OS88UI_KERNEL defined. Cold because that
+; is where its callers are (fdlg.inc and ctrl.inc are cold in their entirety);
+; .text reaches it through the one far entry at the bottom of this file, which
+; is the fdf_/cpf_ pattern. DS is KERNEL_SEG in both worlds, so the data word
+; below needs no override either way.
 ;
 ; WHAT IT IS NOT FOR. A skinned control. ModPlug's bevelled well and LED
 ; transport are a deliberate port of ModPlugPlayer's look (SPEC.md 56) and
 ; Minesweeper's cell is its own game's chrome - converting those would be
-; undoing intended design, not consolidating it. This is the System-1
-; standard button and nothing else.
+; undoing intended design, not consolidating it.
 ;
 ; GEOMETRY IS A POINTER, and that is the point. Every routine here takes
 ; BX = a 4-word rect {x1, y1, x2, y2}, INCLUSIVE, in screen coordinates -
 ; gfx_frame's own convention - so the drawn control and the clickable control
 ; read the same four words and cannot drift. That is fm_hit's discipline
-; (SPEC.md 22) applied to a package.
+; (SPEC.md 22) applied everywhere at once.
 ;
 ; REGISTERS: every routine preserves everything except its documented output.
 ; =============================================================================
 
+%ifdef OS88UI_KERNEL
+  %macro UI_FRAME 0
+    call KERNEL_SEG:cw_gfx_frame
+  %endmacro
+  %macro UI_FILL 0
+    call KERNEL_SEG:cw_gfx_fill
+  %endmacro
+  %macro UI_STR 0
+    call KERNEL_SEG:cw_font_str
+  %endmacro
+  %macro UI_WIDTH 0
+    call KERNEL_SEG:cw_font_width
+  %endmacro
+  %macro UI_PEN 0
+    call KERNEL_SEG:cw_gfx_pen_cf
+  %endmacro
+  %macro UI_WHITE 0
+    mov byte [gfx_color], CWHITE
+  %endmacro
+%else
+  %macro UI_FRAME 0
+    call OSAPI_GFX_FRAME
+  %endmacro
+  %macro UI_FILL 0
+    call OSAPI_GFX_FILL
+  %endmacro
+  %macro UI_STR 0
+    call OSAPI_FONT_STR
+  %endmacro
+  %macro UI_WIDTH 0
+    call OSAPI_FONT_WIDTH
+  %endmacro
+  %macro UI_PEN 0
+    call OSAPI_GFX_PEN
+  %endmacro
+  %macro UI_WHITE 0
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+  %endmacro
+%endif
+
 OS88UI_DIS  equ 1               ; disabled: dithered frame AND label (47 r2)
-OS88UI_DEF  equ 2               ; the default button's outer ring
+OS88UI_DEF  equ 2               ; the default button's outer ring, 2px out
+OS88UI_FILL equ 4               ; white the interior first (a control on
+                                ; ground that is not already white)
 
 ; -----------------------------------------------------------------------------
 ; os88ui_btn - draw one standard button
 ; in:  BX = rect {x1,y1,x2,y2} inclusive, SI = NUL label, DI = OS88UI_* flags
-;      caller holds the gfx lock (every callback does)
+;      caller holds the gfx lock (every callback and every kernel painter does)
 ; out: nothing; all registers preserved
 ;
-; Frame, then the label centred in both axes. NO FILL: the content behind a
-; button is the window's own background, which W_PAINT has already laid down -
-; filling here would be PERFORMANCE.md Part 1's erase-and-letter pair, drawn
-; twice and briefly blank, for a rectangle that was already the right colour.
+; Optional white interior, frame, optional default ring, then the label
+; CENTRED IN BOTH AXES.
+;
+; Centring is not a choice this imposes - it is what all four kernel buttons
+; were already doing with the arithmetic precomputed as a literal, which is
+; why they could be unified at all: the Control Panel's Activate button adds
+; +6 to a 116px box with a 104px label ((116-104)/2), the file dialog adds +3
+; in a 14-row box ((14-8)/2), and the Timer writes it out as
+; APP_TMR_LT = (APP_TMR_BH - 8) / 2. Three literals and one formula, all the
+; same number.
+;
+; A WHOLE-RECT fill and an INTERIOR fill are the same picture once the frame
+; is drawn over the border, so OS88UI_FILL covers both and the Timer's
+; whole-rect version needed no flag of its own.
 ;
 ; THE PEN IS PUT BACK on every path. Leaving CDGRAY behind is untidy; leaving
 ; [gfx_dis] behind draws the next string in this lock hold as a checkerboard,
@@ -73,40 +138,57 @@ os88ui_btn:
     push si
     push di
     push bp
-    mov bp, bx                  ; BP = the rect. SS != DS in a package
+    mov bp, bx                  ; BP = the rect. In a package SS != DS
                                 ; (SPEC.md 20.1), so every read below needs a
-                                ; ds: override or it addresses the task stack
-    test di, OS88UI_DIS
-    jz .live
-    stc                         ; CF = 1: CDGRAY *and* [gfx_dis] together,
-    jmp short .pen              ; which is SPEC.md 47 rule 1 in one call
-.live:
-    clc
-.pen:
-    call OSAPI_GFX_PEN
+                                ; ds: override or it addresses the task stack;
+                                ; in the kernel it is equally correct and free
+    test di, OS88UI_FILL
+    jz .pen
+    UI_WHITE
     mov ax, [ds:bp+0]
     mov bx, [ds:bp+2]
     mov cx, [ds:bp+4]
     mov dx, [ds:bp+6]
-    call OSAPI_GFX_FRAME
+    inc ax                      ; the interior, one pixel in from the frame
+    inc bx
+    dec cx
+    dec dx
+    UI_FILL
+.pen:
+    test di, OS88UI_DIS
+    jz .live
+    stc                         ; CF = 1: CDGRAY *and* [gfx_dis] together,
+    jmp short .set              ; which is SPEC.md 47 rule 1 in one call
+.live:
+    clc
+.set:
+    UI_PEN
+    mov ax, [ds:bp+0]
+    mov bx, [ds:bp+2]
+    mov cx, [ds:bp+4]
+    mov dx, [ds:bp+6]
+    UI_FRAME
     test di, OS88UI_DEF
     jz .label
-    mov ax, [ds:bp+0]           ; the default ring, 3px outside the frame
-    sub ax, 3
-    mov bx, [ds:bp+2]
-    sub bx, 3
-    mov cx, [ds:bp+4]
-    add cx, 3
-    mov dx, [ds:bp+6]
-    add dx, 3
-    call OSAPI_GFX_FRAME
+    dec ax                      ; the default ring, 2px outside the frame -
+    dec ax                      ; the file dialog's inset, which is the one
+    dec bx                      ; that ships (8086: no sub-imm cheaper here)
+    dec bx
+    inc cx
+    inc cx
+    inc dx
+    inc dx
+    UI_FRAME
 .label:
-    call OSAPI_FONT_WIDTH       ; AX = the label's width in px; SI intact
+    UI_WIDTH                    ; AX = the label's width in px; SI intact
     mov cx, [ds:bp+4]
     sub cx, [ds:bp+0]
     inc cx                      ; CX = the button's width
     sub cx, ax
-    shr cx, 1
+    jns .pad                    ; a label WIDER than its button would make the
+    xor cx, cx                  ; halved padding a huge unsigned number and put
+.pad:                           ; the text off screen entirely - fdlg_blabel's
+    shr cx, 1                   ; guard, kept because it is three bytes
     add cx, [ds:bp+0]           ; ...centred
     mov dx, [ds:bp+6]
     sub dx, [ds:bp+2]
@@ -114,9 +196,9 @@ os88ui_btn:
     sub dx, 8                   ; a glyph cell is 8 rows
     shr dx, 1
     add dx, [ds:bp+2]
-    call OSAPI_FONT_STR
+    UI_STR
     clc
-    call OSAPI_GFX_PEN          ; ...and the pen back, always
+    UI_PEN                      ; ...and the pen back, always
     pop bp
     pop di
     pop si
@@ -150,6 +232,14 @@ os88ui_bhit:
 .no:
     stc
     ret
+
+%ifndef OS88UI_KERNEL
+; --- the package-side click machinery ----------------------------------------
+; Not assembled into the kernel: fdlg.inc and ctrl.inc have their own hit
+; tests (fdlg_hit, cp_onclick's ladders) and nothing kernel-side arms a
+; control yet. The code is here rather than elsewhere so that the day a
+; kernel dialog wants a release-fired button, it is this gate that moves and
+; not a second copy that gets written.
 
 ; -----------------------------------------------------------------------------
 ; os88ui_bfind - which button of a table is the point in?
@@ -217,3 +307,19 @@ os88ui_fire:
     ret
 
 os88ui_armw: dw 0
+%endif
+
+
+%ifdef OS88UI_KERNEL
+; -----------------------------------------------------------------------------
+; os88ui_btn_f - the far entry, for .text callers (SPEC.md 2.6)
+;
+; The body above is a near proc in .cold, which is where its callers are -
+; fdlg.inc and ctrl.inc are cold in their entirety. apps.inc is NOT, so the
+; Timer's button reaches it through here, the same fdf_/cpf_ shape every other
+; text-to-cold crossing in this kernel uses. Packages never see this.
+; -----------------------------------------------------------------------------
+os88ui_btn_f:
+    call os88ui_btn
+    retf
+%endif

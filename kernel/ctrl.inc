@@ -1375,28 +1375,13 @@ cp_vid_mode:
 ; white fill between the two pen calls neither carries the flag nor clears it.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; cp_boxbtn - the Control Panel's framed button: 1px frame, white interior
-; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); the pen is the caller's
-; out: AX..DX hold the INTERIOR, not the rect passed in - neither caller reads
-;      them afterwards (both recompute the label's position from the pane
-;      origin), so putting them back was four bytes nobody spent
-; clobbers: AX, BX, CX, DX, [gfx_color] (left CWHITE - the caller re-pens)
+; cp_brect - scratch for the two pages that draw a standard button
 ;
-; The two callers - the Display page's Activate button and the Date/Time
-; page's +/- pair - drew this identically and separately. Neither centres its
-; label here, because both bake the offset in as a constant that IS the
-; centred position (CPV_BTNW 116 less a 13-glyph label is 12, so +6; CPT_BW 28
-; less one glyph is 20, so +10), and one instruction each is not duplication.
+; os88ui_btn takes a POINTER to {x1,y1,x2,y2} so that the drawn control and a
+; hit test read the same four words (SPEC.md 22's fm_hit discipline). Both
+; pages build theirs here; neither draws two at once.
 ; -----------------------------------------------------------------------------
-cp_boxbtn:
-    call KERNEL_SEG:cw_gfx_frame
-    inc ax                      ; the interior, one pixel in from the frame
-    inc bx
-    dec cx
-    dec dx
-    mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
-    ret
+cp_brect:   dw 0, 0, 0, 0
 
 cp_vid_btn:
     push ax
@@ -1404,29 +1389,29 @@ cp_vid_btn:
     push cx
     push dx
     push si
+    push di
 
-    call cpf_vidok
-    call KERNEL_SEG:cw_gfx_pen_cf
     mov ax, di
     add ax, CPV_BTNX
-    mov bx, bp
-    add bx, CPV_BTNY
-    mov cx, ax
-    add cx, CPV_BTNW - 1
-    mov dx, bx
-    add dx, CPV_BTNH - 1
-    call cp_boxbtn
+    mov [cp_brect+0], ax
+    add ax, CPV_BTNW - 1
+    mov [cp_brect+4], ax
+    mov ax, bp
+    add ax, CPV_BTNY
+    mov [cp_brect+2], ax
+    add ax, CPV_BTNH - 1
+    mov [cp_brect+6], ax
 
-    call cpf_vidok              ; ...and the label in the same pen as the ring
-    call KERNEL_SEG:cw_gfx_pen_cf
+    call cpf_vidok              ; CF = 1 when there is nothing to activate
+    mov di, OS88UI_FILL         ; the pane behind it is not white
+    jnc .live
+    or di, OS88UI_DIS           ; SPEC.md 47 rule 1: the frame AND the label
+.live:                          ; dither together, which is one flag now
     mov si, cp_s_vact
-    mov cx, di
-    add cx, CPV_BTNX + 6
-    mov dx, bp
-    add dx, CPV_BTNY + (CPV_BTNH - 8) / 2
-    call KERNEL_SEG:cw_font_str
-    call KERNEL_SEG:cw_gfx_pen_live
+    mov bx, cp_brect
+    call os88ui_btn
 
+    pop di
     pop si
     pop dx
     pop cx
@@ -2075,6 +2060,7 @@ cp_timebtn:
     push cx
     push dx
     push si
+    push di
 
     mov si, cp_s_tplus
     mov dx, CPT_BUY
@@ -2083,26 +2069,22 @@ cp_timebtn:
     mov si, cp_s_tminus
     mov dx, CPT_BDY
 .have:
-    mov bx, bp
-    add bx, dx                  ; BX = y1
-    push bx
     mov ax, di
-    add ax, CPT_BX              ; AX = x1
-    mov cx, di
-    add cx, CPT_BX + CPT_BW - 1 ; CX = x2
-    mov dx, bx
-    add dx, CPT_BH - 1          ; DX = y2
-    mov byte [gfx_color], CBLACK
-    call cp_boxbtn
-    pop bx
+    add ax, CPT_BX
+    mov [cp_brect+0], ax
+    add ax, CPT_BW - 1
+    mov [cp_brect+4], ax
+    mov ax, bp
+    add ax, dx
+    mov [cp_brect+2], ax
+    add ax, CPT_BH - 1
+    mov [cp_brect+6], ax
 
-    mov byte [gfx_color], CBLACK ; the 8px glyph, centred in the box
-    mov cx, di
-    add cx, CPT_BX + (CPT_BW - 8) / 2
-    mov dx, bx
-    add dx, (CPT_BH - 8) / 2
-    call KERNEL_SEG:cw_font_str
+    mov di, OS88UI_FILL         ; always live: a field is always adjustable
+    mov bx, cp_brect
+    call os88ui_btn
 
+    pop di
     pop si
     pop dx
     pop cx

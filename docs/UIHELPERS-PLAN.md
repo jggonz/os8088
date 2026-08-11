@@ -1,9 +1,12 @@
 # UI element helpers — investigation and plan
 
-> **STATUS: IMPLEMENTED** as `apps/os88ui.inc` — an SDK include, so
-> `KERN_BUDGET` pays **zero** (§10). Recorder is the first adopter and its
-> buttons fire on the RELEASE now; `tests/muptest` gates the shared control
-> on all three adapters. §11 is what was and was not proved.
+> **STATUS: IMPLEMENTED** as `apps/os88ui.inc` — and it is now **ONE SOURCE
+> FOR TWO WORLDS** (§13): the same text assembles into the kernel's own
+> dialogs and into a package, picked by `OS88UI_KERNEL`. Recorder is the
+> first package adopter and its buttons fire on the RELEASE now; the file
+> dialog, the Control Panel and the Timer are the kernel's. `tests/muptest`
+> gates the shared control on all three adapters. §11 is what was and was
+> not proved; §13.3 is what it cost, which is **not** what §9 predicted.
 
 **Tier 4 of the mouse-up work**, and the one whose framing changed most under
 investigation. I ranked it *"biggest win and biggest risk — most of
@@ -245,7 +248,8 @@ Measured, the duplication is not there:
   draws a frame on ground that is already right.
 - The one real overlap is the `ctrl` pair — `cp_vid_btn` (the Display page's
   Activate) and `cp_timebtn` (Date/Time's `+`/`-`) — which both draw frame,
-  inset white fill, then a label. That is `cp_boxbtn` now.
+  inset white fill, then a label. That was `cp_boxbtn`; **§13 has since
+  deleted it**, because `OS88UI_FILL` subsumes it.
 
 **A pleasant surprise inside it:** both callers *centre* their labels, and
 neither looked like it. `cp_vid_btn` adds a literal `+6` and `cp_timebtn`
@@ -256,8 +260,10 @@ moves.
 
 **Four more bytes came from deleting work nobody wanted:** the first draft
 put `AX..DX` back to the rect it was passed, and neither caller reads them —
-both recompute the label position from the pane origin. `cp_boxbtn` leaves
-the interior in them and says so.
+both recompute the label position from the pane origin. `cp_boxbtn` left
+the interior in them and said so. (That whole register question **dissolved**
+at §13: the shared control takes a rect *pointer* and preserves everything,
+so there is nothing for a caller to read back or not read back.)
 
 Verified by eye on the adapters where each is reachable, which is not the
 same machine: the Date/Time page on `os8088_5150_cga_gla`, and the Display
@@ -361,15 +367,106 @@ muptest's fourth case. Stated rather than contrived.
 
 ## 12. What is left
 
-The other nine standard-look buttons — `fdlg`'s are kernel and out of reach,
-so it is `at_button`, `pn_btn`, `np_pbutton`, `pt_btn_xy`, `mppl_btn_rect`
-and the hdd tool's. Each wants its own commit and its own pixel diff, per §6;
-none is urgent, and a package that never adopts loses nothing.
+The other nine standard-look buttons — ~~`fdlg`'s are kernel and out of
+reach~~, which §13 is the answer to: the kernel's three are converted and
+what is left is packages. `at_button`, `pn_btn`, `np_pbutton`, `pt_btn_xy`,
+`mppl_btn_rect` and the hdd tool's. Each wants its own commit and its own
+pixel diff, per §6; none is urgent, and a package that never adopts loses
+nothing.
 
-The check/radio glyphs, when a package wants one.
+The check/radio glyphs — **unblocked by §13**, since `ctrl.inc` can include
+this file now. Still built with their first caller and not before.
 
-And §7a, the kernel's own `fdlg`/`ctrl`/`apps` helpers — independent of all
-of this, no ABI, ~200-300 bytes of `.text`, and **the only part of this tier
-that helps the budget.** With the image rung at zero bytes left after Tier 3,
-that is now the cheapest room in the kernel that does not need an
-investigation first.
+~~And §7a~~ — done, and it is twelve bytes (§7.1). The budget room is still
+not here; §7.2 is where it is.
+
+## 13. The unified source — one text, two worlds
+
+§3 chose the SDK include over a kernel API slot and listed the one thing the
+slot bought that an include did not: *"letting `fdlg.inc` and `ctrl.inc`
+share the same body"*. That turned out to be a false choice. **An include is
+source, so it can be included twice** — once into `.cold` with
+`OS88UI_KERNEL` defined, once into each package without — and the six
+primitive calls that differ between the two worlds are six one-line macros.
+`-I apps/` on the kernel's `nasm` line is the whole build change.
+
+The kernel's three standard buttons are `os88ui_btn` now: `fdlg_btn` (and
+`fdlg_btn2`/`fdlg_defbtn` through it), `cp_vid_btn`, `cp_timebtn`, and
+`app_tmr_btn` — the last through `os88ui_btn_f`, a `retf` shim, because
+`apps.inc` is `.text` and the body is `.cold`. `cp_boxbtn`, §7.1's own
+twelve-byte consolidation, is **gone**: `OS88UI_FILL` subsumes it.
+
+### 13.1 Why it was possible at all
+
+Two facts, neither obvious until the bodies were side by side:
+
+- **All four kernel buttons already centre their labels**, and none of them
+  looked like it — §7.1 found this for the `ctrl` pair (`+6` *is*
+  `(116-104)/2`) and it holds for the other two: `fdlg`'s `+3` is
+  `(14-8)/2`, and the Timer writes it out as `APP_TMR_LT = (APP_TMR_BH-8)/2`.
+  Three literals and one formula, all the same number, so one body serves
+  them with no centring flag and no pixel moves.
+- **A whole-rect fill and an interior fill are the same picture** once the
+  frame is drawn over the border. That is what let the Timer's whole-rect
+  version and the `ctrl` pair's inset version share one `OS88UI_FILL`, and
+  it is why §7.1's *"`fdlg_btn` does not fill and the `ctrl` buttons do, so
+  they are two shapes rather than one"* stopped being true — it is one shape
+  and a flag.
+
+### 13.2 What it is for, restated
+
+The user's framing, and it is the right one: *"Saving space isn't the only
+benefit; if we decide to add features to the UI element then they get them
+for free and we stay consistent."* A pressed state, a focus ring, a
+different disabled treatment — one edit, and the Standard File dialog, the
+Control Panel, the Timer and every package have it. §1.3's five separate
+greying fixes are the evidence for what the alternative costs.
+
+### 13.3 What it cost, measured, and it is not what §9 said
+
+```
+sections   text 55,470 +138   bss 4,943 +27   cold 22,584 +121
+rungs      image 60,416 +0 (3 left)     cold 23,040 +512 (456 left, was 65)
+footprint  KERN_SIZE 97,280 of 98,304 -> 1,024 spare (2 steps), was 1,536
+```
+
+**One 512-byte rung of `.cold`, so the footprint spare goes three steps to
+two.** I estimated *"net −150 to −190 bytes, and — this is the part that
+matters more than the sign — it likely frees `.text`"*, and that was wrong
+in both halves: `.text` grew 138 and `.cold` grew 121. **Generalising costs
+more than the four specialised bodies saved.** The reason is visible in the
+diff — a body taking a rect pointer and a flags word does register shuffling
+that a body with four constants baked into it does not, and each call site
+now builds a four-word rect it used to pass in registers.
+
+That is the honest price of §13.2, and it is the trade the user asked for
+explicitly. It is also **the second-to-last step** — 1,024 bytes of
+`KERN_BUDGET` spare, against the four-step standard the fifth move settled
+on. The next feature has to ask.
+
+### 13.4 A pre-existing §47 defect, found by the conversion
+
+Converting `fdlg_btn` meant looking at a greyed file-dialog button on 1bpp,
+and **its caption is pixel-identical to a live one** — the frame dithers,
+the label does not. 83 ink pixels greyed against 83 live, ASCII-dumped and
+compared cell by cell.
+
+It is **pre-existing**: the kernel from before this branch measures
+identically, so the conversion neither caused it nor fixed it. And the
+discriminator for whoever investigates is already to hand — **the Control
+Panel's greyed `Activate Mode` label *does* checkerboard** (§7.1 verified
+that on `os8088_5150_both_gla`). So `font_ink`'s dither mechanism works and
+the defect is specific to the file dialog's path. Its own investigation;
+recorded here because the conversion is what surfaced it.
+
+### 13.5 Traps
+
+- **The include must not go beside `os88api.inc` in a package** (§8.1), and
+  in the kernel it must go in `.cold`, where its callers are. A `.text`
+  caller crosses through `os88ui_btn_f`.
+- **`BP` addresses `SS` by default**, and in a package `SS != DS`
+  (SPEC.md §20.1), so every rect read in `os88ui_btn` carries a `ds:`
+  override. Free in the kernel and mandatory in a package, from one text.
+- **`tools/kernsize.py` and `tools/os88sym.py` re-assemble the kernel
+  themselves** and needed `-I apps/` too. Without it they fail in a way that
+  looks like a broken kernel rather than a broken tool.

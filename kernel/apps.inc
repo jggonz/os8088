@@ -503,34 +503,27 @@ app_tmr_btn:
     call app_tmr_brect          ; AX,BX,CX,DX = its inclusive screen rect
     call wm_clip_test
     jc .out
+    mov [app_tmr_rect+0], ax
+    mov [app_tmr_rect+2], bx
+    mov [app_tmr_rect+4], cx
+    mov [app_tmr_rect+6], dx
 
-    mov byte [gfx_color], CWHITE
-    call gfx_fill               ; ...which preserves the rect
-
-    push ax                     ; x1 and y1: the pen wants AL for the index
-    push bx
-    mov ax, bp
-    call app_tmr_bok            ; SPEC.md 47 rule 1: colour and [gfx_dis] set
-    call gfx_pen_cf             ; together; rule 2: the same predicate the
-    pop bx                      ; click path refuses on
-    pop ax
-    call gfx_frame              ; the frame greys WITH the label (rule 2),
-                                ; never just the caption
-
-    mov si, bp                  ; the label, centred in the button
+    mov si, bp                  ; the label for this index
     shl si, 1
     mov si, [si + app_tmr_lbl]
-    mov bp, ax                  ; BP = x1, DI = y1 - the index has done its
-    mov di, bx                  ; work, and so has the state ptr in DI
-    call font_width             ; AX = 8 * length
-    mov cx, APP_TMR_BW
-    sub cx, ax
-    shr cx, 1                   ; every label fits, so this cannot go negative
-    add cx, bp
-    mov dx, di
-    add dx, APP_TMR_LT
-    call font_str
-
+    mov ax, bp
+    call app_tmr_bok            ; CF = 1 when this button would refuse
+    mov di, OS88UI_FILL         ; the Timer fills its whole rect white; a
+                                ; frame over the border makes that the same
+                                ; picture as filling the interior, which is
+                                ; why one flag covers both (os88ui.inc)
+    jnc .live
+    or di, OS88UI_DIS           ; SPEC.md 47 rule 1, and rule 2's predicate is
+.live:                          ; the same one the click path refuses on
+    mov bx, app_tmr_rect
+    call COLD_SEG:os88ui_btn_f  ; the SHARED control (SPEC.md 2.6's far entry:
+                                ; the body is cold, where fdlg and ctrl are,
+                                ; and apps.inc is .text)
 .out:
     pop bp
     pop di
@@ -540,6 +533,8 @@ app_tmr_btn:
     pop bx
     pop ax
     ret
+
+app_tmr_rect: dw 0, 0, 0, 0     ; the button being drawn, screen coordinates
 
 ; -----------------------------------------------------------------------------
 ; app_tmr_brect - one button's inclusive screen rect

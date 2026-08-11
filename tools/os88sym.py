@@ -151,6 +151,7 @@ def _load(defines=(), check=True):
 
     cmd = ["nasm", "-f", "bin", "-w+error",
            "-I", os.path.join(ROOT, "kernel") + os.sep,
+           "-I", os.path.join(ROOT, "apps") + os.sep,
            "-I", os.path.join(ROOT, "build") + os.sep]
     for d in defines:
         cmd += ["-D" + d]

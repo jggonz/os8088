@@ -10825,6 +10825,94 @@ comment block beside them — rule 2 (never return, never self-exit) and rule
 4 (ALIVE under the lock deadlocks) especially, because neither is
 detectable from the kernel and both are unrecoverable.
 
+### 20.5.1 apps/os88ui.inc — the standard control, one source for two worlds
+
+A **second** shared include in `apps/`, and the first carrying code.
+`os88api.inc` stays instruction-free on purpose — every package includes it
+unconditionally, so a byte there is a byte on every package — and this one is
+**optional**: a package pulls it in if it wants the System-1 standard button.
+
+**It assembles into the kernel too, from the same text.** Define
+`OS88UI_KERNEL` before including it and its six primitive calls become the
+kernel's own cold-to-text shims (`cw_gfx_frame`, `cw_gfx_fill`, `cw_font_str`,
+`cw_font_width`, `cw_gfx_pen_cf`, and a direct `[gfx_color]` store); leave it
+undefined and they become `OSAPI_GFX_FRAME`, `OSAPI_GFX_FILL`,
+`OSAPI_FONT_STR`, `OSAPI_FONT_WIDTH`, `OSAPI_GFX_PEN` and `OSAPI_SET_COLOR`.
+Nothing else differs. The kernel includes it **once, into `.cold`**, from
+`fdlg.inc`; `ctrl.inc` is cold too and calls it directly, and `apps.inc` is
+`.text` and crosses through `os88ui_btn_f`, a `call`/`retf` shim — the
+`fdf_`/`cpf_` pattern of §2.6.
+
+**It is NOT an API slot, deliberately.** A slot would cost a cell, a published
+contract and a table revision; an include costs the kernel one copy in `.cold`
+and each package its own, and can be revised freely because it is source.
+§20.3.1's free list would have paid for the cell — the cell is not the
+expensive part of a slot, the contract is.
+
+**Why it exists is not size.** Measured, consolidating the kernel's four
+private button helpers was worth *twelve bytes* on its own, and unifying them
+with the package side **cost a 512-byte `.cold` rung** — `KERN_BUDGET` spare
+1,536 to 1,024, two steps (docs/UIHELPERS-PLAN.md, sections 7.1 and 13.3, has
+the per-section figures). The argument is that a feature added to
+the button — a pressed state, a focus ring, a different disabled treatment —
+lands in the Standard File dialog, the Control Panel, the Timer and every
+package at once, because there is one body rather than ten that agree by hand.
+**§47's greying rule was fixed five separate times in this tree**, each as its
+own bug, always `CDGRAY` without `[gfx_dis]`; here the pen is taken once, in
+one place, and rule 1 stops being something to remember.
+
+**Geometry is a POINTER.** Every routine takes `BX` = a 4-word rect
+`{x1, y1, x2, y2}`, **inclusive**, in screen coordinates — `gfx_frame`'s own
+convention — so the drawn control and the clickable control read the same four
+words and cannot drift. That is §22's `fm_hit` discipline applied everywhere at
+once, and Recorder is the argument for it: its drawing used one set of
+constants and its hit test another, two descriptions of one row of buttons
+agreeing by hand.
+
+| | |
+|---|---|
+| `os88ui_btn` | `BX` = rect, `SI` = NUL label, `DI` = flags. Optional white interior, frame, optional default ring 2px out, label **centred in both axes**. Caller holds the gfx lock. All registers preserved, and **the pen is put back live on every path** |
+| `os88ui_bhit` | `BX` = rect, `CX`/`DX` = point (which is how `W_ONCLICK` and `W_ONMOUSEUP` hand it to you). CF = 0 inside |
+| `os88ui_bfind` | `BX` = an array of rects, `AX` = how many. Answers `AX` = the index **plus one**, 0 for none |
+| `os88ui_arm` / `os88ui_fire` | the §13.7 press/release pair. `arm` records what the press landed on; `fire` answers it and **clears**. Package side only |
+
+Flags: `OS88UI_DIS` (dithered frame *and* label — §47 rule 1 and 2 together),
+`OS88UI_DEF` (the default button's outer ring), `OS88UI_FILL` (white the
+interior first, for a control on ground that is not already white).
+
+Six things are load-bearing:
+
+- **`BP` addresses `SS`, and in a package `SS != DS`** (§20.1), so every rect
+  read in `os88ui_btn` carries a `ds:` override. Free in the kernel and
+  mandatory in a package, from one text.
+- **The include goes at the END of a package's source, just before
+  `OS88_BSS`** — not beside `os88api.inc`. The header and an `OS88_ICON16`
+  block are at fixed image offsets (§20.2), and code emitted between them
+  fails the icon macro's own assertion.
+- **A whole-rect fill and an interior fill are the same picture** once the
+  frame is drawn over the border, so `OS88UI_FILL` covers both and the Timer's
+  whole-rect version needed no flag of its own.
+- **Centring is not imposed** — it is what all four kernel buttons were
+  already doing with the arithmetic precomputed as a literal, which is what
+  made one body possible: `(116-104)/2` = `+6`, `(14-8)/2` = `+3`, and
+  `APP_TMR_LT = (APP_TMR_BH-8)/2`. Three literals and one formula, all the
+  same number.
+- **A label wider than its button** would make the halved padding a huge
+  unsigned number and put the text off screen; the guard is three bytes and is
+  kept.
+- **`os88ui_arm`'s word is DATA, not bss.** A package declares its bss as one
+  total with `equ` offsets (`OS88_BSS`), and a shared include cannot reserve
+  part of that without the package agreeing where. Two bytes of image is
+  cheaper than a convention.
+
+**What it is not for**: a skinned control. ModPlug's bevelled well and LED
+transport are a deliberate port of ModPlugPlayer's look (§56), and
+Minesweeper's cell is its own game's chrome — converting those would be
+undoing intended design rather than consolidating it.
+
+`tests/muptest` is the gate, and it gates §13.7's release rules and this
+control's arm with the same four gestures.
+
 ### 20.6 Worker tasks — one background task per package instance
 
 A package may claim **exactly one** worker task, so that the work it does
@@ -19037,10 +19125,14 @@ answer — so typing the first character or deleting the last one flips it, and
 and a frame plus a label per keypress is real money on the machines this runs
 on.
 
-`fdlg_btn` takes the **caller's** pen rather than forcing `CBLACK`, so the
-disabled frame greys with the label — and because that pen comes from
-`gfx_pen_cf`, it carries `[gfx_dis]` too, so on a mono adapter the frame goes
-dotted and the label goes to a checkerboard together (§47 rule 2/3).
+`fdlg_btn` takes the disabled state as a **flag** (`AH`) and hands it to
+`os88ui_btn` (§20.5.1), which takes the pen through `gfx_pen_cf` once — so the
+colour and `[gfx_dis]` are set together and the frame greys with the label
+(§47 rule 1/2). It used to force `CBLACK`, which is fine for three of the four
+buttons and wrong for the one that can be disabled; then it took the
+**caller's** pen, which fixed that and left the colour and the flag as the
+caller's to get right. The flag is the third and last shape: one predicate,
+one call, and the pen comes back live by itself.
 
 `fdlg_paint` calls the **bodies**, because `wm_paint_all` already handed it a
 white content; everything else calls the wrappers. Neither erase touches its
@@ -24875,7 +24967,9 @@ Conformant, and worth reading as the reference:
 - **"Close Window"** (§12.3) — greys from `wm_top` rather than beeping.
 - **The file dialog's default button** (§38.8) — `fdlg_actok` behind the pen,
   the click and the Enter key alike, greyed while the name box is empty and no
-  row is chosen. `fdlg_btn` stopped forcing `CBLACK` so the frame greys too.
+  row is chosen. `fdlg_btn` stopped forcing `CBLACK` so the frame greys too,
+  and carries the state as a flag into `os88ui_btn` now (§20.5.1) so the
+  colour and `[gfx_dis]` cannot be set apart.
 
 **Left as beeps, deliberately.** The second half of the sweep asked which
 refusals *ought* to grey and do not, and three answer no:

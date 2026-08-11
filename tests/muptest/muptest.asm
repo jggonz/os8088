@@ -145,6 +145,15 @@ mu_onup:
     call os88ui_bfind               ; ...and the release?
     cmp ax, di
     jne .cancel                     ; a different button, or none: CANCELLED
+    cmp di, 2                       ; button Two: put up the Standard File
+    jne .hide                       ; dialog, which is the ONLY way to see
+    mov bx, si                      ; fdlg_btn's own drawing - its default
+    mov al, FDLG_SAVE               ; button, its greying and its 2px ring
+    mov di, mu_fdone                ; (SPEC.md 38). Save mode, because that is
+    xor si, si                      ; the one that starts REFUSED and so shows
+    call OSAPI_FILE_DLG             ; rule 1 doing its job
+    jmp short .out
+.hide:
     mov bx, si                      ; matched: hide, which is the harness's
     call OSAPI_WM_HIDE              ; whole signal
     jmp short .out
@@ -160,6 +169,13 @@ mu_onup:
     pop di
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mu_fdone - the dialog's completion proc. Nothing to do: the gate is what the
+; dialog LOOKED like, not what it returned.
+; -----------------------------------------------------------------------------
+mu_fdone:
     ret
 
 ; -----------------------------------------------------------------------------
