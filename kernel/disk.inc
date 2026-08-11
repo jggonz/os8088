@@ -5209,7 +5209,10 @@ dsk_fdd_probe:
     push bx
     mov bl, [fdd_unit]
     xor bh, bh
-    or  al, [fdd_mbit+bx]       ; ...this unit's motor, not unit 1's
+    or  al, [cs:fdd_mbit+bx]    ; ...this unit's motor, not unit 1's. Read
+                                ; through CS: this table is .ovl DATA, and the
+                                ; overlay cannot reach its own data through DS
+                                ; (SPEC.md 2.5) - DS is still KERNEL_SEG here
     pop bx
     call fdd_dor
     mov cx, FDD_MOTORW          ; name a case SEEKOK already covers. This is
