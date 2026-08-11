@@ -407,21 +407,21 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5738,
+    "bss": 5739,
     "budget": 104960,
     "codemax": 65536,
-    "cold": 20628,
-    "coldpara": 1312,
+    "cold": 20133,
+    "coldpara": 1280,
     "fatpara": 288,
     "imgpara": 4096,
-    "kend": 6368,
+    "kend": 6336,
     "kseg": 96,
-    "ksize": 100352,
+    "ksize": 99840,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 59486
+    "text": 59636
   },
   "small": {
     "bss": 5495,
@@ -934,24 +934,24 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,980 | 37.4% |
-| the window system and its furniture | 18,854 | 23.5% |
+| the file system, end to end | 29,616 | 37.1% |
+| the window system and its furniture | 18,854 | 23.6% |
 | drawing: adapters, primitives, glyphs, icons | 12,628 | 15.8% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,890 | 12.3% |
-| the kernel proper: API table, heap, scheduler, events | 6,023 | 7.5% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,890 | 12.4% |
+| the kernel proper: API table, heap, scheduler, events | 6,023 | 7.6% |
 | the three built-in kinds | 1,376 | 1.7% |
-| the Control Panel | 918 | 1.1% |
-| **total** | **80,114** | |
+| the Control Panel | 918 | 1.2% |
+| **total** | **79,769** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 1,000 | 7,730 | **8,730** | 338 | — |
+| `files.inc` — the Disk window (§22) | 1,127 | 7,907 | **9,034** | 339 | — |
 | `wm.inc` — the window manager (§11) | 8,087 | — | **8,087** | 669 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,769 | — | **5,769** | 885 | 3,584 |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,449 | **5,628** | 155 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,773 | — | **5,773** | 885 | 3,584 |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,203 | — | **5,203** | 653 | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 4,777 | **4,956** | 155 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,911 | **4,134** | 106 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
@@ -978,13 +978,13 @@ generated in the first place.
 | `dock.inc` — the dock (§30) | 793 | — | **793** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 776 | **776** | 58 | — |
 | `toast.inc` — **(undescribed)** | 481 | — | **481** | 43 | — |
-| `mod.inc` — **(undescribed)** | 17 | 428 | **445** | 34 | — |
+| `mod.inc` — **(undescribed)** | 36 | 428 | **464** | 34 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,831 | — | **2,831** | — | — |
-| **total** | **59,486** | **20,628** | **80,114** | **5,738** | **7,762** |
+| **total** | **59,636** | **20,133** | **79,769** | **5,739** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1338,11 +1338,19 @@ Task Manager.
 > `ctrl.inc` is its DATA and the two routines that could not go
 > (`cp_tick_due`, `cp_drv_gone`) — 918 bytes against 3,876.
 >
-> It is not free against the other guard: `.text` + `.bss` went 65,098 →
-> 65,224, so `KERN_CODE_MAX`'s slack fell **438 → 312**. The loader is
-> `.cold`, so what landed in `.text` is the five `cw_*` shims it calls out
-> through, two thunks, the module table and the refusal string — and the
-> refusal is the feature rather than the mechanism.
+> **The floppy formatter went through next** (`FORMAT.DRV`, 802 bytes), and
+> its payoff is the other kind: it was `%ifndef KERN_SMALL`, a whole feature
+> compiled out, so **the 128KB machine now HAS a formatter it never had** —
+> and `kern_small` came out of the same round at **97,280 → 96,256 with 1,024
+> spare**, against the zero it stood at. `kern_big` is **102,912 → 99,840**.
+>
+> **Neither is free against the other guard, and that is the number to watch
+> now.** `.text` + `.bss` is **65,375 of 65,536 — 161 bytes left**. The
+> dispatch really is free (the `.text` thunks did not change), but the loader's
+> five `cw_*` shims, two thunks, the module table and — mostly — the four
+> refusal and prompt strings are `.text` all the same. **The next addition to
+> `.text` or `.bss` anywhere will need one of the levers in this document**,
+> and this is the guard nobody can raise.
 >
 > **On-demand kernel modules**, in the original note's words: It is this one without the
 > published ABI: `.cold` is already `vstart=0`, contains **zero data

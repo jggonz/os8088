@@ -111,9 +111,9 @@ def check_image(name, img, ident, build):
         fail("%s: header says %d bytes, the section is %d"
              % (name, size, len(img)))
     nent, = struct.unpack_from("<H", img, MOD_H_NENT)
-    if not 1 <= nent <= 8:
+    if not 1 <= nent <= 4:
         fail("%s: %d entries, which is outside 1..MOD_NENT" % (name, nent))
-    hdr = MOD_H_ENT + 8 * 2
+    hdr = MOD_H_ENT + 4 * 2
     for i in range(nent):
         ent, = struct.unpack_from("<H", img, MOD_H_ENT + i * 2)
         if not hdr <= ent < len(img):

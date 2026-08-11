@@ -417,8 +417,8 @@ $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 # (SPEC.md 2.8.2), so shipping the wrong one is refused rather than executed;
 # this is what stops it happening in the first place.
 KMODDIR = $(BUILD)
-KMODS = $(KMODDIR)/ctrl.drv
-KMODARGS = -m 0=$(BUILD)/ctrl.drv
+KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv
+KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv
 
 # THE KERNEL IS ASSEMBLED WHOLE AND THEN CUT UP (SPEC.md 2.8). Everything
 # from .modc onward is an on-demand module: kernel code that ships as a file

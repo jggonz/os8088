@@ -3439,21 +3439,28 @@ dskw_char_x:
     ret
 
 
-%ifndef KERN_SMALL
 ; =============================================================================
 ; The FAT12 floppy formatter (SPEC.md 18.96)
 ;
-; **kern_big ONLY** (docs/KERN-SPLIT-PLAN.md), and the FIRST thing to go
-; through that seam. It costs 1,024 bytes of footprint - two 512-byte rungs,
-; one on the image and one on the cold segment - and kern_small stood at 512
-; bytes of spare, so the alternative was a second raise of the guard the
-; 128KB machine lives under. The requester's call, and this is the shape it
-; took.
+; **AN ON-DEMAND MODULE** (SPEC.md 2.8), shipped as FORMAT.DRV and read into a
+; heap claim when the user asks to format a disk. It qualifies on
+; docs/ONDEMAND-PLAN.md 1's test the way the Control Panel does and for a
+; different reason: preparing a disk is a PREPARED operation with a trip to
+; the disk box already in it, and it is among the rarest deliberate actions
+; in the system. MS-DOS drew the same line in 1981 - COPY lives in
+; COMMAND.COM and FORMAT is a file on the system disk - and the constraint
+; that produced that split is the hardware, which is the same hardware.
 ;
-; It needs NO ABI parity work (docs/KERN-SPLIT-PLAN.md's rule 3): there is no
-; API slot here, deliberately (see the note at the foot of SPEC.md 18.96), so
-; there is nothing for a package to find missing and one .o88 still serves
-; both kernels. What kern_small loses is two items on one menu.
+; **kern_small HAS IT NOW, and that is the payoff rather than the saving.**
+; This was `%ifndef KERN_SMALL` - a whole feature compiled out, so a 128KB
+; machine could not format a floppy at all - and on demand it costs that
+; build the strings, the menu item and a stub. `kern_big` gives back the
+; ~750 bytes of cold code as well. The first edition of ONDEMAND-PLAN read
+; the guard as a saving already taken; it was a missing feature.
+;
+; There is no API slot here, deliberately (see the note at the foot of
+; SPEC.md 18.96), so nothing a package can name changed and one .o88 still
+; serves both kernels.
 ;
 ; A HIGH-LEVEL format: the boot sector, both FATs and the root directory, and
 ; nothing else. int 13h AH=05h - writing sector ID fields - is deliberately
@@ -3486,6 +3493,55 @@ DFMT_SIZE    equ 14
 
 DFMT_ROWS    equ 4
 
+; The entry indices - this image's ABI with the resident stubs below.
+FME_PROBE   equ 0
+FME_FORMAT  equ 1
+FME_REACH   equ 2
+FME_ROW     equ 3
+FM_NENT     equ 4
+FMFP        equ mod_fp + MOD_FMT * MOD_NENT * 4
+
+section .modf                   ; the on-demand image (SPEC.md 2.8)
+modf_hdr:
+    dw 0x384F                   ; MOD_H_MAGIC
+    db MOD_VER                  ; MOD_H_VER
+    db MOD_FMT                  ; MOD_H_ID
+    dw BUILD_NUM                ; MOD_H_BUILD - another COMMIT...
+    dw MOD_STAMP                ; ...and another BUILD of this one
+    dw modf_end                 ; MOD_H_IMG
+    dw FM_NENT                  ; MOD_H_NENT
+    dw modf_e_probe             ; the FAR entries, never the bodies: an entry
+    dw modf_e_format            ; is reached by `call far`, so it has to end
+    dw modf_e_reach             ; in a retf, and every body below keeps the
+    dw modf_e_row               ; near `ret` cold code has always had
+    times MOD_NENT - FM_NENT dw 0
+
+modf_e_probe:   call dskw_fmt_probe_x
+            retf
+modf_e_format:  call dskw_format_x
+            retf
+modf_e_reach:   call dskw_fmt_reach_x
+            retf
+modf_e_row:     call dskw_fmt_row_x
+            retf
+
+; -----------------------------------------------------------------------------
+; dskw_fmt_ioerr - dskw_ioerr's six instructions, in the image
+;
+; The formatter's one call OUT that is not already a cw_* shim. Duplicated
+; rather than far-entered on docs/HDD-SPLIT-PLAN.md 3.2's rule: a boundary
+; crossing for two compares costs more than the eleven bytes it saves, and a
+; far entry would be a fifth thing the resident half publishes for the sake
+; of a predicate. It reads the same [dsk_ioerr] through the same DS.
+; -----------------------------------------------------------------------------
+dskw_fmt_ioerr:
+    mov ax, FERR_IO
+    cmp byte [dsk_ioerr], 0x03
+    jne .out
+    mov ax, FERR_WPROT
+.out:
+    ret
+
 section .text                   ; DATA, so back to the kernel segment: cold
                                 ; code reads it through DS (SPEC.md 2.6), and
                                 ; a `dw` left on the cold side of this toggle
@@ -3508,21 +3564,21 @@ dskw_fmt_tab:
     db 2, 0xFD
     dw 2, 112, 360              ; 360KB
 
-    ; the caller's live geometry, banked across dskw_fmt_probe's reads and put
+    ; the caller's live geometry, banked across dskw_fmt_probe_x's reads and put
     ; back by its .undo. Three words rather than a constant, because the probe
     ; is no longer only ever run over a volume that failed to mount (see .undo)
 dskw_fmt_bspt:  dw 9
 dskw_fmt_bhds:  dw 2
 dskw_fmt_btot:  dw 0
-section .cold                   ; ...and back to cold code
+section .modf                   ; ...and back to the image
 
 ; -----------------------------------------------------------------------------
-; dskw_fmt_row - a table row's address (module-internal)
+; dskw_fmt_row_x - a table row's address (module-internal)
 ; in:  AL = row index
 ; out: SI -> the row
 ; clobbers: SI (the output), flags
 ; -----------------------------------------------------------------------------
-dskw_fmt_row:
+dskw_fmt_row_x:
     push ax
     push dx
     xor ah, ah
@@ -3535,7 +3591,7 @@ dskw_fmt_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_fmt_probe - which of the four formats is this drive holding?
+; dskw_fmt_probe_x - which of the four formats is this drive holding?
 ; in:  [disk_drive] = the volume; UI task, gfx lock held (it reads the disk)
 ; out: CF=0 with AL = a dskw_fmt_tab row; CF=1 with AX = FERR_*
 ; clobbers: AX (the output), flags
@@ -3569,7 +3625,7 @@ dskw_fmt_row:
 ; is once per format; the alternative is trusting AH=08h about the MEDIUM,
 ; which is the thing this routine exists to not do.
 ; -----------------------------------------------------------------------------
-dskw_fmt_probe:
+dskw_fmt_probe_x:
     push bx
     push cx
     push dx
@@ -3723,7 +3779,7 @@ dskw_fmt_probe:
 
     ; --- one candidate: can CHS (0,0,spt) be read? -------------------------
     ; A local, so it may read the walker in CX and the DRIVE's spt in SI -
-    ; and SI is banked into DX first, because dskw_fmt_row spends SI on the
+    ; and SI is banked into DX first, because dskw_fmt_row_x spends SI on the
     ; table row and the outer loop needs the drive's figure for every
     ; candidate after this one.
     ;
@@ -3740,7 +3796,7 @@ dskw_fmt_probe:
     push si
     mov dx, si                  ; DX = the drive's spt, before SI becomes the
     mov al, cl                  ; row
-    call dskw_fmt_row
+    call dskw_fmt_row_x
     mov ax, [si+DFMT_SPT]
     cmp ax, dx
     ja .try_no
@@ -3786,7 +3842,7 @@ dskw_fmt_probe:
     ; forcing 9/2 there would leave a mounted 1.44MB volume claiming 9 sectors
     ; a track after a CANCELLED confirmation - a raw read at the wrong CHS with
     ; nothing at all to say so. Banking is two words more than the constant was
-    ; and it is right whichever way the caller arrived. dskw_format sets the
+    ; and it is right whichever way the caller arrived. dskw_format_x sets the
     ; row's geometry itself and owes this nothing.
 .undo:
     push ax
@@ -3800,8 +3856,8 @@ dskw_fmt_probe:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_format - lay a fresh FAT12 volume on the floppy in [disk_drive]
-; in:  AL = a dskw_fmt_tab row (dskw_fmt_probe's answer), [disk_drive] = the
+; dskw_format_x - lay a fresh FAT12 volume on the floppy in [disk_drive]
+; in:  AL = a dskw_fmt_tab row (dskw_fmt_probe_x's answer), [disk_drive] = the
 ;      volume. UI task, gfx lock held - dskw_*'s context exactly.
 ; out: CF=0; CF=1 with AX = FERR_IO / FERR_WPROT
 ; clobbers: AX (the output), flags
@@ -3825,7 +3881,7 @@ dskw_fmt_probe:
 ; hostile-BPB pipeline (SPEC.md 18.2), rather than trusting the arithmetic
 ; here.
 ; -----------------------------------------------------------------------------
-dskw_format:
+dskw_format_x:
     push bx
     push cx
     push dx
@@ -3833,12 +3889,12 @@ dskw_format:
     push di
     push es
 
-    call dskw_fmt_row           ; SI = the row, live for the whole routine
+    call dskw_fmt_row_x           ; SI = the row, live for the whole routine
     mov ax, [si+DFMT_SPT]
     mov [disk_spt], ax
     mov word [disk_heads], 2
     mov ax, [si+DFMT_TOT]       ; ...and the extent §18.95's fill clamps to,
-    mov [dsk_totsec], ax        ; for dskw_fmt_probe's reason
+    mov [dsk_totsec], ax        ; for dskw_fmt_probe_x's reason
 
     ; --- 1. the boot sector, at LBA 0 --------------------------------------
     call dskw_fmt_boot
@@ -3901,7 +3957,7 @@ dskw_format:
     clc
     ret
 .ioerr:
-    call dskw_ioerr             ; AX = FERR_IO / FERR_WPROT
+    call dskw_fmt_ioerr             ; AX = FERR_IO / FERR_WPROT
     pop es
     pop di
     pop si
@@ -3992,9 +4048,9 @@ dskw_fmt_zero:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_fmt_reach - can this drive actually reach the volume just declared?
+; dskw_fmt_reach_x - can this drive actually reach the volume just declared?
 ; in:  AL = the dskw_fmt_tab row that was written, [disk_drive] = the volume,
-;      [disk_spt]/[disk_heads] still the format's (dskw_format leaves them)
+;      [disk_spt]/[disk_heads] still the format's (dskw_format_x leaves them)
 ; out: CF=0 = the last sector was written and read back intact; CF=1 = it was
 ;      not. Clobbers AX, flags.
 ;
@@ -4022,21 +4078,21 @@ dskw_fmt_zero:
 ; It destroys the sector it tests, which is free here and nowhere else: the
 ; only caller is a commit the user has already agreed to erase the disk for.
 ; -----------------------------------------------------------------------------
-dskw_fmt_reach:
+dskw_fmt_reach_x:
     push bx
     push cx
     push dx
     push si
     push di
     push es
-    call dskw_fmt_row
+    call dskw_fmt_row_x
     mov di, [si+DFMT_TOT]
     dec di                      ; DI = the last sector the BPB now claims
     call dskw_fmt_zero
     mov ax, LOW_SEG
     mov es, ax                  ; dsk_secbuf is .lowbss (SPEC.md 2.1), so the
     mov word [es:dsk_secbuf+0], 'o8'    ; marker goes in through ES and never
-    mov word [es:dsk_secbuf+2], '8R'    ; through DS - dskw_format's own trap
+    mov word [es:dsk_secbuf+2], '8R'    ; through DS - dskw_format_x's own trap
     mov [es:dsk_secbuf+4], di   ; ...and the LBA, so a seek that landed on a
                                 ; DIFFERENT track cannot match by accident
     mov ax, di
@@ -4196,8 +4252,81 @@ dskw_fmt_stub:
     db 0x16, 0xCD, 0x19
     db 0x0D, 0x0A, 'Not a bootable disk. Press any key.', 0x0D, 0x0A, 0
 DFMT_STUB_LEN equ $ - dskw_fmt_stub
-section .cold                   ; ...and back to cold code
-%endif                          ; KERN_SMALL: no formatter
+section .cold                   ; ...and the RESIDENT stubs (SPEC.md 2.8.1)
+;
+; Four public names, unchanged, so not one call site in files.inc moved. Each
+; loads the image if it is not there and far-calls into it; each REFUSES the
+; way its body would have refused, because a caller that has to learn a new
+; failure mode is a caller that has to be found.
+;
+; dskw_fmt_row is the odd one and is worth a line: it is called from the
+; STATUS LINE's composer, once per repaint while the confirmation is up, so it
+; would load the image on a repaint - which is fine, because the confirmation
+; can only have been armed by a probe that already loaded it. It stays loaded
+; until fm_fmt_drop, and this stub is then six compares.
+dskw_fmt_probe:
+    push ax
+    mov al, MOD_FMT
+    call mod_need
+    pop ax
+    jc .p_no
+    call far [FMFP + FME_PROBE*4]
+    ret
+.p_no:
+    mov ax, FERR_NODISK         ; dskw_fmt_probe_x's own refusal for a medium
+    stc                         ; it cannot read - the nearest true thing, and
+    ret                         ; the toast names the disk either way
+
+dskw_format:
+    push ax
+    mov al, MOD_FMT
+    call mod_need
+    pop ax
+    jc .f_no
+    call far [FMFP + FME_FORMAT*4]
+    ret
+.f_no:
+    mov ax, FERR_NODISK
+    stc
+    ret
+
+dskw_fmt_reach:
+    push ax
+    mov al, MOD_FMT
+    call mod_need
+    pop ax
+    jc .r_no
+    call far [FMFP + FME_REACH*4]
+    ret
+.r_no:
+    stc                         ; "the volume's last sector was NOT reached",
+    ret                         ; which is what an absent formatter has to say
+
+dskw_fmt_row:
+    push ax
+    mov al, MOD_FMT
+    call mod_need
+    pop ax
+    jc .w_no
+    call far [FMFP + FME_ROW*4]
+    ret
+.w_no:
+    mov si, dskw_fmt_tab        ; row 0, so a status line composed after the
+    ret                         ; image went away letters a number instead of
+                                ; reading a garbage pointer. It cannot happen -
+                                ; see the note above - and this is what makes
+                                ; that a fact rather than a claim
+
+; fm_fmt_drop - the formatter is finished with (SPEC.md 2.8.3)
+;
+; Called from every path that ends a format confirmation, which is the one
+; moment nothing is on the module's stack and nothing will call it again.
+fm_fmt_drop:
+    push ax
+    mov al, MOD_FMT
+    call mod_drop
+    pop ax
+    ret
 
 
 ; -----------------------------------------------------------------------------

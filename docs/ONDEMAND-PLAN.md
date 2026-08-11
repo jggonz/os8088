@@ -1,7 +1,12 @@
 # On-demand kernel modules
 
-**Research document, not a contract.** SPEC.md is the binding contract for
-what the kernel *is*; this is the study of a mechanism nobody has built yet.
+**Research document, not a contract — and now IMPLEMENTED.**
+> The study below was written before the code and is kept as the reasoning
+> behind it. What shipped is SPEC.md §2.8; where the two disagree, SPEC.md is
+> the contract. §12 at the end is what happened when it was built.
+
+SPEC.md is the binding contract for
+what the kernel *is*; this was the study of a mechanism nobody had built.
 Every figure was measured on this tree at `9ff3bd3` by the method in §6.1, and
 the ones that are derived rather than measured say so.
 
@@ -688,3 +693,72 @@ bytes in it, which is §5.7's finding about `gfx_pixel` in another register. The
 unit of on-demand loading is therefore a **feature**, never a routine, and any
 proposal naming a function rather than a user-visible operation is proposing
 to spend a disk read to save a hundred bytes.
+
+
+---
+
+## 12. What happened when it was built
+
+Shipped as SPEC.md §2.8. The shape survived intact — `.cold` was the
+mechanism, no `.text` thunk changed, and the seam fell where §6 said it
+would. Five things are worth recording.
+
+**The numbers came in close, and the second candidate changed sign.**
+
+| | predicted | built |
+|---|---:|---:|
+| Control Panel out | −3,072 | **−2,560** |
+| Format out | (not recommended) | **−1,024**, then +512 for the swap prompt |
+| `kern_big` total | — | **102,912 → 99,840** |
+| `kern_small` total | — | **97,280 → 96,256, and 0 → 1,024 spare** |
+
+The panel came in 512 short of the estimate because the loader, the stubs and
+the refusal string go back into `.cold` and `.text`. **The estimate that
+mattered more was `KERN_CODE_MAX`'s, and §0's finding 2 was too strong**: the
+mechanism spends no `.text` on *dispatch*, but the five `cw_*` shims the
+loader calls out through, two thunks, the module table and two refusal strings
+are `.text` all the same — slack fell **438 → 300**. The claim to make is that
+the *dispatch* is free, not that the feature is.
+
+**`kern_small` is where the story ended up, and it is Format's, not the
+panel's.** §3.2's correction was right and understated: the small build now
+*has* a floppy formatter, which it never had, **and** has 1,024 bytes of spare
+against a guard that had none. Both from the same round.
+
+**A second stamp was needed and the plan did not see it.** §5.2's build number
+answers "another commit" and cannot answer "another BUILD of this commit" —
+`make small`, `VIDEO=cga` and `FONT=` are all one commit with the kernel's
+data at different addresses. `MOD_STAMP` (the section sizes summed) is that
+second word, and every image rule that builds a kernel outside `build/` now
+builds its own modules beside it.
+
+**Four bugs, and all four were silent.** §7.3 predicted the register trap and
+missed the sharper one next to it: **an entry far-called must end in `retf`,
+and every `.cold` body ends in the near `ret` it has always had**. Pointing
+the header's table straight at the bodies left CS as the module and marched
+execution forward through the image — which reached the panel's own drawing
+code and painted a Control Panel, with no window, over the desktop, once a
+minute. The fix is a 4-byte far stub per entry inside the image, which is
+`.cold`'s own `cpf_*` idiom moved one segment along. The other three:
+`cpf_cp_tick` loaded the image every minute to run a no-op (it is gated on the
+resident `cp_tick_due_x` now); `cp_open` had no `ret` and fell into
+`cp_paint`; and eleven near calls from `.modc` into `os88ui_glyph` /
+`os88ui_btn` crossed a boundary **`tools/os88ovlchk.py` could not see, because
+it globbed `kernel/*.inc` and that file is under `apps/`**. It scans it now,
+and that is the more important half of the fix — a file that emits code into
+the kernel belongs in its list whatever directory it is in.
+
+**§5's traps were mostly not the ones that bit.** §7.1's purgeable-claim
+hazard never arose, because §7.2 was taken as written and the images are
+ordinary claims freed by the feature. §7.4's under-the-lock load is real and
+uneventful. What did bite is not in §7 at all: the shared-helper crossing
+above, and the fact that a *test harness* clicking 30 pixels to the left of a
+divider lands in the item list rather than the page — which cost two runs and
+is why the settle timeouts in this work were test bugs twice over.
+
+**What is not verified.** `os8088_xt_vga` does not boot to a desktop in this
+container on this kernel *or* on the one before it, so VGA is untested and is
+not a regression; CGA, Hercules and `kern_small` are each driven end to end.
+And the swap prompt's *first* step — the one a one-floppy machine hits — is
+built and reasoned about but has only been exercised on the path where
+`mod_need` succeeds; the machine that needs it is the field machine.

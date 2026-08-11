@@ -1440,7 +1440,9 @@ dsk_ltrtab:                     ; every message that names the system disk
     dw cp_s_nodrv               ; ...and its OPEN refusal (SPEC.md 2.8.4), now
                                 ; that the panel's own code is a file on that
                                 ; same disk
-DSK_LTRN equ 4
+    dw fm_s_swapd               ; ...and the formatter's swap prompt (2.8.5),
+    dw fm_s_swapnd              ; which names it twice: the ask and the refusal
+DSK_LTRN equ 6
 
 ; -----------------------------------------------------------------------------
 ; dsk_geom_pick - bank the current volume's partition base and cylinder bound

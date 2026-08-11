@@ -624,6 +624,37 @@ a second from `ui_task`, panel or no panel) and `cp_drv_gone` (called from
 `drv_release` on any published driver's detach — including `drv_shutdown` on
 the way to a warm boot, *after* `cp_flush_close` has dropped the image).
 
+#### 2.8.5 The disk swap, which is the formatter's whole cost
+
+`FORMAT.DRV` is a file on the system disk, and **the disk the operation is
+about is the one in the drive** — so on a one-floppy machine, which is the
+calibration machine (docs/FIELD-MACHINES.md), the code cannot be read at the
+moment it is wanted. That is not a defect of the mechanism; it is what
+loading from disk costs a machine with one drive, and MS-DOS charged exactly
+it for `FORMAT` while keeping `COPY` in `COMMAND.COM`.
+
+So `fm_c_format` asks for the image **before** it probes anything, and if it
+cannot have one it puts up a swap prompt instead of the confirmation:
+
+```
+Insert the system disk in A:          -> Enter -> the image loads
+Insert the disk to format, then Enter -> Enter -> probe, then §22.12's
+Enter=ready  Esc=no                                confirmation
+```
+
+It is **`FS_EDIT` mode 6 with a step byte** (`[fm_fmtstep]`), not two modes:
+the two lines differ only in their first, the same key answers both, and a
+second mode value is a second thing every ladder in `files.inc` has to know
+about. Escape at either step abandons the whole operation, and the prompt is
+two lines, so it takes `.cancelfull` like §22.12's own.
+
+**The common case asks nothing.** A two-drive machine, a machine booted from
+a hard disk (§52.10.3), and a second format in one session all find
+`mod_need` answering from the table — six compares — and go straight to the
+probe. `fm_edit_end` is where the image goes back, gated on a format mode
+having been armed: it is the one path all four endings share, and the one
+moment nothing of the image is on the stack.
+
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
 ```nasm

@@ -969,6 +969,7 @@ section .ovl     start=OVL_START vstart=0
 ; They are LAST in the file and unpadded, so truncating at MODC_START yields
 ; byte for byte the kernel.bin that would have been emitted without them.
 section .modc    start=MODC_START vstart=0
+section .modf    start=MODF_START vstart=0
 section .modmap  start=MODMAP_START vstart=0
 section .text
 
@@ -2550,6 +2551,11 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "assoc.inc"          ; file type associations (SPEC.md 54): the
                               ; tables and the icon composition. BEFORE
                               ; disk.inc, whose harvest calls into it
+%include "mod.inc"            ; on-demand kernel modules (SPEC.md 2.8): the
+                              ; loader and the far-pointer table. BEFORE
+                              ; every module it serves, because a module's
+                              ; own section carries the header that names
+                              ; MOD_* and MOD_NENT
 %include "disk.inc"
 %include "diskw.inc"          ; the FAT write path (SPEC.md 18.4): after
                                 ; disk.inc, whose constants and layout it uses
@@ -2562,11 +2568,6 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "icons.inc"
 %include "desk.inc"
 %include "dock.inc"
-%include "mod.inc"            ; on-demand kernel modules (SPEC.md 2.8): the
-                              ; loader and the far-pointer table. BEFORE
-                              ; every module it serves, because a module's
-                              ; own section carries the header that names
-                              ; MOD_* and MOD_NENT
 %include "ctrl.inc"
 %include "driver.inc"           ; loadable drivers (SPEC.md 51): after
                                 ; diskw (it reads and writes the system disk)
@@ -3035,11 +3036,16 @@ OVL_SIZE equ ovl_end - $$
 ; image ends, so `truncate to MODC_START` reproduces the pre-module kernel.bin
 ; byte for byte. tools/os88mod.py proves that rather than trusting it.
 MODC_START   equ OVL_START + OVL_SIZE
-MODMAP_START equ MODC_START + MODC_SIZE
+MODF_START   equ MODC_START + MODC_SIZE
+MODMAP_START equ MODF_START + MODF_SIZE
 
 section .modc
 modc_end:
 MODC_SIZE equ modc_end - $$
+
+section .modf
+modf_end:
+MODF_SIZE equ modf_end - $$
 
 ; --- the split table, which is HOST-SIDE ONLY --------------------------------
 ; os88mod.py has to know where each module starts and how long it is, and the
@@ -3061,6 +3067,7 @@ mod_map:
                                 ; before a module is added, and a `dw` of it
                                 ; assembles as a silent truncation under any
                                 ; flags but this tree's -w+error
+    dd MODF_START, MODF_SIZE
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
 modmap_end:
