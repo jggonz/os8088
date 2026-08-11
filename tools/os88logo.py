@@ -46,20 +46,17 @@ import zlib
 LOGO_MAXW = 594
 LOGO_MAXH = 110
 
-# The height is drawn to LOGO_MAXH EXACTLY, and that is a decision rather
-# than an oversight.  Paint asks the kernel to resize its window to the
-# picture (pt_wfollow) and pt_sizeask answers with a height FLOOR -
-# PT_SZ_END = 128, "tall enough to still show the size boxes", itself
-# clamped to the screen.  So the shortest canvas Paint will show is 128 rows
-# on Hercules and VGA and 110 on CGA, where the desktop band is barely
-# taller than the tool column.
+# The height is drawn to LOGO_MAXH exactly - 110 is the tallest a picture
+# can be and still open uncropped on every adapter, and there is no reason
+# to be shorter.  If that bound ever moves, the check in main() makes it a
+# failed BUILD rather than a quietly cropped logo.
 #
-# A white band under a short picture is therefore unavoidable SOMEWHERE, and
-# the only choice is where: at 110 the picture is exact on CGA and has an
-# 18-row band on the other two; at 128 it is exact on those two and CROPPED
-# on CGA, losing 18 rows of artwork.  110 is the tallest that is never
-# cropped.  If that bound ever moves, the check in main() makes it a failed
-# BUILD rather than a quietly cropped logo.
+# This logo is what found SPEC.md 42.9's bug: Paint used to floor a resize
+# at PT_SZ_END = 128 - "tall enough to still show the size boxes" - so a
+# 110-row picture opened into a 128-row canvas with 18 rows of white under
+# it that were not in the file.  A control's convenience was setting the
+# minimum size of a PICTURE.  The floor is the kernel's WMIN_H now, so any
+# size opens at its own size and nothing here has to be chosen around it.
 
 LOGO_MAXBYTES = 4096
 

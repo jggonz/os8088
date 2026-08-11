@@ -23475,6 +23475,50 @@ slowly than the window*, which yields. On a 1bpp adapter the renderer is
 possible (§32), so nothing is owed a present and nothing is being unlocked:
 there is nothing to wait for, and `pt_wait` returns at once.
 
+### 42.9 The canvas floor is the KERNEL's, and the size boxes stopped setting it
+
+`pt_sizeask` floored the height at **`PT_SZ_END` = 128** — *tall enough to
+still show the size boxes* — so **no picture under 128 rows ever opened at
+its own size on any adapter**. It arrived as a 466x110 file and became a
+466x128 canvas with 18 rows of white under it that were not in the file, and
+`File ▸ Save` would then have written them.
+
+The floor is `PT_CH_MIN` now, and `PT_CW_MIN`/`PT_CH_MIN` are **derived from
+`WMIN_W`/`WMIN_H`** (§11.1) rather than chosen: `WMIN_W - PT_CHROME_W` = 50
+and `WMIN_H - PT_CHROME_H` = 22. That is a second fix inside the first.
+`wm_resize` and `ui_grow` clamp a frame at `WMIN_*` **and neither tells the
+app they did it**, so Paint's old 32x16 floor was a canvas the window can
+never be: `pt_adopt` would set `[pt_ch]` = 16, ask for a 58-row frame, get a
+64-row one, and draw 16 rows of picture inside a 22-row content box — a strip
+of stale white that belongs to nobody. Deriving is what stops the two
+drifting again.
+
+**What the floor was really protecting is worth stating, because it is not
+what its comment said.** The comment claimed the size boxes are *"the ONLY
+way to make the canvas taller again — no menu item, no key"*, so a canvas
+short enough to hide them was stuck for the session. The first half is true:
+there is no Size menu item and no key. The second half stopped being true
+when `OSAPI_WM_ONSIZE` landed — **the grow box is the kernel's**, a 13x13 at
+the frame's bottom-right (`wm_grow_rect`) drawn *after* `W_PAINT` on the
+frontmost `WF_SIZABLE` window, and it hit-tests at every size the kernel
+allows. It does not consult `[pt_ch]` and cannot be hidden by a short canvas.
+A comment outliving the code it described, in the usual direction.
+
+Nothing else needed a floor to survive, because Paint's three stacked
+controls already draw what fits and nothing more: `pt_szon` hides the size
+boxes under `PT_SZ_END`, `pt_draw_dims` hides the two-line readout under
+`PT_DIM_Y + 17`, and **`pt_draw_pal` stops emitting tool buttons at
+`[pt_ch]`** — *"a short window shows fewer tools rather than drawing over its
+own strip"* — with `pt_pal_click` carrying the identical test, so the drawn
+control and the clickable one cannot drift (§22's `fm_hit` discipline). That
+last one is what makes the removal safe rather than merely desirable: the
+tool column wants ~86 rows and `pt_cprep` does **not** clip to the content
+box, so without that gate a 22-row canvas would paint tools straight through
+Paint's own strip and onto the desktop — §49's tamegram lesson exactly.
+
+At the floor a 22-row canvas still shows one row of tools, and the picture is
+its own size on every adapter.
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
@@ -35078,28 +35122,14 @@ wide, and CGA's dock row `176 - PT_WIN_Y - PT_CHROME_H` = **110** tall. The
 tool checks its output against both and refuses rather than shipping a
 picture that opens cropped.
 
-**The height is drawn to that bound EXACTLY, and it is the one number here
-that is deliberately not conservative — because the alternative is not a
-tidier picture but a cropped one.** Paint asks the kernel to resize its
-window to the picture (`pt_wfollow`), and `pt_sizeask` answers with a height
-**floor**: `PT_SZ_END` = **128**, *tall enough to still show the size boxes*,
-itself clamped to `[pt_chmax]`. So the smallest canvas Paint will show is
-128 rows on Hercules and VGA and **110 on CGA**, where the desktop band is
-barely taller than the tool column and the screen is what cannot fund the
-controls.
-
-That makes the white band under a short picture unavoidable *somewhere*, and
-the choice is only where:
-
-| picture | CGA (`chmax` 110) | Hercules / VGA (floor 128) |
-|---------|-------------------|-----------------------------|
-| 110 tall | exact, no band   | 18-row band                |
-| 128 tall | **cropped — 18 rows lost** | exact, no band     |
-
-110 is the tallest a picture can be and never be cropped, and it is exact on
-the tightest screen; 128 buys a tidier Hercules at the price of destroying
-part of the picture on a CGA. The band is Paint's minimum window size and
-belongs to any short picture, not to this one.
+**The height is drawn to that bound exactly**, because 110 is the tallest a
+picture can be and still open uncropped on every adapter, and there is no
+longer any reason to be shorter: since §42.9 removed Paint's `PT_SZ_END`
+height floor, a picture of *any* size opens at its own size. **This logo is
+what found that floor** — it arrived 110 tall and became a 128-tall canvas
+with 18 rows of white under it that were not in the file, on Hercules and
+VGA both, and the only choice then was which adapter got the band. There is
+no band now and no choice to make.
 
 Measured on cycle-accurate 8088s rather than reasoned — the file opened
 through the real dialog, off the real system disk, and the canvas read back
@@ -35107,9 +35137,9 @@ out of the guest and diffed against the source bitmap:
 
 | machine | canvas | picture |
 |---------|--------|---------|
-| `os8088_5150_cga_gla` | `466 x 110`, no band | 39 differing pixels, in one 8x12 box |
-| `os8088_5150_herc_gla` | `466 x 128`, 18-row band | **0** differing pixels of 51,260 |
-| `os8088_xt_vga` (mode 12h) | `466 x 128`, 18-row band | 31 differing pixels, in one 8x12 box |
+| `os8088_5150_cga_gla` | `466 x 110` | 39 differing pixels, in one 8x12 box |
+| `os8088_5150_herc_gla` | `466 x 110` | **0** differing pixels of 51,260 |
+| `os8088_xt_vga` (mode 12h) | `466 x 110` | 31 differing pixels, in one 8x12 box |
 
 The two non-zero rows are the same thing and it is not the picture: `CUR_GW`
 x `CUR_GH` is **8x12** (§7.1) — the mouse arrow, parked on the canvas. A
