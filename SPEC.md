@@ -14954,6 +14954,53 @@ diffed against a forced full repaint: **0 differing bytes of 676**.
 
 `[np_bandb]` went with it — the test was its only reader.
 
+#### 27.2.2 `NP_MAXCOL` was one SCREEN wide, and a straddling window is not
+
+Reported from the field with a photograph: a Note Pad straddling the display
+seam draws each row to a point, then a **gap**, then stray letter fragments
+near the right edge — *"only when straddling; resizing it inside either screen
+formats correctly."*
+
+`NP_MAXCOL` was **91**, and its comment said why: *"720/8 is the widest screen
+this runs on."* That was true of a screen and stopped being true of a WINDOW
+the moment §39.19 let one span two displays — straddling, it may be the whole
+virtual desktop wide, **1360 px on a Hercules beside a CGA, or 170 cells**.
+`np_rcols` is clamped to `NP_MAXCOL - 1`, and it is not only the padding: it
+is what the wrap asks whether a word fits, and it is the bound `np_rflush`
+tests before storing a cell — the guard there already names the clamp as the
+case where a cell gets dropped. So every row stopped at column 90, and the
+cells past it were neither written **nor erased**, which is the gap and the
+fragments in one fact.
+
+**The reporter's second sentence is the confirmation and worth keeping**: *a
+redraw shows the same gap without the fragments.* A repaint white-fills the
+window and then letters 90 columns — so the stale pixels go and the clamp
+still stops the text short. One symptom, two halves, both explained by one
+constant.
+
+`NP_MAXCOL` is 171 now. Three things about the change are worth knowing:
+
+- **The two buffers it sizes moved to the counter block.** Every offset in
+  Note Pad's older bss block is written down by hand, so growing a field in
+  the middle of it means renumbering thirty-five of them correctly; `NPVAR`
+  sizes itself. They left a 183-byte hole where they were, which any later
+  field may reclaim.
+- **`NP_MAXCOL - 1` stopped fitting a sign-extended `imm8`.** At 90 every
+  compare against it was two bytes and at 170 it is three, which pushed a
+  `jmp short` in the regex matcher out of range. Nothing subtle — but it is
+  the kind of build break that looks unrelated to the change that caused it.
+- **Cost is package bss, not kernel**: +343 bytes in a claim Note Pad already
+  takes.
+
+`tests/dispnp.py` is the gate, and **its first two measurements both passed the
+broken build** — which is the lesson rather than the number. "Is there ink past
+column 90" passed with 42 pixels and "the last cell carrying ink" passed with
+113, because **the stale fragments are themselves ink**: both measured the
+artefact as though it were the fix. What separates them is that real text is
+CONTIGUOUS — the gate types 150 characters with no spaces — so the honest
+number is the first UNLETTERED cell. Broken it reads **91**, which is
+`NP_MAXCOL - 1` exactly; fixed, the row never breaks.
+
 ### 27.3 The visual break — typing in FRONT of text without reflowing it
 
 Inserting a character at the front of a note moves every character after it,
