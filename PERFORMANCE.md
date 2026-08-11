@@ -5005,9 +5005,18 @@ damage rect at all — **9,090.1 → 2,851.5, 3.19x**.
 **Flat art gets faster too, which the plan doubted.** docs/PAINT-NOTES.md's
 sketch was a plane-parallel decoder that "would beat this on detailed pictures
 and lose to it on flat ones"; this is not that. It keeps the run scan, so a
-solid row is still ONE run — it just costs ~315 µs instead of ~740. Paint's
-canvas is 492x280 with a 492x133 picture in it, so 147 of its rows are a single
-run each and they got cheaper along with the rest.
+solid row is still ONE run — it just costs less. Measured on `mkbmp`'s `flat`
+art (one run a row) with the same damage rect: **132.1 ms**, which with the
+84.9-runs figure fits a two-term model of the whole path —
+
+```
+run path, µs a row = 830 + 371 x runs      (830 = the scan and the row setup)
+```
+
+— reproducing all three measured densities within 3% (flat 132.1 against 132.1,
+textured 2,352 against 2,430.7, fine 8,292 against 8,364.9). **That 830 µs is
+the term the "45x" estimate forgot**, and it is what decides whether the byte
+decoder needs a hybrid; docs/HANDOFF-REDRAW.md item B2 has the working.
 
 **Merging the two routines was worth 11%** — 2,698.1 → 2,430.7 ms — and that is
 the 8088 lesson rather than a tidy-up. Written as a `gfx_blit_span` that worked

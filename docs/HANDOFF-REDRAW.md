@@ -255,54 +255,100 @@ and a store per destination byte:
     or  dl, al          ; ...four times, then `mov [di], dl`
 ```
 
-Counted on an 8088 that is **~166 clocks per 8 pixels = 20.8 clocks a pixel =
-4.36 µs**, against 371 µs a run. So:
+Counted on an 8088 that is **~180 clocks per 8 pixels = 22.5 clocks a pixel =
+4.71 µs** — and note that is an instruction count, not a measurement.
 
-| | decoder | crossover |
-|---|---|---|
-| 1bpp | 4.36 µs/px | **one run per 85 pixels** |
-| VGA, four Map Mask passes | 17.43 µs/px | one run per 15 pixels |
+**The crossover is 1.84 runs a row, not one run per 85 pixels**, and the first
+version of this section had it wrong in a way worth keeping: it compared the
+decoder's per-PIXEL cost against the MARGINAL per-run cost, forgetting that the
+run path also reads every source byte (`repe scasb`) whether it coalesces
+anything or not. Measured on flat art — one run a row, `mkbmp ... flat` — the run
+path costs **132.1 ms** for the same 110 rows, which fixes the missing term:
 
-Priced on Set 41's own damage rect, where the decoder would cost **154 ms on
-1bpp** and 744 on VGA:
+```
+run path, µs a row = 830 + 371 x runs          (830 = the scan and the row setup)
+decoder,   µs a row = 1,513                    (whatever is in the row)
+```
 
-| | now | with the decoder | | against the pre-§5.4.1 figure |
-|---|---|---|---|---|
-| CGA, 85 runs/row | 2,430.7 ms | 153.9 | **15.8x** | 36x |
-| CGA, 308 runs/row | 8,364.9 ms | 153.9 | **54.4x** | 122x |
-| VGA, 85 runs/row | 2,163.5 ms | 744.2 | 2.9x | 6x |
-| VGA, 308 runs/row | 7,151.1 ms | 744.2 | 9.6x | 19x |
+That model reproduces all three measured points within 3% — flat 132.1 against
+132.1, textured 2,352 against 2,430.7, fine 8,292 against 8,364.9 — so the
+crossover is where `830 + 371R = 1,513`, i.e. **R = 1.84**. Anything that is not
+a solid bar is above it.
 
-**It MUST be a hybrid, and that is the whole design risk.** A flat row is one
-run — 371 µs today — and the decoder would take 1,412 µs for the same 321
-pixels: **3.8x WORSE**. The switch wants the row's run count *before* the row is
-drawn, which the scan only discovers as it goes; the cheap answer is the
-**previous row's** count, pictures being locally coherent, with the first row on
-the run path and a wrong guess costing one row. Per ROW and never mid-row, so
-there is no seam for the two paths to disagree at.
+| | now | with the decoder | |
+|---|---|---|---|
+| CGA, flat (1 run/row) | 132.1 ms | 166.5 | **1.26x WORSE** |
+| CGA, 85 runs/row | 2,430.7 ms | 166.5 | **14.6x** |
+| CGA, 308 runs/row | 8,364.9 ms | 166.5 | **50.2x** |
+| VGA, four Map Mask passes | | ~4x the above | 2.9x / 9.6x |
 
-**What it costs.**
+**So the hybrid is not worth building**, which is the second correction. It buys
+26% on a perfectly flat row and costs a switch plus keeping BOTH paths alive
+forever. Decoder-only is the design: a blit becomes **constant time in its
+content**, which is a better property for a UI than a fast case and a slow one.
 
-- **~150–200 bytes of `.text`** for the 1bpp decoder (the aligned inner loop,
-  the leading and trailing partial bytes, and the odd-`x0` case), ~30 for the
-  hybrid switch, ~40 for the table build. ~250 more for VGA's four-pass twin.
+**And dropping the hybrid is what makes it affordable.** The span writers
+`sw_blit_span` (167 bytes), `vga_blit_span` (157) and `vga_sr_on` (12) are
+**336 bytes** that the decoder replaces outright; the switch would be ~30 more.
+What must stay either way is `gfx_blit_run` (34 bytes) and the run scan, because
+they are the fallback for the three refused cases.
+
+**What it costs.****What it costs.**
+
+- **~200 bytes of `.text`** for the 1bpp decoder (the aligned inner loop, the
+  leading and trailing partial bytes, and the odd-`x0` case) plus ~40 for the
+  table build, **against 336 bytes of span writers it deletes**. ~250 more for
+  VGA's four-pass twin, which deletes nothing extra.
 - **512 bytes of table** for 1bpp (two parities x 256), 512–1,024 more for VGA.
 - **And it has to live in `.text`, not on the heap**, which is the part that
   costs real budget. `xlat` is DS-relative and the loop already needs three
   segments at once — source (ES), framebuffer, table — so the table goes in CS
   and is read with `cs xlat`, leaving DS for the framebuffer. A purgeable heap
   claim (§50.6) would be free against the budget and cannot be addressed here.
-- **So: one 512-byte step of `KERN_BUDGET` for 1bpp alone, about three for
-  both** — against **512 bytes spare on `kern_big` today**. It needs a raise,
-  which is docs/KERNEL-MEMORY.md's conversation and not a build fix.
+- **So, decoder-only and 1bpp-only: +240 of code +512 of table −336 deleted =
+  about +416 bytes, against 383 bytes of slack in `kern_big`'s image rung.**
+  That is one 512-byte step, and painfully close to none at all — a hundred
+  bytes of a tighter inner loop and it fits in what is already there. **With the
+  hybrid it is unambiguously two steps** (nothing is deleted and the switch is
+  added), and VGA's twin plus its own table is two or three more. The budget has
+  **512 bytes spare on `kern_big`**, so 1bpp decoder-only is the only variant
+  that does not certainly need a raise.
 - **Verification is the existing gates and no new ones**: `ptcheck` on three
   adapters plus `PTROW=1`, which is exactly the shape §5.4.1 was proved with.
   The new failure modes are bit phase (`x0` mod 2 and mod 8), the dither parity
   the table bakes in, and the partial bytes at each end.
 
-**The honest summary is that 1bpp is worth it and VGA is marginal.** 15.8x on
-the machine this project is calibrated against, for one budget step; 2.9x on
-VGA for two more, on an adapter the calibration machine does not have.
+**The honest summary is that 1bpp decoder-only is worth it and VGA is
+marginal.** 14.6x on the machine this project is calibrated against for one
+budget step or none, at the price of 26% on a blank canvas; 2.9x on VGA for two
+or three more steps, on an adapter the calibration machine does not have.
+
+**And Paint is not the only consumer** — see "What else the blit is under",
+below.
+
+### What else the blit is under
+
+`gfx_blit4` has three consumers besides Paint's canvas, and one of them is more
+latency-critical than Paint has ever been:
+
+- **Solitaire's card BACKS.** The source says what they cost — *"the back is a
+  lattice, so `gfx_blit4` coalesces it into 634 `gfx_fill` runs on the 32x44
+  metrics (336 on CGA's 28x28)"* — so priced with the measured constants a card
+  back was **278 ms on CGA** and is **125 ms** after §5.4.1, and would be
+  ~13 ms with the decoder. `sol_drawall` draws the whole tableau; `sol_cmd_deal`
+  already has a comment about how dear one back is.
+- **ArtfulType's KEYSTROKE PATH.** `at_draw_line` composes a line, expands it to
+  packed 4bpp and puts it on screen as **one `OSAPI_GFX_BLIT4`, per keystroke**,
+  ungated by adapter. Text is the worst case for run coalescing — every glyph
+  edge is a run — so this is structurally the biggest beneficiary in the system
+  and the one where the saving is felt as *typing latency* rather than as a
+  repaint. **It is NOT measured**: three attempts to time a keystroke through
+  the debug server produced no `gfx_blit4` hit at all while typing plainly
+  worked before the breakpoints were armed, which is a harness problem and not
+  an app one. **Take that measurement first** — if a line is the ~1,200 runs a
+  45-character line of 8x8 glyphs suggests, it dwarfs everything in this
+  document.
+- **Tracker** mentions the idiom in its fullscreen text path but does not blit.
 
 ### C. Registered cache regions and exclusions
 
