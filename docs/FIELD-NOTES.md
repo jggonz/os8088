@@ -1677,7 +1677,7 @@ asked. On a machine claiming four drives the operator would see unit 3 and
 have no visibility into units 1 and 2. It wants either a per-unit block or a
 unit field beside the verdict.
 
-### 17.1 The format prompt does not clear on Escape (REPRODUCED, cause found)
+### 17.1 The format prompt does not clear on Escape (FIXED, verified on Hercules and CGA)
 
 Two of the four reports — "the size/format prompt doesn't clear after
 formatting" and "there is some corruption over the size prompt" — are **one
@@ -1701,8 +1701,9 @@ the prompt and press Escape. It does NOT show on the Enter path, because the
 format's own `fmv_load` repaints the whole window — which is why the harness
 missed it: every test here pressed Enter.
 
-The fix is to make mode 5's cancel take the full-repaint exit (`.out`, CF = 1)
-instead of `.lineonly`, which is a compare and a branch.
+**Fixed**: mode 5's cancel takes the full-repaint exit (`.out`, CF = 1)
+instead of `.lineonly`. Verified by re-running the repro on both adapters —
+the prompt clears whole.
 
 ### 17.2 Format Disk stays greyed on a disk it just made (QUEUED — a design question)
 
@@ -1732,7 +1733,7 @@ What the operator should have seen is the toast saying so —
 not have: with a stale prompt line on screen the window was not saying what it
 looked like it was saying.
 
-### 17.4 Do not offer the size toggle on units 0 and 1 (QUEUED — a change)
+### 17.4 Do not offer the size toggle on units 0 and 1 (DONE)
 
 Asked for directly: the internal drives are the machine's own and their
 geometry is not in question, so the `Spc=size` key should only appear for
@@ -1744,3 +1745,16 @@ It is a narrowing of §18.96.2 rather than a removal: the toggle exists because
 *actionable* on a drive the operator may have changed. The row is already in
 `dsk_vtab` with its `DV_UNIT`, so the test is available where the prompt is
 composed.
+
+**Done**, as `fm_fmt_sizeable` — one predicate serving both the line and the
+key. Verified with a scratch disk on unit 2 (`--mount fd:2:`): on B: the
+second line reads `Enter=yes  Esc=no` and Space leaves the row at 3, on C: it
+reads `Spc=size  Enter=yes  Esc=no` and Space moves it 3 → 2.
+
+**And a third thing came out of setting the switches up for it**, which is in
+§18.98 rather than here because it is not what the field reported: §18.97's
+removal set the drive COUNT to 1 as well as freeing row 1, which truncates
+§18.98's loop — so a machine claiming three or four drives with no unit 1
+would never have asked about the external pair. That is the field machine with
+a 4865 plugged in, i.e. the exact configuration this round exists to serve, and
+it would have cost the next field run for nothing.

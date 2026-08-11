@@ -725,3 +725,45 @@ overlays = [
     bus_type = "ISA"
     type = "CGA"
     clock_mode = "Dynamic"
+
+# ...and THE configuration SPEC.md 18.98 exists for: the field 5150's own
+# drives plus an IBM 4865 on the 5.25" adapter's external 37-pin connector.
+# Two internal 360k and an 80-CYLINDER 720k as unit 2, which is the only place
+# 18.96.2's size override is offered and the only drive that can pass its
+# reach test. Unit 3 is a 360k, so one machine carries both answers: the
+# toggle stands on C: and falls back on D:.
+[[machine]]
+name = "os8088_5150_cga_ext720"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+        [[machine.fdc.drive]]
+        type = "720k"
+
+        [[machine.fdc.drive]]
+        type = "360k"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"

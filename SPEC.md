@@ -9357,6 +9357,15 @@ that sector back and compares. Four things about it:
   mountable 720KB volume on screen with Format Disk… disabled. The user gets
   a working disk and a toast that says what happened and why —
   `Drive cannot reach 720K - made 360K`, §59.6's subject/outcome/cause.
+- **And the key is offered on units 2 and 3 ONLY** (`fm_fmt_sizeable`). The
+  toggle exists because `AH=08h` is refused and the drive cannot be asked how
+  many cylinders it has — but that ignorance is only *actionable* on a drive
+  the operator may have changed. Units 0 and 1 are the machine's own internal
+  drives, and offering a 720KB volume on the 5150's Tandon is offering
+  something the reach test will only take away again; units 2 and 3 are
+  §18.98's external pair, which is exactly where an 80-cylinder 3.5" drive
+  turns up. One predicate serves the line and the key, so what is named and
+  what is accepted cannot disagree — §47 rule 2's shape.
 
 The cost on the honest path is **two `int 13h` calls**, once per 720KB
 format, against a format that is already 7 writes and a remount.
@@ -9619,6 +9628,17 @@ Three things follow, and the first is the one that decides the letters:
   take back and `dsk_fdd_retire` stays the unit-1 special case it was written
   as. And only PROVEN absence skips a row: every other answer keeps the drive,
   which is §18.97's fail-safe unchanged.
+
+**A retired unit 1 must not truncate the count**, and it did. §18.97's removal
+path set the drive count to 1 as well as freeing the row — correct while two
+was the most a machine could claim, and wrong the moment units 2 and 3 became
+reachable, because the loop above is bounded by that count. A machine claiming
+three or four drives with no unit 1 therefore never asked about the external
+pair at all. That is not a corner: it is **one internal drive plus a 4865 on
+the 37-pin connector**, which is the field machine with the thing this section
+was written for plugged into it. The count stays the claim, and the zone pass
+reads the ROW instead — a row the probe retired is `DVK_FREE` and is not handed
+back, so only the row is taken away.
 
 **Parameterising the probe by unit is where this bit back**, and it is worth
 a paragraph because both halves assembled and booted. `dsk_fdd_probe` encoded
@@ -12722,6 +12742,17 @@ is the 720KB/360KB pair and only ever that (§18.96); the size on the line is
 `.lineonly` — the same one-status-line path a typed rename character already
 takes. Rows 0 and 1 have no partner, so Space keeps meaning *no* there and
 the second line drops `Spc=size` with it.
+
+**Escape has to repaint the WINDOW, not the status line.** `.cancel` ends in
+`.lineonly` — CF = 0, "the status line is all that moved" — and that is right
+for a one-line prompt and wrong for this one: it left `Format B: as 360K?` on
+the row above for ever, which is docs/FIELD-NOTES.md 17.1 and was reported as
+two separate faults, the prompt not clearing *and* corruption over it. They
+are the same line nobody erased. Mode 5 takes the full-repaint exit; modes 1,
+2 and 3 are one-line prompts and mode 4's two-line replace question never
+reaches `.cancel` at all. It never showed on the Enter path, because the
+format's own `fmv_load` repaints the whole window — which is exactly how every
+test in this tree missed it.
 
 **It is two lines because one no longer fits.** `fm_stat_line` truncates at
 `([fm_cw] - 12) / 8` characters and the Disk window's template is 320 wide,

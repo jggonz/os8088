@@ -3036,6 +3036,44 @@ fm_fmt_reach:
 .out:
     ret
 
+; -----------------------------------------------------------------------------
+; fm_fmt_sizeable - may this volume's size be overruled? (SPEC.md 18.96.2)
+; in:  AL = the volume index
+; out: CF = 0 = offer the toggle; CF = 1 = do not
+; clobbers: flags
+;
+; TWO tests, and the second is the one that arrived from the field.
+;
+; The row has to be one of the 9-sector pair (2 = 720K, 3 = 360K), because
+; that is the only ambiguity there is - rows 0 and 1 have no partner.
+;
+; And the UNIT has to be 2 or 3. The toggle exists because `AH=08h` is refused
+; and the drive cannot be asked how many cylinders it has (18.96.2), but that
+; ignorance is only ACTIONABLE on a drive the operator may have changed: units
+; 0 and 1 are the machine's own internal drives, and offering to make a 720KB
+; volume on the 5150's Tandon is offering something the reach test will only
+; take away again. Units 2 and 3 are the external pair on the 5.25" adapter's
+; 37-pin connector (18.98), which is exactly where an 80-cylinder 3.5" drive
+; turns up and exactly where the BIOS can say nothing about it.
+; -----------------------------------------------------------------------------
+fm_fmt_sizeable:
+    cmp byte [fm_fmtrow], 2     ; the 9-sector pair, and only it
+    jb .no
+    push bx
+    mov bl, al
+    call KERNEL_SEG:cw_dsk_vol_row
+    jc .nopop
+    cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there
+    jb .nopop
+    pop bx
+    clc
+    ret
+.nopop:
+    pop bx
+.no:
+    stc
+    ret
+
 fm_c_format:                    ; File > Format Disk... (SPEC.md 22.12)
     mov di, [fm_vp]
     call fm_fmt_ok              ; the greying is the primary answer; this is
@@ -3553,8 +3591,11 @@ fm_editkey:
 .confirmf:
     cmp al, ' '
     jne .confirm
-    cmp byte [fm_fmtrow], 2
-    jb .confirm
+    push ax
+    mov al, [di+FS_DRV]
+    call fm_fmt_sizeable        ; the SAME predicate the line is composed
+    pop ax                      ; from, so the two cannot disagree
+    jc .confirm                 ; nothing to offer: Space still means no
     xor byte [fm_fmtrow], 1
     jmp short .lineonly         ; the size on the line IS [fm_fmtrow], so the
                                 ; redraw is the one a typed rename character
@@ -3568,10 +3609,31 @@ fm_editkey:
     call fm_edit_commit
     jmp short .out
 .cancel:
+%ifndef KERN_SMALL
+    ; The FORMAT prompt is TWO lines (SPEC.md 22.12), so one status line
+    ; cannot undo it: .lineonly is CF = 0, "the status line is all that
+    ; moved", and fm_status_only repaints exactly that. Escape therefore left
+    ; `Format B: as 360K?` on the row ABOVE it for ever - reported off the
+    ; field as the prompt not clearing AND as corruption over it, which are
+    ; the same line nobody erased (docs/FIELD-NOTES.md 17.1).
+    ;
+    ; Right for every OTHER mode, which is why it survived: 1, 2 and 3 are
+    ; one-line prompts, and mode 4's two-line replace question never reaches
+    ; here - it is answered at .replace. And it never showed on the Enter
+    ; path, because the format's own fmv_load repaints the whole window,
+    ; which is exactly how every test in this tree missed it.
+    cmp byte [di+FS_EDIT], 5
+    je .cancelfull
+%endif
     call fm_edit_end
 .lineonly:
     clc                         ; CF = 0: the typed name is ON the status line
     jmp short .pops             ; and NOTHING else on this window moved, so a
+%ifndef KERN_SMALL
+.cancelfull:                    ; ...two lines: the caller owes the window
+    call fm_edit_end
+    jmp short .out
+%endif
 .out:                           ; keystroke owes one line, not a repaint
     stc                         ; anything else - commit, cancel, the replace
 .pops:                          ; question - changed the listing or the mode
@@ -5688,9 +5750,12 @@ fm_draw_status:
     call fm_stat_line
     mov di, fm_hdrbuf           ; ...and line two, the answers, where every
     mov si, fm_s_fmtk           ; other status line goes
-    cmp byte [fm_fmtrow], 2     ; 9-sector media is the one ambiguous case,
-    jb .fs_stat                 ; so it is the only one with a key to name
-    mov si, fm_s_fmtk2          ; (SPEC.md 18.96)
+    push ax
+    mov al, [fm_ldrv]
+    call fm_fmt_sizeable        ; ...and the key is named only where it does
+    pop ax                      ; something (SPEC.md 18.96.2)
+    jc .fs_stat
+    mov si, fm_s_fmtk2
     jmp short .fs_stat
 %endif
 .fs_st_del:
