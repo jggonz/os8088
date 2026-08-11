@@ -872,6 +872,23 @@ $(BUILD)/big.dat: Makefile | $(BUILD)
 $(BUILD)/filetest.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88 $(BUILD)/big.dat
 
+# muptest: the SPEC.md 13.7 gate - a package's mouse-up. Its answers are a
+# WINDOW that is there or not, so a harness reads wm_wins rather than pixels.
+# The case only a package can prove is the FIRST rule: a press that ran no
+# W_ONCLICK owes no release, which the kernel cannot test from its own side
+# because it has no way to know a package expected nothing.
+#
+#   make test TESTAPPS=build/muptest.img
+$(BUILD)/muptest.bin: tests/muptest/muptest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/muptest/muptest.asm
+	@echo "muptest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/muptest.o88: $(BUILD)/muptest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/muptest.bin -o $@
+
+$(BUILD)/muptest.img: $(BUILD)/muptest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/muptest.o88
+
 # assoctest: the SPEC.md 54 gate. Its own scratch image, and a TEST.AST for it
 # to be opened WITH - the point of the gate is what happens on a document
 # double-click, so the fixture is half the test:

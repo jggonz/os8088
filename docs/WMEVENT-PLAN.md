@@ -1,5 +1,10 @@
 # The package-side mouse-up, and what the WM surface is carrying — plan
 
+> **STATUS: `W_ONMOUSEUP` IMPLEMENTED** (SPEC.md §13.7; `kernel/wm.inc`,
+> `kernel/ui.inc`, `kernel/kernel.asm`, `apps/os88api.inc`), gated by
+> `tests/muptest` on all three adapters. **The §2 withdrawals were NOT done** —
+> §2.4 is why, and it is a reversal of what §2 recommends.
+
 **Tier 3 of the mouse-up work.** One new window callback, plus the API audit
 the §20.8 alpha unfreeze makes actionable.
 
@@ -46,11 +51,10 @@ Sweeping every `OSAPI_*` in the SDK for callers outside `os88api.inc`, across
 
 | slot | callers | verdict |
 |---|---|---|
-| `OSAPI_XMEM_ALLOC` | **0** | **withdraw** |
-| `OSAPI_XMEM_FREE` | **0** | **withdraw** |
-| `OSAPI_XMEM_COPY` | **0** | **withdraw** |
-| `OSAPI_XMEM_INFO` | **0** | **withdraw** |
-| `OSAPI_VOL_PAINT` | **0** | **withdraw** — its one grep hit is a *comment* in `drivers/os88drv.inc:283`, not a call |
+| `OSAPI_XMEM_ALLOC` | **0** | withdraw — but see §2.4 |
+| `OSAPI_XMEM_FREE` | **0** | withdraw — but see §2.4 |
+| `OSAPI_XMEM_COPY` | **0** | withdraw — but see §2.4 |
+| `OSAPI_VOL_PAINT` | **0** | withdraw — its one grep hit is a *comment* in `drivers/os88drv.inc:283`, not a call |
 | `OSAPI_BATCH_END` | 0 | **keep** — dead *by design*, see §2.2 |
 | `OSAPI_WM_TITLE` | 1 (`tests/gfxbench`) | **keep** — see §2.3 |
 | `OSAPI_XMEM_CAPS` | 2 (Task Manager, `sysbench`) | keep |
@@ -61,8 +65,15 @@ consumers. It has one. The genuinely dead surface is somewhere else entirely.
 
 ### 2.1 The XMS store is four-fifths dead, and that is a §53.6.1 leftover
 
+**Correction first: there are FOUR `xm_*` cells, not five, and THREE are
+dead.** An earlier draft of this table listed an `OSAPI_XMEM_INFO`; **there is
+no such slot.** The sweep that found the dead surface read its names out of
+`os88api.inc`; the verification pass that followed used a list I typed by
+hand, and a name that does not exist trivially has zero callers. The table
+holds `xm_caps`, `xm_alloc`, `xm_free`, `xm_copy` — and `CAPS` is the live one.
+
 `kernel/xmem.inc` is **625 lines of code** (of 1,013 with comments). Of the
-five slots §41 publishes, **one is called** — `OSAPI_XMEM_CAPS`, by the Task
+four slots §41 publishes, **one is called** — `OSAPI_XMEM_CAPS`, by the Task
 Manager and `sysbench`, and in both cases only to *print* a "XMS used/sizeK"
 line. Nothing in the tree ever allocates from the store.
 
@@ -77,8 +88,7 @@ explicit justification: *"§41 stays (the `xm_*` slots are a published package
 ABI, §20.8 rule 4 … this was one kernel-side consumer of the store, not the
 store)."* **That justification was the freeze**, and the freeze is gone.
 
-**In scope for Tier 3: withdraw the four dead cells, keep `CAPS`.** Reclaims
-32 bytes of table and makes four bodies unreferenced.
+**This was in scope for Tier 3 and was not done — §2.4.**
 
 **Out of scope, and flagged rather than done: whether §41 should exist at
 all.** That is a bigger question — it touches SPEC.md §41 whole, the Task
@@ -87,6 +97,33 @@ deserves its own investigation rather than being smuggled in behind a mouse-up
 change. It is worth taking, though, and **the reason to take it is Tier 4**:
 the UI element helpers need most of `KERN_BUDGET`'s remaining spare, and this
 is the largest block of provably unreferenced code in the kernel.
+
+### 2.4 The withdrawals were NOT done, and the reason is renumbering
+
+§2 says withdraw five cells. **They are all mid-table** — the `xm_*` three at
+0x0198..0x01A8 and `VOL_PAINT` at 0x0288, against a tail of 0x03A0 — and the
+table is 8 bytes per cell at fixed offsets, so removing any of them **shifts
+roughly ninety cells below it**. Every `%define` in `os88api.inc` under the
+hole changes value, every `.o88` is rebuilt, and the whole of that is bought
+for **24 bytes of table**.
+
+Under §20.8's alpha unfreeze that is *legal*. It is not *worth it*, and this
+is exactly the case rule 4 still binds on: renumbering is "expensive and
+deliberate", and a 90-slot shift on my own initiative, for 24 bytes, in the
+same commit as a feature, is not deliberate — it is a large silent-failure
+surface attached to a change that has nothing to do with it.
+
+The alternative that keeps the numbering — pointing the dead cells at a
+refusing stub — reclaims nothing at all: the cell still costs 8 bytes and the
+bodies stay reachable through it.
+
+**So the real prize was never the cells; it is the BODIES**, and those belong
+to the §41 question §2.1 already flags as out of scope. `xm_alloc`, `xm_free`
+and `xm_copy` are hundreds of lines and are reachable only through three cells
+nobody calls — but removing them orphans `xm_ucopy`, `xm_chk` and `xm_bios`
+in turn, and touches what the Task Manager and `sysbench` display. That is its
+own investigation with its own gate, and it is now **the obvious place to look
+for the 512 bytes this tier's rung crossing spent** (§6).
 
 ### 2.2 `OSAPI_BATCH_END` is dead by design — keep it
 
@@ -199,30 +236,29 @@ one, so the fire path needs the billing block. That is the only new code.
 adding `AL` 2 and 3 to it. Either order works; building them as two independent
 mechanisms does not, and would be the thing to catch in review.
 
-## 6. Budget
+## 6. Budget — MEASURED
 
-| | estimate |
-|---|---|
-| `.bss` | **+24** — `wm_wins` is `MAX_WIN * WIN_SIZE`, so 12 × 2 |
-| `.text` — `wm_create` zero | ~5 |
-| `.text` — setter body + cell | ~12 |
-| `.text` — fire path (billing block, factored with `W_ONCLICK`'s) | ~60 |
-| `.text` — **reclaimed**, 4 XMS cells + `VOL_PAINT` | **−40** |
-| **net `.text`** | **~+37**, plus whatever the four unreferenced `xm_*` bodies give back |
+```
+kernsize[big]: sections   text 55,483 +151  bss 4,943 +27   (sum +178)
+kernsize[big]: rungs      image 60,928 +512 (502 left, was 168)
+kernsize[big]: footprint  KERN_SIZE 97,280 of 98,304 -> 1,024 spare (2 steps), was 1,536  [+512]
+kernsize[big]: *** the image rung CROSSED: 118 -> 119 steps of 512 ***
+```
 
-Estimates from instruction shapes for this tier's own code; the **baseline is
-now measured** (Tier 1 installed `nasm` and built the tree). Removing the
-`xm_*` bodies could plausibly swing the net negative on its own.
+**It crossed a rung, exactly as predicted.** `.bss` +27 is the record growth
+(12 windows × 2 for `W_ONMOUSEUP`, plus 3 that were Tier 1's). `.text` +151 is
+four times the ~37 estimated, and the estimate was wrong because it counted
+only the new code: the API cell (8), the setter, the `wm_create` zero, the
+`.mup_pkg` branch, **and `ui_ptcall`** — the billing block factored out of
+`.content_front` so `W_ONCLICK` and `W_ONMOUSEUP` share one body. Factoring
+was supposed to pay for itself and roughly did; the estimate simply never
+included the branch or the cell.
 
-**The pressure is the IMAGE RUNG, not the footprint.** kern_big's footprint
-spare is **1,536 bytes / three 512-byte steps** — an earlier draft said 1,024
-and two, taken from `docs/KERNEL-MEMORY.md` rather than a build — but after
-Tier 1 the image rung has **63 bytes left of 512**. So this tier's ~+37 bytes
-of `.text` almost certainly **crosses a rung** and takes the footprint spare to
-two steps, unless the withdrawals in §2 land first and pay for it. Doing the
-withdrawals *before* the callback is therefore not just tidy ordering: it is
-what keeps this change free. kern_small is a separate `KERN_SMALL=1` build and
-is still unmeasured.
+Footprint spare is **1,024 bytes, two 512-byte steps**, down from three. That
+is inside normal operating range (CLAUDE.md's standard is four) but it is a
+step spent, and §2.4 says where the next one is if it is wanted back.
+
+kern_small (`KERN_SMALL=1`) is a separate build and remains unmeasured.
 
 ## 7. Testing
 
@@ -299,18 +335,49 @@ four withdrawn cells.
 - **Which edge anything fires on for existing code.** `W_ONCLICK` is still
   dispatched on the press, and §13.6's boundary rule is untouched.
 
-## 10. Order of work
+## 10. Order of work — DONE (except §2)
 
-1. Tier 1 first (§5), so the arm exists.
-2. The withdrawals of §2 — four XMS cells and `VOL_PAINT` — as their own
-   commit, since they are unrelated to the callback and want their own bisect
-   point.
-3. `W_ONMOUSEUP`, the setter cell, the `wm_create` zero, the factored billing
-   block.
-4. The gate package and cases 1–8, CGA first.
-5. SPEC edits: §11's record table, §41's slot list, and 13.8.
+1. ~~Tier 1 first, so the arm exists.~~ **Done** — and it was reused rather
+   than rebuilt: `wm_hit`'s `AL` 2/3 fire the chrome, `AL` 0 fires this, one
+   `[ui_armw]`/`[ui_armr]` pair and one `ui_arm_chk`.
+2. ~~The withdrawals of §2 as their own commit.~~ **NOT done — §2.4.**
+3. ~~`W_ONMOUSEUP`, the setter cell, the `wm_create` zero, the factored
+   billing block.~~ **Done.** `W_ONMOUSEUP` at record offset 26 (`WIN_SIZE`
+   26 → 28), `OSAPI_WM_ONMOUSEUP` appended at **0x03A8** — an append, so
+   nothing renumbered — and `ui_ptcall` is the shared dispatcher.
+4. ~~The gate package and cases 1–8, CGA first.~~ **Done** — `tests/muptest`,
+   `make build/muptest.img`, four cases on CGA, Hercules and VGA.
+5. ~~SPEC edits.~~ §13.7 landed. §11's record table and §41's slot list were
+   **not** touched, the latter because §2 did not happen.
 
-**Batch this with Tier 2 and Tier 4 if their timing allows.** Every table
-revision costs the same fixed price — every `.o88` rebuilt, every image
-reissued — and paying it once for three changes rather than three times is the
-one scheduling win the §20.8 unfreeze hands over.
+### 10.1 What the gate proved
+
+`tests/muptest` is 165 bytes and answers every question as *a window that is
+there or not* — its `W_ONMOUSEUP` hides itself — so the harness reads
+`wm_wins` and nothing is screen-scraped.
+
+| case | expected | |
+|---|---|---|
+| A | press inside, release inside | release arrives |
+| B | press inside, release **outside the window** | still delivered — §4's second rule |
+| C | press the **title bar**, release | **no** release: no `W_ONCLICK` ran |
+| D | a window that never registered one (About) | wholly unaffected |
+
+**C is the case only a package can prove**, and it is why this needed a gate
+package rather than more scripted clicking: the kernel cannot test it from its
+own side, having no way to know a package expected nothing. **D is the
+regression test for every shipped package** — none registers the callback, so
+none of their behaviour may move.
+
+Tier 1's full matrix was re-run afterwards on all three adapters, because
+`.content_front` and `.mup` were both refactored under it: all pass, keyboard
+mouse included.
+
+**One apparatus note:** the harness must derive the Disk window's first row
+from the window's **own rect**, not a fixed coordinate. The window lands
+differently on each adapter — CGA clamps it, Hercules is 720x348 — so a
+hardcoded row silently double-clicks empty content and the test reports "the
+package did not launch" about a working kernel. That cost a run on two
+adapters before it was noticed.
+
+**Not run:** anything on the field machine. Nothing here touches a disk.

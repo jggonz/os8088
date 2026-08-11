@@ -206,35 +206,16 @@ ui_task:
     jmp .yield
 
 .content_front:
-    cmp word [si + W_ONCLICK], 0
-    je .yield                   ; window does not take clicks
+    mov bp, [si + W_ONCLICK]
+    or bp, bp
+    jz .yield                   ; window does not take clicks
     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
-    mov bx, si                  ; (CX/DX survived wm_hit/wm_top/gfx_lock)
-    call inst_win_owner         ; bill the handler to its instance (8.1)
-    push di
-    push word [snd_inst]        ; stamp the dispatched instance for sound
-    call snd_disp_set           ; grants made inside the handler (SPEC 34.3)
-    push cx                     ; the click point - task_cycles returns in
-    push dx                     ; DX:AX, so CX/DX have to step aside
-    call task_cycles            ; DX:AX = start stamp
-    mov bx, ax
-    mov ax, dx
-    pop dx                      ; click y
-    pop cx                      ; click x
-    push ax                     ; start stamp: hi, then lo
-    push bx
-    push bp
-    mov bp, [si + W_ONCLICK]    ; wm_pkgcall: record in SI, offset in BP
-    call wm_pkgcall
-    pop bp
-    pop ax
-    pop dx
-    pop word [snd_inst]         ; the outer dispatch's stamp, back
-    pop di
-    or di, di
-    jz .click_done
-    call inst_charge
-.click_done:
+    call ui_ptcall              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
+    mov [ui_armw], si           ; ...and the RELEASE is owed to this window
+    mov byte [ui_armr], 0       ; (SPEC.md 13.7): region 0, armed only because
+                                ; W_ONCLICK actually ran. A press that merely
+                                ; raised a window, or that this window refused
+                                ; above, arms nothing
     call gfx_unlock
     jmp .yield
 
@@ -270,10 +251,17 @@ ui_task:
     jmp .yield
 
 .mup:
-    ; The release. Fires the armed box only if wm_hit at THIS point still
-    ; answers the same window AND the same region - "released over the same
-    ; element", which is the whole feature. The arm is spent either way, so a
-    ; release that lands anywhere else simply throws it away.
+    ; The release. Two species, and they differ in exactly one way:
+    ;
+    ;   region 2/3 - the CHROME (SPEC.md 13.5). Fires only if wm_hit at THIS
+    ;                point still answers the same window AND the same region.
+    ;   region 0   - a PACKAGE's content release (SPEC.md 13.7). Delivered
+    ;                WHEREVER it landed, this window's own, because a package
+    ;                that is never told cannot un-draw a pressed state or
+    ;                decline to act. The kernel guarantees delivery; the
+    ;                package decides identity, having no widget layer to ask.
+    ;
+    ; The arm is spent either way.
     cmp word [ui_armw], 0
     je .yield                   ; nothing armed: one compare, and the release
                                 ; is ignored exactly as it always was
@@ -285,23 +273,27 @@ ui_task:
                                 ; double-click spacing release-to-release,
                                 ; silently - os88mouse.py's dblclick measures
                                 ; press-to-press and would keep passing
-    call wm_hit                 ; BX = window under the release, AL = region
-    mov si, [ui_armw]           ; (AH survives wm_hit by its own contract, but
-    mov ah, [ui_armr]           ; it is loaded after it regardless)
+    mov si, [ui_armw]
+    mov ah, [ui_armr]
     mov word [ui_armw], 0       ; spent: every path below leaves it clear
+    or ah, ah
+    jz .mup_pkg                 ; region 0: no identity test at all
+    call wm_hit                 ; BX = window under the release, AL = region;
+                                ; AH survives it by wm_hit's own contract
     cmp bx, si
     jne .yield                  ; a different window - two windows' boxes can
                                 ; share a point, so this half is not optional
     cmp al, ah
     jne .yield                  ; ...or the other box on the same title bar
     call gfx_lock
-    test word [bx + W_FLAGS], 2 ; the window can have gone between the two
+    test word [si + W_FLAGS], 2 ; the window can have gone between the two
     jz .mup_done                ; passes - a package worker reaching
                                 ; inst_task_die, or a command off its own bar.
                                 ; wm_hit has answered already, so this is the
                                 ; belt to that braces; it costs a test, and
                                 ; what it guards is a dispatch through a freed
                                 ; record (the ui_dispatch guard, verbatim)
+    mov bx, si
     cmp ah, 2
     jne .mup_min
     call app_close_win          ; in: BX; quits the owning instance (or
@@ -309,6 +301,18 @@ ui_task:
 .mup_min:
     call inst_minimize          ; in: BX; flags the instance minimized and
 .mup_done:                      ; hides - its dock tile inverts (SPEC.md 30)
+    call gfx_unlock
+    jmp .yield
+
+.mup_pkg:                       ; SPEC.md 13.7 - the package's release
+    call gfx_lock
+    test word [si + W_FLAGS], 2 ; ...unless the window went away between the
+    jz .mup_pdone               ; two passes, which a worker can do
+    mov bp, [si + W_ONMOUSEUP]
+    or bp, bp
+    jz .mup_pdone               ; the package never asked for releases, which
+    call ui_ptcall              ; is every shipped package today
+.mup_pdone:
     call gfx_unlock
     jmp .yield
 
@@ -465,6 +469,51 @@ ui_task:
 .idle:
     call task_yield
     jmp .loop
+
+; -----------------------------------------------------------------------------
+; ui_ptcall - dispatch a POINT callback on a window, billed (SPEC.md 8.1/34.3)
+; in:  SI = window, BP = the handler's offset in that window's segment,
+;      CX = x, DX = y; the caller holds the gfx lock
+; out: nothing; CX/DX preserved across the call so the caller may reuse them
+; clobbers: AX, BX, DI (and whatever the handler clobbers)
+;
+; W_ONCLICK and W_ONMOUSEUP have the identical contract and the identical
+; environment - UI task, gfx lock held, billed to the owning instance, with
+; the dispatched instance stamped for sound grants (SPEC.md 34.3) - so this is
+; the one body rather than two that have to be kept in step. It was factored
+; out of .content_front when W_ONMOUSEUP arrived; before that there was only
+; one caller and no reason.
+;
+; The caller checks the handler is non-zero. BP is the offset because that is
+; what wm_pkgcall wants and what the record already holds.
+; -----------------------------------------------------------------------------
+ui_ptcall:
+    mov bx, si
+    call inst_win_owner         ; DI = the owning record, 0 = unowned window
+    push di
+    push word [snd_inst]        ; stamp the dispatched instance for sound
+    call snd_disp_set           ; grants made inside the handler (SPEC 34.3)
+    push cx                     ; the point - task_cycles answers in DX:AX,
+    push dx                     ; so CX/DX have to step aside
+    call task_cycles            ; DX:AX = start stamp
+    mov bx, ax
+    mov ax, dx
+    pop dx                      ; y
+    pop cx                      ; x
+    push ax                     ; start stamp: hi, then lo
+    push bx
+    push bp
+    call wm_pkgcall             ; SI = window, BP = the handler
+    pop bp
+    pop ax
+    pop dx
+    pop word [snd_inst]         ; the outer dispatch's stamp, back
+    pop di
+    or di, di
+    jz .out
+    call inst_charge
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ui_arm_chk - drop a chrome arm whose release will never arrive (SPEC.md 13.5)

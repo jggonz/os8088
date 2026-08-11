@@ -6119,6 +6119,47 @@ want the release. Rows, icons and title bars have one: §22.2's file row,
 §26.2's drive zone, §38.3's dialog row and §11.95's title bar all select or
 raise first and open or zoom second.
 
+### 13.7 A package's mouse-up — `W_ONMOUSEUP` (API 0x03A8)
+
+`W_ONMOUSEUP` is the release half of a content click. Installed with
+`OSAPI_WM_ONMOUSEUP` (BX = window, AX = a near proc in the caller's segment,
+0 clears it) **after** `wm_create` — it is **not a template word**, because
+`wm_create`'s template copy is eight words and growing it would read one word
+past every existing package's template. `wm_create` zeroes it, as it does
+`W_MENUS` and `W_ONSIZE`.
+
+It is called with **CX = x, DX = y, SI = window**, in `W_ONCLICK`'s
+environment exactly: the UI task, under the gfx lock, billed to the owning
+instance with the dispatched instance stamped for sound grants (§34.3). The
+two share one dispatcher, `ui_ptcall`, so their environments cannot drift.
+
+Two rules, and they are the whole of it:
+
+- **Delivered only if this window's `W_ONCLICK` ran for the matching press.**
+  A press that merely raised a background window, or landed on the chrome, or
+  was swallowed by a modal dialog (§38.2), or that the window declined by
+  having no `W_ONCLICK`, arms nothing and produces no release.
+- **Delivered even when the release lands outside the window.** That is the
+  point rather than an edge case: a package must be able to un-draw a pressed
+  state and decline to act, and it can do neither if the release is dropped.
+  `CX`/`DX` are screen coordinates and may fall outside the content box, or
+  go negative once the caller subtracts its origin. Range-testing them is the
+  caller's job.
+
+**The kernel guarantees delivery; the package decides identity.** There is no
+widget layer, so the kernel cannot know what "the same control" means here and
+does not try — it answers *the release for the press you were given*.
+
+It shares §13.5's arm: `wm_hit`'s `AL` 2 and 3 fire the chrome, `AL` 0 fires
+this, one word of state and one `ui_arm_chk`. The chrome half re-tests
+identity at the release and this half does not, which is the only place the
+two paths differ.
+
+**A package that installs this and also polls `OSAPI_MOUSE` in a tracking loop
+from the same `W_ONCLICK` is doing the job twice** — the loop consumes its own
+release. Pick one; the callback is the one that costs the keyboard mouse a
+single keypress (§9.6.1) and holds no lock across a wait (§7.1.3).
+
 ## 14. apps.inc
 
 The built-in app **kinds**: About, Timer, Bounce. Nothing is

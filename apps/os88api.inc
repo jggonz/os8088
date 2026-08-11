@@ -1093,7 +1093,10 @@ W_SEG     equ 22            ; dispatcher, and the segment every near
 W_ONSIZE  equ 24            ; word: near ptr or 0 - your resize negotiator.
                             ; NOT a template word - set it with
                             ; OSAPI_WM_ONSIZE
-WIN_SIZE  equ 26
+W_ONMOUSEUP equ 26          ; word: near ptr or 0 - the RELEASE half of a
+                            ; content click (SPEC.md 13.7). NOT a template
+                            ; word - set it with OSAPI_WM_ONMOUSEUP
+WIN_SIZE  equ 28
 MAX_WIN   equ 12
 
 ; THE RECORD LIVES IN KERNEL_SEG. On entry to any callback ES points there
@@ -1886,6 +1889,41 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
 %define OSAPI_FILE_APPEND_SYS KERNEL_SEG:0x03A0 ; SI = NUL 8.3 name, ES:BX =
                                  ; bytes, CX = count; out as
                                  ; OSAPI_FILE_APPEND. DRIVERS ONLY.
+%define OSAPI_WM_ONMOUSEUP  KERNEL_SEG:0x03A8   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it): the RELEASE
+                                 ; half of a content click (SPEC.md 13.7).
+                                 ; Call it from your entry proc after
+                                 ; OSAPI_WM_CREATE, exactly like
+                                 ; OSAPI_WM_ONSIZE - W_ONMOUSEUP is not a
+                                 ; template word.
+                                 ;
+                                 ; The kernel calls it with CX = x, DX = y,
+                                 ; SI = your window, in W_ONCLICK's environment
+                                 ; exactly: the UI task, under the gfx lock,
+                                 ; billed to your instance. You may draw.
+                                 ;
+                                 ; TWO RULES, and both are the point of it:
+                                 ;   - it arrives ONLY if your W_ONCLICK ran
+                                 ;     for the matching press. A press that
+                                 ;     merely raised your window, or landed on
+                                 ;     the chrome, or was swallowed by a modal
+                                 ;     dialog, produces nothing.
+                                 ;   - it arrives EVEN IF the release landed
+                                 ;     outside your window. CX/DX are SCREEN
+                                 ;     coordinates and may be outside your
+                                 ;     content box, or negative once you
+                                 ;     subtract your origin. That is what lets
+                                 ;     you un-draw a pressed state and decline
+                                 ;     to act, which is the whole feature -
+                                 ;     range-test it yourself.
+                                 ;
+                                 ; The kernel guarantees DELIVERY; you decide
+                                 ; IDENTITY. It has no idea what your controls
+                                 ; are and does not try to guess.
+                                 ;
+                                 ; Do NOT also poll OSAPI_MOUSE in a tracking
+                                 ; loop from the same W_ONCLICK: that loop
+                                 ; consumes its own release. Pick one.
 %define OSAPI_BOOT_TICKS    KERNEL_SEG:0x02F8   ; out AX = how long this machine
                                  ; took to boot, in SYSTEM TICKS (18.2065 Hz,
                                  ; 54.925 ms each): the boot sector's first
