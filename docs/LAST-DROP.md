@@ -172,6 +172,76 @@ building. Nobody has found one.
 
 ---
 
+## 3. The blit decoder's HYBRID — a run path kept for flat art
+
+**Status:** costed against measured constants, **never built.**
+**Against:** SPEC.md §5.4.1's decoder (docs/HANDOFF-REDRAW.md item B2).
+**Verdict:** buys 1.8x on a row with **one run in it** and nothing at all on
+any other row, for ~366 bytes and a permanent second code path.
+
+### What it does
+
+The byte decoder walks the destination byte by byte and costs the same
+whatever is in the row. The run path costs `830 + 371 x runs` µs a row
+(PERFORMANCE.md Set 41, fitted to three measured densities within 3%), so it
+is *cheaper* on rows with almost nothing in them. The hybrid keeps both and
+picks per row — from the PREVIOUS row's run count, pictures being locally
+coherent, first row on the run path, a wrong guess costing one row. Per row
+and never mid-row, so the two paths have no seam to disagree at.
+
+### Measured
+
+Both halves are built and measured now (PERFORMANCE.md Sets 41 and 42), so
+these are figures rather than estimates. The crossover is **~10 runs a row**:
+
+| CGA, Paint's canvas | run path | decoder |
+|---|---|---|
+| flat, 1 run a row | **132.1 ms** | 517.6 |
+| textured, 85 runs a row | 2,430.7 ms | **516.6** |
+| fine, 308 runs a row | 8,364.9 ms | **517.6** |
+
+### The price
+
+- **~336 bytes that the decoder would otherwise delete** — `sw_blit_span`
+  (167), `vga_blit_span` (157), `vga_sr_on` (12) — because the hybrid needs
+  them alive, plus ~30 for the switch itself.
+- On `kern_big` that is the difference between fitting in the image rung's
+  existing slack and **crossing a 512-byte rung**, at a moment when the
+  footprint has 512 bytes spare.
+- And a permanent second path through the hottest drawing routine in the
+  system, which every future change to either half has to keep byte-identical
+  with the other.
+
+### Why it is shelved
+
+**Nothing anyone waits on draws flat art through `gfx_blit4`** — and the
+decoder shipped without it (SPEC.md §5.4.1.1), so this entry is now the record
+of a deliberate omission rather than of an unbuilt option. Its consumers
+are Paint's canvas, Solitaire's card backs (a lattice, 336 runs on CGA by the
+source's own count) and **ArtfulType's keystroke path**, which puts a whole
+line of TEXT on screen as one blit — and text is the least flat thing there
+is. The one case the hybrid protects is a blank Paint canvas, which is 132 ms
+against 518: an operation nobody is sitting through, made 386 ms slower.
+
+There is also a property worth having on the other side of the ledger:
+decoder-only makes a blit **constant time in its content**. A UI with one
+predictable cost is better than one with a fast case and a slow one, and it
+is what stops "never price a blit on flat art" (docs/HANDOFF-REDRAW.md) being
+a rule anybody has to remember.
+
+### What would flip the answer
+
+- **A consumer that blits large flat areas often.** A picture viewer with
+  letterboxing, a window background drawn as a blit, a game with flat sprites.
+  None exists today; the moment one does, this is 3.9x on it.
+- **A cheaper switch than "the previous row".** If the run count for a row
+  were already known — say the source carried it — the switch would be a
+  compare and the 30 bytes would be most of the cost. That is a change to the
+  blit's ABI, not to this routine.
+- **A budget with room in it.** The verdict above is 336 bytes against a rung;
+  on a kernel with four steps spare rather than one, the same measurement
+  reads very differently.
+
 ## The apparatus, so it is not rebuilt
 
 Everything Set 29 needed already exists in the tree:

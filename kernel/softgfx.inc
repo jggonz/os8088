@@ -298,120 +298,228 @@ sw_col:
     jnz .xrow
     ret
 
+; =============================================================================
+; THE BLIT DECODER (SPEC.md 5.4.1) - a row of packed 4bpp straight into 1bpp
+;
+; gfx_blit4 used to emit one gfx_hline per coalesced RUN, and SPEC.md 5.4.1's
+; first form wrote the run itself instead - which took ~756us of ARRIVING off
+; each one and left ~371us of per-run work. This takes the runs out altogether:
+; a source BYTE is two pixels and maps, through 39.4's reduction, to a two-bit
+; destination pattern that depends only on its value and one parity bit, so a
+; 256-byte table answers it outright and the loop is a read, an xlat and a
+; shift per two pixels. It costs the same whatever is in the row.
+;
+; THERE IS NO HYBRID and docs/LAST-DROP.md 3 is why. The run path is cheaper
+; only below 1.84 runs a row (PERFORMANCE.md Set 41's two-term fit), nothing
+; anyone waits on draws flat art through this - Paint's canvas, Solitaire's
+; lattice card backs, ArtfulType's line of TEXT per keystroke - and keeping
+; both paths costs 336 bytes and a permanent second opinion about the pixels.
+;
+; THREE SEGMENTS AT ONCE is what shapes the loop: the source is the CALLER's
+; (ES on entry), the framebuffer is [vid_rseg], and the table is the kernel's.
+; So DS becomes the source (lodsb), ES the framebuffer, and the table is read
+; `cs xlat` - .bss being in KERNEL_SEG, which is CS for this code. Nothing may
+; read a [gfx_blit_*] word inside the loop.
+; =============================================================================
+
+; sw_pbit - internal: the 1bpp bit for colour SI at parity DH (SPEC.md 39.4)
+; out: AL = 0 or 1; clobbers AL and flags
+sw_pbit:
+    mov al, [si + gfx_inktab]
+    cmp al, 1
+    je .dither
+    and al, 1                   ; gfx_inktab is 00 / 01 / FF, so the low bit
+    ret                         ; IS the answer for the two solid classes
+.dither:
+    mov al, dh                  ; ...and a middle grey alternates with (x+y) -
+    xor al, 1                   ; INVERTED, because sw_parity's 0xAA has its
+    ret                         ; bit SET at x=0 of an even row, and bit 7 is
+                                ; the leftmost pixel
+
 ; -----------------------------------------------------------------------------
-; sw_blit_span - gfx_blit_run's direct twin, 1bpp only (SPEC.md 5.4.1)
-; in:       DI = the run's first x, DX = one past its last pixel (row-relative),
-;           AH = its colour, [gfx_blit_x] = the block's left edge,
-;           [gfx_blit_ro] = the row's base byte, [gfx_blit_dth] = the row's
-;           dither phase, ES = the CALLER's source segment, DF clear
-; out:      nothing; every register preserved, ES included
+; sw_pairbuild - fill the two pair tables from gfx_inktab (SPEC.md 5.4.1)
+; out: gfx_pairtab0/1 built, [gfx_pairbuilt] = 1; every register preserved
 ;
-; The same run gfx_blit_run emits, with the ARRIVING taken out. gfx_hline is a
-; gfx_fill, and a gfx_fill is SPEC.md 5.7's ~756us of clip test, display hook,
-; adapter dispatch, vga_rect_setup and row-base arithmetic before it writes a
-; byte - all of it per RUN, and a detailed picture is 85 runs a row.
+; Built at run time rather than assembled, so gfx_inktab stays the ONE place
+; the reduction is written down. Once per boot, ~5,000 clocks, behind a flag
+; in .text because -f bin zeroes no .bss.
 ;
-; Everything that call did FOR the run is done once a ROW instead, or refused:
-; the row base is [gfx_blit_ro], SPEC.md 39.4's reduction is the ink table read
-; below, the dither's phase is [gfx_blit_dth] (sw_parity's answer), and the
-; clip region and the display split are what gfx_blit4 declines the path over.
-; What is left is two masked bytes and a rep stosb.
-;
-; IT IS ONE ROUTINE AND NOT TWO, which is worth ~11% of it: split into a
-; gfx_blit_span that worked out the pattern and an sw_span that wrote it, the
-; pair spent 24 stack slots and a near call/ret on prologue alone - about 400
-; of the ~1,900 clocks a run costs here. On an 8088 the instruction COUNT is
-; the price; there is no work in a push.
-;
-; IT SWAPS ES AND PUTS IT BACK. gfx_blit4's ES is the CALLER's source segment,
-; because `repe scasb` is what makes the run scan fast (SPEC.md 5.4), and stosb
-; wants the framebuffer. Two pushes a run against ~756us saved is 1.7%, and the
-; alternative - scanning a whole row's runs into a buffer so ES could be
-; switched once a row - is up to 640 runs' worth of storage on a kernel with a
-; kilobyte spare.
-;
-; It clips to the screen itself, because nothing above it does any more.
+; tab0 is for a pair whose FIRST pixel is at even (x+y), tab1 for odd; the two
+; pixels of a pair are always opposite, so one bit selects the table and the
+; loop then costs nothing per pixel for the dither at all.
 ; -----------------------------------------------------------------------------
-sw_blit_span:
+sw_pairbuild:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    push es
-    mov al, ah                  ; the documented contract: gfx_blit4 leaves
-    mov [gfx_color], al         ; [gfx_color] holding the last colour drawn
+    xor bx, bx
+.byte:
+    mov ax, bx                  ; AL = the byte; SI = its high nibble...
+    mov cl, 4
+    shr al, cl
     xor ah, ah
-    mov bx, ax
-    and bx, 15
-    mov al, [bx + gfx_inktab]   ; SPEC.md 39.4's reduction, which the gfx_fill
-    cmp al, 1                   ; used to do for us in sw_ink
-    jne .pat
-    mov al, [gfx_blit_dth]      ; ...and the middle greys are this row's phase
-.pat:
-    mov bl, al                  ; BL = the pattern byte: 00 / FF / AA / 55
-    mov ax, di                  ; AX = x1
-    mov cx, [gfx_blit_x]
-    add cx, dx
-    dec cx                      ; CX = x2, the last pixel drawn
-    or ax, ax                   ; x1 < 0 -> 0
-    jns .x1ok
-    xor ax, ax
-.x1ok:
-    cmp cx, [vid_cw]            ; x2 past the last column -> the last column
-    jl .x2ok
-    mov cx, [vid_cwm1]
-.x2ok:
-    cmp cx, ax
-    jl .out                     ; entirely off the screen (or an empty run)
-    mov si, ax                  ; DH = left edge mask, DL = right, BY TABLE:
-    and si, 7                   ; a variable shift is 8 clocks plus 4 a bit on
-    mov dh, [si + vga_lmtab]    ; an 8088, and this is per RUN (SPEC.md 5.7)
-    mov si, cx
-    and si, 7
-    mov dl, [si + vga_rmtab]
-    shr cx, 1                   ; CX = right byte column
-    shr cx, 1
-    shr cx, 1
-    shr ax, 1                   ; AX = left byte column
-    shr ax, 1
-    shr ax, 1
+    mov si, ax
+    mov ax, bx                  ; ...and DI its low one
+    and al, 15
+    xor ah, ah
+    mov di, ax
+    xor dh, dh                  ; --- tab0: hi at parity 0, lo at parity 1
+    call sw_pbit
+    shl al, 1
+    mov dl, al
+    push si
+    mov si, di
+    mov dh, 1
+    call sw_pbit
+    pop si
+    or dl, al
+    mov [bx + gfx_pairtab0], dl
+    mov dh, 1                   ; --- tab1: the other way round
+    call sw_pbit
+    shl al, 1
+    mov dl, al
+    push si
+    mov si, di
+    xor dh, dh
+    call sw_pbit
+    pop si
+    or dl, al
+    mov [bx + gfx_pairtab1], dl
+    inc bx
+    cmp bx, 256
+    jb .byte
+    mov byte [gfx_pairbuilt], 1
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sw_blit_row - ONE ROW of packed 4bpp into the 1bpp framebuffer (SPEC.md 5.4.1)
+; in:       ES:SI = the row's first source byte (pixel 0 is its HIGH nibble),
+;           [gfx_blit_x] = pixel 0's destination x, [gfx_blit_w] = pixels,
+;           [gfx_blit_ro] = the row's base byte, [gfx_blit_tb] = this row's
+;           pair table. gfx_blit4 has already proved the row is ON SCREEN in x.
+; out:      nothing; every register preserved, ES and DS included
+;
+; The accumulator is 16-bit and carries `AH` bits, seeded with the `x & 7` bits
+; of the first destination byte that belong to the SCREEN - so the first store
+; needs no mask, and only the last one does. That seeding is why this handles
+; an odd x with no special case: the completed byte is `DX >> (AH-8)` and
+; `AH-8` is 0 or 1 by construction, fixed for the whole row.
+;
+; It does NOT clip in x, and that is the one thing gfx_blit4 owes it: a left
+; clip would advance the source by a pixel count that may be ODD, which shifts
+; the nibble phase of every pair after it. Refusing an off-screen block costs
+; nothing real - Paint, ArtfulType and Solitaire all clip their own blits - and
+; buys the loop its simplicity.
+; -----------------------------------------------------------------------------
+sw_blit_row:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push ds
+    push es
+    mov ax, [gfx_blit_x]
     mov di, [gfx_blit_ro]
-    add di, ax                  ; DI = the run's first byte
-    sub cx, ax                  ; CX = byte span; 0 = it is inside one byte
-    mov es, [vid_rseg]          ; ...and only NOW is ES not the source
-    jnz .multi
-    and dh, dl                  ; one byte: the two edges are one mask
-    mov bh, dh
-    not bh
-    mov al, bl
-    and al, dh
-    and [es:di], bh             ; sw_col's write, without its row loop
-    or  [es:di], al
-    jmp short .out
-.multi:
-    mov bh, dh                  ; --- the left edge byte
-    not bh
-    mov al, bl
-    and al, dh
-    and [es:di], bh
-    or  [es:di], al
+    mov bx, ax
+    and bx, 7                   ; BL = the bits of byte 0 we do NOT own
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add di, ax                  ; DI = the first destination byte
+    mov cx, [gfx_blit_w]
+    mov bp, cx
+    and bp, 1                   ; BP = 1 if there is an odd trailing pixel
+    shr cx, 1
+    push cx                     ; ...whole pairs, banked over the shift below
+    mov dx, [gfx_blit_tb]
+    mov ax, [vid_rseg]
+    push dx                     ; ...and the table, over the segment swap
+    mov dx, es                  ; DX = the CALLER's source segment
+    mov es, ax                  ; ES = the framebuffer
+    mov ds, dx                  ; DS = the source: NO kernel reads past here
+    xor dx, dx
+    mov ah, bl                  ; AH = bits already accounted for
+    or bl, bl
+    jz .primed
+    mov al, [es:di]             ; the screen's top `bl` bits, right-aligned, so
+    mov cl, 8                   ; that the first store owes no mask
+    sub cl, bl
+    shr al, cl
+    mov dl, al
+.primed:
+    pop bx                      ; BX = the pair table (cs xlat's base)
+    pop cx                      ; CX = whole pairs
+    jcxz .odd
+.pair:
+    lodsb                       ; DS:SI - the source byte, two pixels
+    cs xlat                     ; ...and its two destination bits
+    shl dx, 1
+    shl dx, 1
+    or dl, al
+    add ah, 2
+    cmp ah, 8
+    jb .next
+    sub ah, 8
+    jnz .carry
+    mov [es:di], dl             ; the common case: eight bits, none over
     inc di
-    dec cx                      ; CX = whole interior bytes
-    jz .right
-    mov al, bl
-    rep stosb                   ; ...which is the whole point of this routine,
-                                ; and it leaves DI on the right edge byte
-.right:
-    mov bh, dl                  ; --- and the right edge byte
-    not bh
-    mov al, bl
-    and al, dl
-    and [es:di], bh
-    or  [es:di], al
-.out:
+    xor dx, dx
+    jmp short .next
+.carry:
+    mov al, dl                  ; AH = 1: one bit belongs to the NEXT byte, so
+    and al, 1                   ; bank it, shift the completed byte down and
+    shr dx, 1                   ; put it back
+    mov [es:di], dl
+    inc di
+    xor dx, dx
+    mov dl, al
+.next:
+    loop .pair
+.odd:
+    or bp, bp                   ; a trailing pixel with no partner
+    jz .tail
+    lodsb
+    cs xlat
+    shr al, 1                   ; the HIGH nibble's bit, out of the pair
+    shl dx, 1
+    or dl, al
+    inc ah
+    cmp ah, 8
+    jb .tail
+    xor ah, ah
+    mov [es:di], dl
+    inc di
+    xor dx, dx
+.tail:
+    or ah, ah                   ; AH bits left over: the TOP AH bits of the
+    jz .done                    ; last byte, and the screen keeps the rest
+    mov cl, 8
+    sub cl, ah
+    mov al, dl
+    shl al, cl
+    mov ah, 0xFF
+    shl ah, cl                  ; AH = the mask of the bits we own
+    mov ch, ah
+    not ch
+    and ch, [es:di]
+    or ch, al
+    mov [es:di], ch
+.done:
     pop es
+    pop ds
+    pop bp
     pop di
     pop si
     pop dx

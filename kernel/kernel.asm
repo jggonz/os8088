@@ -170,11 +170,35 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 100352          ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 100864          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE EIGHTEENTH MOVE, 100,352 -> 100,864, ONE
+                                ; STEP, AND IT IS AN ASK RATHER THAN A GRANT -
+                                ; the owner asked for SPEC.md 5.4.1's decoder
+                                ; and it lands exactly ON the guard, so the
+                                ; alternative to this line is a tree where the
+                                ; next byte anywhere fails to build. What it
+                                ; buys is 512 bytes of PAIR TABLE: a source
+                                ; byte is two pixels and maps to a two-bit
+                                ; destination pattern, so 2 x 256 entries make
+                                ; the blit's inner loop a read, an xlat and a
+                                ; shift - 4.7x on a picture, 16.2x on detailed
+                                ; art, and CONSTANT TIME in the content
+                                ; (PERFORMANCE.md Set 42).
+                                ;
+                                ; TWO WAYS TO HAND IT BACK, both costed:
+                                ; docs/LAST-DROP.md 3's packed single table
+                                ; (256 bytes, two loop variants, ~30 bytes of
+                                ; code back) gets most of it, and dropping the
+                                ; VGA span writer (169 bytes, SPEC.md 5.4.1)
+                                ; gets the rest at the price of that 1.95x. If
+                                ; the owner would rather not spend the step,
+                                ; those are the two levers and neither is a
+                                ; rewrite.
                                 ;
                                 ; THE SEVENTEENTH MOVE, 98,304 -> 100,352,
                                 ; ASKED FOR AND GRANTED, and the first since

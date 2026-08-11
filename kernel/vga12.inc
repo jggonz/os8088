@@ -469,6 +469,12 @@ vga_gc_reset:
     ret
 
 ; -----------------------------------------------------------------------------
+; SPEC.md 5.4.1's one-shot: the pair tables are derived from gfx_inktab, so
+; they are built at run time rather than assembled - and the flag lives HERE,
+; in .text with a real initialiser, because -f bin zeroes no .bss and this is
+; read by the first blit the machine ever draws.
+gfx_pairbuilt db 0
+
 ; The two edge masks, by x & 7. They were computed with `shr dl,cl` / `shl
 ; dl,cl`, which on an 8088 is 8 clocks plus 4 PER BIT and costs a push/pop of
 ; CX to free the count register - about a fifth of vga_rect_setup for two
@@ -1662,12 +1668,23 @@ gfx_blit4:
     cmp byte [gfx_dnest], 0     ; gfx_fill's own GFXDISP (SPEC.md 39.14.7), and
     jne .slow                   ; a nested hook has already translated
 %endif
-    mov byte [gfx_blit_fst], 1  ; 1 = the 1bpp writer...
     cmp byte [vid_mono], 0
+    je .vga
+    or ax, ax                   ; 1 = THE ROW DECODER (SPEC.md 5.4.1), which
+    js .slow                    ; does not clip in x: a left clip advances the
+    add ax, cx                  ; source by a pixel count that may be ODD, and
+    cmp ax, [vid_cw]            ; that shifts the nibble phase of every pair
+    ja .slow                    ; after it. Every caller clips its own blit
+    mov byte [gfx_blit_fst], 1
+    cmp byte [gfx_pairbuilt], 0
     jne .slow
-    mov byte [gfx_blit_fst], 2  ; ...2 = the planar one, whose Enable Set/Reset
-    call vga_sr_on              ; is armed ONCE here and cleared at .out: only
-                                ; the colour and the bit mask change per run
+    call sw_pairbuild           ; once a boot, from gfx_inktab
+    jmp short .slow
+.vga:
+    mov byte [gfx_blit_fst], 2  ; 2 = the planar SPAN writer, whose Enable
+    call vga_sr_on              ; Set/Reset is armed ONCE here and cleared at
+                                ; .out: only the colour and the bit mask
+                                ; change per run
 .slow:
 .row:
     mov si, [gfx_blit_sv]       ; ES:SI = this row's first byte
@@ -1684,13 +1701,19 @@ gfx_blit4:
                                 ; is exactly the kind of luck a row cursor
                                 ; should not be resting on
     mov [gfx_blit_ro], ax
-    mov al, 0xAA                ; ...and this row's dither phase (SPEC.md 39.4),
-    test bl, 1                  ; which sw_parity works out the same way
+    mov ax, bx                  ; ...and this row's pair table: the two pixels
+    add ax, [gfx_blit_x]        ; of a pair are always opposite parities, so
+    mov dx, gfx_pairtab0        ; (x + y) & 1 picks the table and the dither
+    test al, 1                  ; then costs the loop nothing (SPEC.md 39.4)
     jz .par
-    mov al, 0x55
+    mov dx, gfx_pairtab1
 .par:
-    mov [gfx_blit_dth], al
+    mov [gfx_blit_tb], dx
     pop ax
+    cmp byte [gfx_blit_fst], 1
+    jne .rowd
+    call sw_blit_row            ; THE WHOLE ROW, no run scan at all
+    jmp .nextrow                ; (near: the scan below is longer than 127)
 .rowd:
     xor dx, dx                  ; DX = the pixel the next run starts at
 .run:
@@ -1764,14 +1787,10 @@ gfx_blit4:
     add di, dx                  ; DI = the run's first x, on screen
     mov ah, [gfx_blit_c]
     mov dx, [gfx_blit_e]        ; DX = one past its last pixel, row-relative
-    cmp byte [gfx_blit_fst], 1  ; (which is where the next run starts)
-    je .emit1                   ; 1 = the 1bpp writer, 2 = the planar one,
-    ja .emitv                   ; 0 = neither, so gfx_fill as it always was
-    call gfx_blit_run
-    jmp short .emitd
-.emit1:
-    call sw_blit_span           ; SPEC.md 5.4.1
-    jmp short .emitd
+    cmp byte [gfx_blit_fst], 2  ; (which is where the next run starts) 2 = the
+    je .emitv                   ; planar span writer; 0 = gfx_fill as it always
+    call gfx_blit_run           ; was. 1 never gets here - the decoder above
+    jmp short .emitd            ; draws the whole row and skips the scan
 .emitv:
     call vga_blit_span
 .emitd:
@@ -3322,9 +3341,11 @@ gfx_blit_e:  resw 1             ; ...and the run scanner's state: one past the
 gfx_blit_s0: resw 1             ; run's last pixel, where `repe scasb` began,
 gfx_blit_c:  resb 1             ; the run's colour, and the byte a matching
 gfx_blit_pb: resb 1             ; PAIR of that colour holds (c | c<<4)
-gfx_blit_ro: resw 1             ; SPEC.md 5.4.1's direct path: this row's base
-gfx_blit_dth:resb 1             ; byte, its 50% dither byte (AA or 55 by row
-gfx_blit_fst:resb 1             ; parity), and whether the path is armed at all
+gfx_blit_ro: resw 1             ; SPEC.md 5.4.1's direct paths: this row's base
+gfx_blit_tb: resw 1             ; byte, its pair table, and which path is armed
+gfx_blit_fst:resb 1             ; (0 = gfx_fill, 1 = the decoder, 2 = VGA spans)
+gfx_pairtab0: resb 256          ; ...and the pair tables themselves, built once
+gfx_pairtab1: resb 256          ; from gfx_inktab by sw_pairbuild
 
 vga_plane       resb 1          ; save/restore plane counter / mask bit
 vga_lmsk        resb 1          ; rect: left edge bit mask

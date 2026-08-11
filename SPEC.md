@@ -749,6 +749,61 @@ kilobyte spare.
 
 Measured, PERFORMANCE.md Set 41.
 
+#### 5.4.1.1 …and then the runs go altogether: the pair decoder
+
+§5.4.1 took the per-CALL floor off a run and left ~371 µs of per-RUN work. This
+takes the runs out: `sw_blit_row` walks the DESTINATION byte by byte, and a
+source byte — two pixels — maps through §39.4's reduction to a **two-bit**
+destination pattern that depends only on its value and one parity bit. So a
+256-byte table answers it outright and the loop is `lodsb`, `cs xlat`, two
+shifts and an `or` per two pixels. **It costs the same whatever is in the row.**
+
+Measured (PERFORMANCE.md Set 42) on a Paint raise, cycle-accurate 5150/CGA:
+**516.6 ms at 85 runs a row, 517.6 at 308, 517.6 on flat art** — a 0.2% spread
+across a 3.6x range of run density, which is the design property rather than a
+happy accident. Against §5.4.1's span writer that is **4.7x** on a picture and
+**16.2x** on detailed art, and against the run path it replaced, 10.7x and 36.3x.
+
+**There is no hybrid**, and docs/LAST-DROP.md 3 is the costing. The run path
+stays cheaper below ~10 runs a row, and nothing anyone waits on draws flat art
+through this: the consumers are Paint's canvas, Solitaire's lattice card backs
+and **ArtfulType's line of text per keystroke**. The price is a blank canvas
+going 132 → 517 ms, and the property bought is that a blit has ONE cost.
+
+Five things are load-bearing:
+
+- **Two tables, picked by `(x + y) & 1`.** The two pixels of a pair are always
+  opposite parities, so one bit selects the table and the 50% dither then costs
+  the inner loop nothing at all. They are built at run time by `sw_pairbuild`
+  from `gfx_inktab`, so the reduction stays written down in one place.
+- **The dither bit is `parity XOR 1`**, not `parity`: `sw_parity`'s `0xAA` has
+  its bit SET at x = 0 of an even row and bit 7 is the leftmost pixel. Getting
+  it the other way round inverts every dithered pixel and nothing else, which
+  is 20,532 differing pixels and looks like a much deeper bug than it is.
+- **Three segments at once** — the source is the caller's (`ES` on entry), the
+  framebuffer is `[vid_rseg]`, the table is the kernel's — so `DS` becomes the
+  source for `lodsb`, `ES` the framebuffer, and the table is read `cs xlat`,
+  `.bss` being in `KERNEL_SEG`. Nothing may read a `[gfx_blit_*]` word inside
+  the loop.
+- **It does not clip in x and `gfx_blit4` owes it that**: a left clip advances
+  the source by a pixel count that may be ODD, and that shifts the nibble phase
+  of every pair after it. Refusing an off-screen block costs nothing real —
+  Paint, ArtfulType and Solitaire all clip their own blits.
+- **The accumulator is 16-bit and seeded with the screen's own `x & 7` bits**,
+  so the first store needs no mask and only the last one does. That seeding is
+  what makes an odd `x` need no special case: the completed byte is
+  `DX >> (n-8)` and `n-8` is 0 or 1 by construction, fixed for the whole row.
+
+**VGA keeps the span writer.** Four planes want the run's bits each, so the
+decoder there is four Map Mask passes — a different routine, and the machine
+this project is calibrated against has no VGA in it.
+
+**What is left is the loop's SIZE, not its instruction count** (§5.7's floor at
+4.34 clocks per instruction byte). ~20 instruction bytes a pair is ~9.6 µs a
+pixel measured, and the per-pair count test is 8 of those 20: an unrolled
+four-pairs-a-byte loop for even `x` would be about twice as fast and is the next
+step.
+
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
 **in** AX/BX/CX/DX = x1/y1/x2/y2 inclusive, absolute screen coordinates;

@@ -5063,3 +5063,56 @@ carries `KERNEL.SYS`, so this commit's 174 → 175 sectors is 139 → 140 cluste
 used and one kilobyte less free. It appears in exactly the five steps where that
 window's status line is on screen and in none of the others, which is what
 identifies it; `make`'s own `N/354 clusters` line confirms it in one command.
+
+### Set 42 — the blit stops working per run (SPEC.md §5.4.1.1)
+
+docs/HANDOFF-REDRAW.md item B2, built without its hybrid. Same session, same
+damage rect, cycle-accurate 5150/CGA, three run densities:
+
+| Paint's canvas | runs/row | pre-§5.4.1 | span writer | **decoder** |
+|---|---|---|---|---|
+| `FLAT.BMP` | 1.0 | — | 132.1 ms | **517.6 ms** |
+| `TEXTURE.BMP` | 84.9 | 5,526.2 ms | 2,430.7 ms | **516.6 ms** |
+| `FINE.BMP` | 308.0 | 18,777.3 ms | 8,364.9 ms | **517.6 ms** |
+
+**516.6 / 517.6 / 517.6 — a 0.2% spread across a 3.6x range of run density.**
+That is the result: a blit now has ONE cost, and "never price a blit on flat
+art" (Set 32) stops being a rule anyone has to remember. Against the span
+writer it is **4.7x** on a picture and **16.2x** on detailed art; against the
+run path this round started from, 10.7x and 36.3x. The price is the flat row:
+132.1 → 517.6, **3.9x worse**, on the one operation nobody waits for.
+
+**Three things this measurement corrects, and the first is a rule.**
+
+**The estimate was 2.9x optimistic because it counted clocks and not BYTES.**
+Item B2 predicted 4.71 µs a pixel from a textbook instruction timing; measured
+it is **9.56 µs**. §5.7's own floor says why — **4.34 clocks per instruction
+byte on an 8088** — and the loop is ~20 instruction bytes a pair, which is 10
+a pixel, which is 43 clocks, which is 9.0 µs. The 8-bit bus starves the
+prefetch queue, so on this machine **the size of a loop IS its speed** and a
+clock-count estimate of a tight loop will always read low. *Count bytes.*
+
+**So the crossover is ~10 runs a row, not 1.84** — still far below anything
+with content in it (textured art is 55 a row over the damage rect, fine art
+201), and still above flat.
+
+**And the next step is visible in the same arithmetic**: the per-pair count
+test is 8 of the 20 bytes. An unrolled four-pairs-a-byte loop, legal whenever
+`x` is even, would be about twice as fast again — ~260 ms — at the price of a
+second loop body for odd `x`.
+
+**One bug, caught by the gate and worth naming**: the dither bit is
+`parity XOR 1`, not `parity`. `sw_parity`'s `0xAA` has its bit SET at x = 0 of
+an even row and bit 7 is the leftmost pixel. Inverted, it changes every
+dithered pixel and nothing else — 20,532 differing pixels, which reads like a
+far deeper defect than a single `xor al, 1`.
+
+Verified **0 differing pixels** with `tools/ptcheck.py` on CGA, Hercules and
+VGA mode 12h, and on CGA with `PTROW=1` (`FINE.BMP`'s 1–2 pixel runs). The
+`subcheck` 25-pixel difference is Set 41's known one — `KERNEL.SYS` grew a
+cluster and the drive-A window reports one kilobyte less free.
+
+**Cost: `.text` +169, `.bss` +513, and it lands exactly ON `KERN_BUDGET`.**
+`KERN_BUDGET`'s eighteenth move is one step to keep the tree buildable, and it
+is an **ask** rather than a grant — the constant's own comment carries the two
+ways to hand it back, both costed.

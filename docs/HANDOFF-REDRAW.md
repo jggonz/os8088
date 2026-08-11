@@ -20,6 +20,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §11.96.10 | **a RAISE puts back only what was covered** (was item A) | Paint raise 9,090 → 5,948 ms, **1.53x** |
 | §11.97 | a window below draws no chrome where something above will cover it | drag flash 14,253 → 10,665 px, **1.34x** |
 | §5.4.1 | a blit run goes straight into the framebuffer, 1bpp and VGA | canvas blit 5,526 → 2,431 ms (CGA), 4,226 → 2,163 (VGA) |
+| §5.4.1.1 | …and then the runs go: the 1bpp pair decoder, no hybrid | 2,431 → **517 ms**, and CONSTANT in the content |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -34,7 +35,8 @@ otherwise mislead the next reader:
   caller's own pointer and `BP` stride, and `pt_blit` has taken an arbitrary
   canvas rect all along.
 - **A blank Paint canvas is unrepresentative by 41x** (211 ms against 8,670).
-  Never price a blit on flat art.
+  Never price a blit on flat art — **which §5.4.1.1 retired**: a blit costs the
+  same whatever is in it now, and flat art is the one case that got *slower*.
 - **Paint's associations are not a bug.** It declares no header block, but
   `assoc.inc` ships a static table (`BMP`/`GIF` → PAINT, `TXT` → NOTEPAD, `MOD` →
   TRACKER, `MD` → ARTFUL), so a document double-click reaches it.
@@ -225,106 +227,34 @@ Three things to carry forward:
 put every run inside ONE framebuffer byte touching neither edge, which is the
 narrowest case the masks have and one a picture barely reaches.
 
-### B2. The byte decoder — costed, not built
+### B2. The byte decoder — **BUILT, SPEC.md §5.4.1.1**
 
-§5.4.1 removed the per-CALL floor from a blit and left a per-RUN cost. This is
-the design that removes *that*, and it is written down with its arithmetic
-because the number it was originally justified by — "45x" — is a **per-byte**
-figure and this is not going to reach it.
+`sw_blit_row` walks the destination byte by byte; a source byte is two pixels
+and a 256-byte table turns it into two destination bits. **No hybrid** —
+docs/LAST-DROP.md 3 is the costing, kept as the record of a deliberate
+omission. Measured (PERFORMANCE.md Set 42):
 
-**The measured constants it is designed against**, two-point fits from Set 41
-(the same session at two run densities, so per-row and per-pixel terms cancel):
-
-| | per run, before §5.4.1 | after | removed |
+| Paint's canvas | pre-§5.4.1 | span writer | **decoder** |
 |---|---|---|---|
-| 1bpp (CGA) | 828 µs | **371 µs** | 457 |
-| VGA | 526 µs | **258 µs** | 268 |
+| flat, 1 run a row | — | 132.1 ms | **517.6 ms** |
+| textured, 85 a row | 5,526.2 | 2,430.7 | **516.6** |
+| fine, 308 a row | 18,777.3 | 8,364.9 | **517.6** |
 
-**The design.** Stop emitting per run and walk the DESTINATION byte by byte. A
-source byte is two pixels and maps, through §39.4's reduction, to a **two-bit**
-destination pattern that depends only on the byte's value and one parity bit —
-so a 256-byte table answers it outright and the inner loop is four table reads
-and a store per destination byte:
+**0.2% spread across a 3.6x range of run density** — a blit has one cost now.
 
-```
-    mov al, [es:si]     ; the source byte (2 px); ES is the source, so not lodsb
-    inc si
-    cs xlat             ; AL = its 2-bit pattern
-    shl dl, 1
-    shl dl, 1
-    or  dl, al          ; ...four times, then `mov [di], dl`
-```
+**The lesson is a rule and it is §5.7's own: count BYTES, not clocks.** This
+section predicted 4.71 µs a pixel from textbook instruction timings and it is
+9.56 measured, because an 8088 floors at **4.34 clocks per instruction byte** —
+the 8-bit bus starves the prefetch queue, so the SIZE of a tight loop is its
+speed. Every clock-count estimate of a loop in this document should be read as
+a lower bound.
 
-Counted on an 8088 that is **~180 clocks per 8 pixels = 22.5 clocks a pixel =
-4.71 µs** — and note that is an instruction count, not a measurement.
+**The next step is in the same arithmetic.** The per-pair count test is 8 of
+the loop's ~20 bytes a pair; an unrolled four-pairs-a-byte loop, legal whenever
+`x` is even, is about twice as fast again (~260 ms) for a second loop body.
 
-**The crossover is 1.84 runs a row, not one run per 85 pixels**, and the first
-version of this section had it wrong in a way worth keeping: it compared the
-decoder's per-PIXEL cost against the MARGINAL per-run cost, forgetting that the
-run path also reads every source byte (`repe scasb`) whether it coalesces
-anything or not. Measured on flat art — one run a row, `mkbmp ... flat` — the run
-path costs **132.1 ms** for the same 110 rows, which fixes the missing term:
-
-```
-run path, µs a row = 830 + 371 x runs          (830 = the scan and the row setup)
-decoder,   µs a row = 1,513                    (whatever is in the row)
-```
-
-That model reproduces all three measured points within 3% — flat 132.1 against
-132.1, textured 2,352 against 2,430.7, fine 8,292 against 8,364.9 — so the
-crossover is where `830 + 371R = 1,513`, i.e. **R = 1.84**. Anything that is not
-a solid bar is above it.
-
-| | now | with the decoder | |
-|---|---|---|---|
-| CGA, flat (1 run/row) | 132.1 ms | 166.5 | **1.26x WORSE** |
-| CGA, 85 runs/row | 2,430.7 ms | 166.5 | **14.6x** |
-| CGA, 308 runs/row | 8,364.9 ms | 166.5 | **50.2x** |
-| VGA, four Map Mask passes | | ~4x the above | 2.9x / 9.6x |
-
-**So the hybrid is not worth building**, which is the second correction. It buys
-26% on a perfectly flat row and costs a switch plus keeping BOTH paths alive
-forever. Decoder-only is the design: a blit becomes **constant time in its
-content**, which is a better property for a UI than a fast case and a slow one.
-
-**And dropping the hybrid is what makes it affordable.** The span writers
-`sw_blit_span` (167 bytes), `vga_blit_span` (157) and `vga_sr_on` (12) are
-**336 bytes** that the decoder replaces outright; the switch would be ~30 more.
-What must stay either way is `gfx_blit_run` (34 bytes) and the run scan, because
-they are the fallback for the three refused cases.
-
-**What it costs.****What it costs.**
-
-- **~200 bytes of `.text`** for the 1bpp decoder (the aligned inner loop, the
-  leading and trailing partial bytes, and the odd-`x0` case) plus ~40 for the
-  table build, **against 336 bytes of span writers it deletes**. ~250 more for
-  VGA's four-pass twin, which deletes nothing extra.
-- **512 bytes of table** for 1bpp (two parities x 256), 512–1,024 more for VGA.
-- **And it has to live in `.text`, not on the heap**, which is the part that
-  costs real budget. `xlat` is DS-relative and the loop already needs three
-  segments at once — source (ES), framebuffer, table — so the table goes in CS
-  and is read with `cs xlat`, leaving DS for the framebuffer. A purgeable heap
-  claim (§50.6) would be free against the budget and cannot be addressed here.
-- **So, decoder-only and 1bpp-only: +240 of code +512 of table −336 deleted =
-  about +416 bytes, against 383 bytes of slack in `kern_big`'s image rung.**
-  That is one 512-byte step, and painfully close to none at all — a hundred
-  bytes of a tighter inner loop and it fits in what is already there. **With the
-  hybrid it is unambiguously two steps** (nothing is deleted and the switch is
-  added), and VGA's twin plus its own table is two or three more. The budget has
-  **512 bytes spare on `kern_big`**, so 1bpp decoder-only is the only variant
-  that does not certainly need a raise.
-- **Verification is the existing gates and no new ones**: `ptcheck` on three
-  adapters plus `PTROW=1`, which is exactly the shape §5.4.1 was proved with.
-  The new failure modes are bit phase (`x0` mod 2 and mod 8), the dither parity
-  the table bakes in, and the partial bytes at each end.
-
-**The honest summary is that 1bpp decoder-only is worth it and VGA is
-marginal.** 14.6x on the machine this project is calibrated against for one
-budget step or none, at the price of 26% on a blank canvas; 2.9x on VGA for two
-or three more steps, on an adapter the calibration machine does not have.
-
-**And Paint is not the only consumer** — see "What else the blit is under",
-below.
+**And VGA keeps the span writer** — four planes want the run's bits each, so
+its decoder is four Map Mask passes, a different routine.
 
 ### What else the blit is under
 
