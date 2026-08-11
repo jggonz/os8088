@@ -7928,6 +7928,47 @@ when it unloads, which `drv_release` does **before** freeing the driver's
 claims: a mounted volume whose transport has been freed is a read into
 whatever claims that memory next.
 
+#### 18.7.1 What the letters mean
+
+The letter is the ROW INDEX and nothing else — six sites do `add al, 'A'`
+(`desk_zone_label`, `dsk_bootltr`, `fdlg`, and three in `files.inc`), so the
+whole of the lettering policy is *which row a volume is given*. There is no
+letter field, nothing persisted moves, and no display code knows this section
+exists.
+
+Three conventions:
+
+- **A: and B: are the first two FLOPPIES the machine has**, wherever they are
+  plugged in. `dsk_flop_add` scans from row 0, so an external drive takes B:
+  on a machine whose internal second drive was proven absent and freed
+  (§18.97). It started at row 2, which gave that machine an external at C:
+  with B: standing empty beside it. Row 0 is never free — only
+  `dsk_fdd_retire` frees a row and only ever row 1 — so this cannot hand A:
+  to an external by accident.
+- **C: belongs to the hard disk**, whether or not one ever turns up.
+  `dsk_flop_add` skips row 2; `dsk_vol_add` already scans from it, so the
+  first partition lands there the moment floppies stop taking it. **The cost
+  is a gap**: a floppy-only machine with three drives reads A, B, D, and that
+  departs from DOS, which gives external floppies C: and D: when there is no
+  hard disk. It is paid on purpose — a letter that always means the same kind
+  of device is worth more than contiguity, and three-floppy machines are an
+  edge case already.
+- **Floppies are lettered before hard disks**, and this one costs nothing at
+  all: `kmain` runs `dsk_boot_from`, then `desk_init` (every floppy, the
+  external pair included), then `drv_boot` (where a driver mounts its
+  partitions). Floppies have claimed the low rows before a driver volume can
+  ask. It is worth writing down precisely because it is free — a later change
+  that moved `desk_init` after `drv_boot` would reverse it silently.
+
+**What was NOT done, and why**: reserving C: only when a hard disk actually
+appears. `desk_init` runs before `drv_boot`, so it cannot know one is coming
+without either reordering the boot — which moves when the desktop zones are
+laid out, and `drv_boot` owns the splash — or swapping rows at
+`osapi_vol_add` time. A swap is safe at boot (no window exists, no mount has
+happened) but it is a second mechanism touching `[disk_drive]` and the
+per-volume arrays `dsk_fatww` and `dsk_bpbv`, against six bytes and a skipped
+row for the version above.
+
 ### 18.8 The FAT is a window, not a snapshot
 
 A 32MB FAT16 volume at 512-byte clusters has a **254-sector FAT**. `FAT_SEG`
