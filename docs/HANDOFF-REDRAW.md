@@ -19,6 +19,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §11.90.2 | `OSAPI_WM_DAMAGE` — the app is told which rect it owes | canvas blit 8,670 → 6,759 ms, **1.28x** |
 | §11.96.10 | **a RAISE puts back only what was covered** (was item A) | Paint raise 9,090 → 5,948 ms, **1.53x** |
 | §11.97 | a window below draws no chrome where something above will cover it | drag flash 14,253 → 10,665 px, **1.34x** |
+| §5.4.1 | a blit run goes straight into the framebuffer (1bpp) | canvas blit 5,526 → 2,431 ms, **2.27x** |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -127,6 +128,24 @@ strip owes it), and `wm_draw_win`'s own `.growbox` runs after `W_PAINT`. The
 ~400 ms in front of the first is the palette, the colour strip and the divider,
 which is exactly what Set 32's own table calls it.
 
+**What IS there, and is worth its own commit later, is that the grow box is
+drawn TWICE per Paint repaint.** The two callers run back to back from the
+user's point of view — `pt_draw_strip` ends in `pt_growbox` and then
+`wm_draw_win`'s `.growbox` draws the same 13x13 box again a few hundred
+milliseconds later — and `wm_grow_paint` is **14 drawing calls** (fill, frame,
+frame, fill, frame), which §5.7 prices at ~756 µs of *arriving* each: about
+**10.6 ms, paid twice**, plus PERFORMANCE.md Part 1's double draw on the glass.
+
+Paint's call is not redundant in general and must not simply be deleted: the
+strip's white bed erases the box, so every path that repaints the strip owes it
+one, and the tool, colour, width and toggle clicks repaint the strip **without
+a `W_PAINT` behind them**. What is redundant is the call made *inside* a
+`W_PAINT`, where the kernel is about to draw the box anyway. The shape of the
+fix is therefore a "we are inside our own paint proc" test in `pt_growbox`, or
+`wm_draw_win` skipping `.growbox` for a window that has drawn its own — and the
+first is much the smaller change. Deferred deliberately; it is ~21 ms of every
+Paint repaint and none of the multi-second ones.
+
 **So there is no 402 ms of free money**, and the lesson is about the instrument:
 `os88span.py`'s Paint scenarios arm three symbols and `wm_grow_paint` was the
 last of them, so a second hit of it read as a second pass. **When a trace
@@ -174,18 +193,37 @@ is what proved it pre-dated the change), and **an optimisation that stops
 something being redrawn inherits every defect that redraw was hiding** —
 §48.9.1's rule, arriving from the other direction.
 
-### B. `gfx_blit4` still pays a drawing call per RUN
+### B. `gfx_blit4` paid a drawing call per RUN — **1bpp DONE, SPEC.md §5.4.1**
 
-The 8.7 s itself, and **the single largest drawing cost in the system**. It
-removed the far call per run — which is what it was built for and it worked — and
-still emits one `gfx_hline` per run, paying §5.7's ~756 µs per-call floor
-thousands of times. Priced per byte against `gfx_restore`: **244 µs against 5.5**.
+The 8.7 s itself, and it was **the single largest drawing cost in the system**.
+`sw_blit_span` writes a run into the 1bpp framebuffer itself, so §5.7's per-call
+floor is paid once a CALL rather than once a run: the row base and the dither
+phase are worked out once a row, §39.4's reduction is a table read, and what is
+left is two masked bytes and a `rep stosb`. Measured (PERFORMANCE.md Set 41) on a
+cycle-accurate 5150/CGA: the canvas blit **5,526 → 2,431 ms on 85-runs-a-row art
+and 18,777 → 8,365 on 308**, the same 2.25x both times, because what goes is a
+fixed cost per run.
 
-Fully scoped in **docs/PAINT-NOTES.md** with its three hazards (1bpp and VGA are
-different problems; the banked layout wants `gfx_nextrow` inlined per row; it must
-stay byte-identical) and a gate that already exists (`tools/ptcheck.py`). **This is
-the best piece to hand to a separate session** — self-contained in the renderers,
-needing none of the `wm.inc` context the rest of this round is about.
+Three things to carry forward:
+
+- **2.25x and not 45x, and the gap is not a shortfall.** The 45x was
+  `gfx_restore`'s **per-BYTE** cost against the blit's; this is a **per-RUN**
+  change. It removes ~400 µs of arriving and leaves ~315 µs of per-run work —
+  the scan's three 4-bit shifts, the `repe scasb` setup, the tail nibble decode
+  and the span writer's forty instructions.
+- **The rest needs a different routine, and a hybrid.** A byte-by-byte decoder
+  that gathers 8 pixels' bits regardless of runs is ~44 clocks a pixel: another
+  20x on `FINE.BMP`'s art and **fifteen times worse on a flat row**, where the
+  run path draws 492 pixels in one span. So the end state is keyed on the row's
+  run density, and this change is the half that is unconditionally right.
+- **VGA is not done.** Four planes want the run's bits each — Set/Reset and a bit
+  mask per span, a different routine with its own correctness argument. It
+  measures unchanged and gates identically, and the calibration machine has no
+  VGA in it.
+
+**`PTROW=1` belongs in any future run of this gate**: `FINE.BMP`'s 1–2 pixel runs
+put every run inside ONE framebuffer byte touching neither edge, which is the
+narrowest case the masks have and one a picture barely reaches.
 
 ### C. Registered cache regions and exclusions
 

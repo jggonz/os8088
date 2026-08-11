@@ -395,7 +395,7 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5066,
+    "bss": 5070,
     "budget": 100352,
     "codemax": 65536,
     "cold": 22933,
@@ -409,24 +409,24 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3126,
     "stk0": 1024,
-    "text": 57074
+    "text": 57329
   },
   "small": {
-    "bss": 4857,
+    "bss": 4861,
     "budget": 96256,
     "codemax": 65536,
     "cold": 21404,
     "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3648,
-    "kend": 5952,
+    "imgpara": 3680,
+    "kend": 5984,
     "kseg": 96,
-    "ksize": 93696,
+    "ksize": 94208,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2740,
     "stk0": 1024,
-    "text": 53279
+    "text": 53520
   }
 }
 ```
@@ -922,14 +922,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,346 | 36.7% |
-| the window system and its furniture | 17,581 | 22.0% |
-| drawing: adapters, primitives, glyphs, icons | 11,810 | 14.8% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.3% |
+| the file system, end to end | 29,346 | 36.6% |
+| the window system and its furniture | 17,581 | 21.9% |
+| drawing: adapters, primitives, glyphs, icons | 12,065 | 15.0% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.2% |
 | the kernel proper: API table, heap, scheduler, events | 5,959 | 7.4% |
 | the Control Panel | 4,120 | 5.1% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **80,007** | |
+| **total** | **80,262** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -939,7 +939,7 @@ generated in the first place.
 | `wm.inc` — the window manager (§11) | 7,028 | — | **7,028** | 645 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,646 | — | **5,646** | 892 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,430 | **5,609** | 155 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,841 | — | **4,841** | 136 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,929 | — | **4,929** | 140 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
@@ -960,18 +960,18 @@ generated in the first place.
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 977 | — | **977** | 18 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
+| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 927 | — | **927** | 4 | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 916 | — | **916** | 9 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 776 | **776** | 58 | — |
-| `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 760 | — | **760** | 4 | — |
 | `toast.inc` — **(undescribed)** | 435 | — | **435** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,767 | — | **2,767** | — | — |
-| **total** | **57,074** | **22,933** | **80,007** | **5,066** | **7,762** |
+| **total** | **57,329** | **22,933** | **80,262** | **5,070** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

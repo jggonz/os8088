@@ -700,6 +700,50 @@ through the Map Mask) would beat this on detailed pictures and lose on flat
 ones, and would need its own 1bpp twin; it changes no
 caller, so it stays available as a later optimisation.
 
+#### 5.4.1 …and on a 1bpp adapter a run goes straight into the framebuffer
+
+§5.4's whole cost is the *arriving*. Each coalesced run is one `gfx_hline`,
+which is one `gfx_fill`, which is §5.7's ~756 µs of clip test, display hook,
+adapter dispatch, `vga_rect_setup` and row-base arithmetic before a byte is
+written — and a detailed picture is ~85 runs a row. Measured, a textured
+492×133 16-colour bitmap is **8,670 ms** on a 4.77MHz 8088 and the same
+canvas blank is 211 (PERFORMANCE.md Set 32): the pixels barely enter it.
+
+`gfx_blit_span` is the same run with the arriving taken out. Everything the
+`gfx_fill` was doing for the run is done **once a row**, or refused:
+
+- the row base is `gfx_rowbase` once at the top of the row, not once a run;
+- §39.4's reduction is one `gfx_inktab` read, and the 50% dither's phase is
+  the row's own `AA`/`55` byte — `sw_parity`'s answer, computed with it;
+- the screen clip is `sw_span`'s own two compares;
+- and what is left is what a horizontal run actually costs: **two masked bytes
+  and a `rep stosb`**.
+
+**It is refused rather than approximated in three cases**, each because
+something the `gfx_fill` did per run genuinely has to happen: an armed clip
+region (§11.3 — the runs must clip against it, and only `gfx_fill` does),
+more than one display (§39.14.7 — a run splits itself through `gfx_fill`'s own
+`GFXDISP`), and a nested whole-shape hook (§39.14.2 — the coordinates have
+already been translated). Refusing is the *existing* path, so the fallback
+needs no argument of its own.
+
+**VGA is deliberately not done here.** The four planes want the run's bits
+each, which is Set/Reset and a bit mask per span rather than a byte pattern —
+a different routine with a different correctness argument, and the machine this
+project is calibrated against has no VGA in it (docs/FIELD-MACHINES.md). The
+gate covers it either way: `tools/ptcheck.py` compares a textured canvas pixel
+for pixel on all three adapters, and VGA simply measures unchanged.
+
+**`sw_span` swaps `ES` and puts it back**, which is the one thing in it that
+looks like waste and is not. `gfx_blit4` holds the CALLER's source segment in
+`ES`, because `repe scasb` is what makes the run scan fast (§5.4), and `stosb`
+wants the framebuffer. Two pushes a run against ~756 µs saved is 1.7%; the
+alternative — scanning a whole row's runs into a buffer so `ES` could be
+switched once a row — is up to 640 runs' worth of storage on a kernel with a
+kilobyte spare.
+
+Measured, PERFORMANCE.md Set 41.
+
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
 **in** AX/BX/CX/DX = x1/y1/x2/y2 inclusive, absolute screen coordinates;

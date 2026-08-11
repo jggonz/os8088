@@ -299,6 +299,128 @@ sw_col:
     ret
 
 ; -----------------------------------------------------------------------------
+; sw_blit_span - gfx_blit_run's direct twin, 1bpp only (SPEC.md 5.4.1)
+; in:       DI = the run's first x, DX = one past its last pixel (row-relative),
+;           AH = its colour, [gfx_blit_x] = the block's left edge,
+;           [gfx_blit_ro] = the row's base byte, [gfx_blit_dth] = the row's
+;           dither phase, ES = the CALLER's source segment, DF clear
+; out:      nothing; every register preserved, ES included
+;
+; The same run gfx_blit_run emits, with the ARRIVING taken out. gfx_hline is a
+; gfx_fill, and a gfx_fill is SPEC.md 5.7's ~756us of clip test, display hook,
+; adapter dispatch, vga_rect_setup and row-base arithmetic before it writes a
+; byte - all of it per RUN, and a detailed picture is 85 runs a row.
+;
+; Everything that call did FOR the run is done once a ROW instead, or refused:
+; the row base is [gfx_blit_ro], SPEC.md 39.4's reduction is the ink table read
+; below, the dither's phase is [gfx_blit_dth] (sw_parity's answer), and the
+; clip region and the display split are what gfx_blit4 declines the path over.
+; What is left is two masked bytes and a rep stosb.
+;
+; IT IS ONE ROUTINE AND NOT TWO, which is worth ~11% of it: split into a
+; gfx_blit_span that worked out the pattern and an sw_span that wrote it, the
+; pair spent 24 stack slots and a near call/ret on prologue alone - about 400
+; of the ~1,900 clocks a run costs here. On an 8088 the instruction COUNT is
+; the price; there is no work in a push.
+;
+; IT SWAPS ES AND PUTS IT BACK. gfx_blit4's ES is the CALLER's source segment,
+; because `repe scasb` is what makes the run scan fast (SPEC.md 5.4), and stosb
+; wants the framebuffer. Two pushes a run against ~756us saved is 1.7%, and the
+; alternative - scanning a whole row's runs into a buffer so ES could be
+; switched once a row - is up to 640 runs' worth of storage on a kernel with a
+; kilobyte spare.
+;
+; It clips to the screen itself, because nothing above it does any more.
+; -----------------------------------------------------------------------------
+sw_blit_span:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov al, ah                  ; the documented contract: gfx_blit4 leaves
+    mov [gfx_color], al         ; [gfx_color] holding the last colour drawn
+    xor ah, ah
+    mov bx, ax
+    and bx, 15
+    mov al, [bx + gfx_inktab]   ; SPEC.md 39.4's reduction, which the gfx_fill
+    cmp al, 1                   ; used to do for us in sw_ink
+    jne .pat
+    mov al, [gfx_blit_dth]      ; ...and the middle greys are this row's phase
+.pat:
+    mov bl, al                  ; BL = the pattern byte: 00 / FF / AA / 55
+    mov ax, di                  ; AX = x1
+    mov cx, [gfx_blit_x]
+    add cx, dx
+    dec cx                      ; CX = x2, the last pixel drawn
+    or ax, ax                   ; x1 < 0 -> 0
+    jns .x1ok
+    xor ax, ax
+.x1ok:
+    cmp cx, [vid_cw]            ; x2 past the last column -> the last column
+    jl .x2ok
+    mov cx, [vid_cwm1]
+.x2ok:
+    cmp cx, ax
+    jl .out                     ; entirely off the screen (or an empty run)
+    mov si, ax                  ; DH = left edge mask, DL = right, BY TABLE:
+    and si, 7                   ; a variable shift is 8 clocks plus 4 a bit on
+    mov dh, [si + vga_lmtab]    ; an 8088, and this is per RUN (SPEC.md 5.7)
+    mov si, cx
+    and si, 7
+    mov dl, [si + vga_rmtab]
+    shr cx, 1                   ; CX = right byte column
+    shr cx, 1
+    shr cx, 1
+    shr ax, 1                   ; AX = left byte column
+    shr ax, 1
+    shr ax, 1
+    mov di, [gfx_blit_ro]
+    add di, ax                  ; DI = the run's first byte
+    sub cx, ax                  ; CX = byte span; 0 = it is inside one byte
+    mov es, [vid_rseg]          ; ...and only NOW is ES not the source
+    jnz .multi
+    and dh, dl                  ; one byte: the two edges are one mask
+    mov bh, dh
+    not bh
+    mov al, bl
+    and al, dh
+    and [es:di], bh             ; sw_col's write, without its row loop
+    or  [es:di], al
+    jmp short .out
+.multi:
+    mov bh, dh                  ; --- the left edge byte
+    not bh
+    mov al, bl
+    and al, dh
+    and [es:di], bh
+    or  [es:di], al
+    inc di
+    dec cx                      ; CX = whole interior bytes
+    jz .right
+    mov al, bl
+    rep stosb                   ; ...which is the whole point of this routine,
+                                ; and it leaves DI on the right edge byte
+.right:
+    mov bh, dl                  ; --- and the right edge byte
+    not bh
+    mov al, bl
+    and al, dl
+    and [es:di], bh
+    or  [es:di], al
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sw_fill_pat - software twin of gfx_fill_pat (SPEC.md 5/32): the 8-row
 ;               pattern at [gfx_pat], staged into vga_patbuf, written
 ;               identically to every plane (colors 0/15 per pixel bit).

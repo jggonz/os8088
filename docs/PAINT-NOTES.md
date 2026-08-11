@@ -545,7 +545,7 @@ drags a Disk window across it and raises it again — `tools/ptcheck.py`, which
 uses a textured BMP on purpose, because a blank canvas is uniform white and
 therefore the one picture that cannot tell a kept promise from a broken one.
 
-## Refactor candidate: `gfx_blit4` still pays a drawing call per RUN
+## `gfx_blit4` paid a drawing call per RUN — half done, SPEC.md §5.4.1
 
 Not a defect, and not a criticism of `gfx_blit4`, which was created for exactly
 this canvas and did the thing it was built to do: Paint used to coalesce runs
@@ -566,16 +566,30 @@ does — priced per byte those two are **5.5 µs against 244 µs** (Set 32), a 4
 gap that is entirely the per-call floor. It wants care on three fronts and is
 therefore its own piece of work:
 
-- **1bpp and VGA are different problems.** On a mono adapter the framebuffer IS
-  the renderer's target (§39.3), so a run becomes a byte span with edge masks —
-  `sw_xfer`'s shape. On VGA the four planes each want the run's bits, which is
-  Set/Reset and a Bit Mask per span rather than a `rep`.
+**The 1bpp half of that landed — SPEC.md §5.4.1, PERFORMANCE.md Set 41 —
+and it is worth 2.25–2.27x, not 45x.** `sw_blit_span` writes the run itself,
+so the ~756 µs of *arriving* goes; what stays is ~315 µs of per-RUN work (the
+scan's three 4-bit shifts, the `repe scasb` setup, the tail nibble decode, the
+span writer's own forty instructions). **The 45x was a per-BYTE figure and this
+is a per-RUN change**, which is why the two numbers are so far apart and why the
+ratio is identical on 85-runs-a-row art and on 308. Getting the rest means not
+working per run at all — a byte-by-byte decoder at ~44 clocks a pixel, which is
+another 20x on detailed art and **fifteen times worse on a flat row**, so the end
+state is a hybrid keyed on run density. Two of the three fronts below are
+therefore still open, and the third is answered:
+
+- **1bpp and VGA are different problems**, and that is exactly how it went: the
+  1bpp side is `sw_blit_span`, a byte span with table-driven edge masks; the VGA
+  side — Set/Reset and a Bit Mask per span — is not built, and the machine this
+  project is calibrated against has no VGA in it.
 - **The banked layout** (§39.3) means a row walk must go through `gfx_nextrow`,
   and PERFORMANCE.md Part 9 Set 3's rule applies: inline it in the row loop.
 - **It must stay byte-identical**, and the gate exists — `tools/ptcheck.py`
   compares a textured canvas pixel for pixel across builds on all three
   adapters, which is what a change of this kind needs and what a blank canvas
-  would silently pass.
+  would silently pass. **`PTROW=1` is the one to add to it**: `FINE.BMP`'s 1–2
+  pixel runs put every run inside ONE framebuffer byte, touching neither edge —
+  the narrowest case the masks have, and one a picture barely reaches.
 
 ## It is told which rect it owes (SPEC.md §11.90.2)
 
@@ -640,3 +654,22 @@ straight after `pt_wfix`):
   window at all (SPEC.md §11.90) — which is precisely the situation at launch,
   where this defect is born. The deferred call still earns its keep for the
   frame; it was never the thing that put those pixels down.
+
+## Deferred: the grow box is drawn twice per repaint
+
+Found while retiring the "`W_PAINT` runs twice" bug (PERFORMANCE.md Set 40) and
+left alone on purpose. `pt_draw_strip` ends in `pt_growbox` because **the
+strip's white bed erases the box and the click paths have no `W_PAINT` behind
+them** — a tool, colour, width or toggle click repaints the strip and nothing
+else would put it back. Inside a `W_PAINT` that reasoning does not apply:
+`wm_draw_win`'s `.growbox` draws the same box a few hundred milliseconds later,
+so the two land back to back from the user's point of view.
+
+`wm_grow_paint` is **14 drawing calls** — fill, frame, frame, fill, frame — at
+SPEC.md §5.7's ~756 µs of *arriving* each: about **10.6 ms**, paid twice, plus
+Part 1's double draw on the glass.
+
+The fix is a "we are inside our own paint proc" test in `pt_growbox`, not a
+deletion, and not `wm_draw_win` learning which windows draw their own box. It is
+~21 ms of a repaint that is otherwise seconds long, which is why it is written
+down rather than done.

@@ -44,7 +44,12 @@ from os88mouse import Mouse
 import sucheck as su
 import subcheck as sc
 
-ROW_TEXTURE = 2                 # pttest.img root, sorted: APPS FINE.BMP TEXTURE.BMP
+# pttest.img root, sorted: APPS FINE.BMP TEXTURE.BMP. TEXTURE (runs of 3-8
+# pixels) is the default because it is a picture; PTROW=1 opens FINE instead -
+# runs of 1-2, so every run sits inside ONE framebuffer byte and touches neither
+# edge of it, which is SPEC.md 5.4.1's narrowest case and the one a picture
+# barely exercises.
+ROW_TEXTURE = int(os.environ.get("PTROW", "2"))
 MASK_Y = 18
 
 

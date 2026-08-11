@@ -1648,8 +1648,45 @@ gfx_blit4:
     mov [gfx_blit_x], ax        ; every drawing entry runs under the gfx lock
     mov [gfx_blit_h], dx        ; (SPEC.md 1 rule 6), so one copy serves
     mov [gfx_blit_sv], si
+
+    ; --- may a run go straight into the framebuffer? (SPEC.md 5.4.1) -------
+    mov byte [gfx_blit_fst], 0
+    cmp byte [vid_mono], 0
+    je .slow                    ; VGA's four planes are a different problem
+    cmp word [wm_clip_n], 0
+    jne .slow                   ; a region is armed, and each run has to clip
+                                ; itself against it - which only gfx_fill does
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja .slow                    ; two displays: a run splits itself through
+    cmp byte [gfx_dnest], 0     ; gfx_fill's own GFXDISP (SPEC.md 39.14.7), and
+    jne .slow                   ; a nested hook has already translated
+%endif
+    mov byte [gfx_blit_fst], 1
+.slow:
 .row:
     mov si, [gfx_blit_sv]       ; ES:SI = this row's first byte
+    cmp byte [gfx_blit_fst], 0
+    je .rowd
+    cmp bx, [vid_ch]            ; UNSIGNED, so a negative y is caught too: the
+    jae .nextrow                ; row is off screen and nothing below it clips
+    push ax                     ; any more
+    mov ax, bx
+    call gfx_rowbase            ; once a ROW, where gfx_fill did it once a RUN.
+                                ; BEFORE the `xor dx, dx` below and not after:
+                                ; gfx_rowbase ends in a `mul`, so it WRITES DX -
+                                ; zero for every geometry this kernel has, which
+                                ; is exactly the kind of luck a row cursor
+                                ; should not be resting on
+    mov [gfx_blit_ro], ax
+    mov al, 0xAA                ; ...and this row's dither phase (SPEC.md 39.4),
+    test bl, 1                  ; which sw_parity works out the same way
+    jz .par
+    mov al, 0x55
+.par:
+    mov [gfx_blit_dth], al
+    pop ax
+.rowd:
     xor dx, dx                  ; DX = the pixel the next run starts at
 .run:
     ; --- the run's colour, and the byte a matching PAIR would hold ---------
@@ -1722,10 +1759,17 @@ gfx_blit4:
     add di, dx                  ; DI = the run's first x, on screen
     mov ah, [gfx_blit_c]
     mov dx, [gfx_blit_e]        ; DX = one past its last pixel, row-relative
-    call gfx_blit_run           ; (which is where the next run starts)
+    cmp byte [gfx_blit_fst], 0  ; (which is where the next run starts)
+    jne .emitf
+    call gfx_blit_run
+    jmp short .emitd
+.emitf:
+    call sw_blit_span           ; SPEC.md 5.4.1
+.emitd:
     cmp dx, [gfx_blit_w]
     jb .run
 
+.nextrow:
     mov ax, [gfx_blit_sv]       ; next source row
     add ax, bp
     mov [gfx_blit_sv], ax
@@ -1770,6 +1814,7 @@ gfx_blit_run:
     pop bx
     pop ax
     ret
+
 
 ; -----------------------------------------------------------------------------
 ; vga_vline_core - internal: vertical run of masked byte writes
@@ -3142,6 +3187,9 @@ gfx_blit_e:  resw 1             ; ...and the run scanner's state: one past the
 gfx_blit_s0: resw 1             ; run's last pixel, where `repe scasb` began,
 gfx_blit_c:  resb 1             ; the run's colour, and the byte a matching
 gfx_blit_pb: resb 1             ; PAIR of that colour holds (c | c<<4)
+gfx_blit_ro: resw 1             ; SPEC.md 5.4.1's direct path: this row's base
+gfx_blit_dth:resb 1             ; byte, its 50% dither byte (AA or 55 by row
+gfx_blit_fst:resb 1             ; parity), and whether the path is armed at all
 
 vga_plane       resb 1          ; save/restore plane counter / mask bit
 vga_lmsk        resb 1          ; rect: left edge bit mask

@@ -4972,3 +4972,68 @@ what let this stand: `wm_grow_paint` was the last mark in both, so a second hit
 of it read as a second pass. **When a trace implies a control-flow shape, arm
 the symbol that shape would go through** — here `wm_draw_win` and `wm_front`,
 neither of which fires.
+
+### Set 41 — a blit run goes straight into the framebuffer (SPEC.md §5.4.1)
+
+docs/HANDOFF-REDRAW.md's item B, and the largest single drawing cost in the
+system. `gfx_blit4` coalesces runs of equal pixels and emits one `gfx_hline`
+per run — which is one `gfx_fill`, which is §5.7's per-call floor of clip test,
+display hook, adapter dispatch, `vga_rect_setup` and row-base arithmetic before
+a byte is written. On a 1bpp adapter `sw_blit_span` writes the run itself
+instead: the row base and the dither phase are worked out once a **row**, the
+§39.4 reduction is one table read, and what is left is two masked bytes and a
+`rep stosb`.
+
+Cycle-accurate 5150/CGA, Paint raised from under a Disk window (so §11.96.10's
+damage rect, ~65% of the canvas width), `tools/os88span.py paintraise`:
+
+| the canvas | runs/row | before | after | |
+|---|---|---|---|---|
+| `TEXTURE.BMP`, runs of 3–8 px | 84.9 | 5,526.2 ms | **2,430.7 ms** | **2.27x** |
+| `FINE.BMP`, runs of 1–2 px | 308.0 | 18,777.3 ms | **8,364.9 ms** | **2.25x** |
+
+**The two ratios agreeing is the result, not a coincidence**: what the change
+removes is a fixed cost *per run*, so it scales with the run count and the art
+does not matter. Per run: ~740 µs → ~326 µs on the textured canvas and ~702 →
+~313 on the fine one, so about **400 µs of arriving** goes and about **315 µs of
+per-run work** stays.
+
+The whole Paint raise is 5,947.8 → **2,851.5 ms** on the textured canvas, and
+against the figure this round started from — before §11.96.10 gave a raise a
+damage rect at all — **9,090.1 → 2,851.5, 3.19x**.
+
+**Flat art gets faster too, which the plan doubted.** docs/PAINT-NOTES.md's
+sketch was a plane-parallel decoder that "would beat this on detailed pictures
+and lose to it on flat ones"; this is not that. It keeps the run scan, so a
+solid row is still ONE run — it just costs ~315 µs instead of ~740. Paint's
+canvas is 492x280 with a 492x133 picture in it, so 147 of its rows are a single
+run each and they got cheaper along with the rest.
+
+**Merging the two routines was worth 11%** — 2,698.1 → 2,430.7 ms — and that is
+the 8088 lesson rather than a tidy-up. Written as a `gfx_blit_span` that worked
+out the pattern plus an `sw_span` that wrote it, the pair spent **24 stack slots
+and a near call/ret** on prologue alone: about 400 of the ~1,900 clocks a run
+cost. On this machine the instruction COUNT is the price and there is no work in
+a push.
+
+**What is left, and what it would take.** ~315 µs a run is ~1,500 clocks: the
+run scan's three 4-bit shifts (24 clocks each on an 8088), the `repe scasb`
+setup, the tail nibble decode, and `sw_blit_span`'s own forty-odd instructions.
+Removing it means not working per run at all — a decoder that walks the
+destination BYTE by byte, gathering eight pixels' bits regardless of runs, at
+roughly 44 clocks a pixel. On `FINE.BMP`'s damage rect that is ~394 ms against
+8,365, another 20x; on a flat row it is 4.5 ms against 0.3, fifteen times WORSE.
+So the end state is a hybrid keyed on the row's run density, and this change is
+the half of it that is unconditionally right.
+
+**VGA is deliberately untouched** (§5.4.1): four planes want the run's bits
+each, which is Set/Reset and a bit mask per span rather than a byte pattern —
+a different routine with a different correctness argument — and the machine
+this project is calibrated against has no VGA in it. It measures unchanged and
+gates identically.
+
+Verified **0 differing pixels** on CGA, Hercules and VGA mode 12h with
+`tools/ptcheck.py` (5 steps) and `tools/subcheck.py` (11), and separately on
+CGA against `PTROW=1` — `FINE.BMP`'s 1–2 pixel runs, where every run sits
+inside ONE framebuffer byte and touches neither edge of it, which is the
+narrowest case §5.4.1 has and the one a picture barely exercises.

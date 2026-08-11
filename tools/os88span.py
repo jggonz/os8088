@@ -52,6 +52,11 @@ from os88mouse import Mouse
 import sucheck as su
 import subcheck as sc
 
+# pttest.img's root row to open: 2 = TEXTURE.BMP (runs of 3-8), 1 = FINE.BMP
+# (runs of 1-2, so every run is inside one framebuffer byte - SPEC.md 5.4.1's
+# narrowest case). tools/ptcheck.py reads the same variable.
+PTROW = int(os.environ.get("PTROW", "2"))
+
 CLK = 4772727.0                 # 4.77 MHz, so cycles -> ms
 WIN_SIZE = 26
 
@@ -169,7 +174,7 @@ def sc_paintraise(m, mo):
     covered. Needs build/pttest.img (tools/ptcheck.py's docstring)."""
     mo.dblclick(*su.zone(m, 1)); time.sleep(4)
     disk = [w for w in su.windows(m) if w.visible][0]
-    mo.dblclick(*su.row(disk, 2)); time.sleep(45)
+    mo.dblclick(*su.row(disk, PTROW)); time.sleep(45)
     pt = [w for w in su.windows(m) if w.visible
           and w.title.upper().startswith("PAINT")]
     if not pt:
@@ -190,7 +195,7 @@ def sc_paint(m, mo):
     SPEC.md 11.96.10 gave wm_raise a rect to arm."""
     mo.dblclick(*su.zone(m, 1)); time.sleep(4)
     disk = [w for w in su.windows(m) if w.visible][0]
-    mo.dblclick(*su.row(disk, 2)); time.sleep(45)
+    mo.dblclick(*su.row(disk, PTROW)); time.sleep(45)
     pt = [w for w in su.windows(m) if w.visible
           and w.title.upper().startswith("PAINT")]
     if not pt:
