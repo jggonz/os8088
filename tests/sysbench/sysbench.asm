@@ -1773,6 +1773,8 @@ sb_fdd:
     call bl_sline
     mov si, sb_s_h_fdd3
     call bl_sline
+    mov si, sb_s_h_fdd5
+    call bl_sline
     mov si, sb_s_h_fdd4
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
 
@@ -1788,13 +1790,13 @@ sb_fdd:
     mov si, sb_l_fran               ; ...whether it was contested at all
     mov al, 1
     call sb_fdb
-    mov si, sb_l_fst3               ; ...and the two bytes that decided it
+    mov si, sb_l_fst3               ; ...and the line, read twice
     mov al, 2
     call sb_fdbx
-    mov si, sb_l_fst0
+    mov si, sb_l_fst3b
     mov al, 3
     call sb_fdbx
-    mov si, sb_l_fpcn
+    mov si, sb_l_fst0
     mov al, 4
     call sb_fdbx
     mov si, sb_l_fstep              ; THE row that carries
@@ -4346,14 +4348,15 @@ sb_l_mln:    db '  winning IRQ hex 10=4', 0
 
 sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
 sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a DIP switch.', 0
-sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0; ST0 bit 4 = EQUIP CHECK, which IS the absent drive.', 0
-sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 seek ok 03 EQUIP CHECK 04-06 refused.', 0
+sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0. The SECOND read decides: no TRK0 after a', 0
+sb_s_h_fdd5: db '   recalibrate is the absent drive. ST0 is drained, never branched on.', 0
+sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
 sb_l_fran:   db '  probe ran', 0
-sb_l_fst3:   db '  unit 1 ST3 hex', 0
-sb_l_fst0:   db '  unit 1 ST0 hex', 0
-sb_l_fpcn:   db '  unit 1 cyl hex', 0
+sb_l_fst3:   db '  ST3 motor off hex', 0
+sb_l_fst3b:  db '  ST3 after seek hex', 0
+sb_l_fst0:   db '  ST0 drained hex', 0
 sb_l_fstep:  db '  probe stop hex', 0
 sb_l_fvrd:   db '  verdict 1=kept 0=gone', 0
 

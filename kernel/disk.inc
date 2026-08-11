@@ -206,15 +206,14 @@ DPT_LEN equ 11
 FDD_S_OFF    equ 0               ; never ran: one drive claimed, or FDDPROBE=0
 FDD_S_TRK0   equ 1               ; ST3 said TRACK 0 with the motor off - the
                                  ; drive is there and nothing further ran
-FDD_S_SEEKOK equ 2               ; the recalibrate came back CLEAN: the drive
+FDD_S_SEEKOK equ 2               ; ...said it after the recalibrate: the drive
                                  ; is there and was parked off track 0
-FDD_S_EC     equ 3               ; ...came back with Equipment Check - 77 steps
-                                 ; and no TRK0. THE absent drive, and the one
-                                 ; verdict in this list that removes anything
-FDD_S_NORDY  equ 4               ; the controller never asked for a byte  \ all
-FDD_S_NOSEEK equ 5               ; the seek outlived FDD_SEEKTO            | of
-FDD_S_BADIC  equ 6               ; ST0's interrupt code is not one we read / them
-                                 ; refusals, and every one keeps the drive
+FDD_S_NOTRK0 equ 3               ; the recalibrate ran and TRK0 never came up.
+                                 ; THE absent drive, and the one verdict in
+                                 ; this list that removes anything
+FDD_S_NORDY  equ 4               ; the controller never took a byte, or never
+                                 ; offered one - a refusal, and it KEEPS the
+                                 ; drive like every other thing that goes wrong
 fdd_dbg_blk:
     dw DBG_TAG_FDD               ; 'FD' - the magic, and the block's own first
     dw fdd_dbg_span              ; word, so a reader can check where it landed
@@ -222,9 +221,16 @@ fdd_dbg_blk:
 fdd_dbg_span:
 fdd_dbg_eqp:  db 0               ; drives int 11h claimed, after the clamp
 fdd_dbg_ran:  db 0               ; 0 = the probe never ran
-fdd_dbg_st3:  db 0xFF            ; SENSE DRIVE STATUS, unit 1. bit 4 = TRACK 0
-fdd_dbg_st0:  db 0xFF            ; SENSE INTERRUPT STATUS ST0. bit 4 = EC
-fdd_dbg_pcn:  db 0xFF            ; the present-cylinder byte beside it
+fdd_dbg_st3:  db 0xFF            ; SENSE DRIVE STATUS, unit 1, motor off.
+                                 ; bit 4 = TRACK 0, and bit 3 = two-side, which
+                                 ; the field 5150 also reads CLEAR on the drive
+                                 ; it does not have (ST3 = 21)
+fdd_dbg_st3b: db 0xFF            ; ...and again after the recalibrate. THIS is
+                                 ; what decides: the same physical line, asked
+                                 ; once the head has been told to go and find it
+fdd_dbg_st0:  db 0xFF            ; SENSE INTERRUPT STATUS ST0, taken to leave
+                                 ; the controller clean. DIAGNOSTIC ONLY -
+                                 ; nothing branches on it (SPEC.md 18.97.1)
 fdd_dbg_step: db FDD_S_OFF       ; where it stopped - THE row that carries, for
                                  ; the reason clk_dbg_step is (SPEC.md 37.92):
                                  ; the verdict alone cannot tell "proved
@@ -4833,9 +4839,16 @@ FDD_HANDTO   equ 12000           ; spins waiting for RQM on one byte. Each is
                                  ; call it 4us on a 4.77MHz 8088, so ~50ms,
                                  ; against a handshake that really takes
                                  ; microseconds. A ceiling, not a delay
-FDD_SEEKTO   equ 40              ; ticks (~2.2s) for the recalibrate. A 77-step
-                                 ; give-up is about half a second at the DPT's
-                                 ; rate; this is the bound, not the expectation
+FDD_SEEKW    equ 20              ; ticks (~1.1s) to let the recalibrate finish.
+                                 ; 77 steps at the DPT's rate is about half a
+                                 ; second, so this is generous on purpose - and
+                                 ; only a machine heading for the absent verdict
+                                 ; ever waits it out
+FDD_SIN      equ 6               ; sense-interrupt results to drain before
+                                 ; giving up on the queue ever emptying: four
+                                 ; is one per drive after a reset, and the
+                                 ; bound is what stops a controller answering
+                                 ; 0FFh from spinning here for ever
 FDD_MOTORW   equ 12              ; ticks (~660ms) for the motor line to take
                                  ; effect. NOT dsk_dpt+10's 8 x 1/8 s: nothing
                                  ; here reads a disk, so what this waits for is
@@ -4900,6 +4913,9 @@ dsk_fdd_probe:
     call fdd_dor
     call fdd_st3                ; --- step 1: no motor, and usually enough ---
     jc .nordy
+    mov [fdd_dbg_st3], al       ; fdd_st3 ANSWERS in AL and banks nothing - it
+                                ; is called twice and the two reads are two
+                                ; different fields
     test al, 0x10               ; TRACK 0
     jz .motor
     mov byte [fdd_dbg_step], FDD_S_TRK0
@@ -4916,54 +4932,43 @@ dsk_fdd_probe:
                                 ; probe can arrange, against the (undocumented,
                                 ; and on every datasheet untrue) possibility of
                                 ; a drive that gates TRK0 on its spindle
-.recal:                         ; --- step 3: make it go and find track 0 ----
+.recal:                         ; --- step 3: make it step, then ask the LINE
+    call fdd_sidrain            ; whatever the controller still has queued is
+                                ; not ours - see fdd_sidrain, and SPEC.md
+                                ; 18.97.1 for the field run that found it
     mov al, 0x07                ; RECALIBRATE
     call fdd_put
     jc .nordy
     mov al, 0x01                ; unit 1
     call fdd_put
     jc .nordy
-    call fdd_wseek
-    jc .noseek
-    mov al, 0x08                ; SENSE INTERRUPT STATUS
-    call fdd_put
+    mov cx, FDD_SEEKW           ; 77 steps at the DPT's rate is about half a
+    call fdd_wait               ; second. A FIXED bound and not a poll: MSR's
+                                ; drive-busy bit is a promise about a seek the
+                                ; controller accepted, and the case this exists
+                                ; for is the one where there is no drive to
+                                ; accept it
+    call fdd_st3                ; ...and ask the SAME LINE step 1 asked
     jc .nordy
-    call fdd_get
-    jc .nordy
-    mov [fdd_dbg_st0], al
-    call fdd_get
-    jc .nordy
-    mov [fdd_dbg_pcn], al
-
-    mov al, [fdd_dbg_st0]       ; EQUIPMENT CHECK is the signal, and it is
-    mov ah, al                  ; reached WITHOUT dispatching on the interrupt
-    and al, 0xC0                ; code first, because the parts disagree about
-    cmp al, 0x80                ; which IC a failed recalibrate carries - 01 on
-    jae .badic                  ; the datasheet, 00 on some implementations, and
-                                ; a `jz .seekok` on 00 would silently never fire
-                                ; on the one machine this exists for. What IC
-                                ; still decides is whether the command RAN at
-                                ; all: 10 and 11 (ready changed, invalid) mean
-                                ; it did not, so they keep the drive
-    test ah, 0x20               ; SE - the seek really ended
-    jz .badic
-    test ah, 0x10               ; ...and EC: 77 steps and no TRK0
-    jz .seekok
-    mov byte [fdd_dbg_step], FDD_S_EC
+    mov [fdd_dbg_st3b], al
+    push ax
+    call fdd_res                ; our recalibrate's own interrupt, taken so the
+    jc .nores                   ; next BIOS floppy operation does not find it
+    mov [fdd_dbg_st0], al       ; waiting. Reported, never branched on
+.nores:
+    call fdd_sidrain
+    pop ax
+    test al, 0x10               ; TRACK 0: did the head reach it?
+    jnz .seekok
+    mov byte [fdd_dbg_step], FDD_S_NOTRK0
     mov byte [fdd_dbg_vrd], 0
     xor al, al                  ; THE one path that removes a drive
     jmp short .out
 .seekok:
     mov byte [fdd_dbg_step], FDD_S_SEEKOK
     jmp short .keep
-.badic:
-    mov byte [fdd_dbg_step], FDD_S_BADIC
-    jmp short .keep
 .nordy:
     mov byte [fdd_dbg_step], FDD_S_NORDY
-    jmp short .keep
-.noseek:
-    mov byte [fdd_dbg_step], FDD_S_NOSEEK
 .keep:
     mov byte [fdd_dbg_vrd], 1
     mov al, 1
@@ -5032,8 +5037,12 @@ fdd_dor:
     pop cx
     ret
 
-; fdd_st3 - SENSE DRIVE STATUS on unit 1 -> AL, and banked for the field
-;           report. CF = 1: the controller never answered.
+; fdd_st3 - SENSE DRIVE STATUS on unit 1 -> AL. CF = 1: no answer.
+;
+; A LEVEL READ of the selected drive's own status lines, which is the whole
+; reason the decision hangs off it rather than off SENSE INTERRUPT STATUS: it
+; has no queue, no ordering and no unit ambiguity - the unit is in the command
+; byte and the answer is whatever that drive is putting on the bus right now.
 fdd_st3:
     mov al, 0x04
     call fdd_put
@@ -5041,13 +5050,73 @@ fdd_st3:
     mov al, 0x01                ; unit 1, head 0
     call fdd_put
     jc .bad
+    jmp short fdd_get           ; ...whose CF and AL are ours
+.bad:
+    stc
+    ret
+
+; fdd_res - ONE SENSE INTERRUPT STATUS result. AL = ST0, CF = 1 = no answer.
+;
+; The second result byte (PCN) is taken only if the controller offers one: a
+; sense with nothing pending answers with ST0 alone, so a blind second read
+; sits out a whole handshake timeout for a byte that is not coming.
+fdd_res:
+    push cx
+    push dx
+    mov al, 0x08
+    call fdd_put
+    jc .bad
     call fdd_get
     jc .bad
-    mov [fdd_dbg_st3], al
+    push ax
+    mov cx, FDD_SELW
+.w: dec cx
+    jnz .w                      ; let the MSR settle before asking again
+    mov dx, FDC_MSR
+    in al, dx
+    and al, 0xC0
+    cmp al, 0xC0                ; is a second byte on offer?
+    jne .one
+    mov dx, FDC_FIFO
+    in al, dx                   ; PCN, discarded
+.one:
+    pop ax
+    pop dx
+    pop cx
     clc
     ret
 .bad:
+    pop dx
+    pop cx
     stc
+    ret
+
+; fdd_sidrain - take every queued SENSE INTERRUPT STATUS result and drop it.
+;
+; SPEC.md 18.97.1: a controller reset leaves one status-change result PER
+; DRIVE and the 765 hands them out in order, so a single sense answers the
+; question the QUEUE is on rather than the one you asked. Measured on the
+; field 5150: a sense issued after a recalibrate of unit 1 returned ST0 = C2 -
+; interrupt code 11, and unit TWO. Nothing branches on ST0 any more, but the
+; queue is still drained: at both ends, so the one this probe publishes is its
+; own, and so the next BIOS floppy operation does not inherit ours.
+fdd_sidrain:
+    push ax
+    push cx
+    mov cx, FDD_SIN
+    call fdd_res
+    jc .out
+.next:
+    and al, 0xC0
+    cmp al, 0x80                ; interrupt code 10 = invalid, i.e. the
+    je .out                     ; controller has nothing left to hand over
+    dec cx
+    jz .out
+    call fdd_res
+    jnc .next
+.out:
+    pop cx
+    pop ax
     ret
 
 ; fdd_put - hand one byte to the FDC, MSR-handshaked and BOUNDED: the one way
@@ -5105,35 +5174,6 @@ fdd_get:
     in al, dx
     pop dx
     pop cx
-    clc
-    ret
-
-; fdd_wseek - wait for unit 1's seek to end.  out: CF = 1 = it outlived
-;             FDD_SEEKTO. A seek runs in the BACKGROUND, so the MSR goes
-;             not-busy at once and D1B is the bit that matters.
-fdd_wseek:
-    push ax
-    push cx
-    push dx
-    mov cx, [ticks]
-    add cx, FDD_SEEKTO
-.spin:
-    mov dx, FDC_MSR
-    in al, dx
-    test al, 0x02               ; D1B: unit 1 busy in seek mode
-    jz .done
-    mov ax, [ticks]
-    sub ax, cx
-    js .spin                    ; modular arithmetic between two free-running
-    pop dx                      ; words, so the SIGN decides (SPEC.md 45.15's
-    pop cx                      ; trap: jg honours the overflow flag)
-    pop ax
-    stc
-    ret
-.done:
-    pop dx
-    pop cx
-    pop ax
     clc
     ret
 

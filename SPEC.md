@@ -9332,11 +9332,18 @@ controller's own pull-up. So:
    selected drive's line. Present → done, in microseconds, with no stepping
    and no motor.
 3. Only if that is clear — which a *present* drive parked off track 0 also
-   reads — spin unit 1's motor up, wait `FDD_MOTORW`, then **RECALIBRATE**
-   (`07h`) and **SENSE INTERRUPT STATUS** (`08h`) → ST0 bit 4, Equipment
-   Check, which the 765 sets when it has stepped 77 times and never seen
-   TRK0. That is the absent drive, and this is the only path that costs
+   reads — spin unit 1's motor up, wait `FDD_MOTORW`, **RECALIBRATE** (`07h`),
+   wait `FDD_SEEKW`, and then **read ST3 again**. The head has been told to go
+   and find track 0; if TRK0 still has not come up, there is nothing there to
+   find it. That is the absent drive, and this is the only path that costs
    anything.
+
+**Step 3 asks the same LINE step 2 asked, and §18.97.1 is why.** The textbook
+answer is `SENSE INTERRUPT STATUS` and ST0's Equipment Check bit, this was
+built that way, and the field run measured it reading another drive's status
+out of the controller's queue. A `SENSE DRIVE STATUS` is a *level read* of the
+selected unit's own lines — no queue, no ordering, and the unit is in the
+command byte — so it cannot answer about somebody else.
 
 **The motor is in step 3 and not step 1**, which is what makes a
 correctly-switched two-drive machine free: a drive parked at track 0 answers
@@ -9424,6 +9431,49 @@ only as far as "the recalibrate completes and its interrupt code decodes"
 (`FDD_S_SEEKOK`, no hang). **The removal itself has never run.** The 5150
 whose SW1 claims a drive it does not have is the only machine that can fire
 it, which is what the field report is for.
+
+### 18.97.1 What the field run found: a sense answers the QUEUE, not the question
+
+The first build of §18.97 decided on **ST0** after the recalibrate, testing
+Equipment Check — 77 steps and no TRK0 — with the interrupt code as a
+sanity gate. On the 5150 it published:
+
+```
+unit 1 ST3 hex        0021      probe stop hex        0006   (refused)
+unit 1 ST0 hex        00C2      verdict 1=kept 0=gone     1
+```
+
+**Step 2 was right and step 3 read somebody else's answer.** `ST3 = 0x21` is
+unit 1, READY, **TRK0 clear** *and* two-side clear — the absent drive,
+reported correctly, and exactly what no emulator here could produce
+(MartyPC synthesises `0x79`, TRK0 set, for a drive its own config does not
+have). `ST0 = 0xC2` is interrupt code **11**, SE and EC both clear, and
+**US = 2**: a status-change result for unit *two*, in answer to a question
+about unit one.
+
+That is the µPD765 behaving as specified. A controller reset leaves one
+status-change interrupt **per drive** pending, `SENSE INTERRUPT STATUS` hands
+them out one at a time in unit order, and the command carries no argument —
+so what comes back is whatever is at the head of the queue, not an answer
+about the drive you last commanded. Nothing in the sequence had drained them.
+
+Three things follow, and the third is the general one:
+
+- **The decision moved to ST3**, read a second time after the recalibrate.
+  It is a level read of the selected unit's lines, so it has no queue to be
+  at the wrong end of, and the unit is in the command byte rather than in the
+  reply. `FDD_S_NOTRK0` replaces `FDD_S_EC`, and `FDD_S_NOSEEK`/`FDD_S_BADIC`
+  are gone with the ladder that produced them.
+- **The queue is still drained, at both ends** (`fdd_sidrain`): before, so the
+  ST0 the block publishes is this probe's own, and after, so the next BIOS
+  floppy operation does not inherit an interrupt of ours. ST0 is reported and
+  **nothing branches on it**.
+- **The fail-safe is what makes this a bug report rather than a lost drive.**
+  Every unrecognised state keeps the drive, so the machine showed a `Disk B`
+  it should not have — a wasted click — instead of hiding a real one. The
+  design rule earned its keep the first time it was tested on hardware, and
+  that is the argument for writing refusals that way even when the code
+  "obviously" works.
 
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
@@ -31873,9 +31923,9 @@ how far it got, and the verdict.
 ```
 fdd_dbg_eqp   drives the equipment word claimed, after the clamp (0..2)
 fdd_dbg_ran   0 = never ran (one drive claimed, or FDDPROBE=0), 1 = ran
-fdd_dbg_st3   SENSE DRIVE STATUS for unit 1; bit 4 is TRK0. FF = never read
-fdd_dbg_st0   SENSE INTERRUPT STATUS ST0 after RECALIBRATE; bit 4 is EC
-fdd_dbg_pcn   the present-cylinder byte beside it
+fdd_dbg_st3   SENSE DRIVE STATUS, unit 1, motor off; bit 4 is TRK0
+fdd_dbg_st3b  ...and again after the RECALIBRATE. THIS is what decides
+fdd_dbg_st0   a drained SENSE INTERRUPT STATUS ST0 - diagnostic only (§18.97.1)
 fdd_dbg_step  where it stopped: FDD_S_*, and the row that carries
 fdd_dbg_vrd   0 = absent, the row was retired; 1 = present, the row was kept
 ```
@@ -31886,12 +31936,11 @@ identically whether the probe proved a drive present or merely failed to
 prove one absent, and those two are the difference between a working feature
 and a fail-safe that is quietly always taking the safe branch. `FDD_S_TRK0`
 means the motor-off read answered and nothing further ran, which is the row a
-correctly-switched two-drive machine should show; `FDD_S_EC` means the
-recalibrate came back with Equipment Check and the row went; `FDD_S_SEEKOK`
-means it came back *clean*, so the drive is there and was parked off track 0.
-Everything else is a refusal — a byte handshake that timed out, a controller
-that never went ready, a seek that outlived `FDD_SEEKTO` — and each keeps the
-drive.
+correctly-switched two-drive machine should show; `FDD_S_SEEKOK` means TRK0
+came up after the recalibrate, so the drive is there and was parked off track
+0; `FDD_S_NOTRK0` means it never came up and the row went. `FDD_S_NORDY` is
+the only refusal left — the controller never took a byte or never offered
+one — and it keeps the drive, as every unrecognised state does.
 
 **Unconditional, for the mouse, clock and display blocks' reason** — and more
 plainly than any of them. This block exists *because* no emulator here can be

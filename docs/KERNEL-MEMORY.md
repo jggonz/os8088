@@ -379,7 +379,7 @@ Three things about it:
     "ksize": 97792,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 3067,
+    "ovl": 3069,
     "stk0": 1024,
     "text": 56025
   },
@@ -1129,7 +1129,7 @@ It works because of what the `FAT_SEG` window is doing at boot: nothing.
 `drv_boot` — the *last* thing `kmain` does before the first paint. So there
 is a 4,608-byte hole in the middle of the kernel's own ladder that is live
 for the whole of start-up and dead the instant the first volume mounts. The
-overlay is **3,067 bytes** of it, with 1,541 spare:
+overlay is **3,069 bytes** of it, with 1,539 spare:
 
 | | bytes | |
 |---|---:|---|
@@ -1137,7 +1137,7 @@ overlay is **3,067 bytes** of it, with 1,541 spare:
 | `cpudet.inc` minus `cpu_info` | 314 | the tier test and the whole A20 gate. `cpu_info` stays: it is API slot 0x0188 and answers all session long |
 | `xmem.inc` — `xm_init` | 123 | sizing the store is a once. `xm_arm` stays resident — `xm_copy` re-arms unreal mode inside the window that uses it — so it gets a shim |
 | `snd.inc` — `snd_init` | 107 | saving the boot 61h bits and publishing `snd_live`. `snd_unhook` is the shutdown path and stays |
-| `disk.inc` — `dsk_fdd_probe` | 380 | asking the FDC whether drive B is really there (SPEC.md §18.97), and retiring its volume row if not. `make FDDPROBE=0` takes it out |
+| `disk.inc` — `dsk_fdd_probe` | 382 | asking the FDC whether drive B is really there (SPEC.md §18.97), and retiring its volume row if not. `make FDDPROBE=0` takes it out |
 | `desk.inc` — `desk_init` | 122 | counting volumes and laying out their zones, and the 21 bytes that contest the count against the probe above. `desk_ord` and `desk_zone_label` are called by the runtime painters and stay |
 | `kernel.asm` — the entry stubs | 24 | |
 
@@ -1146,9 +1146,9 @@ they are short by ~158 bytes that predate this note. Trust the total and the
 spare; treat a row as "roughly what this module put here".
 
 **The number to watch is NOT the 1,541 spare, it is the IMAGE's last sector.**
-`kernel.bin` is **87,035 bytes** and the boot sector reads
+`kernel.bin` is **87,037 bytes** and the boot sector reads
 `(size + 511) / 512` = **170** of them, which hold 87,040 — so there are
-**5 bytes** of slack in the file, and the next thing added to `.ovl`, however
+**3 bytes** of slack in the file, and the next thing added to `.ovl`, however
 small, costs a whole sector of boot read (~65 ms on the field machine).
 `tools/kernsize.py` reports the three *rungs* and not this, because the rungs
 are what the RAM ladder is built from; the file's tail is a separate question
