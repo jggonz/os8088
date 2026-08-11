@@ -135,7 +135,10 @@ def main(argv):
         say("...dragged onto display 1: (%d,%d)" % (wx, wy))
 
         # --- 1: drive it UP as hard as the clamp allows --------------------
-        mo.drag(wx + ww // 2, wy + TITLE_H // 2, wx + ww // 2, 0)
+        # ...to d1vy and not to 0: past the seam, the rows above the second
+        # display are the DEAD ZONE now (SPEC.md 39.19.3) and mou_clamp
+        # correctly refuses to put the pointer in one.
+        mo.drag(wx + ww // 2, wy + TITLE_H // 2, wx + ww // 2, d1vy)
         os88marty.settle(m, card=sec["idx"])
         wx, wy, ww, wh = win_by(m, slot)
         say("pushed to the top of display 1: W_Y = %d (wanted %d)"
@@ -147,7 +150,8 @@ def main(argv):
 
         # --- 2: ...and the pixels are actually up there --------------------
         sw, sh, srows = m.vram(skind)
-        top = band(srows, wx - d1vx, wx - d1vx + ww - 1, 0, TITLE_H - 1)
+        top = band(srows, wx - d1vx, wx - d1vx + ww - 1, wy - d1vy,
+                   wy - d1vy + TITLE_H - 1)
         litn = sum(1 for b in top if b)
         say("its title bar rows on display 1: %d of %d px lit"
             % (litn, len(top)))
@@ -157,7 +161,7 @@ def main(argv):
                         "the pixels did not" % wy)
 
         # --- 3: and they come back when it leaves --------------------------
-        mo.drag(wx + ww // 2, TITLE_H // 2, wx + ww // 2, 120)
+        mo.drag(wx + ww // 2, wy + TITLE_H // 2, wx + ww // 2, 120)
         os88marty.settle(m, card=sec["idx"])
         ax2, ay2, aw2, ah2 = win_by(m, slot)
         say("...and it ended up at (%d,%d) %dx%d" % (ax2, ay2, aw2, ah2))

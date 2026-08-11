@@ -1291,6 +1291,21 @@ vid_disp_init:
     je .below
     mov ax, [vid_cw]
     mov [di+VID_CTX_VX], ax
+    mov word [di+VID_CTX_VY], MBAR_H  ; ...AND ITS TOP ROW IS THE DESKTOP'S,
+                                      ; not the screen's (SPEC.md 39.19.3).
+                                      ; The second monitor carries no menu
+                                      ; bar, so aligning its row 0 with the
+                                      ; primary's row 0 spends the first
+                                      ; MBAR_H of it on a band no straddling
+                                      ; window may enter - 20 of a CGA's 200
+                                      ; rows, 10%. Aligning it with the
+                                      ; DESKTOP BAND instead gives those rows
+                                      ; back and costs nothing: the dead zone
+                                      ; moves from below the card to above it
+                                      ; and does not grow, mou_clamp is
+                                      ; written against the union rather than
+                                      ; against a rectangle (39.15.4), and
+                                      ; ui_ylow already reads this very word
     jmp short .placed
 .below:
     mov ax, [vid_ch]

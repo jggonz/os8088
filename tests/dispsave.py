@@ -32,7 +32,7 @@ import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 
 TITLE_H = 18
-VID_CTX_SZ, VID_CTX_VX, VID_CTX_CW = 42, 36, 14
+VID_CTX_SZ, VID_CTX_VX, VID_CTX_VY, VID_CTX_CW = 42, 36, 38, 14
 S = os88sym.linear
 
 
@@ -91,6 +91,7 @@ def main(argv):
         ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
         seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
         secw = u16(ctx, VID_CTX_SZ + VID_CTX_CW)
+        secy = u16(ctx, VID_CTX_SZ + VID_CTX_VY)   # SPEC.md 39.19.3: NOT 0
         say("secondary %s at x=%d, %d px wide" % (sec["type"], seam, secw))
 
         # two Disk windows - WF_SAVEU is theirs (SPEC.md 22.14), and they
@@ -124,8 +125,11 @@ def main(argv):
 
         # the reference: the back window, uncovered, as it is now
         sw, sh, rows = m.vram(skind)
+        # BOTH axes come off the display's origin. y used to be taken raw,
+        # which was right only while VY was 0 (SPEC.md 39.19.3) and then
+        # compared two different bands and called it corruption.
         x0, x1 = bx - seam, min(bx + bw - 1, seam + secw - 1) - seam
-        y0, y1 = by, min(by + bh - 1, sh - 1)
+        y0, y1 = by - secy, min(by + bh - 1 - secy, sh - 1)
         ref = region(rows, x0, x1, y0, y1)
         say("reference: its %d..%d x %d..%d on the second card, %d px"
             % (x0, x1, y0, y1, len(ref)))

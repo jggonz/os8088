@@ -22032,6 +22032,40 @@ chunky preview after a quarter of the work. `fr_rowcalc` computes one row
 into `fr_line` **with no lock held**; `fr_emit` then takes the lock for a
 run-coalesced band paint and releases it (rule 3 of §20.6).
 
+#### 39.19.3 The second monitor's top row is the DESKTOP's, not the screen's
+
+Right places display 1 at `(primary width, MBAR_H)` and not at
+`(primary width, 0)`. **The second card carries no menu bar** — the chrome is
+the primary's (§39.16.2) — so aligning its row 0 with the primary's row 0
+spends the first `MBAR_H` rows of it on a band no straddling window may
+enter: a window whose origin is on the primary is floored at `MBAR_H` by
+`ui_ylow`, so on a **CGA that is 20 of 200 rows, 10% of the monitor**, and on
+the machine this is calibrated against the second monitor IS the CGA
+(docs/FIELD-MACHINES.md). Aligning display 1 with the primary's **desktop
+band** instead maps virtual `MBAR_H` to its local row 0, and a straddling
+window gets all 200.
+
+**It costs one word and nothing else, which is the whole argument for doing
+it this way** rather than by special-casing the clamp:
+
+- **The dead zone MOVES and does not grow.** Virtual rows `0..MBAR_H-1` past
+  the seam stop being covered and rows `ch..ch+MBAR_H-1` start being covered;
+  on a Hercules+CGA machine the total is 148 rows either way. Every CGA pixel
+  still has a virtual address, so nothing on that monitor goes undrawn.
+- **`mou_clamp` is written against the UNION, not a rectangle** (§39.15.4):
+  *inside some display, take it; otherwise clamp into the display the arrow is
+  on.* Sliding right along the menu bar now stops the pointer at the primary's
+  last column instead of crossing, which is the same rule that already stops
+  it dropping into the gap below a short second monitor.
+- **`vid_desk_union` already takes `max(vy + ch)`**, `ui_ylow` already returns
+  the display's own `VY`, `wm_dmg_band` already bands `vy .. vy+ch-1`, and
+  `vid_span_one`, `gfx_disp_run` and `gfx_disp_enter` are all written against
+  `VX`/`VY`. Not one of them needed a line.
+
+**Below is deliberately unchanged.** Its seam is horizontal and the menu bar
+is nowhere near it, so there is nothing to reclaim — and display 1's `VY`
+there is the primary's height, which is what places it at all.
+
 ### 40.1 The restore cache
 
 **Why there is no frame buffer, and why the cache is not in bss.** The canvas

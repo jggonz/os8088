@@ -409,7 +409,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 56986
+    "text": 56994
   },
   "small": {
     "bss": 4884,
@@ -924,12 +924,12 @@ generated in the first place.
 |---|---:|---:|
 | the file system, end to end | 29,803 | 37.2% |
 | the window system and its furniture | 17,379 | 21.7% |
-| drawing: adapters, primitives, glyphs, icons | 11,849 | 14.8% |
+| drawing: adapters, primitives, glyphs, icons | 11,857 | 14.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,823 | 12.3% |
 | the kernel proper: API table, heap, scheduler, events | 5,981 | 7.5% |
 | the Control Panel | 3,873 | 4.8% |
 | the three built-in kinds | 1,365 | 1.7% |
-| **total** | **80,073** | |
+| **total** | **80,081** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -954,7 +954,7 @@ generated in the first place.
 | `icons.inc` — the icon renderer (§10) | 1,570 | — | **1,570** | 34 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,365 | — | **1,365** | 11 | 240 |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,336 | — | **1,336** | 84 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,344 | — | **1,344** | 84 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
@@ -971,7 +971,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,789 | — | **2,789** | — | — |
-| **total** | **56,986** | **23,087** | **80,073** | **5,093** | **7,762** |
+| **total** | **56,994** | **23,087** | **80,081** | **5,093** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
