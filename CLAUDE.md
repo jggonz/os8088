@@ -285,6 +285,25 @@ make bench    # build the testing apps in tests/ into build/bench.img and
               # bench360.img. ON DEMAND ONLY — `all` never builds tests/ and
               # nothing under it ships. Run one with
               # `make test TESTAPPS=build/bench.img` (docs/TESTING.md)
+make dosstub  # JUST ENOUGH DOS TO RUN A .COM, on a machine that has none
+              # (SPEC.md 62.8). There is no DOS in this container and none
+              # this tree may ship, so OS88NET.COM - the DOS half of the
+              # parallel link - was written, assembled, packaged and SENT TO
+              # THE FIELD TWICE with not one instruction of it ever executed.
+              # It came back "returns to prompt instantly with nothing
+              # printed, whatever parameters", which is what a .COM does when
+              # something is in front of its entry: DOS enters at offset
+              # 0x100, the FIRST byte of the file, and two %includes sat above
+              # `start:`. This is a bootable 360KB floppy carrying an int 21h
+              # stub and the .COM inside its own image, so it runs on the same
+              # cycle-accurate 8088 with a REAL parallel port at 0x378.
+              # Knobs, for the paths a real file cannot easily produce:
+              # FSIZE=64M / FSIZE=256 (the size arithmetic at its ends),
+              # FAILOPEN=1 (DOS says no), ARGS='/RO /P:378' (the command
+              # tail - argument parsing is code nothing else here executes).
+              # It refuses an unimplemented int 21h call LOUDLY, printing AH
+              # and halting: a stub that returns a plausible zero is a harness
+              # that has started lying about the thing under test
 make comscan  # the SERIAL PORT SURVEY (tests/comscan) - the field diagnostic
               # for "the mouse was not detected on real hardware" (SPEC.md
               # 9.5). Builds build/comscan.img (360K, BOOTABLE - no DOS, no

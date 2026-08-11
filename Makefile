@@ -316,6 +316,7 @@ $(shell mkdir -p $(BUILD); \
 # BSD/macOS stat, and this gets built on both. Try GNU first, fall back to BSD.
 FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 
+
 KERNEL_SRC := kernel/kernel.asm
 # apps/os88ui.inc is a KERNEL source too - SPEC.md 20.5.1's shared control
 # assembles into fdlg.inc with OS88UI_KERNEL defined. Without it here, editing
@@ -1989,6 +1990,55 @@ $(BUILD)/llboot144.bin: boot/boot.asm $(BUILD)/lptlink.bin | $(BUILD)
 	$(NASM) -f bin $(BOOTDEF) \
 		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/lptlink.bin) + 511 ) / 512 )) \
 		-o $@ boot/boot.asm
+
+# THE DOS-LITE HARNESS (tests/dosstub): a bootable floppy that runs
+# OS88NET.COM on a machine with no DOS on it.
+#
+# It exists because the DOS end was written, assembled, packaged and SENT TO
+# THE FIELD TWICE without one instruction of it ever executing - there is no
+# DOS in this container and none this tree may ship, so `make` could say the
+# program was fine while DOS entered it at a byte that was not its entry.
+#
+#   make dosstub                     10MB image: 20,480 sectors
+#   make dosstub FSIZE=64M           past os8088's cap: 65,535, and it says so
+#   make dosstub FSIZE=256           under one sector: the refusal
+#   make dosstub FAILOPEN=1          DOS says no: the error path
+#   make dosstub ARGS='/RO /P:378'   the command tail
+#
+# ON DEMAND ONLY. `all` never builds tests/ and nothing under it ships.
+DOSSTUB_DEF :=
+ifeq ($(FSIZE),64M)
+DOSSTUB_DEF += -DFSIZE_HI=0x0400 -DFSIZE_LO=0x0000
+endif
+ifeq ($(FSIZE),256)
+DOSSTUB_DEF += -DFSIZE_HI=0x0000 -DFSIZE_LO=0x0100
+endif
+ifneq ($(ARGS),)
+DOSSTUB_DEF += -DARGS='"$(ARGS)"'
+endif
+ifneq ($(FAILOPEN),)
+DOSSTUB_DEF += -DFAILOPEN=1
+endif
+
+$(BUILD)/dosstub.bin: tests/dosstub/dosstub.asm $(BUILD)/os88net.com | $(BUILD)
+	$(NASM) -f bin -w+error $(DOSSTUB_DEF) -o $@ tests/dosstub/dosstub.asm
+
+$(BUILD)/dsboot.bin: boot/boot.asm $(BUILD)/dosstub.bin | $(BUILD)
+	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/dosstub.bin) + 511 ) / 512 )) \
+		-o $@ boot/boot.asm
+
+$(BUILD)/dosstub.img: $(BUILD)/dsboot.bin $(BUILD)/dosstub.bin tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/dsboot.bin --kernel $(BUILD)/dosstub.bin
+
+.PHONY: dosstub
+dosstub: $(BUILD)/dosstub.img
+	@echo "dosstub: $(BUILD)/dosstub.img - boots and runs OS88NET.COM with no DOS"
+	@echo "  cd $(BUILD)/martypc/run && MARTYPC_DEBUG_ADDR=127.0.0.1:9001 \\"
+	@echo "    ./martypc_headless --machine-config-name os8088_5150_cga_lpt \\"
+	@echo "    --mount fd:0:media/floppies/dosstub.img &"
+	@echo "  python3 tools/os88marty.py 127.0.0.1:9001 screen"
 
 $(BUILD)/lptlink.img: $(BUILD)/llboot360.bin $(BUILD)/lptlink.bin \
                       $(BUILD)/lptlink.com tools/os88disk.py

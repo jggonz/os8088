@@ -51,6 +51,21 @@
     org 0                       ; loaded at KERNEL_SEG:0000 by boot/boot.asm
 %endif
 
+; THE ENTRY IS THE FIRST BYTE, in both builds - DOS enters a .COM at offset
+; 0x100 and boot/boot.asm far-jumps to KERNEL_SEG:0000, and neither asks where
+; the author put `start:`. This file is safe by LAYOUT (its two %includes are
+; at the END, ~600 lines down) and that safety is one edit from gone, so it is
+; asserted rather than trusted. It emits nothing; if anything is ever put
+; above it, nasm says `TIMES value -N is negative` and N is how many bytes got
+; in front of the entry.
+;
+; os88net.asm is the same assertion for the reason it EXISTS: it had the two
+; includes above `start:`, so DOS ran the transport's first routine on a
+; garbage port and terminated instantly with nothing printed, whatever
+; arguments it was given.
+com_entry:
+    times ($$ - com_entry) db 0
+
 ; --- the benchmark -----------------------------------------------------------
 ; 64 x 256 = 16KB, which is ~1.6s at the 10KB/s NET-PLAN 1.2 models and ~5s at
 ; a pessimistic 3KB/s. The tick is 54.9ms, so either way the measurement has
