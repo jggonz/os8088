@@ -590,6 +590,15 @@ tracked.
   **`R`** runs it, **`S`** saves the report. It names the file after the
   adapter it found: `GFXHERC.TXT` / `GFXCGA.TXT` / `GFXVGA.TXT`, so the two
   disks cannot produce a file that overwrites the other's.
+  **On an EXTENDED desktop (SPEC.md §39.19) it names the card its SANDBOX is
+  on, not the machine's primary** — so with two cards you get one report per
+  card by dragging the window across and pressing `R` again, and neither has
+  to be renamed by hand. That is not only the name: the framebuffer segment,
+  the stride, the bank count and the status port are that display's too, and
+  the raw VRAM rows are addressed in its own coordinates. Read
+  **`sandbox straddles`** first — a 1 there means the window crossed the seam,
+  so the primitives in that report were being split, refused or drawn per cell
+  (§39.14.6/§39.14.7) and it is not comparable with a report that reads 0.
 - Then `SYSBENCH.O88`, likewise, to `SYSBENCH.TXT`.
 - `gfxbench` is about fifteen seconds. `sysbench` is about a minute on a
   floppy-only machine and **two or more with the hard disk mounted** — its

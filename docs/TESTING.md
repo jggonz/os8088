@@ -960,6 +960,13 @@ pasted into [PERFORMANCE.md](../PERFORMANCE.md).
 | `gfxbench` on VGA / Hercules / CGA | `GFXVGA.TXT` / `GFXHERC.TXT` / `GFXCGA.TXT` |
 | `sysbench` | `SYSBENCH.TXT` |
 
+**On an extended desktop the name is the card the SANDBOX is on**, not
+`[vid_kind]` — `gfxbench` resolves its own window's origin against §57.4's
+`VD` block, and the framebuffer segment, stride, bank count, status port and
+the raw VRAM rows' addressing all follow it. So two cards give two reports
+from one launch: run, drag the window onto the other monitor, run again.
+Check the new **`sandbox straddles`** row before comparing two of them.
+
 **The file goes to the CURRENT volume and directory** (SPEC.md §19.2), which
 right after launching a package off the bench disk is that disk's root — so
 the ordinary thing works. It means the bench floppy must **not** be

@@ -1288,7 +1288,7 @@ sb_mouse:
                                     ; is a measurement
 
     mov ax, DBG_TAG_MOUSE           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_mbase], ax              ; -> mou_bases, 2 words, 0 = no UART there
@@ -1453,7 +1453,7 @@ sb_video:
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_VIDEO           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_vkind], ax              ; -> vid_kind, vid_mono, vid_planes
@@ -1698,7 +1698,7 @@ sb_ladder:
     call bl_sline                   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_CLOCK           ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov ax, [es:bx+2]
     mov [sb_cstate], ax             ; -> the 7-byte state span
@@ -2272,7 +2272,7 @@ sb_raw13:
     ; --- find the kernel's instrument, or say there is none ----------------
     push es
     mov ax, DBG_TAG_DISK            ; SPEC.md 57's registry
-    call sb_dbgfind
+    call bl_dbgfind
     jc .nodbg
     mov [sb_dbgblk], bx
     mov ax, [es:bx+12]
@@ -3534,47 +3534,6 @@ sb_verify:
     ret
 
 ; -----------------------------------------------------------------------------
-; sb_dbgfind - look a published block up in the debug registry (SPEC.md 57)
-; in:  AX = the block's tag ('MO', 'DD')
-; out: CF=0 with BX = its offset in KERNEL_SEG and ES = KERNEL_SEG;
-;      CF=1 if this kernel does not publish it
-; clobbers: BX, ES, CF
-;
-; One word at 0060:000E names a list of (tag, offset) pairs ended by tag 0.
-; The tag is also the block's own first word, so this checks that the offset
-; it followed landed where it meant to - which is the whole reason a reader
-; can trust a number it found by walking a pointer out of a fixed address.
-; -----------------------------------------------------------------------------
-sb_dbgfind:
-    push ax
-    push si
-    mov bx, KERNEL_SEG
-    mov es, bx
-    mov si, [es:0x000E]             ; the registry, or 0
-    or si, si
-    jz .none
-.scan:
-    mov bx, [es:si]                 ; the tag
-    or bx, bx
-    jz .none                        ; end of list: not published here
-    cmp bx, ax
-    je .hit
-    add si, 4
-    jmp short .scan
-.hit:
-    mov bx, [es:si+2]               ; ...and the block behind it
-    cmp [es:bx], ax                 ; which must lead with the same tag
-    jne .none
-    pop si
-    pop ax
-    clc
-    ret
-.none:
-    pop si
-    pop ax
-    stc
-    ret
-
 ; sb_r13rate - DX:AX = counts for CX bytes -> DX:AX = bytes per second
 sb_r13rate:
     push bx

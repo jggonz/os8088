@@ -362,6 +362,7 @@ gb_run:
     mov byte [gb_ran], 1
 
     call gb_geom                    ; the sandbox, from the LIVE window
+    call gb_disp                    ; ...and WHICH CARD it is on (SPEC.md 39.19)
     call gb_mktab                   ; the adapter record and the row tables
     call gb_mkblit                  ; the two blit sources
     call bl_baseline                ; ...and the loop overhead every P row is
@@ -451,6 +452,139 @@ gb_geom:
     ret
 
 ; -----------------------------------------------------------------------------
+; gb_disp - WHICH DISPLAY is the sandbox on? (SPEC.md 39.19, 57.4's 'VD')
+;
+; in:       gb_geom has run; out: [gb_dok] and the gb_d* block; [gb_kind]
+;           becomes the SANDBOX's adapter rather than the machine's primary
+; clobbers: flags
+;
+; This report used to name itself after `[vid_kind]`, and on a two-card machine
+; that is the PRIMARY - so a run whose window was on the other card wrote
+; GFXHERC.TXT full of CGA timings and had to be renamed by hand. Worse than the
+; name: gb_mktab took the framebuffer segment, the stride and the bank shape
+; from the same place, so the raw VRAM rows measured a card the sandbox was not
+; on, at an offset derived from a VIRTUAL x that is past that card's width.
+; That was luck rather than design every time it came out right.
+;
+; So the display is RESOLVED, from the point the drawing actually starts at,
+; and everything else follows from it: the file name, the adapter line, the
+; status port, the four framebuffer numbers, and the local origin the row
+; tables are built from.
+;
+; A reader that cannot find its block says so and continues (SPEC.md 57 rule
+; 2) - [gb_dok] stays 0, the origin stays (0,0) and every number is the
+; one-display answer, which is exactly right on a one-display machine and on a
+; kern_small kernel that has no such bytes at all.
+;
+; [gb_dstrad] is the row that changes what the rest of the report MEANS: a
+; sandbox crossing a seam has primitives being split per display (39.14.1),
+; refused (gfx_scroll, 39.14.7) or drawn per cell (font_run, 39.14.6), and
+; those are different measurements from the same row names.
+; -----------------------------------------------------------------------------
+gb_disp:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [gb_dok], 0            ; the one-display answer, and the fallback
+    mov byte [gb_dn], 1             ; for a kernel that publishes nothing
+    mov byte [gb_dix], 0xFF
+    mov byte [gb_dstrad], 0
+    mov word [gb_dvx], 0
+    mov word [gb_dvy], 0
+    mov ax, [gb_vw]
+    mov [gb_dcw], ax
+    mov ax, [gb_vh]
+    mov [gb_dch], ax
+
+    mov ax, DBG_TAG_VIDEO
+    call bl_dbgfind
+    jc .out
+    mov si, bx
+    mov bx, [es:si+6]               ; -> vid_ndisp, or 0 on a kern_small kernel
+    or bx, bx
+    jz .out                         ; single-display by CONSTRUCTION: nothing
+    mov al, [es:bx]                 ; to report, rather than a 1 read out of a
+    mov [gb_dn], al                 ; byte that is not there
+    mov cx, [es:si+12]              ; VID_CTX_SZ
+    mov si, [es:si+10]              ; ...and the records
+    xor di, di
+.scan:
+    mov ax, [es:si+VCTX_VX]         ; is the sandbox's origin inside this one?
+    cmp [gb_x], ax
+    jb .next
+    mov dx, ax
+    add dx, [es:si+VCTX_CW]
+    cmp [gb_x], dx
+    jae .next
+    mov ax, [es:si+VCTX_VY]
+    cmp [gb_y], ax
+    jb .next
+    mov dx, ax
+    add dx, [es:si+VCTX_CH]
+    cmp [gb_y], dx
+    jb .found
+.next:
+    add si, cx
+    inc di
+    mov al, [gb_dn]
+    xor ah, ah
+    cmp di, ax
+    jb .scan
+    jmp short .out                  ; the DEAD ZONE (39.2.1): no display claims
+                                    ; it, so there is no record to report and
+                                    ; the primary's numbers are the best guess
+.found:
+    mov [gb_dix], di
+    mov al, [es:si+VCTX_KIND]
+    mov [gb_dkind], al
+    mov [gb_kind], al               ; ...and THIS is what renames the file
+    mov ax, [es:si+VCTX_VX]
+    mov [gb_dvx], ax
+    mov ax, [es:si+VCTX_VY]
+    mov [gb_dvy], ax
+    mov ax, [es:si+VCTX_CW]
+    mov [gb_dcw], ax
+    mov ax, [es:si+VCTX_CH]
+    mov [gb_dch], ax
+    mov ax, [es:si+VCTX_SEG]        ; the four framebuffer numbers, from the
+    mov [gb_fbseg], ax              ; live context rather than gb_vtab
+    mov ax, [es:si+VCTX_STRIDE]
+    mov [gb_stride], ax
+    mov ax, [es:si+VCTX_BMASK]
+    mov [gb_bmask], ax
+    mov ax, [es:si+VCTX_BSHIFT]
+    mov [gb_bshift], ax
+    mov byte [gb_dok], 1
+
+    mov ax, [gb_cx]                 ; ...and does the CONTENT BOX fit inside it?
+    add ax, [gb_cw]                 ; (the sandbox's origin does by construction
+    mov dx, [gb_dvx]                ; - that is how the display was chosen)
+    add dx, [gb_dcw]
+    cmp ax, dx
+    ja .strad
+    mov ax, [gb_cy]
+    add ax, [gb_ch]
+    mov dx, [gb_dvy]
+    add dx, [gb_dch]
+    cmp ax, dx
+    jbe .out
+.strad:
+    mov byte [gb_dstrad], 1
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; gb_rowbase - the framebuffer offset of scan line AX (SPEC.md 39.3)
 ; in:       AX = y
 ; out:      AX = byte offset
@@ -477,6 +611,13 @@ gb_rowbase:
 
 ; -----------------------------------------------------------------------------
 ; gb_mktab - pick the adapter record and fill the two bandwidth row tables
+;
+; The record comes from the DISPLAY the sandbox is on, not from the machine's
+; primary (SPEC.md 39.14.7's report): gb_disp has already taken seg / stride /
+; bmask / bshift out of that display's own context when there is more than one,
+; and the static gb_vtab is the one-display answer. The rows are built from
+; LOCAL coordinates for the same reason - gb_rowbase computes an offset into a
+; framebuffer, and the sandbox's x is the VIRTUAL desktop's.
 ; -----------------------------------------------------------------------------
 gb_mktab:
     push ax
@@ -485,6 +626,8 @@ gb_mktab:
     push dx
     push si
     push di
+    cmp byte [gb_dok], 0
+    jne .port                       ; gb_disp took them from the live context
     mov al, [gb_kind]               ; the adapter record: seg, stride, bmask,
     xor ah, ah                      ; bshift - vid_tab's four numbers, which a
     mov bx, 8                       ; package has no other way to learn
@@ -499,7 +642,11 @@ gb_mktab:
     mov [gb_bmask], bx
     mov bx, [si+6]
     mov [gb_bshift], bx
-    shr ax, 1                       ; the status-port record is 4 bytes
+.port:
+    mov al, [gb_kind]               ; the status-port record is 4 bytes, and it
+    xor ah, ah                      ; is still keyed on the KIND - which is the
+    mov bx, 4                       ; sandbox's display's kind now
+    mul bx
     mov si, gb_ptab
     add si, ax
     mov bx, [si]
@@ -507,14 +654,16 @@ gb_mktab:
     mov bx, [si+2]
     mov [gb_vsbit], bx
 
-    mov ax, [gb_x]                  ; the byte column our content starts at
-    mov cl, 3
+    mov ax, [gb_x]                  ; the byte column our content starts at,
+    sub ax, [gb_dvx]                ; on ITS OWN card (gb_dvx is 0 with one
+    mov cl, 3                       ; display, so this is free there)
     shr ax, cl
     mov [gb_xbyte], ax
 
     mov di, gb_vrow                 ; --- the framebuffer table. SI is the row
     mov si, GB_BWROWS               ; counter and NOT cx, because gb_rowbase
     mov bx, [gb_y]                  ; loads two shift counts into CL: a `loop`
+    sub bx, [gb_dvy]                ; ...and local rows, gb_xbyte's reason
 .v:                                 ; here ran 65,536 times and wrote a word
     mov ax, bx                      ; every two bytes across the whole segment
     call gb_rowbase
@@ -652,6 +801,33 @@ gb_header:
     mov si, gb_l_rows
     mov ax, [gb_vh]
     call gb_num
+    cmp byte [gb_dn], 1             ; ...and on a two-card machine, WHICH card
+    jbe .one                        ; the rows below were measured on: every
+    mov si, gb_l_ndisp              ; number from here down is that display's,
+    mov al, [gb_dn]                 ; and the screen pair above is the UNION
+    xor ah, ah                      ; (SPEC.md 39.16)
+    call gb_num
+    mov si, gb_l_dix
+    mov al, [gb_dix]
+    xor ah, ah
+    call gb_num
+    mov si, gb_l_dorg
+    mov ax, [gb_dvx]
+    call gb_num
+    mov si, gb_l_dorgy
+    mov ax, [gb_dvy]
+    call gb_num
+    mov si, gb_l_dw
+    mov ax, [gb_dcw]
+    call gb_num
+    mov si, gb_l_dh
+    mov ax, [gb_dch]
+    call gb_num
+    mov si, gb_l_strad              ; THE row that changes what the rest means
+    mov al, [gb_dstrad]
+    xor ah, ah
+    call gb_num
+.one:
     mov si, gb_l_bpp
     mov al, [gb_bpp]
     xor ah, ah
@@ -2441,6 +2617,15 @@ gb_s_ttl2:  db '===========================================================', 0
 gb_l_adapter: db 'adapter', 0
 gb_l_screen:  db 'screen width px', 0
 gb_l_rows:    db 'screen height px', 0
+; ...the desktop's UNION. These seven are the DISPLAY the sandbox is on, and
+; they are printed only when there is more than one to choose between.
+gb_l_ndisp:   db 'displays', 0
+gb_l_dix:     db 'sandbox display', 0
+gb_l_dorg:    db 'display origin x', 0
+gb_l_dorgy:   db 'display origin y', 0
+gb_l_dw:      db 'display width px', 0
+gb_l_dh:      db 'display height px', 0
+gb_l_strad:   db 'sandbox straddles', 0
 gb_l_bpp:     db 'bits per pixel', 0
 gb_l_dock:    db 'first dock row', 0
 gb_l_fbseg:   db 'framebuffer seg', 0
@@ -2587,8 +2772,24 @@ gb_it_top:  db 'Top of Report', 0
 ; A hand-totalled figure that is too small is a package writing over
 ; benchlib's arena, which assembles cleanly and produces a report full of
 ; plausible nonsense.
+; vid_ctx (SPEC.md 57.4's 'VD'): an 18-word run with vid_cw/vid_ch inside it,
+; then the display's origin in the virtual desktop and its kind. Mirrored here
+; and in tests/sysbench for the same reason - a test package reads kernel state
+; through the registry and shipped software never does (SPEC.md 57).
+VCTX_SEG    equ 0               ; vid_seg:    the framebuffer
+VCTX_STRIDE equ 2               ; vid_stride: bytes from a row to the row one
+                                ;             BANK down (SPEC.md 39.3)
+VCTX_BMASK  equ 4               ; vid_bmask:  y & this = the bank
+VCTX_BSHIFT equ 6               ; vid_bshift: y >> this = the row in that bank
+VCTX_CW     equ 14              ; vid_cw / vid_ch: THIS DISPLAY's extent, not
+VCTX_CH     equ 16              ; the desktop's (SPEC.md 39.2.1)
+VCTX_VX     equ 36              ; ...and its origin in the virtual desktop
+VCTX_VY     equ 38
+VCTX_KIND   equ 40              ; ...and which adapter it is
+
 GB_NWALK    equ 8               ; walks stepped together (SPEC.md 5.6.8)
-GB_O_SYSKB  equ 178 + GB_NWALK * (4 + GLS_SZ)   ; the scalars above end at
+GB_O_SCAL   equ 192             ; ...where the scalars below end
+GB_O_SYSKB  equ GB_O_SCAL + GB_NWALK * (4 + GLS_SZ)   ; the scalars above end at
                                 ; gb_lsblk, which is DERIVED - a hand-totalled
                                 ; figure that is too small is a package writing
                                 ; over benchlib's arena, and it assembles
@@ -2667,8 +2868,18 @@ gb_tls8     equ os88_image_end + 162   ; dword: eight arrivals (SPEC.md 5.6.8)
 gb_tlsv8    equ os88_image_end + 166   ; dword: ...and one, for the same pixels
 gb_tlsa     equ os88_image_end + 174   ; dword: A - B, parked across bl_us100
 gb_lsi      equ os88_image_end + 170   ; word:  gb_lsinit's walk index
-gb_lsdsc    equ os88_image_end + 178   ; GB_NWALK (block, count) pairs
-gb_lsblk    equ os88_image_end + 178 + GB_NWALK * 4      ; GB_NWALK walk states
+gb_dok      equ os88_image_end + 178   ; byte: the 'VD' block answered, and
+gb_dn       equ os88_image_end + 179   ; byte: ...with this many displays
+gb_dix      equ os88_image_end + 180   ; byte: which one the sandbox is on,
+                                       ;       0xFF = none (the dead zone)
+gb_dkind    equ os88_image_end + 181   ; byte: ...and its adapter
+gb_dstrad   equ os88_image_end + 182   ; byte: the content box leaves it
+gb_dvx      equ os88_image_end + 184   ; word: that display's origin in the
+gb_dvy      equ os88_image_end + 186   ;       virtual desktop, and its own
+gb_dcw      equ os88_image_end + 188   ;       extent - what every number from
+gb_dch      equ os88_image_end + 190   ;       'framebuffer seg' down describes
+gb_lsdsc    equ os88_image_end + GB_O_SCAL   ; GB_NWALK (block, count) pairs
+gb_lsblk    equ os88_image_end + GB_O_SCAL + GB_NWALK * 4  ; ...and walk states
 gb_syskb    equ os88_image_end + GB_O_SYSKB    ; SYSKB_SIZE bytes
 gb_vrow     equ os88_image_end + GB_O_VROW     ; GB_BWROWS words: fb offsets
 gb_rrow     equ os88_image_end + GB_O_RROW     ; ...and the RAM ones
