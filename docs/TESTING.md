@@ -767,6 +767,7 @@ checks referenced throughout this document:
 | `filetest` | the write path (§18.4) | `make test TESTAPPS=build/filetest.img` |
 | `fsxtest` | fullscreen exclusive (§53): keys 0–8 cycle every mode with an identifying pattern, `x` runs a same-mode bracket, `t` keys a duration-0 tone for the §53.3 legs; the window shows the `fsx_caps` mask (01EF/000F/0011 by adapter) and the last result (`K`/`R`/`F`/`S`) | `make test TESTAPPS=build/fsxtest.img` (also under `VIDEO=cga` / `VIDEO=herc`; `make test-snd` + two instances for the sound legs) |
 | `stackprobe` | the 256-byte task-stack margin (§8) | `make test TESTAPPS=build/stkprobe.img` |
+| `xmtest` | the extended-memory **teardown** (§41.5/§29.4): does a closed instance's blocks above 1MB get freed? Needs a machine with a store, so **QEMU on a 386** — the target machine can never have one. The assertion lives outside the package, in `tests/xmcheck.py`, which reads `xm_tab` over QMP around the close | `make test TESTAPPS=build/xmtest.img` then `python3 tests/xmcheck.py build/qmp.sock` |
 | `trklog` | not a gate — a **recorder**. Tracker itself, built with `-DTRKLOG`, logging one record per system tick and writing it to `TRKLOG.TXT` (SPEC.md §45.14) | `make test SB16=1 TESTAPPS=build/trklog.img` |
 
 `benchlib.inc` is the one shared source under `tests/` — the timing loop, the

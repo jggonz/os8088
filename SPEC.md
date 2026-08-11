@@ -3654,6 +3654,13 @@ callback, never in a static, so nested paints (a W_ONCLICK that repaints
 every window) bill correctly. The callbacks' own register contracts below
 are unchanged — the sites restore AX/CX/DX/SI before calling.
 
+**The `snd_disp_set` half of that bracket has a fourth site**, and it is not
+a billing one: `loader_run` step 8's call to the **package entry proc**
+(§41.5.1). CPU time there is not billed to the instance — the record is not
+published yet — but the entry proc still has to be *identified*, or everything
+an app asks for while starting up is attributed to the kernel. The stamp
+brackets are otherwise identical, and nest the same way.
+
 Frame drawing (paint-all does this before calling W_PAINT):
 - 1px black outline around the whole frame; 1px black drop shadow along the
   right and bottom edges, offset (+1,+1), Mac-style.
@@ -21129,20 +21136,70 @@ entry covers — so a freed block merges with its neighbours for nothing.
 `xm_copy` carries **one ABI over two transports**: `int 15h AH=87h` on tier
 1, unreal mode on tier 2. The caller cannot tell which ran and must not care.
 
-**Nothing allocates out of this pool today, and the teardown leg is not
-wired.** Exactly one consumer has ever existed — §53.6.1's fullscreen desktop
-stash, kernel-side, 286+/VGA — and it was removed. `xm_release_inst` /
-`xm_release_rec` are correct and are called from nowhere: they had three call
-sites in `instance.inc`, beside each `snd_release_rec`, from the commit that
-introduced them until the **#51 integration merge dropped all three** — which
-is docs/UPSTREAM.md's hazard exactly, a merge that assembles, boots and says
-nothing, because a call that is simply absent breaks no build. It has cost
-nothing, and not by luck: the stash arrived *after* that merge and no instance
-has ever held a block. **So the paragraph above states the design and not the
-present behaviour, and the first consumer's first job is to wire those three
-sites back** rather than write the release again. Recorded here rather than
-fixed because a call that can only ever scan a table of zeroes is not worth
-three instructions until something fills it.
+**Nothing allocates out of this pool today, and the teardown leg is wired
+again.** Exactly one consumer has ever existed — §53.6.1's fullscreen desktop
+stash, kernel-side, 286+/VGA — and it was removed. `xm_release_rec` had three
+call sites in `instance.inc`, beside each `snd_release_rec`, from the commit
+that introduced it until the **#51 integration merge dropped all three** —
+docs/UPSTREAM.md's hazard exactly, a merge that assembles, boots and says
+nothing, because a call that is simply absent breaks no build. It cost nothing
+only because the stash arrived *after* that merge and no instance has ever
+held a block.
+
+The three calls are back, and **`tests/xmtest` + `tests/xmcheck.py` is the
+gate that makes the next such loss loud** (§41.7). It needs a package for a
+structural reason: `xm_alloc` stamps a block with the calling instance, so
+nothing outside one can make a block that belongs to a slot. Measured on QEMU
+with a 386 — three blocks, owner `0x01`, all three freed on the close — and
+**verified to FAIL**, which is the only thing that makes a green run mean
+anything: with the three calls commented out, the same run leaves all three
+live at KB=4 owner=1 after the window has gone.
+
+`kern_small` gets `xm_release_rec` as a `ret` in xmem.inc's `%else` rather
+than three `%ifdef`s in `instance.inc` (§41.11). **The teardown path does not
+know which build it is**, which matters because a conditional there is one a
+fourth teardown site could forget — and a missing `call` fails silently, which
+is how these three were lost in the first place.
+
+#### 41.5.1 The entry proc is a dispatched callback too (binding)
+
+**The loader stamps the entry proc with its instance, and it did not used to.**
+`xm_owner` goes through `inst_caller` (§34.3), which answers with the
+dispatched callback's stamp or, failing that, the **running task's** `T_INST` —
+and the entry proc is far-called by the loader on the UI task, whose `T_INST`
+is 0xFF. So everything an entry proc asked the kernel for came back attributed
+to the KERNEL. Measured, not reasoned: three blocks claimed from an entry proc
+came back owner `0xFF` in `xm_tab`, and the same three claimed from that
+package's `W_PAINT` came back owner `0x01`.
+
+`loader_run` step 8 now brackets the entry call the way every other dispatch
+site does — `push word [snd_inst]` / `snd_disp_set` / call / `pop word
+[snd_inst]` — so the entry proc is identified like a `W_PAINT`.
+
+**It was never an XMS bug**, which is why the fix is not in `xmem.inc`.
+`inst_caller` is the kernel's one "who is asking?" answer, so the same gap ran
+through four subsystems and all four are fixed by the one stamp:
+
+| asked from an entry proc | before | now |
+|---|---|---|
+| `xm_alloc` (§41.5) | stamped kernel, never released | the instance's, released at teardown |
+| a sound grant (§34.3) | never released at teardown | released |
+| `toast_show` (§59) | outlived its app | retired with it |
+| `osapi_file_here` / `inst_vol_enter` (§19.2.1) | the machine's directory | the instance's |
+
+Every one of those is an improvement in the same direction, and none is a
+behaviour a package could have relied on: they are all "this belongs to
+nobody" becoming "this belongs to the app that asked".
+
+**The abort path had to follow.** An entry that claims and then returns CF=1
+now leaves blocks owned by a slot `ld_unreserve` is about to hand back, so
+`ld_unreserve` releases them alongside the two heap owners it already swept.
+Without that, the next package to take the slot would inherit them — a worse
+failure than the leak the stamp removed, and the reason the sweep is part of
+this change rather than a later one.
+
+The gate for all of it is §41.7's, and it claims **from the entry proc** so it
+tests the stamp and the release together.
 
 ### 41.6 What the Task Manager reports
 
@@ -21253,6 +21310,31 @@ allocator slots refuse, and the Task Manager shows the tier alone with no bar
 under it — §41.6.1) and with
 `-m 2M` for a small non-zero store, where an allocator that gets its
 subtraction wrong will hand out a base past the top of RAM.
+
+**The teardown has a gate of its own**, because it is the one thing here that
+no amount of reading `xm_caps` can check:
+
+```
+make test TESTAPPS=build/xmtest.img
+python3 tests/xmcheck.py build/qmp.sock
+```
+
+`tests/xmtest` claims **three** blocks (one would pass a release that stopped
+at the first match) from inside a `W_PAINT` — a *dispatched callback*, which
+is what gets them stamped with the instance rather than the kernel (§41.5.1) —
+and `tests/xmcheck.py` drives the launch and the close and reads `xm_tab`
+over QMP. It has to be a package: `xm_alloc` stamps a block with the calling
+instance, so nothing outside one can make a block that belongs to a slot.
+
+**The assertion is deliberately outside the package.** A package asking the
+kernel "did you free my blocks?" is the writer and the reader being the same
+code, and both agreeing on the same wrong answer is the failure this area has
+already had once (docs/FIELD-NOTES.md 4).
+
+**And the gate is verified to FAIL**, which is the only thing that makes a
+green run mean anything: with the three `call xm_release_rec` commented out of
+`instance.inc`, the same run leaves all three blocks live at KB=4 owner=1
+after the window has gone.
 
 ### 41.8 The package ABI
 

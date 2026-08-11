@@ -603,6 +603,23 @@ $(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin tools/os88pkg.py
 $(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fmtest.o88
 
+# XMTEST: the extended-memory TEARDOWN gate (SPEC.md 41.5/29.4). It answers
+# "when an instance holding blocks above 1MB closes, are they freed?", which
+# needs a package because xm_alloc stamps a block with the CALLING INSTANCE -
+# nothing outside one can make a block that belongs to a slot. It must run on
+# a machine that HAS a store, so QEMU on a 386 rather than MartyPC's 8088:
+#   make test TESTAPPS=build/xmtest.img
+#   python3 tests/xmcheck.py build/qmp.sock
+$(BUILD)/xmtest.bin: tests/xmtest/xmtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/xmtest/xmtest.asm
+	@echo "xmtest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/xmtest.o88: $(BUILD)/xmtest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/xmtest.bin -o $@
+
+$(BUILD)/xmtest.img: $(BUILD)/xmtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/xmtest.o88
+
 # LINETEST: the gate for SPEC.md 5.6.6, the 1bpp three-column walk. A
 # deterministic fan of dilated steep lines and nothing else, so two kernels
 # can be compared byte for byte over a framebuffer dump:
