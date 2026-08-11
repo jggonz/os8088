@@ -984,10 +984,24 @@ osapi_table:
                                   ;          answers CF=1 / AX = FERR_NAME
                                   ;          rather than being reused - a
                                   ;          shipped slot keeps its contract
-    OSAPI_SLOT gfx_dbuf_gone      ; 0x01F0 - RETIRED (SPEC.md 32/20.8 rule 4):
-                                  ;          was a package's own sw_set. The
-                                  ;          cell answers CF=1 rather than
-                                  ;          being reused
+    OSAPI_SLOT wm_onmouseup       ; 0x01F0 - BX = window, AX = a near proc in
+                                  ;          YOUR segment (0 clears it): the
+                                  ;          release half of a content click
+                                  ;          (SPEC.md 13.7). Call it after
+                                  ;          OSAPI_WM_CREATE, like
+                                  ;          OSAPI_WM_ONSIZE - W_ONMOUSEUP is
+                                  ;          not a template word.
+                                  ;
+                                  ;          THIS CELL IS REUSED, and it is
+                                  ;          the worked example of SPEC.md
+                                  ;          20.3.1's free list: it held the
+                                  ;          RETIRED gfx_dbuf_gone (32), whose
+                                  ;          contract was withdrawn, whose SDK
+                                  ;          name was removed, and which
+                                  ;          therefore had no caller that
+                                  ;          could exist. Reuse cost the table
+                                  ;          nothing where an append would
+                                  ;          have grown it
     OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows
@@ -1363,14 +1377,7 @@ osapi_table:
                                   ;         what lets a system file too big for
                                   ;         the caller's buffer be finished at
                                   ;         all (SPEC.md 18.4.4)
-    OSAPI_SLOT wm_onmouseup       ; 0x03A8 - BX = window, AX = a near proc in
-                                  ;          YOUR segment (0 clears it): the
-                                  ;          release half of a content click
-                                  ;          (SPEC.md 13.7). Call it after
-                                  ;          OSAPI_WM_CREATE, like
-                                  ;          OSAPI_WM_ONSIZE - W_ONMOUSEUP is
-                                  ;          not a template word
-osapi_table_end:                  ; 0x03B0
+osapi_table_end:                  ; 0x03A8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1378,8 +1385,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 116 * 8
-%error "os8088 API jump table must be exactly 116 8-byte slots"
+%if OSAPI_TABLE_LEN != 115 * 8
+%error "os8088 API jump table must be exactly 115 8-byte slots"
 %endif
 
 ; =============================================================================

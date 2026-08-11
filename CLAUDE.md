@@ -1546,9 +1546,12 @@ Verified by booting a cycle-accurate 5150 and diffing framebuffers against the
 build before it: **0 differing bytes** on CGA, Hercules, VGA mode 12h and both
 cards of the dual-display machine.
 
-**Slot 0x01F0 is retired, not reused** (§20.8 rule 4): the cell answers CF=1
-and the SDK publishes no `OSAPI_GFX_DBUF`, so a source naming it fails to
-assemble rather than silently getting something else.
+**Slot 0x01F0 was retired here and is REUSED now** - it carries
+`wm_onmouseup` (SPEC.md §13.7). That is SPEC.md §20.3.1's rule: **a RETIRED
+cell is a free list, and a new slot should take one before appending.** It is
+safe for exactly the reason the retirement was safe - the contract was
+withdrawn AND the SDK name deleted, so no source that assembles can name it -
+and it is not the same thing as reusing a LIVE number, which stays forbidden.
 
 What did NOT go is `kernel/softgfx.inc` itself — 65% of it is the 1bpp renderer
 (§39.3), which was always the load-bearing half.

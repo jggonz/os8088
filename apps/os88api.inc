@@ -1889,7 +1889,7 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
 %define OSAPI_FILE_APPEND_SYS KERNEL_SEG:0x03A0 ; SI = NUL 8.3 name, ES:BX =
                                  ; bytes, CX = count; out as
                                  ; OSAPI_FILE_APPEND. DRIVERS ONLY.
-%define OSAPI_WM_ONMOUSEUP  KERNEL_SEG:0x03A8   ; BX = win ptr, AX = a near proc
+%define OSAPI_WM_ONMOUSEUP  KERNEL_SEG:0x01F0   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it): the RELEASE
                                  ; half of a content click (SPEC.md 13.7).
                                  ; Call it from your entry proc after

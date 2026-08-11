@@ -6119,7 +6119,7 @@ want the release. Rows, icons and title bars have one: §22.2's file row,
 §26.2's drive zone, §38.3's dialog row and §11.95's title bar all select or
 raise first and open or zoom second.
 
-### 13.7 A package's mouse-up — `W_ONMOUSEUP` (API 0x03A8)
+### 13.7 A package's mouse-up — `W_ONMOUSEUP` (API 0x01F0)
 
 `W_ONMOUSEUP` is the release half of a content click. Installed with
 `OSAPI_WM_ONMOUSEUP` (BX = window, AX = a near proc in the caller's segment,
@@ -10469,7 +10469,7 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 0x01B0 wm_geom         0x01D8 gfx_blit4         0x0200 mem_claim      (X)
 0x01B8 cm_alloc    (X) 0x01E0 wm_about_set      0x0208 mem_free       (X)
 0x01C0 cm_free     (X) 0x01E8 (retired)         0x0210 mem_avail
-0x01C8 cm_caps         0x01F0 RETIRED (§32)     0x0218 osapi_font_glyphs
+0x01C8 cm_caps         0x01F0 wm_onmouseup      0x0218 osapi_font_glyphs
 0x01D0 wm_resize       0x01F8 gfx_scroll        0x0220 wm_onsize
                                                 0x0228 osapi_file_here
                                                 0x0230 osapi_file_goto
@@ -10518,6 +10518,48 @@ keep their original register contracts exactly — and `OSAPI_SND_FM` /
 sound driver's (§51.4) real contracts. New code should prefer the KB slots
 (§50.3) over the arena wrappers: they are the native shape, they work from
 the entry proc, and only they carry the DMA-page and regrow contracts.
+
+### 20.3.1 A RETIRED cell is a free list — take one before appending
+
+A slot whose contract has been **withdrawn** is not dead weight to be worked
+around: it is **the next slot number**, and a new cell SHOULD take one before
+growing the table. `wm_onmouseup` (§13.7) at **0x01F0** is the worked example
+— it holds what was `gfx_dbuf_gone`, retired with §32's back buffer — and it
+cost the table nothing where an append would have added eight bytes and moved
+`osapi_table_end`.
+
+**This does not contradict the paragraph above, and the difference is the
+whole rule.** *A slot number must never mean two contracts* is about a **live**
+number: 0x01C8 quietly changing from paragraphs to KB is a package that
+assembles cleanly and runs wrong. A retired cell has **no contract to
+collide with** — it was withdrawn, its SDK name was deleted, and therefore no
+source that assembles can be naming it.
+
+**Three conditions, and all three are mechanically checkable:**
+
+1. **The contract is WITHDRAWN, not merely uncalled.** A cell with zero
+   callers today may still be a capability somebody is told they have —
+   `OSAPI_VOL_PAINT` (0x0288) is a real body a driver is invited to call and
+   `OSAPI_BATCH_END` (0x0390) is optional *by design* (§18.9.3). Neither is
+   free. Only a cell this spec has retired is.
+2. **The SDK publishes no name for it**, and the reuse must not add one back.
+   That is what turns a stale caller from a silent wrong call into a **failed
+   assembly**, and it is the guard doing the real work here — it was already
+   the reason §18.4.1 deleted `OSAPI_FILE_READBIG` rather than leaving it
+   pointing at a stub.
+3. **Zero callers in `apps/`, `drivers/` and `tests/`** — which is the whole
+   population, because this tree hosts every package written for this OS
+   (§20.8 rule 4). One grep settles it.
+
+**The free list today is exactly one cell: 0x01E8** (`dskw_gone`, §18.4.1).
+0x01F0 has just been spent. Three more — 0x0198, 0x01A0, 0x01A8, the XMS
+allocator's — would join it if §41 is ever resolved, and are NOT free until
+then: their contracts stand and `xm_caps` beside them is live.
+
+**Record the reuse where the cell is**, in `kernel.asm`'s comment and in this
+spec's map, naming what the number used to be. A number that has meant two
+things across a release boundary is exactly the archaeology the next reader
+needs, and it costs a line.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -11042,9 +11084,11 @@ without anyone noticing it was a rule.
    passage of time. Until it is written in this paragraph, the table is open.
 
    Two things in the table are history and stay as they are. The refusing
-   stubs already built — 0x01E8 `dskw_gone` (§18.4.1) and 0x01F0
-   `gfx_dbuf_gone` (§32) — are correct and re-treading them buys nothing;
-   what changes is that a *new* retirement need not add another. And the
+   stubs already built are correct and re-treading them buys nothing; what
+   changes is that a *new* retirement need not add another. **And a retired
+   cell is a FREE LIST rather than a headstone** — §20.3.1: 0x01F0
+   (`gfx_dbuf_gone`, §32) has been reused for `wm_onmouseup`, and 0x01E8
+   (`dskw_gone`, §18.4.1) is what is left of it. And the
    §18.4.1 unification of 0x0120/0x0128, which kept two numbers while
    changing their register contracts (CX became DX:CX, `dskw_read`'s answer
    became DX:AX), is no longer an exception to anything — it is kept in the
@@ -17518,8 +17562,12 @@ cycle-accurate 5150 and comparing framebuffers with the build before it: **0
 differing bytes** on CGA (128,000), Hercules (250,560), VGA mode 12h (921,600
 rendered) and on the dual-display machine's **both** cards.
 
-**Slot 0x01F0 is RETIRED, not reused** (§20.8 rule 4): the cell answers CF=1,
-and `apps/os88api.inc` publishes no `OSAPI_GFX_DBUF`, so a source that still
+**Slot 0x01F0 was retired here and has since been REUSED** — it carries
+`wm_onmouseup` (§13.7) now, on §20.3.1's free-list rule: a withdrawn contract
+whose SDK name was deleted has no caller that can exist, so the number was the
+next one to hand rather than an append. What follows is the retirement as it
+stood, and the reason the cell was safe to take: it answered CF=1,
+and `apps/os88api.inc` published no `OSAPI_GFX_DBUF`, so a source that still
 names it fails to assemble rather than silently getting a different call.
 
 ### 32.1 What the renderer does

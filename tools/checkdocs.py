@@ -68,7 +68,7 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 # move, and the SDK publishes no name for it - so a package that still calls
 # it fails to assemble. Prose has to keep naming the number, because the
 # number is the whole reason the cell is still there.
-HELD = {"0x01e8", "0x01f0"}
+HELD = {"0x01e8"}   # 0x01f0 was retired and is REUSED now (SPEC.md 13.7)
 
 
 def headings(path):

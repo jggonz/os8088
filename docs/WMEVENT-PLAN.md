@@ -2,8 +2,11 @@
 
 > **STATUS: `W_ONMOUSEUP` IMPLEMENTED** (SPEC.md §13.7; `kernel/wm.inc`,
 > `kernel/ui.inc`, `kernel/kernel.asm`, `apps/os88api.inc`), gated by
-> `tests/muptest` on all three adapters. **The §2 withdrawals were NOT done** —
-> §2.4 is why, and it is a reversal of what §2 recommends.
+> `tests/muptest` on all three adapters, at **API 0x01F0 — a REUSED retired
+> cell** (SPEC.md §20.3.1), which is what kept it free: `.text` +141 against
+> 168 left in the image rung, so **no rung crossed and the footprint spare is
+> still three steps**. **The §2 withdrawals were NOT done** — §2.4 is why, and
+> it is a reversal of what §2 recommends.
 
 **Tier 3 of the mouse-up work.** One new window callback, plus the API audit
 the §20.8 alpha unfreeze makes actionable.
@@ -239,13 +242,27 @@ mechanisms does not, and would be the thing to catch in review.
 ## 6. Budget — MEASURED
 
 ```
-kernsize[big]: sections   text 55,483 +151  bss 4,943 +27   (sum +178)
-kernsize[big]: rungs      image 60,928 +512 (502 left, was 168)
-kernsize[big]: footprint  KERN_SIZE 97,280 of 98,304 -> 1,024 spare (2 steps), was 1,536  [+512]
-kernsize[big]: *** the image rung CROSSED: 118 -> 119 steps of 512 ***
+kernsize[big]: sections   text 55,473 +141  bss 4,943 +27   (sum +168)
+kernsize[big]: rungs      image 60,416 +0 (0 left, was 168)
+kernsize[big]: footprint  KERN_SIZE 96,768 of 98,304 -> 1,536 spare (3 steps), was 1,536  [+0]
 ```
 
-**It crossed a rung, exactly as predicted.** `.bss` +27 is the record growth
+**No rung crossed, and it very nearly did.** The first build appended the
+cell at 0x03A8 and came to `.text` +151 / `.bss` +27 = **178 against the 168
+that were left**, crossing by ten bytes and taking the footprint spare from
+three steps to two. Putting the slot on the **reused retired cell** at 0x01F0
+instead (SPEC.md §20.3.1) removed the appended cell's eight bytes and two more
+of stub, landing on **168 of 168 — exactly zero left in the image rung.**
+
+So §20.3.1's free list paid for this tier on its first use, and that is luck
+in the size of the margin rather than in the direction: an append costs eight
+bytes that a reuse does not, every time.
+
+**THE IMAGE RUNG NOW HAS ZERO BYTES LEFT.** The next byte of `.text` or
+`.bss` anywhere in the kernel buys a whole 512-byte step. That is the first
+fact for whoever touches it next, and §2.4 says where to look for room.
+
+**It crossed a rung on the first build, exactly as predicted.** `.bss` +27 is the record growth
 (12 windows × 2 for `W_ONMOUSEUP`, plus 3 that were Tier 1's). `.text` +151 is
 four times the ~37 estimated, and the estimate was wrong because it counted
 only the new code: the API cell (8), the setter, the `wm_create` zero, the
