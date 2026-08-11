@@ -208,18 +208,73 @@ The helper draws pixels, so the test is pixel identity, per site.
 5. **`APP_MAX_SIZE` and the disk.** Every adopter's `.o88` still assembles under
    60KB and `make combo` still fits 354 clusters.
 
-## 7. Optional 7a: consolidate the kernel's own helpers
+## 7. 7a: consolidate the kernel's own helpers — DONE, and it is 12 bytes
+
+> **RESULT: `.cold` −12 bytes.** The estimate below said 200–300 and was
+> **20x too high**. See §7.1 — the finding is that these modules are already
+> well factored, and that is worth knowing precisely because it stops the
+> next person spending a day here looking for room.
+
+
 
 Independent of everything above, no ABI, no package impact: `fdlg_btn` /
 `fdlg_btn2` / `fdlg_defbtn` / `cp_vid_btn` / `cp_timebtn` / `app_tmr_btn` are
 close enough in shape to share a body, and `cp_glyph`'s four 12x12 bitmaps are
 already one mechanism with one caller.
 
-Worth maybe 200–300 bytes of `.text`, which is real money against kern_small's
-512-byte spare — **and it is the only part of Tier 4 that helps the budget at
-all.** It can be done at any time, in any order, and does not need this
-document's SDK work to land first. If the budget gets tight before Tier 4 is
-scheduled, do this and skip the rest.
+Worth maybe 200-300 bytes of `.text`, which is real money against kern_small's
+512-byte spare — **and that was wrong; see the result above and §7.1.**
+
+### 7.1 What was actually there, and why it is only twelve bytes
+
+**Everything in `fdlg.inc` and `ctrl.inc` is in `.cold`; only `app_tmr_btn`
+is in `.text`.** That decided the scope on its own: a helper serving both
+sections needs a shim, and `.text` had *zero* bytes of rung left after
+Tier 3, so `app_tmr_btn` was left alone.
+
+Measured, the duplication is not there:
+
+- **`cp_glyph`, `fdlg_off`, `fdlg_text`, `fdlg_blabel` already ARE the shared
+  bodies.** What is left at each call site is loading four constants into
+  `AX/BX/CX/DX` — which does not consolidate: a table-driven
+  `frame(SI = a rect)` saves ~11 bytes of code per site and costs 8 bytes of
+  table per site, against a ~20-byte helper, so five sites come out
+  **negative**.
+- **`fdlg_btn` does not fill and the `ctrl` buttons do**, so they are two
+  shapes rather than one. `fdlg_paint` fills its pane once; a button there
+  draws a frame on ground that is already right.
+- The one real overlap is the `ctrl` pair — `cp_vid_btn` (the Display page's
+  Activate) and `cp_timebtn` (Date/Time's `+`/`-`) — which both draw frame,
+  inset white fill, then a label. That is `cp_boxbtn` now.
+
+**A pleasant surprise inside it:** both callers *centre* their labels, and
+neither looked like it. `cp_vid_btn` adds a literal `+6` and `cp_timebtn`
+computes `(CPT_BW - 8) / 2` — but `CPV_BTNW` is 116 and its label is 13
+glyphs = 104px, so `+6` **is** `(116 - 104) / 2`, and the source comment
+already said so. One helper serves both with no centring flag and no pixel
+moves.
+
+**Four more bytes came from deleting work nobody wanted:** the first draft
+put `AX..DX` back to the rect it was passed, and neither caller reads them —
+both recompute the label position from the pane origin. `cp_boxbtn` leaves
+the interior in them and says so.
+
+Verified by eye on the adapters where each is reachable, which is not the
+same machine: the Date/Time page on `os8088_5150_cga_gla`, and the Display
+page on **`os8088_5150_both_gla`**, because §31.10.1 does not draw a Display
+page at all on a one-adapter machine — so `cp_vid_btn` is unreachable on the
+default test box. Activate Mode comes up correctly **greyed, frame and label
+dithering together**, which is §47 rule 1 surviving the refactor.
+
+### 7.2 Where the room actually is
+
+Not here. The Control Panel is **4,120 bytes, 5.3% of the kernel**
+(`kernsize.py --modules`), and its buttons are a small fraction of that. The
+kernel's big blocks are the file system at 36.8% and the window system at
+21.5%, and the one *provably unreferenced* block is the XMS store —
+`kernel/xmem.inc`, 625 lines of code, three of its four slots with no caller
+anywhere (`WMEVENT-PLAN.md` §2.1). That is where a step comes from, and it
+wants its own investigation rather than a refactor.
 
 ## 8. Order of work — DONE
 

@@ -1374,6 +1374,30 @@ cp_vid_mode:
 ; interior is white either way: [gfx_dis] is read by font_ink alone, so a
 ; white fill between the two pen calls neither carries the flag nor clears it.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; cp_boxbtn - the Control Panel's framed button: 1px frame, white interior
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); the pen is the caller's
+; out: AX..DX hold the INTERIOR, not the rect passed in - neither caller reads
+;      them afterwards (both recompute the label's position from the pane
+;      origin), so putting them back was four bytes nobody spent
+; clobbers: AX, BX, CX, DX, [gfx_color] (left CWHITE - the caller re-pens)
+;
+; The two callers - the Display page's Activate button and the Date/Time
+; page's +/- pair - drew this identically and separately. Neither centres its
+; label here, because both bake the offset in as a constant that IS the
+; centred position (CPV_BTNW 116 less a 13-glyph label is 12, so +6; CPT_BW 28
+; less one glyph is 20, so +10), and one instruction each is not duplication.
+; -----------------------------------------------------------------------------
+cp_boxbtn:
+    call KERNEL_SEG:cw_gfx_frame
+    inc ax                      ; the interior, one pixel in from the frame
+    inc bx
+    dec cx
+    dec dx
+    mov byte [gfx_color], CWHITE
+    call KERNEL_SEG:cw_gfx_fill
+    ret
+
 cp_vid_btn:
     push ax
     push bx
@@ -1391,13 +1415,7 @@ cp_vid_btn:
     add cx, CPV_BTNW - 1
     mov dx, bx
     add dx, CPV_BTNH - 1
-    call KERNEL_SEG:cw_gfx_frame
-    inc ax                      ; the interior, one pixel in from the frame
-    inc bx
-    dec cx
-    dec dx
-    mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
+    call cp_boxbtn
 
     call cpf_vidok              ; ...and the label in the same pen as the ring
     call KERNEL_SEG:cw_gfx_pen_cf
@@ -2075,13 +2093,7 @@ cp_timebtn:
     mov dx, bx
     add dx, CPT_BH - 1          ; DX = y2
     mov byte [gfx_color], CBLACK
-    call KERNEL_SEG:cw_gfx_frame
-    inc ax                      ; the interior, one pixel in from the frame
-    inc bx
-    dec cx
-    dec dx
-    mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
+    call cp_boxbtn
     pop bx
 
     mov byte [gfx_color], CBLACK ; the 8px glyph, centred in the box
