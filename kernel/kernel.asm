@@ -2644,6 +2644,8 @@ cw_dsk_get_icon:        call dsk_get_icon
                     retf
 cw_dsk_next_clus:       call dsk_next_clus
                     retf
+cw_dsk_put_icon_k:      call dsk_put_icon_k
+                    retf
 cw_dsk_read_chain:      call dsk_read_chain
                     retf
 cw_dsk_relist:          call dsk_relist
@@ -2741,6 +2743,8 @@ cw_task_yield:          call task_yield
 cw_toast_show:          call toast_show
                     retf
 cw_toast_say:           call toast_say
+                    retf
+cw_ui_note:             call ui_note
                     retf
 cw_ui_post_cmd:         call ui_post_cmd
                     retf
@@ -2902,6 +2906,31 @@ fdlg_paint:           call COLD_SEG:fdf_fdlg_paint
 fdlg_reap:            call COLD_SEG:fdf_fdlg_reap
                     ret
 fdlg_top:             call COLD_SEG:fdf_fdlg_top
+                    ret
+
+; --- ...and assoc.inc's (SPEC.md 54). It joined the cold set because nothing
+; in it runs faster than a double-click, and because its heaviest callees were
+; already there: the calls to ld_run_name, files_poster, files_refresh and
+; dskw_stat were a DOUBLE crossing (out through a cw_ shim, in through a
+; resident thunk) and are near calls now - SPEC.md 2.6's "growing the set makes
+; the ones already in it cheaper".
+assoc_post:           call COLD_SEG:acf_assoc_post
+                    ret
+assoc_run:            call COLD_SEG:acf_assoc_run
+                    ret
+assoc_docicon:        call COLD_SEG:acf_assoc_docicon
+                    ret
+assoc_note_app:       call COLD_SEG:acf_assoc_note_app
+                    ret
+asc_use:              call COLD_SEG:acf_asc_use
+                    ret
+asc_lookup:           call COLD_SEG:acf_asc_lookup
+                    ret
+asc_take:             call COLD_SEG:acf_asc_take
+                    ret
+osapi_arg_file:       call COLD_SEG:acf_osapi_arg_file
+                    ret
+osapi_assoc_set:      call COLD_SEG:acf_osapi_assoc_set
                     ret
 
 ; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
