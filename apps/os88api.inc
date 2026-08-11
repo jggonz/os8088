@@ -179,7 +179,10 @@ CWHITE    equ 15
                                  ; instance down and the kernel frees the record
 %define OSAPI_WM_FRONT      KERNEL_SEG:0x0090   ; BX=win ptr
 %define OSAPI_WM_CONTENT    KERNEL_SEG:0x0098   ; BX=win ptr; out AX=content left, DX=top
-%define OSAPI_WM_OBSCURED   KERNEL_SEG:0x00A0   ; BX=win ptr; out CF=1 if covered
+%define OSAPI_WM_OBSCURED   KERNEL_SEG:0x00A0   ; BX=win ptr; out CF=1 if covered -
+                                 ; which INCLUDES your window being hidden, so a
+                                 ; worker gating a draw on this needs no
+                                 ; visibility test of its own (SPEC.md 11.3.1)
 %define OSAPI_TASK_YIELD    KERNEL_SEG:0x00A8   ; give up the time slice
 %define OSAPI_TASK_SLEEP    KERNEL_SEG:0x00B0   ; AX = ticks to sleep (18 ~ 1 second)
 %define OSAPI_GET_TICKS     KERNEL_SEG:0x00B8   ; out AX = [ticks]

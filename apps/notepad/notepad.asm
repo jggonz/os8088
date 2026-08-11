@@ -2696,9 +2696,19 @@ np_worker:
     call np_reconcile
 .height:
     ; Count the note's rows, which no other walk does any more (SPEC.md 27.7),
-    ; and move the thumb if that changed it. NOT gated on the window being
-    ; visible: this is arithmetic, np_sbcheck draws only when a number moved,
-    ; and a covered window's bar is redrawn by W_PAINT anyway.
+    ; and move the thumb if that changed it. THE COUNT is not gated on the
+    ; window being visible - it is arithmetic, and a covered or hidden window's
+    ; height is owed the moment it comes back - and THE DRAW is gated by the
+    ; call below it, like the other three in this routine.
+    ;
+    ; That distinction was written here as one sentence and the drawing half
+    ; was wrong (SPEC.md 11.3.1): "np_sbcheck draws only when a number moved"
+    ; was offered as the reason it was safe, and a number moving is exactly
+    ; what a chunked count does on a window nobody can see - NP_HCHUNK rows a
+    ; pass, each raising [np_drows]. wm_obscured answered only "is anything on
+    ; TOP of me", so after the close box hid this window the bar was drawn onto
+    ; the bare desktop. It answers about a hidden window now, which is what the
+    ; four calls here have always meant by it.
     cmp byte [np_hdirty], 0
     je .count
     call np_bounds                  ; the walk reads [np_ty]/[np_rgt], and the
