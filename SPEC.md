@@ -20934,6 +20934,45 @@ caller repaints instead. `gfx_scroll` says so in `CF` and its callers already
 handle it; that a straddled `gfx_scroll` costs 368us instead of 48,817 in a
 field `gfxbench` is that refusal being measured, not a fault.
 
+#### 39.14.9 The walk clipped in the wrong space — what a FIELD report found
+
+*"Missile Command's explosions draw, but the lines still only draw on the
+primary. The secondary's lines appear on the primary."* §39.14.5 hooked the
+resumable walk and that fix is right; this is a second, independent defect
+underneath it, and the walk is the only primitive in the machine that could
+have it.
+
+**`gfx_ls_box` scans `wm_clip_tab`, which is VIRTUAL (§11.3), with a point that
+`gfx_ls_one` has already translated to DISPLAY-LOCAL.** On display 0 the two
+spaces are the same numbers and it works; on any other display the point
+matches no rect at all, `gfx_ls_box` takes its "nothing holds it" branch
+(`bx1 = 1, bx2 = 0`, an empty box), every pixel fails the box test, and **the
+walk advances normally while drawing not one pixel.** That is §39.14.1's rule
+— *below `GFXCLIP` and not above it* — in the one place the hook could not be
+put below it, because the walk resolves its display per call and then loops.
+
+**Why the sweep and the gates both missed it.** `gfx_ls_box` has two branches
+and only the ARMED one is wrong: with no clip region it uses `[vid_cwm1]` /
+`[vid_chm1]`, the ACTIVE display's own extent, which after translation is
+exactly right. A window callback normally has no region armed — so
+`tests/linetest` straddling a seam draws on both cards through all three
+primitives and says nothing is wrong. A **background painter** arms one
+(§11.3), and Missile's trails are drawn by its worker. The bug needs a walk,
+a second display, and a clip region at the same time.
+
+**Measured, with the app's own state rather than by inference.** `inst_tab`
+gives the package's segment and nasm's `[map all]` over `apps/missile` gives
+the offsets, so the walk block can be read live: an ICBM with **launch
+v(752,70) on display 1, tip v(800,106) on display 1, 49 pixels drawn — and the
+CGA dark at (80,106)**. Neither endpoint is near the seam and neither is in the
+dead zone, which is what rules out both of the more interesting hypotheses.
+
+**The fix is in `gfx_ls_box` alone**: scan in virtual space (`+[vid_ox]`,
+`+[vid_oy]`, both 0 on display 0) and hand the surviving rect back translated
+AND clamped to the display — a clip rect may span the seam, and a box reaching
+past this card's last column would have `gfx_lstep_mono` addressing off the end
+of its own framebuffer. A one-display machine pays two adds per resolve.
+
 ### 39.15 The pointer crosses; the arrow jumps (`KERN_BIG` only)
 
 **`[mouse_x]`/`[mouse_y]` are VIRTUAL desktop coordinates** — they always
