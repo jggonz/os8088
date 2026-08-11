@@ -2566,6 +2566,44 @@ The general rule this is an instance of: **a routine that is reached from
 pair sits under every drawing site in the machine, kernel and package alike,
 and there is no call site that can compensate.
 
+### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
+
+`gfx_xor_rect`'s `cur_unlazy` sat **below** its `cmp byte [vid_mono], 0`, so on
+a 1bpp adapter — where the software renderer *is* the direct path (§39.5) — the
+unclipped drag outline jumped to `gfx_xor_rect_sw` and the promise was never
+spent. It is `GFXCLIP`'s documented rule, arriving at the one public rect entry
+that does not use the macro (an outline is not the intersection of its bounding
+rect with anything, so it decomposes before it clips), and its documented
+failure: **works on VGA, silently does nothing on Hercules and CGA.**
+
+**What it looks like is stray pixels, and they are not in the picture.** With
+the arrow still on the glass, an XOR that lands under it flips the *arrow's*
+bits, while the save-under still holds the background from before. The next
+`gfx_unlock` moves or restores the cursor, which writes that background back
+and takes the XOR with it — and then the app's own erase, an XOR of the same
+rect, flips a pixel that was never left lit. One stray dot per pointer
+position, wherever the outline passed under the cursor and the cursor then
+moved.
+
+Paint's rubber band is where it shows worst, and the reason is geometric rather
+than particular to Paint: the band's corner tracks the pointer, so the cursor
+is *on* the outline for the whole drag. Measured on a cycle-accurate 5150 with
+a Hercules card, one oval dragged out and then forced to repaint from the
+canvas: **2 differing pixels before, 0 after** — the anchor and one waypoint
+where the pointer paused. The rectangle tool leaks the same pixel from the same
+routine; nothing in `pt_oval` was ever wrong.
+
+Three things about the fix. It goes **between the clip test and the mono
+dispatch**, not at the top: the clipped path decomposes into `gfx_xor_fill`
+strips whose `GFXCLIP` owes no hide, because `wm_clip_set` already asked
+`cur_lazyck` (§7.1.4) and a region away from the pointer is the win this whole
+mechanism exists for. `vga_xor_rect_vram` keeps its own call, because the
+transient overlays enter there directly and it is three instructions when the
+flag is already spent — `cur_unlazy` is one-way within a hold. And
+`gfx_xor_fill` was **already right** and looks wrong: its raw body carries the
+same pair, but every public caller reaches it through `GFXCLIP`, which spends
+the hide above everything.
+
 ## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
 - `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
