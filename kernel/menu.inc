@@ -1003,7 +1003,7 @@ menu_bar_text:
 ; font_run wants ASCIIZ and menu_bcell carries one spare cell for it.
 ;
 ; **Bit 7 in a cell is the INVERSION FLAG and not a character** (SPEC.md
-; 59.2), so it is masked off across the run before the glyphs are drawn and
+; 60.2), so it is masked off across the run before the glyphs are drawn and
 ; put back after. That is exact rather than approximate: a run arriving here
 ; with CWHITE ink is wholly inside the strip by construction, so every cell
 ; in it carries the bit and every cell in it gets it back.

@@ -1,0 +1,12 @@
+# The attic, which is where Curses starts and where its first puzzle is. Like
+# Bear it opens on a quote box in the upper window - see tests/frotz/scripts/
+# bear.txt for why that still compares.
+look
+inventory
+examine me
+north
+look
+south
+look
+open box
+wait

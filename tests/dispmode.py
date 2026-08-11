@@ -53,6 +53,8 @@ import dispcp                                               # noqa: E402
 
 KERNEL_SEG = 0x0060
 DBG_TAG_VIDEO = 0x4456
+MBAR_H = 20
+S = os88sym.linear
 
 
 def u16(b, i=0):
@@ -142,7 +144,6 @@ def main(argv):
 
     fail = []
     say = lambda s: print("  " + s)
-    S = os88sym.linear
 
     # THE REBOOT IS A RESET AND NOT A SECOND LAUNCH, which is the one thing to
     # know before changing this. MartyPC mounts a floppy by reading it into
@@ -205,7 +206,11 @@ def main(argv):
         dispcp.open_panel(m, mo, S, os88marty.settle, card=gate)
         say("the Control Panel is open on its Display page")
 
-        for which, wx, wy in (("right", "cw", 0), ("below", 0, "ch")):
+        # Right places display 1 at (primary cw, MBAR_H) and not at
+        # (primary cw, 0): the second card has no menu bar, so its top row is
+        # aligned with the primary's DESKTOP BAND rather than its screen
+        # (SPEC.md 39.19.3). Below is unchanged - its seam is horizontal.
+        for which, wx, wy in (("right", "cw", MBAR_H), ("below", 0, "ch")):
             dispcp.set_mode(m, mo, S, os88marty.settle, which, card=gate)
             v = VD(m)
             say("after '%s': %s" % (which, v))
@@ -215,7 +220,7 @@ def main(argv):
                 continue
             d0, d1 = v.disp[0], v.disp[1]
             want = (d0["cw"] if wx == "cw" else 0,
-                    d0["ch"] if wy == "ch" else 0)
+                    d0["ch"] if wy == "ch" else wy)
             if (d1["vx"], d1["vy"]) != want:
                 fail.append("'%s' put display 1 at (%d,%d), wanted %s"
                             % (which, d1["vx"], d1["vy"], want))

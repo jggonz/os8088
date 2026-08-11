@@ -120,22 +120,26 @@ hd_sync:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_mount_one - mount the partition [hd_pslot] names on device [hd_sel]
-; in:  [hd_pslot] = the slot, [hd_sel] = the device; the gfx lock is HELD
+; hd_mount_one - mount the partition [hd_pslot] names on device AL
+; in:  AL = the device, [hd_pslot] = the slot; the gfx lock is HELD
 ; out: CF = 0 and [hd_mvol] = the kernel's volume index
 ; clobbers: flags
 ;
-; The resident's name and the resident's inputs, so inst.inc's call site did
-; not have to move - but it ANSWERS now, where the resident's published its
-; result by filling a row in hd_vols and left the caller to go and find it.
-; That walk was the installer's only reason to see the volume table at all, so
-; moving the answer into the verb is what keeps hd_vols entirely on the other
-; side of the boundary.
+; The resident's name, so inst.inc's call site did not have to move - but it
+; ANSWERS now, where the resident's published its result by filling a row in
+; hd_vols and left the caller to go and find it. That walk was the installer's
+; only reason to see the volume table at all, so moving the answer into the
+; verb is what keeps hd_vols entirely on the other side of the boundary.
+;
+; The device is an ARGUMENT and not [hd_sel], on purpose: [hd_sel] is the
+; panel's live highlight and any later hd_sync - the Format window's open
+; does one - moves it. The installer banked its device into [hd_idev] at open
+; for exactly that reason, and reading the highlight here would have mounted,
+; and then copied the system tree onto, whatever the user last clicked.
 ; -----------------------------------------------------------------------------
 hd_mount_one:
     push ax
     push si
-    mov al, [hd_sel]
     mov [hd_req+HRQ_DEV], al
     mov al, [hd_pslot]
     mov [hd_req+HRQ_SLOT], al

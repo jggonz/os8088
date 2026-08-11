@@ -342,8 +342,9 @@ hd_iw_button:
     push si
     push di
     mov [hd_ibx], ax
-    mov [hd_ibw], bx
-    mov [hd_ibl], si
+    mov [hd_ibw], bx            ; latched across the predicate call; SI is not
+                                ; any more - os88ui_btn takes the label there,
+                                ; so hd_ibl went with the drawing
     cmp cl, 1
     je .live
     ja .rest
@@ -355,28 +356,23 @@ hd_iw_button:
 .live:
     clc
 .pen:
-    call OSAPI_GFX_PEN          ; CF IS the argument (SPEC.md 47 rule 1)
-    mov ax, di
+    mov cx, 0                   ; CF -> the shared control's DIS flag. `mov`
+    adc cx, 0                   ; does not touch flags, so the carry the
+                                ; predicate answered in survives into the adc
+    mov ax, di                  ; ...and the rect, in screen coordinates
     add ax, [hd_ibx]
-    mov bx, bp
-    add bx, HIW_BY
-    mov cx, ax
-    add cx, [hd_ibw]
-    dec cx
-    mov dx, bx
-    add dx, HIW_BH - 1
-    call OSAPI_GFX_FRAME
-    mov si, [hd_ibl]
-    call OSAPI_FONT_WIDTH       ; AX = its pixels, for centring
-    mov cx, [hd_ibw]
-    sub cx, ax
-    shr cx, 1
-    add cx, di
-    add cx, [hd_ibx]
-    mov dx, bp
-    add dx, HIW_BY + 4
-    mov si, [hd_ibl]
-    call OSAPI_FONT_STR
+    mov [hd_ibrect+0], ax
+    add ax, [hd_ibw]
+    dec ax
+    mov [hd_ibrect+4], ax
+    mov ax, bp
+    add ax, HIW_BY
+    mov [hd_ibrect+2], ax
+    add ax, HIW_BH - 1
+    mov [hd_ibrect+6], ax
+    mov di, cx
+    mov bx, hd_ibrect           ; no OS88UI_FILL: hd_ibtns_draw white-fills
+    call os88ui_btn             ; the whole 16px band before re-emitting
     pop di
     pop si
     pop dx
@@ -384,6 +380,8 @@ hd_iw_button:
     pop bx
     pop ax
     ret
+
+hd_ibrect:  dw 0, 0, 0, 0       ; the button being drawn, screen coordinates
 
 ; =============================================================================
 ; Drawing the face a piece at a time (SPEC.md 52.10.6)
@@ -1321,6 +1319,28 @@ hd_inst_sys:
                                     ; exactly what it is here for (52.10.12)
     call hd_ibuf_get            ; the buffer FIRST: a format we cannot follow
     jc .nomem                   ; with a copy is a wiped partition
+                                ; ...and NO size gate on top of it, which is a
+                                ; deliberate difference from the branch this
+                                ; routine was last reviewed on. That gate read
+                                ; `cmp word [hd_ibufkb], HIW_KMAXKB / jb
+                                ; .small` and refused the install outright on a
+                                ; buffer under HIW_KMAXKB, because KERNEL.SYS
+                                ; was written whole and a system file could not
+                                ; be appended to. Both halves of that reason
+                                ; have expired: OSAPI_FILE_APPEND_SYS is the
+                                ; door (SPEC.md 19.6.1), hd_icopy_one's species
+                                ; test went with it, and the whole/chunked
+                                ; choice below is now a plain 32-bit "does it
+                                ; fit" - so a small buffer COPIES, slower, and
+                                ; hd_ibuf_get's size is a speed choice. Putting
+                                ; the gate back would refuse a machine short of
+                                ; heap - the field 5150's class - about a file
+                                ; the disk it booted from is carrying, which is
+                                ; the bug the species test was removed to fix.
+                                ; The wiped-partition failure it was written
+                                ; against cannot arise here: the small-buffer
+                                ; case succeeds instead of failing after the
+                                ; format
     mov word [hd_imsg], hd_s_iwork
     call hd_imsg_draw           ; say so BEFORE the writes - a 32MB format is
                                 ; hundreds of sectors and the user should not
@@ -2595,6 +2615,10 @@ hd_inst_mount:
     mov al, [hd_isel]
     mov [hd_pslot], al          ; hd_mount_one reads the SLOT from here and
     call hd_part_ent            ; the entry from SI - it answers no volume
+    mov al, [hd_idev]           ; the BANKED device (bound at open), never
+                                ; [hd_sel]: the Format window's own open
+                                ; re-syncs the highlight, and both windows
+                                ; can be up at once
     call hd_mount_one           ; ...and it ANSWERS with the kernel's volume
                                 ; index, where the resident's version left a
                                 ; row in hd_vols to be gone and found. That
@@ -2877,7 +2901,6 @@ hd_iclx:      dw 0
 hd_icly:      dw 0
 hd_ibx:       dw 0
 hd_ibw:       dw 0
-hd_ibl:       dw 0
 hd_ibufseg:   dw 0
 hd_ibufkb:    dw 0
 hd_idrv:      db 0              ; the destination's kernel volume index

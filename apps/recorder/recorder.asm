@@ -179,6 +179,11 @@ rc_entry:
     mov si, rc_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
+    push ax                         ; SPEC.md 13.7: the buttons fire on the
+    mov ax, rc_onup                 ; RELEASE, over the button the press
+    call OSAPI_WM_ONMOUSEUP         ; landed on - so a mis-aimed press can be
+    pop ax                          ; slid off and cancelled. Not a template
+                                    ; word; set after wm_create, like MENU_SET
     mov si, rc_menus                ; BX = the window wm_create just returned
     call OSAPI_MENU_SET             ; (draws nothing, takes no lock, and
                                     ; preserves the flags as well as the
@@ -237,41 +242,74 @@ rc_onclick:
     mov [rc_oy], dx
     pop dx
     pop cx
-    sub cx, [rc_ox]                 ; -> content-relative click
-    sub dx, [rc_oy]
+    call rc_layout                  ; the rects follow the window; CX/DX are
+    mov ax, 4                       ; already SCREEN coords, which is what
+    mov bx, rc_rects                ; os88ui_bfind wants
+    call os88ui_bfind               ; AX = button+1, 0 = none
+    call os88ui_arm                 ; ...and that is ALL a press does now
+    pop di                          ; (SPEC.md 13.7): no action, no repaint,
+    pop si                          ; nothing to undo if the user slides off
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret                             ; near: dispatched (SPEC.md 20.5)
+
+; -----------------------------------------------------------------------------
+; rc_onup - W_ONMOUSEUP (SPEC.md 13.7): the button fires HERE
+; in:  CX = x, DX = y (SCREEN), SI = window; UI task, gfx lock held
+; out: nothing
+;
+; The action happens on the release, and only if the release is over the
+; button the press armed - so a press on Stop that the user thinks better of
+; is cancelled by sliding off it, which is what every control in this OS's
+; Macintosh model does and what a hand on a 1200-baud mouse needs.
+;
+; CX/DX may be OUTSIDE the window entirely; that is the contract, and it is
+; why os88ui_bfind simply answers 0 there and the compare below fails.
+; -----------------------------------------------------------------------------
+rc_onup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; the window may have moved since the press
+    mov [rc_ox], ax
+    mov [rc_oy], dx
+    call rc_layout
+    call os88ui_fire                ; AX = what the press armed, and it is
+    or ax, ax                       ; cleared - one release per press, so
+    jz .out                         ; there is no stale arm to guard against
+    mov di, ax
+    mov ax, 4
+    mov bx, rc_rects
+    call os88ui_bfind               ; AX = the button under the RELEASE
+    cmp ax, di
+    jne .out                        ; a different button, or none: cancelled
     call rc_poll                    ; retire a finished stream first, so the
                                     ; button logic sees the current state
-    cmp dx, RC_BTN_Y                ; the button row?
-    jl .repaint
-    cmp dx, RC_BTN_Y+RC_BTN_H
-    jge .repaint
-    cmp cx, 4
-    jl .repaint
-    cmp cx, 56
-    jl .rec
-    cmp cx, 58
-    jl .repaint
-    cmp cx, 110
-    jl .stop
-    cmp cx, 112
-    jl .repaint
-    cmp cx, 164
-    jl .play
-    cmp cx, 166
-    jl .repaint
-.demo:
-    call rc_do_demo
-    jmp .repaint
-.rec:
+    dec ax
+    jnz .n1
     call rc_do_rec
-    jmp .repaint
-.stop:
+    jmp short .repaint
+.n1:
+    dec ax
+    jnz .n2
     call rc_do_stop
-    jmp .repaint
-.play:
+    jmp short .repaint
+.n2:
+    dec ax
+    jnz .n3
     call rc_do_play
+    jmp short .repaint
+.n3:
+    call rc_do_demo
 .repaint:
     call rc_repaint
+.out:
     pop di
     pop si
     pop dx
@@ -913,6 +951,7 @@ rc_draw_status:
 ; out: nothing; clobbers AX, CX, SI (and rc_btn's scratch)
 ; -----------------------------------------------------------------------------
 rc_draw_btns:
+    call rc_layout
     mov cl, 0                       ; REC: needs PCM_IN and idle
     test byte [rc_caps], SND_CAP_PCM_IN
     jz .rec
@@ -920,7 +959,7 @@ rc_draw_btns:
     jne .rec
     mov cl, 1
 .rec:
-    mov ax, 4
+    mov ax, 0
     mov si, rc_l_rec
     call rc_btn
 
@@ -929,7 +968,7 @@ rc_draw_btns:
     je .stop
     mov cl, 1
 .stop:
-    mov ax, 58
+    mov ax, 1
     mov si, rc_l_stop
     call rc_btn
 
@@ -942,7 +981,7 @@ rc_draw_btns:
     jz .play
     mov cl, 1
 .play:
-    mov ax, 112
+    mov ax, 2
     mov si, rc_l_play
     call rc_btn
 
@@ -951,67 +990,87 @@ rc_draw_btns:
     jne .demo
     mov cl, 1
 .demo:
-    mov ax, 166
+    mov ax, 3
     mov si, rc_l_demo
     call rc_btn
     ret
 
 ; -----------------------------------------------------------------------------
-; rc_btn - one button: 1px frame + centered label, live or disabled
+; rc_btn - one button, through the shared control (apps/os88ui.inc)
 ; in:  AX = content-relative x1, SI = label, CL = 1 enabled / 0 disabled
 ; out: nothing; preserves all registers
 ;
-; OSAPI_GFX_PEN and not OSAPI_SET_COLOR (SPEC.md 47 rule 3): a disabled control
-; is CDGRAY *and* [gfx_dis], and the flag is what makes the LABEL a
-; checkerboard on Hercules and CGA. With the colour alone this drew a dotted
-; frame - gfx_ink dithers a shape without help - around a solid-black caption,
-; which is rule 2's own failure, the two halves of one control disagreeing.
+; The drawing used to be here: frame, centred label, and OSAPI_GFX_PEN rather
+; than OSAPI_SET_COLOR so that a disabled control is CDGRAY *and* [gfx_dis]
+; (SPEC.md 47 rule 1 - with the colour alone this drew a dotted frame around a
+; solid-black caption, which is rule 2's own failure). All of that is
+; os88ui_btn now, and this is the adapter: it turns Recorder's
+; content-relative x into the rect the shared routine takes.
+;
+; The rect is a STORED 4-word block rather than four registers, because
+; os88ui_bhit reads the same words - so the drawn button and the clickable
+; button cannot drift (fm_hit's discipline, SPEC.md 22).
 ; -----------------------------------------------------------------------------
 rc_btn:
     push ax
     push bx
-    push cx
-    push dx
-    push si
     push di
-    mov di, ax                      ; DI = x1, content-relative
-    or cl, cl                       ; CF = 1 when disabled, which is the shape
-    jnz .live                       ; the pen takes
-    stc
-    jmp short .col
+    mov bx, ax                      ; AX = the button index
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1                       ; *8: four words a rect (8086: no shl imm)
+    add bx, rc_rects
+    xor di, di
+    or cl, cl
+    jnz .live
+    mov di, OS88UI_DIS
 .live:
-    clc
-.col:
-    call OSAPI_GFX_PEN
-    mov ax, [rc_ox]
-    add ax, di
-    mov di, ax                      ; DI = x1, absolute
-    mov bx, [rc_oy]
-    add bx, RC_BTN_Y
-    mov cx, ax
-    add cx, RC_BTN_W-1
-    mov dx, bx
-    add dx, RC_BTN_H-1
-    call OSAPI_GFX_FRAME
-    call OSAPI_FONT_WIDTH           ; AX = label width, px
-    mov cx, RC_BTN_W
-    sub cx, ax
-    shr cx, 1
-    add cx, di                      ; centered label x
-    mov dx, [rc_oy]
-    add dx, RC_BTN_Y+4
-    call OSAPI_FONT_STR
-    clc                             ; ...and put the pen back. Leaving CDGRAY
-    call OSAPI_GFX_PEN              ; behind was untidy; leaving the FLAG
-                                    ; behind draws the next string in this
-                                    ; lock hold as a checkerboard
+    call os88ui_btn
     pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; rc_layout - rebuild the four button rects from the live content origin
+; in:  [rc_ox]/[rc_oy]
+; out: nothing; preserves all registers
+;
+; ONE table, read by the drawing (os88ui_btn) and by the hit test
+; (os88ui_bfind) alike. The hit test used to be a ladder of literals in
+; rc_onclick - 4/56, 58/110, 112/164, 166 - against a drawing that used
+; 4/58/112/166 and RC_BTN_W: two descriptions of one row of buttons, agreeing
+; by hand. They cannot disagree now (SPEC.md 22's fm_hit discipline).
+; -----------------------------------------------------------------------------
+rc_layout:
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, rc_bx                   ; the four content-relative x1s
+    mov bx, rc_rects
+    mov cx, 4
+.one:
+    lodsw
+    add ax, [rc_ox]
+    mov [bx+0], ax                  ; x1
+    add ax, RC_BTN_W-1
+    mov [bx+4], ax                  ; x2
+    mov ax, [rc_oy]
+    add ax, RC_BTN_Y
+    mov [bx+2], ax                  ; y1
+    add ax, RC_BTN_H-1
+    mov [bx+6], ax                  ; y2
+    add bx, 8
+    loop .one
     pop si
-    pop dx
     pop cx
     pop bx
     pop ax
     ret
+
+rc_bx:      dw 4, 58, 112, 166      ; the button row, content-relative
+rc_rects:   times 16 dw 0           ; ...as four {x1,y1,x2,y2}, screen coords
 
 ; -----------------------------------------------------------------------------
 ; rc_putu5 - AX as 5 zero-padded decimal chars at DS:BX
@@ -1117,6 +1176,9 @@ rc_sine:
     db  47, 48, 48, 49, 50, 51, 53, 54, 55, 56, 57, 59, 60, 61, 63, 64
     db  66, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 85, 87, 88, 90, 92
     db  94, 96, 98,100,102,105,107,109,111,113,115,117,119,122,124,126
+
+; --- the shared controls (SPEC.md 47 rule 1 in one place) -------------------
+%include "os88ui.inc"
 
     OS88_BSS 4022
     OS88_IMAGE_END

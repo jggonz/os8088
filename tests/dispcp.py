@@ -131,6 +131,32 @@ def set_primary(m, mo, S, settle, slot, card=None):
 DESK_ZY0, DESK_ZW, DESK_COLW = 32, 32, 44
 
 
+DV_KIND, DV_FLAGS, DV_SIZE, DVOL_MAX, DVK_FREE = 0, 2, 16, 8, 0xFF
+
+
+def drive_ordinal(m, S, letter="B"):
+    """Which desktop ZONE does drive `letter` own? (SPEC.md 26.1)
+
+    NOT the drive number. A zone exists per volume with DV_FLAGS bit 0 set, and
+    the ordinal is that volume's POSITION among the shown ones - so a machine
+    whose B: was retired by SPEC.md 18.97's probe, or which mounts a hard disk,
+    numbers them differently. Walking dsk_vtab is the only way to be right, and
+    it turns "no window opened" into "B: has no zone", which is the difference
+    between a test that fails and a test that says why.
+    """
+    want = ord(letter.upper()) - ord("A")
+    t = m.read(S("dsk_vtab"), DVOL_MAX * DV_SIZE)
+    n = 0
+    for v in range(DVOL_MAX):
+        r = t[v * DV_SIZE:(v + 1) * DV_SIZE]
+        if r[DV_KIND] == DVK_FREE or not (r[DV_FLAGS] & 1):
+            continue
+        if v == want:
+            return n
+        n += 1
+    return None
+
+
 def drive_xy(m, S, ordinal):
     """The centre of volume `ordinal`'s desktop zone, in VIRTUAL coordinates.
 
@@ -149,9 +175,87 @@ def drive_xy(m, S, ordinal):
             DESK_ZY0 + row * step + zh1 // 2)
 
 
-def open_drive(m, mo, S, settle, ordinal, card=None):
-    """Double-click a drive zone and settle. Drive B: is ordinal 1."""
+def open_drive(m, mo, S, settle, letter="B", card=None):
+    """Double-click drive `letter`'s desktop zone and settle."""
+    if isinstance(letter, int):          # an ORDINAL was passed: no longer
+        ordinal = letter                 # supported, because it is not stable
+        raise TypeError("open_drive takes a DRIVE LETTER, not the ordinal %d "
+                        "- see drive_ordinal()" % ordinal)
+    ordinal = drive_ordinal(m, S, letter)
+    if ordinal is None:
+        raise RuntimeError("drive %s: has no desktop zone on this machine "
+                           "(dsk_vtab says it is free or hidden)" % letter)
     x, y = drive_xy(m, S, ordinal)
     mo.dblclick(x, y)
     settle(m, card=card)
     return x, y
+
+
+# --- a Disk window's rows (SPEC.md 22) ---------------------------------------
+#
+# The same discipline as drive_xy above, and for the same reason: FM_ROW_Y0
+# moved 26 -> 22 under two tests at once, and neither said "the row geometry
+# changed" - one reported that a package would not launch and the other that a
+# window had not opened. These three have no published copy, so they are
+# written down; they are written down ONCE.
+FM_ROW_Y0, FM_ROW_H, FM_ROW_X = 22, 16, 60
+TITLE_H = 18
+
+
+def row_xy(wx, wy, row=0):
+    """The centre of list row `row` in a Disk window at (wx, wy)."""
+    return (wx + 1 + FM_ROW_X,
+            wy + TITLE_H + 1 + FM_ROW_Y0 + row * FM_ROW_H + FM_ROW_H // 2)
+
+
+def open_row(m, mo, S, settle, wx, wy, row=0, card=None):
+    """Double-click a Disk window row and settle."""
+    x, y = row_xy(wx, wy, row)
+    mo.dblclick(x, y)
+    settle(m, card=card)
+    return x, y
+
+
+# --- the window record (SPEC.md 11) ------------------------------------------
+#
+# WIN_SIZE IS A STRIDE AND IT MOVES: 18 -> 20 -> ... -> 26 -> 28 over this
+# tree's life, once per field added to the record. A stale one does not fail,
+# it reads every window's rect out of the middle of its neighbour - so the
+# clicks derived from it land on bare desktop and the test reports whatever
+# did not happen next. That has now cost three debugging sessions, so the
+# readers live here and check themselves.
+WIN_SIZE, W_FLAGS, W_X, W_Y, W_W, W_H = 28, 0, 2, 4, 6, 8
+MAX_WIN = 12
+
+
+def _u16(b, i=0):
+    return b[i] | (b[i + 1] << 8)
+
+
+def win_rect(m, S, slot):
+    """(x, y, w, h) of window `slot`."""
+    r = m.read(S("wm_wins") + slot * WIN_SIZE, WIN_SIZE)
+    return (_u16(r, W_X), _u16(r, W_Y), _u16(r, W_W), _u16(r, W_H))
+
+
+def win_list(m, S, check=True):
+    """Every used+visible window slot, newest last.
+
+    `check` asserts the rects are PLAUSIBLE against the live desktop, which is
+    what catches a moved WIN_SIZE at the point it goes wrong instead of three
+    steps later.
+    """
+    t = m.read(S("wm_wins"), MAX_WIN * WIN_SIZE)
+    out = [i for i in range(MAX_WIN)
+           if _u16(t, i * WIN_SIZE + W_FLAGS) & 3 == 3]
+    if check and out:
+        vw = _u16(m.read(S("vid_w"), 2))
+        vh = _u16(m.read(S("vid_h"), 2))
+        for i in out:
+            x, y, w, h = win_rect(m, S, i)
+            if not (0 < w <= vw and 0 < h <= vh and x < vw and y < vh):
+                raise RuntimeError(
+                    "window %d reads (%d,%d) %dx%d on a %dx%d desktop - "
+                    "WIN_SIZE (%d here) has moved in kernel/wm.inc"
+                    % (i, x, y, w, h, vw, vh, WIN_SIZE))
+    return out

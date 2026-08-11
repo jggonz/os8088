@@ -134,6 +134,16 @@ DVK_BIOS     equ 0
 DVK_DRV      equ 1
 DVK_FREE     equ 0xFF
 
+; --- and what a PACKAGE is told about a volume (SPEC.md 18.7.2) -------------
+; Deliberately NOT the DVK_* values: those are the transport and are kernel
+; internals, and a package asking OSAPI_VOL_KIND is nearly always asking about
+; the MEDIUM. Two separate answers in one call, so neither has to be inferred
+; from the other - which is the mistake this section was written to end.
+VK_REMOVABLE equ 0               ; AL: a floppy
+VK_FIXED     equ 1               ; AL: a hard disk, however it is reached
+VT_BIOS      equ 0               ; AH: int 13h
+VT_DRIVER    equ 1               ; AH: a DRVC_DISK driver (SPEC.md 52)
+
 ; .text and not .bss for the reason every other boot-reachable table is: -f bin
 ; zeroes nothing, and the first disk_mount runs before anything could.
 dsk_vtab:
@@ -630,12 +640,17 @@ dsk_bpb_bank_get:
 ; out: nothing; every register AND the flags preserved
 ; -----------------------------------------------------------------------------
 dsk_bpb_bank_put:
+    pushf                       ; FIRST - the flags are part of the contract,
+                                ; and the common exit (a floppy outside a
+                                ; batch) is a compare away from clobbering
+                                ; the CF a caller may be carrying
     cmp byte [dsk_vflop], 1
     jne .keep                   ; a floppy is banked only inside a batch, and
     cmp byte [dsk_batch], 0     ; only for as long as it runs (SPEC.md 18.9.3)
-    je .out
+    jne .keep
+    popf
+    ret
 .keep:
-    pushf
     push ax
     push bx
     push cx
@@ -954,9 +969,15 @@ dsk_xfer:
                                 ; a copy - and it is why the payload pays no
                                 ; copy at all (SPEC.md 18.95.1)
     call dsk_rah_fill           ; yes: read to the end of DI's track
-    jc .fail
+    jc .nocache                 ; a failed fill is a fact about the
+                                ; SPECULATIVE tail, not about the sector
+                                ; asked for: fall through and read exactly
+                                ; what the caller wanted, with the retry
+                                ; ladder it always had (18.91: one bad
+                                ; sector costs its own 512 bytes, not the
+                                ; good ones beside it)
     call dsk_rah_take           ; ...which covers DI by construction
-    jc .fail
+    jc .nocache
 .served:
     add di, ax                  ; the same advance .ok makes, and no int 13h
     sub si, ax
@@ -1320,7 +1341,15 @@ dsk_boot_from:
     pop dx
     pop cx
 
-    mov bx, dsk_vtab + 2*DV_SIZE    ; the row walks, as dsk_vol_add's does
+    mov bx, dsk_vtab + 2*DV_SIZE    ; the row walks, as dsk_vol_add's does -
+                                ; and from row 2, which at THIS point in kmain
+                                ; is always free, so a boot partition is
+                                ; always C:. That used to be a happy accident
+                                ; of the call order; SPEC.md 18.7.1 makes it
+                                ; the rule, and dsk_flop_add now skips row 2
+                                ; so a floppy cannot take it first. Do not
+                                ; "tidy" this to scan from 0: rows 0 and 1
+                                ; are the floppies' by that same rule
 .scan:
     cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
     jae .out                    ; no free row cannot happen at boot, nothing
@@ -1466,12 +1495,29 @@ dsk_flop_add:
     push bx
     push cx
     mov cl, al                  ; the unit, before AX becomes the answer
-    mov bx, dsk_vtab + 2*DV_SIZE    ; the ROW walks, as dsk_vol_add's does
+    mov bx, dsk_vtab            ; the ROW walks, as dsk_vol_add's does - and
+                                ; it starts at A: (SPEC.md 18.7.1). This was
+                                ; row 2, which made an external floppy C:
+                                ; even on a machine whose B: had been proven
+                                ; absent and freed: A and B are the first two
+                                ; FLOPPIES the machine has, wherever they are
+                                ; plugged in. Row 0 is never free (only
+                                ; dsk_fdd_retire frees one, and only row 1),
+                                ; so this cannot hand out A: by accident
 .scan:
     cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
     jae .full
+    cmp bx, dsk_vtab + 2*DV_SIZE
+    je .next                    ; ...and C: BELONGS TO THE HARD DISK, whether
+                                ; or not one ever turns up. dsk_vol_add still
+                                ; scans from row 2, so the first partition
+                                ; lands there the moment floppies stop taking
+                                ; it - and on a floppy-only machine with three
+                                ; drives the letters read A, B, D, which is
+                                ; the price and is paid on purpose
     cmp byte [bx+DV_KIND], DVK_FREE
     je .got
+.next:
     add bx, DV_SIZE
     jmp short .scan
 .got:
@@ -1498,6 +1544,53 @@ dsk_flop_add:
     pop bx
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; dsk_vol_fixed - is this volume a HARD DISK? (SPEC.md 18.7.2)
+; in:  BL = volume index
+; out: CF=1 = no such volume (out of range, or a free row); CF=0 with AL = 0
+;      removable / 1 fixed, and AH = VT_BIOS / VT_DRIVER
+; clobbers: AX (the output), flags
+;
+; **DV_KIND IS THE TRANSPORT AND NOT THE MEDIUM**, which SPEC.md 18.7 has said
+; since the volume table existed and which nothing shared enforced. A hard
+; disk reached through a DRIVER is DVK_DRV; a hard disk reached through the
+; BIOS - a boot partition, SPEC.md 52.10.3 - is DVK_BIOS with unit 80h or
+; above, and every `cmp DV_KIND, DVK_DRV` in the tree read that as a floppy.
+; desk_draw_zone did, so a machine booted off its hard disk drew C: with the
+; FLOPPY icon.
+;
+; One predicate, so the desktop and OSAPI_VOL_KIND cannot drift: the same
+; question is now asked once and answered once.
+; -----------------------------------------------------------------------------
+dsk_vol_fixed:
+    push bx
+    call dsk_vol_slot
+    jc .no
+    mov ah, [bx+DV_KIND]
+    cmp ah, DVK_FREE
+    je .no                      ; AH IS the transport: VT_BIOS/VT_DRIVER are
+                                ; DVK_BIOS/DVK_DRV, asserted below rather than
+                                ; assumed, so a change to either breaks the
+                                ; BUILD instead of the published ABI
+    mov al, 1                   ; a driver volume is fixed by construction:
+    cmp ah, DVK_DRV             ; SPEC.md 52 mounts partitions and nothing else
+    je .out                     ; through DSV_BLK
+    xor al, al                  ; ...and a BIOS one is fixed exactly when its
+    test byte [bx+DV_UNIT], 0x80    ; int 13h drive says so - disk_mount's own
+    jz .out                     ; test, in the one place that owns it
+    mov al, 1
+.out:
+    pop bx
+    clc
+    ret
+.no:
+    pop bx
+    stc
+    ret
+%if VT_BIOS != DVK_BIOS || VT_DRIVER != DVK_DRV
+  %error "disk: SPEC.md 18.7.2 - VT_* must equal DVK_*, or dsk_vol_fixed lies"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_vol_slot - a volume index's row, live or not (module internal)
@@ -2130,7 +2223,13 @@ disk_mount:
     xor ax, ax                  ; LBA 0
     mov cx, 1
     mov bx, dsk_secbuf
-    call disk_read
+    inc byte [dsk_rah_busy]     ; NEVER from §18.95's cache: this read is the
+    call disk_read              ; swap detector itself. Served from a cached
+    dec byte [dsk_rah_busy]     ; chunk it would re-sign the OLD disk's boot
+                                ; sector, [dsk_sigcur] would never move, and
+                                ; every later hit - FAT window included -
+                                ; would be the old disk's bytes laid onto the
+                                ; new one by the next write. (dec leaves CF)
     jc .jfail
     call dsk_bpb_sig            ; [dsk_sigcur] = which disk this is (18.8.2),
                                 ; off the sector we have just read anyway.
@@ -5466,22 +5565,18 @@ dsk_wclus:    resw 1            ; dirw: the cluster being walked, 0 = root
 dsk_wsec:     resw 1            ; dirw: sector index inside it
 dsk_wguard:   resw 1            ; dirw: sectors left before the walk gives up
 
-; --- the read-ahead window's bookkeeping (SPEC.md 19.2.3) -------------------
-; Safe in .bss for the same reason: dsk_dirw_start zeroes dsk_rah_n before any
-; walk, and dsk_dirw_fill writes the other five before anything reads them.
-; [dsk_rah_seg] is NOT - it is in .text with a real initialiser, because a
-; shed reads it and mem_pg_own names it.
+; --- the read-ahead cache's bookkeeping (SPEC.md 18.95) ---------------------
+; Safe in .bss because nothing reads any of it while [dsk_rah_seg] is 0, and
+; the claim that sets that word non-zero (dsk_rah_want) flushes the table and
+; zeroes dsk_rah_next before anything can look. [dsk_rah_seg] itself is NOT -
+; it is in .text with a real initialiser, because a shed reads it and
+; mem_pg_own names it.
 dsk_rah_tab:  resb DSK_RAH_RUNS * RAH_REC   ; one record per cached chunk
 dsk_rah_next: resw 1            ; the next slot to spend (round robin)
 dsk_rah_slot: resw 1            ; ...and the one being filled, in bytes
 dsk_rah_rem:  resw 1            ; dsk_rah_have's second answer: sectors of the
                                 ; chunk from the wanted one on, itself included
 dsk_rah_got:  resw 1            ; ...and how many dsk_rah_take actually copied
-dsk_rah_bc:   resw 1            ; the cursor banked across one speculative
-dsk_rah_bs:   resw 1            ; step: cluster, sector index and guard, put
-dsk_rah_bg:   resw 1            ; back when the step is not contiguous
-dsk_rah_max:  resw 1            ; ...and what ONE int 13h may carry from the
-                                ; run's first sector (dsk_rah_cap)
 dsk_op:       resb 1            ; int 13h function for dsk_xfer: 02h / 03h
 dsk_run:      resw 1            ; sectors in the int 13h call being issued
                                 ; (SPEC.md 18.91). A module word for the same

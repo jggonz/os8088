@@ -75,6 +75,16 @@ DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94, `make DISKCNT=1`
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92, unconditional
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4, unconditional
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5, unconditional
+DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6, unconditional
+
+; What OSAPI_VOL_KIND answers (SPEC.md 18.7.2). The MEDIUM and the TRANSPORT
+; are two questions: "is this a hard disk" is the first, and inferring it from
+; the second is the bug that section exists to end - a hard disk booted
+; through the BIOS is int 13h transport and fixed medium at the same time.
+VK_REMOVABLE equ 0               ; AL: a floppy
+VK_FIXED     equ 1               ; AL: a hard disk, however it is reached
+VT_BIOS      equ 0               ; AH: int 13h
+VT_DRIVER    equ 1               ; AH: a DRVC_DISK driver (SPEC.md 52)
                             ; It is baked into every OSAPI_* far call, so a
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
@@ -475,15 +485,28 @@ VID_CGA    equ 2
                                  ; handler's offset (0 = none). Preserves every
                                  ; register and the flags
 
-; 0x01E8 is RETIRED and has NO %define (SPEC.md 18.4.1/20.8). It was
-; OSAPI_FILE_READBIG, the one file op with no 64KB ceiling; OSAPI_FILE_READ
-; has none either now, and the two contracts differed only in where the
-; destination's offset came from. The cell is still there and still answers -
-; CF=1 with AX = FERR_NAME - because a RELEASED slot keeps its contract and
-; "we no longer implement this" is a refusal, never a different routine at
-; the same address. Nothing above it moved. A source that still names
-; OSAPI_FILE_READBIG fails to assemble, which is the intended way to find
-; out: pass your base segment in ES with BX = 0 and call OSAPI_FILE_READ.
+%define OSAPI_VOL_KIND      KERNEL_SEG:0x01E8   ; AL = a volume index (0 = A:).
+                                 ; CF=1 = there is no such volume; CF=0 with
+                                 ; AL = VK_REMOVABLE / VK_FIXED and AH =
+                                 ; VT_BIOS / VT_DRIVER (SPEC.md 18.7.2). The
+                                 ; first thing a package can ask about a
+                                 ; volume without USING it: OSAPI_VOL_* are
+                                 ; the driver's and refuse you. Ask the MEDIUM
+                                 ; when you mean "is this a hard disk" - a
+                                 ; boot partition is VT_BIOS and VK_FIXED at
+                                 ; once.
+                                 ;
+                                 ; THIS NUMBER WAS OSAPI_FILE_READBIG, retired
+                                 ; at SPEC.md 18.4.1 when OSAPI_FILE_READ lost
+                                 ; its 64KB ceiling, and taken back here under
+                                 ; SPEC.md 20.3.1: a withdrawn cell has no
+                                 ; contract to collide with, its %define was
+                                 ; deleted, and nothing in the tree names it -
+                                 ; so a stale caller still fails to assemble
+                                 ; rather than calling this by accident. If
+                                 ; you were using readbig: pass your base
+                                 ; segment in ES with BX = 0 and call
+                                 ; OSAPI_FILE_READ.
 
                                  ; for your own drawing (SPEC.md 32): AL = 1
                                  ; on / 0 off, lock HELD. Out CF=0 and AL =
@@ -1093,7 +1116,10 @@ W_SEG     equ 22            ; dispatcher, and the segment every near
 W_ONSIZE  equ 24            ; word: near ptr or 0 - your resize negotiator.
                             ; NOT a template word - set it with
                             ; OSAPI_WM_ONSIZE
-WIN_SIZE  equ 26
+W_ONMOUSEUP equ 26          ; word: near ptr or 0 - the RELEASE half of a
+                            ; content click (SPEC.md 13.7). NOT a template
+                            ; word - set it with OSAPI_WM_ONMOUSEUP
+WIN_SIZE  equ 28
 MAX_WIN   equ 12
 
 ; THE RECORD LIVES IN KERNEL_SEG. On entry to any callback ES points there
@@ -1919,6 +1945,41 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
 %define OSAPI_FILE_APPEND_SYS KERNEL_SEG:0x03A0 ; SI = NUL 8.3 name, ES:BX =
                                  ; bytes, CX = count; out as
                                  ; OSAPI_FILE_APPEND. DRIVERS ONLY.
+%define OSAPI_WM_ONMOUSEUP  KERNEL_SEG:0x01F0   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it): the RELEASE
+                                 ; half of a content click (SPEC.md 13.7).
+                                 ; Call it from your entry proc after
+                                 ; OSAPI_WM_CREATE, exactly like
+                                 ; OSAPI_WM_ONSIZE - W_ONMOUSEUP is not a
+                                 ; template word.
+                                 ;
+                                 ; The kernel calls it with CX = x, DX = y,
+                                 ; SI = your window, in W_ONCLICK's environment
+                                 ; exactly: the UI task, under the gfx lock,
+                                 ; billed to your instance. You may draw.
+                                 ;
+                                 ; TWO RULES, and both are the point of it:
+                                 ;   - it arrives ONLY if your W_ONCLICK ran
+                                 ;     for the matching press. A press that
+                                 ;     merely raised your window, or landed on
+                                 ;     the chrome, or was swallowed by a modal
+                                 ;     dialog, produces nothing.
+                                 ;   - it arrives EVEN IF the release landed
+                                 ;     outside your window. CX/DX are SCREEN
+                                 ;     coordinates and may be outside your
+                                 ;     content box, or negative once you
+                                 ;     subtract your origin. That is what lets
+                                 ;     you un-draw a pressed state and decline
+                                 ;     to act, which is the whole feature -
+                                 ;     range-test it yourself.
+                                 ;
+                                 ; The kernel guarantees DELIVERY; you decide
+                                 ; IDENTITY. It has no idea what your controls
+                                 ; are and does not try to guess.
+                                 ;
+                                 ; Do NOT also poll OSAPI_MOUSE in a tracking
+                                 ; loop from the same W_ONCLICK: that loop
+                                 ; consumes its own release. Pick one.
 %define OSAPI_BOOT_TICKS    KERNEL_SEG:0x02F8   ; out AX = how long this machine
                                  ; took to boot, in SYSTEM TICKS (18.2065 Hz,
                                  ; 54.925 ms each): the boot sector's first

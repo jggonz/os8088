@@ -170,11 +170,62 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 100352          ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 102400          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE EIGHTEENTH MOVE, 100,352 -> 102,400,
+                                ; ASKED FOR AND GRANTED, kern_big's alone and
+                                ; the third of those. 2KB on the thirteenth
+                                ; move's terms - headroom, half a step - for
+                                ; SPEC.md 62's NETWORK DRIVER
+                                ; (docs/NET-PLAN.md).
+                                ;
+                                ; WHAT IT HAS ALREADY SPENT is stage 1, which
+                                ; is on this branch and is 175 bytes: DV_CLASS
+                                ; and the per-class volume drop (18.7.3),
+                                ; DRVC_NET's publication slot (51.2.1), and
+                                ; the Control Panel window growing 140 -> 151
+                                ; to hold a third driver page (31.1). That
+                                ; landed INSIDE the rung the merge left, which
+                                ; is why the guard read one step against a
+                                ; standard of four before this move and not
+                                ; because of it.
+                                ;
+                                ; WHAT IT IS FOR is the rest: stage 2's file
+                                ; REDIRECTOR, estimated at ~400 bytes across
+                                ; twelve branch sites in the file layer, and
+                                ; stage 3's OSAPI_DRV_CALL - the cell that
+                                ; lets a PACKAGE reach a driver at all, which
+                                ; is what mTCP forwarding needs and which
+                                ; nothing else in the tree has ever wanted. On
+                                ; move 10's terms: granted ahead of the work,
+                                ; and whatever those two do not spend is
+                                ; handed back rather than kept. It leaves five
+                                ; steps, one above the standard four, and that
+                                ; extra step is the redirector's estimate plus
+                                ; the margin an estimate wants.
+                                ;
+                                ; kern_small is deliberately NOT moved, and it
+                                ; needs nothing: on the merged tree stage 1
+                                ; crosses NO rung there - 94,208, four steps,
+                                ; the standard - because its 175 bytes fit
+                                ; inside the rung this merge already had open.
+                                ; (Measured on the branch BEFORE the merge it
+                                ; did cross one, 113 -> 114 steps; that figure
+                                ; is a property of the tree it was taken on
+                                ; and not of the change, which is the whole
+                                ; reason a merge re-measures rather than
+                                ; carrying a number across.) The fifteenth
+                                ; move's drift says the small guard should
+                                ; stay the tighter of the two, and at 96,256
+                                ; against 102,400 it now is by 6KB. If the
+                                ; redirector turns out not to fit there, the
+                                ; question to ask is whether a 128KB machine
+                                ; wants a network drive at all - not whether
+                                ; the guard should follow.
                                 ;
                                 ; THE SEVENTEENTH MOVE, 98,304 -> 100,352,
                                 ; ASKED FOR AND GRANTED, and the first since
@@ -884,6 +935,7 @@ DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5
+DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6
 
 ; =============================================================================
 ; Fixed entry points
@@ -1075,17 +1127,38 @@ osapi_table:
                                   ;          no stub is needed
     OSAPI_SLOT wm_about_set       ; 0x01E0 - the app-name pull-down (12.2):
                                   ;          BX = win, SI = your About handler
-    OSAPI_SLOT dskw_gone          ; 0x01E8 - RETIRED (SPEC.md 18.4.1/20.8):
-                                  ;          this was readbig, the one file op
-                                  ;          with no 64KB ceiling. dskw_read
-                                  ;          has none either now, so the cell
-                                  ;          answers CF=1 / AX = FERR_NAME
-                                  ;          rather than being reused - a
-                                  ;          shipped slot keeps its contract
-    OSAPI_SLOT gfx_dbuf_gone      ; 0x01F0 - RETIRED (SPEC.md 32/20.8 rule 4):
-                                  ;          was a package's own sw_set. The
-                                  ;          cell answers CF=1 rather than
-                                  ;          being reused
+    OSAPI_SLOT osapi_vol_kind     ; 0x01E8 - AL = a volume index. CF=1 = there
+                                  ;          is no such volume; CF=0 with AL =
+                                  ;          VK_REMOVABLE / VK_FIXED and AH =
+                                  ;          VT_BIOS / VT_DRIVER (SPEC.md
+                                  ;          18.7.2). The MEDIUM and the
+                                  ;          TRANSPORT are two questions, and
+                                  ;          a package asking "is this a hard
+                                  ;          disk" wants the first.
+                                  ;          WAS readbig (SPEC.md 18.4.1),
+                                  ;          retired when dskw_read lost its
+                                  ;          64KB ceiling - SPEC.md 20.3.1's
+                                  ;          free list, and taking it cost the
+                                  ;          table nothing where an append
+                                  ;          would have been eight bytes
+    OSAPI_SLOT wm_onmouseup       ; 0x01F0 - BX = window, AX = a near proc in
+                                  ;          YOUR segment (0 clears it): the
+                                  ;          release half of a content click
+                                  ;          (SPEC.md 13.7). Call it after
+                                  ;          OSAPI_WM_CREATE, like
+                                  ;          OSAPI_WM_ONSIZE - W_ONMOUSEUP is
+                                  ;          not a template word.
+                                  ;
+                                  ;          THIS CELL IS REUSED, and it is
+                                  ;          the worked example of SPEC.md
+                                  ;          20.3.1's free list: it held the
+                                  ;          RETIRED gfx_dbuf_gone (32), whose
+                                  ;          contract was withdrawn, whose SDK
+                                  ;          name was removed, and which
+                                  ;          therefore had no caller that
+                                  ;          could exist. Reuse cost the table
+                                  ;          nothing where an append would
+                                  ;          have grown it
     OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows
@@ -1528,6 +1601,14 @@ dbg_reg:
                                     ; a second monitor is plugged into a
                                     ; second card is the one question in
                                     ; SPEC.md 39 no emulator can be asked
+    dw DBG_TAG_BUILD, kbld_dbg_blk  ; SPEC.md 57.6 - WHICH KERNEL IS THIS. A
+                                    ; report that cannot name its own build is
+                                    ; a report somebody has to take on trust,
+                                    ; and this session lost a day to exactly
+                                    ; that: three field disks whose KERNEL.SYS
+                                    ; is 88,134 bytes apiece, because the image
+                                    ; rounds to a 512-byte rung, so not one row
+                                    ; in the report could tell them apart
     dw DBG_TAG_FDD, fdd_dbg_blk     ; SPEC.md 57.5 - and the FOURTH, more
                                     ; plainly than any of them: this block
                                     ; exists BECAUSE no emulator here can be
@@ -2264,6 +2345,29 @@ osapi_file_goto_q:
 ; out: AX = width, BX = height, CX = first row the dock owns (so the usable
 ;      desktop is rows MBAR_H..CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
 ;      DH = bits per pixel, 4 or 1
+; -----------------------------------------------------------------------------
+; osapi_vol_kind - what KIND of volume is this? (SPEC.md 18.7.2, slot 0x01E8)
+; in:  AL = a volume index (0 = A:, 1 = B:, ...)
+; out: CF=1 = no such volume; CF=0 with AL = VK_* and AH = VT_*
+; clobbers: AX (the output), flags
+;
+; The first thing a package can ask about a volume other than by using it, and
+; it exists because sysbench could not: its hard-disk block probes volume
+; index 2 with a FILE_GOTO and assumed a hard disk, which SPEC.md 18.98's
+; external floppies made false. OSAPI_VOL_* are the DRIVER's and refuse a
+; package (SPEC.md 51), so there was no way to ask at all.
+;
+; TWO answers because they are two questions: a package wanting "is this a
+; hard disk" wants the MEDIUM, and one wanting "will this go through a driver"
+; wants the TRANSPORT. Conflating them is the bug this section exists for.
+; -----------------------------------------------------------------------------
+osapi_vol_kind:
+    push bx
+    mov bl, al
+    call dsk_vol_fixed          ; ...which answers BOTH, so this cell is the
+    pop bx                      ; index-to-BL and nothing else (a pop leaves
+    ret                         ; CF alone)
+
 osapi_video:
     mov ax, [vid_w]
     mov bx, [vid_h]
@@ -2702,6 +2806,44 @@ fdlg_reap:            call COLD_SEG:fdf_fdlg_reap
                     ret
 fdlg_top:             call COLD_SEG:fdf_fdlg_top
                     ret
+
+; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
+; Three words that change whenever any section's length does, so a field
+; report can name the build that produced it. They are SECTION-END LABELS, so
+; they cost the machine no cycles at all, and they are STABLE in a way a
+; checksum of the running image could not be - .text here carries
+; mutable data on purpose (dsk_vtab, vid_w, fdd_dbg_*, fm_fchk), so a sum of
+; it would depend on the adapter the machine booted on and on when it was
+; taken.
+;
+; What it is NOT is a content hash: a byte-neutral edit - two instructions
+; swapped - leaves every length alone and every term equal. That is the price
+; of costing nothing, and it is the right trade, because the question this
+; answers in practice is "is the disk in the drive the one I think it is",
+; and an ordinary change moves at least one of these.
+;
+; Forward references: each label is an offset in a `vstart 0` section, so each
+; IS that section's length, and a `dw` is not a critical expression - nasm
+; resolves them in a later pass.
+kbld_dbg_blk:
+    dw DBG_TAG_BUILD                ; 'ID' - the magic, and the block's own
+    dw kbld_dbg_span                ; first word (SPEC.md 57)
+kbld_dbg_span:
+kbld_text: dw kernel_text_end       ; THREE PLAIN WORDS, not one hashed one:
+kbld_cold: dw cold_end              ; nasm refuses arithmetic between
+kbld_ovl:  dw ovl_end               ; relocatable symbols ("expression is not
+                                    ; simple or relocatable"), and the `equ`s
+                                    ; that hold these lengths are defined
+                                    ; BELOW - after `kernel_text_end`, which
+                                    ; must stay the last thing in .text. Three
+                                    ; words is the better answer anyway: a
+                                    ; reader gets the sections themselves and
+                                    ; can see WHICH one moved, where a hash
+                                    ; only says that something did
+KBLD_DBG_SPAN equ ($ - kbld_dbg_span)
+%if KBLD_DBG_SPAN != 6
+  %error "kernel: SPEC.md 57.6 block - the published span is not 6 bytes"
+%endif
 
 ; =============================================================================
 ; Size guards (SPEC.md 15.1). Same-section label differences bound via equ -

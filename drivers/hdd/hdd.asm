@@ -1272,4 +1272,7 @@ hd_cly:      dw 0
 
 %include "hdsec.inc"
 
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%include "os88ui.inc"
+
     OS88_DRV_END

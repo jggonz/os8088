@@ -493,7 +493,7 @@ so `pt_msgon` had to be cleared by every repaint path and `pt_msg_hide` had to
 be called at the top of the click, key and menu handlers so that any
 interaction took it down.
 
-It is SPEC.md §59's strip in the menu bar. `pt_msg_show` is nine instructions
+It is SPEC.md 59's strip in the menu bar. `pt_msg_show` is nine instructions
 around `OSAPI_TOAST`; `pt_msg_hide`, `[pt_msgon]` and `[pt_msgw]` are gone,
 with the three "an interaction retires the toast" calls and the two repaint
 stores. **−138 bytes**, and the artwork stops being covered.
@@ -506,7 +506,7 @@ Two things worth knowing before adding another message here:
 - **A message put up BEFORE a long operation still works**, and that took
   kernel work rather than luck. `Encoding...` precedes seconds of LZW inside a
   window callback, so a purely deferred toast would have appeared *after* the
-  thing it announced; SPEC.md §59.4's `toast_now` draws on the spot when the
+  thing it announced; SPEC.md 59.4's `toast_now` draws on the spot when the
   caller provably holds the gfx lock, which a menu command always does. The
   `pt_wait` that used to exist to flush it on a double-buffered machine is
   no longer needed for that reason — `toast_now` draws on the spot itself.
