@@ -4949,3 +4949,39 @@ operation, or the harness gets optimised instead of the feature.
 it was never the rate. A 360 KB image crosses it in **99 seconds**; the same
 image reaches this machine any other way via the seven-step path in
 docs/FIELD-MACHINES.md.
+
+### Set 40 — the network drive works, and a third of it is turnaround
+
+**docs/NET-PLAN.md step 2, on the iron**: the 5150 (GB101's LPT at **03BC**)
+against the DOS machine (DIO-500 at **0378**), NET.DRV loaded and
+`OS88NET.COM` serving a 720KB image. The Control Panel reads **Linked, 1440
+sectors** — the image's exact size — a Disk window lists `APPS`, `MEDIA` and
+`NETTEST.TXT`, and **double-clicking the text file launched Note Pad and
+opened it**: the file association resolved, the package loaded and the
+document arrived, all across the cable. **Everything above `dsk_xfer` worked
+unchanged**, which was the whole bet of doing block mode first.
+
+**The document open took about ten seconds**, and it decomposes:
+
+| | sectors | cost |
+|---|---:|---:|
+| `NOTEPAD.O88` | 32 | |
+| `NETTEST.TXT` | 2 | |
+| **data**, at Set 39's 3,741 B/s | 34 | **4.65 s** |
+| **turnaround**, 2 x 54.9 ms per SECTOR | 34 | **3.73 s** |
+| mounts and directory walks | | the rest |
+
+**The turnaround is 37% of it and it is nearly all removable.** `lp_turn`
+spends one whole system tick per direction reversal — deliberately, and Set
+39's own header says why: a spin count cannot be made to hold between a 5150
+and an unknown far end, and a reversal was expected to be *"a handful per
+run"*. In block mode it is **two per sector**, because `net_blk` sends a
+count of **1** every time — even though the protocol carries a count byte and
+`dsk_xfer` hands it an already-coalesced run. A 9-sector run batched into one
+command is 2 reversals instead of 18: **3.73 s → 0.44 s** on this figure.
+
+That is the same shape as SPEC.md §18.91's floppy batching and it is worth
+recording as such: **a cost model built for streaming, met by a caller that
+does not stream.** The transport is not slow here; it is being asked the same
+question 34 times.
+

@@ -34998,6 +34998,15 @@ have hidden from the other:
   0x378 with 0x3BC and 0x278 dark. `/P:3BC` pins a port that does not answer
   and the program says `No parallel port to listen on.` and exits.
 
+**And on the iron, which is the only place the wire exists** (PERFORMANCE.md
+Part 9 Set 40): the page reads `Linked` and **1440 sectors** — the image's
+exact size — a Disk window lists its folders and files, and a text file
+**double-clicked open** resolved its association, loaded Note Pad and read
+the document, all across the cable. Everything above `dsk_xfer` worked
+unchanged, which was the whole bet of doing block mode before the
+redirector. The open took ~10 s, of which **3.7 s is `lp_turn`** at two
+reversals per sector — see §62.3.
+
 ### 62.8 `tests/dosstub` — a machine to run the DOS end on
 
 The bug in §62.6 shipped **twice**, and the reason is worth more than the bug:
