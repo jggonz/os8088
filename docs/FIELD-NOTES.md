@@ -1713,19 +1713,66 @@ missed it: every test here pressed Enter.
 instead of `.lineonly`. Verified by re-running the repro on both adapters —
 the prompt clears whole.
 
-### 17.2 Format Disk stays greyed on a disk it just made (QUEUED — a design question)
+### 17.2 Format Disk stays greyed on a disk it just made (FIXED)
 
 Reported as "after formatting a disk, Format Disk becomes greyed out for the
-newly formatted disk forever". That is §22.12's predicate working as written:
-the item is live only while `FS_MOK == 0`, and a disk that formatted now
-mounts. The comment there says why — *"it MOUNTED: there is nothing here to
+newly formatted disk forever". That was §22.12's predicate working as written:
+the item was live only while `FS_MOK == 0`, and a disk that formatted now
+mounts. The comment there said why — *"it MOUNTED: there is nothing here to
 format, and 'erase this perfectly good disk' is a different feature with a
 different question"*.
 
-So it is a design decision meeting a user who wants to reformat, and the
-question is whether that second feature should exist. **§18.96.2 depends on
-the greying** — it is the reason a failed 720K pick re-formats as 360K instead
-of stopping — so anything done here has to leave that argument standing.
+**The plainest form of it is that os8088 could format any disk except one of
+its own**, which is what settled the design question: the second feature
+should exist, and declining to ask a question is not the same as protecting
+anybody from its answer. The `FS_MOK` test is gone from `fm_fmt_ok`, and the
+different question is *asked* — a mountable volume gets
+`ERASE and format A: as 360K?` where an unreadable one gets
+`Format A: as 360K?`. Enter still means yes and every other key no, which is
+already the strongest confirmation in the system (§22.12).
+
+Three pieces of fallout, all of which existed only because the greying had
+made them unreachable:
+
+- **`dskw_fmt_probe` forced 9/2 on the way out.** Its own comment justified
+  that with *"this routine is only ever called with a failed mount behind
+  it"*, which is exactly the premise that was just removed — so a **cancelled**
+  confirmation on a mounted 1.2MB or 1.44MB volume would have left the machine
+  believing that volume had 9 sectors a track. It banks the caller's
+  `[disk_spt]`/`[disk_heads]`/`[dsk_totsec]` and puts those back instead.
+  Like the routine's own note about why it restores anything at all, this
+  **closes a trap rather than fixing an observed bug**: on a 9-sector volume
+  the constant was accidentally right, and every drive in this harness — and
+  on the field machine — is 9-sector, so the case cannot be exhibited here.
+  What is gated is the round trip: the three words read identically before
+  the confirmation, while it is up, and after Escape cancels it.
+- **A sibling Disk window could be showing a folder on the disk being
+  replaced.** It could not before, because a window on an unmountable volume
+  is always at the root (§19.2). `fm_fmt_home` sends every other window on
+  that drive back to the root, with a caption to match and §22.8's deferred
+  re-list rather than three mounts paid at once.
+- **§18.96.2's fallback leaned on the greying** — a failed 720K reach test
+  re-formats as 360K rather than stopping, and the stated reason was that
+  stopping would leave a mountable, lying 720KB volume with Format Disk…
+  disabled. The behaviour is kept and the reason is restated: the user asked
+  for a formatted disk, and the useful answer is the one the drive *can* make
+  plus a toast saying why. §18.96.2 still runs, because a disk that silently
+  loses whatever is written past cylinder 39 is not a thing to ship on the
+  grounds that it can be reformatted afterwards.
+
+Verified on a cycle-accurate 5150/CGA with B: a copy of the shipped apps disk
+— four folders on a perfectly good FAT12 volume, which is exactly the disk the
+old predicate refused: the confirmation reads `ERASE and format B: as 360K?`,
+Enter makes an empty 360KB volume that the HOST's own fsck accepts
+(`os88disk.py --verify`: 354 clusters, 0 files), and with two windows open —
+one left inside `B:\APPS` — the sibling's `FS_CWD` goes 2 → 0 with the
+re-list debt set, its caption comes back as `Disk`, and raising it lists the
+new root. The 720K/360K gate (§18.96.2) still passes both legs.
+
+Cost: `.text` +24, `.cold` +152, **no rung crossed** and footprint unchanged
+— but `kern_big`'s cold rung has 107 bytes left in it afterwards, so the next
+cold addition buys a whole 512. `kern_small` is untouched: the formatter is
+`kern_big` only (§18.96).
 
 ### 17.3 720K on the field machine came back 360K (NOT A BUG — the reach test)
 
