@@ -522,12 +522,17 @@ dsk_bpb_bank_get:
 ; out: nothing; every register AND the flags preserved
 ; -----------------------------------------------------------------------------
 dsk_bpb_bank_put:
+    pushf                       ; FIRST - the flags are part of the contract,
+                                ; and the common exit (a floppy outside a
+                                ; batch) is a compare away from clobbering
+                                ; the CF a caller may be carrying
     cmp byte [dsk_vflop], 1
     jne .keep                   ; a floppy is banked only inside a batch, and
     cmp byte [dsk_batch], 0     ; only for as long as it runs (SPEC.md 18.9.3)
-    je .out
+    jne .keep
+    popf
+    ret
 .keep:
-    pushf
     push ax
     push bx
     push cx
@@ -838,9 +843,15 @@ dsk_xfer:
                                 ; a copy - and it is why the payload pays no
                                 ; copy at all (SPEC.md 18.95.1)
     call dsk_rah_fill           ; yes: read to the end of DI's track
-    jc .fail
+    jc .nocache                 ; a failed fill is a fact about the
+                                ; SPECULATIVE tail, not about the sector
+                                ; asked for: fall through and read exactly
+                                ; what the caller wanted, with the retry
+                                ; ladder it always had (18.91: one bad
+                                ; sector costs its own 512 bytes, not the
+                                ; good ones beside it)
     call dsk_rah_take           ; ...which covers DI by construction
-    jc .fail
+    jc .nocache
 .served:
     add di, ax                  ; the same advance .ok makes, and no int 13h
     sub si, ax
@@ -1925,7 +1936,13 @@ disk_mount:
     xor ax, ax                  ; LBA 0
     mov cx, 1
     mov bx, dsk_secbuf
-    call disk_read
+    inc byte [dsk_rah_busy]     ; NEVER from §18.95's cache: this read is the
+    call disk_read              ; swap detector itself. Served from a cached
+    dec byte [dsk_rah_busy]     ; chunk it would re-sign the OLD disk's boot
+                                ; sector, [dsk_sigcur] would never move, and
+                                ; every later hit - FAT window included -
+                                ; would be the old disk's bytes laid onto the
+                                ; new one by the next write. (dec leaves CF)
     jc .jfail
     call dsk_bpb_sig            ; [dsk_sigcur] = which disk this is (18.8.2),
                                 ; off the sector we have just read anyway.
@@ -4832,22 +4849,18 @@ dsk_wclus:    resw 1            ; dirw: the cluster being walked, 0 = root
 dsk_wsec:     resw 1            ; dirw: sector index inside it
 dsk_wguard:   resw 1            ; dirw: sectors left before the walk gives up
 
-; --- the read-ahead window's bookkeeping (SPEC.md 19.2.3) -------------------
-; Safe in .bss for the same reason: dsk_dirw_start zeroes dsk_rah_n before any
-; walk, and dsk_dirw_fill writes the other five before anything reads them.
-; [dsk_rah_seg] is NOT - it is in .text with a real initialiser, because a
-; shed reads it and mem_pg_own names it.
+; --- the read-ahead cache's bookkeeping (SPEC.md 18.95) ---------------------
+; Safe in .bss because nothing reads any of it while [dsk_rah_seg] is 0, and
+; the claim that sets that word non-zero (dsk_rah_want) flushes the table and
+; zeroes dsk_rah_next before anything can look. [dsk_rah_seg] itself is NOT -
+; it is in .text with a real initialiser, because a shed reads it and
+; mem_pg_own names it.
 dsk_rah_tab:  resb DSK_RAH_RUNS * RAH_REC   ; one record per cached chunk
 dsk_rah_next: resw 1            ; the next slot to spend (round robin)
 dsk_rah_slot: resw 1            ; ...and the one being filled, in bytes
 dsk_rah_rem:  resw 1            ; dsk_rah_have's second answer: sectors of the
                                 ; chunk from the wanted one on, itself included
 dsk_rah_got:  resw 1            ; ...and how many dsk_rah_take actually copied
-dsk_rah_bc:   resw 1            ; the cursor banked across one speculative
-dsk_rah_bs:   resw 1            ; step: cluster, sector index and guard, put
-dsk_rah_bg:   resw 1            ; back when the step is not contiguous
-dsk_rah_max:  resw 1            ; ...and what ONE int 13h may carry from the
-                                ; run's first sector (dsk_rah_cap)
 dsk_op:       resb 1            ; int 13h function for dsk_xfer: 02h / 03h
 dsk_run:      resw 1            ; sectors in the int 13h call being issued
                                 ; (SPEC.md 18.91). A module word for the same
