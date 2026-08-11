@@ -30104,6 +30104,46 @@ changing. `hd_entry` is the shape to copy: one `cmp`/`je` per verb it wants,
 then `cmp al, DRVV_ATTACH` / `jne .refuse`, so an unrecognised verb answers
 `CF = 1` and probes nothing. Do not write a default case that does work.
 
+### 51.2.3 A driver asks as the KERNEL, not as whoever was dispatching
+
+**A driver is not an instance, and the API must answer it as one that is
+not.** §19.2.1 made `inst_caller` the question every file cell asks — *who is
+this on behalf of?* — and it answers with the dispatched callback's stamp
+(`[snd_inst]`, §34.3). The kernel enters a driver from **inside** such a
+callback: ticking a row on the Drivers page is a Control Panel *click*, and so
+is every press on a driver's own page. So `DRVV_READY`, `DRVV_ATTACH`,
+`DRVV_DETACH` and the whole page ABI ran stamped as the **Control Panel**, and
+every API cell the driver called was answered on that instance's behalf.
+
+`osapi_file_here`'s own contract already said otherwise — *"a caller with no
+instance behind it, the kernel, a driver, gets the machine's own position"* —
+and so did the consumer that needed it (§52.11's `hd_tool_home`, which banks
+the system volume at `DRVV_READY` on the strength of `drv_load` having just
+stood the machine there). Both documents described the intent; neither
+described the code.
+
+`drv_call` and `drv_cp_call` therefore bank `[snd_inst]`, clear it to "no
+instance" (`drv_nostamp`) and put it back — `ui_task`'s and `loader_run`'s
+bracket, so nested dispatches unwind correctly and a driver page that repaints
+a package's window restores that package's stamp on the way out.
+
+**What it cost, and the shape is worth recognising.** The Control Panel's
+instance is seeded at `inst_alloc` from wherever it was *launched*
+(§38.10) — so a user who opened a Disk window on B: and then opened the
+Control Panel gave `hd_tool_home` `(B:, root)` as "the system volume".
+Install and Format then went to B: for `HDDTOOL.DRV`, did not find it, and
+reported **"Need the system disk" with the system disk in A: the whole time**.
+A user who opened the panel straight from the desktop got `(A:, root)` and
+never saw it — *the bug was a function of where the user had been*, which is
+why it reads as intermittent and why the code looks correct at every line.
+
+**The other two driver entry points deliberately do NOT do this.**
+`drv_svc_call` is the sound ABI, which passes the requesting instance
+explicitly in `DH` and is reached from `snd_tick` inside IRQ0, where touching
+the foreground's stamp is a race rather than a fix; `drv_blk_call` is
+`dsk_xfer`'s inner loop and sits *below* the file layer, so it resolves no
+names. Neither can reach a cell that asks `inst_caller`.
+
 ### 51.3 Loading, and what happens when it fails
 
 `drv_load` is the package loader's order (§21) with the instance half

@@ -2333,6 +2333,17 @@ osapi_file_dfree:
 ;
 ; A caller with no instance behind it - the kernel, a driver - gets the
 ; machine's own position, exactly as before.
+;
+; **A DRIVER only gets that because drv_call and drv_cp_call arrange it**
+; (SPEC.md 51.2.3), and this sentence was a statement of intent until they
+; did. A driver is not an instance, but inst_caller answers with the
+; DISPATCHED CALLBACK's stamp, and the kernel enters a driver from inside
+; one - ticking its row on the Drivers page is a Control Panel click. So this
+; cell reported where the PANEL was standing, the hard-disk driver banked that
+; as the system volume at DRVV_READY (SPEC.md 52.11), and Install then said
+; "Need the system disk" with the system disk in the drive. The two entry
+; points clear the stamp for the length of the call; the other two,
+; drv_svc_call and drv_blk_call, deliberately do not and cannot reach here.
 ; -----------------------------------------------------------------------------
 ; DX and BL are the outputs; SPEC.md 1 makes everything else this routine's
 ; to preserve, BH and AX included - so the slot walks the side table through

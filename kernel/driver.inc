@@ -753,6 +753,40 @@ drv_row:
     ret
 
 ; -----------------------------------------------------------------------------
+; drv_nostamp - "the DRIVER is asking, not the app that happened to be
+;               dispatching" (SPEC.md 51.2.3)
+; in:  nothing
+; out: nothing (every register preserved)
+; clobbers: flags
+;
+; A driver is not an instance. inst_caller answers with the dispatched
+; callback's stamp, though, and the kernel enters a driver from inside one:
+; ticking a row on the Drivers page is a Control Panel CLICK, so DRVV_READY -
+; and every API cell the driver calls from it - was answered as the CONTROL
+; PANEL. That is a lie in the one direction that costs a disk: osapi_file_here
+; then reports where the PANEL thinks it is standing rather than where the
+; machine is, and drv_load has just stood the machine on the system volume
+; precisely so the driver can read from it (SPEC.md 51.2.2/52.11).
+;
+; So the stamp is cleared for the length of the call, which is what makes
+; osapi_file_here's own sentence - "a caller with no instance behind it, the
+; kernel, a driver, gets the machine's own position" - true rather than
+; merely intended. The caller banks [snd_inst] and puts it back, which is
+; ui_task's and loader_run's bracket (SPEC.md 34.3), so nested dispatches
+; unwind correctly: a driver's page click that repaints a package's window
+; restores that package's stamp on the way out.
+;
+; DI is saved because it is snd_disp_set's argument AND drv_cp_call's (the
+; pane's left edge), and this routine is documented to preserve everything.
+; -----------------------------------------------------------------------------
+drv_nostamp:
+    push di
+    xor di, di                  ; 0 = no instance record, which snd_disp_set
+    call snd_disp_set           ; stores as 0xFF - inst_caller's "the kernel"
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
 ; drv_call - call into a loaded driver (SPEC.md 51.2)
 ; in:  BX = row ptr (loaded), BP = the near offset in ITS segment, every
 ;      other register = that proc's own arguments
@@ -764,14 +798,20 @@ drv_row:
 ; there), and the far call lands on the three-byte dispatcher inside the
 ; driver's own header. The far pointer comes out of the ROW, so this is
 ; re-entrant across drivers, and clearing DRVR_SEG disarms it.
+;
+; The stamp comes off for the duration (SPEC.md 51.2.3). `pop word [mem]`
+; touches no flag, so CF still comes back out of the driver.
 ; -----------------------------------------------------------------------------
 drv_call:
     push ds
     push es
+    push word [snd_inst]
+    call drv_nostamp
     push cs
     pop es
     mov ds, [es:bx+DRVR_SEG]
     call far [es:bx+DRVR_DISP]
+    pop word [snd_inst]
     pop es
     pop ds
     ret
@@ -878,6 +918,13 @@ drv_svc_none:
 ; DI, DX, CX and BX and leaves AX alone, where the sound ABI spends every
 ; register there is. That is why drv_svc_call and drv_blk_call are two bodies
 ; and this is one.
+;
+; The stamp comes off here for drv_call's reason (SPEC.md 51.2.3), and this is
+; the site that matters most: a driver's page is drawn and clicked from inside
+; the Control Panel's own callback, so it is where a page that opens a file -
+; the hard disk's Format and Install, which read HDDTOOL.DRV off the system
+; volume (SPEC.md 52.11) - would otherwise resolve names in whatever folder
+; the PANEL was launched in.
 ; -----------------------------------------------------------------------------
 drv_cp_call:
     push si
@@ -893,10 +940,13 @@ drv_cp_call:
     push di                     ; ...and DI is the pane left again
     push ds
     push es
+    push word [snd_inst]
+    call drv_nostamp
     push cs
     pop es
     mov ds, [es:si+2]
     call far [es:si]
+    pop word [snd_inst]
     pop es
     pop ds
 .out:
