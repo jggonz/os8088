@@ -13,17 +13,25 @@ aimed - and a click aimed at where it used to be lands on the desktop, which
 switches the menu bar to Locator and looks exactly like a control that does
 not work.
 """
+import os
+import sys
 import time
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "tools"))
+import os88geom                                              # noqa: E402
 # menu.inc: the System cell is x 0..29 and a pull-down hangs from MBAR_H + 1
 # with MENU_ITEM_H per item. Item 1 is CMD_CTRL (About, Control Panel, Task
 # Manager, ...).
-MBAR_H, MENU_ITEM_H = 20, 16
+from os88geom import (MBAR_H, MENU_ITEM_H, TITLE_H,          # noqa: E402
+                      WIN_SIZE, MAX_WIN, W_FLAGS, W_X, W_Y, W_W, W_H,
+                      DESK_ZY0, DESK_ZW, DESK_COLW,
+                      DV_KIND, DV_FLAGS, DV_SIZE, DVOL_MAX, DVK_FREE,
+                      FM_ROW_Y0, FM_ROW_H)
 SYS_X, SYS_Y = 12, 8
 
 # ctrl.inc's geometry, content-relative. The item list on the left, then the
 # pane, then SPEC.md 31.10.2's row inside it.
-TITLE_H = 18
 CP_IX, CP_I0Y, CP_IROWH = 6, 6, 14
 CP_RX, CP_PGX = 96, 4
 CPV_MY, CPV_MSTEP = 96, 74
@@ -41,14 +49,18 @@ def _cp_win(m, S):
     """(x, y) of the Control Panel's frame, or None. It is the window whose
     W_TITLE is the panel's - found by rect instead, because the panel is the
     only 320-wide window in the machine and a title compare would need the
-    string's address as well."""
-    wins = m.read(S("wm_wins"), 12 * 26)
-    for i in range(12):
-        f = _u16(wins, i * 26)
-        if f & 3 != 3:                      # used and visible
+    string's address as well.
+
+    The stride is os88geom's. It was written out as a bare 26 here - in the
+    one file that already had WIN_SIZE = 28 forty lines further down - so this
+    walked the table wrong and finding the panel at all was luck."""
+    wins = m.read(S("wm_wins"), MAX_WIN * WIN_SIZE)
+    for i in range(MAX_WIN):
+        b = i * WIN_SIZE
+        if _u16(wins, b + W_FLAGS) & 3 != 3:        # used and visible
             continue
-        if _u16(wins, i * 26 + 6) == 320:   # W_W
-            return _u16(wins, i * 26 + 2), _u16(wins, i * 26 + 4)
+        if _u16(wins, b + W_W) == 320:
+            return _u16(wins, b + W_X), _u16(wins, b + W_Y)
     return None
 
 
@@ -127,11 +139,8 @@ def set_primary(m, mo, S, settle, slot, card=None):
 # one instead of two, and neither said anything about zones - they reported a
 # window that failed to appear. `desk_zstep`, `desk_zh1`, `desk_rows` and
 # `vid_desk_zx` are all live words, so only DESK_ZY0/DESK_ZW/DESK_COLW - which
-# are assembly-time constants with no published copy - are written down here.
-DESK_ZY0, DESK_ZW, DESK_COLW = 32, 32, 44
-
-
-DV_KIND, DV_FLAGS, DV_SIZE, DVOL_MAX, DVK_FREE = 0, 2, 16, 8, 0xFF
+# are assembly-time constants with no published copy - need mirroring at all,
+# and os88geom is where they are mirrored, once, checked against desk.inc.
 
 
 def drive_ordinal(m, S, letter="B"):
@@ -196,10 +205,8 @@ def open_drive(m, mo, S, settle, letter="B", card=None):
 # The same discipline as drive_xy above, and for the same reason: FM_ROW_Y0
 # moved 26 -> 22 under two tests at once, and neither said "the row geometry
 # changed" - one reported that a package would not launch and the other that a
-# window had not opened. These three have no published copy, so they are
-# written down; they are written down ONCE.
-FM_ROW_Y0, FM_ROW_H, FM_ROW_X = 22, 16, 60
-TITLE_H = 18
+# window had not opened. They come from os88geom, which checks them.
+FM_ROW_X = 60                   # the pen, and files.inc has no equ for it
 
 
 def row_xy(wx, wy, row=0):
@@ -222,14 +229,10 @@ def open_row(m, mo, S, settle, wx, wy, row=0, card=None):
 # tree's life, once per field added to the record. A stale one does not fail,
 # it reads every window's rect out of the middle of its neighbour - so the
 # clicks derived from it land on bare desktop and the test reports whatever
-# did not happen next. That has now cost three debugging sessions, so the
-# readers live here and check themselves.
-WIN_SIZE, W_FLAGS, W_X, W_Y, W_W, W_H = 28, 0, 2, 4, 6, 8
-MAX_WIN = 12
-
-
-def _u16(b, i=0):
-    return b[i] | (b[i + 1] << 8)
+# did not happen next. That had cost three debugging sessions when this block
+# was written down HERE, and it went on costing them, because writing it down
+# in a second place is the same bug: `_cp_win` above kept a 26 of its own.
+# os88geom is the one copy now, and it checks itself against wm.inc at import.
 
 
 def win_rect(m, S, slot):

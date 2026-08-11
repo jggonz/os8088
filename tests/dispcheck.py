@@ -70,6 +70,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
+import os88geom                                             # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dispcp                                             # noqa: E402
 
@@ -439,11 +440,15 @@ def main(argv):
         mo.to(*home)
         mo.menu(12, 8, 12, 30)                  # chip menu -> About
         os88marty.settle(m, card=gate_card)
-        wins = m.read(S("wm_wins"), 12 * 26)
-        WIN = 26
+        # The stride is os88geom's, checked against wm.inc at import. It was
+        # a bare 26 here, which wm.inc stopped agreeing with at SPEC.md 13.7 -
+        # so this walked the table wrong AND the WF_FULL poke below wrote into
+        # the middle of a neighbouring record.
+        WIN = os88geom.WIN_SIZE
+        wins = m.read(S("wm_wins"), os88geom.MAX_WIN * WIN)
         found = None
-        for i in range(12):
-            fl = u16(wins, i * WIN + 0)
+        for i in range(os88geom.MAX_WIN):
+            fl = u16(wins, i * WIN + os88geom.W_FLAGS)
             if fl & 3 == 3:                     # used and visible
                 found = i
         if found is None:
@@ -470,8 +475,9 @@ def main(argv):
                 cx0, cy0 = mo.where()[:2]
             mo.m.mouse(0, 0)                    # release
             os88marty.settle(m, card=gate_card)
-            wins = m.read(S("wm_wins"), 12 * 26)
-            nx, ny = (u16(wins, found * WIN + 2), u16(wins, found * WIN + 4))
+            wins = m.read(S("wm_wins"), os88geom.MAX_WIN * WIN)
+            nx, ny = (u16(wins, found * WIN + os88geom.W_X),
+                      u16(wins, found * WIN + os88geom.W_Y))
             say("dragged to (%d,%d)" % (nx, ny))
             d = 0
             for c in ctx:

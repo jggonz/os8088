@@ -17690,7 +17690,8 @@ cursor — UI task only). All zeroed by `inst_init`.
 
 A taskbar-style strip along the bottom of the screen showing one tile per
 **running** instance (I_STATE = 1, §29), built-in or package. Clicking a
-tile restores a minimized instance (`inst_restore`) or fronts a visible one
+tile restores a minimized instance (`inst_restore`), minimizes one that is
+already frontmost (`inst_minimize`, §30.4) or fronts any other
 (`wm_front`). Label prefix `dock_`. The dock is not exposed to packages.
 
 A tile carries **two independent states**, drawn as two different kinds of
@@ -17777,7 +17778,7 @@ tile vanishes with the `wm_hide` repaint. Icon pointers must satisfy
 | `dock_force_x` | in: AX = x1, CX = x2 (inclusive). Only that span was. Repeated calls UNION. Preserves all registers. |
 | `dock_paint` | draw the rule, the strip and every live instance's tile. Called by wm_paint_all after `desk_paint`, before the menu bar and windows (lock held by caller) — windows cover the dock exactly like desktop icons (§26). |
 | `dock_hit`   | in CX=x, DX=y. Out: CF=1 = the point is not in the strip at all; CF=0 = the strip owns it, and then **DI = the live instance record under the pointer, or 0** for bare strip, an inter-tile gap, a slot past the last, and an empty or dying one. AL = the slot when DI ≠ 0. Clobbers AX and DI only. The one hit test both buttons use (§30.2). |
-| `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ `[vid_dock_y0]` — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click activates; no double-click logic. |
+| `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ `[vid_dock_y0]` — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; I_WIN == `wm_top` → gfx_lock, `inst_minimize` on I_WIN, gfx_unlock (§30.4); else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click; no double-click logic. |
 | `dock_rclick`| in CX=x, DX=y (no lock held; called by `ui_rdown` when wm_hit found no window). Out: CF as `dock_click`'s. A tile on a live instance → gfx_lock, `menu_popup` anchored at the press, `app_close_win` if `Close` was chosen, gfx_unlock. Bare strip: consumed, and nothing drops (§30.2). |
 
 Every dock-state transition (launch, quit, minimize, restore) — and every
@@ -17964,6 +17965,48 @@ to `wm_paint_dmg` over the menu's own rect (§12.4), and that path reaches
 `[vid_dock_y0]`, so it calls `dock_force` and `dock_paint` (§11.91) — the
 popup may cover the strip freely on the machine small enough to refuse
 `MENU_SAVE_KB`.
+
+### 30.4 The tile is a toggle — clicking the front window's tile minimizes it
+
+A tile has three states and the click does whatever the tile's own mark says
+is not currently true: **minimized** (inverted interior) → `inst_restore`;
+**active** (doubled border — this instance owns the frontmost visible
+window) → `inst_minimize`; **anything else** → `wm_front`. Clicking the
+active tile used to call `wm_front` on a window that was already frontmost,
+which by §11.90 repaints no window at all — a click that consumed itself and
+did nothing visible. The strip is the only place a minimized application can
+be reached from, so making the same tile put it back is the operation the
+dock was missing rather than a second way to spell the title bar's minimize
+box (§13).
+
+Four things about it.
+
+**The question is asked at click time, not read out of `[dock_act]`.**
+`dock_act` is `dock_paint`'s scratch — resolved once per paint and valid
+inside that one lock hold — so a click must call `wm_top` itself, under the
+lock it is about to act with. This is `fdlg_sel_bar`'s rule about
+`[fdlg_shown]` (§38.3) in another module: painter scratch answers about the
+last frame, and a click is not in it.
+
+**Comparing windows is the same test the mark is drawn from.**
+`inst_bind_win` is the only writer of `I_WIN` and of `wm_owner`, and it
+writes both in one breath, so a record and its window name each other:
+`wm_top == [di+I_WIN]` and `inst_win_owner(wm_top) == di` cannot disagree.
+The cheaper of the two is used here, and it is the same predicate
+`dock_key` folds into `DOCK_K_ACT` — so what the tile shows and what the
+click does can never come apart.
+
+**A window that is hidden without being minimized is untouched.** `wm_top`
+counts visible windows only (§11), so such a window is never its answer and
+the click still takes the `wm_front` path exactly as before — where
+`wm_front` itself declines to raise a hidden window and `wm_show` is the
+entry point for that (§11.90).
+
+**It costs what the minimize box costs and no new path.** `inst_minimize`
+sets I_FLAGS bit 0 and calls `wm_hide`, so the repaint is §11.91's damage
+rect over the vacated frame and the tile's interior inverts through §30.3's
+mark diff — one `gfx_xor_fill`, no icon redrawn. Going the other way,
+`inst_restore` is unchanged.
 
 ## 31. ctrl.inc — the Control Panel window
 
