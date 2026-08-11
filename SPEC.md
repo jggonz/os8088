@@ -14501,9 +14501,49 @@ adapter's mode rather than of how many rows it has. And it is re-asked in
 `desk_rowcalc` rather than at boot, because that is the routine `vid_switch`
 re-runs (§39.11.2) — so a machine moved from its CGA to its Hercules gets the
 tall pair back with no second site to remember. `[desk_icoh]`, `[desk_zh1]`,
-`[desk_zstep]`, `[desk_pdisk]` and `[desk_phdd]` are `.text` with real
-initialisers for the reason every boot-reachable table here is: `-f bin`
-zeroes nothing, and a zero icon pointer draws the interrupt vector table.
+`[desk_zstep]`, `[desk_pdisk]`, `[desk_phdd]` and `[desk_zgap]` (§26.5) are
+`.text` with real initialisers for the reason every boot-reachable table here
+is: `-f bin` zeroes nothing, and a zero icon pointer draws the interrupt
+vector table.
+
+### 26.5 The caption sits a gap below the icon
+
+`DESK_ZGAP` rows of desktop between the bottom of the icon's cell and the top
+of the label's white rect — **2** on the 32-row icons and `DESK_ZGAP_S` = **1**
+on the CGA's 14-row pair, which is the same 2.4:1 pixel-aspect argument §26.4
+makes about the icon itself.
+
+It was 0, and that was invisible while the caption was `Disk A`: the white
+rect was the zone's full 48px width, so it read as a *band* under the icon
+whatever it touched. §26.4 made the rect two glyphs wide and hugging, and a
+20px white block flush against `ico_disk32`'s solid black bottom edge (row 31)
+reads as part of the diskette rather than as its name.
+
+**The gap is uniform, and the hard disk did not need it.** The asymmetry is
+real and is in the artwork: `ico_hdd32` ends its ink at row 25 (the feet) and
+leaves rows 26..31 blank, so that icon always had six rows of air under it and
+only the diskette was flush — on the CGA `ico_hdd14`'s last row is the feet,
+which are 2px wide at each end and so clear of a centred caption, while
+`ico_disk14`'s is another solid edge. Keying the gap off *which icon was
+drawn* is therefore the tempting shape and is rejected twice over: two labels
+in a wrapped grid (§26.1) would sit on different baselines — a column holds
+four zones on Hercules and on CGA, so a fifth volume is *beside* the first,
+not under it — and `desk_zone_rect`, `desk_dmg_zones` and `desk_zone_hilite`
+would each gain a second geometry to agree about, which is the class of
+divergence §26.4's "nothing else moved" exists to avoid. One constant in
+`desk_rowcalc` costs the hard disk two rows it can spare.
+
+**The zone grows and the pitch does not.** `[desk_zh1]` is
+`icon + DESK_ZGAP + DESK_LBLH - 1`, so the gap is inside the rect
+`desk_draw_zone` fills gray (which is what makes it *desktop* rather than
+white), inside the rect `desk_zone_rect` erases, inside `desk_dmg_zones`'
+growth and inside `desk_zone_hilite`'s XOR — every one of those already
+derives from `[desk_zh1]`, so none of them changed. `[desk_zstep]` is
+untouched, so `desk_rowcalc`'s `(dock_y0 - DESK_ZY0) / pitch` still answers 7
+on VGA and 4 on Hercules and CGA, and nothing about the wrap moves. That holds
+only while a zone still fits its pitch — 45 against 60, 26 against 34 — and a
+gap large enough to break that would have zones overlapping before it had rows
+to spare.
 
 ## 27. HELLO and NOTEPAD — the second and third packages
 
