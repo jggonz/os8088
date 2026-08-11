@@ -246,7 +246,12 @@ desk_init:
 ; array to keep in step - which is what makes a driver's C: appear by setting
 ; one flag and disappear by clearing it.
 
-section .text
+section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
+                                ; segment of its own. Drive zones and the
+                                ; desktop dither: drawn on a mount, a volume
+                                ; going away and a desktop click, never in a
+                                ; loop. This module has no data at all, so
+                                ; there is no toggle in it (rule 1)
 
 ; -----------------------------------------------------------------------------
 ; desk_rowcalc - how many drive zones fit in one column (SPEC.md 26.1)
@@ -261,7 +266,7 @@ section .text
 ; Control Panel can change the adapter under it (SPEC.md 39.11.2), so it is
 ; resident now and desk_init far-calls it like any other overlay->text step.
 ; -----------------------------------------------------------------------------
-desk_rowcalc:
+desk_rowcalc_x:
     push ax
     push bx
     push cx
@@ -336,7 +341,7 @@ desk_ord:
     cmp cl, DVOL_MAX
     jae .no
     mov bl, cl
-    call dsk_vol_slot
+    call dsk_vol_slot_x
     test byte [bx+DV_FLAGS], 1
     jz .skip
     cmp cl, al
@@ -370,7 +375,7 @@ desk_zone_label:
     push ax
     push bx
     mov bl, al
-    call dsk_vol_slot
+    call dsk_vol_slot_x
     lea si, [bx+DV_LBL]
     cmp byte [si], 0
     jne .out                    ; the row named itself
@@ -396,7 +401,7 @@ desk_zone_label:
 ; ins:  none
 ; outs: none (all registers preserved)
 ; -----------------------------------------------------------------------------
-desk_paint:
+desk_paint_x:
     push ax
     push bx
     mov al, 0
@@ -404,7 +409,7 @@ desk_paint:
     cmp al, DVOL_MAX
     jae .done
     mov bl, al
-    call dsk_vol_slot
+    call dsk_vol_slot_x
     test byte [bx+DV_FLAGS], 1
     jz .skip
     call desk_draw_zone         ; AL = volume index
@@ -507,7 +512,7 @@ desk_ord_xy:
 ; coalesces several changes - unmounting a three-partition disk drops three
 ; volumes before ui_task looks. desk_zones_paint spends the mark and clears it.
 ; -----------------------------------------------------------------------------
-desk_zmark:
+desk_zmark_x:
     push ax
     call desk_zones_shown
     cmp al, [desk_zhw]
@@ -626,7 +631,7 @@ desk_zones_dmg:
 ; rect to it is not slack: it is what makes wm_paint_dmg's marking pass notice
 ; a window sitting over that zone and redraw it too.
 ; -----------------------------------------------------------------------------
-desk_dmg_zones:
+desk_dmg_zones_x:
     push bx
     push cx
     push dx
@@ -639,14 +644,14 @@ desk_dmg_zones:
     jae .done
     push bx
     mov bl, al
-    call dsk_vol_slot
+    call dsk_vol_slot_x
     test byte [bx+DV_FLAGS], 1
     pop bx
     jz .next
     call desk_zone_rect
-    call wm_dmg_hit             ; preserves the rect
+    call KERNEL_SEG:cw_wm_dmg_hit             ; preserves the rect
     jnc .next
-    call wm_dmg_add
+    call KERNEL_SEG:cw_wm_dmg_add
     mov cl, [desk_dzi]
     mov al, 1
     shl al, cl                  ; 8086: a variable shift goes through CL
@@ -679,14 +684,14 @@ desk_dmg_zones:
 ; back, the screen shows exactly the zones that exist, so the next change
 ; starts counting again from what it can see.
 ; -----------------------------------------------------------------------------
-desk_zones_paint:
+desk_zones_paint_x:
     push ax
     push bx
     push cx
     push dx
     call desk_zones_dmg
     mov byte [desk_zhw], 0
-    call wm_paint_dmg
+    call KERNEL_SEG:cw_wm_paint_dmg
     pop dx
     pop cx
     pop bx
@@ -698,7 +703,7 @@ desk_zones_paint:
 ; in:  AL = bit n set = draw zone n; caller holds the gfx lock
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-desk_paint_mask:
+desk_paint_mask_x:
     push ax
     push bx
     push cx
@@ -737,7 +742,7 @@ desk_paint_mask:
 ; ins:  CX = x, DX = y (absolute screen px)
 ; outs: none (all registers preserved)
 ; -----------------------------------------------------------------------------
-desk_click:
+desk_click_x:
     push ax
     push bx
     push cx
@@ -752,7 +757,7 @@ desk_click:
     cmp cl, DVOL_MAX
     jae .miss
     mov bl, cl
-    call dsk_vol_slot
+    call dsk_vol_slot_x
     test byte [bx+DV_FLAGS], 1
     jz .zstep
     mov al, cl
@@ -784,12 +789,12 @@ desk_click:
     cmp bx, DESK_DBLT
     jae .restamp
     ; --- double-click: deselect + redraw under our lock, then open ----------
-    call gfx_lock               ; the store is INSIDE the lock, here and in
+    call KERNEL_SEG:cw_gfx_lock               ; the store is INSIDE the lock, here and in
     mov byte [desk_sel], 0xFF   ; both paths below: desk_zone_redraw's partial
     call desk_zone_redraw       ; case flips the highlight rather than redrawing
-    call gfx_unlock             ; it, so no other painter may see the new
+    call KERNEL_SEG:cw_gfx_unlock             ; it, so no other painter may see the new
                                 ; selection and act on it in between
-    call files_open_drive       ; AL = drive; must be called with NO lock
+    call files_open_drive_x       ; AL = drive; must be called with NO lock
     jmp .out                    ; held - it locks internally (SPEC 22)
 
 .restamp:                       ; same zone, too slow: restart the timer
@@ -800,7 +805,7 @@ desk_click:
 .select:                        ; new selection: redraw old + new zones
     mov bx, [ui_click_t]
     mov [desk_clkt], bx
-    call gfx_lock
+    call KERNEL_SEG:cw_gfx_lock
     mov ah, [desk_sel]          ; AH = old zone (0xFF = none)
     mov [desk_sel], al
     cmp ah, 0xFF
@@ -810,17 +815,17 @@ desk_click:
     xchg al, ah
 .selnew:
     call desk_zone_redraw       ; selected redraw of the new zone
-    call gfx_unlock
+    call KERNEL_SEG:cw_gfx_unlock
     jmp .out
 
 .miss:
     mov al, [desk_sel]          ; empty desktop click clears the selection
     cmp al, 0xFF
     je .out
-    call gfx_lock
+    call KERNEL_SEG:cw_gfx_lock
     mov byte [desk_sel], 0xFF
     call desk_zone_redraw       ; AL = the old zone
-    call gfx_unlock
+    call KERNEL_SEG:cw_gfx_unlock
 
 .out:
     pop di
@@ -870,13 +875,13 @@ desk_zone_redraw:
 
     push ax                     ; keep the volume index for the draw call
     call desk_zone_rect         ; AX/BX = x1/y1, CX/DX = x2/y2 (inclusive)
-    call wm_clip_rect           ; the zone less every visible window; the rect
+    call KERNEL_SEG:cw_wm_clip_rect           ; the zone less every visible window; the rect
                                 ; survives in AX/BX/CX/DX for the test below
     jc .full                    ; too many fragments: repaint the world
     jz .none                    ; wholly covered: nothing of it is on screen
-    call wm_clip_test           ; is the WHOLE zone inside one fragment?
+    call KERNEL_SEG:cw_wm_clip_test           ; is the WHOLE zone inside one fragment?
     jc .part
-    call wm_clip_clear          ; yes - clear air, so the region has no work
+    call KERNEL_SEG:cw_wm_clip_clear          ; yes - clear air, so the region has no work
     pop ax                      ; to do and the icon draws whole
     call desk_draw_zone
     jmp short .done
@@ -886,7 +891,7 @@ desk_zone_redraw:
     jmp short .done
 .full:
     pop ax
-    call wm_paint_all
+    call KERNEL_SEG:cw_wm_paint_all
     jmp short .done
 .none:
     pop ax                      ; the list is already empty, i.e. disarmed
@@ -913,8 +918,12 @@ desk_zone_hilite:
     mov cx, ax
     add cx, DESK_ZW-1
     add dx, [desk_zh1]
-    jmp gfx_xor_fill            ; tail call: it preserves everything and this
-                                ; frame has nothing left to restore
+    call KERNEL_SEG:cw_gfx_xor_fill  ; NOT a tail call any more, and it cannot
+    ret                         ; be: a cw_ shim ends in `retf`, so jumping to
+                                ; one pops this routine's NEAR return address
+                                ; as CS:IP and lands in the weeds. The cost is
+                                ; one `ret` - the frame still has nothing to
+                                ; restore (SPEC.md 2.6)
 
 ; -----------------------------------------------------------------------------
 ; desk_draw_zone - repaint one drive zone from scratch: gray desktop fill
@@ -945,7 +954,7 @@ desk_draw_zone:
     sub ax, DESK_ZOVER
     mov cx, ax
     add cx, DESK_ZW + 2*DESK_ZOVER - 1
-    call gfx_fill_gray
+    call KERNEL_SEG:cw_gfx_fill_gray
 
     ; --- the icon, which IS the zone's width now (SPEC.md 26.4) --------------
     mov cx, [desk_zx]
@@ -953,13 +962,13 @@ desk_draw_zone:
     mov si, [desk_pdisk]
     mov ax, [desk_zdrv]
     mov bl, al
-    call dsk_vol_fixed          ; the MEDIUM, not the transport (SPEC.md
+    call dsk_vol_fixed_x          ; the MEDIUM, not the transport (SPEC.md
     jc .icon                    ; 18.7.2). This was `cmp DV_KIND, DVK_DRV`,
     or al, al                   ; which is the TRANSPORT - so a hard disk
     jz .icon                    ; booted through the BIOS (DVK_BIOS, unit
     mov si, [desk_phdd]         ; 80h+) drew the FLOPPY icon, which is what a
 .icon:                          ; machine booting off its own disk always saw
-    call icon_draw
+    call KERNEL_SEG:cw_icon_draw
 
     ; --- label: the white rect HUGS the caption (SPEC.md 26.4) ---------------
     ; It used to be the zone's full width whatever was in it, which was right
@@ -974,7 +983,7 @@ desk_draw_zone:
     mov ax, [desk_zdrv]
     call desk_zone_label        ; SI -> it, the row's or a derived 'A:'
     push si
-    call font_width             ; AX = its pixel width
+    call KERNEL_SEG:cw_font_width             ; AX = its pixel width
     mov cx, [desk_zx]
     add cx, DESK_ZW/2
     mov bx, ax
@@ -1008,7 +1017,7 @@ desk_draw_zone:
     add dx, DESK_LBLH - 1       ; y2: 2px gap + 8px text + 2px gap, which is
                                 ; [desk_zy] + [desk_zh1] exactly
     mov byte [gfx_color], CWHITE
-    call gfx_fill
+    call KERNEL_SEG:cw_gfx_fill
 
     ; --- ...and the caption in it, black -------------------------------------
     mov byte [gfx_color], CBLACK
@@ -1018,7 +1027,7 @@ desk_draw_zone:
     add dx, [desk_icoh]
     add dx, [desk_zgap]         ; 26.5's gap of desktop...
     add dx, 2                   ; ...and the 2px of white above the text
-    call font_str
+    call KERNEL_SEG:cw_font_str
 
     ; --- selection highlight: XOR the whole hit zone --------------------------
     mov al, [desk_sel]
@@ -1036,6 +1045,12 @@ desk_draw_zone:
     pop ax
     ret
 
+section .text                   ; DATA, so back to the kernel segment (SPEC.md
+                                ; 2.6 rule 1). These labels carry NO COLON,
+                                ; which is why a scan keyed on `name:` missed
+                                ; them and moved the lot into .cold - where DS
+                                ; still names KERNEL_SEG, so desk_pdisk read as
+                                ; garbage and the comment below came true
 desk_lbl_gen db "A:", 0         ; scratch for desk_zone_label's derived form:
                                 ; a volume with no label of its own is named
                                 ; from its index, in place
@@ -1053,6 +1068,28 @@ desk_zh1    dw 32 + DESK_ZGAP + DESK_LBLH - 1   ; ...the zone's, MINUS ONE:
 desk_zstep  dw DESK_ZSTEP       ; zone-to-zone pitch
 desk_pdisk  dw ico_disk32       ; the diskette at that height...
 desk_phdd   dw ico_hdd32        ; ...and the hard disk
+
+section .cold                   ; ...and back to cold code for the far entries
+
+; =============================================================================
+; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,
+; and these near-call the bodies above.
+; =============================================================================
+dkz_desk_click:       call desk_click_x
+                  retf
+dkz_desk_dmg_zones:   call desk_dmg_zones_x
+                  retf
+dkz_desk_paint:       call desk_paint_x
+                  retf
+dkz_desk_paint_mask:  call desk_paint_mask_x
+                  retf
+dkz_desk_rowcalc:     call desk_rowcalc_x
+                  retf
+dkz_desk_zmark:       call desk_zmark_x
+                  retf
+dkz_desk_zones_paint: call desk_zones_paint_x
+                  retf
+
 
 ; -----------------------------------------------------------------------------
 section .bss
