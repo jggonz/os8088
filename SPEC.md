@@ -3903,8 +3903,8 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_zoom`      | in BX = win ptr (resizable and not fullscreen — the CALLER's check); **caller holds the gfx lock**. Toggles the window between the **standard** state — the whole desktop band, full width, `MBAR_H` down to one pixel short of the dock, honouring `WF_SNAP` — and the **user** state it was in before, banked per slot in `wm_zoomr`. Which state it is in is derived from the record, never tracked; `wm_ask_size` is asked for both, and a refused shrink leaves it standard with its bank intact. All registers preserved. Not `wm_fullscreen`: the window keeps its chrome and its place in the z-order. §11.95. |
 | `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0110 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
-| `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect. Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
-| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0170 (§20.3). |
+| `wm_obscured`  | in BX = win ptr; out CF=1 if BX is not visible at all, or any visible window above it in z-order overlaps its frame rect (§11.3.1 — the visibility half is part of the answer, and was not). Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
+| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects, and — since §11.3.1 — when the window is *hidden*, which this always claimed and did not deliver). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0170 (§20.3). |
 | `wm_clip_rect` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); **caller holds the gfx lock**. `wm_clip_set`'s arithmetic for a rect that belongs to no window: the seed is the caller's rect and the occluders are **every** visible window, because the thing under it is the DESKTOP and nothing is below that. out CF=1 the region needs more than 16 rects — nothing is armed and the caller must fall back to something unconditional; CF=0 armed, and **ZF=1 means the rect is wholly covered** (the list is empty, i.e. disarmed: draw nothing at all). Preserves every register. The two degradations are `wm_clip_set`'s, split apart because a caller can act on them differently — an overflow says nothing is *known*, an empty list is a *fact*. Kernel-internal; §26.2 is its consumer. |
 | `wm_clip_clear`| disarm clipping. Preserves every register. `gfx_unlock` already does this, so a painter only needs it to go back to drawing unclipped inside the same lock hold. API slot 0x0178 (§20.3). |
 | `wm_clip_test` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); out CF=0 the whole rect lies inside **one** clip fragment, or nothing is armed; CF=1 it does not. Preserves every register. This is the question `font_char` and `icon_draw16` ask themselves, exposed so a caller that **erases a rect and then draws glyphs into it** can ask it first — see the granularity rule in §11.3. API slot 0x0180 (§20.3). |
@@ -4189,6 +4189,75 @@ at both ends, so its two operations clip alike by construction.
 only the erase and the redraw are conditional; Timer (§14) substitutes
 `wm_clip_set` for its veto; and `apps/fractal`'s `fr_emit_body` (§40) does
 the same, so a partly covered fractal keeps rendering the part you can see.
+
+#### 11.3.1 …and HIDDEN is one of the ways a window can be covered
+
+Both routines above answer a question about **what is on top of a window**,
+and for a long time neither asked whether the window was on screen at all.
+`wm_hide` clears `W_FLAGS` bit 1 and leaves the record where it is in
+`wm_zord` (§11.91 needs it there), so a hidden window with nothing above it
+walked a z-order that found no occluder and came back **clear**:
+`wm_obscured` CF = 0, and `wm_clip_set` armed the window's full content rect.
+Its background painter then drew, in absolute screen coordinates, onto
+whatever now owns those pixels.
+
+**For `wm_clip_set` that was a promise the routine did not keep.** Its
+contract — in §11 and in `apps/os88api.inc` — has always read *CF = 1 the
+window is entirely invisible*, and a hidden window is entirely invisible.
+`files_poster_x` (§22.1) reads it exactly as written, with no visibility test
+of its own and a comment saying so, and was wrong for a minimized Disk window
+with a load pending.
+
+**For `wm_obscured` it was a rule the callers were carrying.** Nine sites pair
+it with a hand-rolled `test word [bx+W_FLAGS], 2` on the line above the call —
+`wm_front`, `cp_tick_x`, and the six package workers that ask through
+`OSAPI_WM_GEOM` or the flag directly (§11.96.1 states this as the rule: *the
+background painters re-check visibility under the lock and skip when the
+window cannot be seen*). Nine copies of a test is the shape that says the
+routine owes the answer, and Note Pad's worker was the tenth site and did not
+carry it.
+
+**How it reached the glass.** Note Pad's worker gates four draws on
+`wm_obscured` and its scroll-bar draw is the one that survives a close: the
+close box hides the window and the worker dies at its next
+`OSAPI_TASK_ALIVE`, but between those two events lies one whole `NP_WTICKS`
+pass — 3 ticks, ~165 ms — in which `np_hchunk` counts its `NP_HCHUNK` rows,
+raises `[np_drows]`, and `np_sbcheck` draws a bar the window no longer has.
+The comment above that call had reasoned that *`np_sbcheck` draws only when a
+number moved*, which is true and is not a safety argument: a chunked count
+moves a number on every pass, and it moves it hardest on the note that has
+just been loaded. Reported from the field as a scroll bar appearing
+immediately after the window closed, and reported as hard to reproduce,
+because it needs the close to land inside that one pass.
+
+**Minimize is the same defect with the race taken out of the front of it** —
+`inst_minimize` is a `wm_hide` too and the worker is not asked to die at all —
+and that is what it was reproduced on, since a test that fires on one phase in
+fourteen is not a test. Open `README.TXT` (15,946 bytes) from a Disk window,
+minimize, and the bar is drawn across whatever the window was covering.
+Deterministic by build over four runs: the count of lit pixels in the bar's
+rect leaves its quiet value on every run of the kernel without the test and on
+none of the kernel with it.
+
+The test is therefore part of both answers, and the reason it belongs in the
+kernel rather than in a tenth caller is that **the error is one-sided**: no
+caller wants *draw the lot* about a window with no pixels on screen, so the
+safe value is the one a forgotten call site inherits — `wm_dmg_dk`'s rule
+(§11.91) in another place. Two orderings are load-bearing. `wm_clip_set` asks
+**before `wm_su_drop`**, because a hidden window is about to draw nothing and
+the raise cache `wm_hide` banked at the moment it went down (§11.96.5) has to
+survive the call rather than be dropped by it. And both tests sit **above the
+routine's pushes**, with an exit of their own, so there is no stack to unwind.
+
+`wm_covered` and `wm_chrome_clip` are deliberately unchanged: both are reached
+only from a paint pass that iterates visible windows, so the test would be
+dead code, and both already degrade toward *draw it* — which is the right
+answer for a window that is about to be drawn.
+
+Cost: 22 bytes of `.text`, no rung crossed, footprint unchanged (`KERN_SIZE`
+102,912 of 104,960, 2,048 spare either side). The nine hand-rolled tests are
+left alone; each is now redundant and none is wrong, and removing them would
+touch six packages to delete a `test`/`jz`.
 
 ### 11.90 Showing a window costs one window, not one screen
 

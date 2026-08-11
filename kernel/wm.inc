@@ -3035,16 +3035,32 @@ wm_geom:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_obscured - is any visible window above this one overlapping it?
+; wm_obscured - is anything covering this window? (SPEC.md 11.3.1)
 ; in:  BX = window ptr
-; out: CF = 1 if a visible window later in wm_zord overlaps BX's frame rect
+; out: CF = 1 if BX is not visible at all, or a visible window later in
+;      wm_zord overlaps its frame rect
 ;
 ; The window above is tested with its drop shadow included - rect
 ; (x, y, w+1, h+1) - so an "unobscured" answer really means none of its
 ; pixels, shadow included, sit over ours. Only trustworthy while the caller
 ; holds the gfx lock (the UI task mutates wm_zord/rects under it).
+;
+; THE VISIBLE TEST IS PART OF THE ANSWER, and for a long time it was not:
+; this asked only "is anything ON TOP of me", so a HIDDEN window - still in
+; wm_zord, with nothing above it - came back CLEAR and its background painter
+; drew onto the bare desktop. Every correct caller carried its own
+; `test [W_FLAGS], 2` on the line above the call (wm_front, cp_tick, and six
+; package workers), and nine copies of a test is the shape that says the
+; routine owes the answer. Note Pad's worker was the tenth and did not: closing
+; it left a scroll bar drawn on the desktop, in the ~165ms between the hide and
+; the worker's next OSAPI_TASK_ALIVE. The error is one-sided - no caller wants
+; "draw the lot" about a window with no pixels on screen - so the safe value is
+; the one a forgotten call site inherits (wm_dmg_dk's rule, SPEC.md 11.91).
 ; -----------------------------------------------------------------------------
 wm_obscured:
+    test word [bx+W_FLAGS], 2   ; on screen at all? Everything a hidden window
+    jz .gone                    ; would draw lands on somebody else's window or
+                                ; on the desktop, and nothing ever erases it
     push ax
     push cx
     push dx
@@ -3106,6 +3122,9 @@ wm_obscured:
     pop dx
     pop cx
     pop ax
+    ret
+.gone:                          ; above the pushes, so nothing to unwind
+    stc
     ret
 
 ; =============================================================================
@@ -3179,8 +3198,23 @@ wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
 ; out: CF = 1 the window is entirely invisible - nothing armed, skip the
 ;      frame; CF = 0 clipping is armed and dies at the next gfx_unlock
 ; clobbers: flags
+;
+; "ENTIRELY INVISIBLE" INCLUDES HIDDEN, and it did not (SPEC.md 11.3.1). The
+; seed is the window's own rect and wm_clip_occl subtracts the windows ABOVE
+; it, so a hidden window with nothing on top of it armed its full content rect
+; and every clipped primitive then drew straight onto the desktop. The contract
+; above already said otherwise, and files_poster_x reads it exactly as written
+; ("CF = 1: none of it is visible any more") with no visibility test of its
+; own - so this was a promise the routine did not keep rather than a rule its
+; callers were failing to learn.
+;
+; Asked FIRST, above wm_su_drop: a hidden window is about to draw nothing, so
+; the raise cache wm_hide banked at the moment it went down (11.96.5) has to
+; survive this call rather than being dropped by it.
 ; -----------------------------------------------------------------------------
 wm_clip_set:
+    test word [bx+W_FLAGS], 2
+    jz .gone
     push ax
     push bx
     push cx
@@ -3246,6 +3280,10 @@ wm_clip_set:
     pop cx
     pop bx
     pop ax
+    ret
+.gone:                          ; above the pushes, so nothing to unwind - and
+    mov word [wm_clip_n], 0     ; "nothing armed" is a store, not an assumption:
+    stc                         ; a caller may arm twice inside one lock hold
     ret
 
 ; -----------------------------------------------------------------------------
