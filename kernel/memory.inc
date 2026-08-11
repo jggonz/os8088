@@ -179,7 +179,8 @@ SK_BUF     equ 12               ; word: FAT + stacks + disk buffers together,
                                 ; the part of the kernel that is scratch
                                 ; rather than program
 SK_HEAP    equ 14               ; word: the claim heap's size
-SK_CLAIM   equ 16               ; word: claimed out of it, every owner
+SK_CLAIM   equ 16               ; word: claimed out of it, every owner, and
+                                ; never a purgeable claim (SPEC.md 50.6.3)
 SK_KCLAIM  equ 18               ; word: ...of which the kernel's own tags
 SK_XMS     equ 20               ; word: the pool above 1MB, 0 on tier 0 (41)
 SYSKB_SIZE equ 22
@@ -1334,6 +1335,11 @@ mem_owned_kb:
 ;
 ; ADD-style rather than plain readers because both call sites are building a
 ; sum in AX and have no spare register to hold a partial total in.
+;
+; Neither counts a PURGEABLE claim, because mem_sum_kb does not (SPEC.md
+; 50.6.3): SK_CLAIM and SK_KCLAIM are the same question asked of two owner
+; sets, so "of which the kernel's own" is only honest if both draw the line
+; in the same place.
 ; -----------------------------------------------------------------------------
 mem_claimed_kb:
     push bx
@@ -1397,26 +1403,31 @@ mem_sum_kb:
 ; in:  nothing
 ; out: AX = claimed KB, BX = heap size KB
 ; clobbers: nothing else (flags)
+;
+; **A PURGEABLE claim is not spoken for** (SPEC.md 50.6.3/28.4.1). This had a
+; record walk of its own that counted every live record, which made SK_CLAIM
+; the one figure in the module answering a different question from the rest:
+; mem_avail counts a cache as free, mem_sum_kb leaves it out of every total,
+; every per-row column omits it - and this put it back into the one number
+; the Task Manager builds its RAM figure from. Measured on the field machine,
+; that was `RAM 195/384K` over rows accounting for 132: the missing 63 being
+; SPEC.md 18.95's DirRead window, which no row shows because it belongs to no
+; instance. 28.4.1 fixed the HEAP half of that line by subtracting the
+; purgeables in the VIEW and left the RAM half reading this.
+;
+; So the walk is gone and mem_sum_kb answers instead: ONE routine decides
+; what is in a total, which is what stops the two drifting again. That is
+; also mem_claimed_kb's first caller - it was written for this and never
+; wired up, which is why the duplicate walk survived being noticed.
 ; -----------------------------------------------------------------------------
 mem_total_kb:
     push cx
-    push si
     xor ax, ax
-    mov si, mem_tab
-    mov cx, MEM_MAX
-.scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
-    add ax, [ss:si+MC_PARA]
-.next:
-    add si, MC_SIZE
-    loop .scan
+    call mem_claimed_kb         ; AX = claimed KB, every owner, no cache
     mov bx, [mem_top]
     sub bx, [mem_base]
     mov cl, 6
-    shr ax, cl
     shr bx, cl
-    pop si
     pop cx
     ret
 

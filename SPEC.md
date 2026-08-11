@@ -18039,13 +18039,31 @@ them by design — a cache belongs to no instance). So the memory view's
 rows accounting for 33, the missing 63 being a `DirRead` window that appears
 in no column because it belongs to nobody.
 
-**The memory view's claimed half now excludes them** (`tm_hsplit`), which
-makes it exactly what its own rows account for between SIZE (a region — a
-claim owned by the instance slot) and HEAP (that instance's data claims).
-Nothing about the kernel's accounting changed; the figure stopped counting
-what the list cannot show. Its map still draws purgeable bands, and that is
-not the same inconsistency: a map is about *addresses*, and a cache occupies
-real memory at a real address whoever owns it.
+`mem_avail` counting them is right and stays right — it answers *what can a
+claim GET*, and a cache yields to any claim. **`SK_CLAIM` does not, and it is
+the kernel that fixes it**: `mem_total_kb` had a record walk of its own that
+counted every live record, so the one figure the Task Manager builds both of
+its totals from was the only place in the module that disagreed with
+`mem_sum_kb`. It calls `mem_claimed_kb` now — which is `mem_sum_kb` with
+every owner, written for exactly this and never wired up, which is why the
+duplicate walk survived being noticed. One routine decides what is in a
+total, `.text` −22, and the two figures on the RAM line become the same word
+plus a constant: **`RAM used` is `SK_KERN + SK_CLAIM`, `HEAP claimed` is
+`SK_CLAIM`**, so they cannot come to disagree about what *claimed* means.
+
+**The first fix was the view's** and covered half the line: the memory view's
+claimed half subtracted the purgeables with `tm_hsplit` and the RAM half went
+on reading `SK_CLAIM` raw, which is what reached the field as
+`RAM 195/384K` over rows accounting for 132. Measured on a cycle-accurate
+5150/CGA with the same guest state either side — 17 KB held, one 63 KB
+`DirRead` window — the line reads `RAM 181/640K  HEAP 17/538K` before and
+**`RAM 118/640K  HEAP 17/538K`** after, against `SK_KERN` 101 and rows
+accounting for 8 + 9. `tm_hsplit` stays for the heap page, which needs the
+record counts and the purgeable KB it is the only source of.
+
+Its map still draws purgeable bands, and that is not the same inconsistency:
+a map is about *addresses*, and a cache occupies real memory at a real
+address whoever owns it.
 
 **The heap page splits it rather than hiding it**, because this is the page
 where a cache is the subject. Three caption lines, one question each:
@@ -29667,6 +29685,12 @@ anyone can run out of — the next claim that needs it takes it — so counting 
 as used would be the *misleading* answer rather than the honest one, and a
 bar that reads full while the machine is not is worse than a figure nobody
 reads.
+
+**`mem_sum_kb` is where that is decided and it is now the only place**
+(§28.4.1). `mem_total_kb` — the one caller of which fills `SK_CLAIM`, which
+the Task Manager's RAM figure is built from — had a record walk of its own
+that counted everything, so a rule stated here held everywhere except in the
+figure most people look at. A second walk is a second opinion; it delegates.
 
 It gets **one line of its own**, and that line is a developer instrument: it
 is how you see that a cache was claimed rather than refused, and that a shed
