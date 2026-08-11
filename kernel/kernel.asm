@@ -1479,7 +1479,15 @@ osapi_table:
                                   ;          Answers "whole" unless WF_OWNBG is
                                   ;          set, because without it the kernel
                                   ;          has already whitened the content
-osapi_table_end:                  ; 0x03B8
+    OSAPI_SLOT osapi_vol_kind     ; 0x03B8 - AL = a volume index. CF=1 = there
+                                  ;          is no such volume; CF=0 with AL =
+                                  ;          VK_REMOVABLE / VK_FIXED and AH =
+                                  ;          VT_BIOS / VT_DRIVER (SPEC.md
+                                  ;          18.7.2). The MEDIUM and the
+                                  ;          TRANSPORT are two questions and a
+                                  ;          package wanting "is this a hard
+                                  ;          disk" wants the first
+osapi_table_end:                  ; 0x03C0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1487,8 +1495,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 117 * 8
-%error "os8088 API jump table must be exactly 117 8-byte slots"
+%if OSAPI_TABLE_LEN != 118 * 8
+%error "os8088 API jump table must be exactly 118 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -2273,6 +2281,29 @@ osapi_file_goto_q:
 ; out: AX = width, BX = height, CX = first row the dock owns (so the usable
 ;      desktop is rows MBAR_H..CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
 ;      DH = bits per pixel, 4 or 1
+; -----------------------------------------------------------------------------
+; osapi_vol_kind - what KIND of volume is this? (SPEC.md 18.7.2, slot 0x03B8)
+; in:  AL = a volume index (0 = A:, 1 = B:, ...)
+; out: CF=1 = no such volume; CF=0 with AL = VK_* and AH = VT_*
+; clobbers: AX (the output), flags
+;
+; The first thing a package can ask about a volume other than by using it, and
+; it exists because sysbench could not: its hard-disk block probes volume
+; index 2 with a FILE_GOTO and assumed a hard disk, which SPEC.md 18.98's
+; external floppies made false. OSAPI_VOL_* are the DRIVER's and refuse a
+; package (SPEC.md 51), so there was no way to ask at all.
+;
+; TWO answers because they are two questions: a package wanting "is this a
+; hard disk" wants the MEDIUM, and one wanting "will this go through a driver"
+; wants the TRANSPORT. Conflating them is the bug this section exists for.
+; -----------------------------------------------------------------------------
+osapi_vol_kind:
+    push bx
+    mov bl, al
+    call dsk_vol_fixed          ; ...which answers BOTH, so this cell is the
+    pop bx                      ; index-to-BL and nothing else (a pop leaves
+    ret                         ; CF alone)
+
 osapi_video:
     mov ax, [vid_w]
     mov bx, [vid_h]

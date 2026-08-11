@@ -125,6 +125,16 @@ DVK_BIOS     equ 0
 DVK_DRV      equ 1
 DVK_FREE     equ 0xFF
 
+; --- and what a PACKAGE is told about a volume (SPEC.md 18.7.2) -------------
+; Deliberately NOT the DVK_* values: those are the transport and are kernel
+; internals, and a package asking OSAPI_VOL_KIND is nearly always asking about
+; the MEDIUM. Two separate answers in one call, so neither has to be inferred
+; from the other - which is the mistake this section was written to end.
+VK_REMOVABLE equ 0               ; AL: a floppy
+VK_FIXED     equ 1               ; AL: a hard disk, however it is reached
+VT_BIOS      equ 0               ; AH: int 13h
+VT_DRIVER    equ 1               ; AH: a DRVC_DISK driver (SPEC.md 52)
+
 ; .text and not .bss for the reason every other boot-reachable table is: -f bin
 ; zeroes nothing, and the first disk_mount runs before anything could.
 dsk_vtab:
@@ -1517,6 +1527,53 @@ dsk_flop_add:
     pop bx
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; dsk_vol_fixed - is this volume a HARD DISK? (SPEC.md 18.7.2)
+; in:  BL = volume index
+; out: CF=1 = no such volume (out of range, or a free row); CF=0 with AL = 0
+;      removable / 1 fixed, and AH = VT_BIOS / VT_DRIVER
+; clobbers: AX (the output), flags
+;
+; **DV_KIND IS THE TRANSPORT AND NOT THE MEDIUM**, which SPEC.md 18.7 has said
+; since the volume table existed and which nothing shared enforced. A hard
+; disk reached through a DRIVER is DVK_DRV; a hard disk reached through the
+; BIOS - a boot partition, SPEC.md 52.10.3 - is DVK_BIOS with unit 80h or
+; above, and every `cmp DV_KIND, DVK_DRV` in the tree read that as a floppy.
+; desk_draw_zone did, so a machine booted off its hard disk drew C: with the
+; FLOPPY icon.
+;
+; One predicate, so the desktop and OSAPI_VOL_KIND cannot drift: the same
+; question is now asked once and answered once.
+; -----------------------------------------------------------------------------
+dsk_vol_fixed:
+    push bx
+    call dsk_vol_slot
+    jc .no
+    mov ah, [bx+DV_KIND]
+    cmp ah, DVK_FREE
+    je .no                      ; AH IS the transport: VT_BIOS/VT_DRIVER are
+                                ; DVK_BIOS/DVK_DRV, asserted below rather than
+                                ; assumed, so a change to either breaks the
+                                ; BUILD instead of the published ABI
+    mov al, 1                   ; a driver volume is fixed by construction:
+    cmp ah, DVK_DRV             ; SPEC.md 52 mounts partitions and nothing else
+    je .out                     ; through DSV_BLK
+    xor al, al                  ; ...and a BIOS one is fixed exactly when its
+    test byte [bx+DV_UNIT], 0x80    ; int 13h drive says so - disk_mount's own
+    jz .out                     ; test, in the one place that owns it
+    mov al, 1
+.out:
+    pop bx
+    clc
+    ret
+.no:
+    pop bx
+    stc
+    ret
+%if VT_BIOS != DVK_BIOS || VT_DRIVER != DVK_DRV
+  %error "disk: SPEC.md 18.7.2 - VT_* must equal DVK_*, or dsk_vol_fixed lies"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_vol_slot - a volume index's row, live or not (module internal)

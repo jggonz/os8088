@@ -7969,6 +7969,42 @@ happened) but it is a second mechanism touching `[disk_drive]` and the
 per-volume arrays `dsk_fatww` and `dsk_bpbv`, against six bytes and a skipped
 row for the version above.
 
+#### 18.7.2 The medium and the transport are two questions
+
+`DV_KIND` is the **transport** — `DVK_BIOS` means int 13h, `DVK_DRV` means a
+`DRVC_DISK` driver — and §18.7 has said so since the volume table existed.
+Nothing shared enforced it, so `cmp byte [bx+DV_KIND], DVK_DRV` grew up in
+several places meaning *is this a hard disk*, which it is not: a **boot
+partition is reached through the BIOS** (§52.10.3), so it is `DVK_BIOS` with
+an int 13h drive of 80h or above — fixed medium, BIOS transport, at the same
+time.
+
+**The visible cost was the desktop.** `desk_draw_zone` picked its icon on that
+test, so a machine booted off its own hard disk drew C: with the **floppy
+icon** — every boot, on the only machine that could show it.
+
+`dsk_vol_fixed` is the one predicate now: BL = volume index, CF=1 for no such
+volume, CF=0 with AL = 0 removable / 1 fixed. It is `DVK_DRV` *or* a BIOS unit
+with bit 7 set — `disk_mount`'s own test, in the one place that owns it. The
+desktop and the API call it, so they cannot drift.
+
+**`OSAPI_VOL_KIND` (slot 0x03B8)** publishes it: AL = a volume index in,
+CF=1 = no such volume, CF=0 with **AL = `VK_REMOVABLE` / `VK_FIXED`** and
+**AH = `VT_BIOS` / `VT_DRIVER`**. Two answers because they are two questions —
+a package asking *is this a hard disk* wants the medium, one asking *will this
+go through a driver* wants the transport, and inferring either from the other
+is the mistake this section exists to end. The published values are
+deliberately **not** the `DVK_*` numbers: those are the transport and are
+kernel internals.
+
+It is the first thing a package can ask about a volume without **using** it.
+`OSAPI_VOL_ADD`/`DEL` are the driver's and answer a package CF=1 (§51), so
+until now the only probe available was a `FILE_GOTO` and a mount — which is
+what `tests/sysbench`'s hard-disk block does, on volume index 2, having been
+written when index 2 could only be a hard disk. §18.98's external floppies
+made that false and the block began timing a floppy under the heading *the
+hard disk*.
+
 ### 18.8 The FAT is a window, not a snapshot
 
 A 32MB FAT16 volume at 512-byte clusters has a **254-sector FAT**. `FAT_SEG`

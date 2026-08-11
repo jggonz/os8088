@@ -76,6 +76,15 @@ DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92, unconditional
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4, unconditional
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5, unconditional
 DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6, unconditional
+
+; What OSAPI_VOL_KIND answers (SPEC.md 18.7.2). The MEDIUM and the TRANSPORT
+; are two questions: "is this a hard disk" is the first, and inferring it from
+; the second is the bug that section exists to end - a hard disk booted
+; through the BIOS is int 13h transport and fixed medium at the same time.
+VK_REMOVABLE equ 0               ; AL: a floppy
+VK_FIXED     equ 1               ; AL: a hard disk, however it is reached
+VT_BIOS      equ 0               ; AH: int 13h
+VT_DRIVER    equ 1               ; AH: a DRVC_DISK driver (SPEC.md 52)
                             ; It is baked into every OSAPI_* far call, so a
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
@@ -1667,6 +1676,19 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                                 ; your content and the only
                                                 ; correct answer is "whole"
                                                 ; (SPEC.md 11.90.2)
+%define OSAPI_VOL_KIND      KERNEL_SEG:0x03B8   ; AL = a volume index (0 = A:).
+                                                ; CF=1 = there is no such
+                                                ; volume; CF=0 with AL =
+                                                ; VK_REMOVABLE / VK_FIXED and
+                                                ; AH = VT_BIOS / VT_DRIVER
+                                                ; (SPEC.md 18.7.2). The first
+                                                ; thing a package can ask about
+                                                ; a volume without USING it:
+                                                ; OSAPI_VOL_* are the driver's
+                                                ; and refuse you. Ask the MEDIUM
+                                                ; when you mean "is this a hard
+                                                ; disk" - a boot partition is
+                                                ; VT_BIOS and VK_FIXED at once
 %define OSAPI_WM_OWNBG      KERNEL_SEG:0x03A8   ; BX = window ptr, AL = 0 clear
                                                 ; / non-0 set. "I paint EVERY
                                                 ; PIXEL of my content myself",
