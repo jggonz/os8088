@@ -482,7 +482,12 @@ vid_switch:
 
     call cur_unlazy             ; 1. the cursor's save-under is the old
     call vid_blank              ; geometry's - and so is the tube we are
-                                ; walking away from
+    call wm_su_drop_all         ; walking away from, and so is every raise
+                                ; cache (SPEC.md 39.14.8.1): wm_su_ck compares
+                                ; RECTS, and a window small enough to fit both
+                                ; geometries does not move while the pixels
+                                ; behind it change card, stride and possibly
+                                ; plane count
 
     mov [vid_kind], al          ; 2. republish the geometry
     call vid_equip

@@ -5353,6 +5353,34 @@ wm_su_slot:
     pop ax
     ret
 
+; wm_su_drop_all - forget EVERY window's cache (SPEC.md 39.14.8.1)
+; preserves every register and the flags
+;
+; A display change is the one event wm_su_ck cannot see. It compares the banked
+; rect against the window's rect NOW, which catches a move, a resize and a
+; refit - and a window small enough to fit both geometries does not move, while
+; the pixels behind it were read off a different card, at a different stride,
+; and possibly with a different number of planes. vid_setmode has just cleared
+; the framebuffer as well, so there is nothing to keep.
+wm_su_drop_all:
+    pushf
+    push ax
+    push bx
+    push cx
+    xor cx, cx
+.one:
+    mov ax, cx
+    call wm_idx2ptr             ; BX = the record (AL = the index)
+    call wm_su_drop
+    inc cx
+    cmp cx, MAX_WIN
+    jb .one
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
 ; wm_su_drop - forget window BX's cache and give the memory back
 ; preserves every register and the flags
 wm_su_drop:
@@ -5819,19 +5847,24 @@ wm_su_try:
     push si
     push di
     push es
-%ifdef KERN_BIG
-    cmp byte [vid_ndisp], 1
-    ja .no                      ; wm_su_take refuses on an extended desktop,
-                                ; and so does the restore: a bank taken in
-                                ; Single survives the switch to Extend, and
-                                ; replaying it through the unhooked
-                                ; gfx_restore has the same wrong-band hazard
-                                ; the take refuses for
-%endif
     call wm_su_ck               ; ...which lays the fragments out and checks
     jc .no                      ; them against the claim's own header, and
                                 ; answers AX = the claim
     mov es, ax
+%ifdef KERN_BIG
+    mov ax, [wm_su_x1]          ; ...AND STILL INSIDE ONE DISPLAY (SPEC.md
+    mov bx, [wm_su_y1]          ; 39.14.8.1). wm_su_take asked the same
+    mov cx, [wm_su_x2]          ; question of the same rect, so this can only
+    mov dx, [wm_su_y2]          ; differ if the ARRANGEMENT moved under a rect
+    call vid_span_one           ; that did not - and there used to be a blanket
+    jc .no                      ; `[vid_ndisp] > 1 -> refuse` here, which after
+                                ; the take learned to ask precisely left the
+                                ; cache TAKEN AND NEVER USED on a two-card
+                                ; machine: the claim and the save, for nothing
+    call wm_su_ck               ; (the span test spent AX, and the claim is
+    jc .no                      ; what the restore below needs in ES)
+    mov es, ax
+%endif
     call wm_su_scrset           ; where 11.96.2's edge scratch lives, which is
     jc .no                      ; past EVERY fragment (SPEC.md 11.96.11.1)
     mov di, WSU_IMG             ; DI = the running offset into it, the twin of

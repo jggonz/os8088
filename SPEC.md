@@ -22298,6 +22298,41 @@ AND clamped to the display — a clip rect may span the seam, and a box reaching
 past this card's last column would have `gfx_lstep_mono` addressing off the end
 of its own framebuffer. A one-display machine pays two adds per resolve.
 
+
+#### 39.14.8.1 …and the RESTORE had to learn the same question
+
+The merge described above left the two halves asking different ones.
+`wm_su_take` asks `vid_span_one`; `wm_su_try` kept a blanket
+`[vid_ndisp] > 1 → refuse`, under a comment saying *"wm_su_take refuses on an
+extended desktop, and so does the restore"* — which had stopped being true in
+the line above it. **So on a two-card machine the cache was TAKEN AND NEVER
+USED**: the claim, the save and the bookkeeping, for nothing, on every window
+covered anywhere on the desktop. `tests/dispsave.py` reads it directly —
+`wm_su_segs[slot]` non-zero after the cover, and the pixels wrong after the
+raise.
+
+The restore asks `vid_span_one` of the banked rect now, which is the same
+question of the same rect and can only differ if the ARRANGEMENT moved under a
+rect that did not.
+
+**And that case is real, which is why the fix is two things and not one.**
+`wm_su_ck` compares the banked rect against the window's rect NOW — a move, a
+resize and a `wm_refit` all disagree, and a window small enough to fit both
+geometries **does not move**, while the pixels behind it were read off a
+different card, at a different stride, and on VGA↔CGA with a different number
+of planes. `vid_switch` therefore drops every cache (`wm_su_drop_all`), beside
+the cursor's save-under and the blank, which is where the comment already says
+the old tube's state is being let go of. It is not gated on `KERN_BIG`: a
+one-card machine switches adapters too, and that is the sharper version of the
+same hazard.
+
+**The lesson is the one §39.14.8 already carries, one level in.** A blunt gate
+and a precise one in *different lines* merge without a conflict; a blunt gate
+and a precise one in different ROUTINES do the same, and leave a half-state
+that no test of either routine can see. `tests/dispsave.py` asserts the
+FEATURE — is a cache taken, and are the pixels right — which is what caught
+both.
+
 ### 39.15 The pointer crosses; the arrow jumps (`KERN_BIG` only)
 
 **`[mouse_x]`/`[mouse_y]` are VIRTUAL desktop coordinates** — they always

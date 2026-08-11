@@ -1955,3 +1955,50 @@ something we are not asserting before it will drive TRK0.
 trust the equipment word, so the drive appears and works. The probe still runs
 for the published state above, which is the only reason any of this could be
 diagnosed at all. Unit 1 is unaffected and still contested.
+
+## 20. A dragged window lands 30px right and 40px UP of the drop, on the EXTENDED desktop only (OPEN, isolated to the redraw round)
+
+**Found by `tests/dispsave.py` failing after the `elendilon` merge**, and it is
+not what that test is about — the raise cache it gates works. The failure is
+that the window the test drops over another one lands somewhere else, so its
+raise click hits the covering window instead of the covered one and 4,343
+pixels are legitimately still covered.
+
+**Reproduced, with the pointer proved to be where it was asked for:**
+
+```
+front window before the drag   (860,120) 320x155
+grab point                     (1020,129)   = its title bar's centre
+pointer driven to              (890,69)     ...and READ BACK as (890,69)
+so the window should land at   (730,60)     = orig + (mouse - start)
+it lands at                    (760,20)     +30 in x, -40 in y
+```
+
+**It is this branch's redraw round and nothing else.** The same scripted drag
+on the same machine config lands at (730,60) on `origin/elendilon`, and at
+(730,60) on THIS tree built `REDRAWFULL=1`. So it is inside one of the
+`%ifndef REDRAWFULL` paths — §5.8, §11.90.1/.2, §11.96.6/.8/.9/.10, §11.97,
+§11.96.11/.11.1 — and not in the merge.
+
+**What has been ruled out:**
+
+- **The pointer.** It is at the requested position when the button comes up;
+  `os88mouse.where()` says so. The drag is not landing short.
+- **A release race.** `ui_drag` samples `[mouse_x]` once per tick (§7.1.3's
+  linger) and drops the window at the last position it SAMPLED, so a release
+  arriving between samples would land it behind the pointer — but holding the
+  release for two guest ticks after the pointer arrives changes nothing.
+- **Single-display drags.** `tools/subcheck.py` drags on one card across 11
+  steps and matches its reference at **0 differing pixels**, positions
+  included, so whatever this is needs two displays.
+- **The raise cache.** `wm_su_segs[slot]` is non-zero after the cover on both
+  trees: the cache is taken either way, and §39.14.8.1's fix is orthogonal.
+
+**Where to look first.** The delta is +30, −40 rather than a clamp to a
+boundary, which is what makes it interesting: both axes move and neither lands
+on an edge. `ui_drag`'s `.release` clamps against `[vid_w]`/`[vid_h]` and then
+calls `wm_snap_ax` and `wm_dock_snap`; on an extended desktop `[vid_dock_y0]`
+and the union's height (§39.16) are the numbers those read, and the second
+display's virtual origin is **not** (0,0) (§39.19.3). Print `ui_curx`/`ui_cury`
+at `.release` and compare them against `W_X`/`W_Y` afterwards: that one read
+says whether the tracking or the clamping is where it goes wrong.
