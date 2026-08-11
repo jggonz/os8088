@@ -3087,6 +3087,54 @@ drv_unload:    call COLD_SEG:dvf_drv_unload
 osapi_drv_cfg: call COLD_SEG:dvf_osapi_drv_cfg
            ret
 
+; --- ...and memory.inc's (SPEC.md 50). The claim heap: every claim and free
+; in the machine, none of them on a drawing path. The busiest is the menu
+; save-under (12.4), one claim and one free per pull-down, where the far call
+; rides a gesture that already costs a heap scan and a screen save.
+; Its ONE outbound call, drv_owns_seg, is near now - driver.inc is cold too.
+mem_avail:            call COLD_SEG:mmf_mem_avail
+                  ret
+mem_avail_lvl:        call COLD_SEG:mmf_mem_avail_lvl
+                  ret
+mem_claim:            call COLD_SEG:mmf_mem_claim
+                  ret
+mem_claim_dma:        call COLD_SEG:mmf_mem_claim_dma
+                  ret
+mem_claim_hi:         call COLD_SEG:mmf_mem_claim_hi
+                  ret
+mem_free:             call COLD_SEG:mmf_mem_free
+                  ret
+mem_free_owner:       call COLD_SEG:mmf_mem_free_owner
+                  ret
+mem_free_rec:         call COLD_SEG:mmf_mem_free_rec
+                  ret
+mem_init:             call COLD_SEG:mmf_mem_init
+                  ret
+mem_owned_kb:         call COLD_SEG:mmf_mem_owned_kb
+                  ret
+mem_owner_of:         call COLD_SEG:mmf_mem_owner_of
+                  ret
+osapi_claim_snapshot: call COLD_SEG:mmf_osapi_claim_snapshot
+                  ret
+osapi_cm_alloc:       call COLD_SEG:mmf_osapi_cm_alloc
+                  ret
+osapi_cm_caps:        call COLD_SEG:mmf_osapi_cm_caps
+                  ret
+osapi_cm_free:        call COLD_SEG:mmf_osapi_cm_free
+                  ret
+osapi_mem_avail:      call COLD_SEG:mmf_osapi_mem_avail
+                  ret
+osapi_mem_claim:      call COLD_SEG:mmf_osapi_mem_claim
+                  ret
+osapi_mem_claim_dma:  call COLD_SEG:mmf_osapi_mem_claim_dma
+                  ret
+osapi_mem_free:       call COLD_SEG:mmf_osapi_mem_free
+                  ret
+osapi_mem_regrow:     call COLD_SEG:mmf_osapi_mem_regrow
+                  ret
+osapi_sys_kb:         call COLD_SEG:mmf_osapi_sys_kb
+                  ret
+
 ; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
 ; Three words that change whenever any section's length does, so a field
 ; report can name the build that produced it. They are SECTION-END LABELS, so
