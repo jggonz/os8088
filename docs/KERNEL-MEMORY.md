@@ -421,7 +421,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 59390
+    "text": 59368
   },
   "small": {
     "bss": 5495,
@@ -938,10 +938,10 @@ generated in the first place.
 | the window system and its furniture | 18,855 | 22.8% |
 | drawing: adapters, primitives, glyphs, icons | 12,628 | 15.3% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,892 | 12.0% |
-| the kernel proper: API table, heap, scheduler, events | 5,989 | 7.3% |
+| the kernel proper: API table, heap, scheduler, events | 5,967 | 7.2% |
 | the Control Panel | 3,876 | 4.7% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **82,590** | |
+| **total** | **82,568** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -960,7 +960,7 @@ generated in the first place.
 | `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
-| `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
+| `memory.inc` — the claim heap (§50) | 1,944 | — | **1,944** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,837 | — | **1,837** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
 | `icons.inc` — the icon renderer (§10) | 1,570 | — | **1,570** | 34 | — |
@@ -983,7 +983,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,797 | — | **2,797** | — | — |
-| **total** | **59,390** | **23,200** | **82,590** | **5,704** | **7,762** |
+| **total** | **59,368** | **23,200** | **82,568** | **5,704** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

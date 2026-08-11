@@ -788,7 +788,11 @@ SK_STK0    equ 8                ; word: task 0's - the UI task's
 SK_DSK     equ 10               ; word: the disk buffers
 SK_BUF     equ 12               ; word: FAT + stacks + disk buffers together
 SK_HEAP    equ 14               ; word: the claim heap's size
-SK_CLAIM   equ 16               ; word: claimed out of it, every owner
+SK_CLAIM   equ 16               ; word: claimed out of it, every owner - and
+                                ; no purgeable claim, which is in nobody's
+                                ; total because the next claim can have it
+                                ; (SPEC.md 50.6.3). OSAPI_MEM_AVAIL is the
+                                ; other side of the same statement
 SK_KCLAIM  equ 18               ; word: ...of which the kernel's own
 SK_XMS     equ 20               ; word: the pool above 1MB, 0 with no store
 SYSKB_SIZE equ 22

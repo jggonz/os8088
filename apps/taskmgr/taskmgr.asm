@@ -1339,6 +1339,13 @@ tm_sample:
     ; of an already-inflated figure could read as more RAM than the machine
     ; has. It cannot now - claims live in the heap, the heap is what is left
     ; above the kernel, so kernel + claims is bounded by the total.
+    ;
+    ; SK_CLAIM leaves the PURGEABLES out (SPEC.md 50.6.3/28.4.1), which is
+    ; what makes this figure the one the rows underneath add up to. It did
+    ; not, and on the field machine that read `RAM 195/384K` over rows
+    ; accounting for 132 - the missing 63 being the DirRead window, which
+    ; belongs to no instance and so appears in no column. The map below still
+    ; DRAWS it: a map is about addresses, and a cache occupies a real one.
     mov ax, [tm_kb+SK_KERN]     ; the WHOLE kernel (SPEC.md 2): image,
                                 ; scratch, FAT snapshot, disk buffers and
                                 ; every task stack are one contiguous span,
@@ -4195,11 +4202,12 @@ tm_txt_ram_y:
     je .built
     mov si, tm_s_heap           ; ...whose two leading spaces are where the
     call tm_copy                ; claim swatch goes
-    push dx                     ; AX = claimed KB, BX = heap size KB - and the
-    call tm_hsplit              ; claimed half EXCLUDES the purgeables, because
-    pop dx                      ; no row below shows one: SK_CLAIM counts them
-    mov bx, [tm_kb+SK_HEAP]     ; and this list cannot, so the figure was a sum
-    call tm_kpair               ; of things the reader could not find (28.4.1)
+    mov ax, [tm_kb+SK_CLAIM]    ; the claimed half EXCLUDES the purgeables,
+    mov bx, [tm_kb+SK_HEAP]     ; because no row below shows one (28.4.1) -
+    call tm_kpair               ; and it is SK_CLAIM that does the excluding
+                                ; now, so the two pairs on this one line
+                                ; cannot disagree about what claimed MEANS:
+                                ; RAM's used half is SK_KERN + this word
 .built:
     call tm_rowsum              ; unchanged since the last refresh? then the
     mov bx, tm_elck + 2*TMC_LINE            ; pixels on screen are already right
