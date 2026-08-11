@@ -9721,6 +9721,46 @@ of `.bss`, every one of them scaling off the constant.
 can the BIOS.
 
 
+#### 18.98.1 The switches are contested for unit 1 and TRUSTED for 2 and 3
+
+§18.97's probe can only ever *remove* what `int 11h` claimed, and every
+failure keeps the drive. `.eloop` did the opposite for the external pair — a
+unit the probe called absent simply never got a row — on the reasoning that
+this is cheaper than a retire, which it is, and that it is the same judgement,
+which it is not.
+
+**The asymmetry is about what the setting MEANS.** Two drives is the factory
+position on essentially every 5150 and is wrong on most of them, so unit 1's
+claim is a default worth disproving — that is the whole of §18.97. Nobody sets
+SW1 to claim three or four drives by accident: that is a deliberate assertion
+about hardware somebody went and wired to the 5.25" adapter's 37-pin
+connector, and §18.96.2's rule governs — trust the assertion. The costs are
+not symmetric either: a phantom `C:` is one wasted click, a hidden real drive
+is the drive the operator has just installed.
+
+**It is not hypothetical.** The field 5150's IBM 4865, powered and working
+under DOS, answers `ST3 = 22` with TRK0 clear **before and after** a
+RECALIBRATE, and `ST0 = 72` — the 765's own Equipment Check, meaning it issued
+the step pulses and never saw track 0. The unit-select bits in both answers
+say the command really did address unit 2. Whatever that is — a drive that
+gates TRK0 on media, or a select line our direct FDC path drives differently
+from the ROM's — the probe cannot see past it, and §18.97's own fail-safe is
+the rule that should have been governing.
+
+**The probe still RUNS; its verdict is just not acted on.** §57.5's ST3/ST0
+for units 2 and 3 is the only way anybody can see what an external drive
+answered, and it is what diagnosed this one. What it costs is a boot-time
+motor and recalibrate per claimed-but-silent unit — a present drive answers
+TRK0 with the motor off in microseconds, so a machine whose externals are
+real pays nothing.
+
+**On a machine that is not a 5150 this changes nothing**, because the
+condition is unchanged: a row is made only for a unit the equipment word
+claims. An AT-class machine takes its drive count from CMOS rather than from
+DIP switches, so a claim of three or four there is if anything a *better*
+assertion than a 5150's, and a machine claiming two never enters this loop at
+all.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
@@ -32586,6 +32626,47 @@ evidence the field machine is never sent. It costs no `.bss` beyond the
 seventeen bytes it publishes, which is rule 6's one permitted exception —
 there is no pre-existing kernel state to point at, because before §18.97 the
 kernel never asked.
+
+### 57.6 `ID` — which kernel is this?
+
+One word, and it exists because a field report that cannot name its own build
+is a report somebody has to take on trust. This session lost the better part
+of a day to exactly that: three disks were sent to the field, one of them
+corrupted a volume and two did not, and **not one row in the report could tell
+them apart** — `KERNEL.SYS` is 88,134 bytes in all three, because the image
+rounds to a 512-byte rung, so `kernel image KB`, `kernel span KB` and even
+`boot ticks` were identical. The bisect that followed rested on the operator's
+memory of which floppy was in the drive.
+
+```
+kbld_fp   kernel_text_end + cold_end*3 + ovl_end*5 + kernel_bss_end*7
+```
+
+**Assembly-time arithmetic over the four section-end labels**, so it costs the
+machine no cycles at all. Each label is an offset in a `vstart 0` section and
+is therefore that section's length; a `dw` is not a critical expression, so
+the forward references resolve in a later pass. The multipliers are odd and
+distinct so that growth in one section cannot be cancelled by an equal shrink
+in another.
+
+**It is deliberately NOT a checksum of the running image**, and that is the
+decision worth recording. `.text` here carries mutable data on purpose —
+`dsk_vtab`, `vid_w`/`vid_h`, `fdd_dbg_*`, `fm_fchk`, the FAT-window arrays —
+all of it in `.text` with real initialisers because `-f bin` zeroes no `.bss`
+(§18.8.1). A sum over it would therefore depend on **which adapter the machine
+booted on** and on **when the sum was taken**, which is worse than useless in a
+report meant to be compared across machines. Summing the `KERNEL.SYS` file
+instead is 88KB of floppy on a machine where that is seconds.
+
+**What it is not** is a content hash: a byte-neutral edit — two instructions
+swapped — leaves every length alone and every term equal. That is the price of
+costing nothing, and it is the right trade, because the question this answers
+in practice is *is the disk in the drive the one I think it is*, and an
+ordinary change moves at least one section. Measured on the three disks that
+prompted it: `.text` was 56,576 / 56,798 / 56,776, so all three separate.
+
+`sysbench` prints it as `kernel build hex` in its header block, beside the
+sizes it cannot distinguish builds with.
 
 ## 58. debug.inc — DEBUG.DRV, the serial monitor (`drivers/debug/debug.asm`)
 

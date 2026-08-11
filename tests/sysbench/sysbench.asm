@@ -534,6 +534,10 @@ sb_header:
     mov si, sb_l_img
     mov ax, [sb_syskb + SK_IMG]
     call sb_num
+    call sb_build                   ; ...and WHICH BUILD (SPEC.md 57.6), which
+                                    ; the two KB rows above cannot say: they
+                                    ; round, and three disks whose kernels
+                                    ; differ can print the same numbers
     mov si, sb_l_buf
     mov ax, [sb_syskb + SK_BUF]
     call sb_num
@@ -1890,6 +1894,34 @@ sb_fdd:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_build - one row naming the kernel this report came off (SPEC.md 57.6)
+;
+; The SUM of the three published section lengths. The block holds them
+; separately - a debugger sees which section moved - but the report has room
+; for one row, and a sum separates builds in practice: measured on the three
+; disks that prompted this, .text alone was 56,576 / 56,798 / 56,776.
+;
+; A kernel too old to publish the block prints no row at all, rather than a
+; zero somebody could read as a build.
+; -----------------------------------------------------------------------------
+sb_build:                       ; AX and SI are NOT banked: every row around
+    push bx                     ; this one loads both fresh, and this package
+    push es                     ; has five bytes of image left (see the align)
+    mov ax, DBG_TAG_BUILD
+    call bl_dbgfind
+    jc .out
+    mov bx, [es:bx+2]
+    mov ax, [es:bx]
+    add ax, [es:bx+2]
+    add ax, [es:bx+4]
+    mov si, sb_l_bld
+    call sb_hex
+.out:
+    pop es
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4662,6 +4694,7 @@ sb_l_boott:   db 'boot ticks', 0
 sb_l_bootms:  db 'boot ms', 0
 sb_l_kern:    db 'kernel span KB', 0
 sb_l_img:     db 'kernel image KB', 0
+sb_l_bld:     db 'kernel build hex', 0
 sb_l_buf:     db 'fat+stacks+bufs KB', 0
 sb_l_heap:    db 'claim heap KB', 0
 sb_l_claim:   db 'claimed out of it KB', 0
@@ -4724,7 +4757,7 @@ sb_s_h_fdd2: db '   STATE, not a measurement. int 11h is a CLAIM - on a 5150 a D
 sb_s_h_fdd3: db '   ST3 bit 4 (10) = TRK0, and the SECOND read decides. ST0 is drained.', 0
 sb_s_h_fdd4: db '   probe stop: 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
 sb_s_h_fdd6: db '   ONE SUB-BLOCK PER UNIT: probe ran is a bitmap, bit n = unit n asked.', 0
-sb_s_h_fdd7: db '   equip 7-6=drives-1; SW1 (Ibm Pc) should match its low byte. Ext=unit2.', 0
+sb_s_h_fdd7: db '   equip 7-6=drives-1; SW1 (Ibm Pc) should match its low byte.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
 sb_l_feqw:   db '  equip word hex', 0
@@ -4961,14 +4994,17 @@ SB_BSS_OWN equ ((SB_O_RAM2 + SB_BWBYTES + 511) / 512) * 512   ; benchlib's base 
                                 ; bss must fit APP_MAX_SIZE (60KB, the
                                 ; SEGMENT, unraisable), bss is 38,452, so the
                                 ; image may not cross 22,528 - and it is
-                                ; 22,476. Fifty-two bytes. Adding a row here
+                                ; 22,519. NINE BYTES. Adding a row here
                                 ; means finding the bytes first, and the two
                                 ; obvious places are BOTH refused: benchlib's
                                 ; BL_MAXROWS and BL_ARENA each carry a comment
                                 ; about a report that TRUNCATED in the field.
                                 ; SPEC.md 57.5's SW1 row was paid for by
-                                ; merging two pairs of header lines, which is
-                                ; a one-off - the prose is compressed now.
+                                ; merging two pairs of header lines and 57.6's
+                                ; build row by trimming a third and dropping
+                                ; two dead push/pop pairs. The prose is
+                                ; compressed now: the next row needs a real
+                                ; saving, not another tidy-up.
     OS88_BSS SB_BSS_OWN + BL_BSS_SIZE
     OS88_IMAGE_END
 

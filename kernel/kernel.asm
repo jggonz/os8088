@@ -884,6 +884,7 @@ DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5
+DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6
 
 ; =============================================================================
 ; Fixed entry points
@@ -1528,6 +1529,14 @@ dbg_reg:
                                     ; a second monitor is plugged into a
                                     ; second card is the one question in
                                     ; SPEC.md 39 no emulator can be asked
+    dw DBG_TAG_BUILD, kbld_dbg_blk  ; SPEC.md 57.6 - WHICH KERNEL IS THIS. A
+                                    ; report that cannot name its own build is
+                                    ; a report somebody has to take on trust,
+                                    ; and this session lost a day to exactly
+                                    ; that: three field disks whose KERNEL.SYS
+                                    ; is 88,134 bytes apiece, because the image
+                                    ; rounds to a 512-byte rung, so not one row
+                                    ; in the report could tell them apart
     dw DBG_TAG_FDD, fdd_dbg_blk     ; SPEC.md 57.5 - and the FOURTH, more
                                     ; plainly than any of them: this block
                                     ; exists BECAUSE no emulator here can be
@@ -2702,6 +2711,44 @@ fdlg_reap:            call COLD_SEG:fdf_fdlg_reap
                     ret
 fdlg_top:             call COLD_SEG:fdf_fdlg_top
                     ret
+
+; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
+; Three words that change whenever any section's length does, so a field
+; report can name the build that produced it. They are SECTION-END LABELS, so
+; they cost the machine no cycles at all, and they are STABLE in a way a
+; checksum of the running image could not be - .text here carries
+; mutable data on purpose (dsk_vtab, vid_w, fdd_dbg_*, fm_fchk), so a sum of
+; it would depend on the adapter the machine booted on and on when it was
+; taken.
+;
+; What it is NOT is a content hash: a byte-neutral edit - two instructions
+; swapped - leaves every length alone and every term equal. That is the price
+; of costing nothing, and it is the right trade, because the question this
+; answers in practice is "is the disk in the drive the one I think it is",
+; and an ordinary change moves at least one of these.
+;
+; Forward references: each label is an offset in a `vstart 0` section, so each
+; IS that section's length, and a `dw` is not a critical expression - nasm
+; resolves them in a later pass.
+kbld_dbg_blk:
+    dw DBG_TAG_BUILD                ; 'ID' - the magic, and the block's own
+    dw kbld_dbg_span                ; first word (SPEC.md 57)
+kbld_dbg_span:
+kbld_text: dw kernel_text_end       ; THREE PLAIN WORDS, not one hashed one:
+kbld_cold: dw cold_end              ; nasm refuses arithmetic between
+kbld_ovl:  dw ovl_end               ; relocatable symbols ("expression is not
+                                    ; simple or relocatable"), and the `equ`s
+                                    ; that hold these lengths are defined
+                                    ; BELOW - after `kernel_text_end`, which
+                                    ; must stay the last thing in .text. Three
+                                    ; words is the better answer anyway: a
+                                    ; reader gets the sections themselves and
+                                    ; can see WHICH one moved, where a hash
+                                    ; only says that something did
+KBLD_DBG_SPAN equ ($ - kbld_dbg_span)
+%if KBLD_DBG_SPAN != 6
+  %error "kernel: SPEC.md 57.6 block - the published span is not 6 bytes"
+%endif
 
 ; =============================================================================
 ; Size guards (SPEC.md 15.1). Same-section label differences bound via equ -

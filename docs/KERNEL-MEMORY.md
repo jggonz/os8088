@@ -407,9 +407,9 @@ Three things about it:
     "ksize": 98816,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 3142,
+    "ovl": 3138,
     "stk0": 1024,
-    "text": 56798
+    "text": 56812
   },
   "small": {
     "bss": 4849,
@@ -424,9 +424,9 @@ Three things about it:
     "ksize": 93184,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 2756,
+    "ovl": 2752,
     "stk0": 1024,
-    "text": 52930
+    "text": 52944
   }
 }
 ```
@@ -926,10 +926,10 @@ generated in the first place.
 | the window system and its furniture | 17,242 | 21.6% |
 | drawing: adapters, primitives, glyphs, icons | 11,851 | 14.9% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,823 | 12.3% |
-| the kernel proper: API table, heap, scheduler, events | 5,959 | 7.5% |
+| the kernel proper: API table, heap, scheduler, events | 5,973 | 7.5% |
 | the Control Panel | 4,120 | 5.2% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **79,750** | |
+| **total** | **79,764** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -970,8 +970,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,767 | — | **2,767** | — | — |
-| **total** | **56,798** | **22,952** | **79,750** | **5,058** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,781 | — | **2,781** | — | — |
+| **total** | **56,812** | **22,952** | **79,764** | **5,058** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

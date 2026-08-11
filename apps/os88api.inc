@@ -75,6 +75,7 @@ DBG_TAG_DISK  equ 0x4444          ; 'DD' - SPEC.md 18.94, `make DISKCNT=1`
 DBG_TAG_CLOCK equ 0x4B43          ; 'CK' - SPEC.md 37.92, unconditional
 DBG_TAG_VIDEO equ 0x4456          ; 'VD' - SPEC.md 57.4, unconditional
 DBG_TAG_FDD   equ 0x4446          ; 'FD' - SPEC.md 57.5, unconditional
+DBG_TAG_BUILD equ 0x4449          ; 'ID' - SPEC.md 57.6, unconditional
                             ; It is baked into every OSAPI_* far call, so a
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
