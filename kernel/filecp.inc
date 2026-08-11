@@ -207,7 +207,7 @@ fcp_goto:
 .full:
     mov dl, al
     mov ax, bx
-    call KERNEL_SEG:cw_dsk_chdir_q
+    call dsk_chdir_q_x
     jc .ferr
     pop dx
     clc
@@ -376,7 +376,7 @@ fcp_selfchk:
     je .bad                     ; the destination IS the source, or is under
     or ax, ax                   ; it: either way the copy would eat itself
     jz .ok                      ; reached the root without meeting it
-    call KERNEL_SEG:cw_dsk_dotdot
+    call dsk_dotdot_x
     jc .ok
     mov [dsk_cwd], ax
     loop .up
@@ -519,7 +519,7 @@ fcp_bufget:
     push cx
     push dx
     call fcp_floor              ; CX = the smallest buffer that can work here
-    call KERNEL_SEG:cw_mem_avail              ; AX = largest free run in KB
+    call mem_avail_x              ; AX = largest free run in KB
     cmp ax, cx
     jb .no
     cmp ax, FCP_MAXKB
@@ -537,10 +537,10 @@ fcp_bufget:
                                 ; the heap happened to be holding. Aligned, a
                                 ; chunk smaller than the buffer never reaches
                                 ; the boundary at all
-    call KERNEL_SEG:cw_mem_claim_dma
+    call mem_claim_dma_x
     pop cx
     jnc .claimed
-    call KERNEL_SEG:cw_mem_claim              ; ...and a heap with no page-aligned run
+    call mem_claim_x              ; ...and a heap with no page-aligned run
     jc .no                      ; still copies, exactly as it did before
 .claimed:                       ; CF=1 refused; the segment comes back in DX,
                                 ; NOT in AX - AX still holds the KB asked for
@@ -589,7 +589,7 @@ fcp_bufput:
     or dx, dx
     jz .out
     mov bx, MEM_K_COPY          ; mem_free takes the owner word too, and
-    call KERNEL_SEG:cw_mem_free ; refuses a base that is not this owner's
+    call mem_free_x ; refuses a base that is not this owner's
     mov word [fcp_raw], 0
     mov word [fcp_seg], 0
 .out:
@@ -608,7 +608,7 @@ fcp_stop:
     call fcp_bufput
     mov byte [fcp_busy], 0
     mov byte [dskw_batch], 0    ; the deferred remount is spent by the caller
-    call KERNEL_SEG:cw_dsk_relist ; the volume switches were quiet (SPEC.md
+    call dsk_relist_x ; the volume switches were quiet (SPEC.md
                                 ; 18.9), so the global snapshot may be this
                                 ; operation's debt - and the world is about to
                                 ; repaint. AFTER dskw_batch, which gates the
@@ -670,7 +670,7 @@ fcp_answer:
 fcp_step:
     mov byte [dskw_batch], 1    ; one remount for the whole operation, spent
                                 ; by the caller (SPEC.md 18.4 rule 3)
-    call KERNEL_SEG:cw_dsk_batch_begin  ; ...and one BPB validation per volume
+    call dsk_batch_begin_x  ; ...and one BPB validation per volume
                                 ; for as long as the interface stays frozen
                                 ; (SPEC.md 18.9.3). One slice is one batch: a
                                 ; question or a finish unlocks, which ends it,
@@ -753,7 +753,7 @@ fcp_step:
                                 ; where anything else that writes must behave
                                 ; normally; fcp_step raises it again on the
                                 ; way back in
-    call KERNEL_SEG:cw_dsk_relist ; ...and where the listing must be this
+    call dsk_relist_x ; ...and where the listing must be this
                                 ; volume's again (SPEC.md 18.9), for the same
                                 ; reason and at the same moment
     mov al, FCPS_ASK            ; the buffer and the frames stay claimed:
@@ -906,12 +906,12 @@ fcp_rlup:
     mov ax, LOW_SEG
     mov es, ax
     mov ax, [fcp_rlclus]
-    call KERNEL_SEG:cw_dsk_clus2lba ; AX = the folder's first sector
+    call dsk_clus2lba_x ; AX = the folder's first sector
     jc .out
     push ax
     mov cx, 1
     mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read
+    call disk_read_x
     pop ax
     jc .out
     cmp byte [es:dsk_secbuf+32], '.'
@@ -923,7 +923,7 @@ fcp_rlup:
     push ax
     mov cx, 1
     mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     pop ax
 .out:
     pop es
@@ -1015,7 +1015,7 @@ fcp_scan:
     call fcp_goto
     jc .ioerr
     mov ax, [di+FCP_FSRC]
-    call KERNEL_SEG:cw_dsk_dirw_start
+    call dsk_dirw_start_x
     mov ax, [di+FCP_FPOS]       ; the ordinal splits into a sector and a slot
     mov cl, 4
     shr ax, cl
@@ -1026,12 +1026,12 @@ fcp_scan:
 .skipsec:
     cmp word [fcp_ssec], 0      ; dsk_dirw_next only computes LBAs - skipping
     je .readsec                 ; whole sectors reads nothing
-    call KERNEL_SEG:cw_dsk_dirw_next
+    call dsk_dirw_next_x
     jc .end
     dec word [fcp_ssec]
     jmp short .skipsec
 .readsec:
-    call KERNEL_SEG:cw_dsk_dirw_get ; dsk_secbuf = the sector holding the
+    call dsk_dirw_get_x ; dsk_secbuf = the sector holding the
     jnc .secok                  ; ordinal (SPEC.md 19.2.3)
     or ax, ax
     jz .end
@@ -1064,7 +1064,7 @@ fcp_scan:
     jnz .next                   ; the volume label
     test ah, 0x06
     jnz .next                   ; hidden or system, exactly as the listing
-    call KERNEL_SEG:cw_dsk_synth              ; ES:SI -> dsk_ent (SPEC.md 19): the display
+    call dsk_synth_x              ; ES:SI -> dsk_ent (SPEC.md 19): the display
                                 ; name, the type word, the cluster, the size
     push si
     push di
@@ -1423,13 +1423,13 @@ fcp_rdnext:
     cmp ax, [dsk_maxclus]
     ja .io
     xor bx, bx
-    call KERNEL_SEG:cw_dsk_read_chain ; AX = first cluster, DX = sectors, ES:BX
+    call dsk_read_chain_x ; AX = first cluster, DX = sectors, ES:BX
     jc .io
     mov cx, [fcp_rgot]
     sub [fcp_rsz], cx
     sbb word [fcp_rszh], 0
     mov ax, [dsk_chain_end]     ; resume past the last cluster it touched
-    call KERNEL_SEG:cw_dsk_next_clus
+    call dsk_next_clus_x
     jc .stop
     mov [fcp_rclus], ax
     jmp short .done

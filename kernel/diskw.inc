@@ -320,7 +320,7 @@ dskw_dfree_x:
     push si
     push di
     push es
-    call KERNEL_SEG:cw_dsk_free_clus ; AX = free clusters - ONE counting body for
+    call dsk_free_clus_x ; AX = free clusters - ONE counting body for
     jc .bad                     ; this cell and for the status line's figure
     mov dl, [dsk_spc]           ; (SPEC.md 22.7), so the two cannot disagree
     xor dh, dh
@@ -418,7 +418,7 @@ dskw_mkbody:
                                 ; to be flushed by a later unrelated write
 .haveclus:
     mov [dskw_first], ax
-    call KERNEL_SEG:cw_dsk_clus2lba ; AX = its first LBA
+    call dsk_clus2lba_x ; AX = its first LBA
     jc .badclus
     mov [dskw_lba], ax
 
@@ -428,7 +428,7 @@ dskw_mkbody:
     mov ax, [dskw_lba]
     mov cx, 1
     mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     jc .wfail
 
     call dskw_zerobuf           ; the cluster's remaining sectors
@@ -443,7 +443,7 @@ dskw_mkbody:
     mov ax, dx
     mov cx, 1
     mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     pop cx
     jc .wfail
     inc dx
@@ -827,7 +827,7 @@ dskw_rtbody:
     cmp ax, [dskw_rt_top]       ; clusters of files we simply could not see
     je .finish                  ; the folder the caller named is empty now
     mov [dskw_rt_clus], ax      ; the child we are leaving...
-    call KERNEL_SEG:cw_dsk_dotdot ; ...and the parent the disk says it has
+    call dsk_dotdot_x ; ...and the parent the disk says it has
     jc .corrupt_home
     call dskw_chdir_dl
     jc .iohome
@@ -888,7 +888,7 @@ dskw_rt_go_home:
 dskw_chdir_dl:
     push dx
     mov dl, [disk_drive]
-    call KERNEL_SEG:cw_dsk_chdir
+    call dsk_chdir_x
     pop dx
     ret
 
@@ -951,9 +951,9 @@ dskw_rt_scan:
     mov ax, LOW_SEG
     mov es, ax
     mov ax, [dsk_cwd]
-    call KERNEL_SEG:cw_dsk_dirw_start
+    call dsk_dirw_start_x
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_get ; dsk_secbuf = the next sector (19.2.1)
+    call dsk_dirw_get_x ; dsk_secbuf = the next sector (19.2.1)
     jnc .secok
     or ax, ax
     jz .none                    ; the chain ended with nothing found
@@ -978,7 +978,7 @@ dskw_rt_scan:
 .found:
     mov di, dskw_raw            ; the WHOLE entry - dsk_copy_in halves the
     mov cx, 32                  ; count into words, so 11 would drop a byte
-    call KERNEL_SEG:cw_dsk_copy_in
+    call dsk_copy_in_x
     mov ax, si                  ; publish where it is, exactly as dskw_find
     sub ax, dsk_secbuf          ; does, so dskw_rt_zap can rewrite the slot
     mov [dskw_doff], ax         ; without a name lookup (dskw_find refuses to
@@ -1032,9 +1032,9 @@ dskw_rt_byclus:
     mov ax, LOW_SEG
     mov es, ax
     mov ax, [dsk_cwd]
-    call KERNEL_SEG:cw_dsk_dirw_start
+    call dsk_dirw_start_x
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_get ; either failure is "not found" here
+    call dsk_dirw_get_x ; either failure is "not found" here
     jc .none
     mov si, dsk_secbuf
     mov cx, 16
@@ -1053,7 +1053,7 @@ dskw_rt_byclus:
     jne .next
     mov di, dskw_raw            ; 32, not 11: dsk_copy_in copies WORDS
     mov cx, 32
-    call KERNEL_SEG:cw_dsk_copy_in
+    call dsk_copy_in_x
     mov si, dskw_raw
     mov di, dskw_n83
     mov cx, 11
@@ -1119,9 +1119,9 @@ dskw_isempty:
     mov ax, LOW_SEG
     mov es, ax
     mov ax, [dskw_oldclus]
-    call KERNEL_SEG:cw_dsk_dirw_start
+    call dsk_dirw_start_x
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_get ; dsk_secbuf = the next sector (19.2.1)
+    call dsk_dirw_get_x ; dsk_secbuf = the next sector (19.2.1)
     jnc .secok
     or ax, ax
     jz .empty                   ; the chain ended with nothing found
@@ -1363,7 +1363,7 @@ dskw_wdata:
 .lba:
     mov ax, [dskw_cur]
     mov [dskw_prev], ax
-    call KERNEL_SEG:cw_dsk_clus2lba ; AX = the cluster's first LBA
+    call dsk_clus2lba_x ; AX = the cluster's first LBA
     jc .ioerr                   ; unreachable: dskw_alloc bounds the cluster
     mov [dskw_lba], ax
     mov al, [dsk_spc]           ; take = min(spc, sectors remaining)
@@ -1433,7 +1433,7 @@ dskw_wdata:
     mov bx, dsk_secbuf
     mov cx, 1
     mov ax, [dskw_clba]
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     pop cx
     jc .jioerr
     inc word [dskw_clba]
@@ -1460,7 +1460,7 @@ dskw_wdata:
     mov bx, dsk_secbuf
     mov cx, 1
     mov ax, [dskw_clba]         ; the sector the whole-sector walk stopped at
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     jc .ioerr
 .advance:
     mov ax, [dskw_take]
@@ -1499,10 +1499,10 @@ dskw_flushrun:
     mov bx, [dskw_src]
     cmp byte [dskw_fop], 0      ; in: AX=LBA, CX=count, ES:BX
     je .rd
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     jmp short .did
 .rd:
-    call KERNEL_SEG:cw_disk_read
+    call disk_read_x
 .did:
     jc .err
     mov ax, [dskw_rlen]
@@ -1665,7 +1665,7 @@ dskw_rdata:
     jb .corrupt
     cmp ax, [dsk_maxclus]
     ja .corrupt
-    call KERNEL_SEG:cw_dsk_clus2lba
+    call dsk_clus2lba_x
     jc .corrupt
     mov [dskw_lba], ax
     mov al, [dsk_spc]           ; take = min(spc, sectors remaining)
@@ -1728,7 +1728,7 @@ dskw_rdata:
     push cx                     ; is only asked with [dskw_rlen] = 0
     mov cx, 1
     mov ax, [dskw_clba]
-    call KERNEL_SEG:cw_disk_read
+    call disk_read_x
     pop cx
     jc .jioerr
     mov es, [dskw_wseg]
@@ -1756,7 +1756,7 @@ dskw_rdata:
     mov bx, dsk_secbuf
     mov cx, 1
     mov ax, [dskw_clba]         ; the sector the whole-sector walk stopped at
-    call KERNEL_SEG:cw_disk_read              ; the last sector, whole, into the scratch
+    call disk_read_x              ; the last sector, whole, into the scratch
     jc .ioerr
     mov es, [dskw_wseg]
     mov di, [dskw_src]
@@ -1767,7 +1767,7 @@ dskw_rdata:
     sub [dskw_rem], ax
     jz .rdone
     mov ax, [dskw_cur]          ; follow the chain
-    call KERNEL_SEG:cw_dsk_next_clus
+    call dsk_next_clus_x
     jc .corrupt
     mov [dskw_cur], ax
     jmp .clus                   ; (near: the loop body outruns a short jump)
@@ -2126,7 +2126,7 @@ dskw_remount_x:
     push dx
     mov dl, [disk_drive]
     mov byte [dsk_keepcwd], 1   ; stay where the write happened (18.4)
-    call KERNEL_SEG:cw_disk_mount
+    call disk_mount_x
     mov byte [dsk_keepcwd], 0
     pop dx
     pop ax
@@ -2304,7 +2304,7 @@ dskw_read_at_x:
     mov ax, [dwr_clus]
     jcxz .atclus
 .skip:
-    call KERNEL_SEG:cw_dsk_next_clus    ; AX = the next cluster; CF=1 = the
+    call dsk_next_clus_x    ; AX = the next cluster; CF=1 = the
     jc .corrupt                 ; chain ended before the size said it would
     cmp ax, 2
     jb .corrupt
@@ -2326,7 +2326,7 @@ dskw_read_at_x:
     mov dx, ax                  ; DX = sectors
     mov ax, [dwr_clus]
     mov bx, [dwr_buf]
-    call KERNEL_SEG:cw_dsk_read_chain
+    call dsk_read_chain_x
     jc .ioerr
     mov ax, [dwr_take]
     xor dx, dx
@@ -2480,7 +2480,7 @@ dskw_apbody:
     mov cx, DSKW_RT_MAX         ; head, and there is nothing to link to
 .walk:
     mov dx, ax                  ; DX = the last cluster seen
-    call KERNEL_SEG:cw_dsk_next_clus
+    call dsk_next_clus_x
     jc .linkdx
     cmp ax, 2
     jb .linkdx
@@ -2631,9 +2631,9 @@ dskw_find:
     mov ax, LOW_SEG
     mov es, ax
     mov ax, [dsk_cwd]           ; the CURRENT directory, not the root
-    call KERNEL_SEG:cw_dsk_dirw_start ; (SPEC.md 19.2 - one walker, both shapes)
+    call dsk_dirw_start_x ; (SPEC.md 19.2 - one walker, both shapes)
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_get ; dsk_secbuf = the next sector (19.2.1)
+    call dsk_dirw_get_x ; dsk_secbuf = the next sector (19.2.1)
     jnc .secok
     or ax, ax
     jz .noent                   ; the directory ended
@@ -2661,7 +2661,7 @@ dskw_find:
     mov [dskw_doff], ax
     mov di, dskw_raw            ; ...and TAKE THE ENTRY WHILE IT IS HERE.
     mov cx, 32                  ; dsk_secbuf holds this very sector - we read
-    call KERNEL_SEG:cw_dsk_copy_in  ; it two instructions ago - and every
+    call dsk_copy_in_x  ; it two instructions ago - and every
     clc                         ; caller that succeeds here wanted these 32
     jmp short .out              ; bytes next. dskw_ent_load used to re-read
                                 ; the sector to get them, which on the field
@@ -2782,13 +2782,13 @@ dskw_ent_load:
     mov ax, [dskw_dsec]
     mov cx, 1
     mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read
+    call disk_read_x
     jc .ioerr
     mov si, dsk_secbuf
     add si, [dskw_doff]
     mov di, dskw_raw
     mov cx, 32
-    call KERNEL_SEG:cw_dsk_copy_in ; LOW_SEG:SI -> KERNEL_SEG:DI
+    call dsk_copy_in_x ; LOW_SEG:SI -> KERNEL_SEG:DI
     clc
     jmp short .out
 .ioerr:
@@ -2825,7 +2825,7 @@ dskw_ent_store:
     mov ax, [dskw_dsec]
     mov cx, 1
     mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read
+    call disk_read_x
     jc .ioerr
     mov si, dskw_raw            ; DS = kernel, ES = LOW_SEG: a plain movsw
     mov di, dsk_secbuf
@@ -2846,7 +2846,7 @@ dskw_ent_store:
     mov ax, [dskw_dsec]
     mov cx, 1
     mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     jc .ioerr
     clc
     jmp short .out
@@ -2893,7 +2893,7 @@ dskw_alloc:
     mov ax, 2
 .check:
     push ax
-    call KERNEL_SEG:cw_dsk_next_clus
+    call dsk_next_clus_x
     jc .skip
     test ax, ax
     jz .got                     ; 0 = free
@@ -2954,7 +2954,7 @@ dskw_free_chain:
     jb .done
     cmp ax, [dsk_maxclus]
     ja .done
-    call KERNEL_SEG:cw_dsk_next_clus ; AX = the link, before we erase it
+    call dsk_next_clus_x ; AX = the link, before we erase it
     jc .done
     mov dx, ax
     mov ax, si
@@ -3011,7 +3011,7 @@ dskw_setfat:
     ja .ok
     mov si, dx                  ; SI = the value: DX is dsk_fat_ofs's second
                                 ; output and cannot carry it
-    call KERNEL_SEG:cw_dsk_fat_ofs  ; BX = window-relative, DX = abs sector
+    call dsk_fat_ofs_x  ; BX = window-relative, DX = abs sector
     jc .out                     ; the window would not load: CF straight out
     mov cx, [dsk_fatseg]
     mov es, cx
@@ -3131,7 +3131,7 @@ dskw_flush_x:
     mov cx, dx
     push ax
     add ax, [dsk_fatlba]        ; FAT1
-    call KERNEL_SEG:cw_disk_write ; preserves BX: reusable for FAT2 below
+    call disk_write_x ; preserves BX: reusable for FAT2 below
     pop ax
     jc .ioerr
     cmp byte [dsk_nfats], 2
@@ -3139,7 +3139,7 @@ dskw_flush_x:
     push ax
     add ax, [dsk_fatlba]
     add ax, [dsk_fatsz]         ; FAT2 = FAT1 + FATSz16
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     pop ax
     jc .ioerr
 .done:
@@ -3588,7 +3588,7 @@ dskw_fmt_probe:
     ; --- is it a floppy at all? (SPEC.md 18.7: DV_KIND is the TRANSPORT,
     ;     and a BIOS unit below 80h is the MEDIUM - disk_mount's own test)
     mov bl, [disk_drive]
-    call KERNEL_SEG:cw_dsk_vol_row
+    call dsk_vol_row_x
     jc .noflop
     cmp byte [bx+DV_KIND], DVK_BIOS
     jne .noflop
@@ -3757,7 +3757,7 @@ dskw_fmt_probe:
     dec ax                      ; LBA spt-1 = CHS (0,0,spt) under this spt
     mov bx, dsk_secbuf
     mov cx, 1
-    call KERNEL_SEG:cw_disk_read
+    call disk_read_x
     jmp short .try_out
 .try_no:
     stc
@@ -3961,7 +3961,7 @@ dskw_fmt_put:
     pop ax
     mov bx, dsk_secbuf
     mov cx, 1
-    call KERNEL_SEG:cw_disk_write
+    call disk_write_x
     pop es
     pop cx
     pop bx
@@ -4047,7 +4047,7 @@ dskw_fmt_reach:
     mov ax, di
     mov bx, dsk_secbuf
     mov cx, 1
-    call KERNEL_SEG:cw_disk_read
+    call disk_read_x
     jc .no
     cmp word [es:dsk_secbuf+0], 'o8'
     jne .no

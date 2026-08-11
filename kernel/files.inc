@@ -237,7 +237,7 @@ fm_kinit_x:
     shr ax, cl
     mov bx, ax
     mov ax, VIEW_KB
-    call KERNEL_SEG:cw_mem_claim
+    call mem_claim_x
     jc .nocache                 ; no room: the window still works, it just
     mov [di+FS_VSEG], dx        ; re-reads the global snapshot to paint
     mov byte [di+FS_VKB], VIEW_KB
@@ -377,7 +377,7 @@ fmv_copy_in:
 .have:
     mov ax, ds                  ; the kernel segment, out of DS: this module
                                 ; is .cold, so CS is COLD_SEG (SPEC.md 2.6)
-    call KERNEL_SEG:cw_dsk_copy_seg
+    call dsk_copy_seg_x
     pop si
     pop dx
     pop bx
@@ -557,7 +557,7 @@ fmv_store:
 fmv_copy_out:
     push dx
     mov dx, [dsk_dseg]
-    call KERNEL_SEG:cw_dsk_copy_seg
+    call dsk_copy_seg_x
     pop dx
     ret
 
@@ -592,14 +592,14 @@ fmv_fit:
     or dx, dx                   ; new one while holding it can refuse on a
     jz .claim                   ; machine that had the room all along (50.3)
     call fmv_owner
-    call KERNEL_SEG:cw_mem_free
+    call mem_free_x
     mov word [di+FS_VSEG], 0
     mov byte [di+FS_VKB], 0
 .claim:
     call fmv_owner              ; BX = the owning instance slot
     mov al, cl
     xor ah, ah
-    call KERNEL_SEG:cw_mem_claim
+    call mem_claim_x
     jc .out                     ; refused: no cache, and that is a normal
     mov [di+FS_VSEG], dx        ; path (SPEC.md 50.3)
     mov [di+FS_VKB], cl
@@ -660,7 +660,7 @@ fmv_load:
     mov bl, al                  ; dsk_chdir wants the drive in DL and the
     mov ax, dx                  ; cluster in AX
     mov dl, bl
-    call KERNEL_SEG:cw_dsk_chdir              ; a remount with [dsk_keepcwd] raised
+    call dsk_chdir_x              ; a remount with [dsk_keepcwd] raised
 
     mov al, [disk_drive]        ; ...and now record what really happened
     mov [di+FS_DRV], al
@@ -715,7 +715,7 @@ fm_measure:
     cmp byte [di+FS_MOK], 0
     je .out                     ; no good mount: no figures, and say so
 
-    call KERNEL_SEG:cw_dsk_free_clus ; --- free: clusters -> KB, once per mount ---
+    call dsk_free_clus_x ; --- free: clusters -> KB, once per mount ---
     jc .used
     mov dl, [dsk_spc]
     xor dh, dh
@@ -738,7 +738,7 @@ fm_measure:
     xor ax, ax                  ; AX = entry index
 .sum:
     push ax
-    call KERNEL_SEG:cw_dsk_get_dir ; SI -> the staged entry, in our own segment
+    call dsk_get_dir_x ; SI -> the staged entry, in our own segment
     mov ax, [si+20]             ; size lo...
     add cx, ax
     mov ax, [si+22]             ; ...and hi, with the carry out of the low
@@ -1056,7 +1056,7 @@ fmv_bcast:
     push dx
     push si
     push di
-    call KERNEL_SEG:cw_dsk_relist   ; PAY THE DEBT BEFORE ADOPTING ANYTHING.
+    call dsk_relist_x   ; PAY THE DEBT BEFORE ADOPTING ANYTHING.
                                 ; Every window below takes the global snapshot
                                 ; by memory copy (fmv_take), so if the write
                                 ; that got us here DEFERRED its rebuild
@@ -2536,7 +2536,7 @@ fm_open_sel:
     jae .folder                 ; both of them navigate, neither is loadable
     cmp word [si+16], 0         ; a DATA file with an association opens in
     jne .package                ; its program instead of reaching the loader
-    call KERNEL_SEG:cw_assoc_post ; (SPEC.md 54.4); without one it still goes
+    call assoc_post_x ; (SPEC.md 54.4); without one it still goes
     jnc .out                    ; there and still says "Bad package", which
 .package:                       ; is the truthful verdict it always was
     inc ax                      ; index + 1: ui.inc runs the loader once the
@@ -3049,7 +3049,7 @@ fm_fmt_ok:
                                 ; gets `Format A: as 360K?`, and Enter still
                                 ; means yes and every other key no.
     mov bl, [di+FS_DRV]
-    call KERNEL_SEG:cw_dsk_vol_row
+    call dsk_vol_row_x
     jc .no
     cmp byte [bx+DV_KIND], DVK_BIOS
     jne .no                     ; a driver-backed volume: its own driver owns
@@ -3137,7 +3137,7 @@ fm_fmt_sizeable:
     jb .no
     push bx
     mov bl, al
-    call KERNEL_SEG:cw_dsk_vol_row
+    call dsk_vol_row_x
     jc .nopop
     cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there
     jb .nopop
@@ -3406,7 +3406,7 @@ fm_c_up:                        ; Folder > Up One Folder
                                 ; and saying so is not worth an error line
     call fmv_sync_x             ; dsk_dotdot walks [dsk_cwd], so that had
                                 ; better be OUR folder (SPEC.md 22.1)
-    call KERNEL_SEG:cw_dsk_dotdot ; AX = the parent's first cluster (19.2)
+    call dsk_dotdot_x ; AX = the parent's first cluster (19.2)
     jc .none                    ; a missing or corrupt '..': stay put
     xor si, si                  ; the parent cannot be named without the
     jmp fm_go                   ; grandparent's listing (SPEC.md 22)

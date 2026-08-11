@@ -2587,91 +2587,11 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; =============================================================================
 cw_app_launch:          call app_launch
                     retf
-cw_assoc_post:          call assoc_post
-                    retf
 cw_clk_fld_adj:         call clk_fld_adj
                     retf
 cw_clk_fld_str:         call clk_fld_str
                     retf
 cw_clk_snapshot:        call clk_snapshot
-                    retf
-cw_desk_zmark:           call desk_zmark
-                     retf
-cw_desk_zones_paint:     call desk_zones_paint
-                     retf
-cw_disk_mount:          call disk_mount
-                    retf
-cw_disk_read:           call disk_read
-                    retf
-cw_disk_write:          call disk_write
-                    retf
-cw_drv_blk_call:         call drv_blk_call
-                     retf
-cw_drv_cfg_save:        call drv_cfg_save
-                    retf
-cw_drv_cls_fp:           call drv_cls_fp
-                     retf
-cw_drv_cls_svc:         call drv_cls_svc
-                    retf
-cw_drv_cp_call:         call drv_cp_call
-                    retf
-cw_drv_cp_class:        call drv_cp_class
-                    retf
-cw_drv_cp_count:        call drv_cp_count
-                    retf
-cw_drv_cp_name:         call drv_cp_name
-                    retf
-cw_drv_load:            call drv_load
-                    retf
-cw_drv_row:             call drv_row
-                    retf
-cw_drv_status:          call drv_status
-                    retf
-cw_drv_tier:            call drv_tier
-                    retf
-cw_drv_unload:          call drv_unload
-                    retf
-cw_dsk_batch_begin:     call dsk_batch_begin
-                    retf
-cw_dsk_chdir:           call dsk_chdir
-                    retf
-cw_dsk_chdir_q:         call dsk_chdir_q
-                    retf
-cw_dsk_clus2lba:        call dsk_clus2lba
-                    retf
-cw_dsk_copy_in:         call dsk_copy_in
-                    retf
-cw_dsk_copy_seg:        call dsk_copy_seg
-                    retf
-cw_dsk_dirw_get:        call dsk_dirw_get
-                    retf
-cw_dsk_dirw_next:       call dsk_dirw_next
-                    retf
-cw_dsk_dirw_start:      call dsk_dirw_start
-                    retf
-cw_dsk_dotdot:          call dsk_dotdot
-                    retf
-cw_dsk_fat_ofs:         call dsk_fat_ofs
-                    retf
-cw_dsk_find_name:       call dsk_find_name
-                    retf
-cw_dsk_free_clus:       call dsk_free_clus
-                    retf
-cw_dsk_get_dir:         call dsk_get_dir
-                    retf
-cw_dsk_get_icon:        call dsk_get_icon
-                    retf
-cw_dsk_next_clus:       call dsk_next_clus
-                    retf
-cw_dsk_put_icon_k:      call dsk_put_icon_k
-                    retf
-cw_dsk_read_chain:      call dsk_read_chain
-                    retf
-cw_dsk_relist:          call dsk_relist
-                    retf
-cw_dsk_synth:           call dsk_synth
-                    retf
-cw_dsk_vol_row:         call dsk_vol_row
                     retf
 cw_evq_pop:             call evq_pop
                     retf
@@ -2696,8 +2616,6 @@ cw_gfx_hline:           call gfx_hline
 cw_gfx_lock:            call gfx_lock
                     retf
 cw_gfx_pen_cf:          call gfx_pen_cf
-                    retf
-cw_gfx_pen_dis:         call gfx_pen_dis
                     retf
 cw_gfx_pen_live:        call gfx_pen_live
                     retf
@@ -2731,22 +2649,6 @@ cw_inst_fhome_idx:      call inst_fhome_idx
                     retf
 cw_inst_win_owner:      call inst_win_owner
                     retf
-cw_mem_avail:           call mem_avail
-                    retf
-cw_mem_avail_lvl:        call mem_avail_lvl
-                     retf
-cw_mem_claim:           call mem_claim
-                    retf
-cw_mem_claim_dma:       call mem_claim_dma
-                    retf
-cw_mem_claim_hi:        call mem_claim_hi
-                    retf
-cw_mem_free:            call mem_free
-                    retf
-cw_mem_free_owner:      call mem_free_owner
-                    retf
-cw_mem_owner_of:         call mem_owner_of
-                     retf
 cw_menu_activate:       call menu_activate
                     retf
 cw_menu_draw_bar:       call menu_draw_bar
@@ -2858,8 +2760,6 @@ cp_onclick:           call COLD_SEG:cpf_cp_onclick
                       ; every new page has to be told
 cp_flush_close:       call COLD_SEG:cpf_cp_flush_close
                     ret
-cp_drv_gone:          call COLD_SEG:cpf_cp_drv_gone
-                    ret
 cp_tick_due:          call COLD_SEG:cpf_cp_tick_due
                     ret
 cp_tick:              call COLD_SEG:cpf_cp_tick
@@ -2872,19 +2772,9 @@ dskw_delete:          call COLD_SEG:dwf_dskw_delete
                     ret
 dskw_dfree:           call COLD_SEG:dwf_dskw_dfree
                     ret
-dskw_flush:           call COLD_SEG:dwf_dskw_flush
-                    ret
-dskw_gone:            call COLD_SEG:dwf_dskw_gone
-                    ret
 dskw_read:            call COLD_SEG:dwf_dskw_read
                     ret
-dskw_remount:         call COLD_SEG:dwf_dskw_remount
-                    ret
 dskw_rename:          call COLD_SEG:dwf_dskw_rename
-                    ret
-dskw_stat:            call COLD_SEG:dwf_dskw_stat
-                    ret
-dskw_sync:            call COLD_SEG:dwf_dskw_sync
                     ret
 dskw_write:           call COLD_SEG:dwf_dskw_write
                     ret
@@ -2901,12 +2791,6 @@ dskw_append_sys:      call COLD_SEG:dwf_dskw_append_sys
 files_init:           call COLD_SEG:fmf_files_init
                     ret
 files_open:           call COLD_SEG:fmf_files_open
-                    ret
-files_open_drive:     call COLD_SEG:fmf_files_open_drive
-                    ret
-files_poster:         call COLD_SEG:fmf_files_poster
-                    ret
-files_refresh:        call COLD_SEG:fmf_files_refresh
                     ret
 %ifndef KERN_SMALL
 fm_bar_gate:          call COLD_SEG:fmf_fm_bar_gate
@@ -2930,11 +2814,7 @@ fm_rclick:            call COLD_SEG:fmf_fm_rclick
                     ret
 fm_rcmd:              call COLD_SEG:fmf_fm_rcmd
                     ret
-fmv_sync:             call COLD_SEG:fmf_fmv_sync
-                    ret
 ld_run_body:          call COLD_SEG:ldf_ld_run_body
-                    ret
-ld_run_name:          call COLD_SEG:ldf_ld_run_name
                     ret
 loader_init:          call COLD_SEG:ldf_loader_init
                     ret
@@ -2961,19 +2841,7 @@ fdlg_top:             call COLD_SEG:fdf_fdlg_top
 ; dskw_stat were a DOUBLE crossing (out through a cw_ shim, in through a
 ; resident thunk) and are near calls now - SPEC.md 2.6's "growing the set makes
 ; the ones already in it cheaper".
-assoc_post:           call COLD_SEG:acf_assoc_post
-                    ret
 assoc_run:            call COLD_SEG:acf_assoc_run
-                    ret
-assoc_docicon:        call COLD_SEG:acf_assoc_docicon
-                    ret
-assoc_note_app:       call COLD_SEG:acf_assoc_note_app
-                    ret
-asc_use:              call COLD_SEG:acf_asc_use
-                    ret
-asc_lookup:           call COLD_SEG:acf_asc_lookup
-                    ret
-asc_take:             call COLD_SEG:acf_asc_take
                     ret
 osapi_arg_file:       call COLD_SEG:acf_osapi_arg_file
                     ret
@@ -2987,10 +2855,6 @@ osapi_assoc_set:      call COLD_SEG:acf_osapi_assoc_set
 ; (SPEC.md 15.3) - call and retf touch no flags.
 disk_mount:       call COLD_SEG:dkf_disk_mount
               ret
-disk_read:        call COLD_SEG:dkf_disk_read
-              ret
-disk_write:       call COLD_SEG:dkf_disk_write
-              ret
 dsk_batch_begin:  call COLD_SEG:dkf_dsk_batch_begin
               ret
 dsk_batch_end:    call COLD_SEG:dkf_dsk_batch_end
@@ -3001,23 +2865,9 @@ dsk_chdir:        call COLD_SEG:dkf_dsk_chdir
               ret
 dsk_chdir_q:      call COLD_SEG:dkf_dsk_chdir_q
               ret
-dsk_clus2lba:     call COLD_SEG:dkf_dsk_clus2lba
-              ret
-dsk_copy_in:      call COLD_SEG:dkf_dsk_copy_in
-              ret
 dsk_copy_seg:     call COLD_SEG:dkf_dsk_copy_seg
               ret
-dsk_dirw_get:     call COLD_SEG:dkf_dsk_dirw_get
-              ret
-dsk_dirw_next:    call COLD_SEG:dkf_dsk_dirw_next
-              ret
-dsk_dirw_start:   call COLD_SEG:dkf_dsk_dirw_start
-              ret
-dsk_dotdot:       call COLD_SEG:dkf_dsk_dotdot
-              ret
 dsk_dpt_init:     call COLD_SEG:dkf_dsk_dpt_init
-              ret
-dsk_fat_ofs:      call COLD_SEG:dkf_dsk_fat_ofs
               ret
 dsk_find:         call COLD_SEG:dkf_dsk_find
               ret
@@ -3025,27 +2875,9 @@ dsk_find_name:    call COLD_SEG:dkf_dsk_find_name
               ret
 dsk_flop_add:     call COLD_SEG:dkf_dsk_flop_add
               ret
-dsk_free_clus:    call COLD_SEG:dkf_dsk_free_clus
-              ret
 dsk_get_dir:      call COLD_SEG:dkf_dsk_get_dir
               ret
-dsk_get_icon:     call COLD_SEG:dkf_dsk_get_icon
-              ret
-dsk_next_clus:    call COLD_SEG:dkf_dsk_next_clus
-              ret
-dsk_put_icon_k:   call COLD_SEG:dkf_dsk_put_icon_k
-              ret
-dsk_read_chain:   call COLD_SEG:dkf_dsk_read_chain
-              ret
-dsk_relist:       call COLD_SEG:dkf_dsk_relist
-              ret
-dsk_synth:        call COLD_SEG:dkf_dsk_synth
-              ret
-dsk_vol_drop_drv: call COLD_SEG:dkf_dsk_vol_drop_drv
-              ret
 dsk_vol_fixed:    call COLD_SEG:dkf_dsk_vol_fixed
-              ret
-dsk_vol_row:      call COLD_SEG:dkf_dsk_vol_row
               ret
 dsk_vol_slot:     call COLD_SEG:dkf_dsk_vol_slot
               ret
@@ -3063,47 +2895,21 @@ osapi_vol_paint:  call COLD_SEG:dkf_osapi_vol_paint
 ; drv_svc_call is called by snd_tick inside IRQ0, so it pays a far call 18.2
 ; times a second (54.6 under 53.2.1 FSXF_FASTTICK) - ~6us on a tick that has
 ; a whole 55ms, and it does nothing at all when no driver publishes a stream.
-drv_blk_call:  call COLD_SEG:dvf_drv_blk_call
-           ret
 drv_boot:      call COLD_SEG:dvf_drv_boot
-           ret
-drv_cfg_save:  call COLD_SEG:dvf_drv_cfg_save
-           ret
-drv_cls_fp:    call COLD_SEG:dvf_drv_cls_fp
-           ret
-drv_cls_svc:   call COLD_SEG:dvf_drv_cls_svc
-           ret
-drv_cp_call:   call COLD_SEG:dvf_drv_cp_call
-           ret
-drv_cp_class:  call COLD_SEG:dvf_drv_cp_class
            ret
 drv_cp_closed: call COLD_SEG:dvf_drv_cp_closed
            ret
-drv_cp_count:  call COLD_SEG:dvf_drv_cp_count
-           ret
-drv_cp_name:   call COLD_SEG:dvf_drv_cp_name
-           ret
 drv_init:      call COLD_SEG:dvf_drv_init
-           ret
-drv_load:      call COLD_SEG:dvf_drv_load
            ret
 drv_notice:    call COLD_SEG:dvf_drv_notice
            ret
 drv_owns_seg:  call COLD_SEG:dvf_drv_owns_seg
            ret
-drv_row:       call COLD_SEG:dvf_drv_row
-           ret
 drv_shutdown:  call COLD_SEG:dvf_drv_shutdown
-           ret
-drv_status:    call COLD_SEG:dvf_drv_status
            ret
 drv_svc_call:  call COLD_SEG:dvf_drv_svc_call
            ret
 drv_task:      call COLD_SEG:dvf_drv_task
-           ret
-drv_tier:      call COLD_SEG:dvf_drv_tier
-           ret
-drv_unload:    call COLD_SEG:dvf_drv_unload
            ret
 osapi_drv_cfg: call COLD_SEG:dvf_osapi_drv_cfg
            ret
@@ -3113,27 +2919,15 @@ osapi_drv_cfg: call COLD_SEG:dvf_osapi_drv_cfg
 ; save-under (12.4), one claim and one free per pull-down, where the far call
 ; rides a gesture that already costs a heap scan and a screen save.
 ; Its ONE outbound call, drv_owns_seg, is near now - driver.inc is cold too.
-mem_avail:            call COLD_SEG:mmf_mem_avail
-                  ret
-mem_avail_lvl:        call COLD_SEG:mmf_mem_avail_lvl
-                  ret
 mem_claim:            call COLD_SEG:mmf_mem_claim
                   ret
-mem_claim_dma:        call COLD_SEG:mmf_mem_claim_dma
-                  ret
-mem_claim_hi:         call COLD_SEG:mmf_mem_claim_hi
-                  ret
 mem_free:             call COLD_SEG:mmf_mem_free
-                  ret
-mem_free_owner:       call COLD_SEG:mmf_mem_free_owner
                   ret
 mem_free_rec:         call COLD_SEG:mmf_mem_free_rec
                   ret
 mem_init:             call COLD_SEG:mmf_mem_init
                   ret
 mem_owned_kb:         call COLD_SEG:mmf_mem_owned_kb
-                  ret
-mem_owner_of:         call COLD_SEG:mmf_mem_owner_of
                   ret
 osapi_claim_snapshot: call COLD_SEG:mmf_osapi_claim_snapshot
                   ret
@@ -3169,8 +2963,6 @@ desk_paint:       call COLD_SEG:dkz_desk_paint
 desk_paint_mask:  call COLD_SEG:dkz_desk_paint_mask
               ret
 desk_rowcalc:     call COLD_SEG:dkz_desk_rowcalc
-              ret
-desk_zmark:       call COLD_SEG:dkz_desk_zmark
               ret
 desk_zones_paint: call COLD_SEG:dkz_desk_zones_paint
               ret

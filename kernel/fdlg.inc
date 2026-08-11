@@ -350,12 +350,12 @@ fdlg_home_go:
     je .media                   ; the user has chosen no folder for this app
     shl bx, 1                   ; ...otherwise the one they chose
     mov ax, [inst_fcwd+bx]
-    call KERNEL_SEG:cw_dsk_chdir
+    call dsk_chdir_x
     jnc .done
 .cur:
     mov dl, [fdlg_hdrv]
     mov ax, [fdlg_hcwd]
-    call KERNEL_SEG:cw_dsk_chdir
+    call dsk_chdir_x
     jmp short .done
 
     ; --- the default: MEDIA in the root of this instance's drive ---
@@ -365,20 +365,20 @@ fdlg_home_go:
 .media:
     mov [fdlg_idrv], dl         ; banked: the two chdirs below both need it
     xor ax, ax                  ; the root, whose listing names its folders
-    call KERNEL_SEG:cw_dsk_chdir
+    call dsk_chdir_x
     jc .cur                     ; the volume itself will not mount
     mov si, fdlg_s_media
-    call KERNEL_SEG:cw_dsk_find_name ; AX = its index; no I/O - the snapshot
+    call dsk_find_name_x ; AX = its index; no I/O - the snapshot
     jc .done                    ; no MEDIA here: this root IS the answer, and
                                 ; it is still an answer nothing drifted into
-    call KERNEL_SEG:cw_dsk_get_dir ; SI -> the staged entry (SPEC.md 19)
+    call dsk_get_dir_x ; SI -> the staged entry (SPEC.md 19)
     cmp word [si+16], 2         ; a folder, not a FILE called MEDIA
     jb .done
     mov ax, [si+18]             ; its first cluster
     or ax, ax
     jz .done                    ; 0 is the root: not a folder to enter
     mov dl, [fdlg_idrv]
-    call KERNEL_SEG:cw_dsk_chdir
+    call dsk_chdir_x
     jc .cur
 .done:
     pop si
@@ -909,7 +909,7 @@ fdlg_stage:
     push bx
     push cx
     push si
-    call KERNEL_SEG:cw_dsk_get_dir ; SI -> the staged 32-byte entry (SPEC.md 19)
+    call dsk_get_dir_x ; SI -> the staged 32-byte entry (SPEC.md 19)
     mov bx, fdlg_row
     mov cx, 16
 .copy:
@@ -995,7 +995,7 @@ fdlg_nextvol:
 ; -----------------------------------------------------------------------------
 fdlg_go:
     push ax
-    call KERNEL_SEG:cw_dsk_chdir
+    call dsk_chdir_x
     jc .moved                   ; a FAILED mount lands at the root of the
     call fdlg_home_dir          ; drive it tried with the gate shut - not a
 .moved:                         ; folder to bring an app back to
@@ -1166,7 +1166,7 @@ fdlg_icon:
     push si
     add cx, [fdlg_cx]           ; content-relative -> absolute
     add dx, [fdlg_cy]
-    call KERNEL_SEG:cw_dsk_get_icon ; SI -> the staged 64-byte body
+    call dsk_get_icon_x ; SI -> the staged 64-byte body
     mov bx, si
     push cx
     xor ax, ax
@@ -2090,7 +2090,7 @@ fdlg_findname:
     push cx
     push bx
     mov ax, bx
-    call KERNEL_SEG:cw_dsk_get_dir ; SI -> the staged entry: name, then the type
+    call dsk_get_dir_x ; SI -> the staged entry: name, then the type
     cmp word [si+16], 2         ; word at +16 and the first cluster at +18
     jne .next                   ; (SPEC.md 19) - only a folder can match
     mov di, si
@@ -2100,7 +2100,7 @@ fdlg_findname:
     pop bx
     pop cx
     mov ax, bx
-    call KERNEL_SEG:cw_dsk_get_dir
+    call dsk_get_dir_x
     mov ax, [si+18]
     clc
     jmp short .out
@@ -2163,7 +2163,7 @@ fdlg_dive:
     push dx
     push si
     mov ax, [fdlg_sel]
-    call KERNEL_SEG:cw_dsk_get_dir ; SI -> the staged entry
+    call dsk_get_dir_x ; SI -> the staged entry
     mov ax, [si+18]             ; its first cluster (SPEC.md 19)
     pop si
     mov dl, [disk_drive]

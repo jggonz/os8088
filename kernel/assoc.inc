@@ -711,7 +711,7 @@ assoc_try:
     push cx
     push dx
     push si
-    call KERNEL_SEG:cw_dsk_chdir_q            ; QUIET (SPEC.md 18.9): the question here is
+    call dsk_chdir_q_x            ; QUIET (SPEC.md 18.9): the question here is
     jc .no                      ; whether a FILE is in this directory, and
                                 ; dskw_stat walks the directory sectors to
                                 ; answer it. A listing would be a scan, a sort
@@ -756,7 +756,7 @@ assoc_tryfold:
 .named:
     push si
     xor ax, ax                  ; the volume's root first
-    call KERNEL_SEG:cw_dsk_chdir_q            ; quiet, for assoc_try's reason
+    call dsk_chdir_q_x            ; quiet, for assoc_try's reason
     pop si
     jc .no
     call dskw_stat_x              ; AL = attribute, BX = the FOLDER's own first
@@ -860,7 +860,7 @@ assoc_locate:
     mov bl, cl
     cmp bl, [assoc_ddrv]
     je .volnext
-    call KERNEL_SEG:cw_dsk_vol_row            ; a FREE row is skipped for the TIME, not for
+    call dsk_vol_row_x            ; a FREE row is skipped for the TIME, not for
     jc .volnext                 ; correctness: mounting one fails anyway, but
                                 ; that failure is the BIOS's retries and on a
                                 ; 4.77MHz machine those are seconds
@@ -1016,7 +1016,7 @@ assoc_back:
     push dx
     mov ax, [assoc_dclus]
     mov dl, [assoc_ddrv]
-    call KERNEL_SEG:cw_dsk_chdir_q            ; QUIET (SPEC.md 18.9/54.9): this restores the
+    call dsk_chdir_q_x            ; QUIET (SPEC.md 18.9/54.9): this restores the
                                 ; volume so the app can READ ITS DOCUMENT, and
                                 ; a read resolves by NAME through dskw_find's
                                 ; directory walk - it never touches the global
@@ -1426,7 +1426,7 @@ asc_use_x:
     jne .haveseg
     mov ax, ASC_KB
     mov bx, MEM_K_ASC
-    call KERNEL_SEG:cw_mem_claim
+    call mem_claim_x
     jc .out                     ; refused: tier 2, every lookup misses
     mov [asc_seg], dx
 .haveseg:
@@ -1443,7 +1443,7 @@ asc_use_x:
                                 ; the ONLY bound on what the rows below may say
     mov es, [asc_seg]
     xor bx, bx
-    call KERNEL_SEG:cw_dsk_read_chain         ; ES:BX = the claim
+    call dsk_read_chain_x         ; ES:BX = the claim
     pop dx                      ; (pop leaves CF alone)
     jc .out
     mov es, [asc_seg]
@@ -1599,9 +1599,9 @@ asc_root_find:
     mov ax, LOW_SEG
     mov es, ax
     xor ax, ax                  ; 0 = the root
-    call KERNEL_SEG:cw_dsk_dirw_start
+    call dsk_dirw_start_x
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_get           ; either failure is "no cache here" (19.2.1)
+    call dsk_dirw_get_x           ; either failure is "no cache here" (19.2.1)
     jc .no
     mov di, dsk_secbuf
     mov cx, 512/32
@@ -1855,10 +1855,10 @@ asc_take_x:
     mov si, di
     mov di, dsk_ico
     mov cx, 64
-    call KERNEL_SEG:cw_dsk_copy_seg           ; DX = src seg, AX = dst seg
+    call dsk_copy_seg_x           ; DX = src seg, AX = dst seg
     pop ax                      ; ...the listing index again
     mov si, dsk_ico
-    call KERNEL_SEG:cw_dsk_put_icon_k
+    call dsk_put_icon_k_x
     pop es
     pop di
     pop si

@@ -964,11 +964,11 @@ dsk_xfer:
     push di                     ; THE ROW SAYS WHICH CLASS (SPEC.md 18.7). This
     push ax                     ; was `drv_svc + DSV_SIZE`, the DISK class's
     mov al, [drv_blkcls]        ; entry hard-coded - right while one class
-    call KERNEL_SEG:cw_drv_cls_svc            ; served blocks and silently wrong the moment
+    call drv_cls_svc_x            ; served blocks and silently wrong the moment
     mov bp, [di+DSV_BLK]        ; two did: a network volume's sectors would
     pop ax                      ; have been handed to the hard-disk driver
     pop di
-    call KERNEL_SEG:cw_drv_blk_call
+    call drv_blk_call_x
     jnc .success
     mov [dsk_ioerr], al         ; the driver reports int 13h's status byte,
     jmp .fail                   ; so 03h still means write-protected (a NEAR
@@ -1729,7 +1729,7 @@ dsk_vol_add:
     mov [bx+DV_CLASS], al       ; fence matched the caller's segment against a
                                 ; publication slot and left the class here
     mov byte [bx+DV_KIND], DVK_DRV      ; published LAST: the row is now live
-    call KERNEL_SEG:cw_desk_zmark             ; the desktop owes a zone - and a driver adds
+    call desk_zmark_x             ; the desktop owes a zone - and a driver adds
                                 ; a volume from a page click, with the gfx
                                 ; lock HELD, so the repaint is deferred to
                                 ; ui_task's idle pass exactly as the Control
@@ -1783,7 +1783,7 @@ dsk_vol_del:
     jc .out
     cmp byte [bx+DV_KIND], DVK_DRV
     jne .out                    ; a BIOS floppy is not the driver's to drop
-    call KERNEL_SEG:cw_desk_zmark             ; ...and owes the zone's removal likewise -
+    call desk_zmark_x             ; ...and owes the zone's removal likewise -
                                 ; BEFORE the flag goes, so the mark counts the
                                 ; zone that is about to vanish. Its pixels are
                                 ; at the ordinal nothing will occupy after
@@ -1907,7 +1907,7 @@ osapi_vol_fence:
     jz .no
     mov al, 1                   ; WALK the classes rather than naming one. It
 .cls:                           ; tested [drv_fseg2] alone - the DISK class -
-    call KERNEL_SEG:cw_drv_cls_fp             ; which is a fence that only one kind of
+    call drv_cls_fp_x             ; which is a fence that only one kind of
     jc .no                      ; driver can ever pass, and a second
     cmp bx, [di+2]              ; block-serving class (docs/NET-PLAN.md 2.1)
     je .yes                     ; would have been refused its own volumes
@@ -1992,7 +1992,7 @@ osapi_vol_mount_x:
 ; -----------------------------------------------------------------------------
 osapi_vol_paint_x:
     call KERNEL_SEG:cw_gfx_lock
-    call KERNEL_SEG:cw_desk_zones_paint
+    call desk_zones_paint_x
     call KERNEL_SEG:cw_gfx_unlock
     ret
 
@@ -3428,7 +3428,7 @@ dsk_fatw_want:
     cmp word [bx+DVOL_MAX*2], 0
     jne .out                    ; it already has one
     mov al, MEM_PG_MIN          ; ...at the BOTTOM rank (SPEC.md 50.6.4): the
-    call KERNEL_SEG:cw_mem_avail_lvl          ; FAT window is a comfort, so "free" here has
+    call mem_avail_lvl_x          ; FAT window is a comfort, so "free" here has
     cmp bx, DSK_FATW_MINK       ; to mean free without taking a cache off
                                 ; anybody - nothing is below MEM_PG_MIN, so
                                 ; nothing counts. AX = largest run KB, BX =
@@ -3489,7 +3489,7 @@ dsk_fatw_claim:
     push bx
     mov ax, (DSK_FAT_SECS*512 + 1023) / 1024
     mov bx, MEM_K_FATW
-    call KERNEL_SEG:cw_mem_claim              ; out: DX = the segment; CF=1 = refused
+    call mem_claim_x              ; out: DX = the segment; CF=1 = refused
     pop bx
     jc .none
     mov [bx], dx
@@ -3522,7 +3522,7 @@ dsk_fatw_drop:
     mov word [dsk_fatw0], 0xFFFF
 .free:
     mov bx, MEM_K_FATW
-    call KERNEL_SEG:cw_mem_free               ; DX = the segment, BX = the owner word
+    call mem_free_x               ; DX = the segment, BX = the owner word
 .out:
     pop dx
     pop bx
@@ -4234,7 +4234,7 @@ dsk_rah_want:
     cmp word [dsk_rah_seg], 0
     jne .out                    ; already held
     mov al, MEM_PG_HIGH         ; ...at OUR OWN rank (SPEC.md 50.6.4), so a
-    call KERNEL_SEG:cw_mem_avail_lvl          ; cheaper cache counts as free and a dearer one
+    call mem_avail_lvl_x          ; cheaper cache counts as free and a dearer one
     cmp ax, DSK_RAH_KB * 2      ; does not. This window is the most expensive
                                 ; cache in the system to lose and the raise
                                 ; cache is the cheapest, so it may have that
@@ -4249,7 +4249,7 @@ dsk_rah_want:
     mov ax, DSK_RAH_KB
     mov bx, MEM_P_DIRW
     mov cx, DSK_RAH_KB          ; ...the WHOLE of it inside one 64KB DMA page
-    call KERNEL_SEG:cw_mem_claim_dma          ; (SPEC.md 50.3), so dsk_runcap never splits a
+    call mem_claim_dma_x          ; (SPEC.md 50.3), so dsk_runcap never splits a
     jc .out                     ; fill and a fill is exactly one call
     mov [dsk_rah_seg], dx
     call dsk_rah_flush          ; ...and it holds nothing yet. THE ONLY place

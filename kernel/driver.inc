@@ -665,7 +665,7 @@ drv_owns_seg_x:
     push si                     ; register to every caller
     call drv_seg_scan
     jnc .out
-    call KERNEL_SEG:cw_mem_owner_of           ; SPEC.md 52.11.6: not a driver image itself -
+    call mem_owner_of_x           ; SPEC.md 52.11.6: not a driver image itself -
     jc .out                     ; is it a claim OWNED by one? A driver's SECOND
     call drv_seg_scan           ; image (52.11) is exactly that, and it is not
 .out:                           ; in drv_tab by design. ONE level, like
@@ -1495,7 +1495,7 @@ drv_load_x:
     ja .big
     push bx
     mov bx, MEM_K_DRV
-    call KERNEL_SEG:cw_mem_claim_hi           ; a driver's base IS its CS, so it can never
+    call mem_claim_hi_x           ; a driver's base IS its CS, so it can never
     pop bx                      ; move: top-down, like a package's region
     jc .nomem
     mov [bx+DRVR_SEG], dx       ; ...which also arms drv_call
@@ -1965,9 +1965,9 @@ drv_release:
     mov word [bx+DRVR_KB], 0
     push bx                     ; anything the DRIVER itself claimed is owned
     mov bx, dx                  ; by its segment (mem_own), so sweep those
-    call KERNEL_SEG:cw_mem_free_owner         ; FIRST - the image's own free below takes
+    call mem_free_owner_x         ; FIRST - the image's own free below takes
     mov bx, MEM_K_DRV           ; that segment out of existence, and a claim
-    call KERNEL_SEG:cw_mem_free               ; whose owner word no longer names anything
+    call mem_free_x               ; whose owner word no longer names anything
     pop bx                      ; could never be found again. The mem_free_rec
 .out:                           ; fence (SPEC.md 50.4), for a driver
     pop di

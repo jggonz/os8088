@@ -655,7 +655,7 @@ cp_entry:
 ; clobbers: AL (the output), flags
 ; -----------------------------------------------------------------------------
 cp_nitems:
-    call KERNEL_SEG:cw_drv_cp_count
+    call drv_cp_count_x
     add al, [cp_nst]
     ret
 
@@ -669,7 +669,7 @@ cp_drv_item:
     cmp al, [cp_nst]
     jb .static
     sub al, [cp_nst]
-    call KERNEL_SEG:cw_drv_cp_class           ; CF=1 if the driver went away under us
+    call drv_cp_class_x           ; CF=1 if the driver went away under us
     jc .gone
     ret
 .gone:
@@ -692,7 +692,7 @@ cp_item_name:
     push ax
     call cp_drv_item
     jc .static
-    call KERNEL_SEG:cw_drv_cp_name            ; the staged copy, so font_str can read it
+    call drv_cp_name_x            ; the staged copy, so font_str can read it
     pop ax
     ret
 .static:
@@ -726,11 +726,11 @@ cp_item_paint:
     jc .static
     mov bx, di                  ; BX = the pane left, banked: drv_cls_svc
     mov dx, bp                  ; answers in DI, and DX is the driver ABI's
-    call KERNEL_SEG:cw_drv_cls_svc            ; pane top
+    call drv_cls_svc_x            ; pane top
     jc .done                    ; (AL survives: it is drv_cls_svc's input)
     mov bp, [di+DSV_CPPAINT]
     mov di, bx
-    call KERNEL_SEG:cw_drv_cp_call
+    call drv_cp_call_x
     jmp short .done
 .static:
     cmp al, [cp_nst]            ; a vanished driver's row paints nothing -
@@ -760,11 +760,11 @@ cp_item_click:
     mov bx, dx                  ; BX = the pane-relative y...
     mov dx, bp                  ; ...DX the pane top, CX already the x
     mov si, di
-    call KERNEL_SEG:cw_drv_cls_svc
+    call drv_cls_svc_x
     jc .done
     mov bp, [di+DSV_CPCLICK]
     mov di, si
-    call KERNEL_SEG:cw_drv_cp_call
+    call drv_cp_call_x
     jmp short .done
 .static:
     cmp al, [cp_nst]            ; a vanished driver's row refuses the click
@@ -2163,7 +2163,7 @@ cp_flush_x:
     push ax
     push bx
     push cx
-    call KERNEL_SEG:cw_drv_cfg_save
+    call drv_cfg_save_x
     mov byte [cp_dsave], 0
     jnc .say
     mov byte [cp_dsave], 2      ; the write itself failed: full, protected, I/O
@@ -2583,7 +2583,7 @@ cp_snd_click:
     cmp ah, [snd_route]
     je .redraw                  ; already the setting: still redraw, because
                                 ; the click clears a stale notice
-    call KERNEL_SEG:cw_drv_tier               ; ask the driver to move; AL = why not
+    call drv_tier_x               ; ask the driver to move; AL = why not
     jnc .take
     mov [cp_snd_err], al        ; the tier stands where it was, and the notice
     jmp short .redraw           ; line says which of the two reasons
@@ -2634,7 +2634,7 @@ cp_drv_paint:
 .row:
     push bx
     mov al, bl
-    call KERNEL_SEG:cw_drv_row                    ; BX = the drv_tab row
+    call drv_row_x                    ; BX = the drv_tab row
     cmp word [bx+DRVR_FILE], 0
     je .next                        ; an empty table row draws nothing
     mov si, [bx+DRVR_TITLE]
@@ -2648,7 +2648,7 @@ cp_drv_paint:
     call KERNEL_SEG:cw_font_str                   ; the driver's name
     pop bx
 
-    call KERNEL_SEG:cw_drv_status                 ; ...and what it is doing right now
+    call drv_status_x                 ; ...and what it is doing right now
     pop ax
     push ax
     call cp_drv_rowy
@@ -2744,7 +2744,7 @@ cp_drv_box1:
                                     ; runs and the documented pen would not
                                     ; hold. On the drawn path the control
                                     ; leaves it live by itself
-    call KERNEL_SEG:cw_drv_row      ; AL survives (drv_row preserves AX)
+    call drv_row_x      ; AL survives (drv_row preserves AX)
     cmp word [bx+DRVR_FILE], 0
     je .out                         ; an empty table row is not a control
     call cp_drv_rowy                ; DX = this row's glyph top - taken BEFORE
@@ -2825,26 +2825,26 @@ cp_drv_click:
     cmp ax, DRV_MAX
     jae .done
     push ax
-    call KERNEL_SEG:cw_drv_row
+    call drv_row_x
     cmp word [bx+DRVR_FILE], 0  ; an empty table row is not a control
     pop ax
     je .done
 
     push ax
-    call KERNEL_SEG:cw_drv_row
+    call drv_row_x
     cmp word [bx+DRVR_SEG], 0
     pop ax
     je .load
-    call KERNEL_SEG:cw_drv_unload             ; it is up: take it down
+    call drv_unload_x             ; it is up: take it down
     push ax
-    call KERNEL_SEG:cw_drv_row
+    call drv_row_x
     mov byte [bx+DRVR_WANT], 0
     mov byte [bx+DRVR_ERR], DRVE_OK ; nothing failed - it was turned off
     pop ax
     jmp short .save
 .load:
     push ax
-    call KERNEL_SEG:cw_drv_row
+    call drv_row_x
     cmp byte [bx+DRVR_WANT], 0  ; unloaded but WANTED: the boot tried and
     je .try                     ; failed (no card, no disk), and on a machine
     mov byte [bx+DRVR_WANT], 0  ; where that is permanent this click is the
@@ -2857,7 +2857,7 @@ cp_drv_click:
 .try:
     mov byte [bx+DRVR_WANT], 1  ; wanted first, so a failed load still
     pop ax                      ; persists the intent: put the disk in and
-    call KERNEL_SEG:cw_drv_load               ; the next boot picks it up
+    call drv_load_x               ; the next boot picks it up
 .save:
     mov byte [cp_wdirty], 1     ; ...and the settings file is OWED, not
                                 ; written: the close pays it (SPEC.md 31.8)
@@ -2909,10 +2909,10 @@ cp_drv_line1:
     push cx
     push dx
     push si
-    call KERNEL_SEG:cw_drv_row      ; AL survives both of these
+    call drv_row_x      ; AL survives both of these
     cmp word [bx+DRVR_FILE], 0
     je .out
-    call KERNEL_SEG:cw_drv_status   ; SI = what it is doing right now
+    call drv_status_x   ; SI = what it is doing right now
     call cp_drv_rowy                ; DX = this row's glyph top
     add dx, CP_DSTDY
     mov ax, CP_PLX                  ; ...and NOT CP_PMX: see above

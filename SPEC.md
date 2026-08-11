@@ -424,8 +424,17 @@ round that is most of what it buys: `fdlg.inc` joining turned its calls to
 call, and `assoc.inc` joining did the same for `ld_run_name`, `files_poster`,
 `files_refresh` and `dskw_stat`. A call that leaves cold code for a resident
 *thunk* is a double crossing — out through a `cw_` shim and straight back in
-through the thunk — so when a target joins the set, its callers here should
-be pointed at the `_x` body instead.
+through the thunk, six segment transitions where a near call would do — so
+when a target joins the set, **its callers inside the set must be pointed at
+the `_x` body**.
+
+That is a standing obligation on every future move, not a tidy-up, because it
+is worth more than the move that creates it: after the second round the tree
+carried **139 such call sites across 48 targets**, and repointing them retired
+**49 `cw_` shims and 55 thunks that no longer had any resident caller at
+all**. `.text` −487, `.cold` −250 — and the footprint fell a full **1,024
+bytes, giving back both 512-byte steps the five moves had cost**. A cold move
+and its cleanup, taken together, were footprint-neutral.
 
 Calls out use four-byte `cw_*` shims; calls *in* use six-byte resident
 thunks (`call SEG:x` / `ret`), because `wm_pkgcall` sets DS from `W_SEG` and
