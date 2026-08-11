@@ -1076,13 +1076,20 @@ osapi_table:
                                   ;          no stub is needed
     OSAPI_SLOT wm_about_set       ; 0x01E0 - the app-name pull-down (12.2):
                                   ;          BX = win, SI = your About handler
-    OSAPI_SLOT dskw_gone          ; 0x01E8 - RETIRED (SPEC.md 18.4.1/20.8):
-                                  ;          this was readbig, the one file op
-                                  ;          with no 64KB ceiling. dskw_read
-                                  ;          has none either now, so the cell
-                                  ;          answers CF=1 / AX = FERR_NAME
-                                  ;          rather than being reused - a
-                                  ;          shipped slot keeps its contract
+    OSAPI_SLOT osapi_vol_kind     ; 0x01E8 - AL = a volume index. CF=1 = there
+                                  ;          is no such volume; CF=0 with AL =
+                                  ;          VK_REMOVABLE / VK_FIXED and AH =
+                                  ;          VT_BIOS / VT_DRIVER (SPEC.md
+                                  ;          18.7.2). The MEDIUM and the
+                                  ;          TRANSPORT are two questions, and
+                                  ;          a package asking "is this a hard
+                                  ;          disk" wants the first.
+                                  ;          WAS readbig (SPEC.md 18.4.1),
+                                  ;          retired when dskw_read lost its
+                                  ;          64KB ceiling - SPEC.md 20.3.1's
+                                  ;          free list, and taking it cost the
+                                  ;          table nothing where an append
+                                  ;          would have been eight bytes
     OSAPI_SLOT wm_onmouseup       ; 0x01F0 - BX = window, AX = a near proc in
                                   ;          YOUR segment (0 clears it): the
                                   ;          release half of a content click
@@ -1493,15 +1500,7 @@ osapi_table:
                                   ;          Answers "whole" unless WF_OWNBG is
                                   ;          set, because without it the kernel
                                   ;          has already whitened the content
-    OSAPI_SLOT osapi_vol_kind     ; 0x03B8 - AL = a volume index. CF=1 = there
-                                  ;          is no such volume; CF=0 with AL =
-                                  ;          VK_REMOVABLE / VK_FIXED and AH =
-                                  ;          VT_BIOS / VT_DRIVER (SPEC.md
-                                  ;          18.7.2). The MEDIUM and the
-                                  ;          TRANSPORT are two questions and a
-                                  ;          package wanting "is this a hard
-                                  ;          disk" wants the first
-osapi_table_end:                  ; 0x03C0
+osapi_table_end:                  ; 0x03B8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1509,8 +1508,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 118 * 8
-%error "os8088 API jump table must be exactly 118 8-byte slots"
+%if OSAPI_TABLE_LEN != 117 * 8
+%error "os8088 API jump table must be exactly 117 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -2296,7 +2295,7 @@ osapi_file_goto_q:
 ;      desktop is rows MBAR_H..CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
 ;      DH = bits per pixel, 4 or 1
 ; -----------------------------------------------------------------------------
-; osapi_vol_kind - what KIND of volume is this? (SPEC.md 18.7.2, slot 0x03B8)
+; osapi_vol_kind - what KIND of volume is this? (SPEC.md 18.7.2, slot 0x01E8)
 ; in:  AL = a volume index (0 = A:, 1 = B:, ...)
 ; out: CF=1 = no such volume; CF=0 with AL = VK_* and AH = VT_*
 ; clobbers: AX (the output), flags

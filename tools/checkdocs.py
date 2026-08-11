@@ -62,13 +62,14 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 # that were are either filled (0x00F8/0x0100 went to the sound driver) or
 # gone, closed up when the numbering settled.
 #
-# 0x01E8 is the other case, and the one this set was kept for: RETIRED
-# (SPEC.md 18.4.1/20.8). It was OSAPI_FILE_READBIG; OSAPI_FILE_READ absorbed
-# it, the cell still exists and still answers CF=1 so nothing above it had to
-# move, and the SDK publishes no name for it - so a package that still calls
-# it fails to assemble. Prose has to keep naming the number, because the
-# number is the whole reason the cell is still there.
-HELD = {"0x01e8"}   # 0x01f0 was retired and is REUSED now (SPEC.md 13.7)
+# THE SET IS EMPTY NOW, and that is SPEC.md 20.3.1 working rather than an
+# omission. It was kept for 0x01E8 - RETIRED at SPEC.md 18.4.1, where
+# OSAPI_FILE_READ absorbed readbig - and a retired cell is a FREE LIST, not a
+# headstone: 0x01F0 went to wm_onmouseup (13.7) and 0x01E8 to OSAPI_VOL_KIND
+# (18.7.2). Both are published names again, so prose naming either number is
+# checkable the ordinary way. Put a number back here only for a cell the SDK
+# deliberately does not define, and say which section retired it.
+HELD = set()
 
 
 def headings(path):

@@ -8122,7 +8122,7 @@ volume, CF=0 with AL = 0 removable / 1 fixed. It is `DVK_DRV` *or* a BIOS unit
 with bit 7 set — `disk_mount`'s own test, in the one place that owns it. The
 desktop and the API call it, so they cannot drift.
 
-**`OSAPI_VOL_KIND` (slot 0x03B8)** publishes it: AL = a volume index in,
+**`OSAPI_VOL_KIND` (slot 0x01E8)** publishes it: AL = a volume index in,
 CF=1 = no such volume, CF=0 with **AL = `VK_REMOVABLE` / `VK_FIXED`** and
 **AH = `VT_BIOS` / `VT_DRIVER`**. Two answers because they are two questions —
 a package asking *is this a hard disk* wants the medium, one asking *will this
@@ -11358,8 +11358,10 @@ source that assembles can be naming it.
    population, because this tree hosts every package written for this OS
    (§20.8 rule 4). One grep settles it.
 
-**The free list today is exactly one cell: 0x01E8** (`dskw_gone`, §18.4.1).
-0x01F0 has just been spent. Three more — 0x0198, 0x01A0, 0x01A8, the XMS
+**The free list today is EMPTY.** 0x01F0 went to `wm_onmouseup` and 0x01E8 —
+`dskw_gone`, §18.4.1's retired readbig — went to `OSAPI_VOL_KIND` (§18.7.2),
+which is the second cell this rule has paid for and the first to be found by
+looking rather than by appending. Three more — 0x0198, 0x01A0, 0x01A8, the XMS
 allocator's — would join it if §41 is ever resolved, and are NOT free until
 then: their contracts stand and `xm_caps` beside them is live.
 

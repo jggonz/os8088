@@ -485,15 +485,28 @@ VID_CGA    equ 2
                                  ; handler's offset (0 = none). Preserves every
                                  ; register and the flags
 
-; 0x01E8 is RETIRED and has NO %define (SPEC.md 18.4.1/20.8). It was
-; OSAPI_FILE_READBIG, the one file op with no 64KB ceiling; OSAPI_FILE_READ
-; has none either now, and the two contracts differed only in where the
-; destination's offset came from. The cell is still there and still answers -
-; CF=1 with AX = FERR_NAME - because a RELEASED slot keeps its contract and
-; "we no longer implement this" is a refusal, never a different routine at
-; the same address. Nothing above it moved. A source that still names
-; OSAPI_FILE_READBIG fails to assemble, which is the intended way to find
-; out: pass your base segment in ES with BX = 0 and call OSAPI_FILE_READ.
+%define OSAPI_VOL_KIND      KERNEL_SEG:0x01E8   ; AL = a volume index (0 = A:).
+                                 ; CF=1 = there is no such volume; CF=0 with
+                                 ; AL = VK_REMOVABLE / VK_FIXED and AH =
+                                 ; VT_BIOS / VT_DRIVER (SPEC.md 18.7.2). The
+                                 ; first thing a package can ask about a
+                                 ; volume without USING it: OSAPI_VOL_* are
+                                 ; the driver's and refuse you. Ask the MEDIUM
+                                 ; when you mean "is this a hard disk" - a
+                                 ; boot partition is VT_BIOS and VK_FIXED at
+                                 ; once.
+                                 ;
+                                 ; THIS NUMBER WAS OSAPI_FILE_READBIG, retired
+                                 ; at SPEC.md 18.4.1 when OSAPI_FILE_READ lost
+                                 ; its 64KB ceiling, and taken back here under
+                                 ; SPEC.md 20.3.1: a withdrawn cell has no
+                                 ; contract to collide with, its %define was
+                                 ; deleted, and nothing in the tree names it -
+                                 ; so a stale caller still fails to assemble
+                                 ; rather than calling this by accident. If
+                                 ; you were using readbig: pass your base
+                                 ; segment in ES with BX = 0 and call
+                                 ; OSAPI_FILE_READ.
 
                                  ; for your own drawing (SPEC.md 32): AL = 1
                                  ; on / 0 off, lock HELD. Out CF=0 and AL =
@@ -1679,19 +1692,6 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                                 ; your content and the only
                                                 ; correct answer is "whole"
                                                 ; (SPEC.md 11.90.2)
-%define OSAPI_VOL_KIND      KERNEL_SEG:0x03B8   ; AL = a volume index (0 = A:).
-                                                ; CF=1 = there is no such
-                                                ; volume; CF=0 with AL =
-                                                ; VK_REMOVABLE / VK_FIXED and
-                                                ; AH = VT_BIOS / VT_DRIVER
-                                                ; (SPEC.md 18.7.2). The first
-                                                ; thing a package can ask about
-                                                ; a volume without USING it:
-                                                ; OSAPI_VOL_* are the driver's
-                                                ; and refuse you. Ask the MEDIUM
-                                                ; when you mean "is this a hard
-                                                ; disk" - a boot partition is
-                                                ; VT_BIOS and VK_FIXED at once
 %define OSAPI_WM_OWNBG      KERNEL_SEG:0x03A8   ; BX = window ptr, AL = 0 clear
                                                 ; / non-0 set. "I paint EVERY
                                                 ; PIXEL of my content myself",
