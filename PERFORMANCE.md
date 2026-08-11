@@ -5292,3 +5292,51 @@ one rather than the absent one. os8088 has none.
 bytes and the riskiest routine in the window manager. That ratio is the argument
 for measuring the case before building the mechanism, and it is the third time
 this round has paid off (§19.2.3.1 and §48.18.1 are the others in this file).
+
+### Set 46 — the cache holds four fragments, and Paint's chrome is 4.7x (SPEC.md §11.96.11.1)
+
+Set 44 gave a window ONE band on one edge and took Paint's tool column out of
+its repaint. This gives it four, so the bottom strip goes too. Same Paint
+raise, same cycle-accurate 5150/CGA:
+
+| | before the round | one band (Set 44) | **four (Set 46)** |
+|---|---:|---:|---:|
+| chrome, up to the canvas blit | 421.8 ms | 191.9 ms | **90.6 ms** |
+| the canvas blit | 259.1 ms | 259.1 ms | 259.1 ms |
+| **the whole Paint raise** | **680.9 ms** | 451.0 ms | **350.8 ms** |
+
+**4.7x on the chrome and 1.94x on the raise.** Paint's cache is ~3 KB on 1bpp
+against ~9 KB for its whole content, which is why it could not have one at all
+before Set 44. Its side of this is two `OSAPI_WM_BAND` calls: the tool column at
+launch, and the strip from `pt_bands` on every paint, because the strip's height
+is `content − canvas` and the size boxes move it without moving the window.
+
+**Three bugs, and all three are the same mistake in three places**: *a routine
+that was right about "the buffer" is wrong about "a fragment of it".*
+
+- **`gfx_save` writes `span+1` bytes a row, not `span+3`.** The +3 in the old
+  size arithmetic is the image *plus* §11.96.2's two edge-scratch columns.
+  Charged per fragment it put every later fragment's offset past its own
+  pixels — 2,943 differing pixels, read as a stripe down Paint's tool column.
+- **The edge scratch has to be SHARED and past every fragment.** Derived inside
+  `wm_su_edge` as "past this rect's image" it is the same address while there is
+  one fragment and lands inside the next one's pixels when there are four.
+- **`wm_su_edge` patches at the FRAGMENT's base, not `WSU_IMG`.** Two symptoms
+  at once and they looked unrelated: the left band's overhang column came back
+  stale — a one-pixel line down the *outside* of the window, 100 px — while the
+  bottom strip was corrupted where the misdirected merge landed, 326 px.
+
+**And the second and third only showed on Hercules.** CGA passed the first fix
+clean and Hercules did not, on the same binary: the covered rect on the CGA
+session reaches the left band and on the Hercules one does not, so the two
+adapters restore a different set of fragments. *Three adapters is not
+belt-and-braces here; it is the only way this class of bug appears at all.*
+
+Verified **0 differing pixels** with `tools/ptcheck.py` on CGA, Hercules and VGA
+mode 12h against `make REDRAWFULL=1`, and with `tools/subcheck.py` on CGA — 11
+steps, 0 pixels, which is also the proof that a window naming NO band takes
+exactly the path it always did (fragment 0 is then the whole content).
+
+**Cost: `.text` +559 over Set 44.** Both kernels cross one image rung and stand
+at **512 spare, one step** — `KERN_SMALL_BUDGET`'s twentieth move is what paid
+for it, and it is spent.

@@ -1678,14 +1678,21 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                                 ; (0 left, 1 right, 2 top,
                                                 ; 3 bottom), CX = the band's
                                                 ; extent in pixels measured in
-                                                ; from that edge; CX = 0
-                                                ; retires it. "CACHE THIS BAND
-                                                ; OF MY CONTENT AND TELL ME
-                                                ; ABOUT THE REST" (SPEC.md
+                                                ; from that edge, 0..255;
+                                                ; CX = 0 retires that edge.
+                                                ; ONE CALL PER EDGE and all
+                                                ; four may be named - the part
+                                                ; you KEEP is then the content
+                                                ; inset by them, which is a
+                                                ; rectangle whatever you ask
+                                                ; for (SPEC.md 11.96.11.1).
+                                                ; "CACHE THESE BANDS OF MY
+                                                ; CONTENT AND TELL ME ABOUT
+                                                ; THE REST" (SPEC.md
                                                 ; 11.96.11): the raise cache
-                                                ; then banks the band alone and
-                                                ; OSAPI_WM_DAMAGE hands you the
-                                                ; content MINUS it, so the
+                                                ; then banks the bands alone
+                                                ; and OSAPI_WM_DAMAGE hands you
+                                                ; the content INSET by them, so
                                                 ; furniture you redraw by
                                                 ; DRAWING it comes back as a
                                                 ; blit. Requires

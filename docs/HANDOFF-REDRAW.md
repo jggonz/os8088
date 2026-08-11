@@ -23,6 +23,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §5.4.1.1 | …and then the runs go: the 1bpp pair decoder, no hybrid | 2,431 → **517 ms**, and CONSTANT in the content |
 | §5.4.1.2 | four pairs are one byte: an aligned body per x PARITY | 517 → **259 ms** even, 508 → **299** odd |
 | §11.96.11 | a window names a BAND; the kernel banks it, the app owes the rest | Paint raise 680.9 → **451.0 ms**, 1.51x |
+| §11.96.11.1 | …and FOUR of them, held as a fragment list | Paint chrome 421.8 → **90.6 ms**, 4.7x |
 | §11.91.3 | **item D measured and NOT built** — the transitive mark it targets does not arise | 0 of 3 windows spared |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
@@ -313,7 +314,7 @@ latency-critical than Paint has ever been:
   has not, the cost is somewhere else entirely and the blit was never it.
 - **Tracker** mentions the idiom in its fullscreen text path but does not blit.
 
-### C. Registered cache regions — **the BAND half is BUILT, SPEC.md §11.96.11**
+### C. Registered cache regions — **BUILT, SPEC.md §11.96.11 and §11.96.11.1**
 
 The design the reporter proposed, of which §11.90.2 is half: a window registers
 **regions it hands to the cache** and **regions it keeps**; a repaint restores the
@@ -329,9 +330,13 @@ the cache banks the band, `wm_damage` hands the app the content minus it.
 **Paint raise 680.9 → 451.0 ms, 1.51x**, and Paint needed no drawing change —
 `pt_draw_pal` was already gated on the damage rect. PERFORMANCE.md Set 44.
 
-The remaining 22% needs the general kept REGION, whose complement is up to four
-rects and therefore a fragment list in the cache: §11.96.11.1 costs it. **It is
-blocked on budget rather than on design** — `kern_small` is at 0 spare.
+The remaining 22% is §11.96.11.1: **four** bands rather than one, held as a
+fragment list in the cache. `KERN_SMALL_BUDGET`'s twentieth move paid for it.
+**Chrome 421.8 → 90.6 ms, 4.7x; the whole raise 680.9 → 350.8, 1.94x**
+(PERFORMANCE.md Set 46), and the three bugs it sprang are all one mistake —
+a routine that was right about "the buffer" is wrong about "a fragment of it".
+Two of them showed only on Hercules, because the two adapters' sessions restore
+a different set of fragments.
 
 And the stated end state: **"blank it" becomes the last resort for every window**,
 not the default — a region that is neither cached nor claimed is the only thing
@@ -366,7 +371,8 @@ tool window, an inspector. os8088 has none.
 
 ## Before you write any code
 
-**Footprint spare is 1,024 bytes on EACH kernel — two 512-byte steps.**
+**Footprint spare is 512 bytes on EACH kernel — ONE 512-byte step, and both
+image rungs were crossed by §11.96.11.1.**
 `KERN_SMALL_BUDGET`'s **twentieth move**, 96,256 → 97,280, was asked for and
 granted and is **allocated to window redraw improvements**: §11.96.11 had left
 the small build exactly on the old figure with 0 spare, and the items below are

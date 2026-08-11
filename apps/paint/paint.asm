@@ -2866,6 +2866,13 @@ pt_paint:
     jne .notice
     call pt_track                   ; did ui_grow resize the window under us?
     call pt_dmg_get                 ; ...and what do we owe? (SPEC.md 11.90.2)
+    call pt_bands                   ; ...AFTER that, never before: wm_damage's
+                                    ; answer above was computed from the
+                                    ; extents the cache was laid out for, and
+                                    ; a canvas resized by the size boxes moves
+                                    ; the strip without moving the WINDOW - so
+                                    ; a new extent set here would inset the
+                                    ; rect we have already been given
     call pt_fsbed                   ; the beds nothing below covers - the tool
                                     ; column's and any band right of the canvas.
                                     ; WINDOWED THIS USED TO BE THE KERNEL'S
@@ -7201,6 +7208,41 @@ pt_repaint:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_bands - keep the kernel's cached bands in step with our layout
+; in:  nothing; out: nothing, every register and the flags preserved
+;
+; SPEC.md 11.96.11.1. The tool column is a constant 44 pixels and is named once
+; at entry; the STRIP's height is [pt_conth] - [pt_ch], which the size boxes
+; move without moving the window, so it is named from here - every paint, which
+; costs a compare, because OSAPI_WM_BAND drops nothing when the figure has not
+; changed. It is 451 of a repaint's 604 drawing calls that the column saves and
+; 131 that the strip does (PERFORMANCE.md Set 44).
+; -----------------------------------------------------------------------------
+pt_bands:
+    pushf
+    push ax
+    push bx
+    push cx
+    cmp byte [pt_fsx], 0            ; the bracket owns the machine and there is
+    jne .out                        ; no window under it to cache
+    cmp byte [pt_mode], PT_M_LIVE
+    jne .out
+    mov bx, [pt_win]
+    or bx, bx
+    jz .out
+    mov cx, [pt_conth]
+    sub cx, [pt_ch]
+    jbe .out                        ; no strip yet: pt_org has not run
+    mov al, 3                       ; edge 3 = bottom
+    call OSAPI_WM_BAND
+.out:
+    pop cx
+    pop bx
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------

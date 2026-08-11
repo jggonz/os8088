@@ -1572,8 +1572,10 @@ osapi_table:
                                   ;          has already whitened the content
     OSAPI_SLOT wm_band            ; 0x03B8 - BX = window, AL = edge (0 left,
                                   ;          1 right, 2 top, 3 bottom), CX = the
-                                  ;          band's extent in pixels, 0 retires
-                                  ;          it. "Cache THIS of my content and
+                                  ;          band's extent in pixels 0..255, 0
+                                  ;          retires that edge. One call per
+                                  ;          edge and all four may be named.
+                                  ;          "Cache THESE of my content and
                                   ;          tell me about the rest" (SPEC.md
                                   ;          11.96.11). CF = 0 taken, CF = 1
                                   ;          refused - and an app MUST read it,

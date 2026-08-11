@@ -5819,12 +5819,13 @@ per-fragment bank, restore and edge merge — for Paint, the other 22% (§11.96.
 
 Six things are load-bearing:
 
-- **`wm_su_crect` is what is BANKED and `wm_su_rect` is what the content IS**,
+- **`wm_su_flay` is what is BANKED and `wm_su_rect` is what the content IS**,
   and every one of the three callers had to be sorted into one or the other:
   `wm_su_ck` and `wm_su_take` ask the first, `wm_damage` the second. That split
-  is also what makes a band change invalidate for free — `wm_su_ck` already
-  compares this answer against the header the pixels were laid out for, so a
-  band of a different shape simply disagrees.
+  is also what makes a band change invalidate for free — `wm_su_ck` compares
+  the content rect **and the four clamped extents** against the header the
+  pixels were laid out for, and those two together are the whole of what the
+  layout is a function of, so anything that moved simply disagrees.
 - **It requires `WF_OWNBG`, and `wm_band` REFUSES without it.** With the flag
   clear the kernel white-fills the whole content before `W_PAINT`, which would
   wipe the band it has just restored. Refusing at registration makes "a band
@@ -5839,12 +5840,12 @@ Six things are load-bearing:
   *both* of `wm_su_try`'s success paths — including the one that restores
   nothing because nothing this pass painted reached the content, which is
   equally a statement that the band is still right.
-- **`wm_su_orect` cuts against `wm_su_crect`'s already-clamped answer**, never
-  against the raw extent. An extent wider than the content would otherwise
-  leave a borrowed subtraction reading as an enormous `x2`; this way the two
-  rects are complementary by construction rather than by two arithmetics
-  agreeing, and "the band was the whole content" falls out as an EMPTY owed
-  rect, which §11.90.2 already permits.
+- **`wm_su_orect` insets by `wm_su_flay`'s already-clamped extents**, never by
+  the raw ones. Two bands that together overrun the content would otherwise
+  leave a borrowed subtraction reading as an enormous `x2`; this way the kept
+  rect and the fragments are complementary by construction rather than by two
+  arithmetics agreeing, and "the bands were the whole content" falls out as an
+  EMPTY owed rect, which §11.90.2 already permits.
 - **The refusal is an answer, not an error.** `REDRAWFULL` refuses, and so
   would any future build that dropped this. An app must read `CF`, because the
   reason to name a band is that a whole-content cache is unaffordable — promise
@@ -5862,23 +5863,58 @@ Six things are load-bearing:
   BAND's rect, answered an empty rect, and Paint correctly drew nothing —
   **19,696 differing pixels, the canvas never repainted at all.**
 
-#### 11.96.11.1 What a general kept REGION would cost, and why it is not built
+#### 11.96.11.1 …and the cache holds up to FOUR of them
 
-The design this is half of names *regions a window hands to the cache* and
-*regions it keeps*, which for Paint would be **keep the canvas, cache
-everything else** — the palette column *and* the 22% bottom strip. The
-complement of a kept rect inside the content is up to four rects, so the cache
-would grow a fragment list: `wm_su_take` banking each into one claim at a
-running offset, `wm_su_try` intersecting the sub-rect with each and restoring
-from the right offset, `wm_su_edge`'s merge running per fragment, and the
-header carrying the kept rect so `wm_su_ck` can still compare shapes.
+One band takes 75% of Paint's repaint (§11.96.11) and the bottom strip is the
+other 22%, so the cache holds **up to four fragments**: the four edge bands
+together. TOP and BOTTOM are full-width strips, LEFT and RIGHT take the rows
+between them, they do not overlap, and their union is exactly the content minus
+the kept rect — which is why `wm_damage` still answers with four moves and no
+region arithmetic exists anywhere in this.
 
-It is not built because of what it buys against what it costs **here**: the
-band already takes 75% of the measured 421.8 ms, the remaining strip is 99 ms,
-and the fragment machinery is several hundred bytes on a kernel whose small
-build now has NO footprint left at all — §11.96.11 spent its last step. When `KERN_SMALL_BUDGET` next
-moves, this is the first thing to spend it on; the arithmetic above is what to
-re-check it against, since it is measured rather than assumed.
+Measured (PERFORMANCE.md Set 46), the same Paint raise on a cycle-accurate
+5150/CGA: everything before the canvas blit **191.9 → 90.6 ms**, so **421.8 →
+90.6, 4.7x** against where this line of work started, and the whole raise
+**680.9 → 350.8 ms, 1.94x**. Paint names its tool column at launch and its
+strip from `pt_bands` on every paint, because the strip's height is
+`content − canvas` and the size boxes move it without moving the window.
+
+Five things are load-bearing, and three of them are the same mistake in three
+places — *a routine that was right about "the buffer" is wrong about "a
+fragment of it"*:
+
+- **`wm_su_flay` lays the fragments out ONCE** into `wm_su_ftab`, from the
+  content rect and the four extents clamped left-then-right and top-then-bottom
+  into what the one before left. `wm_su_take`, `wm_su_kb` and `wm_su_try` then
+  walk that table in index order, so the claim's size, the offsets written into
+  it and the offsets read back out cannot disagree.
+- **With no extents at all, fragment 0 is the WHOLE content and 1..3 are
+  empty**, so a window that never named a band takes exactly the path it always
+  did — which is what makes the whole change provable against `REDRAWFULL` on a
+  desktop of Disk windows.
+- **`gfx_save` writes `span+1` bytes a row, not `span+3`.** The +3 in the old
+  size arithmetic is the image *plus* §11.96.2's two edge-scratch columns, and
+  charging it per fragment put every later fragment's offset past where its
+  pixels actually were. It reads as a stripe down the middle of Paint's tool
+  column.
+- **The edge scratch is SHARED and sits past every fragment.** Each merge wants
+  two byte columns of working room and the merges are sequential, so one area
+  sized for the tallest fragment serves them all. Derived inside `wm_su_edge`
+  as "past this rect's image" it was the same address while there was one
+  fragment, and lands inside the next one's pixels when there are four.
+- **`wm_su_edge` patches at `[wm_su_fbase]`, not at `WSU_IMG`** — which is the
+  first fragment's base and nobody else's. This one had two symptoms at once
+  and they looked unrelated: the left band's own overhang column came back
+  stale (a one-pixel line down the outside of the window) *and* the bottom
+  strip's pixels were corrupted, because that is where the misdirected merge
+  landed.
+
+**`wm_su_srect` no longer spends the sub-rect one-shot**, because every
+fragment needs it and `wm_damage` needs it after them all; `wm_draw_win` clears
+it at its exit and `wm_dmg_wins` at `.wdone`, which is the same guarantee at
+the two sites that can skip a window. That also retired §11.96.11's
+bank-and-restore pair, which existed only because `wm_su_edge` was borrowing
+those four words.
 
 ### 11.97 A window below does not draw chrome where something above will cover it
 

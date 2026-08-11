@@ -4238,12 +4238,15 @@ wm_band:
     push bx
     push cx
     push si
-    or cx, cx
-    jz .idx                     ; retire: 0 whatever the edge says
-    cmp cx, 0x3FFF
-    ja .no
     cmp al, 3
     ja .no
+    cmp cx, 255
+    ja .no                      ; A BYTE PER EDGE (SPEC.md 11.96.11.1): four of
+                                ; them per window is 48 bytes of .text, and a
+                                ; cached band wider than 255 pixels is not a
+                                ; band. CX = 0 retires this edge
+    or cx, cx
+    jz .idx                     ; ...and a retirement needs no promise
     test word [bx+W_FLAGS], WF_OWNBG
     jz .no                      ; THE INTERLOCK, and it is 11.90.2's own: with
                                 ; the flag clear the kernel white-fills the
@@ -4252,20 +4255,18 @@ wm_band:
                                 ; Refusing here makes "a band implies the app
                                 ; owns its background" a property of the build
                                 ; rather than a rule for a reader to keep
-    mov si, ax                  ; the edge, into bits 14..15 through a table:
-    and si, 3                   ; an 8086 shifts by 1 or by CL, and CL is the
-    add si, si                  ; extent
-    or cx, [si+wm_band_ebits]
 .idx:
-    call wm_ptr2idx             ; AX = the slot (and BX is untouched, which is
-    mov si, ax                  ; what wm_su_slot would not have left us)
-    add si, si
-    add si, wm_su_bands
-    cmp cx, [si]
+    push di                     ; wm_su_eptr answers about DI, and every other
+    mov di, bx                  ; caller here already has the window there
+    call wm_su_eptr             ; SI = &wm_su_ext[slot]
+    pop di
+    xor ah, ah                  ; AX = the edge, so SI names its byte
+    add si, ax
+    cmp cl, [si]
     je .ok                      ; unchanged: do NOT drop a live cache for it
-    mov [si], cx
-    call wm_su_drop             ; ...and changed, whatever is banked is a
-.ok:                            ; picture of a different rect
+    mov [si], cl
+    call wm_su_drop             ; ...and changed, whatever is banked is laid
+.ok:                            ; out for a different set of fragments
     pop si
     pop cx
     pop bx
@@ -4351,15 +4352,12 @@ wm_damage:
     test word [di+W_FLAGS], WF_OWNBG
     jz .whole
 %ifndef REDRAWFULL
-    cmp byte [wm_su_bok], 0     ; THE BAND CAME BACK OFF THE CACHE (SPEC.md
-    je .noband                  ; 11.96.11), so the app owes the content MINUS
-    push ax                     ; it - which is the whole point of naming one.
-    call wm_su_bget             ; It is [wm_su_bok] and not the band word,
-    or ax, ax                   ; because on a cache MISS the app owes the band
-    pop ax                      ; too and nothing else can tell those apart
-    jz .noband
-    call wm_su_orect
-    inc si                      ; ...and this IS an answer, sub-rect or not
+    cmp byte [wm_su_bok], 0     ; THE BANDS CAME BACK OFF THE CACHE (SPEC.md
+    je .noband                  ; 11.96.11), so the app owes the content INSET
+    call wm_su_bget             ; by them - which is the whole point of naming
+    jc .noband                  ; any. It is [wm_su_bok] and not the extents,
+    call wm_su_orect            ; because on a cache MISS the app owes the
+    inc si                      ; bands too and nothing else tells those apart
 .noband:
 %endif
     cmp word [wm_su_son], 0
@@ -4453,32 +4451,46 @@ wm_damage:
 ; drops it because a reused slot would otherwise alias the pointer.
 ; =============================================================================
 ; --- the claim's own header, ahead of the image gfx_save writes -------------
-WSU_X1  equ 0                   ; word: the rect the pixels behind it were
-WSU_Y1  equ 2                   ; taken over, COMPARED against the window's
-WSU_X2  equ 4                   ; rect now rather than trusted (see above)
-WSU_Y2  equ 6
-WSU_IMG equ 8                   ; ...and the image starts here
+WSU_X1  equ 0                   ; word: the CONTENT rect the pixels behind it
+WSU_Y1  equ 2                   ; were taken over, COMPARED against the
+WSU_X2  equ 4                   ; window's rect now rather than trusted (see
+WSU_Y2  equ 6                   ; above)
+WSU_EXT equ 8                   ; ...and the four clamped band extents the
+                                ; FRAGMENT LAYOUT was built from (SPEC.md
+                                ; 11.96.11.1): left, right, top, bottom, one
+                                ; byte each. With the rect above they are the
+                                ; whole of what that layout is a function of
+WSU_IMG equ 12                  ; ...and the image starts here
 
 wm_su_segs: times MAX_WIN dw 0  ; the banked content, one word per window
                                 ; record, 0 = none. In .text with real
                                 ; initialisers: -f bin zeroes nothing and
                                 ; wm_su_try reads one before anything sets it
-wm_su_bands: times MAX_WIN dw 0 ; ...and the BAND each window asked for
-                                ; (SPEC.md 11.96.11): extent in bits 0..13,
-                                ; edge in 14..15, and 0 = none, which is what
-                                ; every window has by construction. Same
-                                ; reason for being in .text as the row above
-wm_band_ebits: dw 0x0000, 0x4000, 0x8000, 0xC000
-wm_su_sbk: times 5 dw 0         ; 11.96.11: wm_su_son AND its four rect words,
-                                ; banked across the restore because a BANDED
-                                ; window still owes them to wm_damage. Five in
-                                ; one block because the five they copy are
-                                ; adjacent and in that order, which is what
-                                ; makes the pair one rep movsw each way
-wm_su_bx1: dw 0                 ; wm_su_orect's scratch: the band's own rect,
-wm_su_by1: dw 0                 ; banked while it fetches the content's, so
-wm_su_bx2: dw 0                 ; that the two are complementary by
-wm_su_by2: dw 0                 ; construction and not by two sums agreeing
+wm_su_ext: times MAX_WIN*4 db 0 ; ...and the four BAND extents each window
+                                ; asked to have cached (SPEC.md 11.96.11):
+                                ; left, right, top, bottom, in pixels, per
+                                ; window slot. All four zero is "no bands",
+                                ; which every window has by construction
+                                ; rather than by initialisation. Same reason
+                                ; for being in .text as the row above
+wm_su_kex: times 4 db 0         ; ...those four CLAMPED to the content rect of
+                                ; the operation in hand (wm_su_flay), which is
+                                ; what everything downstream reads
+wm_su_kany: db 0                ; ...and whether any of them is non-zero
+wm_su_ftab: times 16 dw 0       ; the four fragment rects, x1/y1/x2/y2 each;
+                                ; an empty one has x1 > x2 (SPEC.md 11.96.11.1)
+wm_su_fn: dw 0                  ; ...which one the loop in hand is on
+wm_su_fsz: dw 0                 ; ...and how many buffer bytes it occupies
+wm_su_scrb: dw 0                ; where the fragments end and 11.96.2's edge
+wm_su_scrsz: dw 0               ; scratch begins, and how big that is
+wm_su_fbase: dw 0               ; ...and where the fragment being restored
+                                ; STARTS, which is what wm_su_edge patches
+                                ; relative to. It was WSU_IMG, which is the
+                                ; first fragment's base and nobody else's
+wm_su_ex1: dw 0                 ; wm_su_edge's OWN four (SPEC.md 11.96.11.1):
+wm_su_ey1: dw 0                 ; it used to borrow wm_su_sx1..sy2, and a cache
+wm_su_ex2: dw 0                 ; of FRAGMENTS calls it once per fragment while
+wm_su_ey2: dw 0                 ; the sub-rect is still owed to every one
 wm_su_bok: db 0                 ; the band came back off the cache in the draw
                                 ; in hand, so wm_damage owes the app the rest
                                 ; and not the lot. Cleared at the top of every
@@ -4838,9 +4850,14 @@ wm_su_srect:
     mov dx, [wm_su_y2]
     cmp word [wm_su_son], 0
     je .whole
-    mov word [wm_su_son], 0     ; ONE window, consumed here rather than at the
-                                ; caller so a skipped window cannot pass its
-                                ; rect on to the next one
+                                ; THE ONE-SHOT IS NOT SPENT HERE (SPEC.md
+                                ; 11.96.11.1). It used to be, so a skipped
+                                ; window could not pass its rect to the next -
+                                ; but a cache of FRAGMENTS calls this once per
+                                ; fragment, and wm_damage owes the app the same
+                                ; rect afterwards. wm_draw_win clears it at its
+                                ; exit and wm_dmg_wins at .wdone, which is the
+                                ; same guarantee at the two sites that can skip
     cmp ax, [wm_su_sx1]
     jge .x1
     mov ax, [wm_su_sx1]
@@ -4895,185 +4912,431 @@ wm_su_rect:
     sub dx, 2
     ret
 
-; wm_su_bget - DI = window -> AX = its band word, 0 = none (SPEC.md 11.96.11)
-; clobbers: AX and flags, nothing else
-wm_su_bget:
-%ifdef REDRAWFULL
-    xor ax, ax
-    ret
-%else
+; --- SPEC.md 11.96.11.1: the cached region as up to FOUR FRAGMENTS ----------
+;
+; A window names an extent on each of the four edges (wm_band) and the kernel
+; caches those bands: everything the app did NOT keep. Expressed that way the
+; KEPT part is exactly the content inset by the four extents - a RECTANGLE for
+; any combination of them - which is what lets wm_damage answer it with four
+; moves and no region arithmetic. The cached part is up to four strips.
+;
+; TOP and BOTTOM are full width; LEFT and RIGHT take what is between them. They
+; do not overlap, so nothing has to reason about the order they go back in.
+;
+; WITH NO EXTENTS AT ALL fragment 0 is the whole content and 1..3 are empty, so
+; a window that never named a band takes exactly the path it always did.
+
+; wm_su_eptr - SI = &wm_su_ext[DI's slot], four bytes: left, right, top, bottom
+; clobbers: SI and flags
+wm_su_eptr:
+    push ax
     push bx
-    push si
     mov bx, di
-    call wm_ptr2idx
+    call wm_ptr2idx             ; AL = the slot, AH = 0
     mov si, ax
     add si, si
-    mov ax, [si+wm_su_bands]
-    pop si
+    add si, si
+    add si, wm_su_ext
     pop bx
-    ret
-%endif
-
-; wm_su_crect - the rect the CACHE covers: the content rect, cut down to the
-;               band if this window named one (SPEC.md 11.96.11)
-; in:  DI = window ptr
-; out: AX/BX/CX/DX = the rect, exactly wm_su_rect's when there is no band
-; clobbers: the four outputs and flags
-;
-; wm_su_ck and wm_su_take call THIS and wm_damage calls wm_su_rect, and the
-; split is the whole of what keeps the two honest: one asks what is banked,
-; the other what the window's content IS. A band that changed shape therefore
-; invalidates the cache with no new comparison anywhere - wm_su_ck already
-; compares this answer against the header the pixels were laid out for.
-wm_su_crect:
-    call wm_su_rect
-%ifndef REDRAWFULL
-    push si
-    push bp                     ; BP as a plain scratch REGISTER, which is
-    push ax                     ; legal - what SS != DS forbids is [bp+d]
-    call wm_su_bget             ; AX = the band word
-    mov si, ax
     pop ax
-    or si, si
-    jz .out
-    mov bp, si
-    and si, 0x3FFF              ; SI = the extent, as an INCLUSIVE offset
-    dec si                      ; from the edge
-    and bp, 0xC000              ; BP = the edge
-    jnz .notleft
-    add si, ax                  ; LEFT: x2 = min(x2, x1 + extent - 1)
-    cmp si, cx
-    jae .out
-    mov cx, si
-    jmp short .out
-.notleft:
-    cmp bp, 0x4000
-    jne .nottop
-    neg si                      ; RIGHT: x1 = max(x1, x2 - extent + 1)
-    add si, cx
-    cmp si, ax
-    jbe .out
-    mov ax, si
-    jmp short .out
-.nottop:
-    cmp bp, 0x8000
-    jne .bottom
-    add si, bx                  ; TOP: y2 = min(y2, y1 + extent - 1)
-    cmp si, dx
-    jae .out
-    mov dx, si
-    jmp short .out
-.bottom:
-    neg si                      ; BOTTOM: y1 = max(y1, y2 - extent + 1)
-    add si, dx
-    cmp si, bx
-    jbe .out
-    mov bx, si
-.out:
-    pop bp
-    pop si
-%endif
     ret
 
-%ifndef REDRAWFULL
-; wm_su_orect - the part of DI's content the APP still owes once the band has
-;               come back off the cache: the content rect with the band cut
-;               off it. Possibly EMPTY (x1 > x2), which is legal and means the
-;               band was the whole of it.
+; wm_su_flay - lay DI's cached region out (SPEC.md 11.96.11.1)
+; in:  DI = window ptr
+; out: wm_su_x1..y2 = its CONTENT rect, wm_su_kex[0..3] = the extents clamped
+;      to fit it, wm_su_kany = are there any, wm_su_ftab = the four fragments
+;      (an empty one has x1 > x2). Every register preserved.
+;
+; The clamp is left-then-right and top-then-bottom, each into what the one
+; before it left, so two bands that together overrun the content cannot make a
+; fragment that reaches outside it. Everything downstream reads the CLAMPED
+; figures - the header included - so a resize that shrinks the window past a
+; band invalidates the cache through the ordinary rect comparison.
+wm_su_flay:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call wm_su_rect
+    mov [wm_su_x1], ax
+    mov [wm_su_y1], bx
+    mov [wm_su_x2], cx
+    mov [wm_su_y2], dx
+    call wm_su_eptr
+    mov ax, cx
+    sub ax, [wm_su_x1]
+    inc ax                      ; AX = the content's width...
+    mov bx, ax
+    mov al, [si]
+    xor ah, ah
+    cmp ax, bx
+    jbe .l
+    mov ax, bx
+.l:
+    mov [wm_su_kex+0], al
+    sub bx, ax                  ; ...and what the left band left of it
+    mov al, [si+1]
+    xor ah, ah
+    cmp ax, bx
+    jbe .r
+    mov ax, bx
+.r:
+    mov [wm_su_kex+1], al
+    mov ax, dx
+    sub ax, [wm_su_y1]
+    inc ax                      ; AX = the height, same again
+    mov bx, ax
+    mov al, [si+2]
+    xor ah, ah
+    cmp ax, bx
+    jbe .t
+    mov ax, bx
+.t:
+    mov [wm_su_kex+2], al
+    sub bx, ax
+    mov al, [si+3]
+    xor ah, ah
+    cmp ax, bx
+    jbe .b
+    mov ax, bx
+.b:
+    mov [wm_su_kex+3], al
+    mov al, [wm_su_kex+0]
+    or al, [wm_su_kex+1]
+    or al, [wm_su_kex+2]
+    or al, [wm_su_kex+3]
+    mov [wm_su_kany], al
+    jnz .frags
+    mov ax, [wm_su_x1]          ; no bands: fragment 0 is the whole content
+    mov [wm_su_ftab+0], ax
+    mov ax, [wm_su_y1]
+    mov [wm_su_ftab+2], ax
+    mov ax, [wm_su_x2]
+    mov [wm_su_ftab+4], ax
+    mov ax, [wm_su_y2]
+    mov [wm_su_ftab+6], ax
+    mov si, 1
+    call wm_su_fnil
+    mov si, 2
+    call wm_su_fnil
+    mov si, 3
+    call wm_su_fnil
+    jmp .out
+.frags:
+    ; --- 0 TOP: (x1, y1, x2, y1 + t - 1), full width -----------------------
+    mov al, [wm_su_kex+2]
+    xor ah, ah
+    or ax, ax
+    jz .notop
+    add ax, [wm_su_y1]
+    dec ax
+    mov [wm_su_ftab+6], ax
+    mov ax, [wm_su_x1]
+    mov [wm_su_ftab+0], ax
+    mov ax, [wm_su_y1]
+    mov [wm_su_ftab+2], ax
+    mov ax, [wm_su_x2]
+    mov [wm_su_ftab+4], ax
+    jmp short .bot
+.notop:
+    xor si, si
+    call wm_su_fnil
+.bot:
+    ; --- 1 BOTTOM: (x1, y2 - b + 1, x2, y2), full width --------------------
+    mov al, [wm_su_kex+3]
+    xor ah, ah
+    or ax, ax
+    jz .nobot
+    mov bx, [wm_su_y2]
+    sub bx, ax
+    inc bx
+    mov [wm_su_ftab+10], bx
+    mov ax, [wm_su_x1]
+    mov [wm_su_ftab+8], ax
+    mov ax, [wm_su_x2]
+    mov [wm_su_ftab+12], ax
+    mov ax, [wm_su_y2]
+    mov [wm_su_ftab+14], ax
+    jmp short .mid
+.nobot:
+    mov si, 1
+    call wm_su_fnil
+.mid:
+    ; --- the rows LEFT and RIGHT share: y1 + t .. y2 - b -------------------
+    mov al, [wm_su_kex+2]
+    xor ah, ah
+    add ax, [wm_su_y1]
+    mov bx, ax                  ; BX = the middle band's first row
+    mov al, [wm_su_kex+3]
+    xor ah, ah
+    mov cx, [wm_su_y2]
+    sub cx, ax                  ; CX = ...and its last
+    cmp bx, cx
+    jle .side
+    mov si, 2                   ; nothing between the strips: no sides
+    call wm_su_fnil
+    mov si, 3
+    call wm_su_fnil
+    jmp short .out
+.side:
+    ; --- 2 LEFT: (x1, mid1, x1 + l - 1, mid2) ------------------------------
+    mov al, [wm_su_kex+0]
+    xor ah, ah
+    or ax, ax
+    jz .noleft
+    add ax, [wm_su_x1]
+    dec ax
+    mov [wm_su_ftab+20], ax
+    mov ax, [wm_su_x1]
+    mov [wm_su_ftab+16], ax
+    mov [wm_su_ftab+18], bx
+    mov [wm_su_ftab+22], cx
+    jmp short .right
+.noleft:
+    mov si, 2
+    call wm_su_fnil
+.right:
+    ; --- 3 RIGHT: (x2 - r + 1, mid1, x2, mid2) -----------------------------
+    mov al, [wm_su_kex+1]
+    xor ah, ah
+    or ax, ax
+    jz .noright
+    mov dx, [wm_su_x2]
+    sub dx, ax
+    inc dx
+    mov [wm_su_ftab+24], dx
+    mov [wm_su_ftab+26], bx
+    mov ax, [wm_su_x2]
+    mov [wm_su_ftab+28], ax
+    mov [wm_su_ftab+30], cx
+    jmp short .out
+.noright:
+    mov si, 3
+    call wm_su_fnil
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wm_su_fnil - mark fragment SI empty (x1 > x2, which every reader already
+;              treats as nothing to do). Preserves every register.
+wm_su_fnil:
+    push ax
+    push si
+    add si, si
+    add si, si
+    add si, si
+    mov ax, 1
+    mov [si+wm_su_ftab+0], ax
+    xor ax, ax
+    mov [si+wm_su_ftab+2], ax
+    mov [si+wm_su_ftab+4], ax
+    mov [si+wm_su_ftab+6], ax
+    pop si
+    pop ax
+    ret
+
+; wm_su_frag - fragment [wm_su_fn] (0..3) of the laid-out region
+; in:  [wm_su_fn] = 0..3, in memory rather than a register because every loop
+;      over the fragments wants SI for gfx_restore's buffer; wm_su_ftab valid
+; out: CF = 0 and AX/BX/CX/DX = it; CF = 1 = empty, and there is nothing to do
+; clobbers: the four outputs and flags
+wm_su_frag:
+    push si
+    mov si, [wm_su_fn]
+    add si, si
+    add si, si
+    add si, si
+    mov ax, [si+wm_su_ftab+0]
+    mov bx, [si+wm_su_ftab+2]
+    mov cx, [si+wm_su_ftab+4]
+    mov dx, [si+wm_su_ftab+6]
+    pop si
+    cmp ax, cx
+    jg .no
+    cmp bx, dx
+    jg .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; wm_su_bytes - [wm_su_fsz] = the buffer bytes gfx_save writes for the rect in
+;               AX/BX/CX/DX, which is what a later fragment's offset is past.
+; out: CF = 1 = it does not fit a word; every register preserved
+;
+; The +3 is wm_su_kb's own: the byte span, plus the TWO EDGE COLUMNS 11.96.2's
+; merge keeps its scratch in. Both this and wm_su_kb read it from here, so the
+; claim's size and the offsets inside it cannot disagree.
+wm_su_bytes:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, cx
+    mov di, ax
+    mov cl, 3
+    shr si, cl
+    shr di, cl
+    sub si, di
+    inc si                      ; span -> byte count. NOT +3: the two extra
+                                ; columns wm_su_kb used to add are 11.96.2's
+                                ; edge SCRATCH, which lives past the whole
+                                ; image and is not part of any fragment
+    mov ax, dx
+    sub ax, bx
+    inc ax
+    mul si
+    or dx, dx
+    jnz .big
+    mov si, [vid_planes_w]
+    mul si
+    or dx, dx
+    jnz .big
+    mov [wm_su_fsz], ax
+    clc
+    jmp short .out
+.big:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wm_su_scrset - where the fragments end and 11.96.2's edge scratch begins
+; out: [wm_su_scrb] = that offset, [wm_su_scrsz] = the scratch's own size;
+;      CF = 1 = it does not fit a word. Every register preserved.
+;
+; THE SCRATCH IS SHARED AND SITS PAST EVERY FRAGMENT (SPEC.md 11.96.11.1). Each
+; edge merge wants two byte columns of working room and the merges are
+; sequential - one fragment is wholly back on screen before the next is
+; touched - so one area sized for the TALLEST fragment serves them all. It used
+; to be computed inside wm_su_edge as "past this rect's image", which with one
+; fragment was the same address and with four lands inside the next one's
+; pixels. That is what a 605-pixel stripe down the middle of Paint's tool
+; column turned out to be.
+wm_su_scrset:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor di, di                  ; DI = the images together
+    xor si, si                  ; SI = the tallest fragment's rows
+    mov word [wm_su_fn], 0
+.f:
+    call wm_su_frag
+    jc .fnext
+    push si
+    call wm_su_bytes
+    pop si
+    jc .big
+    add di, [wm_su_fsz]
+    jc .big
+    sub dx, bx
+    inc dx
+    cmp dx, si
+    jbe .fnext
+    mov si, dx
+.fnext:
+    inc word [wm_su_fn]
+    cmp word [wm_su_fn], 4
+    jb .f
+    add di, WSU_IMG
+    jc .big
+    mov [wm_su_scrb], di
+    mov ax, si
+    add ax, ax                  ; two byte columns...
+    mov cx, [vid_planes_w]
+    mul cx                      ; ...x planes, of the tallest fragment
+    or dx, dx
+    jnz .big
+    mov [wm_su_scrsz], ax
+    clc
+    jmp short .out
+.big:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wm_su_bget - CF = 0 if DI named any band at all (SPEC.md 11.96.11)
+; clobbers: flags only
+wm_su_bget:
+    push ax
+    push si
+    call wm_su_eptr
+    mov al, [si]
+    or al, [si+1]
+    or al, [si+2]
+    or al, [si+3]
+    pop si
+    or al, al
+    pop ax
+    jz .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; wm_su_orect - the part of DI's content the APP still owes once the cached
+;               bands have come back: the content INSET by the four extents,
+;               and possibly EMPTY (x1 > x2), which is legal and means the
+;               bands were the whole of it.
 ; in:  DI = window ptr
 ; out: AX/BX/CX/DX; clobbers those and flags
 ;
-; It cuts against wm_su_crect's ALREADY CLAMPED answer rather than against the
-; raw extent, which is not tidiness: an extent wider than the content would
-; otherwise leave a borrowed subtraction reading as an enormous x2, and this
-; way the two rects are complementary by construction rather than by two
-; arithmetics agreeing.
+; It insets by wm_su_flay's CLAMPED extents, so the kept rect and the fragments
+; are complementary by construction rather than by two arithmetics agreeing.
 wm_su_orect:
-    call wm_su_crect
-    mov [wm_su_bx1], ax
-    mov [wm_su_by1], bx
-    mov [wm_su_bx2], cx
-    mov [wm_su_by2], dx
-    call wm_su_rect
     push si
-    push ax
-    call wm_su_bget
-    mov si, ax
-    pop ax
-    or si, si
-    jz .out
-    and si, 0xC000
-    jnz .nl
-    mov ax, [wm_su_bx2]         ; LEFT: the app owns from the band's right edge
-    inc ax
-    jmp short .out
-.nl:
-    cmp si, 0x4000
-    jne .nt
-    mov cx, [wm_su_bx1]         ; RIGHT
-    dec cx
-    jmp short .out
-.nt:
-    cmp si, 0x8000
-    jne .nb
-    mov bx, [wm_su_by2]         ; TOP
-    inc bx
-    jmp short .out
-.nb:
-    mov dx, [wm_su_by1]         ; BOTTOM
-    dec dx
-.out:
+    push bp                     ; BP as a plain scratch REGISTER, which is
+    call wm_su_flay             ; legal - what SS != DS forbids is [bp+d]
+    mov bx, [wm_su_y1]
+    mov cx, [wm_su_x2]
+    mov dx, [wm_su_y2]
+    mov bp, [wm_su_x1]
+    mov al, [wm_su_kex+0]
+    xor ah, ah
+    add bp, ax
+    mov si, bp                  ; SI = the inset x1, banked over the rest
+    mov bp, cx
+    mov al, [wm_su_kex+1]
+    xor ah, ah
+    sub bp, ax
+    mov cx, bp
+    mov bp, bx
+    mov al, [wm_su_kex+2]
+    xor ah, ah
+    add bp, ax
+    mov bx, bp
+    mov bp, dx
+    mov al, [wm_su_kex+3]
+    xor ah, ah
+    sub bp, ax
+    mov dx, bp
+    mov ax, si
+    pop bp
     pop si
     ret
-%endif
-
-%ifndef REDRAWFULL
-; wm_su_sbank / wm_su_sback - bank wm_su_son and its four rect words, and put
-; them back for a BANDED window only (SPEC.md 11.96.11).
-;
-; Both wm_su_srect and wm_su_edge destroy that block on the way through a
-; restore, and both are right to: the one-shot is spent per window, and the
-; four words are dead once the rect has been handed to gfx_restore. They are
-; not dead for a window with a band, which still owes wm_damage the same rect
-; for the OTHER half of its content - so this pair is the exception, and it is
-; the window's band that decides, not the caller.
-;
-; wm_su_sback preserves no flags and is called where none are live; wm_su_sbank
-; preserves everything, being on the path of every restore in the machine.
-wm_su_sbank:
-    push si
-    push di
-    mov si, wm_su_son
-    mov di, wm_su_sbk
-    jmp short wm_su_scopy
-wm_su_sback:
-    push ax
-    call wm_su_bget
-    or ax, ax
-    pop ax
-    jnz wm_su_sback_go
-    ret
-wm_su_sback_go:
-    push si
-    push di
-    mov si, wm_su_sbk
-    mov di, wm_su_son
-wm_su_scopy:
-    push ax
-    push cx
-    push es
-    push ds
-    pop es                      ; ES is the CLAIM here, and movsw writes ES:DI
-    mov cx, 5
-    cld
-    rep movsw
-    pop es
-    pop cx
-    pop ax
-    pop di
-    pop si
-    ret
-%endif
 
 ; wm_su_slot - which cache belongs to a window
 ; in:  BX = window ptr
@@ -5136,22 +5399,31 @@ wm_su_ck:
                                 ; exactly what tools/notepad/pixcheck.py does to
                                 ; force a full repaint (SPEC.md 11.96.2)
     mov es, si                  ; the rect is the CLAIM's, not a fifth array:
-    call wm_su_crect            ; it travels with the pixels it describes -
-                                ; and it is the BAND's rect where one was named
-                                ; (SPEC.md 11.96.11), so a band that changed
-                                ; shape invalidates here with no new test
+    call wm_su_flay             ; it travels with the pixels it describes. It
+                                ; is the CONTENT rect and the four clamped
+                                ; extents (SPEC.md 11.96.11.1), because those
+                                ; two together are what the fragment layout is
+                                ; a function of - so a band that changed, or a
+                                ; window that resized past one, disagrees here
+                                ; with no new comparison anywhere
+    mov ax, [wm_su_x1]
     cmp ax, [es:WSU_X1]
     jne .no
-    cmp bx, [es:WSU_Y1]
+    mov ax, [wm_su_y1]
+    cmp ax, [es:WSU_Y1]
     jne .no
-    cmp cx, [es:WSU_X2]
+    mov ax, [wm_su_x2]
+    cmp ax, [es:WSU_X2]
     jne .no
-    cmp dx, [es:WSU_Y2]
+    mov ax, [wm_su_y2]
+    cmp ax, [es:WSU_Y2]
     jne .no
-    mov [wm_su_x1], ax          ; they agree, so either is the rect - taken
-    mov [wm_su_y1], bx          ; from the header, which is what the buffer
-    mov [wm_su_x2], cx          ; behind it was actually laid out for
-    mov [wm_su_y2], dx
+    mov ax, [wm_su_kex+0]
+    cmp ax, [es:WSU_EXT+0]
+    jne .no
+    mov ax, [wm_su_kex+2]
+    cmp ax, [es:WSU_EXT+2]
+    jne .no
     mov ax, si                  ; ...and the segment, for wm_su_try
     clc
     jmp short .out
@@ -5201,7 +5473,11 @@ wm_su_take:
     mov bx, di
     call wm_su_drop             ; whatever THIS window banked before: one
                                 ; window, one claim, or the old one leaks
-    call wm_su_crect            ; DI is still the window for this
+    call wm_su_flay             ; DI is still the window for this: the CONTENT
+    mov ax, [wm_su_x1]          ; rect, the clamped extents and the fragment
+    mov bx, [wm_su_y1]          ; layout, all three of which the header carries
+    mov cx, [wm_su_x2]
+    mov dx, [wm_su_y2]
     cmp ax, cx
     ja .out                     ; degenerate content: nothing to bank
     cmp bx, dx
@@ -5223,32 +5499,35 @@ wm_su_take:
                                 ; the buffer wrongly. wm_fit keeps a window on
                                 ; screen, so this refuses nothing in practice
 %endif
-    mov [wm_su_x1], ax
-    mov [wm_su_y1], bx
-    mov [wm_su_x2], cx
-    mov [wm_su_y2], dx
-    call wm_su_kb               ; AX = KB for the rect just recorded, the
-    jc .out                     ; header below included - or it does not fit
-                                ; one segment at all
+    call wm_su_kb               ; AX = KB for every fragment together, the
+    jc .out                     ; header included - or it does not fit one
+                                ; segment at all
     mov bx, di
     call wm_su_slot             ; SI = its wm_su_segs word, BX = its own tag
     call mem_claim              ; DX = segment
     jc .out                     ; refused: no cache, and the raise repaints -
                                 ; which is what it did before this existed
     mov es, dx
-    push si                     ; the four-word header first: the rect goes
-    mov si, wm_su_x1            ; WITH the pixels, so nothing outside the
-    xor di, di                  ; claim has to be kept in step with them
+    push si                     ; the header first: the content rect and the
+    mov si, wm_su_x1            ; four extents go WITH the pixels, so nothing
+    xor di, di                  ; outside the claim has to be kept in step
     mov cx, 4
     cld
     rep movsw
+    mov si, wm_su_kex
+    mov cx, 2
+    rep movsw
     pop si
-    mov di, WSU_IMG             ; ...and the image starts after it
-    mov ax, [wm_su_x1]
-    mov bx, [wm_su_y1]
-    mov cx, [wm_su_x2]
-    mov dx, [wm_su_y2]
+    mov di, WSU_IMG             ; ...and the fragments start after it, in index
+    mov word [wm_su_fn], 0      ; order and back to back - gfx_save walks DI
+.frag:                          ; itself, and leaves it alone for an empty rect
+    call wm_su_frag
+    jc .fnext
     call gfx_save
+.fnext:
+    inc word [wm_su_fn]
+    cmp word [wm_su_fn], 4
+    jb .frag
     mov ax, es
     mov [si], ax                ; PUBLISHED LAST, so a cache that was only
                                 ; half taken can never be tried
@@ -5280,24 +5559,12 @@ wm_su_kb:
     push bx
     push cx
     push dx
-    mov ax, [wm_su_x2]
-    mov cl, 3
-    shr ax, cl
-    mov bx, [wm_su_x1]
-    shr bx, cl
-    sub ax, bx
-    add ax, 3                   ; span -> count, plus the two edge columns
-    mov bx, [wm_su_y2]
-    sub bx, [wm_su_y1]
-    inc bx
-    mul bx
-    or dx, dx
-    jnz .big
-    mov bx, [vid_planes_w]      ; 4 on VGA, 1 on the mono adapters - the _w
-    mul bx                      ; twin, for menu_save_kb's reason
-    or dx, dx
-    jnz .big                    ; past a segment: gfx_save's DI cannot reach it
-    add ax, WSU_IMG             ; ...and the header sits in front of all of it
+    push si
+    push di
+    call wm_su_scrset           ; the FRAGMENTS' images end at [wm_su_scrb] -
+    jc .big                     ; header included - and 11.96.2's shared edge
+    mov ax, [wm_su_scrb]        ; scratch takes [wm_su_scrsz] past that
+    add ax, [wm_su_scrsz]
     jc .big
     cmp ax, 0xFC00
     ja .big                     ; ...nor could the rounding below survive it
@@ -5309,12 +5576,16 @@ wm_su_kb:
     inc ax
 .out:
     clc
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
     ret
 .big:
     stc
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
@@ -5368,10 +5639,14 @@ wm_su_edge:
     push dx
     push si
     push di
-    mov [wm_su_sx1], ax         ; the rect being restored, banked: every
-    mov [wm_su_sy1], bx         ; register is wanted below, and wm_su_sub's
-    mov [wm_su_sx2], cx         ; one-shot has already been spent by
-    mov [wm_su_sy2], dx         ; wm_su_srect (SPEC.md 11.96.6)
+    mov [wm_su_ex1], ax         ; the rect being restored, banked: every
+    mov [wm_su_ey1], bx         ; register is wanted below. FOUR WORDS OF ITS
+    mov [wm_su_ex2], cx         ; OWN (SPEC.md 11.96.11.1) - it used to borrow
+    mov [wm_su_ey2], dx         ; wm_su_sx1..sy2 on the reasoning that the
+                                ; one-shot was already spent, and a CACHE OF
+                                ; FRAGMENTS calls this once per fragment while
+                                ; the sub-rect is still owed to every one of
+                                ; them and to wm_damage after
 
     mov bx, [wm_su_x2]          ; BX = bpr, the buffer's stride: the BANKED
     mov cl, 3                   ; rect's bytes per row, whatever is restored
@@ -5382,28 +5657,28 @@ wm_su_edge:
     inc bx
     mov [wm_su_bpr], bx
 
-    mov ax, [wm_su_sy2]         ; the restored rect's own rows, which is what
-    sub ax, [wm_su_sy1]         ; every walk below is bounded by
+    mov ax, [wm_su_ey2]         ; the restored rect's own rows, which is what
+    sub ax, [wm_su_ey1]         ; every walk below is bounded by
     inc ax
     mov [wm_su_srow], ax
     mov cx, [vid_planes_w]      ; ...x planes = the bytes gfx_save writes for
     mul cx                      ; one screen column, so the second column's
     mov [wm_su_nrow], ax        ; scratch starts that far past the first
 
-    mov ax, [wm_su_y2]          ; the banked rect's rows, for two things the
-    sub ax, [wm_su_y1]          ; sub-rect cannot answer: where the scratch can
-    inc ax                      ; start, and how far a plane's unwalked tail is
-    push ax
+    mov ax, [wm_su_y2]          ; the banked rect's rows, for the thing the
+    sub ax, [wm_su_y1]          ; sub-rect cannot answer: how far a plane's
+    inc ax                      ; unwalked tail is
     sub ax, [wm_su_srow]
     mul bx
     mov [wm_su_pext], ax        ; the rows of each plane this rect does not
-    pop ax                      ; cover, one whole buffer row each
-    mul cx
-    mul bx
-    add ax, WSU_IMG             ; ...so the scratch starts past the header AND
-    mov [wm_su_scr], ax         ; past the WHOLE image, sub-rect or not
+                                ; cover, one whole buffer row each
+    mov ax, [wm_su_scrb]        ; ...and the scratch is past EVERY FRAGMENT's
+    mov [wm_su_scr], ax         ; image (SPEC.md 11.96.11.1), not just this
+                                ; one's. Derived here it was the same address
+                                ; while there was one fragment and lands inside
+                                ; the next one's pixels when there are four
 
-    mov ax, [wm_su_sy1]         ; where the restored rect's first row sits in
+    mov ax, [wm_su_ey1]         ; where the restored rect's first row sits in
     sub ax, [wm_su_y1]          ; the buffer
     mul bx
     mov [wm_su_rofs], ax
@@ -5423,7 +5698,7 @@ wm_su_edge:
     ; the "overhang" is the window's own content, which this pass did not paint,
     ; so the cache and the screen already agree and there is nothing to merge.
     mov cl, 3
-    mov ax, [wm_su_sx1]
+    mov ax, [wm_su_ex1]
     shr ax, cl
     mov bx, [wm_su_x1]
     shr bx, cl
@@ -5431,7 +5706,7 @@ wm_su_edge:
     mov [wm_su_dol], ax         ; 0 = the left column IS this rect's left byte
     mov ax, [wm_su_x2]
     shr ax, cl
-    mov bx, [wm_su_sx2]
+    mov bx, [wm_su_ex2]
     shr bx, cl
     sub ax, bx
     mov [wm_su_dor], ax         ; 0 = ...and the right one is its right byte
@@ -5439,18 +5714,18 @@ wm_su_edge:
     cmp word [wm_su_dol], 0     ; the LEFT byte column as it is on screen now,
     jne .noleft                 ; over the RESTORED rect's rows only
     mov ax, [wm_su_x1]
-    mov bx, [wm_su_sy1]
+    mov bx, [wm_su_ey1]
     mov cx, ax                  ; x2 = x1: one byte wide, whole bytes copied
-    mov dx, [wm_su_sy2]
+    mov dx, [wm_su_ey2]
     mov di, [wm_su_scr]
     call gfx_save
 .noleft:
     cmp word [wm_su_dor], 0     ; ...and the right one
     jne .nomask
     mov ax, [wm_su_x2]
-    mov bx, [wm_su_sy1]
+    mov bx, [wm_su_ey1]
     mov cx, ax
-    mov dx, [wm_su_sy2]
+    mov dx, [wm_su_ey2]
     mov di, [wm_su_scr]
     add di, [wm_su_nrow]
     call gfx_save
@@ -5463,8 +5738,8 @@ wm_su_edge:
     cmp word [wm_su_dol], 0
     jne .right
     mov si, [wm_su_scr]         ; left: buffer byte 0 of every restored row
-    mov di, WSU_IMG
-    add di, [wm_su_rofs]
+    mov di, [wm_su_fbase]       ; ...of THIS FRAGMENT (SPEC.md 11.96.11.1),
+    add di, [wm_su_rofs]        ; which is WSU_IMG only for the first one
     mov dl, [wm_su_lm]
     call wm_su_merge
 .right:
@@ -5476,7 +5751,7 @@ wm_su_edge:
     add si, [wm_su_nrow]        ; right: buffer byte bpr-1 of every restored row
     mov di, [wm_su_bpr]
     dec di
-    add di, WSU_IMG
+    add di, [wm_su_fbase]
     add di, [wm_su_rofs]
     mov dl, [wm_su_rm]
     call wm_su_merge
@@ -5552,49 +5827,55 @@ wm_su_try:
                                 ; gfx_restore has the same wrong-band hazard
                                 ; the take refuses for
 %endif
-    call wm_su_ck               ; ...which loads wm_su_x1..y2 out of the
-    jc .no                      ; claim's own header, and answers AX = it
+    call wm_su_ck               ; ...which lays the fragments out and checks
+    jc .no                      ; them against the claim's own header, and
+                                ; answers AX = the claim
     mov es, ax
-%ifndef REDRAWFULL
-    call wm_su_sbank            ; BANK THE ONE-SHOT AND ITS FOUR WORDS (SPEC.md
-%endif                          ; 11.96.11): a banded window still owes them to
-                                ; wm_damage, and BOTH wm_su_srect (which spends
-                                ; the flag) and wm_su_edge (which reuses the
-                                ; four as scratch, on the reasoning that the
-                                ; flag was already spent) destroy them
-    call wm_su_srect            ; AX/BX/CX/DX = the rect to put back, and only
-    jnc .put                    ; part of the buffer if the caller named one
-%ifndef REDRAWFULL
-    mov byte [wm_su_bok], 1     ; ...and that goes for the band too: nothing
-    call wm_su_sback            ; painted over it, so it is still right
-%endif
-    clc                         ; nothing this pass painted reached the content,
-    jmp short .out              ; so it is ALREADY right - which is the whole
-                                ; point of 11.96.6 and not a failure
-.put:
-    call wm_su_edge             ; the edge bytes overhang the window, so they are
-                                ; merged with the screen as it is NOW before any
-                                ; of this goes back (11.96.2) - AFTER the arm,
-                                ; because it patches the bytes THIS restore will
-                                ; write and no others (11.96.8). Its own two
-                                ; gfx_save calls cannot disarm the sub-rect: the
-                                ; disarm is gated on [sw_dir], so a save never
-                                ; reaches it (SPEC.md 5.8)
-    mov si, WSU_IMG             ; GFX_RESTORE'S BUFFER IS ES:SI, NOT ES:DI -
-                                ; the twin of gfx_save's, because one advances
-                                ; a movsb source and the other its destination.
+    call wm_su_scrset           ; where 11.96.2's edge scratch lives, which is
+    jc .no                      ; past EVERY fragment (SPEC.md 11.96.11.1)
+    mov di, WSU_IMG             ; DI = the running offset into it, the twin of
+    mov word [wm_su_fn], 0      ; wm_su_take's - so the two walk the fragments
+.frag:                          ; in one order and cannot disagree about where
+    call wm_su_frag             ; any of them lives (SPEC.md 11.96.11.1)
+    jc .fnext
+    call wm_su_bytes            ; [wm_su_fsz] = this one's span in the buffer.
+    jc .fnext                   ; It cannot overflow - wm_su_kb refused the
+                                ; claim if it could - and skipping is the safe
+                                ; answer if it somehow does
+    mov [wm_su_fbase], di       ; ...and where it lives, for the edge merge
+    mov [wm_su_x1], ax          ; THE FRAGMENT IS THE RECT THE BUFFER UNDER DI
+    mov [wm_su_y1], bx          ; WAS LAID OUT FOR, which is what wm_su_srect
+    mov [wm_su_x2], cx          ; intersects against and what wm_su_edge takes
+    mov [wm_su_y2], dx          ; its stride and its masks from
+    call wm_su_srect            ; AX/BX/CX/DX = the part of it to put back, and
+    jc .fskip                   ; only part of the buffer if a rect was named
+    call wm_su_edge             ; the edge bytes overhang, so they are merged
+                                ; with the screen as it is NOW before any of
+                                ; this goes back (11.96.2) - AFTER the arm,
+                                ; because it patches the bytes THIS restore
+                                ; will write and no others (11.96.8). Its own
+                                ; two gfx_save calls cannot disarm the
+                                ; sub-rect: the disarm is gated on [sw_dir], so
+                                ; a save never reaches it (SPEC.md 5.8)
+    push di
+    mov si, di                  ; GFX_RESTORE'S BUFFER IS ES:SI, NOT ES:DI -
+    call gfx_restore            ; the twin of gfx_save's, because one advances
+    pop di                      ; a movsb source and the other its destination.
                                 ; Handed DI, the restore read from the buffer
                                 ; segment at the offset of the WINDOW RECORD -
                                 ; tens of KB past a claim of a few, so the
                                 ; content came back as whatever was there,
                                 ; which is the reported blank window
-    call gfx_restore            ; ...and the rect is the one wm_su_srect just
-                                ; answered with, still in AX/BX/CX/DX - which
-                                ; is why nothing reloads it here any more
+.fskip:
+    add di, [wm_su_fsz]         ; an EMPTY fragment occupies nothing, which is
+.fnext:                         ; why the two exits differ
+    inc word [wm_su_fn]
+    cmp word [wm_su_fn], 4
+    jb .frag
 %ifndef REDRAWFULL
-    mov byte [wm_su_bok], 1     ; ...and the band, if this window named one, is
-    call wm_su_sback            ; on the glass again (SPEC.md 11.96.11)
-%endif
+    mov byte [wm_su_bok], 1     ; the bands are on the glass again - including
+%endif                          ; when nothing was put back, which says the
+                                ; same thing (SPEC.md 11.96.11)
     clc                         ; THE CACHE IS NOT SPENT HERE. It used to be
     jmp short .out              ; dropped on the grounds that this window is
                                 ; about to be the front one and will change
@@ -5699,10 +5980,10 @@ wm_draw_win:
                                 ; The chrome above is drawn either way: it is
                                 ; cheap, and a raise changes the pinstripes
 %ifndef REDRAWFULL
-    call wm_su_bget             ; ...UNLESS THE CACHE IS ONLY A BAND OF IT
-    or ax, ax                   ; (SPEC.md 11.96.11), in which case what came
-    jnz .paint                  ; back is the furniture and the app still owes
-%endif                          ; the rest - wm_damage hands it exactly that,
+    call wm_su_bget             ; ...UNLESS THE CACHE IS ONLY THE BANDS OF IT
+    jnc .paint                  ; (SPEC.md 11.96.11), in which case what came
+%endif                          ; back is the furniture and the app still owes
+                                ; the rest - wm_damage hands it exactly that,
     jmp .growbox                ; and the white fill is skipped because a band
                                 ; needs WF_OWNBG to have been granted at all
 .content:

@@ -404,15 +404,15 @@ Three things about it:
     "cold": 23087,
     "coldpara": 1472,
     "fatpara": 288,
-    "imgpara": 4032,
-    "kend": 6464,
+    "imgpara": 4064,
+    "kend": 6496,
     "kseg": 96,
-    "ksize": 101888,
+    "ksize": 102400,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 58603
+    "text": 59162
   },
   "small": {
     "bss": 5401,
@@ -421,15 +421,15 @@ Three things about it:
     "cold": 21540,
     "coldpara": 1376,
     "fatpara": 288,
-    "imgpara": 3776,
-    "kend": 6112,
+    "imgpara": 3808,
+    "kend": 6144,
     "kseg": 96,
-    "ksize": 96256,
+    "ksize": 96768,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2752,
     "stk0": 1024,
-    "text": 54721
+    "text": 55280
   }
 }
 ```
@@ -925,21 +925,21 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,803 | 36.5% |
-| the window system and its furniture | 18,220 | 22.3% |
-| drawing: adapters, primitives, glyphs, icons | 12,617 | 15.4% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,823 | 12.0% |
+| the file system, end to end | 29,803 | 36.2% |
+| the window system and its furniture | 18,779 | 22.8% |
+| drawing: adapters, primitives, glyphs, icons | 12,617 | 15.3% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,823 | 11.9% |
 | the kernel proper: API table, heap, scheduler, events | 5,989 | 7.3% |
 | the Control Panel | 3,873 | 4.7% |
 | the three built-in kinds | 1,365 | 1.7% |
-| **total** | **81,690** | |
+| **total** | **82,249** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,004 | 7,620 | **8,624** | 336 | — |
-| `wm.inc` — the window manager (§11) | 7,486 | — | **7,486** | 669 | — |
+| `wm.inc` — the window manager (§11) | 8,045 | — | **8,045** | 669 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,702 | — | **5,702** | 884 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,449 | **5,628** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,203 | — | **5,203** | 653 | — |
@@ -974,7 +974,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,797 | — | **2,797** | — | — |
-| **total** | **58,603** | **23,087** | **81,690** | **5,610** | **7,762** |
+| **total** | **59,162** | **23,087** | **82,249** | **5,610** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
