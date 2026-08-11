@@ -1956,7 +1956,7 @@ trust the equipment word, so the drive appears and works. The probe still runs
 for the published state above, which is the only reason any of this could be
 diagnosed at all. Unit 1 is unaffected and still contested.
 
-## 20. `ui_drag` banks a mousedown point the pointer was never at (OPEN, narrowed to one word)
+## 20. A window dragged from BEHIND another lands at the covered rect's corner (FIXED, SPEC.md 11.96.10.1)
 
 **Found by `tests/dispsave.py` failing after the `elendilon` merge**, and it is
 not what that test is about — the raise cache it gates works. The failure is
@@ -2028,15 +2028,33 @@ was, which is precisely what a redraw optimisation changes — and that is why
 the same scripted session lands correctly on `origin/elendilon` and on this
 tree built `REDRAWFULL=1`, and wrongly on the shipped build.
 
-**The discriminating probe is `OSAPI_EVQ_PENDING`** (slot 0x0338), or `evq`'s
-head and tail read straight out of the guest, sampled immediately before
-`drag()` sends its press: a non-zero depth there settles it in one run.
-**Taken once, on an ISOLATED session — a single Disk window, one `to()`, no
-drag before it — the queue is EMPTY** (`head == tail == 32`) both before the
-move and after it. That is not the failing case and does not answer it: what
-the probe owes is the same two reads inside `dispsave`'s own session, where a
-drag has just finished and the UI task has just repainted two windows across a
-seam. If the
+**The queue was empty, and that killed the last hypothesis.** Read inside
+`dispsave`'s own session, immediately before the press: `count = 0`, and after
+it `head`/`tail` advanced by exactly one record. So the event `ui_drag` acted
+on **was** the press just sent, the pointer was proved at (1020,129) before and
+after it, and `mou_isr` filled the record from `[mouse_x]` — which said
+(1020,129). The event could not have carried (990,175). Something between the
+push and `ui_drag` was changing `CX`/`DX`.
+
+### The answer: `wm_raise` ate two registers that were not its to eat
+
+`ui_dispatch` holds the mousedown point in `CX`/`DX` and hands it to `ui_drag`.
+Between the two it calls **`wm_front`** — but only when the clicked window is
+not already frontmost. `wm_front` saves `AX`/`BX`/`BP`/`DI`, which is exactly
+what `wm_raise`'s contract says it clobbers, and §11.96.10's arming site loads
+a rect into `AX`/`BX`/`CX`/`DX` for `wm_su_sub`.
+
+**(990,175) is `wm_cov_x2`/`wm_cov_y2`** — the bottom-right corner of the box
+the covering window was sitting on. Two `push`es fix it; SPEC.md §11.96.10.1 is
+the write-up, and `tests/dispsave.py` passes.
+
+**Why it hid for a whole round of work.** It needs a window that is NOT already
+frontmost, so every scripted drag that had one window, or grabbed the front
+one, landed pixel-exact — `tools/subcheck.py` drags across 11 steps and never
+touched it. And on a 16px cascade the wrong answer and the right one are a few
+pixels apart, which reads as drag imprecision; the two-display arrangement
+pulled them 130 px apart and made it obvious. The gate that caught it was
+measuring the raise cache, which was working. If the
 queue is empty, the press really is being posted at a superseded position and
 the search moves back to the ISR; if it is not, the question becomes *why* a
 press outlives its dispatch — `ui_drag`'s own `.track` drains the queue looking

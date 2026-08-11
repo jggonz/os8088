@@ -5783,6 +5783,45 @@ interlock, at the one geometry that escaped it. Latent before this: `wm_dmg_wins
 was the only caller that armed a rect and a fullscreen window is rarely marked,
 where `wm_front` can raise one.
 
+#### 11.96.10.1 …and a rect argument spends four registers, two of which are the caller's
+
+`wm_raise`'s contract lists **`AX`/`BX`/`BP`/`DI`** as the registers it
+clobbers, and `wm_front` saves exactly those four. §11.96.10's arming site
+loads a rect into `AX`/`BX`/`CX`/`DX` for `wm_su_sub` — so it ate `CX` and
+`DX`, which belong to whoever called `wm_front`.
+
+**The caller is `ui_dispatch`, and what it holds in `CX`/`DX` is the mousedown
+point.** `ui_drag` is called with it immediately afterwards
+(`mov [ui_startx], cx`), so a window **dragged from behind another one** was
+dropped at the covered rect's bottom-right corner rather than under the
+pointer. Measured: a grab at (1020,129) became `ui_startx`/`ui_starty` =
+(990,175), which is exactly `wm_cov_x2`/`wm_cov_y2` for that pair of windows,
+and the window landed 130 px left and 100 px up of where it was released
+instead of 130 and 60.
+
+**Three things about how it hid**, all worth more than the two `push`es:
+
+- **It needs a window that is NOT already frontmost**, because `ui_dispatch`
+  only calls `wm_front` on that branch. Every scripted drag in the harness
+  that had one window, or grabbed the front one, landed pixel-exact — which is
+  what made it look like a dual-display bug when it was found there.
+- **It is invisible on a machine where the covered rect happens to be near the
+  pointer**, and a 16px cascade is exactly that: the wrong answer and the right
+  one differ by a few pixels, which reads as drag imprecision. The two-display
+  arrangement pulled them 130 px apart and made it obvious.
+- **The gate that caught it was measuring something else entirely.**
+  `tests/dispsave.py` failed on 4,343 wrong pixels; the raise cache it gates
+  was working, and the reason its comparison was wrong is that the window it
+  drops had landed somewhere it could not click past. docs/FIELD-NOTES.md 20 is
+  the trail, and it went through `ui_drag`, `mou_isr` and the event queue —
+  each of which had to be *exonerated by measurement* — before the arithmetic
+  said `start` was wrong rather than `cur`.
+
+**The rule is the one §11.96.6's arming site already carried and this site
+copied without its guard**: a rect argument spends four registers, and a
+routine whose contract names two of them is holding the other two for someone
+else.
+
 #### 11.96.11 The app keeps a band, and the kernel banks it
 
 **Paint has no raise cache at all, and the reason is memory**: a cache over its

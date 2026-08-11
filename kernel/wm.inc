@@ -1496,11 +1496,23 @@ wm_raise:
     cmp al, 2
     jne .whole
     push bx                     ; BX IS THE WINDOW wm_draw_win is about to be
-    mov ax, [wm_cov_x1]         ; handed and a rect argument spends four
-    mov bx, [wm_cov_y1]         ; registers - the same trap 11.96.6's arming
-    mov cx, [wm_cov_x2]         ; site sprang, which assembles and then freezes
-    mov dx, [wm_cov_y2]         ; the machine inside a garbage W_PAINT
+    push cx                     ; handed and a rect argument spends FOUR
+    push dx                     ; registers - and this routine's contract lists
+                                ; AX/BX/BP/DI as the clobbered ones, so CX and
+                                ; DX are the CALLER's (SPEC.md 11.96.10.1).
+                                ; wm_front saves exactly the four the contract
+                                ; names, and ui_dispatch is holding the
+                                ; mousedown point in CX/DX across it - so a
+                                ; window dragged from BEHIND another one was
+                                ; dropped at the covered rect's bottom-right
+                                ; corner instead of under the pointer
+    mov ax, [wm_cov_x1]
+    mov bx, [wm_cov_y1]
+    mov cx, [wm_cov_x2]
+    mov dx, [wm_cov_y2]
     call wm_su_sub
+    pop dx
+    pop cx
     pop bx
 .whole:
 %endif

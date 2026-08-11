@@ -421,7 +421,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 59390
+    "text": 59394
   },
   "small": {
     "bss": 5495,
@@ -438,7 +438,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2752,
     "stk0": 1024,
-    "text": 55487
+    "text": 55491
   }
 }
 ```
@@ -935,20 +935,20 @@ generated in the first place.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 29,974 | 36.3% |
-| the window system and its furniture | 18,855 | 22.8% |
+| the window system and its furniture | 18,859 | 22.8% |
 | drawing: adapters, primitives, glyphs, icons | 12,628 | 15.3% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,892 | 12.0% |
 | the kernel proper: API table, heap, scheduler, events | 5,989 | 7.3% |
 | the Control Panel | 3,876 | 4.7% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **82,590** | |
+| **total** | **82,594** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,000 | 7,730 | **8,730** | 338 | — |
-| `wm.inc` — the window manager (§11) | 8,083 | — | **8,083** | 669 | — |
+| `wm.inc` — the window manager (§11) | 8,087 | — | **8,087** | 669 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,767 | — | **5,767** | 885 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,449 | **5,628** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,203 | — | **5,203** | 653 | — |
@@ -983,7 +983,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,797 | — | **2,797** | — | — |
-| **total** | **59,390** | **23,200** | **82,590** | **5,704** | **7,762** |
+| **total** | **59,394** | **23,200** | **82,594** | **5,704** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
