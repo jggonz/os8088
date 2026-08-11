@@ -209,6 +209,31 @@ ifneq ($(REDRAWFULL),)
 VIDDEF += -DREDRAWFULL
 endif
 
+# SOLNOKEEP=1 makes Solitaire's sol_keep answer 0, so every tableau column is
+# erased and redrawn whole - the pre-SPEC.md 43.10 path, and a stricter
+# reference than 43.7's, which kept the buried backs. It is REDRAWFULL's
+# reasoning for a package: the shadow's whole claim is "the same picture, drawn
+# fewer times", and the failure it can have is a card left standing where a
+# card no longer is - a REAL picture, so no screenshot of one build can check
+# it. Only the pair can.
+#
+#   make && python3 tools/solcheck.py capture /tmp/a build/soltest.img
+#   make SOLNOKEEP=1 && python3 tools/solcheck.py capture /tmp/b build/soltest.img
+#   python3 tools/solcheck.py diff /tmp/a /tmp/b        # 0 differing pixels
+#
+# IT IS IN $(SOLSTAMP) BELOW, and it has to be for the reason NOSPLIT records:
+# the .bin rule depends on the SOURCE, so a knob outside a stamp leaves an
+# up-to-date binary in place, drives the same build twice and returns a null
+# A/B - which reads as a pass.
+SOLDEF :=
+ifneq ($(SOLNOKEEP),)
+SOLDEF += -DSOLNOKEEP
+endif
+SOLSTAMP := $(BUILD)/.sol-$(if $(SOLNOKEEP),nokeep,keep)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(SOLSTAMP) ] || { rm -f $(BUILD)/.sol-* $(BUILD)/solitair.bin; \
+                                touch $(SOLSTAMP); })
+
 # SNDSNIFF=sb adds the Sound Blaster DSP reset scan to the boot's sound probe
 # (SPEC.md 51.3.1), which by default is the OPL2 timer-flag dance at 388h and
 # nothing else. Every Sound Blaster ever made carries an OPL2 there, so the
@@ -889,7 +914,7 @@ $(BUILD)/paint.o88: $(BUILD)/paint.bin tools/os88pkg.py
 # the Task Manager and the dock show - is still 'SOLITAIRE'; that field is 16
 # bytes (SPEC.md 20.2) and has nothing to do with the file name.
 $(BUILD)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/solitaire/solitaire.asm
+	$(NASM) -f bin -w+error $(SOLDEF) -I apps/ -o $@ apps/solitaire/solitaire.asm
 	@echo "solitaire: $(call FILESIZE,$@) bytes"
 
 

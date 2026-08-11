@@ -5630,3 +5630,98 @@ once something has moved.
 
 **Cost: the kernel is untouched.** `solitair.o88` 5,799 -> 5,823 bytes, which is
 heap while the game is open and nothing when it is closed.
+
+### Set 50 — Solitaire's drop redraws the cards that MOVED (SPEC.md §43.10)
+
+Set 49 priced Solitaire's FULL repaint and left §43.7's incremental path alone
+on the strength of its own reasoning: a move touches two piles, so it costs two
+`sol_drawpile` calls and never a whole content. That is true, and it is not the
+same claim as *a drop is cheap*.
+
+**Measured on a cycle-accurate 5150 with a Hercules card, one card dragged off
+a six-card run onto another column** — the commonest move in Klondike, driven
+through the UART with the drawing primitives breakpointed and the board poked
+to a chosen position so the case measured is the case chosen:
+
+| | before | after |
+|---|---:|---:|
+| card faces drawn | 11 | 3 |
+| drawing calls | 481 | 210 |
+| guest time | **332.5 ms** | **171.2 ms** |
+
+**Eight of those eleven faces were pixel-identical to what was already on the
+screen.** Cards leave and arrive at the *top* of a column, so the ones
+underneath do not move — and `sol_drawpile` erased and redrew them anyway,
+because §43.7's keep stopped at the face-down run. The fan was `(cfd 2, cfa 5,
+cfu 14)` before the move and after it, so nothing below the change had moved by
+so much as a pixel.
+
+**The two ratios differ — 2.3x the calls, 1.94x the time — because the faces
+that survive are the expensive ones**: 41 calls per face on average before, 66
+after. A buried card is a sliver that skips its centre pip and its bottom edge
+(§43.3), and slivers are exactly what a keep keeps; what is left to draw is the
+full-height card at the bottom of the column and the one that just arrived.
+
+**A re-fan is the case where there is nothing to win, and it is not rare.**
+`sol_colfan` tightens a column that would run past the content bottom, so on
+CGA's 136-row desktop a column growing from 7 cards to 10 takes the face-up
+step from 12px to 10px and *every* card in it really does move. Measured, that
+same drop is **309 calls before and 309 after** — the shadow keeps nothing and
+is right not to. The win is on the adapters with the room for long columns,
+which is Hercules and VGA, and on the field machine that is the primary card.
+
+**What it cost: nothing the kernel can see.** `solitair.o88` 5,823 -> 5,889
+bytes of image and 1,276 -> 1,451 of bss — 203 bytes of shadow against the 28
+the sliver cache used — all of it inside the package's own region, which is a
+heap claim (§20.1). No kernel file changed.
+
+**Verified by comparison, not by argument.** `tools/solcheck.py` grew a PLAY
+phase for this: fourteen real drags chosen from the guest's own board (so both
+builds play the same game off the same seeded deal), including a six-card run,
+a three-card run, waste plays, a foundation play that empties a column outright,
+and Auto Finish — capturing after every one. The gate is that the incrementally
+drawn content equals **the same position forced through a full `W_PAINT`**:
+**0 differing pixels on Hercules and 0 on CGA**. That comparison needs no second
+build, which is what makes it the strong one — a wrong keep is a card left
+standing where a card no longer is, a real picture rather than a broken-looking
+one, so nothing about the screen would say so.
+
+**`make SOLNOKEEP=1` is the second build, and it found something that is not
+this change.** It stubs `sol_keep` to 0, so every column is erased and redrawn
+whole — strictly more drawing than either §43.7 or §43.10 — and its own content
+then differs from *its own* full repaint by **12 pixels**: one column, one pixel
+wide, twelve rows tall, at a tableau column that the move in question neither
+redraws nor keeps. Two independent runs of it are byte-identical to each other
+and both carry it, so it is deterministic rather than a timing or cursor
+artifact; it appears at one identifiable step — a six-card drag whose outline
+crosses four columns — and survives every later move, which is what a stray
+pixel in a column nothing repaints does.
+
+**It is unexplained and it is not safely a property of the knob**, because
+`keep = 0` is a state the shipped build reaches too: on the first draw after
+`sol_pinv`, and after any re-fan. What is established is the paragraph above —
+the shipped build's own output is exact against a full repaint on both 1bpp
+adapters — and not a clean cross-build diff, which this did not produce (15 of
+19 captures identical, 4 differing by those same 12 pixels, with the reference
+the build that disagrees with ground truth). Worth an investigation of its own;
+the trace to start from is which drawing call touches that column during that
+step, since neither pile being redrawn owns it.
+
+Three things the harness had to be taught first, and each of them made a broken
+build look like a passing one:
+
+- **The listing has to be of the build that is there.** A package's bss names
+  are `equ`s over `os88_image_end` with no map, so the offsets are walked out of
+  the source and checked against an instruction in the listing — and the listing
+  was being assembled without the knob's `-D`, so it described the other build.
+  It was caught only because the two images happen to differ in size.
+- **The crop has to be in guest coordinates.** `solcheck` cropped the card's
+  rasterised frame, which on Hercules is 720x350 for a 720x348 screen at
+  dx = -16 (`sucheck.fb` has said so for as long as it has existed). Both builds
+  are offset the same way so a cross-build diff survived it; a comparison across
+  a window MOVE does not.
+- **Blanking the mouse cell is not enough when the two captures are different
+  steps.** The pointer is somewhere else at each, so one image gets a black box
+  where the other has cards — 321 pixels of difference, in BOTH builds, which is
+  what said it was the harness. The arrow is parked clear of the window now and
+  the blanking is belt and braces.

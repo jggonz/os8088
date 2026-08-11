@@ -24674,6 +24674,110 @@ plaque and the About panel, and it lives in bss, which the loader zeroes — so
 the one-pile-at-a-time callers a move goes through inherit the safe value
 without anybody arranging it.
 
+### 43.10 The shadow — a drop redraws the cards that MOVED
+
+§43.7 keeps a column's buried **backs** and redraws every face-up card below
+the change. That is most of a drop, and nearly all of it is redrawing pixels
+that are already right: cards leave and arrive at the **top** of a column, so
+the ones underneath do not move at all.
+
+Measured on a cycle-accurate 5150 with a Hercules card, one card dragged off a
+six-card run onto another column — the commonest move in the game:
+
+| | before | after |
+|---|---|---|
+| card faces drawn | 11 | 3 |
+| drawing calls | 481 | 210 |
+| guest time | 332.5 ms | 171.2 ms |
+
+**Eight of those eleven faces were pixel-identical to what was already on the
+screen** — 2.3x the drawing calls and 1.94x the time, for nothing. This is
+§43.9's finding on the incremental path: the cost is ~91% the per-call floor,
+so the only lever is the call count and the way to pull it is to draw fewer
+cards.
+
+The two ratios differ because **the faces that survive are the expensive
+ones**: 41 calls per face on average before, 66 after. A buried card is a
+sliver that skips its centre pip and its bottom edge (§43.3), and slivers are
+exactly what a keep keeps — what is left to draw is the full-height card at the
+bottom of the column and the one that just arrived.
+
+So `sol_shw` is a **shadow of what is on the glass**, one 29-byte row per
+tableau column — the count drawn, the two fan steps they were drawn at, and
+the card bytes themselves — and `sol_keep` is the diff against it: the leading
+run whose bytes still match, at a fan that has not moved. `sol_plan` turns that
+into the row the erase **starts** at, which is the load-bearing half; an erase
+reaching any higher would wipe the very cards being kept. It is §12.9's
+`menu_bcell` idiom — the record of what was drawn *is* the thing the next draw
+is composed against, so there is no second structure to fall out of step.
+
+**Three facts make a byte compare sufficient**, and all three come from a card
+being drawn out of (byte, x, y, visible height) and nothing else:
+
+- **x is the column's**, which a keep does not move.
+- **y is `sol_yoff(i)`** — a pure function of the index, `[sol_cfd]` and the two
+  fan steps. The fan is compared outright, and `[sol_cfd]` *cannot* differ over
+  a matched prefix, because it is the count of leading face-down cards and
+  those bytes are equal: either both counts run past the prefix, in which case
+  every kept offset is `index × cfa` on both sides, or the first face-up card
+  falls inside it and the two agree exactly.
+- **The visible height** is what the next card leaves showing — except for the
+  **last** card, which is drawn whole and carries a bottom edge no buried card
+  has (§43.3). So the last card of *either* drawing is never kept: the bound is
+  `min(now, then) − 1`. That one expression covers both directions — the card
+  that was on top and now has one fanned over it, and the card uncovered by
+  cards leaving — and it is also what makes `sol_move` turning a card face up
+  safe, since that changes its byte.
+
+**A re-fan is caught by comparing the fan, and it is not rare.** `sol_colfan`
+tightens a column that would run past the content bottom, so on CGA's 136-row
+desktop a column growing from 7 cards to 10 takes the face-up step from 12px to
+10px and *every* card in it really does move. The shadow keeps nothing there
+and is right not to: measured, that same drop is 309 calls before and after.
+The win is on the adapters with room — Hercules and VGA — which is where the
+columns are long enough for the waste to be worth anything.
+
+**Face-down cards stop needing an argument of their own.** §43.7's reasoning
+was that every back is the same image, so the question is never *which* card
+but only *where and how big*; that is now just what a byte compare says, and
+`sol_slv`, `sol_pfa` and `sol_pslv` are gone with it. The shadow costs 203
+bytes in the package's own region — a heap claim (§20.1), so a machine not
+playing Solitaire pays nothing — against the 28 the sliver cache cost.
+
+**`sol_prec` records at `sol_drawpile`'s single exit**, not in the tableau
+branch, so a pile kind added later cannot forget it; it refuses a non-tableau
+pile itself rather than at the call site, because the stock, the waste and the
+foundations leave through that exit too and `sol_shw` has seven rows. An
+emptied column therefore records *zero drawn* instead of keeping a stale row.
+
+The invalidation points are §43.7's, unchanged: `sol_pinv` at a full repaint,
+at the win plaque, and at a change of content origin.
+
+**It is checked by comparison, not by argument** (`tools/solcheck.py`), and the
+binding comparison is **against a full repaint of the same position rather than
+against another build**: after a session of fourteen real drags — a six-card
+run, a three-card run, waste plays, a foundation play that empties a column
+outright, and Auto Finish — the incrementally drawn content must equal the same
+board forced through `W_PAINT`. **0 differing pixels on Hercules and 0 on CGA.**
+That is the strong form, because it needs no second build to be trusted: a
+wrong keep is a card left standing where a card no longer is, which is a real
+picture rather than a broken-looking one, so nothing about the screen would say
+so.
+
+`make SOLNOKEEP=1` is the second build, and what it found is **not** this
+feature — it is worth reading before trusting it as a reference. It stubs
+`sol_keep` to 0, so every column is erased and redrawn whole, and its own
+content then differs from its own full repaint by **12 pixels**: one column,
+one pixel wide, twelve rows tall, at a tableau column that the move in question
+neither redraws nor keeps. It is deterministic — two independent runs are
+byte-identical to each other and both carry it — it appears at one identifiable
+step (a six-card drag across four columns) and it survives every later move,
+which is what a stray pixel in a column nothing repaints does. **It is
+unexplained, and `keep = 0` is a state the shipped build reaches too** — on the
+first draw after `sol_pinv`, and after any re-fan — so it is not safe to file as
+a property of the knob. What is established is only that the shipped build's
+own output is exact against a full repaint on both 1bpp adapters.
+
 ## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
 
 A brick-breaker over the published package ABI. Prefix `ark_`, embedded icon,

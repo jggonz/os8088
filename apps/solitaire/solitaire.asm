@@ -519,7 +519,6 @@ sol_drawpile:
     mov al, [sol_dpi]
     cmp al, [sol_dpn]
     jb .tab
-    call sol_prec                   ; remember what the slivers look like now
     jmp .out
 
     ; --- the stock: one card back, or the turn-over-again ring --------------
@@ -593,6 +592,10 @@ sol_drawpile:
 .slot:
     call sol_slot
 .out:
+    call sol_prec                   ; ...and record what is on the glass now.
+                                    ; ONE site, at the single exit, so a pile
+                                    ; kind added later cannot forget it; it is
+                                    ; sol_prec that refuses a non-tableau pile
     pop di
     pop si
     pop dx
@@ -602,62 +605,82 @@ sol_drawpile:
     ret
 
 ; =============================================================================
-; Keeping the buried backs (SPEC.md 43.7)
+; The shadow - what is on the glass, per tableau column (SPEC.md 43.10)
 ;
-; A tableau column redrew every card whenever any of them changed, and the
-; cards at the bottom of it are face-DOWN - the one drawing in this program
-; that is genuinely expensive, because the back is a lattice and gfx_blit4
-; emits one gfx_fill per run of equal pixels (41 runs for a fanned sliver, 634
-; for a whole back). A column with five buried cards therefore paid ~205 runs
-; to redraw pixels that had not changed, on every single move that touched it.
-; A run is a drawing call and a drawing call on this machine has a ~756us
-; floor (PERFORMANCE.md Part 2), so those 205 runs are about a TENTH OF A
-; SECOND of visible redraw per move - not a rounding error, which is the whole
-; reason this section exists.
+; A tableau column redrew every card whenever any of them changed, and a card
+; is expensive: measured on a cycle-accurate 5150, a face averages ~41 drawing
+; calls and a drawing call has a ~756us floor (PERFORMANCE.md Part 2). A back
+; is worse - a lattice does not coalesce, and gfx_blit4 emits one gfx_fill per
+; run of equal pixels (41 runs for a fanned sliver, 634 for a whole back).
 ;
-; What makes skipping them safe is that **face-down cards are
-; indistinguishable**: every back is the same image, so the question is never
-; "is it still the same card" but only "is it still drawn in the same place at
-; the same size". Two numbers settle that, cached per column by sol_prec:
+; Nearly none of that redrawing is wanted. Cards leave and arrive at the TOP
+; of a column, so the ones below the change do not move at all - same card,
+; same offset, same visible height, already on the screen and already right.
+; Measured on Hercules: one card dragged off a six-card run onto another
+; column drew ELEVEN faces for 481 drawing calls and 332.5ms, eight of the
+; eleven pixel-identical to what was already there. It is 3 faces, 210 calls
+; and 171.2ms now.
 ;
-;   [sol_pfa+p]  the face-down fan step it was drawn at, and
-;   [sol_pslv+p] how many leading cards were drawn as slivers of exactly that
-;                height.
+; So this keeps a SHADOW of what was drawn - one row per column, sol_shw:
 ;
-; A leading card's offset is index * step, so an unchanged step means an
-; unchanged position. sol_keep takes the smaller of what is wanted now and
-; what was drawn then, and sol_plan turns that into the row the erase starts
-; at - because an erase that reached higher would wipe the very slivers being
-; kept.
+;   +SHW_N     how many cards were drawn
+;   +SHW_CFA   the face-down fan they were drawn at
+;   +SHW_CFU   ...and the face-up one
+;   +SHW_CARD  the card bytes themselves, as drawn
 ;
-; The cache is invalidated - sol_pinv - wherever something else may have
-; painted over a column: a full repaint (which fills the content with felt
-; first), the win plaque (which lands on the felt between the piles), and a
-; change of content origin, which is what a window move looks like from here.
+; and sol_keep is the diff: the leading run whose card bytes still match, at a
+; fan that has not moved. sol_plan turns that count into the row the erase
+; STARTS at, which is the load-bearing half - an erase reaching any higher
+; would wipe the very cards being kept.
+;
+; Three things make the comparison sufficient, and all three are about a card
+; being drawn from (byte, x, y, visible height) and nothing else:
+;
+;  - **x is the column's**, which a keep does not move.
+;  - **y is sol_yoff(i)**, a pure function of the index, [sol_cfd] and the two
+;    fan steps. The fan is compared outright; [sol_cfd] cannot differ over a
+;    matched prefix, because it IS the count of leading face-down cards and
+;    those bytes are equal. (Either both counts run past the prefix - and then
+;    every kept offset is index*cfa on both sides - or the first face-up card
+;    is inside it and the two agree exactly.)
+;  - **the visible height** is what the NEXT card leaves showing, except for
+;    the last card, which is drawn whole and carries a bottom edge no buried
+;    card has. So the last card of EITHER drawing is never kept: the bound is
+;    min(now, then) - 1, which is also what catches the card that was on top
+;    and now has one fanned over it, and the one uncovered by a card leaving.
+;
+; A face-down card needs no special argument any more - every back is the same
+; image, so identical bytes are identical pixels, and SPEC.md 43.7's
+; "indistinguishable" reasoning falls out of the byte compare instead of
+; standing beside it. The shadow costs 29 bytes a column in the package's own
+; region (SPEC.md 20.1 - a package's memory is a heap claim), against the two
+; words a column the sliver cache cost.
+;
+; It is invalidated - sol_pinv - wherever something else may have painted over
+; a column: a full repaint (which fills the content with felt first), the win
+; plaque (which lands on the felt between the piles), and a change of content
+; origin, which is what a window move looks like from here.
 ; =============================================================================
 
+SHW_N       equ 0                   ; cards drawn; 0 = nothing here to trust
+SHW_CFA     equ 1                   ; the face-down fan they were drawn at
+SHW_CFU     equ 3                   ; ...and the face-up one
+SHW_CARD    equ 5                   ; the card bytes, as drawn
+SOL_SHW     equ SHW_CARD + PILE_CAP ; ...one row per tableau column
+
 ; -----------------------------------------------------------------------------
-; sol_slv - how many leading cards of this column are drawn as face-down
-;           slivers of exactly [sol_cfa] height
-; in:  [sol_dpn], [sol_cfd]; out: AX; preserves all other registers
-;
-; All of the face-down run when something covers it. When the column is ALL
-; face-down - which only happens mid-deal - the last one is drawn at its full
-; height instead, so it is not a sliver and does not count.
+; sol_shwbase - a column's shadow row
+; in:  AL = tableau pile; out: SI = the row; preserves all registers but SI
 ; -----------------------------------------------------------------------------
-sol_slv:
-    push cx
-    mov cl, [sol_dpn]
-    mov ch, 0
-    mov ax, [sol_cfd]
-    cmp cx, ax
-    ja .out
-    mov ax, cx
-    or ax, ax
-    jz .out
-    dec ax
-.out:
-    pop cx
+sol_shwbase:
+    push ax
+    push dx
+    mov dl, SOL_SHW
+    mul dl                          ; AX = pile * SOL_SHW (6*29 = 174, one byte)
+    mov si, ax
+    add si, sol_shw
+    pop dx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -666,58 +689,112 @@ sol_slv:
 ; out: AX; preserves all other registers
 ; -----------------------------------------------------------------------------
 sol_keep:
+%ifdef SOLNOKEEP
+    xor ax, ax                      ; `make SOLNOKEEP=1`: keep nothing, so every
+    ret                             ; column is erased and redrawn whole. The
+                                    ; reference build the shadow is diffed
+                                    ; against - see the Makefile
+%endif
     push bx
+    push cx
+    push dx
     push si
+    xor cx, cx                      ; CH = kept so far, and the answer
     mov al, [sol_dpp]
+    call sol_shwbase                ; SI = this column's shadow
+    mov dl, [si + SHW_N]
+    or dl, dl
+    jz .stop                        ; nothing was drawn from this shadow
+    mov ax, [sol_cfa]
+    cmp ax, [si + SHW_CFA]
+    jne .stop                       ; a re-fan moved every card in the column
+    mov ax, [sol_cfu]
+    cmp ax, [si + SHW_CFU]
+    jne .stop
+    mov cl, [sol_dpn]               ; the bound: the LAST card of either
+    cmp cl, dl                      ; drawing is drawn whole and is never kept
+    jbe .bound
+    mov cl, dl
+.bound:
+    or cl, cl
+    jz .stop
+    dec cl
+    jz .stop
+    mov al, [sol_dpp]
+    call sol_pilebase               ; BX = the live pile
+    add si, SHW_CARD
+.walk:
+    mov al, [bx]
+    cmp al, [si]
+    jne .stop                       ; the first card that differs ends the run
+    inc bx
+    inc si
+    inc ch
+    dec cl
+    jnz .walk
+.stop:
+    mov al, ch                      ; banked before CX is popped
     mov ah, 0
-    mov si, ax
-    add si, si
-    call sol_slv                    ; AX = what this draw wants to skip
-    mov bx, [sol_cfa]
-    cmp bx, [sol_pfa+si]            ; ...drawn at the same step as last time?
-    jne .none
-    cmp ax, [sol_pslv+si]           ; ...and no more than were drawn then?
-    jbe .out
-    mov ax, [sol_pslv+si]
-    jmp .out
-.none:
-    xor ax, ax
-.out:
     pop si
+    pop dx
+    pop cx
     pop bx
     ret
 
 ; -----------------------------------------------------------------------------
-; sol_prec - record what this column's slivers now look like
+; sol_prec - record what this column now looks like on the screen
 ; in:  [sol_dpp], [sol_dpn], sol_colfan already run; preserves all registers
+;
+; Called from sol_drawpile's single exit, and refuses anything that is not a
+; tableau column there rather than at the call site: the stock, the waste and
+; the foundations all leave through it too, and sol_shw has seven rows.
 ; -----------------------------------------------------------------------------
 sol_prec:
     push ax
+    push bx
+    push cx
     push si
     mov al, [sol_dpp]
-    mov ah, 0
-    mov si, ax
-    add si, si
-    mov ax, [sol_cfa]
-    mov [sol_pfa+si], ax
-    call sol_slv
-    mov [sol_pslv+si], ax
+    cmp al, P_TABN
+    jae .out
+    call sol_shwbase                ; SI = this column's shadow
+    mov al, [sol_dpn]
+    mov [si + SHW_N], al
+    mov ax, [sol_cfa]               ; sol_colfan has run for any column with a
+    mov [si + SHW_CFA], ax          ; card in it; an empty one records 0 cards
+    mov ax, [sol_cfu]               ; and sol_keep never reads the rest
+    mov [si + SHW_CFU], ax
+    mov cl, [sol_dpn]
+    mov ch, 0
+    jcxz .out
+    mov al, [sol_dpp]
+    call sol_pilebase               ; BX = the pile
+    add si, SHW_CARD
+.copy:
+    mov al, [bx]
+    mov [si], al
+    inc bx
+    inc si
+    loop .copy
+.out:
     pop si
+    pop cx
+    pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; sol_pinv - forget every column's cache; the next draw of each redraws whole
+; sol_pinv - forget every column's shadow; the next draw of each redraws whole
 ; preserves all registers
 ; -----------------------------------------------------------------------------
 sol_pinv:
     push cx
     push si
-    xor si, si
+    mov si, sol_shw
     mov cx, P_TABN
 .each:
-    mov word [sol_pslv+si], 0       ; 0 kept: sol_keep's min can only be 0
-    add si, 2
+    mov byte [si + SHW_N], 0        ; 0 drawn: sol_keep's bound can only be 0
+    add si, SOL_SHW
     loop .each
     pop si
     pop cx
@@ -3441,10 +3518,9 @@ sol_ic_ring:
     SWORD sol_cfu                   ; ...and the face-up one
     SBYTE sol_cfp                   ; the column being measured
     SWORD sol_keepn                 ; leading cards this draw may skip
-    SWORD sol_lastox                ; the origin the cache below belongs to
+    SWORD sol_lastox                ; the origin the shadow below belongs to
     SWORD sol_lastoy
-    SBUF  sol_pfa, P_TABN*2         ; per column: the fan its slivers were
-    SBUF  sol_pslv, P_TABN*2        ; drawn at, and how many of them
+    SBUF  sol_shw, P_TABN*SOL_SHW   ; what is on the glass, per column (43.10)
 
 ; --- sol_move / sol_domove / sol_tofnd ---------------------------------------
     SBYTE sol_mvs
