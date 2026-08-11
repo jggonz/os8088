@@ -1653,3 +1653,94 @@ size.** And "exactly three rows" being almost exactly one DMA block at the XT
 rate (2.99) was a **coincidence**, and a persuasive one — it survived a
 capture, a plausible mechanism and a designed experiment before the experiment
 killed it.
+
+## 17. Four reports off the first `combo.img` field run (OPEN, three queued, one reproduced)
+
+The 5150 run that confirmed SPEC.md §18.97's probe on real hardware — `ST3
+0021` twice, `probe stop 03`, `verdict 0`, and drive B gone — also brought
+back four things about the formatter. They are queued rather than fixed, and
+one of them is already root-caused.
+
+**The probe's other half is NOT one of them.** The report reads
+`drives int 11h claims 2`, and §18.98's loop over units 2 and 3 starts at
+`cl = 2` against that count, so it correctly never runs: SW1 says two drives,
+which is units 0 and 1, and there is no third to ask about. The removal of
+unit 1 then sets the count to 1. **To exercise units 2 and 3 the switches have
+to claim three or four drives** — which is also the only way the external pair
+can appear at all (§18.98). Nothing is wrong here; it is worth writing down
+because "the probe for drive 2 did not run" and "the probe for drive 2 is
+broken" look identical in the report.
+
+**One gap it does expose**: `fdd_dbg_*` (§57.5) is a single set of bytes and
+§18.98 now probes up to three units, so the block describes the LAST one
+asked. On a machine claiming four drives the operator would see unit 3 and
+have no visibility into units 1 and 2. It wants either a per-unit block or a
+unit field beside the verdict.
+
+### 17.1 The format prompt does not clear on Escape (REPRODUCED, cause found)
+
+Two of the four reports — "the size/format prompt doesn't clear after
+formatting" and "there is some corruption over the size prompt" — are **one
+bug**, and it is a regression from §26.4.
+
+`Format Disk…` armed, then **Escape**: line two is correctly replaced by the
+resting `Size ? Free ?`, and line one — `Format B: as 360K?` — **stays on
+screen**, sitting over the row above the status line. That is what reads as
+corruption; there is nothing corrupt about it, it is a line nobody erased.
+
+The cause is that §22.12's prompt became **two lines** at §26.4 (one line is
+44 characters and `fm_stat_line` truncates at 38, losing `Esc=no`), and the
+cancel path did not follow: `.cancel` calls `fm_edit_end` and falls into
+`.lineonly`, which is CF = 0 — "the status line is all that moved" — so
+`fm_status_only` repaints **one** line. It was right for every other mode,
+because modes 1, 2 and 3 are one-line prompts, and mode 4's two-line replace
+question never reaches `.cancel` at all (it is handled at `.replace`).
+
+**Reproduced on Hercules and on CGA**, drive B, with the shipped kernel: arm
+the prompt and press Escape. It does NOT show on the Enter path, because the
+format's own `fmv_load` repaints the whole window — which is why the harness
+missed it: every test here pressed Enter.
+
+The fix is to make mode 5's cancel take the full-repaint exit (`.out`, CF = 1)
+instead of `.lineonly`, which is a compare and a branch.
+
+### 17.2 Format Disk stays greyed on a disk it just made (QUEUED — a design question)
+
+Reported as "after formatting a disk, Format Disk becomes greyed out for the
+newly formatted disk forever". That is §22.12's predicate working as written:
+the item is live only while `FS_MOK == 0`, and a disk that formatted now
+mounts. The comment there says why — *"it MOUNTED: there is nothing here to
+format, and 'erase this perfectly good disk' is a different feature with a
+different question"*.
+
+So it is a design decision meeting a user who wants to reformat, and the
+question is whether that second feature should exist. **§18.96.2 depends on
+the greying** — it is the reason a failed 720K pick re-formats as 360K instead
+of stopping — so anything done here has to leave that argument standing.
+
+### 17.3 720K on the field machine came back 360K (NOT A BUG — the reach test)
+
+Reported as "switching to 720k formatted the disk in drive A; result was a
+360k formatted disk, claiming 354k free". That is §18.96.2 working: the Tandon
+TM100-2 is a 40-cylinder drive, the marker written to the volume's last sector
+did not come back, and the fallback re-made the disk as 360KB. **354K free on
+a 360KB volume is correct** — 354 clusters of 1KB after the boot sector, two
+FATs and the root directory.
+
+What the operator should have seen is the toast saying so —
+`Drive cannot reach 720K - made 360K` — and §17.1 is a good reason they may
+not have: with a stale prompt line on screen the window was not saying what it
+looked like it was saying.
+
+### 17.4 Do not offer the size toggle on units 0 and 1 (QUEUED — a change)
+
+Asked for directly: the internal drives are the machine's own and their
+geometry is not in question, so the `Spc=size` key should only appear for
+units **2 and 3** — the external pair, which is exactly where an 80-cylinder
+3.5" drive can turn up and where the BIOS can say nothing about it (§18.98).
+
+It is a narrowing of §18.96.2 rather than a removal: the toggle exists because
+`AH=08h` is refused and the drive cannot be asked, and that ignorance is only
+*actionable* on a drive the operator may have changed. The row is already in
+`dsk_vtab` with its `DV_UNIT`, so the test is available where the prompt is
+composed.
