@@ -1336,13 +1336,26 @@ Task Manager.
 > `cw_*` shims, so cold code is already position-independent at paragraph
 > granularity and could execute from a heap claim unchanged. Making the *cold*
 > thunk load-and-dispatch spends **no `.text`**, which is the guard with 438
-> bytes left. Measured: the file dialog, Cut/Copy/Paste and the Control Panel
-> together are ~8.7 KB of footprint on **both** builds, and they are never in
-> use at the same time. Read ONDEMAND-PLAN §4.1 and ONDEMAND-PLAN §5 before
-> acting on this
-> note: the Control Panel is where `drv_notice` sends a machine whose driver
-> would not load, and the floppy formatter — the feature that prompted the
-> idea — is the worst candidate in the kernel.
+> bytes left.
+>
+> **What may go is decided by the user and not by the seam**, which is that
+> document's ONDEMAND-PLAN §1 and the thing to read first: a feature qualifies
+> only if the system disk is already required to use it, or can be required
+> without interrupting what the user was doing — on a one-floppy machine every
+> load is a disk swap. Two candidates survive it. The **Control Panel**, worth
+> **3,072 bytes on both builds**, whose precondition is one it already has
+> (`cp_flush_close` writes `SYSTEM.CFG` to that disk). And **Disk Format**,
+> which is not a saving at all: it is compiled out of `kern_small` by
+> `%ifndef KERN_SMALL`, so on demand **gives that build a feature it does not
+> have**, funded by the panel's 3,072. MS-DOS drew the same line — `COPY` in
+> `COMMAND.COM`, `FORMAT` external — and the file dialog and Cut/Copy/Paste
+> fail it for `COPY`'s reason.
+>
+> The passage above says the Control Panel is *"the window you want when a
+> driver will not attach"*, and it is right that this is the objection to
+> weigh; ONDEMAND-PLAN §2.2 weighs it and finds it survivable, because
+> `drv_notice` runs before `ui_task` starts and so before any disk can have
+> been swapped.
 
 A cold segment would have taken about 4,900 bytes off `KERN_CODE_MAX` and
 **nothing** off `KERN_BUDGET`. Making it a package on the system disk took

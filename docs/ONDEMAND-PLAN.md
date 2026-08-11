@@ -2,8 +2,8 @@
 
 **Research document, not a contract.** SPEC.md is the binding contract for
 what the kernel *is*; this is the study of a mechanism nobody has built yet.
-Every figure below was measured on this tree at `9ff3bd3` with the method in
-§3.1, and the ones that are derived rather than measured say so.
+Every figure was measured on this tree at `9ff3bd3` by the method in §6.1, and
+the ones that are derived rather than measured say so.
 
 The ask, in the requester's words:
 
@@ -14,680 +14,677 @@ The ask, in the requester's words:
 > kernel's memory usage. Find and recommend any other potential usecases in
 > the kernel.
 
+> **This document was rewritten once, and the first edition's mistake is the
+> most useful thing in it.** It ranked candidates by how cleanly they could be
+> *severed* — symbol counts, thunk counts, dangling references — and produced
+> a recommendation (the Standard File dialog first, Cut/Copy/Paste second)
+> that is wrong on the only axis that decides: **what the user is doing when
+> the code is wanted, and how often.** §1 is that axis, stated as a test, and
+> it disqualifies both. The seam analysis was not wasted — §6 keeps it, and it
+> is what says the two surviving candidates are *feasible* — but it is the
+> second question and it was asked first.
+
 ---
 
 ## 0. The verdict, up front
 
-**The premise is right, the mechanism is 95% built already, and it is not the
-driver architecture — it is `.cold`.**
+**Two candidates, on two different payoffs, and neither is the one the seams
+pointed at.**
 
-Four findings, in the order they change what you would do:
+| | what it costs today | what on demand buys |
+|---|---|---|
+| **The Control Panel** (§31) | 3,204 B of `.cold`, resident on both builds forever | **~3 KB off both builds** — and its precondition is one the feature *already has* |
+| **Disk Format** (§18.96/§22.12) | 1,357 B of `.cold` + 342 B of `.text` on `kern_big`, and it is **compiled out of `kern_small` entirely** | **`kern_small` gains a feature it does not have**, and `kern_big` gives back 2 KB |
 
-1. **`.cold` is an on-demand image in everything but where it lives.** It is
-   assembled at `vstart=0`, it contains **zero data directives** (proved in
-   §3.2, not asserted), it runs with `DS = KERNEL_SEG`, and every call it
-   makes out of itself already goes through one of **107 `cw_*` far shims**.
-   Nothing in those 23,200 bytes cares that it is at `COLD_SEG`. Point the
-   thunk at a heap claim instead and the same bytes run unchanged.
+Four findings:
 
-2. **The conversion costs `.text` nothing, which is the guard that cannot be
-   raised.** The `.text` thunk (`cp_paint: call COLD_SEG:cpf_cp_paint`) does
-   not change at all — the *cold* thunk becomes the load-and-dispatch stub, and
-   cold code is always resident. `kern_big` has **438 bytes** left against
-   `KERN_CODE_MAX` and no conversation can raise it; this mechanism does not
-   spend one of them.
+1. **The test is about the user, not the code.** A feature may be loaded on
+   demand only if **the system disk is already required to do it, or can be
+   required without interrupting what the user was doing.** §1. On a
+   one-floppy machine — the calibration machine — every load is a disk swap,
+   and there are operations where that is simply not payable.
 
-3. **The three best candidates are the Standard File dialog, Cut/Copy/Paste and
-   the Control Panel — and they are never in use at the same time.** Measured,
-   severing all three takes `kern_big` from **102,912 → 92,160** and
-   `kern_small` from **97,280 → 86,528**; the realistic code-only conversion is
-   **~8.7 KB** of that. `kern_small` today stands at **exactly zero bytes of
-   spare against its guard**, so this is not an optimisation, it is the next
-   place the small build's headroom comes from. The Control Panel is the
-   biggest *mechanical* fit of the three and goes **last**, for a reason that is
-   not mechanical at all (§4.1): it is the window `drv_notice` opens when a
-   driver will not load, and two of the seven ways a driver fails are ways this
-   would fail too.
+2. **MS-DOS drew this exact line and got it right.** `COMMAND.COM` is resident
+   and implements `COPY`; `FORMAT` is an external utility on the system disk,
+   never in RAM when it is not needed. Frequency and preparedness decide, and
+   the answer has been known since 1981. §1.1.
 
-4. **Disk Format — the motivating example — is the *worst* candidate in the
-   kernel, for two independent reasons**, and §5 is the working. It is worth
-   reading before any code is written, because the feature that prompted the
-   idea is the one that should go last, or not at all.
+3. **The mechanism is not the driver architecture — it is `.cold`.** Cold code
+   is assembled at `vstart=0`, contains **zero data directives** (checked, not
+   assumed), runs with `DS = KERNEL_SEG` and calls out only through the 107
+   `cw_*` far shims. It is already position-independent at paragraph
+   granularity and would run from a heap claim unchanged. Making the *cold*
+   thunk load-and-dispatch spends **no `.text`** — the guard with 438 bytes
+   left and no way to raise it. §5.
 
-**What this is not.** It is not a second driver class, it is not an API slot,
-and it is not a package. §7.1 says why each of those three is the wrong shape,
-and two of them were already rejected once for the same reasons in
-docs/HDD-SPLIT-PLAN.md §5.0.
+4. **Format must be a kernel module and cannot be a package.** Measured, its
+   entire outbound surface is **four calls, three of them existing `cw_*`
+   shims**, and two of those are `disk_read`/`disk_write` — kernel-internal
+   primitives with **no API slot, deliberately**. An application cannot write
+   raw sectors to an unmounted volume and should not be able to. §5.4.
 
 ---
 
-## 1. Where the kernel already stands
+## 1. The test
 
-`kernsize.py`, this tree's own instrument, on the shipped build:
+> **A feature may be loaded on demand only if the system disk is already
+> required to do it, or can be required without interrupting what the user was
+> doing.**
+
+Everything else — seam width, `.bss`, thunk counts — is a feasibility check
+that comes *after* this one and can only ever say no.
+
+The reason it binds so hard is the machine this project is calibrated against:
+**one 360 KB floppy drive** (docs/FIELD-MACHINES.md). There, "load a module
+from the system disk" means *the user physically swaps a disk*, and the
+question is never "is 200 ms acceptable" — it is "does this operation already
+have a trip to the disk box in it".
+
+Run against the candidates:
+
+| feature | system disk already required? | verdict |
+|---|---|---|
+| **Control Panel** | **Yes** — it writes `SYSTEM.CFG` there when it closes (§51.5.1) | **passes** |
+| **Disk Format** | No, but it can be — the operation is *prepared*, and the user is already handling disks | **passes** (§3) |
+| Standard File dialog | **No, and the requirement is perverse** | fails |
+| Cut/Copy/Paste | **No** | fails |
+
+### 1.1 The precedent: `COMMAND.COM` implements `COPY`, `FORMAT` is external
+
+This is the whole taxonomy, and it is worth stating because it is not a
+judgement call — it is what every 8-bit and 16-bit system with removable media
+converged on:
+
+- **`COPY` is in the resident interpreter.** It is one of the two or three
+  things a user does most, it acts on whatever disk is in the drive, and
+  requiring the system disk to copy a file would make the system unusable.
+- **`FORMAT` is a file on the system disk.** It is rare, it is deliberate, it
+  is preceded by going and *getting* a blank disk, and it prompts —
+  `Insert new diskette for drive A: and press ENTER` — which nobody ever
+  considered a defect because the swap was already part of the job.
+
+os8088 is a Macintosh-shaped system rather than a DOS-shaped one, but the
+constraint that produced that split is the *hardware*, and the hardware is the
+same. Where this tree has already made the same call it made it the same way:
+the Task Manager is a package on the system disk (§28), the hard disk's
+partition/format/install tool is loaded on demand by its own driver (§52.11),
+and both are things you go and *do* rather than things you do while doing
+something else.
+
+### 1.2 Why the file dialog fails
+
+The first edition made it the top recommendation on the strength of a
+**7-thunk seam**, the narrowest in the kernel. The use case kills it outright:
+
+> Note Pad, on a one-floppy machine, saving a file to the apps disk.
+
+The apps disk is in the drive **because that is where the document is going**.
+The Save dialog is *how the user reaches that disk* — and on demand, opening
+it would require first swapping to the system disk, waiting for a load, and
+swapping back. The chooser cannot be the thing that costs you the disk you are
+choosing on.
+
+It is also not rare. Every save, every open, in every application.
+
+### 1.3 Why Cut/Copy/Paste fails
+
+Worse, on both counts. The user has clicked a file **on the disk in the
+drive** and wants to act on it; the operation is meaningless without that disk
+present, so the load would have to happen, be swapped away from, and swapped
+back to — around a selection made on a listing that the swap invalidates
+(§22.8's whole subject). And it is one of the most common actions in the
+system, not a rare one.
+
+`COPY` lives in `COMMAND.COM` for exactly this reason.
+
+---
+
+## 2. The Control Panel
+
+**3,204 bytes of `.cold` on both builds, and the precondition is already
+paid.**
+
+The argument is not "it is rarely used", which is true but weak. It is:
+
+> **The Control Panel is a configuration applet that persists its settings to
+> the system disk.** `cp_flush_close` writes `SYSTEM.CFG` when the panel is
+> CLOSED (§31.8/§51.5.1) — one floppy write per session, to `KERNEL.SYS`'s own
+> volume, which it locates and refuses without. **Any panel session that
+> changes anything already requires the system disk.** On demand moves that
+> requirement from close to open, and asks for nothing the feature did not
+> already ask for.
+
+What is genuinely new is that a session which changes *nothing* — opening the
+panel to look — would newly need the disk. That is the honest cost and it is
+small.
+
+### 2.1 The seam is the cleanest in the kernel
+
+15 symbols, of which **6 are already the `cpf_*` cold thunks**. The other 9
+are four words of state (`cp_sel`, `cp_dirty`, `cp_wdirty`, `cp_nst`), three
+data pointers (`cp_tpl`, `cp_sname`, `cp_s_dsdrv`) and two constants
+(`CP_ITIME`, `CP_IDRV`) — every one of which stays resident in `.text`
+anyway, because §5 moves code and never data. It has **zero `.bss`**, every
+entry point is on the UI task with the gfx lock held, and nothing calls it in
+a loop.
+
+### 2.2 The `drv_notice` objection, and why it is weaker than the first
+### edition claimed
+
+docs/KERNEL-MEMORY.md says the panel is *"the window you want when a driver
+will not attach, and where `drv_notice` sends you"*, and the first edition
+made that the reason to take the panel **last** — two of the seven `DRVE_*`
+codes being conditions under which the panel could not load either.
+
+**Checked against `kmain`, that is mostly wrong**:
+
+```
+2175:    call drv_boot               ; ...and load what SYSTEM.CFG asks for
+2188:    call wm_paint_all
+2208:    call drv_notice             ; ...and only NOW say what did not load
+2211:    jmp ui_task                 ; task 0 becomes the UI task; never returns
+```
+
+`drv_notice` runs **before `ui_task` starts**, so before a single event has
+been dispatched and before the user has had any opportunity to touch the
+drive. **`DRVE_DISK` is unreachable there** — the machine booted off that disk
+moments earlier and nothing has asked for it to be removed. What survives is
+`DRVE_MEM`, and it survives weakly: a driver may claim up to `DRV_MAX_KB` = 40
+KB where the panel wants ~4, and `drv_load`'s failure path calls
+`drv_release` before it returns, so the memory that could not fund the driver
+is free again and will usually fund the panel.
+
+The residual is a machine so short of heap that neither fits. That deserves
+a toast rather than a restructuring — `drv_errstr` is already the bounded
+table of strings, and §59.6 already put the panel's *own* verdict in the menu
+bar for the same species of reason. **Worth building, not worth blocking on.**
+
+### 2.3 What it does not disturb
+
+`cp_flush_close` runs *from* the module, so the image must still be resident
+when the panel closes — it will be, since the close is a call into it, but it
+makes the pin in §7.1 an open-to-close span for this module rather than a
+per-call one. That is a per-module property and §7.1 says so.
+
+---
+
+## 3. Disk Format — and the first edition's misreading
+
+**The first edition ruled this out. It was wrong, and the error was one of
+reading rather than of measurement.**
+
+It took SPEC.md §22.12's opening — *"A floppy that reads and is not FAT12
+shows `No os8088 disk (A:)` and nothing else… **File ▸ Format Disk…** is the
+way out"* — as a statement of what the feature is FOR, and concluded that the
+disk in the drive at the moment of use is always a foreign one that the module
+therefore cannot be read from.
+
+That paragraph describes **one route in**, not the purpose. The purpose is:
+
+> **complete an action to make a disk empty and usable.**
+
+Overlapping, and different. It is not disk *recovery* — it cannot recover
+anything, it erases. It is **preparation**: the user has a blank or unwanted
+disk and wants a working one. Which means the user is already standing at the
+machine handling disks, and a swap is not an interruption of the task — it *is*
+the task.
+
+### 3.1 Frequency settles it
+
+Formatting a disk is among the **rarest** deliberate actions in the system.
+Copying and pasting is among the most common. The first edition compared them
+on seam width, where they look similar; on frequency they are not remotely
+alike, and frequency is what §1 measures.
+
+### 3.2 The `kern_small` argument runs the other way
+
+The first edition observed that `dskw_fmt_*` and its UI sit inside `%ifndef
+KERN_SMALL`, and concluded that the machine which most needs memory already
+does not pay — so on demand would only save `kern_big` 2 KB.
+
+**That reads a missing feature as a saving.** What that guard actually means
+is:
+
+> **A 128 KB machine cannot format a floppy at all.**
+
+It has no Format item on its File menu. On demand does not save that machine
+2 KB — it **gives it the feature**, at a resident cost of the menu item, a
+predicate and a stub. That is a much better payoff than the one the first
+edition costed, and it is the argument for doing it.
+
+### 3.3 The swap prompt is not new UI — it is `FS_EDIT` mode 6
+
+The one real design consequence. On a one-floppy machine the order has to be:
+
+```
+    system disk in A:  ->  File > Format Disk...  ->  module loads
+                       ->  "Insert the disk to format, then Enter"
+                       ->  probe, size, confirm  ->  format
+```
+
+`fm_c_format` currently calls `dskw_fmt_probe` **on the spot**, which after an
+on-demand load would probe the system disk — the wrong disk. So a step has to
+go in front of it.
+
+That step costs almost nothing, because the machinery exists: `FS_EDIT` is the
+Disk window's status-line mode byte, **modes 1–5 are used and 6 is free**, and
+mode 5 is already a *two-line* question (the row above the status line carries
+`Format A: as 720K?` and the status line carries the answers — §22.12). A mode
+6 reading `Insert the disk to format  Enter=ready  Esc=no` is the same
+mechanism with different strings, and `FS_FERR`/`FS_LDST` left two free bytes
+at +14/+15 in the state block if per-window state is wanted.
+
+And it is **conditional**: the prompt is owed only when the volume being
+formatted is the volume the module came from. A two-drive machine, a machine
+with a hard disk (where the system volume is the boot partition — §52.10.3),
+or a second format in the same session with the image still cached (§7.2) all
+skip it entirely.
+
+### 3.4 It has to go in second
+
+`kern_small` stands at **exactly zero bytes of spare** against its guard (§4),
+so restoring Format there costs a 512-byte rung it does not have: the strings
+stay resident in `.text` (§5 moves code, not data — 183 bytes here) plus a
+stub. **The Control Panel's 3,072 bytes fund it**, which is the sequencing
+argument and the reason §8 orders them that way.
+
+---
+
+## 4. Where the kernel stands
 
 ```
 kernsize[big]: sections   text 59,394  bss 5,704  cold 23,200  lowbss 7,762  ovl 3,138
 kernsize[big]: footprint  KERN_SIZE 102,912 of KERN_BUDGET 104,960 -> 2,048 spare (4 steps)
 kernsize[big]: segment    .text+.bss 65,098 of KERN_CODE_MAX 65,536 -> 438 left
 kernsize[big]: ladder     HEAP 0x1980 = 102.0 KB
+
+kern_small:               KERN_SIZE  97,280 of KERN_BUDGET  97,280 -> 0 spare
 ```
 
-and the small build, which is the one this is for:
+**Zero.** The next byte added to `kern_small` anywhere fails to build.
+docs/KERNEL-MEMORY.md's move 21 was the last 1 KB and its terms were move 5's:
+headroom for ordinary growth, not an invitation. There is none left.
 
-```
-kern_small:    KERN_SIZE 97,280 of KERN_BUDGET 97,280 -> 0 spare
-```
+On the 128 KB machine the heap is what is above the kernel: **26.0 KB** under
+`kern_big`, **31.5 KB** under `kern_small`.
 
-**Zero.** Not four steps, not one — the next byte added to `kern_small`
-anywhere fails to build. docs/KERNEL-MEMORY.md's move 21 was the last 1 KB and
-its terms were move 5's: headroom for ordinary growth, not an invitation. There
-is no ordinary growth left in it.
+### 4.1 The four levers, and what each relieves
 
-On the machine the floor is written for — 128 KB — the heap is what is left
-above the kernel: **26.0 KB** under `kern_big` and **31.5 KB** under
-`kern_small`. A package region, a Disk window's 3 KB listing cache, a FAT
-window and a copy buffer all come out of that.
+| lever | `KERN_CODE_MAX` (segment) | `KERN_BUDGET` (footprint) |
+|---|---|---|
+| **`.ovl` boot overlay** (§2.5) | relieved | **relieved** — lands in the FAT window, overwritten by the first mount |
+| **`.cold` cold segment** (§2.6) | relieved | **not relieved** — still resident |
+| **out to a package** (§28's Task Manager) | relieved | relieved |
+| **on-demand module** *(this document)* | not spent | **relieved** |
 
-### 1.1 The four levers that exist, and what each relieves
-
-This is the table the rest of the document turns on, because three of the four
-are routinely confused with each other and only one of them is new.
-
-| lever | `KERN_CODE_MAX` (segment) | `KERN_BUDGET` (footprint) | cost |
-|---|---|---|---|
-| **`.ovl` boot overlay** (§2.5) | relieved | **relieved** — it lands in the FAT window and is overwritten by the first mount | run-once code only |
-| **`.cold` cold segment** (§2.6) | relieved | **not relieved** — still resident | a far call per crossing |
-| **out to a package** (§28's Task Manager) | relieved | relieved | a published ABI, an instance, a `.o88` |
-| **on-demand module** *(this document)* | not spent | **relieved** | a disk read per use, and §8's traps |
-
-The row that matters is the second one. **Moving a module cold to fix a
-footprint overrun is a no-op that looks like a fix** — docs/KERNEL-MEMORY.md
-says so already — and 23,200 bytes of this kernel have taken that route and are
-still resident. This mechanism is what finishes the journey for the part of
-that which is *rarely used*.
-
-### 1.2 The precedent is already in the tree
-
-`HDD.DRV` loads `HDDTOOL.DRV` — an 11 KB second image read into a heap claim
-and far-called — and frees it at detach (SPEC.md §52.11,
-docs/HDD-SPLIT-PLAN.md). It cost **no kernel byte**, it works, and it was
-verified end to end under QEMU.
-
-Three things carry over from it and one does not. What carries: the file is a
-`.DRV` so `os88disk.py`'s `sys_attr` gives it hidden+system+read-only *by
-extension* with no tool-chain change (§19.6), the installer's "every `*.DRV`"
-copy picks it up for free, and `ld_check_hdr` refuses it so it can never be
-double-clicked. What does not carry is the **shape**: `HDDTOOL.DRV` is a
-package — its own `CS` *and* `DS`, its own dispatcher, reaching the kernel
-through `OSAPI_*` far calls and its resident half through a verb table. A
-kernel module wants none of that, and §2 is why.
+The second row is the point. **Moving a module cold to fix a footprint overrun
+is a no-op that looks like a fix** — docs/KERNEL-MEMORY.md says so already —
+and 23,200 bytes of this kernel took that route and are still resident.
 
 ---
 
-## 2. The finding: `.cold` is the mechanism, minus where it lives
-
-`section .cold start=COLD_START vstart=0`.
-
-Three properties follow, and all three were checked rather than assumed:
-
-- **It is pure code.** A scan of every `.cold` block in `kernel/` for `db`,
-  `dw`, `dd`, `resb`, `resw`, `times` and `incbin` returns **0 directives**.
-  Cold modules put their data back in `.text` on purpose — `diskw.inc` even
-  labels the switch *"DATA, so back to the kernel segment"*. So a cold module's
-  data already lives somewhere a moved image can still reach.
-
-- **It runs with `DS = KERNEL_SEG`.** Every kernel variable, every string,
-  every table is reached by the same absolute offset it is reached by from
-  `.text`. **A module that moves does not have to re-express one data access.**
-  This is the whole difference from a package, and it is what makes the
-  conversion a build change rather than a rewrite.
-
-- **It never near-calls out of itself.** 107 `cw_*` shims in `.text` are its
-  entire outbound surface, each an absolute `call KERNEL_SEG:cw_x`, and
-  `tools/os88ovlchk.py` fails the build if a near call ever crosses. The
-  segment those shims name is a constant.
-
-Put together: **`.cold` code is already position-independent at paragraph
-granularity.** Load it at any paragraph, set `CS` to it, leave `DS` alone, and
-it runs. The only thing tying it to `COLD_SEG` is the constant in the 40-odd
-inbound thunks — `call COLD_SEG:cpf_cp_paint` — and that constant is one word.
-
-That is the finding. Everything below is what to do with it.
-
----
-
-## 3. The candidates, measured
-
-### 3.1 Method
-
-A scratch copy of `kernel/` with one `%include` removed, then assembled with
-the real flags (`-f bin -w+error -DKERNSIZE -DKERN_BIG`) and the real include
-paths. **nasm is the oracle**: anything the rest of the kernel still needs
-shows up as an undefined symbol, and the loop stubs each one and re-assembles
-until it converges. This is docs/HDD-SPLIT-PLAN.md §4.1's severance, automated,
-and the stub count *is* the seam width — it is the number of entry points a
-real conversion has to route.
-
-The sizes come from `kernel.asm`'s own `ks:` line under `-DKERNSIZE`, which is
-where `kernsize.py` gets them, so there is no second opinion about how
-`KIMG_PARA` rounds. Stubs cost one byte each and are left in the figures, so
-every saving below is understated by at most a few dozen bytes.
-
-### 3.2 The table
-
-Δ against `kern_big` at 102,912. **`Δksize` is the footprint** — what the
-machine gets back — and it moves in 512-byte rungs, which is why it is not the
-sum of the columns beside it.
-
-| candidate | Δ`.text` | Δ`.cold` | Δ`.bss` | **Δksize** | seam | how often used |
-|---|---:|---:|---:|---:|---:|---|
-| **`fdlg.inc`** — Standard File dialog (§38) | −223 | **−3,907** | −106 | **−4,608** | 18 | seconds at a time, modal |
-| **`ctrl.inc`** — Control Panel (§31) | −672 | **−3,204** | 0 | **−4,096** | 15 | rarely, minutes apart |
-| `assoc.inc` — file associations (§54) | **−2,809** | 0 | −43 | −3,072 | 11 | every document open |
-| **`filecp.inc`** — Cut/Copy/Paste (§22.3–22.5) | 0 | **−2,134** | −135 | **−2,560** | 12 | per file operation |
-| *floppy formatter* (§18.96 + §22.12) | −342 | −1,357 | −1 | −2,048 | (exact) | almost never |
-| `icons.inc` — the icon renderer (§10) | −1,570 | 0 | −34 | −1,536 | 7 | every desktop paint |
-| `xmem.inc` — memory above 1MB (§41) | −1,040 | 0 | −124 | −1,536 | 9 | rarely |
-| `fsx.inc` — fullscreen exclusive (§53) | −916 | 0 | −9 | −1,024 | 4 | per frame, in a game |
-| `loader.inc` — the package loader (§21) | 0 | −776 | −58 | −1,024 | 9 | every launch |
-| `clip.inc` — the clipboard (§55) | −193 | 0 | −6 | −512 | 3 | per copy |
-
-The floppy formatter's row is not a severance — it is the exact delta of its
-existing `%ifndef KERN_SMALL` guards, so it is the one figure here that is a
-fact about the shipped build rather than about a scratch one.
-
-### 3.3 What "severed" over-states, and by how much
-
-**A severance removes the module's data too, and a real conversion does not.**
-Only `.cold` leaves; the `.text` bytes are the module's tables and strings and
-they stay resident, reached through `DS` exactly as now. So read the
-**Δ`.cold`** column, not Δksize, for what actually moves:
-
-| | `.cold` today | after | rung | **footprint saved** |
-|---|---:|---:|---:|---:|
-| Control Panel out | 23,200 | 19,996 | 40 × 512 | **3,072** |
-| File dialog out | 23,200 | 19,293 | 38 × 512 | **4,096** |
-| Cut/Copy/Paste out | 23,200 | 21,066 | 42 × 512 | **2,048** |
-| **all three** | 23,200 | **13,955** | 28 × 512 | **9,216** |
-
-less the dispatcher and the per-entry stubs that go back into `.cold`
-(~150 bytes each, 19 entry points across the three), which rounds the answer to
-**~8,704 bytes — seventeen 512-byte steps.** That figure is *derived* from
-measured section sizes; it is not itself measured, and it will not be until
-something is built.
-
-For the machine at the floor, that is a heap of **31.5 KB → 40.2 KB, +27%**.
-
-### 3.4 The peak is BETTER, which is the opposite of the HDD split
-
-docs/HDD-SPLIT-PLAN.md §10 had to report that the peak got 3 KB *worse*,
-because the tool image duplicated helpers it could no longer near-call. Nothing
-is duplicated here — the bytes move, they are not copied — so the only overhead
-is `mem_claim`'s rounding to whole KB:
-
-| | today | after, idle | after, Control Panel open |
-|---|---:|---:|---:|
-| kernel footprint (small) | 96.5 KB | 87.8 KB | 87.8 KB |
-| loaded module | — | — | 4 KB |
-| **total** | **96.5 KB** | **87.8 KB** | **91.8 KB** |
-
-**And the three share one slot.** The file dialog is modal (`[fdlg_win]` is
-enforced at three call sites), the Control Panel is a window the user is
-standing in front of, and a paste runs to completion inside one operation —
-so the realistic concurrency is one, occasionally two. Three permanent
-residents become one transient one. That is the argument, and it is stronger
-than the byte count.
-
----
-
-## 4. The recommendation
-
-**Build the mechanism against the Standard File dialog first, then Cut/Copy/
-Paste. Take the Control Panel only after reading §4.1, and Disk Format not at
-all.**
-
-- **`fdlg.inc` first.** The biggest single win at 3,907 bytes of `.cold`, the
-  narrowest seam in the whole table — **8 symbols, 7 of them the `fdf_*` cold
-  thunks** and the eighth one word (`fdlg_win`) — and it is the candidate with
-  **no diagnostic role**, which §4.1 says is the property that matters most.
-  It is behind a published slot (`OSAPI_FILE_DLG`, 0x0150), which is fine and
-  is the point of §7.3: the *slot* stays, its body loads. `fdlg_open_x`
-  already has a `.refuse` exit, so "could not load" needs no new contract, and
-  it is modal — nothing else is clickable while it is up and it destroys its
-  window on the way out, which is §8.5's easy case.
-
-- **`filecp.inc` second**, and this one deserves a measurement before it is
-  taken: a paste is *itself* disk work, so the load rides in front of an
-  operation that already takes seconds, but a Cut/Copy/Paste is also far more
-  frequent than the other two. It is the first candidate where "rarely used" is
-  arguable rather than obvious.
-
-- **`ctrl.inc` third, and conditionally.** On every mechanical measure it is
-  the best candidate in the kernel: 15 symbols of seam of which 6 are already
-  the `cpf_*` thunks and the other 9 are four words of state (`cp_sel`,
-  `cp_dirty`, `cp_wdirty`, `cp_nst`), three data pointers (`cp_tpl`,
-  `cp_sname`, `cp_s_dsdrv`) and two constants (`CP_ITIME`, `CP_IDRV`) that all
-  stay resident in `.text` anyway; **zero `.bss`**; every entry point on the UI
-  task with the lock held; nothing calling it in a loop. §4.1 is the one
-  argument against it and it is not a mechanical one.
-
-### 4.1 The Control Panel is the window you open when something is wrong
-
-docs/KERNEL-MEMORY.md already says this, in the passage explaining why the
-Task Manager was allowed to leave the kernel and be a package:
-
-> The **Control Panel** — the window you want when a driver will not attach,
-> and where `drv_notice` sends you — is cold and therefore still resident.
-
-That is load-bearing and it argues against the recommendation this document
-started with. `drv_boot` runs before the first paint, banks a failure in the
-row, and `drv_notice` afterwards does `mov byte [cp_sel], CP_IDRV` /
-`app_launch KIND_CTRL` — it opens the panel on its Drivers page so the machine
-can *say* what happened. Two of the seven `DRVE_*` codes are precisely the
-conditions under which an on-demand panel could not load either:
-
-- **`DRVE_DISK`** — no readable system disk in A:. The panel's image is on
-  that disk.
-- **`DRVE_MEM`** — the heap could not fund the driver. It very likely cannot
-  fund a 4 KB panel a moment later either.
-
-So the machine that most needs to explain itself becomes the machine that
-cannot. That is a **strictly worse** failure than today's, and it is not
-hypothetical: `DRVE_DISK` is the ordinary state of a single-floppy machine
-that has swapped to the apps disk, which is the calibration machine
-(docs/FIELD-MACHINES.md).
-
-It is survivable, and the tree has already built the survival. §59.6 moved the
-Control Panel's own save verdict into the **menu bar** for exactly this
-species of reason — a verdict that outlives the window it is about — and one
-string per `DRVE_*` in a toast is the same answer applied one step earlier.
-`drv_errstr` is already that table of strings, already bounded, already
-written to name a *fact about the machine the user might act on*.
-
-**But that is new work, on the diagnostic path, and it must be built before
-`ctrl.inc` moves and not after.** Which is the whole reason the panel is third
-here rather than first: the mechanism should be proved twice on features whose
-failure costs the user a click, before it is pointed at the one whose failure
-costs them the explanation.
-
-Stop there. §6 is the survey of everything else and the answer for all of it is
-no, for reasons that are worth having written down.
-
----
-
-## 5. Disk Format: why the motivating example is the worst candidate
-
-Two independent reasons, either of which is sufficient.
-
-### 5.1 The disk you must read is not in the drive
-
-SPEC.md §22.12 is explicit about what this feature is *for*:
-
-> A floppy that reads and is not FAT12 shows `No os8088 disk (A:)` and nothing
-> else — the window is a dead end with a perfectly good disk in it.
-> **File ▸ Format Disk…** is the way out.
-
-So at the moment the user reaches for it, the disk in the drive is **the one
-about to be erased**, and on the calibration machine — one 360 KB floppy,
-docs/FIELD-MACHINES.md — that is the only drive there is. `drv_load`'s own
-path is `drv_vol_bank` → `drv_mounted` → read from the system volume →
-`drv_vol_back`; here it would find a foreign disk and answer
-`Need the system disk`, which is docs/HDD-SPLIT-PLAN.md §6.4's regression with
-the convenience argument replaced by an impossibility one. Hard Disk Format
-merely became *inconvenient* on a single-floppy machine; floppy Format becomes
-**unreachable on exactly the machine and exactly the disk it exists for**.
-
-The ways out, and none of them is cheap:
-
-- **Load earlier.** There is no earlier. `fm_bar_gate` runs on the press that
-  opens the menu, which is already after the swap.
-- **A swap prompt** — *insert the system disk* → load → *insert the disk to
-  format* → format. The kernel has no such prompt and building one is new UI,
-  new modal state, and two extra swaps on the machine with the fewest drives.
-- **Accept it on two-drive and installed machines only.** True — a hard-disk
-  machine reads the module off C: and formatting A: is free — but that is the
-  machine with 26 KB of heap to spare, not the one with 31.5.
-
-### 5.2 The split has already removed it from the machine that needs it
-
-`dskw_fmt_*` and its whole UI are inside `%ifndef KERN_SMALL`. **The 128 KB
-machine does not have the formatter and has never paid for it.** What on-demand
-loading would buy is 2,048 bytes on `kern_big` — the build with 4 steps of
-spare, running on machines with hundreds of KB free.
-
-That is the general rule this example teaches, and it is worth stating on its
-own:
-
-> **On-demand loading earns its keep on code that BOTH builds must keep.** Where
-> a feature can simply be compiled out of the small build, the split is
-> cheaper, simpler and has no failure mode. Where it cannot — because both
-> machines want it, and both want it rarely — that is where this mechanism is
-> the only lever left.
-
-The Control Panel, the file dialog and Cut/Copy/Paste are all in both builds
-and cannot leave either. That is precisely why they are the recommendation and
-Format is not.
-
-### 5.3 If it is wanted anyway
-
-It is the one candidate whose engine and UI are already *separated by a build
-flag*, so the conversion is mechanical and the risk is low. Take it **last**,
-after the mechanism has shipped twice, and take it with §5.1's failure as an
-accepted, documented refusal on single-floppy machines rather than as a bug to
-be fixed later. `dskw_fmt_probe` runs at menu time and reads only, so the
-refusal can at least be delivered before the confirmation is armed rather than
-after the user has said yes.
-
----
-
-## 6. Everything else, and why not
-
-- **`assoc.inc` (3,072)** — the largest `.text` candidate, and the only one
-  that would relieve `KERN_CODE_MAX`'s 438 remaining bytes. Rejected on
-  frequency: it is on the path of **every document double-click**, which is the
-  commonest way anything is launched. Worth converting to `.cold` on its own
-  merits (that *does* relieve the segment guard), and that is a different
-  document.
-- **`icons.inc` (1,536)** — every desktop paint, every Disk window row, every
-  dock tile. Not rare by any reading.
-- **`loader.inc` (1,024)** — it is what loads things. A load path that must
-  load itself is the one genuine circularity here.
-- **`fsx.inc` (1,024)** — narrowest seam in the table (4 symbols) and
-  tempting for it, but `fsx_wait` is the **frame clock**: a game calls it once
-  per frame, and §53.2's whole argument is that the bracket has no jitter in
-  it. An indirect far call per frame is affordable; a `mod_need` test per frame
-  is the wrong shape of code to put there.
-- **`xmem.inc` (1,536)** — genuinely rare, and already removed from
-  `kern_small` (§41.11), so §5.2's rule applies exactly as it does to Format:
-  the machine that needs the memory already does not pay.
-- **`clip.inc` (512)** — one rung, three symbols. Too small to be worth a
-  failure mode.
-- **`splash.inc` (961 `.text`)** — worth a mention because it looks like a
-  candidate and is not one: after boot the only live entry is `spl_step`, a
-  compare and a `ret` called once per sector from `dsk_xfer` forever. The rest
-  is dead weight, but it must be resident *within the image's opening
-  `SPL_RESIDENT` sectors* because the boot sector ticks the bar while the
-  kernel is still arriving, so it can be neither loaded on demand nor deferred.
-  If those ~900 bytes are ever wanted back, the lever is `.ovl`, not this.
-- **The RTC write paths** (`clk_at_write` 141, `clk_rp_write` 130,
-  `clk_ns_write` 99 — 370 bytes) — only reachable from the Control Panel's
-  Date/Time page, so they are **not a candidate of their own**: they are three
-  routines that should simply move into whatever image the Control Panel ends
-  up in. Noted here so the next person does not cost them separately.
-- **`files.inc`'s 6,590 bytes of `.cold`** — the Disk window is Locator, and
-  Locator is what the machine is when nothing else is running.
-
-**And a shape worth recognising for next time.** The largest single routine in
-the whole kernel is `osapi_table` at 944 bytes, and it is a table. The next is
-a 258-byte icon. **There is no hot spot anywhere** — 82,594 bytes of code with
-nothing over 200 bytes in it — which is SPEC.md §5.7's finding about `gfx_pixel`
-in another register. The unit of on-demand loading therefore has to be a
-*feature*, never a routine, and any proposal here that names a function rather
-than a module is proposing to spend a disk read to save a hundred bytes.
-
----
-
-## 7. The mechanism
-
-### 7.1 What it is not
-
-- **Not a `drv_tab` row.** A driver is *ticked*, has a class, a publication
-  slot, a `SYSTEM.CFG` bit and a Control Panel line. None of that applies, and
-  docs/HDD-SPLIT-PLAN.md §5.0 rejected it once already for the same reason.
-- **Not a package.** A package owns its own `DS`, and owning its own `DS` is
-  exactly what a kernel module must not do — it would have to re-express every
-  one of its data accesses and re-reach the kernel through `OSAPI_*` instead of
-  the `cw_*` shims that already exist. That is the difference between moving
-  1,300 lines and rewriting them.
-- **Not an API slot.** Nothing outside the kernel calls it. §20.8's rule 4 is
-  not engaged, no `.o88` is invalidated, and `apps/os88api.inc` does not change.
-
-### 7.2 What it is
-
-**A `.cold` section that ships as a file instead of as part of `kernel.bin`.**
-
-- **The image** is the module's `.cold` output, assembled at `vstart=0` exactly
-  as now, with a small header on the front. It ships as `<NAME>.DRV` in the
-  system volume's root, which buys hidden+system+read-only by extension, the
-  installer's copy rule and `ld_check_hdr`'s refusal, all for free (§1.2).
-- **The contract inside it is `.cold`'s, unchanged**: `CS` = the claim,
-  `DS = KERNEL_SEG`, out through `cw_*`, near `ret`s, `tools/os88ovlchk.py`
-  policing the boundary as it does today.
-- **The claim** is `mem_claim_hi` with a purgeable tag (§7.5) — a module's base
-  is its `CS` so it can never move, which is `mem_claim_hi`'s existing reason
-  for existing.
-- **The inbound thunk does not change in `.text`.** `cp_paint` stays
-  `call COLD_SEG:cpf_cp_paint`. What changes is `cpf_cp_paint` — it becomes a
-  cold stub that calls `mod_need` and then `call far [mod_ent + n]`. Cold code
-  is always resident, so **the resident cost against `KERN_CODE_MAX` is zero.**
-
-### 7.3 The header, and the one thing it must carry
-
-A kernel module is not a package and does not need `call bp / retf` — the
-kernel knows the entry offsets, because it built them. That is cheaper and it
-is also a hazard: **a stale module file beside a newer kernel would far-call
-into the wrong offset, silently.** So the image carries an entry *table*, and
-a stamp:
+## 5. The mechanism: `.cold` is it, minus where it lives
+
+`section .cold start=COLD_START vstart=0`. Three properties, all checked:
+
+- **It is pure code.** Every `.cold` block in `kernel/` scanned for `db`, `dw`,
+  `dd`, `resb`, `resw`, `times` and `incbin`: **0 directives**. Cold modules
+  put their data back in `.text` on purpose — `diskw.inc` labels the switch
+  *"DATA, so back to the kernel segment"*.
+- **It runs with `DS = KERNEL_SEG`.** Every variable, string and table is
+  reached at the same offset `.text` reaches it at. **A module that moves does
+  not re-express one data access.** This is the entire difference from a
+  package.
+- **It never near-calls out of itself.** 107 `cw_*` shims are its whole
+  outbound surface, each an absolute `call KERNEL_SEG:cw_x`, and
+  `tools/os88ovlchk.py` fails the build if a near call crosses.
+
+So cold code is **already position-independent at paragraph granularity**. The
+only thing tying it to `COLD_SEG` is the constant in its inbound thunks, and
+that is one word.
+
+### 5.1 What changes, and what does not
+
+The `.text` thunk **does not change**: `cp_paint` stays
+`call COLD_SEG:cpf_cp_paint`. The *cold* thunk `cpf_cp_paint` becomes the
+load-and-dispatch stub, and cold code is always resident. **The resident cost
+against `KERN_CODE_MAX` is zero** — which matters, because that guard has 438
+bytes left and cannot be raised by any conversation.
+
+### 5.2 The image and its header
+
+The module's `.cold` output, at `vstart=0`, shipped as `<NAME>.DRV` in the
+system volume's root — which buys hidden+system+read-only *by extension* from
+`os88disk.py`'s `sys_attr` (§19.6), the installer's `*.DRV` copy rule, and
+`ld_check_hdr`'s refusal, with no tool-chain change. Header version **5**, so
+both `ld_check_hdr` (3) and `drv_check` (4) refuse it too.
+
+A kernel module needs no `call bp / retf` dispatcher — the kernel knows the
+entry offsets, because it built them. That is cheaper and also a hazard: a
+stale module beside a newer kernel would far-call the wrong offset, silently.
+So the image carries an entry table and a **build stamp**:
 
 ```
   0   dw  0x384F          ; 'O','8'
-  2   db  5               ; kernel module (a package is 3, a driver is 4)
+  2   db  5               ; kernel module (package 3, driver 4)
   3   db  module id
-  4   dw  the kernel's BUILD NUMBER      <- tools/buildnum.py, already in the tree
+  4   dw  the kernel's BUILD NUMBER      <- tools/buildnum.py, already here
   6   dw  image size = the file's whole size
   8   dw  entry count
  10   dw  entry[0] .. entry[n-1]         ; offsets in this image
 ```
 
-The build stamp is the load-bearing field. `buildnum.py` already produces a
-number that moves on **every commit** (SPEC.md §14.2, and it is why the
-`md5sum` shortcut in CLAUDE.md only works within one commit), so a module and
-the kernel that can call it agree by construction and a mismatch refuses at
-load. Version 5 keeps both `ld_check_hdr` (3) and `drv_check` (4) refusing it,
-which is the two-independent-gates discipline §51.1 already uses.
+`buildnum.py` already moves on every commit (§14.2), so a module and the
+kernel that can call it agree by construction.
 
-### 7.4 The loader
+### 5.3 The loader
 
-`drv_load` minus everything that is about being a driver: no row, no class, no
-`drv_publish`, no `DRVV_ATTACH`, no tier. What survives is the useful half, and
-it is about 130 bytes today —
+`drv_load` minus everything that is about being a driver — no row, no class,
+no `drv_publish`, no `DRVV_ATTACH`, no tier. What survives is ~130 bytes and
+belongs in `.cold` beside the stubs that call it:
 
 ```
     drv_vol_bank                 ; the user may be anywhere (§51.5.2)
     drv_mounted                  ; is the system volume reachable?
-    drv_find / dskw_stat         ; how big is it
+    dskw_stat                    ; how big is it
     mem_claim_hi                 ; one claim, at the size the directory reported
     dskw_read                    ; the whole file, by name
     <header check>
     drv_vol_back                 ; preserves CF
 ```
 
-— and it belongs in `.cold` beside the stubs that call it, not in `.text`.
-`drv_vol_bank`/`drv_vol_back` are §51.5.2's bank-and-restore and their compare
-makes the common case free.
+### 5.4 Why Format cannot be a package
 
-### 7.5 Discard: shed, do not free
+Measured — the formatter's *entire* outbound surface:
 
-The obvious design frees the image when the feature closes. **Do not.** The
-tree already has the better answer and it is §50.6's purgeable claim:
+| calls out to | what it is |
+|---|---|
+| `cw_disk_read` | kernel-internal sector read |
+| `cw_disk_write` | kernel-internal sector write |
+| `cw_dsk_vol_row` | the volume table row |
+| `dskw_ioerr` | `diskw.inc`'s own error mapper — needs a shim or moves with it |
 
-- tag the image `MEM_PG_LOW` — *"losing it costs a little I/O, or a visible
-  pause"*, which is exactly what a re-read costs;
-- a second visit to the Control Panel then costs **nothing** on a machine with
-  room, and the image is the **first thing shed** on a machine without;
-- `mem_claim`'s shed-and-retry (§50.6.2) means a package load that would have
-  been refused now takes the Control Panel's image instead of failing —
-  which is strictly better than either freeing eagerly or holding forever;
-- and §50.6.1 places purgeable claims *inside the data arena*, below the lowest
-  region base, so a cached module image cannot fragment the run a package needs.
+Everything else it calls is its own. **Three of the four are `cw_*` shims that
+already exist**, which is as clean a fit as this mechanism could ask for.
 
-**With one hard rule, which is §8.1.**
+And it is decisive about the *shape*: `disk_read` and `disk_write` have **no
+API slot, deliberately** — nothing published lets anything write raw sectors
+to an unmounted volume, and an application should not be able to. So Format is
+a **kernel module** (`CS` = the claim, `DS = KERNEL_SEG`, out through `cw_*`)
+and not an application package, and that is a fact about the operation rather
+than a preference. `HDDTOOL.DRV` reached the opposite conclusion for the
+opposite reason (§52.11): it needed its *driver's* segment, not the kernel's.
 
 ---
 
-## 8. The traps
+## 6. The measurements
 
-### 8.1 A module must not be purgeable while it is entered
+### 6.1 Method
 
-`mem_claim`'s shed-and-retry fires on a refusal and takes the
-lowest-priority cache. If the Control Panel's own image is a cache while
-`cp_onclick` is running inside it — and `cp_onclick` reaches `drv_load`, which
-reaches `mem_claim_hi` — the machine can shed the code it is standing on. It
-would not fault; it would run whatever the next claim wrote there.
+A scratch copy of `kernel/` with one `%include` removed or one `%ifndef`
+guard forced, assembled with the real flags (`-f bin -w+error -DKERNSIZE`) and
+the real include paths. **nasm is the oracle** — anything still needed shows
+up as an undefined symbol, and the loop stubs each one and re-assembles until
+it converges. This is docs/HDD-SPLIT-PLAN.md §4.1's severance, automated.
+Sizes come from `kernel.asm`'s own `ks:` line, which is where `kernsize.py`
+gets them, so there is no second opinion about how `KIMG_PARA` rounds.
 
-A one-byte nesting count per module, incremented by the stub before the far
-call and decremented after, with the claim pinned while it is non-zero. The
-counter must be per module and not a single flag, because a module can re-enter
-itself through a callback.
+### 6.2 The two candidates
 
-### 8.2 The register the verb travels in
+Δ against `kern_big` at 102,912. The Format rows are **not** a severance —
+they are the exact delta of the existing `%ifndef KERN_SMALL` guards, so they
+are facts about the shipped build.
 
-docs/HDD-SPLIT-PLAN.md §10 sprang this exact bug twice in one build: the verb
-was passed in `BP`, which is the dispatcher's *address*, and then the stub
-restored `BP` after kernel calls that spend it. Both were silent — nothing
-faulted, nothing hung, nothing appeared on screen. Here there is no dispatcher
-at all (§7.3), so the entry is an index into the header's table and `BP` is
-free; but the general shape stands, and the stub is the one place in this
-mechanism where a register contract is being invented rather than inherited.
+| | Δ`.text` | Δ`.cold` | Δ`.bss` | Δksize | seam |
+|---|---:|---:|---:|---:|---:|
+| **Control Panel** (`ctrl.inc`) | −672 | **−3,204** | 0 | −4,096 | 15 syms, 6 already thunks |
+| **Format, engine** (`diskw.inc`) | −159 | **−751** | 0 | −1,536 | 4 outbound calls |
+| **Format, UI** (`files.inc`) | −183 | **−605** | −1 | −1,024 | — |
+| **Format, both** | −342 | −1,356 | −1 | −2,048 | — |
 
-### 8.3 The load happens under the gfx lock
+**Read the Δ`.cold` column for what actually moves.** A severance removes the
+module's data too and a real conversion does not: only `.cold` leaves, and the
+`.text` bytes are tables and strings that stay resident and reachable through
+`DS`.
 
-Every candidate's entry points are called from the UI task with the lock held —
-that is `W_PAINT`/`W_ONCLICK`'s contract. So the module load is disk I/O inside
-a lock hold, which is **already what `drv_load` from a Drivers-page click
-does**, and what `ui_tm_open` does for `TASKMGR.O88`. It is not new. What is
-new is that it happens on the path of *opening a window*, where the user has
-given no prior indication they are about to wait: derived from PERFORMANCE.md's
-24 ms per 512 bytes delivered plus its isolated-access note (a first-sector read
-is a **seek**, ~80 ms average and worse at the stroke's end), a 3.2 KB module is
-**roughly a quarter to half a second**. That is an inference from two measured
-figures and not itself a measurement; it belongs in a field run before anybody
-quotes it.
+So, in rungs:
 
-§18.95's sector cache and §18.8.1's per-volume FAT window both work in its
-favour on the second load, and §7.5's purgeable cache means there usually is no
-second load.
+| | `.cold` today | after | footprint saved |
+|---|---:|---:|---:|
+| Control Panel out | 23,200 | 19,996 | **3,072** |
+| …then Format's engine and UI out | 19,996 | 18,640 | **1,024** more |
 
-### 8.4 A refusal is a normal path, and every caller needs one
+less the dispatcher and per-entry stubs that go back into `.cold` (~150 bytes
+each), which is **~3.9 KB on `kern_big`** — derived from measured section
+sizes, not itself measured, and it will not be until something is built.
+
+For `kern_small` the shape is different and better: the Control Panel's 3,072
+arrives as **spare against a guard that currently has none**, and Format
+arrives as a **feature that build does not have**, paying only its strings and
+stub out of that.
+
+### 6.3 The peak is better, unlike the HDD split
+
+docs/HDD-SPLIT-PLAN.md §10 had to report the peak 3 KB *worse*, because the
+tool image duplicated helpers it could no longer near-call. Nothing is
+duplicated here — the bytes move, they are not copied — so the only overhead
+is `mem_claim` rounding to whole KB. With the panel open: 4 KB claimed against
+3,072 + rounding given back, which is a wash at the peak and a clear win at
+rest. The panel and the formatter are never open at once.
+
+### 6.4 What it costs in time
+
+Derived from PERFORMANCE.md's 24 ms per 512 bytes delivered plus its
+isolated-access note — *a first-sector read is a **seek**, ~80 ms average and
+worse at the stroke's end* — a 3.2 KB module is **roughly a quarter to half a
+second**. That is an inference from two measured figures and belongs in a
+field run before anybody quotes it. §18.95's sector cache and §18.8.1's
+per-volume FAT window both help on a second load, and §7.2 means there usually
+is no second load.
+
+For the Control Panel that lands on a window opening. For Format it lands in
+front of an operation that writes every sector of a floppy, and is invisible.
+
+---
+
+## 7. The traps
+
+### 7.1 A module must not be purgeable while it is entered
+
+§7.2 makes the image a purgeable claim, and `mem_claim`'s shed-and-retry fires
+on a refusal and takes the lowest-priority cache. If the Control Panel's own
+image is a cache while `cp_onclick` is running inside it — and `cp_onclick`
+reaches `drv_load`, which reaches `mem_claim_hi` — the machine can shed the
+code it is standing on. It would not fault; it would run whatever the next
+claim wrote there.
+
+A one-byte nesting count per module, pinned while non-zero, incremented by the
+stub before the far call. Per module and not one flag, because a module can
+re-enter itself through a callback. **For the Control Panel the pin is an
+open-to-close span**, not a per-call one, because `cp_flush_close` writes
+`SYSTEM.CFG` from inside the image (§2.3).
+
+### 7.2 Discard: shed, do not free
+
+The obvious design frees the image when the feature closes. **Do not** — §50.6
+already has the better answer. Tag it `MEM_PG_LOW` (*"losing it costs a little
+I/O, or a visible pause"*, which is exactly a re-read): a second visit costs
+nothing on a machine with room, the image is the first thing shed on a machine
+without, a package load that would have been refused takes it instead of
+failing, and §50.6.1 places purgeable claims inside the data arena below the
+lowest region base, so a cached image cannot fragment the run a package needs.
+
+For Format this is also what removes §3.3's prompt on a second format in the
+same session.
+
+### 7.3 The register the verb travels in
+
+docs/HDD-SPLIT-PLAN.md §10 sprang this twice in one build: the verb was passed
+in `BP`, which is the dispatcher's *address*, and the stub restored `BP` after
+kernel calls that spend it. Both silent — nothing faulted, nothing hung,
+nothing appeared on screen. Here there is no dispatcher (§5.2) so the entry is
+an index into the header's table, but the stub is the one place in this
+mechanism where a register contract is invented rather than inherited.
+
+### 7.4 The load happens under the gfx lock
+
+Every entry point of both candidates is called from the UI task with the lock
+held. That is already what `drv_load` from a Drivers-page click does, and what
+`ui_tm_open` does for `TASKMGR.O88`. Not new.
+
+### 7.5 A refusal is a normal path, and both callers need one
 
 No system disk, a full heap, a corrupt image, a build-stamp mismatch. §50's
-rule already says refusal is normal and every claim in the tree has a fallback;
-the work here is that **three features that could not previously fail now can**.
-`fdlg_open_x` has `.refuse` already. The Control Panel's is `ui_dispatch`
-declining to open the window and saying so — and §59.6 has already built the
-place to say it, in the menu bar, after the panel's own window is gone.
+rule says refusal is normal and every claim in the tree has a fallback; the
+work is that **two features that could not previously fail now can.** The
+Control Panel's answer is a toast (§2.2); Format's is the same, and it is
+strictly better than the alternative — a Format that refuses because the
+system disk is out is a sentence, where a Format that half-ran is a disk.
 
-The one that needs thought is `cp_flush_close`: the Control Panel writes
-`SYSTEM.CFG` when it *closes* (§31.8), so the image must still be resident at
-that moment. It will be — the close is a call into the module — but it means
-the pin in §8.1 has to cover the whole open-to-close span for this module, not
-just one entry. That is a per-module property, not a general one, and it is the
-argument for the Control Panel keeping its image for as long as its window
-exists rather than per call.
+### 7.6 The stale-mount hazard around Format's swap
 
-### 8.5 A window that outlives its image is a paint into freed memory
+Between the load and the format the user changes the disk in the drive. §18.9
+and §18.9.3's BPB banking exist precisely to *avoid* re-reading a BPB, and
+§18.9.3 says a floppy skips revalidation only when a **caller asserts** it
+inside a batch bracket. Mode 6's Enter is the assertion running the other way:
+it must **invalidate**, and `dskw_fmt_probe` must re-probe the drive it is
+about to write. Getting this wrong formats to the geometry of the disk that
+has been taken out.
 
-docs/HDD-SPLIT-PLAN.md §6.1 exactly. The Control Panel's window and the file
-dialog's window both dispatch through `W_DISP`/`W_SEG`; if the image is shed
-while a window still names it, the next paint runs freed memory. §8.4's pin
-covers it for the Control Panel; the file dialog is modal and destroys its
-window on the way out, which is the easier case. **This is the trap to test
-first and it fails as a hang, not as an error.**
+### 7.7 A window that outlives its image is a paint into freed memory
 
-### 8.6 The build has to keep them in step
+docs/HDD-SPLIT-PLAN.md §6.1 exactly. The Control Panel's window dispatches
+through `W_DISP`/`W_SEG`; shed the image while the window still names it and
+the next paint runs freed memory. §7.1's pin covers it. **This is the trap to
+test first and it fails as a hang, not as an error.**
 
-Three new obligations for `make`: the module images build from the same source
-tree as the kernel, they carry its build number, and they land on **both**
-shipped floppies and in the installer's copy set. A kernel that ships without
-its modules is a machine whose Control Panel does not open — so
-`tools/os88disk.py` should refuse an image whose kernel names a module the
-volume does not carry, the way it already refuses an over-long root listing.
+### 7.8 The build has to keep them in step
+
+The module images build from the same tree as the kernel, carry its build
+number, and land on **both** shipped floppies and in the installer's copy set.
+A kernel that ships without its modules is a machine whose Control Panel does
+not open — so `os88disk.py` should refuse an image whose kernel names a module
+the volume does not carry, the way it already refuses an over-long root
+listing.
 
 ---
 
-## 9. What this does not change
+## 8. What this does not change
 
 - **No API slot, no `.o88` invalidated, no package rebuilt.** §20.8 rule 4 is
   not engaged.
-- **`KERN_CODE_MAX` is not spent** (§7.2), which is the guard with 438 bytes
-  left and no way to raise it.
+- **`KERN_CODE_MAX` is not spent** (§5.1).
 - **`.cold`'s contract is unchanged** — same `vstart`, same `DS`, same `cw_*`
   shims, same `os88ovlchk.py`.
 - **No module's data moves**, so no string staging (§31.9's `DSV_CPNAME` trap)
   and no `cs:` overrides anywhere.
-- **The kern_small/kern_big split is untouched** and stays the right answer for
-  everything it can reach. This is for what it cannot.
+- **The `kern_small`/`kern_big` split is untouched.** This is for what the
+  split cannot reach — and for Format it *undoes* a split that was a feature
+  removal.
 
 ---
 
-## 10. Decisions for the owner
+## 9. Decisions for the owner
 
-1. **Is the mechanism worth ~8.7 KB on both builds?** `kern_small` is at zero
-   spare, so the alternative to finding room somewhere is a further budget move
-   for the 128 KB machine — which docs/KERNEL-MEMORY.md says should be answered
-   by a second build rather than a raise, and the second build already exists
-   and has nothing left to give.
-2. **Does the Control Panel move at all?** §4.1 is the case against, and it is
-   an argument about diagnosis rather than about bytes: the panel is where
-   `drv_notice` sends a machine whose driver would not load, and two of the
-   seven reasons a driver fails are reasons the panel could not load either.
-   Answering it needs one string per `DRVE_*` in a toast — §59.6's mechanism,
-   one step earlier — built **before** the panel moves. Without that, the 3 KB
-   is not worth it and the file dialog plus Cut/Copy/Paste are 6 KB on their
-   own.
-3. **Purgeable cache (§7.5), or free on close?** The cache is better on every
-   axis except that it makes §8.1 mandatory rather than optional.
+1. **Control Panel first, Format second?** §3.4's arithmetic says it has to be
+   that way if Format is to reach `kern_small`, which is its whole payoff:
+   the small build has 0 spare and the panel is what funds the strings and the
+   stub.
+2. **Does Format's `FS_EDIT` mode 6 prompt read acceptably?** §3.3. It is
+   DOS's prompt and this tree's own two-line confirmation mechanism, but it is
+   the one user-visible change in the whole document.
+3. **Is a look-but-change-nothing Control Panel session worth a disk swap?**
+   §2. Every session that changes something already pays it at close.
 4. **`.DRV`, or a new extension?** `.DRV` buys the attributes, the copy rule
    and the loader's refusal for free, at the cost of a file that is not a
    driver being called one — docs/HDD-SPLIT-PLAN.md's decision 4, unresolved
-   then and unresolved now, and this would be the second thing in that
-   position.
-5. **Is §5.1's refusal acceptable if Format is ever taken?** On a
-   single-floppy machine, on-demand Format cannot work without a swap prompt
-   the kernel does not have.
+   then and unresolved now.
+5. **Is the `DRVE_MEM` toast (§2.2) a prerequisite or a follow-up?** It is
+   worth having whether or not the panel ever moves.
 
 ---
 
-## 11. If it goes ahead
-
-Six commits, each buildable and testable alone. Only the last two can break
-anything.
+## 10. If it goes ahead
 
 1. **The header, the loader and the pin** — `mod_need`, `mod_pin`,
    `mod_release`, all in `.cold`, plus `tools/os88mod.py` to stamp an image.
-   Nothing calls any of it. `kernel.bin` grows by a few hundred bytes of
-   `.cold` and by **zero** bytes of `.text`; check that.
-2. **Build `FDLG.DRV` as a second output of the same source**, and ship it on
-   both floppies — while `fdlg.inc` is *still* compiled into the kernel. Two
-   copies of the same bytes, one of them unreachable. The commit that proves
-   the build works.
-3. **Route `fdf_*` through `mod_need`**, still with the resident copy present
-   as the fallback. Every file-dialog path now goes through the new mechanism
-   on a machine where it cannot fail.
-4. **Delete `fdlg.inc`'s `.cold` from the kernel image.** The first commit that
-   can break something, and the one to A/B: same scripted session against both
-   builds, framebuffer byte-identical, which is `make REDRAWFULL=1`'s discipline
+   Nothing calls any of it. Check that `.text` grows by **zero**.
+2. **The `DRVE_*` toast** (§2.2), so `drv_notice` can report without a window.
+   Worth having on its own merits and a prerequisite for step 5.
+3. **Build `CTRL.DRV` as a second output of the same source** and ship it on
+   both floppies, while `ctrl.inc` is *still* compiled in. Two copies of the
+   same bytes, one unreachable — the commit that proves the build.
+4. **Route `cpf_*` through `mod_need`**, resident copy still present as the
+   fallback.
+5. **Delete `ctrl.inc`'s `.cold` from the kernel image.** The first commit that
+   can break something, and the one to A/B: the same scripted session against
+   both builds, framebuffer byte-identical — `make REDRAWFULL=1`'s discipline
    applied to a different question.
-5. **`filecp.inc`**, same three steps compressed into one now the mechanism
-   exists, and after the measurement §4 asks for.
-6. **`ctrl.inc`**, and only behind §4.1's toast — which is a commit of its own,
-   before this one, and is worth having whether or not the panel ever moves.
+6. **`FORMAT.DRV`**, the same steps compressed now the mechanism exists, plus
+   `FS_EDIT` mode 6 and §7.6's invalidation.
+7. **Turn Format on in `kern_small`** — the commit that is the actual point of
+   step 6, and the one to measure against the guard.
 
-**How it gets tested.** `make marty` throughout — this is 8088 code, all three
+**How it gets tested.** `make marty` throughout: this is 8088 code, all three
 adapters, and MartyPC's floppy turns (PERFORMANCE.md Sets 35/37) so the load
-cost is within a measurement quantum of the iron rather than 30x fast. The
-specific things to drive: open and close the Control Panel twice in one session
-(the claim must not leak and the second open must be free); open it on a machine
-with the heap deliberately filled, and check the refusal reaches the menu bar;
-close it with a driver row ticked, so `cp_flush_close` writes `SYSTEM.CFG` from
-a loaded image (§8.4); shed the image under a package load and re-open (§8.1);
-and a Save As from a package with the file dialog's image already shed. Then the
-5150, because every one of those is a disk operation and this tree's rule about
-disks is that the number lands on the iron.
+cost is within a measurement quantum of the iron rather than 30x fast. Drive:
+the panel opened and closed twice in one session (no leak, second open free);
+opened with the heap deliberately filled (the refusal must reach the menu
+bar); closed with a driver row ticked, so `cp_flush_close` writes from a
+loaded image (§2.3); the image shed under a package load and re-opened (§7.1);
+a Format with the system disk out; a Format with the disk swapped between load
+and Enter (§7.6); and two Formats in one session, the second of which must not
+prompt. Then the 5150, because every one of those is a disk operation and this
+tree's rule about disks is that the number lands on the iron.
 
-**And the thing to watch that no test will catch**: `tools/os88ovlchk.py` sees
-near calls, not indirect ones, and this mechanism is built entirely out of
-indirect far calls. The four existing tables of `.cold` pointers in `.text` are
-already a review rule rather than a build gate; this adds one more, and it is
-the same rule — *a table of module offsets may live in `.text` only if the
-module alone dispatches through it.*
+**And the thing no test will catch**: `tools/os88ovlchk.py` sees near calls,
+not indirect ones, and this mechanism is built entirely out of indirect far
+calls. The four existing tables of `.cold` pointers in `.text` are already a
+review rule rather than a build gate; this adds one more, and it is the same
+rule — *a table of module offsets may live in `.text` only if the module alone
+dispatches through it.*
+
+---
+
+## 11. Everything else, and why not
+
+Kept from the first edition, because the survey is still worth having — but
+re-sorted so that §1's test comes first and the seam only ever confirms.
+
+**Disqualified by §1 (the user, not the code):** the Standard File dialog
+(§1.2), Cut/Copy/Paste (§1.3), `assoc.inc` (every document open), `icons.inc`
+(every desktop paint), `loader.inc` (it is what loads things), `clip.inc`
+(per copy, and 512 bytes), `fsx.inc` (`fsx_wait` is a game's **frame clock** —
+§53.2's whole argument is that the bracket has no jitter in it), `files.inc`'s
+6,590 bytes of `.cold` (the Disk window is Locator, and Locator is what the
+machine is when nothing else is running), and the Disk window's own New
+Folder, Rename and Delete — all common operations acting on the disk in the
+drive, which is `COPY` in `COMMAND.COM` again.
+
+**Already done, and the precedents:** the Task Manager is a package on the
+system disk (§28), and the hard disk's partition/format/install tool is loaded
+on demand by its own driver (§52.11). Both pass §1 for the same reason Format
+does.
+
+**Not a candidate but worth knowing:** `xmem.inc` is genuinely rare and
+already removed from `kern_small` (§41.11) — but §3.2's correction applies to
+it too, and it is the one place the first edition's reasoning survives
+unchanged, because nothing about XMS is a *user* action to be restored.
+`splash.inc`'s 961 bytes look like a candidate and are not: after boot the
+only live entry is `spl_step`, a compare and a `ret` called once per sector
+from `dsk_xfer`, and the rest must be resident within the image's opening
+`SPL_RESIDENT` sectors because the boot sector ticks the bar while the kernel
+is still arriving. If those bytes are wanted, the lever is `.ovl`. The RTC
+write paths (`clk_at_write` 141, `clk_rp_write` 130, `clk_ns_write` 99 — 370
+bytes) are reachable only from the Control Panel's Date/Time page and are not
+a candidate of their own: they are three routines that should **move into the
+Control Panel's image**, and they are the first thing to look at once §2 has
+landed.
+
+**And a shape worth recognising.** The largest single routine in the kernel is
+`osapi_table` at 944 bytes, and it is a table; the next is a 258-byte icon.
+There is **no hot spot anywhere** — 82,594 bytes of code with nothing over 200
+bytes in it, which is §5.7's finding about `gfx_pixel` in another register. The
+unit of on-demand loading is therefore a **feature**, never a routine, and any
+proposal naming a function rather than a user-visible operation is proposing
+to spend a disk read to save a hundred bytes.
