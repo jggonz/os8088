@@ -3592,18 +3592,30 @@ pt_fsx_main:
 ; in:  AX = int 16h's (ascii, scan); gfx lock held
 ; out: CF=1 leave the bracket; preserves all registers
 ;
-; Everything W_ONKEY does, plus the one key that only means something in here.
+; Everything W_ONKEY does, plus the two keys that only mean something in here.
+;
+; F is the tree's fullscreen key (SPEC.md 11.2.1): the key that got you here is
+; the key that leaves, the same binding Missile Command and Tracker carry. It
+; is a BARE letter, so it is offered only while nothing else wants the
+; keystroke - the text tool takes printable characters and a size box takes
+; its own - which is exactly the gate pt_type already applies, read here
+; instead of there. Ctrl+F is the unconditional door and stays the one the
+; menu item names, because it is the one that is true in every state.
+;
 ; Escape is offered LAST and only when there is nothing else for it to do: it
 ; already ends a text run, drops a selection and abandons a size-box edit, and
 ; answering a half-typed caption by throwing the user out of full screen would
-; be the wrong answer to the same keypress. Ctrl+F is the unconditional door,
-; and it is the key the menu item names.
+; be the wrong answer to the same keypress.
 ; -----------------------------------------------------------------------------
 pt_fsx_key:
     push ax
     push si
     cmp al, 0x06                    ; Ctrl+F, whatever else is going on
     je .leave
+    cmp al, 'f'                     ; ...and the bare letter whenever nothing
+    je .bare                        ; else is taking it
+    cmp al, 'F'
+    je .bare
     cmp al, 27
     jne .pass
     cmp byte [pt_txton], 0          ; Escape with something to cancel is a
@@ -3612,6 +3624,12 @@ pt_fsx_key:
     jne .pass
     cmp byte [pt_fbox], 0
     jne .pass
+    jmp short .leave
+.bare:
+    cmp byte [pt_txton], 0          ; a caption is being typed: this is an 'f'
+    jne .pass
+    cmp byte [pt_fbox], 0           ; a size box has the keyboard (pt_onkey
+    jne .pass                       ; routes to pt_szkey before the canvas)
 .leave:
     pop si
     pop ax
@@ -5859,6 +5877,13 @@ pt_onkey:
     je .paste
     cmp al, 0x06                    ; Ctrl+F
     je .full
+    cmp byte [pt_txton], 0          ; ...and the bare F, the tree's fullscreen
+    jne .print                      ; key (SPEC.md 11.2.1), whenever the text
+    cmp al, 'f'                     ; tool is not taking the keystroke. pt_type
+    je .full                        ; drops it in that state anyway, so this
+    cmp al, 'F'                     ; costs the canvas nothing it was using
+    je .full
+.print:
     cmp al, 32
     jb .out
     cmp al, 126

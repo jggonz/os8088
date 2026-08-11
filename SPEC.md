@@ -4039,14 +4039,59 @@ and the menu-bar branch of the event ladder (step 2) is bypassed so a
 click in rows 0..19 routes to wm_hit like any other. The mouse cursor
 stays live — a fullscreen app that wants it hidden draws its own.
 
-Leaving fullscreen is **the app's job** (recommend Esc in its W_ONKEY →
-`wm_fullscreen` AL=0; the menu bar is unreachable while it holds the
+Leaving fullscreen is **the app's job** (§11.2.1 is the binding: **F**, with
+Esc as the escape hatch; the menu bar is unreachable while it holds the
 screen). The kernel's safety net: `wm_destroy` and `wm_hide` both check
 BX against `[wm_fs]` and, on a match, restore the saved geometry, clear
 WF_FULL and zero `wm_fs` before repainting — closing, minimizing (no box
 is drawn, but app_close_win's die-flag path hides) or killing a
 fullscreen window can never strand the latch, and a re-shown window comes
 back windowed at its old place.
+
+#### 11.2.1 F is the fullscreen key, in both directions (binding)
+
+**The key that got you there is the key that leaves.** Every app that can
+go fullscreen — by this section's surface, by §53's bracket, or by both
+stacked the way Missile Command stacks them — binds **`f` and `F`** to
+*enter* it from the windowed state and to *leave* it from the fullscreen
+one, and binds **Esc** to leave. Both letters, always: an app that tests
+only one is an app whose fullscreen key stops working under Caps Lock.
+
+The rule is about the user rather than the mechanism, which is why it
+spans two mechanisms that share nothing in the kernel. §11.2 is a latch
+and §53 is a bracket; an app may be on either, or enter the first and put
+the second on top of it (§48.13), and none of that is visible from the
+front of the machine. What is visible is that the screen went big and
+some key has to give it back — so the answer may not depend on which of
+those an app happened to build with, and it may not depend on which way
+the user is going.
+
+**Esc is the escape hatch and not the door.** It stays because it is what
+a user presses when they want out of *anything*, and because an app that
+has given F away to a text run (below) still owes a way home. Where Esc
+already means *cancel* inside the app it keeps meaning that first, and is
+a way out only when it has nothing left to cancel — Paint's text run,
+selection and size-box edit are the worked example. F is the door because
+a door should not also be a cancel key.
+
+**The exception is an app that is taking typed text**, where a bare
+letter is not the app's to bind: pressing F in ArtfulType (§46) writes an
+`f`, and it must. Two shapes, both in the tree:
+
+- **The whole app is a writer.** ArtfulType is fullscreen *as its editing
+  mode* — the window is a splash and the document is the screen — so it
+  binds no F at all, enters on its splash's own verbs and leaves on Esc,
+  which is unambiguous there because the document survives it.
+- **The app takes text sometimes.** Paint (§42.7) is a bitmap editor with
+  a text tool, so F is free except while a caption is being typed or a
+  size box has the keyboard. It offers the bare letter under exactly that
+  gate — the one `pt_type` was already applying to the same keystroke —
+  and keeps **Ctrl+F** as the unconditional door. Ctrl+F is what the menu
+  item names, because a menu item's key hint has to be true in every
+  state and the bare letter is not.
+
+An app that reserves letters for gameplay is *not* an exception: Missile
+Command and Tracker both bind a dozen bare letters and F is one of them.
 
 ### 11.3 The clip region — what a background task may draw
 
@@ -32625,6 +32670,13 @@ Inside a foreign mode the video hardware is otherwise the app's: the
 6845/CRTC, sequencer, graphics controller, attribute controller and DAC
 ports may all be programmed directly, and the exit mode set reprograms
 everything they touch.
+
+**How the user leaves is §11.2.1's, not this section's**: the bracket ends
+when the app's exclusive main returns, and *what makes it return* is the
+same **F** (with Esc as the escape hatch) that a §11.2 app binds — because
+the rule is about the user, who cannot see which of the two an app was
+built with. An app's own polled loop is what tests those keys, since no
+events are dispatched in here.
 
 ### 53.8 The package ABI (§20.3 slots)
 
