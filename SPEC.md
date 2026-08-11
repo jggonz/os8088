@@ -24448,6 +24448,84 @@ Measured, never pinned: the widest line sets the width and the line count
 sets the height, both clamped to the content, so it is right on all three
 adapters (§39) and nothing needs re-measuring when a line changes.
 
+### 43.9 A full repaint is 681 ms, and two fills of it were the same pixels twice
+
+§43.7 is about the INCREMENTAL path — a move costs two piles — and it is
+right. What nobody had priced is the path a *New Game*, a *Restart Deal*, a
+launch and every `wm_paint_all` take: `sol_drawall`, whole.
+
+Measured on a cycle-accurate 5150/CGA with a 220x136 content, breakpointing the
+primitives across one New Game: **816 drawing calls, 681.3 ms**. At
+PERFORMANCE.md Part 2's ~756us of fixed cost per call that is 617 ms of pure
+*arriving*, so this repaint is ~91% floor and **the only lever is the call
+count** — §48.18's finding in another package.
+
+**Everything else about this window is already cheap, and that is why the
+repaint is where the work is.** `WF_SAVEU` (§11.96.1) has covered Solitaire
+since it was written, and its content banks in ~3.7 KB on 1bpp, so the cache
+answers every partial case measured — a raise from under another window
+**97.5 ms**, a window dragged off it **78.7 ms**, an un-minimize **172.1 ms**,
+none of them running `W_PAINT` at all. (`gfx_blit4` is the test: card backs are
+the only thing here that blits, so a capture with none in it is a capture in
+which `sol_drawall` did not run.) §11.96.11's `wm_band` is therefore **not** for
+this window and was measured and declined: the whole-content cache is
+affordable, and Klondike has no static furniture at an edge to name.
+
+#### 43.9.1 `WF_OWNBG` — the felt is the background
+
+Solitaire predates §11.90.1 and is its second consumer. `sol_drawall`'s first
+act is a felt fill of the whole content, with `sol_pinv` in front of it so no
+sliver is kept, so **every pixel of the content is written by the app** — the
+promise holds by construction rather than by audit.
+
+Without the flag, `wm_draw_win` filled that same rect white first: on CGA a
+measured **26.45 ms**, which as work is noise and as a picture is
+PERFORMANCE.md Part 1's double draw at maximum contrast, because the felt is
+`CGREEN` and §39.4 reduces that to **black** on both mono adapters. So on the
+machines this game is for, every kernel-driven repaint was the window going
+white, then black, then filling with cards over two-thirds of a second.
+
+It is two instructions beside the existing `OSAPI_WM_SAVEU`, and neither
+disturbs the flags, so `wm_create`'s CF still reaches the loader.
+
+#### 43.9.2 …and inside a full repaint the pile wipes are that same fill again
+
+`sol_drawall` fills the whole content with felt and then calls `sol_drawpile`
+thirteen times — whose first act is to fill *that pile's rect* with felt again,
+unless `sol_covers` says a card will cover every pixel of it (§43.7), which is
+true only for a non-empty stock or foundation. So the seven tableau rects, the
+waste and the empty foundations were each filled twice, and a tableau rect runs
+the full height of the content.
+
+Measured, per call, across one New Game:
+
+| | ms each | count | total |
+|---|---|---|---|
+| the whole-content fill | 26.45 | 1 | 26.45 |
+| tableau column wipes | 11.85–12.93 | 7 | 83.2 |
+| waste + empty foundation wipes | 3.93–4.06 | 5 | 19.7 |
+
+**102.9 ms of 681.3 — 15.1% — for pixels that were already that colour.**
+`[sol_felt]` is the byte that says so: set after the whole-content fill, tested
+by `sol_drawpile` ahead of `sol_covers`, cleared when the loop ends.
+
+**What makes it identical rather than merely cheaper is that pile rects are
+DISJOINT.** A tableau column's rect is one card wide at its own pitch; the
+waste's is widened by exactly the two fan steps its cards use, which is what
+the empty column between it and the foundations is for; the top row ends above
+`[sol_taby]`. So no pile drawn earlier in the loop has put a pixel inside a
+later one's rect, and the felt the whole-content fill laid down is still
+underneath every one of them. If that ever stops being true — a layout with
+overlapping slots, or a pile that draws outside its own rect — this byte is the
+thing that breaks, silently, as one pile's cards left standing inside another's
+slot.
+
+`sol_plan` is still called, because it runs `sol_colfan` and sets `[sol_keepn]`
+for the draw below; only the fill is skipped. The flag is *cleared* before the
+plaque and the About panel, and it lives in bss, which the loader zeroes — so
+the one-pile-at-a-time callers a move goes through inherit the safe value
+without anybody arranging it.
+
 ## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
 
 A brick-breaker over the published package ABI. Prefix `ark_`, embedded icon,
