@@ -1216,6 +1216,10 @@ fm_s_repk:    db 'Enter=yes  A=all  Esc=stop', 0  ; three answers are 45
 fm_s_delpr:   db 'Delete ', 0
 fm_s_delq:    db '? Enter=yes Esc=no', 0
 %ifndef KERN_SMALL
+fm_s_fmtpr2:  db 'ERASE and format ', 0  ; ...when the volume MOUNTED, which is
+                                    ; the whole of what removing 22.12's old
+                                    ; refusal costs: the disk has files on it
+                                    ; and the question has to say so
 fm_s_fmtpr:   db 'Format ', 0       ; TWO lines (SPEC.md 22.12): 'Format A: as
 fm_s_fmtas:   db ': as ', 0         ; 720K?' in the row above, the answers on
 fm_s_fmtq:    db 'K?', 0            ; the status line itself - as one line it
@@ -2954,11 +2958,11 @@ fm_arm_sel:
 ; in:  DI = a state block
 ; out: CF = 0 yes, CF = 1 no. All registers preserved.
 ;
-; Two stable, cheap facts and nothing that touches a disk, which is what
-; makes this SPEC.md 47 rule 5's case - a GREYED item rather than a live one
-; that refuses. It is the whole predicate: fm_bar_gate greys from it and
-; fm_c_format re-asks it, so the thing that is offered and the thing that
-; happens cannot drift (rule 2).
+; ONE stable, cheap fact - is this volume a floppy - and nothing that touches
+; a disk, which is what makes this SPEC.md 47 rule 5's case: a GREYED item
+; rather than a live one that refuses. It is the whole predicate:
+; fm_bar_gate greys from it and fm_c_format re-asks it, so the thing that is
+; offered and the thing that happens cannot drift (rule 2).
 ;
 ; What is deliberately NOT here is whether the medium can be READ. That is
 ; rule 3's case - the only test is doing the thing - so fm_c_format probes on
@@ -2968,10 +2972,18 @@ fm_arm_sel:
 fm_fmt_ok:
     push ax
     push bx
-    cmp byte [di+FS_MOK], 0
-    jne .no                     ; it MOUNTED: there is nothing here to format,
-                                ; and "erase this perfectly good disk" is a
-                                ; different feature with a different question
+                                ; NO TEST OF FS_MOK. It used to refuse a
+                                ; volume that MOUNTED - "there is nothing here
+                                ; to format, and erase this perfectly good
+                                ; disk is a different feature with a different
+                                ; question" - and the consequence was that
+                                ; os8088 could format any disk except one of
+                                ; its own (docs/FIELD-NOTES.md 17.2). The
+                                ; different question is asked instead of being
+                                ; declined: a mountable volume gets `ERASE and
+                                ; format A: as 360K?` where an unreadable one
+                                ; gets `Format A: as 360K?`, and Enter still
+                                ; means yes and every other key no.
     mov bl, [di+FS_DRV]
     call KERNEL_SEG:cw_dsk_vol_row
     jc .no
@@ -3036,17 +3048,142 @@ fm_fmt_reach:
 .out:
     ret
 
+; -----------------------------------------------------------------------------
+; fm_fmt_sizeable - may this volume's size be overruled? (SPEC.md 18.96.2)
+; in:  AL = the volume index
+; out: CF = 0 = offer the toggle; CF = 1 = do not
+; clobbers: flags
+;
+; TWO tests, and the second is the one that arrived from the field.
+;
+; The row has to be one of the 9-sector pair (2 = 720K, 3 = 360K), because
+; that is the only ambiguity there is - rows 0 and 1 have no partner.
+;
+; And the UNIT has to be 2 or 3. The toggle exists because `AH=08h` is refused
+; and the drive cannot be asked how many cylinders it has (18.96.2), but that
+; ignorance is only ACTIONABLE on a drive the operator may have changed: units
+; 0 and 1 are the machine's own internal drives, and offering to make a 720KB
+; volume on the 5150's Tandon is offering something the reach test will only
+; take away again. Units 2 and 3 are the external pair on the 5.25" adapter's
+; 37-pin connector (18.98), which is exactly where an 80-cylinder 3.5" drive
+; turns up and exactly where the BIOS can say nothing about it.
+; -----------------------------------------------------------------------------
+fm_fmt_sizeable:
+    cmp byte [fm_fmtrow], 2     ; the 9-sector pair, and only it
+    jb .no
+    push bx
+    mov bl, al
+    call KERNEL_SEG:cw_dsk_vol_row
+    jc .nopop
+    cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there
+    jb .nopop
+    pop bx
+    clc
+    ret
+.nopop:
+    pop bx
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_fmt_home - send every OTHER window on a formatted volume to its root
+; in:  AL = the volume index just formatted; gfx lock HELD, UI task
+; out: nothing (all registers preserved)
+;
+; Fallout from docs/FIELD-NOTES.md 17.2, and it did not exist before it: while
+; a volume that MOUNTED could not be formatted, no window could be showing a
+; folder on a disk about to be replaced - a Disk window on an unmountable
+; volume is always at the root (SPEC.md 19.2). Now one can, and a sibling left
+; holding FS_CWD after the format names a cluster that is free, or past the
+; end of the volume entirely if the format shrank it.
+;
+; The acting window is SKIPPED because fm_edit_commit's own path already does
+; all of this to it, and better: it re-lists there and then, where a sibling
+; only takes the FS_DIRTY debt and spends it when it is looked at (22.8) - a
+; re-list is a MOUNT, and there may be three of them.
+;
+; The caption is written here rather than through fm_settitle, which reads the
+; PUBLISHED window ([fm_vp]/[fm_vinst]) and would have to be aimed at each
+; sibling in turn. 'Disk' is fm_settitle's own answer for a root, and
+; wm_title_set with AX = 0 is fm_title_flush's - the bytes the caption already
+; points at have changed underneath it (SPEC.md 11.92).
+; -----------------------------------------------------------------------------
+fm_fmt_home:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dl, al
+    mov si, inst_tab
+    mov cx, INST_MAX
+.scan:
+    cmp byte [si+I_STATE], 1
+    jne .next
+    cmp byte [si+I_KIND], KIND_FILES
+    jne .next
+    mov di, [si+I_SPTR]
+    cmp di, [fm_vp]
+    je .next                    ; the acting window: its caller owns it
+    cmp byte [di+FS_DRV], dl
+    jne .next
+    cmp word [di+FS_CWD], 0
+    je .next                    ; already at the root, so the caption is right
+                                ; and only the listing is stale - which is the
+                                ; ordinary shape a sibling is left in by any
+                                ; write, and fmv_bcast is about to hand it the
+                                ; new one for free
+    mov word [di+FS_CWD], 0
+    mov word [di+FS_SEL], 0xFFFF    ; indices into a listing that no longer
+    mov word [di+FS_SCRL], 0        ; describes anything
+    mov byte [di+FS_DIRTY], 1
+    mov byte [fm_fchk], 1       ; ...and it may be the FRONT window, where
+                                ; waiting for a focus change means waiting for
+                                ; a click that never comes (22.8)
+    push cx
+    push si
+    mov bx, [si+I_WIN]
+    add si, I_NAME              ; the 16 bytes the caption, the dock tile and
+    mov di, si                  ; the Task Manager row all point at (29.1)
+    mov si, fm_s_root
+    mov cx, 15
+.ch:
+    lodsb                       ; DF=0 per SPEC.md 1
+    mov [di], al
+    inc di
+    or al, al
+    jz .titled
+    loop .ch
+    mov byte [di], 0
+.titled:
+    xor ax, ax
+    call KERNEL_SEG:cw_wm_title_set
+    pop si
+    pop cx
+.next:
+    add si, I_RECSZ
+    loop .scan
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 fm_c_format:                    ; File > Format Disk... (SPEC.md 22.12)
     mov di, [fm_vp]
     call fm_fmt_ok              ; the greying is the primary answer; this is
     jc .no                      ; the belt, because a body may not assume
                                 ; which surface picked it
-    call fmv_sync_x             ; stand on THIS window's volume. The mount
-                                ; fails - that IS the premise - and what it
-                                ; leaves behind is the thing we need:
-                                ; disk_mount sets [disk_drive] before it
-                                ; validates anything and its failure path
-                                ; does not undo it (SPEC.md 18.3)
+    call fmv_sync_x             ; stand on THIS window's volume. It may or may
+                                ; not mount - both are formattable now (22.12)
+                                ; - and either way [disk_drive] is left naming
+                                ; it, because disk_mount sets that before it
+                                ; validates anything and its failure path does
+                                ; not undo it (SPEC.md 18.3)
     call dskw_fmt_probe         ; AL = the format this medium can take, or
     jc .bad                     ; CF=1 with AX = FERR_*. READS ONLY, so a
                                 ; refusal here has changed nothing at all
@@ -3553,8 +3690,11 @@ fm_editkey:
 .confirmf:
     cmp al, ' '
     jne .confirm
-    cmp byte [fm_fmtrow], 2
-    jb .confirm
+    push ax
+    mov al, [di+FS_DRV]
+    call fm_fmt_sizeable        ; the SAME predicate the line is composed
+    pop ax                      ; from, so the two cannot disagree
+    jc .confirm                 ; nothing to offer: Space still means no
     xor byte [fm_fmtrow], 1
     jmp short .lineonly         ; the size on the line IS [fm_fmtrow], so the
                                 ; redraw is the one a typed rename character
@@ -3568,10 +3708,31 @@ fm_editkey:
     call fm_edit_commit
     jmp short .out
 .cancel:
+%ifndef KERN_SMALL
+    ; The FORMAT prompt is TWO lines (SPEC.md 22.12), so one status line
+    ; cannot undo it: .lineonly is CF = 0, "the status line is all that
+    ; moved", and fm_status_only repaints exactly that. Escape therefore left
+    ; `Format B: as 360K?` on the row ABOVE it for ever - reported off the
+    ; field as the prompt not clearing AND as corruption over it, which are
+    ; the same line nobody erased (docs/FIELD-NOTES.md 17.1).
+    ;
+    ; Right for every OTHER mode, which is why it survived: 1, 2 and 3 are
+    ; one-line prompts, and mode 4's two-line replace question never reaches
+    ; here - it is answered at .replace. And it never showed on the Enter
+    ; path, because the format's own fmv_load repaints the whole window,
+    ; which is exactly how every test in this tree missed it.
+    cmp byte [di+FS_EDIT], 5
+    je .cancelfull
+%endif
     call fm_edit_end
 .lineonly:
     clc                         ; CF = 0: the typed name is ON the status line
     jmp short .pops             ; and NOTHING else on this window moved, so a
+%ifndef KERN_SMALL
+.cancelfull:                    ; ...two lines: the caller owes the window
+    call fm_edit_end
+    jmp short .out
+%endif
 .out:                           ; keystroke owes one line, not a repaint
     stc                         ; anything else - commit, cancel, the replace
 .pops:                          ; question - changed the listing or the mode
@@ -3690,7 +3851,7 @@ fm_edit_commit:
     mov si, fm_onam             ; old name...
     mov di, fm_ebuf             ; ...new name; the eleven name bytes and
     call dskw_rename_x          ; nothing else move (SPEC.md 18.4)
-    jmp short .verdict
+    jmp .verdict                ; NEAR, for the reason above
 %ifndef KERN_SMALL
     ; Format (SPEC.md 22.12). The row is the one the PROMPT was built from,
     ; not one re-derived now, for the reason Rename and Delete work from
@@ -3717,7 +3878,11 @@ fm_edit_commit:
                                 ; message or the other and never both
     mov di, [fm_vp]             ; the volume is a different one now, so the
     mov al, [di+FS_DRV]         ; window is re-listed at its ROOT rather than
-    xor dx, dx                  ; at the folder it was pretending to be in
+    call fm_fmt_home            ; at the folder it was pretending to be in -
+                                ; and so is every SIBLING window on this drive,
+                                ; which is only reachable since a mountable
+                                ; volume became formattable (17.2)
+    xor dx, dx
     call fmv_load
     push si
     xor si, si                  ; ...and the caption follows it: 'Disk' is
@@ -5667,6 +5832,10 @@ fm_draw_status:
 .fs_st_fmt:
     push bx
     mov si, fm_s_fmtpr
+    cmp byte [fm_lmok], 0       ; it mounted: name the ERASURE (22.12)
+    je .fs_fmtpr
+    mov si, fm_s_fmtpr2
+.fs_fmtpr:
     call fm_scat
     mov al, [fm_ldrv]
     add al, 'A'
@@ -5688,9 +5857,12 @@ fm_draw_status:
     call fm_stat_line
     mov di, fm_hdrbuf           ; ...and line two, the answers, where every
     mov si, fm_s_fmtk           ; other status line goes
-    cmp byte [fm_fmtrow], 2     ; 9-sector media is the one ambiguous case,
-    jb .fs_stat                 ; so it is the only one with a key to name
-    mov si, fm_s_fmtk2          ; (SPEC.md 18.96)
+    push ax
+    mov al, [fm_ldrv]
+    call fm_fmt_sizeable        ; ...and the key is named only where it does
+    pop ax                      ; something (SPEC.md 18.96.2)
+    jc .fs_stat
+    mov si, fm_s_fmtk2
     jmp short .fs_stat
 %endif
 .fs_st_del:

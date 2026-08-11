@@ -128,8 +128,21 @@ desk_init:
     pop ax                      ; AX's way because the probe answers in AL
     or cl, cl
     jnz .probed                 ; present, or not PROVEN absent - either way it
-    mov dh, 1                   ; keeps its zone (18.97: the two errors are not
-    call dsk_fdd_retire         ; symmetric). Absent: one zone, and the row too
+    call dsk_fdd_retire         ; keeps its zone (18.97: the two errors are not
+                                ; symmetric). Absent: the row goes.
+                                ;
+                                ; **AND THE COUNT DOES NOT.** This was
+                                ; `mov dh, 1` - correct while two was the most
+                                ; a machine could claim, and wrong the moment
+                                ; 18.98 made units 2 and 3 reachable: it
+                                ; truncates the loop below, so a machine
+                                ; claiming three or four drives with no unit 1
+                                ; never asks about the external pair at all.
+                                ; That is not a corner - it is one internal
+                                ; drive plus a 4865 on the 37-pin connector,
+                                ; which is the field machine with the thing
+                                ; 18.98 was written for plugged into it.
+                                ; .zloop below reads the ROW instead.
 .probed:
 %endif
     ; A floppy the machine does not have gets no zone - but its VOLUME ROW
@@ -142,6 +155,11 @@ desk_init:
     mov bl, cl
     call KERNEL_SEG:ovw_dsk_vol_slot  ; FAR: overlay -> resident
     mov byte [bx+DV_FLAGS], 0
+    cmp byte [bx+DV_KIND], DVK_FREE
+    je .zskip                   ; the probe retired it - do not hand it back.
+                                ; This is what lets the count above stay the
+                                ; CLAIM: the zone is a fact about the ROW now,
+                                ; and only the row is taken away
     cmp cl, dh
     jae .zskip
     mov byte [bx+DV_FLAGS], 1

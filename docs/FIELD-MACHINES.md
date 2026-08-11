@@ -86,7 +86,7 @@ by name in a dozen places.
 | expansion | **AST SixPakPlus Rev 1** — carries the other **384 KB** (256 + 384 = the 640 KB every set reports) **and the clock**. That 640 is what `int 12h` answers, and since SPEC.md §2.7 the boot sector relocates itself to the top of it — so if this machine ever stops booting after a memory change, the first thing to check is the motherboard DIP switches, which are where an XT's RAM count comes from. A board the switches do not mention is a machine with plenty of RAM and a small answer, and the sector prints `RAM` and stops rather than loading a kernel over itself |
 | clock | the SixPakPlus's **MM58167 at 2C0h** — §37.90's **rung 2**, and the machine the whole ladder was written for: an XT BIOS implements `int 1Ah` AH=00h/01h and nothing else, so this BIOS knows nothing about a clock sitting in its own backplane. It is also what keeps rung 3 off a SixPakPlus — rung 3 is claimed only when the BIOS *can* read the clock, and here it cannot |
 | video | **Hercules GB101 → IBM 5151** (mono TTL) **and IBM CGA, new style → IBM 5153** (RGB). **Both cards and both monitors, always, in the machine.** It boots on the **Hercules**, and that is **SW1-5/6**, not a property of the probe: §39.1's last rung is `int 11h` bits 5:4, this machine's switches say `11b` = 80×25 mono, so `vid_detect` takes the `VID_HERC` branch. The second column costs neither a card swap **nor a build any more** — the Control Panel's Display page switches it at run time (§39.11) |
-| floppy | **one** — a **Tandon TM100-2**, 360 KB 5.25" DD. There is no drive B. **But SW1 says there are two**, and that is worth knowing rather than fixing quietly: the DIP pair is what `int 11h` reports, so this machine is the one that showed a `Disk B` icon which could never mount — and it is therefore the witness for SPEC.md §18.97's probe, which asks the FDC instead. Its expected `sysbench` rows are `claimed 2`, `probe stop 03` (no TRK0 after the recalibrate) and `verdict 0`. **The first run came back `probe stop 06` and kept the drive** — §18.97.1: `ST3 = 21` was right and the `SENSE INTERRUPT STATUS` beside it answered about unit *two*, so the decision moved onto ST3 read a second time. **If the switches get corrected, the probe stops running** and those rows read `claimed 1 / probe ran 0` — still right, and no longer a test of anything, so say which way the switches are set when reporting a run |
+| floppy | **one** — a **Tandon TM100-2**, 360 KB 5.25" DD. There is no drive B. **But SW1 says there are two**, and that is worth knowing rather than fixing quietly: the DIP pair is what `int 11h` reports, so this machine is the one that showed a `Disk B` icon which could never mount — and it is therefore the witness for SPEC.md §18.97's probe, which asks the FDC instead. **Confirmed on the iron:** `claimed 2`, `ST3 = 21` both before and after the recalibrate, `ST0 = 71` (IC 01, SE, EC, unit 1), `probe stop 03`, `verdict 0` — and the desktop comes up with drive A alone. The first run came back `probe stop 06` and kept the drive; §18.97.1 is that round, and it is worth reading because the fault was the controller's interrupt *queue* rather than the signal. **If the switches get corrected, the probe stops running** and those rows read `claimed 1 / probe ran 0` — still right, and no longer a test of anything, so say which way the switches are set when reporting a run |
 | hard disk | **Seagate ST-225**, 20 MB MFM, on a **Seagate ST11M** controller, in the second bay |
 | serial | **one port, at 0x3F8 (COM1)**, with the mouse on it — `sysbench`'s SPEC.md §9.4.2 block reports `COM1 03F8, COM2 0000`. Worth having written down, because it decides which half of a two-sided mouse change this machine can witness: with one port there is no §9.5 contest, `[mou_need]` is 1 by default, and everything §9.5.1 says about a modem on the other port is untestable here. The **Compaq Portable III** below is the two-port machine |
 | sound | none |
@@ -395,13 +395,16 @@ threshold dropped on the one port that answered like a mouse.
 
 **Its floppy drive is a 1.2MB 5.25", and that is a measurement fact, not
 trivia.** It turns at **360 RPM — 167 ms a revolution — even with 360KB media
-in it**, where every other machine here is a 300 RPM/200 ms drive, and its
-media is close to **1:1 interleaved** where the 5150's is 2:1. So it is the
-only machine in the register that can show a *latency* cost for what it is:
+in it**, where every other machine here is a 300 RPM/200 ms drive. So it is
+the only machine in the register that can show a *latency* cost for what it
+is:
 its BIOS streams a track at 22,368 B/s against the 5150's 11,984, os8088 gets
 11,047 against 8,062, and the gap to its own ceiling is therefore **2.03x
 against the 5150's 1.49x** for identical code issuing an identical 5 calls
-(PERFORMANCE.md Part 9 Set 19). A single calibration machine flatters a
+(PERFORMANCE.md Part 9 Set 19). Both machines' media is 1:1 and Set 19 said
+otherwise for a while: what separates a 1.24-revolution track read from a
+1.92 is per-call BIOS overhead, a 4.77MHz 8088 spending 52.5 ms in the IBM
+ROM's head-settle loop where a 12MHz 286 spends a fraction of it (Set 37). A single calibration machine flatters a
 latency bug, and this is the machine that says so.
 
 Read its reports with the revolution time in mind: `int 13h 1 sector` comes
@@ -484,9 +487,10 @@ differing runs. **Ask nobody for a dump of a build you can run yourself.**
 What still needs the owner is a dump of a machine *whose behaviour differs
 from the emulator's* — which, given everything in docs/FIELD-NOTES.md, is
 more often than it sounds, and always when a disk is involved. MartyPC's
-floppy is 30x fast and its BIOS returns what its author believed the hardware
-returns (PERFORMANCE.md, Set 11), so **a dump taken in the container proves
-what the code does and not what the 5150 does with it**.
+floppy TURNS now (PERFORMANCE.md Set 35) so its timing is close, but its BIOS
+still returns what its author believed the hardware returns, so **a dump taken
+in the container proves what the code does and not what the 5150 does with
+it**.
 
 The rest of this section is unchanged and applies to both, because the rules
 are about dumps and not about who took them. MartyPC's own debugger will also

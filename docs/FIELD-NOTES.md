@@ -922,7 +922,14 @@ every one landing on a whole number of the 200 ms revolution:
 So the media is **2:1 interleaved** — a whole track in one command takes two
 turns, 11,520 B/s by arithmetic against 11,985 measured — and **the drive,
 the controller and the BIOS all stream perfectly when asked for nine sectors
-at once**. `int 13h track, 1 call` *is* our batched read done right, and it
+at once**.
+
+> **The interleave sentence is wrong and PERFORMANCE.md Set 37 is the
+> correction.** The media is 1:1; the second turn is the IBM ROM's own
+> head-settle wait, 25 ms asked for and 52.5 ms of `LOOP $` delivered, once
+> per `int 13h`. The 11,520 agreement cannot discriminate, being bytes over
+> the whole call. Everything else in this note stands, including the
+> conclusion it exists for. `int 13h track, 1 call` *is* our batched read done right, and it
 is **6.3x faster than what `dsk_xfer` achieves**.
 
 The decisive comparison is the last two rows against each other. os8088 costs
@@ -1040,7 +1047,8 @@ the single 170 KB file off the same disk runs at **~13,390 B/s** (about 15
 seconds, 2 of them not spinning, stopping three times for a 64 KB buffer),
 the BIOS's own one-call track read is **11,570**, and 2:1 interleave by
 arithmetic is 11,520. Three independent figures within 16%. **11.5-13.4 KB/s
-is what this drive does.**
+is what this drive does.** (The third figure agrees by coincidence — see the
+correction above — and the target is the two measured ones.)
 
 ---
 
@@ -1653,3 +1661,155 @@ size.** And "exactly three rows" being almost exactly one DMA block at the XT
 rate (2.99) was a **coincidence**, and a persuasive one — it survived a
 capture, a plausible mechanism and a designed experiment before the experiment
 killed it.
+
+## 17. Four reports off the first `combo.img` field run (OPEN, three queued, one reproduced)
+
+The 5150 run that confirmed SPEC.md §18.97's probe on real hardware — `ST3
+0021` twice, `probe stop 03`, `verdict 0`, and drive B gone — also brought
+back four things about the formatter. They are queued rather than fixed, and
+one of them is already root-caused.
+
+**The probe's other half is NOT one of them.** The report reads
+`drives int 11h claims 2`, and §18.98's loop over units 2 and 3 starts at
+`cl = 2` against that count, so it correctly never runs: SW1 says two drives,
+which is units 0 and 1, and there is no third to ask about. The removal of
+unit 1 then sets the count to 1. **To exercise units 2 and 3 the switches have
+to claim three or four drives** — which is also the only way the external pair
+can appear at all (§18.98). Nothing is wrong here; it is worth writing down
+because "the probe for drive 2 did not run" and "the probe for drive 2 is
+broken" look identical in the report.
+
+**One gap it does expose**: `fdd_dbg_*` (§57.5) is a single set of bytes and
+§18.98 now probes up to three units, so the block describes the LAST one
+asked. On a machine claiming four drives the operator would see unit 3 and
+have no visibility into units 1 and 2. It wants either a per-unit block or a
+unit field beside the verdict.
+
+### 17.1 The format prompt does not clear on Escape (FIXED, verified on Hercules and CGA)
+
+Two of the four reports — "the size/format prompt doesn't clear after
+formatting" and "there is some corruption over the size prompt" — are **one
+bug**, and it is a regression from §26.4.
+
+`Format Disk…` armed, then **Escape**: line two is correctly replaced by the
+resting `Size ? Free ?`, and line one — `Format B: as 360K?` — **stays on
+screen**, sitting over the row above the status line. That is what reads as
+corruption; there is nothing corrupt about it, it is a line nobody erased.
+
+The cause is that §22.12's prompt became **two lines** at §26.4 (one line is
+44 characters and `fm_stat_line` truncates at 38, losing `Esc=no`), and the
+cancel path did not follow: `.cancel` calls `fm_edit_end` and falls into
+`.lineonly`, which is CF = 0 — "the status line is all that moved" — so
+`fm_status_only` repaints **one** line. It was right for every other mode,
+because modes 1, 2 and 3 are one-line prompts, and mode 4's two-line replace
+question never reaches `.cancel` at all (it is handled at `.replace`).
+
+**Reproduced on Hercules and on CGA**, drive B, with the shipped kernel: arm
+the prompt and press Escape. It does NOT show on the Enter path, because the
+format's own `fmv_load` repaints the whole window — which is why the harness
+missed it: every test here pressed Enter.
+
+**Fixed**: mode 5's cancel takes the full-repaint exit (`.out`, CF = 1)
+instead of `.lineonly`. Verified by re-running the repro on both adapters —
+the prompt clears whole.
+
+### 17.2 Format Disk stays greyed on a disk it just made (FIXED)
+
+Reported as "after formatting a disk, Format Disk becomes greyed out for the
+newly formatted disk forever". That was §22.12's predicate working as written:
+the item was live only while `FS_MOK == 0`, and a disk that formatted now
+mounts. The comment there said why — *"it MOUNTED: there is nothing here to
+format, and 'erase this perfectly good disk' is a different feature with a
+different question"*.
+
+**The plainest form of it is that os8088 could format any disk except one of
+its own**, which is what settled the design question: the second feature
+should exist, and declining to ask a question is not the same as protecting
+anybody from its answer. The `FS_MOK` test is gone from `fm_fmt_ok`, and the
+different question is *asked* — a mountable volume gets
+`ERASE and format A: as 360K?` where an unreadable one gets
+`Format A: as 360K?`. Enter still means yes and every other key no, which is
+already the strongest confirmation in the system (§22.12).
+
+Three pieces of fallout, all of which existed only because the greying had
+made them unreachable:
+
+- **`dskw_fmt_probe` forced 9/2 on the way out.** Its own comment justified
+  that with *"this routine is only ever called with a failed mount behind
+  it"*, which is exactly the premise that was just removed — so a **cancelled**
+  confirmation on a mounted 1.2MB or 1.44MB volume would have left the machine
+  believing that volume had 9 sectors a track. It banks the caller's
+  `[disk_spt]`/`[disk_heads]`/`[dsk_totsec]` and puts those back instead.
+  Like the routine's own note about why it restores anything at all, this
+  **closes a trap rather than fixing an observed bug**: on a 9-sector volume
+  the constant was accidentally right, and every drive in this harness — and
+  on the field machine — is 9-sector, so the case cannot be exhibited here.
+  What is gated is the round trip: the three words read identically before
+  the confirmation, while it is up, and after Escape cancels it.
+- **A sibling Disk window could be showing a folder on the disk being
+  replaced.** It could not before, because a window on an unmountable volume
+  is always at the root (§19.2). `fm_fmt_home` sends every other window on
+  that drive back to the root, with a caption to match and §22.8's deferred
+  re-list rather than three mounts paid at once.
+- **§18.96.2's fallback leaned on the greying** — a failed 720K reach test
+  re-formats as 360K rather than stopping, and the stated reason was that
+  stopping would leave a mountable, lying 720KB volume with Format Disk…
+  disabled. The behaviour is kept and the reason is restated: the user asked
+  for a formatted disk, and the useful answer is the one the drive *can* make
+  plus a toast saying why. §18.96.2 still runs, because a disk that silently
+  loses whatever is written past cylinder 39 is not a thing to ship on the
+  grounds that it can be reformatted afterwards.
+
+Verified on a cycle-accurate 5150/CGA with B: a copy of the shipped apps disk
+— four folders on a perfectly good FAT12 volume, which is exactly the disk the
+old predicate refused: the confirmation reads `ERASE and format B: as 360K?`,
+Enter makes an empty 360KB volume that the HOST's own fsck accepts
+(`os88disk.py --verify`: 354 clusters, 0 files), and with two windows open —
+one left inside `B:\APPS` — the sibling's `FS_CWD` goes 2 → 0 with the
+re-list debt set, its caption comes back as `Disk`, and raising it lists the
+new root. The 720K/360K gate (§18.96.2) still passes both legs.
+
+Cost: `.text` +24, `.cold` +152, **no rung crossed** and footprint unchanged
+— but `kern_big`'s cold rung has 107 bytes left in it afterwards, so the next
+cold addition buys a whole 512. `kern_small` is untouched: the formatter is
+`kern_big` only (§18.96).
+
+### 17.3 720K on the field machine came back 360K (NOT A BUG — the reach test)
+
+Reported as "switching to 720k formatted the disk in drive A; result was a
+360k formatted disk, claiming 354k free". That is §18.96.2 working: the Tandon
+TM100-2 is a 40-cylinder drive, the marker written to the volume's last sector
+did not come back, and the fallback re-made the disk as 360KB. **354K free on
+a 360KB volume is correct** — 354 clusters of 1KB after the boot sector, two
+FATs and the root directory.
+
+What the operator should have seen is the toast saying so —
+`Drive cannot reach 720K - made 360K` — and §17.1 is a good reason they may
+not have: with a stale prompt line on screen the window was not saying what it
+looked like it was saying.
+
+### 17.4 Do not offer the size toggle on units 0 and 1 (DONE)
+
+Asked for directly: the internal drives are the machine's own and their
+geometry is not in question, so the `Spc=size` key should only appear for
+units **2 and 3** — the external pair, which is exactly where an 80-cylinder
+3.5" drive can turn up and where the BIOS can say nothing about it (§18.98).
+
+It is a narrowing of §18.96.2 rather than a removal: the toggle exists because
+`AH=08h` is refused and the drive cannot be asked, and that ignorance is only
+*actionable* on a drive the operator may have changed. The row is already in
+`dsk_vtab` with its `DV_UNIT`, so the test is available where the prompt is
+composed.
+
+**Done**, as `fm_fmt_sizeable` — one predicate serving both the line and the
+key. Verified with a scratch disk on unit 2 (`--mount fd:2:`): on B: the
+second line reads `Enter=yes  Esc=no` and Space leaves the row at 3, on C: it
+reads `Spc=size  Enter=yes  Esc=no` and Space moves it 3 → 2.
+
+**And a third thing came out of setting the switches up for it**, which is in
+§18.98 rather than here because it is not what the field reported: §18.97's
+removal set the drive COUNT to 1 as well as freeing row 1, which truncates
+§18.98's loop — so a machine claiming three or four drives with no unit 1
+would never have asked about the external pair. That is the field machine with
+a 4865 plugged in, i.e. the exact configuration this round exists to serve, and
+it would have cost the next field run for nothing.

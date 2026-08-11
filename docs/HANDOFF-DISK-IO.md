@@ -54,9 +54,12 @@ either of the measured rows. PERFORMANCE.md's "THREE quantities, all
 different, and one number was doing all three" is about exactly this, and its
 guidance is to quote **calls**, not seconds.
 
-**Nothing here is a field number.** The constants are measured on the 5150; the
-call counts are measured on MartyPC, which is cycle-accurate and **30x fast on
-a disk**. The owner intends to confirm on the 5150 but has live data on its
+**Nothing here is a field number.** The constants are measured on the 5150;
+the call counts are measured on MartyPC. (That used to read "30x fast on a
+disk"; since PERFORMANCE.md Set 37 its floppy is within a measurement quantum
+of the field machine on an IBM-ROM machine. A call count was never affected
+either way — what is worth checking is which machine a *timing* came off,
+because GLaBIOS is 1.61x lighter per `int 13h` than the period ROM.) The owner intends to confirm on the 5150 but has live data on its
 hard disk and must back it up first.
 
 ---
@@ -109,9 +112,9 @@ after, the width being PERFORMANCE.md's "1 to 2 revolutions per call" band
 whose middle nobody has measured. The call count is the measurement and the
 seconds are an estimate — quote the former.
 
-**Still not a field number.** Every count here is MartyPC's, which is
-cycle-accurate on the CPU and 30x fast on a disk. The constants are the
-5150's. The two have never been multiplied together on the iron.
+**Still not a field number.** Every count here is MartyPC's; the constants are
+the 5150's, and the two have never been multiplied together on the iron. (The
+"30x fast on a disk" this used to say expired at PERFORMANCE.md Set 37.)
 
 ### What §19.2.3 turned out to be, which is not what was planned
 

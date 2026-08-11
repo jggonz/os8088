@@ -3507,6 +3507,13 @@ dskw_fmt_tab:
     dw 9, 40, 720
     db 2, 0xFD
     dw 2, 112, 360              ; 360KB
+
+    ; the caller's live geometry, banked across dskw_fmt_probe's reads and put
+    ; back by its .undo. Three words rather than a constant, because the probe
+    ; is no longer only ever run over a volume that failed to mount (see .undo)
+dskw_fmt_bspt:  dw 9
+dskw_fmt_bhds:  dw 2
+dskw_fmt_btot:  dw 0
 section .cold                   ; ...and back to cold code
 
 ; -----------------------------------------------------------------------------
@@ -3569,6 +3576,14 @@ dskw_fmt_probe:
     push si
     push di
     push es
+
+    ; the three words .try writes, banked before anything is aimed anywhere
+    mov ax, [disk_spt]
+    mov [dskw_fmt_bspt], ax
+    mov ax, [disk_heads]
+    mov [dskw_fmt_bhds], ax
+    mov ax, [dsk_totsec]
+    mov [dskw_fmt_btot], ax
 
     ; --- is it a floppy at all? (SPEC.md 18.7: DV_KIND is the TRANSPORT,
     ;     and a BIOS unit below 80h is the MEDIUM - disk_mount's own test)
@@ -3717,9 +3732,9 @@ dskw_fmt_probe:
                                 ; leaves whatever the last good one set. It
                                 ; only ever shortens a fill, so a stale value
                                 ; cannot read wrong bytes - but it can make
-                                ; the probe's own surplus meaningless, and
-                                ; the mount that follows overwrites this from
-                                ; the BPB anyway
+                                ; the probe's own surplus meaningless. .undo
+                                ; puts the caller's back, and a format's own
+                                ; mount re-derives it from the BPB regardless
     dec ax                      ; LBA spt-1 = CHS (0,0,spt) under this spt
     mov bx, dsk_secbuf
     mov cx, 1
@@ -3744,13 +3759,25 @@ dskw_fmt_probe:
     ; both from the BPB - so this closes a trap rather than fixing a bug, and
     ; it is the cheap end of that trade.
     ;
-    ; 9/2 and not the values on the way in, because that is exactly what
-    ; disk_mount's own failure path leaves (SPEC.md 18.3) and this routine is
-    ; only ever called with a failed mount behind it. dskw_format sets the
-    ; row's geometry itself.
+    ; **The values on the way IN, and that is a correction.** It used to force
+    ; 9/2 - exactly what disk_mount's own failure path leaves (SPEC.md 18.3) -
+    ; on the reasoning that the probe is only ever called with a failed mount
+    ; behind it. docs/FIELD-NOTES.md 17.2 took that premise away: a volume that
+    ; mounted can be formatted now, so the probe runs over live geometry, and
+    ; forcing 9/2 there would leave a mounted 1.44MB volume claiming 9 sectors
+    ; a track after a CANCELLED confirmation - a raw read at the wrong CHS with
+    ; nothing at all to say so. Banking is two words more than the constant was
+    ; and it is right whichever way the caller arrived. dskw_format sets the
+    ; row's geometry itself and owes this nothing.
 .undo:
-    mov word [disk_spt], 9
-    mov word [disk_heads], 2
+    push ax
+    mov ax, [dskw_fmt_bspt]
+    mov [disk_spt], ax
+    mov ax, [dskw_fmt_bhds]
+    mov [disk_heads], ax
+    mov ax, [dskw_fmt_btot]
+    mov [dsk_totsec], ax
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
