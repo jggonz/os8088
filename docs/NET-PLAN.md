@@ -231,6 +231,51 @@ one:
 end's own cost, says **6,499 bytes/second** for a 5150 against a modern far
 end — the second row.
 
+### 1.2.0 FIELD RESULT: 1,536 bytes/second, and the wire is not the cost
+
+**The link came up first try and moved 16 KB each way with zero errors**, DOS
+box calling as master on 0378, 5150 answering as slave on 03BC. Scan,
+handshake, magic, turnaround guard and both direction reversals all confirmed
+on iron. What it measured:
+
+| | bytes | ticks | rate | errors |
+|---|---|---|---|---|
+| out (master → 5150) | 16,128 | 191 | **1,536 B/s** | 0 |
+| in (5150 → master) | 16,128 | 184 | **1,595 B/s** | 0 |
+
+**That is 4.2x slower than §1.2's model, and the model was not wrong about the
+wire — it was wrong about everything around it.** 325 µs per nibble, of which
+the two `in`s and three `out`s that actually move data are about 30. Counted
+against PERFORMANCE.md Part 2's measured constants (4.34 clocks per instruction
+byte, 4.77 MHz) the prediction is **360 µs, within 11% of the measurement**,
+and it says exactly where:
+
+| per nibble, on the 5150 | µs |
+|---|---|
+| `lp_wfar`, four calls | **289** |
+| …of which `ticks()`, four reads | **94** |
+| `lp_rnib`'s own body and frame | 71 |
+| the wire | ~30 |
+
+**Nine tenths of it was arriving, not working** — and the single worst item was
+reading the BIOS tick counter to build a deadline **that is almost never
+reached**. This is SPEC.md §5.7's finding in a new place: one `gfx_pixel` was
+196 guest instructions of generic rect machinery across eleven routines with
+no hot spot anywhere.
+
+Fixed the way §5.7 was: the deadline is **lazy** (`ticks` is not read until a
+whole `LP_SPIN` of polls has gone unanswered, which on a working link never
+happens), the wait is a **macro rather than a called proc** so there is no
+frame four times a nibble, the poll body is 9 bytes rather than 16 (the level
+is a branch now, not a compare against a variable), and `DX` walks between the
+two ports with `inc`/`dec` instead of being reloaded from memory. Predicted
+after: **93 µs a nibble, ~5,400 B/s** — and predicted is all it is until the
+next field run says otherwise.
+
+**The measurement stands as the number of record either way.** 1,536 B/s is
+what this protocol did on these two machines, and PERFORMANCE.md Part 6 rule 8
+applies to the *fix* exactly as it applied to the model it replaces.
+
 ### 1.2.1 The cable is SLOWER than the floppy, and the case survives anyway
 
 An earlier draft of this section said the link was "1.3× to 3.4× the floppy",
@@ -242,11 +287,14 @@ throughput row, which was two Part 9 rounds stale.** The current figure is
 | | bytes/second | |
 |---|---|---|
 | floppy `FILE_READ`, warm | **21,307** | Set 24 |
-| this cable, modelled | ~6,500 | linksim |
-| ratio | **the cable is 3.3× SLOWER** | |
+| this cable, **measured** | **1,536** | §1.2.0, on the iron |
+| this cable, after §1.2.0's fix | ~5,400 predicted | not yet measured |
+| ratio | **the cable is 13.9× slower today, ~4× after the fix** | |
 
 That is a real result and it is not fatal, but it does retire an argument this
-plan was leaning on. **The case for this feature was never the transfer rate,
+plan was leaning on. **The field figure is worse than the model, not better**
+(§1.2.0), so everything below is written against 1,536 B/s and re-reads the
+same way at 5,400. **The case for this feature was never the transfer rate,
 and §0 already says so: it is the TRIP.** A cable at 6.5 KB/s that needs no
 trip beats a floppy at 21 KB/s that needs the seven-step path in
 docs/FIELD-MACHINES.md — SD card, VHD mount, copy, unmount, writer machine,
@@ -1042,7 +1090,7 @@ free and sufficient.
 
 | # | build | proved by |
 |---|---|---|
-| **1** | **`tests/lptlink`** — §9.1, **BUILT**. `make lptlink`: the survey and the wire in one artifact, on neither side of which is os8088 involved | a port report from both machines, a link that comes up by itself, and **a measured KB/s figure on the iron** into PERFORMANCE.md Part 9. Not §1.2's model. `python3 tests/lptlink/linksim.py` is its host-side gate and passes today |
+| **1** | **`tests/lptlink`** — §9.1, **BUILT AND RUN**. `make lptlink` | **DONE, §1.2.0**: link up first try, 16 KB each way, 0 errors, at 1,536 B/s. The rate is being re-measured after the hot-path fix; everything else about step 1 is settled |
 | 2 | `NET.DRV` Stage 1 + `OS88NET /IMG` | a `Network` icon on the desktop, a Disk window listing it, a package launched off it, a file written to it, `os88disk.py --verify` on the image afterwards from the host |
 | 3 | `OSAPI_DRV_CALL` + `DSV_PKGCALL` | a package reaching a driver at all — testable with a stub verb before any networking exists |
 | 4 | Stage 2, the redirector | the same Disk window over `OS88NET /D:C:\` — and the same `tests/filetest` battery, which is the existing 25-case write gate and applies unchanged |

@@ -570,54 +570,89 @@ lp_turn:
     ret
 
 ; -----------------------------------------------------------------------------
-; lp_wfar - wait for the far end's D4 to reach a level, bounded IN TICKS
-; in:  AH = 0x80 wait for high, 0x00 wait for low;  AL = ticks to allow
-; out: CF=0 and AL = the XORed status byte that satisfied it - so a nibble is
-;      sampled by the very read that detected the strobe, and there is no
-;      window in which the sender could have moved on. CF=1 = the deadline.
-; clobbers: AX, CF
+; LP_WAIT - wait for the far end's D4 to reach a level, bounded IN TICKS
+;   %1 = jnz (wait for it HIGH) or jz (wait for it LOW)
+;   %2 = the tick allowance      %3 = where to go when it expires
+; in:  DX = the status port.  uses AL, CX.  PRESERVES BX (rnib's nibble).
+; out: AL = the XORed status byte that satisfied it, so a nibble is sampled by
+;      the very read that detected the strobe.
 ;
-; ONE routine for all four waits in the handshake, and the deadline is in
-; TICKS for the reason LP_TMO gives: a poll count means different things on
-; the two ends of this cable, and a time does not.
+; A MACRO AND NOT A ROUTINE, and the field run is why. This was `lp_wfar`, a
+; near proc, called FOUR TIMES A NIBBLE - and the first measurement on real
+; hardware came back at 1,536 bytes/second, 325 us a nibble, against a model
+; that said 77. Counted against PERFORMANCE.md Part 2's own constants the
+; prediction was 360 us, within 11% of the measurement, and it says where:
+;
+;     lp_wfar, one call        72.2 us   (of which ticks() 23.5)
+;     ...4 of them a nibble   288.8 us
+;     lp_rnib body + frame     71.2 us
+;
+; The WIRE is two `in`s and three `out`s a nibble, about 30 us. Everything
+; else was the machinery of arriving - and the single worst item was reading
+; the BIOS tick counter to build a deadline THAT IS ALMOST NEVER REACHED.
+; SPEC.md 5.7's lesson in a new place: one gfx_pixel was 196 instructions of
+; generic rect code across eleven routines with no hot spot anywhere.
+;
+; So: the deadline is LAZY - `ticks` is not read at all until a whole LP_SPIN
+; of polls has gone unanswered, which on a working link never happens - the
+; poll body is 9 bytes rather than 16 (the level is a BRANCH now, not a
+; compare against a variable), and the whole thing is inlined so there is no
+; frame and no call.
 ; -----------------------------------------------------------------------------
-lp_wfar:
-    push cx
-    push dx
-    mov [lp_wlvl], ah
-    xor ah, ah
-    push ax                     ; the tick allowance
-    call ticks
-    pop cx
-    add ax, cx
-    mov [dl_wf], ax
-    mov dx, [lp_stat]
-.pass:
+%macro LP_WAIT 3
     mov cx, LP_SPIN
-.poll:
+    mov byte [lp_dlset], 0
+%%poll:
     in  al, dx
     xor al, 0x80                ; BUSY is inverted, and it is the top bit
-    mov ah, al
-    and ah, 0x80
-    cmp ah, [lp_wlvl]
-    je  .got
-    loop .poll
-    call ticks                  ; LP_SPIN polls without an answer: is the
-    sub ax, [dl_wf]             ; DEADLINE up? (modular - SPEC.md 45.15's js)
-    js  .pass
+    test al, 0x80
+    %1 %%got
+    loop %%poll
+    mov al, %2                  ; LP_SPIN polls unanswered: NOW ask the clock
+    call lp_dlchk
+    jc  %3
+    mov cx, LP_SPIN
+    jmp %%poll
+%%got:
+%endmacro
+
+; -----------------------------------------------------------------------------
+; lp_dlchk - the cold half of LP_WAIT. AL = the tick allowance.
+; out: CF=1 the deadline has passed. Preserves every register.
+;
+; The FIRST expiry establishes the deadline and never fails, which is what
+; keeps `ticks` off the fast path entirely: a link that is working never gets
+; here, and one that is not pays a tick read per 5,000 polls.
+; -----------------------------------------------------------------------------
+lp_dlchk:
+    push ax
+    push bx
+    cmp byte [lp_dlset], 0
+    jne .chk
+    mov byte [lp_dlset], 1
+    mov bl, al
+    xor bh, bh
+    call ticks
+    add ax, bx
+    mov [dl_wf], ax
+    clc
+    jmp short .out
+.chk:
+    call ticks
+    sub ax, [dl_wf]             ; modular compare (SPEC.md 45.15's js)
+    js  .live
     stc
     jmp short .out
-.got:
+.live:
     clc
 .out:
-    pop dx
-    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; lp_snib - send AL's low nibble
 ; out: CF=0 acked, CF=1 timed out
-; clobbers: CF
 ;
 ; FULLY INTERLOCKED, four phases: nibble+strobe up, wait for ack up, strobe
 ; down, wait for ack down. Both ends idle at D4 = 0 between nibbles, and
@@ -633,6 +668,10 @@ lp_wfar:
 ; presented as a cable fault on exactly the pair this exists for. Caught by
 ; the host-side model before it reached the iron, which is what SPEC.md
 ; 18.94.3 built that habit for.
+;
+; DX walks between base and base+1 with inc/dec rather than being re-loaded
+; from memory: one byte and two clocks against four bytes and seventeen, three
+; times a nibble, which is worth having once the calls are gone.
 ; -----------------------------------------------------------------------------
 lp_snib:
     push ax
@@ -650,25 +689,20 @@ lp_snib:
     out dx, al                  ; the nibble FIRST, strobe still low, so the
     or  al, 0x10                ; data is stable before the far end is told
     out dx, al                  ; to look at it
-    mov ah, 0x80
-    mov al, LP_TMO
-    call lp_wfar                ; ...wait for the ack to RISE
-    jc  .bad
-    mov dx, [lp_base]
+    inc dx                      ; -> status
+    LP_WAIT jnz, LP_TMO, .bad   ; ...wait for the ack to RISE
+    dec dx                      ; -> data
     mov al, bl
     out dx, al                  ; strobe down, nibble held
-    mov ah, 0
-    mov al, LP_TMO
-    call lp_wfar                ; ...and to FALL. Only then is the nibble
-    jnc .done                   ; complete at BOTH ends
+    inc dx
+    LP_WAIT jz, LP_TMO, .bad    ; ...and to FALL. Only then is the nibble
+    clc                         ; complete at BOTH ends
+    jmp short .out
 .bad:
     mov dx, [lp_base]
     mov al, bl
     out dx, al                  ; leave the strobe DOWN however we left, or
     stc                         ; the next attempt starts mid-handshake
-    jmp short .out
-.done:
-    clc
 .out:
     pop dx
     pop cx
@@ -690,38 +724,36 @@ lp_rnib:
     push bx
     push cx
     push dx
-    mov al, LP_TMO
+    mov dx, [lp_stat]
     cmp byte [lp_lastop], 1
-    je  .lvl                    ; already receiving: the ordinary wait
-    mov al, TURN_RX             ; a REVERSAL: the far end is sitting inside
-.lvl:                           ; lp_turn spending a whole tick, so this end
-    mov ah, 0x80                ; has to be patient exactly there and nowhere
-    call lp_wfar                ; else
-    jc  .bad
+    jne .rev                    ; a REVERSAL: the far end is sitting inside
+    LP_WAIT jnz, LP_TMO, .bad   ; lp_turn spending a whole tick, so this end
+    jmp short .got              ; has to be patient exactly there and nowhere
+.rev:                           ; else
+    LP_WAIT jnz, TURN_RX, .bad
+.got:
     shr al, 1                   ; far D3..D0 are status bits 6..3, sampled by
     shr al, 1                   ; the read that saw the strobe
     shr al, 1
     and al, 0x0F
     mov bl, al
-    mov dx, [lp_base]
+    dec dx                      ; -> data
     mov al, 0x10
     out dx, al                  ; ack up
-    mov ah, 0
-    mov al, LP_TMO
-    call lp_wfar                ; wait for the strobe to fall
-    jc  .bad
-    mov dx, [lp_base]
+    inc dx
+    LP_WAIT jz, LP_TMO, .bad    ; wait for the strobe to fall
+    dec dx
     xor al, al
     out dx, al                  ; ack down - both ends idle again
     mov al, bl
     clc
-    jmp short .out
+    jmp short .fin
 .bad:
     mov dx, [lp_base]
     xor al, al
     out dx, al                  ; idle on the way out of a timeout too
     stc
-.out:
+.fin:
     mov byte [lp_lastop], 1     ; the next send is a reversal and owes lp_turn
     pop dx
     pop cx
@@ -1644,7 +1676,7 @@ dl_hunt:    dw 0
 dl_cmd:     dw 0
 dl_turn:    dw 0
 dl_wf:      dw 0
-lp_wlvl:    db 0
+lp_dlset:   db 0
 slv_abort:  db 0
 
 t0:         dw 0
