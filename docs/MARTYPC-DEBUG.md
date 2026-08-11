@@ -110,10 +110,19 @@ So the boundary has moved, and it now runs between the ROM and the chip:
 Not modelled, and each is a place not to trust a number: **motor spin-up**
 (the BIOS's own ~1 s wait is a CPU-timed loop and so was always accurate, but
 the drive itself comes up to speed instantly), **the PIO paths** (PCjr), and
-**Format Track**, charged a flat revolution and never calibrated. The seek
-figures are the BIOS's own request rather than a measurement — the field's
-three rows all read one track and never seek, so nothing here pins them.
+**Format Track**, charged a flat revolution and never calibrated.
 **Hard disks are untouched**: this is the floppy alone.
+
+**The seek WAS the one guess and is not any more** (PERFORMANCE.md Set 36).
+It took its step rate from what the BIOS asks for through SPECIFY and its
+settle from the DPT, because every raw row this project had read one track and
+never moved the head. `sysbench`'s seek block put the 5150 at **7.81 ms a
+cylinder against the model's 8.00**, with the break falling between 10 and 20
+cylinders exactly where the model puts it. What the same rows expose is that
+MartyPC's **39-cylinder row is 3.000 revolutions against the field's 2.138** —
+not a wrong step rate, but the per-call turnaround pushing a read past sector 1
+so it waits another whole turn. That is the track row's cliff again: **one
+cause, two symptoms**, and the residual behind the boot as well.
 
 ### Counting the traffic from outside: `m.disk()`
 
@@ -173,6 +182,7 @@ model is right for the reason it was changed.
 | `os8088_5150_cga_gla` (GLaBIOS) | 1:1 | 41 (2.25 s) | **130 (7.14 s)** | — |
 | `os8088_5150_cga` (IBM ROM) | 2:1 | — | **210 (11.53 s)** | 180 (9.886 s) |
 | `os8088_5150_herc` (IBM ROM) | 2:1 | — | **211 (11.59 s)** | **180 (9.886 s)** |
+| ...`combo.img` on both (Set 36) | 2:1 | — | **222** | **205** — 1.08x |
 
 The last row is the like-for-like: the field's 180 is a Hercules boot off
 `herc.img`. **4.4x fast becomes 1.17x SLOW** — and the sign matters as much as
