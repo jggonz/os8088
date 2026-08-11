@@ -67,6 +67,28 @@ hd_dev_row:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_dev_row_ck - the same row, refused when the index names no device
+; in:  AL = index
+; out: CF = 0 with DI = the row; CF = 1 = no such device (DI untouched)
+; clobbers: DI (the output), flags
+;
+; The service handlers branch on CF after a row lookup, and the index they
+; look up arrived over the tool seam (SPEC.md 52.11.5) - a mismatched tool
+; image is exactly what the seam's validation exists for. hd_dev_row itself
+; stays unchecked because hd_dev_new must reach the row AT [hd_ndev] to fill
+; it before the count is raised.
+; -----------------------------------------------------------------------------
+hd_dev_row_ck:
+    cmp al, [hd_ndev]
+    jae .no
+    call hd_dev_row
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_chs - a 32-bit LBA as CHS, for the geometry in DI (module internal)
 ; in:  DI = the device row, [hd_lba] = the LBA
 ; out: CF = 0 and [hd_cyl]/[hd_head]/[hd_sec]; CF = 1 = past the drive

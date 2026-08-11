@@ -2284,17 +2284,35 @@ pt_szdraw:
     cmp byte [pt_szi], 3
     jb .box
     ; --- Apply, the full width of the column ----------------------------------
-    mov byte [pt_pen], CBLACK
+    ; The one standard labelled button in Paint, and so the one thing here
+    ; that is the shared control (apps/os88ui.inc). Everything else in this
+    ; module's chrome is pt_cwell - a filled well with a 16x16 icon and no
+    ; label - which is deliberately not a System-1 button.
+    ;
+    ; ONE PIXEL: the label's y was the literal +3 in a PT_SZ_AH = 13 box and
+    ; the shared control centres at (13-8)/2 = 2, so it sits one row higher.
+    ; Horizontally it already WAS centred and did not look it - 'Apply' is
+    ; 40px in a 42px button, so the x of 1 is (42-40)/2 exactly.
+    ;
+    ; No OS88UI_FILL: pt_szdraw white-fills the whole group before the first
+    ; box, so this always lands on clean ground.
     xor ax, ax
-    mov bx, PT_SZ_AY
-    mov cx, PT_SEPX - 2
-    mov dx, bx
-    add dx, PT_SZ_AH - 1
-    call pt_cframe
+    add ax, [pt_ox]                 ; the rect, in SCREEN coordinates - which
+    mov [pt_brect+0], ax            ; is what pt_cframe/pt_ctext were adding
+    add ax, PT_SEPX - 2             ; per primitive
+    mov [pt_brect+4], ax
+    mov ax, PT_SZ_AY
+    add ax, [pt_oy]
+    mov [pt_brect+2], ax
+    add ax, PT_SZ_AH - 1
+    mov [pt_brect+6], ax
     mov si, pt_s_apply
-    mov cx, 1
-    mov dx, PT_SZ_AY + 3
-    call pt_ctext
+    mov bx, pt_brect
+    xor di, di
+    call os88ui_btn
+    mov byte [pt_pen], CBLACK       ; os88ui_btn leaves the KERNEL's pen live;
+                                    ; [pt_pen] is this module's own and the
+                                    ; two are not the same variable
     pop di
     pop si
     pop dx
@@ -2302,6 +2320,13 @@ pt_szdraw:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; pt_brect - the Apply button's rect, screen coordinates. ONE, because
+; pt_szdraw draws one button and nothing hit-tests it against a stored rect:
+; pt_onclick has its own band (SPEC.md 42).
+; -----------------------------------------------------------------------------
+pt_brect:   dw 0, 0, 0, 0
 
 ; -----------------------------------------------------------------------------
 ; pt_szval - a NUL digit string at SI as a number
@@ -10079,6 +10104,9 @@ pt_ic_text:
                                     ; the load
     PTBUF  pt_argdrv, 1             ; ...and where it lives
     PTBUF  pt_argclus, 2
+
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%include "os88ui.inc"
 
     OS88_BSS PT_BSS
     OS88_IMAGE_END

@@ -1679,11 +1679,25 @@ can appear at all (§18.98). Nothing is wrong here; it is worth writing down
 because "the probe for drive 2 did not run" and "the probe for drive 2 is
 broken" look identical in the report.
 
-**One gap it does expose**: `fdd_dbg_*` (§57.5) is a single set of bytes and
-§18.98 now probes up to three units, so the block describes the LAST one
-asked. On a machine claiming four drives the operator would see unit 3 and
-have no visibility into units 1 and 2. It wants either a per-unit block or a
-unit field beside the verdict.
+**One gap it did expose, now FIXED**: `fdd_dbg_*` (§57.5) was a single set of
+bytes while §18.98 probes up to three units, so the block described the LAST
+one asked — on a machine claiming four drives the operator saw unit 3 and had
+no visibility into units 1 and 2. That is a diagnostic going blank on exactly
+the configuration it exists for, an internal drive plus a 4865 on the 37-pin
+connector. It is **one five-byte row per unit** now, with `probe ran` a bitmap
+(bit n = unit n was asked) and a unit printed only if its bit is set — so a
+correctly-switched two-drive machine still reads five short rows and not
+twenty. Ten bytes of `.text`, sixteen of `.ovl`, no rung crossed. Verified on
+`os8088_5150_cga_ext720`: `claimed 4`, `probe ran 0E`, three rows whose `ST3`
+reads `79`, `7A`, `7B` — the low two bits being the unit, which is what says
+each row is about the drive it names.
+
+**And `sysbench`'s own reader had two equs on one word**, found while
+rewriting it: `sb_fdstate` and `sb_skcyl` were both `os88_image_end + 240`.
+It worked only because `sb_disk` runs before `sb_fdd` and `sb_fdd` reads that
+word in the same breath it writes it — neither of which anything enforces,
+and the comment above `sb_fdstate` is *about* the last time this happened.
+Moved past every scalar, with `SB_O_SYSKB` raised to match.
 
 ### 17.1 The format prompt does not clear on Escape (FIXED, verified on Hercules and CGA)
 
@@ -1813,3 +1827,131 @@ removal set the drive COUNT to 1 as well as freeing row 1, which truncates
 would never have asked about the external pair. That is the field machine with
 a 4865 plugged in, i.e. the exact configuration this round exists to serve, and
 it would have cost the next field run for nothing.
+
+## 18. The switches were flipped and no external drive appeared (NOT A BUG — the count is the highest UNIT plus one)
+
+Reported off the second `combo.img` run: the operator set SW1 for the external
+4865 and no third drive showed up. The report is unambiguous about where the
+fault is not.
+
+```
+drives int 11h claims         2
+probe ran bitmap hex  0002
+--- unit 1   ST3 0021 / 0021   ST0 0071   probe stop 03 (ABSENT)   verdict 0
+```
+
+**The kernel is exonerated by the first row.** `desk_init` is
+`((AX >> 6) & 3) + 1` straight off `int 11h` with no clamp — the clamp to 2 is
+what §18.98 removed — so `claims 2` *is* the BIOS equipment word's bits 7:6.
+And §18.97's probe is demonstrably working in the same block: unit 1 answers
+`ST3 = 21` twice, `ST0 = 71`, stop 03, verdict 0, which is that section's exact
+documented signature, and drive B is correctly gone.
+
+**Nor were the switches set backwards**, and that is worth stating because it
+is the first thing anybody checks. Bits 7:6 carry exactly one encoding per
+count, so moving *either* switch necessarily changes the number: backwards
+would have read 1 or 4. Reading the same 2 as the previous run means those two
+bits did not move at all — a mechanical question (SW1 versus SW2, counting from
+the wrong end of an 8-way block, or a 40-year-old rocker that travels without
+making contact), not a polarity one.
+
+**And then the operator supplied the fact that settles it**: the switches
+*were* moved, and the previous run — the one that reported `claims 2` and had
+drive B taken away by the probe — was taken with the DIPs set to **one drive**.
+So two different physical settings both produced bits 7:6 = `01`. Those bits
+are not tracking the switches at all, which is a stuck line or a wiring
+question rather than anything about the encoding, and it retires the "did you
+cold boot" and "which end of the block" questions together.
+
+It also explains something that had been read as os8088 being wrong: **drive B
+appeared on this machine before §18.97's probe existed**, on a machine with one
+floppy, because the equipment word claims two whatever the switches say. The
+probe removing it is not a workaround for a mis-set switch — it is the only
+thing on that machine that can answer the question at all. And it is why DOS
+never needed the switches either: `DRIVER.SYS` assigns a logical drive to a
+physical unit without consulting the equipment word, which is what "it just
+claimed it with the command line command" was.
+
+**And the likely misunderstanding is arithmetic, not electrical.** J1's first
+external drive is physical **#2**, so one internal drive plus one external is
+**three** claimed drives — units 0, 1 and 2, with nothing at unit 1 — not two.
+At a claim of two the word says "units 0 and 1" and §18.98's loop over the
+external pair correctly never runs. SPEC.md §18.98 now says so where the count
+is described.
+
+**What changed as a result**: `sysbench` prints the **raw equipment word** in
+hex beside the derived count, because the count alone cannot say *which* switch
+moved and a run that reads the expected number for an unexpected reason is the
+one that costs a second trip. Bits 7-6 drives-1, 5-4 display, 3-2 planar RAM,
+1 the 8087, 0 "there is a diskette drive at all" — so one hex word is very
+nearly SW1 itself, and flipping SW1-1 or SW1-2 by miscounting the block is
+visible rather than silent. It is read from the BIOS rather than from the
+kernel's banked byte, so the two disagreeing would itself be news. Verified on
+`os8088_5150_cga_ext720`: `equip word hex 04EF` beside `claims 4`, which is
+§18.98's own measured figure for a four-drive machine.
+
+**And SW1 itself**, read off the 8255's port A rather than out of the POST
+snapshot, because on this machine the interesting question is no longer "what
+did the BIOS latch" but "did the switches ever reach the chip". Equal to the
+equipment word's low byte ⇒ the BIOS is faithful and the fault is in the
+switches or their wiring; different ⇒ something rewrote `0040:0010` after
+POST, which a machine with an ST11M and a SixPakPlus in it can do and which
+`int 11h` can never reveal. IBM PC only, gated on the model byte at
+`F000:FFFE`: port B bit 7 moves port A onto the switch block on a 5150, and on
+a 5160 the same bit clears the keyboard while SW1 sits on port C. Port B is
+banked and restored byte for byte inside an `IF = 0` window. Verified on
+`os8088_5150_cga_ext720`, where the switches *do* reach the chip:
+`equip word hex 04EF` and `SW1 direct hex 00EF`, the same byte.
+
+**Paying for it emptied the package's last slack.** `sysbench` is at its
+ceiling — `image + bss` must fit `APP_MAX_SIZE`, which is the 60KB *segment*
+and unraisable, so with `bss` at 38,452 the image may not cross 22,528. Both
+obvious sources of relief are refused by their own comments: `BL_MAXROWS` and
+`BL_ARENA` each record a report that TRUNCATED in the field. The two rows were
+bought by merging two pairs of header lines instead, and the file now says so
+where the `align` is. **9 bytes left**, after §57.6's build row took the rest.
+
+## 19. The 765 cannot see the external drive that DOS reads fine (OPEN — routed around)
+
+The field 5150's IBM 4865 on the 5.25" adapter's 37-pin connector is powered,
+cabled and **works**: with a disk in it, os8088 mounts it, the file manager
+lists it, and `sysbench` reads a file off it. Every one of those goes through
+`int 13h` with `DL = 2`.
+
+`dsk_fdd_probe`, which drives the FDC directly, cannot see it at all:
+
+```
+  --- unit 2
+  ST3 motor off hex     0022      bit 4 (TRK0) CLEAR
+  ST3 after seek hex    0022      ...and still clear after a RECALIBRATE
+  ST0 drained hex       0072      IC 01, SE, EC - the 765's Equipment Check
+  probe stop hex        0003      ABSENT
+```
+
+The unit-select bits in both answers (`ST3` low two bits = 10, `ST0` low two
+= 10) say the commands really did address unit 2, and `ST0`'s EC is the
+controller reporting that it issued the step pulses and never saw track 0.
+So the command reached the chip and the chip found nothing on the far end.
+
+**Media has been ruled out**, which is what makes this interesting rather than
+merely inconvenient. §18.97's whole premise is that TRK0 is a position sensor
+that answers with or without a disk; the obvious explanation was that this
+drive gates it on media. It does not — the capture above was taken **with a
+formatted disk in the drive, in the same boot that mounted and read it**.
+
+Ruled out so far: the drive (DOS and os8088 both use it), power (it has its
+own — J1 supplies none), the cable and the select jumper (`int 13h DL=2`
+reaches it), and media.
+
+Still open: why the ROM's own select sequence reaches unit 2 and ours does
+not. The next step is to disassemble the 27 Oct 82 ROM's motor-on/select/seek
+and diff it against `dsk_fdd_probe`'s — the ROM image is the one thing about
+this machine that is already in hand. Candidates worth carrying into that
+read: whether the IBM adapter decodes DOR bits 4–7 as motor enables for units
+2 and 3 the way a stock FDC does, and whether the drive's status outputs need
+something we are not asserting before it will drive TRK0.
+
+**It is routed around rather than fixed** (SPEC.md §18.98.1): units 2 and 3
+trust the equipment word, so the drive appears and works. The probe still runs
+for the published state above, which is the only reason any of this could be
+diagnosed at all. Unit 1 is unaffected and still contested.

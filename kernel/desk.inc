@@ -181,19 +181,29 @@ desk_init:
                                 ; so it gets no row and therefore no zone -
                                 ; there is nothing here to hide afterwards
 %ifndef NO_FDDPROBE
-    ; ...and the claim is worth no more about these two than about unit 1, so
-    ; ask them the same question (SPEC.md 18.97). It is worth MORE here, if
-    ; anything: an external drive on the 5.25" adapter's 37-pin connector is
-    ; the one that gets unplugged, and its switches are the ones left set.
+    ; ...and they are ASKED but not JUDGED (SPEC.md 18.98.1). The probe runs
+    ; for its published state - 57.5's ST3/ST0 for this unit is the only way
+    ; anybody can see what an external drive answered - and the ROW is made
+    ; whatever it says.
     ;
-    ; Cheaper than 18.97's retire, because the row does not exist yet: a unit
-    ; proven absent simply never gets one, so there is nothing to take back
-    ; and dsk_fdd_retire stays the unit-1 special case it was written as.
+    ; **The switches are contested for unit 1 and TRUSTED for units 2 and 3**,
+    ; and the asymmetry is about what the setting MEANS. Two drives is the
+    ; factory position on essentially every 5150 and is wrong on most of them,
+    ; so unit 1's claim is a default worth disproving. Nobody sets SW1 to
+    ; claim three or four by accident: that is a deliberate assertion about
+    ; hardware somebody went and wired to the 37-pin connector, and 18.96.2's
+    ; rule applies - trust the assertion. The costs are not symmetric either:
+    ; a phantom C: is one wasted click, a hidden real drive is the drive the
+    ; operator just installed.
+    ;
+    ; It is not hypothetical. The field 5150's 4865 answers ST3 = 22 with
+    ; TRK0 clear before AND after a recalibrate - ST0 = 72, the 765's own
+    ; Equipment Check - while DOS reads the same drive perfectly. Whatever
+    ; that is, the probe cannot see past it, and 18.97's "every failure keeps
+    ; the drive" is the rule that should have governed.
     mov al, cl
     call dsk_fdd_probe          ; preserves BX, CX, DX and ES: CL and the
-    or al, al                   ; count in DH both survive it
-    jz .eskip                   ; proven absent - and ONLY proven: every other
-%endif                          ; answer keeps the drive (18.97's fail-safe)
+%endif                          ; count in DH both survive it. AL is IGNORED
     mov al, cl
     call KERNEL_SEG:ovw_dsk_flop_add    ; FAR: overlay -> resident
 .eskip:
@@ -923,11 +933,12 @@ desk_draw_zone:
     mov si, [desk_pdisk]
     mov ax, [desk_zdrv]
     mov bl, al
-    call dsk_vol_slot
-    cmp byte [bx+DV_KIND], DVK_DRV
-    jne .icon
-    mov si, [desk_phdd]         ; a driver-backed volume is a HARD DISK to
-.icon:                          ; look at, not a floppy (SPEC.md 26)
+    call dsk_vol_fixed          ; the MEDIUM, not the transport (SPEC.md
+    jc .icon                    ; 18.7.2). This was `cmp DV_KIND, DVK_DRV`,
+    or al, al                   ; which is the TRANSPORT - so a hard disk
+    jz .icon                    ; booted through the BIOS (DVK_BIOS, unit
+    mov si, [desk_phdd]         ; 80h+) drew the FLOPPY icon, which is what a
+.icon:                          ; machine booting off its own disk always saw
     call icon_draw
 
     ; --- label: the white rect HUGS the caption (SPEC.md 26.4) ---------------

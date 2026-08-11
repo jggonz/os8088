@@ -826,6 +826,9 @@ at_x4g: AT_X4TAB 7
 
 AT_BSS_TOTAL equ (at_bss_end - at_bss_base)
 
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%include "os88ui.inc"
+
     OS88_BSS AT_BSS_TOTAL
     OS88_IMAGE_END
 

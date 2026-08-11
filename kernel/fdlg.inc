@@ -1232,10 +1232,26 @@ fdlg_actok:
     stc
     ret
 
+; =============================================================================
+; The STANDARD CONTROL, shared with every package (apps/os88ui.inc).
+;
+; One source, two worlds: OS88UI_KERNEL turns its primitive calls into the
+; cold-to-text shims below, and a package assembling the identical text gets
+; OSAPI_* far calls instead. A feature added to the button lands here, in the
+; Control Panel, in the Timer and in every package at once - which is the
+; whole reason it is one file rather than ten that agree by hand.
+;
+; It goes in fdlg.inc because this is the biggest consumer and the file is
+; cold in its entirety; ctrl.inc is cold too and calls it directly, and
+; apps.inc is .text and reaches it through os88ui_btn_f.
+; =============================================================================
+%define OS88UI_KERNEL
+%include "os88ui.inc"
+
 ; -----------------------------------------------------------------------------
 ; fdlg_defbtn - draw the default button (Open / Save) in the right pen
 ; in:  the layout cache; gfx lock held
-; out: nothing (all registers preserved); leaves the disabled pen set
+; out: nothing (all registers preserved); the pen is left LIVE by os88ui_btn
 ; -----------------------------------------------------------------------------
 fdlg_defbtn:
     push ax
@@ -1250,16 +1266,24 @@ fdlg_defbtn:
     mov al, 0
     adc al, 0                   ; AL = 1 refused, 0 live - and note ADC WRITES
     mov [fdlg_actl], al         ; CF, so the carry the gate answered in is
-    or al, al                   ; gone by here. Passing it to gfx_pen_cf drew
-    jz .live                    ; the button live every time, which is exactly
-    call KERNEL_SEG:cw_gfx_pen_dis ; the "looks available and refuses" failure
-    jmp short .pen              ; rule 4 exists to prevent
-.live:
-    call KERNEL_SEG:cw_gfx_pen_live
-.pen:
+    mov ah, al                  ; gone by here, which is why the answer is
+                                ; carried as a VALUE from here on rather than
+                                ; re-read from the flag (it used to be passed
+                                ; to gfx_pen_cf and drew the button live every
+                                ; time - the "looks available and refuses"
+                                ; failure rule 4 exists to prevent)
     mov bx, FD_BY0
-    mov al, 1                   ; the default button carries the outer frame
-    call fdlg_btn
+    mov al, OS88UI_DEF | OS88UI_FILL
+                                ; the outer ring - and the FILL, because this
+                                ; is the one button in the kernel REDRAWN IN
+                                ; PLACE (fdlg_draw_name, on the edge where
+                                ; fdlg_actok moves). font_char is transparent,
+                                ; so without an erase a checkerboard caption
+                                ; is OR'd onto the solid one already there and
+                                ; the greyed label comes out pixel-identical
+                                ; to the live one - SPEC.md 47 rule 1 defeated
+                                ; downstream of a mechanism that works
+    call fdlg_btn               ; ...and AH carries the greying (SPEC.md 47 r1)
     pop si
     pop bx
     pop ax
@@ -1267,9 +1291,26 @@ fdlg_defbtn:
 
 ; -----------------------------------------------------------------------------
 ; fdlg_btn - one button of the right-hand column (internal)
-; in:  BX = its top (content-relative), SI = label, AL non-zero = the
-;      default button (a second frame 2px out)
-; out: nothing (all registers preserved)
+; in:  BX = its top (content-relative), SI = label, AL = OS88UI_* flags
+;      (DEF and/or FILL), AH non-zero = disabled
+; out: nothing (all registers preserved); the pen is left LIVE
+;
+; The drawing is os88ui_btn's now - the shared control, one source with every
+; package (apps/os88ui.inc). What is left here is the adapter: the column's
+; fixed x, this button's y, and the window origin, turned into the screen rect
+; the shared routine takes. AL is the shared routine's OWN flag word rather
+; than a private encoding, so adding one is not two edits.
+;
+; The DISABLED state moved from the caller's pen to a flag, which is SPEC.md
+; 47 rule 1 arriving properly: it used to be "set the pen, then call me", so
+; the colour and [gfx_dis] were the caller's to get right and the label and
+; the frame could disagree. Now one flag drives both and the pen comes back
+; live by itself.
+;
+; Only the DEFAULT button passes FILL. Cancel, Drive and New Folder are drawn
+; once, by fdlg_paint, onto a pane wm_paint_all has already whited - and
+; nothing can change what they say - so an erase there is a gfx_fill nobody
+; needs. The default button is the exception because its state moves.
 ; -----------------------------------------------------------------------------
 fdlg_btn:
     push ax
@@ -1277,39 +1318,28 @@ fdlg_btn:
     push cx
     push dx
     push si
-    push bp
-    mov [fdlg_bdef], al         ; AL is about to become a rect corner
-    mov bp, bx                  ; BP = the button top (a value, never an
-                                ; address: SS is not DS, SPEC.md 1)
-                                ; The pen is the CALLER'S - it used to force
-                                ; CBLACK here, which is fine for three of the
-                                ; four buttons and wrong for the one that can
-                                ; be disabled (SPEC.md 47 rule 2: the frame
-                                ; greys with the label, and on a mono adapter
-                                ; the frame is the half that shows)
+    push di
+    mov di, ax                  ; DI = the two flag bytes; AX is about to be a
+                                ; rect corner
     mov ax, FD_BX1
-    mov bx, bp
     mov cx, FD_BX2
-    mov dx, bp
+    mov dx, bx
     add dx, FD_BH
-    call fdlg_off
-    call KERNEL_SEG:cw_gfx_frame
-    cmp byte [fdlg_bdef], 0
-    je .label
-    mov ax, FD_BX1-2
-    mov bx, bp
-    dec bx
-    dec bx
-    mov cx, FD_BX2+2
-    mov dx, bp
-    add dx, FD_BH+2
-    call fdlg_off
-    call KERNEL_SEG:cw_gfx_frame
-.label:
-    mov dx, bp
-    add dx, 3
-    call fdlg_blabel
-    pop bp
+    call fdlg_off               ; AX..DX = the inclusive SCREEN rect
+    mov [os88ui_krect+0], ax
+    mov [os88ui_krect+2], bx
+    mov [os88ui_krect+4], cx
+    mov [os88ui_krect+6], dx
+    mov ax, di
+    or ah, ah                   ; AL is already the flag word; the greying is
+    jz .live                    ; the one bit that arrived separately
+    or al, OS88UI_DIS
+.live:
+    xor ah, ah
+    mov di, ax
+    mov bx, os88ui_krect
+    call os88ui_btn
+    pop di
     pop si
     pop dx
     pop cx
@@ -1437,14 +1467,13 @@ fdlg_paint_x:
 
     ; --- the button column ---
     call fdlg_defbtn            ; Open / Save, greyed when it would refuse
-    call KERNEL_SEG:cw_gfx_pen_live
     mov si, fdlg_s_cancel
     mov bx, FD_BY1
-    xor al, al
+    xor ax, ax
     call fdlg_btn
     mov si, fdlg_s_drive
     mov bx, FD_BY2
-    xor al, al
+    xor ax, ax
     call fdlg_btn
     cmp byte [fdlg_mode], 0     ; New Folder is a SAVE-mode button: opening a
     je .nonewf                  ; file has no use for one, and the fourth
