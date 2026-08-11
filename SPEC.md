@@ -6032,8 +6032,9 @@ itself.
 
 | symbol      | contract                                                    |
 |-------------|---------------------------------------------------------------|
-| `fpg_begin` | in: AX = sectors this operation expects (0 is read as 1). Arms the widget and draws the **whole** of the expensive part — the white bed, the document icon and the box frame. Preserves all registers and the flags. |
-| `fpg_step`  | in: nothing. One sector done. Preserves **every register and the flags** — its caller is the middle of `dsk_xfer`'s per-sector loop, `spl_step`'s contract exactly. |
+| `fpg_begin` | in: `DX:CX` = the **bytes** this operation expects (0 refuses). Arms the widget and draws the **whole** of the expensive part — the white bed, the document icon and the box frame. Preserves all registers and the flags. §12.8.1. |
+| `fpg_step`  | in: nothing. One 512-byte unit done. Preserves **every register and the flags** — its caller is the middle of `dsk_xfer`'s per-sector loop, `spl_step`'s contract exactly. |
+| `fpg_stepb` | in: AX = bytes moved **since the last report**. The byte-shaped step, for a producer with no sectors; API slot 0x03C0 (`OSAPI_FS_PROG`). §12.8.1. |
 | `fpg_end`   | in: nothing. Disarms and gives the bar back: white-fills the rows of its own bed that carry no menu text, `menu_inval`s the bed's cells, and calls `menu_draw_bar`. Preserves all registers and the flags. |
 
 **The chrome is drawn once and the bar is the only thing that moves.** A
@@ -6093,19 +6094,98 @@ Five things hold it up.
 
 **Where it is armed** is the file-operation layer, because that is the only
 place a *total* exists: `dsk_xfer` knows one call's run and `dskw_rdata`
-coalesces many calls into one operation. The four sites are the three
-`diskw.inc` data pipelines, each immediately after `dskw_size32` has put the
-job's sector count in `[dskw_rem]` (§18.4), and `dsk_read_chain`, which takes
-its total in DX — between them, every multi-second transfer in the system:
-a package load, a document open, a Paint or Note Pad save, and each chunk of
-a file-manager copy. `fpg_end` sits in the matching `dskw_*_x` epilogue,
-where there is exactly one of it however many ways the body returned.
+coalesces many calls into one operation. The five sites are the three
+`diskw.inc` data pipelines, each passing the job's own `[dskw_len]`/
+`[dskw_lenhi]` (§18.4); `dsk_read_chain`, which is handed sectors and
+multiplies; and `dskw_rbody`'s **redirected** branch, where `DX:CX` is
+already `FSV_STAT`'s answer and nothing has to be computed at all (§12.8.1)
+— between them, every multi-second transfer in the system: a package load, a
+document open, a Paint or Note Pad save, each chunk of a file-manager copy,
+and a file coming down a cable. `fpg_end` sits in the matching `dskw_*_x`
+epilogue, where there is exactly one of it however many ways the body
+returned — which is why the redirected branch needed no exit of its own.
 
 Metadata sectors — the FAT flush, the directory commit — are outside
 `[dskw_rem]` and so are not counted, which is why the bar clamps at full
 rather than wrapping. The alternative was a total that had to be revised
 downward mid-operation, and a progress bar that goes backwards is worse than
 one that sits at 100% for a sector or two.
+
+#### 12.8.1 The scale is BYTES, and the driver steps it
+
+`fpg_begin` took a **sector count** until the file redirector arrived and had
+none to give. A `DVK_FILE` volume has no sectors at all — no BPB, no FAT, no
+`int 13h` behind it, and `dsk_xfer` refuses one outright (§62.9) — so the
+one file operation in the machine that can take a *minute*, a read over a
+LapLink cable at 3,741 bytes/second (PERFORMANCE.md Set 39), was the only
+one that reported nothing whatsoever. It armed no widget because it had no
+number of the shape the widget wanted.
+
+That is a defect in the *interface* rather than a missing feature, and the
+tell is that **every producer already holds a byte count**: `dskw_size32`
+divides one to get `[dskw_rem]`, `dsk_read_chain` is the only caller in the
+tree that genuinely thinks in sectors, and `FSV_STAT` answers a size in
+`DX:CX`. Asking each for what it has rather than what this module used to
+want costs nothing and makes the widget say something on a volume with no
+geometry.
+
+- **`DX:CX` and not `DX:AX`**, because that is the file API's own 32-bit
+  count convention (§18.4.1) *and* `FSV_STAT`'s answer register pair. The
+  redirected arming site is therefore a bare `call` with no argument setup
+  at all, at a point where AX is still the driver's handle and must survive
+  — which is precisely the site the whole change exists for.
+- **512-byte units stay, and they are not part of the contract.** The
+  trough is 62 pixels; `fpg_begin` rounds the byte total UP into whole units
+  and saturates at 65,535, so a 32MB job (the volume cap, §18.7) lands one
+  unit short of exact and nothing about that is visible. Keeping the unit is
+  what leaves `fpg_step` — `dsk_xfer`'s per-sector caller, on the disk path
+  for the life of the machine — untouched and still free.
+- **`fpg_stepb` is the other half, and without it the conversion is a bar
+  that lies.** Arming a redirected read from `FSV_STAT`'s size and then
+  never stepping it puts a 0% bar on screen for the length of the transfer
+  and takes it away again. The kernel *cannot* step it: a redirected read is
+  **one far call**, not a loop the kernel is standing in, so between
+  `FSV_READ` going out and coming back only the driver knows how far the
+  file has got. So it is an API slot (0x03C0, `OSAPI_FS_PROG`), and the
+  driver calls it from inside the verb.
+- **"Since the last report", never a running total.** A driver that reports
+  cumulative bytes advances the bar by the whole file on every call. The
+  remainder below one unit is **carried** in `[fpg_frac]` rather than
+  rounded away, so reporting a wire's every 64-byte frame is exact rather
+  than dropping 448 bytes in 512 — which is the difference between a bar
+  that fills and one that never leaves 0.
+- **`[fpg_frac]` is SEEDED with `FPG_UNIT - 1`, not zeroed**, and that one
+  word is the whole of what makes the two ends round the same way. The total
+  rounds **up** into whole units; a plain accumulator counts only **whole**
+  ones, so a 167-byte file armed at 1 unit and delivered 167 bytes reported
+  **0 of 1** and left the bar at 0% for the entire transfer — with no
+  arithmetic anywhere being wrong. Seeded, the running
+  `(FPG_UNIT - 1 + bytes) / FPG_UNIT` *is* `ceil(bytes / FPG_UNIT)` at every
+  point, not merely at the end. `fpg_step` never reads it, so the sector path
+  is untouched.
+- **The loader's arm is one sector coarse, deliberately.** `dsk_read_chain`
+  is handed sectors and multiplies, so a redirected package load is scaled to
+  the *capacity* the driver is given rather than to the file — the same number
+  the driver is told to clamp against, and out by under 512 bytes. The path
+  this feature exists for, `dskw_rbody`'s, is armed from `FSV_STAT` and is
+  exact; changing the loader's would mean changing an interface for less than
+  a sector.
+- **`fpg_stepb` steps *through* `fpg_step`** rather than repeating its
+  arithmetic, the same discipline `dskw_rdata`/`wdata`'s shared flush
+  follows (§18.4.2) and for the same reason: two copies of "has the extent
+  moved" is two answers that can drift. The loop runs at most 128 turns per
+  64KB report and each turn is a compare that usually finds nothing to draw.
+- **Unarmed it is a compare and a return**, so a driver calls it
+  unconditionally and never tests. It *draws*, so the gfx lock must already
+  be held — true by construction inside a file operation (§18) — and a
+  driver must never take it.
+
+**`RAMDISK.DRV` reports in `RD_PCHUNK` (64-byte) pieces on purpose**, and
+that is the only place the harness pretends to be slow. A RAM disk delivers
+a whole file in one `rep movsb`, so without it `OSAPI_FS_PROG` would ship
+with no consumer but the cable it was written for and no way to run it in a
+container — which is exactly how `OS88NET.COM` reached the field twice with
+not one instruction executed (§62.8).
 
 ### 12.9 The bar is three segments, and each answers for itself
 
@@ -35265,6 +35345,28 @@ simply leaves it blank, so §25's generic icon does its job. A driver that
 wants to harvest gets a second cell later, or does it with `FSV_READAT` and
 composes — but **measure first**: at ~30 ms a read it is a second of listing
 time for a folder of thirty packages.
+
+**A driver also owes the PROGRESS BAR, and it is the only one that can pay**
+(§12.8.1). The kernel arms §12.8's file-activity widget from `FSV_STAT`'s
+size and is then **one far call deep** inside `FSV_READ`, blind, until the
+verb returns — where a floppy is stepped from `dsk_xfer`'s own per-sector
+loop. So a redirected read of a 116KB module over a 3,741 bytes/second cable
+(PERFORMANCE.md Set 39) reported *nothing at all* until the widget's scale
+became bytes and this cell existed:
+
+```
+OSAPI_FS_PROG  0x03C0   AX = bytes moved SINCE YOUR LAST REPORT
+                        (never a running total: the bar would advance by
+                        the whole file on every call)
+                        out: nothing, every register and the flags kept
+```
+
+An ordinary slot and not an X stub — it carries no pointer. Unarmed it is a
+compare and a return, so call it unconditionally and never test; a short
+count is the ordinary case for a wire and the sub-unit remainder is carried
+rather than rounded, so reporting every 64-byte frame is exact. **It draws**,
+so the gfx lock must already be held — true by construction inside a file
+operation (§18) — and a driver must never take it.
 
 `DVK_FILE` = 2 joins `DVK_BIOS` and `DVK_DRV` in `DV_KIND`, and `DV_CLASS`
 (§18.7.3) says which class serves it — the same byte, doing the same job, for

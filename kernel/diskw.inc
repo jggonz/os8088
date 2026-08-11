@@ -1295,8 +1295,9 @@ dskw_wbody:
     ; a crash here costs nothing. The price is that a replace briefly needs
     ; room for both copies (SPEC.md 18.4).
 .data:
-    mov ax, [dskw_rem]          ; arm the progress widget HERE and not up at
-    call KERNEL_SEG:cw_fpg_begin    ; .sized, though the count is known there:
+    mov cx, [dskw_len]          ; arm the progress widget HERE and not up at
+    mov dx, [dskw_lenhi]        ; .sized, though the count is known there:
+    call KERNEL_SEG:cw_fpg_begin    ; (DX:CX = the job in BYTES, SPEC.md 12.8.1)
                                 ; dskw_find's directory scan sits between the
                                 ; two and its sectors are not part of the job
                                 ; the bar is measuring (SPEC.md 12.8).
@@ -1673,9 +1674,9 @@ dskw_rbody:
     stc                         ; entry is hostile rather than merely large
     ret
 .secok:
-    mov ax, [dskw_rem]          ; the widget's scale (SPEC.md 12.8) - a 116KB
-    call KERNEL_SEG:cw_fpg_begin    ; module is 232 sectors and a minute of
-                                ; frozen screen; dskw_read_x ends it
+    mov cx, [dskw_len]          ; the widget's scale, in BYTES (SPEC.md
+    mov dx, [dskw_lenhi]        ; 12.8.1) - a 116KB module is a minute of
+    call KERNEL_SEG:cw_fpg_begin    ; frozen screen; dskw_read_x ends it
     mov ax, [dskw_raw+DSK_R_CLUS]
     mov [dskw_cur], ax
     call dskw_rdata             ; walk the chain into the caller's buffer
@@ -1716,6 +1717,17 @@ dskw_rbody:
     stc
     ret
 .fsfits:
+    call KERNEL_SEG:cw_fpg_begin    ; DX:CX IS ALREADY THE SIZE - the reason
+                                ; the widget's scale is BYTES (SPEC.md 12.8.1):
+                                ; a redirected volume has no sectors to give
+                                ; it, so before this the one file operation
+                                ; that can take a MINUTE over a cable was the
+                                ; only one in the machine that reported
+                                ; nothing at all. The driver steps it from
+                                ; inside FSV_READ through OSAPI_FS_PROG, which
+                                ; is the other half: the kernel is not
+                                ; standing in a loop here, it is one far call
+                                ; deep and blind until the verb returns
     mov bx, [dskw_src]          ; AX IS STILL THE HANDLE, which is the whole
     mov dx, [dskw_seg]          ; reason the size test came first: every
     mov cx, [dskw_cap]          ; register this loads is one the test needed,
@@ -2634,8 +2646,9 @@ dskw_apbody:
     call dskw_norm              ; the source becomes seg:0..15 + a segment run
     call dskw_size32            ; size the job exactly as dskw_wbody does
     jc .badarg                  ; (unreachable: a chunk is one 16-bit count)
-    mov ax, [dskw_rem]          ; ...and arm the widget the same way, so a
-    call KERNEL_SEG:cw_fpg_begin    ; file-manager copy reports chunk by chunk
+    mov cx, [dskw_len]          ; ...and arm the widget the same way, so a
+    mov dx, [dskw_lenhi]        ; file-manager copy reports chunk by chunk
+    call KERNEL_SEG:cw_fpg_begin
     mov word [dskw_zapnext], 0
 
     call dskw_wdata             ; the new sub-chain, allocated and written

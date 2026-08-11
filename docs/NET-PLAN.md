@@ -817,6 +817,32 @@ source directory by walking its raw sectors and there are none. That wants an
 enumerate-by-ordinal verb or the engine reading the kernel's own listing, and
 it is design work rather than a branch site.
 
+**THE ACTIVITY BAR REPORTS ON A CABLE NOW** (SPEC.md §12.8.1), which is the
+one thing three milestones of branch sites left visibly missing. §12.8's
+widget took a SECTOR count, a redirected volume has none, so the single
+slowest operation the whole redirector makes possible — 116KB of module at
+3,741 bytes/second, half a minute of frozen screen — was the *only* file
+operation in the machine that said nothing at all. `fpg_begin` takes bytes in
+`DX:CX` now, which is the file API's own 32-bit count convention and
+`FSV_STAT`'s answer pair, so the redirected arming site is a bare `call` with
+no argument setup; every other producer already held a byte count and was
+dividing it away. The trough stays 512-byte units internally, so `fpg_step` —
+`dsk_xfer`'s per-sector caller, on the disk path for the life of the machine —
+is untouched and still free.
+
+**Converting the front door alone would have shipped a bar that lies.** A
+redirected read is ONE far call, not a loop the kernel is standing in, so
+between `FSV_READ` going out and coming back only the driver knows how far the
+file has got — arm it and never step it and the bar sits at 0% for the whole
+transfer. So `OSAPI_FS_PROG` (0x03C0) is the other half, and the contract is
+"bytes since your last report" rather than a running total, with the sub-unit
+remainder carried rather than rounded so a wire's 64-byte frames sum exactly.
+`RAMDISK.DRV` reports in 64-byte pieces on purpose: a RAM disk delivers a file
+in one `rep movsb`, and without that this slot would have shipped with no
+consumer but the cable it was written for — which is precisely how
+`OS88NET.COM` reached the field twice unexecuted. **`.text` +103, `.cold` +23,
+no rung crossed, footprint unchanged.**
+
 The cable's file client is now a SECOND `DRVC_FILE` driver against a kernel
 proven three milestones deep, which is what the whole RAM-disk detour bought.
 

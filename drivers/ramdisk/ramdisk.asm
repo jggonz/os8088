@@ -656,6 +656,54 @@ rd_blit_kern:
     pop ds
     ret
 
+; rd_blit_prog - rd_blit_user, in pieces, reporting each (SPEC.md 12.8.1)
+; in/out: rd_blit_user's exactly
+;
+; The one place this harness pretends to be slow, and it earns its keep: a
+; DRVC_FILE driver is the only producer the kernel CANNOT step the activity
+; bar for - it arms the widget from FSV_STAT's size and is then one far call
+; deep inside here, blind, until this returns (SPEC.md 62.9.1). A RAM disk
+; delivers a whole file in one rep movsb, so without this the OSAPI_FS_PROG
+; path would ship untested against nothing but the cable it was written for,
+; which is exactly how OS88NET.COM reached the field twice unexecuted.
+;
+; RD_PCHUNK is small on purpose: 116KB of module is ~1,800 reports, and each
+; one is a compare inside the kernel that usually finds the bar's extent
+; unmoved. Reporting a SHORT count is the ordinary case for a wire and the
+; remainder is carried, not rounded - so an odd tail needs no special case.
+RD_PCHUNK   equ 64              ; a plausible frame, not a tuned figure
+rd_blit_prog:
+    push ax
+    push bx
+    push cx
+    push si
+.chunk:
+    jcxz .done
+    mov si, cx                  ; SI = this piece's length: what is left, or
+    cmp si, RD_PCHUNK           ; a whole frame, whichever is smaller - the
+    jbe .go                     ; odd tail needs no case of its own, because
+    mov si, RD_PCHUNK           ; a short report is what a wire does anyway
+.go:
+    push cx                     ; the running remainder, across a blit that
+    mov cx, si                  ; spends CX down to 0
+    call rd_blit_user           ; arena:AX -> DX:BX, CX bytes
+    add ax, si                  ; advance the arena offset and the destination
+    add bx, si                  ; (the kernel normalised BX to 0..15 and an
+                                ; extent is RD_EXTKB, so neither can wrap)
+    push ax
+    mov ax, si
+    call OSAPI_FS_PROG          ; AX = bytes SINCE THE LAST REPORT, never a
+    pop ax                      ; running total (SPEC.md 12.8.1)
+    pop cx
+    sub cx, si
+    jmp short .chunk
+.done:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; rd_blit_user - arena:AX -> DX:BX (the kernel's buffer), CX bytes
 rd_blit_user:
     push ds
@@ -855,7 +903,8 @@ rd_read:
     jcxz .none                  ; an empty file: 0 bytes, and not an error
     mov al, [si+RDE_EXT]
     call rd_ext_off
-    call rd_blit_user           ; arena:AX -> DX:BX, CX bytes
+    call rd_blit_prog           ; arena:AX -> DX:BX, CX bytes, in RD_PCHUNK
+                                ; pieces with one OSAPI_FS_PROG per piece
 .none:
     mov ax, [rd_n]
     xor dx, dx

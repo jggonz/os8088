@@ -47,12 +47,33 @@ FPG_W      equ FPG_ICO_W + FPG_ISP + FPG_BOX_W + FPG_GAP    ; 88
 FPG_BAR_PX equ FPG_BOX_W - 2    ; 62: the trough, in pixels
 FPG_MINX   equ MENU_SYS_XR + 8  ; an origin left of this would collide with
                                 ; the System menu: refuse the whole feature
+FPG_UNIT   equ 512              ; the trough's internal unit, in bytes: a
+FPG_USHR   equ 9                ; SECTOR, because fpg_step's caller is the
+                                ; per-sector loop in dsk_xfer and that is the
+                                ; one report this widget gets for free. It is
+                                ; NOT part of the interface - fpg_begin and
+                                ; fpg_stepb both speak bytes (SPEC.md 12.8.1)
 
 ; -----------------------------------------------------------------------------
 ; fpg_begin - arm the widget and draw everything expensive about it
-; in:  AX = sectors this operation expects (0 refuses: nothing to report);
+; in:  DX:CX = BYTES this operation expects (0 refuses: nothing to report);
 ;      DS = KERNEL_SEG, gfx lock held by the caller
 ; out: nothing - all registers and the flags preserved
+;
+; **The scale is BYTES, and the trough's units are the widget's own business**
+; (SPEC.md 12.8.1). It took a SECTOR count until the file redirector arrived
+; and had none to give: a DRVC_FILE volume has no sectors at all (SPEC.md
+; 62.9), FSV_STAT answers a size in DX:CX, and a cable moves bytes. Every
+; producer already holds a byte count - dskw_size32 divides one to get
+; [dskw_rem] - so asking for the thing they have rather than the thing this
+; module used to want costs nothing and makes the widget say something on a
+; volume that has no geometry. DX:CX and not DX:AX because that is the file
+; API's own 32-bit count convention (SPEC.md 18.4.1) and FSV_STAT's answer
+; register pair, so the two arming sites that matter most pass it unmoved.
+;
+; Internally it is still 512-byte units, rounded UP, saturating at 65,535 -
+; a 32MB job (the volume cap, SPEC.md 18.7) lands one unit short of exact and
+; the trough is 62 pixels wide, so nothing about that is visible.
 ;
 ; Refuses, silently and completely, in four cases: already armed (an
 ; operation nested inside another - the OUTER one is the honest scale), the
@@ -80,11 +101,35 @@ fpg_begin:
     jl .out                     ; narrower than the widget wrapping the sub
     mov [fpg_x0], bx
 
-    or ax, ax                   ; a 0-sector job has no progress to report and
+    mov ax, cx                  ; --- DX:CX bytes -> a 16-bit unit count
+    add ax, FPG_UNIT - 1        ; round UP: a 1-byte job is one unit, not none
+    adc dx, 0
+    mov cx, FPG_USHR
+.shr:
+    shr dx, 1                   ; DX:AX >>= 9 (dskw_size32's idiom - the 8086
+    rcr ax, 1                   ; has no 32-bit shift)
+    loop .shr
+    or dx, dx
+    jz .fits
+    mov ax, 0xFFFF              ; past 32MB of units: saturate rather than wrap
+.fits:
+    or ax, ax                   ; a 0-byte job has no progress to report and
     jz .out                     ; would be fpg_step's divisor: refuse it whole
     mov [fpg_total], ax
     mov word [fpg_done], 0
     mov word [fpg_px], 0
+    mov word [fpg_frac], FPG_UNIT - 1
+                                ; SEEDED, not zeroed, and that one word is what
+                                ; makes fpg_stepb round the way the total above
+                                ; just did: a running `(FPG_UNIT-1 + bytes) /
+                                ; FPG_UNIT` IS ceil(bytes / FPG_UNIT) at every
+                                ; point, so a 167-byte file reports one unit
+                                ; out of the one it was armed for instead of
+                                ; zero out of one. Zeroed, every file under
+                                ; 512 bytes left the bar at 0% for the whole
+                                ; transfer and no arithmetic anywhere was
+                                ; wrong (SPEC.md 12.8.1). fpg_step never reads
+                                ; it, so the sector path is untouched
 
     call toast_kill             ; the toast strip (SPEC.md 59) is in these
                                 ; pixels and this is a newer, more urgent
@@ -132,7 +177,7 @@ fpg_begin:
     ret
 
 ; -----------------------------------------------------------------------------
-; fpg_step - one sector done
+; fpg_step - one 512-byte unit done
 ; in:  nothing;  DS = KERNEL_SEG (every caller is kernel code)
 ; out: nothing - EVERY register and the flags preserved, because the hot
 ;      caller is the middle of dsk_xfer's per-sector loop, where CX is a loop
@@ -190,6 +235,65 @@ fpg_step:
     pop dx
     pop cx
     pop bx
+    pop ax
+.out:
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; fpg_stepb - N BYTES done (SPEC.md 12.8.1)
+; in:  AX = bytes moved since the last report;  DS = KERNEL_SEG, gfx lock held
+; out: nothing - every register and the flags preserved, fpg_step's contract
+;
+; The entry point for a producer that moves bytes rather than sectors, and it
+; IS slot 0x03C0 (OSAPI_FS_PROG) - an ordinary OSAPI_SLOT cell, so a
+; DRVC_FILE driver inside FSV_READ/FSV_WRITE calls exactly this routine. That
+; is the half fpg_begin cannot cover: the kernel arms the widget from
+; FSV_STAT's size and then has NOTHING to say until the verb returns, because
+; a redirected read is one far call and not a loop the kernel is standing in.
+; Only the driver knows how far the file has got.
+;
+; A short count is the normal case and not an error - a wire delivers what it
+; delivers - so this accumulates, and the remainder below one unit is carried
+; in [fpg_frac] rather than rounded away. Report the SAME bytes twice and the
+; bar advances twice, which is why the contract is "since the last report"
+; and not "so far".
+;
+; Unarmed it is a compare and a return, so a driver may call it
+; unconditionally, and one that never calls it at all is merely a driver whose
+; bar sits at 0 - which is what every redirected read did before this existed.
+; It draws, so it demands what every drawing path here demands: the gfx lock
+; ALREADY held, true by construction inside a file operation (SPEC.md 18).
+;
+; It steps through fpg_step rather than repeating its arithmetic - the same
+; discipline dskw_rdata/wdata's shared flush follows (SPEC.md 18.4.2), and
+; for the same reason: two copies of "has the extent moved" is two answers
+; that can drift. The loop runs at most 128 times per 64KB report and each
+; turn is a compare that usually finds nothing to draw, which against the
+; wire that made this necessary (3,741 B/s, PERFORMANCE.md Set 39) is not a
+; cost anybody can measure.
+; -----------------------------------------------------------------------------
+fpg_stepb:
+    pushf
+    cmp byte [fpg_on], 0
+    je .out
+    push ax
+    push cx
+    push dx
+    xor dx, dx                  ; DX:AX = the carried remainder + this report,
+    add ax, [fpg_frac]          ; exact in 32 bits, so nothing is lost at a
+    adc dx, 0                   ; chunk boundary
+    mov cx, FPG_UNIT
+    div cx                      ; AX = whole units (<= 256, so the quotient
+    mov [fpg_frac], dx          ; cannot overflow), DX = the new remainder
+    mov cx, ax
+    jcxz .done
+.each:
+    call fpg_step
+    loop .each
+.done:
+    pop dx
+    pop cx
     pop ax
 .out:
     popf
@@ -266,9 +370,11 @@ fpg_boxr:
 ;     first int 13h of the machine calls fpg_step) ----------------------------
 fpg_on      db 0                ; armed? tested by fpg_step on every sector
 fpg_x0      dw 0                ; the widget's left edge, from [vid_clk_hx]
-fpg_done    dw 0                ; sectors stepped so far
+fpg_done    dw 0                ; units stepped so far
 fpg_total   dw 1                ; ...out of this many (never 0: it divides)
 fpg_px      dw 0                ; pixels of trough currently lit
+fpg_frac    dw 0                ; fpg_stepb's carry: bytes reported that have
+                                ; not yet made a whole unit (SPEC.md 12.8.1)
 
 ; --- the document icon (icons.inc's record: db wwords, height, then height
 ;     mask words and height data words, bit 15 = leftmost). A page with a

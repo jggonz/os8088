@@ -398,7 +398,7 @@ Three things about it:
     "bss": 5196,
     "budget": 102400,
     "codemax": 65536,
-    "cold": 23618,
+    "cold": 23641,
     "coldpara": 1504,
     "fatpara": 288,
     "imgpara": 3936,
@@ -409,7 +409,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3138,
     "stk0": 1024,
-    "text": 57545
+    "text": 57648
   },
   "small": {
     "bss": 4926,
@@ -922,14 +922,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,693 | 37.8% |
-| the window system and its furniture | 17,417 | 21.5% |
+| the file system, end to end | 30,727 | 37.8% |
+| the window system and its furniture | 17,501 | 21.5% |
 | drawing: adapters, primitives, glyphs, icons | 11,857 | 14.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,950 | 12.3% |
-| the kernel proper: API table, heap, scheduler, events | 6,005 | 7.4% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,950 | 12.2% |
+| the kernel proper: API table, heap, scheduler, events | 6,013 | 7.4% |
 | the Control Panel | 3,876 | 4.8% |
 | the three built-in kinds | 1,365 | 1.7% |
-| **total** | **81,163** | |
+| **total** | **81,289** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -937,8 +937,8 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,000 | 7,730 | **8,730** | 338 | — |
 | `wm.inc` — the window manager (§11) | 6,645 | — | **6,645** | 669 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 6,068 | — | **6,068** | 890 | 3,584 |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,723 | **5,902** | 155 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 6,079 | — | **6,079** | 890 | 3,584 |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,746 | **5,925** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 4,882 | — | **4,882** | 136 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,907 | **4,130** | 106 | — |
 | `ctrl.inc` — the Control Panel (§31) | 672 | 3,204 | **3,876** | — | — |
@@ -966,12 +966,12 @@ generated in the first place.
 | `dock.inc` — the dock (§30) | 793 | — | **793** | 34 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 758 | — | **758** | 4 | — |
 | `toast.inc` — **(undescribed)** | 481 | — | **481** | 43 | — |
-| `fprog.inc` — the file-operation progress widget (§12.8) | 370 | — | **370** | — | — |
+| `fprog.inc` — the file-operation progress widget (§12.8) | 454 | — | **454** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,813 | — | **2,813** | — | — |
-| **total** | **57,545** | **23,618** | **81,163** | **5,196** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,821 | — | **2,821** | — | — |
+| **total** | **57,648** | **23,641** | **81,289** | **5,196** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

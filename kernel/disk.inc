@@ -4899,11 +4899,15 @@ dsk_read_chain:
     push di
     push bp
 
-    xchg ax, dx                 ; the whole file's sectors ARE the widget's
-    call fpg_begin              ; scale, and this is the only place that knows
-    xchg ax, dx                 ; them: dsk_xfer sees one coalesced run at a
-                                ; time (SPEC.md 12.8). One byte each way, and
-                                ; AX is the first cluster either side of it.
+    push ax                     ; the whole file's extent IS the widget's
+    push dx                     ; scale, and this is the only place that knows
+    mov ax, dx                  ; it: dsk_xfer sees one coalesced run at a time
+    mov cx, 512                 ; (SPEC.md 12.8). This caller is handed SECTORS
+    mul cx                      ; and holds no finer figure, so the byte count
+    mov cx, ax                  ; is exact to the sector and the last partial
+    call fpg_begin              ; one rounds up here exactly as it used to
+    pop dx                      ; round up inside the widget (12.8.1)
+    pop ax                      ; ...AX is the first cluster either side
 
     ; --- a REDIRECTED volume: ONE FSV_READ, by the handle in AX (62.9.1) ----
     ; This is the loader's and assoc's path, and it is the one caller that

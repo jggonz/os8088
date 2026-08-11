@@ -235,6 +235,17 @@ DSV_SIZE     equ 28
 ; THE KERNEL STILL SORTS (19.4) AND STILL SYNTHESIZES `..` (19.5). Do neither
 ; - two places deciding a listing's order is how a display index stops meaning
 ; what the hit-test thinks it means.
+;
+; YOU OWE THE PROGRESS BAR (SPEC.md 12.8.1). The kernel arms 12.8's file
+; activity widget from FSV_STAT's size and is then ONE FAR CALL DEEP inside
+; your FSV_READ, blind, until you return - where a floppy is stepped from
+; dsk_xfer's own per-sector loop. So call OSAPI_FS_PROG as the bytes move, AX
+; = HOW MANY SINCE YOUR LAST REPORT (a running total advances the bar by the
+; whole file every call). Unarmed it is a compare and a return, so call it
+; unconditionally and never test; a short count is ordinary and the remainder
+; below 512 bytes is carried, not rounded. Skip it and the bar sits at 0 for
+; the length of the transfer, which is worse than the nothing it showed before
+; the widget learned to count in bytes.
 FSV_LIST     equ 0              ; APPEND this folder's entries, one at a time,
                                 ; through OSAPI_FS_ENT. You do not stage them
                                 ; and you cannot: dsk_put_dir knows whether

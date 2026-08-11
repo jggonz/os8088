@@ -1569,7 +1569,22 @@ osapi_table:
                                   ;          it still SORTS (19.4) and still
                                   ;          synthesizes '..' (19.5), so do
                                   ;          neither
-osapi_table_end:                  ; 0x03C0
+    OSAPI_SLOT fpg_stepb          ; 0x03C0 - AX = bytes moved SINCE YOUR LAST
+                                  ;          REPORT, and a DRVC_FILE driver's
+                                  ;          (SPEC.md 12.8.1/62.9.1): step
+                                  ;          SPEC.md 12.8's file-activity bar
+                                  ;          from inside FSV_READ/FSV_WRITE.
+                                  ;          The kernel armed it from
+                                  ;          FSV_STAT's size and is one far
+                                  ;          call deep and blind until the verb
+                                  ;          returns, so only you can move it.
+                                  ;          Unarmed it is a compare and a
+                                  ;          return, so call it
+                                  ;          unconditionally; it DRAWS, so the
+                                  ;          gfx lock must already be held -
+                                  ;          which it is, inside a file
+                                  ;          operation (SPEC.md 18)
+osapi_table_end:                  ; 0x03C8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1577,8 +1592,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 118 * 8
-%error "os8088 API jump table must be exactly 118 8-byte slots"
+%if OSAPI_TABLE_LEN != 119 * 8
+%error "os8088 API jump table must be exactly 119 8-byte slots"
 %endif
 
 ; =============================================================================
