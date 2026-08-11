@@ -409,24 +409,24 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3123,
     "stk0": 1024,
-    "text": 56485
+    "text": 56542
   },
   "small": {
-    "bss": 4717,
+    "bss": 4853,
     "budget": 96256,
     "codemax": 65536,
     "cold": 21404,
     "coldpara": 1344,
     "fatpara": 288,
-    "imgpara": 3584,
-    "kend": 5888,
+    "imgpara": 3616,
+    "kend": 5920,
     "kseg": 96,
-    "ksize": 92672,
+    "ksize": 93184,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 2681,
+    "ovl": 2737,
     "stk0": 1024,
-    "text": 52395
+    "text": 52797
   }
 }
 ```
@@ -922,24 +922,24 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,115 | 36.8% |
-| the window system and its furniture | 17,163 | 21.7% |
-| drawing: adapters, primitives, glyphs, icons | 11,663 | 14.7% |
+| the file system, end to end | 29,115 | 36.7% |
+| the window system and its furniture | 17,156 | 21.6% |
+| drawing: adapters, primitives, glyphs, icons | 11,727 | 14.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,815 | 12.4% |
 | the kernel proper: API table, heap, scheduler, events | 5,959 | 7.5% |
 | the Control Panel | 4,120 | 5.2% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **79,211** | |
+| **total** | **79,268** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 986 | 7,439 | **8,425** | 336 | — |
-| `wm.inc` — the window manager (§11) | 6,610 | — | **6,610** | 645 | — |
+| `wm.inc` — the window manager (§11) | 6,603 | — | **6,603** | 645 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,646 | — | **5,646** | 892 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,404 | **5,577** | 155 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 4,694 | — | **4,694** | 132 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 4,758 | — | **4,758** | 132 | — |
 | `ctrl.inc` — the Control Panel (§31) | 768 | 3,352 | **4,120** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,185 | — | **3,185** | 145 | — |
@@ -971,7 +971,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,767 | — | **2,767** | — | — |
-| **total** | **56,485** | **22,726** | **79,211** | **5,062** | **7,762** |
+| **total** | **56,542** | **22,726** | **79,268** | **5,062** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1173,19 +1173,20 @@ overlay is **3,069 bytes** of it, with 1,539 spare:
 they are short by ~158 bytes that predate this note. Trust the total and the
 spare; treat a row as "roughly what this module put here".
 
-**The number to watch is NOT the 1,541 spare, it is the IMAGE's last sector.**
-`kernel.bin` is **86,525 bytes** and the boot sector reads
-`(size + 511) / 512` = **169** of them, which hold 86,528 — so there are
-**3 bytes** of slack in the file, and the next thing added to `.ovl`, however
-small, costs a whole sector of boot read (~65 ms on the field machine).
-`tools/kernsize.py` reports the three *rungs* and not this, because the rungs
-are what the RAM ladder is built from; the file's tail is a separate question
-and this is where it is written down.
+**The number to watch is NOT the overlay's spare, it is the IMAGE's last
+sector.** `kernel.bin` is **88,115 bytes** and the boot sector reads
+`(size + 511) / 512` = **173** of them, which hold 88,576 — so there are
+**461 bytes** of slack in the file, and once that is gone the next thing added
+to `.ovl`, however small, costs a whole sector of boot read (~65 ms on the
+field machine). `tools/kernsize.py` reports the three *rungs* and not this,
+because the rungs are what the RAM ladder is built from; the file's tail is a
+separate question and this is where it is written down.
 
-It has been under 100 bytes at every measurement of one round now — 8 before
-§18.97's probe, 5 after it, 5 again after the `font_run` work crossed an image
-rung underneath it, and 5 again after the redraw round and move 17 — which is
-worth reading as a pattern rather than as a run of coincidences: **`.text` and `.ovl` land in the same file and round at
+It was under 100 bytes at four consecutive measurements of one round — 8
+before §18.97's probe, 5 after it, 5 again after `font_run` crossed an image
+rung underneath it, 3 after §18.97.1 — and then a rung boundary moved and it
+is 461. That swing is the point, and it is worth reading as a pattern rather
+than as a run of coincidences: **`.text` and `.ovl` land in the same file and round at
 different places**, so the tail's slack is not a budget anyone is steering
 and it can be spent to nearly nothing by a change that never touches the
 overlay at all. Re-measure it; do not carry a figure from a commit message.

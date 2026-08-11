@@ -2660,8 +2660,22 @@ and what makes `int 13h` AH=08h/AH=15h useless twice over (neither exists on a
 a position sensor on the head carriage: a drive that is there asserts it with
 or without media, and an unpopulated select line is held inactive by the
 controller's pull-up. So it is **SENSE DRIVE STATUS** (ST3 bit 4) with no
-motor, and only if that is inconclusive the motor and a **RECALIBRATE**, whose
-**ST0 bit 4 — Equipment Check, 77 steps and no TRK0 — is the absent drive**.
+motor, and only if that is inconclusive the motor, a **RECALIBRATE**, and
+**ST3 again** — the head has been told to go and find track 0, so if TRK0
+still has not come up there is nothing there to find it.
+
+**It decided on ST0's Equipment Check first, and the field killed that**
+(SPEC.md §18.97.1). `SENSE INTERRUPT STATUS` takes no argument and the 765
+queues one status-change result *per drive* after a reset, so a sense returns
+the head of the queue rather than an answer about the drive you commanded:
+the 5150 answered `ST0 = C2` — interrupt code 11, unit **two** — to a question
+about unit one, and the probe refused and kept the drive. A `SENSE DRIVE
+STATUS` is a *level read* of the selected unit's lines, so it has no queue to
+be at the wrong end of. The queue is drained at both ends anyway, and ST0 is
+still published: with the drain in place it reads `0x71` — IC 01, SE, EC,
+unit 1 — which is exactly the Equipment Check the first design wanted, so it
+now **corroborates** the ST3 decision instead of being a byte nothing could
+explain.
 
 Five things hold it up. **Every failure keeps the drive**, because the two
 errors are not symmetric: a phantom icon costs a click, a hidden real drive
@@ -2695,8 +2709,10 @@ overlay can spend that tail.
 
 **No emulator here can arbitrate it, so the verdict and its working are
 published** through §57's registry as `'FD'` (§57.5) and reported by
-`tests/sysbench` — `claimed`, `probe ran`, the raw ST3 and ST0, `probe stop`
-and the verdict. Read **`probe stop`** first: `verdict 1` is what a probe that
+`tests/sysbench` — `claimed`, `probe ran`, both ST3 reads, the drained ST0,
+`probe stop` and the verdict. **It is confirmed on the iron**: `ST3 = 21`
+before and after, `probe stop 03`, `verdict 0`, and a desktop with drive A
+alone. Read **`probe stop`** first: `verdict 1` is what a probe that
 *proved* a drive present and one that merely *failed to prove one absent* both
 say, and telling those apart is the difference between this working and this
 being a fail-safe that never fires. `make FDDPROBE=0` is the A/B and removes

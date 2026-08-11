@@ -9537,6 +9537,25 @@ Three things follow, and the third is the general one:
   that is the argument for writing refusals that way even when the code
   "obviously" works.
 
+**The second field run closed it, and it vindicates the signal it replaced:**
+
+```
+ST3 motor off hex     0021      probe stop hex        0003
+ST3 after seek hex    0021      verdict 1=kept 0=gone    0
+ST0 drained hex       0071
+```
+
+TRK0 clear before the recalibrate and **still clear after it**, so the row was
+retired and the desktop came up with drive A alone — the first time the
+removal has run anywhere. And `ST0 = 0x71` is **interrupt code 01, SE set, EC
+set, US = 1**: precisely the Equipment Check the first design was testing for,
+now that the drain has made it *ours*. So the original reading of the
+datasheet was right and only the queue was wrong. The decision stays on ST3 —
+a level read cannot be got at by ordering, which is worth more than being
+textbook — but ST0 is now an **independent corroboration** in the same block
+rather than a byte nothing could explain, and that is why it is still
+published.
+
 ### 18.98 The third and fourth floppy — a row, and nothing else
 
 The IBM 5.25" Diskette Drive Adapter has an **external 37-pin D connector**
@@ -20834,6 +20853,98 @@ answer and the reason `GFX_SCROLL 256x128` reads 368us in a straddled
 `gfxbench` — that is the refusal, not a fast scroll. `gfx_line` and the walk
 keep theirs too (§39.14.5): a line's unit is a pixel, and resolving a display
 per pixel is the inner loop §5.6.6 exists to keep tight.
+
+#### 39.14.8 `gfx_save` / `gfx_restore` — the two writers the audit missed
+
+§39.14.5's rule is **a path that writes the framebuffer without passing a
+public entry is a hole, and the audit that finds them is by WRITER and not by
+entry point.** It named three. There was a fourth pair, and §39.14.2's own
+prose had been listing them as hooked all along — *"for font_char, font_run,
+ico_core, gfx_scroll, gfx_save/restore and gfx_line"* — while `gfx_save` and
+`gfx_restore` took no hook at all. A comment is not a mechanism.
+
+**The failure depends on draw order, which is what made it invisible.** Both
+routines reach `vga_rect_setup`, which clips against `[vid_cw]`/`[vid_ch]` —
+the display **last drawn on** (§39.14.3), not the screen — while the rect
+handed in is VIRTUAL. So the same call goes two different ways:
+
+- **the rect is on display 1, display 0 is current** → it clips away to
+  nothing, the save banks nothing, and the restore draws nothing;
+- **the rect is on display 0, display 1 is current** → it does not clip at
+  all, and reads or writes the *other card's* framebuffer at coordinates that
+  are legal there. Hercules pixels get banked as if they were the CGA's, and
+  put back on whichever card is current at restore time.
+
+The consumer is the **window raise cache** (§11.96), which banks what is under
+a window so a raise can put it back instead of repainting — for *any* window,
+including one on the second display. The menu save-under was safe by accident:
+a pull-down hangs off the menu bar and the bar is the primary's (§39.16.2), so
+its rect is display 0's, whose origin is (0,0) and whose translation is the
+identity. It is safe by mechanism now.
+
+**It is whole-shape like `gfx_scroll`, not split like a blit's runs**, and
+§39.14.7 is exactly the test that says which: a run carries no source, and a
+save IS the source. The buffer is one plane-major image with one stride, the
+two cards have different strides and different bank shapes, and §5.8's
+sub-rect restore addresses into that buffer with arithmetic derived from the
+rect — so half a row from each card is not a thing the buffer can hold.
+
+**The caller owes the straddle test, and that is the one asymmetry with
+`gfx_scroll`.** A scroll REFUSES a rect it cannot serve and the caller
+repaints. A save cannot usefully refuse, because `wm_su_edge` calls it on
+single-byte columns inside a rect the caller has already approved — and
+because the failure it would be refusing is silent in a way a scroll's is not:
+**a cut save and a cut restore agree with each other.** The pixels that were
+banked go back exactly; the ones past the seam were never banked, are never
+put back, and nothing anywhere notices. So the test belongs where the decision
+to use a cache is made.
+
+**And the gate was already there, asking the wrong question.** `wm_su_take`
+tested `cx >= [vid_cw]` under a comment explaining that a clipped rect would
+index the buffer wrongly — right about the hazard, and reading a word that
+means "the display last drawn on". It is `vid_span_one` now (§39.14.6's
+predicate, its third consumer), which is the same screen test on a one-card
+machine and a stronger one on two; `kern_small` keeps the old pair, being
+single-display by construction and having no `vid_span_one` to call.
+
+**The cursor must not take the hook**, and does not: `mouse.inc` enters at
+`vga_save_vram`/`vga_restore_vram`, *below* it, out of IRQ4. The arrow
+brackets itself (§39.15.2) and `cur_geom` has already resolved its display, so
+a hook there would translate a rect that is translated.
+
+**What it actually WAS, measured, because the two directions are not the same
+bug and only one of them fired.** `tests/dispsave.py` reads `wm_su_segs[slot]`
+out of the guest — a word per window, non-zero exactly when a cache is held —
+for a Disk window sitting on the second display and then covered:
+
+| | cache taken | pixels after the raise |
+|---|---|---|
+| the hook | `0x9E80` | **0 px of 49,600 differ** from the uncovered reference |
+| no hook | **`0x0000`** | 0 px differ |
+
+So what shipped was **the raise cache silently switched off across the whole
+second display**, not corruption: a window's virtual x there is past any one
+display's width, the gate refused, and the fallback is a full repaint, which
+is correct and slower. That is the direction the gate happened to block.
+
+**It did not block the other one**, and this is the part to hold on to rather
+than the table: a rect on display **0** passes `cx >= [vid_cw]` whatever is
+current, so if display 1 was the last drawn on, the save reads *its*
+framebuffer at coordinates that are legal there. Two of the three
+`wm_su_take` sites cannot reach it — `wm_raise` banks the outgoing front
+window immediately after `wm_draw_title`/`wm_grow_erase` drew on *that same
+window*, and `wm_su_bank` banks a window that was just drawn, so in both the
+current display and the rect's display agree by construction. `wm_hide` has
+no such guarantee. **It was not observed firing, and it is closed either
+way** — which is the honest shape of it: one measured defect, one latent
+path, and a fix that does not need to know which of them a user hit.
+
+**Cost: `.text` +57 on `kern_big`, crossing one image rung** — 97,280 →
+97,792 of `KERN_BUDGET`, 2,560 spare (5 steps). The rung had **0 bytes left**
+when this started, §39.14.7 having just landed exactly on the boundary, so
+any addition at all cost the same 512. `kern_small` is **−12**: the hook
+compiles out there and the restructure retires a duplicated
+`cmp byte [vid_mono], 0` in each of the two entries.
 
 `gfx_scroll` and `gfx_blit4` keep REFUSING rather than falling back, and that
 stays right: a blit cannot take a sub-rect without advancing its source to
