@@ -188,6 +188,8 @@ fcp_goto:
     push dx
     cmp al, [disk_drive]
     jne .full
+    cmp byte [dsk_vkind], DVK_FILE
+    je .fsgo                    ; a REDIRECTED volume: below
     or bx, bx
     jz .quiet                   ; 0 is the root, always legal
     cmp bx, 2
@@ -204,6 +206,27 @@ fcp_goto:
     pop dx
     stc
     ret
+
+    ; --- a REDIRECTED volume: TELL THE DRIVER, do not just store the word ---
+    ; The quiet path above exists precisely to avoid a mount for a move inside
+    ; one volume - and a mount is the only thing that would have called
+    ; FSV_CHDIR. A DRVC_FILE driver keeps its own idea of where it is standing
+    ; (it has to: FSV_STAT resolves a name in the CURRENT folder), so writing
+    ; [dsk_cwd] behind its back leaves the two disagreeing and every name the
+    ; copy then asks about is looked up in the folder it came FROM. It
+    ; presented as FERR_NOENT for a file that is plainly listed.
+    ;
+    ; The range checks go with it: that word is an OPAQUE HANDLE (SPEC.md
+    ; 62.9.1), `>= 2` rejects the first folder such a driver ever hands out,
+    ; and [dsk_maxclus] belongs to the last FAT volume mounted.
+.fsgo:
+    push bp
+    mov ax, bx                  ; the handle, or 0 for the root
+    mov bp, FSV_CHDIR
+    call KERNEL_SEG:cw_drv_fs_call
+    pop bp
+    jc .bad
+    jmp short .quiet
 .full:
     mov dl, al
     mov ax, bx
@@ -1349,9 +1372,11 @@ fcp_rdopen:
     push dx
     call dskw_stat_x            ; BX = first cluster, DX:CX = size
     jc .out
-    mov [fcp_rclus], bx
-    mov [fcp_rsz], cx
+    mov [fcp_rclus], bx         ; ...or, on a redirected volume, THE HANDLE
+    mov [fcp_rsz], cx           ; dskw_stat answered (SPEC.md 62.9.1)
     mov [fcp_rszh], dx
+    mov word [fcp_roff], 0      ; such a read walks an OFFSET, not a chain
+    mov word [fcp_roff+2], 0
     clc
 .out:
     pop dx
@@ -1413,6 +1438,35 @@ fcp_rdnext:
     or ax, ax
     jz .done                    ; the file is finished: 0 bytes says so
     mov [fcp_rgot], ax
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatread
+
+    ; --- a REDIRECTED volume: one FSV_READAT at the running offset ----------
+    ; No chain to step and no [dsk_maxclus] to range-check against - that word
+    ; belongs to the last FAT volume mounted. The offset walks instead, which
+    ; is also what makes this resumable without [dsk_chain_end].
+    push bp
+    mov cx, ax                  ; the take is also the capacity
+    mov dx, es                  ; DX:BX = the destination (SPEC.md 51.8)
+    xor bx, bx
+    mov si, [fcp_roff]
+    mov di, [fcp_roff+2]
+    mov ax, [fcp_rclus]         ; the handle
+    mov bp, FSV_READAT
+    call KERNEL_SEG:cw_drv_fs_call
+    pop bp
+    jc .jio
+    mov cx, [fcp_rgot]
+    add [fcp_roff], cx
+    adc word [fcp_roff+2], 0
+    sub [fcp_rsz], cx
+    sbb word [fcp_rszh], 0
+    jmp short .done
+.jio:
+    jmp .io
+
+.fatread:
+    mov ax, [fcp_rgot]
     add ax, 511                 ; sectors = ceil(take / 512). take is at most
     mov cl, 9                   ; FCP_MAXCH, so the +511 cannot carry out
     shr ax, cl
@@ -1649,7 +1703,11 @@ fcp_chunk:  resw 1              ; ...and the bytes one pass moves
 
 fcp_rlclus: resw 1              ; fcp_relink: the moved entry's first cluster
 
-fcp_rclus:  resw 1              ; the streaming read: the next cluster...
+fcp_rclus:  resw 1              ; the streaming read: the next cluster, or on
+                                ; a redirected volume THE HANDLE, which does
+                                ; not move...
+fcp_roff:   resd 1              ; ...and where that read has got to, which is
+                                ; what replaces stepping a chain there...
 fcp_rsz:    resw 1              ; ...the bytes of the file still to come,
 fcp_rszh:   resw 1              ; low and high...
 fcp_rgot:   resw 1              ; ...and what this chunk has taken so far

@@ -795,8 +795,30 @@ pass by luck, and a driver numbering its files from 4,096 would have had every
 package refused on a volume that browsed and read correctly. Neither would
 have been found on a cable without first being blamed on the cable.
 
-Milestone 3 (writes) follows on a kernel that is already proven, and the
-cable's file client is then a SECOND `DRVC_FILE` driver rather than the first.
+**MILESTONE 3 IS BUILT AND VERIFIED** (SPEC.md §62.9.6): writes. New Folder,
+Delete, Rename, a document saved back onto a redirected volume, and a package
+copied across one and then RUN. **`.text` +0, `.bss` +4, `.cold` +213 — one
+cold rung**, footprint 100,352 → 100,864, three steps spare.
+
+Four bugs, and the two in the KERNEL are the same mistake in different
+modules: `fcp_goto` and `fcp_rdnext` both range-check a "first cluster"
+against `[dsk_maxclus]`, which on a redirected volume compares an opaque
+handle against **the last FAT volume's** cluster count — and `fcp_goto` also
+rejects anything below 2, so the copy engine refused the first subfolder any
+`DRVC_FILE` driver ever hands out. `fcp_goto` had a second fault worth
+carrying to the cable: its quiet path deliberately skips the mount, and a
+mount is the only thing that calls `FSV_CHDIR` — so it moved `[dsk_cwd]`
+behind the driver's back and every later name resolved in the folder the copy
+came FROM. **A driver-side cwd is state the kernel can silently
+desynchronise.**
+
+**The remaining gap is copying a FOLDER**, not a file: `fcp_scan` enumerates a
+source directory by walking its raw sectors and there are none. That wants an
+enumerate-by-ordinal verb or the engine reading the kernel's own listing, and
+it is design work rather than a branch site.
+
+The cable's file client is now a SECOND `DRVC_FILE` driver against a kernel
+proven three milestones deep, which is what the whole RAM-disk detour bought.
 
 ### 2.3 What was considered and rejected
 

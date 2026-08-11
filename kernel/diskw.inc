@@ -393,6 +393,11 @@ dskw_mkbody:
     stc
     ret
 .gated:
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatmk
+    mov bp, FSV_MKDIR
+    jmp dskw_fsop
+.fatmk:
     mov di, dskw_n83
     call dskw_name83            ; SI -> the 11-byte raw name field
     jnc .named
@@ -628,6 +633,12 @@ dskw_rmbody:
     stc
     ret
 .gated:
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatrm
+    mov bp, FSV_RMDIR           ; EMPTINESS is the driver's test, exactly as
+    jmp dskw_fsop               ; it is the FAT path's: only the side holding
+                                ; the directory can answer it
+.fatrm:
     mov di, dskw_n83
     call dskw_name83            ; '.' and '..' cannot be spelled (18.4), and
     jnc .named                  ; the root has no entry, so neither can be
@@ -1181,6 +1192,33 @@ dskw_isempty:
 ; which is the whole point of SPEC.md 18.4.1. What replaces it is the sector
 ; count's own ceiling, below.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; dskw_fsop - run one FSV_* write verb and reconcile (module internal)
+; in:  BP = the verb, plus whatever that verb's own arguments are
+; out: CF and AX exactly as the FAT body it replaced would have answered
+; clobbers: BP, and whatever the verb clobbers
+;
+; The tail all six write bodies share on a redirected volume (SPEC.md 62.9),
+; and sharing it is the point rather than a saving: dskw_sync_x is what marks
+; every Disk window showing this folder (SPEC.md 22.8) and rebuilds the global
+; snapshot, and it has to run after a SUCCESSFUL write of any kind. Six copies
+; of that would be six chances to forget one, which is precisely how a
+; coherence rule decays - and the FAT side already learned it, which is why
+; dskw_sync has one caller per operation and not one per code path.
+;
+; THE PROTECTION MASK IS THE DRIVER'S HERE, and that is a real difference
+; worth stating. DSKW_PROT is a test on the raw FAT attribute byte out of a
+; directory entry, and a redirected volume has neither. A driver that wants
+; a file to be undeletable refuses FSV_DELETE; the kernel cannot do it for it.
+; -----------------------------------------------------------------------------
+dskw_fsop:
+    call KERNEL_SEG:cw_drv_fs_call
+    jc .out                     ; AX = the driver's FERR_*, passed through
+    call dskw_sync_x            ; the folder changed (SPEC.md 22.8/18.4)
+    clc                         ; ...and dskw_sync does not propagate CF
+.out:
+    ret
+
 dskw_wbody:
     cmp byte [dsk_mntok], 1
     je .gated
@@ -1188,6 +1226,18 @@ dskw_wbody:
     stc
     ret
 .gated:
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatw
+    call dskw_norm              ; the source becomes seg:0..15 + a run, so the
+                                ; driver is handed a normalised (seg, offset)
+                                ; exactly as a read is
+    mov bx, [dskw_src]
+    mov dx, [dskw_seg]          ; DX:BX = the bytes (SPEC.md 51.8's rule)
+    mov cx, [dskw_len]
+    mov di, [dskw_lenhi]        ; DI:CX = how many
+    mov bp, FSV_WRITE
+    jmp dskw_fsop
+.fatw:
     mov di, dskw_n83
     call dskw_name83            ; SI -> the 11-byte raw name field
     jnc .named
@@ -1982,6 +2032,11 @@ dskw_dbody:
     stc
     ret
 .gated:
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatd
+    mov bp, FSV_DELETE
+    jmp dskw_fsop
+.fatd:
     mov di, dskw_n83
     call dskw_name83
     jnc .named
@@ -2049,6 +2104,11 @@ dskw_nbody:
     stc
     ret
 .gated:
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatn
+    mov bp, FSV_RENAME          ; SI = the old name, DI = the new one, which
+    jmp dskw_fsop               ; is this cell's own argument order already
+.fatn:
     push si
     mov si, di                  ; the new name first: parse it, then prove
     mov di, dskw_n83            ; it is free
@@ -2547,6 +2607,12 @@ dskw_apbody:
     stc
     ret
 .gated:
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatap
+    mov dx, es                  ; DX:BX = the bytes, CX = how many - the same
+    mov bp, FSV_APPEND          ; three registers this cell was handed
+    jmp dskw_fsop
+.fatap:
     mov di, dskw_n83
     call dskw_name83
     jc .badarg

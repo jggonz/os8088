@@ -35367,8 +35367,8 @@ will not open"** — four call layers and one whole subsystem away from the
 cause, with the mount itself completing correctly first. A `%if` on the
 table's own length is the guard, and it is the only kind that can catch this.
 
-**Milestone 3 lands on this.** The write verbs are what is left; the cable's
-file client is a second `DRVC_FILE` driver after that.
+**Milestone 3 lands on this** — see §62.9.6. The cable's file client is a
+second `DRVC_FILE` driver after that.
 
 #### 62.9.5 Milestone 2 as built — reads, by handle
 
@@ -35426,6 +35426,74 @@ and skips `fpg_begin` (`fpg_end` is gated on its own flag, so the pairing is
 safe). That costs nothing on a RAM disk and is worth fixing for the cable,
 where a 116KB read is half a minute of frozen screen — a byte-based scale is
 the obvious answer and it belongs with the cable's client.
+
+#### 62.9.6 Milestone 3 as built — writes
+
+**Done and verified: New Folder, Delete, Rename, a document SAVED back onto a
+redirected volume, and a package COPIED across one and then RUN.** The six
+write verbs are `FSV_WRITE`, `APPEND`, `DELETE`, `RENAME`, `MKDIR` and
+`RMDIR`, and all six reach the driver through **one shared tail**,
+`dskw_fsop`. Sharing it is the point rather than a saving: `dskw_sync_x` is
+what marks every Disk window showing the folder (§22.8) and rebuilds the
+global snapshot, and it has to run after a successful write of any kind. Six
+copies of that would be six chances to forget one.
+
+**Measured: `.text` +0, `.bss` +4, `.cold` +213 — one COLD rung, `KERN_SIZE`
+100,352 → 100,864, spare 2,048 → 1,536 (three steps).** §62.9.5 predicted
+that rung and it is the one this stage was always going to cross.
+
+**The protection mask is the DRIVER's here**, and that is a real difference
+rather than an omission. `DSKW_PROT` is a test on the raw FAT attribute byte
+out of a directory entry and a redirected volume has neither, so a driver
+that wants a file undeletable refuses `FSV_DELETE`. The kernel cannot do it
+for it, and pretending otherwise would mean inventing an attribute byte the
+far side never sent.
+
+**Three more sites had to learn about handles, and all three are the same
+mistake in different modules.** The kernel range-checks a "first cluster"
+against `[dsk_maxclus]` in four places; on a redirected volume that word is
+an opaque handle and `[dsk_maxclus]` **belongs to the last FAT volume
+mounted**. §62.9.5 fixed the loader's. `fcp_goto`'s is worse, because it also
+rejects anything below 2 — and the first folder a `DRVC_FILE` driver hands
+out is handle 1, so the copy engine refused the very first subfolder with
+`FERR_IO`. `fcp_rdnext`'s is the third, and it walks a chain besides; a
+redirected read there is one `FSV_READAT` at a running offset, which is also
+what makes it resumable without `[dsk_chain_end]`.
+
+**`fcp_goto` had a second and more interesting fault: it desynchronises the
+driver.** Its quiet path exists *precisely* to avoid a mount for a move
+inside one volume — "a move inside one volume is a word" — and a mount is the
+only thing that would have called `FSV_CHDIR`. A `DRVC_FILE` driver keeps its
+own idea of where it is standing, because `FSV_STAT` resolves a name in the
+**current** folder, so writing `[dsk_cwd]` behind its back leaves the two
+disagreeing and every name the copy then asks about is looked up in the
+folder it came *from*. It presented as `FERR_NOENT` for a file plainly listed
+on screen. **A driver-side cwd is state the kernel can silently
+desynchronise, and the routines that can do it are the ones written to skip a
+mount** — which is a general hazard for any future `DRVC_FILE` client, not a
+quirk of the copy engine.
+
+**Two of the four bugs this milestone found were in the HARNESS, and both are
+worth reading because of their SHAPE rather than their content.**
+`rd_ext_off` computed a byte offset with `mul`, which writes `DX:AX` — and
+`DX` is the destination *segment* at both call sites that matter, so every
+read handed the blitter a segment of 0 and wrote the file over the interrupt
+vector table. **The operation reported success**; the machine ran away in the
+heap some seconds later, in a different subsystem, and the first diagnosis
+blamed the kernel's copy engine (whose changes were reverted and then
+restored once the real cause was found). And `rd_write` set `RDE_TYPE` to 0
+for everything, so a copied `.O88` landed as a plain FILE: listed, the right
+size, byte-perfect on the volume, and **inert** — because a type-0
+double-click goes to §54's association path, and nothing is associated with
+`.O88`. A package's type comes from its extension and a redirected volume has
+to decide that the same way `dsk_synth` does.
+
+**What is deliberately NOT covered, and is a gap rather than a decision:**
+copying a FOLDER onto a redirected volume. `fcp_scan` enumerates a source
+directory by walking its raw sectors, and there are none — a redirected tree
+copy needs either an enumerate-by-ordinal verb or the engine reading the
+kernel's own listing, and neither is a branch site. Single files copy in both
+directions.
 
 **One thing milestone 1 could not have and the next one must decide.**
 `RAMDISK.DRV` took **`DEBUG.DRV`'s `drv_tab` row**, because the Drivers page
