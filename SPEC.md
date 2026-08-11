@@ -2395,6 +2395,135 @@ The general rule this is an instance of: **a routine that is reached from
 pair sits under every drawing site in the machine, kernel and package alike,
 and there is no call site that can compensate.
 
+### 7.2 A window names the pointer's picture, and it wears it over that window only
+
+`OSAPI_WM_CURSOR` (slot 0x03B8) takes `BX` = a window and `AL` = one of
+`CUR_NSHAPE` built-in shapes; the pointer wears that shape over that window's
+**content** and nowhere else. It exists because an application that wanted a
+different pointer had exactly one move available — draw a second one — and
+Missile Command did: `mc_cross_*` is an XOR crosshair the game paints, erases
+and re-paints itself, standing on top of the kernel arrow, which is still
+drawn at the same point. `MC_CHARM` is 8 rather than 4 for no better reason
+than that the arms have to be readable *around* the arrow. **Two pointers, one
+mouse**, and the game pays a measured **4.4 ms of every frame** (PERFORMANCE.md
+Part 9 Set 12) to draw the one that is not the system's.
+
+Three decisions carry it, and all three are about spending nothing.
+
+- **Every shape shares the 8x12 cell.** `CUR_GW`/`CUR_GH`/`CUR_SPAN` bound
+  every walk in `mouse.inc`, and §7.1 is the record of what shrinking them
+  bought: a quarter of the rows, a third of the bytes per row, and the cell's
+  third framebuffer byte retired outright. A shape wanting a 16x16 cell would
+  hand all of that back **on every lock hold in the machine, for every
+  application** — the crosshair over one window would be paid for by the
+  desktop, the Task Manager and every package that never asked. So the shapes
+  fit the arrow's cell or they do not ship, and `CUR_SHAPE_END` asserts it per
+  shape, at assembly time, exactly as the arrow alone used to be asserted.
+- **The picture is one indirection.** `mov si, cur_and` became
+  `mov si, [cur_tabp]` in the three loops that read a table — `cur_put_mono`,
+  `cur_move_mono`'s pass 2, and `cur_draw` — and that is the whole of what
+  changing the drawn shape costs. **`cur_get_mono` did not change at all**,
+  which is the property worth naming: the erase replays `[cur_off]`,
+  `[cur_rows]` and `[cur_b1ok]` and drains a save buffer, so it is a statement
+  about the *cell*, not about the picture inside it. Shapes that share a cell
+  therefore share an erase.
+- **Nothing is asked in the ISR.** §7.2.1 is where the question is asked.
+
+### 7.2.1 The shape rides in `W_FLAGS`, and the UI task asks the question
+
+The shape is a byte in **`W_FLAGS`' spare high byte**. No record grew, no
+template changed, and `wm_create`'s `mov word [bx+W_FLAGS], 1` and
+`wm_destroy`'s `mov word [bx+W_FLAGS], 0` already zero it — which is
+`CUR_ARROWSH`. So the default is the arrow because the byte arrives 0, and a
+package that dies holding a crosshair cannot leave one behind, because the
+record is zeroed on the way out and the next pass re-asks. **There is no
+lifetime problem to solve, and that is the built-in set earning its keep**: an
+app-supplied *bitmap* would have to be staged into the kernel (`font_str`
+reads through DS, and so does `cur_put_mono` — the driver Control Panel page
+name is the precedent, §31.9), kept alive past the package that owns it, and
+re-validated at run time for the one invariant `CUR_ROW` checks at assembly
+time. None of that is bought here.
+
+**`cur_shape_pass` is called from `ui_task`'s `.yield` tail**, beside
+`toast_pass`, and it is one compare per pass: `[cur_shx]`/`[cur_shy]` bank the
+position the last answer was for, and `[cur_shchk]` covers the case a position
+compare cannot see — the pointer standing still while the window under it is
+raised, hidden, closed, dragged or grown away. Two stores set that flag,
+`wm_raise` and `wm_paint_dmg`, because **every one of those five events pays a
+repaint through one of them**.
+
+The UI task rather than the mouse ISR, for two reasons and the second is the
+binding one. `wm_hit` is a z-order walk with an 8-bit `mul` per candidate, and
+the ISR runs per mouse packet — putting it there would give back a share of
+what §7.1 spent three optimisations winning. **And the UI task is the only
+mutator of `wm_zord` and the window rects**, so `wm_hit` answers from it with
+no gfx lock and no race, which is exactly what the ISR could not do. A frame
+of latency on a cosmetic change is invisible; a torn z-order walk is not.
+
+Chrome stays the arrow. `wm_hit` answers `AL != 0` for the title bar and its
+three boxes, and those are the kernel's to draw and to click — only a window's
+content is the application's to dress. `BX = 0` — the desktop, the drive
+zones, the dock and the menu bar — is the arrow for the same reason.
+
+**And it is worth nothing inside an fsx bracket** (§53): the held lock keeps
+the pointer off the screen there by construction, so an exclusive app draws
+its own pointer and always did. Missile Command therefore keeps `mc_cross_*`
+for its bracket and drops it windowed, which is where the two pointers were.
+
+### 7.2.2 The hot spot is the expensive half, and it is CLAMPED rather than clipped
+
+A crosshair is useless anchored at its top-left corner: the pixel the player
+is aiming at has to be the one under the pointer. So a shape carries a **hot
+spot** — the pixel inside the cell that sits under `mouse_x`/`mouse_y` — and
+that, not the picture, is what costs anything.
+
+The arrow's hot spot is (0,0), and for years **every walk in `mouse.inc`
+assumed it**: `mouse_x`/`mouse_y` are clamped to the screen, so the cell's
+top-left could never be negative, and `cur_geom` clips at the right and bottom
+edges only. A centred hot spot puts the cell's top-left at `pointer - hot`,
+which goes **negative within `hx` of the left edge and `hy` of the top** — and
+a negative byte column, or a negative row through `gfx_rowbase`, does not
+error. It addresses the row above the framebuffer.
+
+Left and top *clipping* is the correct fix and it is not a small one: a
+`cur_b0ok` beside `cur_b1ok`, a table start offset for the skipped rows, `sar`
+where the column shift is `shr`, and the two of those threaded through
+`cur_mvcols`/`cur_mvrow`/`cur_mvbg` — the four per-column answers §7.1.2 built
+to write every byte exactly once, whose cases double when either cell can lose
+its first column.
+
+**What ships is the clamp instead.** `cur_geom` and `cur_rect` subtract the
+hot spot and clamp the result at the display origin, which is four
+instructions each and can never address outside the framebuffer. Its only
+defect is that the picture stops moving in the outermost `hx` columns and
+`hy` rows — the crosshair's centre drifts up to 3 pixels from the pointer
+against the left edge of the screen, and 5 against the top. That is a
+deliberate trade, recorded here so that the day it is not good enough, the
+paragraph above says what the real fix is.
+
+Three things follow and each broke first:
+
+- **`[cur_cellx]`/`[cur_celly]` are banked by `cur_geom`**, because the cell's
+  top-left is no longer the pointer's position and `cur_move_mono` asks about
+  it three times — the old cell's byte column, pass 1's "will pass 2 cover
+  this row", and `cur_mvrow`. §7.1's rule applies unchanged: two derivations
+  of a save-under's geometry are two chances to disagree by a byte, and a byte
+  is a smear.
+- **`cur_lazyck` subtracts the hot spot too, and deliberately does NOT clamp.**
+  It asks whether an armed clip region can reach the cursor cell; unclamped is
+  a *superset* of where the cell really is, so the error can only ever be a
+  redundant hide. Forgetting it runs the other way — a painter told the cursor
+  is out of reach draws through the part of the cell reaching further left than
+  the test did, and §7.1.4's smear is permanent. It is the one site here that
+  fails silently and weeks later.
+- **The shape may only change while the cursor is off the glass.**
+  `cur_shape_set` calls `cur_unlazy` first and adds no hide/show pair of its
+  own: `gfx_lock` already promised the hide and `gfx_unlock` already owes the
+  show, so spending the promise is the whole of it. That hands `cur_move_mono`
+  its standing precondition — within one move the shape, and therefore the hot
+  spot, is fixed — which is what lets pass 1 and pass 2 subtract cell tops from
+  each other and get an honest answer.
+
 ## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
 - `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it

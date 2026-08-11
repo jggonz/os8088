@@ -1551,7 +1551,17 @@ osapi_table:
                                   ;          Answers "whole" unless WF_OWNBG is
                                   ;          set, because without it the kernel
                                   ;          has already whitened the content
-osapi_table_end:                  ; 0x03B8
+    OSAPI_SLOT wm_cursor          ; 0x03B8 - BX = window, AL = OSAPI_CUR_*.
+                                  ;          The picture the pointer wears over
+                                  ;          THIS window's content, and nowhere
+                                  ;          else (SPEC.md 7.2). Takes effect on
+                                  ;          the next UI pass rather than now:
+                                  ;          the pointer may not be over you,
+                                  ;          and only the kernel knows. Chrome -
+                                  ;          the title bar and its boxes - stays
+                                  ;          the arrow, because it is the
+                                  ;          kernel's to draw and to click
+osapi_table_end:                  ; 0x03C0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1559,8 +1569,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 117 * 8
-%error "os8088 API jump table must be exactly 117 8-byte slots"
+%if OSAPI_TABLE_LEN != 118 * 8
+%error "os8088 API jump table must be exactly 118 8-byte slots"
 %endif
 
 ; =============================================================================

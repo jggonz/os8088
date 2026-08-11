@@ -1424,6 +1424,10 @@ wm_fs_zpos:
 ; one thing that can.
 ; -----------------------------------------------------------------------------
 wm_raise:
+    mov byte [cur_shchk], 1     ; the window under a STANDING pointer just
+                                ; changed (SPEC.md 7.2): cur_shape_pass gates
+                                ; on the pointer having moved, and this is one
+                                ; of the two ways the answer moves under it
     push ax                     ; a Disk window whose folder changed under it
     xor al, al                  ; is re-listed BEFORE a pixel is drawn, so
     call fm_focus               ; this raise puts the new listing up rather
@@ -1959,6 +1963,48 @@ wm_lift:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_cursor - the picture the pointer wears over THIS window's content
+; in:  BX = window ptr, AL = CUR_*SH (SPEC.md 7.2)
+; out: nothing (all registers preserved)
+;
+; The shape rides in W_FLAGS' spare HIGH BYTE, so no record grew and no
+; template changed - and wm_create's `mov word [bx+W_FLAGS], 1` and
+; wm_destroy's `mov word [bx+W_FLAGS], 0` already zero it, which is
+; CUR_ARROWSH. A package that never asks gets the arrow because the byte is 0,
+; not because anything put it there; and a package that dies with a crosshair
+; set cannot leave one behind, because its record is zeroed on the way out and
+; cur_shape_pass re-asks on the next UI pass.
+;
+; It does not draw. The pointer may not even be over this window, and the one
+; place that knows is cur_shape_pass - so this stores and posts, exactly as
+; every other "the answer may have changed" site in the tree does.
+; -----------------------------------------------------------------------------
+wm_cursor:
+    pushf                       ; FLAGS INCLUDED, and wm_snap above is the
+                                ; whole reason this line is here rather than
+                                ; being learned again: a package's ENTRY PROC
+                                ; returns CF to the loader (SPEC.md 20.2) and
+                                ; sets its cursor from there, after
+                                ; wm_create's CF has been consumed by a
+                                ; branch - so the carry riding in the flags at
+                                ; that point IS the return value. The `cmp`
+                                ; below leaves CF SET for every shape that is
+                                ; legal, so without this, asking for a
+                                ; crosshair aborted the launch and the file
+                                ; row just sat there selected
+    push ax
+    cmp al, CUR_NSHAPE
+    jae .out                    ; refuse a shape nobody ships HERE as well as
+                                ; in cur_shape_set: a bad byte written into
+                                ; the record would be re-read every pass
+    mov [bx + W_FLAGS + 1], al
+    mov byte [cur_shchk], 1
+.out:
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_top - find the frontmost visible window
 ; in:  nothing
 ; out: BX = window ptr, or 0 if no window is visible
@@ -2433,6 +2479,12 @@ wm_paint_chrome:
 ; merely reached the bottom of the screen. It is a per-window test instead.
 ; -----------------------------------------------------------------------------
 wm_paint_dmg:
+    mov byte [cur_shchk], 1     ; ...and the other way (SPEC.md 7.2): a window
+                                ; hidden, destroyed, dragged or grown out from
+                                ; under a pointer that never moved. Every one
+                                ; of those pays a repaint through here, which
+                                ; is why this is the second store and not the
+                                ; fifth
     push ax
     push bx
     push cx
