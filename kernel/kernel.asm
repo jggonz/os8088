@@ -2786,6 +2786,10 @@ cw_vid_dual_ok:         call vid_dual_ok
 cw_vid_disp_relay:      call vid_disp_relayout
                     retf
 %endif
+cw_wm_clip_clear:        call wm_clip_clear
+                     retf
+cw_wm_clip_rect:         call wm_clip_rect
+                     retf
 cw_wm_clip_set:         call wm_clip_set
                     retf
 cw_wm_clip_test:        call wm_clip_test
@@ -2798,6 +2802,10 @@ cw_wm_destroy:          call wm_destroy
                     retf
 cw_wm_destroy_seg:      call wm_destroy_seg
                     retf
+cw_wm_dmg_add:           call wm_dmg_add
+                     retf
+cw_wm_dmg_hit:           call wm_dmg_hit
+                     retf
 cw_wm_dmg_wins:         call wm_dmg_wins
                     retf
 cw_wm_grow_paint:       call wm_grow_paint
@@ -2810,6 +2818,8 @@ cw_wm_obscured:         call wm_obscured
                     retf
 cw_wm_paint_all:        call wm_paint_all
                     retf
+cw_wm_paint_dmg:         call wm_paint_dmg
+                     retf
 cw_wm_pkgcall:          call wm_pkgcall
                     retf
 cw_wm_show:             call wm_show
@@ -3134,6 +3144,25 @@ osapi_mem_regrow:     call COLD_SEG:mmf_osapi_mem_regrow
                   ret
 osapi_sys_kb:         call COLD_SEG:mmf_osapi_sys_kb
                   ret
+
+; --- ...and desk.inc's (SPEC.md 26.1). The desktop dither and the drive
+; zones. Drawn on a mount, on a volume going away and on a click on bare
+; desktop - never in a loop, and the module carries no data at all, so it
+; moved whole with no section toggle in it.
+desk_click:       call COLD_SEG:dkz_desk_click
+              ret
+desk_dmg_zones:   call COLD_SEG:dkz_desk_dmg_zones
+              ret
+desk_paint:       call COLD_SEG:dkz_desk_paint
+              ret
+desk_paint_mask:  call COLD_SEG:dkz_desk_paint_mask
+              ret
+desk_rowcalc:     call COLD_SEG:dkz_desk_rowcalc
+              ret
+desk_zmark:       call COLD_SEG:dkz_desk_zmark
+              ret
+desk_zones_paint: call COLD_SEG:dkz_desk_zones_paint
+              ret
 
 ; --- WHICH KERNEL IS THIS? (SPEC.md 57.6) ------------------------------------
 ; Three words that change whenever any section's length does, so a field

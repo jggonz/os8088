@@ -115,6 +115,67 @@ def main():
                  "rule 2 (name the segment)" % len(cs_bad))
     print("os88ovlchk: no .cold code assumes CS")
 
+    # --- rule 1: cold code's DATA lives in .text ----------------------------
+    # Same argument as the CS check and the same kind of invariant: DS still
+    # names KERNEL_SEG in cold code, so a `db`/`dw` inside .cold is addressed
+    # at the wrong segment by every reader of it.  The whole kernel satisfies
+    # this (0 across seven cold modules), which is what makes it a refusal.
+    #
+    # It is worth checking mechanically because the tell is easy to miss BY
+    # EYE: NASM does not require a colon on a label, so `desk_pdisk dw
+    # ico_disk32` does not look like a label at a glance and a scan keyed on
+    # `name:` walks straight past it.  Moving desk.inc cold took seven such
+    # lines with it; DS then read the icon pointers out of .text at the cold
+    # offsets, and the machine jumped into the weeds on the first click on a
+    # drive zone - with the gfx lock held, so it froze rather than faulting.
+    # The comment sitting above those very lines had predicted it: "a zero
+    # [desk_pdisk] draws the interrupt vector table as an icon".
+    #
+    # .ovl is again exempt, and for the same reason: the overlay's data rides
+    # WITH it, so fdd_mbit, drvp_sbbase and ovl_font_bits all belong there.
+    DATA = re.compile(r'^\s*(?:[A-Za-z_]\w*:?\s+)?(?:d[bwdq]|times|resb|resw)\b',
+                      re.I)
+    d_bad = []
+    for f in files:
+        for sect, n, line in sections(f):
+            if sect == '.cold' and DATA.match(line):
+                d_bad.append((f, n, line.strip()[:60]))
+    for f, n, src in d_bad:
+        print("%s:%d: data in .cold: %s" % (f, n, src), file=sys.stderr)
+    if d_bad:
+        sys.exit("os88ovlchk: %d data directive(s) in .cold - SPEC.md 2.6 "
+                 "rule 1 (data stays in .text)" % len(d_bad))
+    print("os88ovlchk: no data in .cold")
+
+    # --- and no TAIL CALL to a cw_ shim -------------------------------------
+    # A cw_ shim is `call <target>` / `retf`: it exists to turn a far CALL
+    # from cold code into a near call plus a far return.  Reaching it with a
+    # `jmp` instead leaves no far frame, so the shim's `retf` pops the
+    # JUMPING routine's near return address as CS:IP - a wild jump into
+    # whatever segment that word happens to name.
+    #
+    # It is easy to write by accident, because a near tail call
+    # (`jmp gfx_xor_fill`) is an ordinary idiom in this kernel and the
+    # conversion to a shim looks mechanical.  desk_zone_hilite ended that way
+    # and froze the machine on the first click on a drive zone, with the gfx
+    # lock held; and drv_task's `.die` did the same and got away with it only
+    # because task_exit never comes back.  Neither is visible to the near-call
+    # check above: both ARE far transfers, which is exactly what it wants.
+    JSHIM = re.compile(r'\bjmp\s+(?:far\s+)?\w+\s*:\s*cw_(\w+)')
+    j_bad = []
+    for f in files:
+        for sect, n, line in sections(f):
+            m = JSHIM.search(line)
+            if m:
+                j_bad.append((f, n, m.group(1)))
+    for f, n, tgt in j_bad:
+        print("%s:%d: jmp to cw_%s - a shim ends in retf, so this pops a near "
+              "frame as CS:IP" % (f, n, tgt), file=sys.stderr)
+    if j_bad:
+        sys.exit("os88ovlchk: %d tail call(s) to a cw_ shim - use call + ret"
+                 % len(j_bad))
+    print("os88ovlchk: no tail call reaches a cw_ shim")
+
 
 if __name__ == '__main__':
     main()

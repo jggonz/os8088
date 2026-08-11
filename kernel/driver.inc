@@ -2012,8 +2012,11 @@ drv_task_x:
     cli                         ; IF=0 through task_exit (it would cli again
     dec byte [drv_wcnt]         ; anyway): the count moves in the SAME window
     xor bx, bx                  ; as the death publish, and this NEVER
-    jmp KERNEL_SEG:cw_task_exit               ; RETURNS - the two pushes above die with the
-                                ; task's stack
+    call KERNEL_SEG:cw_task_exit ; RETURNS - the two pushes above die with the
+                                ; task's stack, and so does the return address
+                                ; this call leaves. A `jmp` to a cw_ shim
+                                ; happens to work only while the target never
+                                ; comes back; a call works either way
 .fail:
     stc
 .out:
