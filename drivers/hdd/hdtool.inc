@@ -75,6 +75,18 @@ hd_tname:    db 'HDDTOOL.DRV', 0
 ; hd_ready runs inside drv_load's volume bracket, so what OSAPI_FILE_HERE
 ; answers here is the volume HDD.DRV was itself read from - which is where
 ; HDDTOOL.DRV is too, on a floppy machine and an installed one alike.
+;
+; **AND THAT SENTENCE NEEDED A KERNEL FIX TO BE TRUE** (SPEC.md 51.2.3), which
+; is worth leaving here because nothing about this routine looks wrong.
+; OSAPI_FILE_HERE answers for the CALLING INSTANCE (SPEC.md 19.2.1), and a
+; driver is not one - but inst_caller reports whichever callback is being
+; dispatched, and ticking our row on the Drivers page is a CONTROL PANEL
+; click. So this banked wherever the PANEL had been launched: a user who
+; opened a Disk window on B: and then opened the panel gave us (B:, root) as
+; "the system volume", and Format and Install then went to B: for the tool,
+; did not find it, and said "Need the system disk" with it sitting in A:.
+; drv_call clears the stamp now, so this reads the machine, which is what it
+; always meant to read.
 ; -----------------------------------------------------------------------------
 hd_tool_home:
     push ax
@@ -277,10 +289,21 @@ hd_tool_call:
 ; -----------------------------------------------------------------------------
 ; hd_tool_open - bring the tool in and open one of its windows
 ; in:  AL = HDT_FORMAT or HDT_INSTALL
-; out: nothing; the caption says what happened
+; out: CF = 0 a window is up; CF = 1 nothing opened and [hd_msg] says why
 ; clobbers: flags
 ;
 ; The two Control Panel buttons, and the only place a load is triggered.
+;
+; IT ANSWERS CF BECAUSE ITS CAPTION WAS UNREACHABLE. Both callers repaint the
+; pane BEFORE this and never after - deliberately, because a page draws itself
+; unclipped and a repaint after wm_show paints over the window just put up
+; (page.inc's .dofmt) - so on the path where no window appears, the verdict
+; set here was stored and never drawn. Clicking Install with the wrong disk in
+; the drive did nothing visible at all, and the message surfaced later, on
+; whatever unrelated thing repainted the page next. A refusal explains itself
+; (SPEC.md 47 rule 5), so the caller needs to be able to tell the two apart.
+;
+; `pop` touches no flag, so the three pops below carry CF out unharmed.
 ; -----------------------------------------------------------------------------
 hd_tool_open:
     push ax
@@ -292,12 +315,15 @@ hd_tool_open:
     mov al, ah                  ; the verb back into AL, where hd_tool_call
     call hd_tool_call           ; takes it
     jc .norun
+    clc
     jmp short .out
 .nofile:
     mov word [hd_msg], hd_s_nosys
+    stc
     jmp short .out
 .norun:
     mov word [hd_msg], hd_s_notool
+    stc
 .out:
     pop bp
     pop bx
