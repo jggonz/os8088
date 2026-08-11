@@ -35033,3 +35033,128 @@ first `DSF_KB` of the "file" is real memory and a read past it is answered
 
 It is `make dosstub`, on demand only; `all` builds nothing under `tests/` and
 nothing there ships.
+
+## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
+
+466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
+`MEDIA` on the three shipped system disks. It is **generated at build time
+and never committed** — `make` runs `tools/os88logo.py`, which draws the
+picture and writes the file.
+
+### 63.1 What it is for
+
+`MEDIA` is where the Standard File dialog opens (§38.10) and the system disk
+carried it **empty**, because a boot floppy has no media on it. So the first
+`File ▸ Open` a new user ever ran showed them an empty list, on a working
+machine, with no way to tell that apart from something being wrong. The logo
+is the disk answering that.
+
+It is a **picture** rather than a text file because the folder's other job is
+to be somewhere `Paint` (§42) can start, and because the thing that most
+needs saying on a first open — *this is os8088* — is a thing an OS says with
+its logo.
+
+### 63.2 What it draws
+
+An 8088 in its 40-pin DIP, on the desktop's 50% dither, with `os8088`
+knocked out of the package in white. The chip is this OS's own iconography
+already: it is what the System menu draws and what About shows.
+
+Every mark in it is one of §39.4's three classes — black, white, or the 50%
+checkerboard — so **nothing in it has to survive a colour reduction**; the
+picture a VGA shows and the picture a Hercules shows are the same bits, not
+two roundings of a third thing. The package is drawn on a white keyline for
+the reason §39.4 exists at all: a black body straight onto the dither has no
+edge of its own, and at CGA's 2.4:1 the checkerboard is a mid grey, so the
+two read as one texture.
+
+### 63.3 The three bounds it is drawn inside, all hard
+
+**The screen.** Paint's canvas *is* its content (§42) — there is no viewport
+and no scaling — so `pt_adopt` **crops** a picture bigger than the largest
+canvas the screen can show. That bound is Paint's own arithmetic and the
+smallest of the three adapters wins each axis: `640 - PT_CHROME_W` = **594**
+wide, and CGA's dock row `176 - PT_WIN_Y - PT_CHROME_H` = **110** tall. The
+tool checks its output against both and refuses rather than shipping a
+picture that opens cropped.
+
+**The height is drawn to that bound EXACTLY, and it is the one number here
+that is deliberately not conservative — because the alternative is not a
+tidier picture but a cropped one.** Paint asks the kernel to resize its
+window to the picture (`pt_wfollow`), and `pt_sizeask` answers with a height
+**floor**: `PT_SZ_END` = **128**, *tall enough to still show the size boxes*,
+itself clamped to `[pt_chmax]`. So the smallest canvas Paint will show is
+128 rows on Hercules and VGA and **110 on CGA**, where the desktop band is
+barely taller than the tool column and the screen is what cannot fund the
+controls.
+
+That makes the white band under a short picture unavoidable *somewhere*, and
+the choice is only where:
+
+| picture | CGA (`chmax` 110) | Hercules / VGA (floor 128) |
+|---------|-------------------|-----------------------------|
+| 110 tall | exact, no band   | 18-row band                |
+| 128 tall | **cropped — 18 rows lost** | exact, no band     |
+
+110 is the tallest a picture can be and never be cropped, and it is exact on
+the tightest screen; 128 buys a tidier Hercules at the price of destroying
+part of the picture on a CGA. The band is Paint's minimum window size and
+belongs to any short picture, not to this one.
+
+Measured on cycle-accurate 8088s rather than reasoned — the file opened
+through the real dialog, off the real system disk, and the canvas read back
+out of the guest and diffed against the source bitmap:
+
+| machine | canvas | picture |
+|---------|--------|---------|
+| `os8088_5150_cga_gla` | `466 x 110`, no band | 39 differing pixels, in one 8x12 box |
+| `os8088_5150_herc_gla` | `466 x 128`, 18-row band | **0** differing pixels of 51,260 |
+| `os8088_xt_vga` (mode 12h) | `466 x 128`, 18-row band | 31 differing pixels, in one 8x12 box |
+
+The two non-zero rows are the same thing and it is not the picture: `CUR_GW`
+x `CUR_GH` is **8x12** (§7.1) — the mouse arrow, parked on the canvas. A
+diff that is a count alone would have been evidence of nothing; the bounding
+box is what identifies it. On VGA the only two colours anywhere inside the
+picture are `(0,0,0)` and `(255,255,255)`, which is the two-entry palette
+arriving through `pt_map16` as `CBLACK` and `CWHITE` on a 16-colour screen.
+
+**The file.** 4KB, and checked rather than hoped for.
+
+**The decoder.** GIF87a, global colour table, LZW minimum code size 2..8,
+non-interlaced. The palette is two entries — pure white then pure black, the
+two colours `pt_map16` cannot map anywhere but `CWHITE` and `CBLACK` — and
+the minimum code size is 2, which is GIF's own floor and not a choice.
+
+The LZW follows **giflib's ordering**: a code is emitted at the *current*
+width and the width grows afterwards. That is what leaves the encoder and
+`pt_gdec` one entry apart in the same direction; the other order produces a
+file most decoders still read and this one does not, which is the worst
+available way to be wrong.
+
+### 63.4 The pixel is not square, and no bitmap can be right on all three
+
+A row is 1.00 pixel wide on VGA (640x480 in 4:3), **1.55** on Hercules
+(720x348) and **2.40** on CGA (640x200), so one bitmap is a long thin DIP on
+one adapter and a stubby one on another. There is no fix, only a choice, and
+the choice made here is **Hercules** — the middle of the three, and the card
+the calibration machine drives (docs/FIELD-MACHINES.md). It reads as a real
+40-pin package there, as a longer one on VGA and as a chunkier one on CGA.
+
+`--png` writes the preview at all three aspects, and that is the only way to
+make this decision: the proportions were picked by looking, and a change to
+`CAP` or `PAD_X` has to be looked at again the same way.
+
+### 63.5 Why the artwork is code
+
+The same reason `fonts/*.f8` is ASCII art rather than 760 bytes of hex
+(§6.2.1): **a picture's defects are entirely visual**, and a 2KB LZW blob in
+the tree is a thing nobody can review, diff or re-derive. Every proportion in
+it is a named constant, the layout is derived from the type size rather than
+hand-fitted around it, and the four glyphs are one pen dragged round four
+paths — which is what keeps their stroke weight identical through a change of
+size, the failure the eye reads first at this scale and the one four
+hand-drawn glyphs cannot be held against.
+
+That is the *opposite* of §6.2.1's conclusion for an 8x8 face, and both are
+right for their size: at 8 rows there is no curve to get right, only which of
+six pixels to light, so the hand wins. At 44 rows there is nothing but curve.
