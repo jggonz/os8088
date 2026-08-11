@@ -1,3 +1,27 @@
+# --- a note about INTERLEAVE, and why no machine here sets one ---------------
+# A drive's `interleave` (our patch 04, default 1) is the physical sector order
+# on the platter. A raw sector image records the LOGICAL order and says nothing
+# about where the sectors sit, so no emulator can derive it from the file - it
+# is a property of the disk the machine is being asked to model, and it is a
+# knob for exactly that reason.
+#
+# **Every machine below is 1:1, and that is a MEASUREMENT.** This file used to
+# carry an `os8088_2_360k_floppies` overlay putting 2:1 media in the IBM-ROM
+# machines, because PERFORMANCE.md read the field's `int 13h track, 1 call` -
+# 398 ms, 2.00 revolutions where a 1:1 track is 1.00 - as a 2:1 platter. It is
+# not: the missing revolution is the BIOS's own head-settle wait, 25 ms of
+# diskette-parameter-table asked for and ~52 ms of `LOOP $` at F000:EEB8
+# delivered, once per `int 13h`. With 1:1 media and that wait modelled by
+# simply running the ROM, `tests/sysbench` on this emulator reproduces the
+# field machine's whole raw floppy block to the measurement quantum -
+# `int 13h 1 sector` and all five short seek rows EXACTLY (PERFORMANCE.md
+# Part 9 Set 37). With 2:1 it did not, and the boot was 27% slow.
+#
+# That also retired a caveat: GLaBIOS abandons a floppy operation after
+# ~250 ms and a 2:1 track read takes up to 400 ms, so the GLaBIOS machines had
+# to be given different media from the IBM ones. At 1:1 they need no exception
+# and every machine here carries the same disks.
+
 # --- os8088's calibration machine, as close as MartyPC gets ------------------
 # docs/FIELD-MACHINES.md's IBM 5150: 8088 at 4.77MHz, 256K on the board plus an
 # AST SixPakPlus making 640K, and a CGA. (The real machine also carries a

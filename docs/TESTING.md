@@ -7,8 +7,9 @@ period BIOS, with a debugger attached: memory, registers, I/O ports,
 breakpoints, single-step and cycle counts, none of it costing the guest a
 cycle (docs/MARTYPC-DEBUG.md). It covers **all three** of SPEC.md §39's
 adapters, scripted input, screenshots and sound. **And for anything with a
-disk in its timing, go to the 5150 — no emulator here is disk-accurate,
-MartyPC included.**
+disk in its timing, the 5150 is where the number LANDS — though MartyPC's
+floppy now turns (PERFORMANCE.md Sets 35/37) and agrees with the iron's raw
+`int 13h` rows to the measurement quantum.**
 
 **Here is the whole of QEMU's remaining list**, stated as a list so that "a
 legitimate need" is something you can check rather than something you can
@@ -51,40 +52,40 @@ A tool that is wrong in the flattering direction does not announce itself.
 | **86Box** | a machine that is **not an 8088** (the 286 and 386 targets), real sound cards on a period bus, a second opinion on the video probe | period-correct whole machines, and the widest hardware library |
 | **the 5150** | anything with a **disk** in it, and the three defects no emulator shows | docs/FIELD-MACHINES.md |
 
-## The one rule that outranks the table: no emulator here is disk-accurate
+## The one rule that outranks the table: a disk number lands on the 5150
 
-**MartyPC is cycle-accurate on the CPU and it is not a floppy drive.** It
-models instruction timing, the prefetch queue and bus contention; it does not
-model a disk that spins at 300 rpm, a head that has to seek, or an interleave.
-PERFORMANCE.md Set 11 measured the gap on the same test and the same media:
+**MartyPC's floppy used to be a fiction and now it is a model.** Upstream it
+modelled no platter at all — a seek completed in the breath it was issued and
+a sector arrived the instant it was asked for — which is where Set 11's 30x
+came from. `tools/martypc/patches/04-floppy-disk-timing.patch` gives it
+rotation, an MFM data rate, a per-cylinder seek and a configurable interleave
+(PERFORMANCE.md Sets 35/37, docs/MARTYPC-DEBUG.md):
 
-| | real 5150 | MartyPC |
-|---|---|---|
-| read 16 KB, cold motor | **8.07 s** | **0.27 s** — 30x fast |
-| boot | **38,886 ms** | **2,306 ms** — 17x fast |
+| `boot ticks`, 360KB `combo.img` | stock | Set 35 | **now** | real 5150 |
+|---|---|---|---|---|
+| `os8088_5150_cga_gla` (GLaBIOS) | 41 (2.25 s) | 130 (7.14 s) | **175** | — |
+| `os8088_5150_herc` (IBM ROM) | — | 222 | **188** | **205** |
 
-So **if a disk is in the path, MartyPC's number is wrong** and it is wrong by
-more than an order of magnitude. That includes anything that *contains* a
-disk read without being about one — a boot time, a package launch, a Tracker
-module load, a Control Panel save. PCem is no better and QEMU is worse. There
-is exactly one instrument for disk timing and it is the machine in
-docs/FIELD-MACHINES.md.
+`tests/sysbench`'s whole raw `int 13h` block matches the field machine's own
+report off that identical image to within one measurement quantum on nine of
+thirteen rows, seven of them exactly (Set 37). So the rule is now two rules and
+**both** have moved:
 
-**And it will not catch a disk CORRECTNESS bug either**, which is the sharper
-half. SPEC.md §18.91's `AL` bug is the worked example: `dsk_xfer` asked the
-BIOS for nine sectors, the BIOS moved nine and answered `AL = 1`, and the
-kernel believed `AL` and re-read the rest one sector at a time. On the 5150
-that was 148 sectors and 34 `int 13h` calls for a 32-sector file — 4.6x the
-traffic. **The same binary on the same image under QEMU moved 34 sectors in 6
-calls**: correct, fast, and completely silent about the bug. It took the real
-machine plus §18.94's counters to see it at all, and the boot sector carried
-the identical bug undiscovered for as long again. An emulator's BIOS returns
-what its author thought the hardware returns; the hardware is under no such
-obligation.
+- **TIMING**: MartyPC is worth asking. It still is not where a figure LANDS:
+  anything going into PERFORMANCE.md Part 9 comes off the 5150. PCem is no
+  better and QEMU models none of it.
+- **CORRECTNESS**: half of it moved. MartyPC runs the real IBM ROM, so what
+  the ROM does is reproduced — §18.91's `AL` bug shows here as **893 boot
+  ticks against 188** and 870 sectors in 183 reads against 183 in 24, the
+  field's own signature. What a real 765 puts in ST1, or whether a real drive
+  returns short, is still the emulator author's belief and still the 5150's
+  question, as are interrupt stack depth (SPEC.md §8) and anything QEMU's
+  SeaBIOS smooths over (docs/FIELD-NOTES.md 5).
 
-The same caution applies to `int 1Eh`'s diskette parameter table, short
-`int 13h` reads, and interrupt stack depth — docs/FIELD-NOTES.md 5 and
-SPEC.md §8. All three are BIOS behaviours an emulator smooths over.
+One caveat: the `ibm5150_82_v4` machines need an IBM ROM this tree cannot
+ship, so a container without one in `tools/martypc/roms/` can run the GLaBIOS
+twins only — and a GLaBIOS machine is not where a disk number comes from, its
+BIOS abandoning a floppy op after ~250 ms.
 
 ---
 
@@ -1036,6 +1037,27 @@ bandwidth, the clock ladder, the API's far-call floor, **what the kernel's
 own interrupts cost per second of ordinary work** (the same workload timed
 with interrupts off and then on), and the floppy — twice, because the first
 read pays the motor spin-up and quoting either figure alone misleads.
+
+**Two of its floppy blocks exist to pin the two numbers the MartyPC disk model
+has no measurement for** (PERFORMANCE.md Set 35, `tools/martypc/patches/04-*`).
+Both go through the kernel's `dsk_dbg_raw`, so both need a `DISKCNT=1` kernel
+and are silent on any other — which is what every `make field` disk is.
+
+- **The head step.** Every other raw row reads one track and never moves the
+  head, so the model's step rate is the BIOS's own SPECIFY request and its
+  settle is the DPT's, both on trust. `seek N cyl, pair` reads cylinder 0 and
+  then cylinder N, so an op holds two seeks of that distance. **Read the rows
+  as revolutions and expect whole ones**: a read ends at a fixed angular
+  position, so the seek happens inside the wait for sector 1 to come round and
+  is invisible until it is longer than that wait. What the block measures is
+  therefore *the distance at which the cost steps up*, not a slope — and the
+  `seek 0 cyl` row is the zero of that scale rather than something to trust.
+- **Spin-up.** `1 sector, motor COLD` waits for the BIOS's own motor countdown
+  at `0040:0040` to expire, checks `0040:003F` and prints it, then times one
+  sector; `1 sector, motor warm` is the same read with the platter already
+  turning. Both are N = 1 and must be — the event happens once. A `motor
+  status 40:3F` of anything but `00` means the drive never stopped and the
+  cold row is not cold, which is the one way this can lie and so is printed.
 
 Three things about reading their output:
 
