@@ -292,10 +292,12 @@ wm_disp_of:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_disp_span - that display's x origin and width (SPEC.md 39.17.2)
-; in:       BX = the window; AX/CX = the primary's, already loaded
-; out:      AX = x0, CX = width
-; clobbers: AX, CX, flags
+; wm_disp_span - that display's standard-state box (SPEC.md 39.17.2)
+; in:       BX = the window; AX/CX/SI/DX = the primary's (x0, width, y0,
+;           band height), already loaded
+; out:      AX = x0, CX = width, SI = y0, DX = band height (one pixel short,
+;           wm_fit's drop-shadow rule)
+; clobbers: AX, CX, SI, DX, flags
 ; -----------------------------------------------------------------------------
 wm_disp_span:
     cmp byte [vid_ndisp], 1
@@ -303,8 +305,15 @@ wm_disp_span:
     push di
     call wm_disp_of
     call vid_ctx_ptr
+    or al, al                   ; (the movs leave the flags for the jz)
     mov ax, [di+VID_CTX_VX]
     mov cx, [di+VID_CTX_CW]
+    jz .prim                    ; the PRIMARY keeps the caller's band: bar to
+                                ; dock, which its context record cannot know
+    mov si, [di+VID_CTX_VY]     ; a secondary has no bar and no dock, so its
+    mov dx, [di+VID_CTX_CH]     ; whole height is desktop - wm_fit_box's own
+    dec dx                      ; rule (SPEC.md 39.16.1), one short like it
+.prim:
     pop di
 .out:
     ret
@@ -907,24 +916,32 @@ wm_zoom:
     push si
     xor ax, ax                  ; the standard state: x = the left edge...
     mov cx, [vid_pw]            ; ...and w = the whole live screen (SPEC 39.2)
+    mov si, MBAR_H              ; ...y = under the bar, h = the desktop band,
+    mov dx, [vid_dock_y0]       ; one pixel short of the dock - wm_fit's
+    sub dx, MBAR_H + 1          ; clamp, for wm_fit's reason
 %ifdef KERN_BIG
-    call wm_disp_span           ; ...of the DISPLAY this window is on, or a
-                                ; zoom would move it to the other monitor
+    call wm_disp_span           ; ...ALL FOUR of the DISPLAY this window is on
+                                ; (SPEC.md 39.17.2), or a zoom would move it
+                                ; to the other monitor - which the x half
+                                ; alone once guaranteed only until the y half
+                                ; wrote MBAR_H onto a BELOW-layout secondary
 %endif
     call wm_snap_want
     jnc .nosnap
-    mov ax, 7                   ; WF_SNAP: the leftmost frame x whose CONTENT
-    sub cx, ax                  ; origin is a multiple of 8, and the width
-                                ; hands back exactly what x took
+    add ax, 7                   ; WF_SNAP: the leftmost frame x whose CONTENT
+    sub cx, 7                   ; origin is byte-aligned ON ITS DISPLAY -
+                                ; every display origin is byte-aligned, so
+                                ; local and virtual agree - and the width
+                                ; hands back exactly what x took. (`mov ax,7`
+                                ; here was the relocation: it overwrote the
+                                ; display origin wm_disp_span just answered)
 .nosnap:
-    mov dx, [vid_dock_y0]       ; h = the desktop band, one pixel short of the
-    sub dx, MBAR_H + 1          ; dock - wm_fit's clamp, for wm_fit's reason
     call wm_ask_size            ; ...as the window will have it (SPEC.md 11.1),
                                 ; which is what makes the compare below hold
                                 ; for a negotiator with a quantum of its own
     cmp [bx+W_X], ax            ; is the window already in the standard state?
     jne .go
-    cmp word [bx+W_Y], MBAR_H
+    cmp [bx+W_Y], si
     jne .go
     cmp [bx+W_W], cx
     jne .go
@@ -1001,6 +1018,7 @@ wm_zoom:
                                 ; of it, and not the chrome (SPEC.md 11.95.1)
 .go:
     ; --- it is not: bank where it stands, and go to the standard state -------
+    push si                     ; the standard y, which wm_zoom_slot spends SI on
     call wm_zoom_slot
     call wm_rz_bank             ; ...for the REPAINT as well as for the user
                                 ; state - and it has to happen here, before
@@ -1018,7 +1036,9 @@ wm_zoom:
     mov [si+ZR_H], ax
     pop ax
     mov [bx+W_X], ax
-    mov word [bx+W_Y], MBAR_H   ; wm_resize's y clamp only ever pushes a window
+    pop si                      ; ...and the standard y back
+    mov [bx+W_Y], si            ; its DISPLAY's standard y (SPEC.md 39.17.2):
+                                ; wm_resize's y clamp only ever pushes a window
                                 ; UP OFF the dock, never down off the bar, so
                                 ; this is the half it cannot do
     call wm_resize_nb           ; ...and this is the half it can (the bank is
@@ -1341,6 +1361,32 @@ wm_raise:
     push ax
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
     call wm_lift                ; ...and the top of the z-order
+
+    ; THE OUTGOING WINDOW IS DEALT WITH FIRST, and the bank is why. It used to
+    ; sit after the two chrome calls below, on the reading that nothing between
+    ; here and there draws a window - but wm_dock_under does, whenever a window
+    ; hangs over the dock strip (ui_grow's clamp allows it, wm_dock_clear
+    ; reports it): it runs wm_dmg_wins, which redraws every marked window WHOLE
+    ; and unclipped, and wm_lift has already made US the front one, so the
+    ; incoming window is drawn LAST - over the outgoing one. A bank taken
+    ; afterwards held the coverer's pixels inside the covered window's rect,
+    ; and wm_su_ck cannot see that: it compares four rect words, which still
+    ; agree. Taken here it is the outgoing window's own content, which is the
+    ; only thing SPEC.md 11.96 promises to put back.
+    cmp bp, di
+    je .self                    ; already the front window: no outgoing one
+    or bp, bp
+    jz .self
+    test word [di+W_FLAGS], WF_FULL
+    jnz .self                   ; we are about to cover the whole screen: the
+                                ; outgoing window's title bar is a strip drawn
+                                ; only to be painted over
+    xchg bp, di                 ; DI = the outgoing front, BP = the incoming
+    call wm_su_take             ; banked while it is still the only thing on
+                                ; its own rect (SPEC.md 11.96)
+    call wm_draw_title          ; DI != BP now, so it loses its stripes
+    xchg bp, di
+.self:
     call menu_draw_bar          ; BOTH guard themselves on wm_fs_vis, and that
     call wm_dock_under          ; is the point: under a fullscreen window each
                                 ; draws nothing AND records that its pixels are
@@ -1351,21 +1397,6 @@ wm_raise:
                                 ; wm_fullscreen's own raise, neither module was
                                 ; ever told, and quitting a 11.2 app left its
                                 ; bar and a blank strip on screen for good
-    cmp bp, di
-    je .self                    ; already the front window: no outgoing one
-    or bp, bp
-    jz .self
-    test word [di+W_FLAGS], WF_FULL
-    jnz .self                   ; we are about to cover the whole screen: the
-                                ; outgoing window's title bar is a strip drawn
-                                ; only to be painted over
-    xchg bp, di                 ; DI = the outgoing front, BP = the incoming
-    call wm_draw_title          ; DI != BP now, so it loses its stripes
-    call wm_su_take             ; ...and its content is banked HERE, while it
-                                ; is still on the glass and before the window
-                                ; going over it has drawn (SPEC.md 11.96)
-    xchg bp, di
-.self:
     mov bx, di
     mov bp, di                  ; we ARE the front window now
     pop ax
@@ -2553,6 +2584,22 @@ wm_paint_all:
     mov ah, 0
     mov di, si
     add di, ax                  ; DI = one past the front
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    jbe .fsone
+    call vid_disp_dither        ; wm_fs_vis said display 0, so the OTHER
+                                ; display is not under it (SPEC.md 39.17.1):
+                                ; its desktop still dithers...
+    jmp short .win              ; ...and its windows still draw - the walk
+                                ; starts at the BOTTOM, and wm_covered skips
+                                ; everything the fullscreen window really
+                                ; covers. That is one region pass per covered
+                                ; window, on a path that is already a full
+                                ; repaint; started AT the fullscreen window
+                                ; it skipped every display-1 window below it
+                                ; in z and left that monitor stale for good
+.fsone:
+%endif
     call wm_fs_zpos             ; SI = the fullscreen window's slot in wm_zord
 .win:
     cmp si, di
@@ -4038,6 +4085,20 @@ wm_su_take:
     jnz .out                    ; a fullscreen window is not usefully covered
                                 ; by what is being raised over it, and it is
                                 ; the biggest block there is
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja .out                     ; an EXTENDED desktop refuses the bank
+                                ; outright: the extent checks below compare
+                                ; against the ACTIVE display's [vid_cw]/
+                                ; [vid_ch], and gfx_save/gfx_restore carry no
+                                ; display hook - a bank taken while the other
+                                ; card was current saved, and would later
+                                ; restore, the wrong band of the wrong
+                                ; monitor at untranslated virtual offsets. A
+                                ; refusal is the designed fallback (11.96):
+                                ; the raise repaints, exactly as it did
+                                ; before the cache existed
+%endif
     mov bx, di
     call wm_su_drop             ; whatever THIS window banked before: one
                                 ; window, one claim, or the old one leaks
@@ -4282,6 +4343,15 @@ wm_su_try:
     push si
     push di
     push es
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja .no                      ; wm_su_take refuses on an extended desktop,
+                                ; and so does the restore: a bank taken in
+                                ; Single survives the switch to Extend, and
+                                ; replaying it through the unhooked
+                                ; gfx_restore has the same wrong-band hazard
+                                ; the take refuses for
+%endif
     call wm_su_ck               ; ...which loads wm_su_x1..y2 out of the
     jc .no                      ; claim's own header, and answers AX = it
     mov es, ax

@@ -1139,13 +1139,22 @@ gfx_line:
     mov di, [wm_clip_n]
 .frag:
     mov ax, [si+WCR_X1]         ; the rects are disjoint, so no pixel of the
-    mov [gfx_ln_cx1], ax        ; line is ever written twice
-    mov ax, [si+WCR_Y1]
-    mov [gfx_ln_cy1], ax
-    mov ax, [si+WCR_X2]
-    mov [gfx_ln_cx2], ax
-    mov ax, [si+WCR_Y2]
-    mov [gfx_ln_cy2], ax
+    mov bx, [si+WCR_Y1]         ; line is ever written twice
+    mov cx, [si+WCR_X2]
+    mov dx, [si+WCR_Y2]
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; the fragments are VIRTUAL and the endpoints
+    je .fv                      ; went display-local at GFXDORG, so each
+    sub ax, [vid_ox]            ; fragment follows them onto the display -
+    sub cx, [vid_ox]            ; gfx_clip_run's own idiom, which this loop
+    sub bx, [vid_oy]            ; replicated WITHOUT the translation: a local
+    sub dx, [vid_oy]            ; line clipped against virtual rects meets
+.fv:                            ; none of them on display 1 and vanishes
+%endif
+    mov [gfx_ln_cx1], ax
+    mov [gfx_ln_cy1], bx
+    mov [gfx_ln_cx2], cx
+    mov [gfx_ln_cy2], dx
     push si
     push di
     call gfx_line_raw

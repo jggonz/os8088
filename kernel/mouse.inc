@@ -978,8 +978,15 @@ mou_clamp:
     call vid_disp_find
     pop ax
     jnc .mout                   ; inside a display already: nothing to correct
-    mov cl, [cur_disp]
-    call vid_pt_clamp
+    push bx
+    push ax
+    mov ax, [mouse_x]           ; the display under the PRE-STEP position,
+    mov bx, [mouse_y]           ; which the clamp invariant keeps inside SOME
+    call vid_disp_find          ; display - NOT [cur_disp]: that is where the
+    mov cl, al                  ; arrow was last DRAWN, and it freezes while
+    pop ax                      ; the gfx lock is held, so a seam crossed
+    pop bx                      ; during a repaint and then clamped into it
+    call vid_pt_clamp           ; dragged the pointer a whole monitor back
 .mout:
     pop cx
     ret
@@ -991,13 +998,17 @@ kbm_move:
     mov al, [bx+1]              ; not disturb it, so it serves both axes
     imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
     add ax, [mouse_x]
-    mov [mou_nx], ax            ; staged, exactly as the ISR does, and for
-                                ; mou_clamp's 2-D reason (SPEC.md 39.15.4)
+    push ax                     ; banked on OUR stack until y is ready, for
+                                ; mou_clamp's 2-D reason (SPEC.md 39.15.4).
+                                ; NOT in [mou_nx]: that word is the IRQ4
+                                ; ISR's staging area, and a serial byte
+                                ; landing between our store and read-back
+                                ; paired the ISR's x with our y
     mov al, [bx+2]              ; dy, the same way
     imul dl
     add ax, [mouse_y]
     mov bx, ax
-    mov ax, [mou_nx]
+    pop ax
     call mou_clamp
     mov [mouse_x], ax
     mov [mouse_y], bx
