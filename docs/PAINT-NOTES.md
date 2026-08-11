@@ -629,7 +629,7 @@ Three things in the adoption are load-bearing:
   that its own comment ("every part of this draws its own background") is true
   rather than true-because-a-`W_PAINT`-ran-first.
 
-## A window that resizes itself inside its own paint (SPEC.md §42.9)
+## A window that resizes itself inside its own paint (SPEC.md §42.10)
 
 Found by §11.96.10's gate and **not caused by it**: on a picture that makes the
 window grow, `pt_wfix` rewrites `W_W`/`W_H` from `pt_track` — which runs at the

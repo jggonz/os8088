@@ -5104,7 +5104,7 @@ sequence of captures fails every one after it — at the first symbol lookup, wh
 is before any window is opened, so the run leaves nothing to look at.
 
 **And the gate found a defect in Paint that was nowhere near it** — SPEC.md
-§42.9. `ptcheck` came back with 2,218 differing pixels on VGA (655 on Hercules)
+§42.10. `ptcheck` came back with 2,218 differing pixels on VGA (655 on Hercules)
 in a region **outside** the covered box entirely: 41 columns of desktop dither
 inside Paint's own content, the full height of the colour strip. `pt_wfix`
 rewrites `W_W`/`W_H` from `pt_track`, which runs at the *top* of `W_PAINT` after

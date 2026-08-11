@@ -187,7 +187,7 @@ Three things came out of it that the next reader wants:
   whole safety condition and it is a property of the *caller*, which is why it is
   an argument and not a test inside `wm_raise`.
 
-**And it found a defect in Paint on its way through** — SPEC.md §42.9,
+**And it found a defect in Paint on its way through** — SPEC.md §42.10,
 docs/PAINT-NOTES.md. A window that resizes itself inside its own `W_PAINT` was
 laying out the rest of that paint at the size it used to be, so 41 columns of
 Paint's colour strip showed the **desktop dither** through `WF_OWNBG`. It had

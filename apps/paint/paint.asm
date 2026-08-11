@@ -185,8 +185,6 @@ PT_LZW_KB   equ 16                  ; the claim both directions run in
 ; from the live geometry rather than from a constant.
 PT_CW_DEF   equ 448                 ; the canvas a fresh Paint starts with...
 PT_CH_DEF   equ 280                 ; ...clamped to the screen and to memory
-PT_CW_MIN   equ 32                  ; the smallest a resize may leave
-PT_CH_MIN   equ 16
 PT_CW_MAX   equ 736                 ; row-table sizing: the widest screen
 PT_CH_MAX   equ 464                 ; os8088 drives is 720, the tallest 480
 PT_BMPHDR   equ 118                 ; 14 + 40 + 16*4: the DIB in front of row 0
@@ -204,6 +202,22 @@ PT_CHROME_H equ PT_STRIP_H + 1 + 19 ; canvas height -> frame height (the +1 is
                                     ; the separator row, the 19 is TITLE_H+1)
 PT_CHROME_W equ PT_CV_X + 2         ; canvas width  -> frame width
 PT_WIN_Y    equ MBAR_H + 4          ; frame top
+
+; The smallest canvas there is, and it is the KERNEL's number rather than one
+; of ours: wm_resize and ui_grow both clamp a frame at WMIN_W x WMIN_H
+; (SPEC.md 11.1) and neither tells the app they did it, so a floor of our own
+; below theirs is a canvas the window can never be - Paint drawing [pt_ch]
+; rows inside a content box the kernel made taller, and a strip of stale
+; white under the picture that nothing owns. Derived, so the two cannot drift.
+;
+; It REPLACED a floor of PT_SZ_END - "tall enough to still show the size
+; boxes" - and SPEC.md 42.9 is why that went: it was a minimum window size
+; imposed to keep a control reachable, and it made every picture shorter than
+; 128 rows open at the wrong size on every adapter. The controls degrade on
+; their own (pt_szon, pt_draw_dims, pt_draw_pal all draw what fits), and the
+; grow box is the kernel's, on the frame, at every size the kernel allows.
+PT_CW_MIN   equ WMIN_W - PT_CHROME_W    ; 50
+PT_CH_MIN   equ WMIN_H - PT_CHROME_H    ; 22
 PT_GROW     equ 15                  ; the grow box owns the content's last 13
                                     ; columns and rows (SPEC.md 11) - which is
                                     ; inside the strip, so the strip's
@@ -6336,29 +6350,15 @@ pt_sizeask:
     jle .w_cap
     mov ax, [pt_cwmax]
 .w_cap:
-    ; The height floor is "tall enough to still show the size boxes", not
-    ; PT_CH_MIN. A canvas shorter than PT_SZ_END hides them (pt_szon), and
-    ; they are the ONLY way to make the canvas taller again - no menu item, no
-    ; key - so typing 100 into the height box, or dragging the grow box up,
-    ; left the window stuck at that size for the rest of the session. This is
-    ; a minimum window size and nothing more exotic.
-    ;
-    ; Held against [pt_chmax] first, because on a 640x200 CGA screen the band
-    ; between the menu bar and the dock is barely taller than the tool column:
-    ; where the SCREEN is what cannot fund the controls, no floor can, and
-    ; PT_CH_MIN is the honest answer.
-    mov bx, PT_SZ_END
-    cmp bx, [pt_chmax]
-    jle .h_fl
-    mov bx, [pt_chmax]
-.h_fl:
-    cmp bx, PT_CH_MIN
-    jge .h_fl2
-    mov bx, PT_CH_MIN
-.h_fl2:
-    cmp dx, bx                      ; signed: a tiny window makes this negative
+    ; The height floor is PT_CH_MIN - the smallest window the KERNEL will
+    ; make - and nothing else. It used to be PT_SZ_END, "tall enough to still
+    ; show the size boxes", and SPEC.md 42.9 is the removal: a control's
+    ; convenience was setting the minimum size of a PICTURE, so every image
+    ; under 128 rows opened at the wrong size on every adapter, with a white
+    ; band under it that was not in the file.
+    cmp dx, PT_CH_MIN               ; signed: a tiny window makes this negative
     jge .h_ok
-    mov dx, bx
+    mov dx, PT_CH_MIN
 .h_ok:
     cmp dx, [pt_chmax]
     jle .h_cap

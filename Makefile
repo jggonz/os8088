@@ -489,12 +489,30 @@ DRIVERS += $(BUILD)/hddtool.drv
 SYSAPPS := $(BUILD)/taskmgr.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
-# ...and MEDIA, which every disk carries and the system disk carries EMPTY:
-# it is where a File Open or File Save starts (SPEC.md 38.10), so it has to
-# exist on whatever volume the user is on, and a boot floppy has no media to
-# put in it. --folder is os88disk's way of saying "this folder, with nothing
-# in it" - a folder otherwise exists only because a file named one.
+# ...and MEDIA, which every disk carries: it is where a File Open or File
+# Save starts (SPEC.md 38.10), so it has to exist on whatever volume the user
+# is on. --folder is os88disk's way of saying "this folder, with nothing in
+# it" - a folder otherwise exists only because a file named one - and it is
+# still what the disks below that carry no media use.
 MEDIAFOLDER := --folder MEDIA
+
+# The logo (SPEC.md 63): 466x100 of monochrome GIF, and the one thing in
+# MEDIA on the three SHIPPED system disks, which used to be empty. It is not
+# decoration on a disk with room to spare - it is what makes the default
+# folder open on SOMETHING. The dialog starts in MEDIA and a boot floppy had
+# nothing to put there, so the first File > Open a new user ever ran showed
+# them an empty list on a working machine.
+#
+# GENERATED, never committed: the artwork is code (tools/os88logo.py), for
+# the reason fonts/*.f8 is ASCII art rather than hex - a picture's defects
+# are entirely visual and a 2KB LZW blob is not reviewable. Scoped the way
+# SYSDOC is, and for the same reason: `make field`'s narrow disks and the
+# bench disks are clusters the benchmarks may want.
+SYSLOGO := $(BUILD)/OS8088.GIF
+SYSLOGOARG := MEDIA:$(SYSLOGO)
+
+$(SYSLOGO): tools/os88logo.py | $(BUILD)
+	python3 tools/os88logo.py -o $@
 
 # SYSDOC is the manual, and it is deliberately NOT part of SYSAPPS: that list
 # rides the apps disk (APPS_ROOT) and all five `make field` disks as well, and
@@ -633,10 +651,10 @@ $(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
 	$(NASM) -f bin -w+error -I drivers/net/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes - the DOS end, for the FAR machine"
 
-$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
 # BETWEEN the two shipped ones have: an XT or AT fitted with a 3.5" DD drive,
@@ -647,15 +665,15 @@ $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) to
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG)
 
-$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
 # apps disks - their directory order is pinned (SPEC.md 24) - so it rides its
