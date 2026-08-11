@@ -3595,6 +3595,13 @@ dskw_fmt_probe:
     test byte [bx+DV_UNIT], 0x80
     jnz .noflop
     mov dl, [bx+DV_UNIT]        ; the int 13h drive, for AH=08h below
+    inc byte [dsk_rah_busy]     ; the probe's reads NEVER touch §18.95's
+                                ; cache, either way: a hit would answer the
+                                ; geometry question from RAM - the previous
+                                ; disk's RAM, since the probe only runs after
+                                ; a failed mount - and a fill would cache
+                                ; sectors read under a TRIAL geometry, keyed
+                                ; as if the real one had read them
 
     ; --- the DRIVE's own idea of itself, before anything is read -----------
     ; DI = its cylinders, SI = its sectors per track. int 13h AH=08h is the
@@ -3607,25 +3614,33 @@ dskw_fmt_probe:
     ; guess but the only thing such a machine can be. Measured: neither
     ; GLaBIOS nor the 27 Oct 1982 IBM ROM answers it, and the 1982 ROM does
     ; not support any other format either.
-    mov di, 40
-    mov si, 9
     push bp                     ; AH=08h spends BX, CX, DX, DI and ES, and
     push dx                     ; some BIOSes spend BP as well
     mov ah, 0x08
     int 0x13
     pop dx
     jc .nogeom
+    cmp ch, 0xFF                ; CH = 0FFh is not a geometry. (Tested on CH
+    je .nogeom                  ; itself: the old widen-and-`inc ax` form made
+                                ; 0x0100 of it, which is not zero, so the
+                                ; guard never fired)
+    mov al, cl
+    xor ah, ah                  ; AH first: the `jz` must see `and`'s flags,
+    and al, 0x3F                ; not the xor's, which are always zero
+    jz .nogeom                  ; a zero would make the descent skip every row
+    mov si, ax                  ; SI = the drive's sectors per track
     mov al, ch                  ; CH = max cylinder low 8 (a floppy is < 256)
     xor ah, ah
     inc ax
-    jz .nogeom                  ; CH = 0FFh is not a geometry
-    mov di, ax
-    mov al, cl
-    and al, 0x3F                ; sectors per track, bits 0..5
-    xor ah, ah
-    jz .nogeom                  ; a zero would make the descent skip every row
-    mov si, ax
+    mov di, ax                  ; DI = its cylinders
+    jmp short .geom
 .nogeom:
+    mov di, 40                  ; no usable answer is a 360KB machine - and
+    mov si, 9                   ; these are SET here, not left standing from
+                                ; above: AH=08h returns ES:DI = the diskette
+                                ; parameter table even when its numbers are
+                                ; unusable, so DI does not survive the call
+.geom:
     pop bp
 
     ; --- the MEDIUM's sectors per track: descend from the drive's ----------
@@ -3681,6 +3696,7 @@ dskw_fmt_probe:
     call .undo                  ; the probe leaves NO geometry behind
     pop ax
 .done:
+    dec byte [dsk_rah_busy]
     pop es
     pop di
     pop si
@@ -3691,8 +3707,11 @@ dskw_fmt_probe:
     ret
 
 .noflop:
-    mov ax, FERR_PROT           ; a hard-disk partition is HDDTOOL's (52.2)
+    mov ax, FERR_PROT           ; a hard-disk partition is HDDTOOL's (52.2);
+    jmp short .fail_nb          ; refused BEFORE the cache bypass went up
 .fail:
+    dec byte [dsk_rah_busy]
+.fail_nb:
     pop es
     pop di
     pop si

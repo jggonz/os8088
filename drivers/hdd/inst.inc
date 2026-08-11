@@ -1321,6 +1321,28 @@ hd_inst_sys:
                                     ; exactly what it is here for (52.10.12)
     call hd_ibuf_get            ; the buffer FIRST: a format we cannot follow
     jc .nomem                   ; with a copy is a wiped partition
+                                ; ...and NO size gate on top of it, which is a
+                                ; deliberate difference from the branch this
+                                ; routine was last reviewed on. That gate read
+                                ; `cmp word [hd_ibufkb], HIW_KMAXKB / jb
+                                ; .small` and refused the install outright on a
+                                ; buffer under HIW_KMAXKB, because KERNEL.SYS
+                                ; was written whole and a system file could not
+                                ; be appended to. Both halves of that reason
+                                ; have expired: OSAPI_FILE_APPEND_SYS is the
+                                ; door (SPEC.md 19.6.1), hd_icopy_one's species
+                                ; test went with it, and the whole/chunked
+                                ; choice below is now a plain 32-bit "does it
+                                ; fit" - so a small buffer COPIES, slower, and
+                                ; hd_ibuf_get's size is a speed choice. Putting
+                                ; the gate back would refuse a machine short of
+                                ; heap - the field 5150's class - about a file
+                                ; the disk it booted from is carrying, which is
+                                ; the bug the species test was removed to fix.
+                                ; The wiped-partition failure it was written
+                                ; against cannot arise here: the small-buffer
+                                ; case succeeds instead of failing after the
+                                ; format
     mov word [hd_imsg], hd_s_iwork
     call hd_imsg_draw           ; say so BEFORE the writes - a 32MB format is
                                 ; hundreds of sectors and the user should not
@@ -2595,6 +2617,10 @@ hd_inst_mount:
     mov al, [hd_isel]
     mov [hd_pslot], al          ; hd_mount_one reads the SLOT from here and
     call hd_part_ent            ; the entry from SI - it answers no volume
+    mov al, [hd_idev]           ; the BANKED device (bound at open), never
+                                ; [hd_sel]: the Format window's own open
+                                ; re-syncs the highlight, and both windows
+                                ; can be up at once
     call hd_mount_one           ; ...and it ANSWERS with the kernel's volume
                                 ; index, where the resident's version left a
                                 ; row in hd_vols to be gone and found. That
