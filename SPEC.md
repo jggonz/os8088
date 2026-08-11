@@ -9134,10 +9134,14 @@ one call the table above says is left.
 #### 18.95.3 …and `sysbench` states it in `int 13h`, not in seconds
 
 The cache is a claim about **calls**, so the gate for it is `tests/sysbench`'s
-counter block (§18.94) and not a timing row — a timer here would be measuring
-whichever emulator the report was taken on, and MartyPC's floppy is 30x fast
-in the flattering direction. Five rows, `make DISKCNT=1`, `make DIRW1=1` for
-the A/B, measured on `os8088_5150_cga_gla` with the 360KB bench floppy:
+counter block (§18.94) and not a timing row. That was written when MartyPC's
+floppy was 30x fast; it is within a measurement quantum of the field machine
+now (PERFORMANCE.md Set 37), and the rule still holds for a better reason —
+**these counts were taken on `os8088_5150_cga_gla`, which is a GLaBIOS
+machine**, and Set 38 measured GLaBIOS at 1.61x the IBM ROM on a track read.
+A call is a call on any BIOS, so the table below is unaffected; a *timing*
+taken there would not be. Five rows, `make DISKCNT=1`, `make DIRW1=1` for
+the A/B, with the 360KB bench floppy:
 
 | | `DIRW1=1` (no cache) | §18.95 |
 |---|---:|---:|
@@ -29822,8 +29826,11 @@ install** (both disks, 22 files onto a pristine 31M partition):
 | after | **76** | **971** | **354** |
 
 — 41%, 29% and 45%. **The counts are the claim and the seconds are not**:
-these were taken on MartyPC, which is cycle-accurate and 30x fast on a disk,
-so what a saved mount is worth in *time* has to come off the 5150. Both runs
+these were taken on `os8088_xt_hdd`, a **GLaBIOS** machine, whose per-`int 13h`
+overhead is 1.61x lighter than the IBM ROM's (PERFORMANCE.md Set 38) — so what
+a saved mount is worth in *time* has to come off the 5150. (MartyPC's floppy
+itself is no longer the reason: since Set 37 it lands within a measurement
+quantum of the field machine, on an IBM-ROM machine.) Both runs
 produced the same 22 files at the same clusters with `BEVERLY.MOD`
 byte-identical, `FAT1 == FAT2`, 191 clusters allocated and 191 reachable, no
 orphans and no cross-links — which is the check that matters, because an

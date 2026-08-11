@@ -82,10 +82,15 @@ thirteen rows, seven of them exactly (Set 37). So the rule is now two rules and
   question, as are interrupt stack depth (SPEC.md §8) and anything QEMU's
   SeaBIOS smooths over (docs/FIELD-NOTES.md 5).
 
-One caveat: the `ibm5150_82_v4` machines need an IBM ROM this tree cannot
-ship, so a container without one in `tools/martypc/roms/` can run the GLaBIOS
-twins only — and a GLaBIOS machine is not where a disk number comes from, its
-BIOS abandoning a floppy op after ~250 ms.
+Two caveats. **A disk TIMING comes off an IBM-ROM 5150 and no other class**
+(Set 38): the drive is one model and six machines give bit-identical
+controller traffic, but GLaBIOS turns an `int 13h` around **1.61x** faster
+than the 1982 ROM — enough that nine one-sector reads cost the same as one
+whole track there and ten revolutions here. Counts are fine on any machine; a
+timing is not. docs/MARTYPC-DEBUG.md carries the per-machine table. And the
+`ibm5150_82_v4` machines need an IBM ROM this tree cannot ship, so a container
+without one in `tools/martypc/roms/` can run only the GLaBIOS twins — which
+is the class you must not take that timing from.
 
 ---
 

@@ -226,9 +226,12 @@ rule goes first:
 > a fiction: it turns at 300 RPM, charges a seek and moves bytes at the media
 > rate (PERFORMANCE.md Sets 35/37), which took the boot from 4.4x fast to
 > **0.92x** and `sysbench`'s raw floppy block to within one measurement
-> quantum of the iron on nine of thirteen rows. Use it to find a disk
-> regression; confirm it on the iron before it goes in PERFORMANCE.md. QEMU
-> remains 30x fast and models none of it.
+> quantum of the iron. **Take that number off an IBM-ROM 5150 and no other
+> class** (Set 38, and docs/MARTYPC-DEBUG.md's table): the drive is one model
+> and six machines produce bit-identical controller traffic, but a GLaBIOS
+> machine's `int 13h` is **1.61x lighter** than the period ROM's — counts yes,
+> seconds no. Use it to find a disk regression; confirm it on the iron before
+> it goes in PERFORMANCE.md. QEMU remains 30x fast and models none of it.
 >
 > Why this is a rule and not a preference: QEMU is the emulator **furthest
 > from the target**. It runs the guest at host speed, on a CPU that is not an

@@ -541,6 +541,39 @@ pass the same `-D`s (`--define DISKCNT=1`).
 
 ## The machines
 
+### Which of them a DISK number may come off
+
+Read this before quoting a floppy figure from any of them, because the answer
+is not "all of them" and the difference is 1.61x rather than a rounding error.
+
+**The drive is the same everywhere and that is measured** (PERFORMANCE.md Part
+9 Set 38). One `combo.img` booted on all eighteen machines, with `m.disk()`
+read from outside the guest, puts **six of them bit-identical** — 24 reads,
+186 sectors, longest run 9, 29 seeks, 54 cylinders, 432.0 ms of seek — across
+CGA, Hercules, a two-card machine, a Sound Blaster with no OPL, a 720KB drive
+as B: and a four-drive machine. There is no per-machine drive constant and
+nothing to tune: the Tandon TM100-2 does not care what is in the next slot.
+
+**The BIOS is not the same, and it is what the number is made of.**
+
+| class | machines | a disk TIMING here is… |
+|---|---|---|
+| **IBM ROM, 5150** | `_cga`, `_herc`, `_both`, `_sb`, `_sbonly`, `_sb_128k`, `_sb_256k`, `_cga_720b`, `_cga_4fdd` | **field-comparable.** `sysbench`'s raw block lands 9–10 of 11 rows within one measurement quantum of docs/FIELD-MACHINES.md's 5150, 6–8 of them exactly |
+| **GLaBIOS** | `_cga_gla`, `_herc_gla`, `_both_gla`, `_both_gla_mono`, `_cga_1fd`, `_xt_vga`, `_xt_vga_sb`, `_xt_hdd`, `_xt_hdd_sb` | **counts yes, seconds no.** A track read is **1.61x** lighter, and nine one-sector reads cost *the same as one* track read where the IBM ROM pays ten revolutions |
+
+That last one is not an emulator artifact. On 1:1 media sector *n+1* follows
+*n* immediately, so nine separate reads fit one revolution **if the BIOS turns
+a call around inside one sector time (22 ms)**. GLaBIOS does; the 1982 IBM ROM
+cannot, its head-settle loop alone being 52.5 ms (Set 37).
+
+**No single machine is "the calibration", including `os8088_5150_herc`.**
+Which rows land exactly shuffles between the three IBM machines measured —
+`_cga` nails both track rows and misses `seek 5 cyl`, `_herc` the reverse —
+because a row sitting on a 13,731 µs quantum boundary falls whichever side the
+guest's turnaround puts it. Quote the **class**, not the machine.
+
+### The list
+
 `tools/martypc/configs/os8088_machines.toml` is appended to MartyPC's own
 `ibm5150.toml` by `build.sh`:
 
@@ -1268,8 +1301,10 @@ All of the following was run end to end in the container, against
   `settle(limit=)` must be sized as though guest seconds arrive FASTER than
   wall ones, because they do.
   **It is a cycle count and NOT a boot time.** Dividing it by 4.772728 MHz
-  gives 63.02 s, and that figure is worth nothing: a boot is mostly POST and
-  floppy, and this tool is 30x fast on the floppy. The real machine's boot is
+  gives 63.02 s, and that figure was worth nothing when it was taken: a boot
+  is mostly POST and floppy, and this tool was then 30x fast on the floppy.
+  Since Set 37 the floppy half is within a quantum of the iron and the POST
+  half still is not measured against anything. The real machine's boot is
   PERFORMANCE.md's **9,886 ms** (see the table above: 38,886 was the figure
   before Part 9 Set 18's `AL` fix) and the only way to move that number is to
   measure it there. What the cycle count IS good for is a **delta** against
