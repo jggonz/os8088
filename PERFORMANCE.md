@@ -3978,3 +3978,230 @@ lands on the paths that are least gated and longest-running**, and §6.1.8's
 span is worth having for the same reason — a padded Note Pad row is exactly the
 shape it collapses. The Task Manager is the one consumer that had already
 solved the problem a different way.
+
+### Set 30 — the raise cache's restore, and the sub-rect that halves it (SPEC.md §5.8/§11.96.6)
+
+REDRAW-SPEC Part 3 left one instruction for whoever picked it up: *do not spend
+the sub-rect work on the strength of the 644 → 215 ms figure — that is the
+cache's win and it is already banked. Measure the restore itself first.* So this
+set starts there, and the measurement is three exec breakpoints inside one
+`wm_draw_win` on a cycle-accurate 5150/CGA, with `cycles` read at each.
+
+A 318×136 Disk window content, raised with its cache live:
+
+| span | cycles | ms |
+|---|---|---|
+| `wm_draw_win` → `wm_su_try` (all the chrome: frame, shadow, title bar) | 233,108 | 48.84 |
+| `wm_su_try` → `gfx_restore` (`wm_su_ck` + `wm_su_edge`, the edge merge) | 86,962 | **18.22** |
+| `gfx_restore` → `wm_grow_paint` (the blit) | 141,465 | **29.64** |
+
+So the restore is **47.86 ms** against 48.84 for everything around it — the
+blit is not a rounding error on a raise, and the **edge merge is 38% of it**,
+which nothing had priced before.
+
+**What the sub-rect is worth, on the case it is for.** Two Disk windows, the
+front one dragged clear and then dragged *away* so it genuinely uncovers an L
+(dragged the other way, §11.91.2 marks nothing at all and the whole question
+does not arise). Same session, same machine, breakpoints on `gfx_restore` and
+`gfx_sub_off`, which bracket the blit:
+
+| build | rect restored | cycles | ms |
+|---|---|---|---|
+| whole content | (111,38,428,173) — 41 B/row × 136 | 146,212 | 30.63 |
+| sub-rect | (216,80,428,173) — 27 B/row × 94 | 72,860 | **15.27** |
+
+**2.01x**, against 2.20x predicted by the byte counts — the difference is the
+per-row overhead the narrower band still pays 94 times.
+
+**The dock strip cost 1.4x of that on its own, and finding out was the whole
+lesson.** The first version folded the strip into the shared painted rect
+whenever `dock_paint` had drawn, and the strip is *full width*, so every
+window's owed rect became full width — including a window nowhere near the
+dock. Measured: 21.28 ms rather than 15.27, a 41-byte row where 27 would do.
+The marking pass one screen up had already got this right (`.mnodock` tests
+each window's own `y+h`), and `wm_su_owed` follows it. **A term that is only
+true of some windows does not belong in a rect they all share** — §26.3's
+phantom drive-zone columns are the same mistake, and this is the second time
+the answer has been "ask per window".
+
+**What is NOT measured here, and should be next**: the 18.22 ms edge merge is
+still done over the *whole* banked rect's rows even when the restore is a
+94-row band, because `wm_su_edge` walks the buffer with one stride and bounding
+it to the sub-rect's rows needs the two-level walk the plane skip implies. That
+is the larger of the two remaining halves — bigger than what the blit has left
+to give. **Set 31 is that, done.**
+
+### Set 31 — the edge merge bounded to the rect being restored (SPEC.md §11.96.8)
+
+Set 30 halved the blit and named what it had left alone: `wm_su_edge`, walking
+the whole banked rect however small a strip the restore put back. Same machine
+(cycle-accurate 5150/CGA), same session, same drag — the two Disk windows with
+the front one dragged *away* so it genuinely uncovers — and the span is
+`wm_su_try` → `gfx_restore`, which is `wm_su_ck` plus the merge:
+
+| build | cycles | ms |
+|---|---|---|
+| the whole banked rect (136 rows, both columns) | 88,736 | 18.59 |
+| bounded to the restored rect | 38,596 | **8.09** |
+
+**2.30x**, and the blit beside it is unchanged at 15.27 ms, which is the check
+that the two halves are independent. So one restore on this drag:
+
+| | edge | blit | restore |
+|---|---|---|---|
+| before the round | 18.59 | 30.63 | 49.22 ms |
+| after §11.96.6 | 18.59 | 15.27 | 33.86 ms |
+| after §11.96.8 | **8.09** | 15.27 | **23.36 ms** |
+
+**2.11x on the restore**, from two changes that are each provably the same
+pixels.
+
+**Two things in the 2.30x are not the row count**, and they are worth separating
+because the second is free where the first is not. The rows walked drop 136 → 94
+(a 1.45x), and the **left edge column is not merged at all**: this restore's
+`x1` is 216, which is byte column 27 against the banked rect's 13, so there is
+no overhang on that side to repair — those pixels are the window's own content,
+which the pass did not paint, so the cache and the screen already agree. A
+sub-rect in the middle of a window does *no* edge work whatever its height. That
+is the half of the win the row bound alone would not have found, and it is why
+the figure beats the 1.45x the geometry suggests.
+
+**What is left of the restore is now the blit again**, 15.27 against 8.09 — and
+there is no obvious next cut in it: it is `rep movsb` over exactly the bytes that
+changed, at 27 bytes a row for 94 rows, and the per-row overhead is the row loop
+the two renderers already share with the cursor.
+
+### Set 32 — Paint's repaint with a PICTURE in it: blank was the very cheap case
+
+Set 30's Paint figures were taken on a **blank** canvas, and that turns out to
+be the wrong end of a 41x range. Same machine (cycle-accurate 5150/CGA), same
+window, same cover-and-raise — the only difference is what is in the canvas. The
+picture arrives by **double-clicking it**: `assoc.inc` ships `BMP` → PAINT, so
+§54.5's launch-with-a-document path loads it with no file dialog to drive.
+
+| canvas | runs/row | the canvas blit |
+|---|---|---|
+| blank (one run a row) | 1 | **211 ms** |
+| a textured 492×133 16-colour BMP | 84.9 | **8,670 ms** |
+
+**8.7 seconds**, and the model holds: 11,298 runs at ~0.77 ms each against
+`pt_blit`'s own quoted ~0.5 ms per `gfx_hline`, the balance being the 4bpp source
+scan. A picture with ~30 runs a row — an ordinary drawing rather than this
+deliberately noisy one — lands near the three seconds the field reports.
+
+**What this settles about `WF_SAVEU` for Paint, which is the opposite of the
+guess on record.** "Paint is already drawing a blit, so a restore cannot be
+faster" is false by two orders of magnitude, because the two are not the same
+kind of operation: `gfx_blit4` costs **per RUN** (a `gfx_hline` per run, ~756 µs
+of arriving each, §5.7), while `gfx_restore` is a flat `rep movsb` with no
+per-run cost at all. Priced per byte off Set 30 and this set:
+
+| | bytes moved | ms | per byte |
+|---|---|---|---|
+| `gfx_restore`, whole content (Set 30) | 5,576 | 30.63 | **5.5 µs** |
+| `gfx_blit4`, textured canvas | ~35,600 | 8,670 | **244 µs** |
+
+So a raise cache over Paint's content would be ~9 KB and ~50 ms on a 1bpp
+adapter against 8,670 — **170x** — and ~36 KB and ~200 ms on VGA, 43x.
+
+**The objection that survives is memory, and it is adapter-shaped.** `wm_su_kb`'s
+`(bpr + 2) × rows × planes`: Paint's stock content on CGA/Hercules is ~9 KB, on
+VGA ~36 KB, and a window grown to most of a 640×480 screen is ~150 KB. Paint
+itself already holds canvas + undo + clipboard, ~127 KB at stock size — so on a
+**256 KB machine** (heap ≈ 160 KB after the kernel) there is no room for the VGA
+figure and only just room for the 1bpp one, and the claim being purgeable
+(§50.6) means it is simply refused rather than damaging. The cache is therefore
+a **640 KB-machine** optimisation on VGA and a marginal one on the machines this
+project is calibrated against.
+
+**Which is why drawing LESS of the canvas beats caching it, and composes with
+everything.** The blit is linear in the runs it covers, so a repaint that owes
+10% of the canvas costs ~10% of 8,670 ms — about **0.9 s** — at **no memory cost
+at all**, on every adapter and every machine size. That is a bigger win than the
+cache can give on a 256 KB machine and it stacks with the cache where the cache
+fits. §11.90's unconditional white fill is what stands in front of it.
+
+**And two smaller things this run recorded**: the repaint issues **two**
+`wm_draw_win` passes for Paint's window (a 376 ms one that draws no canvas, then
+the 8,670 ms one), which is the `[pt_apend]` deferred-resize path calling
+`OSAPI_WM_FRONT` from inside `W_PAINT` and is worth its own look; and the
+~376 ms of palette, colour strip and divider is **small in area** — a narrow
+left-hand column — so it is the part a cache would hold for about 1 KB.
+
+### Set 33 — the white fill measured as a PICTURE, not as work (SPEC.md §11.90.1)
+
+`wm_draw_win`'s fill is one `gfx_fill` — ~24 ms on a Disk-window-sized content —
+so as *work* there is nothing here. As a *picture* it is PERFORMANCE.md Part 1's
+double draw in its purest form, and the gap between its two layers is however
+long `W_PAINT` takes. Sampled on a cycle-accurate 5150/CGA over a Paint raise
+with Set 32's textured bitmap, an interior box of the canvas:
+
+| | the sample box |
+|---|---|
+| the kernel fills (before) | **fully white from +350 ms to +2,967 ms — 2,617 ms** |
+| `WF_OWNBG` (after) | **never blank**: peak whiteness 0.818, never uniform |
+
+**The 2,617 ms is the BOX's figure and not the window's.** `pt_blit` works down
+the canvas in bands, so a given row is white from the fill until the blit reaches
+it: the box sampled here is in the upper middle and clears at 2.6 s, and the
+bottom rows stay white for the whole 8,670 ms. Which is the shape of the defect —
+the user watches their picture vanish and then wipe back down the screen.
+
+**So the flag's value is not the 24 ms and quoting it that way would be
+misleading.** It is that a repaint stops being visible as a blank-then-fill. The
+same argument applies to every window whose `W_PAINT` is slow, and to none whose
+`W_PAINT` is fast — which is why it is opt-in per window rather than a default
+(§11.90.1).
+
+Verified against a build that still gets the fill: **0 differing pixels** on CGA,
+Hercules and VGA mode 12h across cover / raise / drag-across / re-raise
+(`tools/ptcheck.py`). The gate uses a **textured** BMP deliberately: a blank
+canvas is uniform white, which is precisely the colour the fill would have left,
+so it is the one picture that cannot tell a kept promise from a broken one.
+
+### Set 34 — Paint told which rect it owes (SPEC.md §11.90.2)
+
+§11.90.1 stopped the kernel whitening Paint's content; this hands Paint
+§11.96.6's accumulated damage so it blits only the part it owes. Measured on a
+cycle-accurate 5150/CGA with Set 32's textured bitmap, the Disk window dragged
+**off** Paint by (+70, +45) — a `wm_dmg_wins` pass, which is where a damage rect
+exists at all:
+
+| | Paint's `W_PAINT` | its canvas blit |
+|---|---|---|
+| the whole content | 9,024.5 ms | 8,669.8 ms |
+| the damage rect | **7,114.1 ms** | **6,758.8 ms** |
+
+**1.28x, and it is exactly proportional rather than surprising**: the damage
+covered 73% of Paint's content width and the blit came in at 78% of the whole.
+That is the feature working as designed — the blit is linear in the runs it
+covers — and it is also the honest ceiling, because two things bound how small
+the rect can get.
+
+**A drag's damage is at least the MOVER's own rect.** `ui_drag` passes the union
+of where the window was and where it is, so the saving is bounded by how much
+smaller the moving window is than the one underneath: a Disk window 320 wide
+dragged over a Paint 536 wide can only ever uncover so little of it, and 1.28x is
+what that geometry allows. A small window dragged across a full-screen Paint
+saves nearly everything; that is the same arithmetic, not a different feature.
+
+**And a RAISE still repaints whole**, which is the bigger of the two gaps and the
+obvious next step. `wm_raise` arms no damage rect — there is none to arm — so
+`wm_damage` answers "whole", correctly. But what a raised window actually owes is
+the part that **was covered**, which is computable: it is the complement of
+§11.3's visible region taken *before* `wm_lift`. That is the case where "only 10%
+of the canvas was visible" turns 8.7 s into ~0.9 s, and nothing in this set
+reaches it.
+
+Verified with `tools/ptcheck.py` against a build that asks for nothing: **0
+differing pixels** on CGA, Hercules and VGA mode 12h.
+
+**A harness correction came out of it, and it is the second time this round that
+the arrow has cost a run.** `subcheck`'s docstring argued the mouse arrow needed
+no masking because both runs drive the pointer to the same derived coordinates.
+True of its POSITION and silent about whether it is DRAWN — the cursor is erased
+under the gfx lock and put back at the unlock (§7.1.4), so whether a capture
+catches it depends on where `settle` lands relative to the last one. Measured:
+**the same build captured twice differed by 45 arrow-shaped pixels** over a dock
+tile. Both gates now blank a 16x16 box at the published cursor position. A gate
+that fails at random is worse than no gate.

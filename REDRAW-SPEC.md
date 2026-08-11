@@ -222,20 +222,58 @@ a Disk window it repaints in full.
 | f | the cache is taken wherever a window is drawn, not only at a raise | §11.96.4 | drags 2-5 `SU_HIT` instead of full repaints |
 | g | minimizing banks instead of dropping | §11.96.5 | restore-from-dock is a blit |
 | h | the vacated test is `old` minus the mover's new FRAME | §11.91.2 | see the table below |
+| i | **`gfx_restore` can put back part of its buffer** | §5.8 | the primitive; skips 0 at rest |
+| j | **the raise cache restores only what the pass painted** | §11.96.6 | 30.63 → 15.27 ms, 2.01x |
+| k | **a bank is only worth what was on the glass** | §11.96.7 | a real bug: 3,876 stale px |
+| l | **the edge merge is bounded by the same rect** | §11.96.8 | 18.59 → 8.09 ms, 2.30x |
 
-### What is left, and it is ONE primitive
+(i) and (j) are the primitive and its first consumer, below. **(k) was not on
+anyone's list**: verifying (j) against `REDRAWFULL=1` turned up 7,907 differing
+pixels that were **already there** — the pristine tree against its own
+reference — and the cause was `wm_raise` banking the outgoing front window's
+cache *after* `wm_dock_under` had drawn the incoming window over it. The cache
+then held the covering window's picture, and it surfaced one operation later as
+a ghost window inside another. A wrong cache is invisible until it is used,
+which is why nothing near the ordering ever looked wrong; SPEC.md §11.96.7 has
+it. **The moral for the next round of this work is that the 0-differing-pixels
+standard is worth running even when you are confident**, and worth running
+*before* you write anything — a pre-existing failure otherwise arrives looking
+exactly like your own.
+
+### The primitive — BUILT for `gfx_restore`, still owed for `gfx_blit4`
 
 **A blit that can draw a sub-rect of its source.** `gfx_restore` and
-`gfx_blit4` are both off §11.3's clipped list for the same stated reason —
+`gfx_blit4` were both off §11.3's clipped list for the same stated reason —
 *"a blit cannot take a sub-rect without advancing its source to match"* — and
-that one sentence is the whole of what stands between here and two separate
+that one sentence was the whole of what stood between here and two separate
 wins:
 
 - **the raise cache putting back only the part that was uncovered**, instead
-  of the whole window (`gfx_restore`), and
-- **Paint repainting only the uncovered part of its canvas** (`gfx_blit4`).
+  of the whole window (`gfx_restore`) — **landed, SPEC.md §5.8/§11.96.6**;
+- **Paint repainting only the uncovered part of its canvas** (`gfx_blit4`) —
+  **there is no primitive to build here at all.** See "Consumer 2" below.
 
-Build it once and both follow. It is the same arithmetic in two places.
+**"Build it once and both follow" was wrong, and the reason decides where the
+rest of the work is.** What makes a sub-rect impossible for a caller is not the
+blit — it is **who owns the source layout**. `gfx_save`'s buffer is the kernel's
+private business, plane-major at a stride the kernel computes, so a caller
+cannot address into it and the kernel had to grow §5.8's three words.
+`gfx_blit4`'s source is the caller's own pointer and its own `BP` stride, so a
+sub-rect is already expressible by advancing the pointer and passing a smaller
+`CX`/`DX` — and `pt_blit` has taken an arbitrary canvas rect all along, rounding
+its left edge to an even pixel because two pixels share a byte. Being off
+§11.3's clipped list means *the kernel* will not clip a blit; it never meant the
+caller could not ask for one.
+
+**And the arithmetic was never the hard part of either.** What cost this round
+its time was (a) the register discipline at the call site — the arming call
+takes a rect in `AX/BX/CX/DX` and `BX` is the window pointer `wm_draw_win` is
+about to be handed, which assembles, boots, and hard-freezes the machine inside
+a garbage `W_PAINT` — and (b) the one-shot's *disarm site*: it is cleared by
+the restore bodies rather than by the caller, so a forgetful caller inherits
+"whole", and in `sw_xfer` that clear has to be **gated on `[sw_dir]`** because
+`.done` is the *save* path's exit too and `wm_su_edge` is two `gfx_save` calls
+between the arm and the restore.
 
 #### The buffer layout it has to walk
 
@@ -281,25 +319,43 @@ buffer before the restore. Reuse it; do not invent a masked write, for
 
 ### Then the two consumers
 
-#### Consumer 1 — the raise cache restores only the uncovered part
+#### Consumer 1 — the raise cache restores only the uncovered part (LANDED)
 
-`wm_dmg_wins` knows the uncovered rect: it is `(W n old) \ new_frame`, which
-§11.91.2 already computes to decide whether to mark at all. Hand it to
-`wm_su_try` as a one-shot (`wm_dmg_dk`'s rule: a caller that forgets inherits
-"whole", the safe value).
+The plan said to hand `wm_dmg_wins`'s uncovered rect — `(W ∩ old) \ new_frame`
+— to `wm_su_try` as a one-shot. **What shipped is a rect that ACCUMULATES, and
+the difference is not a refinement, it is the correctness argument.**
 
-**And there is a third part nobody should discover the hard way.** Today
-`wm_draw_win` drawing a window *whole* is exactly what makes it safe to paint
-over the window above it — the cascade marks that one and redraws it
-afterwards. Restore only a strip and that guarantee is gone: either the
-cascade stays (and the redraws it causes stay with it, which is half the win)
-or **the marking pass has to key on each window's REDRAWN REGION rather than
-its rect.** That is a real change to §11.91's marking and it is the piece to
-scope honestly before starting.
+The plan's own next paragraph is why: `wm_draw_win` drawing a window whole is
+what makes it safe to paint over the window above it, so restoring only a strip
+needs the strip to cover everything that really did paint over this window. The
+vacated rect is not that. **The chrome is the reason** — `wm_draw_win` writes
+the outline, the drop shadow and the title bar *whether its cache hit or not*,
+so a window below yours takes your pixels away every time it is drawn, wherever
+its frame reaches you. So `wm_dmg_x1..y2` means *what this pass has painted*
+from `.draw` onward: seeded with the damage rect (already covering the dither
+and every touched drive zone), grown by each window's frame as it is drawn.
+Marking is bottom-to-top and drawing is back-to-front, so one pass in that
+order sees every contribution before it can matter.
 
-A safe intermediate exists and is worth landing on its own: keep the cascade
-exactly as it is and shrink only the blit. Every marked window still gets
-marked, but each costs a strip instead of a screenful.
+This is the **safe intermediate** the plan named, and it is safe for a reason
+worth stating: the marking is untouched, so every window that was marked is
+still marked and still drawn — only how much of itself it puts back changed.
+The bottom-most drawn window gains most, and **that is the majority case rather
+than a corner**: after §11.91.2, three of five measured drags mark exactly one
+window.
+
+Two things a reader will want that the plan did not anticipate:
+
+- **The dock strip is per WINDOW, not a term in the shared rect** — see Set 30.
+  Folded in, it made every window's owed rect full width because the strip is.
+- **An empty intersection is the best answer available**, not a failure: nothing
+  this pass painted reached the content, so the content is already right and no
+  pixel is written at all.
+
+**A raise still restores the whole content**, and deliberately: `wm_raise` has
+no damage rect, and what a raised window owes is the part that was *covered*,
+which is the complement of §11.3's visible region rather than anything this
+pass computed. That is a separate consumer and it is not built.
 
 #### Consumer 2 — Paint, which cannot use the cache and should not
 
@@ -326,6 +382,113 @@ takes `tm_row_draw`'s answer: redraw whole elements the region touches.
 What is missing on the app side is an **API**: a package can ask
 `OSAPI_WM_OBSCURED` (a boolean) and `wm_clip_test` (does a rect cross a clip
 edge). Neither says *"here is the rect you owe"*.
+
+#### What consumer 2 is actually blocked on, measured
+
+**`wm_draw_win` white-fills the whole content before every `W_PAINT`** — Part
+1's point 1, still true, no opt-out flag, and `apps/paint`'s own `pt_fsbed`
+comment documents it. So a slot that tells Paint which rect it owes achieves
+**nothing** until the kernel stops erasing the rest, and that is a change to the
+kernel's erase contract rather than an optimisation: every application depends
+on the fill.
+
+**A BLANK CANVAS IS THE VERY CHEAP CASE, and the first version of this section
+priced only that** — PERFORMANCE.md Set 32 is the correction. Measured on a
+cycle-accurate 5150/CGA, Paint raised from behind a Disk window:
+
+| | blank canvas | a textured 492×133 BMP |
+|---|---|---|
+| kernel white fill + palette + strip + divider | ~376 | ~376 |
+| the canvas blit (one `gfx_blit4`) | ~211 | **~8,670** |
+| **one Paint repaint** | ~602 ms | **~9,060 ms** |
+
+**Nine seconds**, and the blit is linear in the *runs* it covers, not the pixels
+(`pt_blit`'s own note: a `gfx_hline` per run at ~756 µs of arriving each). So the
+canvas is not "a third of the problem" as this section first said — at 85 runs a
+row it is 96% of it, and an ordinary drawing at ~30 runs a row lands near the
+three seconds the field reports.
+
+**That kills the ordering this section first proposed.** `WF_SAVEU` on Paint
+*would* be enormously faster — a restore is a flat `rep movsb` at ~5.5 µs a byte
+against the blit's ~244, so ~50 ms on 1bpp against 8,670 — but it is the wrong
+lever anyway, on memory:
+
+- Paint already holds canvas + undo + clipboard, **~127 KB** at stock size.
+- A cache over its content is ~9 KB on 1bpp, **~36 KB on VGA**, ~150 KB for a
+  window grown over most of a 640×480 screen.
+- On a **256 KB machine** the heap is ~160 KB after the kernel, so the VGA figure
+  cannot exist and the 1bpp one only just can. Purgeability (§50.6) makes that a
+  refusal rather than damage — which is to say the feature simply is not there on
+  the machines this project is calibrated against.
+
+**Drawing less of the canvas beats caching it, and it composes.** A repaint that
+owes 10% of the canvas costs ~10% of the blit — about 0.9 s against 8.7 — at **no
+memory cost at all**, on every adapter and every machine size, and it stacks with
+a cache wherever a cache fits. So the erase contract is not the expensive
+prerequisite to be avoided; it is the thing worth doing first.
+
+Two smaller things stand unchanged, and one is now the *shape* of the answer
+rather than an alternative to it:
+
+1. **The white fill must become opt-out.** `pt_repaint`'s own comment is *"Every
+   part of this draws its own background, so no white fill is needed first"* — so
+   for Paint the kernel's fill is waste today, before any of the above.
+2. **The chrome is small in AREA and dear in TIME** — that ~376 ms of palette,
+   strip and divider is a narrow left-hand column, about **1 KB** of cache on
+   1bpp. It is the part a cache holds cheaply, exactly where the canvas is the
+   part it cannot.
+
+#### The design that follows: registered cache regions, and exclusions
+
+Which points at one mechanism rather than two competing ones. A window registers
+**regions it hands to the cache** and **regions it keeps**; a repaint then
+restores the cached regions that the damage touches, and calls `W_PAINT` with the
+damage rects that fall in the kept ones. For Paint that is exactly the right
+split — cache the chrome (~1 KB, kills ~376 ms), keep the canvas (no memory, and
+the app blits only the rect it is handed) — and it makes the white fill the **last
+resort** it should be rather than the default: a region that is neither cached
+nor claimed by the app is the only thing that needs blanking, and blanking is
+what a repaint should be seen to do least of.
+
+Three things from consumer 1 carry straight into it, and one warning:
+
+- `wm_dmg_x1..y2` from `.draw` onward already **is** the damage, accumulated
+  (§11.96.6), and `wm_su_owed` already makes it a per-window answer.
+- A per-window rect **list** is what `wm_clip_tab` already is (§11.3, 16 rects
+  with a documented overflow degradation), so the shape exists.
+- The one-shot discipline (§5.8) is what keeps it safe: armed immediately before
+  the draw, disarmed by whatever consumes it.
+- **The warning is §11.3's granularity rule.** Handing an app a damage rect and
+  no clip leaves it free to draw outside it; handing it a clip as well brings back
+  the fill-clips-per-pixel / glyph-clips-per-cell trap for every app that adopts
+  it. Paint is the easy consumer because 96% of its repaint is a blit; the next
+  one will not be.
+
+**One thing to look at while in there**, found by the measurement and not chased:
+that raise produced **two** `wm_grow_paint` calls for Paint's window (374 ms
+then 211 ms), which reads as its `W_PAINT` running twice. `[pt_apend]`'s
+deferred-resize path calls `OSAPI_WM_FRONT` from inside the paint, which would
+do exactly that.
+
+**Three things consumer 1 settled that a rect-passing slot can be written
+against**, whenever the erase contract is faced:
+
+1. **The rect exists and is already computed.** `wm_dmg_x1..y2` from `.draw`
+   onward *is* "what this pass painted", accumulated (§11.96.6), and
+   `wm_su_owed` already turns it into a per-window answer. A slot that hands a
+   package `wm_su_owed`'s output intersected with its content rect is the whole
+   API — no new bookkeeping, and it answers 0 rects for a window nothing
+   touched, which is the case worth having.
+2. **It must be a `W_PAINT`-time question, not a callable one.** A package that
+   asks "what do I owe" outside its paint has no answer that stays true, and
+   the one-shot discipline is what makes the kernel's own use safe: armed
+   immediately before the draw, disarmed by the thing that consumes it. The
+   natural shape is therefore a slot a paint proc may call *while it is being
+   painted*, refusing otherwise — not a flag in the window record.
+3. **A package must be able to decline.** `wm_su_srect`'s fallback is "restore
+   the whole buffer, always correct and only dearer"; the app-side equivalent
+   is that ignoring the answer and repainting whole stays correct, so the slot
+   can ship before any app uses it and Paint can adopt it alone.
 
 ### Measured, so the next session does not have to re-derive it
 
@@ -357,16 +520,51 @@ too slow through the debug server. A breakpoint at `gfx_restore` and another
 at `wm_grow_paint`, reading `cycles` at each, is the measurement that was
 being set up when the session ended.
 
+**That measurement was then taken, and PERFORMANCE.md Sets 30 and 31 are it**:
+on a 318×136 Disk window the restore is **47.86 ms** — 29.64 of blit and 18.22
+of `wm_su_edge`'s merge — against 48.84 ms for all the chrome around it. So the
+instruction above was right to insist on it, and the answer justified both
+halves of the work. On one drag that genuinely uncovers, priced end to end:
+
+| | edge | blit | restore |
+|---|---|---|---|
+| before | 18.59 | 30.63 | 49.22 ms |
+| §11.96.6 — the sub-rect blit | 18.59 | 15.27 | 33.86 ms |
+| §11.96.8 — the bounded merge | **8.09** | 15.27 | **23.36 ms** |
+
+**2.11x on the restore.** The edge half beat the row-count ratio (2.30x against
+the 1.45x that 136 → 94 rows predicts) because bounding it also means **an edge
+column the restore does not reach is not merged at all** — a sub-rect in the
+middle of a window does no edge work whatever its height.
+
+**What is left of the restore is the blit again**, and there is no obvious next
+cut in it: `rep movsb` over exactly the bytes that changed, at a per-row overhead
+the two renderers share with the cursor.
+
 ### How to verify any of it
 
-`make REDRAWFULL=1` is the reference: it puts the Disk window off the raise
-cache, `wm_dmg_stale` back on the whole damage rect, `wm_su_bank` back to
-one-shot, `wm_hide` back to dropping, and `fm_docmd` back to a whole-window
-repaint. Drive the identical scripted session through both kernels and
-compare framebuffers step by step; **0 differing pixels is the standard**, on
-VGA mode 12h, CGA and Hercules.
+`tools/subcheck.py` is that, as one command — `capture` a session, `capture` it
+again against the other build, `diff`. `make REDRAWFULL=1` is the reference: it
+puts the Disk window off the raise cache, `wm_dmg_stale` back on the whole
+damage rect, `wm_su_bank` back to one-shot, `wm_hide` back to dropping,
+`fm_docmd` back to a whole-window repaint, and §11.96.6's arming off. **0
+differing pixels is the standard**, on VGA mode 12h, CGA and Hercules — and it
+is met, over 11 steps covering three drags, two raises, a minimize, a restore
+from the dock and a close.
 
-Four things cost a run each and are worth reading before the first one:
+**Two traps in the harness cost this round a run each, and both are silent.**
+`os88mouse`'s `click` and `drag` send their button packets without proving them,
+and the 1200-baud UART drops one clocked in while the previous is in flight — a
+dropped *release* leaves the button down, so the next press is no edge at all
+and **every step after it quietly does nothing** while each call still succeeds.
+Measured: a session whose last seven steps left the window table completely
+unchanged. `_edge` is the proving primitive; `subcheck`'s `pclick`/`pdrag` use
+it. And **compare the window GEOMETRY before comparing pixels**: two runs that
+put the windows in different places are not the same session, and the pixel diff
+blames the kernel for it — thousands of differing pixels in a window-shaped
+region, which is exactly what a real defect looks like.
+
+Four more things cost a run each and are worth reading before the first one:
 
 - **No animating window in the session.** A Timer's digits and a Fractal's
   render differ between two passes and read as a redraw defect. Use
