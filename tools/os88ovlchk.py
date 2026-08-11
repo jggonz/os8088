@@ -84,6 +84,37 @@ def main():
         sys.exit("os88ovlchk: %d call(s) cross a segment boundary near" % len(bad))
     print("os88ovlchk: no near call crosses a segment boundary")
 
+    # --- and the OTHER half of SPEC.md 2.6: nothing may assume CS ------------
+    # Rule 1 puts cold code's DATA in .text, so cold code has no data of its
+    # own to reach - which makes "CS is mentioned in .cold" a clean invariant
+    # rather than a heuristic, and the whole kernel satisfies it.
+    #
+    # It is worth a refusal because the failure is silent in a way the check
+    # above is not: `mov ax, cs` meaning "the kernel segment" assembles, and
+    # the loop that breaks it is a segment LOAD rather than a control
+    # transfer, so nothing here saw it. Cold, CS is COLD_SEG - dsk_copy_in
+    # staged a boot sector into the middle of the cold segment and every BPB
+    # field stayed 0, which surfaced as "No os8088 disk (A:)" on a good
+    # floppy. Name the segment (`mov ax, KERNEL_SEG`) and this stays quiet.
+    #
+    # .ovl is deliberately NOT checked: the overlay's data rides WITH it, so
+    # reaching it through CS is the correct idiom there and two places use it
+    # (font.inc's glyph copy does `push cs / pop ds`, drv_snd_sniff uses
+    # `cs lodsw`).
+    CS = re.compile(r'\b(?:push\s+cs|mov\s+\w+\s*,\s*cs|cs\s*:'
+                    r'|cs\s+(?:lods|movs|stos|scas))', re.I)
+    cs_bad = []
+    for f in files:
+        for sect, n, line in sections(f):
+            if sect == '.cold' and CS.search(line):
+                cs_bad.append((f, n, line.strip()[:60]))
+    for f, n, src in cs_bad:
+        print("%s:%d: .cold assumes CS: %s" % (f, n, src), file=sys.stderr)
+    if cs_bad:
+        sys.exit("os88ovlchk: %d CS assumption(s) in .cold - SPEC.md 2.6 "
+                 "rule 2 (name the segment)" % len(cs_bad))
+    print("os88ovlchk: no .cold code assumes CS")
+
 
 if __name__ == '__main__':
     main()
