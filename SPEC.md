@@ -34801,7 +34801,7 @@ have hidden from the other:
   machines measure identically; `LP_SPIN` is only how often the deadline is
   re-read.
 
-### 62.6 …and four the field caught that it could not
+### 62.6 …and six the field caught that it could not
 
 - **DOS entered the program at a byte that was not its entry, and nothing in
   it ever ran.** A `.COM` starts at offset 0x100, which is the **first byte of
@@ -34817,6 +34817,29 @@ have hidden from the other:
   `times ($$ - com_entry) db 0`, which emits nothing and fails the build with
   `TIMES value -N is negative`, N being how many bytes got in front. **It
   shipped twice**, and §62.8 is the reason it could.
+- **The Connect button did nothing, on a page that drew perfectly.** The page
+  ABI hands a click **pane-relative** (§31.1: DI = pane left, DX = pane top,
+  CX = pane-relative x, BX = pane-relative y) and the hit test compared those
+  against a rect built from the pane's **absolute** origin — CX was 0..220
+  where the test wanted ~264, so the first `jb` took the exit every time. The
+  button is drawn by **§20.5.1's shared control** now, and the rect it is
+  drawn from and the rect it is hit-tested against are one set of
+  pane-relative constants, which is what that include's geometry-is-a-pointer
+  rule exists to make impossible.
+- **The link dropped after the first idle pause, and that is what "opening D:
+  shows nothing" was.** The DOS end gave up waiting for the next command after
+  `CMD_WAIT` — 180 ticks, about ten seconds — and went back to hunting. But
+  **the gap between commands is the user's thinking time and has no upper
+  bound**: os8088 mounts the volume at Connect and the next command comes when
+  somebody double-clicks the drive icon, which may be a minute later. So the
+  mount at Connect worked (the page read `Linked`, 1440 sectors, the exact
+  size of the image), and the first read after that went into a machine no
+  longer listening for one — `net_lost`, the volume dropped, the page reading
+  disconnected. The wait is unbounded now, with ESC as the way out; and
+  because an unbounded wait would otherwise make a **re**-connect impossible
+  (the magic is not a command, so a stale slave would discard it),
+  `net_connect` sends `NC_BYE` before its hello to shake one loose. The two
+  halves are one fix and neither works alone.
 - **`getkey` ate every keystroke.** Copied from `comscan`, where
   `push ax / xor ax,ax / int 16h / pop ax` is a correct "press any key" pause
   and fatal as a menu read. Both the boot disk and the DOS program read as
@@ -34849,6 +34872,11 @@ have hidden from the other:
   Hard Drive on row 5 and Network on row 6, with class 3 unpublished in
   between — which is what exercises `drv_cp_class`'s ordinal walk rather than
   asserting it. On a machine with one page an off-by-one there is invisible.
+- **Where a link DIED is reported**, not just that it is gone: `net_lost`
+  banks the LBA and the page's Link row reads `Lost at LBA nnnn` instead of
+  `No partner`. A link that drops on a real cable drops for a reason no
+  emulator here can reproduce, so the page has to carry the evidence out —
+  §18.94's discipline one layer up.
 - **The DOS end RUNS**, on `tests/dosstub` (§62.8): the banner, the default
   image name, the `/RO` and `/P:` switches and a filename in the same tail,
   the "cannot open" refusal, the sector arithmetic at all three of its

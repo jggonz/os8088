@@ -99,26 +99,39 @@ slv_reply:
 
 
 ; -----------------------------------------------------------------------------
-; lp_rbyte_w - lp_rbyte, but waits CMD_WAIT ticks for the FIRST nibble
+; lp_rbyte_w - lp_rbyte, but waits FOR AS LONG AS IT TAKES for the first nibble
 ;
 ; The second nibble keeps the ordinary short bound, which is the point: a
 ; retry loop around a whole byte would resume in the middle of one and desync
 ; the phase. Only the gap BETWEEN bytes may be long.
+;
+; IT USED TO GIVE UP AFTER CMD_WAIT - 180 ticks, ~10 seconds - and that was
+; wrong in a way only a real session shows. The gap between commands is the
+; USER'S THINKING TIME and has no upper bound: os8088 mounts the volume at
+; Connect, and the next command comes when somebody double-clicks the drive
+; icon, which may be a minute later or an hour. The slave timed out, went back
+; to hunting, and os8088 - which had no idea - sent its next read into a
+; machine that was no longer listening for one. It reached the field as "the
+; link comes up and reports 1440 sectors, then opening D: shows nothing and
+; the Control Panel says disconnected": the mount at Connect worked, and
+; everything after the first idle pause did not.
+;
+; So the server waits, and the two ways out are the ones a server should have:
+; ESC here, and the master's own NC_BYE - which net_detach sends on unload and
+; net_connect now sends BEFORE its hello, so a slave still sitting in this
+; loop from a stale session is shaken loose and can be found again. Without
+; that second half an unbounded wait would trade one bug for another: the
+; magic is not a command, so this loop would discard it and the reconnect
+; would never complete.
 ; -----------------------------------------------------------------------------
 lp_rbyte_w:
     push bx
-    call lpl_ticks
-    add ax, CMD_WAIT
-    mov [dl_cmd], ax
 .w:
     call lp_rnib
     jnc .got
-    call lpl_kbhit
+    call lpl_kbhit              ; ESC is the only deadline left
     jc .bad
-    call lpl_ticks
-    sub ax, [dl_cmd]            ; modular compare (SPEC.md 45.15's js, not jg)
-    js  .w
-    jmp short .bad
+    jmp short .w
 .got:
     mov bl, al
     call lp_rnib
@@ -139,5 +152,4 @@ lp_rbyte_w:
 win_lo:     dw 0
 win_hi:     dw 0
 dl_hunt:    dw 0
-dl_cmd:     dw 0
 slv_abort:  db 0

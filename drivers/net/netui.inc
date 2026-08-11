@@ -47,7 +47,22 @@ NP_HY       equ 4               ; the heading row, HDP_HY's
 NP_Y0       equ 20              ; the first value row
 NP_ROW      equ 12
 NP_VX       equ 48              ; where a value column starts
-NP_BY       equ 66              ; the button
+
+; --- the button, ONE definition, PANE-RELATIVE -------------------------------
+; The draw converts these to screen coordinates for os88ui_btn and the hit
+; test compares the click against them directly, so the drawn control and the
+; clickable control read the same four numbers.
+;
+; THAT IS NOT A TIDINESS ARGUMENT, it is the bug this page shipped with. The
+; hit test compared the PANE-RELATIVE click the page ABI hands it (SPEC.md
+; 31.1: DI = pane left, DX = pane top, CX = pane-relative x, BX =
+; pane-relative y) against a rect built from [net_px]/[net_py] - absolute
+; screen coordinates. CX was 0..220 and the test wanted ~264, so the first
+; `jb` took the exit every time and **the button did nothing at all**, on a
+; page that drew perfectly. It reached the field as "Connect does nothing, but
+; unloading and reloading the driver connects".
+NP_BX       equ 2               ; the button
+NP_BY       equ 66
 NP_BW       equ 92
 NP_BH       equ 16
 
@@ -89,13 +104,25 @@ net_cp_paint:
     call net_lab
     mov si, s_sport
     cmp byte [net_state], NS_LINKED
-    jne .st
+    jne .nolink
     mov si, s_slinked
 .st:
     mov bx, NP_Y0 + NP_ROW
     call net_val
+    jmp short .row3
+.nolink:
+    cmp byte [net_lost_f], 0    ; not merely absent - it DIED, and where
+    je  .st
+    mov si, s_slost
+    mov bx, NP_Y0 + NP_ROW
+    call net_val
+    mov ax, [net_lastlba]
+    mov bx, NP_Y0 + NP_ROW
+    mov cx, NP_VX + 48
+    call net_declba
 
     ; --- row 3: how big it is, when there is one -----------------------------
+.row3:
     cmp byte [net_state], NS_LINKED
     jne .btn
     mov si, s_size
@@ -138,20 +165,18 @@ net_cp_click:
     mov [net_px], di
     mov [net_py], dx
 
-    ; is it in the button? Its rect is the paint's own arithmetic, once.
-    mov ax, di
-    add ax, NP_LX
-    cmp cx, ax
+    ; --- is it in the button? -----------------------------------------------
+    ; CX and BX are PANE-RELATIVE (SPEC.md 31.1) and so are these four
+    ; constants, which is the whole of the fix: they used to be compared
+    ; against a rect built from the pane's ABSOLUTE origin, so the test could
+    ; never pass and the button did nothing. See the header above NP_BX.
+    cmp cx, NP_BX
     jb  .out
-    add ax, NP_BW
-    cmp cx, ax
+    cmp cx, NP_BX + NP_BW
     jae .out
-    mov ax, dx
-    add ax, NP_BY
-    cmp bx, ax
+    cmp bx, NP_BY
     jb  .out
-    add ax, NP_BH
-    cmp bx, ax
+    cmp bx, NP_BY + NP_BH
     jae .out
 
     cmp byte [net_state], NS_LINKED
@@ -273,12 +298,23 @@ net_hex:
 ; net_dec - AX as decimal in the value column. BX = y offset.
 ; -----------------------------------------------------------------------------
 net_dec:
+    push cx
+    mov cx, NP_VX
+    call net_declba
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; net_declba - AX as decimal at an arbitrary column. BX = y, CX = x offset.
+; -----------------------------------------------------------------------------
+net_declba:
     push ax
     push bx
     push cx
     push dx
     push si
     push bx                     ; the row, wanted again after the arithmetic
+    push cx                     ; ...and the column
     mov si, net_buf + 8
     mov byte [si], 0
     mov bx, 10
@@ -292,8 +328,9 @@ net_dec:
     inc cx
     or  ax, ax
     jnz .d
+    pop cx
     pop bx
-    call net_val
+    call net_txt
     pop si
     pop dx
     pop cx
@@ -302,51 +339,60 @@ net_dec:
     ret
 
 ; -----------------------------------------------------------------------------
-; net_draw_btn - Connect / Disconnect
+; net_brect - the button's rect in SCREEN coordinates, from the pane-relative
+;             constants above and [net_px]/[net_py]
+; out: BX -> {x1,y1,x2,y2} inclusive, os88ui_btn's own convention
+; -----------------------------------------------------------------------------
+net_brect:
+    push ax
+    mov ax, [net_px]
+    add ax, NP_BX
+    mov [net_rc+0], ax
+    add ax, NP_BW - 1
+    mov [net_rc+4], ax
+    mov ax, [net_py]
+    add ax, NP_BY
+    mov [net_rc+2], ax
+    add ax, NP_BH - 1
+    mov [net_rc+6], ax
+    mov bx, net_rc
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_draw_btn - Connect / Disconnect, through the SHARED CONTROL
+;
+; SPEC.md 20.5.1's os88ui_btn rather than a frame and a font_str of our own:
+; a feature added to the button - a pressed state, a focus ring, a different
+; disabled treatment - reaches this page with the rest of the system, and
+; SPEC.md 47's greying is taken once in one place instead of being remembered
+; here. It also centres the label in both axes, which is why the +8/+5 this
+; routine used to carry are gone.
+;
+; NO OS88UI_FILL: net_pane_clear has already whited the pane on every path
+; that reaches this, so filling again would be PERFORMANCE.md's double-draw
+; with the frame as the second layer.
 ;
 ; IT NEVER GREYS - see the header. Both states are actions the user may take
 ; and neither has a predicate that could refuse one, which is SPEC.md 47
 ; rule 3: the only test of "is there a partner" is asking, so Connect asks and
-; the Link row answers. The pen is still set EXPLICITLY rather than left to
-; whatever drew last, because [gfx_dis] outlives a caller (rule 1), and
-; OSAPI_GFX_PEN is what carries the flag - OSAPI_SET_COLOR carries only the
-; colour, which on the two mono adapters is a solid-black caption inside a
-; dotted frame.
+; the Link row answers.
 ; -----------------------------------------------------------------------------
 net_draw_btn:
     push ax
     push bx
-    push cx
-    push dx
     push si
-
-    clc                         ; live, in both states
-    call OSAPI_GFX_PEN
-
-    mov ax, [net_px]
-    add ax, NP_LX
-    mov bx, [net_py]
-    add bx, NP_BY
-    mov cx, ax
-    add cx, NP_BW
-    mov dx, bx
-    add dx, NP_BH
-    call OSAPI_GFX_FRAME
-
+    push di
+    call net_brect              ; BX = the rect
     mov si, s_conn
     cmp byte [net_state], NS_LINKED
     jne .lab
     mov si, s_disc
 .lab:
-    mov cx, [net_px]
-    add cx, NP_LX + 8
-    mov dx, [net_py]
-    add dx, NP_BY + 5
-    call OSAPI_FONT_STR
-
+    xor di, di                  ; no flags: live, no fill, no default ring
+    call os88ui_btn
+    pop di
     pop si
-    pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -357,7 +403,9 @@ s_state:    db 'Link', 0
 s_size:     db 'Size', 0
 s_sport:    db 'No partner', 0
 s_slinked:  db 'Linked', 0
+s_slost:    db 'Lost at LBA', 0
 s_ro:       db 'read only', 0
 s_conn:     db 'Connect', 0
 s_disc:     db 'Disconnect', 0
 net_buf:    db 0,0,0,0,0,0,0,0,0
+net_rc:     dw 0,0,0,0       ; the button's rect, built by net_brect

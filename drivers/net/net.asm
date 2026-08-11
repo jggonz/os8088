@@ -230,6 +230,18 @@ net_connect:
     mov ax, [cand_base+bx]
     call lp_setport
     call lp_init
+    mov al, NC_BYE              ; SHAKE OFF A STALE SESSION FIRST. The slave's
+    call lp_sbyte               ; command wait is unbounded (lplslv.inc), so a
+                                ; partner still serving a link we have since
+                                ; lost - an unplugged cable, a driver reloaded,
+                                ; a Disconnect that did not reach it - is
+                                ; sitting in lp_rbyte_w and would read the
+                                ; magic below as commands and discard it. A
+                                ; bye costs one byte, is ignored by a slave
+                                ; that is already hunting, and is what makes
+                                ; Connect work TWICE. Its result is deliberately
+                                ; not tested: there may be nothing there at all,
+                                ; which is the ordinary case
     call mst_hello              ; the magic, and the partner's version byte
     jc  .nope
     pop cx
@@ -247,6 +259,7 @@ net_connect:
 
 .linked:
     mov byte [net_state], NS_LINKED
+    mov byte [net_lost_f], 0    ; a fresh link is not the old one's failure
     call net_info               ; how big is it, and may we write to it?
     jc  .lost
     call net_mount              ; osapi_vol_add + osapi_vol_mount
@@ -508,10 +521,17 @@ net_cmd:
 ; -----------------------------------------------------------------------------
 net_lost:
     mov byte [net_state], NS_PORT
-    ret
+    mov [net_lastlba], dx       ; WHERE it died, for the page to report.
+    mov byte [net_lost_f], 1    ; A link that drops on a real cable drops for
+    ret                         ; a reason no emulator here can reproduce, so
+                                ; the page has to carry the evidence out - the
+                                ; SPEC.md 18.94 discipline, one layer up. DX is
+                                ; net_blk's walking LBA at every one of the
+                                ; four sites that reach here
 
 %include "netui.inc"            ; the Control Panel page (SPEC.md 31.9)
 %include "lplink.inc"           ; ...and the transport, shared with tests/lptlink
+%include "os88ui.inc"           ; ...and the standard control (SPEC.md 20.5.1)
 
 ; -----------------------------------------------------------------------------
 ; lpl_ticks - lplink.inc's one requirement of its includer (see its header)
@@ -526,6 +546,8 @@ net_state:  db NS_NOPORT
 net_vol:    db 0xFF             ; the volume index we registered, FF = none
 net_secs:   dw 0                ; what the far side says its image holds
 net_flags:  db 0                ; bit 0 = it will not take writes
+net_lost_f: db 0                ; 1 = the last link ended by dying, not by us
+net_lastlba: dw 0               ; ...and the sector it was on when it did
 net_px:     dw 0
 net_py:     dw 0
 

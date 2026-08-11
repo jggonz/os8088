@@ -594,7 +594,8 @@ $(BUILD)/debug.drv: $(BUILD)/debug.bin tools/os88drv.py
 # ships. OS88NET.COM is the other end of the cable and does NOT go on an
 # os8088 disk - it is a DOS program for the far machine, built here and sent.
 $(BUILD)/net.bin: drivers/net/net.asm drivers/net/netui.inc \
-                  drivers/net/lplink.inc drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+                  drivers/net/lplink.inc drivers/os88drv.inc apps/os88api.inc \
+                  apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
 	@echo "net:    $(call FILESIZE,$@) bytes"
 

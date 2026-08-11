@@ -72,8 +72,12 @@ TURN_RX     equ 8               ; ticks a RECEIVE will wait for its first
                                 ; the far end is inside lp_turn and owes a
                                 ; whole tick, and LP_SPIN is ~2ms on a fast
                                 ; machine. See lp_rnib
-CMD_WAIT    equ 180             ; ~10s: how long the slave waits for the next
-                                ; command, so the master may print between them
+                                ; There is no CMD_WAIT. The gap between
+                                ; commands is the USER'S THINKING TIME and has
+                                ; no upper bound, so lp_rbyte_w waits for as
+                                ; long as it takes and ESC is the way out - see
+                                ; its header in lplslv.inc for what a 10-second
+                                ; one cost.
 
 ; -----------------------------------------------------------------------------
 ; lp_latch - is there a parallel port at AX? (NET-PLAN 1.4.2)
