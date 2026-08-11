@@ -200,8 +200,11 @@ KERN_BUDGET equ 102912          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; so far: 5,526 -> 2,431 -> 517 -> 259 ms on a
                                 ; Paint canvas, and CONSTANT in the content
                                 ; (PERFORMANCE.md Sets 41, 42 and 43). 148 of
-                                ; that 2KB is spent: SPEC.md 5.4.1.2's two
-                                ; aligned bodies, one per destination-x parity.
+                                ; that 2KB went on SPEC.md 5.4.1.2's two
+                                ; aligned bodies, one per destination-x parity,
+                                ; and 417 on 11.96.11's cache band - which is
+                                ; not blit work, and is charged here because
+                                ; this is the step that was open. 1,024 left.
                                 ;
                                 ; TWO WAYS TO HAND THE FIRST STEP BACK if the
                                 ; footprint is ever wanted, both costed:
@@ -324,6 +327,18 @@ KERN_BUDGET equ 96256           ; the whole kernel's FOOTPRINT. Growing past
                                 ; that feels snappy and one that does not. The
                                 ; fifth move's rule still binds it: headroom
                                 ; for ordinary growth, not an invitation.
+                                ;
+                                ; AND IT IS FULL. As of SPEC.md 11.96.11 this
+                                ; build sits EXACTLY on the figure - 0 spare,
+                                ; not one byte - so the next thing added to
+                                ; .text or .bss anywhere fails to assemble on
+                                ; kern_small and only there. That is the guard
+                                ; doing its job and it is not a build problem
+                                ; to route around: the eighteenth move's shape
+                                ; is the precedent, an ASK with what it buys
+                                ; measured first. 1KB is the unit, per the rule
+                                ; above, and docs/HANDOFF-REDRAW.md item C
+                                ; names the first thing waiting on it.
                                 ;
                                 ; AND ON THE INTEGRATION BRANCH IT LANDED ON
                                 ; TOP OF A REMOVAL IT DID NOT KNOW ABOUT.
@@ -1535,7 +1550,20 @@ osapi_table:
                                   ;          Answers "whole" unless WF_OWNBG is
                                   ;          set, because without it the kernel
                                   ;          has already whitened the content
-osapi_table_end:                  ; 0x03B8
+    OSAPI_SLOT wm_band            ; 0x03B8 - BX = window, AL = edge (0 left,
+                                  ;          1 right, 2 top, 3 bottom), CX = the
+                                  ;          band's extent in pixels, 0 retires
+                                  ;          it. "Cache THIS of my content and
+                                  ;          tell me about the rest" (SPEC.md
+                                  ;          11.96.11). CF = 0 taken, CF = 1
+                                  ;          refused - and an app MUST read it,
+                                  ;          because the reason to name a band
+                                  ;          is that a cache over the whole
+                                  ;          content is unaffordable, so a
+                                  ;          caller that promises WF_SAVEU
+                                  ;          anyway has promised the thing it
+                                  ;          was trying to avoid
+osapi_table_end:                  ; 0x03C0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1543,8 +1571,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 117 * 8
-%error "os8088 API jump table must be exactly 117 8-byte slots"
+%if OSAPI_TABLE_LEN != 118 * 8
+%error "os8088 API jump table must be exactly 118 8-byte slots"
 %endif
 
 ; =============================================================================

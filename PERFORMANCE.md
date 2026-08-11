@@ -5178,3 +5178,66 @@ a whole 512-byte step; `kern_small` crossed one (1,536 → 1,024 spare, two
 steps, still inside its own budget). `KERN_BUDGET`'s nineteenth move (+2,048,
 granted with the eighteenth as one piece of work) is what that slack is drawn
 from.
+
+### Set 44 — Paint's palette stops being drawn (SPEC.md §11.96.11)
+
+docs/HANDOFF-REDRAW.md item C, in the half that fits. **Paint has no raise
+cache at all and the reason is memory** — over its whole content that is ~9 KB
+on 1bpp, ~36 KB on VGA and ~150 KB grown, on top of the ~127 KB it already
+holds — while its repaint is the most expensive in the tree.
+
+**The measurement that decided the design** breakpointed the primitives
+between `wm_draw_win` and the canvas blit and bucketed each by the rect it was
+handed, so no package symbols were needed. Cycle-accurate 5150/CGA, Paint
+covered by a Disk window and raised:
+
+| region | `gfx_fill` | `hline` | `vline` | `frame` | `font_char` | total |
+|---|---:|---:|---:|---:|---:|---:|
+| **tool palette** | 225 | 184 | 23 | 12 | 7 | **451** |
+| bottom strip | 64 | 27 | 26 | 13 | 1 | 131 |
+| everything else | 10 | 2 | 4 | 1 | 5 | 22 |
+
+**604 drawing calls, 421.8 ms — and 75% of it is a 44-pixel column** of eight
+wells, eight 16×16 icons and the size boxes, none of which has changed since
+the window opened. That is what said a BAND is enough and a general kept region
+is not worth its code (§11.96.11.1): the strip is the other 99 ms.
+
+So a window names one band on one edge, the cache banks that alone, and
+`wm_damage` hands the app the content minus it:
+
+| | before | after | |
+|---|---:|---:|---|
+| chrome, up to the canvas blit | 421.8 ms | **191.9 ms** | 2.19x |
+| the canvas blit | 259.1 ms | 259.1 ms | — (same damage rect) |
+| **the whole Paint raise** | **680.9 ms** | **451.0 ms** | **1.51x** |
+
+Paint's cache is ~1 KB on 1bpp and ~13 KB on VGA, and **Paint needed no drawing
+change at all** — `pt_draw_pal` and `pt_fsbed`'s bed for it were already gated
+on §11.90.2's damage rect. Its side of this is nine instructions: name the band,
+and promise `WF_SAVEU` only if the band was taken.
+
+**One bug, and the gate is what found it — which is the transferable part.**
+Two routines destroy `wm_su_son` and its four rect words on the way through a
+restore, and **both are right to**: `wm_su_srect` spends the one-shot per window
+so a skipped window cannot pass its rect to the next, and `wm_su_edge` reuses
+the four words as scratch *on the explicit reasoning that the one-shot has
+already been spent*. Restoring only the flag left `wm_damage` intersecting the
+app's half against the BAND's rect, which is empty — so Paint was told it owed
+nothing and correctly drew nothing: **19,696 differing pixels, the canvas never
+repainted.** A span measurement had already shown it as a *win* (the whole raise
+"190.8 ms" with no `gfx_blit4` in it at all), which is exactly what a
+performance number looks like when the work has gone missing rather than got
+cheaper. **A timing that improves by more than the change can explain is a
+correctness question, not a result.**
+
+Verified **0 differing pixels** with `tools/ptcheck.py` on CGA, Hercules and
+VGA mode 12h against `make REDRAWFULL=1` (which refuses the band, so Paint
+declines the promise and the reference is exactly today's behaviour), and with
+`tools/subcheck.py` on CGA — 6 pixels, one digit of drive A's free space, the
+kernel having grown a cluster.
+
+**Cost: `.text` +417, and it is the last of the small kernel's.** `kern_big`
+crosses one image rung and stands at 1,024 spare (two steps); **`kern_small` is
+at 0 spare, exactly on `KERN_BUDGET`** — it builds, and there is not one byte
+left for the next feature. That is a decision to take with whoever asks for the
+next one, not a build fix.

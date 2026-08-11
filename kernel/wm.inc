@@ -4200,6 +4200,88 @@ wm_saveu:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_band - API 0x03A8: "cache THIS BAND of my content and hand me the rest"
+; in:  BX = window ptr, AL = edge (0 left, 1 right, 2 top, 3 bottom),
+;      CX = the band's extent in pixels, measured in from that edge.
+;      CX = 0 retires the band, and the cache goes back to the whole content.
+; out: CF = 0 taken, CF = 1 REFUSED - and a refusal is not an error, it is the
+;      answer a kernel that does not do this gives (REDRAWFULL, and any future
+;      build that drops the feature). An app must READ it: the whole reason to
+;      name a band is that a cache over the whole content is unaffordable, so
+;      a caller that promises WF_SAVEU without checking has promised the thing
+;      it was trying to avoid. Paint's content is 9KB banked on 1bpp and 150KB
+;      grown on VGA; its palette column is 1KB and 13KB.
+; clobbers: nothing but CF
+;
+; SPEC.md 11.96.11. The band is where a window keeps the furniture it redraws
+; by DRAWING it - Paint's tool palette is 451 of the 604 primitive calls its
+; repaint issues, 341 ms of 422 on a 4.77MHz 8088 - and the rest of the content
+; is whatever it can put back cheaply itself. So the kernel banks the band and
+; the app is told, through 11.90.2's damage rect, that it owes everything but.
+;
+; A BAND AND NOT A RECT, and that is what makes it small: on one edge, the part
+; the app keeps is a RECTANGLE for any damage rect, so wm_damage subtracts it
+; with four compares and no region arithmetic anywhere. A general kept rect
+; leaves an L or a ring and needs the cache to become a fragment list; the band
+; is the case every consumer here actually has, and 11.96.11.1 records what the
+; general one would cost.
+;
+; ONE WORD PER WINDOW, edge in the top two bits, and 0 means no band - which is
+; what every existing window has by construction rather than by initialisation.
+; -----------------------------------------------------------------------------
+wm_band:
+%ifdef REDRAWFULL
+    stc                         ; the reference build does not do this, and
+    ret                         ; says so rather than half-doing it
+%else
+    push ax
+    push bx
+    push cx
+    push si
+    or cx, cx
+    jz .idx                     ; retire: 0 whatever the edge says
+    cmp cx, 0x3FFF
+    ja .no
+    cmp al, 3
+    ja .no
+    test word [bx+W_FLAGS], WF_OWNBG
+    jz .no                      ; THE INTERLOCK, and it is 11.90.2's own: with
+                                ; the flag clear the kernel white-fills the
+                                ; WHOLE content before W_PAINT, so a band
+                                ; restored in front of one is wiped by it.
+                                ; Refusing here makes "a band implies the app
+                                ; owns its background" a property of the build
+                                ; rather than a rule for a reader to keep
+    mov si, ax                  ; the edge, into bits 14..15 through a table:
+    and si, 3                   ; an 8086 shifts by 1 or by CL, and CL is the
+    add si, si                  ; extent
+    or cx, [si+wm_band_ebits]
+.idx:
+    call wm_ptr2idx             ; AX = the slot (and BX is untouched, which is
+    mov si, ax                  ; what wm_su_slot would not have left us)
+    add si, si
+    add si, wm_su_bands
+    cmp cx, [si]
+    je .ok                      ; unchanged: do NOT drop a live cache for it
+    mov [si], cx
+    call wm_su_drop             ; ...and changed, whatever is banked is a
+.ok:                            ; picture of a different rect
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+%endif
+
+; -----------------------------------------------------------------------------
 ; wm_ownbg - "I paint every pixel of my content myself" (SPEC.md 11.90.1)
 ; in:  BX = window ptr, AL = 0 clear / non-0 set
 ; out: nothing (all registers and the flags preserved)
@@ -4253,6 +4335,9 @@ wm_damage:
     push di
     mov di, bx                  ; the window: wm_su_rect writes all four
     call wm_su_rect             ; AX/BX/CX/DX = its content rect
+    xor si, si                  ; ...and SI says whether that rect has been
+                                ; NARROWED by anything below, which is what
+                                ; lets "no sub-rect named" still be an answer
     test word [di+W_FLAGS], WF_FULL
     jnz .whole                  ; ...AND WHOLE ON A FULLSCREEN WINDOW, whatever
                                 ; WF_OWNBG says: wm_draw_win's 11.2 branch fills
@@ -4265,8 +4350,20 @@ wm_damage:
                                 ; wm_front can raise one
     test word [di+W_FLAGS], WF_OWNBG
     jz .whole
+%ifndef REDRAWFULL
+    cmp byte [wm_su_bok], 0     ; THE BAND CAME BACK OFF THE CACHE (SPEC.md
+    je .noband                  ; 11.96.11), so the app owes the content MINUS
+    push ax                     ; it - which is the whole point of naming one.
+    call wm_su_bget             ; It is [wm_su_bok] and not the band word,
+    or ax, ax                   ; because on a cache MISS the app owes the band
+    pop ax                      ; too and nothing else can tell those apart
+    jz .noband
+    call wm_su_orect
+    inc si                      ; ...and this IS an answer, sub-rect or not
+.noband:
+%endif
     cmp word [wm_su_son], 0
-    je .whole                   ; nobody named one
+    je .nosub                   ; nobody named one
     cmp ax, [wm_su_sx1]
     jge .x1
     mov ax, [wm_su_sx1]
@@ -4283,6 +4380,13 @@ wm_damage:
     jle .y2
     mov dx, [wm_su_sy2]
 .y2:
+    clc
+    pop di
+    pop si
+    ret
+.nosub:
+    or si, si                   ; the band narrowed it, so this is a rect and
+    jz .whole                   ; not "the whole content"
     clc
     pop di
     pop si
@@ -4359,6 +4463,27 @@ wm_su_segs: times MAX_WIN dw 0  ; the banked content, one word per window
                                 ; record, 0 = none. In .text with real
                                 ; initialisers: -f bin zeroes nothing and
                                 ; wm_su_try reads one before anything sets it
+wm_su_bands: times MAX_WIN dw 0 ; ...and the BAND each window asked for
+                                ; (SPEC.md 11.96.11): extent in bits 0..13,
+                                ; edge in 14..15, and 0 = none, which is what
+                                ; every window has by construction. Same
+                                ; reason for being in .text as the row above
+wm_band_ebits: dw 0x0000, 0x4000, 0x8000, 0xC000
+wm_su_sbk: times 5 dw 0         ; 11.96.11: wm_su_son AND its four rect words,
+                                ; banked across the restore because a BANDED
+                                ; window still owes them to wm_damage. Five in
+                                ; one block because the five they copy are
+                                ; adjacent and in that order, which is what
+                                ; makes the pair one rep movsw each way
+wm_su_bx1: dw 0                 ; wm_su_orect's scratch: the band's own rect,
+wm_su_by1: dw 0                 ; banked while it fetches the content's, so
+wm_su_bx2: dw 0                 ; that the two are complementary by
+wm_su_by2: dw 0                 ; construction and not by two sums agreeing
+wm_su_bok: db 0                 ; the band came back off the cache in the draw
+                                ; in hand, so wm_damage owes the app the rest
+                                ; and not the lot. Cleared at the top of every
+                                ; wm_draw_win; in .text for its neighbours'
+                                ; reason
 wm_su_x1:  dw 0                 ; the rect the operation in hand is working
 wm_su_y1:  dw 0                 ; on - written by wm_su_take before the claim
 wm_su_x2:  dw 0                 ; that will hold it exists, and read back out
@@ -4770,6 +4895,186 @@ wm_su_rect:
     sub dx, 2
     ret
 
+; wm_su_bget - DI = window -> AX = its band word, 0 = none (SPEC.md 11.96.11)
+; clobbers: AX and flags, nothing else
+wm_su_bget:
+%ifdef REDRAWFULL
+    xor ax, ax
+    ret
+%else
+    push bx
+    push si
+    mov bx, di
+    call wm_ptr2idx
+    mov si, ax
+    add si, si
+    mov ax, [si+wm_su_bands]
+    pop si
+    pop bx
+    ret
+%endif
+
+; wm_su_crect - the rect the CACHE covers: the content rect, cut down to the
+;               band if this window named one (SPEC.md 11.96.11)
+; in:  DI = window ptr
+; out: AX/BX/CX/DX = the rect, exactly wm_su_rect's when there is no band
+; clobbers: the four outputs and flags
+;
+; wm_su_ck and wm_su_take call THIS and wm_damage calls wm_su_rect, and the
+; split is the whole of what keeps the two honest: one asks what is banked,
+; the other what the window's content IS. A band that changed shape therefore
+; invalidates the cache with no new comparison anywhere - wm_su_ck already
+; compares this answer against the header the pixels were laid out for.
+wm_su_crect:
+    call wm_su_rect
+%ifndef REDRAWFULL
+    push si
+    push bp                     ; BP as a plain scratch REGISTER, which is
+    push ax                     ; legal - what SS != DS forbids is [bp+d]
+    call wm_su_bget             ; AX = the band word
+    mov si, ax
+    pop ax
+    or si, si
+    jz .out
+    mov bp, si
+    and si, 0x3FFF              ; SI = the extent, as an INCLUSIVE offset
+    dec si                      ; from the edge
+    and bp, 0xC000              ; BP = the edge
+    jnz .notleft
+    add si, ax                  ; LEFT: x2 = min(x2, x1 + extent - 1)
+    cmp si, cx
+    jae .out
+    mov cx, si
+    jmp short .out
+.notleft:
+    cmp bp, 0x4000
+    jne .nottop
+    neg si                      ; RIGHT: x1 = max(x1, x2 - extent + 1)
+    add si, cx
+    cmp si, ax
+    jbe .out
+    mov ax, si
+    jmp short .out
+.nottop:
+    cmp bp, 0x8000
+    jne .bottom
+    add si, bx                  ; TOP: y2 = min(y2, y1 + extent - 1)
+    cmp si, dx
+    jae .out
+    mov dx, si
+    jmp short .out
+.bottom:
+    neg si                      ; BOTTOM: y1 = max(y1, y2 - extent + 1)
+    add si, dx
+    cmp si, bx
+    jbe .out
+    mov bx, si
+.out:
+    pop bp
+    pop si
+%endif
+    ret
+
+%ifndef REDRAWFULL
+; wm_su_orect - the part of DI's content the APP still owes once the band has
+;               come back off the cache: the content rect with the band cut
+;               off it. Possibly EMPTY (x1 > x2), which is legal and means the
+;               band was the whole of it.
+; in:  DI = window ptr
+; out: AX/BX/CX/DX; clobbers those and flags
+;
+; It cuts against wm_su_crect's ALREADY CLAMPED answer rather than against the
+; raw extent, which is not tidiness: an extent wider than the content would
+; otherwise leave a borrowed subtraction reading as an enormous x2, and this
+; way the two rects are complementary by construction rather than by two
+; arithmetics agreeing.
+wm_su_orect:
+    call wm_su_crect
+    mov [wm_su_bx1], ax
+    mov [wm_su_by1], bx
+    mov [wm_su_bx2], cx
+    mov [wm_su_by2], dx
+    call wm_su_rect
+    push si
+    push ax
+    call wm_su_bget
+    mov si, ax
+    pop ax
+    or si, si
+    jz .out
+    and si, 0xC000
+    jnz .nl
+    mov ax, [wm_su_bx2]         ; LEFT: the app owns from the band's right edge
+    inc ax
+    jmp short .out
+.nl:
+    cmp si, 0x4000
+    jne .nt
+    mov cx, [wm_su_bx1]         ; RIGHT
+    dec cx
+    jmp short .out
+.nt:
+    cmp si, 0x8000
+    jne .nb
+    mov bx, [wm_su_by2]         ; TOP
+    inc bx
+    jmp short .out
+.nb:
+    mov dx, [wm_su_by1]         ; BOTTOM
+    dec dx
+.out:
+    pop si
+    ret
+%endif
+
+%ifndef REDRAWFULL
+; wm_su_sbank / wm_su_sback - bank wm_su_son and its four rect words, and put
+; them back for a BANDED window only (SPEC.md 11.96.11).
+;
+; Both wm_su_srect and wm_su_edge destroy that block on the way through a
+; restore, and both are right to: the one-shot is spent per window, and the
+; four words are dead once the rect has been handed to gfx_restore. They are
+; not dead for a window with a band, which still owes wm_damage the same rect
+; for the OTHER half of its content - so this pair is the exception, and it is
+; the window's band that decides, not the caller.
+;
+; wm_su_sback preserves no flags and is called where none are live; wm_su_sbank
+; preserves everything, being on the path of every restore in the machine.
+wm_su_sbank:
+    push si
+    push di
+    mov si, wm_su_son
+    mov di, wm_su_sbk
+    jmp short wm_su_scopy
+wm_su_sback:
+    push ax
+    call wm_su_bget
+    or ax, ax
+    pop ax
+    jnz wm_su_sback_go
+    ret
+wm_su_sback_go:
+    push si
+    push di
+    mov si, wm_su_sbk
+    mov di, wm_su_son
+wm_su_scopy:
+    push ax
+    push cx
+    push es
+    push ds
+    pop es                      ; ES is the CLAIM here, and movsw writes ES:DI
+    mov cx, 5
+    cld
+    rep movsw
+    pop es
+    pop cx
+    pop ax
+    pop di
+    pop si
+    ret
+%endif
+
 ; wm_su_slot - which cache belongs to a window
 ; in:  BX = window ptr
 ; out: SI = -> its wm_su_segs word, BX = its owner tag (the base plus the
@@ -4831,7 +5136,10 @@ wm_su_ck:
                                 ; exactly what tools/notepad/pixcheck.py does to
                                 ; force a full repaint (SPEC.md 11.96.2)
     mov es, si                  ; the rect is the CLAIM's, not a fifth array:
-    call wm_su_rect             ; it travels with the pixels it describes
+    call wm_su_crect            ; it travels with the pixels it describes -
+                                ; and it is the BAND's rect where one was named
+                                ; (SPEC.md 11.96.11), so a band that changed
+                                ; shape invalidates here with no new test
     cmp ax, [es:WSU_X1]
     jne .no
     cmp bx, [es:WSU_Y1]
@@ -4893,7 +5201,7 @@ wm_su_take:
     mov bx, di
     call wm_su_drop             ; whatever THIS window banked before: one
                                 ; window, one claim, or the old one leaks
-    call wm_su_rect             ; DI is still the window for this
+    call wm_su_crect            ; DI is still the window for this
     cmp ax, cx
     ja .out                     ; degenerate content: nothing to bank
     cmp bx, dx
@@ -5247,8 +5555,19 @@ wm_su_try:
     call wm_su_ck               ; ...which loads wm_su_x1..y2 out of the
     jc .no                      ; claim's own header, and answers AX = it
     mov es, ax
+%ifndef REDRAWFULL
+    call wm_su_sbank            ; BANK THE ONE-SHOT AND ITS FOUR WORDS (SPEC.md
+%endif                          ; 11.96.11): a banded window still owes them to
+                                ; wm_damage, and BOTH wm_su_srect (which spends
+                                ; the flag) and wm_su_edge (which reuses the
+                                ; four as scratch, on the reasoning that the
+                                ; flag was already spent) destroy them
     call wm_su_srect            ; AX/BX/CX/DX = the rect to put back, and only
     jnc .put                    ; part of the buffer if the caller named one
+%ifndef REDRAWFULL
+    mov byte [wm_su_bok], 1     ; ...and that goes for the band too: nothing
+    call wm_su_sback            ; painted over it, so it is still right
+%endif
     clc                         ; nothing this pass painted reached the content,
     jmp short .out              ; so it is ALREADY right - which is the whole
                                 ; point of 11.96.6 and not a failure
@@ -5272,6 +5591,10 @@ wm_su_try:
     call gfx_restore            ; ...and the rect is the one wm_su_srect just
                                 ; answered with, still in AX/BX/CX/DX - which
                                 ; is why nothing reloads it here any more
+%ifndef REDRAWFULL
+    mov byte [wm_su_bok], 1     ; ...and the band, if this window named one, is
+    call wm_su_sback            ; on the glass again (SPEC.md 11.96.11)
+%endif
     clc                         ; THE CACHE IS NOT SPENT HERE. It used to be
     jmp short .out              ; dropped on the grounds that this window is
                                 ; about to be the front one and will change
@@ -5301,6 +5624,7 @@ wm_draw_win:
     push di
     mov di, bx                  ; DI = window ptr for the duration
 %ifndef REDRAWFULL
+    mov byte [wm_su_bok], 0     ; no band has been put back in THIS draw yet
     mov byte [wm_dw_part], 0    ; IS THIS DRAW PARTIAL? (SPEC.md 11.96.9) Read
     cmp word [wm_su_son], 0     ; HERE, because wm_su_srect spends the one-shot
     je .whole                   ; inside wm_su_try below and wm_su_bank needs to
@@ -5368,12 +5692,19 @@ wm_draw_win:
     call wm_draw_title          ; the title bar, active or not (BP decides)
 
     call wm_su_try              ; THE RAISE CACHE (SPEC.md 11.96): if the
-    jnc .growbox                ; content was banked when this window was
+    jc .content                 ; content was banked when this window was
                                 ; covered, it is already back on screen - so
                                 ; neither the white fill nor W_PAINT runs, and
                                 ; the 578 ms of glyphs they cost is not spent.
                                 ; The chrome above is drawn either way: it is
                                 ; cheap, and a raise changes the pinstripes
+%ifndef REDRAWFULL
+    call wm_su_bget             ; ...UNLESS THE CACHE IS ONLY A BAND OF IT
+    or ax, ax                   ; (SPEC.md 11.96.11), in which case what came
+    jnz .paint                  ; back is the furniture and the app still owes
+%endif                          ; the rest - wm_damage hands it exactly that,
+    jmp .growbox                ; and the white fill is skipped because a band
+                                ; needs WF_OWNBG to have been granted at all
 .content:
     test word [di+W_FLAGS], WF_OWNBG
     jnz .paint                  ; IT OWNS ITS BACKGROUND (SPEC.md 11.90.1): the

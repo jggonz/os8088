@@ -1674,6 +1674,34 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; heap that is the difference between a paste
                                  ; that works and one that half-arrives.
                                  ; Preserves all but AX.
+%define OSAPI_WM_BAND       KERNEL_SEG:0x03B8   ; BX = window ptr, AL = edge
+                                                ; (0 left, 1 right, 2 top,
+                                                ; 3 bottom), CX = the band's
+                                                ; extent in pixels measured in
+                                                ; from that edge; CX = 0
+                                                ; retires it. "CACHE THIS BAND
+                                                ; OF MY CONTENT AND TELL ME
+                                                ; ABOUT THE REST" (SPEC.md
+                                                ; 11.96.11): the raise cache
+                                                ; then banks the band alone and
+                                                ; OSAPI_WM_DAMAGE hands you the
+                                                ; content MINUS it, so the
+                                                ; furniture you redraw by
+                                                ; DRAWING it comes back as a
+                                                ; blit. Requires
+                                                ; OSAPI_WM_OWNBG - without it
+                                                ; the kernel's white fill would
+                                                ; wipe the band it just put
+                                                ; back - and it is what makes
+                                                ; OSAPI_WM_SAVEU affordable on
+                                                ; a window whose whole content
+                                                ; is too big to bank.
+                                                ; CF = 0 taken, CF = 1 REFUSED,
+                                                ; and you MUST read it: promise
+                                                ; WF_SAVEU after a refusal and
+                                                ; you have asked for the
+                                                ; whole-content cache you were
+                                                ; trying to avoid
 %define OSAPI_WM_DAMAGE     KERNEL_SEG:0x03B0   ; BX = your window ptr, called
                                                 ; from inside your own W_PAINT.
                                                 ; CF=1 = draw the WHOLE content

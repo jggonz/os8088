@@ -5737,6 +5737,103 @@ interlock, at the one geometry that escaped it. Latent before this: `wm_dmg_wins
 was the only caller that armed a rect and a fullscreen window is rarely marked,
 where `wm_front` can raise one.
 
+#### 11.96.11 The app keeps a band, and the kernel banks it
+
+**Paint has no raise cache at all, and the reason is memory**: a cache over its
+content is ~9 KB on 1bpp, ~36 KB on VGA and ~150 KB for a window grown over most
+of a 640×480 screen, on top of the ~127 KB Paint already holds — so on a 256 KB
+machine it is refused and the feature is not there. Its repaint is meanwhile
+the most expensive in the tree.
+
+Measured on a cycle-accurate 5150/CGA, breakpointing the primitives between
+`wm_draw_win` and the canvas blit: **604 drawing calls, 421.8 ms** — and
+**451 of them, 75%, are the tool palette**, a 44-pixel column down the left of
+the content. The bottom strip is 131 and everything else 22. The palette is
+eight wells, eight 16×16 icons and the size boxes, redrawn *by drawing them*,
+every time, and none of it has changed since the window opened.
+
+So `wm_band` (slot 0x03B8) lets a window name **one band on one edge** as the
+part the kernel should bank. The raise cache then covers the band alone —
+Paint's is ~1 KB on 1bpp and ~13 KB on VGA — and §11.90.2's `wm_damage` hands
+the app the content **minus** the band, so the app skips what came back as a
+blit. Paint needed no drawing change at all: `pt_draw_pal` was already gated on
+the damage rect, as `pt_fsbed`'s bed for it already was.
+
+Measured on the same raise (PERFORMANCE.md Set 44): everything before the
+canvas blit **421.8 → 191.9 ms, 2.19x**, the blit itself unchanged at 259.1 (the
+damage rect it is given is the same), and **the whole raise 680.9 → 451.0 ms,
+1.51x**.
+
+**A band and not a rect, and that is the whole reason it is small.** On one
+edge, the part the app keeps is a RECTANGLE for any damage rect, so `wm_damage`
+subtracts it with four moves and no region arithmetic anywhere, and the cache
+stays the single-rect machinery it already was. A general kept rect leaves an
+L or a ring, and the cache would have to become a fragment list with a
+per-fragment bank, restore and edge merge — for Paint, the other 22% (§11.96.11.1).
+
+Six things are load-bearing:
+
+- **`wm_su_crect` is what is BANKED and `wm_su_rect` is what the content IS**,
+  and every one of the three callers had to be sorted into one or the other:
+  `wm_su_ck` and `wm_su_take` ask the first, `wm_damage` the second. That split
+  is also what makes a band change invalidate for free — `wm_su_ck` already
+  compares this answer against the header the pixels were laid out for, so a
+  band of a different shape simply disagrees.
+- **It requires `WF_OWNBG`, and `wm_band` REFUSES without it.** With the flag
+  clear the kernel white-fills the whole content before `W_PAINT`, which would
+  wipe the band it has just restored. Refusing at registration makes "a band
+  implies the app owns its background" a property of the build rather than a
+  rule for a reader to keep — §11.90.2's own interlock, one level up.
+- **A hit no longer means "skip `W_PAINT`".** With a band, `wm_draw_win`
+  restores and then *falls into* the paint, because what came back is the
+  furniture and the app still owes the rest. Without one it skips as before.
+- **`[wm_su_bok]` is what `wm_damage` reads**, not the band word: on a cache
+  MISS the app owes the band too, and the two states are indistinguishable from
+  the band alone. It is cleared at the top of every `wm_draw_win` and set on
+  *both* of `wm_su_try`'s success paths — including the one that restores
+  nothing because nothing this pass painted reached the content, which is
+  equally a statement that the band is still right.
+- **`wm_su_orect` cuts against `wm_su_crect`'s already-clamped answer**, never
+  against the raw extent. An extent wider than the content would otherwise
+  leave a borrowed subtraction reading as an enormous `x2`; this way the two
+  rects are complementary by construction rather than by two arithmetics
+  agreeing, and "the band was the whole content" falls out as an EMPTY owed
+  rect, which §11.90.2 already permits.
+- **The refusal is an answer, not an error.** `REDRAWFULL` refuses, and so
+  would any future build that dropped this. An app must read `CF`, because the
+  reason to name a band is that a whole-content cache is unaffordable — promise
+  `WF_SAVEU` after a refusal and you have asked for exactly the thing you were
+  avoiding. Paint sets its promise only on `CF = 0`.
+- **`wm_su_son` AND its four rect words are banked across the restore**
+  (`wm_su_sbank`/`wm_su_sback`), because *two* routines destroy that block on
+  the way through and **both are right to**: `wm_su_srect` spends the one-shot
+  per window so a skipped window cannot pass its rect to the next, and
+  `wm_su_edge` reuses the four words as scratch on the explicit reasoning that
+  the one-shot *has already been spent*. Neither was wrong before a band
+  existed; both are now the exception, and the window's band is what decides.
+  This is the one thing here the gate had to find rather than the design: with
+  only the flag restored, `wm_damage` intersected the app's half against the
+  BAND's rect, answered an empty rect, and Paint correctly drew nothing —
+  **19,696 differing pixels, the canvas never repainted at all.**
+
+#### 11.96.11.1 What a general kept REGION would cost, and why it is not built
+
+The design this is half of names *regions a window hands to the cache* and
+*regions it keeps*, which for Paint would be **keep the canvas, cache
+everything else** — the palette column *and* the 22% bottom strip. The
+complement of a kept rect inside the content is up to four rects, so the cache
+would grow a fragment list: `wm_su_take` banking each into one claim at a
+running offset, `wm_su_try` intersecting the sub-rect with each and restoring
+from the right offset, `wm_su_edge`'s merge running per fragment, and the
+header carrying the kept rect so `wm_su_ck` can still compare shapes.
+
+It is not built because of what it buys against what it costs **here**: the
+band already takes 75% of the measured 421.8 ms, the remaining strip is 99 ms,
+and the fragment machinery is several hundred bytes on a kernel whose small
+build now has NO footprint left at all — §11.96.11 spent its last step. When `KERN_SMALL_BUDGET` next
+moves, this is the first thing to spend it on; the arithmetic above is what to
+re-check it against, since it is measured rather than assumed.
+
 ### 11.97 A window below does not draw chrome where something above will cover it
 
 Reported from the field alongside §11.96.9's ghost: **dragging a window, the one

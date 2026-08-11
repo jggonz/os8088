@@ -292,6 +292,30 @@ pt_entry:
                                     ; wrong: PERFORMANCE.md Set 32 measures the
                                     ; repaint at 9 s, and SPEC.md 11.96.3 made
                                     ; the cache one per WINDOW.)
+                                    ;
+                                    ; ...AND THAT IS WHAT SPEC.md 11.96.11 IS
+                                    ; FOR. The tool column is 451 of the 604
+                                    ; drawing calls a repaint issues - 75% of
+                                    ; a measured 421.8 ms on a 4.77MHz 8088 -
+                                    ; and it is 44 pixels wide, so banking THAT
+                                    ; is ~1KB on 1bpp and ~13KB on VGA instead
+                                    ; of 9KB and 150KB. The promise is made
+                                    ; only if the band was taken: refused, a
+                                    ; WF_SAVEU here asks for the whole-content
+                                    ; cache this app cannot afford
+    pushf                           ; THE CF wm_create OWES THE LOADER rides
+    push ax                         ; through here too, and this pair asks a
+    push cx                         ; question that answers in it
+    xor al, al                      ; edge 0 = left
+    mov cx, PT_CV_X                 ; ...as far as the canvas: the divider
+    call OSAPI_WM_BAND              ; column is the band's last pixel
+    jc .noband
+    mov al, 1
+    call OSAPI_WM_SAVEU             ; our content does not change while we are
+.noband:                            ; not drawing: no worker, the marquee is a
+    pop cx                          ; latched XOR, the caret is keystroke-driven
+    pop ax
+    popf
     call pt_arg                     ; were we launched to open a picture?
     cmp byte [pt_mode], PT_M_LIVE
     jne .menus

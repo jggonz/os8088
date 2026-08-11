@@ -22,6 +22,7 @@ below; PERFORMANCE.md Sets 30–34 are the measurements.
 | §5.4.1 | a blit run goes straight into the framebuffer, 1bpp and VGA | canvas blit 5,526 → 2,431 ms (CGA), 4,226 → 2,163 (VGA) |
 | §5.4.1.1 | …and then the runs go: the 1bpp pair decoder, no hybrid | 2,431 → **517 ms**, and CONSTANT in the content |
 | §5.4.1.2 | four pairs are one byte: an aligned body per x PARITY | 517 → **259 ms** even, 508 → **299** odd |
+| §11.96.11 | a window names a BAND; the kernel banks it, the app owes the rest | Paint raise 680.9 → **451.0 ms**, 1.51x |
 
 One restore is **49.22 → 23.36 ms (2.11x)**. Every step verified at **0 differing
 pixels** on CGA, Hercules and VGA mode 12h.
@@ -289,7 +290,13 @@ latency-critical than Paint has ever been:
   back was **278 ms on CGA** and is **125 ms** after §5.4.1, and would be
   ~13 ms with the decoder. `sol_drawall` draws the whole tableau; `sol_cmd_deal`
   already has a comment about how dear one back is.
-- **ArtfulType's KEYSTROKE PATH.** `at_draw_line` composes a line, expands it to
+- **ArtfulType's KEYSTROKE PATH — TABLED, and it is a SESSION OF ITS OWN.**
+  Do not pick this up as part of the redraw round: the owner has taken it out
+  and will drive it separately, because the reported symptom (twenty characters
+  in twenty seconds) is an order of magnitude away from anything the blit
+  arithmetic below predicts, and closing that gap is an investigation rather
+  than an optimisation. What is known is recorded here and nothing more.
+  `at_draw_line` composes a line, expands it to
   packed 4bpp and puts it on screen as **one `OSAPI_GFX_BLIT4`, per keystroke**,
   ungated by adapter. Text is the worst case for run coalescing — every glyph
   edge is a run — so this is structurally the biggest beneficiary in the system
@@ -297,18 +304,33 @@ latency-critical than Paint has ever been:
   repaint. **It is NOT measured**: three attempts to time a keystroke through
   the debug server produced no `gfx_blit4` hit at all while typing plainly
   worked before the breakpoints were armed, which is a harness problem and not
-  an app one. **Take that measurement first** — if a line is the ~1,200 runs a
-  45-character line of 8x8 glyphs suggests, it dwarfs everything in this
-  document.
+  an app one — **and solving that harness problem is the first half of the
+  tabled session**, because until a keystroke can be timed at all, nothing
+  about it can be told from anything else. If a line is the ~1,200 runs a
+  45-character line of 8x8 glyphs suggests, the three §5.4.1 steps have already
+  taken it from seconds to tens of milliseconds and the report is stale; if it
+  has not, the cost is somewhere else entirely and the blit was never it.
 - **Tracker** mentions the idiom in its fullscreen text path but does not blit.
 
-### C. Registered cache regions and exclusions
+### C. Registered cache regions — **the BAND half is BUILT, SPEC.md §11.96.11**
 
 The design the reporter proposed, of which §11.90.2 is half: a window registers
 **regions it hands to the cache** and **regions it keeps**; a repaint restores the
 cached ones the damage touches and hands the app the damage rects falling in the
-kept ones. For Paint that is *cache the chrome* (~1 KB, kills ~376 ms) and *keep
-the canvas* (no memory). The cache-side registration is not built.
+kept ones. For Paint that is *cache the chrome* and *keep the canvas*.
+
+**What the measurement said, and it decided the shape**: Paint's chrome is 604
+drawing calls and 421.8 ms, and **451 of them — 75% — are the 44-pixel tool
+palette**; the bottom strip is 131 calls and 99 ms. So the built half is a
+**band on one edge**, which keeps both the cached part and the kept part
+RECTANGLES and so needs no region arithmetic anywhere: `wm_band` (slot 0x03B8),
+the cache banks the band, `wm_damage` hands the app the content minus it.
+**Paint raise 680.9 → 451.0 ms, 1.51x**, and Paint needed no drawing change —
+`pt_draw_pal` was already gated on the damage rect. PERFORMANCE.md Set 44.
+
+The remaining 22% needs the general kept REGION, whose complement is up to four
+rects and therefore a fragment list in the cache: §11.96.11.1 costs it. **It is
+blocked on budget rather than on design** — `kern_small` is at 0 spare.
 
 And the stated end state: **"blank it" becomes the last resort for every window**,
 not the default — a region that is neither cached nor claimed is the only thing
@@ -325,12 +347,14 @@ marking on each window's *redrawn region* is a real change to the marking pass.
 
 ## Before you write any code
 
-**Footprint spare is 2,560 bytes on `kern_big` — FIVE 512-byte steps — and
-1,024 on `kern_small`, which is TWO and is the tight one now.** Both image
-rungs are nearly full as well: **63 bytes** left on `kern_big` and 497 on
-`kern_small`, so the next `.text` byte anywhere buys a whole 512-byte step on
-the big kernel. The paragraphs below are the history of how that was arrived
-at, and the figures in them are the ones each move reported at the time.
+**Footprint spare is 1,024 bytes on `kern_big` — TWO 512-byte steps — and
+ZERO on `kern_small`, which is exactly on `KERN_BUDGET`.** The small kernel
+builds and has not one byte left: the next feature that touches it needs
+`KERN_SMALL_BUDGET`'s next step, and that is a decision to take with whoever
+asks for the feature rather than a build fix. The image rungs have 299 bytes
+(`kern_big`) and 294 (`kern_small`). The paragraphs below are the history of
+how that was arrived at, and the figures in them are the ones each move
+reported at the time.
 
 The seventeenth move left 2,560 on `kern_big` and
 3,584 on `kern_small`, which was seven steps and owed a conversation (the raise met
