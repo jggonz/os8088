@@ -296,7 +296,7 @@ KERN_BUDGET equ 102912          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; the two by 2KB, which is the direction it
                                 ; should drift from here.
 %else
-KERN_BUDGET equ 96256           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 97280           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
                                 ;
@@ -328,17 +328,33 @@ KERN_BUDGET equ 96256           ; the whole kernel's FOOTPRINT. Growing past
                                 ; fifth move's rule still binds it: headroom
                                 ; for ordinary growth, not an invitation.
                                 ;
-                                ; AND IT IS FULL. As of SPEC.md 11.96.11 this
-                                ; build sits EXACTLY on the figure - 0 spare,
-                                ; not one byte - so the next thing added to
-                                ; .text or .bss anywhere fails to assemble on
-                                ; kern_small and only there. That is the guard
-                                ; doing its job and it is not a build problem
-                                ; to route around: the eighteenth move's shape
-                                ; is the precedent, an ASK with what it buys
-                                ; measured first. 1KB is the unit, per the rule
-                                ; above, and docs/HANDOFF-REDRAW.md item C
-                                ; names the first thing waiting on it.
+                                ; THE TWENTIETH MOVE, 96,256 -> 97,280, ASKED
+                                ; FOR AND GRANTED, and it is this figure's
+                                ; first move at the 1KB unit the rule above
+                                ; sets. SPEC.md 11.96.11 had landed the build
+                                ; EXACTLY on the old figure - 0 spare, not one
+                                ; byte - so the next thing added to .text or
+                                ; .bss anywhere would have failed to assemble
+                                ; on kern_small and only there. That is the
+                                ; guard doing its job rather than a build
+                                ; problem to route around, and the ask was made
+                                ; with what the last of the old figure bought
+                                ; already measured (a Paint raise 680.9 ->
+                                ; 451.0 ms, PERFORMANCE.md Set 44).
+                                ;
+                                ; IT IS ALLOCATED TO WINDOW REDRAW
+                                ; IMPROVEMENTS, which is the seventeenth move's
+                                ; allocation continued rather than a new one:
+                                ; docs/HANDOFF-REDRAW.md's remaining items are
+                                ; 11.91's marking keyed on redrawn REGIONS
+                                ; rather than rects, and 11.96.11.1's general
+                                ; kept region. The argument is the seventeenth's
+                                ; and has not changed - a redraw optimisation is
+                                ; worth most on the SLOWEST machine, so this is
+                                ; not a figure that work may be kept out of -
+                                ; and the fifth move's rule still binds what is
+                                ; left over: headroom for ordinary growth, not
+                                ; an invitation to spend it.
                                 ;
                                 ; AND ON THE INTEGRATION BRANCH IT LANDED ON
                                 ; TOP OF A REMOVAL IT DID NOT KNOW ABOUT.
@@ -663,7 +679,7 @@ KERN_BUDGET equ 96256           ; the whole kernel's FOOTPRINT. Growing past
                                 ; machine can still install, just slowly.
 %endif                          ; KERN_BIG
 
-KERN_SMALL_BUDGET equ 96256     ; ...and kern_small's, named separately so it
+KERN_SMALL_BUDGET equ 97280     ; ...and kern_small's, named separately so it
                                 ; can be REPORTED on a big build rather than
                                 ; only enforced on a small one. tools/
                                 ; kernsplit.py reads both out of the map and
@@ -681,12 +697,16 @@ KERN_SMALL_BUDGET equ 96256     ; ...and kern_small's, named separately so it
                                 ; budget move so far has had.
                                 ;
                                 ; It moved at the seventeenth, 94,208 ->
-                                ; 96,256, for the window drawing
+                                ; 96,256, and at the TWENTIETH, 96,256 ->
+                                ; 97,280, both for the window drawing
                                 ; optimisations - the argument is at
                                 ; KERN_BUDGET above, and the short form is that
                                 ; a redraw optimisation is worth most on the
                                 ; slowest machine, so this is not a figure that
-                                ; work may be kept out of.
+                                ; work may be kept out of. The twentieth is
+                                ; also the first move this figure has taken at
+                                ; the 1KB unit its own rule sets, kern_big
+                                ; having moved by 2KB throughout.
 
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they

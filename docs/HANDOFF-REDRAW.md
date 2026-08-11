@@ -347,12 +347,13 @@ marking on each window's *redrawn region* is a real change to the marking pass.
 
 ## Before you write any code
 
-**Footprint spare is 1,024 bytes on `kern_big` — TWO 512-byte steps — and
-ZERO on `kern_small`, which is exactly on `KERN_BUDGET`.** The small kernel
-builds and has not one byte left: the next feature that touches it needs
-`KERN_SMALL_BUDGET`'s next step, and that is a decision to take with whoever
-asks for the feature rather than a build fix. The image rungs have 299 bytes
-(`kern_big`) and 294 (`kern_small`). The paragraphs below are the history of
+**Footprint spare is 1,024 bytes on EACH kernel — two 512-byte steps.**
+`KERN_SMALL_BUDGET`'s **twentieth move**, 96,256 → 97,280, was asked for and
+granted and is **allocated to window redraw improvements**: §11.96.11 had left
+the small build exactly on the old figure with 0 spare, and the items below are
+what the step is for. It is the first move that figure has taken at the 1KB unit
+its own rule sets, `kern_big` having moved by 2KB throughout. The image rungs
+have 299 bytes (`kern_big`) and 294 (`kern_small`). The paragraphs below are the history of
 how that was arrived at, and the figures in them are the ones each move
 reported at the time.
 
