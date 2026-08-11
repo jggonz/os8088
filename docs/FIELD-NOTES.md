@@ -1956,49 +1956,83 @@ trust the equipment word, so the drive appears and works. The probe still runs
 for the published state above, which is the only reason any of this could be
 diagnosed at all. Unit 1 is unaffected and still contested.
 
-## 20. A dragged window lands 30px right and 40px UP of the drop, on the EXTENDED desktop only (OPEN, isolated to the redraw round)
+## 20. `ui_drag` banks a mousedown point the pointer was never at (OPEN, narrowed to one word)
 
 **Found by `tests/dispsave.py` failing after the `elendilon` merge**, and it is
 not what that test is about — the raise cache it gates works. The failure is
-that the window the test drops over another one lands somewhere else, so its
-raise click hits the covering window instead of the covered one and 4,343
-pixels are legitimately still covered.
+that the window the test drops over another lands somewhere else, so its raise
+click hits the covering window instead of the covered one and ~4,300 pixels are
+legitimately still covered.
 
-**Reproduced, with the pointer proved to be where it was asked for:**
+**Narrowed to one number.** Reading `ui_drag`'s own words out of the guest
+straight after the drop:
 
 ```
-front window before the drag   (860,120) 320x155
-grab point                     (1020,129)   = its title bar's centre
-pointer driven to              (890,69)     ...and READ BACK as (890,69)
-so the window should land at   (730,60)     = orig + (mouse - start)
-it lands at                    (760,20)     +30 in x, -40 in y
+the harness grabbed at          (1020,129)   = the title bar's centre
+ui_startx / ui_starty            990, 175    <-- 30 LEFT and 46 DOWN of that
+ui_origx  / ui_origy             860, 120    = the window, correctly
+mouse_x   / mouse_y              890,  69    = the pointer, where asked
+ui_curx = orig + (mouse - start)  760,  14   ...clamped up to y = 20
+the window lands at              760,  20
 ```
 
-**It is this branch's redraw round and nothing else.** The same scripted drag
-on the same machine config lands at (730,60) on `origin/elendilon`, and at
-(730,60) on THIS tree built `REDRAWFULL=1`. So it is inside one of the
-`%ifndef REDRAWFULL` paths — §5.8, §11.90.1/.2, §11.96.6/.8/.9/.10, §11.97,
-§11.96.11/.11.1 — and not in the merge.
+So the arithmetic is right and **the mousedown point it was handed is wrong**.
+`ui_drag` takes it from the EVT_MDOWN's `EV_X`/`EV_Y`, which `mou_isr` fills
+from `[mouse_x]` when it posts — so at the moment the press was decoded the
+pointer was still at (990,175), one convergence step short of where
+`os88mouse.to()` had already PROVED it to be by reading that same word.
+
+**`ui_drag` itself is not the bug.** Two isolated drags on the second display,
+one down-right and one up-left, land pixel-exact:
+
+```
+grab (840,29) -> (710,89)   window (680,20) -> (550,80)   exact
+grab (710,89) -> (580,29)   window (550,80) -> (420,20)   exact
+```
 
 **What has been ruled out:**
 
-- **The pointer.** It is at the requested position when the button comes up;
-  `os88mouse.where()` says so. The drag is not landing short.
+- **The clamps.** `ui_curx`/`ui_cury` already hold the wrong answer before
+  them; the y clamp only turns 14 into 20.
 - **A release race.** `ui_drag` samples `[mouse_x]` once per tick (§7.1.3's
   linger) and drops the window at the last position it SAMPLED, so a release
   arriving between samples would land it behind the pointer — but holding the
-  release for two guest ticks after the pointer arrives changes nothing.
+  release for two guest ticks after the pointer arrives changes nothing, and
+  the arithmetic above says the error is in `start`, not in `cur`.
 - **Single-display drags.** `tools/subcheck.py` drags on one card across 11
   steps and matches its reference at **0 differing pixels**, positions
-  included, so whatever this is needs two displays.
+  included.
 - **The raise cache.** `wm_su_segs[slot]` is non-zero after the cover on both
-  trees: the cache is taken either way, and §39.14.8.1's fix is orthogonal.
+  trees; §39.14.8.1's fix is orthogonal to this.
 
-**Where to look first.** The delta is +30, −40 rather than a clamp to a
-boundary, which is what makes it interesting: both axes move and neither lands
-on an edge. `ui_drag`'s `.release` clamps against `[vid_w]`/`[vid_h]` and then
-calls `wm_snap_ax` and `wm_dock_snap`; on an extended desktop `[vid_dock_y0]`
-and the union's height (§39.16) are the numbers those read, and the second
-display's virtual origin is **not** (0,0) (§39.19.3). Print `ui_curx`/`ui_cury`
-at `.release` and compare them against `W_X`/`W_Y` afterwards: that one read
-says whether the tracking or the clamping is where it goes wrong.
+**It is timing, which is why it looks like a branch difference.** The same
+scripted session lands the window correctly on `origin/elendilon` and on this
+tree built `REDRAWFULL=1`, and wrongly on the shipped build — the redraw round
+changed how long the guest spends between packets, not what it does with them.
+So this is a race that a faster or slower kernel moves either side of, and
+**the bug is that a press can be decoded before the move that precedes it has
+been applied**, on a serial line where they cannot overtake.
+
+**`mou_isr` is not the bug either, and reading it is what leaves one
+hypothesis standing.** The decoder applies the packet's delta to
+`mouse_x`/`mouse_y` and *then* fills the event from those same words, so a
+press can only ever be posted at the position after itself. And the error is
+exactly one convergence step: (990,175) − (1020,129) = **(−30, +46)**, the
+negation of the correction `os88mouse.to()` sent last.
+
+**So the press `ui_drag` acted on is not the press the harness sent — it is an
+OLDER one, still queued.** `ui_dispatch` pops events in order, and an EVT_MDOWN
+that nothing dispatched at the time it was posted keeps its own coordinates for
+as long as it sits there. Whether one lingers depends on how busy the UI task
+was, which is precisely what a redraw optimisation changes — and that is why
+the same scripted session lands correctly on `origin/elendilon` and on this
+tree built `REDRAWFULL=1`, and wrongly on the shipped build.
+
+**The discriminating probe is `OSAPI_EVQ_PENDING`** (slot 0x0338), or `evq`'s
+head and tail read straight out of the guest, sampled immediately before
+`drag()` sends its press: a non-zero depth there settles it in one run. If the
+queue is empty, the press really is being posted at a superseded position and
+the search moves back to the ISR; if it is not, the question becomes *why* a
+press outlives its dispatch — `ui_drag`'s own `.track` drains the queue looking
+for the MUP and discards everything else, which is the first place to suspect
+of leaving one behind.
