@@ -1303,6 +1303,22 @@ hd_inst_sys:
                                     ; every partition we could not see
     call hd_ibuf_get            ; the buffer FIRST: a format we cannot follow
     jc .nomem                   ; with a copy is a wiped partition
+    cmp word [hd_ibufkb], HIW_KMAXKB    ; ...and BIG ENOUGH, which is the half
+    jb .small                           ; that line stopped short of. KERNEL.SYS
+                                        ; is written whole - it must land at
+                                        ; cluster 2 (SPEC.md 52.10.2), so the
+                                        ; chunk shape cannot carry it - and
+                                        ; hd_ibuf_get's fall back to
+                                        ; HIW_CHUNKKB is SILENT. Learning that
+                                        ; in hd_icopy_one's .toobig is learning
+                                        ; it after hd_inst_fmt has written the
+                                        ; partition entry, the FAT and the
+                                        ; root: the disk the user pointed at is
+                                        ; wiped, the install fails, and every
+                                        ; retry wipes it again. hd_inst_apps
+                                        ; keeps the fallback and needs it -
+                                        ; every file it copies is an ordinary
+                                        ; one and chunks
     mov word [hd_imsg], hd_s_iwork
     call hd_imsg_draw           ; say so BEFORE the writes - a 32MB format is
                                 ; hundreds of sectors and the user should not
@@ -1367,6 +1383,11 @@ hd_inst_sys:
 .nomem:
     mov word [hd_imsg], hd_s_inomem
     stc
+    jmp short .out
+.small:
+    call hd_ibuf_put            ; nothing has been written yet, so the machine
+    mov word [hd_imsg], hd_s_ibig   ; keeps its partition and hears the same
+    stc                             ; sentence it would have heard afterwards
     jmp short .out
 .nboot:                         ; the FILES are all there and the disk simply
     mov word [hd_imsg], hd_s_inboot ; will not boot - a different sentence to
@@ -2475,6 +2496,10 @@ hd_inst_mount:
     mov al, [hd_isel]
     mov [hd_pslot], al          ; hd_mount_one reads the SLOT from here and
     call hd_part_ent            ; the entry from SI - it answers no volume
+    mov al, [hd_idev]           ; the BANKED device (bound at open), never
+                                ; [hd_sel]: the Format window's own open
+                                ; re-syncs the highlight, and both windows
+                                ; can be up at once
     call hd_mount_one           ; ...and it ANSWERS with the kernel's volume
                                 ; index, where the resident's version left a
                                 ; row in hd_vols to be gone and found. That
