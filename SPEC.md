@@ -6593,7 +6593,10 @@ Paint/onkey/onclick procs receive SI = window ptr (§11) and find their state vi
 the gfx lock) may stay shared. Kind behavior:
 
 - **About** — 300×120 at (170,140), title "About os8088". Paint: four
-  centered lines — "os8088 1.0", "a graphical OS for the 8086", the bare
+  centered lines — "os8088 1.0  Build 333" (the version, and the build
+  number after it — a commit count generated into the image, §14.2; a build
+  that could not determine one shows the bare "os8088 1.0"),
+  "a graphical OS for the 8086", the bare
   scheduling word, which **tracks the live mode** (§8.2, read with
   `sched_mode_get`): "pre-emptive" or "cooperative", and the adapter the
   boot probe found (§39.1): "VGA - 640x480 - 16 colors",
@@ -6763,6 +6766,76 @@ landed. They stay 0 after dragging the window 13 pixels, which is
 `ui_drag`'s `wm_snap_ax` doing its half. Priced with PERFORMANCE.md Part 2,
 a redraw was 8 × (756 + 8×177 + 901) us ≈ **24.7 ms twice a second** and is
 ~1.7 ms once a second.
+
+### 14.2 The build number — a commit count, generated into the image
+
+The About box's first line carries a **build number** after the version:
+`os8088 1.0  Build 333`. It is the number of commits behind the checkout the
+kernel was assembled from, so it goes up by one every time anybody commits,
+reads as a number rather than as a hash, and — the property the rest of this
+section is about — is the **same number on every machine that builds that
+commit**.
+
+**Why not a clock.** The obvious build number is a timestamp, and it would
+break the one thing this toolchain is built around: the same source produces
+the same bytes. `tools/os88disk.py` pins the volume serial and every FAT
+timestamp for exactly that reason, and CLAUDE.md's cheap resolution for "could
+this change a shipped byte" is to build twice and `md5sum` the six images. A
+clock inside the kernel image ends both — every build differs from every other
+and the comparison stops being able to say anything. A commit count is fixed
+for a given commit, so it costs that property nothing.
+
+**It is a GENERATED include, not a `-D`.** `tools/buildnum.py` writes
+`build/buildnum.inc` (`%define BUILD_NUM` and `BUILD_STR`), which `apps.inc`
+names unconditionally and `-I $(BUILD)/` finds — `associco.inc` (§54.3) and
+`font8x8.inc` (§6.2) are the same shape. A `-D` in `$(VIDDEF)` would have been
+one line shorter and would have broken `tools/os88sym.py` for every session
+that did not know to repeat it: that tool re-assembles the kernel and asserts
+byte-identity with `build/kernel.bin`, so a define it was not given reads as
+*the map describes a DIFFERENT kernel* rather than as a missing flag. As an
+include, `os88sym.py` and `kernsize.py` need no argument of their own, because
+both already pass `-I build/`.
+
+**It is generated at make's PARSE time, and rewritten only when it changed.**
+The thing it depends on is not a file: `HEAD` moves when you commit and no
+tracked file's mtime moves with it, so a rule would never fire and the image
+would carry the *previous* build's number — the `VIDSTAMP` trap (Commands, in
+CLAUDE.md) with a number in place of an adapter. Writing the file only when
+the number actually differs is what keeps an up-to-date tree from reassembling
+the kernel, both boot sectors and every image on every single `make`.
+
+**0 means "not known here", and the line reverts to the one that shipped
+before there was a build number.** Two cases produce it, and the second is the
+reason this rule exists at all:
+
+- no git checkout — a tarball, or git not installed;
+- a **shallow** clone. `git rev-list --count` does not fail there; it
+  confidently counts the commits that are present. This tree measured **281**
+  before `git fetch --unshallow` and **333** after, and a web session clones
+  shallow by default — so the number would silently disagree between two
+  machines building the identical commit. That is the failure class CLAUDE.md's
+  shallow-clone rule is about, and the answer is the same one: check
+  `--is-shallow-repository` first and decline to answer rather than answer
+  wrongly. A missing build number is a cosmetic gap; a wrong one is a false
+  statement about which bytes somebody is running, which on a project that
+  mails floppy images to one 5150 in another country is the more expensive of
+  the two. `make` says which case it hit, on the kernel rule's own banner.
+
+**Cost, measured:** `.text` +11 bytes (the extra characters — the number is
+assembled as text, there is no formatting code anywhere), `.bss`, `.cold`,
+`.lowbss` and `.ovl` all +0, **no rung crossed** — the image rung's slack goes
+131 → 120 bytes and `KERN_SIZE` does not move, so `KERN_BUDGET` is untouched at
+2,560 spare. `kernel.bin` is the same 89,154 bytes either way, so the boot
+sector's `KERNEL_SECTORS` does not change. The one thing that varies with the
+number itself is its digit count: build 1,000 costs one byte more than build
+999, out of that same rung slack.
+
+**The version and the build number are different things and stay separate.**
+`1.0` is edited by a human when the OS's version changes; the build number is
+never edited by anyone. The release process reads the former out of this file
+(`.claude/skills/release-os8088`, which greps `os8088` in `kernel/apps.inc`)
+and the string keeps `os8088 1.0` intact and ahead of the build number for
+exactly that reason.
 
 ## 15. kernel.asm — boot sequence
 

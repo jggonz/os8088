@@ -312,6 +312,32 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/hddtool.bin $(BUILD)/hddtool.drv; \
                                 touch $(VIDSTAMP); })
 
+# --- the build number the About box shows (SPEC.md 14.2) ---------------------
+#
+# A GENERATED include, like $(ASSOCICO) and $(FONTINC) below, and generated the
+# same way for the same reason: `-I $(BUILD)/` on the kernel rule finds it, so
+# tools/kernsize.py and tools/os88sym.py - which re-assemble the kernel
+# themselves and pass that same -I - keep working with no argument of their
+# own. A -D in $(VIDDEF) would have been shorter and would have broken
+# os88sym.py for every session that did not know to repeat it: it asserts
+# byte-identity with build/kernel.bin, so a missing define reads as "the map
+# describes a DIFFERENT kernel" rather than as a forgotten flag.
+#
+# It runs at PARSE time and not as a rule, because the thing it depends on is
+# not a file: HEAD moves when you commit and no tracked file's mtime moves
+# with it, so a rule would never fire and the image would carry the previous
+# build's number - the VIDSTAMP trap one paragraph up, with a number instead
+# of an adapter. buildnum.py rewrites the file only when the number actually
+# changed, so this costs an up-to-date tree nothing; when it does change,
+# kernel.bin's ordinary prerequisite does the rest and no stamp is needed.
+#
+# $(BUILDNUM) is the number itself for the banner on the kernel rule. It is
+# 0 when the build could not determine it (no git, or a shallow clone, where
+# the count is silently short - see buildnum.py), and 0 means the About box
+# shows the version line exactly as it always did.
+BUILDINC := $(BUILD)/buildnum.inc
+BUILDNUM := $(shell python3 tools/buildnum.py -o $(BUILDINC))
+
 # "size of this file in bytes" is spelled differently by GNU coreutils and by
 # BSD/macOS stat, and this gets built on both. Try GNU first, fall back to BSD.
 FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
@@ -378,10 +404,10 @@ $(ASSOCICO): tools/os88mini.py $(BUILD)/paint.o88 $(BUILD)/notepad.o88 \
 $(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
 	python3 tools/os88font.py $(FONTSRC) -o $@
 
-$(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) tools/os88ovlchk.py | $(BUILD)
+$(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) $(BUILDINC) tools/os88ovlchk.py | $(BUILD)
 	@python3 tools/os88ovlchk.py
 	$(NASM) -f bin -w+error -I kernel/ -I apps/ -I $(BUILD)/ $(VIDDEF) -o $@ $(KERNEL_SRC)
-	@echo "kernel: $(call FILESIZE,$@) bytes (image rung + boot overlay)"
+	@echo "kernel: $(call FILESIZE,$@) bytes (image rung + boot overlay)$(if $(filter-out 0,$(BUILDNUM)), - build $(BUILDNUM), - NO build number: buildnum.py said why)"
 # What that cost, per section and in 512-byte rungs, against the baseline in
 # docs/KERNEL-MEMORY.md. A REPORT and never a gate: the guards inside
 # kernel.asm are what refuse an overrun, and this says how close you came and
