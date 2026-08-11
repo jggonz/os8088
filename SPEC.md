@@ -6540,6 +6540,18 @@ this, one word of state and one `ui_arm_chk`. The chrome half re-tests
 identity at the release and this half does not, which is the only place the
 two paths differ.
 
+**And that is why the `W_FLAGS` visible-bit test in `.mup_pkg` is the ONLY
+thing guarding a freed record on this path.** The chrome half calls `wm_hit`
+first, so a destroyed window is not in `wm_zord` and cannot be hit; this half
+deliberately has no `wm_hit` and no pointer comparison, because a release
+outside the window is the contract. So when a package tears its own window
+down inside its `W_ONCLICK` — `OSAPI_WM_DESTROY` on an unbound second window
+is the reachable case — the arm is set to a slot whose `W_FLAGS` is 0 and
+whose `W_ONMOUSEUP` **`wm_destroy` does not clear**. Measured with the test
+deleted: the callback runs, through the freed record. `tests/mouseup.py`'s
+case 7 is that A/B, and docs/MOUSEUP-PLAN.md §4.2's description of the test
+as "belt-and-braces" was written about the chrome path and is wrong here.
+
 **A package that installs this and also polls `OSAPI_MOUSE` in a tracking loop
 from the same `W_ONCLICK` is doing the job twice** — the loop consumes its own
 release. Pick one; the callback is the one that costs the keyboard mouse a
@@ -12675,8 +12687,10 @@ Behaviour:
   button. 'n'/'N' → New Folder…. **Backspace (8) → Up One Folder**, the
   `FMC_UP` body verbatim. Scan codes: Up/Down (48h/50h) scroll one row, PgUp/PgDn
   (49h/51h) a page — the view, not the selection, clamped like the bar.
-  Enter (13) with a valid selection → `fm_open_sel`. Rename and Delete have
-  **no key** — see the policy under "Naming and confirming". (disk_mount
+  Enter (13) with a valid selection → `fm_open_sel`. **Delete (scan 53h with
+  `AL` = 0) with a valid selection → `FMC_DELETE`**, the File ▸ Delete body
+  verbatim, so the key arms the confirmation line and touches no disk; Rename
+  has **no key** — see the policy under "Naming and confirming". (disk_mount
   under the gfx lock stalls painters: 16 sectors on the shipped disk —
   about a second on real hardware — with a hostile-media ceiling of 97
   one-sector reads, approaching ~20 s at one sector per revolution plus
@@ -12825,11 +12839,11 @@ looking at, so this needs neither concept. Arming clears `FS_FERR` (the
 prompt replaces the old verdict) and every *other* block's `FS_EDIT`, because
 the buffers below are module-global.
 
-| mode | armed by | line | Enter does |
-|------|----------|------|------------|
-| 1 | File ▸ New Folder…, or `n` | `New folder: NAME` | `dskw_mkdir` SI = `fm_ebuf` (§18.5) |
-| 2 | File ▸ Rename… | `Rename NAME to: NEW` | `dskw_rename` SI = `fm_onam`, DI = `fm_ebuf` |
-| 3 | File ▸ Delete | `Delete NAME? Enter=yes Esc=no` | `dskw_delete`, or `dskw_rmdir` (§18.6) if `fm_odir` |
+| mode | armed by | line | yes key | that key does |
+|------|----------|------|---------|---------------|
+| 1 | File ▸ New Folder…, or `n` | `New folder: NAME` | Enter | `dskw_mkdir` SI = `fm_ebuf` (§18.5) |
+| 2 | File ▸ Rename… | `Rename NAME to: NEW` | Enter | `dskw_rename` SI = `fm_onam`, DI = `fm_ebuf` |
+| 3 | File ▸ Delete, or **Delete** | `Delete NAME? Del=yes Esc=no` | **Delete** | `dskw_delete`, or `dskw_rmdir` (§18.6) if `fm_odir` |
 
 Modes 2 and 3 require a selection; without one the command is a no-op, like
 File ▸ Open. **The target is captured at arm time**, not read at commit time:
@@ -12857,21 +12871,69 @@ is binding and is stated twice on purpose. In modes 1 and 2:
   and then fail as `FERR_NAME`.
 - a key with no ASCII (a bare scan code) is swallowed and changes nothing.
 
-**Mode 3 is different, and deliberately so: Enter confirms and *every other
-key cancels*.** There is no undo and no trash on this system — the confirm
-line is the entire distance between a menu click and a file that is gone —
-so the mode accepts exactly one affirmative keystroke and treats anything
-else, Esc included, as "no". A stray character cannot leave a delete armed
-and waiting for an Enter the user meant for something else. A click anywhere
-cancels it too, through the same `fm_edit_end` that cancels a half-typed
-name.
+**Mode 3 is different, and deliberately so: the Delete key confirms and
+*every other key cancels*.** There is no undo and no trash on this system —
+the confirm line is the entire distance between a command and a file that is
+gone — so the mode accepts exactly one affirmative keystroke and treats
+anything else, Esc included, as "no". A stray character cannot leave a delete
+armed and waiting. A click anywhere cancels it too, through the same
+`fm_edit_end` that cancels a half-typed name.
+
+**The affirmative key is `AX` = 5300h — the whole word, and that is the
+point.** `AH` is the scan code and `AL` must be **0**, so what confirms is a
+key that carries no ASCII at all: it cannot be typed, it cannot arrive as
+part of a name, and with NumLock **on** this very key is `.`, which must
+never delete anything (the §38 name box makes the same test for the same
+reason). It is also the key that armed the mode, which is what makes the
+whole gesture one thing — Delete asks, Delete answers.
+
+**Enter does not confirm a delete, and its removal is the substance of the
+choice rather than a side effect.** Enter commits modes 1, 2, 4 and 5, and in
+the *resting* window it opens the selection — so it is the key most likely to
+be pressed from habit or to be sitting in the BIOS buffer already, and mode 3
+is precisely the mode that must be immune to a keystroke the user meant for
+something else. It now cancels, like every other key.
+
+**A repeat is not a press** (`KBM_GAP`, §9.6.1's rule and its constant, one
+fact about one keyboard rather than two numbers that can drift). Delete arms
+and Delete confirms, so a *held* key would otherwise arm the confirmation and
+then answer it on its own typematic repeat ~9 ticks later — a file deleted by
+one keystroke, in the one mode written to make that impossible. A confirming
+Delete arriving less than `KBM_GAP` ticks after the previous one is swallowed
+whole: not "no", because a repeat of the yes key is not another key, and
+leaving the confirmation up is what lets the user's deliberate second press
+still land. `[fm_delt]` is stamped by **every** Delete this handler sees,
+including a swallowed one — without that a held key drifts past the gap and
+fires anyway, which is exactly what `[kbm_btick]` already learned. Its
+uninitialised value cannot matter: the arm stamps it before any confirm can
+be asked.
+
+**The pass-through is gated on mode 3, so no other mode's swallow moved.**
+`W_ONKEY` drops a key with no ASCII, and that stays true of every mode but
+this one — which is why "every other key says no" reads, in modes 4 and 5, as
+*every other key that carries a character*. So Delete on the Format
+confirmation neither formats nor cancels: it is swallowed, exactly as an
+arrow key always was there, and Esc is still that mode's no. The narrow gate
+is the point rather than a limitation — mode 4 reads any other key as **stop
+the paste**, and a key the user pressed at a Disk window must not be able to
+answer a question it was never aimed at.
+
+**On a mouseless machine the shortcut needs ScrollLock.** §9.6 gives the
+keypad to the pointer while `[mou_seen]` is 0, and scan 53h is its *right*
+button (§12.4) — `kbm_key` claims the keystroke and no window sees it. That
+is the documented trade for having a pointer at all, and ScrollLock hands the
+keys back (§9.6.2).
 
 **Binding policy: no destructive command gets a bare-letter shortcut.** The
 only key source is int 16h AH=00 and shift states are never read, so there
 are no modifiers to hide behind — `d` on a stray keypress would be a deleted
-file. Delete and Rename are reachable from the menu only. The keys that do
-exist are `n` (New Folder…, harmless: it opens an input line) and
-**Backspace = Up One Folder**, alongside the a/b/r/v and scroll keys above.
+file. **Delete's key is not an exception to that policy but an instance of
+it**: it is a dedicated key carrying no ASCII, it cannot be produced by
+typing, and what it does is *arm a confirmation* — the disk is touched only
+by a second, separate press of that same key. Rename is reachable from the
+menu only. The other keys are `n` (New Folder…, harmless: it opens an input
+line) and **Backspace = Up One Folder**, alongside the a/b/r/v and scroll
+keys above.
 
 `fm_kinit` clears the mode, so a closed and reopened window never resumes a
 half-typed name or a pending confirmation.
@@ -13337,7 +13399,10 @@ reason `fm_stat_line` is a proc at all.
 **The confirmation is `FS_EDIT = 5` and it is Delete's, not Rename's.** Enter
 says yes and *every other key* says no — the asymmetry §22 already argues
 for, and this is the strongest case of it in the system: there is no undo, no
-trash, and the operation is not one file but all of them. The probe's chosen
+trash, and the operation is not one file but all of them. What it borrows is
+that **asymmetry** and not §22's *key*: mode 3 answers to Delete because
+Delete is what asked, and a format was asked for by neither that key nor any
+other, so Enter stays the affirmative here. The probe's chosen
 row is banked at arm time (`fm_fmtrow`) and not re-derived at commit, for the
 reason Rename and Delete work from `fm_onam` rather than from `FS_SEL`: what
 the line asked about must be what happens.
@@ -13600,9 +13665,10 @@ cannot resolve, and it is reported.
 finishes, fails, or must ask; every byte of its state is in `.bss`, so the
 pause is an ordinary trip through the event loop and `fcp_answer` resumes
 it. The question is `FS_EDIT` = 4 — the Delete confirmation's mechanism with
-a third answer. **A** sets `[fcp_all]` and nothing is asked again for the
-rest of that operation; anything else stops it with what has already been
-copied left in place.
+a third answer, and its mechanism only: **Enter** is yes here, for §22.12's
+reason, since this question was asked by a paste. **A** sets `[fcp_all]` and
+nothing is asked again for the rest of that operation; anything else stops it
+with what has already been copied left in place.
 
 It is drawn on **two lines** — `Replace NAME?` in the row area, then
 `Enter=yes  A=all  Esc=stop` on the status line — because together they are
@@ -14887,6 +14953,53 @@ short by construction. 740 characters typed on the bottom row, then the corner
 diffed against a forced full repaint: **0 differing bytes of 676**.
 
 `[np_bandb]` went with it — the test was its only reader.
+
+#### 27.2.2 `NP_MAXCOL` was one SCREEN wide, and a straddling window is not
+
+Reported from the field with a photograph: a Note Pad straddling the display
+seam draws each row to a point, then a **gap**, then stray letter fragments
+near the right edge — *"only when straddling; resizing it inside either screen
+formats correctly."*
+
+`NP_MAXCOL` was **91**, and its comment said why: *"720/8 is the widest screen
+this runs on."* That was true of a screen and stopped being true of a WINDOW
+the moment §39.19 let one span two displays — straddling, it may be the whole
+virtual desktop wide, **1360 px on a Hercules beside a CGA, or 170 cells**.
+`np_rcols` is clamped to `NP_MAXCOL - 1`, and it is not only the padding: it
+is what the wrap asks whether a word fits, and it is the bound `np_rflush`
+tests before storing a cell — the guard there already names the clamp as the
+case where a cell gets dropped. So every row stopped at column 90, and the
+cells past it were neither written **nor erased**, which is the gap and the
+fragments in one fact.
+
+**The reporter's second sentence is the confirmation and worth keeping**: *a
+redraw shows the same gap without the fragments.* A repaint white-fills the
+window and then letters 90 columns — so the stale pixels go and the clamp
+still stops the text short. One symptom, two halves, both explained by one
+constant.
+
+`NP_MAXCOL` is 171 now. Three things about the change are worth knowing:
+
+- **The two buffers it sizes moved to the counter block.** Every offset in
+  Note Pad's older bss block is written down by hand, so growing a field in
+  the middle of it means renumbering thirty-five of them correctly; `NPVAR`
+  sizes itself. They left a 183-byte hole where they were, which any later
+  field may reclaim.
+- **`NP_MAXCOL - 1` stopped fitting a sign-extended `imm8`.** At 90 every
+  compare against it was two bytes and at 170 it is three, which pushed a
+  `jmp short` in the regex matcher out of range. Nothing subtle — but it is
+  the kind of build break that looks unrelated to the change that caused it.
+- **Cost is package bss, not kernel**: +343 bytes in a claim Note Pad already
+  takes.
+
+`tests/dispnp.py` is the gate, and **its first two measurements both passed the
+broken build** — which is the lesson rather than the number. "Is there ink past
+column 90" passed with 42 pixels and "the last cell carrying ink" passed with
+113, because **the stale fragments are themselves ink**: both measured the
+artefact as though it were the fix. What separates them is that real text is
+CONTIGUOUS — the gate types 150 characters with no spaces — so the honest
+number is the first UNLETTERED cell. Broken it reads **91**, which is
+`NP_MAXCOL - 1` exactly; fixed, the row never breaks.
 
 ### 27.3 The visual break — typing in FRONT of text without reflowing it
 

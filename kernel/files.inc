@@ -1191,11 +1191,11 @@ fm_errtab:    dw fm_s_empty,  fm_s_enodisk, fm_s_dskerr, fm_s_ename
 FM_NERR       equ 11            ; FERR_OK .. FERR_BIG
 
 ; --- the status-line input prompts (SPEC.md 22) ------------------------------
-; The delete line is the ONLY thing between a menu click and a file that is
+; The delete line is the ONLY thing between a command and a file that is
 ; gone, so it names the file, states the key that says yes and states the key
-; that says no. Worst case it is 'Delete ' + 12 + 18 = 37 characters, which
+; that says no. Worst case it is 'Delete ' + 12 + 16 = 35 characters, which
 ; fits the default window's 38-char status line whole and truncates from the
-; right - which is why the name and the word Enter come before Esc.
+; right - which is why the name and the yes key come before Esc.
 ;
 ; A FOLDER gets a different tail, because Delete on one now removes
 ; everything under it (SPEC.md 18.6) and the line is the only place that can
@@ -1214,7 +1214,10 @@ fm_s_repk:    db 'Enter=yes  A=all  Esc=stop', 0  ; three answers are 45
                                     ; the row above the status line for as
                                     ; long as it is up
 fm_s_delpr:   db 'Delete ', 0
-fm_s_delq:    db '? Enter=yes Esc=no', 0
+fm_s_delq:    db '? Del=yes Esc=no', 0   ; the DELETE key, not Enter (SPEC.md
+                                    ; 22): the key that asked is the key that
+                                    ; answers, and it carries no ASCII, so no
+                                    ; keystroke a name is made of can reach it
 %ifndef KERN_SMALL
 fm_s_fmtpr2:  db 'ERASE and format ', 0  ; ...when the volume MOUNTED, which is
                                     ; the whole of what removing 22.12's old
@@ -1237,7 +1240,7 @@ fm_s_fmtbad:  db 'Drive cannot reach 720K - made 360K', 0
 fm_fmtbadt:   dw 0, fm_s_fmtbad     ; toast_say never uses index 0, so a
 FM_NFMTBAD    equ 2                 ; one-message table is two slots (59.5)
 %endif
-fm_s_delq2:   db ' +contents? Enter=yes Esc=no', 0   ; ...for a folder
+fm_s_delq2:   db ' +contents? Del=yes Esc=no', 0   ; ...for a folder
 fm_s_size:    db 'Size ', 0         ; ...and the resting status line, which
 fm_s_free:    db '   Free ', 0      ; carries both figures (SPEC.md 22.7)
 fm_s_root:    db 'Disk', 0      ; window title at the root...
@@ -2270,8 +2273,13 @@ fm_hit:
 ; window's drive (disk_mount under the gfx lock stalls painters briefly;
 ; accepted by SPEC.md 22). 'v'/'V' toggles the view. Up/Down/PgUp/PgDn (scan
 ; 48h/50h/49h/51h) scroll the view. Enter opens the selection like a
-; double-click. Only the front window is sent keys at all (SPEC.md 13), so
-; there is no focus concept to get wrong.
+; double-click. DELETE arms File > Delete's confirmation on the selection -
+; the one destructive command with a key, and it is one because the key
+; carries no ASCII (so no typed character can reach it), because it only ARMS
+; a line that a SECOND press of the same key has to answer, and because that
+; body is FMC_DELETE itself rather than a second copy of it. Only the front
+; window is sent keys at all (SPEC.md 13), so there is no focus concept to
+; get wrong.
 ; -----------------------------------------------------------------------------
 fm_onkey_x:
     push ax
@@ -2326,6 +2334,11 @@ fm_onkey_x:
     je .remount
     cmp al, 'R'
     je .remount
+    cmp ax, 0x5300              ; Delete, tested as the WHOLE word: AH is the
+    je .delete                  ; scan and AL must be 0, because with NumLock
+                                ; ON this very key is '.' and a typed dot must
+                                ; never arm a delete (the SPEC.md 38 name box
+                                ; makes the same test for the same reason)
     cmp ah, 0x48                ; Up
     je .scr_up
     cmp ah, 0x50                ; Down
@@ -2338,7 +2351,20 @@ fm_onkey_x:
 
 .editing:
     or al, al
-    jz .out                     ; a bare scan code: swallowed, nothing moved
+    jnz .edkey                  ; a bare scan code is swallowed and nothing
+    cmp ax, 0x5300              ; moves - with ONE exception, because the key
+    jne .out                    ; that says yes to the delete confirmation
+    cmp byte [di+FS_EDIT], 3    ; carries no ASCII. The MODE is tested HERE so
+    jne .out                    ; that every other mode's swallow stays byte
+    call fm_delrep              ; for byte what it was: mode 4 in particular
+    jc .out                     ; reads "any other key" as STOP the paste, and
+                                ; a scan code must not be able to answer that.
+                                ; CF = 1 is typematic - a repeat is not a
+                                ; press (SPEC.md 22/9.6.1), and it is
+                                ; SWALLOWED rather than read as "no", so the
+                                ; confirmation is still up for the deliberate
+                                ; second press
+.edkey:
     call fm_editkey
     jc .redraw                  ; it changed the listing or the mode
     call fm_status_only         ; ...otherwise the name being typed lives on
@@ -2374,6 +2400,13 @@ fm_onkey_x:
     jmp short .cmd
 .copy:
     mov bx, FMC_COPY
+    jmp short .cmd
+.delete:
+    call fm_delrep              ; stamp it, so the CONFIRMING press can tell
+    mov bx, FMC_DELETE          ; itself from this one's typematic repeat -
+                                ; CF is ignored here, because arming twice is
+                                ; the same line asked for twice and the
+                                ; keystroke is only destructive at the answer
     jmp short .cmd
 .paste:
     mov bx, FMC_PASTE
@@ -2427,6 +2460,37 @@ fm_onkey_x:
     pop dx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_delrep - is this Delete keystroke a typematic REPEAT? (SPEC.md 22)
+; in:  nothing
+; out: CF = 1 if it arrived less than KBM_GAP ticks after the last one.
+;      All registers preserved.
+;
+; Delete ARMS the confirmation and Delete ANSWERS it, so a key held down would
+; otherwise put the line up and then say yes to it on its own repeat ~9 ticks
+; later - a file deleted by one keystroke, in the one mode written to make
+; that impossible.
+;
+; KBM_GAP is SPEC.md 9.6.1's constant and is used rather than copied: typematic
+; arriving ~1.8 ticks apart and a deliberate press 4+ is a fact about the
+; KEYBOARD, not about the keyboard mouse, and two numbers for it could drift.
+;
+; The stamp moves on an IGNORED repeat too, or a held key drifts past the gap
+; and fires anyway - [kbm_btick]'s own lesson. Its power-on value cannot
+; matter: the ARM stamps it, and nothing can be confirmed before it is armed.
+; -----------------------------------------------------------------------------
+fm_delrep:
+    push ax
+    push bx
+    mov bx, [ticks]
+    mov ax, bx
+    sub ax, [fm_delt]           ; wrap-safe, like every other tick compare in
+    mov [fm_delt], bx           ; this tree (the sign of a difference, never
+    cmp ax, KBM_GAP             ; two absolute readings compared)
+    pop bx                      ; `pop` does not touch flags, so the compare's
+    pop ax                      ; CF is the answer
     ret
 
 ; =============================================================================
@@ -3582,7 +3646,10 @@ fm_rcmd_x:
 
 ; -----------------------------------------------------------------------------
 ; fm_editkey - one keystroke while the front window's FS_EDIT is armed
-; in:  AL = ascii (non-zero); gfx lock held, [fm_vp] published
+; in:  AL = ascii, AH = scan; gfx lock held, [fm_vp] published. AL is non-zero
+;      for every mode but 3, whose one affirmative key carries no ASCII at all
+;      - fm_onkey_x passes THAT scan code through and swallows all the others,
+;      so no other mode here can be answered by a key with no character in it
 ; out: nothing (all registers preserved)
 ;
 ; In the two NAMING modes characters are filtered through diskw.inc's OWN
@@ -3591,11 +3658,14 @@ fm_rcmd_x:
 ; accepted and then come back FERR_NAME.
 ;
 ; The DELETE confirmation (mode 3) is not a line editor at all and is handled
-; first: Enter says yes and EVERY other key says no. That asymmetry is the
-; point (SPEC.md 22). There is no undo and no trash on this system, so the
-; mode accepts exactly one affirmative keystroke - a stray character can
-; never leave a delete armed, waiting for an Enter the user meant for
-; something else entirely.
+; first: the DELETE key says yes and EVERY other key says no. That asymmetry
+; is the point (SPEC.md 22). There is no undo and no trash on this system, so
+; the mode accepts exactly one affirmative keystroke - a stray character can
+; never leave a delete armed, waiting for a key the user meant for something
+; else entirely. Enter is not that key BECAUSE it is every other mode's, and
+; opens the selection in the resting window: it is the keystroke most likely
+; to be pressed from habit or to be sitting in the BIOS buffer already, which
+; is the exact thing this mode exists to be immune to.
 ; -----------------------------------------------------------------------------
 fm_editkey:
     push ax
@@ -3702,8 +3772,23 @@ fm_editkey:
                                 ; moved
 %endif
 .confirm:
+%ifndef KERN_SMALL
+    cmp byte [di+FS_EDIT], 5    ; ...and the FORMAT confirmation still takes
+    je .confirme                ; ENTER (SPEC.md 22.12): what it borrows from
+%endif                          ; mode 3 is the ASYMMETRY, not the key - a
+                                ; format was asked for by neither Delete nor
+                                ; any other key, so there is no gesture to
+                                ; complete
+    cmp ax, 0x5300              ; the DELETE confirmation: the Delete key says
+    jne .cancel                 ; yes and EVERY other key - Enter included -
+                                ; says no (SPEC.md 22). The whole word again:
+                                ; AL = 0 is what keeps a NumLock '.' out
+%ifndef KERN_SMALL
+    jmp short .commit
+.confirme:
     cmp al, 13
-    jne .cancel                 ; anything but Enter means no (SPEC.md 22)
+    jne .cancel                 ; anything but Enter means no (SPEC.md 22.12)
+%endif
 .commit:
     call fm_edit_commit
     jmp short .out
@@ -5866,7 +5951,7 @@ fm_draw_status:
     jmp short .fs_stat
 %endif
 .fs_st_del:
-    mov si, fm_s_delpr          ; "Delete NAME? Enter=yes Esc=no", or
+    mov si, fm_s_delpr          ; "Delete NAME? Del=yes Esc=no", or
     call fm_scat                ; "Delete NAME +contents? ..." for a folder
     mov si, fm_onam
     call fm_scat
@@ -6172,6 +6257,13 @@ fm_fmtrow:  resb 1              ; the dskw_fmt_tab row the FORMAT confirmation
                                 ; single copies
 %endif
 
+fm_delt:    resw 1              ; [ticks] at the last DELETE key fm_onkey saw,
+                                ; arming and confirming alike (SPEC.md 22):
+                                ; the same key does both, so the answer has to
+                                ; be told from the question's own typematic
+                                ; repeat. Not per-window - only the front
+                                ; window is sent keys, and at most one
+                                ; confirmation exists in the machine at a time
 fm_pressx:  resw 1              ; fm_onclick's press point, ABSOLUTE - the
 fm_pressy:  resw 1              ; drag tracks in screen coordinates (22.4)
 fm_dgidx:   resw 1              ; fm_drag: the row it began on...
@@ -6225,8 +6317,8 @@ fm_name:    resb 17             ; NUL-safe copy of one 16-byte name field
 fm_hdrbuf:  resb 48             ; = FM_HDRMAX (a literal per the no-forward-
                                 ; ref-in-bss rule). The header is 22 bytes at
                                 ; most; the size comes from the status line's
-                                ; worst case, "Delete NAME? Enter=yes Esc=no"
-                                ; at 38, which is staged whole and truncated
+                                ; worst case, "Delete NAME +contents? Del=yes
+                                ; Esc=no", which is staged whole and truncated
                                 ; afterwards
 fm_numbuf:  resb 11             ; fm_ultoa scratch: 10 digits + NUL
 

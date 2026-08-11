@@ -42,14 +42,33 @@
 
 MU_W        equ 240                 ; frame
 MU_H        equ 100
+MU_VW       equ 160                 ; ...and the VANISH window (SPEC.md 13.7's
+MU_VH       equ 60                  ; second guard - see mu_vclick)
 
 ; -----------------------------------------------------------------------------
 mu_entry:
     push ax
     push si
+    ; THE VANISH WINDOW IS CREATED FIRST, and that ordering is the whole of
+    ; what this cost to get right: loader.inc shows the window whose pointer
+    ; THE ENTRY PROC RETURNS IN BX, so a second wm_create after the main one
+    ; silently hands the loader the wrong window - the main one is created,
+    ; never shown, and the package looks like it did not launch. Create the
+    ; unbound one first, show it by hand, and let the main one be last.
+    mov si, mu_vtpl
+    call OSAPI_WM_CREATE
+    jc .main                         ; a full table is not a failure here -
+    mov ax, mu_vup                   ; the other four gestures still work
+    call OSAPI_WM_ONMOUSEUP
+    call OSAPI_GFX_LOCK              ; legal: the entry runs with the lock
+    call OSAPI_WM_SHOW               ; FREE (SPEC.md 20.2), unlike a callback
+    call OSAPI_GFX_UNLOCK
+.main:
     mov si, mu_tpl
     call OSAPI_WM_CREATE             ; BX = window ptr, CF on table full
     jc .out
+    mov [mu_win], bx                 ; ...banked: mu_vclick retitles it, being
+                                     ; the only thing it can leave behind
     mov ax, mu_onup
     call OSAPI_WM_ONMOUSEUP          ; SPEC.md 13.7 - AFTER wm_create, never
                                      ; in the template (the copy is 8 words)
@@ -57,7 +76,80 @@ mu_entry:
 .out:
     pop si
     pop ax
+    ret                              ; BX = the MAIN window: the loader's
+                                     ; wm_show and inst_bind_win both take it
+
+; -----------------------------------------------------------------------------
+; The VANISH window - docs/MOUSEUP-PLAN.md 4.2, "the armed window may be gone"
+;
+; The one guard in the mouse-up work that no gesture could reach: between the
+; press and the release, a package can tear its own window down, and
+; ui_dispatch's .mup_pkg has to notice before it dispatches through a record
+; the kernel has freed.
+;
+; It has to be a SECOND window. A package's own window is instance-owned and
+; closing it tears the instance down - the kernel frees the record itself and
+; the image goes with it - so there would be nothing left to observe from.
+; A second one is UNBOUND (SPEC.md 38.1), which is exactly what
+; OSAPI_WM_DESTROY is for: it frees the RECORD while the image lives on.
+;
+; The signal is the MAIN window's caption, because the vanish window is by
+; then the thing under test and cannot report on itself:
+;
+;   'Pressed'      mu_vclick ran, so the press WAS dispatched and the arm
+;                  WAS set - without this the test cannot tell a working
+;                  guard from a gesture that never armed anything
+;   'GuardFailed'  mu_vup ran: the release was dispatched through a freed
+;                  record, which is the bug
+;
+; A pass is 'Pressed' still standing after the release.
+; -----------------------------------------------------------------------------
+mu_vpaint:
+    push ax
+    push bx                         ; W_PAINT preserves EVERYTHING (SPEC.md 11)
+    push cx
+    push dx
+    push si
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    mov cx, ax
+    add cx, 8
+    add dx, 20
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov si, mu_s_vanish
+    call OSAPI_FONT_STR
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
+
+mu_vclick:
+    push ax
+    push bx
+    mov bx, [mu_win]                ; say so BEFORE vanishing: after the
+    mov ax, mu_t_press              ; destroy there is no window to say it from
+    call OSAPI_WM_TITLE
+    mov bx, si                      ; ...and now free the record the kernel is
+    call OSAPI_WM_DESTROY           ; about to arm the release against. The gfx
+                                    ; lock is held, which is what it wants
+    pop bx
+    pop ax
+    ret
+
+mu_vup:
+    push ax
+    push bx
+    mov bx, [mu_win]
+    mov ax, mu_t_fail
+    call OSAPI_WM_TITLE
+    pop bx
+    pop ax
+    ret
+
+mu_win:     dw 0
 
 ; -----------------------------------------------------------------------------
 ; mu_paint - W_PAINT: one line, so the window is visibly there
@@ -224,11 +316,19 @@ mu_tpl:
     dw 120, 60, MU_W, MU_H
     dw mu_title, mu_paint, 0, mu_onclick
 
+mu_vtpl:                            ; clear of the main window AND of the
+    dw 400, 60, MU_VW, MU_VH        ; drive column on a 640px screen
+    dw mu_vtitle, mu_vpaint, 0, mu_vclick
+
 mu_title:   db 'MupTest', 0
 mu_t_no:    db 'Cancelled', 0
 mu_t_no2:   db 'Cancelled.', 0
 mu_tog:     db 0
 mu_s_wait:  db 'press me', 0
+mu_vtitle:  db 'Vanish', 0
+mu_s_vanish: db 'press me too', 0
+mu_t_press: db 'Pressed', 0
+mu_t_fail:  db 'GuardFailed', 0
 
 ; --- the shared controls ------------------------------------------------------
 %include "os88ui.inc"

@@ -130,10 +130,27 @@ NP_MAXKB     equ 16             ; ...and its ceiling, which is now a real
                                 ; means teaching that loop to cross a segment
                                 ; and making its count 32-bit
 NP_STGMIN    equ 1              ; the save's transient staging claim, KB
-NP_MAXCOL    equ 91             ; cells a row can hold: 720/8 is the widest
-                                ; screen this runs on, plus one for the NUL.
+NP_MAXCOL    equ 171            ; cells a row can hold, plus one for the NUL.
                                 ; A row is accumulated into a buffer and drawn
                                 ; as ONE opaque font_run (SPEC.md 6.1/27.2)
+                                ;
+                                ; 1360/8 AND NOT 720/8. It was the widest
+                                ; SCREEN, and a window on an extended desktop
+                                ; is not bounded by one: straddling the seam
+                                ; it may be the whole VIRTUAL desktop wide,
+                                ; which is 1360 px with a 720 Hercules beside
+                                ; a 640 CGA or VGA (SPEC.md 39.19.2). Past the
+                                ; clamp np_rflush DROPS the cell - the guard
+                                ; at .nocell even names the clamp as the case
+                                ; where that happens - so the tail of every
+                                ; row went unwritten AND unerased: text, then
+                                ; a gap, then whatever those cells held
+                                ; before. Reported from the field with a photo
+                                ; of exactly that, and "a redraw shows the
+                                ; same gap without the fragments" is the same
+                                ; fact seen twice, the white fill clearing the
+                                ; stale pixels and the clamp still stopping
+                                ; the text short.
 %define NP_MAXROWS 60           ; signature slots, one per row the content can
                                 ; A %define and not an equ, because the bss
                                 ; block at the foot of this file is laid out
@@ -7306,7 +7323,10 @@ np_rx_ch:
     jne .notdot
     cmp al, 13                  ; '.' stops at a line break, which is what
     je .no                      ; makes '.*' mean "the rest of this line"
-    jmp short .yes
+    jmp .yes                    ; NOT `short`: NP_MAXCOL - 1 stopped fitting a
+                                ; sign-extended imm8 at 171, so every compare
+                                ; against it grew a byte and this went out of
+                                ; range
 .notdot:
     cmp bl, '['
     je .class
@@ -10253,6 +10273,14 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; 4 as well, and adjacent rows they do not measure)
                             ; can never inherit an Up's bound
 
+    NPVAR np_rbuf, NP_MAXCOL + 1  ; the row being accumulated, space-filled
+    NPVAR np_prow, NP_MAXCOL      ; ...and what was last DRAWN on the cached
+                                  ; row, so the next keystroke draws the delta.
+                                  ; THE ONLY TWO FIELDS SIZED BY NP_MAXCOL,
+                                  ; which is why they are here rather than in
+                                  ; the hand-numbered block above (see the hole
+                                  ; at +238 there)
+
 %ifdef NPBENCH
 ; --- the walk bench (tests/npbench.inc), in the -DNPBENCH build only ---------
     NPVAR npb_buf, 640      ; the report, composed here and then copied into
@@ -10353,11 +10381,21 @@ np_rby      equ os88_image_end + 234    ; word: y of the row being
                                        ; time it is flushed
 np_rcx      equ os88_image_end + 236    ; word: the caret's x on that
                                        ; row, 0xFFFF = it is not on this one
-np_rbuf     equ os88_image_end + 238    ; NP_MAXCOL+1 bytes: the row
-                                       ; being accumulated, space-filled
-np_prow     equ os88_image_end + 330    ; NP_MAXCOL bytes: what was
-                                       ; last DRAWN on the cached row, so the
-                                       ; next keystroke can draw the delta
+                                       ; np_rbuf and np_prow USED TO BE HERE,
+                                       ; at +238 and +330, and they are in the
+                                       ; NPVAR block at the foot of this file
+                                       ; now - because they are the only two
+                                       ; fields sized by NP_MAXCOL, and that
+                                       ; constant had to grow 91 -> 171 for a
+                                       ; window straddling a display seam.
+                                       ; Every offset in THIS block is written
+                                       ; down by hand, so growing a field in
+                                       ; the middle of it means renumbering
+                                       ; thirty-five of them and getting all
+                                       ; thirty-five right; the counter block
+                                       ; sizes itself. The 183 bytes they left
+                                       ; are a hole, and reclaimable by any
+                                       ; field that wants them.
 np_prowi    equ os88_image_end + 421    ; word: which row that is,
                                        ; 0xFFFF = the cache holds nothing
 np_prcc     equ os88_image_end + 423    ; word: and where its caret
