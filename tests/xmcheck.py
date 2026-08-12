@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """The extended-memory TEARDOWN gate (SPEC.md 41.5, 29.4).
 
-Drives `tests/xmtest` under QEMU and reads the kernel's own `xm_tab` before
-and after its window is closed: were the blocks that instance held freed?
+Drives `tests/xmtest` under QEMU and reads `xm_tab` before and after its
+window is closed: were the blocks that instance held freed?
+
+THE TABLE IS IN XMEM.DRV NOW (SPEC.md 41.12), not in the kernel, so finding it
+takes two steps instead of one: the kernel's `xm_row` says which segment the
+overlay was loaded into (DRVR_SEG, a heap claim, different every boot), and
+the overlay's OWN nasm map says where `xm_tab` sits inside it. Neither can be
+guessed and both are exact.
 
     make test TESTAPPS=build/xmtest.img
     python3 tests/xmcheck.py build/qmp.sock
@@ -31,6 +37,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 XM_BLKSZ, XM_MAX_BLKS = 8, 8        # kernel/kernel.asm
+DRVR_SEG = 2                        # kernel/driver.inc, into xm_row
 XB_OFF, XB_KB, XB_OWN = 0, 2, 4
 XM_OWN_KERN = 0xFF
 
@@ -69,6 +76,7 @@ def dblclick(sock, x, y):
 
 
 def sym(name):
+    """A KERNEL symbol's flat address, out of nasm's own map."""
     r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88sym.py"),
                         "--all"], capture_output=True, text=True, cwd=ROOT)
     if r.returncode != 0:
@@ -77,8 +85,71 @@ def sym(name):
         f = line.split()
         if len(f) >= 4 and f[0] == name:
             return int(f[3], 16)
-    raise SystemExit(f"xmcheck: no kernel symbol {name!r}. kern_small has no "
-                     "xm_tab at all (SPEC.md 41.11) - this gate is kern_big's.")
+    raise SystemExit(f"xmcheck: no kernel symbol {name!r}. kern_small has none "
+                     "of this at all (SPEC.md 41.11) - this gate is kern_big's.")
+
+
+def ovl_sym(name):
+    """A symbol's offset inside XMEM.DRV, out of the overlay's own nasm map.
+
+    os88sym.py's discipline, on the other image: assemble a COPY with
+    `[map all]` appended and require the result to be byte-identical to the
+    build/xmem.bin that shipped, so a map of a different overlay is an error
+    rather than a wrong answer.
+    """
+    import tempfile
+    src = os.path.join(ROOT, "drivers", "xmem", "xmem.asm")
+    ship = os.path.join(ROOT, "build", "xmem.bin")
+    if not os.path.exists(ship):
+        raise SystemExit("xmcheck: no build/xmem.bin - `make` first.")
+    with tempfile.TemporaryDirectory() as td:
+        cp, out = os.path.join(td, "x.asm"), os.path.join(td, "x.bin")
+        mp = os.path.join(td, "x.map")
+        with open(cp, "w") as f:
+            f.write(open(src).read() + "\n[map all %s]\n" % mp)
+        r = subprocess.run(["nasm", "-f", "bin", "-w+error", "-I",
+                            os.path.join(ROOT, "drivers") + os.sep, "-I",
+                            os.path.join(ROOT, "apps") + os.sep, "-o", out, cp],
+                           capture_output=True, text=True, cwd=ROOT)
+        if r.returncode != 0:
+            raise SystemExit("xmcheck: could not assemble the overlay:\n"
+                             + r.stderr[-600:])
+        if open(out, "rb").read() != open(ship, "rb").read():
+            raise SystemExit("xmcheck: the overlay this map describes is not "
+                             "the one that shipped - rebuild and re-run.")
+        for line in open(mp):
+            f = line.split()
+            if len(f) >= 3 and f[2] == name:
+                return int(f[0], 16)
+    raise SystemExit(f"xmcheck: no symbol {name!r} in XMEM.DRV.")
+
+
+def table_base(sock):
+    """Where xm_tab actually is this boot: the overlay's segment x 16, plus
+    its offset inside the image."""
+    row = sym("xm_row")
+    seg = read_bytes(sock, row + DRVR_SEG, 2)
+    seg = seg[0] | (seg[1] << 8)
+    if not seg:
+        raise SystemExit(
+            "xmcheck: XMEM.DRV is not loaded, so there is no table to read.\n"
+            "         Either this machine has no memory above 1MB (an 8088\n"
+            "         never does - SPEC.md 41.12.1's sniff declines and not a\n"
+            "         sector is read), or the overlay refused at attach and\n"
+            "         the kernel freed it. Use QEMU on a 386 (SPEC.md 41.7).")
+    off = ovl_sym("xm_tab")
+    print(f"xmcheck: XMEM.DRV at {seg:#06x}, xm_tab +{off:#05x}")
+    return (seg << 4) + off
+
+
+def read_bytes(sock, addr, n):
+    data = bytearray()
+    for line in qmp(sock, f"xp /{n}xb 0x{addr:X}").splitlines():
+        if ":" in line:
+            for tok in line.split(":", 1)[1].split():
+                if tok.startswith("0x"):
+                    data.append(int(tok, 16) & 0xFF)
+    return data
 
 
 def blocks(sock, base):
@@ -111,8 +182,7 @@ def main():
     if len(sys.argv) < 2:
         raise SystemExit(__doc__)
     sock = sys.argv[1]
-    base = sym("xm_tab")
-    print(f"xmcheck: xm_tab at {base:#07x}")
+    base = table_base(sock)
 
     print("xmcheck: opening Disk B and launching XMTEST.O88")
     dblclick(sock, *DISKB)

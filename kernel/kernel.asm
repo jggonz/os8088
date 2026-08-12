@@ -918,19 +918,22 @@ CPU_286     equ 1               ; tier 1: A20 gate + HMA, int 15h AH=88h
                                 ; sizing and AH=87h block move (SPEC.md 41.5)
 CPU_386     equ 2               ; tier 2: all of tier 1, plus unreal mode -
                                 ; a 4GB data limit on FS/GS (SPEC.md 41.4)
-HMA_SEG     equ 0xFFFF          ; the one segment above 1MB: HMA_SEG:0010 is
-HMA_MIN_OFF equ 0x0010          ; linear 0x100000 (0xFFFF0 + 0x10) and
-HMA_BYTES   equ 0xFFF0          ; HMA_SEG:FFFF is linear 0x10FFEF - the
-                                ; highest byte real mode can name at all.
-                                ; 65,520 bytes, DATA ONLY: the near model
-                                ; pins CS = DS = KERNEL_SEG, so no code ever
-                                ; lives up there (SPEC.md 41.3/41.9 rule 3)
-XM_HMA_KB   equ 64              ; what a successful xm_hma_claim takes off
-                                ; the xm pool - the HMA is the first 64KB of
-                                ; exactly the RAM AH=88h sizes (SPEC.md 2.4)
-XM_MAX_BLKS equ 8               ; xm_alloc's fixed block table, entries: a
+XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
                                 ; bulk store for a handful of large claims,
-                                ; not a malloc (SPEC.md 41.5)
+                                ; not a malloc (SPEC.md 41.5). It is here and
+                                ; not only in the overlay because BOTH builds'
+                                ; xm_caps report it as the free-entry count -
+                                ; a table with nothing in it, above a pool
+                                ; with nothing in it
+;
+; HMA_SEG, HMA_MIN_OFF, HMA_BYTES and XM_HMA_KB LIVED HERE AND ARE THE
+; OVERLAY'S NOW (SPEC.md 41.12, drivers/xmem/xmem.asm). The kernel does not
+; open the A20 gate, claim the HMA or size the pool any more, so it has no use
+; for the addresses of a window it cannot reach - and a constant mirrored in
+; two files that only one of them reads is the shape that drifts. What the
+; kernel keeps is the TIER above, which is a fact about the CPU that ten
+; readers across the tree branch on and which has nothing to do with the
+; store.
 
 ; =============================================================================
 ; Section layout (SPEC.md 2.1) - declared here, once, with attributes; every
@@ -989,16 +992,14 @@ section .ovl
 ovl_base:
 ovl_cpu_detect:     call cpu_detect
                     retf
-%ifdef KERN_BIG                 ; the A20 gate and the store above 1MB are
-                                ; kern_big's (SPEC.md 41.11). kmain's two calls
-                                ; to these are behind the same guard, so on
-                                ; kern_small neither the shim nor its caller
-                                ; is assembled - the overlay is free either
-                                ; way, but a shim to a body that does not
-                                ; exist would not assemble at all
-ovl_xm_a20:        call xm_a20_enable
-                    retf
-ovl_xm_init:        call xm_init
+%ifdef KERN_BIG                 ; the store above 1MB is kern_big's alone
+                                ; (SPEC.md 41.11). kmain's call to this is
+                                ; behind the same guard, so on kern_small
+                                ; neither the shim nor its caller is
+                                ; assembled - the overlay is free either way,
+                                ; but a shim to a body that does not exist
+                                ; would not assemble at all
+ovl_xm_sniff:       call xm_sniff
                     retf
 %endif
 ovl_desk_init:      call desk_init
@@ -2019,10 +2020,6 @@ api_file_rename:
 ; and it has to stay resident for its own reasons: xm_arm because xm_copy
 ; re-arms unreal mode inside the window that uses it, dsk_vol_slot because
 ; every zone painter calls it on every repaint.
-%ifdef KERN_BIG                 ; xm_arm is kern_big's, so its shim is too
-ovw_xm_arm:         call xm_arm
-                    retf
-%endif
 ovw_dsk_vol_slot:   call dsk_vol_slot
                     retf
 ovw_dsk_flop_add:   call dsk_flop_add
@@ -2111,23 +2108,28 @@ kmain:
                                 ; that may fire in it are the BIOS's own, and
                                 ; a tick lost here costs nothing ([ticks] is
                                 ; zeroed by sched_init anyway)
-%ifdef KERN_BIG                 ; the A20 gate and the store above 1MB are
-                                ; kern_big's alone (SPEC.md 41.11). kern_small
-                                ; is the 128KB-floor product, so it neither
-                                ; opens a gate nor sizes a store - and BOTH
-                                ; probes come off its boot path, which is the
-                                ; only part of this feature that ever cost the
-                                ; machine time rather than bytes. The tier is
-                                ; still detected above, in both builds: it is a
-                                ; fact about the CPU that packages read
-    call FAT_SEG:ovl_xm_a20    ; ...and VERIFY it: the feature bit is set by
-                                ; the wraparound probe, never by the poke
-                                ; (SPEC.md 41.2). A no-op on tier 0 - an 8088
-                                ; has no gate and port 0x92 belongs to
-                                ; something else there
-    call FAT_SEG:ovl_xm_init    ; size the store (int 15h AH=88h, on task 0
-                                ; per SPEC.md 7), claim the HMA, arm unreal
-                                ; mode on tier 2, publish [xm_kb] LAST
+%ifdef KERN_BIG                 ; the store above 1MB is kern_big's alone
+                                ; (SPEC.md 41.11). kern_small is the
+                                ; 128KB-floor product and neither sniffs nor
+                                ; loads. The tier is still detected above, in
+                                ; both builds: it is a fact about the CPU that
+                                ; packages read
+    call FAT_SEG:ovl_xm_sniff   ; IS there memory above 1MB? ONE int 15h
+                                ; AH=88h, and on tier 0 one compare (SPEC.md
+                                ; 41.12.1). The gate, the sizing, the
+                                ; allocator and both transports are XMEM.DRV
+                                ; now, read off the disk by xm_boot below and
+                                ; only on a machine that answered yes.
+                                ;
+                                ; The probe is EXACT rather than heuristic -
+                                ; it is the same call the overlay sizes the
+                                ; store with, so it has no false negatives by
+                                ; construction - and asking it BEFORE the A20
+                                ; gate is a strict improvement on what stood
+                                ; here: a 286 with exactly 1MB used to poke
+                                ; port 0x92 and race the keyboard controller
+                                ; for D1h/DFh to be told there was nothing up
+                                ; there. AH=88h reads CMOS and needs no gate
 %endif
 
     call dsk_dpt_init           ; int 1Eh becomes ours (SPEC.md 18.92) before
@@ -2223,6 +2225,18 @@ kmain:
                                 ; can stop the boot. NOTHING loads that the
                                 ; settings file did not ask for - a driver is
                                 ; several seconds of floppy on this machine
+
+%ifdef KERN_BIG
+    call xm_boot                ; ...and the store above 1MB, if xm_sniff
+                                ; found any (SPEC.md 41.12). Here rather than
+                                ; inside drv_boot because XMEM.DRV is an
+                                ; OVERLAY and not a driver: no drv_tab row, no
+                                ; Drivers-page tick, no SYSTEM.CFG bit and
+                                ; nothing for a user to decide. Still on the
+                                ; splash bar - dsk_xfer ticks per sector - and
+                                ; still before the first paint. A failure is
+                                ; silent by design (SPEC.md 41.12.4)
+%endif
 
     call spl_finish             ; the bar to 100% and the screen handed back:
                                 ; the paint below covers every pixel of it,
@@ -2547,9 +2561,21 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                                 ; splash and everything above it eats that
                                 ; module's residency budget
 %include "cpudet.inc"           ; CPU tiers + the A20 line (SPEC.md 41.1-41.3)
-%include "xmem.inc"             ; memory above 1MB (SPEC.md 41.4/41.5): after
-                                ; cpudet.inc, whose tier and feature bits it
-                                ; branches on and whose xm_hma_claim it calls
+%include "xmem.inc"             ; the kernel's HALF of the store above 1MB
+                                ; (SPEC.md 41.12): four cells, a boot sniff
+                                ; and the dispatch. The gate itself, the
+                                ; sizing, the allocator and both transports
+                                ; are drivers/xmem/xmem.asm.
+                                ;
+                                ; It reads driver.inc's drv_load_at, drv_call,
+                                ; drv_release and DRVR_/DRVC_ vocabulary, all
+                                ; of which are BELOW it - NASM resolves the
+                                ; labels and the equs across passes, and the
+                                ; position is kept where it was so that
+                                ; kern_small comes out byte-identical rather
+                                ; than merely the same size (docs/
+                                ; KERN-SPLIT-PLAN.md 1.1: a divergence that
+                                ; hides in the rung's padding is still real)
 %include "vga12.inc"
 %include "softgfx.inc"
 %include "font.inc"
@@ -2733,8 +2759,13 @@ cw_vga_xor_rect_vram:   call vga_xor_rect_vram
                     retf
 cw_vid_avail_test:      call vid_avail_test
                     retf
-cw_vid_disp_init:        call vid_disp_init
-                     retf
+%ifdef KERN_BIG                 ; vid_disp_init is dual display's and so is
+                                ; its shim - cw_vid_dual_ok below already had
+                                ; the guard and this one was missed, so
+                                ; kern_small stopped assembling entirely
+cw_vid_disp_init:       call vid_disp_init
+                    retf
+%endif
 cw_vid_switch:          call vid_switch
                     retf
 %ifdef KERN_BIG
