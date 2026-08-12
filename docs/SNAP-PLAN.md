@@ -102,9 +102,9 @@ count.
 | app | off-grid pen(s) | note |
 |---|---|---|
 | ~~**Tracker**~~ | ~~6, 38, 108, 111, 116, 150, 205, 210, 258, 290~~ | **MEASURED AND CLOSED WITHOUT CHANGING IT** — SPEC.md §45.19. It was ranked the largest item here on this sample and the sample was misleading four ways: its per-frame values go through `tui_rdout`, which **already rounds its pen down to a byte boundary on mono**; `tui_top_cga`'s labels are already at 0/64/136/200/288; what is left is `tui_draw_all`, which is event-driven and not the "redraws continuously while playing" this row claimed (`tui_draw_dyn` draws only what changed); and 159 of the off-grid cells are `tui_s_logo` at 149, which is `112 + (179-104)/2` — the centring of `'T R A C K E R'`, §3's protected kind. Measured: 237 cells 26.2% aligned on Hercules, 354 / 39.3% on VGA, all of it on one repaint |
-| **Tamegram** | 4, 60, 116, 164, 210 | HUD; 7 of 8 sampled pens ≡ 4, so a single `+4` on the base would align nearly all of it |
+| ~~**Tamegram**~~ | ~~4, 60, 116, 164, 210~~ | ✅ **DONE** — SPEC.md §49.5.1. The sample was right for once: six of the seven pens were ≡ 4 and `+4` fixed them, 0 bytes, 0% → 100% aligned measured over 17.7 s of play. `LOCK` went 210 → 208 (left by 2, not right by 6, which would have ended row 1 on `TG_HUD_W` exactly). Its flash banner and About panel are centred and stay off-grid |
 | **Fractal** | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0. **Confirmed by measurement, and it is the worst in the tree: 2,801 glyphs in one launch, 16% aligned, 2,323 of them at bucket 2** — the status row redrawn per progress tick. Four constants in one table |
-| **Paint** | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned. The palette is drawn on every tool change |
+| ~~**Paint**~~ | ~~`PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2~~ | ✅ **NOTHING TO DO** — SPEC.md §42.12. Measured: a repaint is **62 cells, 100% aligned**. `PT_PAL_X0` is not a text pen (the palette is fills and blitted icons, so "drawn on every tool change" costs no glyph), and the size-box field's pen is **geometrically forced**: 8px label + 32px framed field = 40 of the 43px `PT_SEPX` strip |
 | **ArtfulType** | a literal 14 | **the "≡ 3 (measured)" here was its own CAPTION** — 10 centred glyphs the kernel drew, now excluded (§11.94.2). Its 8 and 16 are already right. Re-audit before moving anything; §46 is a *writer*, so its per-keystroke line draw is the typebench case |
 | **HDD Control Panel page** | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
 | **HDD tool window** | `HTW_LX` 4 | the installer's own `HIW_LX` is already 8 |
@@ -230,7 +230,17 @@ By what the percentage is spent on rather than by size of diff:
    **label** is centred and was left alone (§4's second kind): a 9-character
    name is 72px in an 80px cell, so any rounding puts it flush against a side.
 5. **ArtfulType** — a writer, so it is the typebench case exactly.
-6. **Paint, Tamegram** — one constant table each.
+6. ~~**Paint, Tamegram**~~ — ✅ done. **Tamegram** was the cheapest entry in the
+   whole survey and is now seven named columns, all multiples of 8, `%error`-
+   checked (SPEC.md §49.5.1): six pens were ≡ 4, so `+4` on six numbers, 0 bytes,
+   **0% → 100% aligned** measured over 17.7 s of real play. Its worth is small and
+   stated as such — ~6 cells/s, so 0.6% of the machine and alignment saves 3.4% of
+   that; it is taken because it is free and because leaving the last uniformly-
+   fixable entry invites a re-derivation. **Paint needed nothing**: measured, a
+   repaint is **62 cells, 100% aligned** (SPEC.md §42.12). `PT_PAL_X0` is not a
+   text pen — the palette is fills and blitted icons — and the size-box field's
+   pen is *geometrically forced* off-grid: an 8px label plus a 32px framed field
+   is 40 of the 43px `PT_SEPX` strip, so the pen sits 2px inside a frame at 8.
 7. **Task Manager's five `+6`s, Recorder, Minesweeper, HDD's two pages,
    Hello** — small, mechanical, and Hello matters because it is the template a
    new package starts from.
