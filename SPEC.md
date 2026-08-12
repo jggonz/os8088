@@ -18804,12 +18804,42 @@ bar's columns — both repainted afterwards, which `np_sbar` was going to do
 anyway because the track changed height.
 
 **The shift is not a multiple of 8**, which is the one thing this does that no
-other blit here does: 29 pixels for the Find panel and 41 for Replace, against
+other blit here does: 32 pixels for the Find panel and 44 for Replace, against
 `np_scrollpaint`'s whole rows. On the banked 1bpp adapters that crosses the
 0x2000 window at a different offset every row, so it was verified there and
 not only on VGA — capture, force a full repaint, diff: **0 differing pixels**
 on VGA and CGA, opening and closing, with the Find panel and the taller
-Replace one.
+Replace one. (Those two numbers were 29 and 41 — see §27.10.3.)
+
+#### 27.10.3 …and the height is a multiple of 4, which is the blit's business
+
+The panel's height is `NP_FP_H` = **32**, and 44 with Replace showing. It was
+29 and 41, and the change is not a layout preference: §27.10.2 hands
+`OSAPI_GFX_SCROLL` a delta that **is** this height, so the height decides which
+of `gfx_scroll`'s two paths runs. §5.5.1's constant-delta path derives the
+destination row address once and steps it; on a banked adapter it is gated on
+`dy & [vid_bmask] == 0`, and `bmask` is **3 on Hercules and 1 on the CGA** — so
+an odd height missed it on **both**, and every row of the blit paid a
+`gfx_rowbase` walk it did not need. VGA's `bmask` is 0, so VGA always had the
+fast path and this buys it nothing.
+
+**No choice of the two constants could have fixed it.** `2*NP_FP_ROW +
+2*NP_FP_PAD + 1` is odd for *every* value of either — `2*anything` is even and
+the separating rule adds one — so the correction has to be explicit, and
+`NP_FP_SLACK` is `(-NP_FP_RAW) & 3`. It rounds **up**: rounding down would have
+to take a pixel off something already using it. `NP_FP_ROW` must itself be a
+multiple of 4 or the Replace panel's `+NP_FP_ROW` would undo the alignment, and
+that is an `%error` rather than a comment.
+
+**The three rows land below the buttons, because the button row is
+bottom-anchored** — `np_pbtny` is `np_pt + height - (NP_FP_PAD + 1 +
+NP_FP_ROW)` — so it moves down with the rule and what opens up is clearance
+between the text boxes and the buttons. Nothing is squeezed and no field moved
+relative to the panel's top. The Find↔Replace toggle was **already** on the
+fast path: its delta is `NP_FP_ROW` = 12, which is a multiple of 4.
+
+Cost: **0 bytes** — the constants are the same instruction encodings — and 3
+rows of the note's view, which is under half a text line.
 
 #### 27.10.1 The matcher
 
