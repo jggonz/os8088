@@ -884,12 +884,20 @@ made `/W` unmountable, a table row one byte short, a `make` knob that rebuilt
 nothing, and a harness that was kinder than the thing it stood in for. SPEC.md
 §62.10.4.2 has each of them.
 
-**PHASE 2 IS THE READ PATH AND IT IS DONE** (SPEC.md §62.10.4.3):
+**PHASE 2 IS THE READ PATH AND IT IS DONE, BOTH ENDS** (SPEC.md §62.10.4.3):
 `FSV_STAT`, `FSV_READ` and `FSV_READAT`, which between them make a redirected
 volume's files *readable* — and it is where `OSAPI_FS_PROG` finally got the
 consumer it was written for. **It cost the kernel nothing at all**: the three
 branch sites were built with the RAM disk and did not change, which is the
 whole return on that detour.
+
+**AND A PACKAGE HAS NOW BEEN LAUNCHED OFF THE WIRE**, which §10's table has
+listed as owed since block mode. `MINES.O88` served from `tests/lptlink` and
+double-clicked in the network Disk window is `READAT` for the loader's
+512-byte header peek and then `READ` for all 1,517 bytes — and Minesweeper
+runs, owning the menu bar with its own dock tile. Every byte arrived correct
+and nothing in the harness had to check it: the loader validates the header
+and the code then executes.
 
 Two decisions in it are worth carrying forward. The **capacity goes out with
 the command**, so an oversized file is cut at the source instead of crossing

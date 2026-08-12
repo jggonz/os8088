@@ -37537,17 +37537,61 @@ and wrong for everything else: a `findfirst` of `C:\GAMES\CHESS.EXE`, which is
 how a size and an attribute are asked for, looked for a *directory* called
 `CHESS.EXE` and answered "no such path" about a file that was right there.
 
-**The driver's own half is written and NOT yet confirmed on the glass** — the
-run that opens a document across the cable was still going when this was
-written, and until it lands the os8088 side of phase 2 is source that
-assembles rather than a path that has run. One bug in it was found by reading
-and is worth recording because of its shape: **`net_stat` pushed its own
-outputs.** `AX`, `BX`, `CX` and `DX` are all results there, and it preserved
-three of them — popping the size and the attribute back a few instructions
-after reading them off the wire. It would have answered a stale register
-triple with `CF = 0`: the link works, the file is found, and the kernel is
-told it is some other size. `rd_stat`'s header says `clobbers: AX, BX, CX,
-DX, SI, DI` and had said so all along.
+**And the driver's half is proven by A PACKAGE LAUNCHED OFF THE WIRE**, which
+docs/NET-PLAN.md has listed as owed since block mode — a document open there
+resolved its app off the *floppy*, so nothing had ever been loaded and run
+from the cable. It is also the cleanest possible test of these two verbs:
+`loader_run` peeks the header, claims a region and reads the file whole, with
+no association, no file dialog and no app of its own in the way.
+`MINES.O88` served from `tests/lptlink` and double-clicked in the network
+Disk window:
+
+```
+READAT handle=2 off=0 cap=512  -> 512 bytes     the loader's header peek
+READ   handle=2 cap=1536       -> 1517 bytes    the package
+```
+
+…and Minesweeper runs, owning the menu bar with its own dock tile. **Every one
+of those 1,517 bytes arrived correct**, and nothing in the harness had to
+check that: the loader validates the header and the code then executes.
+
+One driver bug was found by reading rather than by running, and is worth
+recording because of its shape: **`net_stat` pushed its own outputs.** `AX`,
+`BX`, `CX` and `DX` are all results there, and it preserved three of them —
+popping the size and the attribute back a few instructions after reading them
+off the wire. It would have answered a stale register triple with `CF = 0`:
+the link works, the file is found, and the kernel is told it is some other
+size. `rd_stat`'s header says `clobbers: AX, BX, CX, DX, SI, DI` and had said
+so all along.
+
+##### 62.10.4.4 What the harness's own limits look like from a transcript
+
+Three of the four failures in phase 2 were `partner.py` and not the code under
+test, and each presented as a defect in the thing being measured. They are
+written down because the transcript cannot tell them apart from the real
+thing.
+
+- **`serve`'s idle exit added to the budget instead of bounding against it**,
+  so "the master has nothing more to say" cost the whole 60-million-step
+  budget — about two and a half minutes at the end of *every* call. Two of
+  those is a test that times out before printing its first line.
+- **`pkill -f martypc_headless` killed its own shell**: the pattern matches the
+  calling shell's command line. `launch()` already reaps survivors by PID out
+  of `/proc`, which is why it does it that way.
+- **The idle window was too short for a phase containing a floppy load.**
+  Opening a document across the cable made the association look for the app on
+  the redirected volume, correctly fail to find it, and then **mount A: and
+  read `NOTEPAD.O88` off it** before coming back for the document — seconds of
+  guest time on a cycle-accurate drive. This end had already returned and
+  stopped driving the wire, so the guest's next command went into a cable
+  nobody was holding. **Note Pad came up empty and the trace showed three
+  stats and no read, which is precisely what a broken read path would look
+  like.**
+
+The instrument that ended each of these was the same one: `serve` records what
+every command was ABOUT, not just its letter. A string of letters says the
+shape of a session and nothing about which file — and the shape is only the
+question until something goes wrong.
 
 One harness fact belongs here because no amount of reading finds it: **the
 wire is not idle when a slave has been dwelling.** MartyPC's status register
