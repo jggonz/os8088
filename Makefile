@@ -517,7 +517,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
-        bench field combo combo144 stackprobe trklog npbench clicktest marty \
+        bench field combo combo144 combo720 stackprobe trklog npbench clicktest marty \
         comscan lptlink \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
@@ -2591,6 +2591,38 @@ $(BUILD)/combo144.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) \
 	@echo "          room for. NOT for the 5150: a 1.44MB disk needs a"
 	@echo "          500 kbps controller and a BIOS that knows about it."
 	@echo "          QEMU, the AT-class 86Box profiles, or a Gotek."
+
+# ...and the same disk again at 720KB, which is the GEOMETRY between the two
+# above rather than a third payload. A 720KB 3.5" DD disk is what an XT or AT
+# fitted with a 3.5" drive takes, and - the reason it earns a combo of its own -
+# what every USB floppy drive and every Gotek reads, neither of which will touch
+# 5.25" media at all. So this is the field disk for a machine that cannot be fed
+# a 360KB floppy and cannot read a 1.44MB one either.
+#
+# It carries COMBO144ARGS, the FULL payload, because the space is there: 720KB
+# is 713 clusters of 1KB against the 360KB disk's 354, and the 360KB combo
+# spends 304 of those - so BEVERLY.MOD, BIGFILE.DAT, README.TXT and the logo all
+# fit with room over, and sysbench's cache sweep and DOS read-rate rows RUN here
+# rather than being skipped the way they are on the 360KB disk.
+#
+# Same boot sector as the 360KB disk, and that is not a shortcut: 9 spt and 2
+# heads are identical and the sector derives the cylinder from the LBA rather
+# than counting them, so what differs is the BPB, which os88disk.py writes over
+# the first 62 bytes. $(IMG720) above is the same argument for the system disk.
+combo720: $(BUILD)/combo720.img
+
+$(BUILD)/combo720.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
+                    $(APPS_TOOLS) $(APPS_GAMES) $(SYSAPPS) \
+                    $(BENCHPKGS) $(BUILD)/bench.dat $(BUILD)/benchsml.dat \
+                    $(BUILD)/bigfile.dat $(SYSDOC) $(SYSLOGO) \
+                    apps/tracker/beverly.mod tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
+		$(COMBO144ARGS)
+	@echo "combo720: $@ - the combo disk at 720KB, full 1.44MB payload."
+	@echo "          The geometry a Gotek or a USB floppy reads. Boots any"
+	@echo "          machine with a 3.5\" DD drive; NOT the 5150, which is"
+	@echo "          5.25\" only - that is \`make combo\`."
 
 $(BUILD)/combo.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
                     $(APPS_TOOLS) $(APPS_GAMES) $(SYSAPPS) \
