@@ -2614,13 +2614,10 @@ disk_mount_x:
     cld
     rep stosw                   ; ES = [dsk_dseg]
 
-    cmp byte [dsk_vkind], DVK_FILE  ; ...and a REDIRECTED volume stops here
-    jne .harvest0                   ; with every slot blank: it has no sectors
-    jmp .done                       ; to peek at and no ASSOC.DAT to read, so
-.harvest0:                          ; 25's generic icon does its job and 54.3's
-                                    ; document pass has nothing to compose from
-                                    ; (SPEC.md 62.9.2 - the harvest is one of
-                                    ; the exactly two things this gives up)
+    cmp byte [dsk_vkind], DVK_FILE  ; ...and a REDIRECTED volume takes the
+    jne .harvest0                   ; CACHE-ONLY pass below: it has no sectors
+    jmp .fsicons                    ; to peek at, and reading an ASSOC.DAT over
+.harvest0:                          ; a cable is the one thing this may not do
 
     mov ax, LOW_SEG             ; ...and back to the sector buffer for the
     mov es, ax                  ; harvest's reads
@@ -2693,6 +2690,43 @@ disk_mount_x:
 .h_next:
     inc dx
     jmp .harvest
+.fsicons:
+    ; --- 4a'. A REDIRECTED VOLUME'S ICONS, FROM RAM ONLY (SPEC.md 62.9.2.1) --
+    ; The harvest above is a sector read per package and there are no sectors
+    ; here - but the ANSWER to most of those reads is already in memory, and
+    ; asking costs nothing. asc_lookup matches a package on its STEM AND ITS
+    ; SIZE, so a hit is the same name and the same byte count: the same
+    ; package, not a guess that happens to be plausible. A miss leaves the
+    ; blank slot the loop above wrote and 25's generic icon does its job.
+    ;
+    ; **asc_use_x IS DELIBERATELY NOT CALLED**, and that is the whole design
+    ; rather than an omission. It re-keys the cache to [disk_drive] and reads
+    ; that volume's ASSOC.DAT - which over a cable is exactly the traffic this
+    ; exists to avoid, and would evict the rows that make the pass work. So
+    ; the cache is used AS IT STANDS: whatever volume it describes, a row is
+    ; only ever spent on a name-and-size match.
+    ;
+    ; The consequence to know is that this is SESSION STATE. A Link listing
+    ; shows a package's icon if the user has browsed the disk it also lives on,
+    ; and the generic one after a fresh boot. That is inherent to "only if it
+    ; is already in RAM" and not a defect; nothing here may make it otherwise
+    ; by going to look.
+    mov es, [dsk_dseg]
+    xor dx, dx
+.fsico:
+    cmp dx, bp
+    jae .done
+    mov ax, dx
+    call dsk_get_dir_x          ; SI -> dsk_ent
+    cmp word [si+16], 1         ; packages only: a folder's icon is built in
+    jne .fsico_next             ; and a document's would need 54.3's pass,
+    call asc_lookup_x           ; which composes from a program THIS listing
+    jc .fsico_next              ; has no icon for either
+    call asc_take_x
+.fsico_next:
+    inc dx
+    jmp short .fsico
+
 .harvested:
 
     ; --- 4b. document icons (SPEC.md 54.3) ------------------------------

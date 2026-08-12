@@ -229,6 +229,16 @@ net_ready:
 net_detach:
     cmp byte [net_state], NS_LINKED
     jne .port
+    mov byte [lp_turnw], TURN_RX    ; ...AND SHORT AGAIN FOR THE GOODBYE.
+                                ; 62.10.4.8 made lp_snib patient, which is
+                                ; right for a far side that has gone to its
+                                ; disk and wrong for one that is not there at
+                                ; all: unticking the driver with the cable out
+                                ; would spend REPLY_TMO - ten seconds of
+                                ; frozen UI, under the gfx lock - on a byte
+                                ; whose own comment says it is best effort.
+                                ; Nothing after this needs the long one; the
+                                ; next connect's lp_init sets it anyway
     mov al, NC_BYE
     call lp_sbyte               ; best effort: if it fails, it fails
 .port:
@@ -1349,6 +1359,10 @@ net_drop:
 .novol:
     cmp byte [net_state], NS_LINKED
     jne .noling
+    mov byte [lp_turnw], TURN_RX    ; net_detach's reason exactly: a goodbye
+                                ; is best effort, and a patient one costs the
+                                ; user ten frozen seconds when the far end is
+                                ; simply not there (SPEC.md 62.10.4.8)
     mov al, NC_BYE
     call lp_sbyte
     call lp_restore
