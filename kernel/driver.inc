@@ -42,8 +42,10 @@
 ; =============================================================================
 
 DRV_MAX     equ 4               ; rows in drv_tab. The settings word carries
-                                ; one bit per row, so this may grow to 16
-                                ; without touching the file format.
+                                ; one bit per row, so the FILE FORMAT allows 16
+                                ; - but the CONTROL PANEL does not: the Drivers
+                                ; page fits exactly four (see row 2), and a
+                                ; fifth wants SPEC.md 31.1's scrolling list.
 
 ; --- driver classes (SPEC.md 51.2) -------------------------------------------
 ; A class is also a PUBLICATION SLOT. Every table below that says "the driver
@@ -239,6 +241,45 @@ DSV_FS      equ 26              ; dw: DRVC_FILE only - the FSV_* verb table,
                                 ; all, and this costs 2 x DRVC_MAX = 10
 DSV_SIZE    equ 28
 
+; --- the FSV_* verbs behind DSV_FS (SPEC.md 62.9.1) --------------------------
+; A DRVC_FILE volume has NO SECTORS - dsk_xfer refuses one outright - so what
+; the kernel asks instead is these, through drv_fs_call with the verb in BP.
+; The staged SPEC.md 19.1 entry's first-cluster word at offset 18 is AN OPAQUE
+; HANDLE THE DRIVER ASSIGNS: only dsk_chdir and the loader ever interpret it,
+; and both were already redirect points.
+;
+; Mirrored in drivers/os88drv.inc, which is the DRIVER's copy of the same
+; numbers - the two are a published ABI and a %error would be better than a
+; mirror, except that a driver never includes a kernel header and the kernel
+; never includes a driver one. Change both.
+FSV_LIST    equ 0               ; append this folder's entries through
+                                ; OSAPI_FS_ENT. The kernel SORTS and
+                                ; synthesizes '..' itself (19.4/19.5)
+FSV_CHDIR   equ 2               ; AX = a handle out of an entry, 0 = the root.
+                                ; out CF=1 refuses; CF=0 and DX = THE PARENT'S
+                                ; HANDLE, which is what pays for '..' - there
+                                ; is no directory sector here to read one from
+FSV_STAT    equ 4               ; SI = a NUL 8.3 name, in KERNEL_SEG. out
+                                ; CF=0, AX = THE HANDLE, DX:CX = size, BL = a
+                                ; FAT-style attribute byte (0x10 = directory,
+                                ; so dskw_rbody's existing 0x18 test stands)
+FSV_READ    equ 6               ; AX = a handle, DX:BX = buffer (DSV_BLK's
+                                ; rule: ES is KERNEL_SEG on entry so it cannot
+                                ; also be the buffer's segment, SPEC.md 51.8),
+                                ; DI:CX = the 32-bit capacity.
+                                ; out CF=0 and DX:AX = bytes read
+FSV_WRITE   equ 8               ; SI = name, DX:BX = bytes
+FSV_APPEND  equ 10              ; the chunked pair (SPEC.md 18.4.4)
+FSV_READAT  equ 12              ; AX = a handle, DX:BX = buffer, CX = capacity,
+                                ; DI:SI = the 32-bit offset. out DX:AX =
+                                ; delivered, 0 = at or past the end
+FSV_DELETE  equ 14              ; SI = name
+FSV_RENAME  equ 16              ; SI = old, DI = new
+FSV_MKDIR   equ 18              ; SI = name
+FSV_RMDIR   equ 20              ; SI = name
+FSV_DFREE   equ 22              ; -> DX:AX = free BYTES, BX = the granule
+FSV_SIZE    equ 24
+
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every
 ; setting the panel offers is here, so a machine boots in the state it was
@@ -386,10 +427,14 @@ drv_f_sound: db 'SOUND.DRV', 0
 drv_t_sound: db 'Sound', 0
 drv_f_hdd:   db 'HDD.DRV', 0
 drv_t_hdd:   db 'Hard Drive', 0
-drv_f_debug: db 'DEBUG.DRV', 0
-drv_t_debug: db 'Debug', 0
+                                ; DEBUG.DRV's pair is gone with its row: the
+                                ; monitor's source is still in drivers/debug/
+                                ; and SPEC.md 58 still stands, but nothing in
+                                ; the kernel names it and nothing ships it
 drv_f_net:   db 'NET.DRV', 0
 drv_t_net:   db 'Network', 0
+drv_f_ram:   db 'RAMDISK.DRV', 0
+drv_t_ram:   db 'Ram Disk', 0
 
 ; The published drivers' dispatchers, as FAR POINTERS - ONE PAIR PER CLASS.
 ; Adjacent and in this order because together they ARE the dword
@@ -463,17 +508,45 @@ drv_tab:
     db DRVE_OK
     db 0
 
-    dw PKG_DISP, 0              ; row 2: the serial debug monitor (SPEC.md 58)
-    dw drv_f_debug, drv_t_debug
-    dw 0, 0
-    db DRVC_DEBUG
-    db 0                        ; NOT wanted by default, and this is the row
-                                ; where that rule matters most: it opens a
-                                ; channel that reads and writes any byte of
-                                ; the machine, so it exists only while
-                                ; somebody has ticked it and SYSTEM.CFG says
-                                ; so. On a machine that never does, the whole
-                                ; cost is this row and a file on the disk
+    dw PKG_DISP, 0              ; row 2: the RAM disk (SPEC.md 62.9), which is
+    dw drv_f_ram, drv_t_ram     ; the FILE REDIRECTOR'S HARNESS as much as it
+    dw 0, 0                     ; is software: a DRVC_FILE volume backed by no
+    db DRVC_FILE                ; hardware at all, so every branch site the
+    db 0                        ; redirector added to the kernel runs on a
+                                ; cycle-accurate 8088 in a container - which
+                                ; block mode never had, and which is why two of
+                                ; ITS bugs reached the field instead of the
+                                ; build. NOT wanted by default (SPEC.md 51.3).
+                                ;
+                                ; IT TOOK THE SERIAL MONITOR'S ROW, and that is
+                                ; the one thing here that is not free. SPEC.md
+                                ; 58's DEBUG.DRV was row 2; its source is still
+                                ; in drivers/debug/ and its section still
+                                ; stands, but it is no longer listed and no
+                                ; longer ships. THE ROW HAD TO BE REUSED RATHER
+                                ; THAN APPENDED because the Drivers page is
+                                ; FULL: rows are CP_DROWH (26) apart from
+                                ; CP_DR0Y (24) in a CP_CH (132) pane, so a
+                                ; FIFTH row's glyphs start at 128 and its
+                                ; caption falls off the bottom - and the panel
+                                ; cannot grow, because CGA is 200 rows and
+                                ; wm_fit's ceiling is 155 against a frame that
+                                ; is already 151 (SPEC.md 31.1). A fifth driver
+                                ; wants the scrolling list that section already
+                                ; names as the answer, not a taller window.
+                                ;
+                                ; The cost of reusing an index rather than
+                                ; appending is SYSTEM.CFG's driver bitmap,
+                                ; which is one bit per row BY INDEX: a settings
+                                ; file written before this comes up with the
+                                ; RAM disk ticked where Debug was. That is
+                                ; survivable in a way the reverse would not be
+                                ; - this row probes nothing, writes to no port
+                                ; and hooks no vector, so the worst it does is
+                                ; mount a volume nobody asked for - and it is
+                                ; why the RAM DISK took the free index rather
+                                ; than the parallel link being shuffled down
+                                ; into it
     db DRVE_OK
     db 0
 
@@ -932,6 +1005,68 @@ drv_svc_none:
     xor ax, ax
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; drv_fs_call - dispatch one FSV_* verb of the DRVC_FILE driver (SPEC.md 62.9)
+; in:  BP = the FSV_* verb; every other register = that verb's own arguments
+; out: CF = 1 and AX = 0 when no DRVC_FILE driver is published, when it
+;      publishes no DSV_FS table, or when that table's cell for this verb is 0;
+;      otherwise whatever the verb answers
+; clobbers: BP; DS and ES restored, and every other register is the verb's
+;
+; A THIRD BODY beside drv_svc_call and drv_blk_call, and it NAMES ITS CLASS
+; the way drv_svc_call does rather than taking one the way drv_blk_call does.
+; That is not an inconsistency and the distinction is worth keeping straight:
+; drv_blk_call has to be told, because TWO classes serve blocks - DRVC_DISK
+; and DRVC_NET, which is the whole reason DV_CLASS exists (SPEC.md 18.7.3) -
+; and exactly ONE class serves files. The day a second one does, this grows a
+; [drv_fscls] written out of the volume row, not an argument: BP is the only
+; register the FSV ABI leaves free and it is already the verb.
+;
+; THE VERB TABLE LIVES IN THE DRIVER'S SEGMENT, and that is what DSV_FS being
+; a POINTER costs here (SPEC.md 62.9.1: thirteen cells would be charged to
+; every machine, including the ones with no driver at all). So the cell cannot
+; be read with a plain [drv_svc+DSV_*] the way every other published service
+; is - it takes a segment register for one word. ES is borrowed and put
+; straight back, which is what makes it safe to borrow at all: ES is an
+; ARGUMENT to the verbs that move bytes, and DX:BX rather than ES:BX is only
+; the BUFFER's half of that rule (SPEC.md 51.8).
+; -----------------------------------------------------------------------------
+drv_fs_call:
+    cmp word [drv_fseg5], 0     ; class 5 = DRVC_FILE. Nothing attached, or
+    je drv_svc_none             ; attached and not yet published (SPEC.md
+                                ; 51.2.1: the slot is armed after DRVV_ATTACH)
+    push es
+    push di
+    mov di, [drv_svc + (DRVC_FILE-1)*DSV_SIZE + DSV_FS]
+    or di, di
+    jz .none                    ; a DRVC_FILE driver that published no table
+    add di, bp                  ; ...+ the verb
+    mov es, [drv_fseg5]
+    mov bp, [es:di]             ; BP = the near proc, in the driver's segment
+    pop di
+    pop es
+    or bp, bp
+    jz drv_svc_none             ; a verb this driver does not implement, which
+                                ; is an ordinary answer and not a fault: a
+                                ; read-only volume publishes no FSV_WRITE
+    push ds
+    push es
+    push ds
+    pop es                      ; ES = KERNEL_SEG: what the driver reads the
+                                ; things it was handed through. From DS and
+                                ; NOT from CS - driver.inc is .cold, so CS is
+                                ; COLD_SEG here (SPEC.md 2.6 rule 1), and the
+                                ; push has to come before DS is spent below
+    mov ds, [es:drv_fseg5]
+    call far [es:drv_fptr5]     ; drv_fptr5/drv_fseg5 are adjacent and in that
+    pop es                      ; order, so they ARE the far pointer - no
+    pop ds                      ; staging like drv_blk_call's is needed
+    ret
+.none:
+    pop di
+    pop es
+    jmp drv_svc_none
 
 ; -----------------------------------------------------------------------------
 ; drv_cp_call - dispatch one class's Control Panel page proc (SPEC.md 31.9)

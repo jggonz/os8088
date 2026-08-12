@@ -59,7 +59,7 @@ and a rung is 512 bytes. That is the arithmetic every estimate below is against.
 |---|---|---|---|---|
 | 1 | `dsk_xfer`'s driver branch dispatches through `[drv_svc + DSV_SIZE + DSV_BLK]` — **class 2, hard-coded**. A `DRVC_DISK` driver is a singleton (§51.2.1), so a network driver either *is* HDD.DRV's class and cannot coexist with it, or its block calls dispatch into HDD.DRV's table | a volume ROW that names its own class (§2.1) | **~40 B** | **Stage 1** |
 | 2 | The mount is `disk_mount` — BPB, FAT window, root scan. A volume whose remote side has *files* and no sectors has nothing for it to read | a `DVK_FILE` branch at the mount, `dsk_chdir`, `dsk_free_clus` and nine `dskw_*` bodies | **~380–460 B** | Stage 2 |
-| 3 | **There is no generic package→driver call.** `OSAPI_VOL_*` and `OSAPI_DRV_CFG` are fenced *to drivers*; nothing lets a package reach a driver's own service at all | one opaque slot at 0x03B8 | **~60 B** | Stage 3 (mTCP) |
+| 3 | **There is no generic package→driver call.** `OSAPI_VOL_*` and `OSAPI_DRV_CFG` are fenced *to drivers*; nothing lets a package reach a driver's own service at all | one opaque slot at 0x03D0 | **~60 B** | Stage 3 (mTCP) |
 
 Item 1 is the surprise. **Block mode is not free after all** — it is nearly
 free, but the machine this project is calibrated against has an ST-225 on an
@@ -760,18 +760,91 @@ original sketch above:
   volume's listing is the `.lowbss` floor or a donated claim (§22.6) — three
   pieces of bookkeeping a driver must not hold. Gated to `FSV_LIST`.
 
-**The next session picks up at milestone 1**, which is a browsable read-only
-volume: `drv_fs_call`, `disk_mount`'s `DVK_FILE` branch (skip the BPB, the FAT
-window and the root scan; call `FSV_CHDIR` then `FSV_LIST`; let the kernel's
-own sort and `..` run), `dsk_xfer`'s refusal, `dsk_free_clus` → `FSV_DFREE`,
-`OSAPI_FS_ENT`, and **a RAM-disk `DRVC_FILE` driver as the harness**. That
-last is the point: it needs no hardware, so every branch site is exercised on
-a cycle-accurate 8088 in a container — which block mode never had, and which
-is why two of its bugs reached the field instead of the build.
+**MILESTONE 1 IS BUILT AND VERIFIED** — SPEC.md §62.9.4 is the record, and it
+came in at **`.text` +341, `.bss` +5, `.cold` +0: one image rung, four steps
+of `KERN_BUDGET` left**, inside §0's 380–460 byte estimate. `drv_fs_call`,
+`disk_mount`'s `DVK_FILE` branch, `dsk_xfer`'s refusal, `dsk_free_clus` →
+`FSV_DFREE`, `OSAPI_FS_ENT`, `dsk_synth_up`'s banked parent handle, and
+`DVK_FILE` awareness in the five volume-table routines that had been asking
+`is this DVK_DRV` when they meant `is this a driver's`.
 
-Milestones 2 and 3 (reads, then writes) follow on a kernel that is already
-proven, and the cable's file client is then a SECOND `DRVC_FILE` driver
-rather than the first.
+**The harness earned its keep on its first run.** `RAMDISK.DRV` needs no
+hardware, so the whole path ran on a cycle-accurate 8088 in a container and
+found two bugs before any of it went near a cable — one of them a NASM
+line-continuation trap that assembles clean, leaves a service table one word
+short, and presents as "the Disk window will not open" four call layers from
+the cause. That is precisely what block mode did not have, and why two of ITS
+bugs reached the field instead of the build.
+
+**MILESTONE 2 IS BUILT AND VERIFIED TOO** (SPEC.md §62.9.5): reads, by handle.
+Minesweeper launches off a redirected volume and Note Pad opens a document on
+one — the loader's path and an application's, which are different because one
+arrives holding a handle and the other a name. **`.text` +42, `.cold` +205, no
+rung crossed**, so the footprint is unchanged and the spare is still four
+steps; the `.cold` rung has 147 bytes left and milestone 3's six write verbs
+will cross it.
+
+The harness paid for itself twice more. §62.9.3's branch-site table was
+**missing the loader's header peek** — SPEC.md §21 step 2 reads a file's first
+sector to validate its `.o88` header before claiming a region, and `dsk_xfer`
+refuses a redirected volume, so every package was `Bad package` while the
+listing and the sizes were perfect. And the same step re-validates the entry's
+first-cluster word against `[dsk_maxclus]`, which on such a volume compares an
+opaque handle against **the last FAT volume's** cluster count: small handles
+pass by luck, and a driver numbering its files from 4,096 would have had every
+package refused on a volume that browsed and read correctly. Neither would
+have been found on a cable without first being blamed on the cable.
+
+**MILESTONE 3 IS BUILT AND VERIFIED** (SPEC.md §62.9.6): writes. New Folder,
+Delete, Rename, a document saved back onto a redirected volume, and a package
+copied across one and then RUN. **`.text` +0, `.bss` +4, `.cold` +213 — one
+cold rung**, footprint 100,352 → 100,864, three steps spare.
+
+Four bugs, and the two in the KERNEL are the same mistake in different
+modules: `fcp_goto` and `fcp_rdnext` both range-check a "first cluster"
+against `[dsk_maxclus]`, which on a redirected volume compares an opaque
+handle against **the last FAT volume's** cluster count — and `fcp_goto` also
+rejects anything below 2, so the copy engine refused the first subfolder any
+`DRVC_FILE` driver ever hands out. `fcp_goto` had a second fault worth
+carrying to the cable: its quiet path deliberately skips the mount, and a
+mount is the only thing that calls `FSV_CHDIR` — so it moved `[dsk_cwd]`
+behind the driver's back and every later name resolved in the folder the copy
+came FROM. **A driver-side cwd is state the kernel can silently
+desynchronise.**
+
+**The remaining gap is copying a FOLDER**, not a file: `fcp_scan` enumerates a
+source directory by walking its raw sectors and there are none. That wants an
+enumerate-by-ordinal verb or the engine reading the kernel's own listing, and
+it is design work rather than a branch site.
+
+**THE ACTIVITY BAR REPORTS ON A CABLE NOW** (SPEC.md §12.8.1), which is the
+one thing three milestones of branch sites left visibly missing. §12.8's
+widget took a SECTOR count, a redirected volume has none, so the single
+slowest operation the whole redirector makes possible — 116KB of module at
+3,741 bytes/second, half a minute of frozen screen — was the *only* file
+operation in the machine that said nothing at all. `fpg_begin` takes bytes in
+`DX:CX` now, which is the file API's own 32-bit count convention and
+`FSV_STAT`'s answer pair, so the redirected arming site is a bare `call` with
+no argument setup; every other producer already held a byte count and was
+dividing it away. The trough stays 512-byte units internally, so `fpg_step` —
+`dsk_xfer`'s per-sector caller, on the disk path for the life of the machine —
+is untouched and still free.
+
+**Converting the front door alone would have shipped a bar that lies.** A
+redirected read is ONE far call, not a loop the kernel is standing in, so
+between `FSV_READ` going out and coming back only the driver knows how far the
+file has got — arm it and never step it and the bar sits at 0% for the whole
+transfer. So `OSAPI_FS_PROG` (0x03C8) is the other half, and the contract is
+"bytes since your last report" rather than a running total, with the sub-unit
+remainder carried rather than rounded so a wire's 64-byte frames sum exactly.
+`RAMDISK.DRV` reports in 64-byte pieces on purpose: a RAM disk delivers a file
+in one `rep movsb`, and without that this slot would have shipped with no
+consumer but the cable it was written for — which is precisely how
+`OS88NET.COM` reached the field twice unexecuted. **`.text` +103, `.cold` +23,
+no rung crossed, footprint unchanged.**
+
+The cable's file client is now a SECOND `DRVC_FILE` driver against a kernel
+proven three milestones deep, which is what the whole RAM-disk detour bought.
 
 ### 2.3 What was considered and rejected
 
@@ -875,8 +948,8 @@ family in the kernel — a dozen slots and a networking ABI the kernel has to
 understand and then keep for ever under §20.8 rule 4 — or **one opaque cell**:
 
 ```
-OSAPI_DRV_CALL   KERNEL_SEG:0x03B8   (the first free slot; the table
-                 currently ends at 0x03B8)
+OSAPI_DRV_CALL   KERNEL_SEG:0x03D0   (the first free slot; the table
+                 currently ends at 0x03D0)
     BH = the DRVC_* class, BL = a driver-defined verb
     AX/CX/DX/SI/ES = the driver's to define
     out CF = 1 with AX = 0 if no driver of that class is published, or it

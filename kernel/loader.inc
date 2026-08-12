@@ -402,10 +402,18 @@ ld_run_body_x:
     ja .big1
     mov [ld_fsz], ax
     mov ax, [si+LD_DE_CLUS]     ; first cluster: re-check the range the
+    cmp byte [dsk_vkind], DVK_FILE  ; ...unless this word is AN OPAQUE HANDLE
+    je .clusok                      ; (SPEC.md 62.9.1), in which case the
+                                    ; kernel has no opinion to have about its
+                                    ; range - and [dsk_maxclus] is the LAST FAT
+                                    ; volume's, so the test is not merely
+                                    ; wrong here, it is answered by a number
+                                    ; belonging to another disk
     cmp ax, 2                   ; mount already validated (SPEC.md 21 step
     jb .bad1                    ; 1 - this check stands alone if the mount
     cmp ax, [dsk_maxclus]       ; code ever changes)
     ja .bad1
+.clusok:
     mov [ld_clus], ax
     jmp short .peek
 .bad1:
@@ -421,7 +429,28 @@ ld_run_body_x:
     ; LOW_SEG, so the sector lands there and only the 32 header bytes are
     ; staged back into the kernel segment for ld_check_hdr to read.
 .peek:
-    call dsk_clus2lba_x ; AX: cluster -> its first LBA; the first
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .peekfat
+
+    ; --- a REDIRECTED volume: the first 512 bytes, by handle (SPEC.md 62.9) --
+    ; The FAT path below turns a cluster into an LBA and reads a SECTOR, and
+    ; there are none here - dsk_xfer refuses such a volume outright, so
+    ; without this the peek fails and every package on a redirected volume is
+    ; "Bad package". FSV_READAT at offset 0 is exactly the same 512 bytes, and
+    ; it lands in the same dsk_secbuf so step 3 below is untouched.
+    push bp
+    mov dx, LOW_SEG             ; DX:BX, not ES:BX (SPEC.md 51.8) - AX is
+    mov bx, dsk_secbuf          ; still the handle and nothing here spends it
+    mov cx, 512
+    xor si, si                  ; DI:SI = offset 0: the head of the file
+    xor di, di
+    mov bp, FSV_READAT
+    call drv_fs_call
+    pop bp
+    jc .disk1                   ; a short file simply delivers less, and
+    jmp short .hdr              ; ld_check_hdr rejects what is not a package
+.peekfat:
+    call dsk_clus2lba_x  ; AX: cluster -> its first LBA; the first
     jc .bad1                    ; sector of the first cluster IS the file's
                                 ; first 512 bytes, so peek semantics are
                                 ; exact (SPEC.md 21 step 2)
@@ -431,6 +460,7 @@ ld_run_body_x:
     mov bx, dsk_secbuf
     call disk_read_x              ; in: AX=LBA, CX=1, ES:BX
     jc .disk1
+.hdr:
 
     ; --- 3. validate the peeked header -----------------------------------------
     mov si, dsk_secbuf

@@ -2638,6 +2638,44 @@ The general rule this is an instance of: **a routine that is reached from
 pair sits under every drawing site in the machine, kernel and package alike,
 and there is no call site that can compensate.
 
+### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
+
+`gfx_xor_rect`'s `cur_unlazy` sat **below** its `cmp byte [vid_mono], 0`, so on
+a 1bpp adapter — where the software renderer *is* the direct path (§39.5) — the
+unclipped drag outline jumped to `gfx_xor_rect_sw` and the promise was never
+spent. It is `GFXCLIP`'s documented rule, arriving at the one public rect entry
+that does not use the macro (an outline is not the intersection of its bounding
+rect with anything, so it decomposes before it clips), and its documented
+failure: **works on VGA, silently does nothing on Hercules and CGA.**
+
+**What it looks like is stray pixels, and they are not in the picture.** With
+the arrow still on the glass, an XOR that lands under it flips the *arrow's*
+bits, while the save-under still holds the background from before. The next
+`gfx_unlock` moves or restores the cursor, which writes that background back
+and takes the XOR with it — and then the app's own erase, an XOR of the same
+rect, flips a pixel that was never left lit. One stray dot per pointer
+position, wherever the outline passed under the cursor and the cursor then
+moved.
+
+Paint's rubber band is where it shows worst, and the reason is geometric rather
+than particular to Paint: the band's corner tracks the pointer, so the cursor
+is *on* the outline for the whole drag. Measured on a cycle-accurate 5150 with
+a Hercules card, one oval dragged out and then forced to repaint from the
+canvas: **2 differing pixels before, 0 after** — the anchor and one waypoint
+where the pointer paused. The rectangle tool leaks the same pixel from the same
+routine; nothing in `pt_oval` was ever wrong.
+
+Three things about the fix. It goes **between the clip test and the mono
+dispatch**, not at the top: the clipped path decomposes into `gfx_xor_fill`
+strips whose `GFXCLIP` owes no hide, because `wm_clip_set` already asked
+`cur_lazyck` (§7.1.4) and a region away from the pointer is the win this whole
+mechanism exists for. `vga_xor_rect_vram` keeps its own call, because the
+transient overlays enter there directly and it is three instructions when the
+flag is already spent — `cur_unlazy` is one-way within a hold. And
+`gfx_xor_fill` was **already right** and looks wrong: its raw body carries the
+same pair, but every public caller reaches it through `GFXCLIP`, which spends
+the hide above everything.
+
 ## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
 - `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
@@ -6764,8 +6802,9 @@ itself.
 
 | symbol      | contract                                                    |
 |-------------|---------------------------------------------------------------|
-| `fpg_begin` | in: AX = sectors this operation expects (0 is read as 1). Arms the widget and draws the **whole** of the expensive part — the white bed, the document icon and the box frame. Preserves all registers and the flags. |
-| `fpg_step`  | in: nothing. One sector done. Preserves **every register and the flags** — its caller is the middle of `dsk_xfer`'s per-sector loop, `spl_step`'s contract exactly. |
+| `fpg_begin` | in: `DX:CX` = the **bytes** this operation expects (0 refuses). Arms the widget and draws the **whole** of the expensive part — the white bed, the document icon and the box frame. Preserves all registers and the flags. §12.8.1. |
+| `fpg_step`  | in: nothing. One 512-byte unit done. Preserves **every register and the flags** — its caller is the middle of `dsk_xfer`'s per-sector loop, `spl_step`'s contract exactly. |
+| `fpg_stepb` | in: AX = bytes moved **since the last report**. The byte-shaped step, for a producer with no sectors; API slot 0x03C8 (`OSAPI_FS_PROG`). §12.8.1. |
 | `fpg_end`   | in: nothing. Disarms and gives the bar back: white-fills the rows of its own bed that carry no menu text, `menu_inval`s the bed's cells, and calls `menu_draw_bar`. Preserves all registers and the flags. |
 
 **The chrome is drawn once and the bar is the only thing that moves.** A
@@ -6825,19 +6864,98 @@ Five things hold it up.
 
 **Where it is armed** is the file-operation layer, because that is the only
 place a *total* exists: `dsk_xfer` knows one call's run and `dskw_rdata`
-coalesces many calls into one operation. The four sites are the three
-`diskw.inc` data pipelines, each immediately after `dskw_size32` has put the
-job's sector count in `[dskw_rem]` (§18.4), and `dsk_read_chain`, which takes
-its total in DX — between them, every multi-second transfer in the system:
-a package load, a document open, a Paint or Note Pad save, and each chunk of
-a file-manager copy. `fpg_end` sits in the matching `dskw_*_x` epilogue,
-where there is exactly one of it however many ways the body returned.
+coalesces many calls into one operation. The five sites are the three
+`diskw.inc` data pipelines, each passing the job's own `[dskw_len]`/
+`[dskw_lenhi]` (§18.4); `dsk_read_chain`, which is handed sectors and
+multiplies; and `dskw_rbody`'s **redirected** branch, where `DX:CX` is
+already `FSV_STAT`'s answer and nothing has to be computed at all (§12.8.1)
+— between them, every multi-second transfer in the system: a package load, a
+document open, a Paint or Note Pad save, each chunk of a file-manager copy,
+and a file coming down a cable. `fpg_end` sits in the matching `dskw_*_x`
+epilogue, where there is exactly one of it however many ways the body
+returned — which is why the redirected branch needed no exit of its own.
 
 Metadata sectors — the FAT flush, the directory commit — are outside
 `[dskw_rem]` and so are not counted, which is why the bar clamps at full
 rather than wrapping. The alternative was a total that had to be revised
 downward mid-operation, and a progress bar that goes backwards is worse than
 one that sits at 100% for a sector or two.
+
+#### 12.8.1 The scale is BYTES, and the driver steps it
+
+`fpg_begin` took a **sector count** until the file redirector arrived and had
+none to give. A `DVK_FILE` volume has no sectors at all — no BPB, no FAT, no
+`int 13h` behind it, and `dsk_xfer` refuses one outright (§62.9) — so the
+one file operation in the machine that can take a *minute*, a read over a
+LapLink cable at 3,741 bytes/second (PERFORMANCE.md Set 39), was the only
+one that reported nothing whatsoever. It armed no widget because it had no
+number of the shape the widget wanted.
+
+That is a defect in the *interface* rather than a missing feature, and the
+tell is that **every producer already holds a byte count**: `dskw_size32`
+divides one to get `[dskw_rem]`, `dsk_read_chain` is the only caller in the
+tree that genuinely thinks in sectors, and `FSV_STAT` answers a size in
+`DX:CX`. Asking each for what it has rather than what this module used to
+want costs nothing and makes the widget say something on a volume with no
+geometry.
+
+- **`DX:CX` and not `DX:AX`**, because that is the file API's own 32-bit
+  count convention (§18.4.1) *and* `FSV_STAT`'s answer register pair. The
+  redirected arming site is therefore a bare `call` with no argument setup
+  at all, at a point where AX is still the driver's handle and must survive
+  — which is precisely the site the whole change exists for.
+- **512-byte units stay, and they are not part of the contract.** The
+  trough is 62 pixels; `fpg_begin` rounds the byte total UP into whole units
+  and saturates at 65,535, so a 32MB job (the volume cap, §18.7) lands one
+  unit short of exact and nothing about that is visible. Keeping the unit is
+  what leaves `fpg_step` — `dsk_xfer`'s per-sector caller, on the disk path
+  for the life of the machine — untouched and still free.
+- **`fpg_stepb` is the other half, and without it the conversion is a bar
+  that lies.** Arming a redirected read from `FSV_STAT`'s size and then
+  never stepping it puts a 0% bar on screen for the length of the transfer
+  and takes it away again. The kernel *cannot* step it: a redirected read is
+  **one far call**, not a loop the kernel is standing in, so between
+  `FSV_READ` going out and coming back only the driver knows how far the
+  file has got. So it is an API slot (0x03C8, `OSAPI_FS_PROG`), and the
+  driver calls it from inside the verb.
+- **"Since the last report", never a running total.** A driver that reports
+  cumulative bytes advances the bar by the whole file on every call. The
+  remainder below one unit is **carried** in `[fpg_frac]` rather than
+  rounded away, so reporting a wire's every 64-byte frame is exact rather
+  than dropping 448 bytes in 512 — which is the difference between a bar
+  that fills and one that never leaves 0.
+- **`[fpg_frac]` is SEEDED with `FPG_UNIT - 1`, not zeroed**, and that one
+  word is the whole of what makes the two ends round the same way. The total
+  rounds **up** into whole units; a plain accumulator counts only **whole**
+  ones, so a 167-byte file armed at 1 unit and delivered 167 bytes reported
+  **0 of 1** and left the bar at 0% for the entire transfer — with no
+  arithmetic anywhere being wrong. Seeded, the running
+  `(FPG_UNIT - 1 + bytes) / FPG_UNIT` *is* `ceil(bytes / FPG_UNIT)` at every
+  point, not merely at the end. `fpg_step` never reads it, so the sector path
+  is untouched.
+- **The loader's arm is one sector coarse, deliberately.** `dsk_read_chain`
+  is handed sectors and multiplies, so a redirected package load is scaled to
+  the *capacity* the driver is given rather than to the file — the same number
+  the driver is told to clamp against, and out by under 512 bytes. The path
+  this feature exists for, `dskw_rbody`'s, is armed from `FSV_STAT` and is
+  exact; changing the loader's would mean changing an interface for less than
+  a sector.
+- **`fpg_stepb` steps *through* `fpg_step`** rather than repeating its
+  arithmetic, the same discipline `dskw_rdata`/`wdata`'s shared flush
+  follows (§18.4.2) and for the same reason: two copies of "has the extent
+  moved" is two answers that can drift. The loop runs at most 128 turns per
+  64KB report and each turn is a compare that usually finds nothing to draw.
+- **Unarmed it is a compare and a return**, so a driver calls it
+  unconditionally and never tests. It *draws*, so the gfx lock must already
+  be held — true by construction inside a file operation (§18) — and a
+  driver must never take it.
+
+**`RAMDISK.DRV` reports in `RD_PCHUNK` (64-byte) pieces on purpose**, and
+that is the only place the harness pretends to be slow. A RAM disk delivers
+a whole file in one `rep movsb`, so without it `OSAPI_FS_PROG` would ship
+with no consumer but the cable it was written for and no way to run it in a
+container — which is exactly how `OS88NET.COM` reached the field twice with
+not one instruction executed (§62.8).
 
 ### 12.9 The bar is three segments, and each answers for itself
 
@@ -24735,6 +24853,60 @@ register. The alternative shape, deferring the whole repaint to `[pt_apend]`'s
 window that is already frontmost and unobscured draws no window at all (§11.90),
 which is exactly the case at launch.
 
+### 42.11 A document handed over at launch is read BEFORE `wm_create`
+
+A picture double-clicked in a Disk window (§54.4) reached Paint as a name, and
+Paint spent it from its **first `W_PAINT`**. That is a paint the kernel has
+already drawn a frame for, so the picture's size arrived after the window's was
+decided, and every way out of that is a repair:
+
+- `pt_load` ends in `pt_wfollow`, which sizes `pt_tpl` and raises `[pt_wchg]`
+  for a caller to spend on `OSAPI_WM_RESIZE`. **That path had no caller.**
+  `pt_ondlg` spends it; `pt_argload` did not, and could not — `wm_resize`
+  repaints, so calling it from inside a paint proc re-enters the paint proc.
+- What ran instead was `pt_track`, a few instructions later, whose whole job is
+  to follow a **grow box** (§42.10): it found a canvas that disagreed with the
+  window and dragged the canvas back out to the window. The ink guard pinned
+  the *width* to the picture and let the *height* grow, so the 466x110 logo on
+  the system disk opened as a 466x110 picture in a **466x258** canvas — the
+  right width, the wrong height, and a white band under the artwork that is not
+  in the file. §42.9's own case, arriving down a different road.
+- `[pt_wchg]` then stayed raised for the session, so the next `File ▸ Open`
+  inherited a resize nothing had asked for.
+
+**So the load moved to the entry proc, above `wm_create`, and the repair
+disappears rather than being fixed**: `pt_tpl` carries the picture's size and
+its centred origin before the window exists, `wm_create` makes the window at
+it, `pt_track` finds canvas and content already equal, and there is no resize,
+no second repaint and no stale frame anywhere. The dialog path was always
+correct and is untouched — it has a window, holds the lock, and `OSAPI_WM_RESIZE`
+is exactly the right call there.
+
+**The entry proc may do this, and §20.2's contract is what says so.** It
+forbids `wm_show`/`wm_hide`/`wm_front`, spawning, and **drawing**; it explicitly
+permits heap claims "precisely so an app can size itself before it has one",
+which is this. Nothing in a load draws: the decoders write the canvas claim
+(`pt_line_put` — *canvas only, no screen*), `pt_caret_hide` and `pt_marq_hide`
+are gated on flags a freshly zeroed bss holds at 0, and the outcome is a
+**toast**, which §59.3 stages when no lock is held. The file API is legal on the
+UI task and the loader's own image read — with no lock held either — is a few
+hundred instructions behind us.
+
+Three things it needed. `pt_canvas_init` and `pt_font_init` move above
+`wm_create` too, because a decoder needs a canvas to decode INTO and the DIB
+header stamped; they took a `pushf`/`popf` pair with them, since the CF
+`wm_create` owes the loader is no longer in flight where they run.
+`pt_argload` **clears `[pt_wchg]` itself** — the template *is* the answer here,
+so the debt is paid before it is owed. And it shows `[pt_msgp]`, which the old
+path set and nobody read: a double-clicked picture that failed to decode used
+to say nothing at all.
+
+Measured on a cycle-accurate 5150 with a Hercules card, double-clicking
+`MEDIA/OS8088.GIF`: frame **494x300 → 512x152**, canvas **466x258 → 466x110**,
+`[pt_wchg]` **1 → 0** — identical, now, to what the same file through
+`File ▸ Open` has always produced. A Paint launched with no document is
+byte-identical either way.
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
@@ -34786,6 +34958,18 @@ sizes it cannot distinguish builds with.
 
 ## 58. debug.inc — DEBUG.DRV, the serial monitor (`drivers/debug/debug.asm`)
 
+> **UNLISTED AND UNSHIPPED SINCE §62.9.4, AND THE SOURCE IS KEPT.** This
+> driver no longer has a `drv_tab` row and `DEBUG.DRV` is not on either
+> floppy: the Drivers page holds exactly four rows on CGA (§31.1 — the panel
+> is at `wm_fit`'s ceiling already) and the file redirector's harness took
+> this one. `drivers/debug/` still builds — `make build/debug.drv` — and this
+> section still describes what it does, so bringing it back is a `drv_tab`
+> row, a `DRIVERS +=` line, and whichever row it displaces. **What it costs to
+> be without is real and is stated in the paragraph below**: on a machine
+> outside the container there is no other way to ask the kernel what it
+> thinks. The scrolling driver list §31.1 names is what makes this a choice
+> rather than a trade.
+
 A host-side tool reads and writes the machine's memory and I/O ports over a
 serial line. It exists because **there is nowhere else to ask the question**:
 86Box has no automation socket of any kind (no QMP, no monitor socket, no GDB
@@ -36494,11 +36678,18 @@ FSV_LIST    equ 0       ; append this folder's entries. The kernel still
                         ; order is how a display index stops meaning what the
                         ; hit-test thinks it means
 FSV_CHDIR   equ 2       ; AX = a handle out of an entry, or 0 = the root
-FSV_STAT    equ 4       ; SI = name -> exists, size, attributes
-FSV_READ    equ 6       ; SI = name, ES:BX = buffer, DX:CX = capacity
-FSV_WRITE   equ 8       ; SI = name, ES:BX = bytes, DX:CX = count
+                        ; out: CF=1 refuses; CF=0 and DX = THE PARENT'S
+                        ; HANDLE (0 = the root, and 0 when AX was 0)
+FSV_STAT    equ 4       ; SI = a NUL 8.3 name, in KERNEL_SEG
+                        ; out: CF=0, AX = THE HANDLE, DX:CX = size,
+                        ; BL = a FAT-style attribute byte (0x10 = directory)
+FSV_READ    equ 6       ; AX = a handle, DX:BX = buffer, DI:CX = capacity
+                        ; out: CF=0 and DX:AX = bytes read
+FSV_WRITE   equ 8       ; SI = name, DX:BX = bytes
 FSV_APPEND  equ 10      ; the chunked pair (§18.4.4), so a copy still streams
-FSV_READAT  equ 12      ; ...and its read half
+FSV_READAT  equ 12      ; AX = a handle, DX:BX = buffer, CX = capacity,
+                        ; DI:SI = the 32-bit offset. out: DX:AX = delivered,
+                        ; 0 = at or past the end
 FSV_DELETE  equ 14      ; SI = name
 FSV_RENAME  equ 16      ; SI = old, DI = new
 FSV_MKDIR   equ 18      ; SI = name
@@ -36506,6 +36697,52 @@ FSV_RMDIR   equ 20      ; SI = name
 FSV_DFREE   equ 22      ; -> DX:AX = free bytes, BX = the granule
 FSV_SIZE    equ 24
 ```
+
+**READS ARE BY HANDLE AND ONLY `FSV_STAT` TAKES A NAME.** Every other design
+here needs two contracts on one verb, because the two callers arrive with
+different things in hand: `dskw_rbody` and `dskw_read_at` have a name, and
+`dsk_read_chain` — the loader's and `assoc`'s path — has only the
+first-cluster word out of a staged entry, which on this volume is the
+driver's own opaque handle. So the kernel resolves a name through `FSV_STAT`
+first and then reads, which is `open` and `read` in the shape this ABI
+already had, and `dsk_read_chain` calls `FSV_READ` with the handle it is
+holding. **The cost is one extra round trip per named read and it is the
+right trade**: a verb that means "the thing in AX, unless AX is 0, in which
+case the string in SI" is the shape that gets called wrongly later, and a
+redirected volume's round trip is a message on a wire where the *data* it is
+about is kilobytes.
+
+**`FSV_STAT`'s `BL` IS A FAT ATTRIBUTE BYTE**, not the §19.1 type word, and
+that is deliberate: `dskw_rbody` already refuses `0x18` (a directory or a
+volume label) with `FERR_PROT` and `dskw_stat` already publishes the byte to
+packages, so a driver that answers `0x10` for a folder leaves both tests
+working verbatim rather than teaching the kernel a second vocabulary at the
+one site where the two would have to agree.
+
+**A BUFFER IS `DX:BX` AND NEVER `ES:BX`, WHICH IS `DSV_BLK`'S RULE AND NOT A
+NEW ONE.** This section pinned `ES:BX` for the four verbs that move bytes, and
+it cannot be: **`ES` is `KERNEL_SEG` on entry to everything the kernel
+far-calls into a driver** (§20.1) — that is what a driver reads the things it
+was handed through — and the buffer here is in `LOW_SEG`, the FAT window or a
+heap claim, so `ES` cannot carry two meanings at once. §51.8 states it
+outright for the block ABI and the file ABI inherits it verbatim: `DX:BX`, and
+`mov es, dx` is the driver's to do. The verbs that move bytes are milestone 2
+and 3, so nothing is built against the old wording; what the register carrying
+the *count* is settles when they are.
+
+**`FSV_CHDIR` ANSWERS THE PARENT'S HANDLE, AND THAT IS WHAT PAYS FOR `..`.**
+The kernel synthesizes the parent link itself (§19.5) and on a FAT volume it
+gets the cluster to put in it from `dsk_dotdot`, which **reads the
+directory's first sector** — every subdirectory carries `..` as its second
+entry by spec, so the disk itself records where up is and no path stack is
+needed. A redirected volume has no sectors, so that source does not exist,
+and the handle is opaque besides: only the driver knows what its own parent
+is. It is answered by `FSV_CHDIR` rather than by a verb of its own because
+**`dsk_chdir` is the only thing that ever moves `[dsk_cwd]`** — the driver is
+being told where to go at the exact moment it could say what is above it, so
+a fourteenth verb would ask a question the thirteenth has just answered.
+`disk_mount` banks it in `[dsk_fsup]` and `dsk_synth_up` spends it, which is
+one word of `.bss` against a whole round trip per listing.
 
 **A DRIVER CANNOT WRITE THE LISTING AND MUST NOT LEARN HOW.** `FSV_LIST`
 reads as though the driver stages entries itself, and it cannot:
@@ -36516,11 +36753,22 @@ holding. So the driver **appends**, one entry at a time, through a cell of its
 own:
 
 ```
-OSAPI_FS_ENT   ES:SI -> a 20-byte §19.1 staged entry, ES = the driver's DS
+OSAPI_FS_ENT   0x03C0   ES:SI -> a DSK_DE_SIZE-byte §19.1 staged entry, in
+               YOUR OWN segment (so ES = your DS)
                out: CF=0 and AX = the index it landed at
                     CF=1 = the listing is full (§19's 32-entry cap, or
                     whatever [dsk_nmax] says for this volume)
 ```
+
+**The entry is `DSK_DE_SIZE` = 32 bytes and not 20.** This section said 20
+while it was pinned and unbuilt, and 20 was the meaningful *prefix* of a
+§19.1 entry when it was written — the name, the type word at 16 and the
+first-cluster word at 18. The **size dword at 20..23** is inside it now, the
+stride the listing is indexed by has always been 32, and `dsk_put_dir` copies
+the stride. So a driver hands over 32 bytes, zeroed and then filled: name at
+0 (NUL-terminated 8.3, sanitized), **type at 16** (0 = file, 1 = package,
+2 = folder — never 3, which is the kernel's own parent link), **your handle
+at 18**, and the size at 20. Bytes 24..31 are reserved and must be zero.
 
 An **X stub** (§20.1), because the entry is in the driver's segment. It is
 legal **only from inside `FSV_LIST`** — `[dsk_fslist]` is the gate, raised
@@ -36536,6 +36784,28 @@ simply leaves it blank, so §25's generic icon does its job. A driver that
 wants to harvest gets a second cell later, or does it with `FSV_READAT` and
 composes — but **measure first**: at ~30 ms a read it is a second of listing
 time for a folder of thirty packages.
+
+**A driver also owes the PROGRESS BAR, and it is the only one that can pay**
+(§12.8.1). The kernel arms §12.8's file-activity widget from `FSV_STAT`'s
+size and is then **one far call deep** inside `FSV_READ`, blind, until the
+verb returns — where a floppy is stepped from `dsk_xfer`'s own per-sector
+loop. So a redirected read of a 116KB module over a 3,741 bytes/second cable
+(PERFORMANCE.md Set 39) reported *nothing at all* until the widget's scale
+became bytes and this cell existed:
+
+```
+OSAPI_FS_PROG  0x03C8   AX = bytes moved SINCE YOUR LAST REPORT
+                        (never a running total: the bar would advance by
+                        the whole file on every call)
+                        out: nothing, every register and the flags kept
+```
+
+An ordinary slot and not an X stub — it carries no pointer. Unarmed it is a
+compare and a return, so call it unconditionally and never test; a short
+count is the ordinary case for a wire and the sub-unit remainder is carried
+rather than rounded, so reporting every 64-byte frame is exact. **It draws**,
+so the gfx lock must already be held — true by construction inside a file
+operation (§18) — and a driver must never take it.
 
 `DVK_FILE` = 2 joins `DVK_BIOS` and `DVK_DRV` in `DV_KIND`, and `DV_CLASS`
 (§18.7.3) says which class serves it — the same byte, doing the same job, for
@@ -36587,6 +36857,195 @@ on a cycle-accurate 8088 in a container — which is the one thing block mode
 never had, and the reason two of its bugs reached the field. The cable's file
 client is then a second `DRVC_FILE` driver against a kernel that is already
 proven.
+
+#### 62.9.4 Milestone 1 as built — a volume that mounts and lists
+
+**Done and verified on a cycle-accurate 5150 running the period IBM ROM.**
+`RAMDISK.DRV` (521 bytes) publishes `FSV_LIST`, `FSV_CHDIR` and `FSV_DFREE`
+over a static two-level tree, and the whole Disk window works on it: the
+listing arrives **sorted by the kernel** (the driver hands its rows over
+deliberately out of order, so a sort that did not run would show), sizes and
+the `Size … Free …` line are right, `..` is synthesized, and every icon is
+§25's generic one because a redirected volume has no sectors to harvest from.
+
+What the kernel gained: `drv_fs_call`; `disk_mount`'s `DVK_FILE` branch;
+`dsk_xfer`'s refusal; `dsk_free_clus` → `FSV_DFREE`; `OSAPI_FS_ENT`;
+`dsk_synth_up`'s banked parent handle; and `DVK_FILE` awareness in
+`dsk_vol_fixed`, `dsk_vol_del`, `dsk_vol_drop_drv`, `dsk_vol_add` and
+`dsk_here_ok`. **Measured: `.text` +341, `.bss` +5, `.cold` +0 — one image
+rung, `KERN_SIZE` 99,840 → 100,352, spare 2,560 → 2,048 (four steps).** That
+is inside §0's 380–460 byte estimate and inside the budget move granted for
+this stage.
+
+**Three things fell out for free and are worth knowing.** `Format` greys on a
+redirected volume with no new code, because `files.inc` and `diskw.inc` both
+already refuse anything that is not `DVK_BIOS`. The volume reports **fixed**
+rather than removable — but only after `dsk_vol_fixed` was changed to ask
+"not BIOS" instead of "is `DVK_DRV`": fallen through to, its `DV_UNIT` test
+reads *the driver's own handle* as an int 13h drive number, so the icon would
+have been decided by whether that handle happened to have bit 7 set. And
+`dsk_free_clus` answers in **sectors** for such a volume, because the
+redirected mount sets `[dsk_spc] = 1` — which leaves `fm_measure` and
+`dskw_dfree_x` untouched rather than teaching two consumers a second unit.
+
+**The verification found one kernel-shaped bug and one that is a warning about
+NASM.** The kernel one is ordinary: `rd_stage` spent `CX`, which was
+`rd_list`'s loop counter, so the walk ran off the table and filled the listing
+to `DSK_NENT`; it presented as `disk_nfiles` = 32 for a three-entry root,
+which is *also* what a driver appending too much on purpose looks like — the
+cap held and refused the rest exactly as designed, and nothing said so. **It
+was invisible on the screen and obvious the moment the count was read out of
+the guest.**
+
+The other is worth a rule. **A trailing backslash in a NASM comment is a LINE
+CONTINUATION.** The `FSV_*` table was written with an ASCII-art brace down its
+right-hand side — `\` on the first row, `|` on the middle ones, `/` on the
+last — and the `\` silently swallowed the next `dw 0`. The table assembled one
+word short under `-w+error`, `rd_dfree` landed at index 10 instead of 11,
+`FSV_DFREE` read whatever followed the table, and the driver's own
+`call bp` dispatcher jumped to `0x6152`. The symptom was **"the Disk window
+will not open"** — four call layers and one whole subsystem away from the
+cause, with the mount itself completing correctly first. A `%if` on the
+table's own length is the guard, and it is the only kind that can catch this.
+
+**Milestone 3 lands on this** — see §62.9.6. The cable's file client is a
+second `DRVC_FILE` driver after that.
+
+#### 62.9.5 Milestone 2 as built — reads, by handle
+
+**Done and verified on the same machine: Minesweeper launches off a redirected
+volume, and Note Pad opens a document on one.** Those are the two halves §62.9.3
+names, and they are two different paths — the loader arrives holding a handle,
+an application arrives holding a name.
+
+**Measured: `.text` +42, `.cold` +205, `.bss` +0 — NO RUNG CROSSED, so the
+footprint is unchanged at 100,352 and the spare is still four steps.** The
+`.cold` rung has 147 bytes left, which is the number for the next feature to
+watch: milestone 3's six write verbs will cross it.
+
+Five branch sites, and only the first two were in §62.9.3's table:
+
+| site | what it does |
+|---|---|
+| `dskw_stat_x` | `FSV_STAT` — and it is the resolver everything else composes on |
+| `dskw_rbody` | `FSV_STAT` then `FSV_READ`, with the FAT path's own `0x18` and capacity refusals kept verbatim |
+| `dskw_read_at_x` | `FSV_STAT` then `FSV_READAT` |
+| `dsk_read_chain` | one `FSV_READ`, by the handle it already holds |
+| **`loader_run`'s header PEEK** | `FSV_READAT` at offset 0 |
+
+**That last one is the site the table missed, and it is the one that decides
+whether ANY package on such a volume loads.** SPEC.md §21 step 2 reads the
+file's first sector to validate the `.o88` header *before* claiming a region,
+through `dsk_clus2lba` and `disk_read` — and `dsk_xfer` refuses a redirected
+volume outright, so without a branch there every package is `Bad package`
+however well the rest works. It presented exactly that way: the listing was
+right, the sizes were right, and the double-click selected the row and did
+nothing.
+
+**Its neighbour is worse, because it would have been silent.** The same step
+re-validates the entry's first-cluster word against `[dsk_maxclus]` — and on
+a redirected volume that word is an opaque handle while `[dsk_maxclus]`
+belongs to *the last FAT volume mounted*. The check is not merely wrong, it
+is answered by a number from another disk: small handles pass by luck and a
+driver that numbered its files from 4,096 would have had every package
+refused, on a volume that listed and read perfectly. It is skipped on
+`DVK_FILE` now.
+
+**Two design points, both of which the ABI already implied.** Reads are BY
+HANDLE and only `FSV_STAT` takes a name, so the kernel resolves once and then
+reads — the cost is a round trip on a volume where the *data* is kilobytes,
+and what it buys is that no verb ever means two things. And the capacity is
+checked **twice**, once in `dskw_rbody` before it calls and once inside the
+driver: `dsk_read_chain` reaches `FSV_READ` without passing the first check at
+all, and a driver that trusts its caller's arithmetic writes past the end of
+somebody else's claim.
+
+**What a redirected read does NOT do yet is drive §12.8's activity widget on
+the by-name path.** `dsk_read_chain` takes the sector count as its scale and
+so still does; `dskw_rbody`'s redirected branch has no sector count to give
+and skips `fpg_begin` (`fpg_end` is gated on its own flag, so the pairing is
+safe). That costs nothing on a RAM disk and is worth fixing for the cable,
+where a 116KB read is half a minute of frozen screen — a byte-based scale is
+the obvious answer and it belongs with the cable's client.
+
+#### 62.9.6 Milestone 3 as built — writes
+
+**Done and verified: New Folder, Delete, Rename, a document SAVED back onto a
+redirected volume, and a package COPIED across one and then RUN.** The six
+write verbs are `FSV_WRITE`, `APPEND`, `DELETE`, `RENAME`, `MKDIR` and
+`RMDIR`, and all six reach the driver through **one shared tail**,
+`dskw_fsop`. Sharing it is the point rather than a saving: `dskw_sync_x` is
+what marks every Disk window showing the folder (§22.8) and rebuilds the
+global snapshot, and it has to run after a successful write of any kind. Six
+copies of that would be six chances to forget one.
+
+**Measured: `.text` +0, `.bss` +4, `.cold` +213 — one COLD rung, `KERN_SIZE`
+100,352 → 100,864, spare 2,048 → 1,536 (three steps).** §62.9.5 predicted
+that rung and it is the one this stage was always going to cross.
+
+**The protection mask is the DRIVER's here**, and that is a real difference
+rather than an omission. `DSKW_PROT` is a test on the raw FAT attribute byte
+out of a directory entry and a redirected volume has neither, so a driver
+that wants a file undeletable refuses `FSV_DELETE`. The kernel cannot do it
+for it, and pretending otherwise would mean inventing an attribute byte the
+far side never sent.
+
+**Three more sites had to learn about handles, and all three are the same
+mistake in different modules.** The kernel range-checks a "first cluster"
+against `[dsk_maxclus]` in four places; on a redirected volume that word is
+an opaque handle and `[dsk_maxclus]` **belongs to the last FAT volume
+mounted**. §62.9.5 fixed the loader's. `fcp_goto`'s is worse, because it also
+rejects anything below 2 — and the first folder a `DRVC_FILE` driver hands
+out is handle 1, so the copy engine refused the very first subfolder with
+`FERR_IO`. `fcp_rdnext`'s is the third, and it walks a chain besides; a
+redirected read there is one `FSV_READAT` at a running offset, which is also
+what makes it resumable without `[dsk_chain_end]`.
+
+**`fcp_goto` had a second and more interesting fault: it desynchronises the
+driver.** Its quiet path exists *precisely* to avoid a mount for a move
+inside one volume — "a move inside one volume is a word" — and a mount is the
+only thing that would have called `FSV_CHDIR`. A `DRVC_FILE` driver keeps its
+own idea of where it is standing, because `FSV_STAT` resolves a name in the
+**current** folder, so writing `[dsk_cwd]` behind its back leaves the two
+disagreeing and every name the copy then asks about is looked up in the
+folder it came *from*. It presented as `FERR_NOENT` for a file plainly listed
+on screen. **A driver-side cwd is state the kernel can silently
+desynchronise, and the routines that can do it are the ones written to skip a
+mount** — which is a general hazard for any future `DRVC_FILE` client, not a
+quirk of the copy engine.
+
+**Two of the four bugs this milestone found were in the HARNESS, and both are
+worth reading because of their SHAPE rather than their content.**
+`rd_ext_off` computed a byte offset with `mul`, which writes `DX:AX` — and
+`DX` is the destination *segment* at both call sites that matter, so every
+read handed the blitter a segment of 0 and wrote the file over the interrupt
+vector table. **The operation reported success**; the machine ran away in the
+heap some seconds later, in a different subsystem, and the first diagnosis
+blamed the kernel's copy engine (whose changes were reverted and then
+restored once the real cause was found). And `rd_write` set `RDE_TYPE` to 0
+for everything, so a copied `.O88` landed as a plain FILE: listed, the right
+size, byte-perfect on the volume, and **inert** — because a type-0
+double-click goes to §54's association path, and nothing is associated with
+`.O88`. A package's type comes from its extension and a redirected volume has
+to decide that the same way `dsk_synth` does.
+
+**What is deliberately NOT covered, and is a gap rather than a decision:**
+copying a FOLDER onto a redirected volume. `fcp_scan` enumerates a source
+directory by walking its raw sectors, and there are none — a redirected tree
+copy needs either an enumerate-by-ordinal verb or the engine reading the
+kernel's own listing, and neither is a branch site. Single files copy in both
+directions.
+
+**One thing milestone 1 could not have and the next one must decide.**
+`RAMDISK.DRV` took **`DEBUG.DRV`'s `drv_tab` row**, because the Drivers page
+holds exactly four: rows are `CP_DROWH` (26) apart from `CP_DR0Y` (24) in a
+`CP_CH` (132) pane, so a fifth row's glyphs start at 128 and its caption falls
+off the bottom — and the panel cannot grow, because CGA is 200 rows and
+`wm_fit`'s ceiling is 155 against a frame already at 151 (§31.1). §58's
+monitor keeps its source and its section; it is no longer listed and no longer
+ships. **A fifth driver wants the scrolling list §31.1 already names as the
+answer, not a taller window** — and that, not the redirector, is what the next
+driver-shaped feature has to pay for.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

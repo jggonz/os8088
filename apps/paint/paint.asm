@@ -266,6 +266,22 @@ PT_NAMEMAX  equ 12                  ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
 ; has to publish.
 ;
 ; The loader shows the window after we return, so nothing here draws.
+;
+; A DOCUMENT WE WERE LAUNCHED TO OPEN IS READ HERE, BEFORE wm_create, AND
+; SPEC.md 42.11 IS WHY. It used to be read from the first W_PAINT, and that
+; is a paint the kernel has already drawn a frame for: the picture's size
+; arrives too late to be the window's, pt_wfollow's [pt_wchg] had no caller
+; to spend it on that path, and pt_track - which runs a few instructions
+; later and exists to follow a GROW BOX - then dragged the canvas back out to
+; the window it did not fit. A 466x110 logo opened as 466x258. Loaded here
+; the size is simply the template's, and there is no resize at all.
+;
+; Nothing in the load draws: the decoders write the canvas claim
+; (pt_line_put, "canvas only, no screen"), pt_caret_hide and pt_marq_hide are
+; gated on flags a fresh bss holds at 0, and the outcome is a TOAST, which
+; SPEC.md 59 stages when the lock is not held. The file API is legal here -
+; the entry proc runs on the UI task and the loader's own image read, with no
+; lock held either, is a few hundred instructions behind us.
 ; -----------------------------------------------------------------------------
 pt_entry:
     mov byte [pt_fscale], 1         ; the bss arrives zeroed, and zero is not a
@@ -273,6 +289,12 @@ pt_entry:
                                     ; against the pencil's 1px, which is what
                                     ; "much thicker by default" means here
     call pt_geom                    ; screen limits, the memory claim, canvas
+    call pt_arg                     ; were we launched to open a picture?
+    cmp byte [pt_mode], PT_M_LIVE   ; a machine that cannot fund a canvas has
+    jne .make                       ; nothing to decode into
+    call pt_canvas_init             ; the canvas to decode INTO - the header
+    call pt_font_init               ; and the white, before anything fills it
+    call pt_argload                 ; ...and the picture, which sizes pt_tpl
 .make:
     push si
     mov si, pt_tpl
@@ -330,7 +352,6 @@ pt_entry:
     pop cx                          ; latched XOR, the caret is keystroke-driven
     pop ax
     popf
-    call pt_arg                     ; were we launched to open a picture?
     cmp byte [pt_mode], PT_M_LIVE
     jne .menus
     push ax
@@ -351,10 +372,6 @@ pt_entry:
     call pt_menufix                 ; and the menus say what is unavailable                      ; a notice window gets the menu bar too,
                                     ; so its name shows and File/Edit are
                                     ; visibly inert rather than absent
-    pushf                           ; the CF wm_create owes the loader rides
-    call pt_canvas_init             ; through every one of these
-    call pt_font_init
-    popf
 .menus:
     push si
     mov si, pt_menus                ; BX is still the window (SPEC.md 20.3:
@@ -2864,10 +2881,6 @@ pt_brush:
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 pt_paint:
-    cmp byte [pt_argp], 0           ; a picture handed to us at launch
-    je .painting                    ; (SPEC.md 54.5): the lock is held here
-    call pt_argload                 ; and the window is placed, which the
-.painting:                          ; entry proc could promise neither
     push ax
     push bx
     push cx
@@ -7389,15 +7402,18 @@ pt_dlg:
 
 ; -----------------------------------------------------------------------------
 ; pt_arg - accept a picture handed to us at launch (SPEC.md 54.5)
-; in:  nothing; called from pt_entry once the window exists
-; out: nothing; preserves all registers AND the flags - the CF this package
-;      owes the loader is still riding in them
+; in:  nothing; called from pt_entry BEFORE the window exists
+; out: nothing; preserves all registers AND the flags
 ;
-; It RECORDS and does not load. Paint's load path shows a toast, calls
-; pt_wait and repaints, all of which assume the gfx lock is HELD - and an
-; entry proc holds no lock (SPEC.md 20.2). The first W_PAINT is the natural
-; place instead: the lock is held, the window is visible and positioned, and
-; the picture is on screen the moment it arrives with no extra repaint.
+; It RECORDS and does not load; pt_argload, a few instructions later, is the
+; load. The two are still separate because the slot is READ-AND-CLEAR
+; (SPEC.md 54.5) and pt_load has a dozen ways not to finish - so what the
+; kernel handed over is banked whole before anything can fail with it half
+; taken.
+;
+; It ran after wm_create until SPEC.md 42.11, on the reasoning that a load
+; needs the gfx lock. It does not: the decoders write memory, and the toast
+; is staged rather than drawn when no lock is held (SPEC.md 59.3).
 ; -----------------------------------------------------------------------------
 pt_arg:
     pushf
@@ -7444,9 +7460,15 @@ pt_arg:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_argload - spend it, from the first paint (SPEC.md 54.5)
-; in:  the gfx lock HELD, the window visible
-; out: nothing; preserves all registers
+; pt_argload - spend it, from the ENTRY PROC (SPEC.md 54.5/42.11)
+; in:  no window yet, no gfx lock, [pt_argp] = 1 and pt_name the document
+; out: pt_tpl sized for the picture; preserves all registers
+;
+; Called before wm_create, which is the whole of SPEC.md 42.11: pt_load ends
+; in pt_wfollow, so the template this returns is the PICTURE's size and the
+; window is created at it. From the first paint - where this used to run -
+; the same call could only ask for a resize, and the asking is what had no
+; answer.
 ; -----------------------------------------------------------------------------
 pt_argload:
     push ax
@@ -7463,6 +7485,16 @@ pt_argload:
     mov si, pt_name                 ; pt_load reads the name from SI, not from
     call pt_load                    ; the buffer - ...and this is the dialog's
                                     ; own load
+    mov byte [pt_wchg], 0           ; pt_wfollow raised it and the TEMPLATE is
+                                    ; the answer here, so the debt is paid
+                                    ; before it is owed. Left set, the next
+                                    ; File > Open would take pt_ondlg's resize
+                                    ; branch on a size nothing had changed
+    mov si, [pt_msgp]               ; the outcome - 'Opened ...', or why not.
+    or si, si                       ; A double-clicked picture that fails to
+    jz .out                         ; decode used to say NOTHING at all: this
+    call pt_msg_show                ; path set [pt_msgp] and nobody read it
+    mov word [pt_msgp], 0           ; ...and it is not owed twice
 .out:
     pop di
     pop si
