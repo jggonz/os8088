@@ -37246,12 +37246,12 @@ command per `FSV_*` verb, so no command means two things:
 'G' READ    in  handle word, cap dword    out status, length dword, length bytes
 'A' READAT  in  handle word, off dword, cap word
                                       out status, length word, length bytes
-'U' WRITE   in  13-byte name, len dword, len bytes    out status
-'P' APPEND  in  13-byte name, len dword, len bytes    out status
-'D' DELETE  in  13-byte name          out status
-'N' RENAME  in  13-byte old, 13-byte new              out status
-'M' MKDIR   in  13-byte name          out status
-'K' RMDIR   in  13-byte name          out status
+'U' WRITE   in  handle word, 13-byte name, len dword, len bytes   out status
+'P' APPEND  in  handle word, 13-byte name, len WORD, len bytes    out status
+'D' DELETE  in  handle word, 13-byte name             out status
+'N' RENAME  in  handle word, 13-byte old, 13-byte new out status
+'M' MKDIR   in  handle word, 13-byte name             out status
+'K' RMDIR   in  handle word, 13-byte name             out status
 'F' DFREE   in  nothing               out status, free dword, granule word
 'E' ENUM    in  handle word, ordinal word             out status, 32-byte entry
 ```
@@ -37603,6 +37603,60 @@ nibble lands half a handshake out of step. A real cable's BUSY line is pulled
 to its idle level by the receiver; `Partner.sync()` is the harness doing that
 for itself, and it needs cycles as well as the write, because nothing else
 there runs the guest.
+
+##### 62.10.4.5 Phase 3 — the write path
+
+`FSV_WRITE`, `FSV_APPEND`, `FSV_DELETE`, `FSV_RENAME`, `FSV_MKDIR`,
+`FSV_RMDIR`. Like phase 2 it **cost the kernel nothing**: all six branch sites
+were built with the RAM disk, they share `dskw_fsop`, and none of them changed.
+
+Six verbs, one shape — a folder handle, a name, whatever the verb carries, and
+**one status byte back**. They are short on the driver side because everything
+hard about a write is on the *other* side of the cable: there is no commit
+ordering here, no FAT to flush and no rollback, because §18.4's three rules
+are the FAT path's and a redirected volume has none of it. What this end owes
+is the frame.
+
+**A status is a `FERR_*` and it is passed through untranslated.** The far side
+knows why a write failed — a full disk, a read-only file, a name already
+taken — and the kernel's callers already handle every one of them; translating
+here would be a second opinion about somebody else's filesystem. That is also
+where a real bug lived: **the file verbs spent phases 1 and 2 answering `2`
+for "no such thing", which is the BLOCK protocol's numbering** (`NST_*`, int
+13h codes) and is `FERR_IO` in the file protocol's. It cost nothing while the
+driver mapped every non-zero status onto a code of its own, and stopped being
+free the moment `net_wstat` began passing one through. Two numberings that are
+both small integers do not announce the difference.
+
+Three rules carry the write side, and each is a failure that would not
+announce itself:
+
+- **The bytes are consumed whatever happens to them.** The length is on the
+  wire ahead of them, so a refusal — read-only, no such folder, a full disk —
+  still has to take the run off the cable. The alternative is a wire with a
+  file's worth of bytes on it and nobody listening, which is the link dead
+  rather than one operation failed.
+- **A refusal sends exactly one status.** `wr_gate` answers `/RO` by sending
+  `FERR_WPROT` itself, so the drain that follows must not send a second byte —
+  the master is not reading one, and the frame desynchronises rather than the
+  operation failing. `0xFF` is the internal "already said so" marker.
+- **A short DOS write is a full disk**, and DOS reports it by returning fewer
+  bytes rather than by setting carry — so it is a compare, not a `jc` alone.
+  The verdict is banked and the run still drained.
+
+`/RO` is enforced in `wr_gate` and nowhere else, which is the point of one
+routine every verb calls first: a verb added later inherits the refusal by
+construction rather than by its author remembering. The machine at that end
+may be somebody's real DOS box — docs/FIELD-MACHINES.md keeps a live DOS 3.3
+install on the calibration machine's C: — so the switch has to mean it.
+
+One driver-side trap is worth naming because the first draft walked into it
+and left a comment asserting the opposite. **`net_wrrun` walks the source
+through `ES`, not `DS`**: `lplink.inc` addresses `[lp_base]`, `[lp_lastop]`
+and `[lp_dlset]` through `DS` with no segment override anywhere in the file,
+so a routine that repoints `DS` at the caller's buffer hands the transport a
+garbage port number and a garbage turnaround flag. The wire would simply have
+stopped. The assertion cost nothing to check.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

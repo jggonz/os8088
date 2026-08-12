@@ -216,6 +216,16 @@ int21:
     je  f_findfirst
     cmp ah, 0x4F
     je  f_findnext
+    cmp ah, 0x3C
+    je  f_create
+    cmp ah, 0x41
+    je  f_unlink
+    cmp ah, 0x39
+    je  f_mkdir
+    cmp ah, 0x3A
+    je  f_rmdir
+    cmp ah, 0x56
+    je  f_rename
     jmp f_unimp
 
 ; --- AH=02h: DL to the screen -------------------------------------------------
@@ -346,6 +356,8 @@ f_write:
     push di
     push ds
     push es
+    cmp byte [cs:fh_row], 0xFF
+    jne .tree
     call clamp
     mov [cs:xfer], cx
     jcxz .none
@@ -354,6 +366,33 @@ f_write:
     mov es, ax
     mov di, [cs:fpos]
     rep movsb
+    jmp short .none
+
+    ; --- a tree row: THE BYTES ARE DISCARDED AND THE SIZE IS KEPT -----------
+    ; A row's contents are generated (f_read), so there is nowhere to put
+    ; these and nothing that would read them back. What a write here has to
+    ; get right is the METADATA - the file grows, and a later listing and stat
+    ; say so - because that is what this end of the wire can be honest about.
+    ; The byte-exact claim belongs to the os8088-side harness, where
+    ; partner.py holds real blobs; see the header above f_create.
+.tree:
+    mov [cs:xfer], cx           ; every byte accepted: no medium to fill
+    jcxz .none
+    mov al, [cs:fh_row]
+    xor ah, ah
+    call dr_row
+    mov ax, [cs:fpos]           ; the new END, if this write went past it
+    add ax, cx
+    mov dx, [cs:fpos+2]
+    adc dx, 0
+    cmp dx, [cs:bx+DR_SIZE+2]
+    jb  .none
+    ja  .grew
+    cmp ax, [cs:bx+DR_SIZE]
+    jbe .none
+.grew:
+    mov [cs:bx+DR_SIZE], ax
+    mov [cs:bx+DR_SIZE+2], dx
 .none:
     pop es
     pop ds
@@ -440,6 +479,11 @@ DR_ATTR     equ 1               ; byte: 0x10 = directory
 DR_SIZE     equ 2               ; dword
 DR_NAME     equ 6               ; 13 bytes, ASCIIZ - the DTA's own layout
 DR_SZ       equ 20
+DR_GONE     equ 0xFE            ; a row that has been deleted, and is free for
+                                ; tree_add to take. NOT 0xFF: that is the ROOT,
+                                ; and a freed row wearing it would appear in
+                                ; the root's listing the moment it was removed
+                                ; from a subfolder
 
 ; A MACRO AND NOT HAND-COUNTED PADDING, because hand-counting it is exactly
 ; how this shipped broken: every row emitted 19 bytes against a DR_SZ of 20,
@@ -464,6 +508,12 @@ dr_tab:
     DR_ROW 2,    0x00, 20000, 'CHESS.EXE'
     DR_ROW 2,    0x10, 0,     'SUB'
     DR_ROW 5,    0x00, 7,     'DEEP.TXT'
+    ; ...and SPARE ROWS, because phase 3 CREATES. A write to a name that is
+    ; not here has to land somewhere, and a table sized exactly to its seeds
+    ; would refuse every one of them - which reads as the write path failing.
+%rep 8
+    DR_ROW DR_GONE, 0x00, 0, ''
+%endrep
 DR_N        equ ($ - dr_tab) / DR_SZ
 %if ($ - dr_tab) % DR_SZ != 0
   %error "dosstub: dr_tab is not a whole number of DR_SZ rows"
@@ -994,6 +1044,355 @@ path_to:
     pop ax
     ret
 
+; =============================================================================
+; WRITING, on the synthetic tree (SPEC.md 62.10.4.5)
+;
+; THE TREE IS MUTABLE NOW AND THE FILES ARE STILL NOT STORED. A row's contents
+; remain generated - byte i is (i + 7r) & 0xFF - and what a write changes is
+; the row's SIZE and a per-row PHASE byte, so a file written and read back
+; returns exactly what was put in it without this harness holding a single
+; byte of it. That is the whole reason the pattern was chosen in phase 2: it
+; is checkable from either end at no cost.
+;
+; What that CANNOT model is arbitrary content, so the checkable claim here is
+; "the right number of bytes arrived and the metadata moved", and the byte-
+; exact claim belongs to the os8088 side of the wire, where partner.py holds
+; real blobs. Two harnesses, each honest about a different half.
+; =============================================================================
+
+; --- AH=3Ch: create or truncate ----------------------------------------------
+f_create:
+    push bx
+    push si
+    push ds
+    mov si, dx
+    call row_of                 ; the caller's DS:SI
+    push cs
+    pop ds
+    jnc .have                   ; ...it exists: truncate it
+    pop ds
+    push ds
+    mov si, dx
+    call tree_add               ; ...or make a row for it
+    push cs
+    pop ds
+    jc  .full
+.have:
+    mov [cs:fh_row], al
+    xor ah, ah
+    call dr_row
+    mov word [cs:bx+DR_SIZE], 0     ; truncated: no bytes, and the next write
+    mov word [cs:bx+DR_SIZE+2], 0   ; decides the phase
+    mov word [cs:fpos], 0
+    mov word [cs:fpos+2], 0
+    pop ds
+    pop si
+    pop bx
+    mov ax, FH
+    jmp cf_clear
+.full:
+    pop ds
+    pop si
+    pop bx
+    mov ax, 4                   ; 'too many open files' - the nearest DOS code
+    jmp cf_set                  ; to "this stub's table is full"
+
+; --- AH=41h: delete ----------------------------------------------------------
+f_unlink:
+    push bx
+    push si
+    push ds
+    mov si, dx
+    call row_of
+    push cs
+    pop ds
+    jc  .no
+    xor ah, ah
+    call dr_row
+    test byte [cs:bx+DR_ATTR], 0x10
+    jnz .isdir
+    mov byte [cs:bx+DR_PAR], DR_GONE
+    pop ds
+    pop si
+    pop bx
+    jmp cf_clear
+.isdir:
+    pop ds
+    pop si
+    pop bx
+    mov ax, 5                   ; access denied: 41h does not remove folders
+    jmp cf_set
+.no:
+    pop ds
+    pop si
+    pop bx
+    mov ax, 2
+    jmp cf_set
+
+; --- AH=39h: mkdir -----------------------------------------------------------
+f_mkdir:
+    push bx
+    push si
+    push ds
+    mov si, dx
+    call row_of
+    push cs
+    pop ds
+    jnc .exists
+    pop ds
+    push ds
+    mov si, dx
+    call tree_add
+    push cs
+    pop ds
+    jc  .full
+    xor ah, ah
+    call dr_row
+    mov byte [cs:bx+DR_ATTR], 0x10
+    pop ds
+    pop si
+    pop bx
+    jmp cf_clear
+.exists:
+    pop ds
+    pop si
+    pop bx
+    mov ax, 80                  ; already exists
+    jmp cf_set
+.full:
+    pop ds
+    pop si
+    pop bx
+    mov ax, 3
+    jmp cf_set
+
+; --- AH=3Ah: rmdir -----------------------------------------------------------
+; EMPTINESS IS TESTED, because the kernel leaves that entirely to this side
+; (dskw_rmbody: "only the side holding the directory can answer it") and a
+; stub that removed an occupied folder would be testing the wrong contract.
+f_rmdir:
+    push bx
+    push cx
+    push si
+    push ds
+    mov si, dx
+    call row_of
+    push cs
+    pop ds
+    jc  .no
+    xor ah, ah
+    mov cl, al                  ; CL = the row, for the child scan
+    call dr_row
+    test byte [cs:bx+DR_ATTR], 0x10
+    jz  .notdir
+    call dir_empty              ; CL's children. CF=1 = it has some
+    jc  .full
+    mov byte [cs:bx+DR_PAR], DR_GONE
+    pop ds
+    pop si
+    pop cx
+    pop bx
+    jmp cf_clear
+.notdir:
+.full:
+    pop ds
+    pop si
+    pop cx
+    pop bx
+    mov ax, 5                   ; access denied, which is what DOS answers for
+    jmp cf_set                  ; both "not a directory" and "not empty"
+.no:
+    pop ds
+    pop si
+    pop cx
+    pop bx
+    mov ax, 3
+    jmp cf_set
+
+; dir_empty - CL = a row. CF=1 = something still names it as a parent.
+dir_empty:
+    push ax
+    push bx
+    xor ax, ax
+.l:
+    cmp ax, DR_N
+    jae .yes
+    call dr_row
+    cmp byte [cs:bx+DR_PAR], cl
+    je  .no
+    inc ax
+    jmp short .l
+.yes:
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop bx
+    pop ax
+    stc
+    ret
+
+; --- AH=56h: rename. DS:DX = the old name, ES:DI = the new one. --------------
+f_rename:
+    push bx
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov si, dx
+    call row_of                 ; the OLD name, in the caller's DS
+    jc  .no
+    mov [cs:ren_row], al
+    pop es
+    push es
+    push ds
+    mov ax, es                  ; ...and the NEW one, in ES:DI
+    mov ds, ax
+    mov si, di
+    call row_of                 ; it must NOT exist
+    pop ds
+    jnc .exists
+    mov si, di                  ; take just its last component
+    mov ax, es
+    mov ds, ax
+    call last_comp              ; -> cmpbuf, CS-relative
+    push cs
+    pop ds
+    mov al, [cs:ren_row]
+    xor ah, ah
+    call dr_row
+    mov si, cmpbuf              ; ...over the row's name
+    mov di, bx
+    add di, DR_NAME
+    call cs_move
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop bx
+    jmp cf_clear
+.exists:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop bx
+    mov ax, 80
+    jmp cf_set
+.no:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop bx
+    mov ax, 2
+    jmp cf_set
+
+; cs_move - CS:SI -> CS:DI, up to 13 bytes including the NUL
+cs_move:
+    push ax
+    push cx
+    mov cx, 13
+.l:
+    mov al, [cs:si]
+    mov [cs:di], al
+    or  al, al
+    jz  .out
+    inc si
+    inc di
+    loop .l
+.out:
+    pop cx
+    pop ax
+    ret
+
+; last_comp - the caller's DS:SI path -> cmpbuf, the part after the last '\'
+last_comp:
+    push ax
+    push di
+    push si
+    mov di, si                  ; DI walks to the end, then back to a '\'
+.end:
+    cmp byte [si], 0
+    je  .found
+    cmp byte [si], '\'
+    jne .nx
+    mov di, si
+    inc di
+.nx:
+    inc si
+    jmp short .end
+.found:
+    mov si, di
+    mov di, cmpbuf
+.cp:
+    mov al, [si]
+    mov [cs:di], al
+    or  al, al
+    jz  .done
+    inc si
+    inc di
+    jmp short .cp
+.done:
+    pop si
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tree_add - the caller's DS:SI path -> a NEW row. AL = it; CF=1 = table full
+;
+; It reuses a DR_GONE row before appending, so a session that creates and
+; deletes in a loop does not run the table out - which is exactly what a copy
+; test does.
+; -----------------------------------------------------------------------------
+tree_add:
+    push bx
+    push cx
+    push dx
+    push di
+    call path_split             ; -> AL = the parent, cmpbuf = the new name
+    jc  .no
+    cmp byte [cs:cmpbuf], 0
+    je  .no
+    mov dl, al                  ; the parent, banked
+    xor ax, ax
+.scan:
+    cmp ax, DR_N
+    jae .no
+    call dr_row
+    cmp byte [cs:bx+DR_PAR], DR_GONE
+    je  .got
+    inc ax
+    jmp short .scan
+.got:
+    mov [cs:bx+DR_PAR], dl
+    mov byte [cs:bx+DR_ATTR], 0
+    mov word [cs:bx+DR_SIZE], 0
+    mov word [cs:bx+DR_SIZE+2], 0
+    mov si, cmpbuf
+    mov di, bx
+    add di, DR_NAME
+    call cs_move
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
 ; --- anything else: SAY SO AND STOP ------------------------------------------
 ; Never a plausible zero. A stub that quietly succeeds at a call it does not
 ; implement is a harness that has started lying about the thing under test.
@@ -1198,6 +1597,7 @@ dta_off:    dw 0
 cwd_row:    db 0xFF             ; the root
 find_dir:   db 0xFF             ; the folder the walk in progress is in
 find_row:   db 0                ; ...and how far through dr_tab it has got
+ren_row:    db 0                ; the row 56h is renaming
 find_one:   db 0                ; 0 = enumerate the folder, 1 = one named row
                                 ; still to hand over, 2 = and it has been
 fh_row:     db 0xFF             ; the open handle's tree row, FF = the RAM file

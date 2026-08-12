@@ -357,6 +357,47 @@ class Partner(object):
         n = self.recv_word()
         return st, self.recv(n)
 
+    # --- the write verbs, master side (SPEC.md 62.10.4.5) --------------------
+    # Every one of them is a folder, a name, whatever it carries, and ONE
+    # status byte back - a FERR_*, passed through from the far side untouched.
+    def _name13(self, s):
+        return s.encode('ascii').ljust(13, b'\0')[:13]
+
+    def mst_write(self, folder, name, data):
+        self.mst_cmd('U', folder)
+        self.send(self._name13(name))
+        self.send_dword(len(data))
+        self.send(data)
+        return self.recv_byte()
+
+    def mst_append(self, folder, name, data):
+        self.mst_cmd('P', folder)
+        self.send(self._name13(name))
+        self.send_word(len(data))       # ONE word: the chunked half of the
+        self.send(data)                 # pair, so a copy streams through it
+        return self.recv_byte()
+
+    def mst_delete(self, folder, name):
+        self.mst_cmd('D', folder)
+        self.send(self._name13(name))
+        return self.recv_byte()
+
+    def mst_rename(self, folder, old, new):
+        self.mst_cmd('N', folder)
+        self.send(self._name13(old))
+        self.send(self._name13(new))    # ...no length between them: the far
+        return self.recv_byte()         # side knows the first ends at 13
+
+    def mst_mkdir(self, folder, name):
+        self.mst_cmd('M', folder)
+        self.send(self._name13(name))
+        return self.recv_byte()
+
+    def mst_rmdir(self, folder, name):
+        self.mst_cmd('K', folder)
+        self.send(self._name13(name))
+        return self.recv_byte()
+
     def mst_dfree(self):
         """NF_DFREE -> (status, free bytes, granule)."""
         self.mst_cmd('F')
@@ -497,6 +538,52 @@ class Partner(object):
                 self.send_byte(0)
                 self.send_word(len(d))      # ...ZERO past the end, which is
                 self.send(d)                # the contract and not an error
+            elif c in (ord('U'), ord('P')):     # NF_WRITE / NF_APPEND
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                n = (self.recv_dword() if c == ord('U') else self.recv_word())
+                d = self.recv(n)                # THE RUN IS TAKEN WHATEVER we
+                                                # do with it: the length is on
+                                                # the wire ahead of the bytes
+                st = tree.put(fold, name, d, append=(c == ord('P')))
+                self.log.append('%s folder=%d %r %d bytes -> %s'
+                                % ('WRITE' if c == ord('U') else 'APPEND',
+                                   fold, name, n,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('D'):             # NF_DELETE
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.remove(fold, name, want_dir=False)
+                self.log.append('DELETE folder=%d %r -> %s'
+                                % (fold, name,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('N'):             # NF_RENAME
+                fold = self.recv_word()
+                old = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                new = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.rename(fold, old, new)
+                self.log.append('RENAME folder=%d %r -> %r : %s'
+                                % (fold, old, new,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('M'):             # NF_MKDIR
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.mkdir(fold, name)
+                self.log.append('MKDIR folder=%d %r -> %s'
+                                % (fold, name,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('K'):             # NF_RMDIR
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.remove(fold, name, want_dir=True)
+                self.log.append('RMDIR folder=%d %r -> %s'
+                                % (fold, name,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
             elif c == ord('F'):             # NF_DFREE: free bytes, granule
                 self.send_byte(0)
                 self.send_word(tree.free & 0xFFFF)
@@ -581,6 +668,69 @@ class FileTree(object):
             if self.meta[c][0].upper() == name.upper():
                 return c
         return None
+
+    # --- the write verbs (SPEC.md 62.10.4.5) --------------------------------
+    # Each answers a FERR_*, which is what crosses the wire: 0 ok, 3 name,
+    # 4 no such thing, 5 exists, 8 protected. They are apps/os88api.inc's
+    # numbers and NOT the block protocol's int 13h codes, which are a
+    # different numbering that happens to use small integers too.
+    F_OK, F_NAME, F_NOENT, F_EXIST, F_PROT = 0, 3, 4, 5, 8
+
+    def put(self, folder, name, data, append=False):
+        if folder not in self.nodes:
+            return self.F_NOENT
+        h = self.find(folder, name)
+        if append:
+            if h is None:
+                return self.F_NOENT     # APPEND is to an EXISTING file, which
+            if self.meta[h][1] == self.T_DIR:   # is 18.4.4's contract
+                return self.F_PROT
+            self.blobs[h] = self.data(h) + data
+        else:
+            if h is not None and self.meta[h][1] == self.T_DIR:
+                return self.F_PROT
+            if h is None:
+                h = self.add(folder, name, content=data)
+                return self.F_OK
+            self.blobs[h] = bytes(data)
+        n, t, _ = self.meta[h]
+        self.meta[h] = (n, t, len(self.blobs[h]))
+        return self.F_OK
+
+    def remove(self, folder, name, want_dir):
+        h = self.find(folder, name)
+        if h is None:
+            return self.F_NOENT
+        isdir = self.meta[h][1] == self.T_DIR
+        if isdir != want_dir:
+            return self.F_PROT          # DELETE is not RMDIR and the far side
+                                        # must not let one do the other's work
+        if isdir and self.nodes[h][1]:
+            return self.F_PROT          # ...and only the side holding the
+                                        # directory can answer "is it empty"
+        self.nodes[folder][1].remove(h)
+        del self.nodes[h]
+        del self.meta[h]
+        self.blobs.pop(h, None)
+        return self.F_OK
+
+    def rename(self, folder, old, new):
+        h = self.find(folder, old)
+        if h is None:
+            return self.F_NOENT
+        if self.find(folder, new) is not None:
+            return self.F_EXIST
+        n, t, s = self.meta[h]
+        self.meta[h] = (new, t, s)
+        return self.F_OK
+
+    def mkdir(self, folder, name):
+        if folder not in self.nodes:
+            return self.F_NOENT
+        if self.find(folder, name) is not None:
+            return self.F_EXIST
+        self.add(folder, name, 0, self.T_DIR)
+        return self.F_OK
 
     def parent(self, h):
         if h not in self.nodes:

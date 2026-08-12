@@ -913,8 +913,25 @@ written from the verb names alone. They are `G` and `U` now; the tempting fix
 was a mode flag, which is this tree's own second-opinion failure in a new
 place.
 
+**PHASE 3 IS THE WRITE PATH**: `FSV_WRITE`, `APPEND`, `DELETE`, `RENAME`,
+`MKDIR`, `RMDIR` (SPEC.md §62.10.4.5). It cost the kernel nothing either — all
+six branch sites came with the RAM disk, they share `dskw_fsop`, and none of
+them changed. Six verbs, one shape: a folder handle, a name, whatever the verb
+carries, and one `FERR_*` back.
+
+That last word is where a real bug lived. **The file verbs had been answering
+`2` for "no such thing", which is the BLOCK protocol's int 13h numbering and
+is `FERR_IO` in the file protocol's.** Free while the driver mapped every
+non-zero status onto a code of its own; not free the moment a status is passed
+through, which is what a write does.
+
+`/RO` is enforced in one routine every verb calls first, so a verb added later
+inherits the refusal rather than remembering it — the machine at that end may
+be somebody's real DOS box, and §FIELD-MACHINES keeps a live DOS 3.3 install
+on the calibration machine's C:.
+
 What is still owed at this boundary is the WIRE's verdict, which is unchanged:
-two period boxes and a cable. Phase 3 is the write path.
+two period boxes and a cable.
 
 ### 2.3 What was considered and rejected
 

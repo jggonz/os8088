@@ -101,11 +101,32 @@ NF_STAT     equ 'S'             ; handle, 13-byte name -> status, handle,
 NF_READ     equ 'G'             ; handle, cap dword -> status, len dword, bytes
 NF_READAT   equ 'A'             ; handle, off dword, cap word
                                 ;                 -> status, len word, bytes
+NF_WRITE    equ 'U'             ; folder, name, len dword, bytes -> status
+NF_APPEND   equ 'P'             ; folder, name, len WORD, bytes -> status
+NF_DELETE   equ 'D'             ; folder, name -> status
+NF_RENAME   equ 'N'             ; folder, old name, new name -> status
+NF_MKDIR    equ 'M'             ; folder, name -> status
+NF_RMDIR    equ 'K'             ; folder, name -> status
+
+; A FILE-MODE STATUS IS A FERR_* AND A BLOCK-MODE ONE IS AN INT 13H CODE, and
+; they are NOT the same numbering however alike two small integers look. The
+; file verbs spent phases 1 and 2 answering a 2 for "no such
+; thing" - which is FERR_IO, "unrecoverable read/write error". It cost
+; nothing then only because the driver mapped every non-zero status onto a
+; code of its own; it stops being free the moment net_wstat passes one
+; through, which is what the write path does.
+FERR_OK     equ 0               ; ...apps/os88api.inc's numbering, verbatim
+FERR_IO     equ 2
+FERR_NAME   equ 3
+FERR_NOENT  equ 4
+FERR_EXIST  equ 5
+FERR_FULL   equ 6
+FERR_PROT   equ 8
+FERR_WPROT  equ 9
 
 NST_OK      equ 0x00
 NST_WPROT   equ 0x03
 NST_NOSEC   equ 0x04
-NST_NOENT   equ 0x02            ; no such handle - DOS's own 'file not found'
 
 SEC_MAX     equ 0xFFFF          ; os8088's own cap: BPB rule 8 (SPEC.md 18.2)
 
@@ -284,7 +305,44 @@ serve:
     je  .fread
     cmp al, NF_READAT
     je  .freadat
+    cmp al, NF_WRITE
+    je  .fwrite
+    cmp al, NF_APPEND
+    je  .fappend
+    cmp al, NF_DELETE
+    je  .fdelete
+    cmp al, NF_RENAME
+    je  .frename
+    cmp al, NF_MKDIR
+    je  .fmkdir
+    cmp al, NF_RMDIR
+    je  .frmdir
     jmp short .cmd
+
+.fwrite:
+    call srv_write
+    jc  .out
+    jmp .cmd
+.fappend:
+    call srv_append
+    jc  .out
+    jmp .cmd
+.fdelete:
+    call srv_delete
+    jc  .out
+    jmp .cmd
+.frename:
+    call srv_rename
+    jc  .out
+    jmp .cmd
+.fmkdir:
+    call srv_mkdir
+    jc  .out
+    jmp .cmd
+.frmdir:
+    call srv_rmdir
+    jc  .out
+    jmp .cmd
 
 .flist:
     call srv_list
@@ -880,7 +938,7 @@ srv_list:
     jmp short .out
 
 .nodir:
-    mov al, NST_NOENT           ; a count of zero still completes the frame,
+    mov al, FERR_NOENT           ; a count of zero still completes the frame,
     call lp_sbyte               ; so a refusal costs the master nothing but
     jc  .lost                   ; an empty folder
     xor ax, ax
@@ -934,7 +992,7 @@ srv_count:
     xor ax, ax                  ; AN EMPTY FOLDER IS NOT A REFUSAL: DOS
     pop dx                      ; answers findfirst with 'no more files' for
     pop cx                      ; one, and the master wants a count of zero
-    pop bx                      ; rather than NST_NOENT
+    pop bx                      ; rather than FERR_NOENT
     clc
     ret
 
@@ -1312,7 +1370,7 @@ srv_chdir:
     jc  .lost
     jmp short .out
 .no:
-    mov al, NST_NOENT
+    mov al, FERR_NOENT
     call lp_sbyte
     jc  .lost
 .out:
@@ -1412,7 +1470,7 @@ srv_dfree:
     jc  .lost                   ; what every volume it can mount uses
     jmp short .out
 .no:
-    mov al, NST_NOENT
+    mov al, FERR_NOENT
     call lp_sbyte
     jc  .lost
 .out:
@@ -1483,7 +1541,7 @@ srv_stat:
     jc  .lost
     jmp short .out
 .no:
-    mov al, NST_NOENT
+    mov al, FERR_NOENT
     call lp_sbyte
     jc  .lost
 .out:
@@ -1630,7 +1688,7 @@ srv_read:
     call close_handle
     jmp short .lost
 .no:
-    mov al, NST_NOENT
+    mov al, FERR_NOENT
     call lp_sbyte
     jc  .lost
 .out:
@@ -1723,7 +1781,7 @@ srv_readat:
     call close_handle
     jmp short .lost
 .no:
-    mov al, NST_NOENT
+    mov al, FERR_NOENT
     call lp_sbyte
     jc  .lost
 .out:
@@ -1897,6 +1955,507 @@ str_cpy16:
     mov cx, 80
     call str_cpy
     pop cx
+    ret
+
+; =============================================================================
+; WRITING (SPEC.md 62.10.4.5)
+;
+; Six verbs and one shape: a folder handle, a name, whatever the verb carries,
+; and ONE STATUS BYTE back - a FERR_*, not an int 13h code, because that is
+; what the kernel's callers already handle.
+;
+; /RO IS ENFORCED HERE AND NOWHERE ELSE, which is the point of putting the
+; test in one routine every one of them calls first: a verb added later gets
+; the refusal by construction rather than by its author remembering. The
+; machine at this end may be somebody's real DOS box - docs/FIELD-MACHINES.md
+; keeps a live DOS 3.3 install on the calibration machine's C: - so the switch
+; has to mean it.
+; =============================================================================
+
+; wr_gate - may this run write at all? CF=1 = no, and the status is sent
+wr_gate:
+    cmp byte [roflag], 0
+    je  .ok
+    mov al, FERR_WPROT          ; the MEDIA answer, which is what a read-only
+    call lp_sbyte               ; run is from the other end's point of view
+    stc
+    ret
+.ok:
+    clc
+    ret
+
+; wr_arg - the folder handle and one name, off the wire into pathbuf+namebuf
+; out: CF=1 = the link died; ZF=1 (via [srv_ok]) = the folder is unknown
+wr_arg:
+    call lp_rword
+    jc  .lost
+    mov [srv_h], ax
+    call srv_rname
+    jc  .lost
+    mov byte [srv_ok], 1
+    call hd_path                ; -> pathbuf
+    jc  .nodir
+    call path_join              ; ...+ '\' + namebuf -> wildbuf
+    clc
+    ret
+.nodir:
+    mov byte [srv_ok], 0
+    clc
+    ret
+.lost:
+    stc
+    ret
+
+; wr_done - AL = a FERR_*, and the verb is over
+wr_done:
+    call lp_sbyte
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_write - NF_WRITE: create or replace, whole
+;
+; THE BYTES ARE CONSUMED WHATEVER HAPPENS TO THEM. The length is on the wire
+; ahead of them, so a refusal - read-only, no such folder, a full disk - still
+; has to take the run off the cable; the alternative is a wire with a file's
+; worth of bytes on it and nobody listening, which is the link dead rather
+; than one operation failed. So the gate is tested, the run is drained either
+; way, and only then does the status go back.
+; -----------------------------------------------------------------------------
+srv_write:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call wr_arg
+    jc  .lost
+    call lp_rword               ; the length, low
+    jc  .lost
+    mov [srv_rlen], ax
+    call lp_rword               ; ...and high
+    jc  .lost
+    mov [srv_rlen+2], ax
+    call wr_open                ; 3Ch: create or truncate. CF=1 = refused
+    jc  .sink
+    mov byte [srv_wbad], 0
+    call recv_body              ; ...straight into the file
+    jc  .rlost
+    call close_handle
+    mov al, FERR_OK
+    cmp byte [srv_wbad], 0
+    je  .say
+    mov al, FERR_FULL           ; DOS took fewer bytes than it was given
+.say:
+    call wr_done
+    jmp short .out
+.sink:
+    mov [srv_fail], al          ; the reason, banked across the drain
+    call sink_body
+    jc  .lost
+    cmp byte [srv_fail], 0xFF   ; wr_gate ALREADY sent its status, and a
+    je  .out                    ; second one is a frame the master is not
+    mov al, [srv_fail]          ; reading - the link desynchronises rather
+    call wr_done                ; than one operation failing
+    jmp short .out
+.rlost:
+    call close_handle
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_append - NF_APPEND: add to the end of an existing file
+;
+; The length is ONE WORD here (SPEC.md 62.10.1): this is the chunked half of
+; the pair, so a copy streams through it a claim at a time.
+; -----------------------------------------------------------------------------
+srv_append:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call wr_arg
+    jc  .lost
+    call lp_rword
+    jc  .lost
+    mov [srv_rlen], ax
+    mov word [srv_rlen+2], 0
+    call wr_openap              ; open existing and seek to the end
+    jc  .sink
+    mov byte [srv_wbad], 0
+    call recv_body              ; ...straight into the file
+    jc  .rlost
+    call close_handle
+    mov al, FERR_OK
+    cmp byte [srv_wbad], 0
+    je  .say
+    mov al, FERR_FULL           ; DOS took fewer bytes than it was given
+.say:
+    call wr_done
+    jmp short .out
+.sink:
+    mov [srv_fail], al          ; the reason, banked across the drain
+    call sink_body
+    jc  .lost
+    cmp byte [srv_fail], 0xFF   ; wr_gate ALREADY sent its status, and a
+    je  .out                    ; second one is a frame the master is not
+    mov al, [srv_fail]          ; reading - the link desynchronises rather
+    call wr_done                ; than one operation failing
+    jmp short .out
+.rlost:
+    call close_handle
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_delete / srv_mkdir / srv_rmdir - one name, one status
+; -----------------------------------------------------------------------------
+srv_delete:
+    mov byte [srv_verb], 0
+    jmp short srv_name1
+srv_mkdir:
+    mov byte [srv_verb], 1
+    jmp short srv_name1
+srv_rmdir:
+    mov byte [srv_verb], 2
+srv_name1:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call wr_arg
+    jc  .lost
+    call wr_gate
+    jc  .out                    ; ...the status has already gone
+    cmp byte [srv_ok], 0
+    je  .nodir
+    mov dx, wildbuf
+    cmp byte [srv_verb], 1
+    je  .mk
+    cmp byte [srv_verb], 2
+    je  .rm
+    mov ah, 0x41                ; delete
+    jmp short .go
+.mk:
+    mov ah, 0x39                ; mkdir
+    jmp short .go
+.rm:
+    mov ah, 0x3A                ; rmdir
+.go:
+    int 0x21
+    jc  .doserr
+    mov al, FERR_OK
+    call wr_done
+    jmp short .out
+.doserr:
+    call dos_ferr               ; AX = DOS's code -> AL = a FERR_*
+    call wr_done
+    jmp short .out
+.nodir:
+    mov al, FERR_NOENT
+    call wr_done
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_rename - NF_RENAME: two 13-byte names and no length between them
+; -----------------------------------------------------------------------------
+srv_rename:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call wr_arg                 ; the folder and the OLD name -> wildbuf
+    jc  .lost
+    mov si, wildbuf             ; ...banked, because the second name reuses it
+    mov di, oldbuf
+    call str_cpy16
+    call srv_rname              ; the NEW name -> namebuf
+    jc  .lost
+    call wr_gate
+    jc  .out
+    cmp byte [srv_ok], 0
+    je  .nodir
+    call path_join              ; the new name, in the same folder
+    mov dx, oldbuf
+    mov di, wildbuf
+    push ds
+    pop es                      ; int 21h 56h takes ES:DI for the new name
+    mov ah, 0x56
+    int 0x21
+    jc  .doserr
+    mov al, FERR_OK
+    call wr_done
+    jmp short .out
+.doserr:
+    call dos_ferr
+    call wr_done
+    jmp short .out
+.nodir:
+    mov al, FERR_NOENT
+    call wr_done
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; wr_open / wr_openap - the file a write is going into
+; out: CF=0 and [rfh] open; CF=1 and AL = the FERR_* to answer with
+; -----------------------------------------------------------------------------
+wr_open:
+    mov word [rfh], 0xFFFF
+    call wr_gate
+    jc  .gated
+    cmp byte [srv_ok], 0
+    je  .nodir
+    push cx
+    push dx
+    mov ah, 0x3C                ; create/truncate, ordinary attributes
+    xor cx, cx
+    mov dx, wildbuf
+    int 0x21
+    pop dx
+    pop cx
+    jc  .doserr
+    mov [rfh], ax
+    clc
+    ret
+.doserr:
+    call dos_ferr
+    stc
+    ret
+.nodir:
+    mov al, FERR_NOENT
+    stc
+    ret
+.gated:
+    mov al, 0xFF                ; wr_gate has ALREADY sent its status, so the
+    stc                         ; caller must drain and say nothing more
+    ret
+
+wr_openap:
+    mov word [rfh], 0xFFFF
+    call wr_gate
+    jc  wr_open.gated
+    cmp byte [srv_ok], 0
+    je  wr_open.nodir
+    push bx
+    push cx
+    push dx
+    mov ax, 0x3D01              ; write-only, and it must already exist
+    mov dx, wildbuf
+    int 0x21
+    jc  .no
+    mov [rfh], ax
+    mov bx, ax
+    mov ax, 0x4202              ; ...to the end
+    xor cx, cx
+    xor dx, dx
+    int 0x21
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop bx
+    call dos_ferr
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; recv_body - [srv_rlen] bytes off the wire into [rfh], through secbuf
+; out: CF=1 = the link went away
+; -----------------------------------------------------------------------------
+recv_body:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+.chunk:
+    mov ax, [srv_rlen]
+    or  ax, [srv_rlen+2]
+    jz  .done
+    mov cx, 512
+    cmp word [srv_rlen+2], 0
+    jne .full
+    cmp [srv_rlen], cx
+    jae .full
+    mov cx, [srv_rlen]
+.full:
+    mov [srv_chunk], cx
+    mov di, secbuf
+.b:
+    call lp_rbyte
+    jc  .lost
+    mov [di], al
+    inc di
+    loop .b
+    mov ah, 0x40                ; ...and out to the file
+    mov bx, [rfh]
+    mov cx, [srv_chunk]
+    mov dx, secbuf
+    int 0x21
+    jc  .wfail
+    cmp ax, [srv_chunk]         ; A SHORT WRITE IS A FULL DISK and DOS reports
+    je  .wok                    ; it that way rather than with CF - which is
+.wfail:                         ; why this is a compare and not a `jc` alone.
+    mov byte [srv_wbad], 1      ; The run is STILL OWED off the wire, so the
+.wok:                           ; verdict is banked and the loop carries on
+    mov ax, [srv_chunk]
+    sub [srv_rlen], ax
+    sbb word [srv_rlen+2], 0
+    jmp short .chunk
+.done:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; sink_body - swallow [srv_rlen] bytes and store none of them
+sink_body:
+    push ax
+    push cx
+    push dx
+    mov cx, [srv_rlen]
+    mov dx, [srv_rlen+2]
+.b:
+    mov ax, cx
+    or  ax, dx
+    jz  .out
+    call lp_rbyte
+    jc  .lost
+    sub cx, 1
+    sbb dx, 0
+    jmp short .b
+.out:
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+.lost:
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dos_ferr - AX = the code int 21h returned -> AL = a FERR_*
+;
+; Only the ones a write can actually produce; anything else is FERR_IO, which
+; is the honest answer for "DOS said no and this end does not know why".
+; -----------------------------------------------------------------------------
+dos_ferr:
+    cmp ax, 2                   ; file not found
+    je  .noent
+    cmp ax, 3                   ; path not found
+    je  .noent
+    cmp ax, 5                   ; access denied - a read-only file, or a
+    je  .prot                   ; directory that is not empty
+    cmp ax, 80                  ; already exists (mkdir/rename)
+    je  .exist
+    cmp ax, 4                   ; too many open files
+    je  .io
+    mov al, FERR_FULL           ; 39 is 'insufficient disk space', and the
+    cmp ax, 39                  ; rest of DOS's write failures are near
+    je  .out                    ; enough the same thing from here
+.io:
+    mov al, FERR_IO
+    jmp short .out
+.noent:
+    mov al, FERR_NOENT
+    jmp short .out
+.prot:
+    mov al, FERR_PROT
+    jmp short .out
+.exist:
+    mov al, FERR_EXIST
+.out:
     ret
 
 ; =============================================================================
@@ -2513,5 +3072,11 @@ srv_rlen:   dd 0                ; ...and what we are actually sending
 srv_off:    dd 0                ; FSV_READAT's window
 srv_chunk:  dw 0                ; bytes in the secbuf pass in hand
 rfh:        dw 0xFFFF           ; the open DOS handle, FFFF = none
+srv_ok:     db 0                ; wr_arg resolved the folder
+srv_verb:   db 0                ; which of delete/mkdir/rmdir is in hand
+srv_fail:   db 0                ; ...the FERR_* banked across a drain
+srv_wbad:   db 0                ; a DOS write came up short: the disk is full
+oldbuf:     times 88 db 0       ; rename's first path, while the second is
+                                ; built in wildbuf
 dtabuf:     times 48 db 0       ; OUR DTA, and not DOS's at PSP:0080 - that is
                                 ; where the command tail lives
