@@ -2204,3 +2204,76 @@ it (docs/FIELD-MACHINES.md's rule, learned on the 5150). And `est CPU MHz
 x100` reading **8879** on a 16MHz 286 is the known 8088-only derived row,
 still outstanding in the register: it is computed against instruction timings
 a 286 does not have, and it should say so rather than print a number.
+
+---
+
+## 22. Tracker "hardlocks" at the end of a large module (CLOSED — NOT A DEFECT, the module says stop)
+
+> **Reported**: a 297KB module (`banana split`, by Dizzy / CNCD '93) loaded
+> into Tracker in **XT mode, fullscreen**, played to `Pos 30/30` and then
+> "hardlocked the system".
+>
+> **It is not a lock.** The module ends with an explicit `F00` and the FT2
+> text screen then legitimately has nothing left to draw. Reproduced on a
+> cycle-accurate 4.77MHz 8088 with 640KB, CGA and a Sound Blaster DSP 2.01:
+> the song runs 00 → 30, `mp_playing` goes 0, the grid stops moving, the
+> BIOS tick counter keeps advancing, `CS:IP` keeps wandering through the
+> kernel's idle, and **Esc exits the bracket back to the desktop**. The
+> reporter's Esc did nothing because the emulator did not have keyboard
+> focus. Nothing in os8088 is at fault and nothing was changed.
+
+**Three things made it read as a crash, and they are worth knowing because
+the next large module will do the same.**
+
+**The module really does stop.** Pattern 5 is order 48, the last one, and row
+0x39 channel 0 carries `F00` — ProTracker's "speed 0 = stop" — immediately
+after a `C00` fade to silence on all four channels. `mp_readrow`'s `.fF` arm
+sets `mp_playing = 0` and does nothing else. To an ear it ends abruptly and
+does not *sound* finished, which is a property of the music rather than of
+the player.
+
+**Almost every other module loops, and that is the DEFAULT rather than a
+command.** Running off the end of the order list wraps to the restart byte
+(header offset 951, forced to 0 when it is >= songlen), so a module with no
+end-of-song effect at all loops for ever — `beverly.mod` is that case, with
+zero `Bxx`, zero `Dxx` and zero `F00`. A module that wants to loop
+*somewhere else* says so with `Bxx`: `elysium.mod` ends order 28 with `B09`
+and jumps back to order 9, which is the classic play-the-intro-once shape
+(verified live: `pos=1C` → `pos=09`). So there are three outcomes and all
+three are the file's choice — wrap (default), `Bxx` (chosen target), `F00`
+(stop). `banana split` is the only one of the three that stops.
+
+**A finished song in the fullscreen bracket looks exactly like a dead
+machine.** Inside SPEC.md §53's bracket the kernel does not run, so there is
+no clock, no cursor and no chrome to reassure anybody; the app draws
+change-driven (§45.13), so once the song stops the screen is *correctly*
+static; and the only keys that do anything are ENTER, F and Esc. The status
+line does say `Stopped  ENTER play  F/ESC exits`, in one small row above a
+frozen grid. **That is the whole diagnostic surface.** If this is ever
+reported again, the first question is whether Esc exits, and the second is
+whether the module's last pattern has an `F00`.
+
+**Which screen the report came from was the fastest clue and cost nothing.**
+`Pos 30/30` cannot come from the windowed splash: `tui_wpos` prints
+`mp_songlen` and would have said `30/31`. Only `trktxt.inc` prints
+`songlen - 1` ("FT2's own reading"), so the `/30` pinned the report to the
+XT-mode fullscreen text screen before anything was run. **A readout that is
+formatted differently in two places is a locator** — worth remembering the
+next time a field report quotes a number back.
+
+### 22.1 `BPM 125` on every module is correct, and it was verified against a control
+
+Asked in the same round: every module reads `BPM 125`, which looks like a
+stuck field. It is not. A MOD header carries no tempo at all — 125 BPM and
+speed 6 are ProTracker's defaults, and the only thing that moves the tempo is
+`Fxx` with `xx >= 0x20`. Scanned across the patterns each song actually
+plays: `beverly.mod` **0** tempo commands, `banana split` **0** (54 *speed*
+commands, `F02`–`F07`, which is what makes it feel fast), `elysium.mod`
+**0**. All three are honestly 125 for their whole length.
+
+**The readout was proved live rather than argued to be**, because "all three
+agree" is equally what a hardcoded constant looks like. `TEMPO.MOD` — one
+pattern, `F96` at row 0 and `F3C` at row 32 — reads **BPM 150** for rows
+0..31 and **BPM 60** for 32..63, tracking the effect exactly. A negative
+result across three files is not evidence about a field until one file
+disagrees with it.
