@@ -1726,6 +1726,68 @@ dsk_vol_kind:
     ret
 
 ; -----------------------------------------------------------------------------
+; osapi_vol_at - is this PARTITION already a volume? (slot 0x03E0, SPEC 52.10.3)
+; in:  DL = an int 13h drive number, BX:CX = the partition's 32-bit base LBA
+;      (BX = the high word, CX = the low - dsk_boot_from's own argument shape)
+; out: CF = 0 and AL = the volume index that covers it; CF = 1 = none does
+; clobbers: AL (the output), flags
+;
+; **This exists because the kernel gets there first.** On a machine installed
+; to its hard disk, dsk_boot_from adopts the partition the BIOS booted it from
+; before any driver loads (52.10.3) - it has to, because HDD.DRV is a file on
+; that very volume. The driver then probes the same disk, finds the same FAT
+; partition, and has no way of knowing it is already C:, so its Mount put a
+; SECOND volume and a second desktop icon on the same sectors: one from the
+; mount, one from the BIOS.
+;
+; It answers about DVK_BIOS rows and only those, which is not tidiness. A
+; driver-backed row's DV_UNIT is the DRIVER's own volume handle - a small
+; integer that would collide with an int 13h drive number for free - and its
+; partition base never reaches the kernel at all, dsk_xfer handing the driver
+; a volume-relative LBA and the driver adding its own base (18.7). So a
+; driver's rows are the DRIVER's to recognise, out of its own table, and this
+; is the half it cannot see.
+;
+; dsk_vbase is written by dsk_boot_from ALONE and that row can never be freed
+; (dsk_vol_del takes only DVK_DRV and DVK_FILE), so a stale base cannot be
+; inherited by a row somebody else later takes - which is what makes the
+; comparison below safe with no clearing anywhere.
+; -----------------------------------------------------------------------------
+osapi_vol_at_x:
+    push bx
+    push si
+    push di
+    xor al, al                  ; AL = the volume index under test, and the
+    mov si, dsk_vtab            ; answer if one matches
+    mov di, dsk_vbase           ; ...whose stride is 4 and not DV_SIZE: the
+.scan:                          ; base is a side table indexed by VOLUME
+    cmp byte [si+DV_KIND], DVK_BIOS ; a free row is 0xFF, so this drops it too
+    jne .next
+    cmp [si+DV_UNIT], dl
+    jne .next
+    cmp [di], cx                ; the base, low word...
+    jne .next
+    cmp [di+2], bx              ; ...and high
+    je .found
+.next:
+    add si, DV_SIZE
+    add di, 4
+    inc al
+    cmp al, DVOL_MAX
+    jb .scan
+    pop di
+    pop si
+    pop bx
+    stc
+    ret
+.found:
+    pop di
+    pop si
+    pop bx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; dsk_vol_add - register a driver-backed volume (osapi_vol_add, SPEC.md 18.7)
 ; in:  AL = the driver's own volume handle, CX = the volume's sector count,
 ;      ES:SI = a NUL label in the CALLER's segment (0 = derive one),
@@ -5517,6 +5579,8 @@ dkf_dsk_vol_slot:    call dsk_vol_slot_x
 dkf_osapi_fs_ent:    call osapi_fs_ent_x
                  retf
 dkf_osapi_vol_add:   call osapi_vol_add_x
+                 retf
+dkf_osapi_vol_at:    call osapi_vol_at_x
                  retf
 dkf_osapi_vol_del:   call osapi_vol_del_x
                  retf
