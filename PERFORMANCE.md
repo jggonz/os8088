@@ -5968,3 +5968,69 @@ glyph's screen `x & 7` IS its content-relative one, so a non-zero bucket is the
 app's own offset. §11.94.3 is what it and the constants together found.
 **It has an unexplained artifact**: a constant 4 glyphs in bucket 7 per window
 per forced repaint, so counts under about ten say nothing.
+
+### Set 54 — snapping in Y buys nothing, and the scroll recomputes what it could add
+
+The Y question was left open by Set 53 and `docs/SNAP-PLAN.md` §6. It is
+answered: **a `WF_SNAP` in Y would gain nothing on any adapter**, and the
+investigation redirects to something that does.
+
+**Why text has exactly zero y-dependence.** The vertical layout is SPEC.md
+§39.3's banked framebuffer — VGA 1 bank (`bmask` 0, `rowadd` +80), Hercules 4
+(`bmask` 3, `rowadd` +0x2000, `wrapfix` +0x805A), CGA 2 (`bmask` 1, `wrapfix`
++0xC050) — and `gfx_nextrow` pays one extra `add` only on the step that carries
+out of the last bank. **A glyph is 8 rows and 8 is a whole multiple of both 2
+and 4**, so among the 8 advances an 8x8 cell makes, the number that wrap is
+exactly 8/banks wherever the cell starts: among any 8 consecutive rows, exactly
+4 have `y & 1 == 1` and exactly 2 have `y & 3 == 3`. Not approximately — there
+is nothing to recover. On VGA there are no banks at all. This is the opposite
+of the x case, where §6.1.4's arithmetic showed an unaligned cell spans two
+framebuffer bytes and must read-merge-write both; there is no vertical
+equivalent, because a row is a row whatever y it is.
+
+**Fills already solved the row-step problem, and note HOW.** `sw_plane_op`
+holds `gfx_nextrow`'s two parameters in registers so a row step is three
+register instructions (§5.7) — by holding the increment, not by constraining y.
+Measured confirmation, and it is a pleasing one: **a breakpoint on
+`gfx_nextrow` during a Hercules desktop paint never fires**, because every row
+loop that matters has inlined it.
+
+**What the investigation found instead.** `gfx_scroll`'s two backends compute a
+full row address PER ROW for an address that advances by a constant —
+`vgas_lincopy` two `mul word [vid_stride]`, `vgas_bankcopy` two `gfx_rowbase`
+calls, each a `mul` plus a variable `shr` plus a bank-table lookup plus
+call/ret. Measured, cycle-accurate 4.77MHz 8088, Hercules:
+
+| | measured |
+|---|---:|
+| `gfx_rowbase`, one call | **11 instructions, 319 cycles = 66.84 µs** |
+| `GFX_SCROLL 256x128` | **51,229 µs** = 400 µs/row for 32 bytes |
+| `GFX_FILL 256x128`, same bytes, register row step | 24,338 µs = ~185 µs/row |
+| `GFX_SCROLL 256x128` on VGA | 29,096 µs = 227 µs/row |
+
+The `gfx_rowbase` figure is a breakpoint-and-step measurement, not a model: two
+of them are **134 µs of the mono scroll's 400 µs per row, a third of it**, and
+the fill doing comparable per-row work costs less than half as much per row.
+Estimated **~1.45x on mono** (51,229 → ~35,000 µs) and ~1.3x on VGA if the
+scroll adopts the fill's shape. Cost it against §48.18.1 before building — that
+one recovered 4% and was dropped — but this is per-row rather than per-call, so
+it scales with the band's height.
+
+**And this is where a vertical quantum finally earns something — `nbanks`, not
+8, on the scroll DELTA rather than a window origin.** The constant-delta trick
+needs `rowbase(y+dy) − rowbase(y)` equal for every row. On VGA that is
+unconditional (linear: `dy × stride` for any `dy`), so the VGA backend can drop
+its per-row multiplies today with no precondition at all. On the banked
+adapters it holds iff **`dy ≡ 0 (mod nbanks)`** — a multiple of 2 on CGA, 4 on
+Hercules. The tree's deltas already qualify (Note Pad's 32px row step, the Disk
+window's 16px `FM_ROW_H`); the one exception is Note Pad's find panel, whose
+29/41px shift §27.10.2 chose deliberately. Even unaligned, the general path can
+halve its arithmetic by walking the destination with the register step and
+paying `gfx_rowbase` for the source alone.
+
+**So the lever is the increment, not the origin** — which is the same shape as
+§5.7's answer and as `sw_plane_op`'s: on this machine you win by not
+recomputing, not by constraining where things sit. An 8px vertical drag quantum
+would have been the visible price of the wrong answer, and a dearer one than
+the horizontal quantum: a window steps more noticeably on a 348-row screen than
+on a 720-column one.

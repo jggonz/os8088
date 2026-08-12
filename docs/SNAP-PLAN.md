@@ -1,11 +1,17 @@
 # Byte-boundary text — the windows that do not align their own
 
-**Status: the KERNEL half is BUILT and measured. `WF_SNAP`'s `[vid_mono]` gate
-is gone (SPEC.md §11.94, PERFORMANCE.md Set 52) and the flag is INVERTED, so
-every window's content origin is on a multiple of 8 unless it opts out
-(SPEC.md §11.94.1, Set 53). This document is the remaining half: the ~14
-windows whose own text does not land on that boundary, and what each one costs
-to fix. Nothing here is started.**
+**Status: the KERNEL half is BUILT and measured, and SNAPPING IN Y IS ANSWERED
+- NO, see §6: it would gain nothing on any adapter, and the vertical quantum
+that does pay is the BANK COUNT applied to a scroll DELTA rather than 8 applied
+to a window origin. §6.3 is the real opportunity that investigation found -
+`gfx_scroll` recomputing a row address per row, a third of its cost on mono.
+
+**The x half is done:** `WF_SNAP`'s `[vid_mono]` gate is gone (SPEC.md §11.94,
+PERFORMANCE.md Set 52) and the flag is INVERTED, so every window's content
+origin is on a multiple of 8 unless it opts out (SPEC.md §11.94.1, Set 53).
+§§1–5 below are the remaining work: the ~14 windows whose own text does not
+land on that boundary, and what each one costs to fix. Nothing there is
+started.**
 
 The one-line summary: **the kernel now guarantees the window's origin is
 byte-aligned, and roughly half the tree's windows then put their text at an
@@ -183,26 +189,115 @@ that was not clipped before.
 
 ---
 
-## 6. Open question — should the snap apply to Y as well?
+## 6. Snapping to Y — INVESTIGATED, and the answer is no
 
-`wm_snap` is x-only. The content origin's y is `W_Y + TITLE_H + 1` and nothing
-keeps it on a multiple of 8.
+**Asked and answered: a `WF_SNAP` in Y would gain nothing, on any adapter.**
+The investigation is kept because the reasoning redirects the effort somewhere
+that pays, and because "we never checked Y" is otherwise a question that comes
+back every time somebody reads §11.94.
 
-**It is not the same trade, and the reason is worth stating before anyone
-builds it.** A glyph is 8 rows and `font_char` walks them one at a time through
-`gfx_nextrow` whatever y is, so y-alignment buys **nothing per glyph** — there
-is no second-byte spill in the vertical direction. Where it could pay is
-elsewhere:
+### 6.1 Text: provably zero, not merely small
 
-- `gfx_scroll` and `gfx_blit4`, whose row arithmetic is per-row anyway but
-  whose *bank* arithmetic is not (SPEC.md §39.3's banked layout: a bank holds
-  whole rows and a row's base is `rowbase(y)`).
-- Note Pad's §27.7.2 blit, which already rounds its y span to whole rows by
-  hand — the one place in the tree that has needed it.
+The vertical layout is the banked framebuffer (SPEC.md §39.3), and the
+parameters are:
 
-So the honest form of the question is not "should windows snap in y" but
-**"does any primitive here cost more at an odd y, and if so which"** — a
-`gfxbench` row, not a kernel change. Measure before building: an 8px vertical
-drag quantum is a much more visible cost than the horizontal one, because
-`ui_drag` drags an outline and the eye tracks vertical steps on a 348-row
-screen more readily than horizontal ones on a 720-column one.
+| adapter | banks (`y &` mask) | `rowadd` | `wrapfix` |
+|---|---|---|---|
+| VGA | 1 (mask 0) | +80 | — |
+| Hercules | 4 (mask 3) | +0x2000 | +0x805A |
+| CGA | 2 (mask 1) | +0x2000 | +0xC050 |
+
+`gfx_nextrow` is `add di, rowadd` plus a test, and it pays one extra `add`
+only on the step that carries out of the last bank. **A glyph is 8 rows, and 8
+is a whole multiple of both 2 and 4** — so among the 8 row-advances an 8x8 cell
+makes, the number that wrap is exactly 8/banks (4 on CGA, 2 on Hercules)
+**wherever the cell starts**. Not approximately: among any 8 consecutive rows
+the count with `y & 1 == 1` is exactly 4 and with `y & 3 == 3` is exactly 2.
+
+On VGA there are no banks at all — `bmask` and `wrapbit` are 0, so
+`gfx_nextrow` is `add di, 80` with the test always falling through.
+
+So text has **no** y-dependence to recover. This is the opposite of the x case,
+where §6.1.4's arithmetic showed an unaligned cell spans two framebuffer bytes
+and must read-merge-write both: there is no vertical equivalent, because a row
+is a row whatever y it is.
+
+### 6.2 Fills already solved it, in registers, with no alignment at all
+
+`sw_plane_op` banks `gfx_nextrow`'s two parameters in registers, so a row step
+is three register instructions rather than a near call plus two CS-overridden
+memory reads — done for SPEC.md §5.7's reasons, and note *how* it was done: by
+holding the increment, not by constraining y. **Measured confirmation:** a
+breakpoint on `gfx_nextrow` during a Hercules desktop paint **never fires**,
+because every row loop that matters has inlined it.
+
+### 6.3 What the investigation DID find: `gfx_scroll` recomputes what it could add
+
+`gfx_scroll`'s two backends walk their rows the other way round, and both
+compute a full row address **per row** for an address that advances by a
+constant:
+
+- `vgas_lincopy` (VGA, and the buffer planes): two `mul word [vid_stride]`
+  per row.
+- `vgas_bankcopy` (Hercules and CGA): two `gfx_rowbase` calls per row, and
+  `gfx_rowbase` is a `mul`, a variable `shr`, a bank-table lookup and a
+  call/ret.
+
+**Measured on a cycle-accurate 4.77MHz 8088 with a Hercules card:**
+
+| | measured |
+|---|---:|
+| `gfx_rowbase`, one call | **11 instructions, 319 cycles = 66.84 µs** |
+| `GFX_SCROLL 256x128` (gfxbench) | **51,229 µs** = 400 µs per row for 32 bytes |
+| `GFX_FILL 256x128` (same bytes, register row step) | 24,338 µs = ~185 µs per row |
+| `GFX_SCROLL 256x128` on VGA | 29,096 µs = 227 µs per row |
+
+So **two `gfx_rowbase` calls are 134 µs of the mono scroll's 400 µs per row —
+a third of it** — and the fill, doing comparable per-row work with a register
+row step, costs less than half as much per row.
+
+The fix is the fill's: hoist one row address out of the loop, step it with the
+register form, and derive the other end from a constant delta. Estimated
+**~1.45x on `GFX_SCROLL`** for the mono adapters (51,229 → ~35,000 µs) and
+**~1.3x** on VGA. It should be costed against §48.18.1's precedent before
+being built — that one recovered 4% and was dropped — but the arithmetic here
+is per-row rather than per-call, so it scales with the band's height.
+
+### 6.4 …and where a vertical quantum earns its keep — `nbanks`, not 8
+
+The constant-delta trick above needs `rowbase(y+dy) − rowbase(y)` to be the
+same for every row, and that is where alignment finally appears:
+
+- **On VGA it is free and unconditional.** Linear addressing means the delta is
+  `dy × stride` for any `dy`, so the VGA backend can drop its per-row
+  multiplies today with no precondition whatsoever.
+- **On the banked adapters it holds iff `dy ≡ 0 (mod nbanks)`** — `dy` a
+  multiple of 2 on CGA and of 4 on Hercules — because only then do source and
+  destination sit in the same bank and differ by `(dy / nbanks) × stride`.
+
+**So the quantum that matters vertically is the BANK COUNT, and it applies to
+the scroll DELTA rather than to the window's origin.** That is why snapping a
+window in Y is the wrong lever: it constrains the wrong number.
+
+The tree's real deltas mostly already qualify:
+
+| caller | `dy` | CGA (2) | Herc (4) |
+|---|---:|---|---|
+| Note Pad row scroll (`NP_SB_STEP` 4 rows) | 32 px | ✅ | ✅ |
+| Disk window `fm_scrollpaint` (`FM_ROW_H`) | 16 px | ✅ | ✅ |
+| Note Pad find panel (§27.10.2) | 29 / 41 px | ❌ | ❌ |
+
+So the only caller that would have to move is the find panel, and the change is
+one character: its height is `NP_FP_ROW*2 + NP_FP_PAD*2 + 1` = **29** (and
+`+ NP_FP_ROW` = **41** with the replace row), so **the `+ 1` border line is the
+whole of what makes it odd**. 32 and 44 would qualify on both mono adapters.
+§27.10.2 notes the shift is deliberately "not a multiple of 8", but that was
+about the *blit working at all* at a non-8 shift rather than about its cost, so
+nothing there argues for keeping it odd. Even
+unaligned, the general path can still halve its arithmetic: walk the
+destination with the register step and pay `gfx_rowbase` for the source alone.
+
+**None of this needs `WF_SNAP` in Y, and none of it needs an 8-pixel vertical
+drag quantum** — which would have been the visible price, and a dearer one than
+the horizontal quantum, since a window steps more noticeably vertically on a
+348-row screen than horizontally on a 720-column one.
