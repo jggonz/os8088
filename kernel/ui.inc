@@ -917,27 +917,21 @@ ui_drag:
 %ifndef NODRAGCACHE
 ui_drag_phase:
     push ax
-    push cx
     push bx
     mov ax, [bx + W_X]
     sub ax, [ui_origx]          ; AX = dx, signed
-    mov cx, ax
-    and cx, 7                   ; CX = the phase, and `and` on a negative dx
-    jz .out                     ; still yields its low three bits - which is
-                                ; exactly what has to reach 0
     or ax, ax
-    js .neg
-    sub ax, cx                  ; dx > 0: back toward the origin is DOWN
-    jmp short .set
-.neg:
-    add ax, cx                  ; dx < 0: ...and up. -60 & 7 = 4, so -60
-                                ; becomes -56, which is nearer 0 by 4
+    jns .pos
+    neg ax                      ; TRUNCATE TOWARD ZERO, and the sign is why
+    and ax, 0xFFF8              ; this is done on the magnitude rather than in
+    neg ax                      ; place: `and ax, 0xFFF8` rounds toward MINUS
+    jmp short .set              ; INFINITY, so on a leftward drag it moves the
+.pos:                           ; window further from the origin - out of the
+    and ax, 0xFFF8              ; interval the safety argument above rests on
 .set:
     add ax, [ui_origx]
     mov [bx + W_X], ax
-.out:
     pop bx
-    pop cx
     pop ax
     ret
 %endif

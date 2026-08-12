@@ -6625,6 +6625,30 @@ and the sharper form of the same trade (8px drag *steps*, not a 7px drop), and
 it is also why a `WF_SNAP` window always hit this path already: an absolute x
 pinned to a multiple of 8 makes every `dx` one too.
 
+**It is deliberately NOT gated to 1bpp**, which is the obvious economy and is
+measurably wrong: mode 12h is planar, so its byte holds 8 pixels of one plane
+and its phase is the same question. Measured, VGA on the same drag is **889
+calls / 1,196.4 ms without the snap and 210 / 633.3 with it** — a gate would
+have handed that back for nothing.
+
+**`and ax, 0xFFF8` is the wrong instruction on a leftward drag**, and it is
+written down because the first version shipped it. The delta is signed and
+that mask rounds toward **minus infinity**, so on `dx < 0` it moves the window
+*away* from the origin — out of the interval the safety argument above rests
+on. `dx + (dx & 7)` is wronger still and was what shipped: it lands on a
+multiple of 8 only when `dx & 7` is exactly 4, so leftward drags kept refusing
+at seven phases out of eight. It survived its own verification because the
+value that was measured, **`dx = -60`, is that one phase** — the single delta
+for which the broken and the correct arithmetic agree. `dx = -58` is the
+one-line disproof: it landed at −52, `dx & 7 = 4`, 865 calls and 22
+`gfx_blit4`. The magnitude is truncated toward zero instead, `neg`/`and`/`neg`,
+which is a multiple of 8 for both signs and never leaves the interval.
+
+**A verification that picks its own input can pick the input that hides the
+bug**, which is §11.96.12's pinned-deal lesson arriving from the other side —
+there the harness randomised what it should have fixed, here it fixed what it
+should have varied.
+
 It sits inside `ui_drag`'s own `%ifndef NODRAGCACHE`, so `make DRAGCACHE=0`
 drops a window exactly where it always did and the A/B stays honest.
 
