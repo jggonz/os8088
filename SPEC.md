@@ -40074,6 +40074,36 @@ reason is already in the engine: a Cut removes its source at `.finish`,
 being walked while it is being walked. That is the same assumption the FAT
 path's raw-slot ordinal has always rested on.
 
+#### 62.9.8 A copy that stays on one volume never touches the transport
+
+Reported off the field after the write path came up: copying a large file
+from one remote folder to another *"was quite obvious it was going across the
+parallel cable"* — every byte pulled over and pushed straight back, at
+PERFORMANCE.md Set 39's **3,741 bytes/second**, when the machine holding the
+source also holds the destination.
+
+`FSV_COPY` hands the far side the pair — source folder, destination folder,
+the name — and it copies with its own `int 21h`, at its own disk's speed. The
+wire carries one command frame and one status byte.
+
+**It is an optimisation and not a contract**, which is what keeps it cheap.
+`drv_fs_call` already refuses a verb a driver does not publish, and the test
+in `fcp_xfer` falls straight through to the streaming path on that refusal —
+so a driver may implement it or not, and a volume that cannot do a local copy
+behaves exactly as it did before. Nothing else in the engine changes: the
+replace question, the free-space check and the Cut's source delete all happen
+around it as they always did.
+
+Two things about the test are load-bearing. It sits **after** `fcp_goto(source)`,
+because `[dsk_vkind]` describes the volume being stood on and standing on the
+source is what that call just arranged. And it requires
+`[fcp_fsdrv] == [fcp_fddrv]`: a copy between *two different* redirected
+volumes has no far side that holds both, and must still stream.
+
+**Cost, measured**: `.cold` +47 in the kernel — the branch and the call. The
+rest is the driver's and the DOS program's, neither of which is heap the
+kernel accounts for.
+
 ### 62.10 The cable's file client — `NET.DRV` becomes the redirector
 
 §62.9's kernel is finished and proven four milestones deep against a RAM

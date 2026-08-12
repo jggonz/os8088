@@ -1623,6 +1623,34 @@ fcp_xfer:
     mov bx, [fcp_fsclus]        ; chunk: we are here, and the alternative is
     call fcp_goto               ; coming back for it
     jc .err
+
+    ; --- BOTH ENDS ON ONE REDIRECTED VOLUME: let the far side do it -------
+    ; A remote-to-remote copy streamed every byte across the cable and back
+    ; again, which at PERFORMANCE.md Set 39's 3,741 B/s is visible on a large
+    ; file and is entirely wasted: the far side has both the source and the
+    ; destination. FSV_COPY hands it the pair and it copies with its own
+    ; int 21h, at its own disk's speed.
+    ;
+    ; The test is after fcp_goto, not before, because [dsk_vkind] describes
+    ; the volume we are STANDING ON - and standing on the source is what the
+    ; line above just arranged. A driver that publishes no FSV_COPY is
+    ; refused by drv_fs_call exactly as it is for any absent verb, so the
+    ; fall-through below is the whole error path and this can never be worse
+    ; than not trying (SPEC.md 62.9.8).
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .stream
+    mov al, [fcp_fsdrv]
+    cmp al, [fcp_fddrv]
+    jne .stream
+    push bp
+    mov ax, [fcp_fsclus]        ; the two FOLDERS, and one name: fcp_xfer
+    mov dx, [fcp_fdclus]        ; copies under the same name at both ends
+    mov si, fcp_fname
+    mov bp, FSV_COPY
+    call drv_fs_call
+    pop bp
+    jnc .fin
+.stream:
     mov si, fcp_fname
     call fcp_rdopen
     jc .err

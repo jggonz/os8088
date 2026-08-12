@@ -295,7 +295,22 @@ FSV_ENUM     equ 24             ; AX = a folder's handle (0 = the root),
                                 ; and been through the event loop. Enumerate
                                 ; a live structure with a cursor of its own
                                 ; and the copy silently skips or duplicates
-FSV_SIZE     equ 26
+FSV_COPY     equ 26             ; AX = source folder, DX = destination folder,
+                                ; SI = the name (both ends), in KERNEL_SEG.
+                                ; out CF=0; CF=1 and AX = FERR_*
+                                ;
+                                ; BOTH FOLDERS ARE YOURS, so the file need not
+                                ; cross the transport at all (SPEC.md 62.9.8).
+                                ; The kernel asks only when both ends are the
+                                ; same volume, and PUBLISHING IT IS OPTIONAL:
+                                ; leave the row 0 and the copy engine streams
+                                ; through FSV_READAT and FSV_WRITE as before,
+                                ; which is what makes this an optimisation
+                                ; rather than a duty. Implement it when the
+                                ; far side can copy faster than the wire can
+                                ; carry - which for anything with a real disk
+                                ; behind it, it can
+FSV_SIZE     equ 28
 
 ; PUT A `%if` ON YOUR TABLE'S OWN LENGTH. A trailing backslash in a NASM
 ; comment is a LINE CONTINUATION, so an ASCII-art brace drawn down the right

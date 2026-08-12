@@ -172,6 +172,17 @@ rd_fsv:
     dw rd_rmdir                 ; FSV_RMDIR
     dw rd_dfree                 ; FSV_DFREE
     dw rd_enum                  ; FSV_ENUM
+    dw 0                        ; FSV_COPY - DELIBERATELY NOT IMPLEMENTED.
+                                ; 62.9.8's whole safety property is that a
+                                ; driver may decline and fcp_xfer streams as
+                                ; before, and the only way to TEST that is a
+                                ; DRVC_FILE volume which declines. A RAM disk
+                                ; copy is a memcpy either way, so there is no
+                                ; win here to give up - and this is the
+                                ; harness for the branch rather than a user
+                                ; of it. The row still exists because the
+                                ; table is indexed by verb and dispatching
+                                ; past its end is a wild far call
 rd_fsv_end:
 %if rd_fsv_end - rd_fsv != FSV_SIZE
   %error "ramdisk: the FSV_* table is not FSV_SIZE bytes - a swallowed row?"

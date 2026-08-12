@@ -107,6 +107,9 @@ NF_DELETE   equ 'D'             ; folder, name -> status
 NF_RENAME   equ 'N'             ; folder, old name, new name -> status
 NF_MKDIR    equ 'M'             ; folder, name -> status
 NF_RMDIR    equ 'K'             ; folder, name -> status
+NF_COPY     equ 'Y'             ; src folder, dst folder, name -> status. Both
+                                ; ends are OURS, so the file never crosses the
+                                ; cable (SPEC.md 62.9.8)
 
 ; A FILE-MODE STATUS IS A FERR_* AND A BLOCK-MODE ONE IS AN INT 13H CODE, and
 ; they are NOT the same numbering however alike two small integers look. The
@@ -317,6 +320,8 @@ serve:
     je  .fmkdir
     cmp al, NF_RMDIR
     je  .frmdir
+    cmp al, NF_COPY
+    je  .fcopy
     jmp short .cmd
 
 .fwrite:
@@ -341,6 +346,10 @@ serve:
     jmp .cmd
 .frmdir:
     call srv_rmdir
+    jc  .out
+    jmp .cmd
+.fcopy:
+    call srv_copy
     jc  .out
     jmp .cmd
 
@@ -2032,6 +2041,146 @@ wr_done:
     ret
 
 ; -----------------------------------------------------------------------------
+; srv_copy - NF_COPY: source folder, DEST folder, name -> one status byte
+;
+; BOTH ENDS ARE HERE (SPEC.md 62.9.8), so this is an ordinary DOS file copy
+; and the cable carries nothing but the request. os8088 asks for it only when
+; the two folders are on the same redirected volume; a machine that answered
+; it any other way would be copying between two places it does not both hold.
+;
+; /RO refuses it like every other write - wr_gate is the one place that is
+; decided, and a copy creates a file.
+;
+; It reuses secbuf, which nothing else is holding at this point in the command
+; loop, and reports the SAME FERR_ set as a write: the caller cannot tell a
+; local copy from a stream-and-write except by how long it took.
+; -----------------------------------------------------------------------------
+srv_copy:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call lp_rword               ; the SOURCE folder
+    jc  .lost
+    mov [srv_h], ax
+    call lp_rword               ; ...and the DESTINATION folder, banked before
+    jc  .lost                   ; srv_rname reuses the wire
+    mov [srv_dsth], ax
+    call srv_rname
+    jc  .lost
+
+    call wr_gate                ; /RO: the status has already gone out
+    jc  .out
+
+    call hd_path                ; the SOURCE, as a path
+    jc  .nodir
+    call path_join              ; + '\' + namebuf -> wildbuf
+    mov si, wildbuf             ; ...banked whole: building the destination
+    mov di, cpysrc              ; below rewrites pathbuf AND wildbuf
+    call str_cpy16
+
+    mov ax, [srv_dsth]          ; the DESTINATION, the same way
+    mov [srv_h], ax
+    call hd_path
+    jc  .nodir
+    call path_join
+
+    mov dx, cpysrc              ; open the source
+    mov ax, 0x3D00
+    int 0x21
+    jc  .nosrc
+    mov [rfh], ax
+
+    mov dx, wildbuf             ; create the destination
+    mov ah, 0x3C
+    xor cx, cx
+    int 0x21
+    jc  .nodst
+    mov [cpydst], ax
+
+.chunk:
+    mov ah, 0x3F                ; read...
+    mov bx, [rfh]
+    mov cx, 512
+    mov dx, secbuf
+    int 0x21
+    jc  .ioerr
+    or  ax, ax
+    jz  .done                   ; end of file
+    mov cx, ax
+    mov ah, 0x40                ; ...and write, the count DOS actually gave us
+    mov bx, [cpydst]
+    mov dx, secbuf
+    int 0x21
+    jc  .full
+    cmp ax, cx                  ; a short write is a full disk, which DOS
+    jne .full                   ; reports by count and not by CF
+    jmp short .chunk
+.done:
+    call cpy_close
+    mov al, FERR_OK
+    call wr_done
+    jmp short .out
+.full:
+    call cpy_close
+    mov al, FERR_FULL
+    call wr_done
+    jmp short .out
+.ioerr:
+    call cpy_close
+    mov al, FERR_IO
+    call wr_done
+    jmp short .out
+.nodst:
+    call cpy_close
+    mov al, FERR_IO
+    call wr_done
+    jmp short .out
+.nosrc:
+    mov al, FERR_NOENT
+    call wr_done
+    jmp short .out
+.nodir:
+    mov al, FERR_NOENT
+    call wr_done
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; cpy_close - shut both handles, whichever of them got opened
+cpy_close:
+    push ax
+    push bx
+    call close_handle           ; the SOURCE, through [rfh]
+    mov bx, [cpydst]
+    cmp bx, 0xFFFF
+    je  .out
+    mov ah, 0x3E
+    int 0x21
+    mov word [cpydst], 0xFFFF
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; srv_write - NF_WRITE: create or replace, whole
 ;
 ; THE BYTES ARE CONSUMED WHATEVER HAPPENS TO THEM. The length is on the wire
@@ -3079,6 +3228,10 @@ srv_cwd:    db 0                ; the DRIVE the last NF_CHDIR stood on, for
                                 ; NF_DFREE - which is the one verb with no
                                 ; handle to work it out from. 0 = the default
                                 ; drive, which is int 21h 36h's own convention
+srv_dsth:   dw 0                ; NF_COPY's DESTINATION folder (62.9.8)
+cpydst:     dw 0xFFFF           ; ...and its open handle, 0xFFFF = none
+cpysrc:     times 96 db 0       ; the source path, banked whole: building the
+                                ; destination rewrites pathbuf AND wildbuf
 nhd:        dw 0                ; handles issued this session
 hdtab:      times HD_MAX*HD_SZ db 0
 rootpath:   times 72 db 0       ; 'C:\' + DOS's 64 + a NUL

@@ -99,6 +99,11 @@ NF_DELETE   equ 'D'             ; folder, name -> status
 NF_RENAME   equ 'N'             ; folder, old name, new name -> status
 NF_MKDIR    equ 'M'             ; folder, name -> status
 NF_RMDIR    equ 'K'             ; folder, name -> status
+NF_COPY     equ 'Y'             ; src folder, dst folder, name -> status. 'Y'
+                                ; because C, D, F, G, K, L, M, N, P, S, U and
+                                ; A are taken above and R, W, I, X are block
+                                ; mode's - the one-byte space is shared, which
+                                ; SPEC.md 62.10.1 learned the hard way
 
 NET_PCHUNK  equ 64              ; bytes between OSAPI_FS_PROG reports, and
                                 ; between destination re-normalisations. One
@@ -155,6 +160,7 @@ net_fsv:
     dw net_rmdir                ; FSV_RMDIR
     dw net_dfree                ; FSV_DFREE
     dw 0                        ; FSV_ENUM
+    dw net_copy                 ; FSV_COPY (SPEC.md 62.9.8)
 net_fsv_end:
 %if net_fsv_end - net_fsv != FSV_SIZE
   %error "net: the FSV_* table is not FSV_SIZE bytes - a swallowed row?"
@@ -1082,6 +1088,48 @@ net_name1:
     pop si
     pop dx
     pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_COPY - AX = source folder, DX = destination folder, SI = the name
+;            (SPEC.md 62.9.8)
+;
+; BOTH ENDS ARE THE FAR SIDE'S, so not one byte of the file crosses the cable:
+; the frame is two handles and a name out, one status back. A remote-to-remote
+; copy of a large file used to stream every byte over at 3,741 B/s and push it
+; straight back.
+;
+; The two folders go out in the order the kernel hands them over, and the name
+; LAST - so the far side reads command, src, dst, name, which is wr_arg's
+; shape with one extra word in front of it.
+; -----------------------------------------------------------------------------
+net_copy:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [net_arg], dx           ; the destination folder, across net_fcmd_h
+    mov bl, NF_COPY
+    call net_fcmd_h             ; ...which sends AX, the SOURCE folder
+    jc  .bad
+    mov ax, [net_arg]
+    call lp_sword
+    jc  .bad
+    call net_sname
+    jc  .bad
+    call net_wstat
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------

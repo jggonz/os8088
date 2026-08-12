@@ -284,7 +284,18 @@ FSV_ENUM    equ 24              ; AX = a folder's handle, CX = the ordinal,
                                 ; FSV_LIST: that appends into the kernel's
                                 ; one global listing, and a folder COPY walks
                                 ; a folder that is not the one on screen
-FSV_SIZE    equ 26
+FSV_COPY    equ 26              ; AX = source folder, DX = destination folder,
+                                ; SI = the name (both ends), in KERNEL_SEG.
+                                ; out CF=0; CF=1 and AX = FERR_*
+                                ;
+                                ; BOTH ENDS ON ONE VOLUME, so the bytes never
+                                ; cross the transport (SPEC.md 62.9.8). A
+                                ; driver that does not publish it is refused
+                                ; by drv_fs_call like any other absent verb,
+                                ; and fcp_xfer streams as before - which is
+                                ; what makes this an optimisation rather than
+                                ; a contract every DRVC_FILE driver owes
+FSV_SIZE    equ 28
 
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every
