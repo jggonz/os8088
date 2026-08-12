@@ -13772,17 +13772,30 @@ clamped to a word (§19) — a copy cannot work from a truncated length.
 
 ### 19.6.2 …and it stamped three bits while forgiving two
 
-Reported off the field as **a hard-disk install that errors naming
-`KERNEL.SYS`** — and only on a disk that already carries an install. A fresh
-format works, because there is no entry to replace and `dskw_wbody` never
-reaches its `.replace` arm at all.
+**This is a latent defect found while chasing a field report, and it is NOT
+that report's cause.** It was written up as the cause first, and the A/B is
+what took it back: `make INSTRO=1` restores the old mask, and a second
+hard-disk install onto the same partition **succeeds on both builds**. The
+installer's own line says why — `hd_inst_sys` *formats the slot, then copies
+the disk that is in A: now* — so `KERNEL.SYS` never exists when it is
+written, `dskw_wbody`'s `.replace` arm is never reached, and neither leg of
+that A/B touched the code below. The field's `KERNEL.SYS` failure is
+something else and is still open.
+
+What follows is real all the same, and worth having fixed: the arithmetic
+below is not in doubt, only its reach.
 
 §19.6 stamps **read-only + hidden + system** on `KERNEL.SYS` and every
 `*.DRV`. `DSKW_SPROT` — the mask `dskw_write_sys` replaces under — forgave
 `DSKW_SYSAT`, which is *hidden and system*. Read-only was left in, so **the
-kernel could not rewrite its own file**: the second install found the entry,
-tested it, and refused with `FERR_PROT`, which the installer reports as the
-name of the file it was copying.
+kernel cannot rewrite its own file**: anything replacing a `*.DRV` or
+`KERNEL.SYS` in place finds the entry, tests it, and is refused with
+`FERR_PROT`.
+
+**No shipped path reaches it today**, which is why it had never been seen and
+why the A/B above comes back null: the installer formats first, and every
+other producer of a system file writes it onto a volume that has just been
+made. It is a trap set for the next thing that replaces one in place.
 
 The tell was in the constant's own comment — *"Read-only, the volume label
 and a subdirectory still refuse"* — sitting directly beneath a line saying
@@ -13796,11 +13809,11 @@ forgiven is a file wearing the kernel's own species and nothing else. A
 driver still cannot replace a user's read-only document that happens to share
 a name.
 
-**`SYSTEM.CFG` needed none of this and shows why the bug survived**: it is
-deliberately *not* read-only precisely because the kernel rewrites it, so the
-one system file that is replaced on an ordinary machine was the one file the
-mask never had to forgive. Every other one is written once onto a disk that
-has just been formatted.
+**`SYSTEM.CFG` needed none of this and shows why the defect is invisible**:
+it is deliberately *not* read-only precisely because the kernel rewrites it,
+so the one system file that IS replaced on an ordinary machine is the one the
+mask never had to forgive. Every other one is written once, onto a volume
+that has just been formatted.
 
 The test is `dskw_pmask`, one routine where there had been two identical
 copies eleven hundred lines apart — `dskw_wbody`'s replace and
