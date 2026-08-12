@@ -5742,9 +5742,11 @@ fm_rows_only:
 ;                     SPEC.md 11.94.1's alignment default is the other half:
 ;                     with the content origin on a multiple of 8, x1 == fm_cx
 ;                     and the strip is empty as well as harmless. The residue
-;                     is wm_snap_ax's one refusal - a window as wide as the
-;                     screen sitting at x=0 - where x1 is fm_cx+7 and those
-;                     seven columns are margin.
+;                     is wm_snap_ax's one refusal - a window DRAGGED to x=0 at
+;                     the full screen width - where x1 is fm_cx+7 and those
+;                     seven columns are margin. A MAXIMIZED window is not that
+;                     case: SPEC.md 11.95.2 drops its left border, so its
+;                     content starts at W_X = 0 and is aligned outright.
 ;   right, up to 7px: always white. The span stops LEFT of the scroll bar, so
 ;                     the bar's frame, rules and arrows are never disturbed
 ;                     and only the thumb is redrawn; and a list row's size

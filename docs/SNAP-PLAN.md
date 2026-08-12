@@ -9,9 +9,11 @@ to a window origin. §6.3 is the real opportunity that investigation found -
 **The x half is done:** `WF_SNAP`'s `[vid_mono]` gate is gone (SPEC.md §11.94,
 PERFORMANCE.md Set 52) and the flag is INVERTED, so every window's content
 origin is on a multiple of 8 unless it opts out (SPEC.md §11.94.1, Set 53).
-§§1–5 below are the remaining work: the ~14 windows whose own text does not
-land on that boundary, and what each one costs to fix. Nothing there is
-started.**
+
+**AND SO IS THE APPLICATION HALF: every entry in §2 is closed.** Three were
+worth doing and the rest were not — §7 is the summary, and it is the part to read
+first, because the reason most of them were not is more useful than the three
+that were. Sets 52–60.**
 
 The one-line summary: **the kernel now guarantees the window's origin is
 byte-aligned, and roughly half the tree's windows then put their text at an
@@ -101,18 +103,18 @@ count.
 
 | app | off-grid pen(s) | note |
 |---|---|---|
-| **Tracker** | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | the **largest** item here. Its pattern grid was already moved onto 8px boundaries to earn §6.1 (SPEC.md §45.9); the rest of the FT2 face never was — 17% of sampled literal pens aligned. It also redraws continuously while playing, so this is the app where the percentage is spent most often |
-| **Tamegram** | 4, 60, 116, 164, 210 | HUD; 7 of 8 sampled pens ≡ 4, so a single `+4` on the base would align nearly all of it |
-| **Fractal** | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0. **Confirmed by measurement, and it is the worst in the tree: 2,801 glyphs in one launch, 16% aligned, 2,323 of them at bucket 2** — the status row redrawn per progress tick. Four constants in one table |
-| **Paint** | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned. The palette is drawn on every tool change |
+| ~~**Tracker**~~ | ~~6, 38, 108, 111, 116, 150, 205, 210, 258, 290~~ | **MEASURED AND CLOSED WITHOUT CHANGING IT** — SPEC.md §45.19. It was ranked the largest item here on this sample and the sample was misleading four ways: its per-frame values go through `tui_rdout`, which **already rounds its pen down to a byte boundary on mono**; `tui_top_cga`'s labels are already at 0/64/136/200/288; what is left is `tui_draw_all`, which is event-driven and not the "redraws continuously while playing" this row claimed (`tui_draw_dyn` draws only what changed); and 159 of the off-grid cells are `tui_s_logo` at 149, which is `112 + (179-104)/2` — the centring of `'T R A C K E R'`, §3's protected kind. Measured: 237 cells 26.2% aligned on Hercules, 354 / 39.3% on VGA, all of it on one repaint |
+| ~~**Tamegram**~~ | ~~4, 60, 116, 164, 210~~ | ✅ **DONE** — SPEC.md §49.5.1. The sample was right for once: six of the seven pens were ≡ 4 and `+4` fixed them, 0 bytes, 0% → 100% aligned measured over 17.7 s of play. `LOCK` went 210 → 208 (left by 2, not right by 6, which would have ended row 1 on `TG_HUD_W` exactly). Its flash banner and About panel are centred and stay off-grid |
+| ~~**Fractal**~~ | ~~`FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250~~ | ✅ **DONE, and it was not an alignment item** — SPEC.md §40.2.1. The pens moved, but what paid was that `fr_status_maybe` called the FULL strip painter ~100 times a render: **2,557 glyph cells → 565, 4.5x**, off-grid 2,222 → 0, ~100 fills gone. The two halves are one change, `font_run`'s single-store path needing the aligned pen |
+| ~~**Paint**~~ | ~~`PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2~~ | ✅ **NOTHING TO DO** — SPEC.md §42.12. Measured: a repaint is **62 cells, 100% aligned**. `PT_PAL_X0` is not a text pen (the palette is fills and blitted icons, so "drawn on every tool change" costs no glyph), and the size-box field's pen is **geometrically forced**: 8px label + 32px framed field = 40 of the 43px `PT_SEPX` strip |
 | **ArtfulType** | a literal 14 | **the "≡ 3 (measured)" here was its own CAPTION** — 10 centred glyphs the kernel drew, now excluded (§11.94.2). Its 8 and 16 are already right. Re-audit before moving anything; §46 is a *writer*, so its per-keystroke line draw is the typebench case |
-| **HDD Control Panel page** | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
-| **HDD tool window** | `HTW_LX` 4 | the installer's own `HIW_LX` is already 8 |
-| **Recorder** | 4 | |
-| **Minesweeper** | 4 | also draws at 8 |
-| **Piano** | 2 | one sampled pen — low confidence, needs the runtime audit |
-| **Arkanoid** | 2 | one sampled pen — same |
-| **Task Manager** | five literal `+6` sites | despite `TM_PEN` being 8 and `TM_MPEN` 16. SPEC.md §11.94 records moving `TM_PEN` 6 → 8; these five were missed |
+| **HDD Control Panel page** | `HDP_LX` 2 | **left** — a page draws on open and on a click. `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
+| **HDD tool window** | `HTW_LX` 4 | **left**, same reason; the installer's own `HIW_LX` is already 8 |
+| **Recorder** | 4 | **left** — two strings in `rc_draw_status`, whose one caller is `rc_draw_all`: repaint-only |
+| ~~**Minesweeper**~~ | ~~4~~ | **PROTECTED, not a defect** — `add cx, 4` is an 8px glyph centred in a 16px cell, `(16-8)/2`, and it is the app's densest text: aligning it puts every number on the grid 4px off-centre. Mode text is `MN_BOARD_W/2`. A 2-glyph counter is all that is genuinely off-grid |
+| ~~**Piano**~~ | ~~2~~ | **largely not a constant** — `PN_MSG_X` is already 112, and the key letter is `key_x + 5` where `key_x` comes from §11.98.1's run-time scaled keyboard, so no constant can align it. One label at `cx, 2` on a repaint is the row |
+| ~~**Arkanoid**~~ | ~~2~~ | **four of its six text sites are `OSAPI_FONT_WIDTH`-centred**, a fifth is a letter centred in a power-up body; the sixth is the score at `cx, 2` |
+| ~~**Task Manager**~~ | ~~five literal `+6` sites~~ | ✅ **DONE, and it was FOUR** — SPEC.md §28.5. Three of the five are `add ax, 6` on FRAME RECTS (CPU graph, bar, RAM map) and a rect has no glyph phase. The four real pens — the memory page's XMS line and the heap page's TOTAL/SPLIT/FRAG summaries — are at `TM_PEN` now, 0 bytes; `tm_rowfill` still erases from +6, so only 2px of white margin moves |
 | ~~**Hello**~~ | **not a defect** | `hl_line` CENTRES every string — `(HL_CONT_W - width)/2 + content_left` — so it is §3's category 2 and must not be "fixed". Its earlier "≡ 3 for 5 glyphs" was its own caption plus that centring |
 | **Missile Command** | unresolved | every pen is computed at run time. Needs `make SNAPAUDIT=1`, not a grep |
 | `DEBUG.DRV` | `DBGP_LX` 1 | unshipped (SPEC.md §62.9.4); fix if it is ever restored |
@@ -209,19 +211,59 @@ By what the percentage is spent on rather than by size of diff:
    **The lesson for the rest of this list: ask how often a pen is drawn before
    moving it.** An off-grid glyph that should not be drawn at all is not an
    alignment defect, and aligning it would have banked a fifth of the win.
-3. **Tracker** — redraws while playing, and has the most off-grid pens.
+3. ~~**Tracker**~~ — ✅ **measured and CLOSED without changing it**, SPEC.md
+   §45.19. One forced full repaint, histogram filtered to its own record:
+   Hercules **237 cells, 26.2% aligned**; VGA **354, 39.3%**. Four things this
+   plan's literal-pen sample could not see. Its per-frame values all go through
+   `tui_rdout`, which **already rounds its pen down to a byte boundary on mono**
+   — so the frequently-drawn text is on `font_run`'s fast path whatever the
+   caller's constant says. `tui_top_cga`'s labels are already at 0/64/136/200/288.
+   What is left is `tui_draw_all` — event-driven, not per frame — and alignment
+   shaves ~3.4% (Herc) / 9.4% (VGA) off a cell rather than removing it, so all
+   175 off-grid Hercules cells are worth **~6 ms of a ~237 ms repaint, on an
+   event**. And 159 of them are `tui_s_logo` at 149, which is exactly
+   `112 + (179-104)/2` — the centring of `'T R A C K E R'` in its box, §4's
+   second protected kind. The one thing the measurement does point at —
+   `tui_rdout` keeping the erase-and-letter pair on VGA — is a refactor, not a
+   constant, and is costed in §45.19 rather than taken.
 4. ~~**Disk window icon grid**~~ — ✅ done, SPEC.md §22.11.1.2: `FMI_CELL_W`
    78 → 80 and the icon's `fm_cellx + 31` → `+ 32`, which is exactly the centre
    of an 80-wide cell, so it is aligned and centred at once. 0 bytes. The
    **label** is centred and was left alone (§4's second kind): a 9-character
    name is 72px in an 80px cell, so any rounding puts it flush against a side.
 5. **ArtfulType** — a writer, so it is the typebench case exactly.
-6. **Paint, Tamegram** — one constant table each.
-7. **Task Manager's five `+6`s, Recorder, Minesweeper, HDD's two pages,
-   Hello** — small, mechanical, and Hello matters because it is the template a
-   new package starts from.
-8. **Piano, Arkanoid, Missile** — audit first; do not move a constant on one
-   sampled pen.
+6. ~~**Paint, Tamegram**~~ — ✅ done. **Tamegram** was the cheapest entry in the
+   whole survey and is now seven named columns, all multiples of 8, `%error`-
+   checked (SPEC.md §49.5.1): six pens were ≡ 4, so `+4` on six numbers, 0 bytes,
+   **0% → 100% aligned** measured over 17.7 s of real play. Its worth is small and
+   stated as such — ~6 cells/s, so 0.6% of the machine and alignment saves 3.4% of
+   that; it is taken because it is free and because leaving the last uniformly-
+   fixable entry invites a re-derivation. **Paint needed nothing**: measured, a
+   repaint is **62 cells, 100% aligned** (SPEC.md §42.12). `PT_PAL_X0` is not a
+   text pen — the palette is fills and blitted icons — and the size-box field's
+   pen is *geometrically forced* off-grid: an 8px label plus a 32px framed field
+   is 40 of the 43px `PT_SEPX` strip, so the pen sits 2px inside a frame at 8.
+7. ~~**Task Manager's five `+6`s, Recorder, Minesweeper, HDD's two pages**~~ and
+   ~~**Piano, Arkanoid, Missile**~~ — ✅ walked in one batch, **one change taken**,
+   SPEC.md §11.94.4. What the batch found:
+   - **Three of the Task Manager's "five `+6`" are `add ax, 6` on FRAME RECTS**
+     (CPU graph, bar, RAM map) and a rect has no glyph phase. The four real pens
+     — the memory page's XMS line and the heap page's TOTAL/SPLIT/FRAG summaries
+     — moved to `TM_PEN`, 0 bytes (§28.5). Nothing but 2px of white margin moves:
+     `tm_rowfill` still erases from +6.
+   - **Minesweeper's off-grid text is CENTRING and it is the app's densest text**
+     — `add cx, 4` is an 8px glyph in a 16px cell, i.e. `(16-8)/2`; aligning it
+     puts every number on the grid 4px off-centre. Its mode text is
+     `MN_BOARD_W/2`. A 2-glyph counter is all that is genuinely off-grid.
+   - **Piano's is largely not a constant.** `PN_MSG_X` is already 112, and the
+     key letter is `key_x + 5` where `key_x` comes from §11.98.1's run-time
+     scaled keyboard — no constant can align it. One label at `cx, 2` remains.
+   - **Four of Arkanoid's six text sites are `OSAPI_FONT_WIDTH`-centred**, a
+     fifth is a letter centred in a power-up body; the sixth is the score.
+   - **Recorder** is repaint-only (`rc_draw_status` has one caller). **HDD's
+     pages** draw on open and on a click. **Missile** computes every pen and its
+     strip is already §48.17's differing-span emitter.
+8. ~~**Hello**~~ — already struck above: `hl_line` centres every string.
 
 Each item is its own commit, because each is a **visible layout shift** and
 wants looking at on a 1bpp adapter (SPEC.md §47's rule about greying applies to
@@ -335,19 +377,51 @@ The tree's real deltas mostly already qualify:
 |---|---:|---|---|
 | Note Pad row scroll (`NP_SB_STEP` 4 rows) | 32 px | ✅ | ✅ |
 | Disk window `fm_scrollpaint` (`FM_ROW_H`) | 16 px | ✅ | ✅ |
-| Note Pad find panel (§27.10.2) | 29 / 41 px | ❌ | ❌ |
+| Note Pad find panel (§27.10.2) | **32 / 44 px** | ✅ | ✅ |
 
-So the only caller that would have to move is the find panel, and the change is
-one character: its height is `NP_FP_ROW*2 + NP_FP_PAD*2 + 1` = **29** (and
-`+ NP_FP_ROW` = **41** with the replace row), so **the `+ 1` border line is the
-whole of what makes it odd**. 32 and 44 would qualify on both mono adapters.
-§27.10.2 notes the shift is deliberately "not a multiple of 8", but that was
-about the *blit working at all* at a non-8 shift rather than about its cost, so
-nothing there argues for keeping it odd. Even
-unaligned, the general path can still halve its arithmetic: walk the
-destination with the register step and pay `gfx_rowbase` for the source alone.
+**✅ DONE — SPEC.md §27.10.3.** The find panel was the only caller that had to
+move, and this file said the change was "one character": it is not, and the
+reason is worth keeping. `NP_FP_ROW*2 + NP_FP_PAD*2 + 1` is odd for **every**
+value of those two constants — `2*anything` is even and the separating rule adds
+one — so no edit to either could have fixed it and the correction has to be
+explicit: `NP_FP_SLACK = (-NP_FP_RAW) & 3`, rounding UP because down would take
+a pixel off something using it. `NP_FP_ROW` must itself be a multiple of 4 or
+the Replace panel's `+NP_FP_ROW` undoes it, which is an `%error` now.
+The three rows land below the buttons (`np_pbtny` is bottom-anchored), so nothing
+is squeezed; 0 bytes; 0 differing pixels against a forced full repaint on CGA and
+Hercules. §27.10.2's "not a multiple of 8" note was about the *blit working at
+all* at a non-8 shift rather than about its cost, so nothing there argued for
+keeping it odd.
 
 **None of this needs `WF_SNAP` in Y, and none of it needs an 8-pixel vertical
 drag quantum** — which would have been the visible price, and a dearer one than
 the horizontal quantum, since a window steps more noticeably vertically on a
 348-row screen than horizontally on a 720-column one.
+
+
+---
+
+## 7. What the survey turned out to be
+
+Every entry is closed. Three mattered:
+
+| item | what it really was | measured |
+|---|---|---|
+| **Fractal** (§40.2.1) | a **redraw defect wearing an alignment costume** — the full strip painter called ~100 times a render | 2,557 glyph cells → 565, **4.5x** |
+| **Disk window** (§22.11.1.1/.2) | genuinely alignment: the ~40 row strings that dominate `fm_repaint` | 0 bytes, 9 constants |
+| **Tamegram** (§49.5.1) | genuinely alignment, and uniformly so — 6 of 7 pens at ≡ 4 | 0% → **100%** aligned |
+
+Everything else was one of four things, and **a literal-pen grep cannot tell any
+of them from a defect**:
+
+1. **Centring** — protected (§4). Hello, Minesweeper's cell numbers, Arkanoid's
+   four centred sites, Tracker's logo, Paint's About card, Tamegram's banner.
+2. **Not a text pen** — three of the Task Manager's "five", which are frame rects.
+3. **Derived at run time** — Piano's key letters, after §11.98.1.
+4. **A handful of cells on an event** — Recorder, the HDD pages, Piano's label,
+   Arkanoid's score, Paint's size box, and Tracker's whole face.
+
+**The two rules the survey earned.** *Ask how often a pen is drawn before moving
+it* — Fractal's 78% saving came from not drawing, not from aligning. And *look at
+a zoomed crop*, because a 0-byte, byte-identical, fully-aligned change can still
+make a window worse (§22.11.1.1's icon landing on its own label).

@@ -2005,9 +2005,9 @@ tm_cap_xms:
 .draw:
     TM_INK CBLACK
     mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, TMM_XMS_Y
+    add cx, TM_PEN              ; 8, not the 6 this was: SPEC.md 11.94.3. The
+    mov dx, [tm_cy]             ; band tm_lfill erases still starts at 6, so
+    add dx, TMM_XMS_Y                  ; what moves is two pixels of white margin
     mov si, tm_str
     call OSAPI_FONT_STR
 .out:
@@ -3149,9 +3149,9 @@ tm_cap_htot:
 .draw:
     TM_INK CBLACK
     mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, TMH_TOT_Y
+    add cx, TM_PEN              ; 8, not the 6 this was: SPEC.md 11.94.3. The
+    mov dx, [tm_cy]             ; band tm_lfill erases still starts at 6, so
+    add dx, TMH_TOT_Y                  ; what moves is two pixels of white margin
     mov si, tm_str
     call OSAPI_FONT_STR
 .out:
@@ -3231,9 +3231,9 @@ tm_cap_hspl:
 .draw:
     TM_INK CBLACK
     mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, TMH_SPL_Y
+    add cx, TM_PEN              ; 8, not the 6 this was: SPEC.md 11.94.3. The
+    mov dx, [tm_cy]             ; band tm_lfill erases still starts at 6, so
+    add dx, TMH_SPL_Y                  ; what moves is two pixels of white margin
     mov si, tm_str
     call OSAPI_FONT_STR
 .out:
@@ -3300,9 +3300,9 @@ tm_cap_hfrg:
 .draw:
     TM_INK CBLACK
     mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, TMH_FRG_Y
+    add cx, TM_PEN              ; 8, not the 6 this was: SPEC.md 11.94.3. The
+    mov dx, [tm_cy]             ; band tm_lfill erases still starts at 6, so
+    add dx, TMH_FRG_Y                  ; what moves is two pixels of white margin
     mov si, tm_str
     call OSAPI_FONT_STR
 .out:

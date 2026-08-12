@@ -2961,6 +2961,65 @@ it measures a cell the cursor was never in and passes by measuring nothing.
 
 Cost: `.text` **+17 bytes**, no rung crossed, `KERN_BUDGET` untouched.
 
+### 7.1.4.3 A MOVING pointer wants the hide; only a still one wants the arrow
+
+§7.1.4.2 shipped and was reported back as **"the cursor freezes and jerks as
+it moves with the Task Manager open"** — from the field, and it is real.
+
+The mechanism is not new and not the region test's: **the mouse ISR never
+moves the arrow while the gfx lock is held** (§7.1), so with a background
+painter refreshing behind it the pointer does not move during a refresh on
+*any* build, and never has. What §7.1.4.2 changed is whether you can SEE that
+happen:
+
+- **hidden and stuck** — the frame test erased the arrow at the lock and
+  redrew it at the unlock *at the new position*. The eye gets a blink and
+  never sees the pointer lag the hand.
+- **lit and stuck** — the region test leaves it on the glass, so it sits
+  still while the hand moves and then teleports. Same timing to the
+  microsecond; the second one is what a person calls a stutter.
+
+Measured on a cycle-accurate 5150 with a Hercules card, sweeping the pointer
+across a Control Panel with the Task Manager refreshing behind it — the
+reported configuration exactly, and the band §7.1.4.2 newly keeps lit:
+
+| | lock held | arrow still lit while locked |
+|---|---|---|
+| frame test | 14.6%, 39 holds, mean 19 ms | **4%** |
+| region test | 14.9%, 40 holds, mean 19 ms | **96%** |
+
+Identical lock behaviour, opposite visibility. **So the fix is not to give the
+region test back but to notice that §7.1.4's argument was always about a
+STILL pointer** — its own words are "with the mouse sitting still that reads
+as the cursor blinking off and on". A moving pointer was never the case it
+was defending, and for a moving pointer the hide is strictly better.
+
+`mou_isr` stamps `[ticks]` into `[cur_mvt]` on every settled packet, and
+`cur_lazyck` spends the hide when that stamp is within `CUR_MVGRACE` (2 ticks,
+~110 ms) — so the arrow is kept lit only when the hand has actually stopped.
+The blink §7.1.4.2 removed stays removed, because the pointer in that report
+is parked; the stutter goes, because a moving pointer is hidden exactly as it
+was before.
+
+Four things about it. The stamp is **one store in the ISR**, at the position
+write, in **CX** — dead there, where DX is the staged packet the button decode
+still needs. The subtraction is **modular**, so the word wraps once an hour
+into a 2-tick false "moving" whose entire cost is one redundant hide. The
+`pop ax` between the `cmp` and the `jbe` is deliberate — `pop` does not touch
+the flags, and `cur_lazyck` preserves every register. And the grace is longer
+than the ~25–40 ms a 1200-baud report takes, so a steadily moving hand cannot
+oscillate between the two treatments.
+
+**The verification lesson is the sharper half.** §7.1.4.2 was measured four
+ways and every one of them **parked the pointer** — flicker samples a
+stationary arrow, the cell-blink counter samples a stationary arrow, the A/B
+photographs a stationary arrow. That is the case the change improves, so all
+four agreed, and the case it hurts was never asked about. *A cursor change
+needs a moving-pointer reading and a still-pointer reading, and they are
+different measurements*: `tools/` has the flicker one; the motion one is a
+sweep with `[gfx_lock_flag]` and `[cur_lazy]` sampled below frame resolution,
+because the question is what share of locked time the arrow is on the glass.
+
 ### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
 
 `gfx_xor_rect`'s `cur_unlazy` sat **below** its `cmp byte [vid_mono], 0`, so on
@@ -5700,18 +5759,23 @@ Four sites write `W_X` and all four go through `wm_snap_ax`:
   along without any of this (§45.9).
 
 A fifth site, **`wm_zoom`** (§11.95), shares the *gate* and not the
-arithmetic: `wm_snap_ax` moves left and re-tests the window's current width,
-and a zoom is the one case where x wants to move **right** and the width is
-about to shrink by the same seven pixels to pay for it. The three tests are
-therefore `wm_snap_want` (BX = window; CF = 1 = this window wants an 8-aligned
-content origin right now), which `wm_snap_ax` calls too — one answer to the
-question, two ways of acting on it.
+arithmetic: it goes to x = 0 and spans the screen, which §11.95.2 makes an
+aligned position by suppressing the left border, and on a secondary display
+(§39.17.2) — where x = 0 is not a screen edge — it falls back to moving
+**right** to the display's origin + 7 and shrinking the width to pay for it.
+Either way the gate is `wm_snap_want` (BX = window; CF = 1 = this window wants
+an 8-aligned content origin right now), which `wm_snap_ax` calls too — one
+answer to the question, two ways of acting on it.
 
 Three consequences worth naming:
 
-- **A snapped window cannot sit flush against the left edge.** The smallest x
-  with `x + 1` a multiple of 8 is 7, so that is as far left as it goes. Seven
-  pixels is the visible cost of the feature.
+- **A snapped window cannot sit flush against the left edge — unless it spans
+  the screen** (§11.95.2). The smallest x with `x + 1` a multiple of 8 is 7,
+  so that is as far left as an ordinary window goes, and seven pixels is the
+  visible cost of the feature. A window that reaches the right-hand edge from
+  x = 0 has no snapped position at all — the bullet below is `wm_snap_ax`
+  leaving it alone — and for that one the aligned origin is 0 with the left
+  border dropped.
 - **The snap moves LEFT**, so it can never violate the caller's right-edge
   clamp — except in the `x = 0..6` case, where the only answer is 7 and the
   right edge is re-tested. A window too wide for that is **left unsnapped**
@@ -5947,19 +6011,19 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 |---|---|---|
 | ~~Disk window header~~ | ~~`fm_cx + 6`~~ | **done** — 6 → 8, with the status line and the row icon; §22.11.1.1 |
 | ~~Disk window icon grid~~ | ~~icon at `fm_cellx + 31`~~ | **done** — `FMI_CELL_W` 78 → 80 and 31 → 32; §22.11.1.2. Its **label** is `(FMI_CELL_W - width)/2` and is a *centred string*, the second of the three kinds below that must not be "fixed" |
-| Tracker's FT2 UI | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | its *pattern grid* was aligned for §6.1 (§45.9); the rest of the face never was — 17% of sampled literal pens |
-| Tamegram HUD | 4, 60, 116, 164, 210 | 7 of 8 sampled pens ≡ 4 |
+| ~~Tracker's FT2 UI~~ | ~~6, 38, 108, 111, 116, 150, 205, 210, 258, 290~~ | **measured and CLOSED, not done** — §45.17. Its per-frame text already self-aligns, what is left is event-driven, and the biggest cluster is a centred string |
+| ~~Tamegram HUD~~ | ~~4, 60, 116, 164, 210~~ | **done** — §49.5.1: seven named columns, all multiples of 8, `%error`-checked. 0% → 100% aligned, measured over 17.7 s of play |
 | ~~Fractal status row~~ | ~~`FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250~~ | **done** — §40.2.1, together with the change that stops 78% of those glyphs being drawn at all |
-| Paint | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned |
+| ~~Paint~~ | ~~`PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2~~ | **measured 100% ALIGNED on a repaint** (62 cells) — §42.12. Its size-box field pen is geometrically forced off-grid: an 8px label plus a 32px framed field is 40 of a 43px palette strip |
 | ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
-| HDD Control Panel page | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
+| HDD Control Panel page | `HDP_LX` 2 | **left** — a panel page draws on open and on a click. `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned; §11.94.4 |
 | HDD tool window | `HTW_LX` 4 | |
-| Recorder | 4 | |
-| Minesweeper | 4 | also draws at 8 |
-| Piano, Arkanoid | 2 | one sampled pen each — low confidence |
-| Task Manager | five literal `+6` sites | despite `TM_PEN` being 8 |
+| Recorder | 4 | **left** — two strings in `rc_draw_status`, whose one caller is `rc_draw_all`. Repaint-only; §11.94.4 |
+| ~~Minesweeper~~ | ~~4~~ | **protected, not a defect** — its densest text, the number on every revealed cell, is `+4` = an 8px glyph centred in a 16px cell; the mode text is `MN_BOARD_W/2`. Only a 2-glyph counter is genuinely off-grid. §11.94.4 |
+| ~~Piano, Arkanoid~~ | ~~2~~ | **left, and mostly not movable** — Piano's `PN_MSG_X` is already 112, and its key letter is `key_x + 5` off §11.98.1's run-time scaled keyboard; 4 of Arkanoid's 6 text sites are `OSAPI_FONT_WIDTH`-centred. What is left is one label and one score. §11.94.4 |
+| ~~Task Manager~~ | ~~five literal `+6` sites~~ | **done, and it was four** — §28.5: three of the five are `add ax, 6` on FRAME RECTS (the CPU graph, the bar, the RAM map), not pens. The four real ones are the memory page's XMS line and the heap page's three summaries, now at `TM_PEN`; §28.5 |
 | Hello | ≡ 3 for 5 of 35 glyphs | deliberately the minimal package |
-| Missile Command | unresolved | every pen is computed; needs the runtime audit |
+| Missile Command | unresolved | **left** — every pen computed, and its status strip is already §48.17's `mc_srun`, which emits only the span from the first differing cell to the last. §11.94.4 |
 | `DEBUG.DRV` | `DBGP_LX` 1 | unshipped (§62.9.4) |
 
 **Three kinds of off-grid pen are correct and must not be "fixed"**: a
@@ -5978,6 +6042,51 @@ from `make SNAPAUDIT=1`. **Its "known artifact" was the tool being right**
 the *Disk window's `APPS` caption* behind them, `wm_draw_title` centring a pen
 no app can influence. A caption is chrome, it is attributed as chrome now, and
 small counts out of that instrument mean what they say.
+
+#### 11.94.4 The rest of the survey, closed: what an off-grid pen usually is
+
+The remaining entries were walked in one batch and **one change came out of
+them**. This section is the reason, so the census is not re-run.
+
+**Three of the five "literal `+6` sites" in the Task Manager are `add ax, 6` on
+FRAME RECTS** — the CPU graph's frame, the bar's, the RAM map's — and a rect has
+no glyph phase. The four that are text pens are the memory page's XMS line and
+the heap page's TOTAL/SPLIT/FRAG summaries, one `font_str` each from `tm_str` and
+each gated by `tm_elchk`, so they draw only when their own figure changed. Those
+four moved to `TM_PEN` (§28.5): 0 bytes, and the pane stops having a second inset
+of its own.
+
+**Minesweeper's off-grid text is CENTRING, and it is the app's densest text.**
+The number on every revealed cell is `add cx, 4` — an 8px glyph in a 16px cell,
+which is exactly `(16-8)/2`. Aligning it would sit every number 4px off-centre in
+its square, across the whole grid. Its mode text is `MN_BOARD_W/2`. What is left
+off-grid is a two-glyph mine counter.
+
+**Piano's is mostly not a constant at all.** `PN_MSG_X` is 112 and already
+aligned; the key letter is `key_x + 5`, and since §11.98.1 `key_x` comes from
+`pn_metrics` scaling the keyboard into whatever content height the window has —
+so no constant can align it, on any adapter, and the +5 is centring in a key
+whose width is derived. One label at `cx, 2` on a full repaint is the whole of
+that row.
+
+**Four of Arkanoid's six text sites go through `OSAPI_FONT_WIDTH`** and are
+centred; a fifth is a letter centred in a power-up body. The sixth is the score
+at `cx, 2`.
+
+**Recorder** is two strings in `rc_draw_status`, whose only caller is
+`rc_draw_all` — repaint-only. **The HDD pages** draw on open and on a click.
+**Missile Command** computes every pen, and §48.17 already reduced its status
+strip to the span between the first and last differing cell.
+
+**The shape of the whole survey, in one line.** Of §11.94.3's original entries,
+three mattered: **Fractal** (§40.2.1 — 2,557 cells a hundred times a render,
+which was a redraw defect wearing an alignment costume), the **Disk window**
+(§22.11.1.1 — the ~40 row strings that dominate `fm_repaint`), and **Tamegram**
+(§49.5.1 — uniformly off-grid, uniformly fixable). Everything else is one of four
+things: **centring** (protected), a **frame rect** counted as a pen, geometry
+**derived at run time**, or a handful of cells on an **event**. A literal-pen
+grep cannot tell those apart from a defect, which is why every remaining entry
+was censused before anything moved.
 
 ### 11.95 Double-clicking a title bar zooms a resizable window
 
@@ -6021,9 +6130,9 @@ double-click zooms afresh and banks where the drag left it.
 matters:
 
 ```
-x = 0                             (7 for a WF_SNAP window on mono — below)
+x = 0                             (the display's origin + 7 — below)
 y = MBAR_H
-w = [vid_w]                       (less that 7)
+w = [vid_pw]                      (less that 7)
 h = [vid_dock_y0] − MBAR_H − 1
 ```
 
@@ -6051,17 +6160,28 @@ reason. Three things about it:
 - **A restore does not spend the bank.** A refused shrink (below) has to be
   askable again, and a zoom re-banks anyway.
 
-**`WF_SNAP` is honoured, and it is the one case where a snap moves RIGHT.**
-§11.94's `wm_snap_ax` moves a candidate x *left* and re-tests the window's
-**current** width against the right edge — and at full screen width x = 7
-always fails that test, so a snapped window put through it would zoom to x = 0
-and silently lose the single-store fast path it asked for. So the gate alone
-is factored out as **`wm_snap_want`** (BX = window; CF = 1 if this window's
-content origin wants to be 8-aligned right now — `WF_SNAP` set, `WF_FULL`
-clear, `[vid_mono]` non-zero) and `wm_zoom` acts on it in the other direction:
-x = 7, and the width gives back exactly the seven pixels x took, so the right
-edge is unmoved. `wm_snap_ax` calls the same routine, so there is still one
-answer to the question and not two that can drift.
+**`WF_SNAP` is honoured, and x = 0 is where it is honoured BEST.** §11.94's
+`wm_snap_ax` moves a candidate x *left* to the nearest x with `x + 1` a
+multiple of 8, and at full screen width there is no such x that fits — so it
+leaves the window at 0, where the content origin would be 1 and the
+single-store fast path is lost. §11.95.2 is the answer and it costs nothing:
+a snapped frame spanning the screen drops its **left border**, so its content
+starts at x = 0, which is aligned. The standard rect is the whole desktop
+band, the seven pixels of desktop that used to show down the left of a
+maximized window are content now, and the chrome is one drawing call cheaper.
+
+**A secondary display is where the seven pixels are still paid** (§39.17.2).
+There x = 0 is not a screen edge but the boundary with the display beside it,
+so the border has something to separate the window from and `wm_flush`
+correctly says no. `wm_zoom` asks `wm_flush_ck` of the rect it is about to
+commit — the geometry half of §11.95.2's predicate, since the record does not
+hold that rect yet — and when the answer is no it does what it always did:
+x = the display's origin + 7, and the width gives back exactly the seven
+pixels x took, so the right edge is unmoved. The gate above both is
+**`wm_snap_want`** (BX = window; CF = 1 if this window's content origin wants
+to be 8-aligned right now — `WF_SNAP` set, `WF_FULL` clear). `wm_snap_ax`
+calls the same routine, so there is still one answer to the question and not
+two that can drift.
 
 **It asks the window — twice, and the second answer can be no.**
 `wm_ask_size` (§11.1) runs on the state being *tested* (so the compare above
@@ -6128,6 +6248,106 @@ behind it is popped by the UI loop and ignored, which is what that loop
 already does with every mouse-up. On a machine with no mouse (§9.6) the same
 press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
 exactly this case — a pass that dispatched a press and did not track it.
+
+### 11.95.2 A window that spans the screen has no left border
+
+**A border separates a window from what is beside it, and at the screen's left
+edge there is nothing beside it.** So a `WF_SNAP` window whose frame reaches
+from x = 0 to the last column of the screen does not draw one, and its content
+therefore starts **at** `W_X` rather than at `W_X + 1` — which is 0, and
+byte-aligned. The other three sides are untouched.
+
+That is what lets §11.95's standard rect be the whole screen. It used to be
+x = 7, w = screen − 7: §11.94's snap moving *right* to buy an aligned content
+origin, at the 7-pixel cost that section names. A maximized window therefore
+sat with its right edge flush and **seven columns of desktop dither showing
+down its left**, plus a border column — eight columns of content given up to
+land the origin on a byte boundary that x = 0 already is. The standard rect is
+now `x = 0, w = [vid_pw]` and the alignment is kept, not traded for.
+
+**Derived, never tracked** — §11.95's own rule, for its own reason. `wm_flush`
+(BX = window; CF = 1 = no left border; every register preserved) is
+`wm_snap_want` **and** `W_X = 0` **and** `W_X + W_W >= [vid_w]`. There is no
+flag, so there is no site that has to clear one: a window dragged or resized
+off that geometry has its border back at the next paint because the question is
+asked again. `wm_flush_ck` (AX = a candidate x, CX = a candidate width) is the
+geometry half on its own, because `wm_zoom` has to ask it of a rect it has not
+committed yet.
+
+**`wm_snap_want` is in the predicate for two distinct reasons**, and neither is
+decoration. A `WF_FULL` window is *already* borderless and its content IS its
+frame (§11.2), so adjusting it here would inset it twice. And a `WF_NOSNAP`
+window has opted out of having its geometry decided for it (§11.94.1), so it
+keeps its border and its `W_X + 1` content origin whatever it spans.
+
+**It composes with `wm_snap_ax` rather than fighting it, and that is why the
+snapper needed no change at all.** At x = 0 the snapped position is 7, and
+`wm_snap_ax` already **refuses** to move a window there when `7 + W_W` would
+hang it off the right edge — which is exactly the geometry this rule names. So
+a snapped window is either snappable to 7, in which case all four `W_X`
+writers have already put it there and it is never at 0, or it spans the screen,
+in which case x = 0 is the only aligned position it has. `wm_zoom`'s x = 0
+therefore survives `wm_resize_nb`'s `wm_snap_win` untouched. **The corollary is
+that this is not a new state for such windows**: one at x = 0 too wide to snap
+is a window that has been sitting there all along with an *unaligned* content
+origin, silently missing the fast path §11.94 exists for. It gains alignment
+here, it does not lose a position.
+
+**The outline is three sides, and that is a drawing call CHEAPER rather than
+dearer.** `gfx_frame` is four `gfx_fill`s — two `gfx_hline`, two `gfx_vline` —
+and a flush window emits the top, the bottom and the right. At
+PERFORMANCE.md Part 2's ~756µs of fixed cost per drawing call, whatever it
+draws, a maximized window's chrome costs one call less than it did.
+
+**The border may not be drawn and then covered**, which is the shape the first
+draft of this takes: leave `gfx_frame` alone and let the title-bar fill and the
+content fill overwrite column 0. Every pixel of that column is then written
+twice, and PERFORMANCE.md Part 1's double-draw flash is plainly visible on the
+target machine — a defect this container cannot show. Three sides, drawn once.
+
+Six sites answer the question, and they are every place a *content* rect is
+derived from `W_X`; a **frame** rect is unchanged, because the frame really
+does still span x = 0 to x + w − 1:
+
+| site | what changes |
+|---|---|
+| `wm_content` | content left is `W_X`, not `W_X + 1` |
+| `wm_geom` | content width is `W_W − 1`, not `W_W − 2` |
+| `wm_clip_set` | the seed rect, so an app may draw in column 0 |
+| `wm_su_rect` | the raise cache, `wm_cov_rect` and `wm_damage` behind it |
+| `wm_draw_win` | the outline's three sides, the content fill, the bottom drop shadow's left end |
+| `wm_draw_title` | the title-bar interior and the separator under it |
+
+`wm_hit` is **not** among them and needs nothing: it tests the frame rect and
+has never treated the border column as its own region, so a point in column 0
+already answered "content". Neither is `wm_title_set`, whose strip is the frame's
+full width already.
+
+**What does not move is everything positioned from the frame**: the close and
+minimize boxes at `W_X + 8`, the pinstripes inset 3, and the centred caption.
+The frame has not moved — only the fills that would otherwise leave a
+one-pixel hole at column 0 extend to reach it.
+
+**A seventh site had to change, and it is the one nothing pointed at:
+`ui_grow`.** The aligned x is a question about the *width* now — shrink a
+maximized window off the screen's right edge and it stops being flush, so
+column 0 stops being an aligned content origin and 7 is the leftmost one
+again. `ui_grow` never re-snapped, correctly, because until this **a width
+change could not move that origin**; without the `wm_snap_win` it now makes,
+one drag of the grow box left the window at x = 0 with its border back and its
+content at 1, *unaligned* — silently missing the fast path §11.94 exists for,
+which is the exact defect this section is meant to remove. `wm_resize` already
+made that call for its own reason (its x clamp can move the origin) and needed
+nothing.
+
+Its **damage union** follows: `ui_grow` took `x1 = W_X` and
+`x2 = W_X + max(old w, new w)`, which is the union of the two rects only while
+the origin is fixed. It is `min` and `max` over both rects' edges now — the
+same answer when nothing moved, and the seven columns the window vacates put
+back when it did. Verified on all three adapters: after a grow-box shrink from
+the zoomed state the window is at x = 7 with an aligned origin, and the screen
+the resize leaves is **0 differing pixels** against the same window drawn
+whole by `wm_show`.
 
 ### 11.95.1 A window that GREW reveals nothing
 
@@ -13550,6 +13770,44 @@ enumerate one folder and open its files from another.
 The answer is 24 bytes, and the **size is 32-bit** where the listing's is
 clamped to a word (§19) — a copy cannot work from a truncated length.
 
+### 19.6.2 …and it stamped three bits while forgiving two
+
+Reported off the field as **a hard-disk install that errors naming
+`KERNEL.SYS`** — and only on a disk that already carries an install. A fresh
+format works, because there is no entry to replace and `dskw_wbody` never
+reaches its `.replace` arm at all.
+
+§19.6 stamps **read-only + hidden + system** on `KERNEL.SYS` and every
+`*.DRV`. `DSKW_SPROT` — the mask `dskw_write_sys` replaces under — forgave
+`DSKW_SYSAT`, which is *hidden and system*. Read-only was left in, so **the
+kernel could not rewrite its own file**: the second install found the entry,
+tested it, and refused with `FERR_PROT`, which the installer reports as the
+name of the file it was copying.
+
+The tell was in the constant's own comment — *"Read-only, the volume label
+and a subdirectory still refuse"* — sitting directly beneath a line saying
+those bits are "what the kernel just stamped on its own file and it must be
+able to rewrite it". Both sentences were written at once and only one of them
+counted the bits.
+
+`DSKW_KPROT` is the third tier, and it is narrower than "`dskw_write_sys`
+forgives read-only": the **entry** must already be hidden+system, so what is
+forgiven is a file wearing the kernel's own species and nothing else. A
+driver still cannot replace a user's read-only document that happens to share
+a name.
+
+**`SYSTEM.CFG` needed none of this and shows why the bug survived**: it is
+deliberately *not* read-only precisely because the kernel rewrites it, so the
+one system file that is replaced on an ordinary machine was the one file the
+mask never had to forgive. Every other one is written once onto a disk that
+has just been formatted.
+
+The test is `dskw_pmask`, one routine where there had been two identical
+copies eleven hundred lines apart — `dskw_wbody`'s replace and
+`dskw_apbody`'s append. The append copy matters: `INSTCHUNK=1` puts
+`KERNEL.SYS` down as a run of `OSAPI_FILE_APPEND_SYS` calls, so a fix applied
+to the replace alone would have left the low-heap path refusing.
+
 
 ## 20. Loadable programs — the .o88 package format
 
@@ -15753,9 +16011,11 @@ position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
 the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
 The pass is therefore dead code, and it is **kept** rather than deleted: it is
 four instructions of test that state the invariant, and moving the inset back
-would need it. Its residue is `wm_snap_ax`'s one refusal — a window as wide as
-the screen sitting at x=0, where 7 becomes the answer and those seven columns
-are margin.
+would need it. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
+to x=0 at the full screen width, where 7 becomes the answer and those seven
+columns are margin. A **maximized** window is not that case, and §11.95.2 is
+why: it drops its left border, so its content starts at `W_X` = 0 and is
+aligned outright.
 
 **The name had to move with the icon, and no size report or byte diff could
 have said so.** At icon +8 with the name still at +24, the 16px icon cell ends
@@ -18890,12 +19150,42 @@ bar's columns — both repainted afterwards, which `np_sbar` was going to do
 anyway because the track changed height.
 
 **The shift is not a multiple of 8**, which is the one thing this does that no
-other blit here does: 29 pixels for the Find panel and 41 for Replace, against
+other blit here does: 32 pixels for the Find panel and 44 for Replace, against
 `np_scrollpaint`'s whole rows. On the banked 1bpp adapters that crosses the
 0x2000 window at a different offset every row, so it was verified there and
 not only on VGA — capture, force a full repaint, diff: **0 differing pixels**
 on VGA and CGA, opening and closing, with the Find panel and the taller
-Replace one.
+Replace one. (Those two numbers were 29 and 41 — see §27.10.3.)
+
+#### 27.10.3 …and the height is a multiple of 4, which is the blit's business
+
+The panel's height is `NP_FP_H` = **32**, and 44 with Replace showing. It was
+29 and 41, and the change is not a layout preference: §27.10.2 hands
+`OSAPI_GFX_SCROLL` a delta that **is** this height, so the height decides which
+of `gfx_scroll`'s two paths runs. §5.5.1's constant-delta path derives the
+destination row address once and steps it; on a banked adapter it is gated on
+`dy & [vid_bmask] == 0`, and `bmask` is **3 on Hercules and 1 on the CGA** — so
+an odd height missed it on **both**, and every row of the blit paid a
+`gfx_rowbase` walk it did not need. VGA's `bmask` is 0, so VGA always had the
+fast path and this buys it nothing.
+
+**No choice of the two constants could have fixed it.** `2*NP_FP_ROW +
+2*NP_FP_PAD + 1` is odd for *every* value of either — `2*anything` is even and
+the separating rule adds one — so the correction has to be explicit, and
+`NP_FP_SLACK` is `(-NP_FP_RAW) & 3`. It rounds **up**: rounding down would have
+to take a pixel off something already using it. `NP_FP_ROW` must itself be a
+multiple of 4 or the Replace panel's `+NP_FP_ROW` would undo the alignment, and
+that is an `%error` rather than a comment.
+
+**The three rows land below the buttons, because the button row is
+bottom-anchored** — `np_pbtny` is `np_pt + height - (NP_FP_PAD + 1 +
+NP_FP_ROW)` — so it moves down with the rule and what opens up is clearance
+between the text boxes and the buttons. Nothing is squeezed and no field moved
+relative to the panel's top. The Find↔Replace toggle was **already** on the
+fast path: its delta is `NP_FP_ROW` = 12, which is a multiple of 4.
+
+Cost: **0 bytes** — the constants are the same instruction encodings — and 3
+rows of the note's view, which is under half a text line.
 
 #### 27.10.1 The matcher
 
@@ -20065,6 +20355,31 @@ Cost, measured: the package image is **6,903 → 6,916 bytes**, 13 of them the
 longer strings and `tm_put2`'s five instructions. That is heap while the
 window is open and nothing when it is closed (§28), it is charged against no
 kernel guard, and the widest caption is 27 characters before and after.
+
+### 28.5 The summary lines sit at `TM_PEN`, so the pane has one inset
+
+The memory page's XMS line and the heap page's TOTAL, SPLIT and FRAG summaries
+letter at `[tm_cx] + TM_PEN` (8). They were at a literal `+6`, which gave this
+window a *third* inset — `TM_PEN` 8 for the process list and the captions,
+`TM_MPEN` 16 for the memory list, and 6 for these four — and 6 is 6 mod 8, so
+every one of them missed `font_char`'s single-byte cell row (§11.94.3).
+
+**Nothing but white margin moves.** `tm_lfill` → `tm_rowfill` erases the band from
+`rowx + 6` to `rowx + TM_RW`, and those two calls plus the `font_str` are the only
+operations on it, so shifting the pen to 8 leaves two erased columns nobody
+letters. That is not the memory *list* row's case, where `rowx+6` carries the
+legend square (§11.3's chunk discussion) — these are summary lines drawn by
+`tm_lfill`, which has no square.
+
+Each is gated by `tm_elchk`, so it draws only when its own figure changed. Cost
+**0 bytes**; verified by reading both pages on a cycle-accurate 5150/Hercules with
+`[tm_view]` written from outside the guest, `tm_view`'s offset taken from nasm's
+own `[map]` via `tests/dispapps.py` rather than counted by hand. **The pointer
+cannot be driven onto this window** — it refreshes twice a second and holds the
+gfx lock, so 1200-baud packets never converge — which is why the page is selected
+by a poke rather than by the click `tm_click` implements; the poke skips that
+routine's erase fill, so the capture shows the outgoing page underneath and only
+the summary lines themselves are the evidence.
 
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
@@ -26663,6 +26978,35 @@ Measured on a cycle-accurate 5150 with a Hercules card, double-clicking
 `File ▸ Open` has always produced. A Paint launched with no document is
 byte-identical either way.
 
+### 42.12 Its text is already aligned, and the one pen that is not is forced
+
+§11.94.3 listed this app as *"`PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2; 2 of 5
+sampled pens aligned"*. Measured — `make SNAPAUDIT=1`, one forced full repaint,
+histogram filtered to Paint's own window record, cycle-accurate 5150/Hercules —
+a repaint draws **62 glyph cells, 100% of them aligned**. `PT_PAL_X0` is not a
+text pen at all: it is the tool palette's left column, and a palette is fills,
+frames and blitted icons.
+
+The off-grid pens in the source are real but do not fire on a repaint. Two are
+`pt_draw_dims`' `.plain` fallback at `cx = 2`, taken only on a window too short
+for the size boxes; the others belong to `pt_szdraw`, which draws while the
+canvas-size boxes are being typed into.
+
+**And that field cannot be aligned, which is geometry rather than an oversight.**
+`PT_SEPX` is 43 — the black rule between the palette strip and the canvas — so
+the label and the framed field share 43 pixels. An 8px `W`/`H` label plus
+`PT_SZ_BW` = 32 (*"three digits and a caret, framed"*) is 40 of them, which
+fixes the label at 0..7 and the frame at 8..39; the pen is 2px inside the frame
+by construction, so it lands at 10 and 10 mod 8 is 2. Making the pen a multiple
+of 8 needs `PT_SZ_BX` ≡ 6, and the nearest value that clears an 8px label is 14,
+whose frame ends at 45 — past the rule. Moving the pen deeper inside the frame
+instead costs the caret its column. So the label's `cx = 1` could go to 0 and the
+`.plain` dims could go from 2 to 0, which is three cells on paths that are
+event-driven and adapter-conditional; the field's stays at 2 permanently.
+
+Nothing here is worth a layout change, and this section exists so the next reader
+does not re-derive it from the same five-pen sample.
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
@@ -27973,9 +28317,12 @@ completion):
    old grant — *then* clear `mp_loaded` and free the previous module
    grant: no reader may trust a blob about to move, and on the worker
    path the drain is what enforces that rule.
-3. `OSAPI_MEM_AVAIL` → take `min(largest run, 128 KB)` in ONE
-   `OSAPI_MEM_CLAIM` (the one-block rule, §50.3). Refusal is a status-line
-   "Out of memory", not an abort.
+3. Size the claim from the file and take it in ONE `OSAPI_MEM_CLAIM` (the
+   one-block rule, §50.3) — `ceil(bytes / 1024)` KB, refused up front when
+   `OSAPI_MEM_AVAIL`'s largest run will not fund it. The size comes from the
+   dialog (§38.6) or, when it has none, from `OSAPI_FILE_FIND`; only a name
+   that is in no directory falls back to `min(largest run, 128 KB)`
+   (§45.3.1). Refusal is a status-line "Out of memory", not an abort.
 4. `OSAPI_FILE_READ` with ES:BX = the grant at its first byte, DX:CX = its
    byte capacity.
    `FERR_BIG` reads back as "File too big" — a rare answer, because the
@@ -27993,6 +28340,71 @@ with no callback on cancel. The worker owns the fix: every 16th frame it
 repaints the whole top band, so a cancelled dialog's bar strip lives for at
 most a second.
 
+#### 45.3.1 There is no module-size ceiling, and the one there was had been copied from a claim
+
+A 300KB module was refused with **`File too big`** on a machine reporting
+over 400KB of largest free run. The number was **128KB** and it was in the
+app twice, at `cmp dx, 2` and `cmp ax, 128`, and neither of those two was
+ever *reasoned about* — both were copied from a third, and the third is not
+a verdict on a file at all.
+
+The original is `.blind`'s `min(largest run, 128 KB)`, and it is a
+**politeness bound on a guess**. Before §38.6 the completion proc was handed
+a name and no size, so the claim had to be made before the read could report
+one; 128KB is "bigger than any sane 4-channel MOD", picked so that the app
+did not take a whole heap it probably did not need, with `trk_trim` giving
+the difference back afterwards. Nothing in it is a statement about what this
+replayer can play.
+
+When §38.6 added `DX:CX` the new early-refusal path was written beside it
+and took the same constant — its own comment said so, *"the same cap the
+claim used to apply"*. That is where a bound on an over-claim became a
+**refusal**, and it was wrong the moment it was typed: on the sized path the
+size is exact, the claim is exactly it, and the question "will this fit" is
+already asked three lines later against `OSAPI_MEM_AVAIL`. The 128KB
+refused files the heap could fund and answered nothing the heap check did
+not.
+
+**So both refusals go, and what is left is the domain of the arithmetic.**
+The bytes→KB conversion composes `DX<<6` into a word, so `DX >= 1023` (about
+64MB) is where it stops being true and is the only thing refused up front.
+Everything under it is the heap's question. The published contract is
+unchanged: `trk_s_toobig` still exists and is still what a file past that
+answers, and `FERR_BIG` from `OSAPI_FILE_READ` still maps to it.
+
+**The blind path keeps the cap and stops being reached by ordinary loads.**
+It had quietly become the *association* route — §54.5 hands over a name, a
+cluster and a drive and no size at all, so double-clicking a `.MOD` on the
+desktop took the guess, and above the cap that guess is a 128KB claim the
+file does not fit. **`OSAPI_FILE_READ` then refuses it**: §18.4's
+`dskw_rbody` compares the directory entry's 32-bit size against the
+capacity **before any data I/O** and answers `FERR_BIG` with the
+destination untouched, which `trk_fdone`'s `.rderr` maps to the same
+`File too big`. So the association route was refusing a 300KB module too,
+by a different door and with the same words on screen. `trk_sizeof` asks
+`OSAPI_FILE_FIND` — which answers all 32 bits out of the directory
+(§19.7.1) — so the association and the dialog now size the claim
+identically, at the cost of one directory walk on a path that is about to
+read the whole file. Only a name in no directory is still a guess, and
+there the cap is doing the job it was written for: the claim is speculative
+and `trk_ring_probe` (§45.18) has to fund a ring out of what it leaves.
+
+**This paragraph said "silent truncation" first, and that was wrong** — the
+claim being *plausible* is why it is worth leaving the correction in.
+Reasoning from this app alone, a short read looks inevitable: the capacity
+is 128KB, the file is 300KB, and `mp_load` would indeed validate the result
+because `1084 + 1024·P` still fits and the sample extents clamp to the bytes
+present (§45.5). Every step of that is true and the conclusion is false,
+because the kernel never performs the read at all. **A claim about what a
+file operation does is a claim about `diskw.inc`, and it has to be read
+there** rather than derived from the caller's arithmetic. Measured, on the
+reference build: `File too big` / `No module loaded`, not a short module.
+
+**Measured, on a cycle-accurate 4.77MHz 8088 with 640KB and a Sound Blaster,
+same disk and same clicks:** the 300KB module is `File too big` /
+`No module loaded` before, and `OS8088 300K TEST` / `Playing` after. The
+`.o88` grows 73 bytes.
+
 ### 45.4 Memory layout
 
 Four stores, none of them guessed:
@@ -28000,14 +28412,15 @@ Four stores, none of them guessed:
 - **The package segment** — image + bss, including the mixer's 65×256
   volume table (16,640 bytes, built at load: `vt[vol][b] = (int8)b·vol»6`)
   and the 2048-byte `mp_outbuf`.
-- **The module blob** — one heap claim (§50), sized
-  `min(largest free run, 128 KB)` **in KB** from `MEM_AVAIL` at load time
-  regardless of the module's actual size, and held until the next load or
-  teardown. Consequence, stated honestly: while a module is loaded the
-  Tracker's claim holds up to 128KB that other packages and other instances
-  then cannot have. Against a fixed arena that claim would have been
-  effectively *all* of it on a 512KB machine; against a 566KB heap it is a
-  fifth.
+- **The module blob** — one heap claim (§50), `ceil(bytes / 1024)` KB at the
+  file's real size, held until the next load or teardown. It was
+  `min(largest free run, 128 KB)` *regardless* of the module's actual size,
+  which is what the paragraph below was written about; §38.6's size and
+  §45.3.1's `trk_sizeof` between them mean the over-claim now happens only
+  for a name that is in no directory. Consequence, stated honestly: while a
+  module is loaded the Tracker's claim holds the module's own size — and, on
+  that one remaining path, up to 128KB — that other packages and other
+  instances then cannot have.
 
   **...and then `trk_trim` gives the difference back.** The over-claim is
   unavoidable at claim time — the dialog's completion proc is handed a name,
@@ -28080,6 +28493,35 @@ volume table and converts once: `out = 128 + (sum >> 2)` — four channels at
 position arithmetically, so unmuting rejoins the song where it really is.
 Mixing throughput on a real 8088 is **not promised** (§45.8); the mixer is
 honest about being a QEMU/286-era luxury.
+
+#### 45.5.1 The pattern count is a WORD, and a file cap was the only thing holding it
+
+`mp_npat` was a byte, and the line that filled it said why: *"P <= 126 after
+the extent check (file cap)"*. P is `max(order[0..127]) + 1`, so 1..**256**,
+and what bounded it was arithmetic on a number from somewhere else entirely
+— `1084 + 1024·P` must fit the file, and the file could not exceed 128KB, so
+P could not exceed 126. A field of one type was sized by a limit belonging
+to another, in a different module, with one comment connecting them.
+
+Removing §45.3.1's cap therefore reaches this. P = 256 needs 263,228 bytes
+of patterns and an order byte of 255 — both ordinary in a large module — and
+`mov [mp_npat], al` then stores **0**. Nothing errors. `mp_readrow`'s
+hostile-blob clamp reads every pattern as out of range and substitutes
+pattern 0, `mp_cell2txt` refuses every cell, and the app says **Playing**
+over silence with an empty grid.
+
+The count is a word, the two compares that read it are word compares, and
+the FT2 readout — two hex digits, FT2's own field — clamps to `FF` rather
+than printing AL, which for 256 is `00` and reads as *no patterns at all*.
+`mp_pattern` stays a byte: it holds a pattern *number*, 0..255, and it is
+the count that has 257 possible values rather than 256.
+
+**Measured** on a P=256 module past the old cap, cap removed both times, the
+only difference being the width: the Sound Blaster capture is **RMS 0.0,
+peak 0** with the byte and **RMS 3490.2, peak 8191, 96% of samples active**
+with the word. The screen is not the instrument here — `Ptn` reads `FF` in
+*both*, because the clamp picks a pattern to *address* and never writes
+`mp_pattern` back.
 
 ### 45.6 The FT2 screen, parameterized by adapter
 
@@ -29793,6 +30235,60 @@ Four things hold the rest up:
   making the user close something and re-load, and `trk_ring_set` is called
   with what was *actually* granted, never with what was asked for.
 
+
+### 45.19 Its off-grid pens are MEASURED and deliberately left alone
+
+§11.94.3 listed this app's face as the worst alignment offender in the tree
+(*"17% of sampled literal pens"*), and docs/SNAP-PLAN.md ranked it near the top.
+Measured, it is **not worth changing**, and this section is here so nobody
+re-derives that from the same sample.
+
+`make SNAPAUDIT=1`, one forced full repaint of the Tracker window, the histogram
+filtered to Tracker's own record so the About panel used to force the repaint is
+not counted in it:
+
+| adapter | glyph cells | aligned | off-grid buckets |
+|---|---|---|---|
+| Hercules | 237 | 26.2% | 1:16, **5:159** |
+| VGA 12h | 354 | 39.3% | 1:16, 4:40, **5:159** |
+
+Four things that sample could not see:
+
+**The frequently-drawn text already self-aligns.** Every value the playing view
+updates — Pos, Row, BPM, Spd, Ptn, Np, the title, the status line — goes through
+`tui_rdout`, which rounds its pen **down to a byte boundary** when `[tui_mono]`
+is set, precisely so the run earns `font_run`'s single-store path (§6.1). So on
+the two adapters this app exists for, the per-frame text is on the fast path
+already, whatever the caller's constant says.
+
+**The CGA layout is already aligned.** `tui_top_cga`'s labels are at 0, 64, 136,
+200 and 288.
+
+**What is left is EVENT-DRIVEN.** Those 237/354 cells are one `tui_draw_all` —
+a launch, a drag, a raise, a dialog closing. `tui_draw_dyn` draws only what
+changed, against a `tui_l*` shadow of what it last drew, and its own comments
+record per-frame repaints already removed. Alignment does not remove a glyph, it
+shaves a cell's cost: §11.94's measured 3.4% on Hercules and 9.4% on VGA. So
+aligning all 175 off-grid Hercules cells is worth **~6 ms of a ~237 ms repaint,
+on an event** — against Fractal (§40.2.1), which was 2,557 cells a hundred times
+a render and where the fix *removed* 78% of the glyphs rather than shaving each.
+
+**And the biggest single cluster must not move.** 159 of the off-grid cells sit
+at ≡ 5 on both adapters, and the caller log names `tui_s_logo` —
+`'T R A C K E R'`, 13 glyphs at 104px, drawn at 149 inside a box spanning
+112..290. `112 + (179-104)/2 = 149`: **that pen IS the centring**, §11.94.3's
+second protected kind.
+
+**What the measurement does point at, undone and costed.** `tui_rdout` keeps the
+erase-and-letter pair on a colour adapter — its header says so deliberately,
+because the flash it was written to fix was reported from mono — so on VGA the
+per-frame values are drawn at an unaligned pen, and VGA is where alignment is
+worth 2.8x what it is on mono. Fixing it is not a constant: it means resolving
+the two colour roles in `tui_rdout` and emitting one padded `OSAPI_FONT_RUN` for
+both adapters (whose VGA fallback *is* fill-plus-letter), which would delete the
+`.pair` branch and shift VGA's values up to 7px left to where mono already draws
+them. That is a refactor of a routine with a careful history, for a few tens of
+cells per change. Recorded, not taken.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
@@ -31890,6 +32386,41 @@ what was just committed. The purge animation is the other partial path:
 `tg_draw_flash_pages` rewrites only the marked cells, because a full wipe
 every tick puts an intermediate black frame behind every shrink on the
 direct-to-VRAM path.
+
+### 49.5.1 The HUD's seven columns are multiples of 8
+
+`TG_HC_L` 8, `TG_HC_LV` 64, `TG_HC_R` 112, `TG_HC_RV` 168, `TG_HC_F` 120,
+`TG_HC_FV` 184, `TG_HC_LOCK` 208 — named constants now, with an `%error` that
+`OR`s all seven together and checks one bit pattern, so a column added later
+cannot quietly miss the boundary.
+
+They were 4, 60, 108, 164, 116, 180 and 210: **six of the seven at 4 mod 8**,
+which made this the most uniformly off-grid face in the tree and the cheapest to
+correct — `+4` on six numbers, 0 bytes, because the pens were already `mov cx,
+imm16`. §11.94.1 puts the window's content origin on a multiple of 8, so a pen's
+offset mod 8 *is* its phase on the glass, and `font_char` writes one framebuffer
+byte per cell row instead of two only at phase 0 (§11.94's gate came off VGA, so
+that is true of mode 12h's four planes as well).
+
+**`LOCK` moved LEFT by 2 rather than right by 6**, which is the one asymmetry:
+right would have ended row 1 at exactly `TG_HUD_W`, leaving the minimum-width
+case with no margin at all. The widest row is 240 of 248 now, where it was 242.
+
+**What it is worth is small, and is measured rather than implied.** `make
+SNAPAUDIT=1`, filtered to Tamegram's own window record, over 900 frames = 17.7 s
+of real play on a cycle-accurate 5150/Hercules: **109 glyph cells, 0% aligned →
+109 cells, 100% aligned**. That is ~6 cells a second, which at PERFORMANCE.md's
+~1ms a cell is 0.6% of the machine, and alignment saves 3.4% of *that*. It is
+taken because it is free, because it puts this face on the same 8px margin as
+the rest of the tree, and because leaving the last uniformly-fixable entry on
+the survey invites the next reader to re-derive the whole census. **It is not
+taken for the time**, and §49.5 is why: a PLAY frame draws no text at all, and
+the HUD is redrawn only when `[tg_full]` is raised — measured here at about
+once every eleven seconds at the opening fall speed.
+
+Everything else this app letters is **centred** and stays off-grid on purpose:
+the flash banner (`([tg_cwid] - width)/2`) and the About panel
+(`([tg_abw] - width)/2`), both §11.94.3's second protected kind.
 
 ### 49.6 One panel mechanism, two texts
 
@@ -36635,6 +37166,53 @@ is a bound plus a peer comparison and not a field number; `tests/stackprobe`
 on real iron is still the only thing that settles the margin, because SeaBIOS
 hides a real BIOS's interrupt stack use (docs/TESTING.md).
 
+### 56.14 §45.3.1 and §45.5.1, ported — and §56.1 is why this is a second commit
+
+Tracker's 128KB module ceiling and its byte-wide pattern count were **both**
+here too, character for character, because this replayer is an independent
+copy of `trkplay.inc` (§56.1). `mpp_load_name` carried `cmp dx, 2` with the
+comment *"the same cap the blind path takes"* — the same borrowing §45.3.1
+describes, where a politeness bound on a speculative claim became a verdict on
+a file — and `mppmix.inc` carried `mov [mpm_npat], al` under the same *"P <=
+126 after the extent check (file cap)"*. §56.1 exists to say that a replayer
+bug fixed in one player is not fixed in the other; this is the first time that
+warning has been *collected*, and it is worth recording that the duplicated
+comment is what made the second one findable at all.
+
+The fix is §45.3.1's and §45.5.1's, and the reasoning is not repeated here.
+**Three things about this end differ.**
+
+**The blind path is the PLAYLIST, not an association.** ModPlug claims no
+extension — §54 points `MOD` at Tracker, and two players claiming it would
+make a double-click depend on load order (§56.13) — so it has no
+`OSAPI_ARG_FILE` route at all. What it has instead is `mpp_pl_play`, which
+calls `mpp_load_name` with the banked size already read-and-cleared, so
+**every track after the first** arrived as "size unknown" and took the capped
+guess — and `OSAPI_FILE_READ` refuses a file that does not fit the claim
+(§45.3.1's correction), so an oversized track in a playlist stopped the list
+with `File too big` on a feature whose whole purpose is unattended playback.
+`mpp_sizeof` is `trk_sizeof` with the same body and one difference of
+convention: it answers in **DX:CX**, because that is the register pair this
+proc already carries a size in.
+
+That refusal is the *measured* one and not the inferred one: driven through
+the PlayList editor on the reference build — Add…, then the queued entry —
+the player answers `File too big` with `Pos 00/00` and never opens the Sound
+Blaster stream at all (its capture is a 44-byte header). The same clicks on
+the ported build play it.
+
+**There is no readout to clamp.** Tracker prints the pattern count in FT2's
+two-digit `np` field and needed `tui_hexnp`; ModPlug's face has no such
+element — the LCD carries the title, the file name and the transport — so
+`mpm_npat` has exactly four references and all four are the replayer's.
+
+**And the refusal now happens after the stop.** `mpp_load_name` stops
+playback and frees the previous claim *before* it looks at the size, where
+Tracker refuses first and touches nothing; `.toobig`'s comment claiming
+"nothing is playing that this interrupted" was already wrong and is left
+alone, because the sized path can no longer reach it for any file a real heap
+could hold.
+
 ---
 
 ## 57. The debug registry — how a test package reads kernel state
@@ -38879,6 +39457,35 @@ ships to prove. **Zero the slots first and measure**: at ~30 ms a read that is
 a second of listing time for a folder of thirty packages, and it buys a
 picture.
 
+##### 62.9.2.1 …except the icons already in RAM, which are free
+
+The harvest is a sector read per package and there are none here — but the
+**answer** to most of those reads is already in memory, and asking costs
+nothing. `disk_mount`'s redirected tail runs a cache-only pass: for each
+type-1 entry, `asc_lookup` and on a hit `asc_take`; a miss keeps the blank
+slot the loop above wrote.
+
+**A hit is exact, not plausible.** `asc_lookup` matches a package on its
+**stem AND its size**, so it answers "the same name and the same byte count" —
+the same package. That is what makes it safe to spend a row from a cache that
+was loaded for a *different* volume, which is the whole point: a copy of
+`MINES.O88` on a DOS machine is the same 1,517 bytes it is on the apps disk.
+
+**`asc_use_x` is deliberately not called**, and that is the design rather than
+an omission. It re-keys the cache to `[disk_drive]` and reads that volume's
+`ASSOC.DAT` — over a cable, exactly the traffic this exists to avoid — and it
+would evict the rows that make the pass work. The cache is used as it stands.
+
+Two consequences worth stating rather than discovering. It is **session
+state**: a Link listing shows a package's icon if the user has browsed a disk
+that also holds it, and the generic one after a fresh boot. That is inherent
+to "only if it is already in RAM" and nothing here may make it otherwise by
+going to look. And it is **packages only** — §54.3's document pass composes a
+page from the *program's* icon, and on a redirected volume there is no such
+program to have learned one from, so a `.TXT` keeps the generic icon. It keeps
+it on a floppy too, so this closes the gap between the two rather than opening
+one.
+
 #### 62.9.3 The branch sites, and the order to build them in
 
 Each is a test of `DV_KIND` at the top of a routine that already exists, so
@@ -39754,6 +40361,138 @@ the Disk window reads `No os8088 disk (D:)` over `Size ?  Free ?`, which is
 the field photograph letter for letter. The far side's own log says
 `CHDIR handle=2 -> parent 0` — it resolved the folder correctly and then had
 nowhere to put the answer.
+
+##### 62.10.4.7 The second field run: a package listed with no handle
+
+Reported off the same pair, with the deadline fixed: Connect worked, `APPS`
+and `GAMES` navigated in and out, and launching Minesweeper answered
+**`Disk error`**.
+
+**`srv_ent` filled the entry's handle word in its `.dir` branch alone.** A
+folder got one, a file got zero — and so did a **package**, because the
+package arm sets the type and jumps straight to the exit. §19.1's
+first-cluster word at offset 18 *is* the driver's handle on a redirected
+volume, and `loader_run` is the one caller in the machine that arrives
+holding a handle rather than a name (`disk.inc`'s `DVK_FILE` branch reads by
+it and never resolves). So every package on the wire was offered to
+`open_handle` as handle 0, which it refuses outright as the root — the
+answer is a status, the loader's peek takes any failure as `.disk1`, and the
+message is `Disk error` on a link that never faltered.
+
+The shape is worth naming: **the type that worked was the type the walk had
+a reason to touch.** Folders need a handle to be dived into, so the branch
+that gives them one is the branch that already existed; a package needs one
+for a reason that lives in *another* module, three verbs later.
+
+**A plain file still gets 0, deliberately, and the asymmetry is the table.**
+Nothing reads offset 18 behind type 0 — `dskw_read` STATs by name and is
+handed a fresh handle — while `hdtab` holds 64 and a real DOS folder can
+hold hundreds, so a slot per file would exhaust it and break the folders
+that work today. The RAM disk hands one out for everything because it has no
+such table to spend, and that difference is why it could never have shown
+this.
+
+`srv_stat` also stopped answering **OK with handle 0** when `hd_get` finds
+the table full: 0 is the root, `open_handle` refuses it, so that was a
+success the caller could not use — the same lie one verb earlier.
+
+###### 62.10.4.7.1 The harness was kinder than the machine, again
+
+`partner.py`'s `FileTree.entry` wrote the node's handle at offset 18 for
+**every** entry, files and packages included. So the stand-in was the only
+thing in the world supplying a working package handle, and a package launch
+over the cable had been exercised repeatedly — with the harness quietly
+patching the defect under test.
+
+That is the second time in this driver's short history (`NC_BYE` was the
+first, §62.10.4.2) and the rule is the same both times: **a harness that is
+more generous than the thing it stands in for hides precisely the bugs it
+exists to find.** `entry` now applies os88net.asm's rule — a handle for a
+folder and a package, zero for a plain file — so the harness can fail the
+way the field does.
+
+###### 62.10.4.7.2 The A/B, and a knob that rebuilt around the wrong file
+
+`tests/dosstub` boots the real `OS88NET.COM` on a cycle-accurate 8088, so
+this is settled by that program's own instructions rather than by a model of
+them. `HELLO.O88` was already in the stub's tree — put there so `ent_ispkg`
+would fire — and its **type** was checked while its **handle** was printed
+and never read. Measured, listing the root:
+
+| | pre-fix | fixed |
+|---|---|---|
+| `README.TXT` (file) | handle 0 | handle 0 |
+| `HELLO.O88` (package) | **handle 0** | handle 1 |
+| `GAMES`, `EMPTY` (folders) | handles 1, 2 | handles 2, 3 |
+
+**And the A/B nearly reported both legs passing**, because `make dosstub
+COMFILE=<path>` — the knob that embeds a different `OS88NET.COM`, which is
+the only way to build the previous commit's DOS side — was named in `DSSTAMP`
+and **never passed to nasm**. So it rebuilt the stub faithfully and rebuilt
+it around the default file. That is `DSSTAMP`'s own documented trap one knob
+later, and the distinction it turns on is worth stating: **a stamp makes the
+rebuild happen and says nothing about what the rebuild is made of.** The
+first run of this A/B printed `handle=1` for both binaries, which reads as
+"the bug was never there".
+
+##### 62.10.4.8 The third field run: the deadline had a twin on the send side
+
+Reported off the same pair, with §62.10.4.6 and §62.10.4.7 both in: read-only
+mount, chdir in and out, a package launched and a document opened — all
+working. Then a **paste** onto the Link volume: one read off the source
+floppy, a long freeze, the far machine's disk spinning, the Link window
+refreshing **empty**, and on the DOS side a `dir` showing the file at **zero
+bytes**.
+
+**`lp_snib` waited `LP_TMO` — 110 ms — for the far end to acknowledge each
+nibble it sent.** §62.10.4.6 raised the deadline on `lp_rnib`, which is the
+*receive* side, on the reasoning that a reversal means the far side has gone
+to its disk. That reasoning is symmetric and only half of it was applied. A
+**write is os8088 sending**, and `srv_write` reads the length, calls
+`int 21h 3Ch` to **create the file**, and only then reads a body byte — so a
+floppy's directory write lands squarely between our length word and our first
+data byte, where 110 ms was certain to expire.
+
+Every symptom follows from that one deadline, which is what says it is the
+whole story rather than one of several faults:
+
+- the **freeze** is the full volume switch a cross-drive copy makes
+  (`fcp_goto` alternates drives, so each hop is a mount = an `FSV_LIST` over a
+  3,741 B/s wire);
+- the far machine's **disk spinning** is `wr_open`'s create;
+- the **zero-byte file** is that create, with a body that never arrived;
+- the **empty listing** is `net_lost` dropping the volume, exactly as
+  §62.10.4.6's blank Disk window was.
+
+`lp_snib`'s first wait is `[lp_turnw]` now. Its second — the ack falling — keeps
+`LP_TMO`, the same asymmetry `lp_rnib` has and for the same reason: by then
+the far side has committed and is not going anywhere. The port sweep is
+unaffected, because `lp_init` leaves the word at `TURN_RX` until a partner
+answers.
+
+**The shape worth keeping.** The first fix was verified with a harness that
+could stall before a **reply**, and it verified exactly what it was built to
+verify. Nothing stalled before an **ack**, so the untested half stayed
+untested and shipped — and it shipped in the one verb the field had not yet
+reached. *A fix aimed at one direction of a symmetric mechanism should be
+tested in both, or the second half is a field report waiting to happen.*
+
+###### 62.10.4.8.1 …and a goodbye goes back to being impatient
+
+Patience on the send side has one place it is wrong, and it is not a far side
+that is slow — it is one that is **not there**. `net_detach` and `net_drop`
+each send `NC_BYE`, whose own comment says it is best effort, and with the
+cable out that byte would now spend `REPLY_TMO`: **ten seconds of frozen UI,
+under the gfx lock**, for unticking a driver. Both put `[lp_turnw]` back to
+`TURN_RX` first. Nothing after them needs the long one — the next Connect's
+`lp_init` sets it regardless — so this costs a store and closes a freeze the
+fix would otherwise have introduced.
+
+It is worth noticing that the *ordinary* failure needs no such guard: a
+command whose far side has vanished spends one long wait and then `net_lost`
+takes the volume down, which is the same cost the receive side has had since
+§62.10.4.6. What made the goodbye different is that it is issued on a path the
+user is *waiting on*, and its result is discarded.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

@@ -98,6 +98,21 @@ REPLY_TMO   equ 182             ; ...to this - 10 seconds - once a partner has
                                 ; 70 seconds instead of 3. Short while looking,
                                 ; patient once found.
                                 ;
+                                ; IT GOVERNS BOTH DIRECTIONS, and for one
+                                ; round it governed only the receive. A SEND
+                                ; waits for the far end's ack, and the far end
+                                ; may not be looking yet - srv_write reads the
+                                ; length, CREATES THE FILE and only then reads
+                                ; a body byte. That put a floppy's directory
+                                ; write between our length and our first byte,
+                                ; where 110ms was certain to expire: the link
+                                ; dropped, the Disk window blanked, and the
+                                ; far side was left holding a file it had
+                                ; created and never filled - a ZERO-BYTE
+                                ; paste, SPEC.md 62.10.4.8. The same bug as
+                                ; the paragraph above wearing the other hat,
+                                ; which is why lp_snib now reads this word too
+                                ;
                                 ; 182 and not more because lp_dlchk takes the
                                 ; allowance as a BYTE (255 ticks, 14 s) and
                                 ; because an unplugged cable costs this much
@@ -415,7 +430,18 @@ lp_snib:
     or  al, 0x10                ; data is stable before the far end is told
     out dx, al                  ; to look at it
     inc dx                      ; -> status
-    LP_WAIT jnz, LP_TMO, .bad   ; ...wait for the ack to RISE
+                                ; ...wait for the ack to RISE, and this is
+                                ; [lp_turnw] for lp_rnib's reason seen from
+                                ; the other side (SPEC.md 62.10.4.8): the far
+                                ; end may not be LOOKING yet. A WRITE is the
+                                ; case - srv_write reads the length, calls
+                                ; int 21h 3Ch to create the file, and only
+                                ; then reads a body byte, so a floppy's
+                                ; directory write lands between our length
+                                ; and our first byte. At LP_TMO that is 110ms
+                                ; against seconds and the send was certain to
+                                ; fail
+    LP_WAIT jnz, [lp_turnw], .bad
     dec dx                      ; -> data
     mov al, bl
     out dx, al                  ; strobe down, nibble held

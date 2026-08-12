@@ -246,7 +246,11 @@ mp_load:
     mov [mp_run_lo], ax         ; 32-bit running sample start offset
     mov [mp_run_hi], dx
     mov ax, [mp_t1]
-    mov [mp_npat], al           ; P <= 126 after the extent check (file cap)
+    mov [mp_npat], ax           ; P is 1..256 and the count is a WORD for the
+                                ; 256 (SPEC.md 45.5.1). It read AL while the
+                                ; app refused any file over 128KB, because
+                                ; 1084 + 1024*P <= 131072 forces P <= 126 -
+                                ; a byte held it only by way of that cap
     ; -- 7..10: the 31 sample headers -> mp_smptab ---------------------------
     mov word [mp_t1], 0         ; sample index 0..30
 .sm:
@@ -780,9 +784,7 @@ mp_cell2txt:
     ja .no
     cmp ah, 3
     ja .no
-    mov bl, [mp_npat]
-    xor bh, bh
-    cmp di, bx
+    cmp di, [mp_npat]           ; DI = pattern number against the WORD count
     jae .no
     ; ES = pattern segment, SI = cell offset
     mov bx, di
@@ -1460,11 +1462,12 @@ mp_nextrow:
 mp_readrow:
     ; ES = pattern segment for the whole row
     mov al, [mp_pattern]
-    cmp al, [mp_npat]           ; defense-in-depth (the hostile-blob rule):
-    jb .pok                     ; no state corruption may ever select a
-    xor al, al                  ; pattern segment past the validated extent
-.pok:
-    xor ah, ah
+    xor ah, ah                  ; defense-in-depth (the hostile-blob rule):
+    cmp ax, [mp_npat]           ; no state corruption may ever select a
+    jb .pok                     ; pattern segment past the validated extent.
+    xor ax, ax                  ; The count is a word, so this compare is one
+.pok:                           ; too - a byte compare against P = 256 reads
+                                ; as 0 and forces EVERY pattern to 0
     mov cl, 6
     shl ax, cl
     add ax, 67
@@ -2288,7 +2291,8 @@ mpe_song:   db 'Bad song data', 0
     TRKB mp_speed                   ; ticks per row
     TRKB mp_bpm                     ; tempo
     TRKB mp_songlen                 ; order entries played
-    TRKB mp_npat                    ; pattern count P
+    TRKW mp_npat                    ; pattern count P - 1..256, so a WORD
+                                    ; (SPEC.md 45.5.1)
     TRKBUF mp_mute, 4               ; per-channel mute flags
     TRKBUF mp_chvol, 4              ; current output volumes 0..64 (0 = quiet)
     TRKBUF mp_hit, 4                ; a note STRUCK on this channel since the

@@ -512,6 +512,23 @@ tui_hex2:
     pop di
     ret
 
+; tui_hexnp - the pattern count as two hex digits, clamped.
+;
+; [mp_npat] is a WORD (SPEC.md 45.5.1) and this readout is FT2's two-digit
+; one, so the single value that does not fit - P = 256, reachable now that a
+; module may be larger than 128KB - is shown as FF rather than as AL, which
+; would print it as 00 and say the module has no patterns at all.
+tui_hexnp:
+    push ax
+    mov ax, [mp_npat]
+    cmp ax, 255
+    jbe .fits
+    mov al, 255
+.fits:
+    call tui_hex2
+    pop ax
+    ret
+
 ; tui_dec3 - AL -> tui_nbuf as three decimal digits, NUL-terminated
 tui_dec3:
     push ax
@@ -948,8 +965,7 @@ tui_val_ptn:
     mov ah, TC_FACE
     mov al, TC_FACET
     call tui_rdout
-    mov al, [mp_npat]
-    call tui_hex2
+    call tui_hexnp
     mov si, tui_nbuf
     mov cx, 258
     mov dx, 64
@@ -1080,8 +1096,7 @@ tui_el_ptn:
     mov cx, 210
     mov dx, 64
     call tui_textc
-    mov al, [mp_npat]
-    call tui_hex2
+    call tui_hexnp
     mov si, tui_nbuf
     mov cx, 258
     call tui_textc

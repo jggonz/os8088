@@ -1166,12 +1166,27 @@ srv_ent:
     call ent_ispkg              ; @16: 1 = a package, so the loader's icon and
     jnc .file                   ; the double-click both do the right thing
     mov word [entbuf + DE_TYPE], 1
-    jmp short .out
+    jmp short .hand             ; ...AND A PACKAGE NEEDS @18 TOO. See below
 .file:
     mov word [entbuf + DE_TYPE], 0
     jmp short .out
 .dir:
     mov word [entbuf + DE_TYPE], 2
+.hand:
+    ; @18: OUR OPAQUE HANDLE, for a FOLDER because dsk_chdir dives on it, and
+    ; for a PACKAGE because loader_run reads one BY HANDLE out of the staged
+    ; entry (SPEC.md 19.1's first-cluster word, disk.inc's DVK_FILE branch) -
+    ; it is the one caller that arrives holding a handle rather than a name.
+    ; This branch used to be the folder's alone, so every package on the wire
+    ; was listed with handle 0, open_handle refused it as the root, and a
+    ; double-click answered `Disk error` on a link that was working perfectly.
+    ;
+    ; A PLAIN FILE deliberately still gets 0, and the asymmetry is the handle
+    ; TABLE: nothing reads @18 behind type 0 (dskw_read STATs by name and gets
+    ; a fresh one), hdtab holds 64, and a real DOS folder can hold hundreds -
+    ; so a slot per file would exhaust it and break the FOLDERS that work
+    ; today. The RAM disk hands one out for everything because it has no such
+    ; table to spend.
     mov ax, [srv_h]             ; ...its parent is the folder being listed
     mov si, dtabuf + DTA_NAME
     call hd_get                 ; -> AX = the handle, 0 if the table is full
@@ -1523,6 +1538,11 @@ srv_stat:
     mov si, namebuf             ; second stat of the same file answers the
     call hd_get                 ; same handle - hd_get dedupes
     mov [srv_fh], ax
+    or  ax, ax                  ; ...0 IS THE TABLE FULL, and 0 is the ROOT -
+    jz  .no                     ; open_handle refuses it, so answering OK with
+                                ; it is a success the caller cannot use. A
+                                ; refusal here at least names the file that
+                                ; could not be reached
 
     xor al, al
     call lp_sbyte

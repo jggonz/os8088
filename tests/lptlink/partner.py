@@ -104,8 +104,28 @@ class Partner(object):
                                         # one thing this harness is otherwise
                                         # incapable of being slow about. See
                                         # _spend_stall
+        self.stall_body = 0             # ...and the same, MID-frame: see send_body
+        self.stall_ack = 0              # ...and BEFORE AN ACK, which is the
+                                        # THIRD place the far machine goes to
+                                        # its disk and the one no harness could
+                                        # reach: srv_write reads the length,
+                                        # CREATES the file and only then reads
+                                        # a body byte, so the pause lands
+                                        # between os8088's length word and its
+                                        # first data byte. Armed by arm_ack(),
+                                        # spent by recv_nib
         self._owed = False
+        self._ackowed = False
         self._status(idle=True)
+
+    def arm_ack(self):
+        """The NEXT nibble os8088 sends us waits `stall_ack` ticks for its ack.
+
+        Armed rather than continuous because a per-nibble stall would make a
+        1KB write take hours of wall clock, and because the real pause has one
+        place: srv_write's int 21h 3Ch, between the length and the body.
+        """
+        self._ackowed = True
 
     def _spend_stall(self):
         """Run the guest for `self.stall` of ITS OWN ticks, answering nothing.
@@ -161,6 +181,11 @@ class Partner(object):
     # --- one nibble each way -------------------------------------------------
     def recv_nib(self):
         """os8088 is sending: lp_snib's counterpart."""
+        if self._ackowed:               # ...THE FAR SIDE IS NOT LOOKING YET.
+            self._ackowed = False       # See stall_ack: this is the gap that
+            saved, self.stall = self.stall, self.stall_ack   # let 62.10.4.8 ship
+            self._spend_stall()
+            self.stall = saved
         d = self._await_strobe(True)    # nibble is stable before the strobe
         n = d & 0x0F
         self._status(idle=False)        # ack UP (asserted = raw bit 7 zero)
@@ -208,6 +233,25 @@ class Partner(object):
     def send(self, data):
         for b in bytes(data):
             self.send_byte(b)
+
+    def send_body(self, data):
+        """A file's bytes, with `stall_body` ticks of disk every 512.
+
+        os88net.asm's own send_body reads the file through a 512-byte buffer
+        and goes back to int 21h between chunks - so the far side pauses
+        MID-FRAME, which is a different wait from the one before a reply and
+        was the last one still bounded at LP_TMO rather than [lp_turnw]. A
+        harness that streams a file straight out of a Python bytes object
+        cannot exercise it.
+        """
+        for i, b in enumerate(bytes(data)):
+            if self.stall_body and i and not (i % 512):
+                saved, self.stall = self.stall, self.stall_body
+                self._owed = True
+                self.send_byte(b)
+                self.stall = saved
+            else:
+                self.send_byte(b)
 
     def recv_word(self):
         b = self.recv(2)
@@ -591,7 +635,7 @@ class Partner(object):
                                 % (h, cap, len(d)))
                 self.send_byte(0)           # oversized file is short at the
                 self.send_dword(len(d))     # source rather than sent and
-                self.send(d)                # thrown away
+                self.send_body(d)           # thrown away
             elif c == ord('A'):             # NF_READAT: a window
                 h = self.recv_word()
                 off = self.recv_dword()
@@ -605,11 +649,18 @@ class Partner(object):
                                 % (h, off, cap, len(d)))
                 self.send_byte(0)
                 self.send_word(len(d))      # ...ZERO past the end, which is
-                self.send(d)                # the contract and not an error
+                self.send_body(d)           # the contract and not an error
             elif c in (ord('U'), ord('P')):     # NF_WRITE / NF_APPEND
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 n = (self.recv_dword() if c == ord('U') else self.recv_word())
+                self.arm_ack()                  # ...AND HERE IS WHERE THE FAR
+                                                # MACHINE CREATES THE FILE. The
+                                                # length is off the wire and
+                                                # int 21h 3Ch has not run yet,
+                                                # so os8088's first body nibble
+                                                # waits on a DOS floppy write
+                                                # (SPEC.md 62.10.4.8)
                 d = self.recv(n)                # THE RUN IS TAKEN WHATEVER we
                                                 # do with it: the length is on
                                                 # the wire ahead of the bytes
@@ -811,8 +862,17 @@ class FileTree(object):
         b = bytearray(DE_SIZE)
         b[0:len(name)] = name.encode('ascii')    # ...and the rest stays NUL
         b[16] = typ
-        b[18] = h & 0xFF
-        b[19] = (h >> 8) & 0xFF
+        # @18 IS A HANDLE FOR A FOLDER AND A PACKAGE, AND ZERO FOR A PLAIN
+        # FILE, which is os88net.asm's rule and not a convenience of this
+        # file's. It handed one out for EVERYTHING, and that is precisely why
+        # the field found `Disk error` on a package the harness had launched
+        # a dozen times: the real far side listed packages with handle 0, the
+        # loader reads a package BY handle, and the stand-in was the only
+        # thing supplying a working one. A harness kinder than the machine it
+        # stands in for hides exactly the bugs it exists to find.
+        hand = h if typ in (self.T_DIR, self.T_PKG) else 0
+        b[18] = hand & 0xFF
+        b[19] = (hand >> 8) & 0xFF
         b[20] = size & 0xFF
         b[21] = (size >> 8) & 0xFF
         b[22] = (size >> 16) & 0xFF
