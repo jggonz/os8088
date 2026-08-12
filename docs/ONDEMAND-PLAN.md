@@ -712,6 +712,15 @@ would. Five things are worth recording.
 | `kern_big` total | — | **102,912 → 99,840** |
 | `kern_small` total | — | **97,280 → 96,256, and 0 → 1,024 spare** |
 
+**Those four are the DELTAS this work is responsible for, measured on the
+branch, and the totals are not the tree's current position** — three rounds of
+integration landed between them and `elendilon` (the store above 1MB became an
+overlay, the cursor grew a per-window picture, a hidden Control Panel row
+stopped having to be last, and a moved window replays its content). Read the
+left-hand column as *what the modules cost or saved*; docs/KERNEL-MEMORY.md's
+blessed baseline is where both builds actually stand, and it also carries what
+`kern_small` needs to build at all again, which is no longer 0.
+
 The panel came in 512 short of the estimate because the loader, the stubs and
 the refusal string go back into `.cold` and `.text`. **The estimate that
 mattered more was `KERN_CODE_MAX`'s, and §0's finding 2 was too strong**: the
@@ -722,8 +731,12 @@ the *dispatch* is free, not that the feature is.
 
 **`kern_small` is where the story ended up, and it is Format's, not the
 panel's.** §3.2's correction was right and understated: the small build now
-*has* a floppy formatter, which it never had, **and** has 1,024 bytes of spare
-against a guard that had none. Both from the same round.
+*has* a floppy formatter, which it never had, **and** the modules bought back
+1,024 bytes against a guard that had none. Both from the same round — and the
+second half has since been spent by other work rather than by this: at the
+integration branch `make small` is 512 bytes over, where without the modules it
+would be 1,536. The feature survives; the spare did not, which is the ordinary
+fate of spare and the reason the guard is a guard.
 
 **A second stamp was needed and the plan did not see it.** §5.2's build number
 answers "another commit" and cannot answer "another BUILD of this commit" —

@@ -209,6 +209,40 @@ ifneq ($(REDRAWFULL),)
 VIDDEF += -DREDRAWFULL
 endif
 
+# DRAGCACHE=0 removes SPEC.md 11.96.12's drag cache, so a window dragged by its
+# title bar goes back to ordering a full W_PAINT of itself at the new place.
+# It is the A/B: the claim is "the same picture, not drawn", and the failure it
+# can have is a restore landing a few pixels wide of where it belongs - which
+# is a real picture, so no screenshot of one build can check it. Only the pair.
+ifeq ($(DRAGCACHE),0)
+VIDDEF += -DNODRAGCACHE
+endif
+
+# SOLNOKEEP=1 makes Solitaire's sol_keep answer 0, so every tableau column is
+# erased and redrawn whole - the pre-SPEC.md 43.10 path, and a stricter
+# reference than 43.7's, which kept the buried backs. It is REDRAWFULL's
+# reasoning for a package: the shadow's whole claim is "the same picture, drawn
+# fewer times", and the failure it can have is a card left standing where a
+# card no longer is - a REAL picture, so no screenshot of one build can check
+# it. Only the pair can.
+#
+#   make && python3 tools/solcheck.py capture /tmp/a build/soltest.img
+#   make SOLNOKEEP=1 && python3 tools/solcheck.py capture /tmp/b build/soltest.img
+#   python3 tools/solcheck.py diff /tmp/a /tmp/b        # 0 differing pixels
+#
+# IT IS IN $(SOLSTAMP) BELOW, and it has to be for the reason NOSPLIT records:
+# the .bin rule depends on the SOURCE, so a knob outside a stamp leaves an
+# up-to-date binary in place, drives the same build twice and returns a null
+# A/B - which reads as a pass.
+SOLDEF :=
+ifneq ($(SOLNOKEEP),)
+SOLDEF += -DSOLNOKEEP
+endif
+SOLSTAMP := $(BUILD)/.sol-$(if $(SOLNOKEEP),nokeep,keep)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(SOLSTAMP) ] || { rm -f $(BUILD)/.sol-* $(BUILD)/solitair.bin; \
+                                touch $(SOLSTAMP); })
+
 # SNDSNIFF=sb adds the Sound Blaster DSP reset scan to the boot's sound probe
 # (SPEC.md 51.3.1), which by default is the OPL2 timer-flag dance at 388h and
 # nothing else. Every Sound Blaster ever made carries an OPL2 there, so the
@@ -301,10 +335,10 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB \
+                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
@@ -976,7 +1010,7 @@ $(BUILD)/paint.o88: $(BUILD)/paint.bin tools/os88pkg.py
 # the Task Manager and the dock show - is still 'SOLITAIRE'; that field is 16
 # bytes (SPEC.md 20.2) and has nothing to do with the file name.
 $(BUILD)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/solitaire/solitaire.asm
+	$(NASM) -f bin -w+error $(SOLDEF) -I apps/ -o $@ apps/solitaire/solitaire.asm
 	@echo "solitaire: $(call FILESIZE,$@) bytes"
 
 

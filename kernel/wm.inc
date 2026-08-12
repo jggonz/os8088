@@ -4631,6 +4631,12 @@ wm_su_sy1: dw 0                 ; anything in the machine has written it)
 wm_su_sx2: dw 0
 wm_su_sy2: dw 0
 
+; --- the DRAG cache (SPEC.md 11.96.12) --------------------------------------
+; The window a drag has banked, and the ONLY window allowed to use the machine
+; above without having promised WF_SAVEU. In .text with an initialiser for
+; wm_su_son's reason: wm_su_ck reads it before anything has written it.
+wm_dc_win: dw 0
+
 ; --- ...and what a RAISE owes, which is what was COVERED (SPEC.md 11.96.10) --
 ; Written by wm_cov_rect before wm_lift and spent by wm_raise into wm_su_sub
 ; above, because everything between the two - the bar, the dock, the outgoing
@@ -5534,8 +5540,8 @@ wm_su_ck:
     mov si, [si]                ; SI = the claim, 0 = no cache for this window
     or si, si
     jz .no
-    test word [di+W_FLAGS], WF_SAVEU
-    jz .no                      ; THE PROMISE IS TESTED AT THE RESTORE TOO, not
+    call wm_dc_ok
+    jc .no                      ; THE PROMISE IS TESTED AT THE RESTORE TOO, not
                                 ; only at the take. wm_saveu_set drops the cache
                                 ; when an app withdraws it, so this is belt and
                                 ; braces there - but it is the only thing making
@@ -5584,6 +5590,133 @@ wm_su_ck:
 
 ; wm_su_take - bank window DI's content, because it is about to be covered
 ; preserves every register; a refusal anywhere just leaves no cache
+; -----------------------------------------------------------------------------
+; The DRAG cache (SPEC.md 11.96.12) - a window MOVED puts its content back
+; instead of drawing it again.
+;
+; It is not a second mechanism. A drag does not change the content, only where
+; it goes, so this BANKS through wm_su_take at the old position and then moves
+; the claim's header by the same delta - and wm_su_ck, which compares that
+; header against the window's rect NOW, then agrees. Everything after that is
+; the raise cache's own: the fragment layout, wm_su_edge's edge merge, the
+; restore, the free.
+;
+; **EVERY window is eligible, and WF_SAVEU is not the reason.** 11.96.1's
+; promise is about content changing while a window is merely COVERED, which is
+; a question about arbitrary time; here the bank and the restore happen inside
+; ONE gfx lock hold - ui_drag reaches .release holding it and does not unlock
+; until after wm_paint_dmg - so no task, worker or otherwise, can run between
+; them. (Workers are NOT suspended during the drag itself: ui_drag's tracking
+; pass unlocks and yields on every tick. It does not matter, because the bank
+; is taken after that loop has ended.) So the promise is waived for exactly
+; the one window, through wm_dc_win, and never globally: a blanket waiver
+; would let wm_su_bank take a RAISE cache for a window that has made no
+; promise, which is 11.96.1's hazard with a new way in.
+; -----------------------------------------------------------------------------
+
+; wm_dc_ok - may window DI use the save-under machinery?
+; out: CF = 0 yes; preserves every register
+wm_dc_ok:
+    test word [di+W_FLAGS], WF_SAVEU
+    jnz .yes
+    cmp di, [wm_dc_win]         ; a window record is never 0, so this cannot
+    jne .no                     ; match the "nothing cached" state by accident
+.yes:
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; wm_dc_take - bank window BX's content before it moves, and relabel it
+; in:  BX = the window, its W_X/W_Y ALREADY the new ones; ui_origx/y = the old
+; out: nothing; preserves every register
+wm_dc_take:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov di, bx
+    call wm_su_rect             ; ...WHOLLY ON SCREEN WHERE IT IS GOING, which
+%ifdef KERN_BIG                 ; wm_su_take asks of where it has BEEN and
+    call vid_span_one           ; cannot ask of where it is headed. ui_drag
+    jc .out                     ; clamps the TITLE BAR onto the screen and not
+%else                           ; the window, so dragging one down hangs its
+    cmp cx, [vid_cw]            ; bottom off - and wm_su_try would then refuse
+    jae .out                    ; after this had already paid for a claim and a
+    cmp dx, [vid_ch]            ; gfx_save. Measured, that was the commonest
+    jae .out                    ; refusal there is: ~4 ms spent to draw the
+%endif                          ; window in full anyway
+    mov ax, [di+W_X]
+    sub ax, [ui_origx]
+    test al, 7                  ; THE BYTE PHASE, and it is the whole of what
+    jnz .out                    ; this cannot do: gfx_save lays the buffer out
+                                ; from x1 rounded DOWN to a framebuffer byte,
+                                ; so the pixels can be replayed at another x
+                                ; only where the content sits at the same
+                                ; offset inside its byte. Any dy is free -
+                                ; rows are whole - so a vertical drag always
+                                ; takes this path and a horizontal one takes it
+                                ; once every eight pixels
+    mov [wm_dc_win], di         ; ...the waiver, for this window alone
+    mov cx, [di+W_X]            ; wm_su_take reads the geometry, and the pixels
+    mov si, [di+W_Y]            ; are still where the window WAS - so put it
+    mov ax, [ui_origx]          ; back for the length of the save
+    mov [di+W_X], ax
+    mov ax, [ui_origy]
+    mov [di+W_Y], ax
+    call wm_su_take
+    mov [di+W_X], cx
+    mov [di+W_Y], si
+    mov bx, di
+    call wm_su_slot             ; SI = the slot word, and a refusal anywhere in
+    mov ax, [si]                ; wm_su_take just leaves it 0
+    or ax, ax
+    jz .drop
+    mov es, ax
+    mov ax, [di+W_X]            ; RELABEL: the header is the rect wm_su_ck
+    sub ax, [ui_origx]          ; compares, so moving it by the drag's own
+    add [es:WSU_X1], ax         ; delta is the whole trick. WSU_EXT is left
+    add [es:WSU_X2], ax         ; alone because a drag does not resize, so the
+    mov ax, [di+W_Y]            ; band extents it describes are unchanged
+    sub ax, [ui_origy]
+    add [es:WSU_Y1], ax
+    add [es:WSU_Y2], ax
+    jmp short .out
+.drop:
+    mov word [wm_dc_win], 0
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wm_dc_done - the repaint is over: spend the waiver
+; preserves every register and the flags
+;
+; A window that DOES promise keeps what was banked - it is an ordinary raise
+; cache now, correctly labelled. One that does not must lose it here, or the
+; next raise would put back a picture its worker has moved on from.
+wm_dc_done:
+    pushf
+    push bx
+    mov bx, [wm_dc_win]
+    or bx, bx
+    jz .out
+    mov word [wm_dc_win], 0
+    test word [bx+W_FLAGS], WF_SAVEU
+    jnz .out
+    call wm_su_drop
+.out:
+    pop bx
+    popf
+    ret
+
 wm_su_take:
     push ax
     push bx
@@ -5592,8 +5725,8 @@ wm_su_take:
     push si
     push di
     push es
-    test word [di+W_FLAGS], WF_SAVEU
-    jz .out                     ; it made no promise, so its pixels may be
+    call wm_dc_ok
+    jc .out                     ; it made no promise, so its pixels may be
                                 ; stale by the time it is raised (11.96.1)
     test word [di+W_FLAGS], 2   ; not visible: there are no pixels to bank
     jz .out

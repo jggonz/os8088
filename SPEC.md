@@ -604,6 +604,19 @@ code and §2.6's cold segment is still resident; moving a module cold to fix a
 footprint overrun is a no-op that looks like a fix. Taking it off the disk
 entirely is not.
 
+**A MODULE IS NOT AN OVERLAY, and both now ride every disk.** §52.11's
+`HDDTOOL.DRV` and §41.12's `XMEM.DRV` are `DRVC_OVL` images: driver header,
+driver dispatcher, driver load discipline, an ABI of their own, and no
+`drv_tab` row. They are *self-contained* — assembled on their own, loaded by
+whoever owns them, and able to say what they mean to a kernel they were not
+built beside. A module is the opposite and deliberately so: it is **this
+kernel's own code**, cut out of this build's binary, naming `cp_sel`,
+`dsk_secbuf` and a string in `.text` at the addresses *this* assembly put them
+at — which is why it needs §2.8.2's two stamps and an overlay does not. Reach
+for an overlay when the thing has an interface; reach for a module when the
+thing is kernel code that simply need not be resident. Both are `.DRV` files
+for §19.6's reason and neither is a driver.
+
 **What makes it work is that `.cold` was already ready.** Cold code is
 assembled at `vstart = 0`, contains no data at all, runs with `DS =
 KERNEL_SEG` and leaves itself only through the `cw_*` far shims — so it is
@@ -6470,6 +6483,100 @@ it at its exit and `wm_dmg_wins` at `.wdone`, which is the same guarantee at
 the two sites that can skip a window. That also retired §11.96.11's
 bank-and-restore pair, which existed only because `wm_su_edge` was borrowing
 those four words.
+
+#### 11.96.12 A window MOVED replays its content instead of drawing it
+
+Reported from the field as *"drag the whole Solitaire window by its title and
+it redraws its entire screen card by card, instead of from its last full window
+shadow buffer — I'm not sure if this is global or not."*
+
+**It was global, and it was two independent structural reasons rather than a
+bug.** The window being dragged is the FRONT one by construction — `ui_drag` is
+reached through `wm_hit` on the frontmost title bar — so §11.96.4 had *already
+dropped its cache*, on the reasoning that the front window "has not finished
+with the pixels it has just been given". And `wm_su_ck` compares the **absolute
+content rect**, which a move changes in all four numbers, so a cache that did
+exist would have been rejected anyway.
+
+Measured with `tools/winmove.py` on a cycle-accurate 5150/Hercules, each window
+dragged by its own title bar, before:
+
+| | drawing calls | guest time | the tell |
+|---|---:|---:|---|
+| a Disk window | 207 | **236.6 ms** | 71 `font_char` — the listing re-lettered |
+| Solitaire | 1,016 | **914.7 ms** | 22 `gfx_blit4` — every card back drawn again |
+
+**A move is the one repaint that needs no drawing at all**: the content pixels
+are unchanged, only their position moved.
+
+**It is not a second mechanism, and that is the whole of why it is small.**
+`wm_dc_take` banks through **`wm_su_take` at the old position** and then moves
+the claim's header by the drag's own delta — and `wm_su_ck`, which compares that
+header against the window's rect *now*, then agrees. Everything after that is
+the raise cache's own and untouched: the fragment layout, `wm_su_edge`'s edge
+merge (§11.96.2 — mandatory here, because the restore overhangs whole bytes
+into pixels that at the *new* position belong to somebody else), the restore,
+the free. `ui_drag` calls it at `.release` **before `wm_paint_dmg`**, because
+two lines later that paints the desktop over exactly the pixels being saved.
+
+**EVERY window is eligible, and `WF_SAVEU` is not the reason.** §11.96.1's
+promise is about content changing while a window is merely *covered*, which is
+a question about arbitrary time. Here the bank and the restore happen inside
+**one gfx lock hold** — `ui_drag` reaches `.release` holding it and does not
+unlock until after `wm_paint_dmg` — so no task, worker or otherwise, can run
+between them. Verified by dragging **Fractal**, which promises nothing and has
+a live worker: the restore fires and `wm_dc_done` drops the cache afterwards.
+
+**The correction worth recording is that workers are NOT suspended during a
+drag**, which is the obvious reason to reach for and is false: `ui_drag`'s
+tracking pass unlocks and yields on every tick, and its own comment says
+*"background tasks stay live here"*. It does not matter, because the bank is
+taken after that loop has ended. The lock hold is the argument; the suspension
+is not, and would have been a wrong one to build on.
+
+So the promise is waived through `wm_dc_win` for **exactly one window**, never
+globally — a blanket waiver would let `wm_su_bank` take a *raise* cache for a
+window that has made no promise, which is §11.96.1's hazard with a new way in.
+`wm_dc_done` spends the waiver and drops the cache for any window that does not
+promise, because from the next raise onward it would be an ordinary raise cache
+with none of the guarantees one needs.
+
+**Three things refuse it**, and each falls back to exactly what happened before:
+
+- **The byte phase.** `gfx_save` lays the buffer out from `x1` rounded DOWN to
+  a framebuffer byte, so the pixels can be replayed at another `x` only where
+  the content sits at the same offset inside its byte: `dx & 7` must be 0. Any
+  `dy` is free — rows are whole — so a **vertical** drag always takes it and a
+  horizontal one takes it once every eight pixels. A shifted restore would lift
+  that and is not written.
+- **A destination off the screen.** `ui_drag` clamps the *title bar* onto the
+  screen and not the window, so dragging one down hangs its bottom off — and
+  `wm_su_try` refuses a rect that is not wholly on one display. `wm_dc_take`
+  therefore asks that question about where the window is **going**, which
+  `wm_su_take` can only ask about where it has been. Without it the commonest
+  outcome was a claim and a `gfx_save` (~4 ms) paid for a window that was then
+  drawn in full anyway.
+- **Anything `wm_su_take` itself refuses** — no heap, a rect over 64KB, a
+  degenerate content box — which leaves the slot 0 and is already handled.
+
+Measured after, the same drag through both builds (`make DRAGCACHE=0` is the
+A/B), Solitaire on 5150/Hercules, (231,20) → (167,20):
+
+| | drawing calls | guest time | its cards |
+|---|---:|---:|---|
+| `DRAGCACHE=0` | 981 | **954.3 ms** | 22 `gfx_blit4` |
+| with the cache | 210 | **462.4 ms** | **0** — one `gfx_restore` |
+
+**4.7x the calls and 2.06x the time**, and what is left is honest: the window
+*underneath* is genuinely revealed and has to be redrawn, which is most of the
+462 ms. **0 differing pixels of 250,560 on Hercules and of 128,000 on CGA**,
+whole screen, against the reference build.
+
+**The deal has to be pinned or the gate proves nothing** (`tools/solcheck.py`
+says so in capitals and this had to learn it again): Solitaire seeds from
+`GET_TICKS`, so the first attempt reported 782 differing pixels that were two
+different card layouts. `[osapi_seed]` is written and **N** pressed before the
+drag, exactly as `solcheck` does.
 
 ### 11.97 A window below does not draw chrome where something above will cover it
 
@@ -25534,6 +25641,150 @@ for the draw below; only the fill is skipped. The flag is *cleared* before the
 plaque and the About panel, and it lives in bss, which the loader zeroes — so
 the one-pile-at-a-time callers a move goes through inherit the safe value
 without anybody arranging it.
+
+### 43.10 The shadow — a drop redraws the cards that MOVED
+
+§43.7 keeps a column's buried **backs** and redraws every face-up card below
+the change. That is most of a drop, and nearly all of it is redrawing pixels
+that are already right: cards leave and arrive at the **top** of a column, so
+the ones underneath do not move at all.
+
+Measured on a cycle-accurate 5150 with a Hercules card, one card dragged off a
+six-card run onto another column — the commonest move in the game:
+
+| | before | after |
+|---|---|---|
+| card faces drawn | 11 | 3 |
+| drawing calls | 481 | 210 |
+| guest time | 332.5 ms | 171.2 ms |
+
+**Eight of those eleven faces were pixel-identical to what was already on the
+screen** — 2.3x the drawing calls and 1.94x the time, for nothing. This is
+§43.9's finding on the incremental path: the cost is ~91% the per-call floor,
+so the only lever is the call count and the way to pull it is to draw fewer
+cards.
+
+The two ratios differ because **the faces that survive are the expensive
+ones**: 41 calls per face on average before, 66 after. A buried card is a
+sliver that skips its centre pip and its bottom edge (§43.3), and slivers are
+exactly what a keep keeps — what is left to draw is the full-height card at the
+bottom of the column and the one that just arrived.
+
+So `sol_shw` is a **shadow of what is on the glass**, one 29-byte row per
+tableau column — the count drawn, the two fan steps they were drawn at, and
+the card bytes themselves — and `sol_keep` is the diff against it: the leading
+run whose bytes still match, at a fan that has not moved. `sol_plan` turns that
+into the row the erase **starts** at, which is the load-bearing half; an erase
+reaching any higher would wipe the very cards being kept. It is §12.9's
+`menu_bcell` idiom — the record of what was drawn *is* the thing the next draw
+is composed against, so there is no second structure to fall out of step.
+
+**Three facts make a byte compare sufficient**, and all three come from a card
+being drawn out of (byte, x, y, visible height) and nothing else:
+
+- **x is the column's**, which a keep does not move.
+- **y is `sol_yoff(i)`** — a pure function of the index, `[sol_cfd]` and the two
+  fan steps. The fan is compared outright, and `[sol_cfd]` *cannot* differ over
+  a matched prefix, because it is the count of leading face-down cards and
+  those bytes are equal: either both counts run past the prefix, in which case
+  every kept offset is `index × cfa` on both sides, or the first face-up card
+  falls inside it and the two agree exactly.
+- **The visible height** is what the next card leaves showing — except for the
+  **last** card, which is drawn whole and carries a bottom edge no buried card
+  has (§43.3). So the last card of *either* drawing is never kept: the bound is
+  `min(now, then) − 1`. That one expression covers both directions — the card
+  that was on top and now has one fanned over it, and the card uncovered by
+  cards leaving — and it is also what makes `sol_move` turning a card face up
+  safe, since that changes its byte.
+
+**A re-fan is caught by comparing the fan, and it is not rare.** `sol_colfan`
+tightens a column that would run past the content bottom, so on CGA's 136-row
+desktop a column growing from 7 cards to 10 takes the face-up step from 12px to
+10px and *every* card in it really does move. The shadow keeps nothing there
+and is right not to: measured, that same drop is 309 calls before and after.
+The win is on the adapters with room — Hercules and VGA — which is where the
+columns are long enough for the waste to be worth anything.
+
+#### 43.10.1 Why §11.96's raise cache cannot do this, and what it does instead
+
+The obvious question is why an application needs a shadow of its own when the
+system already has one. **They answer different questions, and neither is a
+special case of the other.**
+
+§11.96's cache is about pixels **another window covered**. It is taken off the
+glass by `wm_su_bank` at the end of `wm_draw_win` and put back by `wm_su_try`,
+and §11.96.4's rule is the reason it cannot reach a drop: the bank **drops the
+front window's cache and takes everybody else's**, because the front window
+"has not finished with the pixels it has just been given — the next thing it
+does is change them". A card drop *is* that change, on the window that is by
+definition frontmost while it is being played. A cache taken before the drop is
+a picture of the wrong board, and one taken after it can only be as good as the
+drawing that put it there.
+
+So the two compose rather than overlap, and after §43.10 they compose over an
+incremental drawing that is exact (the gate above). **Measured on a
+cycle-accurate 5150/Hercules with `tools/os88span.py`:**
+
+| | | |
+|---|---|---:|
+| `solraise` | Solitaire covered, then called to the front | `wm_su_try` → `gfx_restore` **15.24 ms** |
+| `sol` | a Disk window dragged **off** Solitaire | `wm_su_try` → `gfx_restore` **32.76 ms** |
+
+**with zero `gfx_blit4` calls in either** — card backs are the only thing in
+this window that blits (§43.3), so a pass with no blit in it is a pass in which
+`sol_drawall` did not run. Against §43.9's 681 ms full repaint, that is the
+cache doing exactly what it is for.
+
+**The general statement is worth making because it is not Solitaire's.** The
+kernel's redraw work — §11.90's raise, §11.91's damage, §11.96's cache — stops
+at the window boundary, and it has to: *inside* a window only the application
+knows which pixels still mean what they meant. Every app whose content changes
+in place therefore owes itself the §43.10 shape — a record of what it put on
+the glass, diffed against what it wants there now — and the tree is full of
+that one idea under different names: `menu_bcell` (§12.9), `tm_rowck` (§11.3),
+`mppu_chk` (§56.12), `mc_srun` (§48.17), `np_sig` (§27.2). A system-wide buffer
+cannot substitute for any of them.
+
+**Face-down cards stop needing an argument of their own.** §43.7's reasoning
+was that every back is the same image, so the question is never *which* card
+but only *where and how big*; that is now just what a byte compare says, and
+`sol_slv`, `sol_pfa` and `sol_pslv` are gone with it. The shadow costs 203
+bytes in the package's own region — a heap claim (§20.1), so a machine not
+playing Solitaire pays nothing — against the 28 the sliver cache cost.
+
+**`sol_prec` records at `sol_drawpile`'s single exit**, not in the tableau
+branch, so a pile kind added later cannot forget it; it refuses a non-tableau
+pile itself rather than at the call site, because the stock, the waste and the
+foundations leave through that exit too and `sol_shw` has seven rows. An
+emptied column therefore records *zero drawn* instead of keeping a stale row.
+
+The invalidation points are §43.7's, unchanged: `sol_pinv` at a full repaint,
+at the win plaque, and at a change of content origin.
+
+**It is checked by comparison, not by argument** (`tools/solcheck.py`), and the
+binding comparison is **against a full repaint of the same position rather than
+against another build**: after a session of fourteen real drags — a six-card
+run, a three-card run, waste plays, a foundation play that empties a column
+outright, and Auto Finish — the incrementally drawn content must equal the same
+board forced through `W_PAINT`. **0 differing pixels on Hercules and 0 on CGA.**
+That is the strong form, because it needs no second build to be trusted: a
+wrong keep is a card left standing where a card no longer is, which is a real
+picture rather than a broken-looking one, so nothing about the screen would say
+so.
+
+`make SOLNOKEEP=1` is the second build, and what it found is **not** this
+feature — it is worth reading before trusting it as a reference. It stubs
+`sol_keep` to 0, so every column is erased and redrawn whole, and its own
+content then differs from its own full repaint by **12 pixels**: one column,
+one pixel wide, twelve rows tall, at a tableau column that the move in question
+neither redraws nor keeps. It is deterministic — two independent runs are
+byte-identical to each other and both carry it — it appears at one identifiable
+step (a six-card drag across four columns) and it survives every later move,
+which is what a stray pixel in a column nothing repaints does. **It is
+unexplained, and `keep = 0` is a state the shipped build reaches too** — on the
+first draw after `sol_pinv`, and after any re-fan — so it is not safe to file as
+a property of the knob. What is established is only that the shipped build's
+own output is exact against a full repaint on both 1bpp adapters.
 
 ## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
 
