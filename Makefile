@@ -77,6 +77,18 @@ endif
 VIDDEF += -DCLK_FORCE=$(RTCFORCE_$(RTC))
 endif
 
+# SNAPAUDIT=1 histograms the x & 7 of every glyph the machine draws, into
+# snap_hchar/snap_hrun (SPEC.md 11.94.1, kernel/font.inc). It answers "which
+# app does not align its text" off a RUNNING machine, which is the only way to
+# catch a pen computed at run time - a centred string, a right-aligned column,
+# an icon-grid cell - that reading layout constants cannot. Read the counters
+# with tools/os88snap.py. Folded into VIDDEF so it shares the stamp below:
+# changing it rebuilds the kernel, which is what stops an instrumented kernel
+# lingering in build/ and being booted by accident.
+ifneq ($(SNAPAUDIT),)
+VIDDEF += -DSNAPAUDIT
+endif
+
 # DISKCNT=1 compiles in the three disk counters of docs/DISK-PERF-PLAN.md 2:
 # mounts, sectors transferred and int 13h data calls. They exist to answer
 # "how much work is a directory change", which QEMU can measure exactly even
@@ -341,10 +353,23 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
+                                      $(BUILD)/kernel-full.bin \
+                                      $(BUILD)/ctrl.drv $(BUILD)/format.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
                                       $(BUILD)/hddtool.bin $(BUILD)/hddtool.drv; \
                                 touch $(VIDSTAMP); })
+# kernel-full.bin AND the two on-demand modules are on that list, and for most
+# of this Makefile's life they were not - which made the whole stamp ineffective
+# for the kernel that actually SHIPS. kernel.bin is not assembled from source:
+# os88mod.py splits it, ctrl.drv and format.drv out of kernel-full.bin (SPEC.md
+# 2.8), and kernel-full.bin depends on the SOURCES alone. A knob changes the
+# command line and no source, so deleting only kernel.bin re-ran the split on
+# the PREVIOUS knob's kernel-full.bin - so `make VIDEO=cga` after a plain build
+# shipped a KERNEL.SYS and two .drv files with no CGA in them, silently, which
+# is the exact failure the stamp exists to prevent and reads as the feature
+# under test being broken. Found by accident: an incremental plain rebuild after
+# `make SNAPAUDIT=1` produced an image 39,504 bytes different from a clean one.
 
 # --- the build number the About box shows (SPEC.md 14.2) ---------------------
 #

@@ -69,7 +69,7 @@ _MIRROR = {
     "W_SEG": ("kernel/wm.inc", 22),
     "WF_SIZABLE": ("kernel/wm.inc", 4),
     "WF_FULL": ("kernel/wm.inc", 8),
-    "WF_SNAP": ("kernel/wm.inc", 16),
+    "WF_NOSNAP": ("kernel/wm.inc", 16),
     "WF_SAVEU": ("kernel/wm.inc", 32),
     "WF_OWNBG": ("kernel/wm.inc", 64),
     # kernel/instance.inc - the instance record (SPEC.md 29)

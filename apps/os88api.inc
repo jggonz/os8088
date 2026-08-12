@@ -1099,9 +1099,12 @@ FERR_BIG     equ 10              ; larger than the buffer (or than 64KB)
 
 WF_SIZABLE equ 4                 ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
-WF_SNAP    equ 16                ; W_FLAGS bit4: content origin snapped to a
-                                 ; multiple of 8 (SPEC.md 11.94) - set it with
-                                 ; OSAPI_WM_SNAP, never by hand
+WF_NOSNAP  equ 16                ; W_FLAGS bit4: this window has OPTED OUT of
+                                 ; content-origin alignment (SPEC.md 11.94).
+                                 ; INVERTED SENSE, because alignment is the
+                                 ; DEFAULT for every window - a clear bit
+                                 ; means snapped. Change it with OSAPI_WM_SNAP
+                                 ; (AL = 0 to opt out), never by hand
 WMIN_W     equ 96                ; smallest frame a resize can leave
 WMIN_H     equ 64
 

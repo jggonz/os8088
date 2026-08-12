@@ -5469,6 +5469,133 @@ decision above is about `font_run`, not about alignment — but it should be
 re-measured on VGA before anyone repeats "the Disk window was considered and
 left alone" as though the arithmetic still said 3%.
 
+#### 11.94.1 Alignment is the DEFAULT, and an app opts OUT
+
+**Every window in the system keeps its content origin on a multiple of 8
+unless it asks not to.** The flag inverted: `WF_NOSNAP` (still `W_FLAGS` bit 4)
+means *do not maintain my alignment*, a clear bit means *do*, and
+`wm_create`'s `mov word [bx+W_FLAGS], 1` is the whole of how the default is
+applied — no template word, nothing to remember at the twelve places a window
+is made, and a reused record (`wm_destroy` writes 0) is snapped again by
+construction.
+
+**The published slot did not change contract.** `OSAPI_WM_SNAP` still means
+"AL non-zero = keep my content origin on a multiple of 8, AL = 0 = do not", so
+every historical `AL = 1` caller is now asking for something it already has,
+and no `.o88` was invalidated by the inversion itself. What moved is only what
+a window that never calls gets. The slot is kept rather than retired because a
+window may opt back *in* — a package with two windows can want it for one and
+not the other — and because the opt-in direction still does work: it snaps on
+the spot as well as clearing the bit.
+
+**Why the default is the right way round.** The old default was "unaligned",
+which meant a window got the fast path only if its author had read §6.1, and
+the majority of windows in the tree never asked: the About box, the Control
+Panel, the Standard File dialog, Paint, Solitaire, Arkanoid, Minesweeper,
+Fractal, Piano, Recorder, ModPlug, ArtfulType, Tamegram, Frotz and — the
+expensive one — **every Disk window**. Alignment costs the *system* nothing to
+provide and costs a window 8-pixel horizontal drag steps; a default that hands
+every window the cheaper renderer and lets the rare exception say so is the
+way round that does not depend on each author rediscovering §6.1.4.
+
+**The Disk window is the case that justifies the inversion.** `fm_repaint` is
+one big fill plus ~40 `font_str`s, and §11.94's "considered and left alone"
+reasoning was about `font_run` — which really would repaint each string's
+background over ground the fill already covered. Alignment is a different
+question, and the answer for this window is mixed in a way worth writing down:
+its **row names are at `fm_cx + 24`**, which is a multiple of 8, so the ~40
+strings that dominate a repaint all land aligned; its **header is at
+`fm_cx + 6`** and its **icon-grid cells at `fm_cx + 78 × col`**, which do not.
+So the inversion buys the dominant cost and leaves two smaller ones on the
+table, each fixable by moving a constant (6 → 8, 78 → 80) at the price of a
+visible layout shift.
+
+**One thing gets slightly worse and it is named rather than hidden.**
+`fm_scrollpaint` rounds its blit span INWARD because a Disk row's icon starts
+at `fm_cx + 4`, and the left strip it cannot move is `(8 − ((k+4) mod 8)) mod 8`
+pixels wide for a content origin `≡ k (mod 8)`. Unaligned, `k = 4` came up one
+window position in eight and cost nothing; aligned, `k` is always 0 and the
+strip is always 4 pixels, so §22.11.1's strip pass now always runs. Four pixels
+of strip against ~40 aligned strings is the trade, and moving the icon inset
+from 4 to 8 would take both.
+
+#### 11.94.2 The audit — `make SNAPAUDIT=1`
+
+Whether an app's text is aligned is a question about the app's own offsets, and
+it is only answerable once the *window* is aligned: with the content origin on
+a multiple of 8, a glyph's screen `x & 7` **is** its content-relative `x & 7`.
+So the instrument is a histogram of `x & 7` over every glyph the machine draws,
+kept in `snap_hchar` and `snap_hrun` (two, because a `font_run` is a whole line
+and a `font_char` is one cell, and counting them together lets one app's
+40-cell string outvote another's 40 strings). `tools/os88snap.py` resets the
+counters, drives, and reads them back.
+
+It is a knob rather than a permanent counter because it sits at the top of
+`font_char`, which is the innermost drawing call in the system; a plain build
+emits not one byte of it, macro and counters living inside the same `%ifdef`.
+
+**Reading it: a non-zero bucket is not automatically a defect.** Three things
+land off-boundary for reasons that are correct — a right-aligned numeric column
+(the Disk window's sizes, the Task Manager's `CPU`/`MEM`), a centred string
+(`ui_note`, a banner), and a value drawn next to a control whose own geometry
+is not on a multiple of 8. What the audit finds is where to *look*; the
+question it answers is whether the app's dominant text path is aligned, and
+that is a matter of which bucket holds the bulk rather than whether bucket 0
+holds everything.
+
+#### 11.94.3 Which windows do NOT align their own text
+
+The inversion puts every window's content origin on a multiple of 8; whether the
+text *inside* it lands there is the app's own business, and getting it wrong
+costs the §6.1 fallback silently rather than drawing anything wrong. This is the
+survey, and it is the list to work down — each entry is a constant, not a
+rewrite.
+
+**Aligned already**, by design and in most cases because somebody moved two
+pixels to get there: Note Pad (`NP_MARGIN` 8), the Task Manager (`TM_PEN` 8,
+`TM_MPEN` 16), the Timer (`APP_TMR_DX` rounded 47 → 48), Frotz (rounds its own
+text origin up to a multiple of 8 in `zw_bounds`, so it never needed the flag),
+Solitaire, the hard-disk installer (`HIW_LX` 8) — and **the Disk window's file
+rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
+`fm_repaint`, which is what makes the inversion worth it for that window.
+
+**Not aligned**, with the offset responsible:
+
+| what | off-grid pen | note |
+|---|---|---|
+| Disk window header | `fm_cx + 6` | one string per repaint; 6 → 8 fixes it |
+| Disk window icon grid | `fm_cx + 78 × col` | `FMI_CELL_W` 78 → 80 would align every column |
+| Tracker's FT2 UI | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | its *pattern grid* was aligned for §6.1 (§45.9); the rest of the face never was — 17% of sampled literal pens |
+| Tamegram HUD | 4, 60, 116, 164, 210 | 7 of 8 sampled pens ≡ 4 |
+| Fractal status row | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0 |
+| Paint | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned |
+| ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
+| HDD Control Panel page | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
+| HDD tool window | `HTW_LX` 4 | |
+| Recorder | 4 | |
+| Minesweeper | 4 | also draws at 8 |
+| Piano, Arkanoid | 2 | one sampled pen each — low confidence |
+| Task Manager | five literal `+6` sites | despite `TM_PEN` being 8 |
+| Hello | ≡ 3 for 5 of 35 glyphs | deliberately the minimal package |
+| Missile Command | unresolved | every pen is computed; needs the runtime audit |
+| `DEBUG.DRV` | `DBGP_LX` 1 | unshipped (§62.9.4) |
+
+**Three kinds of off-grid pen are correct and must not be "fixed"**: a
+right-aligned numeric column (the Disk window's sizes, the Task Manager's
+`CPU`/`MEM`), a centred string (`ui_note`, Missile's banner), and a label tied
+to a control whose own geometry is not on a multiple of 8. The list above is
+where to *look*, not a defect count.
+
+**How much of it is measured, and how much is read.** The named constants are
+exact. The "sampled literal pens" rows are a **sample** — the literal `mov cx, N`
+values within a few lines of a text call — so they say *this app has off-grid
+pens* and not *this fraction of its glyphs are off-grid*; an app whose pens are
+all computed (Missile) shows as nothing at all. The "(measured)" entries come
+from `make SNAPAUDIT=1`. **That instrument has a known artifact**: every
+window's callback reports a constant 4 glyphs in bucket 7 per forced repaint,
+unexplained, so a count under about ten says nothing. Chase that before
+trusting small numbers out of it.
+
 ### 11.95 Double-clicking a title bar zooms a resizable window
 
 **Two presses on the same title bar inside `UI_TDBLT` (9) ticks toggle that

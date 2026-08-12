@@ -78,10 +78,16 @@ WF_OWNBG   equ 64               ; W_FLAGS bit6: this window PAINTS EVERY PIXEL
                                 ; fill is skipped for it (SPEC.md 11.90.1).
                                 ; Opt-in, because the fill is what every other
                                 ; app's W_PAINT draws on top of
-WF_SNAP    equ 16               ; W_FLAGS bit4: this window's CONTENT origin
-                                ; is kept on a multiple of 8 so its text can
-                                ; take font_run's single-store path
-                                ; (SPEC.md 11.94/6.1)
+WF_NOSNAP  equ 16               ; W_FLAGS bit4: this window OPTS OUT of having
+                                ; its CONTENT origin kept on a multiple of 8
+                                ; (SPEC.md 11.94/6.1). The SENSE IS INVERTED
+                                ; on purpose - alignment is the DEFAULT for
+                                ; every window in the system, and this bit is
+                                ; how the rare window that must sit where it
+                                ; was put says so. wm_create writes W_FLAGS =
+                                ; 1 and wm_destroy writes 0, so a fresh or
+                                ; reused record is snapped with nothing to
+                                ; set and no template word to carry
 WMIN_W     equ 96               ; smallest frame a resize can leave, outer px
 WMIN_H     equ 64               ; (SPEC.md 11.1; mirrored in apps/os88api.inc)
 
@@ -134,6 +140,18 @@ wm_pkgcall:
     push cs
     pop es                      ; ES = KERNEL_SEG: the record lives here and
                                 ; the callback may read it
+%ifdef SNAPAUDIT
+    push word [snap_cur]        ; SPEC.md 11.94.2: everything drawn from here
+    mov [snap_cur], si          ; down belongs to THIS WINDOW, and this is the
+                                ; one site that covers both kinds - a package
+                                ; through its dispatcher, a kernel window
+                                ; through BP. Stacked rather than a depth
+                                ; count, because a repaint pass calls several
+                                ; windows' callbacks and the QUESTION is which
+                                ; window drew, not how deep we are. PUSH and
+                                ; MOV write no flags, so the cmp below is
+                                ; unaffected
+%endif
     cmp word [es:si+W_SEG], 0
     je .near
     mov ds, [es:si+W_SEG]       ; DS = the package's own segment
@@ -142,6 +160,12 @@ wm_pkgcall:
 .near:
     call bp                     ; a kernel window: DS is already ours
 .out:
+%ifdef SNAPAUDIT
+    pop word [snap_cur]         ; POP writes no flags, and a callback returns
+                                ; values IN THEM (CF from an entry proc,
+                                ; W_ONSIZE's answer) - so this needs no
+                                ; pushf/popf around it and must not grow one
+%endif
     pop es
     pop ds
     ret
@@ -1664,22 +1688,35 @@ wm_fs_drop:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_snap - set or clear a window's WF_SNAP bit (public; API 0x0268,
-;           SPEC.md 11.94)
-; in:  BX = window ptr, AL = 0 clear / non-zero set
+; wm_snap - opt a window OUT of content-origin alignment, or back in
+;           (public; API 0x0268, SPEC.md 11.94)
+; in:  BX = window ptr, AL = 0 = do NOT keep me aligned / non-zero = do
 ; out: nothing - every register preserved, FLAGS INCLUDED (see below)
 ;
-; "My CONTENT origin wants to be a multiple of 8." Not "snap my W_X": the
-; frame carries a 1px border, so wm_content returns W_X + 1 and the alignment
-; a caller actually needs is one pixel off the frame's. Publishing the frame
-; number would make every app rediscover that `inc ax`, and they would each
-; get it wrong differently.
+; THE CALL'S CONTRACT IS UNCHANGED AND ITS DEFAULT IS NOT. AL = 1 has always
+; meant "keep my content origin on a multiple of 8" and still does; what moved
+; is what a window that never calls at all gets, and that is now ALIGNED
+; (SPEC.md 11.94). So this slot is an OPT-OUT: AL = 0 is the interesting
+; direction now, and every historical AL = 1 caller is asking for something it
+; already has. The stored bit is WF_NOSNAP and its sense is inverted to match -
+; which is what lets wm_create's `mov word [bx+W_FLAGS], 1` be the whole of
+; how the default is applied, with no template word and nothing to remember at
+; the twelve places a window is made.
 ;
-; It snaps immediately as well as setting the flag, because the intended
-; caller is an entry proc or a KD_INIT - before the window is shown, where
-; moving it costs nothing and repainting is not owed. Setting it on a visible
-; window is legal and moves it at the next paint the caller performs, exactly
-; like wm_sizable's grow box.
+; Kept rather than retired, for two reasons. A window MAY opt back in - the
+; §20.8 rule 4 alternative was withdrawing the slot, and a package that wants
+; alignment for one of its windows and not another needs to say so. And
+; snapping on demand is what makes the opt-IN direction still do work: it
+; snaps immediately as well as clearing the flag, because the intended caller
+; is an entry proc or a KD_INIT - before the window is shown, where moving it
+; costs nothing and repainting is not owed. Calling it on a visible window is
+; legal and moves it at the next paint the caller performs, exactly like
+; wm_sizable's grow box.
+;
+; "My CONTENT origin", not "my W_X": the frame carries a 1px border, so
+; wm_content returns W_X + 1 and the alignment a caller actually needs is one
+; pixel off the frame's. Publishing the frame number would make every app
+; rediscover that `inc ax`, and they would each get it wrong differently.
 ;
 ; UI-task context only, same as wm_sizable and for the same reason: every
 ; W_FLAGS writer runs on the UI task or under the gfx lock.
@@ -1703,14 +1740,18 @@ wm_snap:
                                 ; that cmp and this line is the whole defence
     or al, al
     jz .clear
-    or word [bx+W_FLAGS], WF_SNAP
-    call wm_snap_win
-    popf
-    ret
+    and word [bx+W_FLAGS], ~WF_NOSNAP & 0xFFFF  ; AL != 0: "keep me aligned",
+    call wm_snap_win                            ; which is already the default
+    popf                                        ; - so this is a no-op for
+    ret                                         ; every window that never
+                                                ; opted out, and is kept
+                                                ; because a window MAY opt
+                                                ; back in
 .clear:
-    and word [bx+W_FLAGS], ~WF_SNAP & 0xFFFF
-    popf
-    ret
+    or word [bx+W_FLAGS], WF_NOSNAP ; AL = 0: OPT OUT. The window is left
+    popf                            ; exactly where it stands - wherever that
+    ret                             ; is, it is legal - and simply stops being
+                                    ; moved by the four W_X writers
 
 ; -----------------------------------------------------------------------------
 ; wm_snap_win - put this window's content origin back on a multiple of 8
@@ -1771,8 +1812,8 @@ wm_snap_win:
 ; tracker has had the fast path all along without any of this.
 ; -----------------------------------------------------------------------------
 wm_snap_want:
-    test word [bx+W_FLAGS], WF_SNAP
-    jz .no
+    test word [bx+W_FLAGS], WF_NOSNAP
+    jnz .no                     ; ...opted out (SPEC.md 11.94's default is ON)
     test word [bx+W_FLAGS], WF_FULL
     jnz .no
     stc

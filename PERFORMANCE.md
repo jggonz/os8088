@@ -5903,3 +5903,68 @@ The cost is real and it is the one the old comment named: **8-pixel horizontal
 drag steps on VGA**, on every window carrying the flag. Verified from `W_X` 55 —
 a 3px and a 5px drag land back on 55, 9px steps to 63, 14px to 71, every landing
 with an aligned content origin.
+
+### Set 53 — alignment becomes the default, and a stamp that never worked
+
+Set 52 removed `WF_SNAP`'s `[vid_mono]` gate. This inverts the flag: `WF_NOSNAP`
+(SPEC.md §11.94.1), so **every window keeps its content origin on a multiple of
+8 unless it opts out**, and `wm_create`'s `mov word [bx+W_FLAGS], 1` is the whole
+mechanism — no template word, nothing to remember where a window is made, and a
+reused record snapped again by construction.
+
+**The published slot did not change contract**, which is what kept the cost at
+zero: `OSAPI_WM_SNAP` still means "AL non-zero = keep me aligned", so every
+historical `AL = 1` caller now asks for something it already has and no `.o88`
+was invalidated. What moved is only what a window that never calls gets.
+
+**Measured, all three adapters, cycle-accurate 8088.** Windows that had never
+asked and are now aligned:
+
+| window | content origin before | after |
+|---|---:|---:|
+| Disk window (VGA) | 111 (≡ 7) | 104 |
+| Disk window (Hercules) | — | 104 |
+| Control Panel (Hercules) | — | 160 |
+| About box (Hercules) | — | 168 |
+| Note Pad (VGA) | 61 (≡ 5) | 56 |
+
+**The Disk window is the case that justifies the inversion, and the scroll path
+is the thing to check.** §22.11's `fm_scrollpaint` rounds its blit span INWARD
+because a row's icon starts at `fm_cx + 4`, and the strip it cannot move is
+`(8 − ((k+4) mod 8)) mod 8` px for a content origin `≡ k (mod 8)` — so aligned,
+`k` is always 0 and the strip is always 4px, where unaligned `k = 4` came up one
+position in eight and cost nothing. §22.11.1's strip pass therefore now always
+runs. Against that: the ~40 `font_str`s at `fm_cx + 24` all land aligned.
+Verified — three arrow-clicks of scroll, then the same state forced through a
+full repaint (drag out 40px and back, which a snapped window returns from
+exactly): **0 differing framebuffer bytes on VGA and on CGA**, the only diff
+being the menu bar clock's last glyph cell.
+
+**And it found a Makefile bug that has been live for most of this tree's life.**
+`$(VIDSTAMP)` exists so that changing a knob rebuilds the kernel — the trap
+CLAUDE.md names for `VIDEO=`, where booting the previous adapter "reads exactly
+like the probe being broken". Its `rm -f` list covered `kernel.bin`, and
+`kernel.bin` **is not assembled from source**: `os88mod.py` splits it, `ctrl.drv`
+and `format.drv` out of `kernel-full.bin` (SPEC.md §2.8), and `kernel-full.bin`
+depends on the sources alone. A knob changes the command line and no source — so
+deleting only `kernel.bin` re-ran the split on the PREVIOUS knob's
+`kernel-full.bin`, and `make VIDEO=cga` after a plain build shipped a
+`KERNEL.SYS` and two `.drv` files with no CGA in them. Silently.
+
+Found by accident and measured both ways: an incremental plain rebuild after
+`make SNAPAUDIT=1` produced an image **39,504 bytes** different from a clean one;
+with `kernel-full.bin`, `ctrl.drv` and `format.drv` added to the stamp's list it
+is **0**. Every VIDDEF knob was affected — `VIDEO=`, `RTC=`, `DISKCNT=`,
+`REDRAWFULL=`, `DRAGCACHE=`, `NOSPLIT=`, `FONT=`, `RAMKB=`. **Any A/B in this
+tree taken by flipping a knob without `make clean` in between is suspect**, and
+that includes ones whose numbers are already in this file.
+
+**`make SNAPAUDIT=1` is the new instrument** (SPEC.md §11.94.2): a histogram of
+every glyph's `x & 7`, split four ways by `wm_pkgcall`'s stacked `snap_cur` so
+what a window draws inside its own callback is counted apart from the chrome
+around it, and filterable to ONE window from the host. It only means anything
+now that alignment is the default — with the origin on a multiple of 8, a
+glyph's screen `x & 7` IS its content-relative one, so a non-zero bucket is the
+app's own offset. §11.94.3 is what it and the constants together found.
+**It has an unexplained artifact**: a constant 4 glyphs in bucket 7 per window
+per forced repaint, so counts under about ten say nothing.

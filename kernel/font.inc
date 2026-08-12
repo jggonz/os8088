@@ -30,6 +30,55 @@ FONT_RN_MAX equ 90
 ; 3; below that the run takes the plain walk and pays nothing at all.
 FONT_RN_KMIN equ 3
 
+; -----------------------------------------------------------------------------
+; SPEC.md 11.94.1's INSTRUMENT: `make SNAPAUDIT=1` histograms the x & 7 of
+; every glyph the machine draws, so "which app does not align its text" is a
+; number read out of a running machine rather than a guess made by reading
+; layout constants. It only means anything now that alignment is the DEFAULT
+; (11.94): with every window's content origin on a multiple of 8, a non-zero
+; bucket is the APP's own offset and nothing else.
+;
+; Two histograms because the two callers answer different questions - a
+; font_run is a whole line and a font_char is one cell, so counting them
+; together would let one app's 40-cell string outvote another's 40 strings.
+;
+; A plain build emits NOT ONE BYTE of this: the macro is empty and the
+; counters are inside the same %ifdef. It preserves the flags because
+; font_char's own contract does and its callers are inner loops.
+; -----------------------------------------------------------------------------
+%ifdef SNAPAUDIT
+%macro SNAPAUDIT_TALLY 2        ; %1 = the audited window's table, %2 = the other
+    pushf
+    push ax
+    push bx
+    mov ax, [cs:snap_cur]       ; which window's callback are we inside?
+    or ax, ax
+    jz %%other                  ; none: kernel chrome, menus, the desktop
+    mov bx, [cs:snap_win]
+    or bx, bx
+    jz %%mine                   ; no filter set: every callback counts
+    cmp bx, ax
+    jne %%other                 ; a DIFFERENT window - a repaint pass calls
+%%mine:                         ; several, and only one is being asked about
+    mov bx, %1
+    jmp short %%have
+%%other:
+    mov bx, %2
+%%have:
+    mov ax, cx                  ; CX = the pen x, both callers
+    and ax, 7
+    shl ax, 1
+    add bx, ax
+    inc word [cs:bx]            ; cs: - .text, and CS is KERNEL_SEG here
+    pop bx
+    pop ax
+    popf
+%endmacro
+%else
+%macro SNAPAUDIT_TALLY 2
+%endmacro
+%endif
+
 %ifndef BAKED_FONT
 ; -----------------------------------------------------------------------------
 ; font_init - copy the ROM 8x8 font's printable range into RAM
@@ -114,6 +163,7 @@ font_init:
 ; glyph is unreadable anyway.
 ; -----------------------------------------------------------------------------
 font_char:
+    SNAPAUDIT_TALLY snap_hchar, snap_kchar
     call fnt_unlazy
     push ax
     push bx
@@ -548,6 +598,7 @@ font_run:
 %endmacro
 
 font_run_x:
+    SNAPAUDIT_TALLY snap_hrun, snap_krun
     push ax
     push bx
     push cx
@@ -1199,3 +1250,23 @@ ovl_font_bits:
                                 ; fonts/*.f8 that FONT= named (-I build/)
 %endif
 section .text
+
+%ifdef SNAPAUDIT
+; SPEC.md 11.94.2's counters (see SNAPAUDIT_TALLY at the top of this file).
+; In .text with real initialisers rather than .bss, because -f bin zeroes
+; nothing and a host script reads these through os88sym.py by name.
+;
+; Four tables, not two: what a WINDOW draws inside its own callback and what
+; the KERNEL draws around it are different questions with different owners, and
+; mixed together the chrome's dozen title-bar glyphs are indistinguishable from
+; an app's own skew. wm_pkgcall keeps the depth.
+snap_hchar: times 8 dw 0        ; font_char inside a window callback
+snap_hrun:  times 8 dw 0        ; font_run  inside a window callback
+snap_kchar: times 8 dw 0        ; font_char outside one - chrome, menus, desktop
+snap_krun:  times 8 dw 0        ; font_run  outside one
+snap_cur:   dw 0                ; the window whose callback is running, 0 =
+                                ; none (wm_pkgcall stacks it)
+snap_win:   dw 0                ; the HOST's filter: only this window's glyphs
+                                ; go to snap_h*, 0 = any. Written from outside
+                                ; the guest by tools/os88snap.py
+%endif
