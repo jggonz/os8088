@@ -90,13 +90,38 @@ DSKW_SYSAT   equ DSKW_HID | DSKW_SYS
                                ; what a KERNEL file wears (SPEC.md 19.6):
                                ; hidden + system, so neither DOS's DIR nor
                                ; our own file manager lists it
+DSKW_RDO     equ 0x01          ; read-only
 DSKW_SPROT   equ DSKW_PROT & ~DSKW_SYSAT
                                ; the replace mask for dskw_write_sys - the
                                ; same refusals WITHOUT hidden and system,
                                ; because those two are what the kernel just
                                ; stamped on its own file and it must be able
-                               ; to rewrite it. Read-only, the volume label
-                               ; and a subdirectory still refuse.
+                               ; to rewrite it. The volume label and a
+                               ; subdirectory still refuse, and so does an
+                               ; ordinary READ-ONLY file.
+DSKW_KPROT   equ DSKW_SPROT & ~DSKW_RDO
+                               ; ...and the mask for replacing a file that is
+                               ; ALREADY WEARING the kernel's own species.
+                               ;
+                               ; SPEC.md 19.6 stamps THREE bits on KERNEL.SYS
+                               ; and every *.DRV - read-only, hidden AND
+                               ; system - and DSKW_SPROT forgave two of them,
+                               ; so the kernel could not rewrite its own file.
+                               ; Nothing noticed while every install went onto
+                               ; a freshly formatted disk, where the entry
+                               ; does not exist and the replace path is never
+                               ; taken; the field found it the first time a
+                               ; machine was installed to TWICE, as
+                               ; `Install ... KERNEL.SYS` on a disk that was
+                               ; already a working system (SPEC.md 19.6.2).
+                               ;
+                               ; It is narrower than "dskw_write_sys forgives
+                               ; read-only": the ENTRY has to be hidden+system
+                               ; already, so a driver still cannot replace an
+                               ; ordinary read-only file that happens to share
+                               ; a name. SYSTEM.CFG needs none of this - it is
+                               ; deliberately not read-only, for exactly the
+                               ; reason this exists (19.6)
 DSK_R_CTIME  equ 14            ; create time (word)
 DSK_R_CDATE  equ 16            ; create date (word)
 DSK_R_ADATE  equ 18            ; last-access date (word)
@@ -142,6 +167,44 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; nothing. DS is still KERNEL_SEG, so every data
                                 ; reference below is unchanged - but the DATA is
                                 ; not, and stays in .text at every toggle here
+
+; -----------------------------------------------------------------------------
+; dskw_pmask - which attribute bits refuse THIS replace (SPEC.md 19.6.2)
+; in:  dskw_raw holds the existing entry's 32 raw bytes; [dskw_syswr] says
+;      whose write this is
+; out: AL = the mask to test DSK_R_ATTR against; every other register and the
+;      flags preserved
+;
+; Three tiers, and the third is the one the field paid for:
+;
+;   an ordinary write        DSKW_PROT   - anything protected refuses
+;   dskw_write_sys           DSKW_SPROT  - hidden and system forgiven
+;   ...over a KERNEL FILE    DSKW_KPROT  - read-only forgiven as well
+;
+; The last needs the ENTRY to already be hidden+system, not merely the writer
+; to be privileged: those three bits together are what SPEC.md 19.6 stamps on
+; KERNEL.SYS and every *.DRV, so forgiving them is the kernel rewriting its
+; own file and nothing wider. A driver still cannot replace a user's
+; read-only document.
+;
+; It is a routine rather than two copies because it had been two copies -
+; dskw_wbody's and dskw_apbody's, identical and eleven hundred lines apart -
+; and the append one would have kept the bug through the fix.
+; -----------------------------------------------------------------------------
+dskw_pmask:
+    push bx
+    mov al, DSKW_PROT
+    cmp byte [dskw_syswr], 0
+    je .out
+    mov al, DSKW_SPROT
+    mov bl, [dskw_raw+DSK_R_ATTR]
+    and bl, DSKW_SYSAT
+    cmp bl, DSKW_SYSAT          ; the kernel's own species, both bits?
+    jne .out
+    mov al, DSKW_KPROT
+.out:
+    pop bx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0120)
@@ -1276,11 +1339,7 @@ dskw_wbody:
     mov byte [dskw_new], 0
     call dskw_ent_load          ; dskw_raw = the entry's 32 raw bytes
     jc .out
-    mov al, DSKW_PROT
-    cmp byte [dskw_syswr], 0    ; a kernel file's own rewrite forgives the
-    je .pmask                   ; two bits it stamped itself (SPEC.md 19.6)
-    mov al, DSKW_SPROT
-.pmask:
+    call dskw_pmask             ; AL = what may not be replaced here
     test byte [dskw_raw+DSK_R_ATTR], al
     jz .keep
     mov ax, FERR_PROT           ; read-only, hidden, system, label or dir
@@ -2630,11 +2689,7 @@ dskw_apbody:
     jc .badarg
     call dskw_find
     jc .out                     ; AX = FERR_NOENT / FERR_IO already
-    mov al, DSKW_PROT
-    cmp byte [dskw_syswr], 0    ; a kernel file's own extension forgives the
-    je .pmask                   ; two bits dskw_write_sys stamped on it, and
-    mov al, DSKW_SPROT          ; nothing else - dskw_write's own replace mask
-.pmask:                         ; (SPEC.md 19.6.1)
+    call dskw_pmask             ; AL = what may not be extended here
     test byte [dskw_raw+DSK_R_ATTR], al
     jnz .prot
 

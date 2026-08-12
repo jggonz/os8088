@@ -13642,6 +13642,44 @@ enumerate one folder and open its files from another.
 The answer is 24 bytes, and the **size is 32-bit** where the listing's is
 clamped to a word (§19) — a copy cannot work from a truncated length.
 
+### 19.6.2 …and it stamped three bits while forgiving two
+
+Reported off the field as **a hard-disk install that errors naming
+`KERNEL.SYS`** — and only on a disk that already carries an install. A fresh
+format works, because there is no entry to replace and `dskw_wbody` never
+reaches its `.replace` arm at all.
+
+§19.6 stamps **read-only + hidden + system** on `KERNEL.SYS` and every
+`*.DRV`. `DSKW_SPROT` — the mask `dskw_write_sys` replaces under — forgave
+`DSKW_SYSAT`, which is *hidden and system*. Read-only was left in, so **the
+kernel could not rewrite its own file**: the second install found the entry,
+tested it, and refused with `FERR_PROT`, which the installer reports as the
+name of the file it was copying.
+
+The tell was in the constant's own comment — *"Read-only, the volume label
+and a subdirectory still refuse"* — sitting directly beneath a line saying
+those bits are "what the kernel just stamped on its own file and it must be
+able to rewrite it". Both sentences were written at once and only one of them
+counted the bits.
+
+`DSKW_KPROT` is the third tier, and it is narrower than "`dskw_write_sys`
+forgives read-only": the **entry** must already be hidden+system, so what is
+forgiven is a file wearing the kernel's own species and nothing else. A
+driver still cannot replace a user's read-only document that happens to share
+a name.
+
+**`SYSTEM.CFG` needed none of this and shows why the bug survived**: it is
+deliberately *not* read-only precisely because the kernel rewrites it, so the
+one system file that is replaced on an ordinary machine was the one file the
+mask never had to forgive. Every other one is written once onto a disk that
+has just been formatted.
+
+The test is `dskw_pmask`, one routine where there had been two identical
+copies eleven hundred lines apart — `dskw_wbody`'s replace and
+`dskw_apbody`'s append. The append copy matters: `INSTCHUNK=1` puts
+`KERNEL.SYS` down as a run of `OSAPI_FILE_APPEND_SYS` calls, so a fix applied
+to the replace alone would have left the low-heap path refusing.
+
 
 ## 20. Loadable programs — the .o88 package format
 
