@@ -39020,6 +39020,12 @@ perfectly adequate for a partner that answers instantly, which is the whole
 reason every earlier run passed. A harness that cannot produce the failure
 cannot be said to have found the fix.
 
+And the failing leg reproduces it **on the glass**, not merely in the log:
+the Disk window reads `No os8088 disk (D:)` over `Size ?  Free ?`, which is
+the field photograph letter for letter. The far side's own log says
+`CHDIR handle=2 -> parent 0` — it resolved the folder correctly and then had
+nowhere to put the answer.
+
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
 466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
