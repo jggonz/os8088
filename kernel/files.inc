@@ -6148,7 +6148,7 @@ fm_draw_status:
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_stat_line - draw fm_hdrbuf at (content x + 6, DX), truncated to the
+; fm_stat_line - draw fm_hdrbuf at (content x + 8, DX), truncated to the
 ;                window's live width
 ; in:  fm_hdrbuf staged, DX = absolute y; fm_layout has run; lock held
 ; out: nothing (all registers preserved)

@@ -5913,11 +5913,14 @@ reasoning was about `font_run` — which really would repaint each string's
 background over ground the fill already covered. Alignment is a different
 question, and the answer for this window is mixed in a way worth writing down:
 its **row names are at `fm_cx + 24`**, which is a multiple of 8, so the ~40
-strings that dominate a repaint all land aligned; its **header is at
-`fm_cx + 6`** and its **icon-grid cells at `fm_cx + 78 × col`**, which do not.
-So the inversion buys the dominant cost and leaves two smaller ones on the
+strings that dominate a repaint all land aligned; its header **was** at
+`fm_cx + 6` and its icon-grid cells at `fm_cx + 78 × col`, which did not.
+So the inversion bought the dominant cost and left two smaller ones on the
 table, each fixable by moving a constant (6 → 8, 78 → 80) at the price of a
-visible layout shift.
+visible layout shift. **Both have since been moved** — §22.11.1.1 for the
+header and the status line that shares its column, §22.11.1.2 for the grid —
+so this paragraph is the record of what the survey found rather than a
+description of the window today.
 
 **One thing gets slightly worse and it is named rather than hidden.**
 `fm_scrollpaint` rounds its blit span INWARD because a Disk row's icon starts
