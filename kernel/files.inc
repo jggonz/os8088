@@ -43,7 +43,7 @@
 ;
 ; The window also owns the menu bar. fm_menus (below) is Locator's SECOND
 ; SPEC.md 12.2 menu set: same AM_NAME, so the bar still reads 'Locator',
-; but a real AM_ONCMD - fm_oncmd - so File/Folder/View/Special are this
+; but a real AM_ONCMD - fm_oncmd - so File/Edit/Nav/Builtins are this
 ; window's commands rather than the desktop's. fm_oncmd runs under the gfx
 ; lock exactly like W_ONCLICK, which is why three of its commands are
 ; POSTED (inst_launch_post / ui_post_cmd) instead of called: see the jump
@@ -1288,17 +1288,17 @@ fm_s_folder:  db 'Folder', 0    ; ...and in a folder we arrived at from
 ; as windows come and go. AM_ONCMD is a real handler, which makes this the
 ; first KERNEL kind on ui_dispatch's .app route - see the note there.
 ;
-; The four titles are laid out at x 120/168/232/280 and end at 343, against
-; menu_relayout's MENU_CLK_HX limit of 432: 89px of slack, so no title can
+; The four titles are laid out at x 112/160/208/248 and end at 327, against
+; menu_relayout's [vid_clk_hx] limit of 432: 105px of slack, so no title can
 ; be silently dropped. Item strings do not enter that arithmetic at all.
 ; (SPEC.md 12.9 snapped the bar's layout to 8px cells and widened
-; MENU_TITLE_PAD to 16, which cost 18px of that slack and moved every number
-; in this paragraph.)
+; MENU_TITLE_PAD to 16; SPEC.md 22.15 then retired the View cell and
+; shortened 'Folder' to 'Nav', which moved every number in this paragraph
+; again.)
 ; -----------------------------------------------------------------------------
 fm_s_mfile:   db 'File', 0
 fm_s_medit:   db 'Edit', 0
-fm_s_mfold:   db 'Folder', 0
-fm_s_mview:   db 'View', 0
+fm_s_mnav:    db 'Nav', 0
 fm_s_mbuilt:  db 'Builtins', 0   ; the SAME menu as Locator's, with the
                                 ; same items in the same order (SPEC.md
                                 ; 12.3.1) - which is the whole point of
@@ -1333,8 +1333,10 @@ fm_s_up:      db 'Up One Folder', 0
 fm_s_rootf:   db 'Root Folder', 0
 fm_s_drva:    db 'Drive A:', 0
 fm_s_drvb:    db 'Drive B:', 0
-fm_s_aslist:  db 'as List', 0
-fm_s_asicon:  db 'as Icons', 0
+fm_s_aslist:  db 'as List', 0    ; the context menu's now, and only its:
+fm_s_asicon:  db 'as Icons', 0   ; SPEC.md 22.15 retired the View cell, and
+                                ; the in-window toggle button is the surface
+                                ; a one-button machine reaches them by
 fm_s_newwin:  db 'New Window', 0
 fm_s_opennew: db 'Open in New Window', 0
 
@@ -1347,11 +1349,9 @@ FM_IFMT     equ 5               ; ...at this item index, which is also
 FM_NFILE    equ 6               ; items in the File menu
 fm_items_edit:
     dw fm_s_cut, fm_s_copy, fm_s_paste
-fm_items_fold:
+fm_items_nav:
     dw fm_s_newwin, fm_s_opennew
     dw fm_s_refr, fm_s_up, fm_s_rootf, fm_s_drva, fm_s_drvb
-fm_items_view:
-    dw fm_s_aslist, fm_s_asicon
 fm_items_built:
     dw menu_s_timer, menu_s_bounce, menu_s_disk
 
@@ -1359,7 +1359,8 @@ fm_menus:
     dw menu_loc_name            ; AM_NAME: still 'Locator' (SPEC.md 12.3)
     dw fm_oncmd                 ; AM_ONCMD: our own handler - the resident
                                 ; thunk, like fm_tpl's three above
-    dw 5                        ; AM_COUNT (= MENU_APPMAX, used exactly)
+    dw 4                        ; AM_COUNT (MENU_APPMAX is 5: one cell spare,
+                                ; since SPEC.md 22.15 retired View)
     dw fm_s_mfile, fm_items_file, FM_NFILE  ; 'Close Window' retired: the app-name
                                         ; cell carries Close now (SPEC.md
                                         ; 12.7), and a Disk window OWNS that
@@ -1374,8 +1375,10 @@ fm_menus:
                                         ; every other application in this
                                         ; tree - and the system this one is
                                         ; modelled on - has always put them
-    dw fm_s_mfold, fm_items_fold, 7
-    dw fm_s_mview, fm_items_view, 2
+    dw fm_s_mnav, fm_items_nav, 7       ; 'Folder' until SPEC.md 22.15: the
+                                        ; menu is where you GO, and the word
+                                        ; also named the object three of the
+                                        ; File menu's items act ON
     dw fm_s_mbuilt, fm_items_built, 3
 section .cold                   ; ...and back to cold code
 
@@ -2650,7 +2653,7 @@ fm_mount:
 ; in:  gfx lock held, [fm_vp] published
 ; out: nothing (all registers preserved)
 ;
-; The body behind the Refresh button, the r key and Folder > Refresh. It used
+; The body behind the Refresh button, the r key and Nav > Refresh. It used
 ; to be fm_mount, which meant every refresh silently walked the user back to
 ; the root - the one thing a refresh must not do, since the reason to press
 ; it is that the folder you are LOOKING at may have changed. The cwd is
@@ -2804,15 +2807,22 @@ FMC_FORMAT  equ 5
 FMC_CUT     equ 6               ; Edit
 FMC_COPY    equ 7
 FMC_PASTE   equ 8
-FMC_NEWWIN  equ 9               ; Folder
+FMC_NEWWIN  equ 9               ; Nav
 FMC_OPENNEW equ 10
 FMC_REFRESH equ 11
 FMC_UP      equ 12
 FMC_ROOT    equ 13
 FMC_DRVA    equ 14
 FMC_DRVB    equ 15
-FMC_LIST    equ 16              ; View
-FMC_ICONS   equ 17
+FMC_LIST    equ 16              ; no menu CELL of its own since SPEC.md 22.15
+FMC_ICONS   equ 17              ; retired View: the context menu (fm_cxc_dir)
+                                ; and the in-window toggle button are the two
+                                ; surfaces left, and both reach these BY NAME.
+                                ; Nothing renumbers - a base + item sum simply
+                                ; stops reaching this pair, because the base
+                                ; that produced it left fm_menu_base and every
+                                ; other base is a VALUE that did not move
+                                ; (SPEC.md 12.7's FMC_CLOSEW reasoning)
 FMC_TIMER   equ 18              ; Builtins (SPEC.md 12.3.1) - the same three
 FMC_BOUNCE  equ 19              ; commands Locator's own Builtins menu has,
 FMC_DISK    equ 20              ; in the same order. Restart is NOT among them
@@ -2837,9 +2847,10 @@ FMD_NONE    equ 2               ; not one pixel of THIS window - the command
                                 ; posted work for another window entirely, or
                                 ; found nothing to act on
 
-FM_NMENUS   equ 5               ; = fm_menus' AM_COUNT = MENU_APPMAX
+FM_NMENUS   equ 4               ; = fm_menus' AM_COUNT (MENU_APPMAX is 5 and
+                                ; one cell is spare since SPEC.md 22.15)
 fm_menu_base:
-    db FMC_OPEN, FMC_CUT, FMC_NEWWIN, FMC_LIST, FMC_TIMER
+    db FMC_OPEN, FMC_CUT, FMC_NEWWIN, FMC_TIMER
 
 ; The jump table. Every entry records WHICH SIDE OF THE GFX LOCK it is on,
 ; because fm_oncmd runs under that lock and the lock is a non-recursive spin
@@ -2875,8 +2886,8 @@ fm_jmp:
     dw fm_c_root                ; inline (fmv_load at the root)
     dw fm_c_drva                ; inline (fmv_load, drive 0)
     dw fm_c_drvb                ; inline (fmv_load, drive 1)
-    dw fm_c_list                ; inline (FS_VIEW = 0)
-    dw fm_c_icons               ; inline (FS_VIEW = 1)
+    dw fm_c_list                ; inline (FS_VIEW = 0) - context menu and the
+    dw fm_c_icons               ; inline (FS_VIEW = 1)   in-window button only
     dw fm_c_timer               ; POSTED - app_launch takes the lock
     dw fm_c_bounce              ; POSTED - app_launch takes the lock
     dw fm_c_disk                ; POSTED - ui_cmd takes the lock
@@ -3376,14 +3387,14 @@ fm_selfold:
     stc
     ret
 
-fm_c_newwin:                    ; Folder > New Window - a second view of here
+fm_c_newwin:                    ; Nav > New Window - a second view of here
     mov di, [fm_vp]
     mov al, [di+FS_DRV]
     mov dx, [di+FS_CWD]
     xor si, si                  ; same folder, so the same derived title
     jmp short fm_newwin
 
-fm_c_opennew:                   ; Folder > Open in New Window - the selection
+fm_c_opennew:                   ; Nav > Open in New Window - the selection
     mov di, [fm_vp]
     mov ax, [di+FS_SEL]
     cmp ax, [di+FS_N]
@@ -3436,17 +3447,17 @@ fm_c_elsewhere:
     mov byte [fm_cmdchg], FMD_NONE
     ret
 
-fm_c_refresh:                   ; Folder > Refresh
+fm_c_refresh:                   ; Nav > Refresh
     jmp fm_reload
-fm_c_drva:                      ; Folder > Drive A:
+fm_c_drva:                      ; Nav > Drive A:
     xor dl, dl
     jmp short fm_c_mount
-fm_c_drvb:                      ; Folder > Drive B:
+fm_c_drvb:                      ; Nav > Drive B:
     mov dl, 1
 fm_c_mount:
     jmp fm_mount
 
-fm_c_up:                        ; Folder > Up One Folder
+fm_c_up:                        ; Nav > Up One Folder
     mov di, [fm_vp]
     cmp word [di+FS_CWD], 0
     je .none                    ; already at the root: nothing is above it,
@@ -3460,15 +3471,15 @@ fm_c_up:                        ; Folder > Up One Folder
 .none:
     ret
 
-fm_c_root:                      ; Folder > Root Folder
+fm_c_root:                      ; Nav > Root Folder
     xor ax, ax
     xor si, si
     jmp fm_go
 
-fm_c_list:                      ; View > as List
+fm_c_list:                      ; context menu > as List
     xor al, al
     jmp short fm_c_setview
-fm_c_icons:                     ; View > as Icons
+fm_c_icons:                     ; context menu > as Icons
     mov al, 1
 fm_c_setview:
     mov di, [fm_vp]
