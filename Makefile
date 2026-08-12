@@ -412,7 +412,8 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
-        bench field stackprobe trklog npbench clicktest marty comscan lptlink \
+        bench field combo combo144 stackprobe trklog npbench clicktest marty \
+        comscan lptlink \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         checkdocs clean clean-marty distclean
@@ -2383,6 +2384,40 @@ COMBOARGS := $(DRIVERS) $(SYSAPPSARGS) \
 
 combo: $(BUILD)/combo.img
 
+# ...and the same disk at 1.44MB, which is a DIFFERENT MACHINE and not a
+# bigger version of the one above. A 1.44MB disk needs a 500 kbps controller
+# and a BIOS that knows about it, so it will not boot the calibration 5150 -
+# an IBM 5150/XT ROM tops out at 360KB and its 8-bit controller runs the data
+# rate to match (docs/FIELD-MACHINES.md). This is the image for QEMU, for the
+# AT-class 86Box profiles, and for a Gotek or USB floppy on a machine with a
+# 1.44MB drive; `make combo` is still the one for real XT-class iron.
+#
+# It carries the three things the 360KB combo leaves off, because every reason
+# given for dropping them up there is CLUSTERS and this disk has 2,847 of them
+# against 354: BEVERLY.MOD (so Tracker and ModPlug have something to open),
+# BIGFILE.DAT (so sysbench's cache-capacity sweep and DOS read-rate row RUN
+# instead of being skipped) and README.TXT, plus the logo so File > Open lands
+# somewhere that is not empty. Same plainest kernel - no VIDEO= forced - so
+# one image still covers both cards through the Display page.
+COMBO144ARGS := $(COMBOARGS) $(BUILD)/bigfile.dat \
+                MEDIA:apps/tracker/beverly.mod $(SYSLOGOARG) $(SYSDOC)
+
+combo144: $(BUILD)/combo144.img
+
+$(BUILD)/combo144.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) \
+                    $(APPS_TOOLS) $(APPS_GAMES) $(SYSAPPS) \
+                    $(BENCHPKGS) $(BUILD)/bench.dat $(BUILD)/benchsml.dat \
+                    $(BUILD)/bigfile.dat $(SYSDOC) $(SYSLOGO) \
+                    apps/tracker/beverly.mod tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
+		$(COMBO144ARGS)
+	@echo "combo144: $@ - the combo disk at 1.44MB, with BEVERLY.MOD,"
+	@echo "          BIGFILE.DAT and README.TXT that the 360KB one has no"
+	@echo "          room for. NOT for the 5150: a 1.44MB disk needs a"
+	@echo "          500 kbps controller and a BIOS that knows about it."
+	@echo "          QEMU, the AT-class 86Box profiles, or a Gotek."
+
 $(BUILD)/combo.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
                     $(APPS_TOOLS) $(APPS_GAMES) $(SYSAPPS) \
                     $(BENCHPKGS) $(BUILD)/bench.dat $(BUILD)/benchsml.dat \
@@ -2702,6 +2737,12 @@ marty: $(IMG360)
 	@echo "                 a Hercules, docs/DUAL-DISPLAY-PLAN.md) and _herc_gla"
 	@echo "                 is the single-card Hercules without the IBM ROM."
 	@echo "                 python3 tests/dualcheck.py is the two-card gate"
+	@echo "       _herc_gla_144 has 1.44MB DRIVES, for make combo144 - the one"
+	@echo "                 machine here that can read an 18-spt disk. An"
+	@echo "                 anachronism on purpose: no stock XT reads 1.44MB"
+	@echo "                 (500 kbps against the 8-bit card's 250), so it"
+	@echo "                 proves OUR boot sector and FAT12 code at 18 spt"
+	@echo "                 and nothing about the media. No timings off it"
 	@echo "       _cga_lpt has a PARALLEL PORT at 378h (SPEC.md 62's NET.DRV)"
 	@echo "                 and so does _xt_hdd, which is then the one machine"
 	@echo "                 with TWO driver Control Panel pages at once"

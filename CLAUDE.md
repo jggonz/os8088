@@ -399,7 +399,11 @@ make marty    # the MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug
               # 7.16MHz is the fastest MartyPC has, and the CGA PANICS there,
               # so a turbo machine is a VGA one - it is a CONTROL for "is this
               # cost CPU-bound", never a source of a PERFORMANCE.md number),
-              # _xt_hdd (XT-IDE, SPEC.md 52's rung 0). Add
+              # _xt_hdd (XT-IDE, SPEC.md 52's rung 0), _5150_herc_gla_144
+              # (1.44MB DRIVES, for `make combo144` - the only machine here
+              # that reads an 18-spt disk, and an anachronism on purpose: no
+              # stock XT reads 1.44MB, so it proves OUR boot sector and FAT12
+              # code at that geometry and nothing about the media). Add
               # MARTYPC_WAV=/tmp/cap for one wav per sound source.
 make clean
 ```

@@ -6773,6 +6773,148 @@ says so in capitals and this had to learn it again): Solitaire seeds from
 different card layouts. `[osapi_seed]` is written and **N** pressed before the
 drag, exactly as `solcheck` does.
 
+#### 11.96.13 …and the drop is moved onto the phase, not left to chance
+
+Reported from the field as *"drag and drop window moves were supposed to use
+the shadow-under buffer and it does not seem to be working — Solitaire on
+Hercules still redraws card by card,"* with a set of merges suspected.
+
+**It was not the merges, and §11.96.12 was working exactly as measured.** The
+drag cache reproduces its own recorded figures to the millisecond on a
+cycle-accurate 5150/Hercules — 210 calls and 462.5 ms against the 210 and
+462.4 written down when it was built, one `gfx_restore`, zero `gfx_blit4`.
+`wm_dc_take`, `wm_dc_done` and `ui_drag`'s `.release` are unchanged since the
+commit that introduced them.
+
+What was wrong is that **both of §11.96.12's refusals are common and one of
+them is a coin toss.** Measured, the same window, the same session:
+
+| drag | `dx & 7` | destination | calls | guest ms | `gfx_restore` |
+|---|---:|---|---:|---:|---|
+| dx = −64, dy = 0 | 0 | on screen | 210 | **462.5** | 1 |
+| dx = −60, dy = 0 | 4 | on screen | 1,007 | **950.2** | **0** |
+| dx = 0, dy = 40 | 0 | **off** the bottom | 868 | **747.3** | **0** |
+| dx = 0, dy = 40 — a *Disk* window | 0 | on screen | 92 | **203.7** | 1 |
+
+The fourth row is the control: the same vertical drag that refuses on
+Solitaire restores on a short window, which is what says `dy` is healthy and
+the refusal is the destination leaving the screen.
+
+**A hand drops a window on an arbitrary pixel**, so `dx & 7` was 0 one time in
+eight and the feature spent seven of every eight drags doing precisely what it
+was built to stop. That is not something the user can see, aim at, or learn.
+
+`ui_drag_phase` moves the drop onto the phase instead, and **the direction is
+the whole safety argument: always TOWARD `ui_origx`, never away.** The window
+was legal where it started and legal where the clamps left it, and the legal
+x's are an **interval** — so every point between the two is legal too, which
+is why this needs no clamp of its own and cannot fight `wm_dock_snap`,
+`ui_drag_dead` or §39.16's dual-display bounds. Rounding to the *nearest*
+multiple would halve the error and is not worth re-deriving those bounds for.
+
+**The price is up to 7px of horizontal drop precision, and it is paid by every
+window on every adapter**, because the byte phase is a property of the
+framebuffer rather than of the adapter — 8 pixels are one byte on both 1bpp
+cards and one byte per plane in mode 12h. §11.94's `WF_SNAP` is the precedent
+and the sharper form of the same trade (8px drag *steps*, not a 7px drop), and
+it is also why a `WF_SNAP` window always hit this path already: an absolute x
+pinned to a multiple of 8 makes every `dx` one too.
+
+**It is deliberately NOT gated to 1bpp**, which is the obvious economy and is
+measurably wrong: mode 12h is planar, so its byte holds 8 pixels of one plane
+and its phase is the same question. Measured, VGA on the same drag is **889
+calls / 1,196.4 ms without the snap and 210 / 633.3 with it** — a gate would
+have handed that back for nothing.
+
+**`and ax, 0xFFF8` is the wrong instruction on a leftward drag**, and it is
+written down because the first version shipped it. The delta is signed and
+that mask rounds toward **minus infinity**, so on `dx < 0` it moves the window
+*away* from the origin — out of the interval the safety argument above rests
+on. `dx + (dx & 7)` is wronger still and was what shipped: it lands on a
+multiple of 8 only when `dx & 7` is exactly 4, so leftward drags kept refusing
+at seven phases out of eight. It survived its own verification because the
+value that was measured, **`dx = -60`, is that one phase** — the single delta
+for which the broken and the correct arithmetic agree. `dx = -58` is the
+one-line disproof: it landed at −52, `dx & 7 = 4`, 865 calls and 22
+`gfx_blit4`. The magnitude is truncated toward zero instead, `neg`/`and`/`neg`,
+which is a multiple of 8 for both signs and never leaves the interval.
+
+**A verification that picks its own input can pick the input that hides the
+bug**, which is §11.96.12's pinned-deal lesson arriving from the other side —
+there the harness randomised what it should have fixed, here it fixed what it
+should have varied.
+
+#### 11.96.14 …and a destination off the screen clips instead of refusing
+
+§11.96.12's second refusal, and the one §11.96.13 left standing: `wm_su_try`
+asked `vid_span_one` whether the cached rect was **wholly** inside one display
+and refused when it was not. That is the right answer for the case it was
+written for — a display **rearranged** under a rect that did not move
+(§39.14.8.1), where the banked pixels really do belong to a card that is no
+longer there — and the wrong one for a window **dragged** off the bottom,
+where the pixels are banked, correct, and merely partly headed off the glass.
+
+It cost the commonest drag there is, because `ui_drag` clamps the **title bar**
+onto the screen and not the window. On Hercules, Solitaire's 303 rows fill a
+~305-row desktop band, so its legal fully-on-screen `y` range is **18..20** —
+three positions — and every other vertical drag redrew the window card by card.
+Measured: dy = 40 was **868 calls / 747.3 ms** with 22 `gfx_blit4` and no
+`gfx_restore`, while the identical drag on a *Disk* window — short enough to
+stay on screen — restored in **92 calls / 203.7 ms**. That control is what said
+the refusal was the geometry and not `dy`.
+
+**No new mechanism, again.** §5.8's sub-rect restore already puts back part of
+a fragment, `wm_su_srect` already intersects a named rect against the fragment
+and arms `gfx_sub_*`, and `wm_damage` already drives all of it. `wm_su_vset` is
+`vid_span_one`'s question asked for an **answer** instead of a verdict: the far
+edges **clamp** and the near edges still refuse.
+
+Four things are load-bearing:
+
+- **It is a SECOND named rect, not an intersection into `wm_su_son`.** The two
+  say different things and have different owners: `wm_su_s*` is what a pass
+  **painted**, named by `wm_damage`, which owes the app that same rect
+  afterwards — narrowing it here would quietly change what the application is
+  told to repaint. `wm_su_v*` is what is on the **glass**, which is nobody's
+  argument but this one's. Each is intersected only if armed, because either
+  may be the only one set.
+- **The near edges still refuse, and that is `vid_span_one`'s dead-zone test
+  kept verbatim.** `vid_disp_of` falls back to the **primary** for a point no
+  display covers, so an origin outside its own display's bounds means the
+  answer is a fallback rather than a fact — and clamping against the wrong
+  display's far edge would put the restore on the wrong card. It is sound to
+  clamp only `x2`/`y2` because `ui_drag` clamps `x >= 0` and `y >= MBAR_H`, so
+  the overhang a drag can produce is always at the far corner.
+- **`wm_su_try` arms it and `wm_su_try` spends it**, at both exits, rather than
+  being cleared at `wm_draw_win`'s exit the way `wm_su_son` is. A one-shot
+  whose arm and spend are in one routine cannot be leaked onto the next window
+  by a path that skips — and `.no` is reached *after* the arm, because the
+  second `wm_su_ck` can still fail.
+- **`wm_dc_take` asks the same question and immediately drops the arm.** There
+  it is only a filter — is *any* of the destination visible — and the answer
+  that matters is asked again at the restore, against the rect as it will be
+  then.
+
+The window is not re-banked afterwards: `wm_su_bank` goes through `wm_su_take`,
+which still demands a whole rect on one display, so a window left hanging off
+the screen keeps the drag's cache (correct, since its content has not changed)
+and gets an ordinary full redraw the next time it is drawn somewhere that
+cache does not describe.
+
+It sits inside `ui_drag`'s own `%ifndef NODRAGCACHE`, so `make DRAGCACHE=0`
+drops a window exactly where it always did and the A/B stays honest.
+
+**What is deliberately NOT fixed is the second refusal** — a destination that
+leaves the screen, which is the one Solitaire on Hercules hits on nearly every
+*vertical* drag, its 303 rows filling a ~305-row desktop band so that its
+legal fully-on-screen `y` range is 18..20. Putting that back needs the restore
+clipped to the visible rows, and the machinery for it exists (§5.8's sub-rect
+restore, `wm_su_son`/`wm_su_srect`), but `wm_su_try` refuses on `vid_span_one`
+of the *whole* rect before any of it is reached, and `wm_su_ck` demands the
+claim's header equal the window's content rect exactly — so a shrunken rect
+disagrees with its own cache. It is a real piece of work and it is not this
+one.
+
 ### 11.97 A window below does not draw chrome where something above will cover it
 
 Reported from the field alongside §11.96.9's ghost: **dragging a window, the one
