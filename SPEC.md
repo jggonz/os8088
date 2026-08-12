@@ -2799,6 +2799,100 @@ The general rule this is an instance of: **a routine that is reached from
 pair sits under every drawing site in the machine, kernel and package alike,
 and there is no call site that can compensate.
 
+### 7.1.4.2 The test is the REGION, and the frame answered a different question
+
+`cur_lazyck` tested the window's **frame** rect, and §7.1.4 above records the
+reasoning: the region is the content minus what covers it, so outside the frame
+is outside every fragment, and one rect test is far cheaper than sixteen. Both
+halves of that are true. The conclusion drawn from them is not, because *inside
+the frame* is not inside any fragment either — and the gap between those two is
+exactly one window.
+
+**A pointer resting on the window IN FRONT of the painter is inside the
+painter's frame and outside every fragment of its region.** `wm_clip_occl`
+subtracts the windows above, which is the whole reason the region exists; so
+the one place that can prove the arrow is unreachable was throwing that
+subtraction away and asking a question the occluders do not appear in. The
+frame test spent the hide, and the reported case is §7.1.4's own defect seen
+one window along: **a Task Manager refreshing twice a second behind a Control
+Panel, blinking the arrow forever, with the pointer nowhere near anything that
+was being drawn.**
+
+Measured on a cycle-accurate 5150 with a CGA card, Part 3.1's flicker
+instrument, the Control Panel raised over the Task Manager and the pointer
+parked over the Control Panel:
+
+| pointer | in TM's frame? | in TM's region? | flash |
+|---|---|---|---|
+| (300,100) | yes | no | **9 frames = 149 ms, 42 px, bbox `[300,100,306,110]`** |
+| (162,100) | no | no | 0 |
+
+Ten pixels apart, over the same window, with the same painter running — and
+the bounding box is the arrow's own cell, which is the signature
+docs/MARTYPC-DEBUG.md already warns reads as "text flash" if you take the
+count without the box.
+
+`cur_lazyck` walks `wm_clip_tab` now and asks for **overlap with any
+fragment** — not `wm_clip_test`'s containment, which answers whether a whole
+shape fits one fragment; the question here is whether any pixel of the cell
+could be written at all. Four things about it:
+
+- **It is not the sixteen tests the frame was chosen over.** A background
+  painter with nothing on top of it arms exactly ONE fragment — the ordinary
+  case, and the one the frame test was measured on — so this is four compares
+  against that rect where the frame test was four compares against a rect
+  `wm_win_rect` had to build first. It is *cheaper* there, and dearer only
+  when the region is genuinely fragmented, which is precisely when some of
+  those fragments are somebody else's window and the answer is worth buying.
+- **It is strictly tighter, so it cannot be less safe.** Every fragment lies
+  inside the content rect, which lies inside the frame; a cell the frame test
+  called clear is called clear here too. The extra cases it keeps the arrow
+  through are real ones the frame could not distinguish — including a pointer
+  resting on the *painter's own title bar*, which no clipped primitive can
+  reach either.
+- **No region armed means the hide is owed.** Nothing bounds a painter that
+  armed nothing, and that is the answer every unarmed primitive already gets
+  from its own `cur_unlazy`. `wm_clip_set` only calls this with a region
+  built, so it is the contract stated rather than a live path.
+- **`wm_clip_tab` and `[cur_drawn_x]` are both VIRTUAL** (§39.14.9). The
+  display subtraction happens where a position becomes an ADDRESS — `cur_rect`
+  and `cur_geom`, and nowhere else — so the two are already in one space and
+  the walk needs no translation. `wm_clipwin` existed only to hand the frame
+  test a window and is now the knob's alone.
+
+**The safety argument is a measurement, not an audit** — §7.1.4's own rule,
+because what this change does is leave the arrow UP where the frame test hid
+it, and the failure mode if the region does not really bound the painter is a
+permanently smeared cursor. Four readings, each on CGA, Hercules and VGA mode
+12h:
+
+| | measurement |
+|---|---|
+| the fix | pointer over the panel, inside the TM's frame: the arrow's cell changes in **0 of 90** consecutive displayed frames |
+| positive control | pointer over the EXPOSED Task Manager, inside its region: **4–7 of 90**, worst 42 px — the overlap branch still fires, so the walk is not answering "clear" to everything |
+| arrow integrity | Bounce drawing behind the panel, 1,000–1,600 px of it, sampled 20 times across ~10 s: the arrow's own cell **0 px** changed, and the cell it vacates **0 px** after |
+| byte identity | against `make CURFRAME=1`, the same scripted session: **0 differing pixels** outside the arrow and the two areas that are live on *both* builds |
+
+Two things about that last row. The live areas are the menu bar's clock and
+the exposed Task Manager's own cycle counts, and they are named by *measuring*
+them — two runs of the SAME build differ there too, so the A/B is read against
+that floor rather than against zero. And the arrow's cell is excluded because
+it is where the two builds are **supposed** to differ: a still frame of the
+reference build caught the pointer simply **absent**, which is the reported
+defect in one photograph.
+
+The instrument for the first two rows is *not* Part 3.1's `flicker` verbatim.
+`flicker` reports one bbox for all the transient pixels in a frame, so on any
+adapter tall enough to show the Task Manager's gauge it unions the gauge with
+the arrow and stops being a reading about the arrow; the cell is sampled
+directly instead, once per displayed frame, which is the same question asked
+of one rectangle. **And that rectangle is not in the same coordinates on every
+adapter** — Hercules crops a 720x350 aperture out of a 912-wide field, so
+`fbuf`'s pixels sit **(−16, +2)** from the kernel's, and a harness that misses
+it measures a cell the cursor was never in and passes by measuring nothing.
+
+Cost: `.text` **+17 bytes**, no rung crossed, `KERN_BUDGET` untouched.
+
 ### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
 
 `gfx_xor_rect`'s `cur_unlazy` sat **below** its `cmp byte [vid_mono], 0`, so on

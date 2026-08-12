@@ -244,6 +244,30 @@ ifneq ($(REDRAWFULL),)
 VIDDEF += -DREDRAWFULL
 endif
 
+# CURFRAME=1 puts cur_lazyck back on the window's FRAME rect, which is what it
+# tested before SPEC.md 7.1.4.2 - so the deferred cursor hide is spent whenever
+# the pointer is anywhere over the updating window's frame, rather than only
+# where the ARMED REGION can actually reach it. It is the A/B for the reported
+# flash: park the pointer over a window that is IN FRONT of an updating one and
+# the knob build blinks the arrow once per refresh where the shipped one does
+# not. The other half of what it is for is SAFETY - the frame is a strict
+# superset of the region, so the two builds must put the identical picture on
+# screen and only the number of times the arrow was drawn may differ:
+#
+#   make && cp build/os8088-360.img /tmp/rgn.img
+#   make CURFRAME=1 && cp build/os8088-360.img /tmp/ref.img
+#   ...drive the same script on each and diff the framebuffers.
+#
+# Verified that way (SPEC.md 7.1.4.2): 0 differing pixels on CGA, Hercules and
+# VGA mode 12h, outside the arrow's own cell and the two areas that are live on
+# BOTH builds - the menu bar clock and the exposed Task Manager's cycle counts,
+# which differ between two runs of the SAME build and so set the floor the A/B
+# is read against. Inside the arrow's cell the two are SUPPOSED to differ: a
+# still frame of this build caught the pointer simply absent.
+ifneq ($(CURFRAME),)
+VIDDEF += -DCURFRAME
+endif
+
 # DRAGCACHE=0 removes SPEC.md 11.96.12's drag cache, so a window dragged by its
 # title bar goes back to ordering a full W_PAINT of itself at the new place.
 # It is the A/B: the claim is "the same picture, not drawn", and the failure it
@@ -371,9 +395,10 @@ endif
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              DIRW1 FDDPROBE FDDABSENT REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
+                             CURFRAME \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(CURFRAME),-cf$(CURFRAME))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
