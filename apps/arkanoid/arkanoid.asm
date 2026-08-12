@@ -369,25 +369,8 @@ ark_entry:
     mov [ark_dock], cx
     mov [ark_bpp], dh
 
-    mov si, ark_met_big
-    cmp bx, 300
-    jae .metric
-    mov si, ark_met_sml
-.metric:
-    mov di, ark_bw                  ; copied wholesale: the bss words below
-    mov cx, ARK_NMET                ; must stay in the record's order
-.mcopy:
-    mov ax, [si]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    loop .mcopy
-
-    call ark_scale_vel              ; ...and the speeds that record implies
-
-    mov ax, [ark_pw0]               ; the widest an Expand can make it
-    add ax, 24
-    mov [ark_pwmax], ax
+    call ark_metrics            ; the record this screen wants, and everything
+                                ; it implies (SPEC.md 11.98 re-runs this)
 
     mov ax, [ark_bw]                ; content width = the wall plus both rails
     mov bx, ARK_COLS
@@ -446,6 +429,10 @@ ark_entry:
     call OSAPI_WM_CREATE
     jc .full
     mov [ark_win], bx
+    mov ax, ark_onresize            ; the metric record is picked from the
+    call OSAPI_WM_ONRESIZE          ; SCREEN, so an adapter change invalidates
+                                    ; it and nothing else would say so
+                                    ; (SPEC.md 11.98)
     mov si, ark_menus
     call OSAPI_MENU_SET
     mov si, ark_about
@@ -611,6 +598,84 @@ ark_scale_one:
 ; ark_layout - the rows every other routine measures from
 ; in:  [ark_chgt]; out: [ark_bricky], [ark_pady], [ark_floor]
 ; preserves all registers
+; -----------------------------------------------------------------------------
+; ark_metrics - the metric record this screen wants, and what it implies
+; in:  BX = the screen HEIGHT
+; out: ark_bw.. filled, the velocities scaled, ark_pwmax derived
+; clobbers: AX, CX, SI, DI
+; -----------------------------------------------------------------------------
+ark_metrics:
+    mov si, ark_met_big
+    cmp bx, 300
+    jae .metric
+    mov si, ark_met_sml
+.metric:
+    mov di, ark_bw                  ; copied wholesale: the bss words below
+    mov cx, ARK_NMET                ; must stay in the record's order
+.mcopy:
+    mov ax, [si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    loop .mcopy
+
+    call ark_scale_vel              ; ...and the speeds that record implies
+
+    mov ax, [ark_pw0]               ; the widest an Expand can make it
+    add ax, 24
+    mov [ark_pwmax], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_onresize - the adapter changed under us (SPEC.md 11.98)
+;
+; in:  SI = our window, CX/DX = the new content size; the gfx lock is HELD and
+;      this may not draw
+; out: nothing (all registers preserved)
+;
+; ark_track already reads the live box every frame, so the field's EXTENT
+; follows a resize on its own. What does not is the metric RECORD: brick and
+; paddle sizes, the ball, the rail width and the velocity scale are picked once
+; from the screen height at launch, and a 480-row VGA taken to its 200-row CGA
+; leaves a game laid out in 24x10 bricks inside 137 rows of content.
+;
+; THE LEVEL RESTARTS, and that is the honest answer rather than a shortcut. The
+; wall's row COUNT is one of the metric words (6 against 5), so the alive map
+; changes shape - a ball in flight is inside a wall that no longer exists at
+; those coordinates, and there is no rescaling that makes a half-broken 6-row
+; wall into a half-broken 5-row one. Score, lives and level survive; the ball
+; goes back on the paddle, which is a state the game already has and the player
+; already understands (M_READY).
+;
+; It does NOT resize the window. The kernel has already decided the box - that
+; is why this is being called - and ark_track lays the field into whatever it
+; is, which is what every other app in the tree does with its content.
+; -----------------------------------------------------------------------------
+ark_onresize:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock top row, DH=bpp - and
+    mov [ark_scrw], ax              ; the bpp is banked again too, because a
+    mov [ark_dock], cx              ; switch is exactly when it stops being true
+    mov [ark_bpp], dh
+    call ark_metrics
+    cmp byte [ark_mode], M_OVER     ; a finished game has nothing to restart,
+    je .out                         ; and putting a ball back on the paddle
+                                    ; there would look like a free life
+    call ark_startlevel
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ark_layout:
     push ax
@@ -2441,6 +2506,13 @@ ark_newgame:
     mov word [ark_score], 0
     mov byte [ark_lives], ARK_LIVES
     mov byte [ark_level], 1
+    call ark_startlevel
+    pop ax
+    ret
+
+; ark_startlevel - lay this level out and park the ball (all regs preserved)
+ark_startlevel:
+    push ax
     call ark_setspeed               ; AFTER the level is 1: it reads it
     mov ax, [ark_pw0]
     mov [ark_pw], ax

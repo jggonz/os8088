@@ -176,41 +176,9 @@ sol_entry:
     mov [sol_dock], cx
     mov [sol_bpp], dh
 
-    mov si, sol_met_big             ; Hercules' 348 rows still take the big
-    cmp bx, 300                     ; cards; only CGA's 200 do not
-    jae .metric
-    mov si, sol_met_sml
-.metric:
-    mov di, sol_cw                  ; the record is copied wholesale, so the
-    mov cx, SOL_NMET                ; bss words must stay in its order - see
-.mcopy:                             ; the note over sol_cw below
-    mov ax, [si]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    loop .mcopy
-
-    mov ax, [sol_cw]                ; column pitch
-    add ax, [sol_gap]
-    mov [sol_pitch], ax
-    mov ax, [sol_topy]              ; the tableau clears the top row by two
-    add ax, [sol_ch]                ; gaps
-    add ax, [sol_gap]
-    add ax, [sol_gap]
-    mov [sol_taby], ax
-    mov ax, [sol_cw]                ; the waste fans right by a third of a
-    mov bl, 3                       ; card, into the empty column the layout
-    div bl                          ; leaves between it and the foundations
-    mov ah, 0
-    mov [sol_wstep], ax
-
-    mov ax, [sol_pitch]             ; content width = 2 margins + 7 columns
-    mov bx, 7
-    mul bx
-    add ax, [sol_marg]
-    add ax, [sol_marg]
-    sub ax, [sol_gap]
-    mov [sol_cwid], ax
+    call sol_metrics            ; the card metrics this screen wants, and
+                                ; everything derived from them - re-run by
+                                ; sol_onresize (SPEC.md 11.98)
     add ax, 2                       ; ...plus the 1px frame either side
     mov [sol_tpl + WT_W], ax
 
@@ -272,6 +240,9 @@ sol_entry:
     mov si, sol_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .full
+    mov ax, sol_onresize            ; the card metrics are picked from the
+    call OSAPI_WM_ONRESIZE          ; SCREEN, so an adapter change invalidates
+                                    ; them (SPEC.md 11.98)
     mov si, sol_menus
     call OSAPI_MENU_SET             ; draws nothing, and preserves the flags
     mov al, 1                       ; ...and it PROMISES its content stands
@@ -318,6 +289,88 @@ sol_entry:
 ; here rather than relied on, because a card back blitted earlier in the same
 ; callback left it pointing at our own segment and never put it back
 ; (SPEC.md 20.1 says it may).
+; -----------------------------------------------------------------------------
+; sol_metrics - the card metric record this screen wants, and what it implies
+; in:  BX = the screen HEIGHT
+; out: sol_cw.. filled, sol_pitch / sol_taby / sol_wstep / sol_cwid derived
+; clobbers: AX, BX, CX, SI, DI
+; -----------------------------------------------------------------------------
+sol_metrics:
+    mov si, sol_met_big             ; Hercules' 348 rows still take the big
+    cmp bx, 300                     ; cards; only CGA's 200 do not
+    jae .metric
+    mov si, sol_met_sml
+.metric:
+    mov di, sol_cw                  ; the record is copied wholesale, so the
+    mov cx, SOL_NMET                ; bss words must stay in its order - see
+.mcopy:                             ; the note over sol_cw below
+    mov ax, [si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    loop .mcopy
+
+    mov ax, [sol_cw]                ; column pitch
+    add ax, [sol_gap]
+    mov [sol_pitch], ax
+    mov ax, [sol_topy]              ; the tableau clears the top row by two
+    add ax, [sol_ch]                ; gaps
+    add ax, [sol_gap]
+    add ax, [sol_gap]
+    mov [sol_taby], ax
+    mov ax, [sol_cw]                ; the waste fans right by a third of a
+    mov bl, 3                       ; card, into the empty column the layout
+    div bl                          ; leaves between it and the foundations
+    mov ah, 0
+    mov [sol_wstep], ax
+
+    mov ax, [sol_pitch]             ; content width = 2 margins + 7 columns
+    mov bx, 7
+    mul bx
+    add ax, [sol_marg]
+    add ax, [sol_marg]
+    sub ax, [sol_gap]
+    mov [sol_cwid], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_onresize - the adapter changed under us (SPEC.md 11.98)
+;
+; in:  SI = our window, CX/DX = the new content size; the gfx lock is HELD and
+;      this may not draw
+; out: nothing (all registers preserved)
+;
+; sol_track already reads the live box, so the table's EXTENT follows a resize
+; on its own. The card METRICS do not: sol_cw / sol_ch and the gaps and fans
+; around them are picked once from the screen height, so a 480-row VGA taken to
+; its 200-row CGA keeps dealing big cards into 137 rows of content.
+;
+; NO GAME STATE MOVES, and it does not need to - which is the whole difference
+; from apps/arkanoid's handler. Every card's position here is DERIVED at draw
+; time from sol_pitch, sol_taby and the fan steps; a pile is a list, not a set
+; of coordinates. So re-deriving the metrics is the entire operation and the
+; repaint that follows puts the same game down in the new size.
+; -----------------------------------------------------------------------------
+sol_onresize:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock top row, DH=bpp - the
+    mov [sol_scrw], ax              ; bpp banked again too, a switch being
+    mov [sol_dock], cx              ; exactly when it stops being true
+    mov [sol_bpp], dh
+    call sol_metrics
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 sol_track:
     push ax
