@@ -38877,6 +38877,40 @@ so a routine that repoints `DS` at the caller's buffer hands the transport a
 garbage port number and a garbage turnaround flag. The wire would simply have
 stopped. The assertion cost nothing to check.
 
+**Verified both ends.** The DOS side against `tests/dosstub` with
+`partner.py` as the master — twelve cases, every refusal, and a final listing
+back to its starting four so nothing leaked:
+
+```
+MKDIR / again        ok / EXIST(5)
+WRITE 300b  -> stat  300
+APPEND 44b  -> stat  344
+APPEND to a missing file   NOENT(4)
+RENAME               ok, and the listing shows it
+RMDIR empty / GAMES  ok / PROT(8), not empty
+DELETE / again       ok / NOENT(4)
+DELETE a directory   PROT(8) - 41h is not 3Ah
+```
+
+…and the os8088 side by **`File ▸ New Folder…` in a network Disk window**,
+which is the one verb with no application behind it: `M C L F` on the wire —
+`FSV_MKDIR`, then `dskw_sync`'s re-list (§22.8's coherence rule, arriving as
+`CHDIR` + `LIST`), then the status line's free space — and `OVERHERE` appears
+in the window and on the far side.
+
+Two things that test found are the harness's, not the code's, and both are
+the kind that read as a broken feature. **A menu pick that talks to the far
+end is not obviously one**: `Folder ▸ New Window` (item 0 of the *other*
+menu — New Folder is `File` item 1) opens a second Disk window, which
+*mounts*, which needs a wire nobody was driving, so the link dropped and the
+window read `No os8088 disk (C:)`. And **the slave's dwell can expire
+mid-handshake**: `slv_hunt` waits a bounded number of ticks and returns to
+`listen_once`, and the guest's clock runs while a stepped partner works — so
+an exchange begun near the end of a dwell has its magic accepted and its
+reply never sent. That is what the dwell is *for*, and docs/NET-PLAN.md's
+own rule is that the slave dwells and the **master sweeps**; the harness now
+sweeps too.
+
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
 466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in

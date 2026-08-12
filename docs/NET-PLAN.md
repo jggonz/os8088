@@ -930,6 +930,13 @@ inherits the refusal rather than remembering it — the machine at that end may
 be somebody's real DOS box, and §FIELD-MACHINES keeps a live DOS 3.3 install
 on the calibration machine's C:.
 
+**Both ends are verified** (SPEC.md §62.10.4.5). The DOS side is twelve cases
+against `tests/dosstub` - every refusal, and a final listing back to its
+starting four so nothing leaked - and the os8088 side is `File > New Folder`
+in a network Disk window, the one verb with no application behind it:
+`M C L F` on the wire, and the folder appears in the window and on the far
+side.
+
 What is still owed at this boundary is the WIRE's verdict, which is unchanged:
 two period boxes and a cable.
 
