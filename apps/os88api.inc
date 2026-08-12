@@ -642,11 +642,11 @@ CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
                                  ; data limit (41.4). Tier 2 only
 ;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
-; A DRVC_DISK DRIVER's slots, not an application's: all four are fenced on the
-; caller being the driver whose disk services are published, so a package gets
-; CF=1 and nothing else. They are published here because drivers include this
-; file (drivers/os88drv.inc does), and because a slot number belongs in one
-; place (SPEC.md 20.8).
+; A DRVC_DISK DRIVER's slots, not an application's: the four that CHANGE
+; something are fenced on the caller being the driver whose disk services are
+; published, so a package gets CF=1 and nothing else. They are published here
+; because drivers include this file (drivers/os88drv.inc does), and because a
+; slot number belongs in one place (SPEC.md 20.8).
 %define OSAPI_VOL_ADD       KERNEL_SEG:0x0270   ; AL = the driver's own volume
                                  ; handle, CX = the volume's sector count,
                                  ; DX = a listing claim's segment (0 = the
@@ -665,6 +665,30 @@ CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
 %define OSAPI_VOL_PAINT     KERNEL_SEG:0x0288   ; repaint the desktop's drive
                                  ; zones. It takes the gfx lock ITSELF, so
                                  ; never from a callback that holds one
+%define OSAPI_VOL_AT        KERNEL_SEG:0x03E8   ; DL = an int 13h drive number,
+                                 ; BX:CX = a partition's 32-bit base LBA (BX =
+                                 ; the high word). out CF=0 and AL = the volume
+                                 ; index ALREADY covering it, CF=1 = none is.
+                                 ; Preserves every other register.
+                                 ;
+                                 ; ASK THIS BEFORE OSAPI_VOL_ADD, for every
+                                 ; partition you are about to mount. On a
+                                 ; machine installed to its hard disk the
+                                 ; KERNEL adopted the partition it booted from
+                                 ; before your driver was even loaded - it had
+                                 ; to, your image being a file on that volume
+                                 ; (SPEC.md 52.10.3) - and nothing in your own
+                                 ; table says so, so mounting it again puts a
+                                 ; second drive icon on the same sectors.
+                                 ;
+                                 ; It answers about BIOS-transport volumes and
+                                 ; only those. Your own rows are yours to
+                                 ; recognise: the kernel never learns their
+                                 ; partition base (it hands you a
+                                 ; volume-relative LBA and you add it), and a
+                                 ; DV_UNIT that is your own volume handle would
+                                 ; collide with an int 13h drive number for
+                                 ; free. Unfenced, because it changes nothing
 
 ; --- a REDIRECTED volume's listing (SPEC.md 62.9.1) -------------------------
 ; A DRVC_FILE DRIVER's slot, and the narrowest fence in the table: it is legal

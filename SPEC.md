@@ -34496,9 +34496,63 @@ the system to save one indirection. §52.9's "the system disk stays A:" is
 half-right in the way that matters: what moves is *which volume is the system
 volume*, not *which volume is A:*.
 
-**And `HDD.DRV` must not mount the boot partition twice.** Its automount
-skips a partition already in the volume table, matched on device and base
-LBA — the kernel got there first, through the BIOS, and the row is live.
+**And `HDD.DRV` must not mount the boot partition twice.** `hd_mount` skips a
+partition already in the volume table, matched on device and base LBA — the
+kernel got there first, through the BIOS, and the row is live. §52.10.3.1 is
+what that took, and it is worth reading before trusting any other sentence in
+this section that describes behaviour rather than code.
+
+#### 52.10.3.1 CLOSED: the paragraph above was true and the code was not
+
+The rule was written and never implemented, and what it cost was the symptom
+it names: **install to a partition, boot from it, click Mount, and the disk is
+on the desktop twice** — C: from the kernel's adoption and D: from the
+driver, the same sectors under two letters, two FAT windows and two icons.
+Reported from the field in exactly those terms: *one from the mount, one from
+the BIOS*.
+
+The driver could not have got this right on its own, which is why it did not.
+`hd_already` — its only "is this mounted?" test — walks `hd_vols`, the rows
+**this driver** registered, and the kernel's adoption is by construction not
+one of them: it happened before the driver was loaded, out of a table the
+driver cannot see. **`OSAPI_VOL_AT` (slot 0x03E8)** is that half made askable:
+DL = an int 13h drive number, BX:CX = a 32-bit partition base, out CF = 0 and
+AL = the volume index already covering it.
+
+Four things about it.
+
+- **It answers about `DVK_BIOS` rows and only those**, and that is a
+  correctness bound rather than a scope one. A driver-backed row's `DV_UNIT`
+  is the *driver's own volume handle* — a small integer that would collide
+  with an int 13h drive number for free — and its partition base never
+  reaches the kernel at all, `dsk_xfer` handing out a volume-relative LBA and
+  the driver adding its own base (§18.7). A driver's rows stay the driver's
+  to recognise; this is the half it is blind to.
+- **`dsk_vbase` is written by `dsk_boot_from` alone, and that row can never
+  be freed** — `dsk_vol_del` takes `DVK_DRV` and `DVK_FILE` and nothing else
+  — so a stale base cannot be inherited by a row somebody takes later. That
+  is what makes the comparison safe with no clearing anywhere, and it is the
+  invariant to check before giving any other producer a base.
+- **The IDE rung answers "not the kernel's" and mounts.** The kernel's
+  transport is int 13h (rung 0, §52.1), so a device reached through the task
+  file is by definition not the drive the adoption named — and there is no
+  int 13h number to offer for one. That is the right answer for the drive the
+  BIOS does not know, which is the only drive rung 1 is for.
+- **The caption had to change with it.** `hd_mount`'s refusal was still
+  `'No FAT partition on it'` from the top of the loop, which about a
+  partition that is mounted and visible on the desktop is the one answer that
+  is not true. It reads `Already mounted` now, and the same string covers the
+  skip `hd_already` was already doing silently. The Mount button deliberately
+  does **not** become Unmount: the boot volume is not the driver's to drop,
+  and §47 rule 3's honest test is the click, which now says why.
+
+Verified end to end on a cycle-accurate 4.77MHz 8088 (`os8088_xt_hdd`, rung
+0, no floppy mounted), by reading `dsk_vtab` out of the guest rather than
+counting icons: booted from the partition, ticked the driver — which is read
+off that same volume — and clicked Mount. Before, **4 zones and two hard-disk
+volumes, C: and D:, on one partition**; after, **3 zones and one**. The
+ordinary case is unmoved and was checked the same way: boot the floppy on the
+same machine with the same disk attached, and Mount still lands it at C:.
 
 ### 52.10.4 The installer
 
