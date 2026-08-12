@@ -6578,6 +6578,67 @@ says so in capitals and this had to learn it again): Solitaire seeds from
 different card layouts. `[osapi_seed]` is written and **N** pressed before the
 drag, exactly as `solcheck` does.
 
+#### 11.96.13 …and the drop is moved onto the phase, not left to chance
+
+Reported from the field as *"drag and drop window moves were supposed to use
+the shadow-under buffer and it does not seem to be working — Solitaire on
+Hercules still redraws card by card,"* with a set of merges suspected.
+
+**It was not the merges, and §11.96.12 was working exactly as measured.** The
+drag cache reproduces its own recorded figures to the millisecond on a
+cycle-accurate 5150/Hercules — 210 calls and 462.5 ms against the 210 and
+462.4 written down when it was built, one `gfx_restore`, zero `gfx_blit4`.
+`wm_dc_take`, `wm_dc_done` and `ui_drag`'s `.release` are unchanged since the
+commit that introduced them.
+
+What was wrong is that **both of §11.96.12's refusals are common and one of
+them is a coin toss.** Measured, the same window, the same session:
+
+| drag | `dx & 7` | destination | calls | guest ms | `gfx_restore` |
+|---|---:|---|---:|---:|---|
+| dx = −64, dy = 0 | 0 | on screen | 210 | **462.5** | 1 |
+| dx = −60, dy = 0 | 4 | on screen | 1,007 | **950.2** | **0** |
+| dx = 0, dy = 40 | 0 | **off** the bottom | 868 | **747.3** | **0** |
+| dx = 0, dy = 40 — a *Disk* window | 0 | on screen | 92 | **203.7** | 1 |
+
+The fourth row is the control: the same vertical drag that refuses on
+Solitaire restores on a short window, which is what says `dy` is healthy and
+the refusal is the destination leaving the screen.
+
+**A hand drops a window on an arbitrary pixel**, so `dx & 7` was 0 one time in
+eight and the feature spent seven of every eight drags doing precisely what it
+was built to stop. That is not something the user can see, aim at, or learn.
+
+`ui_drag_phase` moves the drop onto the phase instead, and **the direction is
+the whole safety argument: always TOWARD `ui_origx`, never away.** The window
+was legal where it started and legal where the clamps left it, and the legal
+x's are an **interval** — so every point between the two is legal too, which
+is why this needs no clamp of its own and cannot fight `wm_dock_snap`,
+`ui_drag_dead` or §39.16's dual-display bounds. Rounding to the *nearest*
+multiple would halve the error and is not worth re-deriving those bounds for.
+
+**The price is up to 7px of horizontal drop precision, and it is paid by every
+window on every adapter**, because the byte phase is a property of the
+framebuffer rather than of the adapter — 8 pixels are one byte on both 1bpp
+cards and one byte per plane in mode 12h. §11.94's `WF_SNAP` is the precedent
+and the sharper form of the same trade (8px drag *steps*, not a 7px drop), and
+it is also why a `WF_SNAP` window always hit this path already: an absolute x
+pinned to a multiple of 8 makes every `dx` one too.
+
+It sits inside `ui_drag`'s own `%ifndef NODRAGCACHE`, so `make DRAGCACHE=0`
+drops a window exactly where it always did and the A/B stays honest.
+
+**What is deliberately NOT fixed is the second refusal** — a destination that
+leaves the screen, which is the one Solitaire on Hercules hits on nearly every
+*vertical* drag, its 303 rows filling a ~305-row desktop band so that its
+legal fully-on-screen `y` range is 18..20. Putting that back needs the restore
+clipped to the visible rows, and the machinery for it exists (§5.8's sub-rect
+restore, `wm_su_son`/`wm_su_srect`), but `wm_su_try` refuses on `vid_span_one`
+of the *whole* rect before any of it is reached, and `wm_su_ck` demands the
+claim's header equal the window's content rect exactly — so a shrunken rect
+disagrees with its own cache. It is a real piece of work and it is not this
+one.
+
 ### 11.97 A window below does not draw chrome where something above will cover it
 
 Reported from the field alongside §11.96.9's ghost: **dragging a window, the one

@@ -845,6 +845,14 @@ ui_drag:
     jz .done                    ; leaves the screen already correct
 
 %ifndef NODRAGCACHE
+    mov bx, [ui_dragwin]
+    call ui_drag_phase          ; ...onto a multiple of 8 FIRST (SPEC.md
+                                ; 11.96.13): the cache can only replay the
+                                ; pixels at a dx whose low three bits are 0,
+                                ; and a hand drops a window on an arbitrary
+                                ; one - so seven drags in eight were refused
+                                ; and redrew in full. This is where that is
+                                ; paid, in up to 7px of drop precision
     mov bx, [ui_dragwin]        ; THE DRAG CACHE (SPEC.md 11.96.12): bank the
     call wm_dc_take             ; content while it is still on the glass at the
                                 ; old place, so wm_draw_win below replays it at
@@ -879,6 +887,60 @@ ui_drag:
 .done:
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret
+
+; -----------------------------------------------------------------------------
+; ui_drag_phase - put a dropped window's x where the drag cache can replay it
+;                 (SPEC.md 11.96.13)
+; in:  BX = the window, its W_X already clamped and snapped; ui_origx = the old
+; out: nothing; preserves every register
+;
+; 11.96.12's byte phase is not a bug and cannot be argued away: gfx_save lays
+; the buffer out from x1 rounded DOWN to a framebuffer byte, so the pixels can
+; be replayed at another x only where the content sits at the same offset
+; inside its byte. What was wrong was leaving that to CHANCE - a mouse drops a
+; window on an arbitrary pixel, so dx & 7 was 0 one time in eight and the other
+; seven redrew the window card by card. Measured on 5150/Hercules, Solitaire:
+; 210 calls at dx = -64 against 1,007 at dx = -60.
+;
+; So the drop is moved onto the phase instead, and the direction is the whole
+; safety argument: it always moves TOWARD ui_origx, never away. The window was
+; legal where it started and legal where the clamps left it, the legal x's are
+; an INTERVAL, so every point between the two is legal as well - which is why
+; this needs no clamp of its own and cannot fight wm_dock_snap, ui_drag_dead or
+; the dual-display bounds above. Rounding to the NEAREST multiple would be
+; half the error and is not worth re-deriving those bounds here.
+;
+; It is inside the caller's %ifndef NODRAGCACHE, and so is the body below, so a
+; DRAGCACHE=0 reference build drops the window exactly where it always did AND
+; carries not one byte of this - the A/B stays honest in both.
+; -----------------------------------------------------------------------------
+%ifndef NODRAGCACHE
+ui_drag_phase:
+    push ax
+    push cx
+    push bx
+    mov ax, [bx + W_X]
+    sub ax, [ui_origx]          ; AX = dx, signed
+    mov cx, ax
+    and cx, 7                   ; CX = the phase, and `and` on a negative dx
+    jz .out                     ; still yields its low three bits - which is
+                                ; exactly what has to reach 0
+    or ax, ax
+    js .neg
+    sub ax, cx                  ; dx > 0: back toward the origin is DOWN
+    jmp short .set
+.neg:
+    add ax, cx                  ; dx < 0: ...and up. -60 & 7 = 4, so -60
+                                ; becomes -56, which is nearer 0 by 4
+.set:
+    add ax, [ui_origx]
+    mov [bx + W_X], ax
+.out:
+    pop bx
+    pop cx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ui_drag_xor - draw (or erase - XOR is its own inverse) the drag outline at

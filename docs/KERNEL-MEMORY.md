@@ -441,7 +441,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2782,
     "stk0": 1024,
-    "text": 46712
+    "text": 46757
   },
   "small": {
     "bss": 5495,
@@ -962,13 +962,13 @@ generated in the first place.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 30,394 | 37.5% |
-| the window system and its furniture | 19,237 | 23.8% |
+| the window system and its furniture | 19,282 | 23.8% |
 | drawing: adapters, primitives, glyphs, icons | 12,636 | 15.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,752 | 12.0% |
 | the kernel proper: API table, heap, scheduler, events | 6,673 | 8.2% |
 | the three built-in kinds | 1,376 | 1.7% |
 | the Control Panel | 913 | 1.1% |
-| **total** | **80,981** | |
+| **total** | **81,026** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -983,7 +983,7 @@ generated in the first place.
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,467 | — | **3,467** | 149 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,511 | **2,921** | 341 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,332 | **2,849** | 43 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,635 | — | **2,635** | 40 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,680 | — | **2,680** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,197 | **2,197** | 139 | — |
 | `memory.inc` — the claim heap (§50) | 14 | 2,014 | **2,028** | 14 | 256 |
@@ -1011,7 +1011,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,971 | — | **2,971** | — | — |
-| **total** | **46,712** | **34,269** | **80,981** | **5,650** | **7,762** |
+| **total** | **46,757** | **34,269** | **81,026** | **5,650** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
