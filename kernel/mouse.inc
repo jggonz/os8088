@@ -1442,6 +1442,14 @@ mou_byte:
                                 ; lowercase letter is the LEFT BUTTON. The
                                 ; packet that SETTLES the port is acted on, so
                                 ; a one-port machine loses nothing at all
+    mov byte [blk_act], 1       ; ...and a packet this port is settled on IS
+                                ; user input (SPEC.md 64.1). Here rather than
+                                ; at the top of the decode for exactly the
+                                ; reason above: a modem losing the contest
+                                ; must not keep the screen awake all night.
+                                ; One store, no register - the UI task spends
+                                ; it, so nothing in an ISR touches a video
+                                ; port or reads a clock
     mov dh, [bx+mou_b0]         ; stage the packet out of this port's slot: BX
     mov dl, [bx+mou_b1]         ; belongs to the decode from here on
     mov bl, al                  ; BL = Y low bits, decoded below

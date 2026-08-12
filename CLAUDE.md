@@ -3305,6 +3305,71 @@ the clock untouched), a 17-char one (19 cells) and `TOAST_MAX` exactly (the
 whole 25-cell field). A/B'd against `REDRAWFULL=1`: **0 differing pixels** at
 the desktop, with a strip up, and with a strip up through a full bar
 overdraw.
+### The screen blanks after five minutes (SPEC.md §64, `kernel/blank.inc`)
+
+**No keyboard and no mouse for `BLK_IDLE` (5462 ticks) and every monitor the
+machine has goes dark; the next input brings them back and is itself
+swallowed.** It is for the MONITOR — the tubes this runs in front of burn a
+static image into the phosphor, and a desktop is the worst thing to leave
+there: a menu bar, a dock strip and a drive column that never move, at full
+brightness, all night. There is no power saving in it, because hardware this
+old has no DPMS to signal to.
+
+**What is gated is the video SIGNAL, not the framebuffer**, through §39.18.1's
+`vid_blank_kind` — the CRTC keeps running, both syncs keep coming out, memory
+is untouched. Three things fall out and all three are why this costs nothing:
+waking is instant and *exact* (no repaint, no mode set, no `wm_paint_all` —
+the picture that comes back is the one that went away, half-finished Fractal
+pass included); a background task may keep drawing into a blanked card, which
+is why there is **not one gate anywhere in `gfx_*`**; and the monitor never
+re-acquires, so neither edge flashes. Steady-state cost is **two compares per
+UI pass and one byte store per mouse packet** — `mou_isr` sets `[blk_act]`
+*after* §9.5's `[mou_seen]` gate, so a modem losing the port contest cannot
+keep the screen awake all night, and no ISR reads a clock or writes a video
+port.
+
+**The wake input is CONSUMED, and that is a safety rule.** While the screen is
+dark the user cannot see what is under the pointer or which window has the
+keyboard, so acting on that input is acting blind. `blk_wake` answers CF = 1
+when it was the input that lit the screen; `ui.inc` drops the keystroke it has
+already had to fetch (banking the verdict in `pushf`/`popf`, because the flags
+a BIOS service returns are its own business), and **`blk_pass` sits AHEAD of
+`evq_pop`** so the press is drained before it can be dispatched. Move it below
+and the feature still blanks, still wakes, still looks right in a screenshot —
+and the first click out of a dark screen lands wherever the pointer was left.
+
+**A fullscreen bracket is the user (§64.4).** The UI task does not run inside
+one (§53.1) so nothing spends the idle clock there and nothing may — the app
+owns the video mode. What that leaves is the arithmetic on the way out: an
+hour of Missile Command returns to a `[ticks] - [blk_t0]` that has passed
+`BLK_IDLE` and *wrapped*, so `fsx_restore` calls `blk_wake` as its last act.
+
+**Two things it found in code that was already there.** `vid_blank_kind`'s
+Hercules arm wrote **0** to 3B8h, which clears the video-enable bit and the
+GRAPHICS bit with it — so the card was not being blanked, it was being put
+into MDA *text* mode with a 6845 still carrying 720x348 timings. It writes
+`0x02` now, byte for byte what `vid_setmode`'s own blank-first sequence
+(§39.6) uses. And both bodies sent **VGA** down the CGA branch, which writes
+3D8h — a register a VGA does not implement — so §39.11.4's "a VGA-plus-
+Hercules machine keeps its VGA lit" was the whole VGA story; there is a real
+arm now (Sequencer register 1 bit 5, Screen Off) and it is the one access in
+the kernel that **must run with IF=0**, because SR01 has to be *read* and
+`vga12.inc` leaves the sequencer index at 2 across a plane's `rep movsb`. The
+pair also moved **out of the dual-display fence**, where kern_big was the only
+build that could dark a card at all.
+
+**What is measured, and what could not be.** On a cycle-accurate 4.77MHz 8088
+the threshold is **5463–5465 ticks = 300.1 s** on four machines, taken off the
+SHIPPED kernel with `[blk_t0]` wound back rather than five minutes waited out.
+**CGA is proven end to end**: rendered raster 76,218 lit → **0**, VRAM
+unchanged at 76,218, wake back to exactly 76,218. **Neither MartyPC nor QEMU
+rasterises Screen Off on VGA, and MartyPC does not model the mono
+video-enable bit** — hand-forcing the identical bit from the debugger leaves
+the raster lit too, which is what says it is the emulator; the VGA register
+write itself was read back from outside the guest as `0x01 → 0x21`, bit 5 up
+and the dot clock intact. **Those two adapters are the 5150's question.**
+Cost: `.text` **+189**, one image rung, `KERN_BUDGET` spare 4,096 → 3,584
+(7 steps); kern_small's footprint **did not move at all**.
 
 ### The system clipboard (SPEC.md §55, `kernel/clip.inc`)
 

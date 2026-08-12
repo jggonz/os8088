@@ -64,8 +64,18 @@ ui_task:
     mov ah, 0x01                ; any key pending?
     int 0x16
     jz .events
-    mov ah, 0x00                ; fetch it: AL = ascii, AH = scan
-    int 0x16
+    call blk_wake               ; a key is USER INPUT whatever it turns out to
+                                ; be, so the idle clock restarts here (SPEC.md
+                                ; 64.2) and CF says whether this keystroke is
+                                ; the one that lit the screen
+    mov ah, 0x00                ; fetch it: AL = ascii, AH = scan - the wake
+    pushf                       ; case still has to take the key OUT of the
+    int 0x16                    ; BIOS buffer, so only the DELIVERY differs.
+    popf                        ; The verdict is banked across the call: int
+                                ; 16h is a BIOS service and the flags it
+                                ; returns are its own business, not ours
+    jc .events                  ; the screen was dark, so the user never saw
+                                ; the window this would have gone to: drop it
     call kbm_key                ; with no mouse on the machine, the arrows ARE
     jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
                                 ; the application's. One compare per keystroke
@@ -105,6 +115,13 @@ ui_task:
 
     ; --- 2. events: pop one, act on EVT_MDOWN ---------------------------------
 .events:
+    call blk_pass               ; spend the mouse ISR's activity flag, and dark
+                                ; every monitor once the idle period is up
+                                ; (SPEC.md 64.1). AHEAD of evq_pop and not
+                                ; down in .yield: the press that woke the
+                                ; screen is still in the ring here, and this
+                                ; is what drains it rather than letting it be
+                                ; dispatched at a window nobody could see
     mov di, ui_ev
     call evq_pop
     jc .yield                   ; queue empty
