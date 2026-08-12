@@ -7395,10 +7395,44 @@ frame** — `missile` (`mc_track` calls `OSAPI_WM_CONTENT` and
 `OSAPI_WM_GEOM` per frame), `tamegram`, `tracker`, `modplug`, `notepad`,
 `artful`, `fractal`: these need nothing for their geometry, though `missile`
 registers anyway for the adapter facts above. **Fixed layout, never asks its
-size** — `piano` (which reads only `OSAPI_WM_CONTENT`, the origin), `hello`,
-`mines`, `recorder`: a notice cannot help them, because there is no second
-layout to move to. `frotz` and `paint` install the *negotiator* instead and
-size themselves.
+size** — `piano`, `hello`, `mines` and `recorder` read only
+`OSAPI_WM_CONTENT`, the origin. Whether that is a *problem* is a separate
+question from whether they ask, and it is answered by one number: a CGA's
+desktop band is 155 rows, so a template taller than that is clamped and
+everything below the cut is drawn through the window's own frame. `hello`
+(90) and `recorder` (140) fit and need nothing at all. `piano` (177) did not
+and now registers — see §11.98.1. **`mines` (183) does not fit either and is
+NOT fixed here**: its content is a 9x9 grid of 16px cells plus a 20px strip =
+164 rows against the 136 a CGA gives it, so the bottom row and a half of the
+board is outside the frame. Unlike a keyboard, a minefield cannot simply be
+made shorter — the cells would have to shrink, and the mine, flag and digit
+art is drawn for a 16px cell. `frotz` and `paint` install the *negotiator*
+instead and size themselves.
+
+##### 11.98.1 …and `piano` is the one that shortens rather than re-derives
+
+Every other consumer re-derives a *number it had already computed*. `piano`
+had computed nothing: its whole layout is constants, and the keyboard is the
+only part of its content with any slack in it — everything above `y = 88` is a
+note viewer, two button rows and a message, all at fixed rows and none of them
+able to give anything up. So `pn_metrics` **scales the keyboard** into
+whatever content height the window has, and `PN_KB_Y2` / `PN_BK_Y2` become a
+ceiling rather than a layout.
+
+Three things it has to carry with it. **The black keys keep their share**,
+41/67 of the white key, so the instrument stays in proportion instead of the
+black keys swallowing a short keyboard — and at full height that arithmetic
+returns exactly `PN_BK_Y2`, so a VGA and a Hercules draw the pixels they
+always did (measured: `pn_kby2` = 155, `pn_bky2` = 129 on VGA, against 133 and
+115 on a CGA). **Both key LETTERS come with it** — they were at `y = 144` and
+`y = 116`, eleven and thirteen rows up from their own key's foot, and left
+where they were they would have printed below a shortened keyboard, which is
+the same bug one level down. And **the hit test reads the same two words as
+the drawing**, which is §22's `fm_hit` discipline: a key you can see and a key
+you can click are one rect or they are a bug.
+
+A piano keyboard is a shape that reads correctly at any height, which is why
+this is a *scale* and not a second metric record like `apps/arkanoid`'s.
 
 ### 12.05 The bar is redrawn only when its contents changed
 
