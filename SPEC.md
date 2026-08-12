@@ -2961,6 +2961,65 @@ it measures a cell the cursor was never in and passes by measuring nothing.
 
 Cost: `.text` **+17 bytes**, no rung crossed, `KERN_BUDGET` untouched.
 
+### 7.1.4.3 A MOVING pointer wants the hide; only a still one wants the arrow
+
+§7.1.4.2 shipped and was reported back as **"the cursor freezes and jerks as
+it moves with the Task Manager open"** — from the field, and it is real.
+
+The mechanism is not new and not the region test's: **the mouse ISR never
+moves the arrow while the gfx lock is held** (§7.1), so with a background
+painter refreshing behind it the pointer does not move during a refresh on
+*any* build, and never has. What §7.1.4.2 changed is whether you can SEE that
+happen:
+
+- **hidden and stuck** — the frame test erased the arrow at the lock and
+  redrew it at the unlock *at the new position*. The eye gets a blink and
+  never sees the pointer lag the hand.
+- **lit and stuck** — the region test leaves it on the glass, so it sits
+  still while the hand moves and then teleports. Same timing to the
+  microsecond; the second one is what a person calls a stutter.
+
+Measured on a cycle-accurate 5150 with a Hercules card, sweeping the pointer
+across a Control Panel with the Task Manager refreshing behind it — the
+reported configuration exactly, and the band §7.1.4.2 newly keeps lit:
+
+| | lock held | arrow still lit while locked |
+|---|---|---|
+| frame test | 14.6%, 39 holds, mean 19 ms | **4%** |
+| region test | 14.9%, 40 holds, mean 19 ms | **96%** |
+
+Identical lock behaviour, opposite visibility. **So the fix is not to give the
+region test back but to notice that §7.1.4's argument was always about a
+STILL pointer** — its own words are "with the mouse sitting still that reads
+as the cursor blinking off and on". A moving pointer was never the case it
+was defending, and for a moving pointer the hide is strictly better.
+
+`mou_isr` stamps `[ticks]` into `[cur_mvt]` on every settled packet, and
+`cur_lazyck` spends the hide when that stamp is within `CUR_MVGRACE` (2 ticks,
+~110 ms) — so the arrow is kept lit only when the hand has actually stopped.
+The blink §7.1.4.2 removed stays removed, because the pointer in that report
+is parked; the stutter goes, because a moving pointer is hidden exactly as it
+was before.
+
+Four things about it. The stamp is **one store in the ISR**, at the position
+write, in **CX** — dead there, where DX is the staged packet the button decode
+still needs. The subtraction is **modular**, so the word wraps once an hour
+into a 2-tick false "moving" whose entire cost is one redundant hide. The
+`pop ax` between the `cmp` and the `jbe` is deliberate — `pop` does not touch
+the flags, and `cur_lazyck` preserves every register. And the grace is longer
+than the ~25–40 ms a 1200-baud report takes, so a steadily moving hand cannot
+oscillate between the two treatments.
+
+**The verification lesson is the sharper half.** §7.1.4.2 was measured four
+ways and every one of them **parked the pointer** — flicker samples a
+stationary arrow, the cell-blink counter samples a stationary arrow, the A/B
+photographs a stationary arrow. That is the case the change improves, so all
+four agreed, and the case it hurts was never asked about. *A cursor change
+needs a moving-pointer reading and a still-pointer reading, and they are
+different measurements*: `tools/` has the flicker one; the motion one is a
+sweep with `[gfx_lock_flag]` and `[cur_lazy]` sampled below frame resolution,
+because the question is what share of locked time the arrow is on the glass.
+
 ### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
 
 `gfx_xor_rect`'s `cur_unlazy` sat **below** its `cmp byte [vid_mono], 0`, so on

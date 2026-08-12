@@ -104,6 +104,21 @@ CUR_H       equ 16              ; bitmap TABLES, and nothing else
 ; THIRD byte: a 16-bit row whose low byte is zero cannot reach one however far
 ; it is shifted, so `row << (8-shift)` was a byte that was always 0 and a
 ; branch that was never taken, once per row per pass.
+CUR_MVGRACE equ 6               ; ticks since the last movement packet within
+                                ; which the pointer counts as MOVING (SPEC.md
+                                ; 7.1.4.3). ~330ms, and it is MEASURED rather
+                                ; than reasoned: a report is 3 bytes at 1200
+                                ; baud and the 8250 has no FIFO, so a hold
+                                ; that delays IRQ4 loses one and the decoder
+                                ; waits for the next - gaps of 3 and 4 ticks
+                                ; are ordinary DURING a steady sweep. At 2 the
+                                ; gate called those gaps "stopped" and the
+                                ; stutter came back in 16 of 56 lock holds.
+                                ; The cost of the larger value is that the
+                                ; arrow keeps blinking for a third of a second
+                                ; after the hand stops, which is a third of a
+                                ; second of the behaviour that shipped for
+                                ; years before 7.1.4
 CUR_GW      equ 8               ; the arrow's own width, px...
 CUR_GH      equ 12              ; ...and height, rows
 CUR_SPAN    equ 2               ; ...and the framebuffer bytes it spans once
@@ -1482,6 +1497,11 @@ mou_byte:
     call mou_clamp              ; ...and DX is untouched by it, which the
     mov [mouse_x], ax           ; button decode below relies on
     mov [mouse_y], bx
+    mov cx, [ticks]             ; THE HAND IS MOVING (SPEC.md 7.1.4.3), which
+    mov [cur_mvt], cx           ; is what decides whether the deferred hide is
+                                ; worth keeping. CX is dead here - it was the
+                                ; shift count above and the ISR pushed it -
+                                ; and DX is not, which is why it is not DX
 
     ; --- buttons: b0 bit 5 = left, bit 4 = right -----------------------------
     mov al, dh                  ; ...still the staged b0: nothing between here
@@ -2023,6 +2043,19 @@ cur_unlazy:
 cur_lazyck:
     cmp byte [cur_lazy], 0
     je .out
+%ifndef CURFRAME
+    push ax                     ; IS THE HAND MOVING? (SPEC.md 7.1.4.3) If it
+    mov ax, [ticks]             ; is, keeping the arrow lit is the WRONG trade:
+    sub ax, [cur_mvt]           ; the ISR cannot move it under the lock either
+    cmp ax, CUR_MVGRACE         ; way, so lit means the pointer sits still
+    pop ax                      ; while the hand moves and then teleports -
+    jbe cur_unlazy              ; which is what the region test was reported
+                                ; as. Hidden, the same freeze is a blink the
+                                ; eye does not track. Modular subtraction, so
+                                ; the wrap is a 2-tick false "moving" per hour
+                                ; and its cost is one redundant hide. `pop`
+                                ; leaves the flags the `cmp` set
+%endif
 %ifdef CURFRAME
     push ax
     push bx
@@ -2888,6 +2921,13 @@ cur_shhot   db 0, 0,          CUR_XHX, CUR_XHY
 mouse_x     dw SCREEN_W/2       ; public: cursor position, 0..639
 mouse_y     dw SCREEN_H/2       ; public: 0..479
 mouse_btn   db 0                ; public: bit 0 = left, bit 1 = right
+
+cur_mvt     dw 0                ; [ticks] at the last movement packet (SPEC.md
+                                ; 7.1.4.3). In .text with a real initialiser
+                                ; for cur_sptr's reason below - and 0 is the
+                                ; right one either way: it reads as "moved at
+                                ; tick 0", so a machine that has never seen a
+                                ; packet is STILL, which is what it is
 
 cur_sptr    dw cur_save         ; -> whichever save buffer is live. In .text
                                 ; with a REAL initialiser, not .bss: .bss
