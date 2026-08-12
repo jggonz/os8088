@@ -3867,6 +3867,10 @@ wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
                                 ; Initialized data, NOT .bss: every gfx_fill
                                 ; reads it, including the machine's first,
                                 ; and -f bin zeroes nothing.
+wm_clip_ofr db 0                ; wm_clip_occl subtracts by the FRAME rect and
+                                ; not the occupied one (SPEC.md 11.96.15).
+                                ; Written by both entry points before either
+                                ; reads it, so its value here is documentation
 wm_clip_r0  db 0                ; wm_clip_rows' answer (SPEC.md 11.3.2): the
 wm_clip_rn  db 8                ; first drawable row of the cell it was last
                                 ; asked about, and how many from there. Valid
@@ -3998,7 +4002,29 @@ wm_clip_set:
 ; wm_covered as "covered, skip the redraw" - opposite readings of the same
 ; fact, and opposite degradations on overflow (skip vs. draw anyway).
 ; -----------------------------------------------------------------------------
+; wm_clip_occlf - the same walk, subtracting each window above by the rect
+; wm_draw_win REPAINTS (wm_clip_subf's frame) rather than the box it occupies.
+;
+; SPEC.md 11.96.15. Which of the two is right is decided by what the caller
+; does with the answer, and the tree already knows it at wm_clip_subf: the
+; drop shadow is an L starting at (+1,+1), so the occupied box holds two
+; corners - (x+w, y) and (x, y+h) - that nothing ever paints.
+;
+; For OCCLUSION - "may I draw here?" - claiming them is conservative and free:
+; it says covered about a pixel that is not, and a clipped primitive declines
+; to draw one nobody needed. For a RESTORE it is the other direction and it
+; LOSES A PIXEL: the one declined is one no window above will write, so the
+; damage under it is never repaired and the artifact is permanent. 11.91.1
+; found exactly this at the dither, one pixel at a time, and this is the same
+; asymmetry in the second place the tree subtracts a window in order NOT to
+; draw something.
+; -----------------------------------------------------------------------------
+wm_clip_occlf:
+    mov byte [wm_clip_ofr], 1
+    jmp short wm_clip_occl_r
 wm_clip_occl:
+    mov byte [wm_clip_ofr], 0
+wm_clip_occl_r:
     push ax
     push bx
     push cx
@@ -4028,7 +4054,7 @@ wm_clip_occl:
     call wm_idx2ptr             ; BX = window above (AX and CX preserved)
     test word [bx+W_FLAGS], 2
     jz .scan
-    call wm_clip_sub            ; subtract it, shadow included
+    call wm_clip_subx           ; ...by frame or by occupied rect, per entry
     jc .over
     cmp word [wm_clip_n], 0
     jne .scan
@@ -4337,6 +4363,15 @@ wm_clip_clear:
 ;
 ; So the dither subtracts the frame only, and the shadow's L is dithered and
 ; then drawn over: a 1px double-draw down two edges, against a stale pixel.
+; -----------------------------------------------------------------------------
+; wm_clip_subx - whichever of the two wm_clip_occl's entry point asked for.
+; One place decides, so the walk above cannot hold an opinion of its own.
+; -----------------------------------------------------------------------------
+wm_clip_subx:
+    cmp byte [wm_clip_ofr], 0
+    jne wm_clip_subf
+    jmp short wm_clip_sub
+
 wm_clip_subf:
     push ax
     mov ax, [bx+W_X]
@@ -5453,6 +5488,12 @@ wm_dw_part: db 0                ; the draw in hand is PARTIAL (SPEC.md 11.96.9).
                                 ; In .text with an initialiser: -f bin zeroes
                                 ; nothing and wm_su_bank reads it on the first
                                 ; window the machine ever draws
+wm_su_pn:  dw 0                 ; SPEC.md 11.96.15: pieces of the sub-rect the
+wm_su_pi:  dw 0                 ; restore is walking, and which one it is on -
+wm_su_bx1: dw 0                 ; 0 pieces = the single rect below, unreduced.
+wm_su_by1: dw 0                 ; The caller's rect is banked across the walk
+wm_su_bx2: dw 0                 ; because wm_damage still owes it to the app on
+wm_su_by2: dw 0                 ; a band restore (11.96.11)
 wm_su_son: dw 0                 ; is a sub-rect named? (in .text: -f bin zeroes
 wm_su_sx1: dw 0                 ; nothing, and wm_su_try reads this before
 wm_su_sy1: dw 0                 ; anything in the machine has written it)
@@ -7056,6 +7097,128 @@ wm_su_merge:
 ; wm_su_try - put window DI's content back from the cache
 ; out: CF = 0 the content is on screen and W_PAINT must NOT run; CF = 1 draw
 ;      it the ordinary way. Preserves every register.
+; -----------------------------------------------------------------------------
+; wm_su_occl - the named sub-rect MINUS every window above this one
+; in:  DI = the window about to be restored; [wm_su_son]/[wm_su_s*] as armed
+; out: [wm_su_pn] = the pieces in wm_clip_tab, 0 = restore the single rect.
+;      Preserves every register.
+;
+; SPEC.md 11.96.15. This is 11.97's argument about the CHROME applied to the
+; content: a pixel this window would put back under a window above it is a
+; pixel that window is about to write anyway, because 11.91's marking is
+; transitive and upwards and the draw loop runs back to front - so every
+; visible window above this one that overlaps it is drawn LATER IN THIS SAME
+; PASS. Dropping it is therefore not losing it.
+;
+; It matters because the damage rect for a DRAG is the union of where the
+; window was and where it is, which for an eight-pixel move is very nearly the
+; whole window - so every window under it was restoring almost all of its
+; content to reveal an eight-pixel strip. Measured on the reported four-window
+; cascade: the three background windows restored 122,739 pixels of a 2,880
+; pixel reveal, and 2,134 after this.
+;
+; Both degradations are "restore the lot", which is what this did before it
+; existed and can only cost time: an overflow past WM_CLIP_MAX, and an empty
+; list (wm_covered has already skipped a wholly covered window, so that is
+; unreachable rather than merely rare).
+; -----------------------------------------------------------------------------
+wm_su_occl:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [wm_su_pn], 0
+    mov word [wm_clip_n], 0
+    cmp word [wm_su_son], 0
+    je .out                     ; no sub-rect named: the whole content is owed
+    mov ax, [wm_su_sx1]
+    mov dx, [wm_su_sy1]
+    mov cx, [wm_su_sx2]
+    mov si, [wm_su_sy2]
+    cmp ax, cx
+    jg .none
+    cmp dx, si
+    jg .none
+    call wm_clip_seed
+    mov bx, di
+    call wm_clip_occlf          ; BY THE FRAME AND NOT THE OCCUPIED BOX: the
+    jc .none                    ; shadow's two corners are painted by nothing,
+                                ; so claiming them stops this restore putting
+                                ; back a pixel nothing above will write
+    mov ax, [wm_clip_n]
+    or ax, ax
+    jz .none
+    mov [wm_su_pn], ax
+    jmp short .out
+.none:
+    mov word [wm_clip_n], 0
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wm_su_piece - name piece [wm_su_pi] as the sub-rect wm_su_srect intersects
+; preserves every register
+;
+; ITS X EDGES ARE ROUNDED OUTWARD TO WHOLE BYTES, and that is what makes the
+; pieces composable rather than a tidiness (SPEC.md 11.96.15.1). wm_su_edge
+; patches the buffer's partial edge bytes with the screen as it is NOW, keeping
+; only the bits the rect owns - so it OVERWRITES the cached content of the bits
+; it does not own. One rect never noticed: those bits are outside the restore.
+; Two pieces side by side in the same rows DO share an edge byte, and then the
+; left one's merge replaces exactly the cached bits the right one is about to
+; restore, which comes back as a stale sliver up to 8px wide down the join.
+;
+; Rounding out removes the case instead of sequencing it: an aligned edge owns
+; its whole byte, so vga_lmtab/vga_rmtab hand wm_su_edge a full mask, the merge
+; keeps everything and writes nothing back. Two pieces may then overlap by one
+; byte column and both put the same cached bytes there, which is idempotent.
+;
+; What licenses reaching outward at all is that the piece is CLAMPED BACK to
+; the caller's own rect (wm_su_bx1/bx2), which is what this restore put on
+; screen whole before the reduction existed - so every piece is a subset of it
+; and the worst case is the behaviour this replaced. The pixels reclaimed from
+; an occluder belong to a window that overlaps ours and is therefore MARKED
+; (11.91's transitive pass) and redrawn later in this same back-to-front walk.
+wm_su_piece:
+    push ax
+    push si
+    cmp word [wm_su_pn], 0
+    je .out                     ; unreduced: the caller's own rect stands
+    mov ax, [wm_su_pi]
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1                   ; x 8: four words a rect
+    add si, wm_clip_tab
+    mov ax, [si+WCR_X1]
+    and ax, 0FFF8h              ; down to the byte, then back inside the rect
+    cmp ax, [wm_su_bx1]         ; the caller handed us
+    jge .x1
+    mov ax, [wm_su_bx1]
+.x1:
+    mov [wm_su_sx1], ax
+    mov ax, [si+WCR_Y1]
+    mov [wm_su_sy1], ax
+    mov ax, [si+WCR_X2]
+    or ax, 7                    ; ...and up to the end of one
+    cmp ax, [wm_su_bx2]
+    jle .x2
+    mov ax, [wm_su_bx2]
+.x2:
+    mov [wm_su_sx2], ax
+    mov ax, [si+WCR_Y2]
+    mov [wm_su_sy2], ax
+    mov word [wm_su_son], 1
+.out:
+    pop si
+    pop ax
+    ret
+
 wm_su_try:
     push ax
     push bx
@@ -7084,6 +7247,19 @@ wm_su_try:
     mov es, ax
     call wm_su_scrset           ; where 11.96.2's edge scratch lives, which is
     jc .no                      ; past EVERY fragment (SPEC.md 11.96.11.1)
+    mov ax, [wm_su_sx1]         ; THE PIECES OF IT NOTHING ABOVE WILL COVER
+    mov [wm_su_bx1], ax         ; (SPEC.md 11.96.15), and the caller's own rect
+    mov ax, [wm_su_sy1]         ; banked across the walk: wm_damage still owes
+    mov [wm_su_by1], ax         ; it to the app if the bands send us to W_PAINT
+    mov ax, [wm_su_sx2]
+    mov [wm_su_bx2], ax
+    mov ax, [wm_su_sy2]
+    mov [wm_su_by2], ax
+%ifndef NOSUOCCL
+    call wm_su_occl             ; (NOSUOCCL=1 skips only this, leaving the
+%endif                          ; routine compiled: SPEC.md 11.96.15's A/B is
+                                ; three bytes of kernel apart, so both sides
+                                ; carry the same disk and the same free space
     mov di, WSU_IMG             ; DI = the running offset into it, the twin of
     mov word [wm_su_fn], 0      ; wm_su_take's - so the two walk the fragments
 .frag:                          ; in one order and cannot disagree about where
@@ -7098,8 +7274,11 @@ wm_su_try:
     mov [wm_su_y1], bx          ; WAS LAID OUT FOR, which is what wm_su_srect
     mov [wm_su_x2], cx          ; intersects against and what wm_su_edge takes
     mov [wm_su_y2], dx          ; its stride and its masks from
-    call wm_su_srect            ; AX/BX/CX/DX = the part of it to put back, and
-    jc .fskip                   ; only part of the buffer if a rect was named
+    mov word [wm_su_pi], 0      ; ...ONCE PER PIECE (SPEC.md 11.96.15): the
+.piece:                         ; buffer offset is the fragment's and does not
+    call wm_su_piece            ; move, so DI is held across the whole inner
+    call wm_su_srect            ; walk and advanced by wm_su_fsz after it
+    jc .pnext                   ; only part of the buffer if a rect was named
     call wm_su_edge             ; the edge bytes overhang, so they are merged
                                 ; with the screen as it is NOW before any of
                                 ; this goes back (11.96.2) - AFTER the arm,
@@ -7117,6 +7296,11 @@ wm_su_try:
                                 ; tens of KB past a claim of a few, so the
                                 ; content came back as whatever was there,
                                 ; which is the reported blank window
+.pnext:
+    inc word [wm_su_pi]
+    mov ax, [wm_su_pi]
+    cmp ax, [wm_su_pn]
+    jb .piece
 .fskip:
     add di, [wm_su_fsz]         ; an EMPTY fragment occupies nothing, which is
 .fnext:                         ; why the two exits differ
@@ -7138,6 +7322,40 @@ wm_su_try:
 .no:
     stc
 .out:
+    pushf                       ; CF IS THIS ROUTINE'S WHOLE ANSWER, and every
+                                ; test below writes flags (SPEC.md 11.96.15).
+                                ; Without this the `cmp` on the next line
+                                ; cleared the `stc` above it, so EVERY cache
+                                ; miss returned "the content is already on
+                                ; screen" - wm_draw_win then skipped both the
+                                ; white fill and W_PAINT, and every window in
+                                ; the machine came up as bare chrome. The
+                                ; hit path survived by luck, `cmp 0,0` leaving
+                                ; the CF that `clc` had just set. wm_snap
+                                ; banks its flags for the same reason (11.94)
+    cmp word [wm_su_pn], 0      ; the caller's rect back, and the list disarmed:
+    je .nopc                    ; wm_damage owes the app the rect it was HANDED
+    push ax                     ; and not whichever piece the walk stopped on
+    mov ax, [wm_su_bx1]
+    mov [wm_su_sx1], ax
+    mov ax, [wm_su_by1]
+    mov [wm_su_sy1], ax
+    mov ax, [wm_su_bx2]
+    mov [wm_su_sx2], ax
+    mov ax, [wm_su_by2]
+    mov [wm_su_sy2], ax
+    pop ax
+    mov word [wm_su_pn], 0
+    mov word [wm_clip_n], 0     ; ...AND ONLY IF WE ARMED IT. Unconditionally
+                                ; here it also fires on the .no path above -
+                                ; which is the ONLY path the REDRAWFULL
+                                ; reference build ever takes, since nothing
+                                ; banks there and wm_su_ck always refuses - so
+                                ; a change that is meant to be invisible to
+                                ; the reference was disarming a region the
+                                ; reference had armed and never armed itself.
+                                ; A one-shot is spent by its armer (11.96.14)
+.nopc:
     mov word [wm_su_von], 0     ; THE DISPLAY CLIP DIES WITH THE RESTORE THAT
                                 ; ARMED IT (SPEC.md 11.96.14), and it is spent
                                 ; HERE rather than at wm_draw_win's exit like
@@ -7146,8 +7364,10 @@ wm_su_try:
                                 ; are in one routine cannot be leaked onto the
                                 ; next window by a path that skips. Both exits,
                                 ; because .no is reached AFTER the arm on the
-                                ; second wm_su_ck. A `mov` touches no flag, so
-                                ; CF survives it
+                                ; second wm_su_ck. A `mov` touches no flag - it
+                                ; is the `cmp` above that does, which is what
+                                ; the pushf at .out is for
+    popf
     pop es
     pop di
     pop si
