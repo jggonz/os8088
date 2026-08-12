@@ -30413,6 +30413,75 @@ both adapters (whose VGA fallback *is* fill-plus-letter), which would delete the
 them. That is a refactor of a routine with a careful history, for a few tens of
 cells per change. Recorded, not taken.
 
+### 45.20 `tui_rdout` is opaque on every adapter, so the pen is aligned on every adapter
+
+§45.19 closed this app's alignment survey and named one thing it *did* point at,
+undone: `tui_rdout` kept the erase-and-letter pair on a colour adapter, so the
+values the playing view updates were drawn at an unaligned pen on the one adapter
+where alignment is worth **9.4%** against mono's 3.4% (§11.94). That is now taken.
+
+**Two changes and no third.** The widening — round the field's x DOWN to a byte
+boundary and grow its width by the same amount — was gated on `[tui_mono]` and is
+unconditional. And the emit is one path: the value is space-padded to the field's
+cell count and handed to **`tui_runo`**, a second entry point into `tui_runc` that
+skips the mono test and always takes the run. On 1bpp that is the single-store
+cell path as before; on VGA `font_run`'s own fallback is *"one `gfx_fill` of the
+run's rect in the background colour and `font_str` over it"* — which is exactly
+the `.pair` branch this deletes, with the pen now aligned.
+
+**Why an entry point rather than a flag.** `tui_runc`'s gate is right for the
+**pattern view**: its caller fills the row band once, so a second fill per run on
+colour would be PERFORMANCE.md Part 1's double-draw. It is wrong for a field that
+owns its own background, which is every readout. The two callers want opposite
+things from the same body, the five pushes and the epilogue are shared exactly,
+and a flag would want a register nothing there has spare — `AL` and `AH` are the
+two colour ROLES and `BX` is the lookup's scratch.
+
+**One property changes and it is safe.** The old `.pair` filled the full
+`[tui_rdw]`; a padded run covers `cells*8`, so up to 7 pixels at the field's right
+edge are no longer erased. Text can only ever occupy whole 8px cells from
+`[tui_rdx]`, so those pixels can never have held a glyph — and **mono has worked
+this way since the run path was written**, which is what says the shape is sound
+rather than newly assumed.
+
+**Cost: nothing outside this file.** No kernel byte, no new API slot — slot 0x0258
+was already called from `tui_runc` two routines up — and no other package. The
+package itself is *smaller*, **16,342 → 16,288 bytes**: deleting `.pair`'s
+fill-and-letter pair pays for `tui_runo`'s five pushes and a `jmp`.
+
+Measured with `make SNAPAUDIT=1`, filtered to Tracker's own window record, one
+forced full repaint: §45.19's VGA histogram had **40 cells at bucket 4** that
+Hercules did not have at all, and that asymmetry was this branch. After it is
+**340 cells, 48.5% aligned, buckets 0:165 1:16 5:159** against §45.19's **354,
+39.3%, 0:139 1:16 4:40 5:159** — bucket 4 empty, and the two adapters agree.
+
+**Those 40 cells were ONE field, and that is the whole of what the change moves
+on the glass.** A framebuffer A/B of a windowed Tracker is **0 differing pixels
+on Hercules (720x348) and 0 on CGA (640x200)** — identical md5, which it must be,
+since every instruction deleted sat inside a `[tui_mono] == 0` branch and
+`tui_runo` enters `tui_runc.run` with the same five pushes. On VGA it is **856
+pixels in a single 8-row band**: the status line, whose pen moves from content
+x = 4 to x = 0. Every *other* readout was already aligned there, which is the
+empirical confirmation of the round-down rule above rather than an assumption
+about it — and the visible consequence is that the line loses its 4-pixel left
+inset **and matches Hercules and CGA, which have never had one**, the widening
+having been theirs alone. Rounding UP to 8 would give all three an inset instead;
+it is not taken here because it changes what two shipped adapters look like in
+order to make a third one prettier, which is a different decision from this one.
+
+**Two harness traps cost a round each and both pass silently.** `m.vram(None)`
+does not refuse a VGA — it maps anything that is not `cga` onto the Hercules
+layout, and an unmapped 0xB0000 reads as **zeroes rather than erroring**, so the
+first VGA A/B compared two garbage reads and reported 0 differing pixels. The
+bbox is the tell: rows 951..973 of a 480-row screen, because `fbuf` answers three
+bytes per pixel and a byte index divided by the width is not a row. And a
+reference built by stashing must be **copied out of `build/` before the tree is
+restored**, or the pair under test is the reference's system disk beside the new
+apps disk; that one reported a reproducible **1,247 pixels on Hercules** for a
+change that cannot touch a mono pixel, and the control that settles it is the
+same image launched twice — 0 differing pixels, so the instrument is
+deterministic across launches and any reading it gives is about the images.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
