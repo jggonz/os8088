@@ -862,6 +862,18 @@ ui_drag:
                                 ; the pixels this is saving
 %endif
 
+    mov bx, [ui_dragwin]        ; where the user put it is where it goes back to
+    call wm_nat_bank            ; when the adapter changes (SPEC.md 39.11.2.1)
+                                ; - and BELOW ui_drag_phase, not above it. That
+                                ; snap moves x by up to 7px (SPEC.md 11.96.13)
+                                ; and it is the LAST thing to touch the rect, so
+                                ; banking first records a rect the record does
+                                ; not hold and the window shifts by that much on
+                                ; the next adapter change. The two arrived from
+                                ; different branches and the merge of them
+                                ; assembled perfectly with the bank in the wrong
+                                ; place, which is what a merge is for catching
+
     ; It moved. Only two rects changed: the one it left and the one it now
     ; occupies - everything outside their union is still correct on screen,
     ; so this is wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91). The
@@ -1187,6 +1199,9 @@ ui_grow:
     push ax
     call wm_dock_snap
     pop ax
+    call wm_nat_bank            ; the size the user chose, banked AFTER the snap
+                                ; because the snap may have moved the origin
+                                ; (SPEC.md 39.11.2.1)
 
     ; Only the rect it had and the rect it has changed, so the repaint is
     ; their union: wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91).

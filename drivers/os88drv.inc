@@ -273,7 +273,29 @@ FSV_RENAME   equ 16             ; SI = old, DI = new
 FSV_MKDIR    equ 18             ; SI = name
 FSV_RMDIR    equ 20             ; SI = name
 FSV_DFREE    equ 22             ; -> DX:AX = free BYTES, BX = the granule
-FSV_SIZE     equ 24
+FSV_ENUM     equ 24             ; AX = a folder's handle (0 = the root),
+                                ; CX = the ORDINAL, DX:BX = a 32-byte buffer.
+                                ; out CF=0 and the buffer is a SPEC.md 19.1
+                                ; staged entry (the same one FSV_LIST hands
+                                ; to OSAPI_FS_ENT); CF=1 with AX = 0 past the
+                                ; end, or AX = FERR_IO.
+                                ; ONE ENTRY, into the CALLER's buffer - not
+                                ; FSV_LIST, which appends into the kernel's
+                                ; single global listing and is legal only
+                                ; during a mount. This is what a folder COPY
+                                ; walks with, and the folder it walks is not
+                                ; the one on screen.
+                                ; THE ORDINAL IS DENSE AND MUST BE STABLE:
+                                ; 0,1,2,... over the entries you would list,
+                                ; and the same (handle, ordinal) naming the
+                                ; same entry for as long as that folder is
+                                ; unmodified. The copy engine RE-WALKS to it
+                                ; on every call, and between two of them it
+                                ; will have written a file on another volume
+                                ; and been through the event loop. Enumerate
+                                ; a live structure with a cursor of its own
+                                ; and the copy silently skips or duplicates
+FSV_SIZE     equ 26
 
 ; PUT A `%if` ON YOUR TABLE'S OWN LENGTH. A trailing backslash in a NASM
 ; comment is a LINE CONTINUATION, so an ASCII-art brace drawn down the right

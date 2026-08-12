@@ -812,10 +812,30 @@ behind the driver's back and every later name resolved in the folder the copy
 came FROM. **A driver-side cwd is state the kernel can silently
 desynchronise.**
 
-**The remaining gap is copying a FOLDER**, not a file: `fcp_scan` enumerates a
-source directory by walking its raw sectors and there are none. That wants an
-enumerate-by-ordinal verb or the engine reading the kernel's own listing, and
-it is design work rather than a branch site.
+**MILESTONE 4 IS BUILT AND VERIFIED** (SPEC.md §62.9.7): a FOLDER crosses.
+The gap milestones 1-3 left was `fcp_scan`, which enumerates a source
+directory by walking its **raw sectors** — and there are none. `FSV_ENUM`
+(verb 24) hands back one entry by ORDINAL into `dsk_ent`, which is exactly
+where `dsk_synth` puts one, so the two paths converge on the instruction
+after it and the whole tail is shared rather than mirrored. The second
+FAT-only site wanted a REFUSAL rather than an implementation: `fcp_relink`,
+the same-volume move fast path, is raw directory slots end to end and is
+already a fast path **with a fallback**, so a redirected volume declines it
+and the copy engine — entirely built — does the move.
+
+**`.cold` +50, no rung crossed, footprint unchanged**; the driver grew 68
+bytes. Read back from OUTSIDE with `os88flush`, because asking os8088 to list
+what os8088 wrote is the writer and the reader agreeing: `DOCS/DEEP`,
+`DOCS/DEEP/BOTTOM.TXT` 127 bytes, `DOCS/HELLO.TXT` 26 bytes, both bodies
+byte-correct against their seeds.
+
+The harness paid again, and by being READ rather than run: `rd_stage` spends
+`BX` and `rd_enum` used it afterwards as the caller's buffer offset, so the
+32 bytes would have landed somewhere in `KERNEL_SEG`. The first run **looked
+like a pass on a screenshot** with that bug live, because the top-level
+folder is made from the clipboard entry and never goes near the enumerate —
+which is why the verification pulls the file bodies off the host rather than
+counting rows in a window.
 
 **THE ACTIVITY BAR REPORTS ON A CABLE NOW** (SPEC.md §12.8.1), which is the
 one thing three milestones of branch sites left visibly missing. §12.8's
@@ -845,6 +865,80 @@ no rung crossed, footprint unchanged.**
 
 The cable's file client is now a SECOND `DRVC_FILE` driver against a kernel
 proven three milestones deep, which is what the whole RAM-disk detour bought.
+
+**PHASE 1 OF THAT CLIENT IS DONE AND BOTH ENDS HAVE RUN** (SPEC.md §62.10.4).
+`NET.DRV` is `DRVC_FILE`, publishes `FSV_LIST`/`CHDIR`/`DFREE`, and mounts a
+browsable volume over the cable: Connect is `I C X L X` on the wire and
+opening the volume is `C X L X F X`, with the Disk window showing a listing
+that exists nowhere on either floppy. The DOS side gained the same three verbs,
+a `(parent, name)` handle table walked upward to rebuild a path, the current
+directory as its default root and `/W` for the whole machine.
+
+Both halves ran on a cycle-accurate 5150 — which is the part §9 said could not
+be done. The os8088 half is `tests/lptlink/partner.py` as the far end; the DOS
+half is the *mirror*, `tests/dosstub` booting `OS88NET.COM` with `partner.py`
+playing NET.DRV, and it needed nine more `int 21h` functions in the stub over
+a nine-row synthetic tree. Five faults came out of it and four were silent —
+a word store into a `db` that clobbered the next variable, an ordering that
+made `/W` unmountable, a table row one byte short, a `make` knob that rebuilt
+nothing, and a harness that was kinder than the thing it stood in for. SPEC.md
+§62.10.4.2 has each of them.
+
+**PHASE 2 IS THE READ PATH AND IT IS DONE, BOTH ENDS** (SPEC.md §62.10.4.3):
+`FSV_STAT`, `FSV_READ` and `FSV_READAT`, which between them make a redirected
+volume's files *readable* — and it is where `OSAPI_FS_PROG` finally got the
+consumer it was written for. **It cost the kernel nothing at all**: the three
+branch sites were built with the RAM disk and did not change, which is the
+whole return on that detour.
+
+**AND A PACKAGE HAS NOW BEEN LAUNCHED OFF THE WIRE**, which §10's table has
+listed as owed since block mode. `MINES.O88` served from `tests/lptlink` and
+double-clicked in the network Disk window is `READAT` for the loader's
+512-byte header peek and then `READ` for all 1,517 bytes — and Minesweeper
+runs, owning the menu bar with its own dock tile. Every byte arrived correct
+and nothing in the harness had to check it: the loader validates the header
+and the code then executes.
+
+Two decisions in it are worth carrying forward. The **capacity goes out with
+the command**, so an oversized file is cut at the source instead of crossing
+the wire to be discarded — half a minute of cable for a 116KB module. And the
+destination is **re-normalised on the same cadence as the progress report**,
+because both want "often enough to be smooth, rarely enough to be free" and a
+second constant is a second thing to keep in step.
+
+It also found a pinned-protocol mistake worth naming: **`READ` and `WRITE`
+collided with block mode's `NC_READ` and `NC_WRITE`** — the same one-byte
+space, and on the DOS side the same command loop. §62.10.1's table had been
+written from the verb names alone. They are `G` and `U` now; the tempting fix
+was a mode flag, which is this tree's own second-opinion failure in a new
+place.
+
+**PHASE 3 IS THE WRITE PATH**: `FSV_WRITE`, `APPEND`, `DELETE`, `RENAME`,
+`MKDIR`, `RMDIR` (SPEC.md §62.10.4.5). It cost the kernel nothing either — all
+six branch sites came with the RAM disk, they share `dskw_fsop`, and none of
+them changed. Six verbs, one shape: a folder handle, a name, whatever the verb
+carries, and one `FERR_*` back.
+
+That last word is where a real bug lived. **The file verbs had been answering
+`2` for "no such thing", which is the BLOCK protocol's int 13h numbering and
+is `FERR_IO` in the file protocol's.** Free while the driver mapped every
+non-zero status onto a code of its own; not free the moment a status is passed
+through, which is what a write does.
+
+`/RO` is enforced in one routine every verb calls first, so a verb added later
+inherits the refusal rather than remembering it — the machine at that end may
+be somebody's real DOS box, and §FIELD-MACHINES keeps a live DOS 3.3 install
+on the calibration machine's C:.
+
+**Both ends are verified** (SPEC.md §62.10.4.5). The DOS side is twelve cases
+against `tests/dosstub` - every refusal, and a final listing back to its
+starting four so nothing leaked - and the os8088 side is `File > New Folder`
+in a network Disk window, the one verb with no application behind it:
+`M C L F` on the wire, and the folder appears in the window and on the far
+side.
+
+What is still owed at this boundary is the WIRE's verdict, which is unchanged:
+two period boxes and a cable.
 
 ### 2.3 What was considered and rejected
 

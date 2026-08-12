@@ -48,7 +48,7 @@
 
 %include "os88drv.inc"
 
-    OS88_DRIVER 'Network', DRVC_NET, net_entry
+    OS88_DRIVER 'Network', DRVC_FILE, net_entry
 
 ; --- the wire protocol, master side ------------------------------------------
 ; os8088 is always the master and never receives unsolicited data (NET-PLAN
@@ -77,6 +77,38 @@ NC_READ     equ 'R'
 NC_WRITE    equ 'W'
 NC_BYE      equ 'X'
 
+; --- and file mode's, SPEC.md 62.10.1 ----------------------------------------
+; One wire command per FSV_* verb, so no command means two things. Phase 1 is
+; the three that MOUNT AND LIST; the rest are pinned in 62.10.1 and land with
+; their milestones, exactly as the RAM disk's did.
+; READ is 'G' and WRITE will be 'U' because 'R' and 'W' ARE ALREADY TAKEN, by
+; NC_READ and NC_WRITE four lines above - the same one-byte space, and on the
+; DOS side the same command loop. SPEC.md 62.10.1 was pinned from the verb
+; names alone and carried both collisions until the read path was built.
+NF_LIST     equ 'L'             ; handle -> status, count, count x 32 bytes
+NF_CHDIR    equ 'C'             ; handle -> status, PARENT handle
+NF_DFREE    equ 'F'             ; -> status, free dword, granule word
+NF_STAT     equ 'S'             ; handle, 13-byte name -> status, handle,
+                                ;                    size dword, attribute
+NF_READ     equ 'G'             ; handle, cap dword -> status, len dword, bytes
+NF_READAT   equ 'A'             ; handle, off dword, cap word
+                                ;              -> status, len word, len bytes
+NF_WRITE    equ 'U'             ; folder, name, len dword, bytes -> status
+NF_APPEND   equ 'P'             ; folder, name, len WORD, bytes -> status
+NF_DELETE   equ 'D'             ; folder, name -> status
+NF_RENAME   equ 'N'             ; folder, old name, new name -> status
+NF_MKDIR    equ 'M'             ; folder, name -> status
+NF_RMDIR    equ 'K'             ; folder, name -> status
+
+NET_PCHUNK  equ 64              ; bytes between OSAPI_FS_PROG reports, and
+                                ; between destination re-normalisations. One
+                                ; number for both because both want "often
+                                ; enough to be smooth, rarely enough to be
+                                ; free" and a second constant is a second
+                                ; thing to keep in step. At 3,741 B/s a chunk
+                                ; is ~17 ms, so the bar moves ~59 times a
+                                ; second on a wire that cannot outrun it
+
 NST_OK      equ 0x00
 NST_WPROT   equ 0x03
 NST_NOSEC   equ 0x04
@@ -97,11 +129,36 @@ net_svc:
     dw net_name                 ; DSV_NAME
     dw 0                        ; DSV_TONE
     dw 0                        ; DSV_TIERS
-    dw net_blk                  ; DSV_BLK     - every sector comes through here
+    dw 0                        ; DSV_BLK     - NO SECTORS: this volume is
+                                ;               served by answering questions
+                                ;               about FILES (SPEC.md 62.10)
     dw net_cpname               ; DSV_CPNAME  - the page exists while we do
     dw net_cp_paint             ; DSV_CPPAINT
     dw net_cp_click             ; DSV_CPCLICK
     dw 0                        ; DSV_CPCLOSE
+    dw net_fsv                  ; DSV_FS      - ...through this table
+
+; The FSV_* verbs (SPEC.md 62.9.1). A cell of 0 is "not implemented", which
+; drv_fs_call answers as an ordinary refusal rather than a fault - so a phase
+; lands its own verbs and the ones after it decline cleanly meanwhile.
+net_fsv:
+    dw net_list                 ; FSV_LIST
+    dw net_chdir                ; FSV_CHDIR
+    dw net_stat                 ; FSV_STAT
+    dw net_read                 ; FSV_READ
+    dw net_write                ; FSV_WRITE
+    dw net_append               ; FSV_APPEND
+    dw net_readat               ; FSV_READAT
+    dw net_delete               ; FSV_DELETE
+    dw net_rename               ; FSV_RENAME
+    dw net_mkdir                ; FSV_MKDIR
+    dw net_rmdir                ; FSV_RMDIR
+    dw net_dfree                ; FSV_DFREE
+    dw 0                        ; FSV_ENUM
+net_fsv_end:
+%if net_fsv_end - net_fsv != FSV_SIZE
+  %error "net: the FSV_* table is not FSV_SIZE bytes - a swallowed row?"
+%endif
 
 net_name:   db 'Parallel Link', 0
 net_cpname: db 'Network', 0
@@ -329,13 +386,908 @@ net_info:
     ret
 
 ; -----------------------------------------------------------------------------
+; FSV_LIST - the folder we are STANDING IN, one entry at a time
+;            (SPEC.md 62.9.1/62.10.1)
+; in:  nothing - the driver holds its own cwd, put there by FSV_CHDIR
+; out: CF=0; CF=1 = the link went away
+;
+; The wire hands back a COUNT and then that many 32-byte SPEC.md 19.1 entries,
+; and each is passed to OSAPI_FS_ENT unreshaped - the far side's findfirst
+; builds the entry the Disk window's row is drawn from, and nothing in between
+; touches it. The kernel still SORTS (19.4) and still synthesizes '..' (19.5),
+; so this must do neither.
+;
+; It takes NO argument, which is the ABI's own decision and worth stating
+; because the first draft passed a handle: the kernel calls FSV_LIST at the
+; end of a mount, about the folder FSV_CHDIR last stood in, so the handle
+; would be a second opinion about where we are - and two places deciding that
+; is how a listing stops describing the folder the hit-test resolves against.
+; [net_cwd] is the one opinion; the wire still carries it, because the FAR
+; side has a cwd of its own and the two have to agree.
+;
+; A refused entry ends the APPEND but NOT the read: the count is on the wire
+; before the entries are, so the run is consumed whatever the listing does
+; with it, and neither end is left talking into one that stopped listening.
+; -----------------------------------------------------------------------------
+net_list:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [net_full], 0      ; a fresh listing is not the last one's cap
+    mov bl, NF_LIST
+    mov ax, [net_cwd]
+    call net_fcmd_h             ; the command and the folder it is about
+    jc  .bad
+    call lp_rbyte               ; status
+    jc  .bad
+    or  al, al
+    jnz .bad
+    call lp_rword               ; how many entries follow
+    jc  .bad
+    mov di, ax
+.each:
+    or  di, di
+    jz  .done
+    dec di
+    mov cx, DSK_DE_SIZE         ; ...each of them a staged 19.1 entry
+    mov si, net_ent
+.byte:
+    call lp_rbyte
+    jc  .bad
+    mov [si], al
+    inc si
+    loop .byte
+    cmp byte [net_full], 0      ; the listing filled up: keep READING - the
+    jne .each                   ; run is fixed and the far side is mid-send
+    mov si, net_ent
+    call OSAPI_FS_ENT           ; ES is our own DS, set by the X stub
+    jnc .each
+    mov byte [net_full], 1
+    jmp short .each
+.done:
+    clc                         ; ...AND NO net_bye. See net_fcmd's header:
+    jmp short .out              ; NC_BYE ends the SESSION, not the command
+.bad:
+    call net_lost
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_CHDIR - stand in a folder, and say what is above it (SPEC.md 62.9.1)
+; in:  AX = a handle out of an entry, 0 = the root
+; out: CF=0 and DX = THE PARENT'S HANDLE; CF=1 refused
+;
+; The parent comes back from the far side because the handle is ITS to assign
+; and opaque here (62.9.1) - the kernel synthesizes '..' and has no directory
+; sector to read one out of.
+; -----------------------------------------------------------------------------
+net_chdir:
+    push bx
+    push cx
+    push si
+    push di
+    mov [net_arg2], ax          ; ...banked, because the reply overwrites AX
+    mov bl, NF_CHDIR
+    call net_fcmd_h
+    jc  .bad
+    call lp_rbyte               ; status
+    jc  .bad
+    or  al, al
+    jnz .bad
+    call lp_rword               ; the parent's handle
+    jc  .bad
+    mov [net_up], ax
+    mov ax, [net_arg2]          ; ONLY NOW is the move real: a refused chdir
+    mov [net_cwd], ax           ; must leave us standing where we were, or
+    mov dx, [net_up]            ; FSV_LIST lists a folder we never reached
+    clc
+    jmp short .out
+.bad:
+    call net_lost
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_DFREE - free space, in BYTES (SPEC.md 62.9.1)
+; out: CF=0 with DX:AX = free bytes and BX = the granule; CF=1 refused
+; -----------------------------------------------------------------------------
+net_dfree:
+    push cx
+    push si
+    push di
+    mov bl, NF_DFREE
+    call net_fcmd               ; no argument on this one
+    jc  .bad
+    call lp_rbyte               ; status
+    jc  .bad
+    or  al, al
+    jnz .bad
+    call lp_rword
+    jc  .bad
+    mov [net_up], ax            ; low half, banked across the next two reads
+    call lp_rword
+    jc  .bad
+    mov dx, ax
+    call lp_rword               ; the granule
+    jc  .bad
+    mov bx, ax
+    mov ax, [net_up]
+    clc
+    jmp short .out
+.bad:
+    call net_lost
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_STAT - a name in the current folder -> a handle (SPEC.md 62.9.1)
+; in:  SI -> a NUL 8.3 name, IN KERNEL_SEG - so ES, which drv_fs_call sets
+;      from the kernel's own DS
+; out: CF=0, AX = the handle, DX:CX = the size, BL = a FAT attribute byte
+;      (0x10 = directory); CF=1 and AX = FERR_*
+;
+; THE NAME CROSSES AS A FIXED 13 BYTES, padded with NULs, because the frame
+; has to be a fixed size for the same reason every other one here does: the
+; far side must know when the argument ends without a length preceding it,
+; and 8.3 plus a dot plus a terminator IS 13. A longer name cannot reach here
+; - dskw_stat's callers all resolve 8.3 - and one that somehow did would be
+; truncated rather than desynchronising the wire.
+; -----------------------------------------------------------------------------
+; IT PRESERVES SI AND DI AND NOTHING ELSE, which is not tidiness: AX, BX, CX
+; and DX are all OUTPUTS here, and the first version pushed BX/CX/DX at the top
+; and popped them at the bottom - throwing the handle's size and attribute
+; away a few instructions after reading them off the wire. The verb would have
+; answered a stale register triple with CF=0, which is the shape that fails
+; convincingly: the link works, the file is found, and the kernel is told it
+; is some other size.
+net_stat:
+    push si
+    push di
+    mov bl, NF_STAT
+    mov ax, [net_cwd]           ; ...WHICH FOLDER, and not the far side's own
+    call net_fcmd_h             ; memory of the last chdir - see net_list
+    jc  .bad
+    call net_sname              ; ES:SI -> 13 bytes on the wire
+    jc  .bad
+    call lp_rbyte               ; status
+    jc  .bad
+    or  al, al
+    jnz .no
+    call lp_rword               ; the handle
+    jc  .bad
+    mov [net_hnd], ax
+    call lp_rword               ; size, low
+    jc  .bad
+    mov [net_sz], ax
+    call lp_rword               ; size, high
+    jc  .bad
+    mov [net_sz+2], ax
+    call lp_rbyte               ; the attribute byte
+    jc  .bad
+    mov [net_att], al
+
+    mov ax, [net_hnd]
+    mov cx, [net_sz]
+    mov dx, [net_sz+2]
+    xor bx, bx
+    mov bl, [net_att]
+    clc
+    jmp short .out
+.no:
+    mov ax, FERR_NOENT          ; a status the far side chose: the file is not
+    stc                         ; there, which is not the link failing
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop di
+    pop si
+    ret
+
+; net_sname - ES:SI's NUL name -> 13 bytes on the wire, NUL-padded
+net_sname:
+    push ax
+    push cx
+    push si
+    mov cx, 13
+    xor ah, ah                  ; AH = 1 once the NUL has been passed, so the
+.b:                             ; tail is padded rather than reading on into
+    or  ah, ah                  ; whatever follows the caller's string
+    jnz .pad
+    mov al, [es:si]
+    inc si
+    or  al, al
+    jnz .snd
+    mov ah, 1
+.pad:
+    xor al, al
+.snd:
+    call lp_sbyte
+    jc  .bad
+    loop .b
+    pop si
+    pop cx
+    pop ax
+    clc
+    ret
+.bad:
+    pop si
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_READ - the whole file, by handle (SPEC.md 62.9.1)
+; in:  AX = a handle, DX:BX = the buffer, DI:CX = its 32-bit capacity
+; out: CF=0 and DX:AX = the bytes read; CF=1 and AX = FERR_*
+;
+; THE CAPACITY GOES OUT WITH THE COMMAND, which is what keeps a refusal cheap:
+; the far side answers min(size, cap), so an oversized file is short at the
+; source rather than being sent and thrown away here. At 3,741 bytes/second a
+; discarded 116KB module is half a minute of wire.
+;
+; It is still checked on arrival. A far end that ignores the cap is a far end
+; writing past the end of somebody else's heap claim, and "the other machine
+; is well behaved" is not a thing this side can know.
+; -----------------------------------------------------------------------------
+net_read:
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push es
+    mov [net_hnd], ax
+    mov [net_cap], cx           ; the capacity, banked for the check below
+    mov [net_cap+2], di
+    mov [net_bseg], dx
+    mov [net_boff], bx
+
+    mov bl, NF_READ
+    call net_fcmd
+    jc  .bad
+    mov ax, [net_hnd]
+    call lp_sword
+    jc  .bad
+    mov ax, [net_cap]           ; ...and the cap, low word first
+    call lp_sword
+    jc  .bad
+    mov ax, [net_cap+2]
+    call lp_sword
+    jc  .bad
+
+    call lp_rbyte               ; status
+    jc  .bad
+    or  al, al
+    jnz .no
+    call lp_rword               ; the length, low
+    jc  .bad
+    mov [net_len], ax
+    call lp_rword               ; ...and high
+    jc  .bad
+    mov [net_len+2], ax
+
+    mov ax, [net_len+2]         ; longer than we asked for? consume it and
+    cmp ax, [net_cap+2]         ; refuse, rather than write past the claim -
+    ja  .over                   ; the frame is fixed, so the bytes are coming
+    jb  .fits                   ; whatever we do with them
+    mov ax, [net_len]
+    cmp ax, [net_cap]
+    ja  .over
+.fits:
+    call net_rdrun              ; ...and take them
+    jc  .bad
+    mov ax, [net_len]
+    mov dx, [net_len+2]
+    clc
+    jmp short .out
+.over:
+    call net_rdsink
+    mov ax, FERR_BIG
+    stc
+    jmp short .out
+.no:
+    mov ax, FERR_NOENT
+    stc
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_READAT - a window of a file, by handle (SPEC.md 62.9.1)
+; in:  AX = a handle, DX:BX = the buffer, CX = capacity, DI:SI = the offset
+; out: CF=0 and DX:AX = the bytes delivered (0 = at or past the end)
+;
+; The length is a WORD here and a dword in FSV_READ, which is the frame
+; following the contract rather than a second format: a windowed read is
+; capped at 64KB by its own CX.
+; -----------------------------------------------------------------------------
+net_readat:
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push es
+    mov [net_hnd], ax
+    mov [net_cap], cx
+    mov word [net_cap+2], 0
+    mov [net_bseg], dx
+    mov [net_boff], bx
+    mov [net_off], si
+    mov [net_off+2], di
+
+    mov bl, NF_READAT
+    call net_fcmd
+    jc  .bad
+    mov ax, [net_hnd]
+    call lp_sword
+    jc  .bad
+    mov ax, [net_off]
+    call lp_sword
+    jc  .bad
+    mov ax, [net_off+2]
+    call lp_sword
+    jc  .bad
+    mov ax, [net_cap]
+    call lp_sword
+    jc  .bad
+
+    call lp_rbyte
+    jc  .bad
+    or  al, al
+    jnz .no
+    call lp_rword               ; the length, one word
+    jc  .bad
+    mov [net_len], ax
+    mov word [net_len+2], 0
+    cmp ax, [net_cap]
+    ja  .over
+    call net_rdrun
+    jc  .bad
+    mov ax, [net_len]
+    xor dx, dx
+    clc
+    jmp short .out
+.over:
+    call net_rdsink
+    mov ax, FERR_BIG
+    stc
+    jmp short .out
+.no:
+    mov ax, FERR_NOENT
+    stc
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; net_rdrun - take [net_len] bytes off the wire into [net_bseg]:[net_boff]
+; out: CF=1 = the link went away
+;
+; TWO THINGS HAPPEN EVERY NET_PCHUNK BYTES and they are the same test because
+; they want the same cadence. The destination is RE-NORMALISED - the paragraph
+; part of the offset folded into the segment, dskw_norm's arithmetic inside a
+; driver - so a read longer than 64KB cannot carry off the end of a segment;
+; and OSAPI_FS_PROG is stepped, which is the only way SPEC.md 12.8's bar moves
+; at all here (the kernel is one far call deep and blind until this returns).
+;
+; The progress report is BYTES SINCE THE LAST ONE and not a running total,
+; which is the slot's contract: a total would advance the bar by the whole
+; file every call.
+; -----------------------------------------------------------------------------
+net_rdrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov es, [net_bseg]
+    mov di, [net_boff]
+    call net_rdnorm             ; ...once up front, because the caller's
+                                ; offset can be anything at all
+    mov cx, [net_len]
+    mov dx, [net_len+2]
+    xor bx, bx                  ; bytes since the last report
+.byte:
+    mov ax, cx
+    or  ax, dx
+    jz  .done
+    call lp_rbyte
+    jc  .bad
+    mov [es:di], al
+    inc di
+    inc bx
+    sub cx, 1
+    sbb dx, 0
+    cmp bx, NET_PCHUNK
+    jb  .byte
+    call net_rdmark             ; report and re-normalise together
+    xor bx, bx
+    jmp short .byte
+.done:
+    or  bx, bx                  ; the tail, which is almost never a whole
+    jz  .out                    ; chunk
+    call net_rdmark
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.bad:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; net_rdmark - BX bytes have landed: tell the kernel and tidy ES:DI
+net_rdmark:
+    push ax
+    mov ax, bx
+    call OSAPI_FS_PROG
+    pop ax
+    call net_rdnorm
+    ret
+
+; net_rdnorm - fold DI's paragraph part into ES, leaving DI at 0..15
+net_rdnorm:
+    push ax
+    push cx
+    mov ax, di
+    mov cl, 4
+    shr ax, cl
+    and di, 0x000F
+    mov cx, es
+    add cx, ax
+    mov es, cx
+    pop cx
+    pop ax
+    ret
+
+; net_rdsink - swallow [net_len] bytes and store none of them
+;
+; The frame is a fixed size whatever this end does with it (SPEC.md 62.10.1),
+; so a refusal still has to consume the run - the alternative is a wire with
+; a file's worth of bytes on it and nobody listening, which is the link dead
+; rather than one operation failed.
+net_rdsink:
+    push ax
+    push cx
+    push dx
+    mov cx, [net_len]
+    mov dx, [net_len+2]
+.b:
+    mov ax, cx
+    or  ax, dx
+    jz  .out
+    call lp_rbyte
+    jc  .out                    ; ...and if it died mid-sink, it died
+    sub cx, 1
+    sbb dx, 0
+    jmp short .b
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; =============================================================================
+; THE WRITE PATH (SPEC.md 62.10.4.5)
+;
+; Six verbs, one shape: the folder, the name, whatever the verb carries, and
+; a single status byte back. They are short because everything hard about a
+; write is on the OTHER side of the cable - there is no commit ordering here,
+; no FAT to flush, no rollback (SPEC.md 18.4's three rules are the FAT path's
+; and a redirected volume has none of it). What this end owes is the frame.
+;
+; A STATUS IS A FERR_*, and it is passed through untouched: the far side knows
+; why a write failed - full disk, read-only medium, a name that is taken - and
+; the kernel's callers already handle every one of them. Translating here
+; would be a second opinion about somebody else's filesystem.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; FSV_WRITE - create or replace, whole (SPEC.md 62.9.1)
+; in:  SI = a NUL 8.3 name in KERNEL_SEG, DX:BX = the bytes, DI:CX = how many
+; out: CF=0; CF=1 and AX = FERR_*
+; -----------------------------------------------------------------------------
+net_write:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [net_cap], cx           ; the LENGTH, in the same pair a read uses for
+    mov [net_cap+2], di         ; its capacity - one walker, one meaning per
+    mov [net_bseg], dx          ; direction
+    mov [net_boff], bx
+    mov bl, NF_WRITE
+    mov ax, [net_cwd]
+    call net_fcmd_h
+    jc  .bad
+    call net_sname
+    jc  .bad
+    mov ax, [net_cap]
+    call lp_sword
+    jc  .bad
+    mov ax, [net_cap+2]
+    call lp_sword
+    jc  .bad
+    call net_wrrun              ; ...and the bytes
+    jc  .bad
+    call net_wstat
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_APPEND - add to the end of an existing file (SPEC.md 18.4.4)
+; in:  SI = the name, DX:BX = the bytes, CX = how many
+; out: CF=0; CF=1 and AX = FERR_*
+;
+; THE LENGTH IS ONE WORD HERE and a dword in FSV_WRITE, which is the frame
+; following the cell rather than a second format: this is the CHUNKED half of
+; the pair, so a copy streams through it a claim at a time and CX is all there
+; has ever been.
+; -----------------------------------------------------------------------------
+net_append:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [net_cap], cx
+    mov word [net_cap+2], 0
+    mov [net_bseg], dx
+    mov [net_boff], bx
+    mov bl, NF_APPEND
+    mov ax, [net_cwd]
+    call net_fcmd_h
+    jc  .bad
+    call net_sname
+    jc  .bad
+    mov ax, [net_cap]
+    call lp_sword
+    jc  .bad
+    call net_wrrun
+    jc  .bad
+    call net_wstat
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_DELETE / FSV_MKDIR / FSV_RMDIR - one name, one status
+; in:  SI = a NUL 8.3 name in KERNEL_SEG
+; -----------------------------------------------------------------------------
+net_delete:
+    mov bl, NF_DELETE
+    jmp short net_name1
+net_mkdir:
+    mov bl, NF_MKDIR
+    jmp short net_name1
+net_rmdir:
+    mov bl, NF_RMDIR
+net_name1:
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, [net_cwd]
+    call net_fcmd_h
+    jc  .bad
+    call net_sname
+    jc  .bad
+    call net_wstat
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_RENAME - SI = the old name, DI = the new one, both in KERNEL_SEG
+;
+; Two 13-byte fields and no length between them, which is what the fixed frame
+; buys: the far side knows where the first ends because it is always 13.
+; -----------------------------------------------------------------------------
+net_rename:
+    push cx
+    push dx
+    push si
+    push di
+    mov [net_arg2], di          ; ...banked, because net_sname walks SI and the
+                                ; second name has to survive the first
+    mov bl, NF_RENAME
+    mov ax, [net_cwd]
+    call net_fcmd_h
+    jc  .bad
+    call net_sname              ; the old name
+    jc  .bad
+    mov si, [net_arg2]
+    call net_sname              ; ...and the new
+    jc  .bad
+    call net_wstat
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; net_wstat - the one status byte every write verb ends with
+; out: CF=0 and AX = 0; CF=1 and AX = the far side's FERR_*
+;
+; A NON-ZERO STATUS IS NOT A DEAD LINK. That distinction is the whole of this
+; routine: `the disk is full` and `the cable came out` both arrive as a
+; failure at the call site, and only one of them means the volume should be
+; dropped. net_lost is for the second; this is the first.
+; -----------------------------------------------------------------------------
+net_wstat:
+    call lp_rbyte
+    jc  .bad
+    or  al, al
+    jnz .no
+    xor ax, ax
+    clc
+    ret
+.no:
+    xor ah, ah                  ; the far side's FERR_*, passed through
+    stc
+    ret
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; net_wrrun - put [net_cap] bytes from [net_bseg]:[net_boff] on the wire
+; out: CF=1 = the link went away
+;
+; net_rdrun backwards, and deliberately the same shape: the destination is
+; re-normalised and OSAPI_FS_PROG stepped on one test every NET_PCHUNK bytes,
+; because a save over a cable is exactly as long as a load and SPEC.md 12.8's
+; bar has the same nothing to report without it.
+; -----------------------------------------------------------------------------
+; IT WALKS THE SOURCE THROUGH ES AND NOT DS, and that is not a style choice.
+; lplink.inc addresses [lp_base], [lp_lastop] and [lp_dlset] through DS with
+; no segment override anywhere in the file - so a routine that repoints DS at
+; the caller's buffer hands the transport a garbage port number and a garbage
+; turnaround flag. The first draft did exactly that, with a comment asserting
+; the opposite; the assertion cost nothing to check and would have cost a
+; session to debug, because the wire would simply have stopped.
+net_wrrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov es, [net_bseg]
+    mov di, [net_boff]
+    call net_wrnorm
+    mov cx, [net_cap]
+    mov dx, [net_cap+2]
+    xor bx, bx                  ; bytes since the last report
+.byte:
+    mov ax, cx
+    or  ax, dx
+    jz  .done
+    mov al, [es:di]
+    inc di
+    call lp_sbyte
+    jc  .bad
+    inc bx
+    sub cx, 1
+    sbb dx, 0
+    cmp bx, NET_PCHUNK
+    jb  .byte
+    call net_wrmark
+    xor bx, bx
+    jmp short .byte
+.done:
+    or  bx, bx
+    jz  .out
+    call net_wrmark
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.bad:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; net_wrmark - BX bytes have gone: report, then tidy ES:DI
+net_wrmark:
+    push ax
+    mov ax, bx
+    call OSAPI_FS_PROG
+    pop ax
+    call net_wrnorm
+    ret
+
+; net_wrnorm - fold DI's paragraph part into ES, leaving DI at 0..15.
+; net_rdnorm's twin, and the two are separate rather than shared because the
+; read walks a DESTINATION it writes and this walks a SOURCE it reads; one
+; routine taking a direction flag would be a branch per byte.
+net_wrnorm:
+    push ax
+    push cx
+    mov ax, di
+    mov cl, 4
+    shr ax, cl
+    and di, 0x000F
+    mov cx, es
+    add cx, ax
+    mov es, cx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; net_fcmd / net_fcmd_h - open a FILE-mode command, with and without an
+;                         argument word
+; in:  BL = the NF_* letter;  net_fcmd_h also takes AX = the handle
+; out: CF=1 = the link went away
+;
+; `net_cmd` is the BLOCK side's and takes AL + DX + [net_rlen]; these are not
+; that, and the two must not share a name however alike they read - one wire
+; command per verb is 62.10.1's rule, and one routine per command shape is the
+; same rule in the driver.
+;
+; **AND NO COMMAND ENDS WITH NC_BYE.** It reads like a frame terminator and it
+; is not one: `serve` on the far side LEAVES its command loop on NC_BYE and
+; goes back to hunting for the magic (lplslv.inc), so a bye after every verb
+; tore the session down and the next command arrived at a slave that was no
+; longer listening for one. The gap between commands is the user's THINKING
+; TIME and has no upper bound - which is exactly what lp_rbyte_w's unbounded
+; wait was built for, and this would have defeated it. NC_BYE is net_drop's
+; and net_connect's alone.
+;
+; It survived a whole scripted session against tests/lptlink/partner.py, whose
+; server read a bye as "carry on" - a harness MORE FORGIVING than the thing it
+; stands in for hides exactly the bugs it exists to find, so partner.py returns
+; on one now, as the real far end does.
+; -----------------------------------------------------------------------------
+net_fcmd_h:
+    push ax
+    mov [net_arg], ax
+    mov al, bl
+    call lp_sbyte
+    jc  .bad
+    mov ax, [net_arg]
+    call lp_sword
+    jc  .bad
+    pop ax
+    clc
+    ret
+.bad:
+    pop ax
+    stc
+    ret
+
+net_fcmd:
+    push ax
+    mov al, bl
+    call lp_sbyte
+    pop ax
+    ret
+
+; net_bye - let the far side go back to listening. Best effort by contract:
+; the answer is already in hand and a failed goodbye is the next command's
+; problem, which net_connect's own leading NC_BYE is there to clear up.
+net_bye:
+    push ax
+    mov al, NC_BYE
+    call lp_sbyte
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; net_mount - register the volume and mount it
 ; out: CF=0 mounted; CF=1 refused
 ;
-; The kernel names it (SPEC.md 26.4: 'N:' falls out of the volume index, like
-; every other drive), so SI = 0 and DV_LBL stays empty. DX = 0 donates no
-; listing claim, which means the .lowbss floor and a 32-entry listing - Stage 1
-; is a 32MB image and a claim is Stage 2's problem if it is ever one.
+; The mount ITSELF is what proves the far side is serving files rather than
+; sectors: disk_mount branches on DVK_FILE and ends in FSV_LIST (SPEC.md
+; 62.9.1), so a partner that answered the magic but cannot list is refused
+; here rather than at the first double-click.
 ; -----------------------------------------------------------------------------
 net_mount:
     push bx
@@ -343,10 +1295,17 @@ net_mount:
     push dx
     push si
     push di
+    mov word [net_cwd], 0       ; a fresh link stands in the far side's root,
+                                ; whatever the last one was standing in
     mov al, 0                   ; our own volume handle: there is one link, so
-    mov cx, [net_secs]          ; one volume, and the handle is decoration
-    xor dx, dx
-    xor si, si
+    xor cx, cx                  ; one volume, and the handle is decoration.
+                                ; NO SECTOR COUNT - a DVK_FILE volume has no
+                                ; sectors at all and dsk_xfer refuses it
+                                ; (SPEC.md 62.9); the kind follows the CLASS,
+                                ; so changing DRVC_NET to DRVC_FILE is the
+                                ; whole of what makes this a file volume
+    xor dx, dx                  ; no donated listing claim: the .lowbss floor
+    mov si, net_label
     call OSAPI_VOL_ADD
     jc  .bad
     mov [net_vol], al
@@ -639,5 +1598,35 @@ net_rcnt:   db 0                ; ...and how many of them are still to go
 net_st:     db 0                ; the FIRST refusal in this transfer
 net_px:     dw 0
 net_py:     dw 0
+
+; --- file mode's (SPEC.md 62.10) ---------------------------------------------
+; net_label is the volume's name and NOT the drive letter: the kernel assigns
+; the letter from the volume index (SPEC.md 26.4), exactly as it does for
+; `HDD C`, so this is what the desktop zone and the Disk window's header say.
+net_label:  db 'Link', 0
+net_cwd:    dw 0                ; the far side's handle for where we STAND.
+                                ; Ours as well as theirs: FSV_LIST takes no
+                                ; argument, so this is the kernel's only way
+                                ; back to the folder it just chdir'd into
+net_arg:    dw 0                ; net_fcmd_h's argument, across the send
+net_arg2:   dw 0                ; ...and net_chdir's, across the whole reply
+net_up:     dw 0                ; the parent handle the far side answered with
+net_full:   db 0                ; the kernel's listing filled: keep READING the
+                                ; run, stop APPENDING to it
+net_ent:    times DSK_DE_SIZE db 0  ; one staged 19.1 entry, off the wire
+
+; --- and the read path's (SPEC.md 62.10.4.3) -----------------------------------
+; All of it is MEMORY rather than registers because a read has more live state
+; than an 8086 has registers: a handle, a 32-bit capacity, a 32-bit length, a
+; 32-bit offset and a destination that walks - and every one of them has to
+; survive a call into lp_rbyte.
+net_hnd:    dw 0                ; the handle the operation in hand is about
+net_sz:     dd 0                ; FSV_STAT's answer
+net_att:    db 0                ; ...and its attribute byte
+net_cap:    dd 0                ; what we told the far side we could take
+net_len:    dd 0                ; ...and what it says it is sending
+net_off:    dd 0                ; FSV_READAT's window
+net_bseg:   dw 0                ; the destination, which walks a segment at a
+net_boff:   dw 0                ; time - see net_rdnorm
 
     OS88_DRV_END
