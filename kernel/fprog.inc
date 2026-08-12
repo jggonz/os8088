@@ -131,12 +131,14 @@ fpg_begin:
                                 ; wrong (SPEC.md 12.8.1). fpg_step never reads
                                 ; it, so the sector path is untouched
 
-    call toast_kill             ; the toast strip (SPEC.md 59) is in these
-                                ; pixels and this is a newer, more urgent
-                                ; statement about the same conversation. It
-                                ; does not draw - it cannot, the lock is held
-                                ; by the operation - so the bar is put back
-                                ; on the UI task's next look
+                                ; NO toast_kill here any more (SPEC.md 59.8):
+                                ; the strip used to reach left into these
+                                ; cells, and it is in the CLOCK's field now -
+                                ; wholly right of [vid_clk_hx], where this
+                                ; widget's right edge is [vid_clk_hx] - 1. The
+                                ; two can be up together because they are
+                                ; about different things: this says work is
+                                ; happening, a toast says what finished
 
     call cur_unlazy             ; spend gfx_lock's promised hide before we
                                 ; draw anywhere near the arrow (SPEC.md 7.1.4)

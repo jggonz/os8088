@@ -355,15 +355,20 @@ cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
 ; string these replace was THIRTY, and painted through the window's right
 ; border into the desktop - invisibly, because until cp_drv_cap existed the
 ; caption was only ever drawn by a driver tick.
-; SUBJECT, OUTCOME, CAUSE - in that order, and one string per CAUSE. A
-; message that says only that something failed sends the reader looking, and
-; the two causes here want opposite things done about them: one is the user's
-; disk and one is the disk's own answer. The bar has room for both - the
-; menus segment is 50 cells on the narrowest adapter (640px: ([vid_clk_hx] -
-; MENU_TXT_X0) / 8) and 60 on Hercules, against 38 cells for the longest of
-; these - so terseness buys nothing here and costs the reason.
+; OUTCOME, CAUSE - and one string per CAUSE. A message that says only that
+; something failed sends the reader looking, and the two causes here want
+; opposite things done about them: one is the user's disk and one is the
+; disk's own answer.
+;
+; The SUBJECT is what these gave up when the strip moved into the clock's
+; field and TOAST_MAX became 23 (SPEC.md 59.8): they read
+; `Settings not saved: wrong disk in A:` while the bar had 50 cells to say it
+; in. It is the right word to lose of the three - the panel the user just
+; closed is the subject, and it was the only thing on screen - where dropping
+; the cause would leave a message that cannot be acted on. The success line
+; keeps it, being short enough to.
 cp_s_dsok:  db 'Settings Saved', 0
-cp_s_dsdsk: db 'Settings not saved: wrong disk in '
+cp_s_dsdsk: db 'Not saved: need disk '
 cp_s_dsdrv: db 'A:', 0          ; the letter, stamped (SPEC.md 52.10.3): the
                                 ; system volume is not A: on a machine booted
                                 ; from a hard disk, and a message that names
@@ -371,7 +376,7 @@ cp_s_dsdrv: db 'A:', 0          ; the letter, stamped (SPEC.md 52.10.3): the
                                 ; none. This is the only string in the kernel
                                 ; that needs it, and dsk_ltrtab's third entry
                                 ; exists for it
-cp_s_dserr: db 'Settings not saved: disk error', 0
+cp_s_dserr: db 'Not saved: disk error', 0
 ; Indexed by [cp_dsave] + 1, so slot 0 keeps toast_say's "nothing to say" and
 ; SUCCESS gets a message of its own - a save is a thing the user asked for and
 ; waited seconds of floppy for, so silence is the wrong report. It only fires
@@ -382,10 +387,11 @@ CP_NSAVE  equ 4
 
 ; ...and the other end of the same conversation (SPEC.md 2.8.4): the panel's
 ; own code is a file on the system disk now, so OPENING it can fail for the
-; same reason SAVING it can. Subject, outcome, cause, in cp_s_dsdsk's shape
-; and sharing its stamped drive letter - which is what makes it one fact the
-; user can act on rather than two messages about the same missing disk.
-cp_s_noload: db 'Control Panel needs the system disk in '
+; same reason SAVING it can. This one keeps its subject and spends the outcome
+; instead, because there is nothing on screen to infer the subject FROM - the
+; panel never opened. It shares the stamped drive letter, which is what makes
+; it one fact the user can act on rather than two messages about one disk.
+cp_s_noload: db 'Control Panel needs '
 cp_s_nodrv:  db 'A:', 0         ; stamped beside cp_s_dsdrv, same rule
 cp_opentab: dw 0, cp_s_noload
 CP_NOPEN  equ 2
@@ -2349,9 +2355,11 @@ section .modc                   ; the on-demand image (SPEC.md 2.8): a segment
 ; [cp_wdirty] set on failure, so the next close retries rather than silently
 ; dropping the settings.
 ;
-; It is said AFTER the write and not before, which is not a style choice:
-; drv_cfg_save arms SPEC.md 12.8's file-activity widget, and fpg_begin retires
-; a live toast because the two cannot share those pixels (SPEC.md 59.3).
+; It is said AFTER the write and not before. That used to be forced - the
+; write arms SPEC.md 12.8's file-activity widget, which shared the strip's
+; pixels and retired it - and since SPEC.md 59.8 moved the strip into the
+; clock's field the two are independent and the ordering is merely the honest
+; one: the message IS the verdict, and drv_cfg_save is what produces it.
 ; -----------------------------------------------------------------------------
 cp_flush_x:
     push ax

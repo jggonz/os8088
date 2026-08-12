@@ -2625,8 +2625,9 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                               ; steps it per sector
 %include "toast.inc"          ; the transient one-line message (SPEC.md 59):
                               ; the bar's other tenant, beside fprog.inc for
-                              ; the same reason and after it, because
-                              ; toast_show refuses while that widget is armed
+                              ; the same reason. It sits in the CLOCK's field
+                              ; (SPEC.md 59.8), so it no longer defers to that
+                              ; widget and the order here is subject, not need
 %include "ui.inc"
 %include "apps.inc"
 %include "assoc.inc"          ; file type associations (SPEC.md 54): the
