@@ -1,0 +1,788 @@
+#!/usr/bin/env python3
+"""The far end of the LapLink cable, played by the HOST (SPEC.md 62.10.3).
+
+docs/NET-PLAN.md 9 assumed nothing here could be driven without two machines,
+and that is still true of the WIRE's verdict. It is not true of the os8088
+half. MartyPC's ParallelController stores what is written to the status
+register (`status_register_write`) and `status_register_read` has no side
+effects, so the debug server's `outb` drives exactly the lines the guest
+polls; and `data_register_read` returns what the GUEST last wrote, so `inb`
+reads what it is driving. Between them that is the whole cable.
+
+THE WIRE, as drivers/net/lplink.inc drives it:
+
+  os8088 -> here   the DATA register (base+0): D0..D3 = the nibble,
+                   D4 = strobe when sending / ack when receiving
+  here -> os8088   the STATUS register (base+1): bit 7 = the handshake and
+                   bits 6..3 = our nibble
+
+  Bit 7 is BUSY and BUSY IS INVERTED IN HARDWARE - lp_snib reads it through
+  `xor al, 0x80`, so ASSERTED IS A RAW ZERO and idle is a raw one. Getting
+  that backwards is a link that hangs on the first nibble, which is why it is
+  written here rather than left in the shifts.
+
+  A byte is LOW NIBBLE FIRST (lp_sbyte).
+
+WHY IT MAY BE STEPPED AT ALL: every deadline in the transport is in TICKS and
+not in polls - docs/NET-PLAN.md 9.1's third defect, found by linksim.py and
+fixed before any of this shipped. So a partner that pauses the machine
+between nibbles is inside the contract rather than getting away with
+something: the guest's clock does not advance while it is paused, so LP_TMO
+cannot expire underneath us and lp_turn's whole-tick reversal guard costs
+nothing.
+
+It is EXACT rather than fast. Every nibble is a handful of debug-server round
+trips with the emulator stepped in between, so this is the instrument for
+"does the protocol do the right thing", never for "how quick is it" - that
+number comes off two period boxes and PERFORMANCE.md Set 39 already has it.
+"""
+
+MAGIC_Q = b'O88?'                # master -> slave
+MAGIC_R = b'O88!'                # slave -> master, then a version byte
+
+# ...and the same question as the HUNT WINDOW SEES IT. A byte goes low nibble
+# first (lp_sbyte), so 'O88?' = 4F 38 38 3F arrives as F,4,8,3,8,3,F,3 and the
+# eight-nibble window holds 0xF48383F3 - NOT 0x4F38383F. linksim.py calls this
+# MAGQ and the real slave compares against exactly it; deriving it from the
+# byte order instead is a window that can never match, on a wire that is
+# working perfectly.
+MAGQ = 0xF48383F3
+
+# How many emulator steps to let the guest run between our pokes. One nibble
+# is a few `in`/`out`s, so this only has to be enough to get from one poll to
+# the next; too large just wastes wall clock.
+STEP = 400
+
+# Steps to let the guest OBSERVE something we just did. Releasing the ack is
+# not enough on its own: lp_snib does not finish until its second LP_WAIT sees
+# the ack fall, and nothing in this file runs the guest by itself - so a
+# partner that released and immediately re-asserted left the guest waiting for
+# a level it had never been given a cycle to read. Measured: the whole magic
+# arrived and the reply stalled, which is the reversal race lp_turn exists for
+# seen from this end.
+SEE = 8
+TURN = 40
+
+# NO BLIND STEPPING AFTER THE PRESS, and that is the whole of what
+# click_paused had to unlearn. Stepping a mouse packet's worth (60,000
+# instructions) to "let the UART clear" runs the guest straight through the
+# click dispatch and into net_connect, which sends NC_BYE and the magic into a
+# wire nobody is watching - so the partner starts looking after the
+# conversation has already begun and waits out its budget on nibbles that
+# came and went. The partner's own 400-step loop clocks the UART perfectly
+# well; it just has to be the thing doing the stepping.
+
+
+class LinkTimeout(Exception):
+    pass
+
+
+class Partner(object):
+    """One end of the cable, over a shared Marty connection.
+
+    Shares the caller's `Marty` because the debug server takes ONE client and
+    a second connection HANGS rather than failing (CLAUDE.md) - the same rule
+    Mouse and Flush already follow.
+    """
+
+    def __init__(self, marty, base=0x378, budget=4000000):
+        self.m = marty
+        self.base = base
+        self.budget = budget            # emulator steps before we give up
+        self.spent = 0
+        self.nib = 0                    # the nibble we are presenting
+        self.trace = []                 # every nibble received, for diagnosis
+        self.lastop = None              # 'r'/'s', for the reversal guard
+        self.log = []                   # ...what was asked, and answered. A
+                                        # letter per command says the shape of
+                                        # a session and nothing about WHICH
+                                        # file, which is the question as soon
+                                        # as anything goes wrong
+        self._status(idle=True)
+
+    # --- the two wires -------------------------------------------------------
+    def _status(self, idle, nib=None):
+        """Drive bit 7 (idle = raw 1) and bits 6..3 (our nibble)."""
+        if nib is not None:
+            self.nib = nib & 0x0F
+        v = (self.nib << 3) & 0x78
+        if idle:
+            v |= 0x80
+        self.m.outb(self.base + 1, v)
+
+    def _data(self):
+        return self.m.inb(self.base)
+
+    def _step(self):
+        self.m.step(STEP)
+        self.spent += STEP
+        if self.spent > self.budget:
+            raise LinkTimeout('the guest never moved the line we are waiting '
+                              'on (%d steps)' % self.spent)
+
+    def _await_strobe(self, want):
+        """Spin the guest until its D4 (strobe/ack) reaches `want`."""
+        while True:
+            if bool(self._data() & 0x10) == want:
+                return self._data()
+            self._step()
+
+    # --- one nibble each way -------------------------------------------------
+    def recv_nib(self):
+        """os8088 is sending: lp_snib's counterpart."""
+        d = self._await_strobe(True)    # nibble is stable before the strobe
+        n = d & 0x0F
+        self._status(idle=False)        # ack UP (asserted = raw bit 7 zero)
+        self._await_strobe(False)       # ...until it drops the strobe
+        self._status(idle=True)         # ack down...
+        for _ in range(SEE):            # ...AND LET IT BE SEEN. lp_snib does
+            self._step()                # not finish until its second LP_WAIT
+        self.lastop = 'r'               # observes the ack FALL, and nothing
+        return n                        # here runs the guest by itself
+
+    def send_nib(self, n):
+        """os8088 is receiving: lp_rnib's counterpart."""
+        if self.lastop == 'r':              # A DIRECTION REVERSAL, and it owes
+            for _ in range(TURN):           # the guest room to get out of its
+                self._step()                # send loop and into lp_rnib. This
+            self.lastop = 's'               # is lp_turn's guard from the other
+                                            # end of the cable - the far side
+                                            # spends a whole tick here for the
+                                            # same reason (NET-PLAN 9.1's
+                                            # second defect)
+        self._status(idle=False, nib=n)     # nibble and strobe together: the
+                                            # guest samples from the very read
+                                            # that sees the strobe
+        self._await_strobe(True)            # it acks with its own D4
+        self._status(idle=True, nib=n)      # strobe down, nibble held
+        self._await_strobe(False)           # ...and it drops the ack
+        return n
+
+    # --- bytes, low nibble first (lp_sbyte) ----------------------------------
+    def recv_byte(self):
+        lo = self.recv_nib()
+        hi = self.recv_nib()
+        return (hi << 4) | lo
+
+    def send_byte(self, b):
+        self.send_nib(b & 0x0F)
+        self.send_nib((b >> 4) & 0x0F)
+
+    def recv(self, n):
+        return bytes(self.recv_byte() for _ in range(n))
+
+    def send(self, data):
+        for b in bytes(data):
+            self.send_byte(b)
+
+    def recv_word(self):
+        b = self.recv(2)
+        return b[0] | (b[1] << 8)
+
+    def send_word(self, v):
+        self.send(bytes([v & 0xFF, (v >> 8) & 0xFF]))
+
+    def send_dword(self, v):
+        self.send(bytes([v & 0xFF, (v >> 8) & 0xFF,
+                         (v >> 16) & 0xFF, (v >> 24) & 0xFF]))
+
+    def recv_dword(self):
+        b = self.recv(4)
+        return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
+
+    # --- driving the guest to the point of talking ---------------------------
+    def click_paused(self, marty=None):
+        """Press and release the left button on a PAUSED guest, deterministically.
+
+        The caller positions the cursor while the machine runs - mo.to()
+        proves where it is by reading guest memory, which needs cycles - then
+        pauses, then calls this, then starts receiving.
+
+        THE PRESS ALONE, and no release: ui_task dispatches a click on MDOWN,
+        so the press is what runs net_connect, and anything sent after it is
+        one more thing that can consume the cycles the handshake needs.
+        """
+        m = marty or self.m
+        m.mouse(0, 0, l=True)
+
+    # --- the handshake -------------------------------------------------------
+    def hunt(self, limit=64):
+        """slv_hunt: slide an EIGHT-NIBBLE window until the magic is in it.
+
+        Nibble granularity and not byte, for the reason lplslv.inc gives: a
+        byte-granular window cannot recover from being half a byte out of
+        step, so a slave that joined in the middle of a transfer could never
+        resynchronise. SPEC.md 9.5's mouse resync, one level down.
+
+        It is also what a partner needs even when it did NOT join late. The
+        first attempt here read four bytes flat and got `XO88` - the master
+        sends NC_BYE ('X') to put the far end back to listening before it
+        says hello, so the magic is never the first thing on the wire and
+        assuming alignment is wrong from the very first exchange.
+        """
+        want = MAGQ
+        win = 0
+        for i in range(limit * 2):
+            try:
+                win = ((win << 4) | self.recv_nib()) & 0xFFFFFFFF
+            except LinkTimeout as e:
+                raise LinkTimeout('stalled after %d nibble(s), window %08X: %s'
+                                  % (i, win, e))
+            self.trace.append(win & 0x0F)
+            if win == want:
+                return True
+        raise LinkTimeout('no magic in %d nibbles (window %08X, wanted %08X)'
+                          % (limit * 2, win, want))
+
+    def hello(self, version=1):
+        """mst_hello's other half: hunt for 'O88?', answer 'O88!' + version."""
+        self.hunt()
+        self.send(MAGIC_R)
+        self.send_byte(version)
+        return MAGIC_Q
+
+    # --- getting the wire to a known state -----------------------------------
+    def sync(self, limit=200):
+        """Drive the line idle and let the guest come back to rest.
+
+        NEEDED WHEN THE GUEST HAS BEEN LISTENING, and it is a property of this
+        harness rather than of the transport. A real cable's BUSY line is
+        pulled to its idle level by the receiver; MartyPC's status register
+        reads **0** until something writes one, and LP_WAIT reads bit 7
+        INVERTED - so an untouched port looks to a dwelling slave like a strobe
+        that is permanently asserted. It samples a garbage nibble, raises its
+        ack, and parks in the second LP_WAIT waiting for a fall that cannot
+        come.
+
+        So the port genuinely reads D4 HIGH before this end has sent anything,
+        and `_await_strobe(True)` is satisfied by a cycle that never happened -
+        which puts the very first nibble half a handshake out of step, on a
+        link where every byte afterwards looks like a timeout.
+
+        Releasing the phantom strobe is one write; what it also needs is CYCLES,
+        because nothing else here runs the guest.
+        """
+        self._status(idle=True)
+        for _ in range(limit):
+            if not (self._data() & 0x10):
+                return
+            self._step()
+        raise LinkTimeout('the guest never dropped its ack: the wire is stuck '
+                          'with D4 high after %d steps' % (limit * STEP))
+
+    # --- ...and the OTHER role: the host as the MASTER ------------------------
+    # The nibble layer is symmetric - `lp_snib` and `lp_rnib` are the guest's
+    # whichever end it is playing - so nothing below this line needed a second
+    # transport. What differs is only who speaks first.
+    #
+    # This is what tests OS88NET.COM, which until it existed had run on exactly
+    # one machine: the field one. tests/dosstub boots it on a cycle-accurate
+    # 8088 with a real port at 0x378 and no DOS under it; this end asks the
+    # questions NET.DRV would.
+    def mst_hello(self, tries=4, patience=3000000):
+        """NET.DRV's own: send 'O88?', read 'O88!' and a version byte.
+
+        NO HUNT on this side. The slave hunts because the master sweeps ports
+        and it may join mid-transfer; the master has just spoken, so the reply
+        is the next thing on the wire by construction.
+
+        IT RETRIES, because the slave's DWELL CAN EXPIRE UNDER IT. `slv_hunt`
+        waits SLAVE_DWELL ticks and then returns to `listen_once`, which
+        re-enters it - and the guest's clock runs while this end steps it, so
+        an exchange begun near the end of a dwell can have the magic accepted
+        and the reply never sent. Measured: the same script failed once and
+        passed once, decided by where 25 seconds of boot happened to leave the
+        guest.
+
+        That is not a fault to fix in the slave - it is what the dwell is FOR,
+        and a real master sweeps ports and re-sends for exactly this reason
+        (docs/NET-PLAN.md 1.4.5: the slave dwells and the master sweeps). So
+        this end sweeps too. `patience` is per attempt and deliberately short:
+        a reply that is coming at all is a few hundred thousand steps away.
+        """
+        last = None
+        for _ in range(tries):
+            saved = self.budget
+            self.budget = self.spent + patience
+            try:
+                self.send(MAGIC_Q)
+                got = self.recv(4)
+                if got == MAGIC_R:
+                    ver = self.recv_byte()
+                    self.budget = saved
+                    return ver
+                last = 'slave answered %r, wanted %r' % (got, MAGIC_R)
+            except LinkTimeout as e:
+                last = str(e)
+            finally:
+                self.budget = saved
+            self.lastop = None          # a fresh attempt owes no turnaround
+        raise LinkTimeout('no hello in %d attempts: %s' % (tries, last))
+
+    def mst_cmd(self, letter, arg=None):
+        """One command, and its argument word when it takes one."""
+        self.send_byte(ord(letter))
+        if arg is not None:
+            self.send_word(arg)
+
+    def mst_bye(self):
+        self.send_byte(ord('X'))
+
+    def mst_list(self, handle):
+        """NF_LIST -> (status, [32-byte entry]). The count is on the wire
+        before the entries are, so a refusal still completes the frame."""
+        self.mst_cmd('L', handle)
+        st = self.recv_byte()
+        n = self.recv_word()
+        ents = [self.recv(DE_SIZE) for _ in range(n)]
+        return st, ents             # ...and NO bye: that ends the session
+
+    def mst_chdir(self, handle):
+        """NF_CHDIR -> (status, parent handle). The parent comes back because
+        the kernel has no directory sector to read one out of."""
+        self.mst_cmd('C', handle)
+        st = self.recv_byte()
+        if st:
+            return st, None
+        par = self.recv_word()
+        return st, par
+
+    def mst_stat(self, folder, name):
+        """NF_STAT -> (status, handle, size, attr). The name is a fixed 13
+        bytes, NUL-padded, and the FOLDER goes with it (SPEC.md 62.10.1)."""
+        self.mst_cmd('S', folder)
+        self.send(name.encode('ascii').ljust(13, b'\0')[:13])
+        st = self.recv_byte()
+        if st:
+            return st, None, None, None
+        h = self.recv_word()
+        sz = self.recv_dword()
+        at = self.recv_byte()
+        return st, h, sz, at
+
+    def mst_read(self, handle, cap):
+        """NF_READ -> (status, bytes). The cap goes OUT, so an oversized file
+        is cut at the source instead of crossing and being discarded."""
+        self.mst_cmd('G', handle)
+        self.send_dword(cap)
+        st = self.recv_byte()
+        if st:
+            return st, b''
+        n = self.recv_dword()
+        return st, self.recv(n)
+
+    def mst_readat(self, handle, off, cap):
+        """NF_READAT -> (status, bytes). Past the end is a length of ZERO and
+        not a refusal, which is what lets a caller walk to the end without
+        knowing where it is."""
+        self.mst_cmd('A', handle)
+        self.send_dword(off)
+        self.send_word(cap)
+        st = self.recv_byte()
+        if st:
+            return st, b''
+        n = self.recv_word()
+        return st, self.recv(n)
+
+    # --- the write verbs, master side (SPEC.md 62.10.4.5) --------------------
+    # Every one of them is a folder, a name, whatever it carries, and ONE
+    # status byte back - a FERR_*, passed through from the far side untouched.
+    def _name13(self, s):
+        return s.encode('ascii').ljust(13, b'\0')[:13]
+
+    def mst_write(self, folder, name, data):
+        self.mst_cmd('U', folder)
+        self.send(self._name13(name))
+        self.send_dword(len(data))
+        self.send(data)
+        return self.recv_byte()
+
+    def mst_append(self, folder, name, data):
+        self.mst_cmd('P', folder)
+        self.send(self._name13(name))
+        self.send_word(len(data))       # ONE word: the chunked half of the
+        self.send(data)                 # pair, so a copy streams through it
+        return self.recv_byte()
+
+    def mst_delete(self, folder, name):
+        self.mst_cmd('D', folder)
+        self.send(self._name13(name))
+        return self.recv_byte()
+
+    def mst_rename(self, folder, old, new):
+        self.mst_cmd('N', folder)
+        self.send(self._name13(old))
+        self.send(self._name13(new))    # ...no length between them: the far
+        return self.recv_byte()         # side knows the first ends at 13
+
+    def mst_mkdir(self, folder, name):
+        self.mst_cmd('M', folder)
+        self.send(self._name13(name))
+        return self.recv_byte()
+
+    def mst_rmdir(self, folder, name):
+        self.mst_cmd('K', folder)
+        self.send(self._name13(name))
+        return self.recv_byte()
+
+    def mst_dfree(self):
+        """NF_DFREE -> (status, free bytes, granule)."""
+        self.mst_cmd('F')
+        st = self.recv_byte()
+        if st:
+            return st, None, None
+        free = self.recv_dword()
+        gran = self.recv_word()
+        return st, free, gran
+
+    # --- serving, once the link is up ----------------------------------------
+    def serve(self, tree, limit=64, idle=2000000):
+        """Answer commands until the master says NC_BYE, or `limit` of them.
+
+        THIS IS THE FILE SERVER, and it is here rather than in a file of its
+        own for the reason lplink.inc is shared between the driver and
+        tests/lptlink: the wire and what rides on it drift apart the moment
+        they live in two places. `tree` is what os88net.asm's findfirst walks,
+        as a dict - see FileTree below.
+
+        A command is answered and then LEFT: the master sends NC_BYE itself
+        after each reply (net_bye), so the loop returns to waiting rather than
+        assuming a session shape. Returning on the count is what keeps a test
+        from hanging when the driver asks something this does not implement.
+
+        RUNNING OUT OF COMMANDS IS THE ORDINARY ENDING and not a failure - the
+        gap between them is the user's thinking time and has no upper bound
+        (lplslv.inc's own note on why lp_rbyte_w waits forever). So the wait
+        for a command BYTE is allowed to expire and returns; a wait inside a
+        half-answered command is not, and still raises.
+
+        `idle` IS HOW LONG THE MASTER MAY BE SILENT, and it has to cover the
+        slowest thing the guest can do BETWEEN two commands - which is not
+        bounded by the wire at all. Opening a document is the case that found
+        this: the association looks for the app on the redirected volume, does
+        not find it, and then MOUNTS A FLOPPY AND READS THE PACKAGE OFF IT
+        before coming back to read the document. That is seconds of guest time
+        on a cycle-accurate drive, and at the default this end had already
+        given up and stopped driving the wire - so the guest's next command
+        went into a cable nobody was holding, timed out, and Note Pad came up
+        empty. It read exactly like the read path being broken.
+
+        So: pass a generous `idle` for any phase that can include a load, and
+        remember the cost is paid ONCE per call, at the end.
+        """
+        seen = []
+        for _ in range(limit):
+            saved = self.budget
+            # A CEILING, NOT AN INCREMENT, and the difference is the whole
+            # runtime. `budget += idle` leaves the wait bounded by the TOTAL
+            # budget, so "the master has nothing more to say" cost 60 million
+            # steps - 150,000 debug round trips, about two and a half minutes,
+            # at the end of every serve() call. Two of those is a test that
+            # times out before it prints its first line, which is exactly what
+            # it did.
+            self.budget = self.spent + idle
+            try:
+                c = self.recv_byte()
+            except LinkTimeout:
+                return seen              # nothing more to say: we are done
+            finally:
+                self.budget = saved
+            seen.append(chr(c))
+            if c == ord('X'):               # NC_BYE ENDS THE SESSION, exactly
+                return seen                 # as `serve` does on the real far
+                                            # end - it leaves its command loop
+                                            # and goes back to hunting for the
+                                            # magic. This used to `continue`,
+                                            # and that ONE LINE of forgiveness
+                                            # let the driver send a bye after
+                                            # every verb through a whole
+                                            # scripted session: the harness
+                                            # answered, the real slave would
+                                            # have stopped listening. A stand-in
+                                            # that is kinder than the thing it
+                                            # stands in for hides precisely the
+                                            # bugs it exists to find
+            if c == ord('I'):               # NC_INFO
+                self.send_byte(0)           # status
+                self.send_word(0)           # sectors: NONE. A redirected
+                                            # volume has none at all
+                self.send_byte(0)           # flags: bit 0 = read-only
+            elif c == ord('L'):             # NF_LIST: handle -> count, entries
+                h = self.recv_word()
+                ents = tree.list(h)
+                self.log.append('LIST folder=%d -> %d entries' % (h, len(ents)))
+                self.send_byte(0)
+                self.send_word(len(ents))
+                for e in ents:
+                    self.send(e)
+            elif c == ord('C'):             # NF_CHDIR: handle -> parent
+                h = self.recv_word()
+                par = tree.parent(h)
+                self.log.append('CHDIR handle=%d -> parent %s' % (h, par))
+                if par is None:
+                    self.send_byte(0x02)    # no such folder
+                    continue
+                self.send_byte(0)
+                self.send_word(par)
+            elif c == ord('S'):             # NF_STAT: folder + name -> handle
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                h = tree.find(fold, name)
+                self.log.append('STAT folder=%d %r -> %s'
+                                % (fold, name,
+                                   'handle %d' % h if h else 'NOT FOUND'))
+                if h is None:
+                    self.send_byte(0x02)
+                    continue
+                self.send_byte(0)
+                self.send_word(h)
+                self.send_dword(len(tree.data(h)))
+                self.send_byte(0x10 if tree.meta[h][1] == FileTree.T_DIR else 0)
+            elif c == ord('G'):             # NF_READ: handle + cap -> bytes
+                h = self.recv_word()
+                cap = self.recv_dword()
+                if h not in tree.meta:
+                    self.log.append('READ handle=%d -> NO SUCH HANDLE' % h)
+                    self.send_byte(0x02)
+                    continue
+                d = tree.data(h)[:cap]      # THE CAP IS HONOURED HERE, so an
+                self.log.append('READ handle=%d cap=%d -> %d bytes'
+                                % (h, cap, len(d)))
+                self.send_byte(0)           # oversized file is short at the
+                self.send_dword(len(d))     # source rather than sent and
+                self.send(d)                # thrown away
+            elif c == ord('A'):             # NF_READAT: a window
+                h = self.recv_word()
+                off = self.recv_dword()
+                cap = self.recv_word()
+                if h not in tree.meta:
+                    self.log.append('READAT handle=%d -> NO SUCH HANDLE' % h)
+                    self.send_byte(0x02)
+                    continue
+                d = tree.data(h)[off:off + cap]
+                self.log.append('READAT handle=%d off=%d cap=%d -> %d bytes'
+                                % (h, off, cap, len(d)))
+                self.send_byte(0)
+                self.send_word(len(d))      # ...ZERO past the end, which is
+                self.send(d)                # the contract and not an error
+            elif c in (ord('U'), ord('P')):     # NF_WRITE / NF_APPEND
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                n = (self.recv_dword() if c == ord('U') else self.recv_word())
+                d = self.recv(n)                # THE RUN IS TAKEN WHATEVER we
+                                                # do with it: the length is on
+                                                # the wire ahead of the bytes
+                st = tree.put(fold, name, d, append=(c == ord('P')))
+                self.log.append('%s folder=%d %r %d bytes -> %s'
+                                % ('WRITE' if c == ord('U') else 'APPEND',
+                                   fold, name, n,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('D'):             # NF_DELETE
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.remove(fold, name, want_dir=False)
+                self.log.append('DELETE folder=%d %r -> %s'
+                                % (fold, name,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('N'):             # NF_RENAME
+                fold = self.recv_word()
+                old = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                new = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.rename(fold, old, new)
+                self.log.append('RENAME folder=%d %r -> %r : %s'
+                                % (fold, old, new,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('M'):             # NF_MKDIR
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.mkdir(fold, name)
+                self.log.append('MKDIR folder=%d %r -> %s'
+                                % (fold, name,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('K'):             # NF_RMDIR
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.remove(fold, name, want_dir=True)
+                self.log.append('RMDIR folder=%d %r -> %s'
+                                % (fold, name,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('F'):             # NF_DFREE: free bytes, granule
+                self.send_byte(0)
+                self.send_word(tree.free & 0xFFFF)
+                self.send_word((tree.free >> 16) & 0xFFFF)
+                self.send_word(tree.granule)
+            else:
+                raise LinkTimeout('unknown command %r after %r'
+                                  % (chr(c), ''.join(seen)))
+        return seen
+
+
+# --- what the far side is serving --------------------------------------------
+# The entries go across as SPEC.md 19.1 staged entries, UNRESHAPED - the far
+# side's findfirst builds the row the Disk window draws, and nothing between
+# here and font_str touches it. So this file is where the layout has to be
+# right, and it is OSAPI_FS_ENT's, byte for byte:
+#
+#   +0  16  the DISPLAY name, NUL-terminated 8.3 (`MINES.O88`), not the
+#           space-padded on-disk field - the kernel reshapes nothing
+#   +16  2  type: 0 file, 1 package, 2 folder. NEVER 3: the parent link is
+#           the kernel's to synthesize (SPEC.md 19.5)
+#   +18  2  the driver's OPAQUE HANDLE, which the kernel only ever hands back
+#   +20  4  size in bytes, which fm_measure sums
+#   +24  8  zero
+#
+# The first draft of this laid it out as the FAT-ish 11/1/4/2 the on-disk
+# entry uses, which is a different structure that happens to be the same
+# length - so every field was in the wrong place and nothing could say so.
+DE_SIZE = 32
+
+
+class FileTree(object):
+    """A folder tree with handles, standing in for os88net.asm's findfirst.
+
+    Handle 0 is the root, which is the ABI's own convention (FSV_CHDIR takes
+    0 for it) and not this file's - so the root cannot be a node like any
+    other and the tree is keyed from 1.
+    """
+
+    def __init__(self, free=1474560, granule=512):
+        self.free = free
+        self.granule = granule
+        self.nodes = {0: (None, [])}    # handle -> (parent, [children])
+        self.meta = {}                  # handle -> (name, type, size)
+        self.blobs = {}                 # handle -> real bytes, when it matters
+        self._next = 1
+
+    T_FILE, T_PKG, T_DIR = 0, 1, 2      # OSAPI_FS_ENT's, and 3 is not ours
+
+    def add(self, parent, name, size=0, typ=T_FILE, content=None):
+        h = self._next
+        self._next += 1
+        self.nodes[parent][1].append(h)
+        self.nodes[h] = (parent, [])
+        self.meta[h] = (name, typ, len(content) if content is not None
+                        else size)
+        if content is not None:
+            self.blobs[h] = bytes(content)
+        return h
+
+    def data(self, h):
+        """A file's contents.
+
+        GENERATED rather than stored unless `content=` said otherwise: byte i
+        of handle h is (i + 7h) & 0xFF. The same trick the dosstub uses at the
+        other end and for the same reason - the side receiving can predict
+        every byte, so `it arrived` and `it arrived CORRECT` stop being one
+        claim. `content=` is for the cases where the BYTES have to be real: a
+        document Note Pad will render, a package the loader will validate."""
+        name, typ, size = self.meta[h]
+        if typ == self.T_DIR:
+            return b''
+        if h in self.blobs:
+            return self.blobs[h]
+        return bytes((i + 7 * h) & 0xFF for i in range(size))
+
+    def find(self, folder, name):
+        """A name in a folder -> its handle, or None."""
+        if folder not in self.nodes:
+            return None
+        for c in self.nodes[folder][1]:
+            if self.meta[c][0].upper() == name.upper():
+                return c
+        return None
+
+    # --- the write verbs (SPEC.md 62.10.4.5) --------------------------------
+    # Each answers a FERR_*, which is what crosses the wire: 0 ok, 3 name,
+    # 4 no such thing, 5 exists, 8 protected. They are apps/os88api.inc's
+    # numbers and NOT the block protocol's int 13h codes, which are a
+    # different numbering that happens to use small integers too.
+    F_OK, F_NAME, F_NOENT, F_EXIST, F_PROT = 0, 3, 4, 5, 8
+
+    def put(self, folder, name, data, append=False):
+        if folder not in self.nodes:
+            return self.F_NOENT
+        h = self.find(folder, name)
+        if append:
+            if h is None:
+                return self.F_NOENT     # APPEND is to an EXISTING file, which
+            if self.meta[h][1] == self.T_DIR:   # is 18.4.4's contract
+                return self.F_PROT
+            self.blobs[h] = self.data(h) + data
+        else:
+            if h is not None and self.meta[h][1] == self.T_DIR:
+                return self.F_PROT
+            if h is None:
+                h = self.add(folder, name, content=data)
+                return self.F_OK
+            self.blobs[h] = bytes(data)
+        n, t, _ = self.meta[h]
+        self.meta[h] = (n, t, len(self.blobs[h]))
+        return self.F_OK
+
+    def remove(self, folder, name, want_dir):
+        h = self.find(folder, name)
+        if h is None:
+            return self.F_NOENT
+        isdir = self.meta[h][1] == self.T_DIR
+        if isdir != want_dir:
+            return self.F_PROT          # DELETE is not RMDIR and the far side
+                                        # must not let one do the other's work
+        if isdir and self.nodes[h][1]:
+            return self.F_PROT          # ...and only the side holding the
+                                        # directory can answer "is it empty"
+        self.nodes[folder][1].remove(h)
+        del self.nodes[h]
+        del self.meta[h]
+        self.blobs.pop(h, None)
+        return self.F_OK
+
+    def rename(self, folder, old, new):
+        h = self.find(folder, old)
+        if h is None:
+            return self.F_NOENT
+        if self.find(folder, new) is not None:
+            return self.F_EXIST
+        n, t, s = self.meta[h]
+        self.meta[h] = (new, t, s)
+        return self.F_OK
+
+    def mkdir(self, folder, name):
+        if folder not in self.nodes:
+            return self.F_NOENT
+        if self.find(folder, name) is not None:
+            return self.F_EXIST
+        self.add(folder, name, 0, self.T_DIR)
+        return self.F_OK
+
+    def parent(self, h):
+        if h not in self.nodes:
+            return None
+        p = self.nodes[h][0]
+        return 0 if p is None else p
+
+    def entry(self, h):
+        name, typ, size = self.meta[h]
+        b = bytearray(DE_SIZE)
+        b[0:len(name)] = name.encode('ascii')    # ...and the rest stays NUL
+        b[16] = typ
+        b[18] = h & 0xFF
+        b[19] = (h >> 8) & 0xFF
+        b[20] = size & 0xFF
+        b[21] = (size >> 8) & 0xFF
+        b[22] = (size >> 16) & 0xFF
+        b[23] = (size >> 24) & 0xFF
+        return bytes(b)
+
+    def list(self, h):
+        """This folder's children. NO '..' AND NO SORT - the kernel does both
+        (SPEC.md 19.4/19.5), and a driver that helped would be a second
+        opinion about a listing's order, which is how a display index stops
+        meaning what the hit-test resolves."""
+        if h not in self.nodes:
+            return []
+        return [self.entry(c) for c in self.nodes[h][1]]

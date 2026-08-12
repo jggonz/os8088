@@ -310,9 +310,22 @@ make dosstub  # JUST ENOUGH DOS TO RUN A .COM, on a machine that has none
               # FSIZE=64M / FSIZE=256 (the size arithmetic at its ends),
               # FAILOPEN=1 (DOS says no), ARGS='/RO /P:378' (the command
               # tail - argument parsing is code nothing else here executes).
+              # THEY ARE STAMPED (DSSTAMP), because none of them is a
+              # prerequisite of anything and a second `make dosstub` with a
+              # different tail used to rebuild NOTHING and run the previous
+              # run's arguments - VIDSTAMP's trap exactly, and it cost a run
+              # that said /W did not work when /W had never reached the binary
               # It refuses an unimplemented int 21h call LOUDLY, printing AH
               # and halting: a stub that returns a plausible zero is a harness
-              # that has started lying about the thing under test
+              # that has started lying about the thing under test. It
+              # implements what OS88NET.COM CALLS and nothing else - which is
+              # sixteen int 21h functions now, not seven, because the DOS side
+              # became a file server (SPEC.md 62.10.4.2): a nine-row synthetic
+              # directory behind 4Eh/4Fh/47h/3Bh/36h/19h/0Eh/1Ah/25h. Growing
+              # it towards what the program does NOT call is what its header
+              # forbids; growing it to cover what the program does is the file
+              # working. Drive it with tests/lptlink/partner.py in its MASTER
+              # role, which is what finally executed that half of the cable
 make comscan  # the SERIAL PORT SURVEY (tests/comscan) - the field diagnostic
               # for "the mouse was not detected on real hardware" (SPEC.md
               # 9.5). Builds build/comscan.img (360K, BOOTABLE - no DOS, no
@@ -2674,26 +2687,40 @@ one-of-a-kind by accident rather than by design, meeting its second instance
 years later with no diagnostic between the cause and the symptom.**
 
 **NET.DRV is that second instance, and it is a LapLink cable as a volume**
-(SPEC.md §62, docs/NET-PLAN.md). The DOS side (`OS88NET.COM`) serves 512-byte
-sectors out of an image file and everything above `dsk_xfer` works unchanged —
-which is why block mode is stage 1 and the file redirector is stage 2: this is
-~2KB of driver and **172 bytes of kernel**, the redirector is ~400 more across
-twelve branch sites, and it is worth building on a transport somebody has used
-in anger. **3,741 bytes/second measured** (PERFORMANCE.md Set 39), 5.7x slower
-than the 5150's own floppy; what it buys is not speed but that a file crosses
-it without docs/FIELD-MACHINES.md's seven-step path. Three things to know
-before touching it. The transport (`drivers/net/lplink.inc`) is `%include`d by
+(SPEC.md §62, docs/NET-PLAN.md). **It is a `DRVC_FILE` REDIRECTOR now, not a
+block volume** (SPEC.md §62.10): the far side answers questions about FILES
+and `DSV_BLK` is 0, so nothing in os8088 asks it for a sector any more. Block
+mode was stage 1 and everything above `dsk_xfer` worked unchanged, which was
+the whole bet and it paid — the source is kept and still builds, behind
+`OS88NET`'s `/I:` on the DOS end, because stage 2 supersedes it outright (no
+32MB cap, no cache-coherency hazard, the remote machine's *real* filesystem).
+**3,741 bytes/second measured** (PERFORMANCE.md Set 39), 5.7x slower than the
+5150's own floppy; what it buys is not speed but that a file crosses it
+without docs/FIELD-MACHINES.md's seven-step path. Four things to know before
+touching it. The transport (`drivers/net/lplink.inc`) is `%include`d by
 **both** the driver and `tests/lptlink`, so a wire fix cannot drift between the
 diagnostic and the thing it diagnoses. **Every deadline is in TICKS and never
 in polls** — a poll is ~15us on a 4.77MHz 8088 and ~1us on anything modern, so
 a poll-counted timeout had the fast end giving up inside the slow end's
 ordinary response, and the whole point of this cable is that the two ends are
-not alike. And **MartyPC can test everything except the partner**:
-`os8088_5150_cga_lpt` and `os8088_xt_hdd` have Centronics cards with readable
-data registers, so the scan, the attach, the publication, the page and
-`net_connect`'s bounded failure are all verified there — but the status lines
-read a constant, so `mst_hello` always times out. The wire is the 5150's
-question.
+not alike. **`NC_BYE` ends the SESSION and terminates no command** — the far
+side leaves its command loop on one and goes back to hunting for the magic, so
+a bye after every verb tore the link down and the next command arrived at a
+slave that had stopped listening; it belongs to Connect and Disconnect alone.
+**A LETTER IS NOT FREE JUST BECAUSE THE VERB IS NEW** — `READ` and `WRITE`
+were pinned as `R` and `W` in SPEC.md §62.10.1 from the verb names alone, and
+block mode already had both, in the same one-byte space and the same DOS-side
+command loop; they are `G` and `U`, and the mode flag that would have "fixed"
+it is this tree's own second-opinion failure wearing a new hat.
+And **BOTH ENDS RUN ON MARTYPC NOW**, which reverses what this paragraph used
+to say. `tests/lptlink/partner.py` drives the status lines the guest polls
+(SPEC.md §62.10.3) so the os8088 half completes a real handshake and a real
+mount; and the DOS half is the mirror — `tests/dosstub` boots `OS88NET.COM`
+on a cycle-accurate 8088 with a real port at `0x378`, and `partner.py` plays
+NET.DRV. Only the WIRE's verdict is still the 5150's question. **A harness
+that is kinder than the thing it stands in for hides precisely the bugs it
+exists to find**: `partner.py` read `NC_BYE` as "carry on" and the protocol
+bug above survived a whole scripted session looking perfect.
 
 **Every volume can own its FAT window, floppies included** (SPEC.md
 §18.8.1/§18.8.2) — `DSK_FAT_SECS` sectors of heap, claimed at
@@ -3148,8 +3175,11 @@ true now, are never *finished*, and so have no lifetime to share) and
 Missile's is a *banner* on a fullscreen exclusive surface where there is no
 bar to borrow. Those three did not move; Note Pad's and Paint's are gone.
 
-**It lives in the bar's right end** (§12.8's file-activity widget's
-precedent), and that is the whole design rather than a decoration. The bar
+**It lives in the bar's right end — in the CLOCK's field** (§59.8; it was
+the menus segment's right end, on §12.8's file-activity widget's precedent,
+until a long enough message started covering the frontmost application's own
+menu titles). That placement is the whole design rather than a decoration.
+The bar
 **can never be covered** — windows clamp to `y >= MBAR_H` — so there is no
 clip region, no occlusion test, no `WF_SAVEU`/raise-cache interaction and
 none of §11.3's granularity rule; and the bar has **one painter**, so a toast
@@ -3172,15 +3202,17 @@ holds the lock, a worker holds nothing, `gfx_lock` is not reentrant — **and
 callback) would otherwise appear after the thing it announces, so it draws on
 the spot when `[gfx_lock_flag]` is set **and** `[sch_cur]` is 0; both halves
 are needed, because the flag says somebody holds it and only the task test
-says it is us. **Bit 7 of a `menu_bcell` byte is the INVERSION flag and not a
-character** — in the cell byte rather than a table of its own, because a cell
-whose character did not change but whose highlight did has to read as a
-difference to `menu_bput`, which a space at the strip's edge is (§27.8's
-trick). **The strip always ends at the segment's last cell**, which is what
-bounds `menu_bemit` to at most two runs. And **`fpg_begin` retires a live
-toast**, because a copy arms and disarms that widget per chunk and the two
-cannot share the pixels. **The deadline test is `js`, not `jg`** — modular
-arithmetic between two free-running words, §45.15's trap.
+says it is us. **`menu_draw_clock` is the strip's painter**, so "the clock
+may not draw while a toast is up" is not a rule anybody has to obey — the
+field is composed once, whole, and whoever owns a cell owns it; the clock
+comes back on its own because the strip going away is just a different
+composition of the same field. **And the strip hides only what it covers**:
+it is its message plus one inverted space at each end and no wider, laid over
+the LEFT of a field the clock was already staged into right-aligned, so a
+short message lands entirely in the leading spaces and costs the clock
+nothing, while a long one eats the date before the time. **The deadline test
+is `js`, not `jg`** — modular arithmetic between two free-running words,
+§45.15's trap.
 
 **The Disk window's verdicts went the same way (SPEC.md §59.5)**, and that is
 where the drawing code actually fell out. Its status line carried five things
@@ -3199,8 +3231,8 @@ per window because one global put `Bad package` on every open Disk window at
 once, and a toast belongs to no window. `toast_say` (AL = index, BX = table,
 CX = length) is the shared body, carrying in one place the bound whose absence
 once made that whole ladder silent. **Paint's `Loading...` went from the other
-direction**: §12.8's widget reports the same read *live and in the same
-pixels*, so `fpg_begin` retired the toast moments after it went up. Its
+direction**: §12.8's widget reports the same read *live*, and back when the
+two shared pixels `fpg_begin` retired the toast moments after it went up. Its
 `Saving...` stays — a GIF encodes 125,000 pixels before the floppy starts and
 the widget cannot report work that has not reached the disk.
 
@@ -3212,14 +3244,17 @@ at the moment it happens now, on a bar that is still there after the panel's
 own window has been destroyed; `cp_drv_cap` and `CP_DCAPY` are gone with it,
 and `[cp_dsave]` survives only to tell `cp_flush_close_x` whether to retry.
 Success speaks too (`Settings Saved`), which the deferred caption could not
-afford: a save is a thing the user waited seconds of floppy for. **Subject,
-outcome, cause — one string per CAUSE** (`Settings not saved: wrong disk in
-A:` / `: disk error`), because a message that says only that something failed
-sends the reader looking, and the bar has room: the menus segment is **50
-cells** on the narrowest adapter against 38 for the longest of these, so
-terseness buys nothing and costs the reason. Three
-orderings hold it up: it is said AFTER the write (`drv_cfg_save` arms §12.8's
-widget and `fpg_begin` retires a live toast), **`toast_owner_gone` moved to
+afford: a save is a thing the user waited seconds of floppy for. **Outcome,
+cause — one string per CAUSE** (`Not saved: need disk A:` / `: disk error`),
+because a message that says only that something failed sends the reader
+looking. The SUBJECT is what these gave up at §59.8: they read
+`Settings not saved: wrong disk in A:` while the strip had the menus
+segment's 50 cells, and the clock's field is 25 — the panel the user just
+closed is the subject and was the only thing on screen, where dropping the
+cause leaves a message nobody can act on. Three
+orderings hold it up: it is said AFTER the write (which used to be forced by
+that same widget and is now just the verdict following the work),
+**`toast_owner_gone` moved to
 the TOP of `app_close_win`** so the panel's last act is not killed by its own
 teardown — by construction rather than by a claim about which slot
 `inst_caller` answers with — and it stages rather than drawing, so
@@ -3229,7 +3264,9 @@ logic), the per-driver row states, which are status rather than verdicts, and
 `Not Enough Ram`, which is a greying explanation.
 
 **A WIDE strip hung the machine (SPEC.md §59.7), and every earlier test
-passed.** `toast_room` lowers `[menu_bn]`, and `menu_bput` DROPS a cell past
+passed** — and the guard outlived the tenant, because §59.8 took the strip
+out of this segment altogether. `toast_room` lowered `[menu_bn]`, and
+`menu_bput` DROPS a cell past
 it *without advancing DI* — so `menu_bpadc`, which pads by calling `menu_bput`
 until DI reaches its target, spins forever on a target beyond `[menu_bn]`.
 Unreachable while `[menu_bn]` was always the whole segment (`menu_layout`
@@ -3250,6 +3287,24 @@ standard). Note Pad −239 bytes, Paint −138, which is heap and does not offse
 it. Verified on a cycle-accurate 5150/CGA: the bar comes back **0 differing
 bytes** after an expiry, the two-run split emit is **0 differing bytes**
 against a forced full bar redraw, and `pixcheck` went **227 → 0**.
+
+**§59.8 is a NET SAVING of 189 bytes** — `.text` −171, `.bss` −18 — because
+`toast_room`, `toast_compose` and `menu_bemit`'s two-colour split all went and
+nothing replaced them but one byte and a second `font_run` call. On its own
+branch that gave an image RUNG back (`KERN_SIZE` 100,864 → 100,352, spare
+4,096 → 4,608); merged onto `elendilon`, where §11.96's drag cache and the
+snap work had already spent that step, the same 189 bytes land INSIDE the rung
+and cross nothing — the rung's slack goes 164 → 353 bytes and the footprint
+spare stays at 4,096. Both numbers are true and the second is the one the
+machine sees, which is the accounting rule in docs/KERNEL-MEMORY.md read the
+way it is written. Verified on the cycle-accurate 5150 with
+CGA, Hercules AND VGA mode 12h: while a strip is up, **0 differing pixels**
+left of `[vid_clk_hx]` and **0** in the clock cells right of the strip, and
+**0** across the whole bar once it expires — on a 5-char message (7 cells,
+the clock untouched), a 17-char one (19 cells) and `TOAST_MAX` exactly (the
+whole 25-cell field). A/B'd against `REDRAWFULL=1`: **0 differing pixels** at
+the desktop, with a strip up, and with a strip up through a full bar
+overdraw.
 
 ### The system clipboard (SPEC.md §55, `kernel/clip.inc`)
 

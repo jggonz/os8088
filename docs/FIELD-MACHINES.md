@@ -325,13 +325,72 @@ and `shl clk/bit x100` read **29**, both because they are computed against
 **That half is solved: send it `combo.img`.** It carries the ordinary shipped
 kernel with no adapter forced, so the §39.1 probe runs and answers VGA on
 this machine — there is no "VGA field disk" to add, and the trap that ate the
-first set is not in the default ask any more. What is still outstanding is
-the other half: the two **8088-only derived rows** (`est CPU MHz x100` and
-`shl clk/bit x100`) should say so on a tier-1 machine rather than printing a
-number computed against instruction timings a 286 does not have. It also has
+first set is not in the default ask any more. **And the other half is now
+closed too**: the two 8088-only derived rows (`est CPU MHz x100` and `shl
+clk/bit x100`) carry a book per CPU tier and pick by `[cpu_tier]`
+(PERFORMANCE.md Part 8.1) — this machine's own report is what validated
+them, and it now reads its clock correctly instead of printing a number
+computed against timings a 286 does not have. It also has
 a known quirk — **it sometimes decides to boot in mono** — which may be what
 put it into the CGA path in the first place, and which the Display page can
 now correct from inside the running OS.
+
+**It has since found a real bug, and it is the second machine to find the same
+one** (docs/FIELD-NOTES.md 21, SPEC.md §18.97.2). It came up with **no Drive B**
+and a 1.2MB 5.25" drive plainly present: §18.97's probe removed the row,
+because its only removing path is "ST3's TRK0 read clear before and after a
+RECALIBRATE" and note 19's IBM 4865 had already shown a **present, working**
+drive answering exactly that. §18.97's justification is 5150-specific — the
+equipment word there is the SW1 **DIP switches**, a factory default worth
+disproving — and this machine takes the same count out of **CMOS setup**,
+where it is somebody's decision. The verdict is acted on **on tier 0 only**
+now; the probe still runs and still publishes.
+
+**And 1.2MB media was never the problem**, which is worth recording because it
+was the report's own second guess: §18.2's BPB rule 11 whitelists 15 sectors
+per track and rule 13's `spt*heads*80` is 2,400 sectors — a 1.2MB disk
+exactly. What was missing was the drive's ICON, not its ability to mount.
+
+**Confirmed fixed on the machine: drive B is back.** So the equipment word
+really did claim two drives and the probe really did reach its removing path
+— the `claimed 1` branch, a dead DS1287, is ruled out.
+
+**AND IT IS THE ONE MACHINE HERE WITH NO 360KB DRIVE**, which is worth
+stating as a property of the register rather than as a detail of one bug:
+`make combo` builds a **360KB** disk because the calibration 5150 has one
+5.25" drive, and that disk cannot be read here at all. This machine takes
+**1.44MB** in drive A. Until a `combo144` target exists, the disk for it is
+`os88disk.py` called directly with `--size 1440`, `--boot build/boot.bin` and
+the Makefile's own `$(COMBOARGS)` — and 1.44MB is 2,847 clusters against the
+360's 354, so the three things `combo` documents dropping all fit: **BIGFILE.DAT**
+(without which `sysbench` skips the cache-capacity sweep and the DOS
+read-rate cross-check), BEVERLY.MOD and README.TXT. A disk built for this
+machine should carry them; there is no reason not to.
+
+**The `sysbench` came back and it diagnosed the controller** (SPEC.md
+§18.97.3, docs/FIELD-NOTES.md 21). `claimed 2` — so the count did reach us
+and the DS1287 is fine — with `ST3 = 0021` on **both** reads and `ST0 =
+0021`. Against the 5150's genuinely absent drive, which answers `ST3 = 0021`
+twice and `ST0 = 0071`, that is **the same ST3 byte for opposite ground
+truth**, and an ST0 that separates them outright: interrupt code 00, normal
+termination, no Equipment Check is the FDC saying *the recalibrate completed
+and the head reached track 0*. The drive is there, the head is where the
+controller says, and only TRK0's path to ST3 bit 4 is missing. ST0 is now
+consulted before any removal and only ever to answer *keep*.
+
+**One row in that report is not a fault:** `mouse found 0` with both ports
+present is what a machine with nothing plugged in says — the rule above
+applies, ask what was connected.
+
+**And one of them closed this machine's oldest outstanding item.**
+`est CPU MHz x100` read **8879** on a 16MHz 286, because the CPU block quoted
+Intel's 8086 table on every machine. `sysbench` carries a book per tier now
+(PERFORMANCE.md Part 8.1) and **this report is what validated it**: re-derived
+against the 286 book from its own measured column, the two independent
+estimates are **15.83 and 15.86 MHz** — agreeing to 0.2% on a machine the
+table above calls 16 MHz. `shl clk/bit` went the same way, from a
+meaningless 28 to **92** against the 286's book value of 100. A re-run here
+will print them directly.
 
 ---
 

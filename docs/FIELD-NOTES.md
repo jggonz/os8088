@@ -2060,3 +2060,147 @@ the search moves back to the ISR; if it is not, the question becomes *why* a
 press outlives its dispatch — `ui_drag`'s own `.track` drains the queue looking
 for the MUP and discards everything else, which is the first place to suspect
 of leaving one behind.
+
+## 21. No Drive B on the Packard Bell 286, and a 1.2MB drive sitting right there (FIXED, SPEC.md 18.97.2 — CONFIRMED on the machine)
+
+**Reported:** the Packard Bell Victory 286 (docs/FIELD-MACHINES.md) comes up
+with **no Drive B on the desktop**. The machine has a 1.44MB drive A and a
+**1.2MB 5.25" drive B**, and the report came with the right second guess
+attached — *or alternatively we don't support 1.2MB 5.25 drives*.
+
+**It is not the media, and that half was settled by reading.** §18.2's BPB
+rule 11 whitelists **15** sectors per track explicitly, rule 12 takes 2 heads,
+and rule 13's `spt*heads*80` is 2,400 sectors — which is a 1.2MB disk exactly.
+A 1.2MB FAT12 volume mounts. It could never have been the symptom either: a
+media problem shows as a drive icon that fails to open, and what was missing
+was **the icon**.
+
+**It is §18.97's probe, and the tree already held the demonstration.** The one
+path that removes a drive fires when ST3's TRK0 reads clear *before and after*
+a RECALIBRATE. Note 19 above is a **present, powered, DOS-readable** IBM 4865
+answering exactly that — `ST3 = 22` twice, `ST0 = 72`, `probe stop 03` — with
+media in it, mounting and being read through `int 13h` at the same moment.
+So "TRK0 never came up" already had a known second meaning, and §18.98.1
+routed the external pair around it while **unit 1 was left standing on it**.
+
+**The fix is about the CLAIM, not the drive** (SPEC.md §18.97.2). §18.97
+contests unit 1 because on a 5150 the equipment word is the **SW1 DIP
+switches** — two drives is the factory position and is wrong on most 5150s, so
+it is a default worth disproving. An AT-class machine takes the identical
+count out of **CMOS setup**, which is somebody's decision, and §18.98.1 had
+already ruled that a deliberate assertion is trusted. The rule was right and
+was applied to the wrong axis: it is not *how many* drives are claimed that
+decides whether a claim is evidence, it is **where the number came from**. So
+the probe still runs everywhere and still publishes what it found, and the row
+is retired **on tier 0 only** (`[cpu_tier]`, §41.1).
+
+**Verified, and the A/B is one binary on two CPUs.** No emulator here can
+produce a real absent verdict — MartyPC synthesizes `ST3 = 0x79` (TRK0 **set**)
+for a drive its own config does not have, and QEMU's FDC returns
+`0x28 | (track==0 ? 0x10 : 0)` off a `track` that is 0 for an absent drive, so
+both answer *present* unconditionally (measured: QEMU reads `ST3 = 0x39`,
+`probe stop 01`). `make FDDABSENT=1` forces the verdict without touching a
+port, which makes the DECISION testable while leaving the FDC conversation the
+5150's question:
+
+| | MartyPC 5150 (8088) | QEMU (386) |
+|---|---|---|
+| `cpu_tier` | 00 | 02 |
+| claimed / ran | 02 / 02 | 02 / 02 |
+| ST3 / ST3B / ST0 | 21 / 21 / 71 | 21 / 21 / 71 |
+| `probe stop` | 03 (absent) | 03 (absent) |
+| `verdict` | **0 — retired** | **1 — kept** |
+| `dsk_vtab` row 1 | KIND FF, flags 0 | KIND 00, flags 1 |
+| desktop | `A:` alone | `A:` **and** `B:` |
+
+The shipped (no-knob) kernel is **0 differing framebuffer bytes of 384,000**
+against the build before the change, on a machine where the probe finds a
+drive — the new branch is behind a `jnz` no emulator reaches.
+
+**What is still open is the Packard Bell's ST3 itself**, and this fixes the
+kernel's response to it rather than explaining it. It is note 19's question on
+a second machine and a second controller. One candidate is the µPD765's
+**77-step RECALIBRATE limit** against an **80-cylinder** drive — which both
+the 1.2MB 5.25" and the 4865 are, and which is why real drivers issue the
+command twice — but it does not survive on its own: a head parked past
+cylinder 77 is walked to within 3 of track 0 by the failed attempt, so the
+*next* boot would succeed and the fault would not repeat. **Ask for a
+`sysbench` run** (`make combo`): §57.5's `FD` block reports `claimed`,
+`probe ran`, both ST3 reads, the drained ST0, `probe stop` and `verdict` per
+unit, and it separates the three live possibilities in one line —
+`claimed 1` (the drive count never reached us at all, which on a machine with
+a potted DS1287 whose battery is 30 years old is worth ruling out first),
+`claimed 2` + `probe stop 03` (this bug, now fixed), or `probe stop 04` (the
+controller refused, which keeps the drive and was never the symptom).
+
+**Confirmed on the machine.** A 1.44MB `combo` disk was built for it — the
+Packard Bell has no 360KB drive, which is the first time the register's
+default ask has not fitted a machine in it — and **drive B is back on the
+desktop**. That is the reported symptom, gone, on the hardware that reported
+it.
+
+**What that confirms and what it does not.** It confirms the diagnosis was in
+the right routine and that §18.97.2's tier test is what the machine needed:
+the equipment word DID claim two drives (so the `claimed 1` branch — a dead
+DS1287 — is ruled out), and the probe DID reach its removing path, because
+nothing else on that machine had changed. It does **not** explain the FDC:
+no `sysbench` report has come back yet, so the ST3/ST0 bytes this machine
+actually answers are still unread, and note 19's question — why a present
+drive reports TRK0 clear through a recalibrate, on two different controllers
+now — stays open. §57.5's block is on the disk that is over there; the run is
+still worth asking for, and it is now the only thing that could ever explain
+this rather than route around it.
+
+**The `sysbench` came back, and it diagnoses the controller** (SPEC.md
+§18.97.3). Unit 1 on the Packard Bell, whose drive is present and works:
+
+```
+drives int 11h claims    2      ST3 motor off hex    0021
+probe ran bitmap hex  0002      ST3 after seek hex   0021
+probe stop hex        0003      ST0 drained hex      0021
+```
+
+`claimed 2` closes the last alternative — the count did reach us, so the
+DS1287 is fine and the probe really did reach its removing path. And set
+against §18.97.1's 5150, whose drive B genuinely is not there, the two bytes
+say opposite things:
+
+| | ST3, twice | ST0 | truth |
+|---|---|---|---|
+| Packard Bell, unit 1 | **`21`** | `21` — IC 00, SE, **EC clear** | present |
+| 5150, unit 1 | **`21`** | `71` — IC 01, SE, **EC set** | absent |
+
+**ST3 is the same byte for a present drive and an absent one.** Not similar —
+identical, on both reads, on two machines with opposite ground truth. That
+retires the last hope that §18.97's discriminator could be made to work by
+being read more carefully.
+
+**ST0 separates them outright**, and it says something specific: interrupt
+code **00, normal termination**, seek end set, no Equipment Check is the
+controller reporting *the recalibrate completed and the head reached track
+0*. So the drive is there, the head is where the FDC says it is, and only
+TRK0's path to ST3 bit 4 is missing. That is a fact about a **controller**,
+not about a drive — which is the shape note 19 has been missing, and the
+first real progress on it.
+
+**So ST0 is now consulted before anything is removed, and only ever to change
+the answer to *keep*** (`FDD_S_SEEKST0`, step 05). EC clear proves presence;
+EC **set proves nothing**, because the 4865 above is present and sets it.
+That asymmetry is the whole design and it is why this cannot make the probe
+remove a drive it would not already have removed.
+
+**It is a second guard, not a replacement for §18.97.2**, and they cover
+different machines: the tier test declines a 5150-shaped correction on a
+machine whose count came from CMOS, and this one saves a **tier 0** machine
+with a drive of this kind — which the tier test by construction cannot. The
+Packard Bell needed the first. The next XT with a 1.2MB drive needs this.
+Measured, all four cells (`make FDDABSENT=1` / `=2`, MartyPC 5150 and QEMU):
+the only one that removes a drive is an absent drive on tier 0.
+
+**Two things in that report are NOT faults and should not be chased.**
+`mouse found 0` with both ports present and no identify bytes is what a
+machine with nothing plugged into either port says — ask before diagnosing
+it (docs/FIELD-MACHINES.md's rule, learned on the 5150). And `est CPU MHz
+x100` reading **8879** on a 16MHz 286 is the known 8088-only derived row,
+still outstanding in the register: it is computed against instruction timings
+a 286 does not have, and it should say so rather than print a number.

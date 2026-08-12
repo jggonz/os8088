@@ -1245,8 +1245,12 @@ fm_s_swapd:   db 'A:', 0        ; stamped by dsk_bootltr like every other
                                 ; message that names the system volume
 fm_s_swap2:   db 'Insert the disk to format, then Enter', 0
 fm_s_swapk:   db 'Enter=ready  Esc=no', 0
-fm_s_swapno:  db 'Format needs the system disk in '
-fm_s_swapnd:  db 'A:', 0        ; stamped, same rule
+fm_s_swapno:  db 'Format needs disk '  ; ...and this one is a TOAST, so it is
+fm_s_swapnd:  db 'A:', 0        ; bounded by TOAST_MAX = 23 rather than by the
+                                ; status line's width (SPEC.md 59.8): it read
+                                ; `Format needs the system disk in A:` while
+                                ; the strip had the menus segment to sit in.
+                                ; Stamped, same rule as the two above it
 fm_swaptab:   dw 0, fm_s_swapno ; toast_say never uses index 0
 FM_NSWAP  equ 2
 fm_s_fmtk2:   db 'Spc=size  Enter=yes  Esc=no', 0   ; ...when there IS another
@@ -1255,7 +1259,12 @@ fm_s_fmtok:   db 'Formatted ', 0    ; ...and the verdict, SPEC.md 59.6's own
                                     ; reasoning: a format is seconds of floppy
                                     ; the user waited for, so success speaks
                                     ; rather than only failure
-fm_s_fmtbad:  db 'Drive cannot reach 720K - made 360K', 0
+fm_s_fmtbad:  db 'Made 360K, not 720K', 0   ; the OUTCOME, where this said the
+                                    ; cause first and the outcome last
+                                    ; ('Drive cannot reach 720K - made 360K')
+                                    ; and had 40 characters to do it in. What
+                                    ; the user has to know is which disk they
+                                    ; are now holding (SPEC.md 59.8)
 fm_fmtbadt:   dw 0, fm_s_fmtbad     ; toast_say never uses index 0, so a
 FM_NFMTBAD    equ 2                 ; one-message table is two slots (59.5)
 fm_s_delq2:   db ' +contents? Del=yes Esc=no', 0   ; ...for a folder
@@ -4034,9 +4043,11 @@ fm_edit_commit:
     ; already saved AX, SI and DI, so a proc here would spend ten bytes of
     ; `.cold` re-saving them - and the cold rung had 51 bytes in it.
     ;
-    ; It is said AFTER fmv_load, not before: a mount can arm SPEC.md 12.8's
-    ; file-activity widget, which owns these pixels and which toast_show
-    ; refuses while it is up - 59.6's own ordering.
+    ; It is said AFTER fmv_load, not before. That was FORCED until SPEC.md
+    ; 59.8: a mount arms SPEC.md 12.8's file-activity widget, which shared
+    ; the strip's pixels and which toast_show refused while it was up. The
+    ; strip is in the clock's field now and the two are independent, so this
+    ; is just the tidier order - the verdict after the work.
     pop ax                      ; ...the banked verdict
     or al, al
     jnz .fmtfell                ; it could not reach 720K and made 360K
@@ -4060,9 +4071,9 @@ fm_edit_commit:
     pop cx
     jmp short .bcast
 .fmtfell:                       ; ...the OTHER verdict (SPEC.md 18.96.2), said
-    push bx                     ; here for 22.12.1's reason: a mount can arm
-    push cx                     ; 12.8's widget, and toast_show refuses while
-    mov al, 1                   ; it is up
+    push bx                     ; here for 22.12.1's reason, which since 59.8
+    push cx                     ; is an ordering rather than a requirement
+    mov al, 1
     mov bx, fm_fmtbadt
     mov cx, FM_NFMTBAD
     call KERNEL_SEG:cw_toast_say

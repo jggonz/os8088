@@ -519,10 +519,138 @@ wm_dmg_band:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_refit - clamp EVERY live window back onto the screen (SPEC.md 39.11.2)
+; The natural bank: the frame a window goes back to when the screen grows again
+; (SPEC.md 39.11.2.1).
+;
+; wm_fit is a CLAMP, and a clamp throws the number away. That cost nothing
+; while the screen was decided once at boot, and it stopped costing nothing at
+; vid_switch: a 640x480 window fitted onto a 640x200 CGA loses 280 rows, and
+; the record is the only place the old height lived - so VGA -> CGA -> VGA left
+; the Task Manager 155 rows tall on a 480-row screen, and its own layout still
+; drawing the 284 rows' worth it had computed at launch, through the bottom of
+; its frame and onto the desktop.
+;
+; So the rect a window ASKED FOR is banked beside it, and wm_refit replays that
+; instead of re-clamping whatever the last clamp left behind. One entry per
+; window SLOT, a side table rather than four more words in the record, for
+; wm_zoomr's reason one screen up: WIN_SIZE is what wm_idx2ptr multiplies by,
+; and every reader of a window would pay for a wider record whether the machine
+; it runs on has a second adapter or not.
+;
+; NR_W = 0 is "nothing banked" - wm_zoomr's sentinel, safe for wm_zoomr's
+; reason (a banked width is a live window's, which WMIN_W floors at 96) - and
+; wm_destroy clears it, or a reused slot restores a stranger's rect.
+;
+; IT IS A BACKSTOP AND NOT THE ARGUMENT, deliberately, because the tree
+; disagrees with itself about whether .bss arrives zeroed (kernel.asm's
+; overlay note says it does, vid_disp_relayout's says -f bin zeroes nothing)
+; and this must not be the thing that settles it. What actually holds is that
+; wm_refit only visits records whose USED bit is set, wm_init clears that bit
+; for every slot at boot, and the one routine that sets it is wm_create -
+; which banks. So a bank is always present by the time anything can take one,
+; whatever memory the machine came up holding.
+;
+; WHAT MAY BANK, and this is the whole list, because a writer that forgets
+; leaves a window restoring to a rect it stopped having some time ago:
+;
+;   wm_create      the TEMPLATE, before wm_fit can see it. The one place the
+;                  unclamped rect exists at all, and what lets a window created
+;                  while the machine is on the CGA still reach its full size
+;                  when the machine goes back to the VGA
+;   wm_resize_nb   an app sizing itself (SPEC.md 11.1) - and wm_zoom's .go with
+;                  it, that path ending here
+;   wm_zoom        ...and its RESTORE path, which writes the record directly
+;   ui_drag        the user put it there
+;   ui_grow        ...and sized it there
+;
+; WHAT MAY NOT, which is the half worth stating: wm_fit and wm_snap_win, the
+; clamp itself - banking there would make the clamp its own source and the bank
+; would say nothing; wm_dock_snap, which runs inside the two ui_ paths and is
+; covered by their bank after it; and BOTH fullscreen paths, because
+; wm_fs_setrect takes the whole screen and wm_fs_drop gives back what
+; wm_fs_save holds, and neither is a statement about the size the window wants
+; as a window.
+; -----------------------------------------------------------------------------
+NR_X    equ 0
+NR_Y    equ 2
+NR_W    equ 4                   ; ...and the "nothing banked" sentinel
+NR_H    equ 6
+NR_SIZE equ 8
+
+; -----------------------------------------------------------------------------
+; wm_nat_slot - SI -> this window's entry in the natural bank (module internal)
+; in:  BX = window ptr
+; out: SI = wm_natr + index * NR_SIZE; every other register preserved
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_nat_slot:
+    push ax
+    call wm_ptr2idx             ; AL = index, AH = 0
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1                   ; x8: NR_SIZE, and an 8086 has no shl by imm
+    add si, wm_natr
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_nat_bank - this window's rect is the one it wants (module internal)
+; in:  BX = window ptr
+; out: nothing - every register preserved, FLAGS INCLUDED
+;
+; The flags matter: two of the five callers sit between a compare and the jump
+; that reads it (ui_drag's "did it move", wm_create's CF), and a bank is
+; bookkeeping that no caller should have to make room for.
+; -----------------------------------------------------------------------------
+wm_nat_bank:
+    pushf
+    push ax
+    push si
+    call wm_nat_slot
+    mov ax, [bx+W_X]
+    mov [si+NR_X], ax
+    mov ax, [bx+W_Y]
+    mov [si+NR_Y], ax
+    mov ax, [bx+W_W]
+    mov [si+NR_W], ax
+    mov ax, [bx+W_H]
+    mov [si+NR_H], ax
+    pop si
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_nat_take - put the banked rect back into the record (module internal)
+; in:  BX = window ptr
+; out: nothing (all registers preserved); an empty slot leaves the record alone
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_nat_take:
+    push ax
+    push si
+    call wm_nat_slot
+    mov ax, [si+NR_W]
+    or ax, ax
+    jz .out                     ; nothing banked: whatever is in the record is
+    mov [bx+W_W], ax            ; the best answer there is
+    mov ax, [si+NR_X]
+    mov [bx+W_X], ax
+    mov ax, [si+NR_Y]
+    mov [bx+W_Y], ax
+    mov ax, [si+NR_H]
+    mov [bx+W_H], ax
+.out:
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_refit - put EVERY live window back on the screen (SPEC.md 39.11.2)
 ;
 ; in:       nothing (the live geometry has just changed)
-; out:      every used record's W_X..W_H clamped
+; out:      every used record's W_X..W_H replayed from its bank and re-clamped
 ; clobbers: flags
 ;
 ; wm_fit runs once per window at creation because the screen never used to
@@ -530,6 +658,11 @@ wm_dmg_band:
 ; to CGA has every window hanging off the bottom of a 200-row screen - with
 ; its title bar below the dock, which is a window the user cannot reach to
 ; drag back. One pass over wm_wins puts them all inside the new one.
+;
+; IT REPLAYS THE BANK RATHER THAN RE-CLAMPING THE RECORD, and that is the whole
+; of what makes a switch reversible: clamping what the last clamp produced is
+; idempotent in the shrinking direction and has nothing at all to say in the
+; growing one (see the bank above).
 ;
 ; A free slot is skipped rather than clamped: W_W/W_H are whatever the last
 ; owner left there, and wm_create fits the record it fills in anyway.
@@ -542,7 +675,20 @@ wm_refit:
 .next:
     test word [bx+W_FLAGS], 1   ; used?
     jz .skip
-    call wm_fit
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .full
+    call wm_nat_take            ; what it ASKED for, not what the screen it is
+    call wm_fit                 ; leaving happened to allow (SPEC.md 39.11.2.1)
+    jmp short .skip
+.full:
+    call wm_fs_setrect          ; a fullscreen window wants the NEW screen, and
+                                ; its bank is the WINDOWED rect - replayed here
+                                ; it would un-fullscreen a window that is still
+                                ; flagged WF_FULL and still owns [wm_fs], with
+                                ; nothing on screen saying so (SPEC.md 11.2).
+                                ; wm_fit is wrong for it too: it clamps to the
+                                ; desktop band, and a fullscreen frame covers
+                                ; the bar and the dock by definition
 .skip:
     add bx, WIN_SIZE
     loop .next
@@ -668,6 +814,12 @@ wm_create:
     mov [bx+W_SEG], ax
     mov cx, 8                   ; (wm_fit and the index math below want CX
                                 ; free; the rep consumed it)
+    call wm_nat_bank            ; the TEMPLATE's own rect, banked while it is
+                                ; still in the record: this is the only moment
+                                ; the UNCLAMPED size exists, and without it a
+                                ; window created on the CGA could never grow
+                                ; back when the machine returns to its VGA
+                                ; (SPEC.md 39.11.2.1)
     call wm_fit                 ; templates are authored for 640x480; on a
                                 ; smaller screen the record, not the template,
                                 ; is the truth (SPEC.md 39.7)
@@ -806,6 +958,8 @@ wm_resize_nb:                   ; ...and the entry for a caller that has
     jle .paint
     mov [bx+W_Y], ax
 .paint:
+    call wm_nat_bank            ; an app's own size is the one it goes back to
+                                ; on an adapter change (SPEC.md 39.11.2.1)
     call wm_rz_paint            ; ...and only what the move disturbed (11.95.1)
     pop dx
     pop cx
@@ -1110,6 +1264,10 @@ wm_zoom:
                                 ; independent of the height (SPEC.md 11.90)
     call wm_snap_win            ; ...and back onto a byte boundary (11.94),
                                 ; which the x clamp above may have taken it off
+    call wm_nat_bank            ; the user state is the natural one again - and
+                                ; this path writes the record directly, so it
+                                ; is not covered by wm_resize_nb's bank the way
+                                ; .go below is (SPEC.md 39.11.2.1)
     call wm_rz_paint            ; the band it is vacating is most of the
     jmp short .out              ; screen - but only that band, not the whole
                                 ; of it, and not the chrome (SPEC.md 11.95.1)
@@ -1225,6 +1383,10 @@ wm_destroy:
     shl si, 1                   ; a reused slot must not restore to the rect
     shl si, 1                   ; the last tenant was zoomed out of (11.95).
     mov word [wm_zoomr+si+ZR_W], 0  ; the sentinel word is the whole of it
+    mov word [wm_natr+si+NR_W], 0   ; ...and its natural rect, for the same
+                                ; reason again (SPEC.md 39.11.2.1). The two
+                                ; tables share a stride, so they share the
+                                ; index SI already holds
                                 ; (SI is dead from here - the z-order walk
                                 ; below reloads it)
     mov ch, 0
@@ -1683,6 +1845,14 @@ wm_fs_drop:
     mov [bx+W_H], ax
     and word [bx+W_FLAGS], 0xFFF7
     mov word [wm_fs], 0
+    call wm_fit                 ; the saved rect was fitted to the screen this
+                                ; window went fullscreen ON, and the adapter
+                                ; can have changed under it since - wm_refit
+                                ; deliberately leaves a WF_FULL window's bank
+                                ; alone, so nothing else would catch it
+                                ; (SPEC.md 39.11.2.1). A no-op on every other
+                                ; path: an unchanged screen re-fits a rect that
+                                ; already fitted it
     pop ax
 .out:
     ret
@@ -6735,6 +6905,13 @@ wm_zoomr:   resb MAX_WIN * ZR_SIZE  ; per slot: the USER state a zoomed window
                                     ; table, not four more words in the record,
                                     ; because WIN_SIZE is the stride every
                                     ; reader of a window pays
+wm_natr:    resb MAX_WIN * NR_SIZE  ; per slot: the rect a window ASKED for, so
+                                    ; an adapter change can put back what its
+                                    ; clamp took (SPEC.md 39.11.2.1). Same
+                                    ; stride and the same argument as the zoom
+                                    ; bank above, and OUTSIDE wm_init's zero
+                                    ; run like it - nothing reads a slot before
+                                    ; wm_create has written one (see the header)
 wm_about:   resw MAX_WIN            ; per-slot About handler offset, 0 = none
                                     ; (SPEC.md 12.2); inside wm_init's zero
                                     ; run, so a fresh slot has no About

@@ -23,8 +23,8 @@ import os88geom                                              # noqa: E402
 # menu.inc: the System cell is x 0..29 and a pull-down hangs from MBAR_H + 1
 # with MENU_ITEM_H per item. Item 1 is CMD_CTRL (About, Control Panel, Task
 # Manager, ...).
-from os88geom import (MBAR_H, MENU_ITEM_H, TITLE_H,          # noqa: E402
-                      WIN_SIZE, MAX_WIN, W_FLAGS, W_X, W_Y, W_W, W_H,
+from os88geom import (MBAR_H, MENU_ITEM_H, TITLE_H, KERNEL_SEG,  # noqa: E402
+                      WIN_SIZE, MAX_WIN, W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE,
                       DESK_ZY0, DESK_ZW, DESK_COLW,
                       DV_KIND, DV_FLAGS, DV_SIZE, DVOL_MAX, DVK_FREE,
                       FM_ROW_Y0, FM_ROW_H)
@@ -46,20 +46,28 @@ def _u16(b, i=0):
 
 
 def _cp_win(m, S):
-    """(x, y) of the Control Panel's frame, or None. It is the window whose
-    W_TITLE is the panel's - found by rect instead, because the panel is the
-    only 320-wide window in the machine and a title compare would need the
-    string's address as well.
+    """(x, y) of the Control Panel's frame, or None. Matched on W_TITLE, which
+    is `cp_ttl` and nothing else in the machine.
+
+    IT USED TO MATCH ON `W_W == 320` - "the panel is the only 320-wide window,
+    and a title compare would need the string's address as well". The address
+    is one `os88sym` call, and the premise was false: a Disk window's template
+    is 320 wide too (`fm_tpl`), so any caller that opened one before the panel
+    got the DISK window's rect back and clicked its content instead. That is
+    silent - the clicks land on a real window, nothing errors, and the adapter
+    simply does not change - which is the same class of harness bug as the
+    bare 26 below, and cost a session the same way.
 
     The stride is os88geom's. It was written out as a bare 26 here - in the
     one file that already had WIN_SIZE = 28 forty lines further down - so this
     walked the table wrong and finding the panel at all was luck."""
+    title = S("cp_ttl") - (KERNEL_SEG << 4)         # W_TITLE is a NEAR offset
     wins = m.read(S("wm_wins"), MAX_WIN * WIN_SIZE)
     for i in range(MAX_WIN):
         b = i * WIN_SIZE
         if _u16(wins, b + W_FLAGS) & 3 != 3:        # used and visible
             continue
-        if _u16(wins, b + W_W) == 320:
+        if _u16(wins, b + W_TITLE) == title:
             return _u16(wins, b + W_X), _u16(wins, b + W_Y)
     return None
 
