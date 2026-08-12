@@ -836,6 +836,16 @@ ui_drag:
     or di, di                   ; a click that only raised the window (above)
     jz .done                    ; leaves the screen already correct
 
+%ifndef NODRAGCACHE
+    mov bx, [ui_dragwin]        ; THE DRAG CACHE (SPEC.md 11.96.12): bank the
+    call wm_dc_take             ; content while it is still on the glass at the
+                                ; old place, so wm_draw_win below replays it at
+                                ; the new one instead of ordering a W_PAINT.
+                                ; HERE and not after the move: two lines down
+                                ; wm_paint_dmg paints the desktop over exactly
+                                ; the pixels this is saving
+%endif
+
     ; It moved. Only two rects changed: the one it left and the one it now
     ; occupies - everything outside their union is still correct on screen,
     ; so this is wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91). The
@@ -855,6 +865,9 @@ ui_drag:
                                 ; another one cost the other one nothing
     call wm_dmg_union           ; ...grown to cover where it is now
     call wm_paint_dmg           ; caller-held lock, per the wm contract
+%ifndef NODRAGCACHE
+    call wm_dc_done             ; ...and the waiver is spent (SPEC.md 11.96.12)
+%endif
 .done:
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret

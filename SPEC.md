@@ -6084,49 +6084,99 @@ the two sites that can skip a window. That also retired §11.96.11's
 bank-and-restore pair, which existed only because `wm_su_edge` was borrowing
 those four words.
 
-#### 11.96.12 A window MOVED cannot use the cache at all — measured, open
+#### 11.96.12 A window MOVED replays its content instead of drawing it
 
 Reported from the field as *"drag the whole Solitaire window by its title and
 it redraws its entire screen card by card, instead of from its last full window
 shadow buffer — I'm not sure if this is global or not."*
 
-**It is global, and it is two independent structural reasons rather than a
+**It was global, and it was two independent structural reasons rather than a
 bug.** The window being dragged is the FRONT one by construction — `ui_drag` is
-reached through `wm_hit` on the frontmost title bar — so §11.96.4 has *already
+reached through `wm_hit` on the frontmost title bar — so §11.96.4 had *already
 dropped its cache*, on the reasoning that the front window "has not finished
 with the pixels it has just been given". And `wm_su_ck` compares the **absolute
 content rect**, which a move changes in all four numbers, so a cache that did
-exist would be rejected anyway. Either alone is sufficient.
+exist would have been rejected anyway.
 
-Measured with `tools/winmove.py` on a cycle-accurate 5150/Hercules, dragging
-each window by its own title bar:
+Measured with `tools/winmove.py` on a cycle-accurate 5150/Hercules, each window
+dragged by its own title bar, before:
 
 | | drawing calls | guest time | the tell |
 |---|---:|---:|---|
 | a Disk window | 207 | **236.6 ms** | 71 `font_char` — the listing re-lettered |
 | Solitaire | 1,016 | **914.7 ms** | 22 `gfx_blit4` — every card back drawn again |
 
-`wm_su_try` appears in both traces and `gfx_restore` in neither.
+**A move is the one repaint that needs no drawing at all**: the content pixels
+are unchanged, only their position moved.
 
-**What makes this worth fixing rather than accepting is that a move is the one
-repaint that provably needs no drawing at all**: the content pixels are
-unchanged, only their position moved — and the window is front, so its content
-is **wholly visible by construction**, which is the one case where a save off
-the glass cannot capture somebody else's pixels (§11.96.7's hazard, absent).
+**It is not a second mechanism, and that is the whole of why it is small.**
+`wm_dc_take` banks through **`wm_su_take` at the old position** and then moves
+the claim's header by the drag's own delta — and `wm_su_ck`, which compares that
+header against the window's rect *now*, then agrees. Everything after that is
+the raise cache's own and untouched: the fragment layout, `wm_su_edge`'s edge
+merge (§11.96.2 — mandatory here, because the restore overhangs whole bytes
+into pixels that at the *new* position belong to somebody else), the restore,
+the free. `ui_drag` calls it at `.release` **before `wm_paint_dmg`**, because
+two lines later that paints the desktop over exactly the pixels being saved.
 
-Sketched, not built, and three things would decide it. **Where the bank goes**:
-`ui_drag` before the geometry commits, not `wm_draw_win`, because by the time
-the window has moved the source pixels are gone. **The byte phase**: `gfx_save`
-rounds `x1` down to a byte boundary and the buffer is phase-locked to it, so a
-restore at an `x` with a different `x & 7` needs every byte shifted — the cheap
-version takes the fast path only when `dx & 7 == 0` (any `dy` is free) and
-falls back to `W_PAINT` otherwise, which on a 1bpp adapter is seven drags in
-eight paying full price unless the shift is written. **And the interaction with
-§11.91**: the vacated rect is already `wm_paint_dmg`'s, so only the arrival is
-new work.
+**EVERY window is eligible, and `WF_SAVEU` is not the reason.** §11.96.1's
+promise is about content changing while a window is merely *covered*, which is
+a question about arbitrary time. Here the bank and the restore happen inside
+**one gfx lock hold** — `ui_drag` reaches `.release` holding it and does not
+unlock until after `wm_paint_dmg` — so no task, worker or otherwise, can run
+between them. Verified by dragging **Fractal**, which promises nothing and has
+a live worker: the restore fires and `wm_dc_done` drops the cache afterwards.
 
-Not attempted here. §11.96.7 and §11.96.9 each record a shipped bug in exactly
-this code, and a wrong restore is invisible until it is used.
+**The correction worth recording is that workers are NOT suspended during a
+drag**, which is the obvious reason to reach for and is false: `ui_drag`'s
+tracking pass unlocks and yields on every tick, and its own comment says
+*"background tasks stay live here"*. It does not matter, because the bank is
+taken after that loop has ended. The lock hold is the argument; the suspension
+is not, and would have been a wrong one to build on.
+
+So the promise is waived through `wm_dc_win` for **exactly one window**, never
+globally — a blanket waiver would let `wm_su_bank` take a *raise* cache for a
+window that has made no promise, which is §11.96.1's hazard with a new way in.
+`wm_dc_done` spends the waiver and drops the cache for any window that does not
+promise, because from the next raise onward it would be an ordinary raise cache
+with none of the guarantees one needs.
+
+**Three things refuse it**, and each falls back to exactly what happened before:
+
+- **The byte phase.** `gfx_save` lays the buffer out from `x1` rounded DOWN to
+  a framebuffer byte, so the pixels can be replayed at another `x` only where
+  the content sits at the same offset inside its byte: `dx & 7` must be 0. Any
+  `dy` is free — rows are whole — so a **vertical** drag always takes it and a
+  horizontal one takes it once every eight pixels. A shifted restore would lift
+  that and is not written.
+- **A destination off the screen.** `ui_drag` clamps the *title bar* onto the
+  screen and not the window, so dragging one down hangs its bottom off — and
+  `wm_su_try` refuses a rect that is not wholly on one display. `wm_dc_take`
+  therefore asks that question about where the window is **going**, which
+  `wm_su_take` can only ask about where it has been. Without it the commonest
+  outcome was a claim and a `gfx_save` (~4 ms) paid for a window that was then
+  drawn in full anyway.
+- **Anything `wm_su_take` itself refuses** — no heap, a rect over 64KB, a
+  degenerate content box — which leaves the slot 0 and is already handled.
+
+Measured after, the same drag through both builds (`make DRAGCACHE=0` is the
+A/B), Solitaire on 5150/Hercules, (231,20) → (167,20):
+
+| | drawing calls | guest time | its cards |
+|---|---:|---:|---|
+| `DRAGCACHE=0` | 981 | **954.3 ms** | 22 `gfx_blit4` |
+| with the cache | 210 | **462.4 ms** | **0** — one `gfx_restore` |
+
+**4.7x the calls and 2.06x the time**, and what is left is honest: the window
+*underneath* is genuinely revealed and has to be redrawn, which is most of the
+462 ms. **0 differing pixels of 250,560 on Hercules and of 128,000 on CGA**,
+whole screen, against the reference build.
+
+**The deal has to be pinned or the gate proves nothing** (`tools/solcheck.py`
+says so in capitals and this had to learn it again): Solitaire seeds from
+`GET_TICKS`, so the first attempt reported 782 differing pixels that were two
+different card layouts. `[osapi_seed]` is written and **N** pressed before the
+drag, exactly as `solcheck` does.
 
 ### 11.97 A window below does not draw chrome where something above will cover it
 

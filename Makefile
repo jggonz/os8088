@@ -209,6 +209,15 @@ ifneq ($(REDRAWFULL),)
 VIDDEF += -DREDRAWFULL
 endif
 
+# DRAGCACHE=0 removes SPEC.md 11.96.12's drag cache, so a window dragged by its
+# title bar goes back to ordering a full W_PAINT of itself at the new place.
+# It is the A/B: the claim is "the same picture, not drawn", and the failure it
+# can have is a restore landing a few pixels wide of where it belongs - which
+# is a real picture, so no screenshot of one build can check it. Only the pair.
+ifeq ($(DRAGCACHE),0)
+VIDDEF += -DNODRAGCACHE
+endif
+
 # SOLNOKEEP=1 makes Solitaire's sol_keep answer 0, so every tableau column is
 # erased and redrawn whole - the pre-SPEC.md 43.10 path, and a stricter
 # reference than 43.7's, which kept the buried backs. It is REDRAWFULL's
@@ -326,10 +335,10 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB \
+                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dc$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \

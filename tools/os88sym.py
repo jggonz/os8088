@@ -134,6 +134,18 @@ def segment_of(name, defines=(), check=True):
 
 
 def _load(defines=(), check=True):
+    # $OS88_DEFINES is how a tool that never asked for a knob still finds the
+    # right map. Every helper here takes `defines`, and the ones layered above
+    # it - os88geom.word, sucheck.fb, Marty.sym - do not thread it through, so
+    # driving a knob-built kernel meant the byte-identity check below refusing
+    # and the whole session dying at the first symbol. The check is RIGHT (a
+    # map of a different kernel is a wrong answer, not a missing one); what was
+    # missing was a way to tell it. Comma or space separated, e.g.
+    #   OS88_DEFINES=NODRAGCACHE python3 tools/winmove.py sol
+    env = os.environ.get("OS88_DEFINES", "")
+    if env:
+        defines = tuple(defines) + tuple(
+            d for d in env.replace(",", " ").split() if d)
     key = tuple(defines)
     if key in _cache:
         return _cache[key]

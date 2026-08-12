@@ -5756,3 +5756,69 @@ build look like a passing one:
   where the other has cards — 321 pixels of difference, in BOTH builds, which is
   what said it was the harness. The arrow is parked clear of the window now and
   the blanking is belt and braces.
+
+### Set 51 — a window MOVED replays its content (SPEC.md §11.96.12)
+
+Set 50's question came back one level up: *"drag the whole Solitaire window by
+its title and it redraws its entire screen card by card, instead of from its
+last full window shadow buffer — I'm not sure if this is global or not."*
+
+**It was global**, and `tools/winmove.py` was written to price it. Cycle-accurate
+5150/Hercules, each window dragged by its own title bar:
+
+| | drawing calls | guest time | the tell |
+|---|---:|---:|---|
+| a Disk window | 207 | **236.6 ms** | 71 `font_char` — the listing re-lettered |
+| Solitaire | 1,016 | **914.7 ms** | 22 `gfx_blit4` — every card back again |
+
+`wm_su_try` appeared in both traces and `gfx_restore` in neither: the dragged
+window is FRONT, so §11.96.4 had dropped its cache, and `wm_su_ck` compares the
+absolute content rect, which a move changes in all four numbers.
+
+**The fix is a relabel, not a mechanism.** `wm_dc_take` banks through
+`wm_su_take` at the old position and moves the claim's header by the drag's own
+delta; `wm_su_ck` then agrees and the raise cache's own restore — fragments,
+`wm_su_edge`, free — does the rest. The same drag through both builds
+(`make DRAGCACHE=0` is the A/B), Solitaire, (231,20) → (167,20):
+
+| | drawing calls | guest time | its cards |
+|---|---:|---:|---|
+| `DRAGCACHE=0` | 981 | **954.3 ms** | 22 `gfx_blit4` |
+| with the cache | 210 | **462.4 ms** | **0** — one `gfx_restore` |
+
+**4.7x the calls, 2.06x the time.** What remains is honest: the window
+*underneath* is genuinely revealed and must be redrawn, which is most of the
+462 ms.
+
+**Cost: `.text` +174 bytes, no rung crossed, footprint +0** — the machine pays
+nothing for it. `.text+.bss` is 65,308 of `KERN_CODE_MAX`'s 65,536 afterwards,
+so **228 bytes** are left against a ceiling that cannot be raised (16-bit
+offsets); that is the number the next feature has to plan around.
+
+**Verified: 0 differing pixels of 250,560 on Hercules and of 128,000 on CGA**,
+whole screen, against the reference build — and `gfx_restore` fires for
+**Fractal**, which promises no `WF_SAVEU` and has a live worker, which is what
+says every window is eligible rather than only the ones §11.96.1 marked.
+
+Four things this cost, and every one of them made a working build look broken
+or a broken one look fine:
+
+- **The collector ate the first hit.** `burst` opened with `run`, and the guest
+  is already stopped at the *first* symbol of the operation when it is entered —
+  which is precisely the routine under test. `wm_dc_take` was executing all
+  along and simply never appeared, which read as "the new code never runs".
+- **The first honest trace then showed the bank succeeding and the restore
+  refusing**, and the reason was real rather than a slip: the test drag moved
+  the window's bottom *below the screen* (content `y2` 361 on a 348-row
+  Hercules), which `wm_su_try` correctly refuses. `wm_dc_take` asks that
+  question up front now, so the ~4 ms of claim and save is not spent on a
+  window that will be drawn in full anyway.
+- **782 differing pixels that were two different card games.** Solitaire seeds
+  from `GET_TICKS`; the gate now pins `[osapi_seed]` and presses N, which
+  `tools/solcheck.py` documents in capitals.
+- **`os88sym` refused to run against the knob build at all** — correctly, since
+  a map of a different kernel is a wrong answer rather than a missing one. It
+  reads `$OS88_DEFINES` now, so every tool layered above it (`os88geom.word`,
+  `sucheck.fb`, `Marty.sym`) can drive an A/B build without threading defines
+  through each one. That trap is named in `os88span.py`'s docstring and had no
+  remedy until now.
