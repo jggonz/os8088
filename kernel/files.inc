@@ -1882,10 +1882,16 @@ fm_layout:
 .tot:
     mov [fm_total], ax
 
-    ; list-view name budget: (cw - 88)/8 chars, clamped 0..16 (the name
+    ; list-view name budget: (cw - 96)/8 chars, clamped 0..16 (the name
     ; column must stop short of the size column, SPEC.md 22)
     mov ax, [fm_cw]
-    sub ax, 88
+    sub ax, 96                  ; 96, not 88: the name pen moved 24 -> 32 with
+                                ; the icon, and this is what keeps the column's
+                                ; RIGHT edge where it was - cw-64 either way,
+                                ; so the size column's clearance is unchanged
+                                ; and the only loss is one character on a
+                                ; window narrower than 184px of content, where
+                                ; an 8.3 name is already being truncated
     jg .nchpos
     xor ax, ax
     jmp .nchclamp
@@ -5008,8 +5014,8 @@ fm_draw_core:
     jl .hdrcut                  ; no buttons: bound by cw itself
     sub ax, 68
 .hdrcut:
-    sub ax, 14                  ; text starts at x=6, so ending 8px short
-    jg .hdrpos                  ; of the button means chars <= (b-14)/8
+    sub ax, 16                  ; text starts at x=8, so ending 8px short
+    jg .hdrpos                  ; of the button means chars <= (b-16)/8
     xor ax, ax
 .hdrpos:
     mov cl, 3
@@ -5021,7 +5027,13 @@ fm_draw_core:
 .drawhdr:
     mov byte [gfx_color], CBLACK
     mov cx, [fm_cx]
-    add cx, 6
+    add cx, 8                   ; A MULTIPLE OF 8 (SPEC.md 11.94.3): the pen is
+                                ; a fixed offset from a content origin the
+                                ; kernel now guarantees is byte-aligned, so 6
+                                ; gave 11.94's win for this string straight
+                                ; back. The truncation above moved with it -
+                                ; the clearance to the buttons is measured from
+                                ; this pen and 14 was 6's number
     mov dx, [fm_cy]
     add dx, 6
     mov si, fm_hdrbuf
@@ -5163,7 +5175,7 @@ fm_draw_rows:
 
     push ax
     mov cx, [fm_cellx]          ; icon centered at cell +(31, 3)
-    add cx, 31
+    add cx, 32
     mov dx, [fm_celly]
     add dx, 3
     call fm_draw_icon16
@@ -5317,8 +5329,21 @@ fm_draw_lrow:
     add ax, [fm_lscr]           ; AX = directory index
 
     push ax
-    mov cx, [fm_cx]             ; 16x16 icon at x=4, row top
-    add cx, 4
+    mov cx, [fm_cx]             ; 16x16 icon at x=8, row top
+    add cx, 8                   ; 8, NOT 4, and NOT because it is a text pen:
+                                ; an icon is a blit and ico_pass shifts it to
+                                ; wherever it is asked for. Two other things
+                                ; pay for it. ico_pass lands each 16-pixel row
+                                ; in a THREE-byte window at a shift of x & 7,
+                                ; and at shift 0 that third byte is always
+                                ; zero and skipped - so an aligned icon is two
+                                ; latched read-modify-writes a row instead of
+                                ; three, twice over (the mask pass and the
+                                ; data pass). And it RETIRES fm_scrollpaint's
+                                ; left strip: that band rounds INWARD by at
+                                ; most 7px, so an icon 8px in cannot be cut by
+                                ; it at any window position. The visible price
+                                ; is the gap to the name at +24 closing to 16
     mov dx, bp
     call fm_draw_icon16
     pop ax
@@ -5332,10 +5357,15 @@ fm_draw_lrow:
     add bp, 4                   ; text y: row top + 4 centers 8px glyphs
     mov byte [gfx_color], CBLACK
     mov cx, [fm_cx]
-    add cx, 24
-    mov dx, bp
-    mov si, fm_name
-    call KERNEL_SEG:cw_font_str ; name at x = 24
+    add cx, 32                  ; 32, not 24: BOTH are multiples of 8, so this
+    mov dx, bp                  ; is not about alignment - it is the 16px icon
+    mov si, fm_name             ; at +8 ending exactly here. At +24 the name's
+    call KERNEL_SEG:cw_font_str ; first letter touched the icon (ARTFUL.O88's
+                                ; A against the app diamond), which is a
+                                ; visible regression and not one a size report
+                                ; or a byte-identity diff can see. 8px of
+                                ; daylight now, where +4/+24 gave 4; the
+                                ; budget above moved to pay for it
 
     cmp word [fm_ftype], 2      ; a folder and the parent link have no
     jae .lnosize                ; meaningful size (19), and a column of
@@ -5380,7 +5410,10 @@ fm_draw_licon:
     mov ax, di
     add ax, [fm_lscr]           ; AX = directory index
     mov cx, [fm_cx]
-    add cx, 4
+    add cx, 8                   ; the same +8 as fm_draw_lrow's, and it has to
+                                ; be: this is the strip pass's own re-icon, so
+                                ; a disagreement here draws the icon in a
+                                ; different place than the row painter did
     jmp fm_draw_icon16          ; ...and its ret returns to the loop
 
 ; -----------------------------------------------------------------------------
@@ -5679,20 +5712,27 @@ fm_rows_only:
 ; out: CF = 0 drawn; CF = 1 refused - the caller falls back
 ; clobbers: AX, BX, CX, DX, SI, DI, BP (fm_scroll_by banked them)
 ;
-; gfx_scroll wants byte columns, and a Disk window is not WF_SNAP - its
-; content origin is W_X+1, wherever the user dragged it. So the span is
-; rounded INWARD at both ends, which is the opposite of what Note Pad does
-; (SPEC.md 27.7.2) and for a reason: NP_MARGIN is 8 there, so rounding a text
-; band's x1 DOWN still lands inside the content, while a Disk row's icon
-; starts four pixels in and rounding down would take the blit outside the
-; window altogether - onto the frame, and past it onto whatever is to the
-; left. Rounding in leaves two strips this cannot move, and each is answered
-; rather than paid for:
+; gfx_scroll wants byte columns, so the span is rounded INWARD at both ends,
+; which is the opposite of what Note Pad does (SPEC.md 27.7.2) and for a
+; reason: NP_MARGIN is 8 there, so rounding a text band's x1 DOWN still lands
+; inside the content, while rounding a Disk window's down would take the blit
+; onto the frame and past it onto whatever is to the left. Rounding in leaves
+; two strips this cannot move, and each is answered rather than paid for:
 ;
-;   left, up to 7px:  white margin, and at most three columns of the icon at
-;                     x+4. 22.11.1's strip pass erases those and re-icons the
-;                     rows, and only when the rounding really did reach them -
-;                     five window positions in eight need nothing at all.
+;   left, up to 7px:  white margin, and NOTHING ELSE. The icon is 8px in
+;                     (fm_draw_lrow), and inward rounding moves x1 by at most
+;                     7, so the strip cannot reach it at any window position -
+;                     which is why 22.11.1's strip pass, written when the icon
+;                     was at +4 and firing on three window positions in eight,
+;                     is now unreachable. It is KEPT rather than deleted
+;                     because it is four instructions of test that state the
+;                     invariant, and moving the icon back would need it.
+;                     SPEC.md 11.94.1's alignment default is the other half:
+;                     with the content origin on a multiple of 8, x1 == fm_cx
+;                     and the strip is empty as well as harmless. The residue
+;                     is wm_snap_ax's one refusal - a window as wide as the
+;                     screen sitting at x=0 - where x1 is fm_cx+7 and those
+;                     seven columns are margin.
 ;   right, up to 7px: always white. The span stops LEFT of the scroll bar, so
 ;                     the bar's frame, rules and arrows are never disturbed
 ;                     and only the thumb is redrawn; and a list row's size
@@ -5774,9 +5814,10 @@ fm_scrollpaint:
     ; and row painter cover the rows this skips.
 .stripck:
     mov ax, [fm_cx]
-    add ax, 4                   ; the icon's left edge
-    cmp [fm_bx1], ax
-    jle .expfill                ; the blit reached it: nothing stale anywhere
+    add ax, 8                   ; the icon's left edge - fm_draw_lrow's +8, and
+    cmp [fm_bx1], ax            ; it must be read from there rather than kept
+    jle .expfill                ; in step by hand. The blit reached it:
+                                ; nothing stale anywhere
     mov ax, [fm_cx]
     mov cx, [fm_bx1]
     dec cx                      ; the strip, over the whole row band
@@ -6112,8 +6153,9 @@ fm_stat_line:
     cmp byte [fm_hdrbuf], 0
     je .out
     mov ax, [fm_cw]
-    sub ax, 12
-    jg .pos
+    sub ax, 14                  ; 14, not 12: the pen below moved 6 -> 8 and
+    jg .pos                     ; this is what keeps the same 6px of daylight
+                                ; at the content's right edge
     xor ax, ax
 .pos:
     mov cl, 3
@@ -6125,7 +6167,11 @@ fm_stat_line:
 .draw:
     mov byte [gfx_color], CBLACK
     mov cx, [fm_cx]
-    add cx, 6
+    add cx, 8                   ; A MULTIPLE OF 8 (SPEC.md 11.94.3), the header
+                                ; painter's pen exactly - the status line is
+                                ; the SECOND string in this window drawn from
+                                ; fm_hdrbuf and it shares the column, so the
+                                ; two move together or the window is ragged
     mov si, fm_hdrbuf
     call KERNEL_SEG:cw_font_str
 .out:
