@@ -5552,6 +5552,32 @@ FDD_SELW     equ 4000            ; a short settle after the select reaches the
 ; used, and bit 7, which our own recalibrate's IRQ6 set.
 ; -----------------------------------------------------------------------------
 dsk_fdd_probe:
+%ifdef FDD_FORCE_ABSENT
+    ; `make FDDABSENT=1` (SPEC.md 18.97.2): answer ABSENT for unit 1 with no
+    ; port touched at all. NOT shipped, and it stubs the CONVERSATION only -
+    ; the block is filled exactly as the real absent path fills it, so
+    ; desk_init's decision, the retire, the published bytes and sysbench's
+    ; report are all the genuine article. It exists because no emulator here
+    ; can produce an absent verdict, so without it the one path that removes a
+    ; drive - and 18.97.2's tier test on top of it - can only ever be reasoned
+    ; about, which is what put this bug in the field in the first place.
+    cmp al, 1                   ; unit 1 only: the externals are 18.98.1's and
+    jne .real                   ; are never judged, so forcing them proves
+                                ; nothing and would hide their real answers -
+                                ; and having branched on it, this addresses
+                                ; unit 1's row by NAME rather than deriving it
+                                ; again, which is the encoding 18.98 spent a
+                                ; paragraph removing
+    or byte [fdd_dbg_ran], 2    ; bit 1 = unit 1 was asked
+    mov byte [fdd_dbg_u+FDU_ST3],  0x21 ; the field 5150's own two reads and
+    mov byte [fdd_dbg_u+FDU_ST3B], 0x21 ; its drained ST0 (SPEC.md 18.97.1),
+    mov byte [fdd_dbg_u+FDU_ST0],  0x71 ; so a forced report is one a reader
+    mov byte [fdd_dbg_u+FDU_STEP], FDD_S_NOTRK0    ; has already seen on iron
+    mov byte [fdd_dbg_u+FDU_VRD],  0
+    xor al, al
+    ret
+.real:
+%endif
     push bx
     mov [fdd_unit], al          ; SPEC.md 18.98: which unit. It was unit 1 by
                                 ; construction - three encodings of it, in the

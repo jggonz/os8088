@@ -238,6 +238,46 @@ knob-free:
 rm -f build/os8088.img build/os8088-720.img build/os8088-360.img && make
 ```
 
+**That stamp was BROKEN for every knob in the tree and is fixed — if you are
+reading an A/B taken before this, re-take it.** The stamp's job is to delete
+the artifacts a knob can change so they rebuild, and its list named
+`build/kernel.bin` — correct while that *was* the nasm output. The on-demand
+module split (SPEC.md §2.8) put **`build/kernel-full.bin`** in front of it,
+which is the file `$(VIDDEF)` is actually passed to, and left `kernel.bin` a
+DERIVED file that `os88mod.py` carves out of it. So switching a knob deleted
+the derived file, re-ran the carve over a `kernel-full.bin` nothing had
+rebuilt, and produced **the previous knob's kernel** with a fresh timestamp
+and no complaint. `make VIDEO=cga` after a plain `make` re-emitted the VGA
+kernel — the exact failure the paragraph above warns about, with the guard
+against it defeated by an unrelated later change. The two **carved modules**
+go on the list with it (`ctrl.drv`, `format.drv`): they are cut from the same
+assembly and are exactly as stale, so a knob build was shipping a `KERNEL.SYS`
+*and* two `.drv` files from the previous knob.
+
+**It was found twice, independently, from two symptoms that neither of them
+points at the stamp** — an incremental plain rebuild after `make SNAPAUDIT=1`
+differing from a clean one by 39,504 bytes, and `make FDDABSENT=1` producing a
+kernel with none of the knob's bytes in it while the knob's own A/B "passed"
+by comparing a build against itself. If a knob has ever surprised you by
+changing nothing, that was probably this.
+
+Two things made it invisible, and both are worth knowing as shapes.
+`kernsize.py` **re-assembles the kernel itself** with `$(VIDDEF)`, so it
+faithfully reports the sizes of a binary the build did not produce — a 65-byte
+knob was reported for a kernel that did not contain it. And a knob-only change
+touches no source, so nothing else in the dependency graph moves. The check
+that does not lie is to look for the knob's own bytes in the artifact:
+
+```sh
+rm -f build/.video-*        # the belt-and-braces version of the fix
+make FDDABSENT=1 && python3 -c "print(open('build/kernel.bin','rb').read().find(b'\xc6\x44\x01\x21'))"
+```
+
+`os88sym.py` is the other guard that works, because it asserts byte-identity
+between its own assembly and `build/kernel.bin` and **refuses** rather than
+answering — pass the knob with `OS88_DEFINES=FDD_FORCE_ABSENT` (comma or space
+separated) when driving a knob-built kernel.
+
 ---
 
 ## The mouse's port, and the modem on the other one (SPEC.md §9.5)
@@ -1578,6 +1618,42 @@ And one more that is not about time at all, and is the newest:
   paths split** — everything except the EC branch is verifiable here (below),
   and the EC branch itself is verifiable only on the 5150 whose SW1 claims a
   drive it does not have (docs/FIELD-MACHINES.md).
+
+  **QEMU is the same wall from the other side, and it is worth writing down
+  so nobody re-derives it**: `fdctrl_handle_sense_drive_status` answers
+  `0x28 | (track == 0 ? 0x10 : 0) | unit`, off a `track` that is 0 for a
+  drive that is not there — measured, `ST3 = 0x39`, `probe stop 01`. Both
+  emulators say *present* unconditionally, for different reasons.
+
+  **`make FDDABSENT=1` is what splits the two halves of that** (SPEC.md
+  §18.97.2). It forces the verdict to absent for unit 1 with no port touched,
+  filling §57.5's block with the field 5150's own bytes (`ST3 = 21` twice,
+  `ST0 = 71`, `probe stop 03`) — so the **decision** on top of the probe is
+  testable on any machine here, while the **conversation** stays the 5150's
+  question. That decision is what §18.97.2 changed and it needs both tiers:
+
+  ```sh
+  # tier 0 must RETIRE, tier 1+ must KEEP - one binary, two CPUs
+  make FDDABSENT=1
+  python3 - <<'PY'
+  import sys, os; sys.path.insert(0, "tools")
+  os.environ["OS88_DEFINES"] = "FDD_FORCE_ABSENT"
+  import os88marty as M
+  with M.launch("build/os8088-360.img", apps="build/apps360.img",
+                machine="os8088_5150_cga_gla") as m:
+      M.settle(m)
+      print("tier", m.read(m.sym("cpu_tier", ("FDD_FORCE_ABSENT",)), 1)[0],
+            "row1", m.read(m.sym("dsk_vtab", ("FDD_FORCE_ABSENT",)) + 16, 3))
+  PY
+  # -> tier 0, row1 (0xFF, 1, 0): retired, desktop shows A: alone
+  make test FDDABSENT=1   # QEMU is tier 2
+  # -> row1 (0x00, 1, 1): kept, desktop shows A: and B:
+  ```
+
+  Measured on both: `probe stop 03` either way, `verdict` 0 on tier 0 and 1
+  on tier 1+, and the shipped (no-knob) kernel is **0 differing framebuffer
+  bytes of 384,000** against the build before §18.97.2 — the new branch sits
+  behind a `jnz` no emulator reaches.
 
 **Testing §18.97, then, is three runs and a report:**
 
