@@ -5672,7 +5672,7 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 | ~~Disk window icon grid~~ | ~~icon at `fm_cellx + 31`~~ | **done** — `FMI_CELL_W` 78 → 80 and 31 → 32; §22.11.1.2. Its **label** is `(FMI_CELL_W - width)/2` and is a *centred string*, the second of the three kinds below that must not be "fixed" |
 | Tracker's FT2 UI | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | its *pattern grid* was aligned for §6.1 (§45.9); the rest of the face never was — 17% of sampled literal pens |
 | Tamegram HUD | 4, 60, 116, 164, 210 | 7 of 8 sampled pens ≡ 4 |
-| Fractal status row | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0 |
+| ~~Fractal status row~~ | ~~`FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250~~ | **done** — §40.2.1, together with the change that stops 78% of those glyphs being drawn at all |
 | Paint | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned |
 | ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
 | HDD Control Panel page | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
@@ -24772,6 +24772,67 @@ text back into. Combined with §40.1
 the two halves cover the two ways a window loses its pixels: covering costs
 nothing because the worker keeps drawing what is visible and caching what is
 not, and moving costs one replay because the cache survives the repaint.
+
+### 40.2.1 A progress tick draws the percentage and nothing else
+
+`fr_status_maybe` runs up to a hundred times a render — its own comment always
+said so — and it used to call `fr_status`, which white-fills the whole strip and
+re-letters all five fields. That is about 27 glyph cells and a fill, a hundred
+times, to move a digit; PERFORMANCE.md prices a cell at ~1ms on the machine this
+app exists for, so it was seconds of drawing per render. The old comment even
+named the shape of it — *"the strip would otherwise flicker white-then-text on
+every scanline"* — and then did it a hundred times instead of once per row.
+
+**Nothing but the percentage can change while a render runs.** The type, the
+zoom and the palette all move through `fr_kick`, which calls `fr_status` itself.
+So a tick draws ONE field, as one **opaque** `font_run`, space-padded to
+`FR_PCT_CELLS`: §12.9's rule at the menu bar, §48.9.3's at Missile's banner and
+§56.12's at ModPlug's face, which is to say *only the segment that changed may
+put pixels on a strip*.
+
+Three things fall out. There is **no fill**, so the field is never momentarily
+blank — the padding IS the erase (§6.1) — which removes the flicker rather than
+reducing its frequency. There is **no `wm_clip_test` gate**, because `font_run`
+decides one cell at a time and cannot produce §11.3's granularity failure, where
+`fr_status` must ask about its whole rect precisely because its fill and its
+glyphs clip differently. And `fr_redraw` had to stop asking `fr_status_maybe`
+for the strip: it parked an impossible `[fr_pct]` to force a full redraw, and
+that path draws one field now, so it would have left the percentage alone on an
+empty band. It calls `fr_pctcalc` and then `fr_status` — which is what it always
+meant.
+
+**The status strip's columns are all multiples of 8** (§11.94.3): `FR_X_NAME` 8,
+`FR_X_ZOOM` 128, `FR_X_ZNUM` 168, `FR_X_PCT` 200, `FR_X_PAL` 248, where they
+were 2, 130, 170, 200, 250 — four of the five at 2 mod 8, which the SNAPAUDIT
+histogram saw as **2,222 of 2,542 sampled glyphs in bucket 2**, the worst entry
+in that survey. They all moved LEFT except the name, because `FR_X_PAL` plus
+`'Spectrum'` is 312 of a 320px content and there is nowhere right to go; the
+name moved right, off the border, since 0 would abut the window frame. The cost
+is that `'Julia Dendrite'` — the longest type name, 112px — now clears `Zoom` by
+8px instead of 16. Looked at on CGA: one space, and legible.
+
+**Alignment and the split are one change, not two.** `font_run`'s single-store
+cell path needs `[vid_mono]` *and* `x & 7 == 0` (§6.1), so on the two adapters
+this app is slowest on, the aligned pen is what makes the opaque run pay.
+Measured with `make SNAPAUDIT=1` — one byte-identical kernel, two apps images, so
+the package is the only variable — over one `View ▸ Redraw` render on a
+cycle-accurate 5150/CGA:
+
+| | `font_char` calls | `font_run` calls | glyph **cells** | aligned |
+|---|---|---|---|---|
+| before | 2,542 | 3 | **2,557** | 12.5% |
+| after | 50 | 103 | **565** | **100%** |
+
+**4.5x**, and the off-grid glyph count is 2,222 → **0** — not aligned, *gone*,
+which is the better outcome of the two. The cells figure counts a `font_run` as
+its width (5) rather than as one call, because quoting the raw totals would
+flatter the new build by pricing a five-cell run as a single glyph. ~100
+`gfx_fill`s a render go with them. Verified on CGA, Hercules and VGA mode 12h:
+the strip after a hundred incremental ticks is **0 differing pixels** against a
+forced full repaint of the same window at the same percentage — the §59 failure,
+a fast path and a full painter drawing the same pixels with nothing but a diff
+to reconcile them. `snap_hrun` reported all 103 runs in bucket 0, which is what
+says the mono fast path was actually reached rather than merely permitted.
 
 ### 40.3 Acceptance
 

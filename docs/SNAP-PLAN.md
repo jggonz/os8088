@@ -197,9 +197,18 @@ By what the percentage is spent on rather than by size of diff:
 
 1. ~~**Disk window list view**~~ — ✅ done, §2.1: header, status line, icon
    inset, name pen, and the strip test that reads the inset. 0 bytes.
-2. **Fractal** — the audit's own numbers put it first of what is left: 2,801
-   glyphs sampled, 16% aligned, 2,323 of them in bucket 2, and it redraws
-   continuously while a pass runs.
+2. ~~**Fractal**~~ — ✅ done, SPEC.md §40.2.1, and it turned out **not to be an
+   alignment item at all**. The audit put it first of what was left (2,542
+   glyphs sampled, 12.5% aligned, 2,222 in bucket 2), and the reason was that
+   `fr_status_maybe` ran ~100 times a render and called the FULL strip painter
+   each time — a white fill plus five re-lettered fields to move one digit. The
+   five pens are multiples of 8 now (8, 128, 168, 200, 248) *and* a progress
+   tick draws one opaque padded `font_run`: **2,557 glyph cells → 565, 4.5x**,
+   off-grid 2,222 → **0**, ~100 fills a render gone. The two halves are one
+   change, because `font_run`'s single-store path needs the aligned pen.
+   **The lesson for the rest of this list: ask how often a pen is drawn before
+   moving it.** An off-grid glyph that should not be drawn at all is not an
+   alignment defect, and aligning it would have banked a fifth of the win.
 3. **Tracker** — redraws while playing, and has the most off-grid pens.
 4. ~~**Disk window icon grid**~~ — ✅ done, SPEC.md §22.11.1.2: `FMI_CELL_W`
    78 → 80 and the icon's `fm_cellx + 31` → `+ 32`, which is exactly the centre
