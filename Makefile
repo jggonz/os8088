@@ -805,10 +805,29 @@ $(BUILD)/debug.drv: $(BUILD)/debug.bin tools/os88drv.py
 # too, so the thing PERFORMANCE.md Part 9 Set 39 measured is the thing that
 # ships. OS88NET.COM is the other end of the cable and does NOT go on an
 # os8088 disk - it is a DOS program for the far machine, built here and sent.
+#
+# NETTURN1=1 leaves the reply deadline at TURN_RX once the link is up, which
+# is the pre-SPEC.md-62.10.4.6 behaviour: 440ms for the far side to BEGIN
+# answering a command. It is the A/B for the field bug where entering a
+# subdirectory on a machine serving a floppy could not possibly succeed - the
+# motor's spin-up alone exceeds it - and it exists as a knob because a harness
+# that answers instantly measures the two builds identically. Drive it with
+# tests/lptlink/partner.py's `stall` (62.10.4.6.1), which is the only thing
+# here capable of being slow on purpose.
+NETDEF :=
+ifneq ($(NETTURN1),)
+NETDEF += -DNET_TURN1
+endif
+NETSTAMP := $(BUILD)/.net-$(if $(NETTURN1),turn1,std)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(NETSTAMP) ] || { rm -f $(BUILD)/.net-* $(BUILD)/net.bin \
+                                      $(BUILD)/net.drv; \
+                                touch $(NETSTAMP); })
+
 $(BUILD)/net.bin: drivers/net/net.asm drivers/net/netui.inc \
                   drivers/net/lplink.inc drivers/os88drv.inc apps/os88api.inc \
                   apps/os88ui.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
+	$(NASM) -f bin -w+error $(NETDEF) -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
 	@echo "net:    $(call FILESIZE,$@) bytes"
 
 $(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
