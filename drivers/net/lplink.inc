@@ -71,7 +71,38 @@ TURN_RX     equ 8               ; ticks a RECEIVE will wait for its first
                                 ; nibble when it has just reversed direction -
                                 ; the far end is inside lp_turn and owes a
                                 ; whole tick, and LP_SPIN is ~2ms on a fast
-                                ; machine. See lp_rnib
+                                ; machine. See lp_rnib. It is the SWEEP's
+                                ; figure: [lp_turnw] below is what is actually
+                                ; used, and a linked master raises it
+REPLY_TMO   equ 182             ; ...to this - 10 seconds - once a partner has
+                                ; answered. THE FIELD BUG THIS FIXES: a
+                                ; reversal is the master having just finished
+                                ; ASKING, so what it is waiting for is not
+                                ; lp_turn's tick, it is the FAR SIDE DOING THE
+                                ; WORK - and on a redirector that means DOS
+                                ; touching a disk. Double-clicking a folder on
+                                ; a floppy-served volume spins a motor and
+                                ; walks the directory TWICE (the count must
+                                ; precede the entries, SPEC.md 62.10.1), which
+                                ; is seconds. At 8 ticks os8088 gave up at
+                                ; 440ms, dropped the link and blanked the
+                                ; listing, while the DOS side finished its walk
+                                ; and sent the reply into a wire nobody was
+                                ; reading - so it printed nothing and went back
+                                ; to listening, which is exactly what it should
+                                ; do and says nothing about the fault.
+                                ;
+                                ; It cannot simply REPLACE TURN_RX: the port
+                                ; sweep's per-candidate cost is a reversal that
+                                ; times out, so a 7-candidate pass would take
+                                ; 70 seconds instead of 3. Short while looking,
+                                ; patient once found.
+                                ;
+                                ; 182 and not more because lp_dlchk takes the
+                                ; allowance as a BYTE (255 ticks, 14 s) and
+                                ; because an unplugged cable costs this much
+                                ; frozen UI - the gfx lock is held across a
+                                ; file operation
                                 ; There is no CMD_WAIT. The gap between
                                 ; commands is the USER'S THINKING TIME and has
                                 ; no upper bound, so lp_rbyte_w waits for as
@@ -198,6 +229,7 @@ lp_init:
     mov dx, [lp_base]
     xor al, al
     mov byte [lp_lastop], 0     ; a fresh port owes no turnaround
+    mov byte [lp_turnw], TURN_RX    ; ...and is being LOOKED for, not talked to
     out dx, al                  ; idle: five lines low, strobe down. Both
                                 ; roles idle identically, which is what makes
                                 ; a direction reversal safe (lp_snib)
@@ -418,13 +450,18 @@ lp_rnib:
     push cx
     push dx
     mov dx, [lp_stat]
-    cmp byte [lp_lastop], 1
-    jne .rev                    ; a REVERSAL: the far end is sitting inside
-    LP_WAIT jnz, LP_TMO, .bad   ; lp_turn spending a whole tick, so this end
-    jmp short .got              ; has to be patient exactly there and nowhere
-.rev:                           ; else
-    LP_WAIT jnz, TURN_RX, .bad
-.got:
+    ; WAITING FOR A STROBE IS WAITING FOR THE FAR SIDE TO DO SOMETHING, and
+    ; on a redirector that something can be a disk. This used to branch on
+    ; [lp_lastop] - a REVERSAL got TURN_RX because the far end owed lp_turn a
+    ; whole tick, and a CONTINUATION got LP_TMO because it was already
+    ; streaming. The second half is false here: srv_list walks the directory
+    ; TWICE (the count must precede the entries) and the second walk's
+    ; findfirst happens between the count word and the first entry byte, which
+    ; is mid-frame. So both are [lp_turnw] now and the branch is gone with
+    ; them - one allowance, raised by a linked master and reset per port by
+    ; lp_init. The wait for the strobe to FALL below keeps LP_TMO: the far
+    ; side has already committed that nibble and is not going anywhere.
+    LP_WAIT jnz, [lp_turnw], .bad
     shr al, 1                   ; far D3..D0 are status bits 6..3, sampled by
     shr al, 1                   ; the read that saw the strobe
     shr al, 1
@@ -719,6 +756,11 @@ lp_base:    dw 0
 lp_stat:    dw 0
 lp_ctrl:    dw 0
 lp_lastop:  db 0                ; 1 = the last link op was a RECEIVE
+lp_turnw:   db TURN_RX          ; ticks a REVERSAL will wait - see REPLY_TMO.
+                                ; lp_init puts it back to the SWEEP's figure,
+                                ; so patience is something a linked master has
+                                ; to ask for and can never be left switched on
+                                ; across a port scan
 lp_svdat:   db 0
 lp_svctl:   db 0
 lp_ver:     db 0

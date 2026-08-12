@@ -3739,8 +3739,12 @@ wm_hide_r   times 4 dw 0        ; wm_hide/wm_destroy: the vacated rect,
 wm_dg_r     times 4 dw 0        ; wm_dmg_gray's rect, banked across the
                                 ; region build that eats its registers
 
-wm_clipwin  dw 0                ; the window wm_clip_set was given, banked
-                                ; for cur_lazyck (SPEC.md 7.1.4)
+%ifdef CURFRAME
+wm_clipwin  dw 0                ; the window wm_clip_set was given, banked for
+                                ; the pre-7.1.4.2 cur_lazyck, which tested the
+                                ; window's FRAME. The region test wants no
+                                ; window at all, so this is the knob's alone
+%endif
 wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
                                 ; Initialized data, NOT .bss: every gfx_fill
                                 ; reads it, including the machine's first,
@@ -3784,8 +3788,11 @@ wm_clip_set:
                                 ; Per window (11.96.3) it drops only the
                                 ; drawer's own, where it used to drop whoever
                                 ; happened to hold the single cache
-    mov [wm_clipwin], bx        ; for cur_lazyck at .done (SPEC.md 7.1.4) -
-    mov word [wm_clip_n], 0     ; BX does not survive the fragment loop
+%ifdef CURFRAME
+    mov [wm_clipwin], bx        ; the knob's frame test at .done needs the
+                                ; window, and BX does not survive the loop
+%endif
+    mov word [wm_clip_n], 0
 
     mov ax, [bx+W_X]            ; seed with the content rect - the same one
     mov dx, [bx+W_Y]            ; wm_draw_win white-fills before W_PAINT
@@ -3817,16 +3824,23 @@ wm_clip_set:
     jmp short .out
 .done:
     ; The region is armed, and from here to gfx_unlock every clipped primitive
-    ; is CONFINED to it - so if the cursor is outside this window the deferred
+    ; is CONFINED to it - so if the cursor is outside THE REGION the deferred
     ; hide (SPEC.md 7.1.4) is not owed and the pointer stays on screen through
     ; the whole refresh. This is the one place that can prove that, and it is
     ; already on the path of all twelve background painters.
     ;
+    ; The region and not the window: the fragments are the content rect minus
+    ; the windows ON TOP of it, so a pointer over the window in FRONT of this
+    ; one is unreachable while the frame this used to test says otherwise
+    ; (SPEC.md 7.1.4.2).
+    ;
     ; The FAILURE path above deliberately does not check: with no region armed
     ; every primitive falls to its own unconditional cur_unlazy, which is the
     ; safe default and exactly what happened before any of this.
-    mov si, [wm_clipwin]        ; the window, banked at entry: BX does not
-    call cur_lazyck             ; survive the fragment loop
+%ifdef CURFRAME
+    mov si, [wm_clipwin]
+%endif
+    call cur_lazyck
     clc
 .out:
     pop si

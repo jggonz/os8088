@@ -431,7 +431,7 @@ Three things about it:
     "bss": 5752,
     "budget": 104960,
     "codemax": 65536,
-    "cold": 34323,
+    "cold": 34333,
     "coldpara": 2176,
     "fatpara": 288,
     "imgpara": 3328,
@@ -442,13 +442,13 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2825,
     "stk0": 1024,
-    "text": 47407
+    "text": 47424
   },
   "small": {
     "bss": 5646,
     "budget": 99328,
     "codemax": 65536,
-    "cold": 34156,
+    "cold": 34166,
     "coldpara": 2144,
     "fatpara": 288,
     "imgpara": 3168,
@@ -459,7 +459,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2796,
     "stk0": 1024,
-    "text": 44591
+    "text": 44608
   }
 }
 ```
@@ -962,26 +962,26 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,414 | 37.2% |
-| the window system and its furniture | 19,707 | 24.1% |
+| the file system, end to end | 30,424 | 37.2% |
+| the window system and its furniture | 19,697 | 24.1% |
 | drawing: adapters, primitives, glyphs, icons | 12,795 | 15.7% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,761 | 11.9% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,788 | 12.0% |
 | the kernel proper: API table, heap, scheduler, events | 6,681 | 8.2% |
 | the three built-in kinds | 1,376 | 1.7% |
 | the Control Panel | 872 | 1.1% |
-| **total** | **81,730** | |
+| **total** | **81,757** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,097 | 7,881 | **8,978** | 339 | — |
-| `wm.inc` — the window manager (§11) | 8,805 | — | **8,805** | 789 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 358 | 5,917 | **6,275** | 890 | 3,584 |
+| `wm.inc` — the window manager (§11) | 8,795 | — | **8,795** | 789 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 358 | 5,927 | **6,285** | 890 | 3,584 |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,322 | — | **5,322** | 653 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 4,977 | **5,156** | 155 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,887 | **4,110** | 106 | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,472 | — | **3,472** | 149 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,499 | — | **3,499** | 149 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,515 | **2,925** | 341 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,332 | **2,849** | 43 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,703 | — | **2,703** | 40 | — |
@@ -1013,7 +1013,7 @@ generated in the first place.
 | `blank.inc` — **(undescribed)** | 124 | — | **124** | — | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,979 | — | **2,979** | — | — |
-| **total** | **47,407** | **34,323** | **81,730** | **5,752** | **7,762** |
+| **total** | **47,424** | **34,333** | **81,757** | **5,752** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

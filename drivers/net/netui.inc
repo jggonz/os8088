@@ -113,13 +113,18 @@ net_cp_paint:
 .nolink:
     cmp byte [net_lost_f], 0    ; not merely absent - it DIED, and where
     je  .st
-    mov si, s_slost
+    mov si, s_slost             ; ...and WHICH COMMAND died on it. It used to
+    mov bx, NP_Y0 + NP_ROW      ; be `Lost at LBA <n>`, which is block mode's
+    call net_val                ; language - a redirector has no LBA, so the
+    mov al, [net_lastcmd]       ; number was whatever DX happened to hold -
+    or  al, al                  ; AND it was drawn at NP_VX+48, INSIDE an
+    jz  .btn                    ; 11-character string, so it overprinted the
+    mov [net_cbuf], al          ; word it was meant to follow. The field photo
+    mov byte [net_cbuf+1], 0    ; reads `Lost a2 LBA`.
+    mov si, net_cbuf
     mov bx, NP_Y0 + NP_ROW
-    call net_val
-    mov ax, [net_lastlba]
-    mov bx, NP_Y0 + NP_ROW
-    mov cx, NP_VX + 48
-    call net_declba
+    mov cx, NP_VX + 64
+    call net_txt
 
     ; --- row 3: what the far side is serving, when there is one --------------
     ; It used to be `Size <sectors>`, and a redirected volume HAS NO SECTORS
@@ -408,10 +413,11 @@ s_mode:     db 'Mode', 0     ; ...FOUR characters, like 'Port' and 'Link':
                                 ; and a longer label runs into the value
 s_sport:    db 'No partner', 0
 s_slinked:  db 'Linked', 0
-s_slost:    db 'Lost at LBA', 0
+s_slost:    db 'Lost on', 0
 s_files:    db 'Files', 0
 s_filesro:  db 'Files, read only', 0
 s_conn:     db 'Connect', 0
 s_disc:     db 'Disconnect', 0
+net_cbuf:   db 0,0            ; the dead command's letter, as a string
 net_buf:    db 0,0,0,0,0,0,0,0,0
 net_rc:     dw 0,0,0,0       ; the button's rect, built by net_brect
