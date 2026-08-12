@@ -191,13 +191,19 @@ vid_probe_avail:
     ; ...and one adapter is not a CHOICE, so the Control Panel does not offer
     ; a page about it (SPEC.md 31.10.1). Here because this is the only routine
     ; that can answer the question and it answers it once - [vid_avail] is
-    ; fixed for the life of the machine, so [cp_nst] is written once too.
+    ; fixed for the life of the machine, so both bytes below are written once.
     mov al, [vid_avail]
     dec al
     and al, [vid_avail]         ; x & (x-1) == 0: exactly one bit set
     jnz .done
-    dec byte [cp_nst]           ; the Display item is LAST, so the list simply
-.done:                          ; stops one row short of it (SPEC.md 31.10.1)
+    dec byte [cp_nst]           ; one row fewer on screen...
+    or byte [cp_hide], 1 << CP_IVID     ; ...and WHICH one. The count alone
+                                ; could only shorten the list, which is why
+                                ; this page had to be the last row in
+                                ; cp_items; the bit says which record is
+                                ; missing, so cp_v2r can skip it wherever it
+                                ; sits and the ordering is free
+.done:
     pop cx
     pop ax
     ret
