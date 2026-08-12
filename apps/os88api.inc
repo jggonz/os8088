@@ -642,7 +642,10 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; defaults (SPEC.md 51.5). A WRITE NEVER
                                  ; TOUCHES THE DISK: the bytes ride the next
                                  ; Control Panel flush, which is the panel's
-                                 ; close or Special > Restart and nothing else
+                                 ; close or the System menu's Restart and
+                                 ; nothing else (Restart moved off Locator's
+                                 ; own bar to cell 0 of every application,
+                                 ; SPEC.md 12.3.1)
                                  ; (SPEC.md 31.8). The old verb 2, "write the
                                  ; file NOW", is retired and reads as 1
 

@@ -78,7 +78,8 @@ HDC_FBUF     equ HDC_ENT0 + HD_MAXDEV * HDC_ESZ     ; 34 = DRV_BLOB_SZ
 ; **This is the only way out, and that is the rule rather than a shortage of
 ; ideas** (SPEC.md 31.8/51.9). The blob is staged into the kernel's settings
 ; struct on the spot - a 34-byte rep movsb - and SYSTEM.CFG is written when
-; the Control Panel closes or Special > Restart is picked, which is where
+; the Control Panel closes or the System menu's Restart is picked (SPEC.md
+; 12.3.1 moved it there from Locator's own bar), which is where
 ; every other setting in the machine is written and for the same reason: the
 ; write is a mount of A:, a data write, two FAT flushes, a directory write and
 ; a coherence remount, 2+ seconds of frozen UI on the floor machine, landing

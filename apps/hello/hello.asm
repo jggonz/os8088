@@ -49,11 +49,17 @@ hl_entry:
     jc .out
     mov si, hl_menus
     call OSAPI_MENU_SET              ; BX = the window we just created
-                                     ; NO WF_SAVEU: the promise holds, but the
-                                     ; repaint is one fixed string, and there
-                                     ; is ONE cache for the machine (SPEC.md
-                                     ; 11.96) - taking it for this would be
-                                     ; taking it from something that letters
+                                     ; NO WF_SAVEU: the promise holds, and the
+                                     ; repaint is one fixed string - a raise
+                                     ; that draws it costs nothing worth
+                                     ; spending a claim on. It used to say
+                                     ; "there is ONE cache for the machine, so
+                                     ; taking it for this would be taking it
+                                     ; from something that letters"; SPEC.md
+                                     ; 11.96.3 retired that bound - the cache
+                                     ; is per WINDOW now and ranks TRIVIAL, so
+                                     ; it is not taken from anybody. The
+                                     ; reason left is the honest one
 .out:
     pop si
     ret
