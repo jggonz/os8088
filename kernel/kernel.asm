@@ -359,7 +359,7 @@ KERN_BUDGET equ 104960          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; the two by 2KB, which is the direction it
                                 ; should drift from here.
 %else
-KERN_BUDGET equ 97280           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 99328           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
                                 ;
@@ -418,6 +418,55 @@ KERN_BUDGET equ 97280           ; the whole kernel's FOOTPRINT. Growing past
                                 ; and the fifth move's rule still binds what is
                                 ; left over: headroom for ordinary growth, not
                                 ; an invitation to spend it.
+                                ;
+                                ; **THAT TIER IS CLOSED, AND ITS NAME IS
+                                ; 'WINDOW REDRAW'.** It is named rather than
+                                ; merely described so the next reader can tell
+                                ; the two tiers below apart at a glance: 96,256
+                                ; -> 97,280 was spent on window redraw and is
+                                ; done, and the tier above it is not a
+                                ; continuation of it. The seventeenth's
+                                ; allocation ran through the twenty-first and
+                                ; ends there.
+                                ;
+                                ; THE TWENTY-SECOND MOVE, 97,280 -> 99,328,
+                                ; ASKED FOR AND GRANTED, and it is **2KB rather
+                                ; than the 1KB the rule above sets**. That
+                                ; departure is the owner's and was made
+                                ; explicitly; it is recorded here rather than
+                                ; quietly taken, because a standing rule that
+                                ; can be stepped over without a note is not a
+                                ; standing rule. The rule itself is NOT
+                                ; withdrawn - the next move is 1KB again unless
+                                ; somebody says otherwise.
+                                ;
+                                ; WHAT IT REPAIRS FIRST: the small build had
+                                ; stopped assembling. Measured at the grant,
+                                ; KERN_SIZE is 98,304 - 1,024 OVER the old
+                                ; figure, so `make small` failed outright - and
+                                ; the tree had been in that state for some time
+                                ; without it being visible, because `all` never
+                                ; builds kern_small. 512 of that overshoot
+                                ; predates the drag-cache round and 512 arrived
+                                ; with it; neither was ever asked for. Against
+                                ; 99,328 the same build is 1,024 spare, two
+                                ; steps, which is the smallest honest landing
+                                ; place rather than a comfortable one.
+                                ;
+                                ; WHAT IS IN FRONT OF THE REST is the
+                                ; SIZE-CHANGED NOTIFICATION and the straddle
+                                ; rule that goes with it - a window spanning two
+                                ; displays adopting the more restrictive size -
+                                ; which is kernel-side and lands on both guards.
+                                ; It has no SPEC.md number here on purpose: it
+                                ; is not written yet, and a forward reference to
+                                ; a heading that does not exist is what
+                                ; tools/checkdocs.py is for. On move 10's terms:
+                                ; granted ahead of the work, and whatever that
+                                ; does not spend is handed back rather than
+                                ; kept. The fifth move's rule binds the
+                                ; remainder as it binds every other: headroom
+                                ; for ordinary growth, not an invitation.
                                 ;
                                 ; AND ON THE INTEGRATION BRANCH IT LANDED ON
                                 ; TOP OF A REMOVAL IT DID NOT KNOW ABOUT.
@@ -742,7 +791,7 @@ KERN_BUDGET equ 97280           ; the whole kernel's FOOTPRINT. Growing past
                                 ; machine can still install, just slowly.
 %endif                          ; KERN_BIG
 
-KERN_SMALL_BUDGET equ 97280     ; ...and kern_small's, named separately so it
+KERN_SMALL_BUDGET equ 99328     ; ...and kern_small's, named separately so it
                                 ; can be REPORTED on a big build rather than
                                 ; only enforced on a small one. tools/
                                 ; kernsplit.py reads both out of the map and
@@ -769,7 +818,20 @@ KERN_SMALL_BUDGET equ 97280     ; ...and kern_small's, named separately so it
                                 ; work may be kept out of. The twenty-first is
                                 ; also the first move this figure has taken at
                                 ; the 1KB unit its own rule sets, kern_big
-                                ; having moved by 2KB throughout.
+                                ; having moved by 2KB throughout. **Those two
+                                ; together are the tier named 'WINDOW REDRAW',
+                                ; and it is closed** - 94,208 -> 97,280, spent.
+                                ;
+                                ; It moved again at the TWENTY-SECOND, 97,280 ->
+                                ; 99,328, which is 2KB and so a stated
+                                ; departure from that 1KB rule rather than an
+                                ; application of it. The full terms are at
+                                ; KERN_BUDGET above; the short form is that the
+                                ; small build had stopped assembling - 1,024
+                                ; over, invisible because `all` never builds it
+                                ; - and the grant repairs that and leaves two
+                                ; steps in front of the size-changed
+                                ; notification.
 
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
