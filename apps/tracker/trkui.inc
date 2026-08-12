@@ -358,6 +358,27 @@ tui_runc:
     pop ax
     ret
 
+; tui_runo - the same run, OPAQUE ON EVERY ADAPTER (SPEC.md 45.20)
+;
+; tui_runc's gate is right for the PATTERN VIEW, whose caller fills the row band
+; once and would pay for it twice on a colour adapter - and wrong for a field
+; that owns its own background, which is every tui_rdout readout. This entry is
+; that second case: it skips the test and takes the run, so on colour
+; font_run's OWN fallback (a gfx_fill of the run's rect, then font_str over it)
+; does the fill rather than tui_rdout doing it by hand. Same pixels, one path,
+; and the pen is aligned on both adapters instead of only on mono.
+;
+; An ENTRY POINT rather than a flag argument because the five pushes and the
+; epilogue are shared exactly, and a flag would want a register nothing here has
+; spare: AL and AH are the two colour ROLES and BX is the lookup's scratch.
+tui_runo:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    jmp tui_runc.run
+
 tui_charc:                          ; AL = char, CX = x, DX = y
     push cx
     push dx
@@ -565,32 +586,36 @@ tui_dec3:
 ; seven times a second, so the field visibly strobes. Reported from the field
 ; as "windowed mode is drawing flashing characters".
 ;
-; On a mono adapter it is now ONE OSAPI_FONT_RUN (SPEC.md 6.1): the string is
-; space-padded to the field's width and a space paints background on the fast
-; path, so THE PADDING IS THE ERASE and every cell goes from its old contents
-; to its final contents in a single store. There is no moment at which the
-; field is empty.
+; It is now ONE OSAPI_FONT_RUN on EVERY adapter (SPEC.md 6.1, 45.20): the
+; string is space-padded to the field's width and a space paints background, so
+; THE PADDING IS THE ERASE and every cell goes from its old contents to its
+; final contents in one pass. There is no moment at which the field is empty.
 ;
-; Two things earn that fast path and both are needed. The window is WF_SNAP
+; On mono that pass is font_run's single-store cell path. On a colour adapter
+; font_run's own FALLBACK is a gfx_fill of the run's rect plus font_str over
+; it - which is exactly the erase-and-letter pair this routine used to write by
+; hand there, so the pixels are the same and the pen is now aligned. tui_runo
+; rather than tui_runc is what asks for that: tui_runc's mono gate is right for
+; the PATTERN VIEW, whose caller fills the row band once and would pay for it
+; twice, and wrong for a field that owns its own background.
+;
+; Two things earn the fast path and both are needed. The window is WF_SNAP
 ; (SPEC.md 11.94), so [tui_ox] is a multiple of 8; and the field's x must be
-; too, which is what the round-down below is for - font_run's fallback is
-; literally the fill-then-letter pair this routine is escaping, so an
-; unaligned run would buy nothing. Rounding DOWN rather than moving the
-; callers is safe because the up-to-7 extra pixels are inside the field's own
-; background - a value sits in a box face with its label a cell or more to
-; the left - and it makes every caller aligned, including ones not yet
+; too, which is what the round-down below is for. Rounding DOWN rather than
+; moving the callers is safe because the up-to-7 extra pixels are inside the
+; field's own background - a value sits in a box face with its label a cell or
+; more to the left - and it makes every caller aligned, including ones not yet
 ; written. The one site where the pixels to the left are NOT this field's
 ; background is the song title, whose x is 296 rather than 295 for exactly
-; this reason.
+; this reason. Measured: of every windowed readout only the STATUS LINE was
+; unaligned on VGA, and its pen moves from content x = 4 to x = 0 - where the
+; two mono adapters have always drawn it, the widening having been theirs.
 ;
-; On a colour adapter tui_runc has no fill (its callers there have already
-; filled the band), so this keeps the pair: VGA is unchanged, and VGA is not
-; where the flash was reported from.
-;
-; A string longer than the field is now TRUNCATED where it used to overflow
-; the erase rect and draw outside it. That is the better behaviour and no
-; shipped string reaches it - the widest field is the status line at ~51
-; cells and the longest message is far shorter.
+; A string longer than the field is TRUNCATED - on every adapter now - where it
+; used to overflow the erase rect and draw outside it. That is the better
+; behaviour and no shipped string reaches it: the widest field is the status
+; line, 51 cells at [tui_cw] = 418, and the longest string sent to it is
+; 'ENTER play  SPACE stop  HOME top  P pattern' at 43.
 ; -----------------------------------------------------------------------------
 ; The windowed position readout's row, measured UP from the bottom of the
 ; content. It was 22, which put it on rows [ch-22 .. ch-15] - and on the two
@@ -617,13 +642,19 @@ tui_rdout:
     push es
     mov [tui_tcol], al
     mov [tui_ecol], ah
-    cmp byte [tui_mono], 0
-    je .keep
-    mov ax, cx                      ; mono: widen the field LEFT to the byte
-    and ax, 7                       ; boundary, so the run takes font_run's
-    sub cx, ax                      ; single-store path (see the header)
-    add bx, ax
-.keep:
+    mov ax, cx                      ; widen the field LEFT to the byte boundary
+    and ax, 7                       ; on EVERY adapter (SPEC.md 45.20). It was
+    sub cx, ax                      ; mono-only, on the premise that what an
+    add bx, ax                      ; aligned pen buys is font_run's
+                                    ; single-store cell path - which is 1bpp's
+                                    ; alone. Mode 12h is also eight pixels to a
+                                    ; byte, four planes of one bit, so an
+                                    ; unaligned cell spills into a second
+                                    ; framebuffer byte there too and font_char
+                                    ; pays a second GC8 Bit Mask `out` plus a
+                                    ; second latched read-modify-write for it,
+                                    ; once per row per cell (11.94). VGA gains
+                                    ; 9.4% against mono's 3.4%
     mov [tui_rdw], bx
     mov [tui_rdx], cx
     mov [tui_rdy], dx
@@ -635,8 +666,6 @@ tui_rdout:
     add dx, 7                       ; y2
     call tui_clipc
     jc .out
-    cmp byte [tui_mono], 0
-    je .pair
     push ds                         ; stosb writes through ES, and ES is
     pop es                          ; KERNEL_SEG on entry to a callback
     cld
@@ -667,25 +696,9 @@ tui_rdout:
     mov dx, [tui_rdy]
     mov al, [tui_tcol]
     mov ah, [tui_ecol]
-    call tui_runc
-    jmp short .out
-.pair:
-    mov ax, [tui_rdx]               ; colour: the erase-and-letter pair, as
-    mov bx, [tui_rdy]               ; before - tui_runc does not fill there
-    mov cx, [tui_rdw]
-    add cx, ax
-    dec cx
-    mov dx, bx
-    add dx, 7
-    mov al, [tui_ecol]
-    call tui_setcol
-    call tui_fillc
-    mov al, [tui_tcol]
-    call tui_setcol
-    mov cx, [tui_rdx]
-    mov dx, [tui_rdy]
-    call tui_textc
-.out:
+    call tui_runo               ; opaque on BOTH adapters now (SPEC.md 45.20):
+.out:                           ; on colour font_run's own fallback is the fill
+                                ; and the font_str this used to write by hand
     pop es
     pop di
     pop si
