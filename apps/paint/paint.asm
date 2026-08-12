@@ -7629,16 +7629,18 @@ pt_ondlg:
 .sizeok:
 
                                     ; NO 'Loading...' here. It said what
-                                    ; SPEC.md 12.8's file-activity widget now
-                                    ; says better - a live bar rather than a
-                                    ; static line - and it says it in THE SAME
-                                    ; PIXELS, so fpg_begin retires this toast
-                                    ; (SPEC.md 59.3) a moment after it goes up.
-                                    ; A decode follows the read, but the read
-                                    ; is the long half and the widget covers
-                                    ; it; the SAVE below keeps its message
-                                    ; because an encode comes FIRST there and
-                                    ; the widget cannot see it
+                                    ; SPEC.md 12.8's file-activity widget says
+                                    ; better - a live bar rather than a static
+                                    ; line - and it said it over the widget's
+                                    ; own pixels, which is why fpg_begin used
+                                    ; to retire it a moment after it went up.
+                                    ; Since SPEC.md 59.8 the strip is in the
+                                    ; clock's field and would simply survive
+                                    ; beside the widget, saying the same thing
+                                    ; twice; the decision stands on the first
+                                    ; reason alone. The SAVE below keeps its
+                                    ; message because an encode comes FIRST
+                                    ; there and the widget cannot see it
     mov si, pt_name
     call pt_load
     jmp short .draw
@@ -9710,17 +9712,17 @@ pt_s_egif:    db 'GIF', 0
 pt_g_magic:   db 'GIF87a'
 pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
-pt_s_crop:   db 'Would crop artwork - erase it first', 0
-pt_s_noram:  db 'Not enough memory to resize', 0
+pt_s_crop:   db 'Would crop artwork', 0
+pt_s_noram:  db 'No memory to resize', 0
 pt_s_saving: db 'Saving...', 0
 pt_s_wlab:   db 'W', 0
 pt_s_hlab:   db 'H', 0
 pt_s_apply:  db 'Apply', 0
-pt_s_nofsx:  db 'The screen is not free right now', 0
-pt_s_nodlg:  db 'Leave Full Screen to name a file', 0
-pt_s_nu:     db 'Not enough RAM for undo here', 0
-pt_s_nc:     db 'Not enough RAM for the clipboard', 0
-pt_s_ng:     db 'Not enough RAM for GIF here', 0
+pt_s_nofsx:  db 'The screen is not free', 0
+pt_s_nodlg:  db 'Leave Full Screen first', 0
+pt_s_nu:     db 'No RAM for undo here', 0
+pt_s_nc:     db 'No RAM for clipboard', 0
+pt_s_ng:     db 'No RAM for GIF here', 0
 
 ; --- the window template (SPEC.md 11; x/y/w/h patched by pt_geom) -------------
 pt_tpl:
@@ -9789,16 +9791,16 @@ pt_s_note2:  db 'Close this window.', 0
 ; --- toasts ------------------------------------------------------------------
 pt_s_wrote:   db 'Saved', 0
 pt_s_opened:  db 'Opened', 0
-pt_s_nofmt:   db 'Only BMP and GIF are supported', 0
-pt_s_badpic:  db 'Not a picture we can read', 0
-pt_s_bigpic:  db 'Picture too big for free memory', 0
-pt_s_nocomp:  db 'Compressed BMP not supported', 0
-pt_s_nodepth: db 'Need a 1, 4, 8 or 24-bit BMP', 0
-pt_s_toobig:  db 'GIF too big to save - try Bmp', 0
-pt_s_nostage: db 'Not enough memory to open a file', 0
+pt_s_nofmt:   db 'Only BMP and GIF', 0
+pt_s_badpic:  db 'Unreadable picture', 0
+pt_s_bigpic:  db 'Picture too big', 0
+pt_s_nocomp:  db 'No compressed BMP', 0
+pt_s_nodepth: db 'Need 1/4/8/24-bit BMP', 0
+pt_s_toobig:  db 'GIF too big - try Bmp', 0
+pt_s_nostage: db 'No memory to open file', 0
 pt_s_gifbig:  db 'GIF larger than 64KB', 0
-pt_s_trunc:   db 'Cropped on load - use Save As', 0
-pt_s_bigsel:  db 'Selection too big to copy', 0
+pt_s_trunc:   db 'Cropped - use Save As', 0
+pt_s_bigsel:  db 'Selection too big', 0
 
 ; FERR_* -> toast, indexed by the code (SPEC.md 18.4)
 pt_ferrtab:  dw pt_s_wrote, pt_fe_nodisk, pt_fe_io, pt_fe_name, pt_fe_noent
