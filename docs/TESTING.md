@@ -624,6 +624,42 @@ carries no `SYSTEM.CFG`, so nothing asks for it), so the only thing that could
 have created a third volume row is `dsk_boot_from` adopting the partition the
 machine booted from (SPEC.md §52.10.3).
 
+#### ...and what it can do ONCE THE VOLUME CARRIES FILES
+
+`--file NAME=PATH` puts anything else in that volume's root, and it is what
+takes the fixture from "does the boot chain work" to "does the OS work on a
+machine installed to its disk". On an installed machine **every** file the
+boot reaches is on the hard disk — `SYSTEM.CFG`, the drivers, and since
+SPEC.md §2.8 the Control Panel itself — so a volume holding only `KERNEL.SYS`
+boots to a desktop where the chip menu's Control Panel silently does not
+open, and nothing on the machine can load a driver. That is not a bug and it
+reads exactly like one.
+
+The four that make the Hard Drive page reachable, which is the configuration
+SPEC.md §52.10.3.1's duplicate-icon bug lives in:
+
+```sh
+python3 tools/os88hdd.py \
+    --template build/martypc/run/media/hdds/default_xtide.vhd \
+    --out /tmp/boot.vhd --kernel build/kernel.bin \
+    --vbr build/boothd.bin --mbr build/mbr.bin \
+    --file CTRL.DRV=build/ctrl.drv --file FORMAT.DRV=build/format.drv \
+    --file HDD.DRV=build/hdd.drv --file HDDTOOL.DRV=build/hddtool.drv
+```
+
+Attributes follow SPEC.md §19.6 by extension — a `.DRV` lands read-only,
+hidden and system, exactly as the installer writes it — because a fixture
+that hides less than the installer does is a fixture for a volume nobody will
+ever have.
+
+**Then read `dsk_vtab`, do not count icons.** The volume table says which
+volume is which transport, on which unit, at which base; a screenshot says
+there are two hard-disk zones and leaves you guessing which one is the
+duplicate. Tick the driver on the Drivers page, select **Hard Drive**, click
+**Mount**, and the table must be unchanged — one hard-disk row, the
+`DVK_BIOS` one the boot left, and the caption must read `Already mounted`.
+Two zones for one partition is §52.10.3.1.
+
 Two things this cannot tell you, both of which want the 5150: whether the
 **timing** is tolerable (no emulator here is disk-accurate, and MartyPC's
 error is 30× in the flattering direction — see the rule at the top of this

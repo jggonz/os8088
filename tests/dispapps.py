@@ -121,7 +121,8 @@ def pkg_seg(m, want):
 # The ones the app declares as a BYTE. Read as a word they pick up whatever
 # is declared next, which is not wrong so much as unreadable - mc_mono came
 # back as 3840 and 3841 for 0 and 1.
-BYTES = set(["mc_mono", "mc_ecoarse", "mc_expfr", "ark_bpp", "sol_bpp"])
+BYTES = set(["mc_mono", "mc_ecoarse", "mc_expfr", "ark_bpp", "sol_bpp",
+             "mn_mode", "mn_revealed", "mn_flags"])
 
 
 def words(m, seg, app, names):

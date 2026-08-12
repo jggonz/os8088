@@ -97,6 +97,9 @@ HIS_OK       equ 0
 HIS_SMALL    equ 1
 HIS_ALIEN    equ 2
 HIS_NONE     equ 3
+HIS_LIVE     equ 4              ; the volume THIS MACHINE BOOTED FROM, which is
+                                ; a perfectly good partition and the one target
+                                ; an install must never take (SPEC.md 52.10.4.1)
 
 ; Both floppies are 720KB between them, and a system volume wants room to work
 ; in afterwards. Below this an install would fit and leave nothing over, so it
@@ -142,6 +145,15 @@ hd_iw_open:
                                 ; hd_istate/hd_isecs below describe THIS device
     call hd_iw_scan             ; a fresh table every time, tool.inc's reason:
                                 ; the disk can be swapped between two clicks
+    mov bl, [hd_isel]           ; ...and if what it landed on is the volume we
+    xor bh, bh                  ; are RUNNING FROM, say so here rather than
+    cmp byte [bx+hd_istate], HIS_LIVE   ; leaving 'Pick a partition' up over a
+    jne .win                            ; list with nothing pickable in it. The
+    mov word [hd_imsg], hd_s_ilboot     ; scan does not set captions - the
+                                        ; stage machine owns [hd_imsg] and a
+                                        ; side effect in there would fight it
+                                        ; (SPEC.md 52.10.4.1)
+.win:
     cmp word [hd_iwin], 0
     jne .show
     mov si, hd_itpl
@@ -240,6 +252,18 @@ hd_iw_scan:
     cmp ax, HIW_MINSEC
     jb .small
     mov byte [bx+hd_istate], HIS_OK
+    call hd_part_used           ; ...UNLESS IT IS THE ONE WE ARE RUNNING FROM
+    jc .next                    ; (SPEC.md 52.10.4.1). A slot with no ENTRY is
+                                ; asked nothing: what SI points at is zeroed,
+                                ; the extent above came from hd_slot_extent
+                                ; instead, and a base of 0 is not this slot's
+                                ; to be compared
+    push ax                     ; Last of the tests, because it is the only one
+    mov al, [hd_idev]           ; that costs a call out of the image, and every
+    call hd_kvol                ; earlier verdict already refuses the slot
+    pop ax
+    jc .next
+    mov byte [bx+hd_istate], HIS_LIVE
     jmp short .next
 .small:
     mov byte [bx+hd_istate], HIS_SMALL
@@ -2860,7 +2884,11 @@ hd_s_iready:  db 'Ready', 0
 hd_s_ismall:  db 'Too Small', 0
 hd_s_ialien:  db 'Unusable', 0
 hd_s_inone:   db 'No Room', 0
-hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone
+hd_s_ilive:   db 'Booted From', 0   ; SPEC.md 52.10.4.1, and it SAYS WHY NOT
+                                    ; rather than whether (SPEC.md 47 rule 7):
+                                    ; the slot is fine, the machine is standing
+                                    ; on it
+hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone, hd_s_ilive
 
 ; Every line below is one CAPTION, and the macro is what stops one growing
 ; past the band: HIW_CELLS is the run's width and a longer string is silently
@@ -2880,6 +2908,7 @@ hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone
     HIMSG hd_s_iswap, 'Insert the APPS disk, then Install'
     HIMSG hd_s_idone, 'Done - remove the floppy, Restart'
     HIMSG hd_s_ibad, 'That partition cannot be used'
+    HIMSG hd_s_ilboot, 'Boot from a floppy to replace it'
     HIMSG hd_s_inomem, 'Not enough memory to copy'
     HIMSG hd_s_inomb, 'Cannot read the partition table'
     HIMSG hd_s_ifmt, 'Could not format that partition'

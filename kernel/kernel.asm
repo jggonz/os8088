@@ -1788,7 +1788,35 @@ osapi_table:
                                   ;          half of OSAPI_WM_ONSIZE, which
                                   ;          asks BEFORE and takes an answer
                                   ;          (SPEC.md 11.98)
-osapi_table_end:                  ; 0x03E0
+    OSAPI_SLOT wm_keeph           ; 0x03E0 - BX = window, AL = 0 clear / non-0
+                                  ;          set. "My layout is FIXED: if I
+                                  ;          will not fit the desktop band,
+                                  ;          hang me over the dock rather than
+                                  ;          shorten me" (SPEC.md 11.93). Only
+                                  ;          you know whether a row can be
+                                  ;          given up - shortened, your content
+                                  ;          is still drawn and simply outside
+                                  ;          the frame, so it takes no clicks.
+                                  ;          Call it from your entry proc,
+                                  ;          right after OSAPI_WM_CREATE: it
+                                  ;          re-fits from the size you asked
+                                  ;          for, and preserves the flags so
+                                  ;          the CF you owe the loader survives
+    OSAPI_SLOT osapi_vol_at       ; 0x03E8 - DL = an int 13h drive number,
+                                  ;          BX:CX = a partition's 32-bit base
+                                  ;          LBA. out CF=0 and AL = the volume
+                                  ;          index already covering it, CF=1 =
+                                  ;          none is (SPEC.md 52.10.3). What a
+                                  ;          DRVC_DISK driver asks BEFORE
+                                  ;          osapi_vol_add, because on an
+                                  ;          installed machine the kernel has
+                                  ;          already adopted the partition it
+                                  ;          booted from and the driver cannot
+                                  ;          see that from its own table.
+                                  ;          Answers about BIOS-transport rows
+                                  ;          alone: a driver's own rows are
+                                  ;          the driver's to recognise
+osapi_table_end:                  ; 0x03F0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1796,8 +1824,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 122 * 8
-%error "os8088 API jump table must be exactly 122 8-byte slots"
+%if OSAPI_TABLE_LEN != 124 * 8
+%error "os8088 API jump table must be exactly 124 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -2783,6 +2811,8 @@ cw_clk_snapshot:        call clk_snapshot
                     retf
 cw_evq_pop:             call evq_pop
                     retf
+cw_font_run:            call font_run
+                    retf
 cw_font_str:            call font_str
                     retf
 cw_font_width:          call font_width
@@ -3082,6 +3112,8 @@ dsk_vol_slot:     call COLD_SEG:dkf_dsk_vol_slot
 osapi_fs_ent:     call COLD_SEG:dkf_osapi_fs_ent
               ret
 osapi_vol_add:    call COLD_SEG:dkf_osapi_vol_add
+              ret
+osapi_vol_at:     call COLD_SEG:dkf_osapi_vol_at
               ret
 osapi_vol_del:    call COLD_SEG:dkf_osapi_vol_del
               ret

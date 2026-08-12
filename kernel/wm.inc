@@ -88,6 +88,15 @@ WF_NOSNAP  equ 16               ; W_FLAGS bit4: this window OPTS OUT of having
                                 ; 1 and wm_destroy writes 0, so a fresh or
                                 ; reused record is snapped with nothing to
                                 ; set and no template word to carry
+WF_KEEPH   equ 128             ; W_FLAGS bit7: this window's HEIGHT is not the
+                                ; kernel's to reduce (SPEC.md 11.93). wm_fit
+                                ; shortens a frame that will not fit the
+                                ; desktop band, which is right for anything
+                                ; that reflows and wrong for a fixed layout -
+                                ; the content is still DRAWN, it is merely
+                                ; outside the frame, so it takes no clicks.
+                                ; Opt-in, because only the application knows
+                                ; whether its layout can give a row up
 WMIN_W     equ 96               ; smallest frame a resize can leave, outer px
 WMIN_H     equ 64               ; (SPEC.md 11.1; mirrored in apps/os88api.inc)
 
@@ -210,7 +219,7 @@ wm_init:
 ; through. On VGA it is a no-op.
 ;
 ; Size first, then position, and the y floor last so it wins: a window taller
-; than the desktop is better pinned under the menu bar and clipped at the
+; than the desktop is better pinned under the menu bar and hanging over the
 ; dock than pushed up behind the bar.
 ; in:       BX -> the window record, W_X..W_H already filled
 ; out:      W_X/W_Y/W_W/W_H clamped
@@ -223,15 +232,20 @@ wm_init:
 ; no dock. Four registers rather than four variables because that is all it
 ; is - and on a machine with one display wm_fit_box does not exist and the
 ; three loads below are the numbers this routine always used.
+;
+; DX IS A FIFTH: the display's own bottom, which is the floor for a window
+; that will not fit the desktop band at all (SPEC.md 11.93).
 wm_fit:
     push ax
     push cx
+    push dx
     push si
     push di
     xor ax, ax                  ; x0
     mov cx, [vid_pw]            ; xe
     mov si, MBAR_H              ; y0
     mov di, [vid_dock_y0]       ; ye
+    mov dx, [vid_ph]            ; ...and the hard floor under it
 %ifdef KERN_BIG
     call wm_fit_box             ; ...unless the window is on another display
 %endif
@@ -252,9 +266,27 @@ wm_fit:
                                 ; place that decides it for every fixed-size
                                 ; package at once
     cmp [bx+W_H], di
-    jle .hok
-    mov [bx+W_H], di
-.hok:
+    jle .hfit                   ; fits the band: the dock is the floor, and
+                                ; every window in the tree but one takes this
+                                ; branch on every adapter
+%ifndef NOKEEPH                 ; ...and `make KEEPH=0` is the A/B: no test, so
+                                ; every window falls into .hcut and is
+                                ; shortened, which is exactly the pre-11.93
+                                ; behaviour rather than an imitation of it
+    test word [bx+W_FLAGS], WF_KEEPH
+    jz .hcut                    ; a window that reflows is SHORTENED, exactly
+                                ; as it always was
+    pop di                      ; WF_KEEPH: the dock stops being the floor and
+    mov di, dx                  ; the display's own bottom becomes it (SPEC.md
+    push di                     ; 11.93) - for the height clamp below AND for
+    sub di, si                  ; the y clamp further down, which is why DI is
+    dec di                      ; written rather than a copy of it
+    cmp [bx+W_H], di
+    jle .hfit
+%endif
+.hcut:
+    mov [bx+W_H], di            ; still too tall: now it really is the screen
+.hfit:
     pop di
     push cx                     ; x = min(x, xe - w), floor x0
     sub cx, [bx+W_W]
@@ -286,6 +318,7 @@ wm_fit:
 .out:
     pop di
     pop si
+    pop dx
     pop cx
     pop ax
     ret
@@ -551,9 +584,9 @@ wm_strad_fit:
 ; -----------------------------------------------------------------------------
 ; wm_fit_box - the box for the display this window's ORIGIN is on
 ;              (SPEC.md 39.16.1)
-; in:       BX = the window; AX/CX/SI/DI = the primary's box
-; out:      the same four, for that display
-; clobbers: AX, CX, SI, DI, flags
+; in:       BX = the window; AX/CX/SI/DI/DX = the primary's box and hard floor
+; out:      the same five, for that display
+; clobbers: AX, CX, DX, SI, DI, flags
 ;
 ; The ORIGIN and not the centre, deliberately: wm_disp_of's centre test is for
 ; deciding which monitor an app OWNS (docs/DUAL-DISPLAY-PLAN.md 6.5.1), and
@@ -561,15 +594,21 @@ wm_strad_fit:
 ; about the corner the clamps are written from. A window whose origin is in
 ; the dead zone gets the primary, the only answer that cannot leave it
 ; unreachable.
+;
+; DX IS AN OUTPUT TOO (SPEC.md 11.93), and it is the reason the display index
+; is banked on the stack rather than kept in DL: this used to preserve DX, and
+; the caller's fifth number is the bottom a window that will not fit the band
+; may hang down to. On a secondary that IS ye, there being no dock to hang
+; over; on the primary it is [vid_ph], the number already loaded.
 ; -----------------------------------------------------------------------------
 wm_fit_box:
     cmp byte [vid_ndisp], 1
     jbe .out
     push bx
-    push dx
     mov ax, [bx+W_X]
     mov bx, [bx+W_Y]
     call vid_disp_of            ; AL = the display holding the origin
+    push ax                     ; ...banked: DX is an output now
     mov dl, al
     call vid_ctx_ptr            ; DI = its record
     mov ax, [di+VID_CTX_VX]
@@ -580,12 +619,14 @@ wm_fit_box:
     push si
     mov si, [di+VID_CTX_VY]
     pop di                      ; DI = ye, SI = y0
-    or dl, dl
+    mov dx, di                  ; a secondary's hard floor is its own bottom
+    pop ax
+    or al, al
     jnz .done                   ; a secondary has no menu bar and no dock, so
     mov si, MBAR_H              ; its whole height is desktop
     mov di, [vid_dock_y0]
+    mov dx, [vid_ph]            ; ...and the primary's floor is its own height
 .done:
-    pop dx
     pop bx
 .out:
     ret
@@ -5158,6 +5199,58 @@ wm_ownbg:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_keeph - "my layout is fixed: hang me over the dock rather than shorten me"
+;            (public; API 0x03E0, SPEC.md 11.93)
+; in:  BX = window ptr, AL = 0 clear / non-0 set
+; out: nothing - every register preserved, FLAGS INCLUDED
+;
+; wm_fit clamps a frame that will not fit the desktop band down to it, and for
+; anything that reflows - a Disk window, Note Pad, the two that re-derive
+; through 11.98 - that is exactly right. For a FIXED layout it is not a clamp
+; but a loss: the app goes on drawing all of its content, so the rows below
+; W_Y + W_H are still on the glass and simply belong to no window. wm_hit
+; tests the record, so a click there falls through to the dock, and the effect
+; is a board whose bottom rows can be seen and not played.
+;
+; So the height stops being the kernel's to reduce, and the floor becomes the
+; DISPLAY's own bottom instead of the dock's top row. It is opt-in and must
+; be: the kernel cannot tell a layout that can give a row up from one that
+; cannot, and guessing it from "has no negotiator and no 11.98 handler" would
+; make ADDING one silently re-truncate the window.
+;
+; IT RE-FITS FROM THE NATURAL BANK, because by the time an entry proc can call
+; this wm_create has already clamped the window and the asked-for height only
+; survives in the bank (39.11.2.1). That is also why this is not simply a
+; template word: the copy in wm_create is EIGHT words and growing it would
+; read one word past every existing package's template.
+;
+; The intended caller is an entry proc or a KD_INIT, before the window is
+; shown, where moving it costs nothing and no repaint is owed. Calling it on a
+; visible window is legal and takes effect at the next paint the caller
+; performs - wm_snap's terms, and its FLAGS-preserving contract too, for
+; wm_snap's reason: an entry proc's CF is the loader's return value.
+;
+; NO 11.98 NOTIFICATION, deliberately: that one reports a box that moved UNDER
+; an application, and is called with the gfx lock held, which an entry proc
+; does not hold. This is the application asking, and its own first W_PAINT is
+; where it reads the answer.
+; -----------------------------------------------------------------------------
+wm_keeph:
+    pushf
+    or al, al
+    jz .clear
+    or word [bx+W_FLAGS], WF_KEEPH
+.refit:
+    call wm_nat_take            ; the rect the TEMPLATE asked for...
+    call wm_fit                 ; ...re-clamped under the flag as it now is
+    popf
+    ret
+.clear:
+    and word [bx+W_FLAGS], ~WF_KEEPH & 0xFFFF
+    jmp short .refit            ; both directions re-fit: withdrawing it has
+                                ; to be able to put a shortened window back
+
+; -----------------------------------------------------------------------------
 ; wm_damage - which rect does this paint owe? (SPEC.md 11.90.2)
 ; in:  BX = window ptr - your own, called from inside its W_PAINT
 ; out: CF = 1 = draw the WHOLE content, and AX/BX/CX/DX are that content rect;
@@ -7298,12 +7391,28 @@ wm_su_bank:
     cmp bx, di
     je .front
     cmp byte [wm_dw_part], 0    ; A PARTIAL DRAW MAY NOT RE-BANK (SPEC.md
-    jne .out                    ; 11.96.9): the screen inside this window's
-                                ; content is not all ours, so banking it would
-                                ; store the covering window's pixels as our own.
-                                ; Keeping the cache we already have is not a
-                                ; compromise - a partial draw changed nothing,
-                                ; so the old one is still exactly right
+    je .take                    ; 11.96.9): the pass repaired part of this
+                                ; window, so what it drew is no evidence about
+                                ; the rest
+    call wm_su_ck               ; ...but the cache it already has IS. A partial
+    jnc .out                    ; draw changed nothing, so an existing one is
+                                ; still exactly right and re-taking it is a
+                                ; blit for nothing
+    mov bx, di                  ; ...AND WITH NO CACHE AT ALL, ASK THE SCREEN
+    call wm_obscured            ; (SPEC.md 11.96.9.1). "Was this draw partial"
+    jc .out                     ; is a proxy for "is some of this window's
+                                ; content somebody else's pixels", and it is
+                                ; the wrong question once the window is out
+                                ; from under whatever covered it: a drag that
+                                ; uncovers a window repairs only the vacated
+                                ; rect, so the draw is partial while the whole
+                                ; content is now on the glass and correct.
+                                ; wm_obscured asks that directly, and it
+                                ; refuses 11.96.7's hazard too - a window
+                                ; drawn earlier in this same pass with a
+                                ; marked window above it still to come is
+                                ; covered by construction
+.take:
     call wm_su_take             ; covered, or minimized a moment from now:
     jmp short .out              ; its pixels stand until something draws it
 .front:

@@ -642,11 +642,11 @@ CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
                                  ; data limit (41.4). Tier 2 only
 ;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
-; A DRVC_DISK DRIVER's slots, not an application's: all four are fenced on the
-; caller being the driver whose disk services are published, so a package gets
-; CF=1 and nothing else. They are published here because drivers include this
-; file (drivers/os88drv.inc does), and because a slot number belongs in one
-; place (SPEC.md 20.8).
+; A DRVC_DISK DRIVER's slots, not an application's: the four that CHANGE
+; something are fenced on the caller being the driver whose disk services are
+; published, so a package gets CF=1 and nothing else. They are published here
+; because drivers include this file (drivers/os88drv.inc does), and because a
+; slot number belongs in one place (SPEC.md 20.8).
 %define OSAPI_VOL_ADD       KERNEL_SEG:0x0270   ; AL = the driver's own volume
                                  ; handle, CX = the volume's sector count,
                                  ; DX = a listing claim's segment (0 = the
@@ -665,6 +665,30 @@ CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
 %define OSAPI_VOL_PAINT     KERNEL_SEG:0x0288   ; repaint the desktop's drive
                                  ; zones. It takes the gfx lock ITSELF, so
                                  ; never from a callback that holds one
+%define OSAPI_VOL_AT        KERNEL_SEG:0x03E8   ; DL = an int 13h drive number,
+                                 ; BX:CX = a partition's 32-bit base LBA (BX =
+                                 ; the high word). out CF=0 and AL = the volume
+                                 ; index ALREADY covering it, CF=1 = none is.
+                                 ; Preserves every other register.
+                                 ;
+                                 ; ASK THIS BEFORE OSAPI_VOL_ADD, for every
+                                 ; partition you are about to mount. On a
+                                 ; machine installed to its hard disk the
+                                 ; KERNEL adopted the partition it booted from
+                                 ; before your driver was even loaded - it had
+                                 ; to, your image being a file on that volume
+                                 ; (SPEC.md 52.10.3) - and nothing in your own
+                                 ; table says so, so mounting it again puts a
+                                 ; second drive icon on the same sectors.
+                                 ;
+                                 ; It answers about BIOS-transport volumes and
+                                 ; only those. Your own rows are yours to
+                                 ; recognise: the kernel never learns their
+                                 ; partition base (it hands you a
+                                 ; volume-relative LBA and you add it), and a
+                                 ; DV_UNIT that is your own volume handle would
+                                 ; collide with an int 13h drive number for
+                                 ; free. Unfenced, because it changes nothing
 
 ; --- a REDIRECTED volume's listing (SPEC.md 62.9.1) -------------------------
 ; A DRVC_FILE DRIVER's slot, and the narrowest fence in the table: it is legal
@@ -1107,6 +1131,12 @@ WF_NOSNAP  equ 16                ; W_FLAGS bit4: this window has OPTED OUT of
                                  ; DEFAULT for every window - a clear bit
                                  ; means snapped. Change it with OSAPI_WM_SNAP
                                  ; (AL = 0 to opt out), never by hand
+WF_KEEPH   equ 128               ; W_FLAGS bit7: this window's HEIGHT is not the
+                                 ; kernel's to reduce for the dock's sake
+                                 ; (SPEC.md 11.93). Set it with OSAPI_WM_KEEPH,
+                                 ; never by hand - the slot re-fits, and the bit
+                                 ; on its own would not take effect until the
+                                 ; next adapter change
 WMIN_W     equ 96                ; smallest frame a resize can leave
 WMIN_H     equ 64
 
@@ -2155,6 +2185,36 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; none of this. An app that draws through the
                                  ; bottom of its own frame after an adapter
                                  ; change is the symptom this exists for.
+%define OSAPI_WM_KEEPH      KERNEL_SEG:0x03E0   ; BX = win ptr, AL = 0 clear /
+                                 ; non-0 set: "my layout is FIXED - if I will
+                                 ; not fit the desktop band, hang me over the
+                                 ; DOCK rather than shorten me" (SPEC.md 11.93).
+                                 ; Call it from your entry proc right after
+                                 ; OSAPI_WM_CREATE; it re-fits from the size you
+                                 ; asked for, and preserves the FLAGS, so the CF
+                                 ; you owe the loader survives it.
+                                 ;
+                                 ; WHY IT IS OPT-IN. A template is authored for
+                                 ; 640x480 and a CGA's desktop band is 155 rows,
+                                 ; so a taller window is clamped to fit above the
+                                 ; dock. For anything that reflows - a list, a
+                                 ; text view, an app that re-derives through
+                                 ; OSAPI_WM_ONRESIZE - that is exactly right.
+                                 ; For a FIXED layout it is not a clamp but a
+                                 ; LOSS: you go on drawing all of your content,
+                                 ; so the rows below your frame are still on the
+                                 ; glass and simply belong to no window - the
+                                 ; kernel hit-tests the record, so a click there
+                                 ; reaches the dock instead of you. Visible and
+                                 ; unplayable is the symptom.
+                                 ;
+                                 ; The kernel cannot tell the two apart, which
+                                 ; is why you say so. You still do not get more
+                                 ; than the SCREEN: the floor becomes the
+                                 ; display's own bottom, not infinity, so a
+                                 ; template taller than the whole adapter is
+                                 ; still cut - and on a machine where you fit
+                                 ; the band, this changes nothing at all.
 %define OSAPI_BOOT_TICKS    KERNEL_SEG:0x02F8   ; out AX = how long this machine
                                  ; took to boot, in SYSTEM TICKS (18.2065 Hz,
                                  ; 54.925 ms each): the boot sector's first

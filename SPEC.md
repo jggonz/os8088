@@ -5606,6 +5606,87 @@ folder-vanished path reaches it from `ld_run`, which deliberately holds no
 lock across a mount (§21). A pointer cannot be spent on whichever window
 happened to repaint in between.
 
+### 11.93 `WF_KEEPH` — a fixed layout hangs over the dock rather than be cut
+
+**`wm_keeph` (API slot 0x03E0), BX = window, AL = 0 clear / non-0 set: "my
+layout is FIXED, so my height is not the kernel's to reduce."** A window that
+sets it and will not fit the desktop band is clamped against the **display's
+own bottom** instead of against the row the dock starts on — so it hangs over
+the strip, which `wm_dock_under` (§11.90) and `wm_dock_clear` have handled
+since a grown window could first reach it.
+
+**Why the default cannot simply change.** `wm_fit`'s height clamp is
+`[vid_dock_y0] - MBAR_H - 1`, and for anything that reflows it is exactly
+right: a Disk window, Note Pad and Fractal at 155 rows on a CGA show fewer
+rows and lose nothing, the Task Manager and `piano` re-derive through §11.98,
+and every one of them would be *worse* hanging permanently over the dock on
+every CGA boot. Nine of the ten templates in the tree taller than 155 rows are
+in that class. So the relaxed floor is opt-in and the clamp stays the default.
+
+**What the clamp costs the tenth is not a smaller window — it is unreachable
+content.** `wm_fit` moves the RECORD and nothing tells the application, so a
+fixed layout goes on drawing every row it has: the rows below `W_Y + W_H` are
+still on the glass, drawn straight through the bottom of the frame, because
+the `gfx_*` primitives clip to the SCREEN and not to a window. `wm_hit` tests
+the record, so those rows belong to no window at all and a press there falls
+past `.on_desktop` into `dock_click`. Minesweeper on a CGA is the worked
+example and it reads exactly as the two separate bugs it was reported as: the
+board sits over the dock, and its bottom two rows cannot be played. One clamp
+produces both.
+
+**It re-fits from the natural bank** (§39.11.2.1), which is what makes the
+call usable at all: by the time an entry proc can make it, `wm_create` has
+already run `wm_fit` and the asked-for height survives only in the bank. That
+is also why this is not a ninth template word — the copy in `wm_create` is
+**eight** words and growing it would read one word past every package's
+template. Both directions re-fit, because withdrawing the flag has to be able
+to put a shortened window back.
+
+**Four things are deliberate.** The floor is the DISPLAY's bottom and not
+infinity, so a template taller than the whole adapter is still cut — a window
+whose title bar is off the screen cannot be dragged back. It is
+FLAGS-preserving, `wm_snap`'s contract for `wm_snap`'s reason: an entry proc's
+CF is the loader's return value, and a `cmp` inside the re-fit would otherwise
+abort the launch. It sends **no §11.98 notification** — that one reports a box
+that moved *under* an application and is called with the gfx lock held, which
+an entry proc does not hold; this is the application asking, and its own first
+`W_PAINT` reads the answer. And it is a stored flag rather than a one-shot
+re-fit, or the next `wm_refit` (§39.11.2) would clamp the window back to the
+band on the first adapter change.
+
+**Not derived from "has no negotiator and no §11.98 handler",** which lands on
+the right answer for every window in the tree today and is still wrong: it
+would make *adding* a resize handler silently re-truncate a window, which is
+the shape of bug this tree keeps writing down (§18.7.3). The application knows
+whether a row can be given up; nothing else does.
+
+**Minesweeper still does not fit a CGA, and the residual is stated rather than
+hidden.** Its content is 164 rows — a 20px strip plus nine 16px cells, and the
+cells are 16px because the mine, the flag and the digit art are drawn for a
+16px cell — against a screen that can offer `200 - MBAR_H - 1 = 179` frame
+rows, or 160 of content. So the bottom cell row keeps 12 of its 16 rows,
+which is a cell any hand can hit, and the last four are drawn through the
+frame as they always were. The alternative is a board with two rows missing.
+
+**`tests/dispmine.py` is the gate, and it presses a BUTTON rather than taking
+a picture.** The two halves of this were reported as separate bugs — "it sits
+over the dock" and "I cannot interact with the bottom set of mines" — and a
+screenshot shows only the first, because the board is drawn identically either
+way. So the test opens `MINES.O88` on a cycle-accurate CGA and clicks the
+centre of the bottom-left cell, which at `y = 194` is **below
+`[vid_dock_y0]`**: one press asks both questions at once. Measured, shipped
+against `make KEEPH=0`:
+
+| | frame | bottom row | press at (248,194) |
+|---|---|---|---|
+| `WF_KEEPH` | 146×**179**, rows 20..198 | 198 | opens 11 cells |
+| `KEEPH=0` | 146×**155**, rows 20..174 | 174 | opens nothing |
+
+The top-left cell is clicked first in both builds and must open: without that
+control a broken click path and a broken clamp are the same result. `KEEPH=0`
+removes the flag test from `wm_fit` rather than imitating its absence, so the
+reference build's `.hcut` is literally the pre-§11.93 instruction stream.
+
 ### 11.94 `WF_SNAP` — a window that keeps its content on a byte boundary
 
 **Opt-in, EVERY ADAPTER, and the whole of it is one `and`.** `wm_snap` (API
@@ -6876,6 +6957,71 @@ session had. And a polluted cache is **invisible until it is used**: §11.96.7's
 paragraph says so, and it caught the author of this section out a second time in
 the same round.
 
+#### 11.96.9.1 …unless nothing is covering the window, and then it must
+
+§11.96.9 closes with *"the conservative direction costs a re-bank that would
+have been legal"*, and the bill for that came in from the field: **a Disk
+window that repaints in full every time another window is dragged off it, for
+the rest of the session.** Open B: as the first thing after a boot, walk into
+`GAMES`, launch Minesweeper over the listing, and from then on every drag that
+uncovers any part of that window is the whole listing going blank and filling
+back in — until some *other* window is raised over it, at which point it
+silently starts behaving. Measured under MartyPC on the reported sequence:
+`SU_MISS` and a `W_PAINT` on the Disk window at every step, with `wm_su_segs`
+for its slot **0 from the launch onwards**.
+
+Two things compose to get there and neither is wrong on its own.
+`files_poster` clears `Loading...` through `wm_clip_set`, which **drops that
+window's cache** (§11.96) — correct, the window is about to draw. And from
+that moment every draw of that window is a **damage** draw, which names a
+sub-rect, which sets `[wm_dw_part]`, which refuses the re-bank. **There is no
+path left that can put a cache back**: `wm_su_bank` is the only taker outside
+`wm_raise`, and `wm_raise` takes one only from the window *losing* the front —
+which is why raising something else over it is the cure, and why the report
+ends "after switching window orders this stops happening".
+
+**`[wm_dw_part]` is a proxy for the question, and the question is answerable
+directly.** What a bank needs is that every pixel of the content rect is this
+window's own *now*; "was a sub-rect named" answers that only while the window
+is still under whatever covered it. A drag that uncovers a window repairs the
+**vacated** rect and nothing else — so the draw is partial and the content is
+nonetheless whole, correct and on the glass, because §11.91's argument says
+every pixel outside the damage was already right. `wm_obscured` asks it as
+itself.
+
+So `wm_su_bank`'s partial arm is two tests, and the order is the point:
+
+1. **`wm_su_ck` — have I already got one?** §11.96.9's answer stands wherever
+   it applies: a partial draw changed nothing, so an existing cache is still
+   exactly right and re-taking it is ~10 ms of blit for a picture that is
+   already banked. It also asks *valid*, not merely *present*, so a cache the
+   rect no longer matches cannot be kept for ever by a window every one of
+   whose draws is partial.
+2. **`wm_obscured` — is any of me somebody else's pixels?** Only with no cache
+   at all, and the frame rect rather than the content, which is the
+   conservative direction of the two.
+
+**It refuses §11.96.7's hazard by construction rather than by ordering.** That
+section's bug was a bank taken after `wm_dock_under` had redrawn another
+window over this one; the general form is a marked window higher in `wm_zord`
+drawn later in the same pass, and `wm_obscured` answers CF = 1 for exactly
+that shape — the window above is in the z-order and overlaps, whether or not
+it has drawn yet. The pre-existing **whole**-draw arm is untouched and
+deliberately not given the same test: `wm_paint_all` paints back to front over
+a fresh desktop, so a window drawn there is banked from its own pixels while
+`wm_obscured` would call it covered, and adding the test would take a cache
+away that has always been correct.
+
+Measured on a cycle-accurate 5150/CGA over the reported sequence, Disk window
+only:
+
+| | before | after |
+|---|---|---|
+| launch Minesweeper over it | `take` 1, dropped, `fm_repaint` 1 | same |
+| drag Minesweeper clear | MISS, `W_PAINT`, no bank | MISS, `W_PAINT`, **bank** |
+| drag it back over | MISS, `W_PAINT` | **HIT**, no `W_PAINT` |
+| move it to a different part | MISS, `W_PAINT` | **HIT**, no `W_PAINT` |
+
 #### 11.96.7 A bank is only worth what was on the glass when it was taken
 
 `wm_su_take` reads the window's content **off the screen**, so it is valid only
@@ -7625,13 +7771,15 @@ question from whether they ask, and it is answered by one number: a CGA's
 desktop band is 155 rows, so a template taller than that is clamped and
 everything below the cut is drawn through the window's own frame. `hello`
 (90) and `recorder` (140) fit and need nothing at all. `piano` (177) did not
-and now registers — see §11.98.1. **`mines` (183) does not fit either and is
-NOT fixed here**: its content is a 9x9 grid of 16px cells plus a 20px strip =
-164 rows against the 136 a CGA gives it, so the bottom row and a half of the
-board is outside the frame. Unlike a keyboard, a minefield cannot simply be
-made shorter — the cells would have to shrink, and the mine, flag and digit
-art is drawn for a 16px cell. `frotz` and `paint` install the *negotiator*
-instead and size themselves.
+and now registers — see §11.98.1. **`mines` (183) does not fit either, and it
+is the one that goes the OTHER way — §11.93.** Its content is a 9x9 grid of
+16px cells plus a 20px strip = 164 rows against the 136 a CGA gives it, and
+unlike a keyboard a minefield cannot simply be made shorter: the cells would
+have to shrink, and the mine, flag and digit art is drawn for a 16px cell. So
+it does not re-derive at all — it asks not to be shortened, and hangs over the
+dock. The two answers are complementary rather than rival: §11.98 is for a
+layout with slack in it, §11.93 for one with none. `frotz` and `paint` install
+the *negotiator* instead and size themselves.
 
 ##### 11.98.1 …and `piano` is the one that shortens rather than re-derives
 
@@ -13687,6 +13835,57 @@ enumerate one folder and open its files from another.
 The answer is 24 bytes, and the **size is 32-bit** where the listing's is
 clamped to a word (§19) — a copy cannot work from a truncated length.
 
+### 19.6.2 …and it stamped three bits while forgiving two
+
+**This is a latent defect found while chasing a field report, and it is NOT
+that report's cause.** It was written up as the cause first, and the A/B is
+what took it back: `make INSTRO=1` restores the old mask, and a second
+hard-disk install onto the same partition **succeeds on both builds**. The
+installer's own line says why — `hd_inst_sys` *formats the slot, then copies
+the disk that is in A: now* — so `KERNEL.SYS` never exists when it is
+written, `dskw_wbody`'s `.replace` arm is never reached, and neither leg of
+that A/B touched the code below. The field's `KERNEL.SYS` failure is
+something else and is still open.
+
+What follows is real all the same, and worth having fixed: the arithmetic
+below is not in doubt, only its reach.
+
+§19.6 stamps **read-only + hidden + system** on `KERNEL.SYS` and every
+`*.DRV`. `DSKW_SPROT` — the mask `dskw_write_sys` replaces under — forgave
+`DSKW_SYSAT`, which is *hidden and system*. Read-only was left in, so **the
+kernel cannot rewrite its own file**: anything replacing a `*.DRV` or
+`KERNEL.SYS` in place finds the entry, tests it, and is refused with
+`FERR_PROT`.
+
+**No shipped path reaches it today**, which is why it had never been seen and
+why the A/B above comes back null: the installer formats first, and every
+other producer of a system file writes it onto a volume that has just been
+made. It is a trap set for the next thing that replaces one in place.
+
+The tell was in the constant's own comment — *"Read-only, the volume label
+and a subdirectory still refuse"* — sitting directly beneath a line saying
+those bits are "what the kernel just stamped on its own file and it must be
+able to rewrite it". Both sentences were written at once and only one of them
+counted the bits.
+
+`DSKW_KPROT` is the third tier, and it is narrower than "`dskw_write_sys`
+forgives read-only": the **entry** must already be hidden+system, so what is
+forgiven is a file wearing the kernel's own species and nothing else. A
+driver still cannot replace a user's read-only document that happens to share
+a name.
+
+**`SYSTEM.CFG` needed none of this and shows why the defect is invisible**:
+it is deliberately *not* read-only precisely because the kernel rewrites it,
+so the one system file that IS replaced on an ordinary machine is the one the
+mask never had to forgive. Every other one is written once, onto a volume
+that has just been formatted.
+
+The test is `dskw_pmask`, one routine where there had been two identical
+copies eleven hundred lines apart — `dskw_wbody`'s replace and
+`dskw_apbody`'s append. The append copy matters: `INSTCHUNK=1` puts
+`KERNEL.SYS` down as a run of `OSAPI_FILE_APPEND_SYS` calls, so a fix applied
+to the replace alone would have left the low-heap path refusing.
+
 
 ## 20. Loadable programs — the .o88 package format
 
@@ -16193,6 +16392,51 @@ is the fix. It is worth recording as the *reason* for the reference build
 rather than as a footnote to it: a full-repaint reference does not check the
 optimisation being made, it checks **every** cheap path the session touches,
 and this one had been cheap and slightly wrong since §22.9.
+
+#### 22.13.1 …and the status line stopped costing the window
+
+`fm_status_only` is the cheap path §22.13 exists to reach, and **it refused
+exactly when it was most needed**. It was a `gfx_fill` of the band and then
+`fm_draw_status`'s `font_str` over it — §6.1's erase-and-letter pair — so
+§11.3's granularity rule applied: a fill clips per pixel and a glyph per whole
+cell, and a clip edge crossing the line would erase rows the text could not be
+put back into, leaving it **blank rather than stale**. The gate was a
+`wm_clip_test` on the whole band and the fallback was `fm_repaint`.
+
+The case that gate fires in is not an edge case. A clip region is armed on a
+Disk window in exactly one place — `files_poster`, clearing `Loading...` after
+a load — and by then the application just launched **is sitting on top of the
+window**. So the ordinary act of opening a program out of a Disk window
+repainted that window in full behind it: §11.96's ~1,026 ms class of repaint,
+to correct eight rows of text. Reported from the field as exactly that, and it
+compounds — the repaint does not go through `wm_draw_win`, so it leaves no
+raise cache either (§11.96.9.1 is the other half of the same report).
+
+**`font_run` is the answer and it needed no new mechanism.** `fm_stat_line`
+pads `fm_hdrbuf` with spaces to the width the window fits and emits one opaque
+run at `[fm_cx] + 8`: the erase and the letter are one decision per cell, so
+the pair that produced the failure no longer exists, the caller needs no gate,
+and a cell an edge cuts is left **stale** — which is what a covered cell should
+be, since something is drawn over it. The band fill goes with it, the padding
+being the erase (§6.1, §27.2), and nothing else ever writes in those rows: the
+scroll bar stops at `fm_listb` two rows above and the selection bands stop with
+it. The only refusal `fm_status_only` has left is a content rect with nothing
+in it.
+
+Four things follow, and the last two are why this was not simply a deletion.
+The pen was **already** a multiple of 8 (§11.94.3), so the two mono adapters
+get `font_run`'s single-store path and the line stops flashing as well as
+stops escalating. The padding is capped at `FM_HDRMAX-1` as well as at the
+window's width, because it writes into `fm_hdrbuf` and a wide VGA window fits
+more cells than that buffer holds. **`wm_grow_paint` stays**: a padded run ends
+6px short of `[fm_rgt]` and the grow box starts 14 short, so it still overlaps
+and §22.13's own late-found defect is still there to repair. And
+`fm_stat_line`'s "empty buffer, draw nothing" early-out **had to go** — with no
+band fill in front of it, drawing nothing leaves the previous line on the
+glass, so an empty string now pads to a blank run and blanks it.
+
+Measured on a cycle-accurate 5150/CGA, launching Minesweeper from a Disk
+window it then covers: `fm_repaint` **1 → 0**.
 
 ### 22.14 The Disk window keeps §11.96's promise, and `fmv_store` is why
 
@@ -34375,9 +34619,63 @@ the system to save one indirection. §52.9's "the system disk stays A:" is
 half-right in the way that matters: what moves is *which volume is the system
 volume*, not *which volume is A:*.
 
-**And `HDD.DRV` must not mount the boot partition twice.** Its automount
-skips a partition already in the volume table, matched on device and base
-LBA — the kernel got there first, through the BIOS, and the row is live.
+**And `HDD.DRV` must not mount the boot partition twice.** `hd_mount` skips a
+partition already in the volume table, matched on device and base LBA — the
+kernel got there first, through the BIOS, and the row is live. §52.10.3.1 is
+what that took, and it is worth reading before trusting any other sentence in
+this section that describes behaviour rather than code.
+
+#### 52.10.3.1 CLOSED: the paragraph above was true and the code was not
+
+The rule was written and never implemented, and what it cost was the symptom
+it names: **install to a partition, boot from it, click Mount, and the disk is
+on the desktop twice** — C: from the kernel's adoption and D: from the
+driver, the same sectors under two letters, two FAT windows and two icons.
+Reported from the field in exactly those terms: *one from the mount, one from
+the BIOS*.
+
+The driver could not have got this right on its own, which is why it did not.
+`hd_already` — its only "is this mounted?" test — walks `hd_vols`, the rows
+**this driver** registered, and the kernel's adoption is by construction not
+one of them: it happened before the driver was loaded, out of a table the
+driver cannot see. **`OSAPI_VOL_AT` (slot 0x03E8)** is that half made askable:
+DL = an int 13h drive number, BX:CX = a 32-bit partition base, out CF = 0 and
+AL = the volume index already covering it.
+
+Four things about it.
+
+- **It answers about `DVK_BIOS` rows and only those**, and that is a
+  correctness bound rather than a scope one. A driver-backed row's `DV_UNIT`
+  is the *driver's own volume handle* — a small integer that would collide
+  with an int 13h drive number for free — and its partition base never
+  reaches the kernel at all, `dsk_xfer` handing out a volume-relative LBA and
+  the driver adding its own base (§18.7). A driver's rows stay the driver's
+  to recognise; this is the half it is blind to.
+- **`dsk_vbase` is written by `dsk_boot_from` alone, and that row can never
+  be freed** — `dsk_vol_del` takes `DVK_DRV` and `DVK_FILE` and nothing else
+  — so a stale base cannot be inherited by a row somebody takes later. That
+  is what makes the comparison safe with no clearing anywhere, and it is the
+  invariant to check before giving any other producer a base.
+- **The IDE rung answers "not the kernel's" and mounts.** The kernel's
+  transport is int 13h (rung 0, §52.1), so a device reached through the task
+  file is by definition not the drive the adoption named — and there is no
+  int 13h number to offer for one. That is the right answer for the drive the
+  BIOS does not know, which is the only drive rung 1 is for.
+- **The caption had to change with it.** `hd_mount`'s refusal was still
+  `'No FAT partition on it'` from the top of the loop, which about a
+  partition that is mounted and visible on the desktop is the one answer that
+  is not true. It reads `Already mounted` now, and the same string covers the
+  skip `hd_already` was already doing silently. The Mount button deliberately
+  does **not** become Unmount: the boot volume is not the driver's to drop,
+  and §47 rule 3's honest test is the click, which now says why.
+
+Verified end to end on a cycle-accurate 4.77MHz 8088 (`os8088_xt_hdd`, rung
+0, no floppy mounted), by reading `dsk_vtab` out of the guest rather than
+counting icons: booted from the partition, ticked the driver — which is read
+off that same volume — and clicked Mount. Before, **4 zones and two hard-disk
+volumes, C: and D:, on one partition**; after, **3 zones and one**. The
+ordinary case is unmoved and was checked the same way: boot the floppy on the
+same machine with the same disk attached, and Mount still lands it at C:.
 
 ### 52.10.4 The installer
 
@@ -34418,6 +34716,85 @@ hundreds of sectors at **~24 ms** each on the field machine (and ~73 ms
 WRITING, PERFORMANCE.md Part 2 Set 24) — so `fpg_begin`'s
 bar is stepped from inside the transfer loop, which is the one piece of code
 still running.
+
+#### 52.10.4.1 CLOSED: the volume the machine is RUNNING FROM was a target
+
+**Install offered the partition the machine had booted from, and preselected
+it.** `hd_iw_scan`'s ladder asks whether a slot is FAT-typed, inside the
+volume ceiling and at least `HIW_MINSEC` — and a system volume is all three,
+being the thing this dialog exists to produce. So on an installed machine
+with one partition the list read `Slot 1  31M  Ready`, highlighted, with
+Install live: two clicks from formatting the volume the running kernel reads
+its own files from.
+
+What that costs is worse than the duplicate icon of §52.10.3.1 and comes from
+the same blind spot. §52.10.8 already establishes that the destination must
+not be mounted while it is erased — a format rewrites the FAT and the root
+under a live `[dsk_fatseg]`, a banked BPB (§18.9.2) and cached directory
+sectors (§19.2.3) — and `hd_iunmount_dst` enforces it by walking `hd_vols`.
+The boot volume is not in `hd_vols` and **cannot be put right by unmounting**:
+the kernel is reading `KERNEL.SYS`, `CTRL.DRV` and `HDD.DRV` off it, and
+`[dsk_bootvol]` is where every later `drv_load` and `SYSTEM.CFG` write goes
+(§51.5.1). There is no state in which this install can succeed.
+
+So it is refused as a fact rather than a guess (§47 rule 3): `HIS_LIVE`, a
+fifth slot state whose row reads **`Booted From`**. Three things follow with
+no new code, which is what says the state belongs in that ladder rather than
+beside it — `hd_inst_ok` already greys Install for any selection that is not
+`HIS_OK`; `hd_iw_scan`'s pick loop already lands the default selection on the
+first `HIS_OK` slot, so on a disk with a spare partition the dialog simply
+opens on the one that works; and the row still shows its size, because the
+partition is fine and the machine is merely standing on it.
+
+**The row says why not; the caption says what to do.** A state word cannot
+carry `Boot from a floppy to replace it`, and on the single-partition machine
+— the common one — there is nothing pickable in the list at all, so
+`Pick a partition, then Install` would be the interface's last word on a
+dialog that can do nothing. `hd_iw_open` sets that caption when the selection
+comes back `HIS_LIVE`. It is set THERE and not in the scan: the scan is
+called from one place and `[hd_imsg]` belongs to the stage machine, so a
+caption written inside it would fight the arm/copy/done sequence the moment
+anything else called it.
+
+**The predicate is `hd_kvol`, and it is `hdcom.inc`'s** — assembled into both
+images, so the page and the installer cannot drift about what "the kernel
+already has this" means. `OSAPI_VOL_AT` being the one unfenced slot of the
+`OSAPI_VOL_*` family is what makes that possible: the tool is a second image
+whose segment is not the published disk driver's, so a fenced slot would
+refuse it (§52.11).
+
+**What is deliberately NOT refused**: a partition this driver has mounted
+itself. That one is unmounted before the format and always was (§52.10.8),
+and refusing it would take away the ordinary way to re-install — look at what
+is on a partition in a Disk window, then replace it.
+
+**The disk tool is the same hazard through two more buttons, and it had no
+predicate at all.** §52.2's Format is offered on every slot — free, raw,
+alien or a volume — which is right for all of them but one, and `hd_tw_fmtok`
+is the predicate that had never needed to exist. Delete is the same act one
+indirection further out: taking the boot partition's table entry away leaves
+the volume live in RAM, the kernel reading its own files off sectors nothing
+owns, and nothing to boot next time. Both grey on `HTS_LIVE`, both refuse the
+click, and the row reads `Booted From` in place of its FAT type — because
+what matters about that slot is not which FAT it holds. **Three windows now
+say the same word for the same fact**, which is the point of putting it in
+the state rather than beside it.
+
+**Which leaves the machine no way to replace its own system volume from
+inside itself, and that is correct.** The install set is two floppies and
+they are bootable; booting them is the supported path, and it is what the
+caption says. A driver cannot format the ground it is standing on, and an
+interface that offers to is not more capable — it is one confirmation click
+away from a machine that will not start.
+
+Verified on a cycle-accurate 4.77MHz 8088 booted from its own hard disk
+(`os8088_xt_hdd`, rung 0, no floppy): before, `Slot 1  31M  Ready` selected
+and Install live; after, `Slot 1  31M  Booted From`, Install greyed, and the
+caption reading `Boot from a floppy to replace it`. The tool window the same
+way — `Slot 1  31M  Booted From` with Format and Delete both greyed. The
+floppy-booted machine is unchanged, and that is the A/B that matters: the
+same disk on the same machine, one boot source apart, still reads `Ready`,
+still formats and still installs.
 
 ### 52.10.5 A disk already in the machine is not asked for
 

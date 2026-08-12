@@ -847,8 +847,23 @@ hd_mount:
     jne .big                    ; over 65,535 sectors: not a volume this
                                 ; kernel can carry (SPEC.md 18.7)
     call hd_already
-    jnc .next                   ; this one is already mounted
+    jnc .have                   ; this one is already mounted - by us...
+    mov al, [hd_sel]            ; ...or by the KERNEL, which adopted the
+    call hd_kvol                ; partition it booted from before we were
+    jnc .have                   ; loaded at all (SPEC.md 52.10.3). Mounting it
+                                ; again is a second icon on the same sectors.
+                                ; It is hdcom.inc's and takes the DEVICE as an
+                                ; argument, because the installer asks the
+                                ; same question of a device of its own
+                                ; (SPEC.md 52.10.4.1)
     call hd_mount_one
+    jmp short .next
+.have:
+    mov word [hd_msg], hd_s_mhave   ; and SAY so: the caption was still
+                                    ; 'No FAT partition on it' from the top of
+                                    ; the loop, which about a partition that is
+                                    ; mounted and on the desktop is the one
+                                    ; answer that is not true
     jmp short .next
 .big:
     mov word [hd_msg], hd_s_mbig    ; the tool calls this slot Unmountable and
@@ -1254,6 +1269,7 @@ hd_s_mounted: db 'Mounted ', 0
 hd_s_vol1:    db ' volume', 0
 hd_s_vols:    db ' volumes', 0
 hd_s_mnofat:  db 'No FAT partition on it', 0
+hd_s_mhave:   db 'Already mounted', 0
 hd_s_unmounted: db 'Unmounted', 0
 hd_s_mnotab:  db 'No partition table yet', 0
 hd_s_mfull:   db 'No free volume', 0

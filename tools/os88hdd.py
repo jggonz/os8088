@@ -18,6 +18,12 @@ and for the same reasons:
     and the kernel's sector count patched into the word at offset 508
   * KERNEL.SYS FIRST and CONTIGUOUS from cluster 2, which the VBR requires
     because it reads the kernel as a flat run rather than walking a chain
+  * ...and then whatever --file names, in the volume's root. A boot volume
+    with no HDD.DRV on it is a machine that cannot LOAD the hard-disk driver
+    (drv_load reads the system volume, which on an installed machine is the
+    hard disk), so the whole of SPEC.md 52.4's mounting is out of reach
+    without this - including 52.10.3's rule that the driver must not mount
+    the boot partition a second time
 
 MartyPC wants a fixed VHD, which is the raw sectors plus a 512-byte footer.
 Rather than generate a footer, this COPIES an existing one - MartyPC's bundled
@@ -46,6 +52,26 @@ A_RDONLY, A_HIDDEN, A_SYS = 0x01, 0x02, 0x04
 def fail(msg):
     sys.stderr.write("os88hdd: error: %s\n" % msg)
     sys.exit(1)
+
+
+def name83(nm):
+    """An 8.3 name as the 11 padded bytes a directory entry carries."""
+    stem, _, ext = nm.upper().partition(".")
+    if not stem or len(stem) > 8 or len(ext) > 3 or "." in ext:
+        fail("%r is not an 8.3 name" % nm)
+    return (stem.ljust(8) + ext.ljust(3)).encode("latin1")
+
+
+def attrs_of(name):
+    """SPEC.md 19.6's attributes, by extension - what the INSTALLER would
+    give the same file, because a fixture that hides less than the installer
+    does is a fixture testing a volume nobody will ever have."""
+    ext = name[8:11]
+    if ext == b"DRV":
+        return A_RDONLY | A_HIDDEN | A_SYS
+    if ext == b"CFG":
+        return A_HIDDEN | A_SYS             # the kernel REWRITES this one
+    return 0
 
 
 def chs(lba, spt, heads):
@@ -90,7 +116,17 @@ def main():
     ap.add_argument("--spt", type=int, default=26)
     ap.add_argument("--heads", type=int, default=4)
     ap.add_argument("--cyls", type=int, default=615)
+    ap.add_argument("--file", action="append", default=[], metavar="NAME=PATH",
+                    help="another file for the volume's root, e.g. "
+                         "HDD.DRV=build/hdd.drv (repeatable)")
     a = ap.parse_args()
+
+    extras = []
+    for spec in a.file:
+        nm, sep, path = spec.partition("=")
+        if not sep:
+            fail("--file wants NAME=PATH, not %r" % spec)
+        extras.append((name83(nm), open(path, "rb").read()))
 
     tmpl = open(a.template, "rb").read()
     total = a.spt * a.heads * a.cyls
@@ -143,27 +179,41 @@ def main():
     if vbr[510:512] != b"\x55\xAA":
         fail("the VBR lost its signature")
 
-    # --- the FAT, with KERNEL.SYS's chain: cluster 2 onward, contiguous ----
-    kclus = (len(kernel) + spc * SECTOR - 1) // (spc * SECTOR)
-    if 2 + kclus > nclus + 2:
-        fail("the kernel does not fit the volume")
+    # --- the FAT and the root, with KERNEL.SYS's chain first ---------------
+    # The kernel is cluster 2 onward and CONTIGUOUS, which the VBR requires;
+    # every --file lands after it, in the order it was named.
     fat = bytearray(fatsz * SECTOR)
     struct.pack_into("<H", fat, 0, 0xFFF8)
     struct.pack_into("<H", fat, 2, 0xFFFF)
-    for i in range(kclus):
-        n = 2 + i
-        struct.pack_into("<H", fat, n * 2, 0xFFFF if i == kclus - 1 else n + 1)
-
-    # --- the root directory: one entry, and it is the kernel ---------------
     root = bytearray(root_secs * SECTOR)
-    e = bytearray(32)
-    e[0:11] = b"KERNEL  SYS"
-    e[11] = A_RDONLY | A_HIDDEN | A_SYS
-    struct.pack_into("<H", e, 22, 0)            # time
-    struct.pack_into("<H", e, 24, ((2026 - 1980) << 9) | (1 << 5) | 1)
-    struct.pack_into("<H", e, 26, 2)            # first cluster
-    struct.pack_into("<I", e, 28, len(kernel))
-    root[0:32] = e
+    laid = []                                   # (first cluster, bytes)
+    nextc, nent = 2, 0
+
+    def add(name, blob, attr):
+        nonlocal nextc, nent
+        n = max(1, (len(blob) + spc * SECTOR - 1) // (spc * SECTOR))
+        if nextc + n > nclus + 2:
+            fail("%s does not fit the volume" % name)
+        if nent * 32 >= len(root):
+            fail("the root directory is full at %s" % name)
+        for i in range(n):
+            c = nextc + i
+            struct.pack_into("<H", fat, c * 2, 0xFFFF if i == n - 1 else c + 1)
+        e = bytearray(32)
+        e[0:11] = name
+        e[11] = attr
+        struct.pack_into("<H", e, 22, 0)            # time
+        struct.pack_into("<H", e, 24, ((2026 - 1980) << 9) | (1 << 5) | 1)
+        struct.pack_into("<H", e, 26, nextc)
+        struct.pack_into("<I", e, 28, len(blob))
+        root[nent * 32:nent * 32 + 32] = e
+        laid.append((nextc, blob))
+        nextc += n
+        nent += 1
+
+    add(b"KERNEL  SYS", kernel, A_RDONLY | A_HIDDEN | A_SYS)
+    for name, blob in extras:
+        add(name, blob, attrs_of(name))
 
     # --- lay the volume down -----------------------------------------------
     def put(lba, blob):
@@ -174,7 +224,8 @@ def main():
     for i in range(nfats):
         put(fat_lba + i * fatsz, bytes(fat))
     put(root_lba, bytes(root))
-    put(data_lba, kernel + b"\x00" * (-len(kernel) % SECTOR))
+    for c, blob in laid:
+        put(data_lba + (c - 2) * spc, blob + b"\x00" * (-len(blob) % SECTOR))
 
     # --- and the MBR, LAST: it is the commit (SPEC.md 52.10.4) -------------
     sec0 = bytearray(SECTOR)

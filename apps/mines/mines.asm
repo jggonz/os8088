@@ -137,6 +137,17 @@ mn_entry:
                                      ; the mine placement. The board changes
                                      ; when the player clicks it and at no
                                      ; other time
+    mov al, 1                        ; ...and its 164 content rows are 9 x 16
+    call OSAPI_WM_KEEPH              ; plus a 20px strip, none of which can give
+                                     ; a pixel up: the cells are 16px because
+                                     ; the mine, the flag and the digits are
+                                     ; drawn for a 16px cell. A CGA's desktop
+                                     ; band is 155, so without this the frame is
+                                     ; clamped to it, mn_draw_board goes on
+                                     ; drawing all nine rows through the bottom
+                                     ; of the frame, and the two rows below the
+                                     ; cut can be SEEN and not played - the
+                                     ; clicks land on the dock (SPEC.md 11.93)
     pop si
     ret
 .full:

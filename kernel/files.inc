@@ -5514,20 +5514,26 @@ fm_sel_bar:
 ; -----------------------------------------------------------------------------
 ; fm_status_only - repaint one Disk window's status line and NOTHING else
 ; in:  SI = window ptr; gfx lock held (a clip region may be armed)
-; out: CF = 0 drawn; CF = 1 refused - the caller must fall back to a whole
-;      repaint. All registers preserved.
+; out: CF = 0 drawn; CF = 1 refused (a content rect with nothing in it) - the
+;      caller must fall back to a whole repaint. All registers preserved.
 ;
 ; This exists for the loader round trip. Posting a load and finishing one
 ; change exactly one line of text - "Loading..." on, then off again - and both
 ; used to cost a full fm_repaint: a white fill of the whole content plus every
 ; row, every icon, the header and the buttons, to correct eight pixel rows.
 ;
-; The refusal is the SPEC.md 11.3 granularity rule, not caution. The erase is
-; a fill (per-pixel clipping) and the text is glyphs (whole-cell clipping), so
-; a clip edge crossing this rect would erase rows the text could not be put
-; back into - the line would go blank rather than stale. wm_clip_test on the
-; whole rect answers that in one call, exactly as fr_status does; CF = 1 sends
-; the caller back to fm_repaint, which is what it did before this existed.
+; IT USED TO REFUSE UNDER A CUT CLIP REGION and that refusal is gone (SPEC.md
+; 22.13.1), because the pair that needed it is gone: fm_stat_line is one
+; OPAQUE font_run now, so the erase and the letter are one decision per cell
+; and cannot disagree about which rows they cover. The refusal cost the whole
+; window every time - and the case it fires in is precisely the one where
+; something has just been raised over this window, which is where files_poster
+; runs. Reported from the field as a Disk window redrawing in full behind
+; every app launched out of it.
+;
+; The band fill went with it. The run's own padding is the erase (SPEC.md 6.1),
+; and it is the only thing that ever writes in these rows: the scroll bar stops
+; at fm_listb, two rows above, and the selection bands stop with it.
 ; -----------------------------------------------------------------------------
 fm_status_only:
     push ax
@@ -5541,31 +5547,24 @@ fm_status_only:
     call fm_layout              ; fm_cx/fm_cy/fm_cw/fm_rgt/fm_staty, and the
                                 ; fm_l* snapshot fm_draw_status reads
 
-    mov ax, [fm_cx]             ; the status line's own rect: full content
-    mov bx, [fm_cy]             ; width, the 8 rows font_str draws into. The
-    add bx, [fm_staty]          ; scroll bar stops at fm_listb, two rows
-    mov cx, [fm_rgt]            ; above this, so nothing else lives here
-    mov dx, bx
-    add dx, 7
+    mov ax, [fm_cx]
+    mov cx, [fm_rgt]
     cmp ax, cx
     jg .refuse                  ; degenerate content: nothing to draw into
-    cmp bx, dx
-    jg .refuse
-    call KERNEL_SEG:cw_wm_clip_test ; whole rect visible? (SPEC.md 11.3)
-    jc .refuse
 
-    mov byte [gfx_color], CWHITE
-    call KERNEL_SEG:cw_gfx_fill
     call fm_draw_status
-    mov bx, si                  ; the fill above runs to fm_rgt, and the GROW
-    call KERNEL_SEG:cw_wm_grow_paint ; BOX is in those rows at the bottom-
-                                ; right corner - so the band ate part of it
-                                ; and nothing put it back until the next full
-                                ; repaint. fm_repaint has always done this
-                                ; after its own fill; the cheap path had not,
-                                ; and every status-line-only draw - a New
-                                ; Folder prompt, a Rename, 'Loading...' -
-                                ; left the box a broken glyph (SPEC.md 22.13)
+    mov bx, si                  ; the padded run above reaches into the GROW
+    call KERNEL_SEG:cw_wm_grow_paint ; BOX's rows at the bottom-right corner -
+                                ; so the line ate part of it and nothing put
+                                ; it back until the next full repaint.
+                                ; fm_repaint has always done this after its own
+                                ; fill; the cheap path had not, and every
+                                ; status-line-only draw - a New Folder prompt,
+                                ; a Rename, 'Loading...' - left the box a
+                                ; broken glyph (SPEC.md 22.13). The band fill
+                                ; is gone (22.13.1) and this is not: an opaque
+                                ; run ends 6px short of fm_rgt and the box
+                                ; starts 14 short, so it still overlaps
     clc
     jmp short .out
 .refuse:
@@ -6157,6 +6156,16 @@ fm_draw_status:
 ; A proc rather than the tail of fm_draw_status because the replace question
 ; (SPEC.md 22.3) needs it TWICE, on two rows. The truncation is not optional:
 ; 'Out of memory' is 104px and cw can legally be 94 (SPEC.md 22).
+;
+; IT IS ONE OPAQUE RUN AND THE PADDING IS THE ERASE (SPEC.md 22.13.1). It was
+; a font_str over a band fm_status_only had filled - the erase-and-letter pair
+; SPEC.md 6.1 exists to retire - and the pair is what made this line
+; unrepaintable under a clip region: a fill clips per PIXEL and a glyph per
+; whole CELL, so an edge crossing the line filled the visible rows and
+; lettered none of them, the line went BLANK rather than stale, and the only
+; safe answer left was to repaint the whole window. font_run takes both
+; decisions per cell at once, so the caller cannot produce that failure and
+; needs no gate.
 ; -----------------------------------------------------------------------------
 fm_stat_line:
     push ax
@@ -6164,8 +6173,6 @@ fm_stat_line:
     push cx
     push dx
     push si
-    cmp byte [fm_hdrbuf], 0
-    je .out
     mov ax, [fm_cw]
     sub ax, 14                  ; 14, not 12: the pen below moved 6 -> 8 and
     jg .pos                     ; this is what keeps the same 6px of daylight
@@ -6175,19 +6182,39 @@ fm_stat_line:
     mov cl, 3
     shr ax, cl                  ; AX = characters that fit
     cmp ax, FM_HDRMAX-1
-    jae .draw
-    mov bx, ax
-    mov byte [fm_hdrbuf+bx], 0
-.draw:
-    mov byte [gfx_color], CBLACK
+    jb .pad
+    mov ax, FM_HDRMAX-1         ; ...and never more of fm_hdrbuf than there is
+.pad:
+    or ax, ax
+    jz .out                     ; a window too narrow to hold one cell
+    mov bx, fm_hdrbuf           ; PAD TO EXACTLY THAT WIDTH, spaces from the
+    mov cx, ax                  ; string's NUL onward: an opaque space paints
+.padf:                          ; background, so this both truncates a line
+    cmp byte [bx], 0            ; too long for the window and blanks whatever
+    je .padsp                   ; a longer previous line left behind - which
+    inc bx                      ; is the band fill this replaces
+    loop .padf
+    jmp short .padz             ; it fills the width, or overruns it
+.padsp:                         ; FROM THE NUL ON, UNCONDITIONALLY: the bytes
+    mov byte [bx], ' '          ; past it are the previous line's tail, not
+    inc bx                      ; NULs, so a per-byte "is this a NUL" test
+    loop .padsp                 ; leaves them on the glass - measured as one
+                                ; stray 'K' after 'Free 97K' where a New
+                                ; Folder prompt had been
+.padz:
+    mov byte [bx], 0
     mov cx, [fm_cx]
     add cx, 8                   ; A MULTIPLE OF 8 (SPEC.md 11.94.3), the header
                                 ; painter's pen exactly - the status line is
                                 ; the SECOND string in this window drawn from
                                 ; fm_hdrbuf and it shares the column, so the
-                                ; two move together or the window is ragged
+                                ; two move together or the window is ragged -
+                                ; and it is what earns font_run's single-store
+                                ; path on the two mono adapters (SPEC.md 6.1)
     mov si, fm_hdrbuf
-    call KERNEL_SEG:cw_font_str
+    mov al, CBLACK              ; ink...
+    mov ah, CWHITE              ; ...and the background, in one pass
+    call KERNEL_SEG:cw_font_run
 .out:
     pop si
     pop dx
