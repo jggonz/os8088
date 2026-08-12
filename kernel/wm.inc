@@ -3749,6 +3749,18 @@ wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
                                 ; Initialized data, NOT .bss: every gfx_fill
                                 ; reads it, including the machine's first,
                                 ; and -f bin zeroes nothing.
+wm_clip_r0  db 0                ; wm_clip_rows' answer (SPEC.md 11.3.2): the
+wm_clip_rn  db 8                ; first drawable row of the cell it was last
+                                ; asked about, and how many from there. Valid
+                                ; only immediately after that call - the glyph
+                                ; renderers write them on their unclipped path
+                                ; too, so these are "the last row answer" and
+                                ; never a standing description of anything.
+                                ; .text for wm_clip_n's reason: font_char reads
+                                ; them before any code has written them.
+%if wm_clip_rn - wm_clip_r0 != 1
+  %error "wm_clip_r0/rn must stay adjacent: font_char sets both in one word store"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; wm_clip_set - arm clipping to a window's visible region
@@ -4478,6 +4490,120 @@ wm_clip_walk:
     ret
 wm_clip_free:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_rows - which ROWS of a cell may be drawn? (SPEC.md 11.3.2)
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive; at most 255 rows tall)
+; out: CF = 0 and [wm_clip_r0] = the first drawable row as an offset from y1,
+;      [wm_clip_rn] = how many rows from there; CF = 1 not one row may be
+;      drawn - the caller must draw NOTHING, exactly as wm_clip_test says
+; clobbers: flags (every register preserved)
+;
+; wm_clip_test asks "may this WHOLE shape be drawn", which is the only
+; question a glyph could answer while its renderer drew eight rows or none.
+; A window edge crossing a line of text horizontally cuts every cell in it,
+; so that answer is no for the whole line and the visible slice of the text
+; is left STALE - a running Timer with its digits half covered stopped at the
+; second the covering window landed and stayed there (SPEC.md 14.4).
+;
+; A glyph cannot draw half a CELL, but it can draw whole ROWS of one, and a
+; horizontal cut is exactly the case where the rows either side of the edge
+; are each entirely in or entirely out. So this is the same walk with the
+; y test relaxed into an intersection: the fragment must still cover the
+; cell's FULL WIDTH - a vertical cut is refused here as it always was,
+; because half a row of a cell is the thing the renderers cannot express -
+; and what comes back is the tallest run of rows one fragment can offer.
+;
+; ONE fragment, not the union of several: the region is a rect LIST and two
+; fragments can offer disjoint slices of the same cell, which is not a row
+; range. Taking the best single fragment can only ever return FEWER rows than
+; are strictly visible, so the answer is always safe to draw and never draws
+; outside the region - which is the direction an error has to point.
+; -----------------------------------------------------------------------------
+wm_clip_rows:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov byte [wm_clip_r0], 0
+    cmp word [wm_clip_n], 0
+    je .all                     ; disarmed: every row, the same answer
+                                ; wm_clip_free gives for the whole shape
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; SPEC.md 39.14.4, exactly as wm_clip_test:
+    je .armed                   ; inside a whole-shape hook the caller's rect
+    add ax, [vid_ox]            ; is in its display's space and wm_clip_tab is
+    add cx, [vid_ox]            ; virtual. No translation BACK is needed here -
+    add bx, [vid_oy]            ; every register is restored from the stack and
+    add dx, [vid_oy]            ; a row OFFSET is the same in both spaces
+.armed:
+%endif
+    mov si, wm_clip_tab
+    mov di, [wm_clip_n]
+    xor bp, bp                  ; BP = the best row count found so far
+.frag:
+    cmp ax, [si+WCR_X1]         ; the cell's full width, or nothing: a
+    jl .next                    ; part-width row is what cannot be drawn
+    cmp cx, [si+WCR_X2]
+    jg .next
+    push ax
+    push cx
+    mov ax, bx                  ; AX = max(y1, frag y1)
+    cmp ax, [si+WCR_Y1]
+    jge .lo
+    mov ax, [si+WCR_Y1]
+.lo:
+    mov cx, dx                  ; CX = min(y2, frag y2)
+    cmp cx, [si+WCR_Y2]
+    jle .hi
+    mov cx, [si+WCR_Y2]
+.hi:
+    sub cx, ax
+    jl .frag_no                 ; they do not overlap at all
+    inc cx                      ; CX = rows this fragment offers
+    cmp cx, bp
+    jbe .frag_no
+    mov bp, cx
+    sub ax, bx                  ; ...and where they start, from y1
+    mov [wm_clip_r0], al
+.frag_no:
+    pop cx
+    pop ax
+.next:
+    add si, WCR_SZ
+    dec di
+    jnz .frag
+    or bp, bp
+    jz .none
+    mov ax, bp                  ; a BYTE store: [wm_clip_rn] is a db, and
+    mov [wm_clip_rn], al        ; `mov [wm_clip_rn], bp` writes a WORD - it
+                                ; put BP's zero high byte over the first
+                                ; instruction of wm_clip_set, which is the
+                                ; next thing in .text. AX is dead here: it is
+                                ; restored from the stack four lines down
+    jmp short .ok
+.all:
+    mov ax, dx
+    sub ax, bx
+    inc ax
+    mov [wm_clip_rn], al
+.ok:
+    clc                         ; POP leaves the flags alone, so the answer
+    jmp short .out              ; is set before the epilogue rather than after
+.none:
+    stc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
