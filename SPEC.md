@@ -39721,6 +39721,30 @@ exists to find.** `entry` now applies os88net.asm's rule — a handle for a
 folder and a package, zero for a plain file — so the harness can fail the
 way the field does.
 
+###### 62.10.4.7.2 The A/B, and a knob that rebuilt around the wrong file
+
+`tests/dosstub` boots the real `OS88NET.COM` on a cycle-accurate 8088, so
+this is settled by that program's own instructions rather than by a model of
+them. `HELLO.O88` was already in the stub's tree — put there so `ent_ispkg`
+would fire — and its **type** was checked while its **handle** was printed
+and never read. Measured, listing the root:
+
+| | pre-fix | fixed |
+|---|---|---|
+| `README.TXT` (file) | handle 0 | handle 0 |
+| `HELLO.O88` (package) | **handle 0** | handle 1 |
+| `GAMES`, `EMPTY` (folders) | handles 1, 2 | handles 2, 3 |
+
+**And the A/B nearly reported both legs passing**, because `make dosstub
+COMFILE=<path>` — the knob that embeds a different `OS88NET.COM`, which is
+the only way to build the previous commit's DOS side — was named in `DSSTAMP`
+and **never passed to nasm**. So it rebuilt the stub faithfully and rebuilt
+it around the default file. That is `DSSTAMP`'s own documented trap one knob
+later, and the distinction it turns on is worth stating: **a stamp makes the
+rebuild happen and says nothing about what the rebuild is made of.** The
+first run of this A/B printed `handle=1` for both binaries, which reads as
+"the bug was never there".
+
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
 466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
