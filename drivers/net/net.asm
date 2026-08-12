@@ -48,7 +48,7 @@
 
 %include "os88drv.inc"
 
-    OS88_DRIVER 'Network', DRVC_NET, net_entry
+    OS88_DRIVER 'Network', DRVC_FILE, net_entry
 
 ; --- the wire protocol, master side ------------------------------------------
 ; os8088 is always the master and never receives unsolicited data (NET-PLAN
@@ -77,6 +77,14 @@ NC_READ     equ 'R'
 NC_WRITE    equ 'W'
 NC_BYE      equ 'X'
 
+; --- and file mode's, SPEC.md 62.10.1 ----------------------------------------
+; One wire command per FSV_* verb, so no command means two things. Phase 1 is
+; the three that MOUNT AND LIST; the rest are pinned in 62.10.1 and land with
+; their milestones, exactly as the RAM disk's did.
+NF_LIST     equ 'L'             ; handle -> status, count, count x 32 bytes
+NF_CHDIR    equ 'C'             ; handle -> status, PARENT handle
+NF_DFREE    equ 'F'             ; -> status, free dword, granule word
+
 NST_OK      equ 0x00
 NST_WPROT   equ 0x03
 NST_NOSEC   equ 0x04
@@ -97,11 +105,36 @@ net_svc:
     dw net_name                 ; DSV_NAME
     dw 0                        ; DSV_TONE
     dw 0                        ; DSV_TIERS
-    dw net_blk                  ; DSV_BLK     - every sector comes through here
+    dw 0                        ; DSV_BLK     - NO SECTORS: this volume is
+                                ;               served by answering questions
+                                ;               about FILES (SPEC.md 62.10)
     dw net_cpname               ; DSV_CPNAME  - the page exists while we do
     dw net_cp_paint             ; DSV_CPPAINT
     dw net_cp_click             ; DSV_CPCLICK
     dw 0                        ; DSV_CPCLOSE
+    dw net_fsv                  ; DSV_FS      - ...through this table
+
+; The FSV_* verbs (SPEC.md 62.9.1). A cell of 0 is "not implemented", which
+; drv_fs_call answers as an ordinary refusal rather than a fault - so a phase
+; lands its own verbs and the ones after it decline cleanly meanwhile.
+net_fsv:
+    dw net_list                 ; FSV_LIST
+    dw net_chdir                ; FSV_CHDIR
+    dw 0                        ; FSV_STAT
+    dw 0                        ; FSV_READ
+    dw 0                        ; FSV_WRITE
+    dw 0                        ; FSV_APPEND
+    dw 0                        ; FSV_READAT
+    dw 0                        ; FSV_DELETE
+    dw 0                        ; FSV_RENAME
+    dw 0                        ; FSV_MKDIR
+    dw 0                        ; FSV_RMDIR
+    dw net_dfree                ; FSV_DFREE
+    dw 0                        ; FSV_ENUM
+net_fsv_end:
+%if net_fsv_end - net_fsv != FSV_SIZE
+  %error "net: the FSV_* table is not FSV_SIZE bytes - a swallowed row?"
+%endif
 
 net_name:   db 'Parallel Link', 0
 net_cpname: db 'Network', 0
@@ -329,13 +362,214 @@ net_info:
     ret
 
 ; -----------------------------------------------------------------------------
+; FSV_LIST - the folder we are STANDING IN, one entry at a time
+;            (SPEC.md 62.9.1/62.10.1)
+; in:  nothing - the driver holds its own cwd, put there by FSV_CHDIR
+; out: CF=0; CF=1 = the link went away
+;
+; The wire hands back a COUNT and then that many 32-byte SPEC.md 19.1 entries,
+; and each is passed to OSAPI_FS_ENT unreshaped - the far side's findfirst
+; builds the entry the Disk window's row is drawn from, and nothing in between
+; touches it. The kernel still SORTS (19.4) and still synthesizes '..' (19.5),
+; so this must do neither.
+;
+; It takes NO argument, which is the ABI's own decision and worth stating
+; because the first draft passed a handle: the kernel calls FSV_LIST at the
+; end of a mount, about the folder FSV_CHDIR last stood in, so the handle
+; would be a second opinion about where we are - and two places deciding that
+; is how a listing stops describing the folder the hit-test resolves against.
+; [net_cwd] is the one opinion; the wire still carries it, because the FAR
+; side has a cwd of its own and the two have to agree.
+;
+; A refused entry ends the APPEND but NOT the read: the count is on the wire
+; before the entries are, so the run is consumed whatever the listing does
+; with it, and neither end is left talking into one that stopped listening.
+; -----------------------------------------------------------------------------
+net_list:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [net_full], 0      ; a fresh listing is not the last one's cap
+    mov bl, NF_LIST
+    mov ax, [net_cwd]
+    call net_fcmd_h             ; the command and the folder it is about
+    jc  .bad
+    call lp_rbyte               ; status
+    jc  .bad
+    or  al, al
+    jnz .bad
+    call lp_rword               ; how many entries follow
+    jc  .bad
+    mov di, ax
+.each:
+    or  di, di
+    jz  .done
+    dec di
+    mov cx, DSK_DE_SIZE         ; ...each of them a staged 19.1 entry
+    mov si, net_ent
+.byte:
+    call lp_rbyte
+    jc  .bad
+    mov [si], al
+    inc si
+    loop .byte
+    cmp byte [net_full], 0      ; the listing filled up: keep READING - the
+    jne .each                   ; run is fixed and the far side is mid-send
+    mov si, net_ent
+    call OSAPI_FS_ENT           ; ES is our own DS, set by the X stub
+    jnc .each
+    mov byte [net_full], 1
+    jmp short .each
+.done:
+    call net_bye
+    clc
+    jmp short .out
+.bad:
+    call net_lost
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_CHDIR - stand in a folder, and say what is above it (SPEC.md 62.9.1)
+; in:  AX = a handle out of an entry, 0 = the root
+; out: CF=0 and DX = THE PARENT'S HANDLE; CF=1 refused
+;
+; The parent comes back from the far side because the handle is ITS to assign
+; and opaque here (62.9.1) - the kernel synthesizes '..' and has no directory
+; sector to read one out of.
+; -----------------------------------------------------------------------------
+net_chdir:
+    push bx
+    push cx
+    push si
+    push di
+    mov [net_arg2], ax          ; ...banked, because the reply overwrites AX
+    mov bl, NF_CHDIR
+    call net_fcmd_h
+    jc  .bad
+    call lp_rbyte               ; status
+    jc  .bad
+    or  al, al
+    jnz .bad
+    call lp_rword               ; the parent's handle
+    jc  .bad
+    mov [net_up], ax
+    call net_bye
+    mov ax, [net_arg2]          ; ONLY NOW is the move real: a refused chdir
+    mov [net_cwd], ax           ; must leave us standing where we were, or
+    mov dx, [net_up]            ; FSV_LIST lists a folder we never reached
+    clc
+    jmp short .out
+.bad:
+    call net_lost
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_DFREE - free space, in BYTES (SPEC.md 62.9.1)
+; out: CF=0 with DX:AX = free bytes and BX = the granule; CF=1 refused
+; -----------------------------------------------------------------------------
+net_dfree:
+    push cx
+    push si
+    push di
+    mov bl, NF_DFREE
+    call net_fcmd               ; no argument on this one
+    jc  .bad
+    call lp_rbyte               ; status
+    jc  .bad
+    or  al, al
+    jnz .bad
+    call lp_rword
+    jc  .bad
+    mov [net_up], ax            ; low half, banked across the next two reads
+    call lp_rword
+    jc  .bad
+    mov dx, ax
+    call lp_rword               ; the granule
+    jc  .bad
+    mov bx, ax
+    mov ax, [net_up]
+    call net_bye
+    clc
+    jmp short .out
+.bad:
+    call net_lost
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; net_fcmd / net_fcmd_h - open a FILE-mode command, with and without an
+;                         argument word
+; in:  BL = the NF_* letter;  net_fcmd_h also takes AX = the handle
+; out: CF=1 = the link went away
+;
+; `net_cmd` is the BLOCK side's and takes AL + DX + [net_rlen]; these are not
+; that, and the two must not share a name however alike they read - one wire
+; command per verb is 62.10.1's rule, and one routine per command shape is the
+; same rule in the driver.
+; -----------------------------------------------------------------------------
+net_fcmd_h:
+    push ax
+    mov [net_arg], ax
+    mov al, bl
+    call lp_sbyte
+    jc  .bad
+    mov ax, [net_arg]
+    call lp_sword
+    jc  .bad
+    pop ax
+    clc
+    ret
+.bad:
+    pop ax
+    stc
+    ret
+
+net_fcmd:
+    push ax
+    mov al, bl
+    call lp_sbyte
+    pop ax
+    ret
+
+; net_bye - let the far side go back to listening. Best effort by contract:
+; the answer is already in hand and a failed goodbye is the next command's
+; problem, which net_connect's own leading NC_BYE is there to clear up.
+net_bye:
+    push ax
+    mov al, NC_BYE
+    call lp_sbyte
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; net_mount - register the volume and mount it
 ; out: CF=0 mounted; CF=1 refused
 ;
-; The kernel names it (SPEC.md 26.4: 'N:' falls out of the volume index, like
-; every other drive), so SI = 0 and DV_LBL stays empty. DX = 0 donates no
-; listing claim, which means the .lowbss floor and a 32-entry listing - Stage 1
-; is a 32MB image and a claim is Stage 2's problem if it is ever one.
+; The mount ITSELF is what proves the far side is serving files rather than
+; sectors: disk_mount branches on DVK_FILE and ends in FSV_LIST (SPEC.md
+; 62.9.1), so a partner that answered the magic but cannot list is refused
+; here rather than at the first double-click.
 ; -----------------------------------------------------------------------------
 net_mount:
     push bx
@@ -343,10 +577,17 @@ net_mount:
     push dx
     push si
     push di
+    mov word [net_cwd], 0       ; a fresh link stands in the far side's root,
+                                ; whatever the last one was standing in
     mov al, 0                   ; our own volume handle: there is one link, so
-    mov cx, [net_secs]          ; one volume, and the handle is decoration
-    xor dx, dx
-    xor si, si
+    xor cx, cx                  ; one volume, and the handle is decoration.
+                                ; NO SECTOR COUNT - a DVK_FILE volume has no
+                                ; sectors at all and dsk_xfer refuses it
+                                ; (SPEC.md 62.9); the kind follows the CLASS,
+                                ; so changing DRVC_NET to DRVC_FILE is the
+                                ; whole of what makes this a file volume
+    xor dx, dx                  ; no donated listing claim: the .lowbss floor
+    mov si, net_label
     call OSAPI_VOL_ADD
     jc  .bad
     mov [net_vol], al
@@ -639,5 +880,21 @@ net_rcnt:   db 0                ; ...and how many of them are still to go
 net_st:     db 0                ; the FIRST refusal in this transfer
 net_px:     dw 0
 net_py:     dw 0
+
+; --- file mode's (SPEC.md 62.10) ---------------------------------------------
+; net_label is the volume's name and NOT the drive letter: the kernel assigns
+; the letter from the volume index (SPEC.md 26.4), exactly as it does for
+; `HDD C`, so this is what the desktop zone and the Disk window's header say.
+net_label:  db 'Link', 0
+net_cwd:    dw 0                ; the far side's handle for where we STAND.
+                                ; Ours as well as theirs: FSV_LIST takes no
+                                ; argument, so this is the kernel's only way
+                                ; back to the folder it just chdir'd into
+net_arg:    dw 0                ; net_fcmd_h's argument, across the send
+net_arg2:   dw 0                ; ...and net_chdir's, across the whole reply
+net_up:     dw 0                ; the parent handle the far side answered with
+net_full:   db 0                ; the kernel's listing filled: keep READING the
+                                ; run, stop APPENDING to it
+net_ent:    times DSK_DE_SIZE db 0  ; one staged 19.1 entry, off the wire
 
     OS88_DRV_END

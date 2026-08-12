@@ -37277,13 +37277,45 @@ hashed path, an index into its own table.
 Defaulting to wherever `OS88NET` was started is the safe reading of the
 common case — a user in `C:\WORK` who wants that folder on the 5150 — and it
 makes the root a **fence** the DOS side enforces, so os8088 cannot walk out of
-it however malformed a name it sends. `/D:path` names a different subtree, and
-`/W` serves the whole machine with the drives as folders of a synthetic root.
+it however malformed a name it sends. A **bare argument** names a different
+subtree, and `/W` serves the whole machine with the drives as folders of a
+synthetic root.
+
+The bare argument is the folder because the redirector is what the cable is
+FOR now; block mode's image moved behind **`/I:`**, which is the same
+demotion its `DSV_BLK` cell got. A named folder is **entered rather than
+remembered** — `chdir` and then `int 21h` 47h — so DOS resolves `..`, a bare
+drive letter and a relative path, and what this program stores is always the
+fully-qualified answer every path it builds is rooted on. Storing the
+argument would put all three of those cases in the DOS side, badly.
 
 `/W` is deliberately opt-in and deliberately loud, because there is no fence
 behind it: a delete from os8088 is a delete on the DOS machine's real disk,
 and docs/FIELD-MACHINES.md's calibration machine has a live DOS 3.3 install
 on its C:.
+
+**A handle is a slot in an append-only table of `(parent, 8.3 name)`**, so a
+path is rebuilt by walking UP — 16 bytes a folder rather than the 68 a path
+table costs, and the parent word is then not overhead at all, because
+`FSV_CHDIR` has to answer with it (§62.9.1) and a path table would have to
+parse one back out of a string. DOS has no inode to borrow, so something has
+to hold the shape of the tree. It is deduped on `(parent, name)`, which is
+what makes a handle survive the kernel caching one in a Disk window's listing
+and using it minutes later.
+
+**The listing walks the directory TWICE**, and that is the price of §62.10.1's
+fixed frame: the count is on the wire before the entries are, and DOS's
+findfirst/findnext will not say how many there are. The second walk is
+**clamped to the first's count in both directions** — short is padded with a
+blank entry, long is cut — because a directory can change between two walks
+and a wire that has promised a number must deliver it.
+
+**`int 24h` is answered FAIL before anything touches a drive.** Nobody is
+standing at the DOS machine: it is a transfer station with a cable in it, and
+the master is inside a bounded wait. DOS's own Abort/Retry/Fail prompt would
+stop the program dead with the other end reporting a timeout — the one
+failure that looks like a broken cable and is not. An empty floppy drive met
+by `/W`'s drive scan is the ordinary way to reach it.
 
 #### 62.10.3 The harness — the host answers as the partner
 
@@ -37305,6 +37337,62 @@ which is what makes a stepped partner legal at all.
 What it still cannot do is arbitrate the wire: the verdict on the cable comes
 off two period boxes. What it CAN do is find every defect that is not the
 cable's, which is what the RAM disk did for the kernel.
+
+#### 62.10.4 Phase 1 — mount and list, both ends
+
+The three verbs that make a volume **browsable**: `FSV_LIST`, `FSV_CHDIR` and
+`FSV_DFREE`, plus the class change. Measured on a cycle-accurate 5150 with
+`tests/lptlink/partner.py` as the far end, the driver otherwise unmodified
+from the field-proven block build:
+
+- **Connect** is `I C X L X` on the wire — info, chdir-to-root, bye, list,
+  bye. The mount ITSELF is what proves the far side is serving files rather
+  than sectors, because `disk_mount` branches on `DVK_FILE` and ends in
+  `FSV_LIST`: a partner that answers the magic and cannot list is refused at
+  Connect rather than at the first double-click.
+- **Opening the volume** is `C X L X F X`, and the Disk window reads
+  `Drive C: 4 files`, `DOCS / MINES.O88 4096 / READ.ME 512 / ZEBRA.TXT 99`,
+  `Size 4K  Free 1205K`. Everything in it came off the wire and none of it is
+  on either floppy. The rows are in a different order from the one they were
+  sent in, which is what proves the driver did not sort (§19.4) — and `DOCS`
+  has a folder icon and `MINES.O88` the package diamond, from the type word
+  at offset 16 alone.
+
+Two things were wrong and both were silent. **`net_cmd` already existed** —
+the block side's, taking `AL` + `DX` + a run length — so the file side's
+command opener had to be `net_fcmd`; one wire command per verb is §62.10.1's
+rule and one routine per command SHAPE is the same rule inside the driver.
+And **`FSV_LIST` takes no argument**: the first draft passed a handle, which
+is a second opinion about where the driver is standing, and two places
+deciding that is how a listing stops describing the folder the hit-test
+resolves against. `[net_cwd]` is the one opinion, written by `FSV_CHDIR`
+**only after the far side has accepted the move**, so a refused chdir leaves
+the driver standing where it was.
+
+**The page's `Size <sectors>` row went with the class.** A redirected volume
+has no sectors, so that row printed a `0` that meant nothing; it is `Mode
+Files` / `Mode Files, read only` now, and how big the far side is belongs to
+`FSV_DFREE` and shows up where every other volume's does — the Disk window's
+status line (§22.7). The label is four characters like `Port` and `Link`,
+because `net_lab` and `net_txt` are two fixed columns and `Serving` ran into
+the value.
+
+##### 62.10.4.1 The bug the class change surfaced
+
+`drv_detach` decides whether to drop a driver's volumes from a **list of
+classes** — `DRVC_DISK`, then `DRVC_NET` when the cable arrived — and
+`DRVC_FILE` was never added to it. `dsk_vol_drop_drv` has had the `DVK_FILE`
+arm all along, so the machinery was complete and simply never reached:
+**unticking the RAM disk left a mounted volume whose driver image had been
+freed** — a desktop zone, a browsable drive letter and a Disk window all
+dispatching through `drv_fs_call` into memory the next claim owns.
+
+It is the sibling of the bug §51.2.1's per-class publication fixed and of
+§18.7.3's class-blind `dsk_xfer`, and the shape is the same one all three
+times: **a list of classes is a second opinion about which drivers serve
+volumes, and it goes stale the way a second opinion does.** It was found
+only because NET.DRV changed class onto the same path — nothing about the RAM
+disk had changed, and nothing was going to point at it.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

@@ -235,3 +235,143 @@ class Partner(object):
         self.send(MAGIC_R)
         self.send_byte(version)
         return MAGIC_Q
+
+    # --- serving, once the link is up ----------------------------------------
+    def serve(self, tree, limit=64, idle=600000):
+        """Answer commands until the master says NC_BYE, or `limit` of them.
+
+        THIS IS THE FILE SERVER, and it is here rather than in a file of its
+        own for the reason lplink.inc is shared between the driver and
+        tests/lptlink: the wire and what rides on it drift apart the moment
+        they live in two places. `tree` is what os88net.asm's findfirst walks,
+        as a dict - see FileTree below.
+
+        A command is answered and then LEFT: the master sends NC_BYE itself
+        after each reply (net_bye), so the loop returns to waiting rather than
+        assuming a session shape. Returning on the count is what keeps a test
+        from hanging when the driver asks something this does not implement.
+
+        RUNNING OUT OF COMMANDS IS THE ORDINARY ENDING and not a failure - the
+        gap between them is the user's thinking time and has no upper bound
+        (lplslv.inc's own note on why lp_rbyte_w waits forever). So the wait
+        for a command BYTE is allowed to expire and returns; a wait inside a
+        half-answered command is not, and still raises.
+        """
+        seen = []
+        for _ in range(limit):
+            mark = self.spent
+            self.budget += idle          # ...only the command byte gets this
+            try:
+                c = self.recv_byte()
+            except LinkTimeout:
+                return seen              # nothing more to say: we are done
+            finally:
+                self.budget -= idle
+            if self.spent - mark > idle:
+                return seen
+            seen.append(chr(c))
+            if c == ord('X'):               # NC_BYE - back to listening
+                continue
+            if c == ord('I'):               # NC_INFO
+                self.send_byte(0)           # status
+                self.send_word(0)           # sectors: NONE. A redirected
+                                            # volume has none at all
+                self.send_byte(0)           # flags: bit 0 = read-only
+            elif c == ord('L'):             # NF_LIST: handle -> count, entries
+                h = self.recv_word()
+                ents = tree.list(h)
+                self.send_byte(0)
+                self.send_word(len(ents))
+                for e in ents:
+                    self.send(e)
+            elif c == ord('C'):             # NF_CHDIR: handle -> parent
+                h = self.recv_word()
+                par = tree.parent(h)
+                if par is None:
+                    self.send_byte(0x02)    # no such folder
+                    continue
+                self.send_byte(0)
+                self.send_word(par)
+            elif c == ord('F'):             # NF_DFREE: free bytes, granule
+                self.send_byte(0)
+                self.send_word(tree.free & 0xFFFF)
+                self.send_word((tree.free >> 16) & 0xFFFF)
+                self.send_word(tree.granule)
+            else:
+                raise LinkTimeout('unknown command %r after %r'
+                                  % (chr(c), ''.join(seen)))
+        return seen
+
+
+# --- what the far side is serving --------------------------------------------
+# The entries go across as SPEC.md 19.1 staged entries, UNRESHAPED - the far
+# side's findfirst builds the row the Disk window draws, and nothing between
+# here and font_str touches it. So this file is where the layout has to be
+# right, and it is OSAPI_FS_ENT's, byte for byte:
+#
+#   +0  16  the DISPLAY name, NUL-terminated 8.3 (`MINES.O88`), not the
+#           space-padded on-disk field - the kernel reshapes nothing
+#   +16  2  type: 0 file, 1 package, 2 folder. NEVER 3: the parent link is
+#           the kernel's to synthesize (SPEC.md 19.5)
+#   +18  2  the driver's OPAQUE HANDLE, which the kernel only ever hands back
+#   +20  4  size in bytes, which fm_measure sums
+#   +24  8  zero
+#
+# The first draft of this laid it out as the FAT-ish 11/1/4/2 the on-disk
+# entry uses, which is a different structure that happens to be the same
+# length - so every field was in the wrong place and nothing could say so.
+DE_SIZE = 32
+
+
+class FileTree(object):
+    """A folder tree with handles, standing in for os88net.asm's findfirst.
+
+    Handle 0 is the root, which is the ABI's own convention (FSV_CHDIR takes
+    0 for it) and not this file's - so the root cannot be a node like any
+    other and the tree is keyed from 1.
+    """
+
+    def __init__(self, free=1474560, granule=512):
+        self.free = free
+        self.granule = granule
+        self.nodes = {0: (None, [])}    # handle -> (parent, [children])
+        self.meta = {}                  # handle -> (name, type, size)
+        self._next = 1
+
+    T_FILE, T_PKG, T_DIR = 0, 1, 2      # OSAPI_FS_ENT's, and 3 is not ours
+
+    def add(self, parent, name, size=0, typ=T_FILE):
+        h = self._next
+        self._next += 1
+        self.nodes[parent][1].append(h)
+        self.nodes[h] = (parent, [])
+        self.meta[h] = (name, typ, size)
+        return h
+
+    def parent(self, h):
+        if h not in self.nodes:
+            return None
+        p = self.nodes[h][0]
+        return 0 if p is None else p
+
+    def entry(self, h):
+        name, typ, size = self.meta[h]
+        b = bytearray(DE_SIZE)
+        b[0:len(name)] = name.encode('ascii')    # ...and the rest stays NUL
+        b[16] = typ
+        b[18] = h & 0xFF
+        b[19] = (h >> 8) & 0xFF
+        b[20] = size & 0xFF
+        b[21] = (size >> 8) & 0xFF
+        b[22] = (size >> 16) & 0xFF
+        b[23] = (size >> 24) & 0xFF
+        return bytes(b)
+
+    def list(self, h):
+        """This folder's children. NO '..' AND NO SORT - the kernel does both
+        (SPEC.md 19.4/19.5), and a driver that helped would be a second
+        opinion about a listing's order, which is how a display index stops
+        meaning what the hit-test resolves."""
+        if h not in self.nodes:
+            return []
+        return [self.entry(c) for c in self.nodes[h][1]]

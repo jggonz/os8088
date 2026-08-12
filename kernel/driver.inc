@@ -559,7 +559,13 @@ drv_tab:
     dw PKG_DISP, 0              ; row 3: the parallel link (docs/NET-PLAN.md).
     dw drv_f_net, drv_t_net     ; APPENDED, because the settings word carries
     dw 0, 0                     ; one bit per row by INDEX and inserting one
-    db DRVC_NET                 ; would renumber every saved SYSTEM.CFG
+    db DRVC_FILE                ; would renumber every saved SYSTEM.CFG.
+                                ; DRVC_FILE and no longer DRVC_NET: the cable
+                                ; answers questions about FILES now (SPEC.md
+                                ; 62.10), and drv_check compares this byte
+                                ; against the image header's, so the row and
+                                ; net.asm's OS88_DRIVER move together or the
+                                ; driver is refused at load
     db 0                        ; NOT wanted by default, like every other row
                                 ; (SPEC.md 51.3). This one WRITES to parallel
                                 ; ports to find its cable, and a port with a
@@ -2150,7 +2156,22 @@ drv_release:
     cmp al, DRVC_DISK           ; where it is named. dsk_vol_drop_drv used to
     je .dropvol                 ; drop EVERY driver-backed row - no argument
     cmp al, DRVC_NET            ; and it wanted none, because every kind-1
-    jne .novol                  ; volume belonged to the one published
+    je  .dropvol                ; volume belonged to the one published
+    cmp al, DRVC_FILE           ; ...AND THE THIRD WAS MISSING, which is the
+    jne .novol                  ; same bug one class later: a DRVC_FILE driver
+                                ; registers a DVK_FILE volume and neither the
+                                ; RAM disk nor the link deletes it on detach -
+                                ; they leave it to here, and here did not know
+                                ; the class. dsk_vol_drop_drv had the DVK_FILE
+                                ; arm all along (disk.inc), so unticking the
+                                ; RAM disk left a mounted volume whose driver
+                                ; image had been freed: a desktop zone, a
+                                ; browsable drive letter and a Disk window all
+                                ; dispatching through drv_fs_call into memory
+                                ; the next claim owns. A list of classes is a
+                                ; second opinion about which drivers serve
+                                ; volumes, and it went stale the way a second
+                                ; opinion does
 .dropvol:                       ; DRVC_DISK driver (51.2.1, dsk_vtab's old
                                 ; DV_PAD). A SECOND block-serving class ends
                                 ; that: it takes the class in AL now and drops
