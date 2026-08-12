@@ -35,11 +35,11 @@ make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndch
 make debug    # boot halted, waiting for gdb on :1234
 make bench    # build the tests/ apps — ON DEMAND ONLY; nothing under tests/ ships
 make zcheck   # play every Z-machine story to a script and diff it against
-              # dfrotz (§59.13). `make zh` builds the harness interpreter;
+              # dfrotz (§61.13). `make zh` builds the harness interpreter;
               # `tools/zharness.py <story> --repl` types at one by hand. This
               # is how a Frotz change is checked — a story is the only thing
               # that exercises an interpreter, and it is minutes by hand
-make zgfx     # ...and what the reader can SEE (§59.14): every row the
+make zgfx     # ...and what the reader can SEE (§61.14): every row the
               # interpreter claims against the pixels under it, the same
               # across a repaint, and each story's opening screen against the
               # real Frotz's. `make zpic` builds the v6 picture fixture it
