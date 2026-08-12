@@ -2703,6 +2703,11 @@ not alike. **`NC_BYE` ends the SESSION and terminates no command** — the far
 side leaves its command loop on one and goes back to hunting for the magic, so
 a bye after every verb tore the link down and the next command arrived at a
 slave that had stopped listening; it belongs to Connect and Disconnect alone.
+**A LETTER IS NOT FREE JUST BECAUSE THE VERB IS NEW** — `READ` and `WRITE`
+were pinned as `R` and `W` in SPEC.md §62.10.1 from the verb names alone, and
+block mode already had both, in the same one-byte space and the same DOS-side
+command loop; they are `G` and `U`, and the mode flag that would have "fixed"
+it is this tree's own second-opinion failure wearing a new hat.
 And **BOTH ENDS RUN ON MARTYPC NOW**, which reverses what this paragraph used
 to say. `tests/lptlink/partner.py` drives the status lines the guest polls
 (SPEC.md §62.10.3) so the os8088 half completes a real handshake and a real

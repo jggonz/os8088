@@ -884,10 +884,29 @@ made `/W` unmountable, a table row one byte short, a `make` knob that rebuilt
 nothing, and a harness that was kinder than the thing it stood in for. SPEC.md
 §62.10.4.2 has each of them.
 
+**PHASE 2 IS THE READ PATH AND IT IS DONE** (SPEC.md §62.10.4.3):
+`FSV_STAT`, `FSV_READ` and `FSV_READAT`, which between them make a redirected
+volume's files *readable* — and it is where `OSAPI_FS_PROG` finally got the
+consumer it was written for. **It cost the kernel nothing at all**: the three
+branch sites were built with the RAM disk and did not change, which is the
+whole return on that detour.
+
+Two decisions in it are worth carrying forward. The **capacity goes out with
+the command**, so an oversized file is cut at the source instead of crossing
+the wire to be discarded — half a minute of cable for a 116KB module. And the
+destination is **re-normalised on the same cadence as the progress report**,
+because both want "often enough to be smooth, rarely enough to be free" and a
+second constant is a second thing to keep in step.
+
+It also found a pinned-protocol mistake worth naming: **`READ` and `WRITE`
+collided with block mode's `NC_READ` and `NC_WRITE`** — the same one-byte
+space, and on the DOS side the same command loop. §62.10.1's table had been
+written from the verb names alone. They are `G` and `U` now; the tempting fix
+was a mode flag, which is this tree's own second-opinion failure in a new
+place.
+
 What is still owed at this boundary is the WIRE's verdict, which is unchanged:
-two period boxes and a cable. Phase 2 is the read path — `FSV_STAT`,
-`FSV_READ`, `FSV_READAT` — and it is where `OSAPI_FS_PROG` finally gets the
-consumer it was written for.
+two period boxes and a cable. Phase 3 is the write path.
 
 ### 2.3 What was considered and rejected
 

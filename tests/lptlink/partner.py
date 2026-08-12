@@ -315,6 +315,43 @@ class Partner(object):
         par = self.recv_word()
         return st, par
 
+    def mst_stat(self, folder, name):
+        """NF_STAT -> (status, handle, size, attr). The name is a fixed 13
+        bytes, NUL-padded, and the FOLDER goes with it (SPEC.md 62.10.1)."""
+        self.mst_cmd('S', folder)
+        self.send(name.encode('ascii').ljust(13, b'\0')[:13])
+        st = self.recv_byte()
+        if st:
+            return st, None, None, None
+        h = self.recv_word()
+        sz = self.recv_dword()
+        at = self.recv_byte()
+        return st, h, sz, at
+
+    def mst_read(self, handle, cap):
+        """NF_READ -> (status, bytes). The cap goes OUT, so an oversized file
+        is cut at the source instead of crossing and being discarded."""
+        self.mst_cmd('G', handle)
+        self.send_dword(cap)
+        st = self.recv_byte()
+        if st:
+            return st, b''
+        n = self.recv_dword()
+        return st, self.recv(n)
+
+    def mst_readat(self, handle, off, cap):
+        """NF_READAT -> (status, bytes). Past the end is a length of ZERO and
+        not a refusal, which is what lets a caller walk to the end without
+        knowing where it is."""
+        self.mst_cmd('A', handle)
+        self.send_dword(off)
+        self.send_word(cap)
+        st = self.recv_byte()
+        if st:
+            return st, b''
+        n = self.recv_word()
+        return st, self.recv(n)
+
     def mst_dfree(self):
         """NF_DFREE -> (status, free bytes, granule)."""
         self.mst_cmd('F')
@@ -393,6 +430,38 @@ class Partner(object):
                     continue
                 self.send_byte(0)
                 self.send_word(par)
+            elif c == ord('S'):             # NF_STAT: folder + name -> handle
+                fold = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                h = tree.find(fold, name)
+                if h is None:
+                    self.send_byte(0x02)
+                    continue
+                self.send_byte(0)
+                self.send_word(h)
+                self.send_dword(len(tree.data(h)))
+                self.send_byte(0x10 if tree.meta[h][1] == FileTree.T_DIR else 0)
+            elif c == ord('G'):             # NF_READ: handle + cap -> bytes
+                h = self.recv_word()
+                cap = self.recv_dword()
+                if h not in tree.meta:
+                    self.send_byte(0x02)
+                    continue
+                d = tree.data(h)[:cap]      # THE CAP IS HONOURED HERE, so an
+                self.send_byte(0)           # oversized file is short at the
+                self.send_dword(len(d))     # source rather than sent and
+                self.send(d)                # thrown away
+            elif c == ord('A'):             # NF_READAT: a window
+                h = self.recv_word()
+                off = self.recv_dword()
+                cap = self.recv_word()
+                if h not in tree.meta:
+                    self.send_byte(0x02)
+                    continue
+                d = tree.data(h)[off:off + cap]
+                self.send_byte(0)
+                self.send_word(len(d))      # ...ZERO past the end, which is
+                self.send(d)                # the contract and not an error
             elif c == ord('F'):             # NF_DFREE: free bytes, granule
                 self.send_byte(0)
                 self.send_word(tree.free & 0xFFFF)
@@ -437,17 +506,46 @@ class FileTree(object):
         self.granule = granule
         self.nodes = {0: (None, [])}    # handle -> (parent, [children])
         self.meta = {}                  # handle -> (name, type, size)
+        self.blobs = {}                 # handle -> real bytes, when it matters
         self._next = 1
 
     T_FILE, T_PKG, T_DIR = 0, 1, 2      # OSAPI_FS_ENT's, and 3 is not ours
 
-    def add(self, parent, name, size=0, typ=T_FILE):
+    def add(self, parent, name, size=0, typ=T_FILE, content=None):
         h = self._next
         self._next += 1
         self.nodes[parent][1].append(h)
         self.nodes[h] = (parent, [])
-        self.meta[h] = (name, typ, size)
+        self.meta[h] = (name, typ, len(content) if content is not None
+                        else size)
+        if content is not None:
+            self.blobs[h] = bytes(content)
         return h
+
+    def data(self, h):
+        """A file's contents.
+
+        GENERATED rather than stored unless `content=` said otherwise: byte i
+        of handle h is (i + 7h) & 0xFF. The same trick the dosstub uses at the
+        other end and for the same reason - the side receiving can predict
+        every byte, so `it arrived` and `it arrived CORRECT` stop being one
+        claim. `content=` is for the cases where the BYTES have to be real: a
+        document Note Pad will render, a package the loader will validate."""
+        name, typ, size = self.meta[h]
+        if typ == self.T_DIR:
+            return b''
+        if h in self.blobs:
+            return self.blobs[h]
+        return bytes((i + 7 * h) & 0xFF for i in range(size))
+
+    def find(self, folder, name):
+        """A name in a folder -> its handle, or None."""
+        if folder not in self.nodes:
+            return None
+        for c in self.nodes[folder][1]:
+            if self.meta[c][0].upper() == name.upper():
+                return c
+        return None
 
     def parent(self, h):
         if h not in self.nodes:

@@ -37241,11 +37241,12 @@ command per `FSV_*` verb, so no command means two things:
 ```
 'L' LIST    in  handle word           out status, count word, count x 32-byte entry
 'C' CHDIR   in  handle word           out status, PARENT handle word
-'S' STAT    in  13-byte name          out status, handle word, size dword, attr byte
-'R' READ    in  handle word, cap dword    out status, length dword, length bytes
+'S' STAT    in  handle word, 13-byte name
+                                      out status, handle word, size dword, attr byte
+'G' READ    in  handle word, cap dword    out status, length dword, length bytes
 'A' READAT  in  handle word, off dword, cap word
                                       out status, length word, length bytes
-'W' WRITE   in  13-byte name, len dword, len bytes    out status
+'U' WRITE   in  13-byte name, len dword, len bytes    out status
 'P' APPEND  in  13-byte name, len dword, len bytes    out status
 'D' DELETE  in  13-byte name          out status
 'N' RENAME  in  13-byte old, 13-byte new              out status
@@ -37254,6 +37255,27 @@ command per `FSV_*` verb, so no command means two things:
 'F' DFREE   in  nothing               out status, free dword, granule word
 'E' ENUM    in  handle word, ordinal word             out status, 32-byte entry
 ```
+
+**READ is `G` and WRITE is `U` because `R` and `W` WERE ALREADY TAKEN** — by
+block mode's `NC_READ` and `NC_WRITE`, in the same one-byte space and, on the
+DOS side, in the same command loop. This table was first written from the verb
+names alone and pinned both collisions; they were found at the moment the read
+path was built, which is the cheapest place to find them and later than it had
+to be.
+
+The tempting resolution is a mode flag — a run of `OS88NET` serves *either* an
+image or files, never both, so `R` could dispatch on which. That is exactly
+the "no command means two things" rule this section opens with, restated as a
+second opinion about the mode, and this tree has been bitten by that shape
+three times over (§18.7.3, §51.2.1, §62.10.4.1). Sixteen distinct letters in
+a space of 256 is not a scarcity worth managing.
+
+**`STAT` CARRIES THE FOLDER, and every verb that names a file will.** The
+kernel's `FSV_STAT` resolves "a name in the current folder" and the far side
+could have tracked that from the last `CHDIR` — which is the same second
+opinion in the same place, one command's state carried across to another's.
+It costs one word on a wire that is about to move a file, and it leaves the
+DOS side stateless but for the handle table.
 
 **The entry on the wire is the §19.1 staged entry**, byte for byte — name at
 0, type at 16, the driver's opaque handle at 18, size dword at 20. The driver
@@ -37461,6 +37483,71 @@ chdir into it reaches that drive's root.
   perfect. **A stand-in kinder than the thing it stands in for hides
   precisely the bugs it exists to find** — it returns on a bye now, as the
   real far end does.
+
+##### 62.10.4.3 Phase 2 — the read path
+
+`FSV_STAT`, `FSV_READ` and `FSV_READAT`, which between them are what makes a
+redirected volume's files *readable*: a size and a handle, the whole file, and
+a window of one. The kernel's three branch sites were built with the RAM disk
+(§62.9) and did not change.
+
+Three things in the driver are worth knowing before touching it.
+
+**The capacity goes OUT with the command.** `'G' READ` carries the caller's
+32-bit buffer size, so the far side answers `min(size, cap)` and an oversized
+file is cut *at the source*. The alternative — send it all and discard the
+excess here — is half a minute of wire for a 116KB module at 3,741 bytes/s.
+It is still checked on arrival, because "the other machine is well behaved" is
+not a thing this side can know, and a refusal then **consumes** the run: the
+frame is a fixed size whatever this end does with it, so a wire left short is
+the link dead where a discarded file is one operation failed.
+
+**The destination is re-normalised every `NET_PCHUNK` bytes** — the paragraph
+part of the offset folded into the segment, `dskw_norm`'s arithmetic inside a
+driver — so a read longer than 64KB cannot carry off the end of a segment.
+The same test steps `OSAPI_FS_PROG`, because both want the same cadence and a
+second constant is a second thing to keep in step. That report is **bytes
+since the last one**, which is the slot's contract: a running total would
+advance §12.8's bar by the whole file every call.
+
+**All of the read state is in memory rather than registers**, and that is
+forced: a handle, a 32-bit capacity, a 32-bit length, a 32-bit offset and a
+destination that walks, each of which has to survive a call into `lp_rbyte`.
+
+On the DOS side a **file** earns a handle only in `FSV_STAT` — the listing
+hands them to folders alone, because a directory of 300 files would exhaust
+the table on rows nothing ever asks about, and `STAT` is the ask. `hd_get`
+dedupes on `(parent, name)`, so a second stat of the same file answers the
+same handle; measured, `STAT GAMES` returned handle 1, which is exactly what
+the listing had already given it.
+
+Verified against `tests/dosstub` with `partner.py` as the master, the contents
+**checked byte for byte** rather than merely counted — the stub generates a
+row's bytes as `(i + 7r) & 0xFF` and the host predicts them, which is
+`sysbench`'s `BENCH.DAT` trick one file down: `STAT` of a file (handle, size
+1234, attr 00), of a folder (attr 0x10), and of a name that is not there
+(status 2); `READ` whole and `READ` capped at 100, both correct; `READAT` at
+offset 1000 for 234 bytes, correct; and `READAT` past the end answering **zero
+bytes with status 0**, which is the contract and not an error.
+
+That needed one real fix in the stub and it is the interesting one.
+`path_split` replaces `dir_of`, which resolved the last component too and
+dropped it only when it held a **wildcard** — fine for `chdir` and for `*.*`,
+and wrong for everything else: a `findfirst` of `C:\GAMES\CHESS.EXE`, which is
+how a size and an attribute are asked for, looked for a *directory* called
+`CHESS.EXE` and answered "no such path" about a file that was right there.
+
+**The driver's own half is written and NOT yet confirmed on the glass** — the
+run that opens a document across the cable was still going when this was
+written, and until it lands the os8088 side of phase 2 is source that
+assembles rather than a path that has run. One bug in it was found by reading
+and is worth recording because of its shape: **`net_stat` pushed its own
+outputs.** `AX`, `BX`, `CX` and `DX` are all results there, and it preserved
+three of them — popping the size and the attribute back a few instructions
+after reading them off the wire. It would have answered a stale register
+triple with `CF = 0`: the link works, the file is found, and the kernel is
+told it is some other size. `rd_stat`'s header says `clobbers: AX, BX, CX,
+DX, SI, DI` and had said so all along.
 
 One harness fact belongs here because no amount of reading finds it: **the
 wire is not idle when a slave has been dwelling.** MartyPC's status register

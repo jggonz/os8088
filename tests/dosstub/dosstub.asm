@@ -230,23 +230,41 @@ f_putc:
 ; The NAME is at the CALLER's DS:DX and is printed before anything moves,
 ; which is the point of a harness: "the open failed" and "the open failed on
 ; THAT name" are different sentences.
+; A NAME IN THE TREE OPENS THE TREE; ANYTHING ELSE OPENS THE RAM FILE. Both
+; halves are wanted: the redirector reads files out of the synthetic directory
+; below, and block mode's `/I:` names something that is deliberately not in it,
+; so the FSIZE arithmetic keeps its harness. Which one a handle refers to is
+; [fh_row] - 0xFF for the RAM file.
+;
+; It no longer PRINTS the name it was given. That was the right call when an
+; open was a once-per-run event; a redirected read opens a file per command,
+; and a server scrolling its own console per read is a harness charging the
+; thing under test for a screenful of int 10h.
 f_open:
     push si
     push ds
+%ifdef FAILOPEN
     mov si, dx
     call farputs                ; DS:SI, still the caller's segment
     push cs
     pop ds
-%ifdef FAILOPEN
-    mov si, s_nofile            ; ...and the OTHER answer, which the program
-    call puts                   ; has an error path for that nothing else here
-    pop ds                      ; can reach: DOS says no.
+    mov si, s_nofile            ; ...the OTHER answer, which the program has an
+    call puts                   ; error path for that nothing else here can
+    pop ds                      ; reach: DOS says no.
     pop si
     mov ax, 2                   ; file not found
     jmp cf_set
 %else
-    mov si, s_opened
-    call puts
+    mov si, dx
+    call row_of                 ; the caller's DS:SI, against the tree
+    push cs
+    pop ds
+    jc  .ram
+    mov [cs:fh_row], al
+    jmp short .ok
+.ram:
+    mov byte [cs:fh_row], 0xFF
+.ok:
     pop ds
     pop si
     mov word [cs:fpos], 0
@@ -270,6 +288,8 @@ f_read:
     push di
     push ds
     push es
+    cmp byte [cs:fh_row], 0xFF
+    jne .tree
     call clamp                  ; CX = how much of it is real, from [fpos]
     mov [cs:xfer], cx
     jcxz .none
@@ -280,6 +300,33 @@ f_read:
     mov ds, ax
     mov si, [cs:fpos]           ; DSF_KB <= 64, so the offset is one word
     rep movsb
+    jmp short .none
+
+    ; --- a file from the tree: GENERATED, not stored ------------------------
+    ; Byte i of row r is (i + 7*r) & 0xFF, so a nine-row directory with a
+    ; 20,000-byte file in it costs the image nothing at all - and the host end
+    ; can predict every byte, which is the point: a read that arrives is not
+    ; the same claim as a read that arrives CORRECT. It is the sysbench
+    ; BENCH.DAT trick (SPEC.md 18.94), one file down.
+.tree:
+    call tclamp                 ; CX = min(asked, what is left of the row)
+    mov [cs:xfer], cx
+    jcxz .none
+    mov ax, ds
+    mov es, ax
+    mov di, dx
+    mov al, [cs:fh_row]         ; the per-row phase
+    mov bl, 7
+    mul bl                      ; AX = 7*row, and AL is what we want
+    mov bl, al
+    add bl, byte [cs:fpos]      ; ...plus the position's low byte: the whole
+                                ; pattern is mod 256, so only the low byte of
+                                ; the offset can matter
+.gen:
+    mov al, bl
+    stosb
+    inc bl
+    loop .gen
 .none:
     pop es
     pop ds
@@ -332,12 +379,30 @@ f_seek:
     adc [cs:fpos+2], cx
     jmp short .out
 .end:
-    mov ax, FSIZE_LO
+    push bx
+    mov ax, FSIZE_LO            ; ...the RAM file's end, or the ROW's
+    mov bx, FSIZE_HI
+    cmp byte [cs:fh_row], 0xFF
+    je  .fend
+    push ax
+    mov al, [cs:fh_row]
+    xor ah, ah
+    call dr_row
+    mov bx, [cs:bx+DR_SIZE+2]
+    pop ax
+    push bx
+    mov al, [cs:fh_row]
+    xor ah, ah
+    call dr_row
+    mov ax, [cs:bx+DR_SIZE]
+    pop bx
+.fend:
     add ax, dx
     mov [cs:fpos], ax
-    mov ax, FSIZE_HI
+    mov ax, bx
     adc ax, cx
     mov [cs:fpos+2], ax
+    pop bx
 .out:
     mov ax, [cs:fpos]
     mov dx, [cs:fpos+2]
@@ -511,10 +576,25 @@ f_findfirst:
     push si
     push di
     mov si, dx
-    call dir_of                 ; the path, minus its last component
+    call path_split             ; -> AL = the folder, cmpbuf = the last part
     jc  .no
     mov [cs:find_dir], al
     mov byte [cs:find_row], 0
+    mov byte [cs:find_one], 0
+    cmp byte [cs:cmpbuf], 0
+    je  .walk                   ; a bare folder: everything in it
+    call cmp_wild
+    jc  .walk                   ; '*.*': likewise
+    ; ONE NAMED FILE, which is how a size and an attribute are asked for.
+    ; The walk below would answer with the folder's FIRST entry instead, and
+    ; a stat that confidently describes the wrong file is worse than one that
+    ; fails.
+    mov si, dx
+    call row_of
+    jc  .no
+    mov [cs:find_row], al
+    mov byte [cs:find_one], 1
+.walk:
     pop di
     pop si
     jmp f_findnext
@@ -534,6 +614,13 @@ f_findnext:
     push es
     mov al, [cs:find_row]
     xor ah, ah
+    cmp byte [cs:find_one], 0   ; the single-name case: this row, once, and
+    je  .scan                   ; then 'no more files'
+    cmp byte [cs:find_one], 1
+    jne .end
+    mov byte [cs:find_one], 2
+    call dr_row
+    jmp short .fill
 .scan:
     cmp ax, DR_N
     jae .end
@@ -546,6 +633,7 @@ f_findnext:
 .hit:
     inc ax
     mov [cs:find_row], al
+.fill:
     mov es, [cs:dta_seg]        ; ...and fill the DTA the program set
     mov di, [cs:dta_off]
     mov al, [cs:bx+DR_ATTR]
@@ -594,20 +682,30 @@ dr_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; dir_of - the caller's DS:SI path -> AL = the row it names (0xFF = the root)
-; out: CF=1 = no such folder
+; path_split - the caller's DS:SI path -> AL = the PARENT row, cmpbuf = the
+;              LAST component
+; out: CF=1 = a component along the way was not a directory
 ;
-; It drops 'X:', a leading '\', and a LAST COMPONENT CONTAINING A WILDCARD -
-; which is what lets findfirst and chdir share it. Anything else in the path
-; has to match a directory row.
+; It drops 'X:' and a leading '\', walks every component but the last as a
+; directory, and leaves the last one in cmpbuf for whoever asked - which is
+; the whole reason it exists in this shape. The first version resolved the
+; last component too, dropping it only when it held a WILDCARD, and that is
+; fine for chdir and for `*.*` and wrong for everything else: a findfirst of
+; `C:\GAMES\CHESS.EXE` - which is how a size and an attribute are asked for -
+; looked for a DIRECTORY called CHESS.EXE and answered "no such path" about a
+; file that was right there.
+;
+; cmpbuf comes back EMPTY when the path ends in a separator or is a bare
+; drive, which is the caller's cue that the parent IS the answer.
 ; -----------------------------------------------------------------------------
-dir_of:
+path_split:
     push bx
     push cx
     push dx
     push si
     push di
     mov dl, 0xFF                ; where we are: the root
+    mov byte [cs:cmpbuf], 0
     cmp byte [si+1], ':'
     jne .noc
     inc si
@@ -638,20 +736,87 @@ dir_of:
 .cend:
     mov byte [cs:di], 0
     cmp byte [si], '\'
-    jne .last                   ; the LAST component: a wildcard in it means
-    inc si                      ; it is findfirst's '*.*' and not a folder
-    call dir_step
+    jne .done                   ; ...the LAST one: leave it in cmpbuf
+    inc si
+    call dir_step               ; a middle component MUST be a directory
     jc  .no
     mov dl, al
     jmp short .comp
-.last:
-    call cmp_wild
-    jc  .done                   ; '*.*' - we are already standing in it
-    call dir_step
-    jc  .no
-    mov dl, al
 .done:
     mov al, dl
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dir_of - path_split, then enter the last component too. chdir's shape.
+; out: AL = the row the whole path names; CF=1 = not a folder
+; -----------------------------------------------------------------------------
+dir_of:
+    push dx
+    call path_split
+    jc  .no
+    cmp byte [cs:cmpbuf], 0
+    je  .done                   ; the path ended at a folder already
+    mov dl, al
+    call dir_step
+    jc  .no
+.done:
+    pop dx
+    clc
+    ret
+.no:
+    pop dx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; row_of - path_split, then match the last component against ANY row
+; out: AL = the row; CF=1 = no such name in that folder
+;
+; dir_step's sibling without the directory test, for open and for a findfirst
+; that names one file.
+; -----------------------------------------------------------------------------
+row_of:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call path_split
+    jc  .no
+    cmp byte [cs:cmpbuf], 0
+    je  .no                     ; a folder is not a file
+    mov dl, al
+    xor ax, ax
+.l:
+    cmp ax, DR_N
+    jae .no
+    call dr_row
+    mov cl, [cs:bx+DR_PAR]
+    cmp cl, dl
+    jne .nx
+    mov si, bx
+    add si, DR_NAME
+    mov di, cmpbuf
+    call cs_eq
+    jc  .hit
+.nx:
+    inc ax
+    jmp short .l
+.hit:
     pop di
     pop si
     pop dx
@@ -882,6 +1047,40 @@ clamp:
     pop ax
     ret
 
+; tclamp - the same for a TREE row: CX down to what is left of [fh_row]
+; in:  CX = wanted, [fh_row], [fpos];  out: CX = allowed
+;
+; Every row here is under 64KB, so a position with a high word is past the end
+; of any of them and the whole answer is zero - which is also the honest thing
+; for a seek that overshot.
+tclamp:
+    push ax
+    push bx
+    push dx
+    mov al, [cs:fh_row]
+    xor ah, ah
+    call dr_row                 ; -> BX
+    mov ax, [cs:bx+DR_SIZE]     ; what is LEFT, in 32 bits: `size - pos` with
+    mov dx, [cs:bx+DR_SIZE+2]   ; a borrow, because either can exceed a word
+    sub ax, [cs:fpos]
+    sbb dx, [cs:fpos+2]
+    jc  .zero                   ; the position is past the end
+    or  dx, dx
+    jnz .out                    ; over 64KB left: nothing CX can ask for is
+    or  ax, ax                  ; outside it
+    jz  .zero
+    cmp cx, ax
+    jbe .out
+    mov cx, ax
+    jmp short .out
+.zero:
+    xor cx, cx
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 ; fadv - advance [cs:fpos] by AX, AX preserved
 fadv:
     push ax
@@ -999,6 +1198,9 @@ dta_off:    dw 0
 cwd_row:    db 0xFF             ; the root
 find_dir:   db 0xFF             ; the folder the walk in progress is in
 find_row:   db 0                ; ...and how far through dr_tab it has got
+find_one:   db 0                ; 0 = enumerate the folder, 1 = one named row
+                                ; still to hand over, 2 = and it has been
+fh_row:     db 0xFF             ; the open handle's tree row, FF = the RAM file
 cmpbuf:     times 16 db 0       ; one path component, staged into CS so both
                                 ; sides of a comparison are CS-relative
 

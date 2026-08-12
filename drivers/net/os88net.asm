@@ -89,9 +89,18 @@ NC_WRITE    equ 'W'
 NC_BYE      equ 'X'
 
 ; --- and file mode's (SPEC.md 62.10.1) ---------------------------------------
+; READ is 'G' and WRITE will be 'U' because 'R' and 'W' ARE ALREADY TAKEN by
+; NC_READ and NC_WRITE above - the same one-byte space, and THE SAME COMMAND
+; LOOP right here, which is what makes the collision real rather than
+; theoretical (SPEC.md 62.10.1).
 NF_LIST     equ 'L'             ; handle -> status, count, count x 32 bytes
 NF_CHDIR    equ 'C'             ; handle -> status, the PARENT's handle
 NF_DFREE    equ 'F'             ; -> status, free dword, granule word
+NF_STAT     equ 'S'             ; handle, 13-byte name -> status, handle,
+                                ;                         size dword, attr
+NF_READ     equ 'G'             ; handle, cap dword -> status, len dword, bytes
+NF_READAT   equ 'A'             ; handle, off dword, cap word
+                                ;                 -> status, len word, bytes
 
 NST_OK      equ 0x00
 NST_WPROT   equ 0x03
@@ -269,6 +278,12 @@ serve:
     je  .fchdir
     cmp al, NF_DFREE
     je  .fdfree
+    cmp al, NF_STAT
+    je  .fstat
+    cmp al, NF_READ
+    je  .fread
+    cmp al, NF_READAT
+    je  .freadat
     jmp short .cmd
 
 .flist:
@@ -281,6 +296,18 @@ serve:
     jmp .cmd
 .fdfree:
     call srv_dfree
+    jc  .out
+    jmp .cmd
+.fstat:
+    call srv_stat
+    jc  .out
+    jmp .cmd
+.fread:
+    call srv_read
+    jc  .out
+    jmp .cmd
+.freadat:
+    call srv_readat
     jc  .out
     jmp .cmd
 
@@ -1403,6 +1430,475 @@ srv_dfree:
     stc
     ret
 
+; -----------------------------------------------------------------------------
+; srv_stat - NF_STAT: a folder handle and a name -> a handle for the FILE
+; out: CF=1 = the link went away
+;
+; The name is a fixed 13 bytes on the wire (SPEC.md 62.10.1) and the folder
+; comes with it rather than being remembered from the last chdir, so this verb
+; carries everything it is about.
+;
+; A FILE GETS A HANDLE HERE and only here - srv_ent hands them out to folders
+; alone, because a directory of 300 files would exhaust the table on rows
+; nothing ever asks about. This is the ask, so this is where a file earns one.
+; -----------------------------------------------------------------------------
+srv_stat:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call lp_rword               ; which folder
+    jc  .lost
+    mov [srv_h], ax
+    call srv_rname              ; ...and the name, into namebuf
+    jc  .lost
+
+    call hd_path                ; the folder, as a path
+    jc  .no
+    call path_join              ; + '\' + namebuf -> wildbuf
+    call stat_file              ; -> the DTA, or CF=1
+    jc  .no
+
+    mov ax, [srv_h]             ; the handle is (this folder, this name), so a
+    mov si, namebuf             ; second stat of the same file answers the
+    call hd_get                 ; same handle - hd_get dedupes
+    mov [srv_fh], ax
+
+    xor al, al
+    call lp_sbyte
+    jc  .lost
+    mov ax, [srv_fh]
+    call lp_sword
+    jc  .lost
+    mov ax, [dtabuf + DTA_SIZE]
+    call lp_sword
+    jc  .lost
+    mov ax, [dtabuf + DTA_SIZE + 2]
+    call lp_sword
+    jc  .lost
+    mov al, [dtabuf + DTA_ATTR]
+    call lp_sbyte
+    jc  .lost
+    jmp short .out
+.no:
+    mov al, NST_NOENT
+    call lp_sbyte
+    jc  .lost
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; srv_rname - 13 bytes off the wire -> namebuf, NUL-terminated
+srv_rname:
+    push ax
+    push cx
+    push di
+    mov cx, 13
+    mov di, namebuf
+.b:
+    call lp_rbyte
+    jc  .bad
+    mov [di], al
+    inc di
+    loop .b
+    mov byte [namebuf+13], 0    ; ...whatever the far end sent, this ends
+    pop di
+    pop cx
+    pop ax
+    clc
+    ret
+.bad:
+    pop di
+    pop cx
+    pop ax
+    stc
+    ret
+
+; stat_file - wildbuf names a file: findfirst it into the DTA. CF=1 = no.
+; It uses findfirst rather than open-and-seek because the SIZE and the
+; ATTRIBUTE both come out of one call, and a folder must answer with its
+; attribute rather than failing to open.
+stat_file:
+    push ax
+    push cx
+    push dx
+    mov dx, dtabuf
+    mov ah, 0x1A
+    int 0x21
+    mov dx, wildbuf
+    mov cx, 0x10
+    mov ah, 0x4E
+    int 0x21
+    jc  .no
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+
+; path_join - pathbuf + '\' + namebuf -> wildbuf
+path_join:
+    push ax
+    push si
+    push di
+    mov si, pathbuf
+    mov di, wildbuf
+    call str_app
+    cmp byte [di-1], '\'
+    je  .sep
+    mov byte [di], '\'
+    inc di
+.sep:
+    mov si, namebuf
+    call str_app
+    mov byte [di], 0
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_read - NF_READ: a handle and a capacity -> the file
+; out: CF=1 = the link went away
+;
+; THE CAPACITY IS HONOURED HERE, which is what makes an oversized file cheap
+; to refuse: the master's buffer is the limit, so a file bigger than it is cut
+; at the SOURCE instead of crossing the wire to be discarded. At 3,741
+; bytes/second a wasted 116KB module is half a minute.
+; -----------------------------------------------------------------------------
+srv_read:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call lp_rword
+    jc  .lost
+    mov [srv_fh], ax
+    call lp_rword               ; the capacity, low
+    jc  .lost
+    mov [srv_cap], ax
+    call lp_rword               ; ...and high
+    jc  .lost
+    mov [srv_cap+2], ax
+
+    call open_handle            ; the handle -> an open DOS file in [rfh]
+    jc  .no
+    mov ax, [dtabuf + DTA_SIZE] ; open_handle stats it on the way
+    mov [srv_rlen], ax
+    mov ax, [dtabuf + DTA_SIZE + 2]
+    mov [srv_rlen+2], ax
+    call clamp_len              ; ...to the capacity
+    mov al, NST_OK
+    call lp_sbyte
+    jc  .rlost
+    mov ax, [srv_rlen]
+    call lp_sword
+    jc  .rlost
+    mov ax, [srv_rlen+2]
+    call lp_sword
+    jc  .rlost
+    call send_body
+    jc  .rlost
+    call close_handle
+    jmp short .out
+.rlost:
+    call close_handle
+    jmp short .lost
+.no:
+    mov al, NST_NOENT
+    call lp_sbyte
+    jc  .lost
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_readat - NF_READAT: a handle, a 32-bit offset and a word capacity
+;
+; PAST THE END IS A LENGTH OF ZERO AND NOT A REFUSAL, which is the contract
+; (SPEC.md 62.9.1) and is what lets a caller walk a file to its end without
+; knowing how long it is.
+; -----------------------------------------------------------------------------
+srv_readat:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call lp_rword
+    jc  .lost
+    mov [srv_fh], ax
+    call lp_rword
+    jc  .lost
+    mov [srv_off], ax
+    call lp_rword
+    jc  .lost
+    mov [srv_off+2], ax
+    call lp_rword               ; the capacity, one word
+    jc  .lost
+    mov [srv_cap], ax
+    mov word [srv_cap+2], 0
+
+    call open_handle
+    jc  .no
+    mov bx, [rfh]               ; seek to the window's start
+    mov ax, 0x4200
+    mov cx, [srv_off+2]
+    mov dx, [srv_off]
+    int 0x21
+    jc  .rzero
+    ; What is LEFT of the file from there, clamped to the capacity. The size
+    ; is DTA's; the offset may be past it, and `sub` would wrap.
+    mov ax, [dtabuf + DTA_SIZE]
+    mov dx, [dtabuf + DTA_SIZE + 2]
+    sub ax, [srv_off]
+    sbb dx, [srv_off+2]
+    jc  .rzero                  ; the offset is past the end: zero bytes
+    mov [srv_rlen], ax
+    mov [srv_rlen+2], dx
+    call clamp_len
+    mov al, NST_OK
+    call lp_sbyte
+    jc  .rlost
+    mov ax, [srv_rlen]
+    call lp_sword               ; ONE word: a windowed read is capped at 64KB
+    jc  .rlost                  ; by its own capacity
+    call send_body
+    jc  .rlost
+    call close_handle
+    jmp short .out
+.rzero:
+    mov word [srv_rlen], 0
+    mov word [srv_rlen+2], 0
+    mov al, NST_OK
+    call lp_sbyte
+    jc  .rlost
+    xor ax, ax
+    call lp_sword
+    jc  .rlost
+    call close_handle
+    jmp short .out
+.rlost:
+    call close_handle
+    jmp short .lost
+.no:
+    mov al, NST_NOENT
+    call lp_sbyte
+    jc  .lost
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; open_handle - [srv_fh] -> an open DOS file in [rfh], stat in the DTA
+; out: CF=1 = no such handle, or DOS would not open it
+;
+; It stats FIRST and opens second, because the size has to come from somewhere
+; and a seek-to-end costs another two int 21h calls on a machine that may be
+; an XT. The DTA is left holding the answer for the caller.
+; -----------------------------------------------------------------------------
+open_handle:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov word [rfh], 0xFFFF
+    mov ax, [srv_fh]
+    or  ax, ax
+    jz  .no                     ; the ROOT is not a file
+    mov [srv_h], ax
+    call hd_path                ; ...the handle names the FILE itself here,
+    jc  .no                     ; so its path is the whole thing
+    mov si, pathbuf
+    mov di, wildbuf
+    call str_cpy16
+    call stat_file
+    jc  .no
+    test byte [dtabuf + DTA_ATTR], 0x10
+    jnz .no                     ; a folder is not readable
+    mov ax, 0x3D00              ; read-only: phase 2 writes nothing
+    mov dx, wildbuf
+    int 0x21
+    jc  .no
+    mov [rfh], ax
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+close_handle:
+    push ax
+    push bx
+    mov bx, [rfh]
+    cmp bx, 0xFFFF
+    je  .out
+    mov ah, 0x3E
+    int 0x21
+    mov word [rfh], 0xFFFF
+.out:
+    pop bx
+    pop ax
+    ret
+
+; clamp_len - [srv_rlen] down to [srv_cap]
+clamp_len:
+    push ax
+    mov ax, [srv_rlen+2]
+    cmp ax, [srv_cap+2]
+    ja  .cap
+    jb  .out
+    mov ax, [srv_rlen]
+    cmp ax, [srv_cap]
+    jbe .out
+.cap:
+    mov ax, [srv_cap]
+    mov [srv_rlen], ax
+    mov ax, [srv_cap+2]
+    mov [srv_rlen+2], ax
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; send_body - [srv_rlen] bytes of [rfh], through secbuf
+; out: CF=1 = the link went away
+;
+; A SHORT DOS READ ENDS THE FILE AND NOT THE FRAME: the length is already on
+; the wire, so the promised bytes are owed whatever the disk says. It pads
+; with zeros rather than stopping, because a wire left short is the link dead
+; where a short file is one operation wrong.
+; -----------------------------------------------------------------------------
+send_body:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+.chunk:
+    mov ax, [srv_rlen]          ; nothing left to send?
+    or  ax, [srv_rlen+2]
+    jz  .done
+    mov cx, 512                 ; ...this pass: min(512, what is left)
+    cmp word [srv_rlen+2], 0
+    jne .full
+    cmp [srv_rlen], cx
+    jae .full
+    mov cx, [srv_rlen]
+.full:
+    mov [srv_chunk], cx
+    mov ah, 0x3F
+    mov bx, [rfh]
+    mov dx, secbuf
+    int 0x21
+    jc  .short
+    cmp ax, [srv_chunk]
+    je  .have
+.short:
+    call zero_buf               ; DOS gave us less than the file said it had:
+                                ; the frame is owed its bytes regardless
+.have:
+    mov cx, [srv_chunk]
+    mov si, secbuf
+.b:
+    mov al, [si]
+    inc si
+    call lp_sbyte
+    jc  .lost
+    loop .b
+    mov ax, [srv_chunk]
+    sub [srv_rlen], ax
+    sbb word [srv_rlen+2], 0
+    jmp short .chunk
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; str_cpy16 - SI -> DI, whole, up to 80 bytes
+str_cpy16:
+    push cx
+    mov cx, 80
+    call str_cpy
+    pop cx
+    ret
+
 ; =============================================================================
 ; HANDLES
 ; =============================================================================
@@ -2010,5 +2506,12 @@ rootpath:   times 72 db 0       ; 'C:\' + DOS's 64 + a NUL
 pathbuf:    times 80 db 0       ; ...one handle's, rebuilt per command
 wildbuf:    times 88 db 0       ; ...plus '\*.*'
 entbuf:     times DE_SZ db 0    ; one staged entry, on its way to the wire
+namebuf:    times 16 db 0       ; the 13 bytes a name crosses as, terminated
+srv_fh:     dw 0                ; the FILE handle a read is about
+srv_cap:    dd 0                ; what the master says it can take
+srv_rlen:   dd 0                ; ...and what we are actually sending
+srv_off:    dd 0                ; FSV_READAT's window
+srv_chunk:  dw 0                ; bytes in the secbuf pass in hand
+rfh:        dw 0xFFFF           ; the open DOS handle, FFFF = none
 dtabuf:     times 48 db 0       ; OUR DTA, and not DOS's at PSP:0080 - that is
                                 ; where the command tail lives
