@@ -1254,9 +1254,26 @@ How much of *this* window is drawn is the one thing the two entry points
 disagree about. `wm_show` always draws it whole: a newly visible window has no
 pixels on screen. `wm_front` asks **`wm_obscured` before `wm_lift`**, while the
 z-order still says what was on top — nothing was, so only the pinstripes
-changed, so only `wm_draw_title` runs. A click on a background window's title
-bar is that case, and it now costs two title bars and the chrome. Raising a
+changed, so only `wm_draw_title` **and `wm_grow_paint`** run. A click on a
+background window's title bar is that case, and it now costs two title bars,
+a 13x13 corner and the chrome. Raising a
 window that is *already* frontmost repaints no window at all.
+
+**The grow box is in that sentence because it was left out of the code for a
+release** (SPEC.md §11.1.1). It belongs to the frontmost window exactly as the
+close and minimize boxes do, and all three of the places that move it had the
+pairing except this one: `wm_raise` erases the outgoing window's beside the
+`wm_draw_title` that takes its two boxes away, `wm_paint_dmg`'s promotion
+draws the incoming one's beside the title bar it just gained — and the
+title-bar-only raise, which is the **commonest** of the three, drew the title
+bar and stopped. Drag a window OFF a Disk window and call the Disk window
+front: no grow box, permanently (§11.91.2 means nothing repaints it) and
+**still clickable**, because `wm_hit` answers AL = 4 from geometry alone. The
+shape to recognise is that the fix is not new behaviour but a pair that two
+sites already had; `tools/growraise.py` is the gate, and the trap it sprang is
+worth more than the bug — its first metric counted lit pixels in the corner,
+which is the foot of the Disk window's **scroll bar**, so the broken kernel
+scored 169 of 169 and passed while drawing the box took the count *down*.
 
 Three traps:
 

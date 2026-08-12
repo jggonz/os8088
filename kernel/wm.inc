@@ -2004,7 +2004,25 @@ wm_raise:
 %endif
     jmp wm_draw_win             ; tail call
 .titleonly:
-    jmp wm_draw_title           ; tail call: DI == BP, so it gains its stripes
+    call wm_draw_title          ; DI == BP, so it gains its stripes...
+    jmp wm_grow_paint           ; ...AND ITS GROW BOX (SPEC.md 11.1.1), which
+                                ; this path alone forgot - BX is still the
+                                ; window. wm_grow_erase takes the outgoing
+                                ; window's off forty lines above and
+                                ; wm_paint_dmg's promotion draws the incoming
+                                ; one's; this is the third site and the
+                                ; COMMONEST, because it is what a click on a
+                                ; background window runs whenever wm_obscured
+                                ; says nothing was on top of us. Drag a window
+                                ; OFF a Disk window and call the Disk window
+                                ; to the front: its content is already on the
+                                ; glass so only the title bar is drawn, and it
+                                ; came up with stripes, a close box, a
+                                ; minimize box and no grow box. 11.91.2 is why
+                                ; that was permanent rather than a flicker -
+                                ; nothing repaints it afterwards - and wm_hit
+                                ; reports AL = 4 from geometry alone, so the
+                                ; corner stayed invisible-but-clickable
 
 ; -----------------------------------------------------------------------------
 ; wm_dock_clear - is the dock strip free of window pixels?

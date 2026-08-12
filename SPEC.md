@@ -4615,6 +4615,36 @@ rather than with a box it is not entitled to. `wm_paint_dmg`'s promotion is
 the other end: the window that inherits the front gains a box there, next to
 the title bar it already gained (§11.91).
 
+**There is a THIRD site and it was the commonest, which is why this reads as
+two for one release too long.** `wm_raise`'s own `.titleonly` tail — the
+window coming to the front when `wm_obscured` said nothing was on top of it,
+so its content is already on the glass and the title bar is all §11.90 draws.
+The grow box is not in the title bar. Reported from the field: open a Disk
+window, open an app over it, **drag the app off it**, then call the Disk
+window to the front — pinstripes, close box, minimize box, no grow box. The
+drag is what makes the repro, and it is not incidental: leave the app where it
+is and `wm_obscured` says covered, so `wm_front` takes the AL = 2 path into
+`wm_draw_win`, whose `.growbox` tail has drawn the box since §11.1. Only the
+uncovered raise skipped it.
+
+§11.91.2 is again what turned a flicker into a permanency — nothing repaints
+that window afterwards — and `wm_hit` reports AL = 4 from geometry alone, so
+the corner was **invisible but still clickable** for the rest of the session.
+The fix is `wm_draw_title` and then `wm_grow_paint`, the same pair
+`wm_paint_dmg`'s promotion already had, which is the tell worth keeping: the
+pairing existed at both of the other two sites and this one had half of it.
+`.text` +3 (a `jmp` becomes a `call` and a `jmp`), no rung crossed, footprint
+unchanged.
+
+`tools/growraise.py` is the gate, and its own first version is the lesson
+about picking a metric. It counted lit pixels in the corner, assuming a
+missing box means an empty white one — but a Disk window's bottom-right corner
+is the foot of its **scroll bar**, so the broken kernel scored 169 lit of 169
+and *passed*, while drawing the box took the count **down** to 78. It compares
+the rect byte for byte against the box as `wm_draw_win` drew it on the same
+window moments earlier instead: **0 differing pixels of 169** with the fix on
+CGA, Hercules and VGA mode 12h, against **91** without it.
+
 **White is the exact erase, not an approximation.** `wm_grow_paint`'s first
 act is to white-fill the same 13x13, so whatever the application had drawn
 under the corner was already gone the moment the box appeared; erasing puts
