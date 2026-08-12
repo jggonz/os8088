@@ -36606,6 +36606,14 @@ the message *silently and for good*, and the widget is armed by exactly the
 mounts and reads the messages worth saying are about, which is why three call
 sites in `files.inc` had to be ordered around it (§22.12.1, §59.6).
 
+**Cost: a net 189 bytes back** — `.text` −171, `.bss` −18, the two removed
+composers against one byte of `[menu_ckstrip]` and a second `font_run` call.
+On the branch this was built on that crossed an image rung downward
+(`KERN_SIZE` 100,864 → 100,352, spare 4,096 → 4,608); merged onto `elendilon`,
+where §11.96's drag cache had already taken that step, it lands inside the
+rung instead — slack 164 → 353 bytes, footprint spare unchanged at 4,096. The
+second is what the machine sees.
+
 **§59.7's guard stays even though its tenant is gone.** `menu_bpadc`'s clamp
 was added because `toast_room` lowered `[menu_bn]` and a pad target beyond it
 spun forever with the gfx lock held. Nothing lowers `[menu_bn]` today, so the

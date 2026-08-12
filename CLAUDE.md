@@ -3261,10 +3261,16 @@ it. Verified on a cycle-accurate 5150/CGA: the bar comes back **0 differing
 bytes** after an expiry, the two-run split emit is **0 differing bytes**
 against a forced full bar redraw, and `pixcheck` went **227 → 0**.
 
-**§59.8 gave a rung BACK** — `.text` −171, `.bss` −18, `KERN_SIZE` 100,864 →
-100,352, spare 4,096 → 4,608 — because `toast_room`, `toast_compose` and
-`menu_bemit`'s two-colour split all went and nothing replaced them but one
-byte and a second `font_run` call. Verified on the cycle-accurate 5150 with
+**§59.8 is a NET SAVING of 189 bytes** — `.text` −171, `.bss` −18 — because
+`toast_room`, `toast_compose` and `menu_bemit`'s two-colour split all went and
+nothing replaced them but one byte and a second `font_run` call. On its own
+branch that gave an image RUNG back (`KERN_SIZE` 100,864 → 100,352, spare
+4,096 → 4,608); merged onto `elendilon`, where §11.96's drag cache and the
+snap work had already spent that step, the same 189 bytes land INSIDE the rung
+and cross nothing — the rung's slack goes 164 → 353 bytes and the footprint
+spare stays at 4,096. Both numbers are true and the second is the one the
+machine sees, which is the accounting rule in docs/KERNEL-MEMORY.md read the
+way it is written. Verified on the cycle-accurate 5150 with
 CGA, Hercules AND VGA mode 12h: while a strip is up, **0 differing pixels**
 left of `[vid_clk_hx]` and **0** in the clock cells right of the strip, and
 **0** across the whole bar once it expires — on a 5-char message (7 cells,
