@@ -1225,6 +1225,14 @@ ui_grow:
 %ifdef KERN_BIG
     call wm_strad_fit           ; a grow can push a frame across the seam too
 %endif                          ; (SPEC.md 39.16.3)
+    call wm_snap_win            ; ...and the ALIGNED x is a question about the
+                                ; WIDTH now (SPEC.md 11.95.2): a window shrunk
+                                ; off the screen's right edge stops being flush,
+                                ; so column 0 stops being an aligned content
+                                ; origin and 7 is the leftmost one again. Last,
+                                ; after both fits, for wm_fit's reason - the
+                                ; snap moves left and only stays legal once the
+                                ; right edge has been dealt with
     call wm_nat_bank            ; the size the user chose, banked AFTER the snap
                                 ; because the snap may have moved the origin,
                                 ; and after the straddle fit for its reason
@@ -1239,14 +1247,25 @@ ui_grow:
     jae .uh
     mov dx, ax                  ; ...or the old one, whichever is lower
 .uh:
-    mov ax, [bx + W_W]
-    cmp ax, [ui_origx]          ; width never moves its origin, so that axis
-    jge .uw                     ; is still just the larger of the two
-    mov ax, [ui_origx]
-.uw:
+    ; x is the union of BOTH rects, and it did not used to have to be: a width
+    ; change never moved this origin until wm_snap_win above started answering
+    ; a different x once the window stops spanning the screen (SPEC.md
+    ; 11.95.2). Taking the new rect alone leaves the seven columns the window
+    ; VACATED standing on the desktop. With the origin unmoved this is the
+    ; larger of the two widths off the one x, exactly as before.
+    mov cx, [ui_curx]           ; old x2 = old x + old w
+    add cx, [ui_origx]
+    mov ax, [bx + W_X]          ; ...against new x2 = x + w, the drop shadow's
+    add ax, [bx + W_W]          ; own column
+    cmp ax, cx
+    jbe .uw
     mov cx, ax
-    add cx, [bx + W_X]          ; x2 = x + w: the drop shadow's own column
-    mov ax, [bx + W_X]
+.uw:
+    mov ax, [bx + W_X]          ; x1 = the leftmost of the two
+    cmp ax, [ui_curx]
+    jbe .ux
+    mov ax, [ui_curx]
+.ux:
     mov bx, [bx + W_Y]          ; (the read completes before BX changes)
     call wm_paint_dmg           ; caller-held lock, per the wm contract
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
