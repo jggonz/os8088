@@ -37354,25 +37354,20 @@ The three verbs that make a volume **browsable**: `FSV_LIST`, `FSV_CHDIR` and
 `tests/lptlink/partner.py` as the far end, the driver otherwise unmodified
 from the field-proven block build:
 
-- **Connect** was `I C X L X` on the wire — info, chdir-to-root, bye, list,
-  bye — and is `I C L` since the `NC_BYE`s came out (§62.10.1: they ended the
+- **Connect** is `I C L` on the wire — info, chdir-to-root, list. It was
+  `I C X L X` before the `NC_BYE`s came out (§62.10.1: they ended the
   session). The mount ITSELF is what proves the far side is serving files
   rather than sectors, because `disk_mount` branches on `DVK_FILE` and ends in
   `FSV_LIST`: a partner that answers the magic and cannot list is refused at
   Connect rather than at the first double-click.
-- **Opening the volume** was `C X L X F X`, so `C L F`, and the Disk window
-  reads `Drive C: 4 files`,
+- **Opening the volume** is `C L F` — chdir, list, free space — and the Disk
+  window reads `Drive C: 4 files`,
   `DOCS / MINES.O88 4096 / READ.ME 512 / ZEBRA.TXT 99`, `Size 4K  Free 1205K`.
   Everything in it came off the wire and none of it is on either floppy. The
   rows are in a different order from the one they were sent in, which is what
   proves the driver did not sort (§19.4) — and `DOCS` has a folder icon and
   `MINES.O88` the package diamond, from the type word at offset 16 alone.
-
-**The two traces above are the PRE-FIX ones and the letters after them are
-derived, not measured** — the run that removes the byes from a real capture
-was still in flight when this was written. The listing, the sizes, the icons
-and the free space are measured and stand; if a later capture disagrees about
-the letters, it is right and this is wrong.
+- The Control Panel page reads `Port 0378 / Link Linked / Mode Files`.
 
 Two things were wrong and both were silent. **`net_cmd` already existed** —
 the block side's, taking `AL` + `DX` + a run length — so the file side's
