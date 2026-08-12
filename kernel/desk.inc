@@ -138,10 +138,37 @@ desk_init:
     pop ax                      ; AX's way because the probe answers in AL
     or cl, cl
     jnz .probed                 ; present, or not PROVEN absent - either way it
-    call dsk_fdd_retire         ; keeps its zone (18.97: the two errors are not
-                                ; symmetric). Absent: the row goes.
+                                ; keeps its zone (18.97: the two errors are not
+                                ; symmetric). Absent: the row goes - BUT ONLY
+                                ; IF THE CLAIM WAS A DEFAULT (SPEC.md 18.97.2).
                                 ;
-                                ; **AND THE COUNT DOES NOT.** This was
+                                ; 18.97 contests unit 1 because on a 5150 the
+                                ; equipment word is the SW1 DIP SWITCHES: two
+                                ; drives is the factory position, it is wrong
+                                ; on most 5150s, and nobody ever looked. That
+                                ; is a default worth disproving. An AT-class
+                                ; machine takes the same count out of CMOS
+                                ; SETUP, where it is a deliberate assertion by
+                                ; whoever configured the machine - which is
+                                ; 18.98.1's own reasoning for TRUSTING a claim
+                                ; of three or four drives, and it applies here
+                                ; with the same force.
+                                ;
+                                ; It has to, because the discriminator is known
+                                ; to be wrong on real drives: 18.98.1's IBM
+                                ; 4865 is present, powered, mounting and
+                                ; reading under int 13h at the very moment it
+                                ; answers TRK0 clear before AND after a
+                                ; recalibrate - the exact signature that
+                                ; retires a drive here. A probe that cannot
+                                ; distinguish "no drive" from "a drive that
+                                ; will not report TRK0" may only be let near a
+                                ; claim that was nobody's decision.
+    cmp byte [cpu_tier], CPU_8086   ; tier 0 = 8086/8088 = DIP switches. Read
+    jne .keepb                      ; through DS: cpu_tier is .text with a real
+                                    ; initialiser and cpu_detect ran at kmain
+                                    ; long before desk_init (SPEC.md 41.1)
+    call dsk_fdd_retire         ; **AND THE COUNT DOES NOT.** This was
                                 ; `mov dh, 1` - correct while two was the most
                                 ; a machine could claim, and wrong the moment
                                 ; 18.98 made units 2 and 3 reachable: it
@@ -153,6 +180,18 @@ desk_init:
                                 ; which is the field machine with the thing
                                 ; 18.98 was written for plugged into it.
                                 ; .zloop below reads the ROW instead.
+    jmp short .probed
+.keepb:
+    mov byte [fdd_dbg_u+FDU_VRD], 1 ; and the block does not get to say the row
+                                    ; went when it stayed (SPEC.md 57.5): the
+                                    ; probe wrote its own finding into VRD on
+                                    ; the way out, and the DECISION is made
+                                    ; here. `probe stop` still carries what the
+                                    ; probe concluded, which is the row
+                                    ; sysbench already tells the reader to read
+                                    ; FIRST - so a field report says "the probe
+                                    ; called it absent and the row was kept"
+                                    ; in the two bytes it already had
 .probed:
 %endif
     ; A floppy the machine does not have gets no zone - but its VOLUME ROW

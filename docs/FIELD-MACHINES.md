@@ -333,6 +333,45 @@ a known quirk — **it sometimes decides to boot in mono** — which may be what
 put it into the CGA path in the first place, and which the Display page can
 now correct from inside the running OS.
 
+**It has since found a real bug, and it is the second machine to find the same
+one** (docs/FIELD-NOTES.md 21, SPEC.md §18.97.2). It came up with **no Drive B**
+and a 1.2MB 5.25" drive plainly present: §18.97's probe removed the row,
+because its only removing path is "ST3's TRK0 read clear before and after a
+RECALIBRATE" and note 19's IBM 4865 had already shown a **present, working**
+drive answering exactly that. §18.97's justification is 5150-specific — the
+equipment word there is the SW1 **DIP switches**, a factory default worth
+disproving — and this machine takes the same count out of **CMOS setup**,
+where it is somebody's decision. The verdict is acted on **on tier 0 only**
+now; the probe still runs and still publishes.
+
+**And 1.2MB media was never the problem**, which is worth recording because it
+was the report's own second guess: §18.2's BPB rule 11 whitelists 15 sectors
+per track and rule 13's `spt*heads*80` is 2,400 sectors — a 1.2MB disk
+exactly. What was missing was the drive's ICON, not its ability to mount.
+
+**Confirmed fixed on the machine: drive B is back.** So the equipment word
+really did claim two drives and the probe really did reach its removing path
+— the `claimed 1` branch, a dead DS1287, is ruled out.
+
+**AND IT IS THE ONE MACHINE HERE WITH NO 360KB DRIVE**, which is worth
+stating as a property of the register rather than as a detail of one bug:
+`make combo` builds a **360KB** disk because the calibration 5150 has one
+5.25" drive, and that disk cannot be read here at all. This machine takes
+**1.44MB** in drive A. Until a `combo144` target exists, the disk for it is
+`os88disk.py` called directly with `--size 1440`, `--boot build/boot.bin` and
+the Makefile's own `$(COMBOARGS)` — and 1.44MB is 2,847 clusters against the
+360's 354, so the three things `combo` documents dropping all fit: **BIGFILE.DAT**
+(without which `sysbench` skips the cache-capacity sweep and the DOS
+read-rate cross-check), BEVERLY.MOD and README.TXT. A disk built for this
+machine should carry them; there is no reason not to.
+
+**What this machine is still owed:** a `sysbench` run, to say what its FDC
+actually answered. §57.5's `FD` block is what carries it, and the run is now
+the only thing that could ever *explain* note 19/21 rather than route around
+it — the fix is a decision about the claim, not a diagnosis of the
+controller. It is one of two machines in the register that can answer it, and
+the only AT-class one.
+
 ---
 
 ## The Compaq Portable III — `Elendilon/os8088`'s, and mostly unrecorded

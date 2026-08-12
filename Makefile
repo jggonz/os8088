@@ -163,6 +163,23 @@ ifeq ($(FDDPROBE),0)
 VIDDEF += -DNO_FDDPROBE
 endif
 
+# FDDABSENT=1 forces the probe's verdict to ABSENT for unit 1 without touching
+# a port, which is the only way to drive SPEC.md 18.97.2's DECISION on any
+# emulator in this tree: none of them can produce a real absent verdict, so the
+# retire path and the tier-1 keep path are both unreachable from a plain boot.
+# MartyPC synthesizes ST3 = 79 (TRK0 SET) for a drive its own config does not
+# have and QEMU's FDC answers 0x28 | (track==0 ? 0x10 : 0) off a track that is
+# 0 for an absent drive - so both say PRESENT unconditionally.
+#
+# It stubs the FDC conversation and nothing else, deliberately: what 18.97.2
+# changed is what the kernel DOES with an absent verdict, and that is what this
+# makes testable. The conversation itself is still the 5150's question. Boot a
+# tier-0 machine with this and drive B must go; boot a tier-1 one and it must
+# stay, with `probe stop 03` and `verdict 1` in the published block.
+ifeq ($(FDDABSENT),1)
+VIDDEF += -DFDD_FORCE_ABSENT
+endif
+
 # KERN_SMALL=1 selects the SMALL build of the kernel (docs/KERN-SPLIT-PLAN.md).
 #
 # The split is the one docs/KERNEL-MEMORY.md and kernel.asm have named for
@@ -347,10 +364,10 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
+                             DIRW1 FDDPROBE FDDABSENT REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -368,8 +385,22 @@ $(shell mkdir -p $(BUILD); \
 # the PREVIOUS knob's kernel-full.bin - so `make VIDEO=cga` after a plain build
 # shipped a KERNEL.SYS and two .drv files with no CGA in them, silently, which
 # is the exact failure the stamp exists to prevent and reads as the feature
-# under test being broken. Found by accident: an incremental plain rebuild after
-# `make SNAPAUDIT=1` produced an image 39,504 bytes different from a clean one.
+# under test being broken.
+#
+# **FOUND TWICE, INDEPENDENTLY, FROM TWO DIFFERENT SYMPTOMS**, which is worth
+# keeping because neither symptom points at the stamp. One was an incremental
+# plain rebuild after `make SNAPAUDIT=1` differing from a clean one by 39,504
+# bytes; the other was `make FDDABSENT=1` producing a kernel with none of the
+# knob's bytes in it, while the knob's A/B duly "passed" by comparing a build
+# against itself.
+#
+# **kernsize.py cannot catch this and will actively mislead you**: it
+# re-assembles the kernel ITSELF with $(VIDDEF), so it reports the sizes of a
+# binary the build did not produce - a 65-byte knob was reported for a kernel
+# that did not contain it. os88sym.py is the tool that does catch it, because
+# it asserts byte-identity against build/kernel.bin and REFUSES rather than
+# answering. The check that never lies is to look for the knob's own bytes in
+# the artifact.
 
 # --- the build number the About box shows (SPEC.md 14.2) ---------------------
 #

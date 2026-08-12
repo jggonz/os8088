@@ -11577,6 +11577,73 @@ textbook — but ST0 is now an **independent corroboration** in the same block
 rather than a byte nothing could explain, and that is why it is still
 published.
 
+### 18.97.2 The verdict is acted on where the claim was a DEFAULT — tier 0 only
+
+**§18.97's probe answers a question about a DRIVE; whether to act on the
+answer is a question about the CLAIM.** Those were one decision until the
+Packard Bell Victory 286 (docs/FIELD-MACHINES.md) came up with **no Drive B
+and a 1.2MB 5.25" drive sitting right there**. The probe now runs on every
+machine that claims a second drive and publishes what it found, and the row is
+**retired only on tier 0** — an 8086/8088, read straight out of `[cpu_tier]`
+(§41.1), which `cpu_detect` published at `kmain` long before `desk_init`.
+
+**The reason is the whole of §18.97's justification, read carefully.** It
+contests unit 1 because *on a 5150* the equipment word is the **SW1 DIP
+switches**: two drives is the factory position, it is wrong on most 5150s, and
+nobody ever looked. That is a **default worth disproving**. An AT-class
+machine takes the identical count out of **CMOS setup**, where it is a
+deliberate assertion by whoever configured the machine — and §18.98.1 has
+already decided what to do with a deliberate assertion, on exactly this
+reasoning, for a claim of three or four drives: **trust it.** The rule was
+right; it was applied to the wrong axis. It is not the *number* claimed that
+decides whether a claim is evidence, it is **where the number came from**.
+
+**And it has to be, because the discriminator is known to be wrong on real
+drives.** §18.98.1's IBM 4865 is present, powered, mounting and reading
+through `int 13h` **at the same moment** it answers TRK0 clear before *and*
+after a RECALIBRATE — `ST3 = 22`, `ST0 = 72`, `probe stop 03`: byte for byte
+the signature that removes a drive here, modulo the unit bits. Media is not
+the variable; that was tested. So the tree already holds a demonstration that
+**"TRK0 never came up" does not mean "there is no drive"**, and §18.97's own
+safety argument — the two errors are not symmetric, a phantom icon costs a
+click and a hidden drive costs the user their second floppy — says what
+follows: a test that cannot separate *no drive* from *a drive that will not
+report TRK0* may only be let near a claim that was **nobody's decision**.
+
+**What each machine gets.** The 5150 is unchanged in every respect — tier 0,
+so the removal still runs, and the confirmed field result (§18.97.1's second
+run: `ST3 = 21` twice, `probe stop 03`, `verdict 0`, drive A alone) stands.
+Every AT-class machine keeps the drive its setup claims, and a wrong count
+there is a CMOS misconfiguration the owner can fix in the machine's own setup
+screen — which is not true of a DIP switch inside a 5150's case.
+
+**The block does not get to say the row went when it stayed** (§57.5). The
+probe writes its own finding into `FDU_VRD` on the way out and `desk_init`
+makes the *decision*, so `desk_init` writes the truth back: `FDU_VRD` means
+**what happened to the row**, and `FDU_STEP` — `probe stop` — carries what the
+probe concluded. A Packard Bell report therefore reads `probe stop 03` with
+`verdict 1`, which is "called absent, kept anyway", in the two bytes the block
+already had and with no change to its span. `tests/sysbench` already tells its
+reader to take `probe stop` first, for the neighbouring reason: `verdict 1` is
+equally what a probe that *proved* a drive present and one that merely *failed
+to prove one absent* both say.
+
+**What this does NOT do is explain the Packard Bell's ST3.** It makes the
+kernel's response to it safe. Why an internal 1.2MB drive on an AT controller
+should read TRK0 clear through a recalibrate is open, and it is the same
+open question as the 4865's (docs/FIELD-NOTES.md 19) — one candidate being
+the µPD765's **77-step RECALIBRATE limit** against an **80-cylinder** drive,
+which is what both of these are and which is why real drivers issue the
+command twice. That is a hypothesis and not a finding: a head left beyond
+cylinder 77 would be walked to within 3 of track 0 by the failed attempt and
+the *next* boot would succeed, so it cannot on its own explain a repeatable
+verdict. §57.5's `ST3 before` / `ST3 after seek` / `ST0` are published on
+every machine precisely so that a field run can settle it, and no emulator in
+this tree can: MartyPC synthesizes `ST3 = 0x79` (TRK0 **set**) for a drive its
+own config does not have, and QEMU's FDC returns `0x28 | (track==0 ? 0x10 :
+0)` off a `track` that is 0 for an absent drive — so both answer *present*
+unconditionally and neither can produce, or refute, an absent verdict.
+
 ### 18.98 The third and fourth floppy — a row, and nothing else
 
 The IBM 5.25" Diskette Drive Adapter has an **external 37-pin D connector**
