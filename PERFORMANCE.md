@@ -6073,3 +6073,63 @@ there is no sub-row unit vertically (Set 54), so no snapping in x, y or
 otherwise moves it, and a Solitaire whose 303 rows do not fit a 305-row band is
 not made to fit by aligning anything. Clipping was the only answer. Conflating
 the two is easy enough that both sections now say which they are at the top.
+
+### Set 56 — the scroll stops recomputing its row address: 1.49x and 1.52x
+
+Set 54 found `gfx_scroll` computing a full row address for both ends of every
+row when the address advances by a constant, and priced the waste with a
+breakpoint: `gfx_rowbase` is 11 instructions and **319 cycles = 66.84 µs** on a
+Hercules, so two calls were 134 µs of a 400 µs row. Built (SPEC.md §5.5.1).
+
+| `GFX_SCROLL 256x128` | before | after | |
+|---|---:|---:|---:|
+| Hercules | 51,229.07 µs | **34,471.99 µs** | **1.49x** |
+| VGA | 29,095.95 µs | **19,194.37 µs** | **1.52x** |
+
+400 → 269 µs a row on Hercules against the 134 µs the change removes, so the
+saving landed where the measurement pointed. **VGA beat its own estimate** —
+~1.3x predicted, 1.52x measured — because the two `mul`s were a bigger share of
+a shorter per-row cost there, and the rewrite also took `cld` and two adds out
+of the loop.
+
+**`GFX_FILL 256x128` reports byte-identical counts in both runs** — 174,235 on
+Hercules, 100,611 on VGA — which is the control that makes the comparison mean
+anything: the fill was not touched, so two runs agreeing on it are two runs that
+can be compared on the scroll.
+
+**`make SCROLLROW=1` is the reference build, and it reproduces the previous
+kernel's image byte for byte** (md5 47074a3c…, the same image shipped at
+9abacfa) — which is how the A/B proves the reference arm really is the old code
+rather than something that merely resembles it.
+
+**A scroll is a COPY, so byte identity is the whole claim**: a wrong delta shows
+the wrong pixels, not no pixels, and "it looks right" is exactly what a wrong
+offset also looks like. Verified against `SCROLLROW=1` on identical scripted
+sessions:
+
+| adapter | what it drives | steps | result |
+|---|---|---:|---|
+| VGA | Note Pad caret scroll, both directions + page jumps | 6 | **0 differing bytes** |
+| Hercules | the same | 6 | identical md5 at every step |
+| CGA (2 banks, not 4) | Disk window row scroll + page jumps | 5 | identical md5 at every step |
+| Hercules | Note Pad's find panel — `dy` 29 then 41, **UNALIGNED** | 4 | identical but for the clock's last glyph cell |
+
+That last row is the one that matters most for the banked fast path: it is the
+tree's only scroll whose `dy` is not a whole number of banks, so it proves the
+dispatch still falls to the general form instead of taking a constant delta that
+does not exist there.
+
+**One bug, and it is SPEC.md §5.7.1's rule arriving from the other side.** The
+first version stepped the destination with `add di, stride` and was wrong on
+every adapter — **`rep movsb` has already advanced DI by the row's byte count**,
+and the reference form never had to care because it recomputed DI from scratch
+each row. 14,580 differing bytes on the very first VGA capture. The fix is free
+on the linear path (fold `-nb` into the increment, which is computed once) and
+one `sub di, [vgas_nb]` on the banked one, where `gfx_nextrow` is
+column-preserving and so has to start from the column it is preserving. **The
+A/B is what caught it**: the pixels were plausible, the window looked like a
+window, and nothing errored.
+
+**Cost: `.text` +116, no rung crossed — but the image rung is down to 48 bytes
+of slack** (164 before). The next addition to `.text` anywhere buys a whole
+sector, which is the guard working rather than this change being dear.

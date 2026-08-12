@@ -257,11 +257,11 @@ a third of it** — and the fill, doing comparable per-row work with a register
 row step, costs less than half as much per row.
 
 The fix is the fill's: hoist one row address out of the loop, step it with the
-register form, and derive the other end from a constant delta. Estimated
-**~1.45x on `GFX_SCROLL`** for the mono adapters (51,229 → ~35,000 µs) and
-**~1.3x** on VGA. It should be costed against §48.18.1's precedent before
-being built — that one recovered 4% and was dropped — but the arithmetic here
-is per-row rather than per-call, so it scales with the band's height.
+register form, and derive the other end from a constant delta. **BUILT and
+measured** (SPEC.md §5.5.1, PERFORMANCE.md Set 56): `GFX_SCROLL 256x128` goes
+51,229 → **34,472 µs on Hercules (1.49x)** and 29,096 → **19,194 µs on VGA
+(1.52x)**, against an estimate of ~1.45x and ~1.3x. The estimate was low on VGA
+because the two `mul`s were a larger share of a shorter per-row cost there.
 
 ### 6.4 …and where a vertical quantum earns its keep — `nbanks`, not 8
 
