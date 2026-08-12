@@ -53,7 +53,6 @@ LST = "/home/user/os8088/build/npbench.lst"
 DISK_BODY = (395, 135)          # blank area of the Disk window
 NP_TITLE = (80, 30)             # Note Pad's title bar, left of the Disk window
 
-KSEG = 0x0060
 W_FLAGS = 0
 WF_SAVEU = 32                   # SPEC.md 11.96.1. The one kernel number here
                                 # that cannot be derived - the two that CAN are
@@ -110,23 +109,31 @@ def set_saveu(m, p, on):
 def cache_for(m, wp):
     """Is a raise cache banked FOR THIS WINDOW right now? (SPEC.md 11.96)
 
-    Both words, because there is one cache for the machine and it may belong
-    to somebody else - a bare `[wm_su_seg] != 0` reads another window's bank
-    as ours and warns about nothing.
+    ONE WORD, because there is one cache PER WINDOW (SPEC.md 11.96.3):
+    wm_su_segs is a word per window record, at the record's own slot, so the
+    question "is one banked, and is it ours" is a single non-zero test and
+    there is no owner word to compare against.
 
-    AND THE TWO ADDRESSES ARE IN DIFFERENT SPACES. m.sym answers a FLAT
-    address, because that is what m.read takes; [wm_su_win] is a near pointer,
-    so it is KERNEL_SEG-relative. Compared raw they never match, which reads
-    as "no cache was ever banked" - the self-test below reported exactly that
-    on a machine that had just banked one. It is os88marty.sym's own listing
-    warning in a second place: an address in the wrong space is a plausible
-    number that fails quietly.
+    It read [wm_su_seg] and [wm_su_win] - the pair that existed while one
+    cache served the whole machine - and BOTH SYMBOLS ARE GONE. os88sym
+    raises KeyError for a name that is not in the map, so this did not return
+    a wrong answer: it took the whole check down, self-test included, on the
+    first call. That is the right failure and it is still a failure; the
+    lesson is the one in this file's header, one level up - an instrument
+    that names kernel symbols has to be re-read when they move, because
+    nothing else in the tree references them.
+
+    THE SLOT COMES OUT OF THE POINTER, not from a second read: front_win
+    builds `wm_wins + idx * WIN_SIZE`, so the arithmetic inverts, and
+    win_geom derives WIN_SIZE from the .bss layout rather than holding a copy
+    of it.
     """
-    s = m.read(m.sym("wm_su_seg"), 2)
-    if not (s[0] | (s[1] << 8)):
-        return False
-    o = m.read(m.sym("wm_su_win"), 2)
-    return (o[0] | (o[1] << 8)) == wp - (KSEG << 4)
+    maxwin, size = win_geom(m)
+    off = wp - m.sym("wm_wins")
+    if off < 0 or off % size or off // size >= maxwin:
+        raise SystemExit("window record %#x is not a wm_wins slot" % wp)
+    s = m.read(m.sym("wm_su_segs") + (off // size) * 2, 2)
+    return bool(s[0] | (s[1] << 8))
 
 
 def fb(m):
