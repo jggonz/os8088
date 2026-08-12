@@ -53,6 +53,16 @@ MAGQ = 0xF48383F3
 # the next; too large just wastes wall clock.
 STEP = 400
 
+# Steps to let the guest OBSERVE something we just did. Releasing the ack is
+# not enough on its own: lp_snib does not finish until its second LP_WAIT sees
+# the ack fall, and nothing in this file runs the guest by itself - so a
+# partner that released and immediately re-asserted left the guest waiting for
+# a level it had never been given a cycle to read. Measured: the whole magic
+# arrived and the reply stalled, which is the reversal race lp_turn exists for
+# seen from this end.
+SEE = 8
+TURN = 40
+
 # NO BLIND STEPPING AFTER THE PRESS, and that is the whole of what
 # click_paused had to unlearn. Stepping a mouse packet's worth (60,000
 # instructions) to "let the UART clear" runs the guest straight through the
@@ -81,6 +91,8 @@ class Partner(object):
         self.budget = budget            # emulator steps before we give up
         self.spent = 0
         self.nib = 0                    # the nibble we are presenting
+        self.trace = []                 # every nibble received, for diagnosis
+        self.lastop = None              # 'r'/'s', for the reversal guard
         self._status(idle=True)
 
     # --- the two wires -------------------------------------------------------
@@ -117,11 +129,22 @@ class Partner(object):
         n = d & 0x0F
         self._status(idle=False)        # ack UP (asserted = raw bit 7 zero)
         self._await_strobe(False)       # ...until it drops the strobe
-        self._status(idle=True)         # ack down; both ends idle
-        return n
+        self._status(idle=True)         # ack down...
+        for _ in range(SEE):            # ...AND LET IT BE SEEN. lp_snib does
+            self._step()                # not finish until its second LP_WAIT
+        self.lastop = 'r'               # observes the ack FALL, and nothing
+        return n                        # here runs the guest by itself
 
     def send_nib(self, n):
         """os8088 is receiving: lp_rnib's counterpart."""
+        if self.lastop == 'r':              # A DIRECTION REVERSAL, and it owes
+            for _ in range(TURN):           # the guest room to get out of its
+                self._step()                # send loop and into lp_rnib. This
+            self.lastop = 's'               # is lp_turn's guard from the other
+                                            # end of the cable - the far side
+                                            # spends a whole tick here for the
+                                            # same reason (NET-PLAN 9.1's
+                                            # second defect)
         self._status(idle=False, nib=n)     # nibble and strobe together: the
                                             # guest samples from the very read
                                             # that sees the strobe
@@ -194,8 +217,13 @@ class Partner(object):
         """
         want = MAGQ
         win = 0
-        for _ in range(limit * 2):
-            win = ((win << 4) | self.recv_nib()) & 0xFFFFFFFF
+        for i in range(limit * 2):
+            try:
+                win = ((win << 4) | self.recv_nib()) & 0xFFFFFFFF
+            except LinkTimeout as e:
+                raise LinkTimeout('stalled after %d nibble(s), window %08X: %s'
+                                  % (i, win, e))
+            self.trace.append(win & 0x0F)
             if win == want:
                 return True
         raise LinkTimeout('no magic in %d nibbles (window %08X, wanted %08X)'
