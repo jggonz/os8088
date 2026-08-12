@@ -90,7 +90,12 @@ FM_ROW_H    equ 16              ; list row height, px
 FM_ROW_Y0   equ 22              ; row area top (both views)
 FM_DBLCLK   equ 9               ; double-click window, ticks
 FM_SB_W     equ 14              ; scroll bar width
-FMI_CELL_W  equ 78              ; icon-view cell
+FMI_CELL_W  equ 80              ; icon-view cell - 80 and not 78 so that every
+                                ; column starts on a byte (SPEC.md 22.11.1.1):
+                                ; the content origin is a multiple of 8
+                                ; (11.94.1) and 80 keeps every cellx one, so
+                                ; the ICON at cellx+32 is byte-aligned in all
+                                ; of them. 78 gave 0, 78, 156 = 0, 6, 4 mod 8
 FMI_CELL_H  equ 40
 
 ; Everything else - buttons, status line, rows that fit, columns - comes
@@ -1854,7 +1859,9 @@ fm_layout:
 .fit:
     mov [fm_fit], ax
 
-    ; cols = 1 (list) or max(1, (cw-16)/78) (icons)
+    ; cols = 1 (list) or max(1, (cw-16)/FMI_CELL_W) (icons) - the constant and
+    ; not a literal, because it moved 78 -> 80 (SPEC.md 22.11.1.1) and this
+    ; comment said 78 for as long as it was true
     mov ax, 1
     cmp byte [fm_lview], 0
     je .cols
@@ -5174,8 +5181,13 @@ fm_draw_rows:
     pop ax
 
     push ax
-    mov cx, [fm_cellx]          ; icon centered at cell +(31, 3)
-    add cx, 32
+    mov cx, [fm_cellx]          ; icon centered at cell +(32, 3)
+    add cx, 32                  ; 32 is BOTH aligned and the exact centre of an
+                                ; 80-wide cell, (80-16)/2. At FMI_CELL_W 78 the
+                                ; centre was 31 = 7 mod 8, the worst phase there
+                                ; is, so every grid icon paid ico_pass's third
+                                ; framebuffer byte on both of its passes
+                                ; (SPEC.md 22.11.1.1)
     mov dx, [fm_celly]
     add dx, 3
     call fm_draw_icon16

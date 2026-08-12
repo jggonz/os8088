@@ -61,6 +61,8 @@ now guaranteed `≡ 0 (mod 8)`, so `offset mod 8` is the whole question.
 | row name | `fm_cx + 24` | `+ 32` | forced by the icon, not by alignment — see below |
 | name budget | `(cw-88)/8` | `(cw-96)/8` | keeps the column's right edge at `cw-64` |
 | `fm_scrollpaint`'s strip test | `cx + 4` | `+ 8` | reads the inset it is about |
+| `FMI_CELL_W` (grid) | 78 | 80 | every `fm_cellx` on a byte; one `equ`, so `fm_layout`/`fm_hit`/the selection rect follow |
+| grid icon | `fm_cellx + 31` | `+ 32` | `(80-16)/2` — aligned **and** exactly centred |
 
 **Cost: 0 bytes in every section** — `.text`, `.bss`, `.cold`, `.lowbss`,
 `.ovl` all +0, no rung crossed, `KERN_BUDGET` spare unchanged at 3,072. Every
@@ -199,12 +201,11 @@ By what the percentage is spent on rather than by size of diff:
    glyphs sampled, 16% aligned, 2,323 of them in bucket 2, and it redraws
    continuously while a pass runs.
 3. **Tracker** — redraws while playing, and has the most off-grid pens.
-4. **Disk window icon grid** — `FMI_CELL_W` 78 → 80 **and** the icon's
-   `fm_cellx + 31` → `+ 32`, which is exactly the centre of an 80-wide cell.
-   0 bytes measured. The **label** is centred and must be left alone (§4's
-   second kind). `fm_cols` is `max(1, (cw-16)/78)`, clamped at 1, so a narrower
-   window loses a column rather than dividing by zero — but the comment beside
-   it says 78 and has to move too.
+4. ~~**Disk window icon grid**~~ — ✅ done, SPEC.md §22.11.1.2: `FMI_CELL_W`
+   78 → 80 and the icon's `fm_cellx + 31` → `+ 32`, which is exactly the centre
+   of an 80-wide cell, so it is aligned and centred at once. 0 bytes. The
+   **label** is centred and was left alone (§4's second kind): a 9-character
+   name is 72px in an 80px cell, so any rounding puts it flush against a side.
 5. **ArtfulType** — a writer, so it is the typebench case exactly.
 6. **Paint, Tamegram** — one constant table each.
 7. **Task Manager's five `+6`s, Recorder, Minesweeper, HDD's two pages,

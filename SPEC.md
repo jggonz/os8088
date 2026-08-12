@@ -5669,7 +5669,7 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 | what | off-grid pen | note |
 |---|---|---|
 | ~~Disk window header~~ | ~~`fm_cx + 6`~~ | **done** — 6 → 8, with the status line and the row icon; §22.11.1.1 |
-| Disk window icon grid | icon at `fm_cellx + 31` | `FMI_CELL_W` 78 → 80 **and** 31 → 32 aligns every column's ICON, and +32 is exactly the centre of an 80-wide cell, so it stays centred. Its **label** is `(FMI_CELL_W - width)/2` and is therefore a *centred string* — the second of the three kinds below that must not be "fixed" |
+| ~~Disk window icon grid~~ | ~~icon at `fm_cellx + 31`~~ | **done** — `FMI_CELL_W` 78 → 80 and 31 → 32; §22.11.1.2. Its **label** is `(FMI_CELL_W - width)/2` and is a *centred string*, the second of the three kinds below that must not be "fixed" |
 | Tracker's FT2 UI | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | its *pattern grid* was aligned for §6.1 (§45.9); the rest of the face never was — 17% of sampled literal pens |
 | Tamegram HUD | 4, 60, 116, 164, 210 | 7 of 8 sampled pens ≡ 4 |
 | Fractal status row | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0 |
@@ -15377,10 +15377,38 @@ same round. Verified on a cycle-accurate 5150 with CGA, Hercules and VGA mode
 differing pixels** on all three, the only difference anywhere on screen being
 the menu-bar clock ticking between the two captures.
 
+##### 22.11.1.2 The grid cell is 80 wide so that the icon is on a byte
+
+`FMI_CELL_W` is **80**, and the icon sits at `fm_cellx + 32`. Neither number is
+about the blit — the grid takes `fm_rows_only` (§22.11.2) — and neither is about
+a text pen. It is §22.11.1.1's `ico_pass` argument applied to the *other* place
+this window draws icons, and the grid is where it is worth more: at 78 the
+columns started at 0, 78, 156 = **0, 6, 4 mod 8** and the icon's own centre was
+31 = **7 mod 8**, the worst phase there is, so every icon in the grid paid the
+third framebuffer byte on both of its passes. At 80 every `fm_cellx` is a
+multiple of 8 (the content origin being one, §11.94.1) and 32 is `(80-16)/2` —
+so the icon is **aligned and exactly centred at the same time**, which is why
+this needed no trade.
+
+**The label is centred and stays off-grid**, at `(FMI_CELL_W - width)/2`. That
+is §11.94.3's second protected kind and snapping it was considered and dropped:
+a 9-character name is 72px in an 80px cell, so there are 8px of slack and any
+rounding puts the label flush against one side of its cell.
+
+`FMI_CELL_W` is one `equ` read by `fm_layout` (the column count), `fm_hit` (the
+column a click is in) and the selection rect, so those three cannot disagree
+about a cell's width — that is the §22 one-place-for-geometry rule doing the
+work, and it is the whole reason this is a one-line change. The visible
+consequence is that `cols = max(1, (cw-16)/FMI_CELL_W)` answers one fewer at
+`cw` 250..255, where 78 fitted three columns and 80 fits two. Cost **0 bytes**;
+verified on a cycle-accurate 5150 with CGA, Hercules and VGA mode 12h — three
+columns on each, a click on column 1 selecting index 1, and a two-row grid
+scroll **0 differing pixels** against a forced full repaint.
+
 #### 22.11.2 The icon grid takes the middle tier, deliberately
 
-A grid cell is 78 wide and centres a 9-character name in it, so the leftmost
-cell's name can start 3px into the content and the rightmost can end 4px
+A grid cell is 80 wide and centres a 9-character name in it, so the leftmost
+cell's name can start 4px into the content and the rightmost can end 4px
 short of the last cell's edge — which is *inside* the strips inward rounding
 leaves. Repairing those means redrawing the first and last columns whole, and
 at the three columns a 320px window fits that is two thirds of the grid: the
