@@ -7395,7 +7395,10 @@ laid down once): these three register. **Already reads the live box every
 frame** — `missile` (`mc_track` calls `OSAPI_WM_CONTENT` and
 `OSAPI_WM_GEOM` per frame), `tamegram`, `tracker`, `modplug`, `notepad`,
 `artful`, `fractal`: these need nothing for their geometry, though `missile`
-registers anyway for the adapter facts above. **Fixed layout, never asks its
+registers anyway for the adapter facts above. `fractal` is the one of those
+worth checking rather than assuming, because it *caches* what it derives —
+§40.1 is why the cache cannot go stale across a switch, and
+`tests/dispfrac.py` is the measurement. **Fixed layout, never asks its
 size** — `piano`, `hello`, `mines` and `recorder` read only
 `OSAPI_WM_CONTENT`, the origin. Whether that is a *problem* is a separate
 question from whether they ask, and it is answered by one number: a CGA's
@@ -25086,6 +25089,23 @@ against the live one, because `fr_setup` re-reads W_W/W_H every time and
 `wm_fit` can clamp them (§39.7); a cache built for a different canvas would
 replay runs at the wrong columns.
 
+**That compare is also why this package registers no §11.98 handler**, and
+the question is worth answering here rather than leaving it to be re-asked:
+an adapter change re-clamps every window (§39.11.2.1) and Fractal's 322×199
+template really does move — content 320×180 on VGA becomes 320×136 on a CGA
+— so the cache is left holding rows laid out for a canvas that no longer
+exists. Two things close that window at both ends and neither is new.
+`fr_redraw` runs from `W_PAINT`, an adapter change ends in `wm_paint_all`
+(§39.11.2), and a size that has moved falls through to `fr_kick`; and
+`fr_worker` calls `fr_setup` only when `[fr_restart]` is non-zero, so between
+the switch and the repaint it keeps rendering at the width the cache was
+built for rather than half-way to the new one. **`tests/dispfrac.py` is the
+gate** — it asserts, on both adapters and after coming back, that `fr_ccw` /
+`fr_cch` equal the live `fr_cw` / `fr_ch` whenever the cache holds anything
+at all. It is kept for the reason a test on a concern that did not reproduce
+is worth keeping: the reasoning that raised it was plausible, and the next
+reader deserves a measurement rather than a paragraph.
+
 **`fr_prog` counts rows COMPUTED, never rows replayed**, and a repaint sets
 it to the cached row count. That is what the percentage is a percentage of,
 so a redraw no longer moves it — and when the cache overflowed the reduction
@@ -39735,6 +39755,79 @@ the Disk window reads `No os8088 disk (D:)` over `Size ?  Free ?`, which is
 the field photograph letter for letter. The far side's own log says
 `CHDIR handle=2 -> parent 0` — it resolved the folder correctly and then had
 nowhere to put the answer.
+
+##### 62.10.4.7 The second field run: a package listed with no handle
+
+Reported off the same pair, with the deadline fixed: Connect worked, `APPS`
+and `GAMES` navigated in and out, and launching Minesweeper answered
+**`Disk error`**.
+
+**`srv_ent` filled the entry's handle word in its `.dir` branch alone.** A
+folder got one, a file got zero — and so did a **package**, because the
+package arm sets the type and jumps straight to the exit. §19.1's
+first-cluster word at offset 18 *is* the driver's handle on a redirected
+volume, and `loader_run` is the one caller in the machine that arrives
+holding a handle rather than a name (`disk.inc`'s `DVK_FILE` branch reads by
+it and never resolves). So every package on the wire was offered to
+`open_handle` as handle 0, which it refuses outright as the root — the
+answer is a status, the loader's peek takes any failure as `.disk1`, and the
+message is `Disk error` on a link that never faltered.
+
+The shape is worth naming: **the type that worked was the type the walk had
+a reason to touch.** Folders need a handle to be dived into, so the branch
+that gives them one is the branch that already existed; a package needs one
+for a reason that lives in *another* module, three verbs later.
+
+**A plain file still gets 0, deliberately, and the asymmetry is the table.**
+Nothing reads offset 18 behind type 0 — `dskw_read` STATs by name and is
+handed a fresh handle — while `hdtab` holds 64 and a real DOS folder can
+hold hundreds, so a slot per file would exhaust it and break the folders
+that work today. The RAM disk hands one out for everything because it has no
+such table to spend, and that difference is why it could never have shown
+this.
+
+`srv_stat` also stopped answering **OK with handle 0** when `hd_get` finds
+the table full: 0 is the root, `open_handle` refuses it, so that was a
+success the caller could not use — the same lie one verb earlier.
+
+###### 62.10.4.7.1 The harness was kinder than the machine, again
+
+`partner.py`'s `FileTree.entry` wrote the node's handle at offset 18 for
+**every** entry, files and packages included. So the stand-in was the only
+thing in the world supplying a working package handle, and a package launch
+over the cable had been exercised repeatedly — with the harness quietly
+patching the defect under test.
+
+That is the second time in this driver's short history (`NC_BYE` was the
+first, §62.10.4.2) and the rule is the same both times: **a harness that is
+more generous than the thing it stands in for hides precisely the bugs it
+exists to find.** `entry` now applies os88net.asm's rule — a handle for a
+folder and a package, zero for a plain file — so the harness can fail the
+way the field does.
+
+###### 62.10.4.7.2 The A/B, and a knob that rebuilt around the wrong file
+
+`tests/dosstub` boots the real `OS88NET.COM` on a cycle-accurate 8088, so
+this is settled by that program's own instructions rather than by a model of
+them. `HELLO.O88` was already in the stub's tree — put there so `ent_ispkg`
+would fire — and its **type** was checked while its **handle** was printed
+and never read. Measured, listing the root:
+
+| | pre-fix | fixed |
+|---|---|---|
+| `README.TXT` (file) | handle 0 | handle 0 |
+| `HELLO.O88` (package) | **handle 0** | handle 1 |
+| `GAMES`, `EMPTY` (folders) | handles 1, 2 | handles 2, 3 |
+
+**And the A/B nearly reported both legs passing**, because `make dosstub
+COMFILE=<path>` — the knob that embeds a different `OS88NET.COM`, which is
+the only way to build the previous commit's DOS side — was named in `DSSTAMP`
+and **never passed to nasm**. So it rebuilt the stub faithfully and rebuilt
+it around the default file. That is `DSSTAMP`'s own documented trap one knob
+later, and the distinction it turns on is worth stating: **a stamp makes the
+rebuild happen and says nothing about what the rebuild is made of.** The
+first run of this A/B printed `handle=1` for both binaries, which reads as
+"the bug was never there".
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

@@ -104,6 +104,7 @@ class Partner(object):
                                         # one thing this harness is otherwise
                                         # incapable of being slow about. See
                                         # _spend_stall
+        self.stall_body = 0             # ...and the same, MID-frame: see send_body
         self._owed = False
         self._status(idle=True)
 
@@ -208,6 +209,25 @@ class Partner(object):
     def send(self, data):
         for b in bytes(data):
             self.send_byte(b)
+
+    def send_body(self, data):
+        """A file's bytes, with `stall_body` ticks of disk every 512.
+
+        os88net.asm's own send_body reads the file through a 512-byte buffer
+        and goes back to int 21h between chunks - so the far side pauses
+        MID-FRAME, which is a different wait from the one before a reply and
+        was the last one still bounded at LP_TMO rather than [lp_turnw]. A
+        harness that streams a file straight out of a Python bytes object
+        cannot exercise it.
+        """
+        for i, b in enumerate(bytes(data)):
+            if self.stall_body and i and not (i % 512):
+                saved, self.stall = self.stall, self.stall_body
+                self._owed = True
+                self.send_byte(b)
+                self.stall = saved
+            else:
+                self.send_byte(b)
 
     def recv_word(self):
         b = self.recv(2)
@@ -591,7 +611,7 @@ class Partner(object):
                                 % (h, cap, len(d)))
                 self.send_byte(0)           # oversized file is short at the
                 self.send_dword(len(d))     # source rather than sent and
-                self.send(d)                # thrown away
+                self.send_body(d)           # thrown away
             elif c == ord('A'):             # NF_READAT: a window
                 h = self.recv_word()
                 off = self.recv_dword()
@@ -605,7 +625,7 @@ class Partner(object):
                                 % (h, off, cap, len(d)))
                 self.send_byte(0)
                 self.send_word(len(d))      # ...ZERO past the end, which is
-                self.send(d)                # the contract and not an error
+                self.send_body(d)           # the contract and not an error
             elif c in (ord('U'), ord('P')):     # NF_WRITE / NF_APPEND
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
@@ -811,8 +831,17 @@ class FileTree(object):
         b = bytearray(DE_SIZE)
         b[0:len(name)] = name.encode('ascii')    # ...and the rest stays NUL
         b[16] = typ
-        b[18] = h & 0xFF
-        b[19] = (h >> 8) & 0xFF
+        # @18 IS A HANDLE FOR A FOLDER AND A PACKAGE, AND ZERO FOR A PLAIN
+        # FILE, which is os88net.asm's rule and not a convenience of this
+        # file's. It handed one out for EVERYTHING, and that is precisely why
+        # the field found `Disk error` on a package the harness had launched
+        # a dozen times: the real far side listed packages with handle 0, the
+        # loader reads a package BY handle, and the stand-in was the only
+        # thing supplying a working one. A harness kinder than the machine it
+        # stands in for hides exactly the bugs it exists to find.
+        hand = h if typ in (self.T_DIR, self.T_PKG) else 0
+        b[18] = hand & 0xFF
+        b[19] = (hand >> 8) & 0xFF
         b[20] = size & 0xFF
         b[21] = (size >> 8) & 0xFF
         b[22] = (size >> 16) & 0xFF
