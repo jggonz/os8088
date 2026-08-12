@@ -6416,3 +6416,66 @@ places — `mo.menu` releases it in the menu bar, the About close box is inside 
 window — and the union of those two cells is exactly the bbox reported, which
 reads precisely like a blit that moved a band of text. The reference build scored
 83 in the *identical* bbox, and that is what proved it was the instrument.
+
+### Set 60 — Tamegram's HUD goes on the grid; Paint was already there
+
+Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_herc`. docs/SNAP-PLAN.md
+listed these as "one constant table each". One of them was one constant table.
+The other needed nothing at all.
+
+**Tamegram (SPEC.md §49.5.1): 0% → 100% aligned, 0 bytes.** Its HUD columns were
+4, 60, 108, 164, 116, 180 and 210 — **six of the seven at 4 mod 8**, the most
+uniformly off-grid face in the tree and the cheapest to correct. They are named
+constants now (`TG_HC_*`), with one `%error` that `OR`s all seven and checks a
+single bit pattern, so a column added later cannot quietly miss the boundary
+(proved to fire at 118).
+
+Measured over **900 frames = 17.7 s of real play**, histogram filtered to
+Tamegram's own window record:
+
+| | glyph cells | aligned |
+|---|---:|---|
+| before | 109 | **0.0%** (all in bucket 4) |
+| after | 109 | **100.0%** |
+
+Same cell count, same span — only the phase moved, which is what an alignment
+change should look like. **The worth is small and is stated as such**: ~6 cells a
+second is 0.6% of the machine at Part 2's ~1ms a cell, and alignment saves 3.4%
+of that (Set 52). Taken because it is free, because it puts the face on the same
+8px margin as the rest of the tree, and because leaving the last
+uniformly-fixable entry on the survey invites the next reader to re-derive the
+census. §49.5 is why the time is not the reason: a PLAY frame draws **no text at
+all** (four cells erased, four drawn), and the HUD is redrawn only when
+`[tg_full]` is raised — measured at about once every eleven seconds at the
+opening fall speed.
+
+`LOCK` moved 210 → **208**, left by 2 rather than right by 6: right would have
+ended row 1 at exactly `TG_HUD_W`, leaving the minimum-width case with no margin.
+The widest row is 240 of 248 now, where it was 242. Verified by crop rather than
+by count, because `tg_str` **drops** a string that would leave the content box
+rather than clipping it — so a column moved too far right fails by a field being
+*absent*, which a diff reports as "fewer pixels changed".
+
+**Paint (SPEC.md §42.12): nothing to do.** Measured, a full repaint draws **62
+glyph cells, 100% aligned**. `PT_PAL_X0` = 1 is not a text pen at all — it is the
+tool palette's left column, and a palette is fills, frames and blitted icons, so
+this plan's "drawn on every tool change" costs no glyph. The off-grid pens in the
+source are real but fire only on paths a repaint does not take: `pt_draw_dims`'
+`.plain` fallback (a window too short for the size boxes) and `pt_szdraw` (typing
+into the canvas-size boxes).
+
+**And that field's pen cannot be aligned — geometry, not oversight.** `PT_SEPX`
+is 43, so the label and the framed field share 43 pixels; an 8px `W`/`H` label
+plus `PT_SZ_BW` = 32 is 40 of them, fixing the label at 0..7 and the frame at
+8..39, and the pen is 2px inside the frame by construction — 10, which is 2 mod
+8. A multiple of 8 needs `PT_SZ_BX` ≡ 6, and the nearest value clearing an 8px
+label is 14, whose frame ends at 45, past the rule. Moving the pen deeper inside
+the frame costs the caret its column.
+
+**One harness note.** `settle()` cannot be used past Tamegram's launch — it is a
+falling-block game with a worker, so the screen never stops changing and settle
+raises after its limit. `m.advance(frames=N)` is both the fix and the better
+instrument: what matters is not one repaint but how much text the game draws per
+second, and a fixed frame span answers exactly that. And `os88sym` refused a stale
+map when `build/kernel.bin` had been rebuilt without the knob — the guard working
+as designed, and the reason to `make SNAPAUDIT=1` immediately before an audit run.

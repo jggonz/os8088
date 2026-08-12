@@ -5931,9 +5931,9 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 | ~~Disk window header~~ | ~~`fm_cx + 6`~~ | **done** — 6 → 8, with the status line and the row icon; §22.11.1.1 |
 | ~~Disk window icon grid~~ | ~~icon at `fm_cellx + 31`~~ | **done** — `FMI_CELL_W` 78 → 80 and 31 → 32; §22.11.1.2. Its **label** is `(FMI_CELL_W - width)/2` and is a *centred string*, the second of the three kinds below that must not be "fixed" |
 | ~~Tracker's FT2 UI~~ | ~~6, 38, 108, 111, 116, 150, 205, 210, 258, 290~~ | **measured and CLOSED, not done** — §45.17. Its per-frame text already self-aligns, what is left is event-driven, and the biggest cluster is a centred string |
-| Tamegram HUD | 4, 60, 116, 164, 210 | 7 of 8 sampled pens ≡ 4 |
+| ~~Tamegram HUD~~ | ~~4, 60, 116, 164, 210~~ | **done** — §49.5.1: seven named columns, all multiples of 8, `%error`-checked. 0% → 100% aligned, measured over 17.7 s of play |
 | ~~Fractal status row~~ | ~~`FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250~~ | **done** — §40.2.1, together with the change that stops 78% of those glyphs being drawn at all |
-| Paint | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned |
+| ~~Paint~~ | ~~`PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2~~ | **measured 100% ALIGNED on a repaint** (62 cells) — §42.12. Its size-box field pen is geometrically forced off-grid: an 8px label plus a 32px framed field is 40 of a 43px palette strip |
 | ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
 | HDD Control Panel page | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
 | HDD tool window | `HTW_LX` 4 | |
@@ -15845,9 +15845,11 @@ position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
 the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
 The pass is therefore dead code, and it is **kept** rather than deleted: it is
 four instructions of test that state the invariant, and moving the inset back
-would need it. Its residue is `wm_snap_ax`'s one refusal — a window as wide as
-the screen sitting at x=0, where 7 becomes the answer and those seven columns
-are margin.
+would need it. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
+to x=0 at the full screen width, where 7 becomes the answer and those seven
+columns are margin. A **maximized** window is not that case, and §11.95.2 is
+why: it drops its left border, so its content starts at `W_X` = 0 and is
+aligned outright.
 
 **The name had to move with the icon, and no size report or byte diff could
 have said so.** At icon +8 with the name still at +24, the 16px icon cell ends
@@ -26785,6 +26787,35 @@ Measured on a cycle-accurate 5150 with a Hercules card, double-clicking
 `File ▸ Open` has always produced. A Paint launched with no document is
 byte-identical either way.
 
+### 42.12 Its text is already aligned, and the one pen that is not is forced
+
+§11.94.3 listed this app as *"`PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2; 2 of 5
+sampled pens aligned"*. Measured — `make SNAPAUDIT=1`, one forced full repaint,
+histogram filtered to Paint's own window record, cycle-accurate 5150/Hercules —
+a repaint draws **62 glyph cells, 100% of them aligned**. `PT_PAL_X0` is not a
+text pen at all: it is the tool palette's left column, and a palette is fills,
+frames and blitted icons.
+
+The off-grid pens in the source are real but do not fire on a repaint. Two are
+`pt_draw_dims`' `.plain` fallback at `cx = 2`, taken only on a window too short
+for the size boxes; the others belong to `pt_szdraw`, which draws while the
+canvas-size boxes are being typed into.
+
+**And that field cannot be aligned, which is geometry rather than an oversight.**
+`PT_SEPX` is 43 — the black rule between the palette strip and the canvas — so
+the label and the framed field share 43 pixels. An 8px `W`/`H` label plus
+`PT_SZ_BW` = 32 (*"three digits and a caret, framed"*) is 40 of them, which
+fixes the label at 0..7 and the frame at 8..39; the pen is 2px inside the frame
+by construction, so it lands at 10 and 10 mod 8 is 2. Making the pen a multiple
+of 8 needs `PT_SZ_BX` ≡ 6, and the nearest value that clears an 8px label is 14,
+whose frame ends at 45 — past the rule. Moving the pen deeper inside the frame
+instead costs the caret its column. So the label's `cx = 1` could go to 0 and the
+`.plain` dims could go from 2 to 0, which is three cells on paths that are
+event-driven and adapter-conditional; the field's stays at 2 permanently.
+
+Nothing here is worth a layout change, and this section exists so the next reader
+does not re-derive it from the same five-pen sample.
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
@@ -32150,6 +32181,41 @@ what was just committed. The purge animation is the other partial path:
 `tg_draw_flash_pages` rewrites only the marked cells, because a full wipe
 every tick puts an intermediate black frame behind every shrink on the
 direct-to-VRAM path.
+
+### 49.5.1 The HUD's seven columns are multiples of 8
+
+`TG_HC_L` 8, `TG_HC_LV` 64, `TG_HC_R` 112, `TG_HC_RV` 168, `TG_HC_F` 120,
+`TG_HC_FV` 184, `TG_HC_LOCK` 208 — named constants now, with an `%error` that
+`OR`s all seven together and checks one bit pattern, so a column added later
+cannot quietly miss the boundary.
+
+They were 4, 60, 108, 164, 116, 180 and 210: **six of the seven at 4 mod 8**,
+which made this the most uniformly off-grid face in the tree and the cheapest to
+correct — `+4` on six numbers, 0 bytes, because the pens were already `mov cx,
+imm16`. §11.94.1 puts the window's content origin on a multiple of 8, so a pen's
+offset mod 8 *is* its phase on the glass, and `font_char` writes one framebuffer
+byte per cell row instead of two only at phase 0 (§11.94's gate came off VGA, so
+that is true of mode 12h's four planes as well).
+
+**`LOCK` moved LEFT by 2 rather than right by 6**, which is the one asymmetry:
+right would have ended row 1 at exactly `TG_HUD_W`, leaving the minimum-width
+case with no margin at all. The widest row is 240 of 248 now, where it was 242.
+
+**What it is worth is small, and is measured rather than implied.** `make
+SNAPAUDIT=1`, filtered to Tamegram's own window record, over 900 frames = 17.7 s
+of real play on a cycle-accurate 5150/Hercules: **109 glyph cells, 0% aligned →
+109 cells, 100% aligned**. That is ~6 cells a second, which at PERFORMANCE.md's
+~1ms a cell is 0.6% of the machine, and alignment saves 3.4% of *that*. It is
+taken because it is free, because it puts this face on the same 8px margin as
+the rest of the tree, and because leaving the last uniformly-fixable entry on
+the survey invites the next reader to re-derive the whole census. **It is not
+taken for the time**, and §49.5 is why: a PLAY frame draws no text at all, and
+the HUD is redrawn only when `[tg_full]` is raised — measured here at about
+once every eleven seconds at the opening fall speed.
+
+Everything else this app letters is **centred** and stays off-grid on purpose:
+the flash banner (`([tg_cwid] - width)/2`) and the About panel
+(`([tg_abw] - width)/2`), both §11.94.3's second protected kind.
 
 ### 49.6 One panel mechanism, two texts
 
