@@ -5602,6 +5602,39 @@ It is a knob rather than a permanent counter because it sits at the top of
 `font_char`, which is the innermost drawing call in the system; a plain build
 emits not one byte of it, macro and counters living inside the same `%ifdef`.
 
+**IT LOGS THE STRING, not just a bucket count** (§11.94.3's list was built
+before this and shows it). An off-grid glyph inside the audited window records
+its pen x, its pen y, the CHARACTER and the caller's return address, so
+`tools/os88snap.py` prints the text that is off-grid and where. Two traps in
+reading the log itself, both of which produced confident nonsense first: the
+caller's `AX` is at `[ss:sp+2]` and not at `[ss:sp]` — the latter is the saved
+`BX`, which is *constant inside `font_str_x`'s loop* and so looks exactly like a
+real answer (every logged character came out `'R'`); and a return address must be
+resolved in **`KERNEL_SEG` only**, because `.cold` code cannot near-call
+`font_char` at all — it goes through a far `cw_` shim (§2.6) — so resolving
+against `.cold` too picks a nearer symbol by accident and names a *disk* routine
+as the thing that drew a glyph.
+
+**THE CAPTION IS CHROME, and getting that wrong was the instrument's one real
+defect.** Every window's callback used to report a constant 4 glyphs in bucket 7
+whatever the app, which was written off as an unexplained artifact and made every
+count under ten worthless. It was `wm_draw_title`: the pen is **centred in the
+title bar by the kernel**, no application can influence it, and it was being
+attributed to whichever callback bracket happened to be open. The constant 4 was
+the **`'APPS'` caption of the Disk window behind the app** — four characters,
+the same in every run. `wm_draw_title` suspends the attribution now, which is
+right by construction because it keys on who *chose* the pen rather than on who
+is on the stack. Measured after: the audited window reports nothing of its own,
+and `snap_kchar` grows by exactly the two captions (151 → 165, gaining
+`[3:10, 7:4]` for `'ArtfulType'` and `'APPS'`).
+
+**A drag is no longer a way to force a repaint**, which matters for driving this:
+§11.96.12's drag cache replays the window's content instead of calling `W_PAINT`,
+so a dragged window reports nothing. Reset with **no filter** before launching
+the app instead — its first paint runs inside its own `wm_pkgcall`, so it lands
+in `snap_h*` and the chrome lands beside it. The cost of no filter is that two
+windows' callbacks share `snap_h*`, which the pen y separates.
+
 **Reading it: a non-zero bucket is not automatically a defect.** Three things
 land off-boundary for reasons that are correct — a right-aligned numeric column
 (the Disk window's sizes, the Task Manager's `CPU`/`MEM`), a centred string

@@ -6200,3 +6200,57 @@ window, and nothing errored.
 **Cost: `.text` +116, no rung crossed — but the image rung is down to 48 bytes
 of slack** (164 before). The next addition to `.text` anywhere buys a whole
 sector, which is the guard working rather than this change being dear.
+
+### Set 57 — the audit's "artifact" was a window CAPTION, and the tool was right
+
+`make SNAPAUDIT=1` carried a documented unexplained artifact: every window's
+callback reported a **constant 4 glyphs in bucket 7** whatever the app, which
+made any count under about ten worthless and left Piano, Arkanoid and Missile
+Command unresolved in `docs/SNAP-PLAN.md`.
+
+**It was `wm_draw_title`.** A caption's pen is **centred in the title bar by the
+kernel** and no application can influence it, and it was being attributed to
+whichever `wm_pkgcall` bracket happened to be open. The constant 4 was the
+**`'APPS'` caption of the Disk window sitting behind every app under test** —
+four characters, identical in every run, which is exactly why it read as an
+instrument fault rather than as data. `wm_draw_title` suspends the attribution
+now, keying on who *chose* the pen rather than on who is on the stack.
+
+Measured after: the audited window reports **nothing** of its own and
+`snap_kchar` grows by exactly the two captions — 151 → 165, gaining `[3:10, 7:4]`
+for `'ArtfulType'` and `'APPS'`.
+
+**What made it findable was logging the CHARACTER**, and two ways of reading a
+stack produced confident nonsense on the way there:
+
+- The caller's `AX` is at `[ss:sp+2]`, not `[ss:sp]` — the latter is the saved
+  `BX`, which is **constant inside `font_str_x`'s loop** and therefore looks
+  exactly like a real answer. Every logged character came out `'R'`.
+- A return address must be resolved in **`KERNEL_SEG` only**: `.cold` code
+  cannot near-call `font_char`, it goes through a far `cw_` shim (SPEC.md §2.6),
+  so resolving against `.cold` too picks a nearer symbol by accident — it named
+  `dskw_rbody.fatname`, a *disk* routine, as the thing that drew a glyph.
+
+Both are the same shape as this session's other traps: **a wrong reading that is
+stable is indistinguishable from a right one**, and only a value that had to
+vary — the characters spelling `APPS` and `ArtfulType` — could tell them apart.
+
+**Three corrections to §11.94.3's list fall out**, and they are corrections in
+the direction of less work rather than more:
+
+- **Hello is not a defect at all.** `hl_line` centres every string —
+  `(HL_CONT_W - width)/2 + content_left` — so it is §3's category 2. Its earlier
+  "≡ 3 for 5 of its 35 glyphs" was its caption plus that centring.
+- **ArtfulType's "≡ 3 (measured)" was its own caption**, ten centred glyphs the
+  kernel drew. Its literal 14 stands; re-audit before moving anything.
+- **Fractal is confirmed and is the worst in the tree**: 2,801 glyphs in one
+  launch, **16% aligned, 2,323 of them at bucket 2** — the status row redrawn per
+  progress tick, at the `FR_X_*` constants the static pass had already named.
+
+**And a note for whoever finishes the list: a drag no longer forces a repaint.**
+§11.96.12's cache replays the content instead of calling `W_PAINT`, so a dragged
+window reports nothing — which is what the first version of this survey
+measured. Reset with no filter and then LAUNCH the app.
+
+**Cost: nothing.** All of it is inside `%ifdef SNAPAUDIT`, and a plain build is
+**0 differing bytes** against the same commit before this work.
