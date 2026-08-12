@@ -6957,6 +6957,58 @@ with no consumer but the cable it was written for and no way to run it in a
 container — which is exactly how `OS88NET.COM` reached the field twice with
 not one instruction executed (§62.8).
 
+#### 12.8.2 A sector the CACHE served is a sector the bar must count
+
+`fpg_step` lives in `dsk_xfer`'s `.notch` loop, which is the right place for
+it and was for years the only place a sector could arrive. §18.95's cache
+sits **in the same routine, above the transfer**: `.served` short-circuits to
+the next run having advanced the LBA "the same advance `.ok` makes, and no
+`int 13h`" — and `.notch` is on the other branch. So every sector the cache
+answered was a sector the bar never heard about.
+
+The visible defect is **a progress bar that stops short and then vanishes**.
+Measured on a cycle-accurate 5150: loading `TASKMGR.O88` (6,905 bytes, 14
+sectors) armed the widget at 14 units and reported **9**, so the trough
+filled to 39 of its 62 pixels and the operation ended there. Nothing was
+wrong with either number — the cache really did serve five of the fourteen —
+and it is the *question* that was wrong. **The bar reports progress through
+the OPERATION, not through the drive**, and a sector already in memory is as
+done as a sector just read.
+
+So `.served` steps `spl_step` and `fpg_step` `AX` times, exactly as `.notch`
+does after a transfer. Three things make it free: both are a compare and a
+return when their bar is not live (§15.3, §12.8); both preserve every
+register and the flags, so `AX` survives to do the `<< 9` below it and the
+`loop` leaves `CX` at 0, which is why the `mov cl, 9` after it still yields
+9; and a cache hit is *rare enough to be the point* — the loop runs once per
+sector served, against ~24 ms for one that was not.
+
+**The splash bar is stepped for the same reason and not merely for
+symmetry.** `drv_boot` mounts and loads through `disk_read` while the splash
+still owns the screen, so a cache hit there is a notch the boot bar would
+likewise never make. It self-corrects at `spl_finish` where the file widget
+cannot, which makes it the *less* visible half of one defect rather than a
+different one.
+
+**A FILL still over-counts, and that is left alone deliberately.**
+`dsk_rah_fill` re-enters through `disk_read_x` with `[dsk_rah_busy]` set, so
+its read takes the `.nocache` path and `.notch` notches the *whole track* — including
+the speculative tail the caller never asked for. Suppressing that would be
+strictly more exact and is **not** worth it: both bars clamp at their total
+(`fpg_step` against `[fpg_total]`, `spl_step` at `total-1`), so an over-count
+is invisible — it reaches 100% a sector or two early and sits there, which is
+the condition the paragraph above already accepts and for the same reason. An
+under-count is not invisible. Suppressing it would also change the boot bar's
+accounting, which has an allowance of its own (§15.3), to fix something
+nobody can see.
+
+So the three cases, and only one of them was a defect: metadata sectors are
+outside the total and deliberately uncounted; a fill's surplus is outside the
+total and counted anyway, harmlessly, because the clamp eats it; and cached
+sectors are **inside** the total and were not counted at all. The first two
+make the bar clamp at full. The third made it stop short of full, which is
+the one a user can see.
+
 ### 12.9 The bar is three segments, and each answers for itself
 
 **Only the segment that changed may put pixels on the bar.** The menu bar
