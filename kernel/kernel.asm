@@ -1788,7 +1788,21 @@ osapi_table:
                                   ;          half of OSAPI_WM_ONSIZE, which
                                   ;          asks BEFORE and takes an answer
                                   ;          (SPEC.md 11.98)
-osapi_table_end:                  ; 0x03E0
+    OSAPI_SLOT wm_keeph           ; 0x03E0 - BX = window, AL = 0 clear / non-0
+                                  ;          set. "My layout is FIXED: if I
+                                  ;          will not fit the desktop band,
+                                  ;          hang me over the dock rather than
+                                  ;          shorten me" (SPEC.md 11.93). Only
+                                  ;          you know whether a row can be
+                                  ;          given up - shortened, your content
+                                  ;          is still drawn and simply outside
+                                  ;          the frame, so it takes no clicks.
+                                  ;          Call it from your entry proc,
+                                  ;          right after OSAPI_WM_CREATE: it
+                                  ;          re-fits from the size you asked
+                                  ;          for, and preserves the flags so
+                                  ;          the CF you owe the loader survives
+osapi_table_end:                  ; 0x03E8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1796,8 +1810,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 122 * 8
-%error "os8088 API jump table must be exactly 122 8-byte slots"
+%if OSAPI_TABLE_LEN != 123 * 8
+%error "os8088 API jump table must be exactly 123 8-byte slots"
 %endif
 
 ; =============================================================================

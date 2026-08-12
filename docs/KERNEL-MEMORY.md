@@ -442,7 +442,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2825,
     "stk0": 1024,
-    "text": 47658
+    "text": 47719
   },
   "small": {
     "bss": 5646,
@@ -459,7 +459,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2796,
     "stk0": 1024,
-    "text": 44819
+    "text": 44874
   }
 }
 ```
@@ -963,20 +963,20 @@ generated in the first place.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 30,424 | 37.1% |
-| the window system and its furniture | 19,836 | 24.2% |
+| the window system and its furniture | 19,889 | 24.2% |
 | drawing: adapters, primitives, glyphs, icons | 12,890 | 15.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,788 | 11.9% |
-| the kernel proper: API table, heap, scheduler, events | 6,681 | 8.1% |
+| the kernel proper: API table, heap, scheduler, events | 6,689 | 8.2% |
 | the three built-in kinds | 1,376 | 1.7% |
 | the Control Panel | 872 | 1.1% |
-| **total** | **81,991** | |
+| **total** | **82,052** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
+| `wm.inc` — the window manager (§11) | 8,987 | — | **8,987** | 789 | — |
 | `files.inc` — the Disk window (§22) | 1,097 | 7,881 | **8,978** | 339 | — |
-| `wm.inc` — the window manager (§11) | 8,934 | — | **8,934** | 789 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 358 | 5,927 | **6,285** | 890 | 3,584 |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,322 | — | **5,322** | 653 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 4,977 | **5,156** | 155 | — |
@@ -1012,8 +1012,8 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `blank.inc` — **(undescribed)** | 124 | — | **124** | — | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,979 | — | **2,979** | — | — |
-| **total** | **47,658** | **34,333** | **81,991** | **5,752** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,987 | — | **2,987** | — | — |
+| **total** | **47,719** | **34,333** | **82,052** | **5,752** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

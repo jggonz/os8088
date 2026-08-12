@@ -5547,6 +5547,87 @@ folder-vanished path reaches it from `ld_run`, which deliberately holds no
 lock across a mount (§21). A pointer cannot be spent on whichever window
 happened to repaint in between.
 
+### 11.93 `WF_KEEPH` — a fixed layout hangs over the dock rather than be cut
+
+**`wm_keeph` (API slot 0x03E0), BX = window, AL = 0 clear / non-0 set: "my
+layout is FIXED, so my height is not the kernel's to reduce."** A window that
+sets it and will not fit the desktop band is clamped against the **display's
+own bottom** instead of against the row the dock starts on — so it hangs over
+the strip, which `wm_dock_under` (§11.90) and `wm_dock_clear` have handled
+since a grown window could first reach it.
+
+**Why the default cannot simply change.** `wm_fit`'s height clamp is
+`[vid_dock_y0] - MBAR_H - 1`, and for anything that reflows it is exactly
+right: a Disk window, Note Pad and Fractal at 155 rows on a CGA show fewer
+rows and lose nothing, the Task Manager and `piano` re-derive through §11.98,
+and every one of them would be *worse* hanging permanently over the dock on
+every CGA boot. Nine of the ten templates in the tree taller than 155 rows are
+in that class. So the relaxed floor is opt-in and the clamp stays the default.
+
+**What the clamp costs the tenth is not a smaller window — it is unreachable
+content.** `wm_fit` moves the RECORD and nothing tells the application, so a
+fixed layout goes on drawing every row it has: the rows below `W_Y + W_H` are
+still on the glass, drawn straight through the bottom of the frame, because
+the `gfx_*` primitives clip to the SCREEN and not to a window. `wm_hit` tests
+the record, so those rows belong to no window at all and a press there falls
+past `.on_desktop` into `dock_click`. Minesweeper on a CGA is the worked
+example and it reads exactly as the two separate bugs it was reported as: the
+board sits over the dock, and its bottom two rows cannot be played. One clamp
+produces both.
+
+**It re-fits from the natural bank** (§39.11.2.1), which is what makes the
+call usable at all: by the time an entry proc can make it, `wm_create` has
+already run `wm_fit` and the asked-for height survives only in the bank. That
+is also why this is not a ninth template word — the copy in `wm_create` is
+**eight** words and growing it would read one word past every package's
+template. Both directions re-fit, because withdrawing the flag has to be able
+to put a shortened window back.
+
+**Four things are deliberate.** The floor is the DISPLAY's bottom and not
+infinity, so a template taller than the whole adapter is still cut — a window
+whose title bar is off the screen cannot be dragged back. It is
+FLAGS-preserving, `wm_snap`'s contract for `wm_snap`'s reason: an entry proc's
+CF is the loader's return value, and a `cmp` inside the re-fit would otherwise
+abort the launch. It sends **no §11.98 notification** — that one reports a box
+that moved *under* an application and is called with the gfx lock held, which
+an entry proc does not hold; this is the application asking, and its own first
+`W_PAINT` reads the answer. And it is a stored flag rather than a one-shot
+re-fit, or the next `wm_refit` (§39.11.2) would clamp the window back to the
+band on the first adapter change.
+
+**Not derived from "has no negotiator and no §11.98 handler",** which lands on
+the right answer for every window in the tree today and is still wrong: it
+would make *adding* a resize handler silently re-truncate a window, which is
+the shape of bug this tree keeps writing down (§18.7.3). The application knows
+whether a row can be given up; nothing else does.
+
+**Minesweeper still does not fit a CGA, and the residual is stated rather than
+hidden.** Its content is 164 rows — a 20px strip plus nine 16px cells, and the
+cells are 16px because the mine, the flag and the digit art are drawn for a
+16px cell — against a screen that can offer `200 - MBAR_H - 1 = 179` frame
+rows, or 160 of content. So the bottom cell row keeps 12 of its 16 rows,
+which is a cell any hand can hit, and the last four are drawn through the
+frame as they always were. The alternative is a board with two rows missing.
+
+**`tests/dispmine.py` is the gate, and it presses a BUTTON rather than taking
+a picture.** The two halves of this were reported as separate bugs — "it sits
+over the dock" and "I cannot interact with the bottom set of mines" — and a
+screenshot shows only the first, because the board is drawn identically either
+way. So the test opens `MINES.O88` on a cycle-accurate CGA and clicks the
+centre of the bottom-left cell, which at `y = 194` is **below
+`[vid_dock_y0]`**: one press asks both questions at once. Measured, shipped
+against `make KEEPH=0`:
+
+| | frame | bottom row | press at (248,194) |
+|---|---|---|---|
+| `WF_KEEPH` | 146×**179**, rows 20..198 | 198 | opens 11 cells |
+| `KEEPH=0` | 146×**155**, rows 20..174 | 174 | opens nothing |
+
+The top-left cell is clicked first in both builds and must open: without that
+control a broken click path and a broken clamp are the same result. `KEEPH=0`
+removes the flag test from `wm_fit` rather than imitating its absence, so the
+reference build's `.hcut` is literally the pre-§11.93 instruction stream.
+
 ### 11.94 `WF_SNAP` — a window that keeps its content on a byte boundary
 
 **Opt-in, EVERY ADAPTER, and the whole of it is one `and`.** `wm_snap` (API
@@ -7405,13 +7486,15 @@ question from whether they ask, and it is answered by one number: a CGA's
 desktop band is 155 rows, so a template taller than that is clamped and
 everything below the cut is drawn through the window's own frame. `hello`
 (90) and `recorder` (140) fit and need nothing at all. `piano` (177) did not
-and now registers — see §11.98.1. **`mines` (183) does not fit either and is
-NOT fixed here**: its content is a 9x9 grid of 16px cells plus a 20px strip =
-164 rows against the 136 a CGA gives it, so the bottom row and a half of the
-board is outside the frame. Unlike a keyboard, a minefield cannot simply be
-made shorter — the cells would have to shrink, and the mine, flag and digit
-art is drawn for a 16px cell. `frotz` and `paint` install the *negotiator*
-instead and size themselves.
+and now registers — see §11.98.1. **`mines` (183) does not fit either, and it
+is the one that goes the OTHER way — §11.93.** Its content is a 9x9 grid of
+16px cells plus a 20px strip = 164 rows against the 136 a CGA gives it, and
+unlike a keyboard a minefield cannot simply be made shorter: the cells would
+have to shrink, and the mine, flag and digit art is drawn for a 16px cell. So
+it does not re-derive at all — it asks not to be shortened, and hangs over the
+dock. The two answers are complementary rather than rival: §11.98 is for a
+layout with slack in it, §11.93 for one with none. `frotz` and `paint` install
+the *negotiator* instead and size themselves.
 
 ##### 11.98.1 …and `piano` is the one that shortens rather than re-derives
 
