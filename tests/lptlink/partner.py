@@ -363,7 +363,7 @@ class Partner(object):
         return st, free, gran
 
     # --- serving, once the link is up ----------------------------------------
-    def serve(self, tree, limit=64, idle=600000):
+    def serve(self, tree, limit=64, idle=2000000):
         """Answer commands until the master says NC_BYE, or `limit` of them.
 
         THIS IS THE FILE SERVER, and it is here rather than in a file of its
@@ -385,16 +385,21 @@ class Partner(object):
         """
         seen = []
         for _ in range(limit):
-            mark = self.spent
-            self.budget += idle          # ...only the command byte gets this
+            saved = self.budget
+            # A CEILING, NOT AN INCREMENT, and the difference is the whole
+            # runtime. `budget += idle` leaves the wait bounded by the TOTAL
+            # budget, so "the master has nothing more to say" cost 60 million
+            # steps - 150,000 debug round trips, about two and a half minutes,
+            # at the end of every serve() call. Two of those is a test that
+            # times out before it prints its first line, which is exactly what
+            # it did.
+            self.budget = self.spent + idle
             try:
                 c = self.recv_byte()
             except LinkTimeout:
                 return seen              # nothing more to say: we are done
             finally:
-                self.budget -= idle
-            if self.spent - mark > idle:
-                return seen
+                self.budget = saved
             seen.append(chr(c))
             if c == ord('X'):               # NC_BYE ENDS THE SESSION, exactly
                 return seen                 # as `serve` does on the real far
