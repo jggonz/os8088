@@ -1448,6 +1448,21 @@ time, two rows whose relative sizes are known in advance, a ratio you can
 recompute by hand from the columns next to it. A harness that reports one
 number per run is one you have to trust.
 
+**A number can also contradict a DESIGN RULE, and that is the same bug with a
+longer fuse.** `WF_SNAP` was mono-only for most of its life because "what
+snapping buys is `font_run`'s single-store path, which is 1bpp-only" — and
+`typebench`'s own VGA row said alignment was worth **5.8%** there against
+**2.1%** on Hercules, printed in SPEC.md §11.94 directly above the paragraph
+explaining that the flag was a no-op on VGA. Nobody read the two as
+inconsistent, because the number was filed as a fact about `font_run` rather
+than about *alignment*, which is what the row actually measures. Re-measured on
+a cycle-accurate 8088 the gap is wider — 3.4% mono against **9.4%** VGA — and
+`typebench`'s own header was printing `snap:off` on VGA the whole time, three
+lines above the rows refuting it. **When a measurement and a design rule
+disagree inside one file, the measurement is not the thing to explain away**;
+and a harness that labels its own state (`snap:on`/`snap:off`) rather than
+assuming it is what makes such a disagreement visible at all.
+
 **And the sharper form of the same rule: a gate must not be able to pass by
 doing nothing.** `tools/sucheck.py` — the raise cache's gate (SPEC.md §11.96)
 — covered Solitaire by clicking a hard-coded (300, 40) on the Disk window's

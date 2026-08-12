@@ -1694,9 +1694,13 @@ wm_snap:
                                 ; value. wm_snap_ax exits on a `cmp` against
                                 ; the screen width, which leaves CF set for
                                 ; every window that fits; without this, asking
-                                ; to be snapped aborted the launch. On MONO
-                                ; only, because that cmp is inside the
-                                ; [vid_mono] gate - it loaded perfectly on VGA
+                                ; to be snapped aborted the launch. That used
+                                ; to be a MONO-ONLY bug, the cmp being inside
+                                ; a [vid_mono] gate that no longer exists - it
+                                ; loaded perfectly on VGA and answered "Load
+                                ; failed" on Hercules. The gate has gone
+                                ; (wm_snap_want), so every adapter now reaches
+                                ; that cmp and this line is the whole defence
     or al, al
     jz .clear
     or word [bx+W_FLAGS], WF_SNAP
@@ -1733,9 +1737,34 @@ wm_snap_win:
 ; RIGHT and the width is about to shrink to pay for it. One answer, two
 ; users, rather than a second copy of three tests that has to agree.
 ;
-; MONO ONLY, and [vid_mono] is the gate: what snapping buys is font_run's
-; single-store cell path (SPEC.md 6.1), which exists on the 1bpp adapters and
-; nowhere else. On VGA it would cost 8px drag steps for nothing.
+; EVERY ADAPTER, and there is no [vid_mono] test here on purpose. This gate
+; was mono-only for most of the feature's life, on the premise that what
+; snapping buys is font_run's single-store cell path (SPEC.md 6.1) - which is
+; genuinely 1bpp-only - and that "on VGA it would cost 8px drag steps for
+; nothing". The first half is true and the second does not follow from it, and
+; it is measurably false: MODE 12h IS EIGHT PIXELS TO A BYTE, four planes of
+; one bit each, so an unaligned 8x8 cell spills into a second framebuffer byte
+; there exactly as it does on a Hercules - and font_char's .vram path pays for
+; that spill with a second GC8 Bit Mask `out` and a second latched
+; read-modify-write, once per row per cell. SPEC.md 6.1.4 is the arithmetic,
+; and it was never a claim about one adapter: the reason unaligned cannot be
+; made fast is that the cell stops owning its byte, which is as true of a
+; plane as it is of a 1bpp framebuffer.
+;
+; Measured, cycle-accurate 4.77MHz 8088, tests/typebench's 40 keystrokes:
+;
+;   adapter    CHAR aligned   CHAR skewed 5   what alignment is worth
+;   Hercules      1424 ms        1472 ms               3.4%
+;   VGA           1013 ms        1108 ms               9.4%
+;
+; So the adapter the gate excluded gains 2.8x what the adapter it was written
+; for gains. tests/gfxbench prices the primitive on VGA the same way: PAIR 10
+; aligned 6984.93us against skewed 7855.51us, 12.5%.
+;
+; What is still mono-only is font_run's fast path, and that is a fact about
+; font_run rather than about alignment - on VGA a run takes the gfx_fill +
+; font_str fallback and every glyph in it is then byte-aligned, which is where
+; the 9.4% is. Conflating the two is what kept this gate closed.
 ;
 ; WF_FULL is left alone: a fullscreen window is at x=0 with no border, so its
 ; content origin is 0 and already aligned (SPEC.md 11.2) - which is why the
@@ -1746,8 +1775,6 @@ wm_snap_want:
     jz .no
     test word [bx+W_FLAGS], WF_FULL
     jnz .no
-    cmp byte [vid_mono], 0
-    je .no
     stc
     ret
 .no:

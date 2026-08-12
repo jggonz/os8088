@@ -156,8 +156,11 @@ app_tmr_kinit:
                                 ; the KD_INIT contract, and this is the caller
                                 ; that section is written for: before the
                                 ; window is shown, where moving it costs
-                                ; nothing. Mono only - a no-op on VGA, which is
-                                ; what lets it be asked for unconditionally
+                                ; nothing. EVERY adapter - it was mono only
+                                ; until VGA was measured and gained more
+                                ; (verified aligned there - content origin
+                                ; 328) - so it is still asked for
+                                ; unconditionally, just no longer for free
     pop ax
     ret
 

@@ -137,7 +137,7 @@ sb_entry:
     jc .out
     mov [sb_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP              ; mono only; PRESERVES FLAGS
+    call OSAPI_WM_SNAP              ; every adapter (11.94); PRESERVES FLAGS
     mov si, sb_menus
     call OSAPI_MENU_SET
     mov si, sb_onabout

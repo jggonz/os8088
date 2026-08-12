@@ -5832,3 +5832,74 @@ or a broken one look fine:
   `sucheck.fb`, `Marty.sym`) can drive an A/B build without threading defines
   through each one. That trap is named in `os88span.py`'s docstring and had no
   remedy until now.
+
+### Set 52 — VGA wants the byte boundary MORE than mono does (SPEC.md §11.94)
+
+`WF_SNAP` was gated on `[vid_mono]` for most of its life, on the premise that
+what snapping buys is `font_run`'s single-store cell path — which is genuinely
+1bpp-only — and therefore that on VGA the flag is a no-op costing 8px drag
+steps for nothing. **The premise measures false, and the refutation was already
+printed in SPEC.md §11.94**: its `-icount` table said 2.1% on Hercules against
+5.8% on VGA, sitting directly above the paragraph explaining that the flag does
+nothing there. The number had been filed as a fact about `font_run` rather than
+about *alignment*.
+
+**Mode 12h is eight pixels to a byte** — four planes of one bit each — so an
+unaligned 8x8 cell spills into a second framebuffer byte on VGA exactly as on a
+Hercules, and `font_char`'s planar `.vram` path pays for the spill with a second
+`GC8 Bit Mask` `out` and a second latched read-modify-write, once per row per
+cell. Its `.no_second` early-out is taken only when `x & 7 == 0`.
+
+Measured, `tests/typebench` (40 keystrokes, whole 40-cell line redrawn after
+each — what `np_redraw` does to its dirty band), cycle-accurate 4.77MHz 8088;
+Hercules on `os8088_5150_herc` with the period IBM ROM, VGA on `os8088_xt_vga`:
+
+| adapter | CHAR aligned | CHAR skewed 5 | one `font_run` | alignment is worth |
+|---|---:|---:|---:|---:|
+| Hercules | 1424 ms | 1472 ms | 316 ms | **3.4%** |
+| VGA | 1013 ms | 1108 ms | 996 ms | **9.4%** |
+
+**The adapter the gate excluded gains 2.8x the one it was written for.** The
+`font_run` column is the other half of the story and is why the premise was
+believable: on Hercules the run is **4.5x** the CHAR pair (the single-store
+path), and on VGA it is level with it (ratio 101) because a run there falls back
+to `gfx_fill` + `font_str`. The fallback's *glyphs* are what come out aligned,
+and that is where the 9.4% lives.
+
+`tests/gfxbench` on `os8088_xt_vga` prices the primitive the same way:
+
+| row | µs |
+|---|---:|
+| `PAIR 10 aligned` | 6984.93 |
+| `PAIR 10 skewed 5` | 7855.51 |
+| `FONT_RUN 10 aligned` | 7192.01 |
+| `FONT_RUN 10 skewed` | 8051.55 |
+
+**12.5%** and **12.0%** — and the report's own derived `skewPAIR/RUN x100` row
+reads 109.
+
+**The real consumer was paying it.** Note Pad on VGA opened with its content
+origin at **x = 61**, which is skew 5 — the exact column typebench's skewed row
+measures — read both out of the guest (`W_X` 60) and off the framebuffer. With
+the gate removed it opens at 56. Timer lands at 328 and the Task Manager at 248,
+both aligned, both verified by reading `wm_wins` rather than by looking.
+
+Two things worth keeping:
+
+- **Removing it is a no-op on mono by construction** — the deleted instructions
+  are a `cmp`/`je` whose branch was never taken there — and that was checked
+  rather than claimed: identical 7-step scripted sessions (boot, Disk window,
+  folder, launch Note Pad, type, drag, type again) against a reference kernel
+  with the gate restored are **0 differing framebuffer bytes** on Hercules and
+  on CGA. The only bytes that ever differed were a **20-byte 6x6 box at
+  x = w−16, y = 6..11** on both adapters — the menu bar clock's last glyph
+  cell, `00:01` against `00:02`, which advances with wall time and landed on a
+  different step on each adapter. A diff that lands in the same relative
+  6x6 box on two different geometries is a clock, not a regression.
+- **It made the kernel smaller**: `.text` −18, `.cold` −4, no rung crossed,
+  footprint unchanged. Removing a gate removes code.
+
+The cost is real and it is the one the old comment named: **8-pixel horizontal
+drag steps on VGA**, on every window carrying the flag. Verified from `W_X` 55 —
+a 3px and a 5px drag land back on 55, 9px steps to 63, 14px to 71, every landing
+with an aligned content origin.

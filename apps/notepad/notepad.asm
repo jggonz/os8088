@@ -371,7 +371,12 @@ np_entry:
     pop ax                          ; every keystroke redraws a row of text and
                                     ; an aligned cell writes ONE framebuffer
                                     ; byte where an unaligned one writes two.
-                                    ; A no-op on VGA, so it is unconditional
+                                    ; TRUE ON VGA TOO - mode 12h is 8 pixels
+                                    ; to a byte per plane - and measured, this
+                                    ; window was the worked example: it used
+                                    ; to open at content x = 61 there, skew 5,
+                                    ; which typebench prices at 9.4% of every
+                                    ; keystroke (SPEC.md 11.94)
     push si
     mov si, np_menus                ; BX is still the window: hand it our
     call OSAPI_MENU_SET             ; menus (draws nothing, takes no lock)
@@ -2288,8 +2293,10 @@ np_fold1:
 ;     different amounts of work wearing one number.
 ;  4. It needs [np_tx] on a multiple of 8, because OSAPI_GFX_SCROLL is
 ;     byte-column granular on every adapter. OSAPI_WM_SNAP guarantees that on
-;     the two mono adapters (SPEC.md 11.94) - which are the ones a 4.77MHz
-;     machine has - and on VGA it is a coin flip, so there the break simply
+;     EVERY adapter now (SPEC.md 11.94 - it was mono-only, and VGA turned out
+;     to gain more from alignment than mono does), so the coin flip this note
+;     used to describe on VGA is gone and rule 2's CPU test is the only gate
+;     left. On a window too wide to snap the alignment still fails, the break
 ;     does not engage and the reflow is what happens. That is a FACT the code
 ;     can test, not a guess (SPEC.md 47 rule 3).
 ; =============================================================================

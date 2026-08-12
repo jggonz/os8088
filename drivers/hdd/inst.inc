@@ -151,9 +151,11 @@ hd_iw_open:
     mov al, 1                   ; WF_SNAP (SPEC.md 11.94): the content origin
     call OSAPI_WM_SNAP          ; stays on a multiple of 8, so every run in
                                 ; here takes SPEC.md 6.1's single-store path
-                                ; on the two mono adapters. It costs 8px drag
-                                ; steps, which for a dialog nobody drags twice
-                                ; is not a cost at all
+                                ; on the two mono adapters - and on VGA every
+                                ; glyph of the fallback comes out aligned,
+                                ; which is worth more (SPEC.md 11.94). It
+                                ; costs 8px drag steps, which for a dialog
+                                ; nobody drags twice is not a cost at all
 .show:
     mov bx, [hd_iwin]
     call OSAPI_WM_SHOW

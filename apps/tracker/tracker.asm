@@ -266,11 +266,14 @@ trk_entry:
     jc .out
     mov [trk_win], bx
     mov al, 1                       ; keep our CONTENT ORIGIN 8-aligned
-    call OSAPI_WM_SNAP              ; (SPEC.md 11.94): mono-only, a no-op on
-                                    ; VGA, and it is what lets every text run
-                                    ; we draw take font_run's single-store
+    call OSAPI_WM_SNAP              ; (SPEC.md 11.94): EVERY adapter - it was
+                                    ; mono-only and VGA turned out to gain
+                                    ; more - and it is what lets every text
+                                    ; run we draw take font_run's single-store
                                     ; path instead of the erase-and-letter
-                                    ; fallback. wm_snap preserves FLAGS, so
+                                    ; fallback (on VGA, the fallback's own
+                                    ; glyphs are the ones that come out
+                                    ; aligned). wm_snap preserves FLAGS, so
                                     ; the loader's CF still survives to .out
     call trk_rate_menu              ; ...and this ends in MENU_SET. It has to
                                     ; run before the first paint: the three

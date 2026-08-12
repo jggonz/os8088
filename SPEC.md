@@ -5285,8 +5285,8 @@ happened to repaint in between.
 
 ### 11.94 `WF_SNAP` — a window that keeps its content on a byte boundary
 
-**Opt-in, mono only, and the whole of it is one `and`.** `wm_snap` (API slot
-0x0268) sets `WF_SNAP` on a window, and every site that writes `W_X` then
+**Opt-in, EVERY ADAPTER, and the whole of it is one `and`.** `wm_snap` (API
+slot 0x0268) sets `WF_SNAP` on a window, and every site that writes `W_X` then
 keeps that window's **content origin** on a multiple of 8 — so every
 `font_run` the window makes reaches the single-store fast path (§6.1) instead
 of the erase-and-letter fallback. §6.1.1 measures what that is worth: the
@@ -5298,10 +5298,49 @@ border, so the number the kernel actually holds is `W_X ≡ 7 (mod 8)`.
 Publishing the frame number would make every app rediscover that `inc ax`,
 and they would each get it wrong differently.
 
-**The gate is `[vid_mono]`.** What snapping buys is §6.1's single-store cell
-path, which exists on the 1bpp adapters and nowhere else. On VGA the flag is
-therefore a no-op, which is what lets an app set it unconditionally instead of asking
-`OSAPI_VIDEO` first.
+**There is NO `[vid_mono]` gate, and there was one for most of this feature's
+life.** The reasoning that put it there was: what snapping buys is §6.1's
+single-store cell path, that path exists on the 1bpp adapters and nowhere
+else, therefore on VGA the flag is a no-op. The first two steps are true and
+the conclusion does not follow from them — **mode 12h is eight pixels to a
+byte**, four planes of one bit each, so an unaligned 8x8 cell spills into a
+second framebuffer byte there exactly as it does on a Hercules, and
+`font_char`'s planar `.vram` path pays for that spill with a second `GC8 Bit
+Mask` write and a second latched read-modify-write, once per row per cell.
+§6.1.4 is the arithmetic and it was never a statement about one adapter: the
+reason unaligned cannot be made fast is that the cell stops owning its byte,
+which is as true of a plane as of a 1bpp framebuffer.
+
+Measured on a cycle-accurate 4.77MHz 8088 — `tests/typebench`'s 40 keystrokes,
+and `tests/gfxbench`'s text block on the same machines:
+
+| adapter | CHAR aligned | CHAR skewed 5 | what alignment is worth |
+|---|---|---|---|
+| Hercules | 1424 ms | 1472 ms | **3.4%** |
+| VGA | 1013 ms | 1108 ms | **9.4%** |
+
+**The adapter the gate excluded gains 2.8x what the adapter it was written for
+gains**, and at the primitive level `gfxbench` on VGA says the same thing
+louder: `PAIR 10 aligned` 6984.93 µs against `PAIR 10 skewed 5` 7855.51 µs, and
+`FONT_RUN 10 aligned` 7192.01 µs against `FONT_RUN 10 skewed` 8051.55 µs —
+**12.5%** and **12.0%**. The real consumer was paying it: Note Pad on VGA
+opened with its content origin at **x = 61**, which is skew 5, the exact
+column typebench's skewed row measures.
+
+What *is* still mono-only is `font_run`'s single-store path, and that is a fact
+about `font_run` rather than about alignment — on VGA a run takes the
+`gfx_fill` + `font_str` fallback and every glyph in it is then byte-aligned,
+which is where the 9.4% lives. Conflating "the fast path is 1bpp-only" with
+"alignment buys nothing on VGA" is what kept the gate closed.
+
+Removing it is a **no-op on mono by construction** — the deleted instructions
+were a `cmp`/`je` whose branch was never taken there — and that was checked
+rather than asserted: identical 7-step scripted sessions (boot, open a Disk
+window, open a folder, launch Note Pad, type, drag it, type again) against a
+reference kernel with the gate restored are **0 differing framebuffer bytes**
+on Hercules and on CGA. The one thing that does differ between any two runs is
+the menu bar clock's last glyph cell, which advances with wall time. It also
+made the kernel *smaller*: `.text` −18, `.cold` −4, no rung crossed.
 
 Four sites write `W_X` and all four go through `wm_snap_ax`:
 
@@ -5333,10 +5372,14 @@ Three consequences worth naming:
   right edge is re-tested. A window too wide for that is **left unsnapped**
   rather than made illegal: it simply misses the fast path, which is a normal
   path and not a failure.
-- **Dragging becomes 8-pixel steps horizontally**, and that is cheaper than it
-  sounds because `ui_drag` drags an XOR *outline* — the window itself only
-  moves on release, so the snap reads as the outline stepping rather than a
-  window stuttering.
+- **Dragging becomes 8-pixel steps horizontally** — **on every adapter now,
+  VGA included**, which is the whole of what removing the `[vid_mono]` gate
+  costs. It is cheaper than it sounds because `ui_drag` drags an XOR *outline*
+  — the window itself only moves on release, so the snap reads as the outline
+  stepping rather than a window stuttering. Verified on VGA: from `W_X` 55, a
+  3px and a 5px drag land back on 55 (a drag inside one step ends up nowhere),
+  9px steps to 63 and 14px to 71, every landing with an aligned content
+  origin.
 
 **`wm_snap` preserves FLAGS**, and that is load-bearing rather than polite. A
 package's entry proc returns CF to the loader (§20.2) and is exactly where
@@ -5344,10 +5387,13 @@ this gets called — after `wm_create`'s CF has been consumed by a branch, so
 the carry riding in the flags at that point *is* the return value.
 `wm_snap_ax` exits on a `cmp` against the screen width, which leaves CF set
 for every window that fits, so without the `pushf`/`popf` asking to be
-snapped **aborted the launch**. On mono only, because that `cmp` is inside the
-`[vid_mono]` gate — Note Pad loaded perfectly on VGA and answered "Load
-failed" on Hercules, which is the shape every mono-gated bug in this system
-has.
+snapped **aborted the launch**. That used to be a mono-only bug, because the
+`cmp` was inside the `[vid_mono]` gate — Note Pad loaded perfectly on VGA and
+answered "Load failed" on Hercules, which is the shape every mono-gated bug in
+this system has. With the gate gone **every adapter reaches that `cmp`**, so
+the `pushf`/`popf` is the whole defence on all three rather than on two, and
+removing it now breaks the launch everywhere instead of failing to be noticed
+on the machine most people develop on.
 
 **What it is worth, at the workload level.** §6.1.1 prices the primitive;
 `tests/typebench` (in `tests/`, like fontbench and for the same reason)
@@ -5363,6 +5409,15 @@ its dirty band (§27.2). Under `-icount`:
 So snapping is **2.1% on Hercules and 5.8% on VGA** in instructions — more on
 VGA because four planes make the spilled second byte cost four times — and
 drawing the row as a run instead would be a further 6.4% on mono.
+
+**That VGA row is the refutation of the old `[vid_mono]` gate, and it sat in
+this document underneath it for the whole time the gate was closed.** A table
+saying VGA gains nearly three times what Hercules gains, directly above a
+paragraph explaining that the flag is a no-op on VGA, is a contradiction
+nobody read as one — because the number was filed as a fact about `font_run`
+(whose fast path really is 1bpp-only) rather than about *alignment*, which is
+what the row actually measures. **When a measurement and a design rule
+disagree in the same file, the measurement is not the thing to explain away.**
 
 **On the real machine both are bigger, and the second one is bigger than its
 speed.** The same three rows on a 4.77MHz 8088 with a Hercules card:
@@ -5404,6 +5459,15 @@ buy it about 3% (alignment alone removes `font_char`'s second-byte spill)
 while costing 8-pixel drag steps on the window users move most. Not every
 text-heavy window is a candidate; the question is whether it draws its text
 as *runs it erases behind*, and the Disk window does not.
+
+That 3% was measured on mono, and it is the one figure in this section the
+gate's removal leaves **open rather than settled**: the same reasoning that
+makes alignment worth 9.4% to a VGA keystroke applies to `fm_repaint`'s ~40
+`font_str`s, none of which needs `font_run` to benefit. It is deliberately not
+flipped here — the drag cost falls on the window users move most, and the
+decision above is about `font_run`, not about alignment — but it should be
+re-measured on VGA before anyone repeats "the Disk window was considered and
+left alone" as though the arithmetic still said 3%.
 
 ### 11.95 Double-clicking a title bar zooms a resizable window
 

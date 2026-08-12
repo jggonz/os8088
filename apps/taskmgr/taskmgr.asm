@@ -675,7 +675,10 @@ tm_kinit:
     call OSAPI_WM_SNAP          ; text run, so it asks for its content origin
                                 ; on a multiple of 8 and every one of them
                                 ; reaches font_run's single-store path
-                                ; (SPEC.md 11.94/6.1). A no-op on VGA. It
+                                ; (SPEC.md 11.94/6.1). EVERY adapter: this was
+                                ; mono-only until VGA was measured and gained
+                                ; more (verified aligned there - content
+                                ; origin 248). It
                                 ; PRESERVES FLAGS, which the entry proc's own
                                 ; ret owes the loader
 

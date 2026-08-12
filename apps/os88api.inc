@@ -1477,7 +1477,16 @@ OS88_BSS_SIZE equ 0
                                                 ; so it is safe in an entry
                                                 ; proc after the CF you owe
                                                 ; the loader is already in the
-                                                ; flags.
+                                                ; flags. EVERY ADAPTER: this
+                                                ; was a no-op on VGA until
+                                                ; mode 12h's 8-pixels-to-a-
+                                                ; byte planes were measured
+                                                ; and gained MORE than mono
+                                                ; (SPEC.md 11.94), so it now
+                                                ; costs 8px drag steps
+                                                ; everywhere instead of being
+                                                ; free on the machine you
+                                                ; probably develop on.
                                                 ;
                                                 ; "Keep my CONTENT ORIGIN on a
                                                 ; multiple of 8." Ask for this

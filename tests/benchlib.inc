@@ -1039,9 +1039,10 @@ bl_head:
 ; Every line is ONE OSAPI_FONT_RUN, space-padded to the full content width, so
 ; the old row goes straight to the new one a cell at a time: no fill pass, no
 ; blank instant, and no SPEC.md 11.3 granularity failure to gate against
-; (SPEC.md 6.1). On a mono adapter with WF_SNAP set - which the callers ask for
-; - the content origin is a multiple of 8 and every one of these takes the
-; single-store path.
+; (SPEC.md 6.1). With WF_SNAP set - which the callers ask for, and which now
+; takes on every adapter (SPEC.md 11.94) - the content origin is a multiple of
+; 8, so on mono every one of these takes the single-store path and on VGA the
+; fallback's glyphs are at least aligned.
 ; -----------------------------------------------------------------------------
 bl_paint:
     push ax

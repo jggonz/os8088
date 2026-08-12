@@ -6,11 +6,17 @@
 ; a line of text redrawn once per character typed, which is what np_redraw
 ; does to its dirty band (SPEC.md 27.2) and the reason that band exists.
 ;
-; It is snappable itself (OSAPI_WM_SNAP, SPEC.md 11.94), so on a mono adapter
-; its own text lands on multiples of 8 and the aligned rows below really are
-; aligned. The header says which it got - ask rather than assume, because the
-; flag is a no-op on VGA by design and a benchmark that claimed otherwise
-; would be measuring the wrong thing and saying so confidently.
+; It is snappable itself (OSAPI_WM_SNAP, SPEC.md 11.94) and the header says
+; whether the snap took - ask rather than assume, because a window too wide to
+; snap is left unsnapped and a benchmark that claimed otherwise would be
+; measuring the wrong thing and saying so confidently.
+;
+; THIS HARNESS IS WHAT REMOVED 11.94's [vid_mono] GATE. The flag was a no-op on
+; VGA on the reasoning that font_run's single-store path is 1bpp-only, which is
+; true and does not settle the question: the rows below say alignment is worth
+; 3.4% of a keystroke on Hercules and 9.4% on VGA, because mode 12h is also
+; eight pixels to a byte and an unaligned cell spills into a second one there
+; too. The gate is gone; the header now reads snap:on everywhere.
 ;
 ; Never on the shipped apps disks (their order is pinned, SPEC.md 24): its own
 ; scratch image, the fmtest/filetest/fontbench precedent.
@@ -691,10 +697,11 @@ tb_dec5:
 ; tb_head - name the adapter, and say whether the snap actually took
 ; preserves all registers
 ;
-; ASKED, not assumed. OSAPI_WM_SNAP is a no-op on VGA by design, and a window
-; too wide to snap is left unsnapped rather than made illegal (SPEC.md 11.94),
-; so the only honest way to label the rows below is to look at where the
-; content origin ended up.
+; ASKED, not assumed. A window too wide to snap is left unsnapped rather than
+; made illegal (SPEC.md 11.94), so the only honest way to label the rows below
+; is to look at where the content origin ended up. That habit is what caught
+; the [vid_mono] gate: this line read snap:off on VGA while the rows underneath
+; it said alignment was worth 9.4% there.
 ; -----------------------------------------------------------------------------
 tb_head:
     push ax

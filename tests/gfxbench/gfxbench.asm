@@ -118,9 +118,15 @@ gb_entry:
     jc .out
     mov [gb_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP              ; mono only, a no-op on VGA - and it
-                                    ; PRESERVES FLAGS, so the CF this proc
-                                    ; owes the loader survives it
+    call OSAPI_WM_SNAP              ; EVERY adapter (SPEC.md 11.94 - it was
+                                    ; mono only until VGA was measured and
+                                    ; gained more) - and it PRESERVES FLAGS,
+                                    ; so the CF this proc owes the loader
+                                    ; survives it. The rows below are
+                                    ; unaffected either way: this harness sets
+                                    ; its own text x explicitly, which is what
+                                    ; keeps `aligned` and `skewed` meaning the
+                                    ; same thing on all three adapters
     mov si, gb_menus
     call OSAPI_MENU_SET
     mov si, gb_onabout

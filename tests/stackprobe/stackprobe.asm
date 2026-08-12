@@ -72,8 +72,9 @@ spb_entry:
     jc .fail
     mov [spb_win], bx
     mov al, 1
-    call OSAPI_WM_SNAP          ; mono: 8-align the content so FONT_RUN's
-                                ; single-store path letters the lines
+    call OSAPI_WM_SNAP          ; 8-align the content so FONT_RUN's
+                                ; single-store path letters the lines - every
+                                ; adapter now (SPEC.md 11.94)
                                 ; (preserves FLAGS, so the CF we owe the
                                 ; loader is untouched)
     pop si

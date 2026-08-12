@@ -348,8 +348,9 @@ mc_entry:
     jc .full
     mov [mc_win], bx
     mov al, 1                       ; keep our CONTENT ORIGIN 8-aligned
-    call OSAPI_WM_SNAP              ; (SPEC.md 11.94): mono-only, a no-op on
-                                    ; VGA, and what lets the status strip's
+    call OSAPI_WM_SNAP              ; (SPEC.md 11.94): EVERY adapter - it was
+                                    ; mono-only and VGA turned out to gain
+                                    ; more - and what lets the status strip's
                                     ; three opaque runs take font_run's
                                     ; single-store path WINDOWED as well as
                                     ; fullscreen (SPEC.md 48.9). It preserves
