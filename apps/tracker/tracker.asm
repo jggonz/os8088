@@ -785,10 +785,12 @@ trk_do_open:
 ; in:  [trk_modseg] = the claim, [mp_bloblen_hi]:[mp_bloblen_lo] = bytes read
 ; out: [trk_modseg] / [trk_capk] updated; preserves every register
 ;
-; The claim is sized BEFORE the file's size is known - the dialog's completion
-; proc is handed a name, not a directory entry - so it is min(largest run,
-; 128KB) and a 5.6KB module would sit on 128KB of heap until the next load or
-; teardown. One call gives the difference back.
+; This exists for the path where the claim is sized BEFORE the file's size is
+; known - SPEC.md 38.6 gave the completion proc a size and the ordinary load
+; now claims exactly it, but a dialog with no size for the pick still falls
+; back to min(largest run, 128KB), where a 5.6KB module would sit on 128KB of
+; heap until the next load or teardown. One call gives the difference back.
+; On the sized path it finds nothing to give and costs a compare.
 ;
 ; This is a call and not a redesign because OSAPI_MEM_REGROW SHRINKS IN PLACE
 ; (SPEC.md 50.3.1): the record's length changes and nothing moves. Claim-copy-
@@ -814,8 +816,12 @@ trk_trim:
     shr ax, cl                      ; the claim
     mov bx, dx
     mov cl, 6
-    shl bx, cl                      ; DX:AX >> 10 = (DX << 6) + (AX >> 10),
-    or ax, bx                       ; and the 128KB cap keeps it under 129
+    shl bx, cl                      ; DX:AX >> 10 = (DX << 6) + (AX >> 10).
+    or ax, bx                       ; What was READ cannot exceed the capacity
+                                    ; the claim was made at, and trk_fdone's
+                                    ; ~64MB domain guard bounds that, so the
+                                    ; DX<<6 here fits a word for the same
+                                    ; reason it does there
     jnz .go
     inc ax                          ; 0 KB is a refusal, not a claim
 .go:
@@ -839,7 +845,8 @@ trk_trim:
 ;             for this call only - so it is copied out FIRST.
 ;
 ; The load path: stop playback, free the previous module grant, size a new
-; grant from OSAPI_MEM_AVAIL (capped at 128KB), read the
+; grant from the size the dialog reported - or, when it had none, from
+; OSAPI_MEM_AVAIL capped at 128KB (SPEC.md 45.3.1) - read the
 ; whole file with OSAPI_FILE_READ (ES:BX = the grant, DX:CX = its capacity in
 ; bytes - the read walks its destination by SEGMENT, SPEC.md 18.4.1, which is
 ; the only reason a 116KB module fits in one call at all), then
@@ -923,6 +930,65 @@ trk_is_mod:
     stc
     ret
 
+; -----------------------------------------------------------------------------
+; trk_sizeof - the size of [trk_fname] in the CURRENT directory
+;
+; in:  [trk_fname] = a NUL-terminated 8.3 display name
+; out: CF = 0 and DX:AX = its size in bytes; CF = 1 = no such file here.
+;      Preserves BX, CX, SI, DI, ES.
+;
+; The dialog reports a size (SPEC.md 38.6) and an ASSOCIATION launch does not -
+; it hands over a name, a cluster and a drive (SPEC.md 54.5) - so a module
+; double-clicked on the desktop reached trk_fdone as "size unknown" and took
+; the speculative claim, which is capped. Above that cap it read a 300KB
+; module as its first 128KB: no error anywhere, samples silently short, and
+; mp_load happy because the PATTERN extent still fits. OSAPI_FILE_FIND answers
+; all 32 bits out of the directory, so both routes size the claim the same way
+; and the cap is left to the one case that still cannot know (SPEC.md 45.3.1).
+;
+; It costs one directory walk, on a path that is about to read the whole file.
+; -----------------------------------------------------------------------------
+trk_sizeof:
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es                          ; ES:DI = our own record buffer
+    xor cx, cx                      ; ordinal 0 starts the walk
+.next:
+    mov di, trk_find
+    call OSAPI_FILE_FIND            ; CF=1 AX=FERR_NOENT ends it; CX = the
+    jc .no                          ; ordinal to ask for next
+    cmp word [trk_find + 14], OSAPI_FT_DIR
+    jae .next                       ; a folder or the synthesized '..'
+    mov si, trk_fname
+    mov di, trk_find                ; +0 is the same 8.3 display form
+.chr:
+    mov al, [si]
+    cmp al, [di]
+    jne .next
+    or al, al
+    jz .hit
+    inc si
+    inc di
+    jmp short .chr
+.hit:
+    mov ax, [trk_find + 18]         ; +18 = the size, all 32 bits
+    mov dx, [trk_find + 20]
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
 trk_fdone:
     push ax
     push bx
@@ -955,25 +1021,35 @@ trk_fdone:
     ; the name AND the size, so both answers are free.
     call trk_is_mod
     jc .notmod
+    mov word [trk_needk], 0         ; "unknown" has to be written, not assumed:
+                                    ; this word survives the LAST load, so a
+                                    ; file whose size nothing can answer would
+                                    ; otherwise claim the previous module's
     mov ax, [trk_fsize]             ; DX:AX = the size, and it is genuinely
-    mov dx, [trk_fsize+2]           ; 32-bit: a 116KB MOD has a high word of
-    cmp dx, 2                       ; 1, which an "any high word is too big"
-    jae .toobig2                    ; test rejects. >= 128KB is the real cap
+    mov dx, [trk_fsize+2]           ; 32-bit: a 116KB MOD has a high word of 1
     mov bx, ax
     or bx, dx
-    jz .sizeok                      ; 0 = the dialog had no size for it (a
-                                    ; typed name): fall through and let the
-                                    ; file API answer as it always did
+    jnz .havesz
+    call trk_sizeof                 ; 0 = the dialog had no size for it (an
+    jc .sizeok                      ; association launch, or a name typed for
+    mov bx, ax                      ; something not in the listing), so ask
+    or bx, dx                       ; the directory. Still nothing -> leave it
+    jz .sizeok                      ; unknown and let the file API answer as
+.havesz:                            ; it always did
+    cmp dx, 1023                    ; the ONLY ceiling here is the domain of
+    jae .toobig2                    ; the conversion below (SPEC.md 45.3.1):
+                                    ; it composes DX<<6 into a word, so ~64MB
+                                    ; is where the arithmetic stops being
+                                    ; true. Everything under it is the HEAP's
+                                    ; question, asked three lines down
     add ax, 1023                    ; bytes -> KB, rounded up, across 32 bits
-    adc dx, 0
-    mov cl, 10
+    adc dx, 0                       ; (DX <= 1022 above, so <= 1023 here and
+    mov cl, 10                      ; DX<<6 still fits)
     shr ax, cl
     mov cl, 6
     shl dx, cl
     or ax, dx                       ; AX = KB needed
     mov [trk_needk], ax
-    cmp ax, 128                     ; the same cap the claim used to apply
-    ja .toobig2
     push ax
     call OSAPI_MEM_AVAIL            ; AX = LARGEST contiguous run in KB
     pop bx
@@ -1003,9 +1079,15 @@ trk_fdone:
     call OSAPI_MEM_AVAIL            ; AX = LARGEST contiguous run in KB, and
     or ax, ax                       ; BX = the total (KB, not
     jz .nomem                       ; paragraphs - SPEC.md 50.3)
-    cmp ax, 128                     ; cap the grant at 128KB - bigger than any
-    jbe .sized                      ; sane 4-channel MOD
-    mov ax, 128
+    cmp ax, 128                     ; cap the SPECULATIVE grant at 128KB. This
+    jbe .sized                      ; is the original cap and it is the only
+    mov ax, 128                     ; one with a reason left (SPEC.md 45.3.1):
+                                    ; the size is unknown here, so the claim
+                                    ; is a guess, and trk_ring_probe has to
+                                    ; fund a ring out of whatever this leaves.
+                                    ; It is a POLITENESS bound on an over-
+                                    ; claim, never a verdict on a file - the
+                                    ; refusals above no longer borrow it
 .sized:
     mov [trk_capk], ax
     call OSAPI_MEM_CLAIM            ; AX = KB -> DX = base segment, CF=1
@@ -2485,6 +2567,8 @@ trk_s_txxt:   db 'XT off is windowed: Esc first', 0
     TRKBUF trk_argclus, 2
     TRKBUF trk_fname, 13            ; the chosen 8.3 name, copied out of the
                                     ; kernel's buffer during the completion call
+    TRKBUF trk_find, OSAPI_FIND_SZ  ; trk_sizeof's directory record, for the
+                                    ; loads that arrive with no size (45.3.1)
 
 ; --- the ring stream (SPEC.md 34.5 ring mode) ----------------------------------
     TRKB trk_ghave                  ; the pool grant exists

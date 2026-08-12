@@ -28095,9 +28095,12 @@ completion):
    old grant — *then* clear `mp_loaded` and free the previous module
    grant: no reader may trust a blob about to move, and on the worker
    path the drain is what enforces that rule.
-3. `OSAPI_MEM_AVAIL` → take `min(largest run, 128 KB)` in ONE
-   `OSAPI_MEM_CLAIM` (the one-block rule, §50.3). Refusal is a status-line
-   "Out of memory", not an abort.
+3. Size the claim from the file and take it in ONE `OSAPI_MEM_CLAIM` (the
+   one-block rule, §50.3) — `ceil(bytes / 1024)` KB, refused up front when
+   `OSAPI_MEM_AVAIL`'s largest run will not fund it. The size comes from the
+   dialog (§38.6) or, when it has none, from `OSAPI_FILE_FIND`; only a name
+   that is in no directory falls back to `min(largest run, 128 KB)`
+   (§45.3.1). Refusal is a status-line "Out of memory", not an abort.
 4. `OSAPI_FILE_READ` with ES:BX = the grant at its first byte, DX:CX = its
    byte capacity.
    `FERR_BIG` reads back as "File too big" — a rare answer, because the
@@ -28115,6 +28118,57 @@ with no callback on cancel. The worker owns the fix: every 16th frame it
 repaints the whole top band, so a cancelled dialog's bar strip lives for at
 most a second.
 
+#### 45.3.1 There is no module-size ceiling, and the one there was had been copied from a claim
+
+A 300KB module was refused with **`File too big`** on a machine reporting
+over 400KB of largest free run. The number was **128KB** and it was in the
+app twice, at `cmp dx, 2` and `cmp ax, 128`, and neither of those two was
+ever *reasoned about* — both were copied from a third, and the third is not
+a verdict on a file at all.
+
+The original is `.blind`'s `min(largest run, 128 KB)`, and it is a
+**politeness bound on a guess**. Before §38.6 the completion proc was handed
+a name and no size, so the claim had to be made before the read could report
+one; 128KB is "bigger than any sane 4-channel MOD", picked so that the app
+did not take a whole heap it probably did not need, with `trk_trim` giving
+the difference back afterwards. Nothing in it is a statement about what this
+replayer can play.
+
+When §38.6 added `DX:CX` the new early-refusal path was written beside it
+and took the same constant — its own comment said so, *"the same cap the
+claim used to apply"*. That is where a bound on an over-claim became a
+**refusal**, and it was wrong the moment it was typed: on the sized path the
+size is exact, the claim is exactly it, and the question "will this fit" is
+already asked three lines later against `OSAPI_MEM_AVAIL`. The 128KB
+refused files the heap could fund and answered nothing the heap check did
+not.
+
+**So both refusals go, and what is left is the domain of the arithmetic.**
+The bytes→KB conversion composes `DX<<6` into a word, so `DX >= 1023` (about
+64MB) is where it stops being true and is the only thing refused up front.
+Everything under it is the heap's question. The published contract is
+unchanged: `trk_s_toobig` still exists and is still what a file past that
+answers, and `FERR_BIG` from `OSAPI_FILE_READ` still maps to it.
+
+**The blind path keeps the cap and stops being reached by ordinary loads.**
+It had quietly become the *association* route — §54.5 hands over a name, a
+cluster and a drive and no size at all, so double-clicking a `.MOD` on the
+desktop took the guess. Above the cap that is worse than a refusal: the read
+takes the file's first 128KB, `mp_load` validates happily because the
+**pattern** extent still fits, and the module plays with its later samples
+silently absent. `trk_sizeof` asks `OSAPI_FILE_FIND` — which answers all 32
+bits out of the directory (§19.7.1) — so the association and the dialog now
+size the claim identically, at the cost of one directory walk on a path that
+is about to read the whole file. Only a name in no directory is still a
+guess, and there the cap is doing the job it was written for: the claim is
+speculative and `trk_ring_probe` (§45.18) has to fund a ring out of what it
+leaves.
+
+**Measured, on a cycle-accurate 4.77MHz 8088 with 640KB and a Sound Blaster,
+same disk and same clicks:** the 300KB module is `File too big` /
+`No module loaded` before, and `OS8088 300K TEST` / `Playing` after. The
+`.o88` grows 73 bytes.
+
 ### 45.4 Memory layout
 
 Four stores, none of them guessed:
@@ -28122,14 +28176,15 @@ Four stores, none of them guessed:
 - **The package segment** — image + bss, including the mixer's 65×256
   volume table (16,640 bytes, built at load: `vt[vol][b] = (int8)b·vol»6`)
   and the 2048-byte `mp_outbuf`.
-- **The module blob** — one heap claim (§50), sized
-  `min(largest free run, 128 KB)` **in KB** from `MEM_AVAIL` at load time
-  regardless of the module's actual size, and held until the next load or
-  teardown. Consequence, stated honestly: while a module is loaded the
-  Tracker's claim holds up to 128KB that other packages and other instances
-  then cannot have. Against a fixed arena that claim would have been
-  effectively *all* of it on a 512KB machine; against a 566KB heap it is a
-  fifth.
+- **The module blob** — one heap claim (§50), `ceil(bytes / 1024)` KB at the
+  file's real size, held until the next load or teardown. It was
+  `min(largest free run, 128 KB)` *regardless* of the module's actual size,
+  which is what the paragraph below was written about; §38.6's size and
+  §45.3.1's `trk_sizeof` between them mean the over-claim now happens only
+  for a name that is in no directory. Consequence, stated honestly: while a
+  module is loaded the Tracker's claim holds the module's own size — and, on
+  that one remaining path, up to 128KB — that other packages and other
+  instances then cannot have.
 
   **...and then `trk_trim` gives the difference back.** The over-claim is
   unavoidable at claim time — the dialog's completion proc is handed a name,
@@ -28202,6 +28257,35 @@ volume table and converts once: `out = 128 + (sum >> 2)` — four channels at
 position arithmetically, so unmuting rejoins the song where it really is.
 Mixing throughput on a real 8088 is **not promised** (§45.8); the mixer is
 honest about being a QEMU/286-era luxury.
+
+#### 45.5.1 The pattern count is a WORD, and a file cap was the only thing holding it
+
+`mp_npat` was a byte, and the line that filled it said why: *"P <= 126 after
+the extent check (file cap)"*. P is `max(order[0..127]) + 1`, so 1..**256**,
+and what bounded it was arithmetic on a number from somewhere else entirely
+— `1084 + 1024·P` must fit the file, and the file could not exceed 128KB, so
+P could not exceed 126. A field of one type was sized by a limit belonging
+to another, in a different module, with one comment connecting them.
+
+Removing §45.3.1's cap therefore reaches this. P = 256 needs 263,228 bytes
+of patterns and an order byte of 255 — both ordinary in a large module — and
+`mov [mp_npat], al` then stores **0**. Nothing errors. `mp_readrow`'s
+hostile-blob clamp reads every pattern as out of range and substitutes
+pattern 0, `mp_cell2txt` refuses every cell, and the app says **Playing**
+over silence with an empty grid.
+
+The count is a word, the two compares that read it are word compares, and
+the FT2 readout — two hex digits, FT2's own field — clamps to `FF` rather
+than printing AL, which for 256 is `00` and reads as *no patterns at all*.
+`mp_pattern` stays a byte: it holds a pattern *number*, 0..255, and it is
+the count that has 257 possible values rather than 256.
+
+**Measured** on a P=256 module past the old cap, cap removed both times, the
+only difference being the width: the Sound Blaster capture is **RMS 0.0,
+peak 0** with the byte and **RMS 3490.2, peak 8191, 96% of samples active**
+with the word. The screen is not the instrument here — `Ptn` reads `FF` in
+*both*, because the clamp picks a pattern to *address* and never writes
+`mp_pattern` back.
 
 ### 45.6 The FT2 screen, parameterized by adapter
 
