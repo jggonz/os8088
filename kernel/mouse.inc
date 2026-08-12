@@ -1997,34 +1997,42 @@ cur_unlazy:
 .out:
     ret
 
-; cur_lazyck - spend the deferred hide unless SI's window provably cannot
-;              reach the cursor. The test is the window's FRAME rect, not the
-;              clip region: the region is the content minus what covers it, so
-;              outside the frame is outside every fragment, and one rect test
-;              is a great deal cheaper than sixteen.
-; in:  SI = window ptr - wm_win_rect's own register, deliberately, so this
-;      cannot be called with the window in the wrong one
+; cur_lazyck - spend the deferred hide unless the ARMED REGION provably cannot
+;              reach the cursor.
+;
+; THE TEST IS THE REGION, NOT THE WINDOW'S FRAME, and that distinction is the
+; whole of SPEC.md 7.1.4.2. The frame is the cheaper question and it answers a
+; different one: the region is the content rect minus every window ON TOP,
+; so a pointer resting on the window in FRONT of the painter is outside every
+; fragment while sitting squarely inside the frame. The frame test called that
+; reachable and spent the hide - so a Task Manager refreshing twice a second
+; behind a Control Panel blinked the arrow forever, which is 7.1.4's own
+; reported defect seen one window along.
+;
+; The walk is not the sixteen rect tests the frame test was chosen to avoid,
+; either. A background painter with nothing on top of it - the ordinary case,
+; and the one the frame test was measured on - arms exactly ONE fragment, so
+; this is four compares against that rect's four words where the frame test
+; was four compares against a rect wm_win_rect had to build first. It costs
+; more only when the region is genuinely fragmented, which is exactly when
+; some of those fragments are somebody else's window and the answer is worth
+; having.
+;
+; in:  the region is armed in wm_clip_tab / [wm_clip_n]
 ; out: nothing (all registers preserved)
 cur_lazyck:
     cmp byte [cur_lazy], 0
     je .out
+%ifdef CURFRAME
     push ax
     push bx
     push cx
     push dx
     push si
+    mov si, [wm_clipwin]
     call wm_win_rect            ; AX/BX/CX/DX = the frame, drop shadow included
     mov si, [cur_drawn_x]       ; separated on x?  cell is [x, x+CUR_GW-1]
-    sub si, [cur_hx]            ; ...off the HOT SPOT, and deliberately NOT
-                                ; clamped (SPEC.md 7.2.2): unclamped is a
-                                ; superset of where the cell really is, so the
-                                ; error can only ever be a redundant hide.
-                                ; Forgetting it entirely is the other
-                                ; direction and does not show up for weeks -
-                                ; a painter told the cursor was out of reach
-                                ; draws through the part of the cell that
-                                ; reaches further left than this test does,
-                                ; and 7.1.4's smear is permanent
+    sub si, [cur_hx]
     cmp si, cx
     jg .clear                   ; ...wholly right of the frame
     add si, CUR_GW-1
@@ -2049,6 +2057,71 @@ cur_lazyck:
     pop cx
     pop bx
     pop ax
+%else
+    cmp word [wm_clip_n], 0
+    je cur_unlazy               ; NOTHING ARMED BOUNDS NOTHING, so the hide is
+                                ; owed - the safe direction, and the same
+                                ; answer every unarmed painter already gets
+                                ; from its own cur_unlazy. wm_clip_set only
+                                ; reaches here with a region built, so this is
+                                ; the contract stated rather than a live path
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, [cur_drawn_x]       ; the cell, as x1/y1/x2/y2 in AX/BX/CX/DX
+    sub ax, [cur_hx]            ; ...off the HOT SPOT, and deliberately NOT
+                                ; clamped (SPEC.md 7.2.2): unclamped is a
+                                ; superset of where the cell really is, so the
+                                ; error can only ever be a redundant hide.
+                                ; Forgetting it entirely is the other
+                                ; direction and does not show up for weeks -
+                                ; a painter told the cursor was out of reach
+                                ; draws through the part of the cell that
+                                ; reaches further left than this test does,
+                                ; and 7.1.4's smear is permanent
+    mov bx, [cur_drawn_y]
+    sub bx, [cur_hy]
+    mov cx, ax
+    add cx, CUR_GW-1
+    mov dx, bx
+    add dx, CUR_GH-1
+    mov si, wm_clip_tab         ; VIRTUAL rects (SPEC.md 39.14.9), and so is
+    mov di, [wm_clip_n]         ; [cur_drawn_x] - the display subtraction
+                                ; happens where a position becomes an ADDRESS
+                                ; (cur_rect, cur_geom) and nowhere else, so
+                                ; the two are already in one space
+.frag:                          ; OVERLAP, not containment: wm_clip_test asks
+    cmp ax, [si+WCR_X2]         ; whether a whole shape fits one fragment and
+    jg .next                    ; this asks whether any pixel of the cell
+    cmp cx, [si+WCR_X1]         ; could be written at all
+    jl .next
+    cmp bx, [si+WCR_Y2]
+    jg .next
+    cmp dx, [si+WCR_Y1]
+    jge .hit
+.next:
+    add si, WCR_SZ
+    dec di
+    jnz .frag
+    pop di                      ; outside every fragment: the region cannot
+    pop si                      ; reach the arrow, so it stays on screen
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.hit:
+    pop di                      ; a fragment covers part of the cell: owed
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp short cur_unlazy
+%endif
 .out:
     ret
 
