@@ -4699,6 +4699,19 @@ wm_su_sy1: dw 0                 ; anything in the machine has written it)
 wm_su_sx2: dw 0
 wm_su_sy2: dw 0
 
+; ...and the DISPLAY CLIP, which is a SECOND named rect rather than an
+; intersection into the one above (SPEC.md 11.96.14). The two say different
+; things and have different owners: wm_su_s* is what a PASS PAINTED, named by
+; wm_damage, which owes the app that same rect afterwards - narrowing it here
+; would quietly change what the app is told to repaint. wm_su_v* is what is on
+; the GLASS, which is nobody's argument but this one's. Same one-shot rule,
+; cleared by whoever armed it.
+wm_su_von: dw 0
+wm_su_vx1: dw 0
+wm_su_vy1: dw 0
+wm_su_vx2: dw 0
+wm_su_vy2: dw 0
+
 ; --- the DRAG cache (SPEC.md 11.96.12) --------------------------------------
 ; The window a drag has banked, and the ONLY window allowed to use the machine
 ; above without having promised WF_SAVEU. In .text with an initialiser for
@@ -5033,6 +5046,95 @@ wm_su_sub:
 ; correct and only dearer - so this cannot go wrong in the direction that loses
 ; pixels, only in the one that spends time.
 ; -----------------------------------------------------------------------------
+; wm_su_vset - arm the DISPLAY CLIP for a cached rect (SPEC.md 11.96.14)
+; in:  AX/BX/CX/DX = the rect the cache describes, in screen coordinates
+; out: CF = 0 and wm_su_v* armed if any of it is on the glass; CF = 1 if none
+;      of it is. Preserves every register.
+;
+; This is vid_span_one's question asked for an ANSWER instead of a verdict: it
+; tested x2/y2 against the display's far edges and refused, and a drag is the
+; one caller for which refusing is the wrong response - the pixels are banked
+; and correct, and the only thing wrong with them is that some are headed off
+; the screen. So the far edges CLAMP rather than refuse.
+;
+; The near edges still refuse, and that is vid_span_one's dead-zone test kept
+; verbatim: vid_disp_of falls back to the PRIMARY for a point no display
+; covers, so an origin outside its own display's bounds means the answer is a
+; fallback rather than a fact, and clamping against the wrong display's far
+; edge would put the restore on the wrong card. ui_drag clamps x >= 0 and
+; y >= MBAR_H, so the overhang a drag can produce is always at x2/y2.
+; -----------------------------------------------------------------------------
+wm_su_vset:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+%ifdef KERN_BIG
+    mov si, ax                  ; SI = x1; vid_disp_of ANSWERS in AL
+    call vid_disp_of
+    call vid_ctx_ptr            ; DI = the display holding (x1, y1)
+    mov ax, [di+VID_CTX_VX]
+    cmp si, ax
+    jb .no                      ; the dead zone: see above
+    cmp bx, [di+VID_CTX_VY]
+    jb .no
+    add ax, [di+VID_CTX_CW]
+    dec ax                      ; AX = the last legal x on this display
+    cmp cx, ax
+    jle .xok
+    mov cx, ax
+.xok:
+    mov ax, [di+VID_CTX_VY]
+    add ax, [di+VID_CTX_CH]
+    dec ax
+    cmp dx, ax
+    jle .yok
+    mov dx, ax
+.yok:
+    mov ax, si                  ; x1 BACK: the bounds arithmetic above spent AX
+%else
+    or ax, ax                   ; the same two questions where there is only
+    js .no                      ; ever one display
+    or bx, bx
+    js .no
+    mov si, [vid_cw]
+    dec si
+    cmp cx, si
+    jle .xok
+    mov cx, si
+.xok:
+    mov si, [vid_ch]
+    dec si
+    cmp dx, si
+    jle .yok
+    mov dx, si
+.yok:
+%endif
+    cmp ax, cx                  ; ...and an empty intersection is a refusal
+    jg .no                      ; again, because there is nothing to put back
+    cmp bx, dx
+    jg .no
+    mov [wm_su_vx1], ax
+    mov [wm_su_vy1], bx
+    mov [wm_su_vx2], cx
+    mov [wm_su_vy2], dx
+    mov word [wm_su_von], 1
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di                      ; a pop touches no flag, so CF survives
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 wm_su_srect:
     push si
     mov ax, [wm_su_x1]
@@ -5040,7 +5142,11 @@ wm_su_srect:
     mov cx, [wm_su_x2]
     mov dx, [wm_su_y2]
     cmp word [wm_su_son], 0
-    je .whole
+    jne .named
+    cmp word [wm_su_von], 0     ; ...the display clip ALONE is still a sub-rect
+    jne .named                  ; (SPEC.md 11.96.14)
+    jmp .whole
+.named:
                                 ; THE ONE-SHOT IS NOT SPENT HERE (SPEC.md
                                 ; 11.96.11.1). It used to be, so a skipped
                                 ; window could not pass its rect to the next -
@@ -5049,6 +5155,9 @@ wm_su_srect:
                                 ; rect afterwards. wm_draw_win clears it at its
                                 ; exit and wm_dmg_wins at .wdone, which is the
                                 ; same guarantee at the two sites that can skip
+    cmp word [wm_su_son], 0     ; EACH named rect is intersected only if it is
+    je .vis                     ; armed - the two are independent one-shots and
+                                ; either may be the only one set
     cmp ax, [wm_su_sx1]
     jge .x1
     mov ax, [wm_su_sx1]
@@ -5065,6 +5174,26 @@ wm_su_srect:
     jle .y2
     mov dx, [wm_su_sy2]
 .y2:
+.vis:
+    cmp word [wm_su_von], 0     ; ...and then what is actually ON THE GLASS
+    je .isect                   ; (SPEC.md 11.96.14)
+    cmp ax, [wm_su_vx1]
+    jge .vx1
+    mov ax, [wm_su_vx1]
+.vx1:
+    cmp bx, [wm_su_vy1]
+    jge .vy1
+    mov bx, [wm_su_vy1]
+.vy1:
+    cmp cx, [wm_su_vx2]
+    jle .vx2
+    mov cx, [wm_su_vx2]
+.vx2:
+    cmp dx, [wm_su_vy2]
+    jle .vy2
+    mov dx, [wm_su_vy2]
+.vy2:
+.isect:
     cmp ax, cx
     jg .none
     cmp bx, dx
@@ -5707,16 +5836,22 @@ wm_dc_take:
     push di
     push es
     mov di, bx
-    call wm_su_rect             ; ...WHOLLY ON SCREEN WHERE IT IS GOING, which
-%ifdef KERN_BIG                 ; wm_su_take asks of where it has BEEN and
-    call vid_span_one           ; cannot ask of where it is headed. ui_drag
-    jc .out                     ; clamps the TITLE BAR onto the screen and not
-%else                           ; the window, so dragging one down hangs its
-    cmp cx, [vid_cw]            ; bottom off - and wm_su_try would then refuse
-    jae .out                    ; after this had already paid for a claim and a
-    cmp dx, [vid_ch]            ; gfx_save. Measured, that was the commonest
-    jae .out                    ; refusal there is: ~4 ms spent to draw the
-%endif                          ; window in full anyway
+    call wm_su_rect             ; ...AND SOME OF IT ON SCREEN WHERE IT IS GOING
+    call wm_su_vset             ; (SPEC.md 11.96.14). This asked for the WHOLE
+    jc .out                     ; rect and refused, which cost the commonest
+    mov word [wm_su_von], 0     ; drag there is: ui_drag clamps the TITLE BAR
+                                ; onto the screen and not the window, so a tall
+                                ; window dragged down hangs its bottom off, and
+                                ; on Hercules Solitaire's 303 rows fill a
+                                ; ~305-row band - its legal fully-on-screen y
+                                ; was 18..20, so nearly every vertical drag
+                                ; redrew in full. wm_su_try clips the restore
+                                ; to the glass now, so the only thing worth
+                                ; refusing here is a destination with NOTHING
+                                ; of it visible. The arm is dropped again
+                                ; immediately: this is a question, and the
+                                ; answer that matters is asked at the restore
+                                ; against the rect as it will be THEN
     mov ax, [di+W_X]
     sub ax, [ui_origx]
     test al, 7                  ; THE BYTE PHASE, and it is the whole of what
@@ -6169,20 +6304,20 @@ wm_su_try:
     jc .no                      ; them against the claim's own header, and
                                 ; answers AX = the claim
     mov es, ax
-%ifdef KERN_BIG
-    mov ax, [wm_su_x1]          ; ...AND STILL INSIDE ONE DISPLAY (SPEC.md
-    mov bx, [wm_su_y1]          ; 39.14.8.1). wm_su_take asked the same
-    mov cx, [wm_su_x2]          ; question of the same rect, so this can only
-    mov dx, [wm_su_y2]          ; differ if the ARRANGEMENT moved under a rect
-    call vid_span_one           ; that did not - and there used to be a blanket
-    jc .no                      ; `[vid_ndisp] > 1 -> refuse` here, which after
-                                ; the take learned to ask precisely left the
-                                ; cache TAKEN AND NEVER USED on a two-card
-                                ; machine: the claim and the save, for nothing
-    call wm_su_ck               ; (the span test spent AX, and the claim is
-    jc .no                      ; what the restore below needs in ES)
+    mov ax, [wm_su_x1]          ; ...AND WHATEVER OF IT IS ON THE GLASS
+    mov bx, [wm_su_y1]          ; (SPEC.md 11.96.14). This was vid_span_one and
+    mov cx, [wm_su_x2]          ; a refusal, which is right for a rect whose
+    mov dx, [wm_su_y2]          ; DISPLAY moved under it (39.14.8.1) and wrong
+    call wm_su_vset             ; for a window DRAGGED off the bottom: the
+    jc .no                      ; pixels are banked and correct and only some
+                                ; of them are headed off the screen, so the
+                                ; far edges clamp and the near ones still
+                                ; refuse. An empty intersection is the old
+                                ; answer, and a rect wholly on one display
+                                ; arms a clip that changes nothing
+    call wm_su_ck               ; (the clip spent AX, and the claim is what the
+    jc .no                      ; restore below needs in ES)
     mov es, ax
-%endif
     call wm_su_scrset           ; where 11.96.2's edge scratch lives, which is
     jc .no                      ; past EVERY fragment (SPEC.md 11.96.11.1)
     mov di, WSU_IMG             ; DI = the running offset into it, the twin of
@@ -6239,7 +6374,17 @@ wm_su_try:
 .no:
     stc
 .out:
-    pop es                      ; a pop touches no flag, so CF survives
+    mov word [wm_su_von], 0     ; THE DISPLAY CLIP DIES WITH THE RESTORE THAT
+                                ; ARMED IT (SPEC.md 11.96.14), and it is spent
+                                ; HERE rather than at wm_draw_win's exit like
+                                ; wm_su_son because this routine is its only
+                                ; armer - a one-shot whose arm and its spend
+                                ; are in one routine cannot be leaked onto the
+                                ; next window by a path that skips. Both exits,
+                                ; because .no is reached AFTER the arm on the
+                                ; second wm_su_ck. A `mov` touches no flag, so
+                                ; CF survives it
+    pop es
     pop di
     pop si
     pop dx
