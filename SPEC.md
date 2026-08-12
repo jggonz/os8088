@@ -7395,7 +7395,10 @@ laid down once): these three register. **Already reads the live box every
 frame** — `missile` (`mc_track` calls `OSAPI_WM_CONTENT` and
 `OSAPI_WM_GEOM` per frame), `tamegram`, `tracker`, `modplug`, `notepad`,
 `artful`, `fractal`: these need nothing for their geometry, though `missile`
-registers anyway for the adapter facts above. **Fixed layout, never asks its
+registers anyway for the adapter facts above. `fractal` is the one of those
+worth checking rather than assuming, because it *caches* what it derives —
+§40.1 is why the cache cannot go stale across a switch, and
+`tests/dispfrac.py` is the measurement. **Fixed layout, never asks its
 size** — `piano`, `hello`, `mines` and `recorder` read only
 `OSAPI_WM_CONTENT`, the origin. Whether that is a *problem* is a separate
 question from whether they ask, and it is answered by one number: a CGA's
@@ -25055,6 +25058,23 @@ canvas has no rows for). `fr_redraw` also compares the cached canvas size
 against the live one, because `fr_setup` re-reads W_W/W_H every time and
 `wm_fit` can clamp them (§39.7); a cache built for a different canvas would
 replay runs at the wrong columns.
+
+**That compare is also why this package registers no §11.98 handler**, and
+the question is worth answering here rather than leaving it to be re-asked:
+an adapter change re-clamps every window (§39.11.2.1) and Fractal's 322×199
+template really does move — content 320×180 on VGA becomes 320×136 on a CGA
+— so the cache is left holding rows laid out for a canvas that no longer
+exists. Two things close that window at both ends and neither is new.
+`fr_redraw` runs from `W_PAINT`, an adapter change ends in `wm_paint_all`
+(§39.11.2), and a size that has moved falls through to `fr_kick`; and
+`fr_worker` calls `fr_setup` only when `[fr_restart]` is non-zero, so between
+the switch and the repaint it keeps rendering at the width the cache was
+built for rather than half-way to the new one. **`tests/dispfrac.py` is the
+gate** — it asserts, on both adapters and after coming back, that `fr_ccw` /
+`fr_cch` equal the live `fr_cw` / `fr_ch` whenever the cache holds anything
+at all. It is kept for the reason a test on a concern that did not reproduce
+is worth keeping: the reasoning that raised it was plausible, and the next
+reader deserves a measurement rather than a paragraph.
 
 **`fr_prog` counts rows COMPUTED, never rows replayed**, and a repaint sets
 it to the cached row count. That is what the percentage is a percentage of,
