@@ -39139,6 +39139,35 @@ ships to prove. **Zero the slots first and measure**: at ~30 ms a read that is
 a second of listing time for a folder of thirty packages, and it buys a
 picture.
 
+##### 62.9.2.1 …except the icons already in RAM, which are free
+
+The harvest is a sector read per package and there are none here — but the
+**answer** to most of those reads is already in memory, and asking costs
+nothing. `disk_mount`'s redirected tail runs a cache-only pass: for each
+type-1 entry, `asc_lookup` and on a hit `asc_take`; a miss keeps the blank
+slot the loop above wrote.
+
+**A hit is exact, not plausible.** `asc_lookup` matches a package on its
+**stem AND its size**, so it answers "the same name and the same byte count" —
+the same package. That is what makes it safe to spend a row from a cache that
+was loaded for a *different* volume, which is the whole point: a copy of
+`MINES.O88` on a DOS machine is the same 1,517 bytes it is on the apps disk.
+
+**`asc_use_x` is deliberately not called**, and that is the design rather than
+an omission. It re-keys the cache to `[disk_drive]` and reads that volume's
+`ASSOC.DAT` — over a cable, exactly the traffic this exists to avoid — and it
+would evict the rows that make the pass work. The cache is used as it stands.
+
+Two consequences worth stating rather than discovering. It is **session
+state**: a Link listing shows a package's icon if the user has browsed a disk
+that also holds it, and the generic one after a fresh boot. That is inherent
+to "only if it is already in RAM" and nothing here may make it otherwise by
+going to look. And it is **packages only** — §54.3's document pass composes a
+page from the *program's* icon, and on a redirected volume there is no such
+program to have learned one from, so a `.TXT` keeps the generic icon. It keeps
+it on a floppy too, so this closes the gap between the two rather than opening
+one.
+
 #### 62.9.3 The branch sites, and the order to build them in
 
 Each is a test of `DV_KIND` at the top of a routine that already exists, so
