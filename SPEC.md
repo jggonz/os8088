@@ -2961,6 +2961,65 @@ it measures a cell the cursor was never in and passes by measuring nothing.
 
 Cost: `.text` **+17 bytes**, no rung crossed, `KERN_BUDGET` untouched.
 
+### 7.1.4.3 A MOVING pointer wants the hide; only a still one wants the arrow
+
+§7.1.4.2 shipped and was reported back as **"the cursor freezes and jerks as
+it moves with the Task Manager open"** — from the field, and it is real.
+
+The mechanism is not new and not the region test's: **the mouse ISR never
+moves the arrow while the gfx lock is held** (§7.1), so with a background
+painter refreshing behind it the pointer does not move during a refresh on
+*any* build, and never has. What §7.1.4.2 changed is whether you can SEE that
+happen:
+
+- **hidden and stuck** — the frame test erased the arrow at the lock and
+  redrew it at the unlock *at the new position*. The eye gets a blink and
+  never sees the pointer lag the hand.
+- **lit and stuck** — the region test leaves it on the glass, so it sits
+  still while the hand moves and then teleports. Same timing to the
+  microsecond; the second one is what a person calls a stutter.
+
+Measured on a cycle-accurate 5150 with a Hercules card, sweeping the pointer
+across a Control Panel with the Task Manager refreshing behind it — the
+reported configuration exactly, and the band §7.1.4.2 newly keeps lit:
+
+| | lock held | arrow still lit while locked |
+|---|---|---|
+| frame test | 14.6%, 39 holds, mean 19 ms | **4%** |
+| region test | 14.9%, 40 holds, mean 19 ms | **96%** |
+
+Identical lock behaviour, opposite visibility. **So the fix is not to give the
+region test back but to notice that §7.1.4's argument was always about a
+STILL pointer** — its own words are "with the mouse sitting still that reads
+as the cursor blinking off and on". A moving pointer was never the case it
+was defending, and for a moving pointer the hide is strictly better.
+
+`mou_isr` stamps `[ticks]` into `[cur_mvt]` on every settled packet, and
+`cur_lazyck` spends the hide when that stamp is within `CUR_MVGRACE` (2 ticks,
+~110 ms) — so the arrow is kept lit only when the hand has actually stopped.
+The blink §7.1.4.2 removed stays removed, because the pointer in that report
+is parked; the stutter goes, because a moving pointer is hidden exactly as it
+was before.
+
+Four things about it. The stamp is **one store in the ISR**, at the position
+write, in **CX** — dead there, where DX is the staged packet the button decode
+still needs. The subtraction is **modular**, so the word wraps once an hour
+into a 2-tick false "moving" whose entire cost is one redundant hide. The
+`pop ax` between the `cmp` and the `jbe` is deliberate — `pop` does not touch
+the flags, and `cur_lazyck` preserves every register. And the grace is longer
+than the ~25–40 ms a 1200-baud report takes, so a steadily moving hand cannot
+oscillate between the two treatments.
+
+**The verification lesson is the sharper half.** §7.1.4.2 was measured four
+ways and every one of them **parked the pointer** — flicker samples a
+stationary arrow, the cell-blink counter samples a stationary arrow, the A/B
+photographs a stationary arrow. That is the case the change improves, so all
+four agreed, and the case it hurts was never asked about. *A cursor change
+needs a moving-pointer reading and a still-pointer reading, and they are
+different measurements*: `tools/` has the flicker one; the motion one is a
+sweep with `[gfx_lock_flag]` and `[cur_lazy]` sampled below frame resolution,
+because the question is what share of locked time the arrow is on the glass.
+
 ### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
 
 `gfx_xor_rect`'s `cur_unlazy` sat **below** its `cmp byte [vid_mono], 0`, so on
@@ -5619,18 +5678,23 @@ Four sites write `W_X` and all four go through `wm_snap_ax`:
   along without any of this (§45.9).
 
 A fifth site, **`wm_zoom`** (§11.95), shares the *gate* and not the
-arithmetic: `wm_snap_ax` moves left and re-tests the window's current width,
-and a zoom is the one case where x wants to move **right** and the width is
-about to shrink by the same seven pixels to pay for it. The three tests are
-therefore `wm_snap_want` (BX = window; CF = 1 = this window wants an 8-aligned
-content origin right now), which `wm_snap_ax` calls too — one answer to the
-question, two ways of acting on it.
+arithmetic: it goes to x = 0 and spans the screen, which §11.95.2 makes an
+aligned position by suppressing the left border, and on a secondary display
+(§39.17.2) — where x = 0 is not a screen edge — it falls back to moving
+**right** to the display's origin + 7 and shrinking the width to pay for it.
+Either way the gate is `wm_snap_want` (BX = window; CF = 1 = this window wants
+an 8-aligned content origin right now), which `wm_snap_ax` calls too — one
+answer to the question, two ways of acting on it.
 
 Three consequences worth naming:
 
-- **A snapped window cannot sit flush against the left edge.** The smallest x
-  with `x + 1` a multiple of 8 is 7, so that is as far left as it goes. Seven
-  pixels is the visible cost of the feature.
+- **A snapped window cannot sit flush against the left edge — unless it spans
+  the screen** (§11.95.2). The smallest x with `x + 1` a multiple of 8 is 7,
+  so that is as far left as an ordinary window goes, and seven pixels is the
+  visible cost of the feature. A window that reaches the right-hand edge from
+  x = 0 has no snapped position at all — the bullet below is `wm_snap_ax`
+  leaving it alone — and for that one the aligned origin is 0 with the left
+  border dropped.
 - **The snap moves LEFT**, so it can never violate the caller's right-edge
   clamp — except in the `x = 0..6` case, where the only answer is 7 and the
   right edge is re-tested. A window too wide for that is **left unsnapped**
@@ -5940,9 +6004,9 @@ double-click zooms afresh and banks where the drag left it.
 matters:
 
 ```
-x = 0                             (7 for a WF_SNAP window on mono — below)
+x = 0                             (the display's origin + 7 — below)
 y = MBAR_H
-w = [vid_w]                       (less that 7)
+w = [vid_pw]                      (less that 7)
 h = [vid_dock_y0] − MBAR_H − 1
 ```
 
@@ -5970,17 +6034,28 @@ reason. Three things about it:
 - **A restore does not spend the bank.** A refused shrink (below) has to be
   askable again, and a zoom re-banks anyway.
 
-**`WF_SNAP` is honoured, and it is the one case where a snap moves RIGHT.**
-§11.94's `wm_snap_ax` moves a candidate x *left* and re-tests the window's
-**current** width against the right edge — and at full screen width x = 7
-always fails that test, so a snapped window put through it would zoom to x = 0
-and silently lose the single-store fast path it asked for. So the gate alone
-is factored out as **`wm_snap_want`** (BX = window; CF = 1 if this window's
-content origin wants to be 8-aligned right now — `WF_SNAP` set, `WF_FULL`
-clear, `[vid_mono]` non-zero) and `wm_zoom` acts on it in the other direction:
-x = 7, and the width gives back exactly the seven pixels x took, so the right
-edge is unmoved. `wm_snap_ax` calls the same routine, so there is still one
-answer to the question and not two that can drift.
+**`WF_SNAP` is honoured, and x = 0 is where it is honoured BEST.** §11.94's
+`wm_snap_ax` moves a candidate x *left* to the nearest x with `x + 1` a
+multiple of 8, and at full screen width there is no such x that fits — so it
+leaves the window at 0, where the content origin would be 1 and the
+single-store fast path is lost. §11.95.2 is the answer and it costs nothing:
+a snapped frame spanning the screen drops its **left border**, so its content
+starts at x = 0, which is aligned. The standard rect is the whole desktop
+band, the seven pixels of desktop that used to show down the left of a
+maximized window are content now, and the chrome is one drawing call cheaper.
+
+**A secondary display is where the seven pixels are still paid** (§39.17.2).
+There x = 0 is not a screen edge but the boundary with the display beside it,
+so the border has something to separate the window from and `wm_flush`
+correctly says no. `wm_zoom` asks `wm_flush_ck` of the rect it is about to
+commit — the geometry half of §11.95.2's predicate, since the record does not
+hold that rect yet — and when the answer is no it does what it always did:
+x = the display's origin + 7, and the width gives back exactly the seven
+pixels x took, so the right edge is unmoved. The gate above both is
+**`wm_snap_want`** (BX = window; CF = 1 if this window's content origin wants
+to be 8-aligned right now — `WF_SNAP` set, `WF_FULL` clear). `wm_snap_ax`
+calls the same routine, so there is still one answer to the question and not
+two that can drift.
 
 **It asks the window — twice, and the second answer can be no.**
 `wm_ask_size` (§11.1) runs on the state being *tested* (so the compare above
@@ -6047,6 +6122,106 @@ behind it is popped by the UI loop and ignored, which is what that loop
 already does with every mouse-up. On a machine with no mouse (§9.6) the same
 press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
 exactly this case — a pass that dispatched a press and did not track it.
+
+### 11.95.2 A window that spans the screen has no left border
+
+**A border separates a window from what is beside it, and at the screen's left
+edge there is nothing beside it.** So a `WF_SNAP` window whose frame reaches
+from x = 0 to the last column of the screen does not draw one, and its content
+therefore starts **at** `W_X` rather than at `W_X + 1` — which is 0, and
+byte-aligned. The other three sides are untouched.
+
+That is what lets §11.95's standard rect be the whole screen. It used to be
+x = 7, w = screen − 7: §11.94's snap moving *right* to buy an aligned content
+origin, at the 7-pixel cost that section names. A maximized window therefore
+sat with its right edge flush and **seven columns of desktop dither showing
+down its left**, plus a border column — eight columns of content given up to
+land the origin on a byte boundary that x = 0 already is. The standard rect is
+now `x = 0, w = [vid_pw]` and the alignment is kept, not traded for.
+
+**Derived, never tracked** — §11.95's own rule, for its own reason. `wm_flush`
+(BX = window; CF = 1 = no left border; every register preserved) is
+`wm_snap_want` **and** `W_X = 0` **and** `W_X + W_W >= [vid_w]`. There is no
+flag, so there is no site that has to clear one: a window dragged or resized
+off that geometry has its border back at the next paint because the question is
+asked again. `wm_flush_ck` (AX = a candidate x, CX = a candidate width) is the
+geometry half on its own, because `wm_zoom` has to ask it of a rect it has not
+committed yet.
+
+**`wm_snap_want` is in the predicate for two distinct reasons**, and neither is
+decoration. A `WF_FULL` window is *already* borderless and its content IS its
+frame (§11.2), so adjusting it here would inset it twice. And a `WF_NOSNAP`
+window has opted out of having its geometry decided for it (§11.94.1), so it
+keeps its border and its `W_X + 1` content origin whatever it spans.
+
+**It composes with `wm_snap_ax` rather than fighting it, and that is why the
+snapper needed no change at all.** At x = 0 the snapped position is 7, and
+`wm_snap_ax` already **refuses** to move a window there when `7 + W_W` would
+hang it off the right edge — which is exactly the geometry this rule names. So
+a snapped window is either snappable to 7, in which case all four `W_X`
+writers have already put it there and it is never at 0, or it spans the screen,
+in which case x = 0 is the only aligned position it has. `wm_zoom`'s x = 0
+therefore survives `wm_resize_nb`'s `wm_snap_win` untouched. **The corollary is
+that this is not a new state for such windows**: one at x = 0 too wide to snap
+is a window that has been sitting there all along with an *unaligned* content
+origin, silently missing the fast path §11.94 exists for. It gains alignment
+here, it does not lose a position.
+
+**The outline is three sides, and that is a drawing call CHEAPER rather than
+dearer.** `gfx_frame` is four `gfx_fill`s — two `gfx_hline`, two `gfx_vline` —
+and a flush window emits the top, the bottom and the right. At
+PERFORMANCE.md Part 2's ~756µs of fixed cost per drawing call, whatever it
+draws, a maximized window's chrome costs one call less than it did.
+
+**The border may not be drawn and then covered**, which is the shape the first
+draft of this takes: leave `gfx_frame` alone and let the title-bar fill and the
+content fill overwrite column 0. Every pixel of that column is then written
+twice, and PERFORMANCE.md Part 1's double-draw flash is plainly visible on the
+target machine — a defect this container cannot show. Three sides, drawn once.
+
+Six sites answer the question, and they are every place a *content* rect is
+derived from `W_X`; a **frame** rect is unchanged, because the frame really
+does still span x = 0 to x + w − 1:
+
+| site | what changes |
+|---|---|
+| `wm_content` | content left is `W_X`, not `W_X + 1` |
+| `wm_geom` | content width is `W_W − 1`, not `W_W − 2` |
+| `wm_clip_set` | the seed rect, so an app may draw in column 0 |
+| `wm_su_rect` | the raise cache, `wm_cov_rect` and `wm_damage` behind it |
+| `wm_draw_win` | the outline's three sides, the content fill, the bottom drop shadow's left end |
+| `wm_draw_title` | the title-bar interior and the separator under it |
+
+`wm_hit` is **not** among them and needs nothing: it tests the frame rect and
+has never treated the border column as its own region, so a point in column 0
+already answered "content". Neither is `wm_title_set`, whose strip is the frame's
+full width already.
+
+**What does not move is everything positioned from the frame**: the close and
+minimize boxes at `W_X + 8`, the pinstripes inset 3, and the centred caption.
+The frame has not moved — only the fills that would otherwise leave a
+one-pixel hole at column 0 extend to reach it.
+
+**A seventh site had to change, and it is the one nothing pointed at:
+`ui_grow`.** The aligned x is a question about the *width* now — shrink a
+maximized window off the screen's right edge and it stops being flush, so
+column 0 stops being an aligned content origin and 7 is the leftmost one
+again. `ui_grow` never re-snapped, correctly, because until this **a width
+change could not move that origin**; without the `wm_snap_win` it now makes,
+one drag of the grow box left the window at x = 0 with its border back and its
+content at 1, *unaligned* — silently missing the fast path §11.94 exists for,
+which is the exact defect this section is meant to remove. `wm_resize` already
+made that call for its own reason (its x clamp can move the origin) and needed
+nothing.
+
+Its **damage union** follows: `ui_grow` took `x1 = W_X` and
+`x2 = W_X + max(old w, new w)`, which is the union of the two rects only while
+the origin is fixed. It is `min` and `max` over both rects' edges now — the
+same answer when nothing moved, and the seven columns the window vacates put
+back when it did. Verified on all three adapters: after a grow-box shrink from
+the zoomed state the window is at x = 7 with an aligned origin, and the screen
+the resize leaves is **0 differing pixels** against the same window drawn
+whole by `wm_show`.
 
 ### 11.95.1 A window that GREW reveals nothing
 
@@ -15670,9 +15845,11 @@ position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
 the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
 The pass is therefore dead code, and it is **kept** rather than deleted: it is
 four instructions of test that state the invariant, and moving the inset back
-would need it. Its residue is `wm_snap_ax`'s one refusal — a window as wide as
-the screen sitting at x=0, where 7 becomes the answer and those seven columns
-are margin.
+would need it. Its residue is `wm_snap_ax`'s one refusal — a window **dragged**
+to x=0 at the full screen width, where 7 becomes the answer and those seven
+columns are margin. A **maximized** window is not that case, and §11.95.2 is
+why: it drops its left border, so its content starts at `W_X` = 0 and is
+aligned outright.
 
 **The name had to move with the icon, and no size report or byte diff could
 have said so.** At icon +8 with the name still at +24, the 16px icon cell ends
@@ -27949,9 +28126,12 @@ completion):
    old grant — *then* clear `mp_loaded` and free the previous module
    grant: no reader may trust a blob about to move, and on the worker
    path the drain is what enforces that rule.
-3. `OSAPI_MEM_AVAIL` → take `min(largest run, 128 KB)` in ONE
-   `OSAPI_MEM_CLAIM` (the one-block rule, §50.3). Refusal is a status-line
-   "Out of memory", not an abort.
+3. Size the claim from the file and take it in ONE `OSAPI_MEM_CLAIM` (the
+   one-block rule, §50.3) — `ceil(bytes / 1024)` KB, refused up front when
+   `OSAPI_MEM_AVAIL`'s largest run will not fund it. The size comes from the
+   dialog (§38.6) or, when it has none, from `OSAPI_FILE_FIND`; only a name
+   that is in no directory falls back to `min(largest run, 128 KB)`
+   (§45.3.1). Refusal is a status-line "Out of memory", not an abort.
 4. `OSAPI_FILE_READ` with ES:BX = the grant at its first byte, DX:CX = its
    byte capacity.
    `FERR_BIG` reads back as "File too big" — a rare answer, because the
@@ -27969,6 +28149,57 @@ with no callback on cancel. The worker owns the fix: every 16th frame it
 repaints the whole top band, so a cancelled dialog's bar strip lives for at
 most a second.
 
+#### 45.3.1 There is no module-size ceiling, and the one there was had been copied from a claim
+
+A 300KB module was refused with **`File too big`** on a machine reporting
+over 400KB of largest free run. The number was **128KB** and it was in the
+app twice, at `cmp dx, 2` and `cmp ax, 128`, and neither of those two was
+ever *reasoned about* — both were copied from a third, and the third is not
+a verdict on a file at all.
+
+The original is `.blind`'s `min(largest run, 128 KB)`, and it is a
+**politeness bound on a guess**. Before §38.6 the completion proc was handed
+a name and no size, so the claim had to be made before the read could report
+one; 128KB is "bigger than any sane 4-channel MOD", picked so that the app
+did not take a whole heap it probably did not need, with `trk_trim` giving
+the difference back afterwards. Nothing in it is a statement about what this
+replayer can play.
+
+When §38.6 added `DX:CX` the new early-refusal path was written beside it
+and took the same constant — its own comment said so, *"the same cap the
+claim used to apply"*. That is where a bound on an over-claim became a
+**refusal**, and it was wrong the moment it was typed: on the sized path the
+size is exact, the claim is exactly it, and the question "will this fit" is
+already asked three lines later against `OSAPI_MEM_AVAIL`. The 128KB
+refused files the heap could fund and answered nothing the heap check did
+not.
+
+**So both refusals go, and what is left is the domain of the arithmetic.**
+The bytes→KB conversion composes `DX<<6` into a word, so `DX >= 1023` (about
+64MB) is where it stops being true and is the only thing refused up front.
+Everything under it is the heap's question. The published contract is
+unchanged: `trk_s_toobig` still exists and is still what a file past that
+answers, and `FERR_BIG` from `OSAPI_FILE_READ` still maps to it.
+
+**The blind path keeps the cap and stops being reached by ordinary loads.**
+It had quietly become the *association* route — §54.5 hands over a name, a
+cluster and a drive and no size at all, so double-clicking a `.MOD` on the
+desktop took the guess. Above the cap that is worse than a refusal: the read
+takes the file's first 128KB, `mp_load` validates happily because the
+**pattern** extent still fits, and the module plays with its later samples
+silently absent. `trk_sizeof` asks `OSAPI_FILE_FIND` — which answers all 32
+bits out of the directory (§19.7.1) — so the association and the dialog now
+size the claim identically, at the cost of one directory walk on a path that
+is about to read the whole file. Only a name in no directory is still a
+guess, and there the cap is doing the job it was written for: the claim is
+speculative and `trk_ring_probe` (§45.18) has to fund a ring out of what it
+leaves.
+
+**Measured, on a cycle-accurate 4.77MHz 8088 with 640KB and a Sound Blaster,
+same disk and same clicks:** the 300KB module is `File too big` /
+`No module loaded` before, and `OS8088 300K TEST` / `Playing` after. The
+`.o88` grows 73 bytes.
+
 ### 45.4 Memory layout
 
 Four stores, none of them guessed:
@@ -27976,14 +28207,15 @@ Four stores, none of them guessed:
 - **The package segment** — image + bss, including the mixer's 65×256
   volume table (16,640 bytes, built at load: `vt[vol][b] = (int8)b·vol»6`)
   and the 2048-byte `mp_outbuf`.
-- **The module blob** — one heap claim (§50), sized
-  `min(largest free run, 128 KB)` **in KB** from `MEM_AVAIL` at load time
-  regardless of the module's actual size, and held until the next load or
-  teardown. Consequence, stated honestly: while a module is loaded the
-  Tracker's claim holds up to 128KB that other packages and other instances
-  then cannot have. Against a fixed arena that claim would have been
-  effectively *all* of it on a 512KB machine; against a 566KB heap it is a
-  fifth.
+- **The module blob** — one heap claim (§50), `ceil(bytes / 1024)` KB at the
+  file's real size, held until the next load or teardown. It was
+  `min(largest free run, 128 KB)` *regardless* of the module's actual size,
+  which is what the paragraph below was written about; §38.6's size and
+  §45.3.1's `trk_sizeof` between them mean the over-claim now happens only
+  for a name that is in no directory. Consequence, stated honestly: while a
+  module is loaded the Tracker's claim holds the module's own size — and, on
+  that one remaining path, up to 128KB — that other packages and other
+  instances then cannot have.
 
   **...and then `trk_trim` gives the difference back.** The over-claim is
   unavoidable at claim time — the dialog's completion proc is handed a name,
@@ -28056,6 +28288,35 @@ volume table and converts once: `out = 128 + (sum >> 2)` — four channels at
 position arithmetically, so unmuting rejoins the song where it really is.
 Mixing throughput on a real 8088 is **not promised** (§45.8); the mixer is
 honest about being a QEMU/286-era luxury.
+
+#### 45.5.1 The pattern count is a WORD, and a file cap was the only thing holding it
+
+`mp_npat` was a byte, and the line that filled it said why: *"P <= 126 after
+the extent check (file cap)"*. P is `max(order[0..127]) + 1`, so 1..**256**,
+and what bounded it was arithmetic on a number from somewhere else entirely
+— `1084 + 1024·P` must fit the file, and the file could not exceed 128KB, so
+P could not exceed 126. A field of one type was sized by a limit belonging
+to another, in a different module, with one comment connecting them.
+
+Removing §45.3.1's cap therefore reaches this. P = 256 needs 263,228 bytes
+of patterns and an order byte of 255 — both ordinary in a large module — and
+`mov [mp_npat], al` then stores **0**. Nothing errors. `mp_readrow`'s
+hostile-blob clamp reads every pattern as out of range and substitutes
+pattern 0, `mp_cell2txt` refuses every cell, and the app says **Playing**
+over silence with an empty grid.
+
+The count is a word, the two compares that read it are word compares, and
+the FT2 readout — two hex digits, FT2's own field — clamps to `FF` rather
+than printing AL, which for 256 is `00` and reads as *no patterns at all*.
+`mp_pattern` stays a byte: it holds a pattern *number*, 0..255, and it is
+the count that has 257 possible values rather than 256.
+
+**Measured** on a P=256 module past the old cap, cap removed both times, the
+only difference being the width: the Sound Blaster capture is **RMS 0.0,
+peak 0** with the byte and **RMS 3490.2, peak 8191, 96% of samples active**
+with the word. The screen is not the instrument here — `Ptn` reads `FF` in
+*both*, because the clamp picks a pattern to *address* and never writes
+`mp_pattern` back.
 
 ### 45.6 The FT2 screen, parameterized by adapter
 

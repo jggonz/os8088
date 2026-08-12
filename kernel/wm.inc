@@ -1423,13 +1423,19 @@ wm_zoom:
 %endif
     call wm_snap_want
     jnc .nosnap
-    add ax, 7                   ; WF_SNAP: the leftmost frame x whose CONTENT
-    sub cx, 7                   ; origin is byte-aligned ON ITS DISPLAY -
-                                ; every display origin is byte-aligned, so
-                                ; local and virtual agree - and the width
-                                ; hands back exactly what x took. (`mov ax,7`
-                                ; here was the relocation: it overwrote the
-                                ; display origin wm_disp_span just answered)
+    call wm_flush_ck            ; ...spanning the SCREEN? Then x = 0 has no
+    jc .nosnap                  ; left border and IS the aligned origin, so
+                                ; the rect stands as it is (SPEC.md 11.95.2)
+    add ax, 7                   ; WF_SNAP on a SECONDARY display (39.17.2),
+    sub cx, 7                   ; where x = 0 is the boundary with the display
+                                ; beside it rather than a screen edge: the
+                                ; leftmost frame x whose CONTENT origin is
+                                ; byte-aligned ON ITS DISPLAY - every display
+                                ; origin is byte-aligned, so local and virtual
+                                ; agree - and the width hands back exactly
+                                ; what x took. (`mov ax,7` here was the
+                                ; relocation: it overwrote the display origin
+                                ; wm_disp_span just answered)
 .nosnap:
     call wm_ask_size            ; ...as the window will have it (SPEC.md 11.1),
                                 ; which is what makes the compare below hold
@@ -2235,6 +2241,72 @@ wm_snap_want:
     jnz .no                     ; ...opted out (SPEC.md 11.94's default is ON)
     test word [bx+W_FLAGS], WF_FULL
     jnz .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_flush - is this window's LEFT BORDER suppressed? (SPEC.md 11.95.2)
+; in:  BX = window ptr
+; out: CF = 1 yes - the content starts AT W_X and is W_W-1 wide;
+;      every register preserved
+;
+; A border separates a window from what is beside it, and at the screen's left
+; edge there is nothing beside it. So a snapped frame reaching from x = 0 to
+; the last column of the screen does not draw one, and its content origin is
+; therefore 0 - which is byte-aligned, which is the whole reason 11.95's zoom
+; used to sit seven pixels in from the edge to buy.
+;
+; DERIVED, NEVER TRACKED, which is 11.95's own rule for its own reason: a flag
+; would have to be cleared by every site that writes W_X or W_W, and a missed
+; one is a window that answers wrong about itself. Asked again at each paint,
+; a window dragged or resized off this geometry simply has its border back.
+;
+; wm_snap_want is in it for two separate reasons and neither is decoration. A
+; WF_FULL window is ALREADY borderless and its content IS its frame (11.2), so
+; adjusting it here would inset it twice; and a WF_NOSNAP window has opted out
+; of having its geometry decided for it (11.94.1).
+;
+; IT COMPOSES WITH wm_snap_ax RATHER THAN FIGHTING IT, which is why that
+; routine needed no change. At x = 0 the snapped position is 7, and wm_snap_ax
+; already REFUSES to move a window there when 7 + W_W would hang it off the
+; right edge - exactly the geometry named here. So a snapped window is either
+; snappable to 7, in which case all four W_X writers have put it there and it
+; is never at 0, or it spans the screen, in which case 0 is the only aligned x
+; it has. wm_zoom's x = 0 therefore survives wm_resize_nb's wm_snap_win.
+; -----------------------------------------------------------------------------
+wm_flush:
+    call wm_snap_want
+    jnc .no                     ; opted out, or fullscreen: not ours to move
+    push ax
+    push cx
+    mov ax, [bx+W_X]
+    mov cx, [bx+W_W]
+    call wm_flush_ck
+    pop cx                      ; (pop writes no flags, so CF carries out)
+    pop ax
+    ret
+.no:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_flush_ck - would a frame at AX of width CX reach both screen edges?
+; in:  AX = candidate frame x, CX = candidate frame width
+; out: CF = 1 yes; every register preserved
+;
+; The GEOMETRY half of wm_flush on its own, because wm_zoom (SPEC.md 11.95)
+; has to ask it of a rect it has not committed to the record yet - and on a
+; secondary display (39.17.2) the answer is no, x = 0 there being the boundary
+; with the display beside it rather than a screen edge.
+; -----------------------------------------------------------------------------
+wm_flush_ck:
+    or ax, ax
+    jnz .no                     ; not against the screen's left edge
+    cmp cx, [vid_w]             ; ...and reaching the right-hand one? x is 0,
+    jb .no                      ; so the frame spans the screen iff w does
     stc
     ret
 .no:
@@ -3495,8 +3567,10 @@ wm_content:
     mov dx, [bx+W_Y]
     test word [bx+W_FLAGS], WF_FULL
     jnz .full
-    inc ax
     add dx, TITLE_H
+    call wm_flush               ; a window spanning the screen has no LEFT
+    jc .full                    ; border, so its content starts at W_X and is
+    inc ax                      ; aligned there (SPEC.md 11.95.2)
 .full:
     ret
 
@@ -3579,6 +3653,9 @@ wm_geom:
     jnz .vis                    ; fullscreen: the frame IS the content
     sub cx, 2                   ; content cols x+1 .. x+w-2 (SPEC.md 11)
     sub dx, TITLE_H + 1         ; content rows y+TITLE_H .. y+h-2
+    call wm_flush               ; ...or x .. x+w-2, one column wider, when
+    jnc .vis                    ; there is no left border (SPEC.md 11.95.2)
+    inc cx
 .vis:
     test word [bx+W_FLAGS], 2   ; visible?
     jz .hidden
@@ -3816,10 +3893,12 @@ wm_clip_set:
     dec si
     test word [bx+W_FLAGS], WF_FULL
     jnz .seed                   ; fullscreen: the frame IS the content
-    inc ax                      ; else x+1 .. x+w-2, y+TITLE_H .. y+h-2
-    dec cx
+    dec cx                      ; else x+1 .. x+w-2, y+TITLE_H .. y+h-2
     add dx, TITLE_H
     dec si
+    call wm_flush               ; ...and x .. x+w-2 with no left border, or an
+    jc .seed                    ; app could not draw in column 0 at all
+    inc ax                      ; (SPEC.md 11.95.2)
 .seed:
     cmp ax, cx
     jg .none                    ; degenerate content rect
@@ -4683,8 +4762,12 @@ wm_draw_title:
     push dx
     push si
     mov byte [gfx_color], CWHITE
-    mov ax, [di+W_X]            ; title bar interior, 16 white rows
+    mov bx, di                  ; title bar interior, 16 white rows - reaching
+    call wm_flush               ; column 0 on a window with no left border, or
+    mov ax, [di+W_X]            ; a 1px strip of desktop shows through it
+    jc .tfill                   ; (SPEC.md 11.95.2)
     inc ax
+.tfill:
     mov bx, [di+W_Y]
     inc bx
     mov cx, [di+W_X]
@@ -4695,8 +4778,12 @@ wm_draw_title:
     call gfx_fill
 
     mov byte [gfx_color], CBLACK
-    mov ax, [di+W_X]            ; separator under the title bar
+    mov bx, di                  ; separator under the title bar, likewise
+    call wm_flush               ; (SPEC.md 11.95.2)
+    mov ax, [di+W_X]
+    jc .tsep
     inc ax
+.tsep:
     mov bx, [di+W_X]
     add bx, [di+W_W]
     sub bx, 2
@@ -5801,7 +5888,11 @@ wm_su_srect:
 ; numbers wm_draw_win's white fill uses
 wm_su_rect:
     mov ax, [di+W_X]
+    mov bx, di                  ; (BX is an OUTPUT here, so borrowing it for
+    call wm_flush               ; the question costs nothing - SPEC.md 11.95.2)
+    jc .noborder
     inc ax
+.noborder:
     mov bx, [di+W_Y]
     add bx, TITLE_H
     mov cx, [di+W_X]
@@ -7020,8 +7111,36 @@ wm_draw_win:
     mov dx, bx
     add dx, [di+W_H]
     dec dx
+    push bx                     ; ...or THREE SIDES of one, on a window flush
+    mov bx, di                  ; against the screen's left edge (SPEC.md
+    call wm_flush               ; 11.95.2). push/pop write no flags, so the
+    pop bx                      ; answer survives to the branch
+    jc .frame3
     call gfx_frame
-
+    jmp short .shadow
+.frame3:
+    ; gfx_frame is four gfx_fills - two hlines and two vlines - so leaving the
+    ; left one out is a drawing CALL cheaper, not dearer (PERFORMANCE.md Part
+    ; 2's ~756us of fixed cost per call, whatever it draws). The border may NOT
+    ; be drawn and then covered by the fills below: every pixel of column 0
+    ; would be written twice, which is Part 1's double-draw flash and is
+    ; plainly visible on the target machine.
+    push si
+    push di
+    mov si, bx                  ; SI = y1, DI = y2 (gfx_frame's own idiom)
+    mov di, dx
+    mov bx, cx                  ; gfx_hline wants BX = x2, DX = y
+    mov dx, si
+    call gfx_hline              ; top
+    mov dx, di
+    call gfx_hline              ; bottom
+    mov ax, cx                  ; ...and the RIGHT vline alone
+    mov bx, si
+    mov dx, di
+    call gfx_vline
+    pop di
+    pop si
+.shadow:
     mov ax, [di+W_X]            ; drop shadow, right edge: x+w, y+1..y+h
     add ax, [di+W_W]
     mov bx, [di+W_Y]
@@ -7029,8 +7148,12 @@ wm_draw_win:
     mov dx, [di+W_Y]
     add dx, [di+W_H]
     call gfx_vline
-    mov ax, [di+W_X]            ; drop shadow, bottom edge: y+h, x+1..x+w
+    mov bx, di                  ; drop shadow, bottom edge: y+h, x+1..x+w -
+    call wm_flush               ; and x..x+w with no left border to sit under,
+    mov ax, [di+W_X]            ; or the corner pixel is left unpainted
+    jc .shbot                   ; (SPEC.md 11.95.2)
     inc ax
+.shbot:
     mov bx, [di+W_X]
     add bx, [di+W_W]
     mov dx, [di+W_Y]
@@ -7070,8 +7193,12 @@ wm_draw_win:
                                 ; draw, and on a window whose W_PAINT takes
                                 ; seconds it is that long as a white hole
     mov byte [gfx_color], CWHITE
-    mov ax, [di+W_X]            ; content area, filled white before W_PAINT
+    mov bx, di                  ; content area, filled white before W_PAINT -
+    call wm_flush               ; from column 0 where there is no left border
+    mov ax, [di+W_X]            ; (SPEC.md 11.95.2)
+    jc .cfill
     inc ax
+.cfill:
     mov bx, [di+W_Y]
     add bx, TITLE_H
     mov cx, [di+W_X]
