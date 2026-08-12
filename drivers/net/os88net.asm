@@ -175,6 +175,12 @@ start:
 
     call parse_args
     jc  .bye
+    cmp byte [helpflag], 0      ; /? : say what the switches are and stop,
+    je  .nohelp                 ; before anything touches a drive or a port
+    mov si, s_help
+    call puts
+    jmp .bye
+.nohelp:
 
     mov ax, 0x2524              ; FAIL every critical error, before anything
     mov dx, crit24              ; touches a drive - the /W scan is the first
@@ -633,6 +639,13 @@ parse_args:
     je  .whole
     cmp al, 'i'
     je  .image
+    cmp al, '?'
+    je  .help
+    cmp al, 'h'
+    je  .help
+    jmp short .skipopt
+.help:
+    mov byte [helpflag], 1
     jmp short .skipopt
 .ro:
     mov byte [roflag], 1
@@ -779,8 +792,37 @@ setup_root:
     call puts
     call crlf
 .ok:
-    mov si, s_ronly
+    ; --- WHAT THIS RUN IS ACTUALLY DOING, said once and in full -----------
+    ; Every one of these is a choice the user made or a default they did not
+    ; know they took, and the two ends of this cable are usually in different
+    ; rooms: a run that prints only what it is serving leaves the port and the
+    ; write permission to be inferred from behaviour.
+    mov si, s_ronly             ; ...writes, first: it is the one that can
+    cmp byte [roflag], 0        ; surprise somebody about their own disk
+    jne .rosay
+    mov si, s_rwok
+.rosay:
     call puts
+    mov si, s_portpin           ; the port, and WHY it is that port
+    cmp byte [pinned], 0
+    jne .portsay
+    mov si, s_portscan
+.portsay:
+    call puts
+    cmp byte [pinned], 0
+    je  .noport2
+    mov ax, [pinbase]
+    call puthex16
+.noport2:
+    call crlf
+    cmp byte [imgname], 0       ; block mode is the exception, so it is only
+    je  .noimg                  ; mentioned when it is on
+    mov si, s_imgsay
+    call puts
+    mov si, imgname
+    call puts
+    call crlf
+.noimg:
     pop si
     pop dx
     pop ax
@@ -1540,6 +1582,8 @@ srv_stat:
     call hd_path                ; the folder, as a path
     jc  .no
     call path_join              ; + '\' + namebuf -> wildbuf
+    mov al, 'S'                 ; a STAT: what a launch or an open begins with
+    call say_file
     call stat_file              ; -> the DTA, or CF=1
     jc  .no
 
@@ -1616,6 +1660,36 @@ srv_rname:
     pop cx
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; say_file - name a file this run touched, one line, verb-tagged
+; in:  AL = a one-character tag, wildbuf = the path DOS is about to be given
+; out: nothing (all registers preserved)
+;
+; ASKED FOR OFF THE FIELD: the two ends of this cable are usually in different
+; rooms, and the DOS end sat silent from `Listening.` to `Master finished.` -
+; so "did it even ask for that file" was a question only os8088 could answer,
+; and os8088 is the side under suspicion when something goes wrong.
+;
+; It logs at the point the PATH IS RESOLVED rather than per verb, which is one
+; site instead of nine and cannot drift: wildbuf is what every one of them
+; hands to DOS. The tag says which verb without a second string per verb -
+; R read, W write, A append, D delete, N rename, M mkdir, K rmdir, Y copy,
+; S stat. A LIST is not logged: it is one line per FILE IN THE FOLDER, which
+; buries the thing being looked for.
+; -----------------------------------------------------------------------------
+say_file:
+    push ax
+    push si
+    mov [sf_tag], al
+    mov si, sf_pre
+    call puts
+    mov si, wildbuf
+    call puts
+    call crlf
+    pop si
+    pop ax
     ret
 
 ; stat_file - wildbuf names a file: findfirst it into the DTA. CF=1 = no.
@@ -1855,6 +1929,8 @@ open_handle:
     mov si, pathbuf
     mov di, wildbuf
     call str_cpy16
+    mov al, 'R'                 ; a READ: 62.10.5's per-file log
+    call say_file
     call stat_file
     jc  .no
     test byte [dtabuf + DTA_ATTR], 0x10
@@ -2025,6 +2101,8 @@ wr_arg:
     call hd_path                ; -> pathbuf
     jc  .nodir
     call path_join              ; ...+ '\' + namebuf -> wildbuf
+    mov al, [sf_wtag]           ; ...whichever write verb we are inside
+    call say_file
     clc
     ret
 .nodir:
@@ -2077,6 +2155,8 @@ srv_copy:
     call hd_path                ; the SOURCE, as a path
     jc  .nodir
     call path_join              ; + '\' + namebuf -> wildbuf
+    mov al, 'Y'                 ; the SOURCE, before wildbuf is rebuilt
+    call say_file
     mov si, wildbuf             ; ...banked whole: building the destination
     mov di, cpysrc              ; below rewrites pathbuf AND wildbuf
     call str_cpy16
@@ -2086,6 +2166,8 @@ srv_copy:
     call hd_path
     jc  .nodir
     call path_join
+    mov al, 'y'                 ; ...lower case: the same copy's other end
+    call say_file
 
     mov dx, cpysrc              ; open the source
     mov ax, 0x3D00
@@ -2191,6 +2273,7 @@ cpy_close:
 ; way, and only then does the status go back.
 ; -----------------------------------------------------------------------------
 srv_write:
+    mov byte [sf_wtag], 'W'
     push ax
     push bx
     push cx
@@ -2255,6 +2338,7 @@ srv_write:
 ; the pair, so a copy streams through it a claim at a time.
 ; -----------------------------------------------------------------------------
 srv_append:
+    mov byte [sf_wtag], 'A'
     push ax
     push bx
     push cx
@@ -2315,12 +2399,15 @@ srv_append:
 ; -----------------------------------------------------------------------------
 srv_delete:
     mov byte [srv_verb], 0
+    mov byte [sf_wtag], 'D'
     jmp short srv_name1
 srv_mkdir:
     mov byte [srv_verb], 1
+    mov byte [sf_wtag], 'M'
     jmp short srv_name1
 srv_rmdir:
     mov byte [srv_verb], 2
+    mov byte [sf_wtag], 'K'
 srv_name1:
     push ax
     push bx
@@ -2382,6 +2469,7 @@ srv_name1:
 ; srv_rename - NF_RENAME: two 13-byte names and no length between them
 ; -----------------------------------------------------------------------------
 srv_rename:
+    mov byte [sf_wtag], 'N'
     push ax
     push bx
     push cx
@@ -3172,8 +3260,8 @@ putdec16:
 ; DATA
 ; =============================================================================
 s_banner:
-    db 13,10,'OS88NET - the DOS end of an os8088 parallel Network drive',13,10
-    db 'docs/NET-PLAN.md stage 1.  ESC stops.',13,10,13,10,0
+    db 13,10,'OS88NET - the DOS end of an os8088 parallel file link',13,10
+    db 'ESC stops.  OS88NET /? for options.',13,10,13,10,0
 s_serving:  db 'Serving: ',0
 s_size:     db '  ',0
 s_secs:     db ' sectors',0
@@ -3187,8 +3275,8 @@ s_gap:      db '   ',0
 s_ok:       db '  ok',0
 s_dash:     db '  --',0
 s_noport:   db 13,10,'No parallel port to listen on.',13,10,0
-s_ready:    db 13,10,'Listening. Start the os8088 end (Control Panel, Network,'
-            db ' Connect).',13,10,0
+s_ready:    db 13,10,'Listening. Start the os8088 end (Control Panel,'
+            db ' os88net, Connect).',13,10,0
 s_called:   db 13,10,'Called on ',0
 s_bye:      db 13,10,'Master finished.',13,10,0
 s_stopped:  db 13,10,'Stopped.',13,10,0
@@ -3198,7 +3286,32 @@ s_nodir:    db 13,10,'No such folder.',13,10,0
 dirarg:     times 80 db 0       ; the bare argument: the folder to serve
 s_root:     db 'Serving files from ',0
 s_wmc:      db 'Serving files from EVERY DRIVE on this machine.',13,10,0
-s_ronly:    db 13,10,'Phase 1 is READ ONLY whatever the switches say.',13,10,0
+s_ronly:    db 'Writes REFUSED (/RO).',13,10,0
+s_rwok:     db 'Writes allowed.',13,10,0
+s_help:
+    db 'OS88NET [folder] [/W] [/RO] [/P:base] [/I:image]',13,10,13,10
+    db '  folder    serve this folder and everything under it.',13,10
+    db '            Default: the current directory.',13,10
+    db '  /W        serve EVERY drive on this machine: the root of the',13,10
+    db '            link then lists drives rather than files.',13,10
+    db '  /RO       refuse every write. Read-only, whatever os8088 asks.',13,10
+    db '  /P:base   pin the parallel port, in hex - /P:378, /P:278,',13,10
+    db '            /P:3BC. Default: scan and use the first that answers.',13,10
+    db '  /I:image  block mode: serve 512-byte sectors out of an image',13,10
+    db '            file instead of serving files. Superseded by the',13,10
+    db '            file link and kept because the wire is the same.',13,10
+    db '  /?        this.',13,10,13,10
+    db 'ESC stops a run. os8088 connects from Control Panel, os88net.',13,10,0
+sf_wtag:    db 'W'              ; the tag wr_arg's log line carries. A byte of
+                                ; its own and NOT srv_verb, which already
+                                ; exists three hundred lines down as a 0/1/2
+                                ; selector for delete/mkdir/rmdir
+sf_pre:     db '  ['
+sf_tag:     db '?', '] ',0
+s_portpin:  db 'Port pinned by /P: to ',0
+s_portscan: db 'Port chosen by scanning (see the table below).',0
+s_imgsay:   db 'Block-mode image (/I:): ',0
+helpflag:   db 0
 
 imgname:    times 80 db 0       ; ...EMPTY by default now: the bare argument
                                 ; is the FOLDER to serve, and block mode is

@@ -40332,6 +40332,28 @@ safe). That costs nothing on a RAM disk and is worth fixing for the cable,
 where a 116KB read is half a minute of frozen screen — a byte-based scale is
 the obvious answer and it belongs with the cable's client.
 
+##### 62.9.5.1 The seeded files are a harness, and they stopped shipping
+
+The RAM disk mounted with two levels of folder, three text files and a copy
+of `MINES.O88` in it. Those were the redirector's branch sites' test data —
+something to list, something to `chdir` into, something to launch — and once
+the cable served real files they were a **1.8KB copy of a package the disk
+already carries**, in the driver image, on every shipped floppy.
+
+`make ramseed` builds the populated one; the default is empty. Two things are
+worth stating about the cost, because the obvious guess is wrong in both
+directions. It recovers **no kernel budget at all** — a `.drv` is a heap
+claim (`MEM_K_DRV`) and never counted against `KERN_BUDGET` — and what it
+does recover is 2,227 bytes of **floppy**, plus the same in heap while the
+driver is attached: 4,375 → 2,148.
+
+**The empty volume needs no new code**, which is what makes this a deletion
+rather than a feature: a refused arena already mounts an empty RAM disk, so
+every path in the kernel handles the state. What it did need is that the seed
+loop **assembles away** rather than counting zero — `mov cx, 0` followed by
+`loop` decrements to 0xFFFF and runs 65,536 times — so `%if RD_NSEED` wraps
+the loop and `rd_seed_one` with it.
+
 #### 62.9.6 Milestone 3 as built — writes
 
 **Done and verified: New Folder, Delete, Rename, a document SAVED back onto a
@@ -41232,6 +41254,60 @@ command whose far side has vanished spends one long wait and then `net_lost`
 takes the volume down, which is the same cost the receive side has had since
 §62.10.4.6. What made the goodbye different is that it is issued on a path the
 user is *waiting on*, and its result is discarded.
+
+#### 62.10.5 The DOS end says what it is doing
+
+Asked for off the field once the link was in real use, and the reason is
+physical: **the two ends of this cable are usually in different rooms.** The
+DOS side printed what it was serving and then nothing at all until the master
+said goodbye — so "did it even ask for that file", "is this run read-only",
+"which port did it settle on" were all questions only os8088 could answer, and
+os8088 is the side under suspicion when something goes wrong.
+
+Four changes, and the last of them is the one that pays.
+
+**The name is `os88net`** — the driver, its Control Panel page and the row in
+`drv_tab`. It was `Network`, which is the class of thing rather than the thing.
+
+**No stage numbers in the text.** `docs/NET-PLAN.md stage 1` and
+`Phase 1 is READ ONLY whatever the switches say` described a program two
+milestones ago; the second was actively false, since writes work.
+
+**`/?` prints the switches and stops** — before anything touches a drive or a
+port, which is what makes it safe to type on a machine you are unsure about.
+The banner names it, because a switch nobody can discover is not a switch.
+
+**The startup report names the whole effective setup**: the folder served,
+whether writes are allowed *and why* (`/RO` or not), the port and whether it
+was pinned or scanned for, and the block-mode image if there is one. Every
+line is a choice the user made or a default they did not know they took.
+
+**And every file the run touches is named as it is touched**, one line, with
+a one-character verb tag: `[S]` stat, `[R]` read, `[W]` write, `[A]` append,
+`[D]` delete, `[N]` rename, `[M]` mkdir, `[K]` rmdir, `[Y]`/`[y]` a copy's
+two ends. The hook is at the point the **path is resolved** — `wildbuf`, which
+every verb hands to DOS — rather than one per verb: three sites instead of
+nine, and a new verb is logged by construction. **A `LIST` is deliberately not
+logged**: it is one line per file in the folder, which buries the thing being
+looked for.
+
+Measured on a cycle-accurate 8088 through `tests/dosstub`, which runs the real
+program:
+
+```
+Serving files from C:\
+Writes allowed.
+Port chosen by scanning (see the table below).
+...
+Called on 0378
+  [S] C:\README.TXT
+  [R] C:\README.TXT
+  [W] C:\NEW.TXT
+  [D] C:\NEW.TXT
+```
+
+Cost: `OS88NET.COM` 8,265 → 9,625 bytes, which is the far machine's and no
+part of any os8088 budget.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

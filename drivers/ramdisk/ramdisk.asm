@@ -67,6 +67,7 @@ RDE_SZ      equ 24
 ; thing that can be clicked rather than argued - and it proves 62.9.2's other
 ; half by accident: MINES has an EMBEDDED ICON and draws with 25's generic one
 ; here, because a redirected volume has no first sector to harvest from.
+%ifdef RDSEED                   ; ...the seeded volume: `make ramseed` (62.9.5.1)
 rd_d_readme:
     db 'This volume has no sectors.', 13, 10
     db 'Its contents come from RAMDISK.DRV answering', 13, 10
@@ -129,9 +130,20 @@ rd_seed:
     RD_SEED 5, 0, rd_d_bottom, rd_d_bottom_end - rd_d_bottom, 'BOTTOM.TXT'
 rd_seed_end:
 RD_NSEED    equ (rd_seed_end - rd_seed) / RDE_SZ
+%else
+; NOT SEEDED, which is what ships (SPEC.md 62.9.5.1). The files were a
+; harness for the redirector's branch sites and cost the FLOPPY 1.8KB of
+; driver image to carry a copy of MINES.O88 nobody asked for; the volume
+; mounts empty, which every path in the kernel already handles because a
+; refused arena produces exactly that. `make ramseed` builds the populated
+; one for debugging.
+RD_NSEED    equ 0
+%endif
 
-%if rd_d_mines_end - rd_d_mines > RD_EXTB
-  %error "ramdisk: the seeded package does not fit one extent"
+%ifdef RDSEED
+  %if rd_d_mines_end - rd_d_mines > RD_EXTB
+    %error "ramdisk: the seeded package does not fit one extent"
+  %endif
 %endif
 %if RD_NSEED > RD_MAXENT
   %error "ramdisk: more seeds than directory rows"
@@ -295,6 +307,12 @@ rd_seed_all:
     cmp word [rd_arena], 0
     je .out                     ; no store: the volume mounts empty, which is
                                 ; a state the whole kernel already handles
+%if RD_NSEED                    ; ...and it ASSEMBLES AWAY when there are no
+                                ; seeds rather than counting zero: `loop` with
+                                ; CX = 0 decrements to 0xFFFF and runs 65,536
+                                ; times, which is the shape a `jcxz` would be
+                                ; guarding against - and there is no reason to
+                                ; carry the instructions at all
     mov si, rd_seed
     mov di, rd_dir
     mov cx, RD_NSEED
@@ -305,6 +323,7 @@ rd_seed_all:
     add si, RDE_SZ
     add di, RDE_SZ
     loop .one
+%endif
 .out:
     pop cx
     pop di
@@ -312,6 +331,11 @@ rd_seed_all:
     ret
 
 ; rd_seed_one - SI = a seed row, DI = its directory row
+;
+; Inside the gate with the seed data it reads: RDS_DATA and RDS_SIZE are the
+; SEED row's offsets and exist only when there are seed rows, and nothing else
+; calls this (SPEC.md 62.9.5.1).
+%if RD_NSEED
 rd_seed_one:
     push ax
     push bx
@@ -347,6 +371,7 @@ rd_seed_one:
     pop bx
     pop ax
     ret
+%endif
 
 ; =============================================================================
 ; ARENA AND DIRECTORY HELPERS
