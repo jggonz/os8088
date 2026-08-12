@@ -15472,31 +15472,34 @@ Behaviour:
 `fm_kinit` stores it into `W_MENUS`, so the bar carries the file manager's
 menus exactly while one of its windows is active and Locator's desktop
 menus otherwise. Four menus, and the layout is pinned because
-`menu_relayout` drops any cell that would reach `[vid_clk_hx]` (§39.2 — 434
-on either 640-wide adapter and more on Hercules, so 434 is the binding case):
-`'Locator'` is 56px so the first cell starts at 38+56+16 = **110**, and
-cells are `font_width + MENU_TITLE_PAD`:
+`menu_relayout` drops any cell that would reach `[vid_clk_hx]` (§39.2 — **432**
+on either 640-wide adapter and more on Hercules, so 432 is the binding case;
+§12.9 floors it to a glyph-cell boundary, which is why it is not the 434 the
+arithmetic gives). `'Locator'` is 56px so the first cell starts at
+38+56+16 = 110, snapped up to **112**, and cells are
+`font_width + MENU_TITLE_PAD`:
 
 | menu | width | x range | items |
 |------|-------|---------|-------|
 | **File** | 48 | 112..159 | Open · New Folder… · Rename… · Delete · ──── · Format Disk… |
 | **Edit** | 48 | 160..207 | Cut · Copy · Paste |
-| **Folder** | 64 | 208..271 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
-| **View** | 48 | 272..319 | as List · as Icons |
-| **Builtins** | 80 | 320..399 | Timer · Bounce · Disk |
+| **Nav** | 40 | 208..247 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **Builtins** | 80 | 248..327 | Timer · Bounce · Disk |
 
-399 against a 432 limit is 33px of slack — enough that a longer item
+327 against a 432 limit is 105px of slack — enough that a longer item
 string can never push a *title* off the bar, since item widths do not enter
-the layout at all. `MENU_APPMAX` is 5 and all five are used; it was 4 and
-File carried Cut/Copy/Paste as well, until §22.12 needed a sixth item and a
-seven-item File menu stopped being a menu and started being a list.
+the layout at all. `MENU_APPMAX` is 5 and **four** are used, which is
+§22.15: there were five, and a `View` cell holding `as List` · `as Icons`
+was retired to the context menu and the in-window toggle button that already
+carried both. It was 4 before that too, File carrying Cut/Copy/Paste as
+well, until §22.12 needed a sixth item there and a seven-item File menu
+stopped being a menu and started being a list.
 
-The slack is 33px rather than 108 because §12.9 snapped the bar to 8px cells
-and widened `MENU_TITLE_PAD`, and because a fifth title costs its own width
-plus that padding. It is still slack in the direction that matters: nothing
-here is measured against the number of menus, only against where the next
-cell's right edge lands, so the fifth title is laid out or it is not and no
-other cell is affected either way.
+Nothing here is measured against the number of menus, only against where the
+next cell's right edge lands, so a title is laid out or it is not and no
+other cell is affected either way — which is why §12.9 could snap the bar to
+8px cells and widen `MENU_TITLE_PAD`, and why §22.15 could take a cell out,
+without either re-measuring anything but this table.
 
 **Dispatch.** `fm_oncmd` turns (menu, item) into one `FMC_*` id —
 `bl = fm_menu_base[ah] + al`, bounds-checked, then `shl bx,1` and
@@ -15519,7 +15522,7 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Refresh / Drive A: / Drive B: | inline `disk_mount`, exactly as the button and the a/b/r keys already do |
 | Up One Folder / Root Folder | inline: `fmv_sync`, then `dsk_dotdot` + `fmv_load` / `fmv_load` AX=0 |
 | New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
-| as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL` |
+| as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL`. Not on the bar since §22.15 — the context menu and the in-window button reach them |
 | Timer / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
 | Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
 | Restart | **deferred** — `ui_post_cmd` CMD_REBOOT; `ui_cmd` takes the lock and never gives it back |
@@ -16503,6 +16506,64 @@ arithmetic (`wm_su_edge` computes its row count and stride from the rect
 rather than reading back what `vga_rect_setup` clipped), but it is written
 down because it is why the first measurement of this said the cache was dead
 for Note Pad too.
+
+### 22.15 The bar is four cells — View retired, `Folder` renamed to `Nav`
+
+Two changes to `fm_menus`' cell list and nothing else. **The `View` cell is
+gone** and **`Folder` is `Nav`**, so the bar reads **File · Edit · Nav ·
+Builtins** and the layout in §22's table above is the live one.
+
+**`as List` and `as Icons` did not go with the cell.** They are still
+`FMC_LIST` and `FMC_ICONS`, still in `fm_jmp`, and still reached from two
+surfaces: the context menu's `fm_ctx_dir` descriptor (§12.4) and the
+in-window toggle button, whose label is the view a click switches *to*. The
+button is what makes the retirement safe on a **one-button machine**, which
+queues no `EVT_RDOWN` at all — the same argument §22's context-menu section
+already makes for why that button stays. A two-item menu whose whole content
+is duplicated by a button in the window it acts on is a cell spent on
+nothing.
+
+**Nothing renumbers**, and the reason is worth stating because it is not
+§12.7's. `fm_oncmd` builds an id as `fm_menu_base[menu] + item`, so retiring
+a cell removes one **entry** from `fm_menu_base` — the remaining entries are
+`FMC_*` *values*, not positions, so `FMC_TIMER` stays 18 while its menu index
+falls from 4 to 3. `FMC_LIST`/`FMC_ICONS` simply stop being producible by
+that sum, exactly as `FMC_CLOSEW` did; the context menu names them and does
+not care.
+
+`AM_COUNT` goes 5 → 4 and `FM_NMENUS` with it — the two must agree, since
+`FM_NMENUS` is what bounds the `fm_menu_base` read and `menu_relayout` clamps
+the cell index to `AM_COUNT`. **`MENU_APPMAX` stays 5**: it is the bar's
+capacity and `menu_bar`'s size (§12.2), a ceiling every application shares
+rather than this set's count, and lowering it would narrow a published clamp
+to save 14 bytes of `.lowbss`.
+
+**Layout, on the binding 640-wide case** (`[vid_clk_hx]` = 432, §39.2):
+`'Locator'` still puts the first cell at 112, and cells are
+`font_width + MENU_TITLE_PAD`:
+
+| menu | width | x range | items |
+|------|-------|---------|-------|
+| **File** | 48 | 112..159 | Open · New Folder… · Rename… · Delete · ──── · Format Disk… |
+| **Edit** | 48 | 160..207 | Cut · Copy · Paste |
+| **Nav** | 40 | 208..247 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **Builtins** | 80 | 248..327 | Timer · Bounce · Disk |
+
+327 against 432 is **105px of slack**, up from 33 — a cell's width and a
+title's, which is the whole of what the two changes buy the bar. Item strings
+still do not enter that arithmetic.
+
+**`Nav` rather than `Folder` because the old word named two different
+things.** Three items in the *File* menu act on a folder — `New Folder…`,
+and `Rename…`/`Delete` on a folder row — while the `Folder` menu never acted
+on one: every item in it is somewhere to **go** (a drive, the root, the
+parent, a second window onto here). A user who reads `Folder` as "the folder
+commands" opens the wrong menu and finds seven items that are not it. The
+label changed; the item list did not, and neither did one command body.
+`fm_s_mfold`/`fm_items_fold` are `fm_s_mnav`/`fm_items_nav` to match, which
+is label hygiene and not a second change — `fm_ctx_fold` and `fm_cxi_fold`
+keep their names, because *those* really are about a folder under the
+pointer.
 
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
