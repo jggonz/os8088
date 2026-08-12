@@ -105,8 +105,27 @@ class Partner(object):
                                         # incapable of being slow about. See
                                         # _spend_stall
         self.stall_body = 0             # ...and the same, MID-frame: see send_body
+        self.stall_ack = 0              # ...and BEFORE AN ACK, which is the
+                                        # THIRD place the far machine goes to
+                                        # its disk and the one no harness could
+                                        # reach: srv_write reads the length,
+                                        # CREATES the file and only then reads
+                                        # a body byte, so the pause lands
+                                        # between os8088's length word and its
+                                        # first data byte. Armed by arm_ack(),
+                                        # spent by recv_nib
         self._owed = False
+        self._ackowed = False
         self._status(idle=True)
+
+    def arm_ack(self):
+        """The NEXT nibble os8088 sends us waits `stall_ack` ticks for its ack.
+
+        Armed rather than continuous because a per-nibble stall would make a
+        1KB write take hours of wall clock, and because the real pause has one
+        place: srv_write's int 21h 3Ch, between the length and the body.
+        """
+        self._ackowed = True
 
     def _spend_stall(self):
         """Run the guest for `self.stall` of ITS OWN ticks, answering nothing.
@@ -162,6 +181,11 @@ class Partner(object):
     # --- one nibble each way -------------------------------------------------
     def recv_nib(self):
         """os8088 is sending: lp_snib's counterpart."""
+        if self._ackowed:               # ...THE FAR SIDE IS NOT LOOKING YET.
+            self._ackowed = False       # See stall_ack: this is the gap that
+            saved, self.stall = self.stall, self.stall_ack   # let 62.10.4.8 ship
+            self._spend_stall()
+            self.stall = saved
         d = self._await_strobe(True)    # nibble is stable before the strobe
         n = d & 0x0F
         self._status(idle=False)        # ack UP (asserted = raw bit 7 zero)
@@ -630,6 +654,13 @@ class Partner(object):
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 n = (self.recv_dword() if c == ord('U') else self.recv_word())
+                self.arm_ack()                  # ...AND HERE IS WHERE THE FAR
+                                                # MACHINE CREATES THE FILE. The
+                                                # length is off the wire and
+                                                # int 21h 3Ch has not run yet,
+                                                # so os8088's first body nibble
+                                                # waits on a DOS floppy write
+                                                # (SPEC.md 62.10.4.8)
                 d = self.recv(n)                # THE RUN IS TAKEN WHATEVER we
                                                 # do with it: the length is on
                                                 # the wire ahead of the bytes

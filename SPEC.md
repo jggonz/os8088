@@ -40154,6 +40154,48 @@ rebuild happen and says nothing about what the rebuild is made of.** The
 first run of this A/B printed `handle=1` for both binaries, which reads as
 "the bug was never there".
 
+##### 62.10.4.8 The third field run: the deadline had a twin on the send side
+
+Reported off the same pair, with §62.10.4.6 and §62.10.4.7 both in: read-only
+mount, chdir in and out, a package launched and a document opened — all
+working. Then a **paste** onto the Link volume: one read off the source
+floppy, a long freeze, the far machine's disk spinning, the Link window
+refreshing **empty**, and on the DOS side a `dir` showing the file at **zero
+bytes**.
+
+**`lp_snib` waited `LP_TMO` — 110 ms — for the far end to acknowledge each
+nibble it sent.** §62.10.4.6 raised the deadline on `lp_rnib`, which is the
+*receive* side, on the reasoning that a reversal means the far side has gone
+to its disk. That reasoning is symmetric and only half of it was applied. A
+**write is os8088 sending**, and `srv_write` reads the length, calls
+`int 21h 3Ch` to **create the file**, and only then reads a body byte — so a
+floppy's directory write lands squarely between our length word and our first
+data byte, where 110 ms was certain to expire.
+
+Every symptom follows from that one deadline, which is what says it is the
+whole story rather than one of several faults:
+
+- the **freeze** is the full volume switch a cross-drive copy makes
+  (`fcp_goto` alternates drives, so each hop is a mount = an `FSV_LIST` over a
+  3,741 B/s wire);
+- the far machine's **disk spinning** is `wr_open`'s create;
+- the **zero-byte file** is that create, with a body that never arrived;
+- the **empty listing** is `net_lost` dropping the volume, exactly as
+  §62.10.4.6's blank Disk window was.
+
+`lp_snib`'s first wait is `[lp_turnw]` now. Its second — the ack falling — keeps
+`LP_TMO`, the same asymmetry `lp_rnib` has and for the same reason: by then
+the far side has committed and is not going anywhere. The port sweep is
+unaffected, because `lp_init` leaves the word at `TURN_RX` until a partner
+answers.
+
+**The shape worth keeping.** The first fix was verified with a harness that
+could stall before a **reply**, and it verified exactly what it was built to
+verify. Nothing stalled before an **ack**, so the untested half stayed
+untested and shipped — and it shipped in the one verb the field had not yet
+reached. *A fix aimed at one direction of a symmetric mechanism should be
+tested in both, or the second half is a field report waiting to happen.*
+
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
 466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
