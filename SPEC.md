@@ -5866,7 +5866,7 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 |---|---|---|
 | ~~Disk window header~~ | ~~`fm_cx + 6`~~ | **done** — 6 → 8, with the status line and the row icon; §22.11.1.1 |
 | ~~Disk window icon grid~~ | ~~icon at `fm_cellx + 31`~~ | **done** — `FMI_CELL_W` 78 → 80 and 31 → 32; §22.11.1.2. Its **label** is `(FMI_CELL_W - width)/2` and is a *centred string*, the second of the three kinds below that must not be "fixed" |
-| Tracker's FT2 UI | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | its *pattern grid* was aligned for §6.1 (§45.9); the rest of the face never was — 17% of sampled literal pens |
+| ~~Tracker's FT2 UI~~ | ~~6, 38, 108, 111, 116, 150, 205, 210, 258, 290~~ | **measured and CLOSED, not done** — §45.17. Its per-frame text already self-aligns, what is left is event-driven, and the biggest cluster is a centred string |
 | Tamegram HUD | 4, 60, 116, 164, 210 | 7 of 8 sampled pens ≡ 4 |
 | ~~Fractal status row~~ | ~~`FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250~~ | **done** — §40.2.1, together with the change that stops 78% of those glyphs being drawn at all |
 | Paint | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned |
@@ -29720,6 +29720,60 @@ Four things hold the rest up:
   making the user close something and re-load, and `trk_ring_set` is called
   with what was *actually* granted, never with what was asked for.
 
+
+### 45.19 Its off-grid pens are MEASURED and deliberately left alone
+
+§11.94.3 listed this app's face as the worst alignment offender in the tree
+(*"17% of sampled literal pens"*), and docs/SNAP-PLAN.md ranked it near the top.
+Measured, it is **not worth changing**, and this section is here so nobody
+re-derives that from the same sample.
+
+`make SNAPAUDIT=1`, one forced full repaint of the Tracker window, the histogram
+filtered to Tracker's own record so the About panel used to force the repaint is
+not counted in it:
+
+| adapter | glyph cells | aligned | off-grid buckets |
+|---|---|---|---|
+| Hercules | 237 | 26.2% | 1:16, **5:159** |
+| VGA 12h | 354 | 39.3% | 1:16, 4:40, **5:159** |
+
+Four things that sample could not see:
+
+**The frequently-drawn text already self-aligns.** Every value the playing view
+updates — Pos, Row, BPM, Spd, Ptn, Np, the title, the status line — goes through
+`tui_rdout`, which rounds its pen **down to a byte boundary** when `[tui_mono]`
+is set, precisely so the run earns `font_run`'s single-store path (§6.1). So on
+the two adapters this app exists for, the per-frame text is on the fast path
+already, whatever the caller's constant says.
+
+**The CGA layout is already aligned.** `tui_top_cga`'s labels are at 0, 64, 136,
+200 and 288.
+
+**What is left is EVENT-DRIVEN.** Those 237/354 cells are one `tui_draw_all` —
+a launch, a drag, a raise, a dialog closing. `tui_draw_dyn` draws only what
+changed, against a `tui_l*` shadow of what it last drew, and its own comments
+record per-frame repaints already removed. Alignment does not remove a glyph, it
+shaves a cell's cost: §11.94's measured 3.4% on Hercules and 9.4% on VGA. So
+aligning all 175 off-grid Hercules cells is worth **~6 ms of a ~237 ms repaint,
+on an event** — against Fractal (§40.2.1), which was 2,557 cells a hundred times
+a render and where the fix *removed* 78% of the glyphs rather than shaving each.
+
+**And the biggest single cluster must not move.** 159 of the off-grid cells sit
+at ≡ 5 on both adapters, and the caller log names `tui_s_logo` —
+`'T R A C K E R'`, 13 glyphs at 104px, drawn at 149 inside a box spanning
+112..290. `112 + (179-104)/2 = 149`: **that pen IS the centring**, §11.94.3's
+second protected kind.
+
+**What the measurement does point at, undone and costed.** `tui_rdout` keeps the
+erase-and-letter pair on a colour adapter — its header says so deliberately,
+because the flash it was written to fix was reported from mono — so on VGA the
+per-frame values are drawn at an unaligned pen, and VGA is where alignment is
+worth 2.8x what it is on mono. Fixing it is not a constant: it means resolving
+the two colour roles in `tui_rdout` and emitting one padded `OSAPI_FONT_RUN` for
+both adapters (whose VGA fallback *is* fill-plus-letter), which would delete the
+`.pair` branch and shift VGA's values up to 7px left to where mono already draws
+them. That is a refactor of a routine with a careful history, for a few tens of
+cells per change. Recorded, not taken.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 

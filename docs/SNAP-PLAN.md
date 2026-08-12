@@ -101,7 +101,7 @@ count.
 
 | app | off-grid pen(s) | note |
 |---|---|---|
-| **Tracker** | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | the **largest** item here. Its pattern grid was already moved onto 8px boundaries to earn §6.1 (SPEC.md §45.9); the rest of the FT2 face never was — 17% of sampled literal pens aligned. It also redraws continuously while playing, so this is the app where the percentage is spent most often |
+| ~~**Tracker**~~ | ~~6, 38, 108, 111, 116, 150, 205, 210, 258, 290~~ | **MEASURED AND CLOSED WITHOUT CHANGING IT** — SPEC.md §45.19. It was ranked the largest item here on this sample and the sample was misleading four ways: its per-frame values go through `tui_rdout`, which **already rounds its pen down to a byte boundary on mono**; `tui_top_cga`'s labels are already at 0/64/136/200/288; what is left is `tui_draw_all`, which is event-driven and not the "redraws continuously while playing" this row claimed (`tui_draw_dyn` draws only what changed); and 159 of the off-grid cells are `tui_s_logo` at 149, which is `112 + (179-104)/2` — the centring of `'T R A C K E R'`, §3's protected kind. Measured: 237 cells 26.2% aligned on Hercules, 354 / 39.3% on VGA, all of it on one repaint |
 | **Tamegram** | 4, 60, 116, 164, 210 | HUD; 7 of 8 sampled pens ≡ 4, so a single `+4` on the base would align nearly all of it |
 | **Fractal** | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0. **Confirmed by measurement, and it is the worst in the tree: 2,801 glyphs in one launch, 16% aligned, 2,323 of them at bucket 2** — the status row redrawn per progress tick. Four constants in one table |
 | **Paint** | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned. The palette is drawn on every tool change |
@@ -209,7 +209,21 @@ By what the percentage is spent on rather than by size of diff:
    **The lesson for the rest of this list: ask how often a pen is drawn before
    moving it.** An off-grid glyph that should not be drawn at all is not an
    alignment defect, and aligning it would have banked a fifth of the win.
-3. **Tracker** — redraws while playing, and has the most off-grid pens.
+3. ~~**Tracker**~~ — ✅ **measured and CLOSED without changing it**, SPEC.md
+   §45.19. One forced full repaint, histogram filtered to its own record:
+   Hercules **237 cells, 26.2% aligned**; VGA **354, 39.3%**. Four things this
+   plan's literal-pen sample could not see. Its per-frame values all go through
+   `tui_rdout`, which **already rounds its pen down to a byte boundary on mono**
+   — so the frequently-drawn text is on `font_run`'s fast path whatever the
+   caller's constant says. `tui_top_cga`'s labels are already at 0/64/136/200/288.
+   What is left is `tui_draw_all` — event-driven, not per frame — and alignment
+   shaves ~3.4% (Herc) / 9.4% (VGA) off a cell rather than removing it, so all
+   175 off-grid Hercules cells are worth **~6 ms of a ~237 ms repaint, on an
+   event**. And 159 of them are `tui_s_logo` at 149, which is exactly
+   `112 + (179-104)/2` — the centring of `'T R A C K E R'` in its box, §4's
+   second protected kind. The one thing the measurement does point at —
+   `tui_rdout` keeping the erase-and-letter pair on VGA — is a refactor, not a
+   constant, and is costed in §45.19 rather than taken.
 4. ~~**Disk window icon grid**~~ — ✅ done, SPEC.md §22.11.1.2: `FMI_CELL_W`
    78 → 80 and the icon's `fm_cellx + 31` → `+ 32`, which is exactly the centre
    of an 80-wide cell, so it is aligned and centred at once. 0 bytes. The
@@ -335,17 +349,21 @@ The tree's real deltas mostly already qualify:
 |---|---:|---|---|
 | Note Pad row scroll (`NP_SB_STEP` 4 rows) | 32 px | ✅ | ✅ |
 | Disk window `fm_scrollpaint` (`FM_ROW_H`) | 16 px | ✅ | ✅ |
-| Note Pad find panel (§27.10.2) | 29 / 41 px | ❌ | ❌ |
+| Note Pad find panel (§27.10.2) | **32 / 44 px** | ✅ | ✅ |
 
-So the only caller that would have to move is the find panel, and the change is
-one character: its height is `NP_FP_ROW*2 + NP_FP_PAD*2 + 1` = **29** (and
-`+ NP_FP_ROW` = **41** with the replace row), so **the `+ 1` border line is the
-whole of what makes it odd**. 32 and 44 would qualify on both mono adapters.
-§27.10.2 notes the shift is deliberately "not a multiple of 8", but that was
-about the *blit working at all* at a non-8 shift rather than about its cost, so
-nothing there argues for keeping it odd. Even
-unaligned, the general path can still halve its arithmetic: walk the
-destination with the register step and pay `gfx_rowbase` for the source alone.
+**✅ DONE — SPEC.md §27.10.3.** The find panel was the only caller that had to
+move, and this file said the change was "one character": it is not, and the
+reason is worth keeping. `NP_FP_ROW*2 + NP_FP_PAD*2 + 1` is odd for **every**
+value of those two constants — `2*anything` is even and the separating rule adds
+one — so no edit to either could have fixed it and the correction has to be
+explicit: `NP_FP_SLACK = (-NP_FP_RAW) & 3`, rounding UP because down would take
+a pixel off something using it. `NP_FP_ROW` must itself be a multiple of 4 or
+the Replace panel's `+NP_FP_ROW` undoes it, which is an `%error` now.
+The three rows land below the buttons (`np_pbtny` is bottom-anchored), so nothing
+is squeezed; 0 bytes; 0 differing pixels against a forced full repaint on CGA and
+Hercules. §27.10.2's "not a multiple of 8" note was about the *blit working at
+all* at a non-8 shift rather than about its cost, so nothing there argued for
+keeping it odd.
 
 **None of this needs `WF_SNAP` in Y, and none of it needs an 8-pixel vertical
 drag quantum** — which would have been the visible price, and a dearer one than
