@@ -855,7 +855,17 @@ dsk_xfer:
 .served:
     add di, ax                  ; the same advance .ok makes, and no int 13h
     sub si, ax
-    push cx
+    push cx                     ; ...and the same PROGRESS .count makes. A
+    mov cx, ax                  ; sector is delivered to the caller whether it
+.notch2:                        ; came off the platter or out of the cache, and
+    call spl_step               ; both bars are scaled in SECTORS OF THE JOB
+    call fpg_step               ; (SPEC.md 12.8/15.3) - so skipping the cached
+    loop .notch2                ; ones leaves a bar stopped short of the end of
+                                ; an operation that finished, which reads as a
+                                ; hang. Both preserve every register and the
+                                ; flags, and both are a compare and a return
+                                ; when their bar is not on screen; AX is >= 1
+                                ; by dsk_rah_take's contract, as it is at .count
     mov cl, 9
     shl ax, cl
     pop cx
