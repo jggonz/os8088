@@ -1424,8 +1424,75 @@ was ruled out (tens of seconds per 448×280 frame before the dither).
 | Paint's design notes and what it cost | [docs/PAINT-NOTES.md](docs/PAINT-NOTES.md) |
 | Per-device cycle budgets on the floor machine | [docs/SOUND-PLAN.md](docs/SOUND-PLAN.md) |
 | Memory, and why there is no growth room | [docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md) |
+| `sysbench`'s three CPU books, and the tier that picks one | Part 8.1, below |
 | The benchmarks themselves | `tests/fontbench/`, `tests/typebench/`, `tests/gfxbench/`, `tests/sysbench/` (`make bench`) |
 | The field measurements they produced | Part 9, below |
+
+---
+
+## Part 8.1 — `sysbench`'s CPU rows carry THREE books, and pick by tier
+
+`tests/sysbench`'s CPU block measures each instruction and prints the
+**book** figure beside it, so the ratio column says how far the machine is
+from the manual. That book was Intel's **8086** table, unconditionally, on
+every machine — which is right on the target and wrong on everything else,
+and the Packard Bell Victory 286 (docs/FIELD-MACHINES.md) is where it showed:
+
+```
+est CPU MHz x100 MUL    8879        <- an 8879 on a 16MHz 286
+est CPU MHz x100 DIV    9759
+shl clk/bit x100 ~400     28
+```
+
+**None of those three is a measurement error.** `est CPU MHz` inverts
+`MHz = 4.7727 x nominal / measured`, which is exact — with the *right*
+nominal. A 286 does `mul r16` in 21 clocks and an 8086 in 125, so quoting the
+8086's figure inflates the answer by exactly that ratio. Re-derived against
+the 286 book, from the same report's own measured column:
+
+| | measured x100 | 8086 book | est MHz | 286 book | est MHz |
+|---|---|---|---|---|---|
+| `mov ax,i + mul r16` | 693 | 12900 | **88.79** | 2300 | **15.83** |
+| `xor+mov+div r16` | 782 | 16000 | **97.59** | 2600 | **15.86** |
+
+Two independent rows landing on 15.83 and 15.86 for a machine the register
+calls a **16 MHz** AMD 286 — agreeing with each other to 0.2% — is the
+cross-check `sb_mhz` was written to provide, working for the first time on a
+machine that is not an 8088.
+
+**One row per instruction, three book columns, `sb_nomof` picks.** The
+alternative is a table per CPU, which is three places that must agree about
+what row 12 is. `sb_entof` owns the stride for the same reason: it was 8
+bytes with four sites open-coding `shl bx, 3`, and an open-coded stride is a
+silently wrong row rather than a build error.
+
+**The ratio column reads differently on a fast machine and that is not a
+defect.** It is measured-in-4.77MHz-units over book, so on a 16MHz machine
+every execution-bound row lands near **477/1584 = 30**. The Packard Bell's
+register rows duly cluster at 26–30 with the 286 book, where the 8086 book
+scattered them from 4 to 29 — and the rows that do *not* join the cluster are
+the interesting ones: its memory rows sit at 61–81, which is real bus cost
+the 286's zero-wait-state book does not carry.
+
+**`shl clk/bit` had to change currency, not just books.** It is a slope — the
+two `shl r16,cl` rows nine bits apart, subtracted — and it was reported in
+4.77MHz clock periods, so a 286's one-clock-per-bit shift measured **0.28 of
+one**: true, and unreadable against any book. It is scaled by the MUL
+estimate into the machine's own clocks now (`x100 * MHzx100 / 477`), which on
+a 4.77MHz machine is a factor of 1 **by construction**, so tier 0's published
+figure does not move. The Packard Bell reads **92** against the 286 book's
+100. The book row beside it is derived from the same two table rows the
+measurement subtracts — `(nom13 - nom4) / 9`, giving 400 / 100 / **0** — and
+the 386's zero is the barrel shifter, which is the whole reason this row
+stopped meaning anything past tier 0.
+
+**What is validated and what is not.** The 286 column is confirmed against
+field data, above. The 386 column is **book figures that have not yet met
+hardware** — and its MUL and DIV are *early-out* on that part, data-dependent
+in a way the 286's are not, so treat a 386 `est CPU MHz` as approximate until
+a 386 report lands in Part 9. What is verified for it is the mechanism: a
+tier-2 run prints `against the 80386 book` with the 386 column beside every
+row and `shl clk/bit book` at 0.
 
 ---
 
