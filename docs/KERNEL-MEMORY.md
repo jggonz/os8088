@@ -407,21 +407,21 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5713,
+    "bss": 5611,
     "budget": 104960,
     "codemax": 65536,
-    "cold": 37125,
+    "cold": 37308,
     "coldpara": 2336,
     "fatpara": 288,
-    "imgpara": 3296,
-    "kend": 6592,
+    "imgpara": 3232,
+    "kend": 6528,
     "kseg": 96,
-    "ksize": 103936,
+    "ksize": 102912,
     "lowbss": 7762,
     "lowpara": 576,
-    "ovl": 3139,
+    "ovl": 2782,
     "stk0": 1024,
-    "text": 46773
+    "text": 46002
   },
   "small": {
     "bss": 5495,
@@ -934,14 +934,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,718 | 36.6% |
-| the window system and its furniture | 19,038 | 22.7% |
-| drawing: adapters, primitives, glyphs, icons | 12,631 | 15.1% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,090 | 12.0% |
-| the kernel proper: API table, heap, scheduler, events | 6,209 | 7.4% |
-| the Control Panel | 3,836 | 4.6% |
-| the three built-in kinds | 1,376 | 1.6% |
-| **total** | **83,898** | |
+| the file system, end to end | 30,732 | 36.9% |
+| the window system and its furniture | 19,038 | 22.9% |
+| drawing: adapters, primitives, glyphs, icons | 12,636 | 15.2% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,438 | 11.3% |
+| the kernel proper: API table, heap, scheduler, events | 6,203 | 7.4% |
+| the Control Panel | 3,887 | 4.7% |
+| the three built-in kinds | 1,376 | 1.7% |
+| **total** | **83,310** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -949,13 +949,13 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,000 | 7,704 | **8,704** | 338 | — |
 | `wm.inc` — the window manager (§11) | 8,115 | — | **8,115** | 669 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 352 | 5,891 | **6,243** | 890 | 3,584 |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 352 | 5,905 | **6,257** | 890 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,641 | **5,820** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,206 | — | **5,206** | 653 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,883 | **4,106** | 106 | — |
-| `ctrl.inc` — the Control Panel (§31) | 672 | 3,164 | **3,836** | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 673 | 3,214 | **3,887** | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,448 | **2,858** | 341 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,471 | **2,881** | 341 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,332 | **2,849** | 43 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
@@ -966,12 +966,11 @@ generated in the first place.
 | `icons.inc` — the icon renderer (§10) | 1,570 | — | **1,570** | 34 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,527 | — | **1,527** | 197 | 768 |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,347 | — | **1,347** | 84 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,352 | — | **1,352** | 84 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,205 | — | **1,205** | 4 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 15 | 1,052 | **1,067** | 18 | — |
-| `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 916 | — | **916** | 9 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
@@ -979,11 +978,12 @@ generated in the first place.
 | `dock.inc` — the dock (§30) | 793 | — | **793** | 34 | — |
 | `toast.inc` — **(undescribed)** | 481 | — | **481** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 454 | — | **454** | — | — |
+| `xmem.inc` — memory above 1MB (§41.4–41.5) | 269 | 96 | **365** | 22 | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,955 | — | **2,955** | — | — |
-| **total** | **46,773** | **37,125** | **83,898** | **5,713** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,949 | — | **2,949** | — | — |
+| **total** | **46,002** | **37,308** | **83,310** | **5,611** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
