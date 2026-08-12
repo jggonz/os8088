@@ -5630,3 +5630,204 @@ once something has moved.
 
 **Cost: the kernel is untouched.** `solitair.o88` 5,799 -> 5,823 bytes, which is
 heap while the game is open and nothing when it is closed.
+
+### Set 50 — Solitaire's drop redraws the cards that MOVED (SPEC.md §43.10)
+
+Set 49 priced Solitaire's FULL repaint and left §43.7's incremental path alone
+on the strength of its own reasoning: a move touches two piles, so it costs two
+`sol_drawpile` calls and never a whole content. That is true, and it is not the
+same claim as *a drop is cheap*.
+
+**Measured on a cycle-accurate 5150 with a Hercules card, one card dragged off
+a six-card run onto another column** — the commonest move in Klondike, driven
+through the UART with the drawing primitives breakpointed and the board poked
+to a chosen position so the case measured is the case chosen:
+
+| | before | after |
+|---|---:|---:|
+| card faces drawn | 11 | 3 |
+| drawing calls | 481 | 210 |
+| guest time | **332.5 ms** | **171.2 ms** |
+
+**Eight of those eleven faces were pixel-identical to what was already on the
+screen.** Cards leave and arrive at the *top* of a column, so the ones
+underneath do not move — and `sol_drawpile` erased and redrew them anyway,
+because §43.7's keep stopped at the face-down run. The fan was `(cfd 2, cfa 5,
+cfu 14)` before the move and after it, so nothing below the change had moved by
+so much as a pixel.
+
+**The two ratios differ — 2.3x the calls, 1.94x the time — because the faces
+that survive are the expensive ones**: 41 calls per face on average before, 66
+after. A buried card is a sliver that skips its centre pip and its bottom edge
+(§43.3), and slivers are exactly what a keep keeps; what is left to draw is the
+full-height card at the bottom of the column and the one that just arrived.
+
+**A re-fan is the case where there is nothing to win, and it is not rare.**
+`sol_colfan` tightens a column that would run past the content bottom, so on
+CGA's 136-row desktop a column growing from 7 cards to 10 takes the face-up
+step from 12px to 10px and *every* card in it really does move. Measured, that
+same drop is **309 calls before and 309 after** — the shadow keeps nothing and
+is right not to. The win is on the adapters with the room for long columns,
+which is Hercules and VGA, and on the field machine that is the primary card.
+
+**What it cost: nothing the kernel can see.** `solitair.o88` 5,823 -> 5,889
+bytes of image and 1,276 -> 1,451 of bss — 203 bytes of shadow against the 28
+the sliver cache used — all of it inside the package's own region, which is a
+heap claim (§20.1). No kernel file changed.
+
+**And §11.96's raise cache was asked whether it covers any of this. It does
+not, and it is not idle either** (§43.10.1). The question arrived as *"a drag
+and drop did not seem to use this buffer — maybe this is a global issue?"*,
+which is the same words §11.96.4 was written for, so it was re-asked with the
+instrument rather than answered from the document. Two scenarios added to
+`tools/os88span.py`, cycle-accurate 5150/Hercules:
+
+| | | |
+|---|---|---:|
+| `solraise` | Solitaire covered, then called to the front | `wm_su_try` → `gfx_restore` **15.24 ms** |
+| `sol` | a Disk window dragged **off** Solitaire | `wm_su_try` → `gfx_restore` **32.76 ms** |
+| `dragoff` | ...and the same for two Disk windows, as a control | `wm_su_try` → `gfx_restore` **10.84 ms** |
+
+**Zero `gfx_blit4` in any of them**, so `sol_drawall` ran in none — against
+§43.9's 681 ms full repaint. The buffer works, for this package and generally.
+What it cannot do is a card drop: §11.96.4's bank **drops the front window's
+cache and takes everybody else's**, and the window a card is being dropped on
+is by definition the front one. The two mechanisms compose — the cache for
+what another window covered, the shadow for what the app moved itself — and
+after this change they compose over an incremental drawing that is exact.
+
+**One measurement here was wrong before it was right, and the reason is in
+`os88span.py`'s own docstring.** A first pass with a hand-rolled probe reported
+`wm_su_try` firing **zero** times on a Solitaire raise whose picture came back
+perfect, which reads as "the cache is being bypassed" — the very claim under
+test. It was the harness: the probe sent its press and release as back-to-back
+raw packets, which the 1200-baud UART drops (`subcheck.pclick` exists for
+exactly this), and armed the breakpoints before driving the input instead of
+after. **Drive the input before arming and send only the last packet**, which
+is what the scenarios above do and what that file has said since Set 30.
+
+**Verified by comparison, not by argument.** `tools/solcheck.py` grew a PLAY
+phase for this: fourteen real drags chosen from the guest's own board (so both
+builds play the same game off the same seeded deal), including a six-card run,
+a three-card run, waste plays, a foundation play that empties a column outright,
+and Auto Finish — capturing after every one. The gate is that the incrementally
+drawn content equals **the same position forced through a full `W_PAINT`**:
+**0 differing pixels on Hercules and 0 on CGA**. That comparison needs no second
+build, which is what makes it the strong one — a wrong keep is a card left
+standing where a card no longer is, a real picture rather than a broken-looking
+one, so nothing about the screen would say so.
+
+**`make SOLNOKEEP=1` is the second build, and it found something that is not
+this change.** It stubs `sol_keep` to 0, so every column is erased and redrawn
+whole — strictly more drawing than either §43.7 or §43.10 — and its own content
+then differs from *its own* full repaint by **12 pixels**: one column, one pixel
+wide, twelve rows tall, at a tableau column that the move in question neither
+redraws nor keeps. Two independent runs of it are byte-identical to each other
+and both carry it, so it is deterministic rather than a timing or cursor
+artifact; it appears at one identifiable step — a six-card drag whose outline
+crosses four columns — and survives every later move, which is what a stray
+pixel in a column nothing repaints does.
+
+**It is unexplained and it is not safely a property of the knob**, because
+`keep = 0` is a state the shipped build reaches too: on the first draw after
+`sol_pinv`, and after any re-fan. What is established is the paragraph above —
+the shipped build's own output is exact against a full repaint on both 1bpp
+adapters — and not a clean cross-build diff, which this did not produce (15 of
+19 captures identical, 4 differing by those same 12 pixels, with the reference
+the build that disagrees with ground truth). Worth an investigation of its own;
+the trace to start from is which drawing call touches that column during that
+step, since neither pile being redrawn owns it.
+
+Three things the harness had to be taught first, and each of them made a broken
+build look like a passing one:
+
+- **The listing has to be of the build that is there.** A package's bss names
+  are `equ`s over `os88_image_end` with no map, so the offsets are walked out of
+  the source and checked against an instruction in the listing — and the listing
+  was being assembled without the knob's `-D`, so it described the other build.
+  It was caught only because the two images happen to differ in size.
+- **The crop has to be in guest coordinates.** `solcheck` cropped the card's
+  rasterised frame, which on Hercules is 720x350 for a 720x348 screen at
+  dx = -16 (`sucheck.fb` has said so for as long as it has existed). Both builds
+  are offset the same way so a cross-build diff survived it; a comparison across
+  a window MOVE does not.
+- **Blanking the mouse cell is not enough when the two captures are different
+  steps.** The pointer is somewhere else at each, so one image gets a black box
+  where the other has cards — 321 pixels of difference, in BOTH builds, which is
+  what said it was the harness. The arrow is parked clear of the window now and
+  the blanking is belt and braces.
+
+### Set 51 — a window MOVED replays its content (SPEC.md §11.96.12)
+
+Set 50's question came back one level up: *"drag the whole Solitaire window by
+its title and it redraws its entire screen card by card, instead of from its
+last full window shadow buffer — I'm not sure if this is global or not."*
+
+**It was global**, and `tools/winmove.py` was written to price it. Cycle-accurate
+5150/Hercules, each window dragged by its own title bar:
+
+| | drawing calls | guest time | the tell |
+|---|---:|---:|---|
+| a Disk window | 207 | **236.6 ms** | 71 `font_char` — the listing re-lettered |
+| Solitaire | 1,016 | **914.7 ms** | 22 `gfx_blit4` — every card back again |
+
+`wm_su_try` appeared in both traces and `gfx_restore` in neither: the dragged
+window is FRONT, so §11.96.4 had dropped its cache, and `wm_su_ck` compares the
+absolute content rect, which a move changes in all four numbers.
+
+**The fix is a relabel, not a mechanism.** `wm_dc_take` banks through
+`wm_su_take` at the old position and moves the claim's header by the drag's own
+delta; `wm_su_ck` then agrees and the raise cache's own restore — fragments,
+`wm_su_edge`, free — does the rest. The same drag through both builds
+(`make DRAGCACHE=0` is the A/B), Solitaire, (231,20) → (167,20):
+
+| | drawing calls | guest time | its cards |
+|---|---:|---:|---|
+| `DRAGCACHE=0` | 981 | **954.3 ms** | 22 `gfx_blit4` |
+| with the cache | 210 | **462.4 ms** | **0** — one `gfx_restore` |
+
+**4.7x the calls, 2.06x the time.** What remains is honest: the window
+*underneath* is genuinely revealed and must be redrawn, which is most of the
+462 ms.
+
+**Cost: `.text` +174 bytes — and what that costs the MACHINE depends on the
+base it lands on, which is worth stating because both numbers are real.** On
+the branch it was written against it crossed no rung and the footprint moved
+**+0**. Merged onto `elendilon`, where §2.6's cold-segment round had left the
+image rung with **99 bytes** of slack, the same 174 bytes cross it: `KERN_SIZE`
+102,912 → **103,424**, `KERN_BUDGET` spare 2,048 → **1,536 (3 steps)**. That is
+docs/KERNEL-MEMORY.md's accounting rule working as written — a change that
+crosses no rung is not free, it has spent slack that belonged to the next
+feature, and here the next feature was the merge itself.
+
+The other half of that round is the good news: `.text+.bss` is **51,787 of
+65,536** afterwards, so **13,749** are left against the ceiling that cannot be
+raised — where this change's own branch had 228.
+
+**Verified: 0 differing pixels of 250,560 on Hercules and of 128,000 on CGA**,
+whole screen, against the reference build — and `gfx_restore` fires for
+**Fractal**, which promises no `WF_SAVEU` and has a live worker, which is what
+says every window is eligible rather than only the ones §11.96.1 marked.
+
+Four things this cost, and every one of them made a working build look broken
+or a broken one look fine:
+
+- **The collector ate the first hit.** `burst` opened with `run`, and the guest
+  is already stopped at the *first* symbol of the operation when it is entered —
+  which is precisely the routine under test. `wm_dc_take` was executing all
+  along and simply never appeared, which read as "the new code never runs".
+- **The first honest trace then showed the bank succeeding and the restore
+  refusing**, and the reason was real rather than a slip: the test drag moved
+  the window's bottom *below the screen* (content `y2` 361 on a 348-row
+  Hercules), which `wm_su_try` correctly refuses. `wm_dc_take` asks that
+  question up front now, so the ~4 ms of claim and save is not spent on a
+  window that will be drawn in full anyway.
+- **782 differing pixels that were two different card games.** Solitaire seeds
+  from `GET_TICKS`; the gate now pins `[osapi_seed]` and presses N, which
+  `tools/solcheck.py` documents in capitals.
+- **`os88sym` refused to run against the knob build at all** — correctly, since
+  a map of a different kernel is a wrong answer rather than a missing one. It
+  reads `$OS88_DEFINES` now, so every tool layered above it (`os88geom.word`,
+  `sucheck.fb`, `Marty.sym`) can drive an A/B build without threading defines
+  through each one. That trap is named in `os88span.py`'s docstring and had no
+  remedy until now.

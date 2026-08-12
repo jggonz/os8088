@@ -413,15 +413,15 @@ Three things about it:
     "cold": 37308,
     "coldpara": 2336,
     "fatpara": 288,
-    "imgpara": 3232,
-    "kend": 6528,
+    "imgpara": 3264,
+    "kend": 6560,
     "kseg": 96,
-    "ksize": 102912,
+    "ksize": 103424,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2782,
     "stk0": 1024,
-    "text": 46002
+    "text": 46176
   },
   "small": {
     "bss": 5495,
@@ -934,21 +934,21 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,732 | 36.9% |
-| the window system and its furniture | 19,038 | 22.9% |
-| drawing: adapters, primitives, glyphs, icons | 12,636 | 15.2% |
+| the file system, end to end | 30,732 | 36.8% |
+| the window system and its furniture | 19,212 | 23.0% |
+| drawing: adapters, primitives, glyphs, icons | 12,636 | 15.1% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,438 | 11.3% |
 | the kernel proper: API table, heap, scheduler, events | 6,203 | 7.4% |
 | the Control Panel | 3,887 | 4.7% |
-| the three built-in kinds | 1,376 | 1.7% |
-| **total** | **83,310** | |
+| the three built-in kinds | 1,376 | 1.6% |
+| **total** | **83,484** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,000 | 7,704 | **8,704** | 338 | — |
-| `wm.inc` — the window manager (§11) | 8,115 | — | **8,115** | 669 | — |
+| `wm.inc` — the window manager (§11) | 8,279 | — | **8,279** | 669 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 352 | 5,905 | **6,257** | 890 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,641 | **5,820** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,206 | — | **5,206** | 653 | — |
@@ -957,7 +957,7 @@ generated in the first place.
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,471 | **2,881** | 341 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,332 | **2,849** | 43 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,637 | — | **2,637** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,197 | **2,197** | 139 | — |
 | `memory.inc` — the claim heap (§50) | 14 | 2,014 | **2,028** | 14 | 256 |
@@ -983,7 +983,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,949 | — | **2,949** | — | — |
-| **total** | **46,002** | **37,308** | **83,310** | **5,611** | **7,762** |
+| **total** | **46,176** | **37,308** | **83,484** | **5,611** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
