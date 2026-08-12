@@ -54,6 +54,8 @@ import os88geom                                             # noqa: E402
 
 TITLE_H = 18
 VID_VGA, VID_CGA = 0, 2
+KSEG_BASE = 0x600            # KERNEL_SEG << 4: os88sym answers LINEAR,
+                             # and W_ONSIZE-family handlers are NEAR offsets
 S = os88sym.linear
 
 
@@ -140,6 +142,29 @@ def main(argv):
         say("...and re-dragged un-snapped to %r"
             % (dispcp.win_rect(m, S, moved),))
 
+        # --- and SPEC.md 11.98: is the window TOLD? -------------------------
+        # There is no shipped app with a size-changed handler, so the handler
+        # is written INTO the guest as nine bytes of machine code and pointed
+        # at from wm_onsz. That drives the real path - the real slot table, the
+        # real compare, wm_pkgcall's `call bp` for a kernel window - where a
+        # stub inside the kernel would be a different route with the same name.
+        #
+        # It lives in the wm_natr entries of two window slots that are not in
+        # use, and records into a wm_zoomr entry of a third. Nothing reads
+        # those: wm_refit visits used records only, wm_create banks into the
+        # one slot it fills, wm_destroy clears the one it frees. Do not open
+        # more windows after this point.
+        code_at = S("wm_natr") + 10 * 8 - KSEG_BASE     # a NEAR offset: the
+        rec_at = S("wm_zoomr") + 10 * 8 - KSEG_BASE     # handler is called in
+        handler = (b"\x89\x0e" + rec_at.to_bytes(2, "little") +      # mov [],cx
+                   b"\x89\x16" + (rec_at + 2).to_bytes(2, "little")  # mov [],dx
+                   + b"\xc3")                                        # ret
+        m.write(S("wm_natr") + 10 * 8, handler)
+        m.write(S("wm_zoomr") + 10 * 8, b"\0\0\0\0")
+        m.write(S("wm_onsz") + keep * 2, code_at.to_bytes(2, "little"))
+        say("handler for window %d poked at %04x, recording to %04x"
+            % (keep, code_at, rec_at))
+
         # --- VGA -> CGA -> VGA -----------------------------------------------
         dispcp.open_panel(m, mo, S, settle)
         slots = dispcp.win_list(m, S)
@@ -149,6 +174,20 @@ def main(argv):
         switch_to(m, mo, settle, 1, VID_CGA)                # the Cga row
         during = rects(m, slots)
         say("CGA    %r" % (during,))
+
+        got = m.read(S("wm_zoomr") + 10 * 8, 4)
+        gw = int.from_bytes(got[0:2], "little")
+        gh = int.from_bytes(got[2:4], "little")
+        want = (during[keep][2] - 2, during[keep][3] - TITLE_H - 1)
+        say("handler was called with content %dx%d (the window is %dx%d)"
+            % (gw, gh, want[0], want[1]))
+        if (gw, gh) == (0, 0):
+            fail.append("the size-changed handler never ran, and window %d's "
+                        "content box moved %r -> %r (SPEC.md 11.98)"
+                        % (keep, before[keep][2:], during[keep][2:]))
+        elif (gw, gh) != want:
+            fail.append("the handler got %dx%d, but the window's content box "
+                        "is %dx%d (SPEC.md 11.98)" % (gw, gh, want[0], want[1]))
         if during == before:
             sys.exit("dispfit: the CGA clamped nothing, so a round trip that "
                      "comes back unchanged proves nothing - this machine's "

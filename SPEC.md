@@ -7030,6 +7030,57 @@ what is gone is how many of them were written and then immediately overwritten.
 the rect the mover *vacated*, so a drag that does not leave ground inside it
 redraws the mover alone and measures nothing this is about.
 
+### 11.98 …and the window is TOLD when its box moved under it — `OSAPI_WM_ONRESIZE`
+
+**`W_ONSIZE` asks and this one tells, and they are not interchangeable.**
+§11.1's negotiator is called *before* a resize with a proposed size, and the
+app answers with one it will take. That covers every resize somebody
+proposed — a grow-box drag, a zoom, an app sizing itself. It cannot cover the
+case where **nobody proposed anything**: §39.11.2's adapter change re-fits
+every window on the screen at once, and §39.16.3's straddle rule shrinks a
+window because of where it was dragged.
+
+The symptom is the one §39.11.2.1 fixed half of. The Task Manager derives its
+row count from `[vid_dock_y0]` **once**, at launch (§28); §39.11.2.1 gave it
+back the *frame* it asked for across an adapter round trip, and left it still
+holding the row count it computed on the other adapter — so while the machine
+is on the smaller one it lays out for a box it no longer has, and the `gfx_*`
+primitives clip to the SCREEN rather than to the window (§11.3), so the
+surplus rows are drawn through the bottom of its own frame and onto the
+desktop. **The kernel is the only thing that knows the box moved, so the
+kernel has to say so.**
+
+Slot **0x03D8**, appended: §20.3.1's free list of retired cells is empty —
+0x01E8 and 0x01F0 have both been reused already.
+
+**It is a per-slot SIDE TABLE** (`wm_onsz`), not a word in the record, on
+§12.2's `wm_about` precedent: a handler is per *slot*, `WIN_SIZE` is what
+`wm_idx2ptr` multiplies by, and every reader of a window would pay for a wider
+record. It also costs no `.o88` a rebuild and moves no harness constant, which
+a record that grew would. `wm_destroy` clears it beside `wm_about` and
+`wm_zoomr` — a stranger's near pointer called in a new tenant's segment is not
+a wrong answer, it is a jump into the middle of its image.
+
+Four things bind it:
+
+- **The compare is in `wm_sz_notify`, not at the call sites.** "Only when it
+  actually changed" is one rule rather than one per caller, and an adapter
+  re-fit visits every window while moving most of them not at all.
+- **It runs under the gfx lock and MUST NOT DRAW** — `W_ONSIZE`'s contract,
+  for `W_ONSIZE`'s reason.
+- **It is called BEFORE the caller's repaint, not deferred to the UI task.**
+  That ordering is the whole value: an app that relayouts here is painted
+  correctly the first time, where a deferred notice would let one frame go up
+  in the old layout. `vid_switch` owes its caller a repaint (§39.11.2) and
+  `wm_refit` runs inside it, so the repaint is always still ahead.
+- **`wm_refit` walks to a bound rather than with a `loop` counter.** `CX` is
+  what `wm_geom` and `wm_sz_notify` both answer in, and a counter there would
+  have to be saved and restored twice per window.
+
+**No shipped app registers one yet**, and that is deliberate: the mechanism is
+the kernel's half, and which apps need it is a per-app question — an app that
+asks `OSAPI_WM_GEOM` inside `W_PAINT` needs nothing at all.
+
 ### 12.05 The bar is redrawn only when its contents changed
 
 `menu_draw_bar` is on the same hot path as `dock_paint` — every window
@@ -24112,6 +24163,50 @@ drag therefore crosses the seam** — the frame is clamped only when the origin
 lands somewhere no display has — and a window straddling the two cards is
 drawn by §39.14's split, one fragment per display, with no code in the window
 manager aware of it.
+
+#### 39.16.3 …and a window that DOES straddle takes the more restrictive size
+
+The split draws a straddling window correctly, so the straddle is not the
+problem. The problem is that the virtual desktop is a **union and not a
+rectangle** (§39.2.1), so past the seam the two displays stop agreeing about
+which rows exist: a 720x348 Hercules beside a 640x200 CGA has rows 220..347
+on the left and nothing at all on the right. A window tall enough to use them,
+dragged until its right-hand edge is over the CGA, has its bottom-right corner
+in the **dead zone** — drawn nowhere, clickable nowhere, and holding whatever
+the app put there.
+
+So `wm_strad_fit` gives those rows back: a frame reaching rows or columns that
+only one of the two displays has is shortened until it does not.
+
+**It is called from `ui_drag` and `ui_grow`, and deliberately not from
+`wm_fit`.** `wm_fit` confines a frame to the box of the display its *origin*
+is on (§39.16.1) — it is the un-straddler, and a window that has been through
+it cannot straddle at all. The seam is crossed by dragging, which clamps
+against the whole union and allows it on purpose, and by the grow box. Those
+two are the only ways a straddling window comes about, so those two are where
+this runs; putting it in `wm_fit` would be dead code that reads like a rule.
+
+**One axis is narrowed and it is decided by which way the displays TILE.**
+Side by side (§39.19.2's Right) they are contiguous in x and overlap in y, so
+spanning x is the entire point of extending and must stay free while y comes
+in; stacked (Below) it is the other way round. The test is geometric rather
+than a read of `[vid_dlay]` — display 1's `VY` against display 0's height,
+display 0 being at the virtual origin by construction — so a placement that
+put them somewhere else would be answered by the same code rather than by a
+mode byte that had stopped describing it.
+
+**It never moves the origin, only lowers the far edge.** "The more restrictive
+*size*" is a statement about size; a window that has to be moved to fit is a
+bigger promise than this makes. Under the two placements §39.19.2 offers the
+origin side is a no-op anyway — both put the second display's near edge level
+with the first's.
+
+**The shrink is banked** (§39.11.2.1), so the window keeps the size it now has
+rather than springing back at the next adapter change. A drag is deliberate,
+and this is the same rule every other deliberate rect change follows.
+
+And **the window is told**, through §11.98 — its box changed and it did not
+ask, which is exactly the case that mechanism exists for.
 
 ### 39.17 A window belongs to ONE display — `wm_disp_of` (`KERN_BIG` only)
 

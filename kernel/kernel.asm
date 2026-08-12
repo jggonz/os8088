@@ -1772,7 +1772,23 @@ osapi_table:
                                   ;          the title bar and its boxes - stays
                                   ;          the arrow, because it is the
                                   ;          kernel's to draw and to click
-osapi_table_end:                  ; 0x03D8
+    OSAPI_SLOT wm_onresize        ; 0x03D8 - BX = window, AX = a near proc in
+                                  ;          YOUR segment (0 clears it). Your
+                                  ;          content box CHANGED and you did
+                                  ;          not ask - the machine changed
+                                  ;          adapter under you (SPEC.md
+                                  ;          39.11.2), or your window crossed
+                                  ;          the seam onto a shorter display
+                                  ;          (39.16.3). Called SI = window,
+                                  ;          CX/DX = the NEW content size, gfx
+                                  ;          lock HELD, and MUST NOT DRAW: a
+                                  ;          full repaint follows and this is
+                                  ;          your chance to be laid out
+                                  ;          correctly before it. The other
+                                  ;          half of OSAPI_WM_ONSIZE, which
+                                  ;          asks BEFORE and takes an answer
+                                  ;          (SPEC.md 11.98)
+osapi_table_end:                  ; 0x03E0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1780,8 +1796,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 121 * 8
-%error "os8088 API jump table must be exactly 121 8-byte slots"
+%if OSAPI_TABLE_LEN != 122 * 8
+%error "os8088 API jump table must be exactly 122 8-byte slots"
 %endif
 
 ; =============================================================================

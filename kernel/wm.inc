@@ -432,6 +432,125 @@ wm_fs_setrect:
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
+; wm_strad_fit - a window across the seam takes the MORE RESTRICTIVE size
+;                (SPEC.md 39.16.3)
+;
+; in:       BX = the window, its rect already settled by the caller's clamps;
+;           the gfx lock held
+; out:      W_W/W_H reduced if the frame reached rows or columns that only one
+;           of the two displays has; every register preserved, FLAGS INCLUDED
+;
+; WHY IT IS HERE AND NOT IN wm_fit. wm_fit confines a frame to the box of the
+; display its ORIGIN is on (39.16.1), so a window that has been through it
+; cannot straddle at all - it is the un-straddler. The seam is crossed by
+; DRAGGING, which clamps against the whole union and deliberately allows it,
+; and by the grow box; those two are the only ways a straddling window comes
+; about, so those two are where this is called. Putting it in wm_fit would be
+; dead code that reads like a rule.
+;
+; WHAT IS WRONG WITH A STRADDLING WINDOW is not the straddle - SPEC.md 39.14's
+; split draws one fragment per display and that works. It is that the virtual
+; desktop is a UNION and not a rectangle (39.2.1), so beyond the seam the two
+; displays stop agreeing about which rows exist: a 720x348 Hercules beside a
+; 640x200 CGA leaves rows 220..347 present on the left and absent on the
+; right. A window tall enough to use them, dragged until its right-hand edge
+; is over the CGA, has its bottom-right corner in the DEAD ZONE - drawn
+; nowhere, clickable nowhere, and containing whatever the app put there.
+;
+; THE AXIS IS DECIDED BY WHICH WAY THE DISPLAYS TILE, and only one axis is
+; ever narrowed. Side by side (39.19.2's Right), they are contiguous in x and
+; overlap in y - so spanning x is the whole point of extending and must stay
+; free, while y is what has to come in. Stacked (Below) it is the other way
+; round. The test is geometric rather than a read of [vid_dlay]: display 1's
+; VY against display 0's height, display 0 being at the virtual origin by
+; construction. A layout that puts them somewhere else would need this
+; re-read, which is why it asks the records rather than the mode byte.
+;
+; It NEVER MOVES THE ORIGIN, only lowers the far edge. "The more restrictive
+; size" is a statement about size; a window that has to move to fit is a
+; bigger promise than this makes, and under the two placements 39.19.2 offers
+; the origin side is a no-op anyway - both put the second display's near edge
+; level with the first's.
+; -----------------------------------------------------------------------------
+wm_strad_fit:
+    pushf
+    cmp byte [vid_ndisp], 1
+    jbe .out                    ; one display: no seam, and no cost either
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov bp, bx                  ; the window - a register MOVE, so BP addressing
+                                ; SS never comes into it (SPEC.md 1)
+    mov ax, [bx+W_X]
+    mov bx, [bx+W_Y]
+    call vid_disp_of            ; AL = the display the ORIGIN is on...
+    xor al, 1                   ; ...so this is the other, [vid_ndisp] being
+                                ; capped at VID_NDISP_MAX = 2
+    call vid_ctx_ptr            ; DI = its record
+    mov bx, bp                  ; BX = the window again
+
+    mov ax, [di+VID_CTX_VX]     ; --- does the frame reach that display? ---
+    mov dx, [bx+W_X]
+    add dx, [bx+W_W]
+    cmp dx, ax
+    jbe .none                   ; wholly left of it
+    mov cx, ax
+    add cx, [di+VID_CTX_CW]
+    cmp [bx+W_X], cx
+    jae .none                   ; wholly right of it
+    mov ax, [di+VID_CTX_VY]
+    mov dx, [bx+W_Y]
+    add dx, [bx+W_H]
+    cmp dx, ax
+    jbe .none                   ; wholly above it
+    mov cx, ax
+    add cx, [di+VID_CTX_CH]
+    cmp [bx+W_Y], cx
+    jae .none                   ; wholly below it
+
+    mov ax, [vid_ctx + VID_CTX_SZ + VID_CTX_VY]   ; --- which way do they tile?
+    cmp ax, [vid_ctx + VID_CTX_CH]                ; display 1's top against
+    jae .stacked                                  ; display 0's height
+
+    mov si, [di+VID_CTX_VY]     ; SIDE BY SIDE: y is the axis that must come in
+    add si, [di+VID_CTX_CH]     ; SI = one past the last row that display has...
+    sub si, [bx+W_Y]            ; ...as a frame height from this window's top
+    jbe .none                   ; it starts below that display: nothing to do
+    cmp [bx+W_H], si
+    jbe .none                   ; already inside it
+    call wm_geom                ; CX/DX = the content size it has NOW, taken
+    mov [bx+W_H], si            ; BEFORE the store, so wm_sz_notify's compare
+    jmp short .tell             ; has the old pair and re-reads the new itself
+.stacked:
+    mov si, [di+VID_CTX_VX]     ; STACKED: x is
+    add si, [di+VID_CTX_CW]
+    sub si, [bx+W_X]
+    jbe .none
+    cmp [bx+W_W], si
+    jbe .none
+    call wm_geom
+    mov [bx+W_W], si
+.tell:
+    call wm_sz_notify           ; the window's box really did change under it
+                                ; (SPEC.md 11.98), and it did not ask
+.none:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_fit_box - the box for the display this window's ORIGIN is on
 ;              (SPEC.md 39.16.1)
 ; in:       BX = the window; AX/CX/SI/DI = the primary's box
@@ -670,16 +789,23 @@ wm_nat_take:
 wm_refit:
     push bx
     push cx
-    mov bx, wm_wins
-    mov cx, MAX_WIN
-.next:
+    push dx
+    push di
+    push bp
+    mov bx, wm_wins             ; walked to a BOUND rather than with a `loop`
+.next:                          ; counter: CX is the size wm_geom and
+                                ; wm_sz_notify both answer in, and a counter
+                                ; there would have to be saved twice per window
     test word [bx+W_FLAGS], 1   ; used?
     jz .skip
+    call wm_geom                ; the content box it had, banked BEFORE anything
+    mov di, cx                  ; moves - wm_sz_notify compares against it and
+    mov bp, dx                  ; says nothing when it did not change (11.98)
     test word [bx+W_FLAGS], WF_FULL
     jnz .full
     call wm_nat_take            ; what it ASKED for, not what the screen it is
     call wm_fit                 ; leaving happened to allow (SPEC.md 39.11.2.1)
-    jmp short .skip
+    jmp short .told
 .full:
     call wm_fs_setrect          ; a fullscreen window wants the NEW screen, and
                                 ; its bank is the WINDOWED rect - replayed here
@@ -689,9 +815,19 @@ wm_refit:
                                 ; wm_fit is wrong for it too: it clamps to the
                                 ; desktop band, and a fullscreen frame covers
                                 ; the bar and the dock by definition
+.told:
+    mov cx, di
+    mov dx, bp
+    call wm_sz_notify           ; ...and NOW tell it, while the caller's repaint
+                                ; is still ahead of us: an app that relayouts
+                                ; here is painted correctly the first time
 .skip:
     add bx, WIN_SIZE
-    loop .next
+    cmp bx, wm_wins + MAX_WIN*WIN_SIZE
+    jb .next
+    pop bp
+    pop di
+    pop dx
     pop cx
     pop bx
     ret
@@ -814,6 +950,18 @@ wm_create:
     mov [bx+W_SEG], ax
     mov cx, 8                   ; (wm_fit and the index math below want CX
                                 ; free; the rep consumed it)
+    xor ax, ax                  ; ...and NO size-changed handler (SPEC.md
+    call wm_onresize            ; 11.98). The `xor` is NOT redundant: three
+                                ; lines up AX is 0 only for a KERNEL window and
+                                ; is the PACKAGE's own segment otherwise, so
+                                ; passing it through would install a handler at
+                                ; whatever offset that segment number happens to
+                                ; be - a near call into the middle of the
+                                ; package's image on the first adapter change.
+                                ; Cleared here and not only in wm_destroy where
+                                ; its siblings are: destroy covers a slot that
+                                ; has been USED, and this covers the first
+                                ; window in a slot that never has
     call wm_nat_bank            ; the TEMPLATE's own rect, banked while it is
                                 ; still in the record: this is the only moment
                                 ; the UNCLAMPED size exists, and without it a
@@ -849,6 +997,110 @@ wm_create:
 ; -----------------------------------------------------------------------------
 wm_onsize:
     mov [bx+W_ONSIZE], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_onresize - install (or clear) a window's size-CHANGED handler
+;               (public; API 0x03D8, SPEC.md 11.98)
+; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
+; out: nothing (all registers preserved)
+;
+; THE OTHER HALF OF W_ONSIZE, and the two are not interchangeable. W_ONSIZE is
+; a NEGOTIATOR: the kernel proposes a size, the app answers with one it will
+; take, and it runs BEFORE anything moves (SPEC.md 11.1). This is the NOTICE
+; after the fact - "your content box is now this; the frame has already
+; changed" - and it exists because there is a case the negotiator cannot cover
+; at all: SPEC.md 39.11.2's adapter change, where the screen moves under every
+; window at once and no app proposed anything.
+;
+; The reported symptom was the Task Manager drawing its process list through
+; the bottom of its own frame after a VGA -> CGA switch. 39.11.2.1 fixed the
+; FRAME - it comes back the size it asked for - and left the other half
+; standing: an app that derived a layout from the geometry ONCE, at launch,
+; still holds the number it computed then, so while the machine is on the
+; smaller adapter it lays out for a box it no longer has. The kernel is the
+; only thing that knows the box moved, so the kernel has to say so.
+;
+; A SIDE TABLE, not a word in the record: WIN_SIZE is what wm_idx2ptr
+; multiplies by and every reader of a window pays for a wider record, and
+; wm_about (SPEC.md 12.2) is the precedent for a per-slot HANDLER living
+; beside the table rather than in it. It also costs no .o88 a rebuild, which a
+; record that grew would.
+; -----------------------------------------------------------------------------
+wm_onresize:
+    push si
+    call wm_szh_slot
+    mov [si], ax
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_szh_slot - SI -> this window's size-changed handler word (module internal)
+; in:  BX = window ptr
+; out: SI = wm_onsz + index*2; every other register preserved
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_szh_slot:
+    push ax
+    call wm_ptr2idx             ; AL = index, AH = 0
+    mov si, ax
+    shl si, 1
+    add si, wm_onsz
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_sz_notify - tell BX its content box changed, if it asked to be told
+;                (SPEC.md 11.98)
+; in:  BX = window ptr, CX/DX = the content size BEFORE the change; the gfx
+;      lock held by the caller
+; out: nothing (all registers preserved, FLAGS INCLUDED)
+;
+; THE COMPARE IS HERE AND NOT AT THE CALL SITE, so "only when it actually
+; changed" is one rule rather than one per caller. An adapter switch re-fits
+; every window and most of them do not move.
+;
+; It runs with the LOCK HELD and the handler may not draw - that is the
+; contract, and it is W_ONSIZE's contract too. It is also the only ordering
+; that works: the caller's repaint comes after, so an app that relayouts here
+; is painted correctly the first time, where a deferred notice would let one
+; frame go up in the old layout.
+; -----------------------------------------------------------------------------
+wm_sz_notify:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call wm_szh_slot
+    mov bp, [si]
+    or bp, bp
+    jz .out                     ; never asked to be told: one word, and this is
+                                ; the whole cost to every window that has not
+    mov di, cx                  ; bank the OLD pair - wm_geom answers into the
+    mov si, dx                  ; same two registers
+    call wm_geom                ; CX/DX = the content size the record has NOW
+    cmp cx, di
+    jne .fire
+    cmp dx, si
+    je .out                     ; unmoved: the commonest case by far, an adapter
+                                ; change re-fitting a window that already fitted
+.fire:
+    mov si, bx                  ; SI = the window, CX/DX = the NEW content size
+    call wm_pkgcall             ; (BP is the handler; wm_pkgcall puts ES =
+                                ; KERNEL_SEG for it, like every other callback)
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1378,6 +1630,11 @@ wm_destroy:
     mov byte [wm_owner+si], 0xFF; wm_create reuse starts unowned (SPEC.md 11)
     shl si, 1                   ; ...and its About handler with it, or a
     mov word [wm_about+si], 0   ; reused slot inherits a stranger's (12.2)
+    mov word [wm_onsz+si], 0    ; ...and its size-changed handler, which is the
+                                ; same rule again and the same index (11.98):
+                                ; a stranger's near pointer called in a new
+                                ; tenant's segment is not a wrong answer, it is
+                                ; a jump into the middle of its image
     shr si, 1
     shl si, 1                   ; ...and its zoom bank, for the same reason:
     shl si, 1                   ; a reused slot must not restore to the rect
@@ -6915,6 +7172,11 @@ wm_natr:    resb MAX_WIN * NR_SIZE  ; per slot: the rect a window ASKED for, so
 wm_about:   resw MAX_WIN            ; per-slot About handler offset, 0 = none
                                     ; (SPEC.md 12.2); inside wm_init's zero
                                     ; run, so a fresh slot has no About
+wm_onsz:    resw MAX_WIN            ; per-slot size-CHANGED handler offset, 0 =
+                                    ; none (SPEC.md 11.98). wm_about's shape
+                                    ; exactly, for wm_about's reason: a handler
+                                    ; is per SLOT and a wider record is paid for
+                                    ; by every reader of a window
 wm_owner:   resb MAX_WIN            ; instance index owning each window slot
                                     ; (SPEC.md 29), 0xFF = unowned; NOT part
                                     ; of wm_init's zero run (fill is 0xFF)

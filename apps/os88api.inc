@@ -945,7 +945,9 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; It runs under the gfx lock with nothing yet
                                  ; drawn at either size, so DO NOT draw in it -
                                  ; decide, return, and draw in the W_PAINT the
-                                 ; kernel is about to make.
+                                 ; kernel is about to make. Its other half is
+                                 ; OSAPI_WM_ONRESIZE, which is the NOTICE after
+                                 ; a change nobody proposed - see below.
 %define OSAPI_FILE_HERE     KERNEL_SEG:0x0228   ; out DX = YOUR instance's
                                  ; current directory (0 = the root), BL = its
                                  ; drive. No disk I/O.
@@ -2118,6 +2120,41 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; Do NOT also poll OSAPI_MOUSE in a tracking
                                  ; loop from the same W_ONCLICK: that loop
                                  ; consumes its own release. Pick one.
+%define OSAPI_WM_ONRESIZE   KERNEL_SEG:0x03D8   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it): "your content
+                                 ; box CHANGED, and you did not ask"
+                                 ; (SPEC.md 11.98). Install it from your entry
+                                 ; proc after OSAPI_WM_CREATE, like
+                                 ; OSAPI_WM_ONSIZE - it is not a template word.
+                                 ;
+                                 ; THE OTHER HALF OF OSAPI_WM_ONSIZE, and they
+                                 ; are not interchangeable. That one is asked
+                                 ; BEFORE a resize and takes an answer; this one
+                                 ; is told AFTER, and there is nothing to
+                                 ; answer. It covers the case the negotiator
+                                 ; cannot see at all: the user changed ADAPTER
+                                 ; under you (SPEC.md 39.11.2 - a 640x480 VGA
+                                 ; becomes a 640x200 CGA and every window on the
+                                 ; screen is re-fitted at once), or your window
+                                 ; was dragged across the seam onto a shorter
+                                 ; display (39.16.3). Nobody proposed anything;
+                                 ; the box simply moved.
+                                 ;
+                                 ; Called SI = your window, CX = the NEW content
+                                 ; width, DX = the NEW content height, on the UI
+                                 ; task with the gfx lock HELD - and you MUST
+                                 ; NOT DRAW. A full repaint follows immediately,
+                                 ; so this is your chance to be laid out
+                                 ; correctly before your W_PAINT runs rather
+                                 ; than a frame later.
+                                 ;
+                                 ; WHO NEEDS IT: any app that works out a layout
+                                 ; ONCE, from the geometry, and keeps the answer
+                                 ; - rows that fit, columns, a cell size. Ask
+                                 ; OSAPI_WM_GEOM in W_PAINT instead and you need
+                                 ; none of this. An app that draws through the
+                                 ; bottom of its own frame after an adapter
+                                 ; change is the symptom this exists for.
 %define OSAPI_BOOT_TICKS    KERNEL_SEG:0x02F8   ; out AX = how long this machine
                                  ; took to boot, in SYSTEM TICKS (18.2065 Hz,
                                  ; 54.925 ms each): the boot sector's first

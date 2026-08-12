@@ -862,8 +862,14 @@ ui_drag:
                                 ; the pixels this is saving
 %endif
 
-    mov bx, [ui_dragwin]        ; where the user put it is where it goes back to
-    call wm_nat_bank            ; when the adapter changes (SPEC.md 39.11.2.1)
+    mov bx, [ui_dragwin]        ; A DRAG IS ALLOWED TO CROSS THE SEAM (SPEC.md
+%ifdef KERN_BIG                 ; 39.16.1) and this is what it costs when it
+    call wm_strad_fit           ; does: a frame reaching rows or columns only
+%endif                          ; one of the two displays has gives them back
+                                ; (39.16.3). BEFORE the bank, so what is
+                                ; remembered is what the record holds
+    call wm_nat_bank            ; where the user put it is where it goes back to
+                                ; when the adapter changes (SPEC.md 39.11.2.1)
                                 ; - and BELOW ui_drag_phase, not above it. That
                                 ; snap moves x by up to 7px (SPEC.md 11.96.13)
                                 ; and it is the LAST thing to touch the rect, so
@@ -1199,8 +1205,12 @@ ui_grow:
     push ax
     call wm_dock_snap
     pop ax
+%ifdef KERN_BIG
+    call wm_strad_fit           ; a grow can push a frame across the seam too
+%endif                          ; (SPEC.md 39.16.3)
     call wm_nat_bank            ; the size the user chose, banked AFTER the snap
-                                ; because the snap may have moved the origin
+                                ; because the snap may have moved the origin,
+                                ; and after the straddle fit for its reason
                                 ; (SPEC.md 39.11.2.1)
 
     ; Only the rect it had and the rect it has changed, so the repaint is
