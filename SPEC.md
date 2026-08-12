@@ -5678,18 +5678,23 @@ Four sites write `W_X` and all four go through `wm_snap_ax`:
   along without any of this (§45.9).
 
 A fifth site, **`wm_zoom`** (§11.95), shares the *gate* and not the
-arithmetic: `wm_snap_ax` moves left and re-tests the window's current width,
-and a zoom is the one case where x wants to move **right** and the width is
-about to shrink by the same seven pixels to pay for it. The three tests are
-therefore `wm_snap_want` (BX = window; CF = 1 = this window wants an 8-aligned
-content origin right now), which `wm_snap_ax` calls too — one answer to the
-question, two ways of acting on it.
+arithmetic: it goes to x = 0 and spans the screen, which §11.95.2 makes an
+aligned position by suppressing the left border, and on a secondary display
+(§39.17.2) — where x = 0 is not a screen edge — it falls back to moving
+**right** to the display's origin + 7 and shrinking the width to pay for it.
+Either way the gate is `wm_snap_want` (BX = window; CF = 1 = this window wants
+an 8-aligned content origin right now), which `wm_snap_ax` calls too — one
+answer to the question, two ways of acting on it.
 
 Three consequences worth naming:
 
-- **A snapped window cannot sit flush against the left edge.** The smallest x
-  with `x + 1` a multiple of 8 is 7, so that is as far left as it goes. Seven
-  pixels is the visible cost of the feature.
+- **A snapped window cannot sit flush against the left edge — unless it spans
+  the screen** (§11.95.2). The smallest x with `x + 1` a multiple of 8 is 7,
+  so that is as far left as an ordinary window goes, and seven pixels is the
+  visible cost of the feature. A window that reaches the right-hand edge from
+  x = 0 has no snapped position at all — the bullet below is `wm_snap_ax`
+  leaving it alone — and for that one the aligned origin is 0 with the left
+  border dropped.
 - **The snap moves LEFT**, so it can never violate the caller's right-edge
   clamp — except in the `x = 0..6` case, where the only answer is 7 and the
   right edge is re-tested. A window too wide for that is **left unsnapped**
@@ -5923,11 +5928,11 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 
 | what | off-grid pen | note |
 |---|---|---|
-| Disk window header | `fm_cx + 6` | one string per repaint; 6 → 8 fixes it |
-| Disk window icon grid | `fm_cx + 78 × col` | `FMI_CELL_W` 78 → 80 would align every column |
-| Tracker's FT2 UI | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | its *pattern grid* was aligned for §6.1 (§45.9); the rest of the face never was — 17% of sampled literal pens |
+| ~~Disk window header~~ | ~~`fm_cx + 6`~~ | **done** — 6 → 8, with the status line and the row icon; §22.11.1.1 |
+| ~~Disk window icon grid~~ | ~~icon at `fm_cellx + 31`~~ | **done** — `FMI_CELL_W` 78 → 80 and 31 → 32; §22.11.1.2. Its **label** is `(FMI_CELL_W - width)/2` and is a *centred string*, the second of the three kinds below that must not be "fixed" |
+| ~~Tracker's FT2 UI~~ | ~~6, 38, 108, 111, 116, 150, 205, 210, 258, 290~~ | **measured and CLOSED, not done** — §45.17. Its per-frame text already self-aligns, what is left is event-driven, and the biggest cluster is a centred string |
 | Tamegram HUD | 4, 60, 116, 164, 210 | 7 of 8 sampled pens ≡ 4 |
-| Fractal status row | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0 |
+| ~~Fractal status row~~ | ~~`FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250~~ | **done** — §40.2.1, together with the change that stops 78% of those glyphs being drawn at all |
 | Paint | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned |
 | ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
 | HDD Control Panel page | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
@@ -5951,10 +5956,11 @@ exact. The "sampled literal pens" rows are a **sample** — the literal `mov cx,
 values within a few lines of a text call — so they say *this app has off-grid
 pens* and not *this fraction of its glyphs are off-grid*; an app whose pens are
 all computed (Missile) shows as nothing at all. The "(measured)" entries come
-from `make SNAPAUDIT=1`. **That instrument has a known artifact**: every
-window's callback reports a constant 4 glyphs in bucket 7 per forced repaint,
-unexplained, so a count under about ten says nothing. Chase that before
-trusting small numbers out of it.
+from `make SNAPAUDIT=1`. **Its "known artifact" was the tool being right**
+(§11.94.2): the constant 4 glyphs in bucket 7 that every window reported were
+the *Disk window's `APPS` caption* behind them, `wm_draw_title` centring a pen
+no app can influence. A caption is chrome, it is attributed as chrome now, and
+small counts out of that instrument mean what they say.
 
 ### 11.95 Double-clicking a title bar zooms a resizable window
 
@@ -5998,9 +6004,9 @@ double-click zooms afresh and banks where the drag left it.
 matters:
 
 ```
-x = 0                             (7 for a WF_SNAP window on mono — below)
+x = 0                             (the display's origin + 7 — below)
 y = MBAR_H
-w = [vid_w]                       (less that 7)
+w = [vid_pw]                      (less that 7)
 h = [vid_dock_y0] − MBAR_H − 1
 ```
 
@@ -6028,17 +6034,28 @@ reason. Three things about it:
 - **A restore does not spend the bank.** A refused shrink (below) has to be
   askable again, and a zoom re-banks anyway.
 
-**`WF_SNAP` is honoured, and it is the one case where a snap moves RIGHT.**
-§11.94's `wm_snap_ax` moves a candidate x *left* and re-tests the window's
-**current** width against the right edge — and at full screen width x = 7
-always fails that test, so a snapped window put through it would zoom to x = 0
-and silently lose the single-store fast path it asked for. So the gate alone
-is factored out as **`wm_snap_want`** (BX = window; CF = 1 if this window's
-content origin wants to be 8-aligned right now — `WF_SNAP` set, `WF_FULL`
-clear, `[vid_mono]` non-zero) and `wm_zoom` acts on it in the other direction:
-x = 7, and the width gives back exactly the seven pixels x took, so the right
-edge is unmoved. `wm_snap_ax` calls the same routine, so there is still one
-answer to the question and not two that can drift.
+**`WF_SNAP` is honoured, and x = 0 is where it is honoured BEST.** §11.94's
+`wm_snap_ax` moves a candidate x *left* to the nearest x with `x + 1` a
+multiple of 8, and at full screen width there is no such x that fits — so it
+leaves the window at 0, where the content origin would be 1 and the
+single-store fast path is lost. §11.95.2 is the answer and it costs nothing:
+a snapped frame spanning the screen drops its **left border**, so its content
+starts at x = 0, which is aligned. The standard rect is the whole desktop
+band, the seven pixels of desktop that used to show down the left of a
+maximized window are content now, and the chrome is one drawing call cheaper.
+
+**A secondary display is where the seven pixels are still paid** (§39.17.2).
+There x = 0 is not a screen edge but the boundary with the display beside it,
+so the border has something to separate the window from and `wm_flush`
+correctly says no. `wm_zoom` asks `wm_flush_ck` of the rect it is about to
+commit — the geometry half of §11.95.2's predicate, since the record does not
+hold that rect yet — and when the answer is no it does what it always did:
+x = the display's origin + 7, and the width gives back exactly the seven
+pixels x took, so the right edge is unmoved. The gate above both is
+**`wm_snap_want`** (BX = window; CF = 1 if this window's content origin wants
+to be 8-aligned right now — `WF_SNAP` set, `WF_FULL` clear). `wm_snap_ax`
+calls the same routine, so there is still one answer to the question and not
+two that can drift.
 
 **It asks the window — twice, and the second answer can be no.**
 `wm_ask_size` (§11.1) runs on the state being *tested* (so the compare above
@@ -6105,6 +6122,106 @@ behind it is popped by the UI loop and ignored, which is what that loop
 already does with every mouse-up. On a machine with no mouse (§9.6) the same
 press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
 exactly this case — a pass that dispatched a press and did not track it.
+
+### 11.95.2 A window that spans the screen has no left border
+
+**A border separates a window from what is beside it, and at the screen's left
+edge there is nothing beside it.** So a `WF_SNAP` window whose frame reaches
+from x = 0 to the last column of the screen does not draw one, and its content
+therefore starts **at** `W_X` rather than at `W_X + 1` — which is 0, and
+byte-aligned. The other three sides are untouched.
+
+That is what lets §11.95's standard rect be the whole screen. It used to be
+x = 7, w = screen − 7: §11.94's snap moving *right* to buy an aligned content
+origin, at the 7-pixel cost that section names. A maximized window therefore
+sat with its right edge flush and **seven columns of desktop dither showing
+down its left**, plus a border column — eight columns of content given up to
+land the origin on a byte boundary that x = 0 already is. The standard rect is
+now `x = 0, w = [vid_pw]` and the alignment is kept, not traded for.
+
+**Derived, never tracked** — §11.95's own rule, for its own reason. `wm_flush`
+(BX = window; CF = 1 = no left border; every register preserved) is
+`wm_snap_want` **and** `W_X = 0` **and** `W_X + W_W >= [vid_w]`. There is no
+flag, so there is no site that has to clear one: a window dragged or resized
+off that geometry has its border back at the next paint because the question is
+asked again. `wm_flush_ck` (AX = a candidate x, CX = a candidate width) is the
+geometry half on its own, because `wm_zoom` has to ask it of a rect it has not
+committed yet.
+
+**`wm_snap_want` is in the predicate for two distinct reasons**, and neither is
+decoration. A `WF_FULL` window is *already* borderless and its content IS its
+frame (§11.2), so adjusting it here would inset it twice. And a `WF_NOSNAP`
+window has opted out of having its geometry decided for it (§11.94.1), so it
+keeps its border and its `W_X + 1` content origin whatever it spans.
+
+**It composes with `wm_snap_ax` rather than fighting it, and that is why the
+snapper needed no change at all.** At x = 0 the snapped position is 7, and
+`wm_snap_ax` already **refuses** to move a window there when `7 + W_W` would
+hang it off the right edge — which is exactly the geometry this rule names. So
+a snapped window is either snappable to 7, in which case all four `W_X`
+writers have already put it there and it is never at 0, or it spans the screen,
+in which case x = 0 is the only aligned position it has. `wm_zoom`'s x = 0
+therefore survives `wm_resize_nb`'s `wm_snap_win` untouched. **The corollary is
+that this is not a new state for such windows**: one at x = 0 too wide to snap
+is a window that has been sitting there all along with an *unaligned* content
+origin, silently missing the fast path §11.94 exists for. It gains alignment
+here, it does not lose a position.
+
+**The outline is three sides, and that is a drawing call CHEAPER rather than
+dearer.** `gfx_frame` is four `gfx_fill`s — two `gfx_hline`, two `gfx_vline` —
+and a flush window emits the top, the bottom and the right. At
+PERFORMANCE.md Part 2's ~756µs of fixed cost per drawing call, whatever it
+draws, a maximized window's chrome costs one call less than it did.
+
+**The border may not be drawn and then covered**, which is the shape the first
+draft of this takes: leave `gfx_frame` alone and let the title-bar fill and the
+content fill overwrite column 0. Every pixel of that column is then written
+twice, and PERFORMANCE.md Part 1's double-draw flash is plainly visible on the
+target machine — a defect this container cannot show. Three sides, drawn once.
+
+Six sites answer the question, and they are every place a *content* rect is
+derived from `W_X`; a **frame** rect is unchanged, because the frame really
+does still span x = 0 to x + w − 1:
+
+| site | what changes |
+|---|---|
+| `wm_content` | content left is `W_X`, not `W_X + 1` |
+| `wm_geom` | content width is `W_W − 1`, not `W_W − 2` |
+| `wm_clip_set` | the seed rect, so an app may draw in column 0 |
+| `wm_su_rect` | the raise cache, `wm_cov_rect` and `wm_damage` behind it |
+| `wm_draw_win` | the outline's three sides, the content fill, the bottom drop shadow's left end |
+| `wm_draw_title` | the title-bar interior and the separator under it |
+
+`wm_hit` is **not** among them and needs nothing: it tests the frame rect and
+has never treated the border column as its own region, so a point in column 0
+already answered "content". Neither is `wm_title_set`, whose strip is the frame's
+full width already.
+
+**What does not move is everything positioned from the frame**: the close and
+minimize boxes at `W_X + 8`, the pinstripes inset 3, and the centred caption.
+The frame has not moved — only the fills that would otherwise leave a
+one-pixel hole at column 0 extend to reach it.
+
+**A seventh site had to change, and it is the one nothing pointed at:
+`ui_grow`.** The aligned x is a question about the *width* now — shrink a
+maximized window off the screen's right edge and it stops being flush, so
+column 0 stops being an aligned content origin and 7 is the leftmost one
+again. `ui_grow` never re-snapped, correctly, because until this **a width
+change could not move that origin**; without the `wm_snap_win` it now makes,
+one drag of the grow box left the window at x = 0 with its border back and its
+content at 1, *unaligned* — silently missing the fast path §11.94 exists for,
+which is the exact defect this section is meant to remove. `wm_resize` already
+made that call for its own reason (its x clamp can move the origin) and needed
+nothing.
+
+Its **damage union** follows: `ui_grow` took `x1 = W_X` and
+`x2 = W_X + max(old w, new w)`, which is the union of the two rects only while
+the origin is fixed. It is `min` and `max` over both rects' edges now — the
+same answer when nothing moved, and the seven columns the window vacates put
+back when it did. Verified on all three adapters: after a grow-box shrink from
+the zoomed state the window is at x = 7 with an aligned origin, and the screen
+the resize leaves is **0 differing pixels** against the same window drawn
+whole by `wm_show`.
 
 ### 11.95.1 A window that GREW reveals nothing
 
@@ -7453,7 +7570,10 @@ laid down once): these three register. **Already reads the live box every
 frame** — `missile` (`mc_track` calls `OSAPI_WM_CONTENT` and
 `OSAPI_WM_GEOM` per frame), `tamegram`, `tracker`, `modplug`, `notepad`,
 `artful`, `fractal`: these need nothing for their geometry, though `missile`
-registers anyway for the adapter facts above. **Fixed layout, never asks its
+registers anyway for the adapter facts above. `fractal` is the one of those
+worth checking rather than assuming, because it *caches* what it derives —
+§40.1 is why the cache cannot go stale across a switch, and
+`tests/dispfrac.py` is the measurement. **Fixed layout, never asks its
 size** — `piano`, `hello`, `mines` and `recorder` read only
 `OSAPI_WM_CONTENT`, the origin. Whether that is a *problem* is a separate
 question from whether they ask, and it is answered by one number: a CGA's
@@ -15659,32 +15779,30 @@ ticks between two runs of different speed — is excluded.
 
 #### 22.11.1 The blit rounds INWARD, and each strip it leaves is answered
 
-`gfx_scroll` wants byte columns at both ends, and a Disk window is not
-`WF_SNAP` (§11.94) — its content origin is `W_X+1`, wherever the user dragged
-it. So the span is rounded **inward**, which is the opposite of Note Pad's
-§27.7.2 and for a reason worth stating: `NP_MARGIN` is 8 there, so rounding a
-text band's `x1` DOWN still lands inside the content, while a Disk row's icon
-starts four pixels in — rounding down would put the blit's left edge outside
-the window altogether, onto the frame and then onto whatever is to the left
-of it. Inward rounding leaves two strips the blit cannot move, and each is
-answered rather than paid for:
+`gfx_scroll` wants byte columns at both ends, so the span is rounded
+**inward**, which is the opposite of Note Pad's §27.7.2 and for a reason worth
+stating: `NP_MARGIN` is 8 there, so rounding a text band's `x1` DOWN still
+lands inside the content, while rounding a Disk window's down would put the
+blit's left edge onto the frame and then onto whatever is to the left of it.
+Inward rounding leaves two strips the blit cannot move, and each is answered
+rather than paid for:
 
-- **Left, up to 7px**: white margin, plus at most three columns of the 16x16
-  icon at `x+4`. The strip is erased and those rows re-iconed
-  (`fm_draw_licon`), and **only when the rounding really did reach them** —
-  `align_up(cx) > cx+4` is true for three window positions in eight, and the
-  other five need no pass at all.
+- **Left, up to 7px**: white margin, and **nothing else** — see §22.11.1.1,
+  which is the reason that sentence is short now. It used to be white margin
+  *plus up to three columns of the 16x16 icon*, erased and re-iconed by
+  `fm_draw_licon` and only when the rounding really did reach them.
 
-  **The erase in front of it is not belt and braces, and leaving it out is the
-  one bug this shipped before the pixel diff caught it.** An icon is *not*
-  drawn opaque over its cell: `ico_core`'s white pass is the icon's own
-  **silhouette mask** — `ico_app16`'s is a diamond, `ico_disk32`'s a solid
-  rectangle, and a harvested one is whatever the package's author drew — so
-  re-drawing an icon leaves every pixel the *previous* row's icon lit outside
-  the new outline. It showed as a three-column stripe of stale icon edge down
-  the left of the row band, on the three window positions in eight that reach
-  it and no others, which is exactly the shape of bug an eyeball misses and an
-  A/B diff does not.
+  **The erase in front of that was not belt and braces, and leaving it out was
+  the one bug this shipped before the pixel diff caught it** — worth keeping
+  written down, because the same trap is waiting for anything that redraws an
+  icon in place. An icon is *not* drawn opaque over its cell: `ico_core`'s
+  white pass is the icon's own **silhouette mask** — `ico_app16`'s is a
+  diamond, `ico_disk32`'s a solid rectangle, and a harvested one is whatever
+  the package's author drew — so re-drawing an icon leaves every pixel the
+  *previous* row's icon lit outside the new outline. It showed as a
+  three-column stripe of stale icon edge down the left of the row band, on the
+  three window positions in eight that reached it and no others, which is
+  exactly the shape of bug an eyeball misses and an A/B diff does not.
 - **Right, up to 7px**: always white. The span stops at the byte column
   *before* the scroll bar, so the bar's frame, its two rules and its two arrow
   glyphs are never disturbed — only the thumb is redrawn — and a list row's
@@ -15705,10 +15823,82 @@ width of one fill the thumb is briefly doubled, and a doubled thumb reads as
 movement where an absent one reads as a blink. A step too small to move it
 draws nothing.
 
+##### 22.11.1.1 The strip pass is unreachable, and the icon inset is why
+
+The row icon is **8px** into the content, not 4, and the name is at **32**, not
+24 (`fm_draw_lrow`). Both are §11.94.3's alignment work — and one of them is
+not, which is the part to read before moving either.
+
+**What alignment buys here is not a text pen.** `ico_pass` lands each 16-pixel
+icon row in a **three-byte window** at a shift of `x & 7`, and at shift 0 the
+third byte is always zero and is skipped by the `or al,al / jz` already in the
+loop. So an aligned icon is two latched read-modify-writes per row instead of
+three, twice over — the mask pass and the data pass — which is 32 byte-writes
+saved per icon on the two 1bpp adapters and 32 fewer `GC8 Bit Mask` `out`s plus
+their read-modify-writes on VGA. That is an argument from the loop rather than a
+measured figure; it is not in PERFORMANCE.md and should not be quoted as if it
+were.
+
+**What it buys for free is this whole strip.** Inward rounding moves `x1` by at
+most 7 pixels, so an icon 8px in **cannot be cut by the strip at any window
+position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
+the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
+The pass is therefore dead code, and it is **kept** rather than deleted: it is
+four instructions of test that state the invariant, and moving the inset back
+would need it. Its residue is `wm_snap_ax`'s one refusal — a window as wide as
+the screen sitting at x=0, where 7 becomes the answer and those seven columns
+are margin.
+
+**The name had to move with the icon, and no size report or byte diff could
+have said so.** At icon +8 with the name still at +24, the 16px icon cell ends
+exactly where the name's first letter starts: `ARTFUL.O88`'s A touched the app
+diamond, `FRACTAL.O88`'s F touched its blob. +32 gives 8px of daylight, where
++4/+24 gave 4. `fm_layout`'s name budget went `(cw-88)/8` → `(cw-96)/8` to pay
+for it, which puts the column's **right** edge at `cw-64` either way, so the
+size column's clearance is unchanged and the only loss is one character on a
+window narrower than 184px of content — where an 8.3 name is already being
+truncated.
+
+**Cost: 0 bytes in every section**, all seven constants being `add`/`sub reg,
+imm8` at both the old and the new value; the header pen and the status line's
+moved 6 → 8 with their two truncation constants (`14 → 16`, `12 → 14`) in the
+same round. Verified on a cycle-accurate 5150 with CGA, Hercules and VGA mode
+12h: a four-row scroll against a forced full repaint of the same window is **0
+differing pixels** on all three, the only difference anywhere on screen being
+the menu-bar clock ticking between the two captures.
+
+##### 22.11.1.2 The grid cell is 80 wide so that the icon is on a byte
+
+`FMI_CELL_W` is **80**, and the icon sits at `fm_cellx + 32`. Neither number is
+about the blit — the grid takes `fm_rows_only` (§22.11.2) — and neither is about
+a text pen. It is §22.11.1.1's `ico_pass` argument applied to the *other* place
+this window draws icons, and the grid is where it is worth more: at 78 the
+columns started at 0, 78, 156 = **0, 6, 4 mod 8** and the icon's own centre was
+31 = **7 mod 8**, the worst phase there is, so every icon in the grid paid the
+third framebuffer byte on both of its passes. At 80 every `fm_cellx` is a
+multiple of 8 (the content origin being one, §11.94.1) and 32 is `(80-16)/2` —
+so the icon is **aligned and exactly centred at the same time**, which is why
+this needed no trade.
+
+**The label is centred and stays off-grid**, at `(FMI_CELL_W - width)/2`. That
+is §11.94.3's second protected kind and snapping it was considered and dropped:
+a 9-character name is 72px in an 80px cell, so there are 8px of slack and any
+rounding puts the label flush against one side of its cell.
+
+`FMI_CELL_W` is one `equ` read by `fm_layout` (the column count), `fm_hit` (the
+column a click is in) and the selection rect, so those three cannot disagree
+about a cell's width — that is the §22 one-place-for-geometry rule doing the
+work, and it is the whole reason this is a one-line change. The visible
+consequence is that `cols = max(1, (cw-16)/FMI_CELL_W)` answers one fewer at
+`cw` 250..255, where 78 fitted three columns and 80 fits two. Cost **0 bytes**;
+verified on a cycle-accurate 5150 with CGA, Hercules and VGA mode 12h — three
+columns on each, a click on column 1 selecting index 1, and a two-row grid
+scroll **0 differing pixels** against a forced full repaint.
+
 #### 22.11.2 The icon grid takes the middle tier, deliberately
 
-A grid cell is 78 wide and centres a 9-character name in it, so the leftmost
-cell's name can start 3px into the content and the rightmost can end 4px
+A grid cell is 80 wide and centres a 9-character name in it, so the leftmost
+cell's name can start 4px into the content and the rightmost can end 4px
 short of the last cell's edge — which is *inside* the strips inward rounding
 leaves. Repairing those means redrawing the first and last columns whole, and
 at the three columns a 320px window fits that is two thirds of the grid: the
@@ -18792,12 +18982,42 @@ bar's columns — both repainted afterwards, which `np_sbar` was going to do
 anyway because the track changed height.
 
 **The shift is not a multiple of 8**, which is the one thing this does that no
-other blit here does: 29 pixels for the Find panel and 41 for Replace, against
+other blit here does: 32 pixels for the Find panel and 44 for Replace, against
 `np_scrollpaint`'s whole rows. On the banked 1bpp adapters that crosses the
 0x2000 window at a different offset every row, so it was verified there and
 not only on VGA — capture, force a full repaint, diff: **0 differing pixels**
 on VGA and CGA, opening and closing, with the Find panel and the taller
-Replace one.
+Replace one. (Those two numbers were 29 and 41 — see §27.10.3.)
+
+#### 27.10.3 …and the height is a multiple of 4, which is the blit's business
+
+The panel's height is `NP_FP_H` = **32**, and 44 with Replace showing. It was
+29 and 41, and the change is not a layout preference: §27.10.2 hands
+`OSAPI_GFX_SCROLL` a delta that **is** this height, so the height decides which
+of `gfx_scroll`'s two paths runs. §5.5.1's constant-delta path derives the
+destination row address once and steps it; on a banked adapter it is gated on
+`dy & [vid_bmask] == 0`, and `bmask` is **3 on Hercules and 1 on the CGA** — so
+an odd height missed it on **both**, and every row of the blit paid a
+`gfx_rowbase` walk it did not need. VGA's `bmask` is 0, so VGA always had the
+fast path and this buys it nothing.
+
+**No choice of the two constants could have fixed it.** `2*NP_FP_ROW +
+2*NP_FP_PAD + 1` is odd for *every* value of either — `2*anything` is even and
+the separating rule adds one — so the correction has to be explicit, and
+`NP_FP_SLACK` is `(-NP_FP_RAW) & 3`. It rounds **up**: rounding down would have
+to take a pixel off something already using it. `NP_FP_ROW` must itself be a
+multiple of 4 or the Replace panel's `+NP_FP_ROW` would undo the alignment, and
+that is an `%error` rather than a comment.
+
+**The three rows land below the buttons, because the button row is
+bottom-anchored** — `np_pbtny` is `np_pt + height - (NP_FP_PAD + 1 +
+NP_FP_ROW)` — so it moves down with the rule and what opens up is clearance
+between the text boxes and the buttons. Nothing is squeezed and no field moved
+relative to the panel's top. The Find↔Replace toggle was **already** on the
+fast path: its delta is `NP_FP_ROW` = 12, which is a multiple of 4.
+
+Cost: **0 bytes** — the constants are the same instruction encodings — and 3
+rows of the note's view, which is under half a text line.
 
 #### 27.10.1 The matcher
 
@@ -25044,6 +25264,23 @@ against the live one, because `fr_setup` re-reads W_W/W_H every time and
 `wm_fit` can clamp them (§39.7); a cache built for a different canvas would
 replay runs at the wrong columns.
 
+**That compare is also why this package registers no §11.98 handler**, and
+the question is worth answering here rather than leaving it to be re-asked:
+an adapter change re-clamps every window (§39.11.2.1) and Fractal's 322×199
+template really does move — content 320×180 on VGA becomes 320×136 on a CGA
+— so the cache is left holding rows laid out for a canvas that no longer
+exists. Two things close that window at both ends and neither is new.
+`fr_redraw` runs from `W_PAINT`, an adapter change ends in `wm_paint_all`
+(§39.11.2), and a size that has moved falls through to `fr_kick`; and
+`fr_worker` calls `fr_setup` only when `[fr_restart]` is non-zero, so between
+the switch and the repaint it keeps rendering at the width the cache was
+built for rather than half-way to the new one. **`tests/dispfrac.py` is the
+gate** — it asserts, on both adapters and after coming back, that `fr_ccw` /
+`fr_cch` equal the live `fr_cw` / `fr_ch` whenever the cache holds anything
+at all. It is kept for the reason a test on a concern that did not reproduce
+is worth keeping: the reasoning that raised it was plausible, and the next
+reader deserves a measurement rather than a paragraph.
+
 **`fr_prog` counts rows COMPUTED, never rows replayed**, and a repaint sets
 it to the cached row count. That is what the percentage is a percentage of,
 so a redraw no longer moves it — and when the cache overflowed the reduction
@@ -25072,6 +25309,71 @@ text back into. Combined with §40.1
 the two halves cover the two ways a window loses its pixels: covering costs
 nothing because the worker keeps drawing what is visible and caching what is
 not, and moving costs one replay because the cache survives the repaint.
+
+### 40.2.1 A progress tick draws the percentage and nothing else
+
+`fr_status_maybe` runs up to a hundred times a render — its own comment always
+said so — and it used to call `fr_status`, which white-fills the whole strip and
+re-letters all five fields. That is about 27 glyph cells and a fill, a hundred
+times, to move a digit; PERFORMANCE.md prices a cell at ~1ms on the machine this
+app exists for, so it was seconds of drawing per render. The old comment even
+named the shape of it — *"the strip would otherwise flicker white-then-text on
+every scanline"* — and then did it a hundred times instead of once per row.
+
+**Nothing but the percentage can change while a render runs.** The type, the
+zoom and the palette all move through `fr_kick`, which calls `fr_status` itself.
+So a tick draws ONE field, as one **opaque** `font_run`, space-padded to
+`FR_PCT_CELLS`: §12.9's rule at the menu bar, §48.9.3's at Missile's banner and
+§56.12's at ModPlug's face, which is to say *only the segment that changed may
+put pixels on a strip*.
+
+Three things fall out. There is **no fill**, so the field is never momentarily
+blank — the padding IS the erase (§6.1) — which removes the flicker rather than
+reducing its frequency. There is **no `wm_clip_test` gate**, because `font_run`
+decides one cell at a time and cannot produce §11.3's granularity failure, where
+`fr_status` must ask about its whole rect because its fill and its glyphs clip
+differently. Since §11.3.2 that difference is a **vertical** cut only — a
+horizontal one now letters the rows on the visible side, in `font_run_cell` and
+in `font_char` alike — so `fr_status`'s gate is narrower than it was and is
+still needed: half a cell's *width* is the thing neither renderer can write.
+And `fr_redraw` had to stop asking `fr_status_maybe`
+for the strip: it parked an impossible `[fr_pct]` to force a full redraw, and
+that path draws one field now, so it would have left the percentage alone on an
+empty band. It calls `fr_pctcalc` and then `fr_status` — which is what it always
+meant.
+
+**The status strip's columns are all multiples of 8** (§11.94.3): `FR_X_NAME` 8,
+`FR_X_ZOOM` 128, `FR_X_ZNUM` 168, `FR_X_PCT` 200, `FR_X_PAL` 248, where they
+were 2, 130, 170, 200, 250 — four of the five at 2 mod 8, which the SNAPAUDIT
+histogram saw as **2,222 of 2,542 sampled glyphs in bucket 2**, the worst entry
+in that survey. They all moved LEFT except the name, because `FR_X_PAL` plus
+`'Spectrum'` is 312 of a 320px content and there is nowhere right to go; the
+name moved right, off the border, since 0 would abut the window frame. The cost
+is that `'Julia Dendrite'` — the longest type name, 112px — now clears `Zoom` by
+8px instead of 16. Looked at on CGA: one space, and legible.
+
+**Alignment and the split are one change, not two.** `font_run`'s single-store
+cell path needs `[vid_mono]` *and* `x & 7 == 0` (§6.1), so on the two adapters
+this app is slowest on, the aligned pen is what makes the opaque run pay.
+Measured with `make SNAPAUDIT=1` — one byte-identical kernel, two apps images, so
+the package is the only variable — over one `View ▸ Redraw` render on a
+cycle-accurate 5150/CGA:
+
+| | `font_char` calls | `font_run` calls | glyph **cells** | aligned |
+|---|---|---|---|---|
+| before | 2,542 | 3 | **2,557** | 12.5% |
+| after | 50 | 103 | **565** | **100%** |
+
+**4.5x**, and the off-grid glyph count is 2,222 → **0** — not aligned, *gone*,
+which is the better outcome of the two. The cells figure counts a `font_run` as
+its width (5) rather than as one call, because quoting the raw totals would
+flatter the new build by pricing a five-cell run as a single glyph. ~100
+`gfx_fill`s a render go with them. Verified on CGA, Hercules and VGA mode 12h:
+the strip after a hundred incremental ticks is **0 differing pixels** against a
+forced full repaint of the same window at the same percentage — the §59 failure,
+a fast path and a full painter drawing the same pixels with nothing but a diff
+to reconcile them. `snap_hrun` reported all 103 runs in bucket 0, which is what
+says the mono fast path was actually reached rather than merely permitted.
 
 ### 40.3 Acceptance
 
@@ -29613,6 +29915,60 @@ Four things hold the rest up:
   making the user close something and re-load, and `trk_ring_set` is called
   with what was *actually* granted, never with what was asked for.
 
+
+### 45.19 Its off-grid pens are MEASURED and deliberately left alone
+
+§11.94.3 listed this app's face as the worst alignment offender in the tree
+(*"17% of sampled literal pens"*), and docs/SNAP-PLAN.md ranked it near the top.
+Measured, it is **not worth changing**, and this section is here so nobody
+re-derives that from the same sample.
+
+`make SNAPAUDIT=1`, one forced full repaint of the Tracker window, the histogram
+filtered to Tracker's own record so the About panel used to force the repaint is
+not counted in it:
+
+| adapter | glyph cells | aligned | off-grid buckets |
+|---|---|---|---|
+| Hercules | 237 | 26.2% | 1:16, **5:159** |
+| VGA 12h | 354 | 39.3% | 1:16, 4:40, **5:159** |
+
+Four things that sample could not see:
+
+**The frequently-drawn text already self-aligns.** Every value the playing view
+updates — Pos, Row, BPM, Spd, Ptn, Np, the title, the status line — goes through
+`tui_rdout`, which rounds its pen **down to a byte boundary** when `[tui_mono]`
+is set, precisely so the run earns `font_run`'s single-store path (§6.1). So on
+the two adapters this app exists for, the per-frame text is on the fast path
+already, whatever the caller's constant says.
+
+**The CGA layout is already aligned.** `tui_top_cga`'s labels are at 0, 64, 136,
+200 and 288.
+
+**What is left is EVENT-DRIVEN.** Those 237/354 cells are one `tui_draw_all` —
+a launch, a drag, a raise, a dialog closing. `tui_draw_dyn` draws only what
+changed, against a `tui_l*` shadow of what it last drew, and its own comments
+record per-frame repaints already removed. Alignment does not remove a glyph, it
+shaves a cell's cost: §11.94's measured 3.4% on Hercules and 9.4% on VGA. So
+aligning all 175 off-grid Hercules cells is worth **~6 ms of a ~237 ms repaint,
+on an event** — against Fractal (§40.2.1), which was 2,557 cells a hundred times
+a render and where the fix *removed* 78% of the glyphs rather than shaving each.
+
+**And the biggest single cluster must not move.** 159 of the off-grid cells sit
+at ≡ 5 on both adapters, and the caller log names `tui_s_logo` —
+`'T R A C K E R'`, 13 glyphs at 104px, drawn at 149 inside a box spanning
+112..290. `112 + (179-104)/2 = 149`: **that pen IS the centring**, §11.94.3's
+second protected kind.
+
+**What the measurement does point at, undone and costed.** `tui_rdout` keeps the
+erase-and-letter pair on a colour adapter — its header says so deliberately,
+because the flash it was written to fix was reported from mono — so on VGA the
+per-frame values are drawn at an unaligned pen, and VGA is where alignment is
+worth 2.8x what it is on mono. Fixing it is not a constant: it means resolving
+the two colour roles in `tui_rdout` and emitting one padded `OSAPI_FONT_RUN` for
+both adapters (whose VGA fallback *is* fill-plus-letter), which would delete the
+`.pair` branch and shift VGA's values up to 7px left to where mono already draws
+them. That is a refactor of a routine with a careful history, for a few tens of
+cells per change. Recorded, not taken.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
@@ -39574,6 +39930,79 @@ the Disk window reads `No os8088 disk (D:)` over `Size ?  Free ?`, which is
 the field photograph letter for letter. The far side's own log says
 `CHDIR handle=2 -> parent 0` — it resolved the folder correctly and then had
 nowhere to put the answer.
+
+##### 62.10.4.7 The second field run: a package listed with no handle
+
+Reported off the same pair, with the deadline fixed: Connect worked, `APPS`
+and `GAMES` navigated in and out, and launching Minesweeper answered
+**`Disk error`**.
+
+**`srv_ent` filled the entry's handle word in its `.dir` branch alone.** A
+folder got one, a file got zero — and so did a **package**, because the
+package arm sets the type and jumps straight to the exit. §19.1's
+first-cluster word at offset 18 *is* the driver's handle on a redirected
+volume, and `loader_run` is the one caller in the machine that arrives
+holding a handle rather than a name (`disk.inc`'s `DVK_FILE` branch reads by
+it and never resolves). So every package on the wire was offered to
+`open_handle` as handle 0, which it refuses outright as the root — the
+answer is a status, the loader's peek takes any failure as `.disk1`, and the
+message is `Disk error` on a link that never faltered.
+
+The shape is worth naming: **the type that worked was the type the walk had
+a reason to touch.** Folders need a handle to be dived into, so the branch
+that gives them one is the branch that already existed; a package needs one
+for a reason that lives in *another* module, three verbs later.
+
+**A plain file still gets 0, deliberately, and the asymmetry is the table.**
+Nothing reads offset 18 behind type 0 — `dskw_read` STATs by name and is
+handed a fresh handle — while `hdtab` holds 64 and a real DOS folder can
+hold hundreds, so a slot per file would exhaust it and break the folders
+that work today. The RAM disk hands one out for everything because it has no
+such table to spend, and that difference is why it could never have shown
+this.
+
+`srv_stat` also stopped answering **OK with handle 0** when `hd_get` finds
+the table full: 0 is the root, `open_handle` refuses it, so that was a
+success the caller could not use — the same lie one verb earlier.
+
+###### 62.10.4.7.1 The harness was kinder than the machine, again
+
+`partner.py`'s `FileTree.entry` wrote the node's handle at offset 18 for
+**every** entry, files and packages included. So the stand-in was the only
+thing in the world supplying a working package handle, and a package launch
+over the cable had been exercised repeatedly — with the harness quietly
+patching the defect under test.
+
+That is the second time in this driver's short history (`NC_BYE` was the
+first, §62.10.4.2) and the rule is the same both times: **a harness that is
+more generous than the thing it stands in for hides precisely the bugs it
+exists to find.** `entry` now applies os88net.asm's rule — a handle for a
+folder and a package, zero for a plain file — so the harness can fail the
+way the field does.
+
+###### 62.10.4.7.2 The A/B, and a knob that rebuilt around the wrong file
+
+`tests/dosstub` boots the real `OS88NET.COM` on a cycle-accurate 8088, so
+this is settled by that program's own instructions rather than by a model of
+them. `HELLO.O88` was already in the stub's tree — put there so `ent_ispkg`
+would fire — and its **type** was checked while its **handle** was printed
+and never read. Measured, listing the root:
+
+| | pre-fix | fixed |
+|---|---|---|
+| `README.TXT` (file) | handle 0 | handle 0 |
+| `HELLO.O88` (package) | **handle 0** | handle 1 |
+| `GAMES`, `EMPTY` (folders) | handles 1, 2 | handles 2, 3 |
+
+**And the A/B nearly reported both legs passing**, because `make dosstub
+COMFILE=<path>` — the knob that embeds a different `OS88NET.COM`, which is
+the only way to build the previous commit's DOS side — was named in `DSSTAMP`
+and **never passed to nasm**. So it rebuilt the stub faithfully and rebuilt
+it around the default file. That is `DSSTAMP`'s own documented trap one knob
+later, and the distinction it turns on is worth stating: **a stamp makes the
+rebuild happen and says nothing about what the rebuild is made of.** The
+first run of this A/B printed `handle=1` for both binaries, which reads as
+"the bug was never there".
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

@@ -2328,6 +2328,17 @@ endif
 ifneq ($(FAILOPEN),)
 DOSSTUB_DEF += -DFAILOPEN=1
 endif
+# COMFILE=<path> embeds a DIFFERENT OS88NET.COM, which is how a fix to the DOS
+# side gets an A/B: build the previous commit's .com to a scratch path and run
+# the same test against it. It was named in DSSTAMP below and NEVER PASSED TO
+# NASM - so the knob rebuilt the stub faithfully and rebuilt it around the
+# default file, and an A/B ran the same binary twice and reported both legs
+# passing. That is the very trap DSSTAMP's own comment describes, one knob
+# later: a stamp makes the rebuild happen and says nothing about what the
+# rebuild is made of.
+ifneq ($(COMFILE),)
+DOSSTUB_DEF += -DCOMFILE='"$(COMFILE)"'
+endif
 
 # ...AND A STAMP FILE, for exactly VIDSTAMP's reason (see its comment above).
 # None of these four knobs is a prerequisite of anything, so `make dosstub

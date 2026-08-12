@@ -6254,3 +6254,165 @@ measured. Reset with no filter and then LAUNCH the app.
 
 **Cost: nothing.** All of it is inside `%ifdef SNAPAUDIT`, and a plain build is
 **0 differing bytes** against the same commit before this work.
+
+### Set 58 — the Disk window and Fractal go on the grid, and one of them was not an alignment problem
+
+Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_cga` /
+`os8088_5150_herc` / `os8088_xt_vga`. Two items off docs/SNAP-PLAN.md's list,
+and the second is the interesting one.
+
+**The Disk window (SPEC.md §22.11.1.1/§22.11.2, seven constants + two): 0 bytes.**
+`.text`, `.bss`, `.cold`, `.lowbss`, `.ovl` all **+0**, no rung crossed,
+`KERN_BUDGET` spare unchanged at 3,072 — every one of the nine is an
+`add`/`sub reg, imm8` at both the old value and the new. What moved: the header
+pen and the status line's 6 → 8 (with their truncation constants 14 → 16 and
+12 → 14), the row icon 4 → 8, the row name 24 → 32, the name budget
+`(cw-88)/8` → `(cw-96)/8`, `fm_scrollpaint`'s strip test 4 → 8, `FMI_CELL_W`
+78 → 80 and the grid icon `fm_cellx + 31` → `+ 32`.
+
+**Two things the numbers could not see, and one of them was in this tree's own
+notes.** docs/SNAP-PLAN.md said an aligned content origin makes
+`fm_scrollpaint`'s left strip *always* 4px wide, so §22.11.1's strip pass runs on
+every scroll; that is backwards — `fm_bx1 = align_up(fm_cx)` and an aligned
+`fm_cx` already is a multiple of 8, so the strip is **empty** and §11.94.1's
+default had retired that pass already (it used to fire on three window positions
+in eight, not one). What 4 → 8 actually buys is that `ico_pass` lands each
+16-pixel icon row in a **three**-byte window at a shift of `x & 7` and at shift 0
+the third byte is always zero and skipped — two latched read-modify-writes a row
+instead of three, on both the mask and the data pass — plus the pass becomes
+unreachable at *every* window position rather than only the aligned ones. In the
+grid that argument is worth more: the columns started at 0, 78, 156 = **0, 6, 4
+mod 8** and the icon's own centre was 31 = **7 mod 8**, the worst phase there is.
+
+And moving the icon to +8 with the name still at +24 put the 16px icon cell's
+right edge **exactly on the name's first letter** — `ARTFUL.O88`'s A against the
+app diamond. Both numbers are multiples of 8, the kernel is 0 bytes bigger, and a
+four-row scroll stayed byte-identical to a full repaint on all three adapters:
+**nothing in the verification recipe could see it.** A 5x crop could. That is now
+a rule in docs/SNAP-PLAN.md §5 — look at the pixels that moved, every item.
+
+**Fractal (SPEC.md §40.2.1): 2,557 glyph cells → 565, 4.5x — and it was not an
+alignment item.** Set 57 put it first of what was left (2,542 glyphs sampled,
+12.5% aligned, 2,222 in bucket 2). The reason those glyphs existed is that
+`fr_status_maybe` runs up to a hundred times a render and called the FULL strip
+painter each time: a white fill plus five re-lettered fields, to move one digit.
+Nothing but the percentage can change while a render runs — type, zoom and
+palette all go through `fr_kick` — so a tick now draws ONE field as one opaque
+`font_run` padded to `FR_PCT_CELLS`, and the five pens became multiples of 8
+(`FR_X_NAME` 8, `FR_X_ZOOM` 128, `FR_X_ZNUM` 168, `FR_X_PCT` 200, `FR_X_PAL`
+248).
+
+Measured with `make SNAPAUDIT=1`, **one byte-identical kernel and two apps
+images** so the package is the only variable, over one `View ▸ Redraw` render:
+
+| | `font_char` calls | `font_run` calls | glyph **cells** | aligned |
+|---|---|---|---|---|
+| before | 2,542 | 3 | **2,557** | 12.5% |
+| after | 50 | 103 | **565** | **100%** |
+
+The cells column prices a `font_run` at its width (5) rather than at one call,
+because the raw totals would flatter the new build by counting a five-cell run as
+a single glyph. Off-grid glyphs 2,222 → **0** — not aligned, *gone*, which is the
+better of the two outcomes. ~100 `gfx_fill`s a render go with them. Package
++79 bytes of heap; **0 bytes of kernel**.
+
+**The two halves are one change.** `font_run`'s single-store cell path needs
+`[vid_mono]` *and* `x & 7 == 0` (§6.1), so on the adapters this app is slowest on
+the aligned pen is what makes the opaque run pay — and `snap_hrun` reported all
+103 runs in bucket 0, which is what says the fast path was reached rather than
+merely permitted.
+
+**These are COUNTS, under `-icount`-equivalent conditions on a cycle-accurate
+8088 — not microseconds on iron.** Part 2's ~1ms per glyph cell puts 2,557 cells
+at ~2.6 s of drawing per render against ~0.57 s, and ~100 fills at ~756us each at
+another ~76 ms; treat those as arithmetic from measured constants, not as field
+figures. The 5150 is where they would land.
+
+**Two harness traps, both of which produced a confident wrong answer:**
+
+- **`m.advance()` runs a bounded amount of guest time and STOPS.** A poll loop
+  that ends in one leaves the machine paused, and a paused guest processes no
+  UART packets — so every later `os88mouse` call fails with "stuck at" its
+  starting position, which reads exactly like a broken hit-test. One `m.run()`
+  between the loop and the first click.
+- **A stash-for-reference build leaves `build/` holding the REFERENCE.** Two
+  scratch images copied after `git stash pop` but before the rebuild were the old
+  package, and the run reported `image 3138` — the ref's size — while claiming to
+  test the new one. Related and worse: `cp file backup` run twice, the second
+  time after the file was already modified, captured the change the restore was
+  meant to undo, which is how b3c5219 shipped half of the grid change
+  undocumented. **Rebuild after the pop; never reuse a backup path.**
+
+### Set 59 — Note Pad's panel goes on the bank quantum; Tracker is measured and left alone
+
+Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_cga` /
+`os8088_5150_herc` / `os8088_xt_vga`. Two more items off docs/SNAP-PLAN.md, and
+the second is a **negative result** — the more useful of the two.
+
+**Note Pad's find panel (SPEC.md §27.10.3): 0 bytes.** §27.10.2 makes opening or
+closing it one `OSAPI_GFX_SCROLL` of the whole text band, and the delta that blit
+is handed *is* the panel's height — so the height decides which of `gfx_scroll`'s
+two paths runs. Set 56's constant-delta path is gated on
+`dy & [vid_bmask] == 0`, and `bmask` is **3 on Hercules and 1 on the CGA**, so 29
+and 41 missed it on both. `NP_FP_H` is 32 now, 44 with Replace.
+
+SNAP-PLAN called this "one character" and it is not: `2*NP_FP_ROW +
+2*NP_FP_PAD + 1` is odd for **every** value of either constant, so the correction
+has to be explicit (`NP_FP_SLACK = (-NP_FP_RAW) & 3`). Verified 0 differing
+pixels against a forced full repaint on CGA and Hercules.
+
+**Tracker (SPEC.md §45.19): measured, and NOT changed.** §11.94.3 had it as the
+worst offender in the tree and SNAP-PLAN ranked it near the top. `make
+SNAPAUDIT=1`, one forced full repaint, histogram **filtered to Tracker's own
+record**:
+
+| adapter | glyph cells | aligned | off-grid buckets |
+|---|---:|---|---|
+| Hercules | 237 | 26.2% | 1:16, **5:159** |
+| VGA 12h | 354 | 39.3% | 1:16, 4:40, **5:159** |
+
+Four things the literal-pen sample could not see. Every value the playing view
+updates goes through `tui_rdout`, which **already rounds its pen down to a byte
+boundary when `[tui_mono]` is set** — so the frequently-drawn text is on
+`font_run`'s single-store path whatever the caller's constant says.
+`tui_top_cga`'s labels are already at 0/64/136/200/288. What is left is
+`tui_draw_all` — **event-driven**, where this plan claimed the app "redraws
+continuously while playing"; `tui_draw_dyn` draws only what changed against a
+`tui_l*` shadow. And 159 of the off-grid cells are `tui_s_logo` at 149, which is
+exactly `112 + (179-104)/2` — the centring of `'T R A C K E R'` in its
+112..290 box, a protected kind.
+
+Priced: alignment shaves a cell rather than removing it — Set 52's 3.4% on
+Hercules, 9.4% on VGA — so all 175 off-grid Hercules cells are worth **~6 ms of a
+~237 ms repaint, on an event**. Against Fractal (Set 58): 2,557 cells a hundred
+times a render, where the fix *removed* 78% of the glyphs. **Two orders of
+magnitude apart, and that is the whole decision.**
+
+What the measurement does point at is costed in §45.19 and not taken:
+`tui_rdout` deliberately keeps the erase-and-letter pair on colour, so VGA's
+per-frame values are drawn unaligned on the adapter where alignment is worth
+2.8x more — but fixing it is a refactor of that routine, not a constant.
+
+**THE MEASUREMENT ITSELF WAS WRONG TWICE, both in the flattering direction.**
+`os88snap.reset(m)` with no argument aims the filter at **every** window, so the
+first census read 487 cells that included the About panel being used to force the
+repaint and the Disk window behind it — an unknown share of a number reported as
+Tracker's. And the caller log's first 24 glyphs spelled `'os8088 1.0'`, which is
+not on the FT2 face at all: a **windowed** Tracker shows its splash card, and the
+pens §11.94.3 lists are on the fullscreen face. Filtering to Tracker's own record
+(`wm_wins - 0x600 + slot*28`) gave the numbers above.
+
+**And the row-index trap cost four runs in one session**, which is enough to call
+it a rule: a fixed number of `ArrowDown`s plus a fixed row opens a *different
+package on every adapter*, because `[fm_fit]` is ~5 rows on a 200-line CGA and 8
+on Hercules. It opened ArtfulType for Fractal, row 7 for piano, MODPLUG for Note
+Pad and PAINT for Tracker — each time silently, each time looking like the app
+under test was broken. Read `[fm_lscr]` and `[fm_fit]` out of the kernel and take
+the row the wanted directory index is actually on.
+
+**One more pointer fault, same family as Set 58's.** The find-panel check
+reported 80 differing pixels and "MISMATCH": they were the mouse arrow in two
+places — `mo.menu` releases it in the menu bar, the About close box is inside the
+window — and the union of those two cells is exactly the bbox reported, which
+reads precisely like a blit that moved a band of text. The reference build scored
+83 in the *identical* bbox, and that is what proved it was the instrument.

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Do the three apps that lay out ONCE re-derive when the adapter changes?
+"""Do the apps that lay out ONCE re-derive when the adapter changes?
 (SPEC.md 11.98)
 
     make && python3 tests/dispapps.py
 
-`taskmgr`, `arkanoid` and `solitaire` are the three packages that compute a
-layout from the geometry at launch and keep the answer - the Task Manager's
-row and column counts, and the whole metric record the two games pick on
-screen height (brick widths, card sizes, rail widths, ball speed). Everything
-else in `apps/` either re-reads its box every frame or has no second layout to
-move to.
+Five packages compute a layout from the geometry once and keep the answer:
+`taskmgr` (row and column counts), `arkanoid` and `solitaire` and `missile`
+(whole metric records picked on screen height - brick widths, card sizes,
+rail widths, ball speed, the adapter facts), and `piano` (SPEC.md 11.98.1's
+scaled keyboard). Everything else in `apps/` either re-reads its box every
+frame or has no second layout to move to - `apps/fractal` is the one worth
+naming, because it re-derives per paint and `tests/dispfrac.py` is the gate
+for what it caches instead.
 
 IT READS THE PACKAGE'S OWN BSS, which is the only place the answer lives. A
 screenshot cannot show this: the Task Manager's list is three rows long on a

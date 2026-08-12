@@ -51,35 +51,57 @@ and one you do not. They are also, without exception, **one constant each**.
 Each row is one offset. The pen is content-relative, and the content origin is
 now guaranteed `≡ 0 (mod 8)`, so `offset mod 8` is the whole question.
 
-### 2.1 The Disk window — the biggest single win left
+### 2.1 The Disk window — ✅ DONE (the list view), and the grid is next
 
-| what | pen | fix | risk |
+| what | was | is | note |
 |---|---|---|---|
-| header (`Drive B:  7 files`) | `fm_cx + 6` | 6 → 8 | 2px shift of one string |
-| icon-grid cells | `fm_cx + 78 × col` | `FMI_CELL_W` 78 → 80 | grid columns move; check the cell still holds a 16px icon + label at the narrowest content width |
-| row icon inset | `fm_cx + 4` | 4 → 8 | see below — this one is not about text |
+| header (`Drive B:  7 files`) | `fm_cx + 6` | `+ 8` | truncation `sub ax, 14` → `16` moved with it |
+| status line (`Size … Free …`) | `fm_cx + 6` | `+ 8` | the second string drawn from `fm_hdrbuf`; `sub ax, 12` → `14` |
+| row icon inset | `fm_cx + 4` | `+ 8` | not a text pen — see below |
+| row name | `fm_cx + 24` | `+ 32` | forced by the icon, not by alignment — see below |
+| name budget | `(cw-88)/8` | `(cw-96)/8` | keeps the column's right edge at `cw-64` |
+| `fm_scrollpaint`'s strip test | `cx + 4` | `+ 8` | reads the inset it is about |
+| `FMI_CELL_W` (grid) | 78 | 80 | every `fm_cellx` on a byte; one `equ`, so `fm_layout`/`fm_hit`/the selection rect follow |
+| grid icon | `fm_cellx + 31` | `+ 32` | `(80-16)/2` — aligned **and** exactly centred |
 
-Its **file rows are already aligned** (`fm_cx + 24`), which is why the
+**Cost: 0 bytes in every section** — `.text`, `.bss`, `.cold`, `.lowbss`,
+`.ovl` all +0, no rung crossed, `KERN_BUDGET` spare unchanged at 3,072. Every
+one of those seven constants is an `add`/`sub reg, imm8` at both the old value
+and the new.
+
+Its **file rows were already aligned** (`fm_cx + 24`, now 32), which is why the
 inversion was worth taking for this window at all: those ~40 `font_str`s
-dominate `fm_repaint`. The header is one string per repaint and worth little on
-its own; the **icon grid is worth the most in this file**, because every label
-in the grid is off-grid *and by a different amount per column* (78, 156, 234 …
-≡ 6, 4, 2 …), so no single window position can help any of them.
+dominate `fm_repaint`. The header and the status line are one string each per
+repaint and worth little on their own.
 
-**The icon inset is a separate, larger prize.** `fm_scrollpaint` rounds its
-blit span INWARD because a row's icon starts 4px in, and with an aligned origin
-that strip is now *always* 4px wide — so SPEC.md §22.11.1's strip pass runs on
-every scroll, where an unaligned `k = 4` used to skip it one window position in
-eight. Moving the inset 4 → 8 would make the row band byte-aligned at both
-ends and **delete the strip pass from the common case entirely**. It costs 4px
-of row indent everywhere and wants `fm_hit` checked alongside it (SPEC.md §22's
-one-place-for-geometry rule).
+**The icon inset was the interesting one, and this file had its reason wrong.**
+The claim here used to be that with an aligned origin the strip is *always* 4px
+wide, so §22.11.1's strip pass runs on every scroll. That is backwards:
+`fm_bx1 = align_up(fm_cx)` and an aligned `fm_cx` is already a multiple of 8,
+so `fm_bx1 == fm_cx` and the strip is **empty** — §11.94.1's default had
+already retired the pass, which used to fire on three window positions in eight
+(`cx & 7 ∈ {1,2,3}`), not one. What 4 → 8 actually buys is two other things:
+`ico_pass` lands each 16-pixel row in a three-byte window at a shift of
+`x & 7`, and at shift 0 the third byte is always zero and skipped — two latched
+read-modify-writes a row instead of three, on both passes — and it makes the
+pass unreachable at *every* window position, `wm_snap_ax`'s one refusal
+included. `fm_hit` needed nothing: it divides y by the row height and x by
+`FMI_CELL_W`, and references neither the icon inset nor the name pen.
+
+**The name pen is the finding worth carrying to the other items.** Moving the
+icon to +8 with the name at +24 puts the 16px icon cell's right edge exactly on
+the name's first letter — `ARTFUL.O88`'s A touching the app diamond. Both
+numbers are multiples of 8, both are "aligned", the kernel is 0 bytes bigger
+and the scroll is byte-identical to a full repaint: **nothing in the
+verification recipe of §5 can see it.** Only the picture can. So: for each
+remaining item, look at a zoomed crop of what moved and not only at the diff
+count.
 
 ### 2.2 The apps
 
 | app | off-grid pen(s) | note |
 |---|---|---|
-| **Tracker** | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | the **largest** item here. Its pattern grid was already moved onto 8px boundaries to earn §6.1 (SPEC.md §45.9); the rest of the FT2 face never was — 17% of sampled literal pens aligned. It also redraws continuously while playing, so this is the app where the percentage is spent most often |
+| ~~**Tracker**~~ | ~~6, 38, 108, 111, 116, 150, 205, 210, 258, 290~~ | **MEASURED AND CLOSED WITHOUT CHANGING IT** — SPEC.md §45.19. It was ranked the largest item here on this sample and the sample was misleading four ways: its per-frame values go through `tui_rdout`, which **already rounds its pen down to a byte boundary on mono**; `tui_top_cga`'s labels are already at 0/64/136/200/288; what is left is `tui_draw_all`, which is event-driven and not the "redraws continuously while playing" this row claimed (`tui_draw_dyn` draws only what changed); and 159 of the off-grid cells are `tui_s_logo` at 149, which is `112 + (179-104)/2` — the centring of `'T R A C K E R'`, §3's protected kind. Measured: 237 cells 26.2% aligned on Hercules, 354 / 39.3% on VGA, all of it on one repaint |
 | **Tamegram** | 4, 60, 116, 164, 210 | HUD; 7 of 8 sampled pens ≡ 4, so a single `+4` on the base would align nearly all of it |
 | **Fractal** | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0. **Confirmed by measurement, and it is the worst in the tree: 2,801 glyphs in one launch, 16% aligned, 2,323 of them at bucket 2** — the status row redrawn per progress tick. Four constants in one table |
 | **Paint** | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned. The palette is drawn on every tool change |
@@ -173,17 +195,46 @@ An app whose pens are all computed shows as nothing at all.
 
 By what the percentage is spent on rather than by size of diff:
 
-1. **Tracker** — redraws while playing, and has the most off-grid pens.
-2. **Disk window icon grid** (`FMI_CELL_W` 78 → 80) — every label off-grid by
-   a different amount per column.
-3. **Disk window icon inset** (4 → 8) — not text at all, but it deletes
-   §22.11.1's strip pass from every scroll.
-4. **ArtfulType** — a writer, so it is the typebench case exactly.
-5. **Fractal, Paint, Tamegram** — one constant table each.
-6. **Task Manager's five `+6`s, Recorder, Minesweeper, HDD's two pages,
+1. ~~**Disk window list view**~~ — ✅ done, §2.1: header, status line, icon
+   inset, name pen, and the strip test that reads the inset. 0 bytes.
+2. ~~**Fractal**~~ — ✅ done, SPEC.md §40.2.1, and it turned out **not to be an
+   alignment item at all**. The audit put it first of what was left (2,542
+   glyphs sampled, 12.5% aligned, 2,222 in bucket 2), and the reason was that
+   `fr_status_maybe` ran ~100 times a render and called the FULL strip painter
+   each time — a white fill plus five re-lettered fields to move one digit. The
+   five pens are multiples of 8 now (8, 128, 168, 200, 248) *and* a progress
+   tick draws one opaque padded `font_run`: **2,557 glyph cells → 565, 4.5x**,
+   off-grid 2,222 → **0**, ~100 fills a render gone. The two halves are one
+   change, because `font_run`'s single-store path needs the aligned pen.
+   **The lesson for the rest of this list: ask how often a pen is drawn before
+   moving it.** An off-grid glyph that should not be drawn at all is not an
+   alignment defect, and aligning it would have banked a fifth of the win.
+3. ~~**Tracker**~~ — ✅ **measured and CLOSED without changing it**, SPEC.md
+   §45.19. One forced full repaint, histogram filtered to its own record:
+   Hercules **237 cells, 26.2% aligned**; VGA **354, 39.3%**. Four things this
+   plan's literal-pen sample could not see. Its per-frame values all go through
+   `tui_rdout`, which **already rounds its pen down to a byte boundary on mono**
+   — so the frequently-drawn text is on `font_run`'s fast path whatever the
+   caller's constant says. `tui_top_cga`'s labels are already at 0/64/136/200/288.
+   What is left is `tui_draw_all` — event-driven, not per frame — and alignment
+   shaves ~3.4% (Herc) / 9.4% (VGA) off a cell rather than removing it, so all
+   175 off-grid Hercules cells are worth **~6 ms of a ~237 ms repaint, on an
+   event**. And 159 of them are `tui_s_logo` at 149, which is exactly
+   `112 + (179-104)/2` — the centring of `'T R A C K E R'` in its box, §4's
+   second protected kind. The one thing the measurement does point at —
+   `tui_rdout` keeping the erase-and-letter pair on VGA — is a refactor, not a
+   constant, and is costed in §45.19 rather than taken.
+4. ~~**Disk window icon grid**~~ — ✅ done, SPEC.md §22.11.1.2: `FMI_CELL_W`
+   78 → 80 and the icon's `fm_cellx + 31` → `+ 32`, which is exactly the centre
+   of an 80-wide cell, so it is aligned and centred at once. 0 bytes. The
+   **label** is centred and was left alone (§4's second kind): a 9-character
+   name is 72px in an 80px cell, so any rounding puts it flush against a side.
+5. **ArtfulType** — a writer, so it is the typebench case exactly.
+6. **Paint, Tamegram** — one constant table each.
+7. **Task Manager's five `+6`s, Recorder, Minesweeper, HDD's two pages,
    Hello** — small, mechanical, and Hello matters because it is the template a
    new package starts from.
-7. **Piano, Arkanoid, Missile** — audit first; do not move a constant on one
+8. **Piano, Arkanoid, Missile** — audit first; do not move a constant on one
    sampled pen.
 
 Each item is its own commit, because each is a **visible layout shift** and
@@ -194,6 +245,11 @@ session against a reference build, framebuffers diffed — and expect the diff t
 be non-zero here, because the pixels really do move. What must not change is
 the *content*: same strings, same widths, nothing clipped at the right edge
 that was not clipped before.
+
+**And LOOK at a zoomed crop, every time.** §2.1's icon shifted onto its own
+label — a defect that is 0 bytes, byte-identical under the scroll A/B, and
+plainly wrong in a 5x crop. The diff count and the size report can both be
+perfect while the window is worse.
 
 ---
 
@@ -293,17 +349,21 @@ The tree's real deltas mostly already qualify:
 |---|---:|---|---|
 | Note Pad row scroll (`NP_SB_STEP` 4 rows) | 32 px | ✅ | ✅ |
 | Disk window `fm_scrollpaint` (`FM_ROW_H`) | 16 px | ✅ | ✅ |
-| Note Pad find panel (§27.10.2) | 29 / 41 px | ❌ | ❌ |
+| Note Pad find panel (§27.10.2) | **32 / 44 px** | ✅ | ✅ |
 
-So the only caller that would have to move is the find panel, and the change is
-one character: its height is `NP_FP_ROW*2 + NP_FP_PAD*2 + 1` = **29** (and
-`+ NP_FP_ROW` = **41** with the replace row), so **the `+ 1` border line is the
-whole of what makes it odd**. 32 and 44 would qualify on both mono adapters.
-§27.10.2 notes the shift is deliberately "not a multiple of 8", but that was
-about the *blit working at all* at a non-8 shift rather than about its cost, so
-nothing there argues for keeping it odd. Even
-unaligned, the general path can still halve its arithmetic: walk the
-destination with the register step and pay `gfx_rowbase` for the source alone.
+**✅ DONE — SPEC.md §27.10.3.** The find panel was the only caller that had to
+move, and this file said the change was "one character": it is not, and the
+reason is worth keeping. `NP_FP_ROW*2 + NP_FP_PAD*2 + 1` is odd for **every**
+value of those two constants — `2*anything` is even and the separating rule adds
+one — so no edit to either could have fixed it and the correction has to be
+explicit: `NP_FP_SLACK = (-NP_FP_RAW) & 3`, rounding UP because down would take
+a pixel off something using it. `NP_FP_ROW` must itself be a multiple of 4 or
+the Replace panel's `+NP_FP_ROW` undoes it, which is an `%error` now.
+The three rows land below the buttons (`np_pbtny` is bottom-anchored), so nothing
+is squeezed; 0 bytes; 0 differing pixels against a forced full repaint on CGA and
+Hercules. §27.10.2's "not a multiple of 8" note was about the *blit working at
+all* at a non-8 shift rather than about its cost, so nothing there argued for
+keeping it odd.
 
 **None of this needs `WF_SNAP` in Y, and none of it needs an 8-pixel vertical
 drag quantum** — which would have been the visible price, and a dearer one than
