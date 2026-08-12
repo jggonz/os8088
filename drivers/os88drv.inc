@@ -363,9 +363,10 @@ FSV_SIZE     equ 26
 
 ; --- volumes a DRVC_DISK driver mounts (SPEC.md 18.7/51.8) -------------------
 ; A volume is a small INDEX - 0 = A:, 1 = B:, 2 = C: - and the desktop zone,
-; the drive letter and the file manager all fall out of it. The fence on all
-; three is the same identity test OSAPI_DRV_TASK uses: your segment must be
-; the segment of the driver whose DISK services are published.
+; the drive letter and the file manager all fall out of it. The fence on the
+; ones that CHANGE something is the same identity test OSAPI_DRV_TASK uses:
+; your segment must be the segment of the driver whose DISK services are
+; published.
 ;
 ;   OSAPI_VOL_ADD    in  AL = your own volume handle (whatever you like: it
 ;                            comes back in DSV_BLK's AH)
@@ -384,7 +385,19 @@ FSV_SIZE     equ 26
 ;   OSAPI_VOL_PAINT  repaint the desktop's drive zones. It takes the gfx lock
 ;                        ITSELF, so never call it from a page click - defer it
 ;                        the way the Control Panel defers its own repaints
-; The four slots themselves are published by os88api.inc, which this file
+;   OSAPI_VOL_AT     in  DL = an int 13h drive number, BX:CX = a partition's
+;                            32-bit base LBA (BX = the high word)
+;                    out CF = 0 and AL = the volume index ALREADY covering it
+;                        ASK IT BEFORE EVERY OSAPI_VOL_ADD. On a machine
+;                        installed to its hard disk the kernel adopted the
+;                        partition it booted from before you were loaded - it
+;                        had to, your image being a file on that volume
+;                        (SPEC.md 52.10.3) - and nothing in your own table
+;                        says so, so mounting it again puts a second drive
+;                        icon on the same sectors. Unfenced, changing nothing;
+;                        it answers about BIOS-transport volumes alone,
+;                        yours being yours to recognise
+; The five slots themselves are published by os88api.inc, which this file
 ; includes: a slot number belongs in one place (SPEC.md 20.8).
 
 ; The listing claim a mounted volume wants (SPEC.md 22.6): DSK_VENT entries of
