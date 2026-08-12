@@ -224,8 +224,17 @@ By what the percentage is spent on rather than by size of diff:
    event**. And 159 of them are `tui_s_logo` at 149, which is exactly
    `112 + (179-104)/2` — the centring of `'T R A C K E R'` in its box, §4's
    second protected kind. The one thing the measurement does point at —
-   `tui_rdout` keeping the erase-and-letter pair on VGA — is a refactor, not a
-   constant, and is costed in §45.19 rather than taken.
+   `tui_rdout` keeping the erase-and-letter pair on VGA — was costed in §45.19
+   as a refactor rather than a constant, and has since been **taken** (SPEC.md
+   §45.20): the widening is unconditional and the emit is one path through a
+   second entry point, `tui_runo`, so on colour `font_run`'s own fallback does
+   the fill the routine used to write by hand. VGA **354 cells / 39.3% aligned
+   → 340 / 48.5%**, bucket 4's 40 cells — the status line, and the only
+   unaligned windowed readout there — emptied into bucket 0. The package is 54
+   bytes *smaller* and no kernel byte moved. Mono is byte-identical by
+   construction and was checked that way (0 differing pixels on Hercules and
+   CGA); on VGA the status line's pen moves from content x = 4 to x = 0, which
+   is where the two mono adapters have always drawn it.
 4. ~~**Disk window icon grid**~~ — ✅ done, SPEC.md §22.11.1.2: `FMI_CELL_W`
    78 → 80 and the icon's `fm_cellx + 31` → `+ 32`, which is exactly the centre
    of an 80-wide cell, so it is aligned and centred at once. 0 bytes. The
