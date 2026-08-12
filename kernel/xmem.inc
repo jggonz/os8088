@@ -172,8 +172,14 @@ xm_sniff:
     pop ax
     ret
 
-section .text
-
+section .cold                   ; xm_boot is COLD, and that is not a saving:
+                                ; every routine it calls - drv_load_at,
+                                ; drv_call, drv_release - is driver.inc's, and
+                                ; driver.inc went cold (SPEC.md 2.6). From
+                                ; .text those would be three thunks and three
+                                ; far calls; from here they are near calls and
+                                ; cost nothing at all. It runs once, at boot,
+                                ; which is what the cold segment is for
 ; -----------------------------------------------------------------------------
 ; xm_boot - load and attach the overlay, if the sniff asked for it
 ;
@@ -196,7 +202,7 @@ section .text
 ; published - the snd_live ordering of SPEC.md 34.7. Every cell below tests
 ; that one word, so it must not be visible before what it gates.
 ; -----------------------------------------------------------------------------
-xm_boot:
+xm_boot_x:
     push ax
     push bx
     push cx
@@ -279,6 +285,15 @@ xm_boot:
                                 ; stamped on its way past
     call drv_release            ; BX = the row; the claim goes back and
     jmp short .out              ; nothing was hooked
+
+; --- the far entry kmain reaches xm_boot through (SPEC.md 2.6) --------------
+xmf_xm_boot:        call xm_boot_x
+                    retf
+
+section .text
+
+xm_boot:            call COLD_SEG:xmf_xm_boot
+                    ret
 
 ; -----------------------------------------------------------------------------
 ; xm_dsp - dispatch one of the overlay's service procs

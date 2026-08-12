@@ -5571,3 +5571,62 @@ exactly the path it always did (fragment 0 is then the whole content).
 at **512 spare, one step** — `KERN_SMALL_BUDGET`'s twentieth move is what paid
 for it, and it is spent.
 
+
+### Set 49 — Solitaire fills nothing twice (SPEC.md §43.9)
+
+The question asked was whether §11.96.11's `wm_band` is worth anything to
+Solitaire. **It is not, and measuring that is what found what is.** Solitaire
+has promised `WF_SAVEU` since it was written and its content banks in ~3.7 KB
+on 1bpp, so the raise cache already answers every partial case — a raise from
+under another window **97.5 ms**, a window dragged off it **78.7 ms**, an
+un-minimize **172.1 ms**, and `W_PAINT` running in none of them. A band is for
+a window whose whole-content cache is unaffordable; this one's is affordable
+and installed, and Klondike has no static furniture at an edge to name.
+
+`gfx_blit4` is what makes those three claims checkable rather than inferred:
+card backs are the only thing in this window that blits (§43.3), so a capture
+with none in it is a capture in which `sol_drawall` did not run.
+
+**What is expensive is the full repaint — a New Game, a Restart, a launch,
+every `wm_paint_all` — and two of its fills were the same pixels twice.**
+Cycle-accurate 5150/CGA, 220x136 content, the *same deal in both builds*
+(`[osapi_seed]` written from the harness, because `sol_newgame` takes its
+entropy from `OSAPI_RAND` and nowhere else — two runs of one binary otherwise
+deal differently and no pixel or call count is comparable):
+
+| | before | after |
+|---|---:|---:|
+| New Game — the app drawing itself | 789 calls, **664.2 ms** | 777 calls, **562.6 ms** |
+| a window MOVE — through `wm_draw_win` | 978 calls, **934.6 ms** | 965 calls, **809.0 ms** |
+
+**Exactly 12 fills and exactly 13**, which is the shape that says the change did
+what it claims and nothing else: twelve pile wipes on both, plus the kernel's
+white fill on the one that goes through `wm_draw_win`.
+
+- **§43.9.2, the twelve wipes.** `sol_drawall` fills the whole content with felt
+  and then `sol_drawpile` fills *each pile's rect* with felt again, except where
+  `sol_covers` already declined. Per call: the whole-content fill **26.45 ms**,
+  seven tableau column wipes at **11.85–12.93** (a column's rect is the full
+  content height), five waste/empty-foundation wipes at **3.93–4.06** —
+  **102.9 ms of 681.3, 15.1%**, for pixels that were already that colour.
+  Measured after: **101.6 ms**.
+- **§43.9.1, `WF_OWNBG`.** Solitaire predates §11.90.1 and is its second
+  consumer. One fill of **~25 ms**, and as a *picture* it is Part 1's double
+  draw at maximum contrast — the felt is `CGREEN`, which §39.4 reduces to
+  **black** on both mono adapters, so every kernel-driven repaint was the window
+  going white, then black, then filling with cards over two-thirds of a second.
+
+**The repaint is ~91% floor and the call count is the only lever**, which is why
+both of these are worth their size: 816 calls x PERFORMANCE.md Part 2's ~756us
+is 617 ms of the 681. Nothing inside those calls was touched. This is §48.18's
+finding in another package.
+
+Verified **0 differing pixels** on CGA, Hercules and VGA mode 12h — three
+captures each (the deal, the same board after a MOVE, and a Restart in place)
+against a build of `HEAD`'s `solitaire.asm`, by `tools/solcheck.py`. The move is
+in the session because `WF_OWNBG`'s failure mode is a pixel the app does not
+write showing *what was there before*, which is only another window's content
+once something has moved.
+
+**Cost: the kernel is untouched.** `solitair.o88` 5,799 -> 5,823 bytes, which is
+heap while the game is open and nothing when it is closed.

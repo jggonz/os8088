@@ -738,15 +738,22 @@ hd_page_click:
                                 ; pane repaint AFTER wm_show paints straight
                                 ; over the window it has just put up - which is
                                 ; what the Install dialog arrived doing.
+                                ; ...and a REFUSED open is the exception to
+                                ; that ordering, because there is no window to
+                                ; paint over: the caption it just set would
+                                ; otherwise sit undrawn until something else
+                                ; repainted the page (hdtool.inc)
 .dofmt:
     call hd_page_repaint
     mov al, HDT_FORMAT          ; the tool is a second image now, read off
     call hd_tool_open           ; the system volume on this click (52.11)
+    jc .repaint
     jmp short .done
 .doinst:                        ; Install stages nothing either, for the tool's
     call hd_page_repaint        ; reason: what it changes is a DISK, and about
     mov al, HDT_INSTALL         ; the machine's settings nothing at all
     call hd_tool_open
+    jc .repaint
     jmp short .done
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so the refusal

@@ -129,11 +129,11 @@ ld_unreserve:
     call KERNEL_SEG:cw_xm_release_rec   ; DI = the record, as this routine's
                                         ; own contract already promises
     call ld_slot
-    call KERNEL_SEG:cw_mem_free_owner
+    call mem_free_owner_x
     mov bx, [ld_base]
     or bx, bx
     jz .out
-    call KERNEL_SEG:cw_mem_free_owner
+    call mem_free_owner_x
     mov word [ld_base], 0
 .out:
     pop bx
@@ -391,7 +391,7 @@ ld_run_body_x:
     ; --- 1. validate the directory entry --------------------------------------
     cmp ax, [disk_nfiles]
     jae .bad1                   ; index out of range
-    call KERNEL_SEG:cw_dsk_get_dir ; SI -> the entry, staged out of LOW_SEG into
+    call dsk_get_dir_x ; SI -> the entry, staged out of LOW_SEG into
                                 ; the kernel segment (SPEC.md 2.1)
     cmp word [si+LD_DE_TYPE], 1
     jne .bad1                   ; not an application package
@@ -421,7 +421,7 @@ ld_run_body_x:
     ; LOW_SEG, so the sector lands there and only the 32 header bytes are
     ; staged back into the kernel segment for ld_check_hdr to read.
 .peek:
-    call KERNEL_SEG:cw_dsk_clus2lba ; AX: cluster -> its first LBA; the first
+    call dsk_clus2lba_x ; AX: cluster -> its first LBA; the first
     jc .bad1                    ; sector of the first cluster IS the file's
                                 ; first 512 bytes, so peek semantics are
                                 ; exact (SPEC.md 21 step 2)
@@ -429,14 +429,14 @@ ld_run_body_x:
     mov es, bx
     mov cx, 1
     mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read              ; in: AX=LBA, CX=1, ES:BX
+    call disk_read_x              ; in: AX=LBA, CX=1, ES:BX
     jc .disk1
 
     ; --- 3. validate the peeked header -----------------------------------------
     mov si, dsk_secbuf
     mov di, ld_hdr
     mov cx, LD_HDR_SIZE
-    call KERNEL_SEG:cw_dsk_copy_in ; LOW_SEG:dsk_secbuf -> KERNEL_SEG:ld_hdr
+    call dsk_copy_in_x ; LOW_SEG:dsk_secbuf -> KERNEL_SEG:ld_hdr
     mov si, ld_hdr
     call ld_check_hdr           ; fills ld_img/ld_bss/ld_ent;
     jc .ret1                    ; AL = LD_EBAD / LD_EBIG on failure
@@ -464,7 +464,7 @@ ld_run_body_x:
     shr ax, cl                  ; than to the 512 bytes int 13h needs - which
                                 ; mem_claim's own granularity then guarantees
     call ld_slot                ; BX = the owner word: this record's slot
-    call KERNEL_SEG:cw_mem_claim_hi ; from the TOP down, away from the data claims
+    call mem_claim_hi_x ; from the TOP down, away from the data claims
     jc .nomem                   ; growing up from the bottom (SPEC.md 50.3)
     mov [ld_base], dx
     mov cl, 10                  ; I_SIZE is bytes, and it is what the region
@@ -492,7 +492,7 @@ ld_run_body_x:
     mov ax, [ld_clus]
     mov es, [ld_base]           ; the package's OWN segment, offset 0
     xor bx, bx
-    call KERNEL_SEG:cw_dsk_read_chain ; in: AX=cluster, DX=sectors, ES:BX -> dest.
+    call dsk_read_chain_x ; in: AX=cluster, DX=sectors, ES:BX -> dest.
     jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
                                 ; LD_EDISK (disk error), 2 = LD_EBAD (chain
                                 ; corrupt is bad data, not a disk error) -

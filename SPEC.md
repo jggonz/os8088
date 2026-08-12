@@ -395,16 +395,46 @@ fix a footprint overrun is a no-op that looks like a fix. The two rungs it
 moves between round separately, so a large move usually costs one 512-byte
 step rather than nothing.
 
-Two things live there. The Control Panel's three code runs — large, cold
-enough that a far call per entry costs nothing measurable, and needed on
-exactly the machine where things are going wrong, so it must stay resident.
-And the five **file modules**: `loader.inc` (§21), `diskw.inc` (§18.4),
-`files.inc` (§22), `filecp.inc` (§22.3) and `fdlg.inc` (§38), ~16.6KB
-between them, moved together because they mostly call each other — a call
-inside the set stays near, and only the ones that leave it pay a shim.
-Growing the set makes the ones already in it *cheaper*: `fdlg.inc` joining
-turned its calls to `fm_ultoa`, `dskw_mkdir` and `dskw_char` from a double
-crossing into a near call, and retired those three thunks.
+**Eleven modules live there**, and the set has grown in two rounds. The
+original three groups: the Control Panel's code runs — large, cold enough
+that a far call per entry costs nothing measurable, and needed on exactly the
+machine where things are going wrong, so it must stay resident — and the five
+**file modules**, `loader.inc` (§21), `diskw.inc` (§18.4), `files.inc` (§22),
+`filecp.inc` (§22.3) and `fdlg.inc` (§38), moved together because they mostly
+call each other.
+
+The second round added five more when `.text` + `.bss` came within **471
+bytes** of `KERN_CODE_MAX`, which is the guard that cannot be raised:
+`assoc.inc` (§54), `disk.inc` (§18–19), `driver.inc` (§51), `memory.inc`
+(§50) and `desk.inc` (§26.1). What made them the right five is not their size
+but their **cadence** — a double-click, a mount, a driver load, a heap claim
+and a drive-zone click are all human-scale or floppy-bound, where a far call
+is microseconds against milliseconds. The drawing primitives, the schedulerticks
+and the two ISRs are deliberately NOT here for the same reason, and
+`splash.inc` and `viddet.inc` *cannot* be: both must be resident inside the
+image's opening sectors and the cold segment lands after the image rung.
+
+Together: **`.text` + `.bss` 65,065 → 52,838, so the headroom under
+`KERN_CODE_MAX` went 471 → 12,698.** It cost `KERN_BUDGET` two 512-byte
+steps, which is the trade this mechanism always makes and never hides.
+
+**Growing the set makes the ones already in it cheaper**, and by the second
+round that is most of what it buys: `fdlg.inc` joining turned its calls to
+`fm_ultoa`, `dskw_mkdir` and `dskw_char` from a double crossing into a near
+call, and `assoc.inc` joining did the same for `ld_run_name`, `files_poster`,
+`files_refresh` and `dskw_stat`. A call that leaves cold code for a resident
+*thunk* is a double crossing — out through a `cw_` shim and straight back in
+through the thunk, six segment transitions where a near call would do — so
+when a target joins the set, **its callers inside the set must be pointed at
+the `_x` body**.
+
+That is a standing obligation on every future move, not a tidy-up, because it
+is worth more than the move that creates it: after the second round the tree
+carried **139 such call sites across 48 targets**, and repointing them retired
+**49 `cw_` shims and 55 thunks that no longer had any resident caller at
+all**. `.text` −487, `.cold` −250 — and the footprint fell a full **1,024
+bytes, giving back both 512-byte steps the five moves had cost**. A cold move
+and its cleanup, taken together, were footprint-neutral.
 
 Calls out use four-byte `cw_*` shims; calls *in* use six-byte resident
 thunks (`call SEG:x` / `ret`), because `wm_pkgcall` sets DS from `W_SEG` and
@@ -412,7 +442,18 @@ that is the wrong contract for cold code. The thunk keeps the **public**
 name and the body takes an `_x` suffix, so no caller outside changes.
 
 Four rules, and every one of them is something that assembles cleanly and
-runs wrong:
+runs wrong.
+
+**`tools/os88ovlchk.py` now refuses four of the five ways to break them**, and
+`make` runs it: a near control transfer across the boundary, a **CS
+assumption** in `.cold`, a **data directive** in `.cold`, and a **tail call to
+a `cw_` shim**. Each is a clean invariant rather than a heuristic — the whole
+kernel satisfies all four — and each was verified to fire by reintroducing the
+bug. The one that is still review-only is the fifth below, the pointer table,
+because it cannot be told from a legitimate one mechanically.
+
+The three added after the near-call check all came out of the second round of
+moves, and each had already shipped a failure by the time it was written:
 
 - **Data stays in `.text`** (or `.bss`). DS is still `KERNEL_SEG`, so a
   string or table that moved with its code would be addressed at the wrong
@@ -432,11 +473,42 @@ runs wrong:
   a whole commit. The tell is a symbol dump: `python3 tools/os88sym.py --all`
   prints each symbol's section, and any `.cold` name that a `mov`/`cmp`
   reaches without a `cs:` override is this bug.
+
+  **And the trap that hides the data in the first place: NASM does not
+  require the colon.** `desk_phdd   dw ico_hdd32` is a label and a `dw`, and
+  it does not look like either at a glance — so a scan keyed on `name:` walks
+  straight past it. Moving `desk.inc` cold took seven such lines with it,
+  including the per-adapter icon pointers, and the comment sitting directly
+  above them had already predicted the result: *"a zero `[desk_pdisk]` draws
+  the interrupt vector table as an icon"*. `os88ovlchk.py` refuses any data
+  directive in `.cold` now, colon or no colon, which is why this one is
+  mechanical rather than a reading exercise.
 - **Nothing may assume `CS` is `KERNEL_SEG`.** `push cs`/`pop es` and
   `[cs:x]` are the two spellings, and `loader.inc` had three of them —
   including a documented one, the far pointer it calls a package's
   dispatcher through. It reads that through ES now, which is the only
   register still naming the kernel at that point.
+
+  **`disk.inc` is the worked example, and the assumption was written out in
+  the comment**: `mov ax, cs   ; destination = the kernel segment (this code
+  is in .text, so CS is it)`. Cold, CS is `COLD_SEG`, so `dsk_copy_in` staged
+  the boot sector 64 bytes into the middle of the cold segment instead of into
+  `dsk_bpb`; every BPB field stayed 0, `disk_mount` refused, and a Disk window
+  on a perfectly good floppy said *No os8088 disk (A:)*. Five sites in that
+  one file. **Name the segment** — `mov ax, KERNEL_SEG` — or, where AX is
+  live, take it from DS, which cold code still keeps: `push ds` / `pop es` is
+  the same two instructions and no register at all (`driver.inc` has six).
+- **No tail call to a `cw_` shim.** A shim is `call <target>` / `retf`, built
+  to turn a far CALL into a near call plus a far return. A `jmp` to one leaves
+  no far frame, so its `retf` pops the jumping routine's **near** return
+  address as `CS:IP`. It is easy to write by accident because a near tail call
+  is an ordinary idiom here and the conversion looks mechanical:
+  `desk_zone_hilite` ended `jmp gfx_xor_fill`, became
+  `jmp KERNEL_SEG:cw_gfx_xor_fill`, and froze the machine on the first click
+  on a drive zone — at `cs=77F2` executing zeros, with IF clear and the gfx
+  lock held, so it read as a hang rather than a crash. Use `call` + `ret`. The
+  near-call check cannot see it: it IS a far transfer, which is what that
+  check wants.
 - **A table of cold pointers may live in `.text` only if cold code alone
   dispatches through it.** There are four: `ctrl.inc`'s page table, and
   `files.inc`'s `fm_jmp` and two `fm_ctx_*` sets. The mirror rule is the one
@@ -3901,10 +3973,10 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x0108 (§20.3). |
 | `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0118 (§20.3). |
 | `wm_zoom`      | in BX = win ptr (resizable and not fullscreen — the CALLER's check); **caller holds the gfx lock**. Toggles the window between the **standard** state — the whole desktop band, full width, `MBAR_H` down to one pixel short of the dock, honouring `WF_SNAP` — and the **user** state it was in before, banked per slot in `wm_zoomr`. Which state it is in is derived from the record, never tracked; `wm_ask_size` is asked for both, and a refused shrink leaves it standard with its bank intact. All registers preserved. Not `wm_fullscreen`: the window keeps its chrome and its place in the z-order. §11.95. |
-| `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0110 (§20.3). |
+| `wm_fullscreen`| in AL = 1 enter / AL = 0 exit, **BX = the caller's own win ptr either way**; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (the screen is another window's — entering *or* leaving), CF=0 done. API slot 0x0110 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
-| `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect. Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
-| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0170 (§20.3). |
+| `wm_obscured`  | in BX = win ptr; out CF=1 if BX is not visible at all, or any visible window above it in z-order overlaps its frame rect (§11.3.1 — the visibility half is part of the answer, and was not). Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
+| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects, and — since §11.3.1 — when the window is *hidden*, which this always claimed and did not deliver). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0170 (§20.3). |
 | `wm_clip_rect` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); **caller holds the gfx lock**. `wm_clip_set`'s arithmetic for a rect that belongs to no window: the seed is the caller's rect and the occluders are **every** visible window, because the thing under it is the DESKTOP and nothing is below that. out CF=1 the region needs more than 16 rects — nothing is armed and the caller must fall back to something unconditional; CF=0 armed, and **ZF=1 means the rect is wholly covered** (the list is empty, i.e. disarmed: draw nothing at all). Preserves every register. The two degradations are `wm_clip_set`'s, split apart because a caller can act on them differently — an overflow says nothing is *known*, an empty list is a *fact*. Kernel-internal; §26.2 is its consumer. |
 | `wm_clip_clear`| disarm clipping. Preserves every register. `gfx_unlock` already does this, so a painter only needs it to go back to drawing unclipped inside the same lock hold. API slot 0x0178 (§20.3). |
 | `wm_clip_test` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); out CF=0 the whole rect lies inside **one** clip fragment, or nothing is armed; CF=1 it does not. Preserves every register. This is the question `font_char` and `icon_draw16` ask themselves, exposed so a caller that **erases a rect and then draws glyphs into it** can ask it first — see the granularity rule in §11.3. API slot 0x0180 (§20.3). |
@@ -4020,8 +4092,23 @@ entire screen and reports "covered" to everyone beneath it.
   (word, .bss, 0 = none — **the** fullscreen latch), set the frame to
   (0, 0, `[vid_w]`, `[vid_h]`), set WF_FULL, `wm_front` (raises + repaints
   under the held lock). Re-entering with the same window is CF=0 no-op.
-- **Exit** (AL=0): `[wm_fs]` zero → CF=0 no-op. Else restore the saved
-  geometry into the record, clear WF_FULL, zero `wm_fs`, `wm_paint_all`.
+- **Exit** (AL=0, BX = win ptr): `[wm_fs]` zero → CF=0 no-op. `[wm_fs]`
+  non-zero and ≠ BX → **CF=1, nothing changes** — the screen is somebody
+  else's and is not yours to put down. Else restore the saved geometry into
+  the record, clear WF_FULL, zero `wm_fs`, `wm_paint_all`.
+
+  **BX binds on exit**, and the symmetry with enter is the whole of the
+  reason. It used to be ignored: the exit path opened by overwriting BX with
+  `[wm_fs]`, so AL=0 dropped whatever window owned the screen — a package
+  could take another package's fullscreen down with its own window pointer,
+  leaving the two disagreeing about who was fullscreen and nothing on screen
+  saying so. Every caller in the tree already passed its own window
+  (`apps/artful`, `apps/missile` twice, `tests/gfxbench`), so honouring it
+  changed no shipped behaviour and no `.o88`; what it removes is a way to be
+  wrong that nothing could have reported. This is a *contract* change at a
+  live slot, which §20.8 rule 4 permits while the OS is in alpha and this
+  tree hosts every caller — and it is the benign direction of one, since it
+  can only start refusing a call that was already a bug.
 
 While WF_FULL is set: `wm_draw_win` draws **no chrome at all** — no frame,
 shadow, title bar, boxes or grow box; the content area is the whole frame
@@ -4039,14 +4126,59 @@ and the menu-bar branch of the event ladder (step 2) is bypassed so a
 click in rows 0..19 routes to wm_hit like any other. The mouse cursor
 stays live — a fullscreen app that wants it hidden draws its own.
 
-Leaving fullscreen is **the app's job** (recommend Esc in its W_ONKEY →
-`wm_fullscreen` AL=0; the menu bar is unreachable while it holds the
+Leaving fullscreen is **the app's job** (§11.2.1 is the binding: **F**, with
+Esc as the escape hatch; the menu bar is unreachable while it holds the
 screen). The kernel's safety net: `wm_destroy` and `wm_hide` both check
 BX against `[wm_fs]` and, on a match, restore the saved geometry, clear
 WF_FULL and zero `wm_fs` before repainting — closing, minimizing (no box
 is drawn, but app_close_win's die-flag path hides) or killing a
 fullscreen window can never strand the latch, and a re-shown window comes
 back windowed at its old place.
+
+#### 11.2.1 F is the fullscreen key, in both directions (binding)
+
+**The key that got you there is the key that leaves.** Every app that can
+go fullscreen — by this section's surface, by §53's bracket, or by both
+stacked the way Missile Command stacks them — binds **`f` and `F`** to
+*enter* it from the windowed state and to *leave* it from the fullscreen
+one, and binds **Esc** to leave. Both letters, always: an app that tests
+only one is an app whose fullscreen key stops working under Caps Lock.
+
+The rule is about the user rather than the mechanism, which is why it
+spans two mechanisms that share nothing in the kernel. §11.2 is a latch
+and §53 is a bracket; an app may be on either, or enter the first and put
+the second on top of it (§48.13), and none of that is visible from the
+front of the machine. What is visible is that the screen went big and
+some key has to give it back — so the answer may not depend on which of
+those an app happened to build with, and it may not depend on which way
+the user is going.
+
+**Esc is the escape hatch and not the door.** It stays because it is what
+a user presses when they want out of *anything*, and because an app that
+has given F away to a text run (below) still owes a way home. Where Esc
+already means *cancel* inside the app it keeps meaning that first, and is
+a way out only when it has nothing left to cancel — Paint's text run,
+selection and size-box edit are the worked example. F is the door because
+a door should not also be a cancel key.
+
+**The exception is an app that is taking typed text**, where a bare
+letter is not the app's to bind: pressing F in ArtfulType (§46) writes an
+`f`, and it must. Two shapes, both in the tree:
+
+- **The whole app is a writer.** ArtfulType is fullscreen *as its editing
+  mode* — the window is a splash and the document is the screen — so it
+  binds no F at all, enters on its splash's own verbs and leaves on Esc,
+  which is unambiguous there because the document survives it.
+- **The app takes text sometimes.** Paint (§42.7) is a bitmap editor with
+  a text tool, so F is free except while a caption is being typed or a
+  size box has the keyboard. It offers the bare letter under exactly that
+  gate — the one `pt_type` was already applying to the same keystroke —
+  and keeps **Ctrl+F** as the unconditional door. Ctrl+F is what the menu
+  item names, because a menu item's key hint has to be true in every
+  state and the bare letter is not.
+
+An app that reserves letters for gameplay is *not* an exception: Missile
+Command and Tracker both bind a dozen bare letters and F is one of them.
 
 ### 11.3 The clip region — what a background task may draw
 
@@ -4189,6 +4321,75 @@ at both ends, so its two operations clip alike by construction.
 only the erase and the redraw are conditional; Timer (§14) substitutes
 `wm_clip_set` for its veto; and `apps/fractal`'s `fr_emit_body` (§40) does
 the same, so a partly covered fractal keeps rendering the part you can see.
+
+#### 11.3.1 …and HIDDEN is one of the ways a window can be covered
+
+Both routines above answer a question about **what is on top of a window**,
+and for a long time neither asked whether the window was on screen at all.
+`wm_hide` clears `W_FLAGS` bit 1 and leaves the record where it is in
+`wm_zord` (§11.91 needs it there), so a hidden window with nothing above it
+walked a z-order that found no occluder and came back **clear**:
+`wm_obscured` CF = 0, and `wm_clip_set` armed the window's full content rect.
+Its background painter then drew, in absolute screen coordinates, onto
+whatever now owns those pixels.
+
+**For `wm_clip_set` that was a promise the routine did not keep.** Its
+contract — in §11 and in `apps/os88api.inc` — has always read *CF = 1 the
+window is entirely invisible*, and a hidden window is entirely invisible.
+`files_poster_x` (§22.1) reads it exactly as written, with no visibility test
+of its own and a comment saying so, and was wrong for a minimized Disk window
+with a load pending.
+
+**For `wm_obscured` it was a rule the callers were carrying.** Nine sites pair
+it with a hand-rolled `test word [bx+W_FLAGS], 2` on the line above the call —
+`wm_front`, `cp_tick_x`, and the six package workers that ask through
+`OSAPI_WM_GEOM` or the flag directly (§11.96.1 states this as the rule: *the
+background painters re-check visibility under the lock and skip when the
+window cannot be seen*). Nine copies of a test is the shape that says the
+routine owes the answer, and Note Pad's worker was the tenth site and did not
+carry it.
+
+**How it reached the glass.** Note Pad's worker gates four draws on
+`wm_obscured` and its scroll-bar draw is the one that survives a close: the
+close box hides the window and the worker dies at its next
+`OSAPI_TASK_ALIVE`, but between those two events lies one whole `NP_WTICKS`
+pass — 3 ticks, ~165 ms — in which `np_hchunk` counts its `NP_HCHUNK` rows,
+raises `[np_drows]`, and `np_sbcheck` draws a bar the window no longer has.
+The comment above that call had reasoned that *`np_sbcheck` draws only when a
+number moved*, which is true and is not a safety argument: a chunked count
+moves a number on every pass, and it moves it hardest on the note that has
+just been loaded. Reported from the field as a scroll bar appearing
+immediately after the window closed, and reported as hard to reproduce,
+because it needs the close to land inside that one pass.
+
+**Minimize is the same defect with the race taken out of the front of it** —
+`inst_minimize` is a `wm_hide` too and the worker is not asked to die at all —
+and that is what it was reproduced on, since a test that fires on one phase in
+fourteen is not a test. Open `README.TXT` (15,946 bytes) from a Disk window,
+minimize, and the bar is drawn across whatever the window was covering.
+Deterministic by build over four runs: the count of lit pixels in the bar's
+rect leaves its quiet value on every run of the kernel without the test and on
+none of the kernel with it.
+
+The test is therefore part of both answers, and the reason it belongs in the
+kernel rather than in a tenth caller is that **the error is one-sided**: no
+caller wants *draw the lot* about a window with no pixels on screen, so the
+safe value is the one a forgotten call site inherits — `wm_dmg_dk`'s rule
+(§11.91) in another place. Two orderings are load-bearing. `wm_clip_set` asks
+**before `wm_su_drop`**, because a hidden window is about to draw nothing and
+the raise cache `wm_hide` banked at the moment it went down (§11.96.5) has to
+survive the call rather than be dropped by it. And both tests sit **above the
+routine's pushes**, with an exit of their own, so there is no stack to unwind.
+
+`wm_covered` and `wm_chrome_clip` are deliberately unchanged: both are reached
+only from a paint pass that iterates visible windows, so the test would be
+dead code, and both already degrade toward *draw it* — which is the right
+answer for a window that is about to be drawn.
+
+Cost: 22 bytes of `.text`, no rung crossed, footprint unchanged (`KERN_SIZE`
+102,912 of 104,960, 2,048 spare either side). The nine hand-rolled tests are
+left alone; each is now redundant and none is wrong, and removing them would
+touch six packages to delete a `test`/`jz`.
 
 ### 11.90 Showing a window costs one window, not one screen
 
@@ -12053,9 +12254,10 @@ Slot-specific contracts that are not simply their target routine's:
                          ES restored per §1.
 0x0108 wm_sizable        in BX = win ptr, AL = 0 clear / non-zero set
                          WF_SIZABLE (§11.1). UI-task context only.
-0x0110 wm_fullscreen     in AL = 1 enter (BX = win) / 0 exit; caller holds
-                         the gfx lock; out CF=1 = enter refused, screen
-                         already owned (§11.2).
+0x0110 wm_fullscreen     in AL = 1 enter / 0 exit, BX = your OWN win ptr
+                         either way; caller holds the gfx lock; out CF=1 =
+                         refused, the screen is another window's - entering
+                         or leaving (§11.2).
 0x0118 wm_grow_paint     in BX = win ptr; lock held. The grow-box restore
                          of §11: a resizable package's self-initiated
                          content repaint must end with this call. A no-op
@@ -18069,9 +18271,9 @@ address whoever owns it.
 where a cache is the subject. Three caption lines, one question each:
 
 ```
-HEAP 544K  AVAIL 519K        the heap, and what a claim can GET out of it
-HELD 25K(5)  PURGE 69K(2)    what is claimed, on what terms, and how many
-MAX RUN 515K   FRAG    4K    how that AVAIL is SHAPED
+HEAP 544K    AVAIL 519K        the heap, and what a claim can GET out of it
+HELD 25K( 5) PURGE  69K( 2)    what is claimed, on what terms, and how many
+MAX RUN 515K FRAG    4K        how that AVAIL is SHAPED
 ```
 
 **Every line is a pair that closes**, and that is the layout's whole rule:
@@ -18096,10 +18298,10 @@ and that is the point rather than a layout accident: their sum answers no
 question. `HELD` is memory nothing can get back; `PURGE` is memory the next
 claim can have for the price in the TIER column. **The record count is split
 with them** for the same reason — one `8 clm` was a sum across the only
-distinction this page exists to draw — and it is `tm_putn` rather than
-`tm_put3` because a parenthesised count wants its own width: `(5)`, not
-`(  5)`. At two-digit counts the line is exactly 27 characters, which is
-`TM_STRMAX`'s limit.
+distinction this page exists to draw — and it is `tm_put2` rather than
+`tm_put3` because a parenthesised count wants its own width: `( 5)`, not
+`(  5)`. It is not `tm_putn` either, and §28.4.2 is why. The line is exactly
+27 characters, which is `TM_STRMAX`'s limit.
 
 **`AVAIL`, never `FREE`.** It counts the purgeables (§50.6.3), so it is what a
 claim can *get* rather than what is unused, and the two differ by `PURGE`
@@ -18137,6 +18339,49 @@ cache at all. The alternative considered and rejected was `TOP`, which keeps
 the ordering explicit and matches the constant, but reads as *purge this
 last* rather than *this is not purgeable* — ambiguous in exactly the place
 the column has to be plain.
+
+### 28.4.2 The three captions are a table, so the second column is a column
+
+Every line here is a *pair* (§28.4.1), and three pairs stacked are a table
+whether or not they are drawn as one. They were not: each right-hand label
+began wherever its own left half happened to stop, so `AVAIL`, `PURGE` and
+`FRAG` started at columns 11, 13 and 14 and their figures at 17, 18 and 19.
+Nothing was wrong with any single line and the three together read as a
+ragged edge — the eye has to find the second figure on each row instead of
+running down one column.
+
+**The right label starts at column 13 on all three and the right figure at
+19.** The pads that buy it live in the strings (`tm_s_havl`, `tm_s_hpurg`,
+`tm_s_hfrag`), because that is where the arithmetic is checkable by looking:
+each line's left half plus the pad in front of its right label comes to 13,
+as 9+4, 12+1 and 12+1. `FRAG` carries two trailing spaces rather than one —
+it is a letter shorter than the other two, and it is the **figures** that
+have to line up, not the labels.
+
+**One of the three was not merely misaligned but MOVING.** The record counts
+are the only variable-width field on the page, so at nine held records the
+HELD line is a character shorter than at ten and `PURGE` slid sideways as
+claims were made and released — on a page whose whole subject is claims being
+made and released. `tm_put2` fixes the field at two columns, which is the
+narrowest width that holds `MEM_MAX`; the guard is at the routine. That also
+makes the line one fixed width at every count, which is what lets the
+27-character limit be checked once rather than argued about per count.
+
+**Aligning the LEFT column too does not fit, and the arithmetic is why.** A
+common left column needs 8 (the widest label, `MAX RUN `) + 4 (`nnnK`) + 4
+(`(nn)`) + 1 gutter + 6 (`PURGE `) + 4 + 4 = 31 characters against
+`TM_STRMAX`'s 27 — and raising `TM_STRMAX` would not reach it either, because
+the caption is drawn with `font_str`, which does not clip to a window: the
+window's content is `TM_W − 2` = 230 px and the pen sits at +6, so the line
+has **28** cells however big the buffer is. So the choice was one aligned
+column or none, and the right one is where the figures that get compared
+live. The left labels stay left-aligned with their figures against them,
+which is how a label reads anyway.
+
+Cost, measured: the package image is **6,903 → 6,916 bytes**, 13 of them the
+longer strings and `tm_put2`'s five instructions. That is heap while the
+window is open and nothing when it is closed (§28), it is charged against no
+kernel guard, and the widest caption is 27 characters before and after.
 
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
@@ -23630,7 +23875,7 @@ Control Panel's own Display page at §31.10.1, which is last for precisely this
 reason). Not spending that constraint a third time is worth more than the
 ~60 bytes the row and its class would have cost.
 
-**One loader, not two.** `drv_load_at` is `drv_load` with the row supplied
+**One loader, not two.** `drv_load_at` is `drv_load_x` with the row supplied
 instead of indexed — the volume bracket, the mount, `drv_find`, the single
 `MEM_K_DRV` claim, the read, `drv_check` and the shared failure tail. A
 `DRVC_OVL` row **stops after `drv_check`**: an overlay has no class, so it can
@@ -23638,6 +23883,15 @@ neither publish nor be sent `DRVV_TIER` or `DRVV_READY`, and its owner
 attaches it. Copying that control flow instead would have been the shape that
 drifts, and the thing it drifts away from is `drv_vol_bank`/`drv_vol_back` —
 §51.5.2 is what a missing volume restore costs.
+
+**`xm_boot` is therefore `.cold`, and that is not a saving.** All three
+routines it calls — `drv_load_at`, `drv_call`, `drv_release` — are
+`driver.inc`'s, and `driver.inc` is in the cold segment (§2.6). From `.text`
+those would be three thunks and three far calls; from the same segment they
+are near calls and cost nothing at all. It runs once, at boot, which is what
+`.cold` is for. Everything else here stays resident: the four cells are API
+slots and an `OSAPI_SLOT` names a `KERNEL_SEG` offset, so their bodies cannot
+be cold.
 
 **`[xm_kb]` is the one gate**, and it means two things at once on purpose:
 *there is a store* and *the overlay is attached*. The kernel writes it last,
@@ -24701,6 +24955,84 @@ against every background task for as long as the player left the credits up.
 Measured, never pinned: the widest line sets the width and the line count
 sets the height, both clamped to the content, so it is right on all three
 adapters (§39) and nothing needs re-measuring when a line changes.
+
+### 43.9 A full repaint is 681 ms, and two fills of it were the same pixels twice
+
+§43.7 is about the INCREMENTAL path — a move costs two piles — and it is
+right. What nobody had priced is the path a *New Game*, a *Restart Deal*, a
+launch and every `wm_paint_all` take: `sol_drawall`, whole.
+
+Measured on a cycle-accurate 5150/CGA with a 220x136 content, breakpointing the
+primitives across one New Game: **816 drawing calls, 681.3 ms**. At
+PERFORMANCE.md Part 2's ~756us of fixed cost per call that is 617 ms of pure
+*arriving*, so this repaint is ~91% floor and **the only lever is the call
+count** — §48.18's finding in another package.
+
+**Everything else about this window is already cheap, and that is why the
+repaint is where the work is.** `WF_SAVEU` (§11.96.1) has covered Solitaire
+since it was written, and its content banks in ~3.7 KB on 1bpp, so the cache
+answers every partial case measured — a raise from under another window
+**97.5 ms**, a window dragged off it **78.7 ms**, an un-minimize **172.1 ms**,
+none of them running `W_PAINT` at all. (`gfx_blit4` is the test: card backs are
+the only thing here that blits, so a capture with none in it is a capture in
+which `sol_drawall` did not run.) §11.96.11's `wm_band` is therefore **not** for
+this window and was measured and declined: the whole-content cache is
+affordable, and Klondike has no static furniture at an edge to name.
+
+#### 43.9.1 `WF_OWNBG` — the felt is the background
+
+Solitaire predates §11.90.1 and is its second consumer. `sol_drawall`'s first
+act is a felt fill of the whole content, with `sol_pinv` in front of it so no
+sliver is kept, so **every pixel of the content is written by the app** — the
+promise holds by construction rather than by audit.
+
+Without the flag, `wm_draw_win` filled that same rect white first: on CGA a
+measured **26.45 ms**, which as work is noise and as a picture is
+PERFORMANCE.md Part 1's double draw at maximum contrast, because the felt is
+`CGREEN` and §39.4 reduces that to **black** on both mono adapters. So on the
+machines this game is for, every kernel-driven repaint was the window going
+white, then black, then filling with cards over two-thirds of a second.
+
+It is two instructions beside the existing `OSAPI_WM_SAVEU`, and neither
+disturbs the flags, so `wm_create`'s CF still reaches the loader.
+
+#### 43.9.2 …and inside a full repaint the pile wipes are that same fill again
+
+`sol_drawall` fills the whole content with felt and then calls `sol_drawpile`
+thirteen times — whose first act is to fill *that pile's rect* with felt again,
+unless `sol_covers` says a card will cover every pixel of it (§43.7), which is
+true only for a non-empty stock or foundation. So the seven tableau rects, the
+waste and the empty foundations were each filled twice, and a tableau rect runs
+the full height of the content.
+
+Measured, per call, across one New Game:
+
+| | ms each | count | total |
+|---|---|---|---|
+| the whole-content fill | 26.45 | 1 | 26.45 |
+| tableau column wipes | 11.85–12.93 | 7 | 83.2 |
+| waste + empty foundation wipes | 3.93–4.06 | 5 | 19.7 |
+
+**102.9 ms of 681.3 — 15.1% — for pixels that were already that colour.**
+`[sol_felt]` is the byte that says so: set after the whole-content fill, tested
+by `sol_drawpile` ahead of `sol_covers`, cleared when the loop ends.
+
+**What makes it identical rather than merely cheaper is that pile rects are
+DISJOINT.** A tableau column's rect is one card wide at its own pitch; the
+waste's is widened by exactly the two fan steps its cards use, which is what
+the empty column between it and the foundations is for; the top row ends above
+`[sol_taby]`. So no pile drawn earlier in the loop has put a pixel inside a
+later one's rect, and the felt the whole-content fill laid down is still
+underneath every one of them. If that ever stops being true — a layout with
+overlapping slots, or a pile that draws outside its own rect — this byte is the
+thing that breaks, silently, as one pile's cards left standing inside another's
+slot.
+
+`sol_plan` is still called, because it runs `sol_colfan` and sets `[sol_keepn]`
+for the draw below; only the fill is skipped. The flag is *cleared* before the
+plaque and the About panel, and it lives in bss, which the loader zeroes — so
+the one-pile-at-a-time callers a move goes through inherit the safe value
+without anybody arranging it.
 
 ## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
 
@@ -30271,6 +30603,46 @@ changing. `hd_entry` is the shape to copy: one `cmp`/`je` per verb it wants,
 then `cmp al, DRVV_ATTACH` / `jne .refuse`, so an unrecognised verb answers
 `CF = 1` and probes nothing. Do not write a default case that does work.
 
+### 51.2.3 A driver asks as the KERNEL, not as whoever was dispatching
+
+**A driver is not an instance, and the API must answer it as one that is
+not.** §19.2.1 made `inst_caller` the question every file cell asks — *who is
+this on behalf of?* — and it answers with the dispatched callback's stamp
+(`[snd_inst]`, §34.3). The kernel enters a driver from **inside** such a
+callback: ticking a row on the Drivers page is a Control Panel *click*, and so
+is every press on a driver's own page. So `DRVV_READY`, `DRVV_ATTACH`,
+`DRVV_DETACH` and the whole page ABI ran stamped as the **Control Panel**, and
+every API cell the driver called was answered on that instance's behalf.
+
+`osapi_file_here`'s own contract already said otherwise — *"a caller with no
+instance behind it, the kernel, a driver, gets the machine's own position"* —
+and so did the consumer that needed it (§52.11's `hd_tool_home`, which banks
+the system volume at `DRVV_READY` on the strength of `drv_load` having just
+stood the machine there). Both documents described the intent; neither
+described the code.
+
+`drv_call` and `drv_cp_call` therefore bank `[snd_inst]`, clear it to "no
+instance" (`drv_nostamp`) and put it back — `ui_task`'s and `loader_run`'s
+bracket, so nested dispatches unwind correctly and a driver page that repaints
+a package's window restores that package's stamp on the way out.
+
+**What it cost, and the shape is worth recognising.** The Control Panel's
+instance is seeded at `inst_alloc` from wherever it was *launched*
+(§38.10) — so a user who opened a Disk window on B: and then opened the
+Control Panel gave `hd_tool_home` `(B:, root)` as "the system volume".
+Install and Format then went to B: for `HDDTOOL.DRV`, did not find it, and
+reported **"Need the system disk" with the system disk in A: the whole time**.
+A user who opened the panel straight from the desktop got `(A:, root)` and
+never saw it — *the bug was a function of where the user had been*, which is
+why it reads as intermittent and why the code looks correct at every line.
+
+**The other two driver entry points deliberately do NOT do this.**
+`drv_svc_call` is the sound ABI, which passes the requesting instance
+explicitly in `DH` and is reached from `snd_tick` inside IRQ0, where touching
+the foreground's stamp is a race rather than a fix; `drv_blk_call` is
+`dsk_xfer`'s inner loop and sits *below* the file layer, so it resolves no
+names. Neither can reach a cell that asks `inst_caller`.
+
 ### 51.3 Loading, and what happens when it fails
 
 `drv_load` is the package loader's order (§21) with the instance half
@@ -32861,6 +33233,13 @@ Inside a foreign mode the video hardware is otherwise the app's: the
 6845/CRTC, sequencer, graphics controller, attribute controller and DAC
 ports may all be programmed directly, and the exit mode set reprograms
 everything they touch.
+
+**How the user leaves is §11.2.1's, not this section's**: the bracket ends
+when the app's exclusive main returns, and *what makes it return* is the
+same **F** (with Esc as the escape hatch) that a §11.2 app binds — because
+the rule is about the user, who cannot see which of the two an app was
+built with. An app's own polled loop is what tests those keys, since no
+events are dispatched in here.
 
 ### 53.8 The package ABI (§20.3 slots)
 

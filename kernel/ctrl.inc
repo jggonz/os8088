@@ -614,7 +614,6 @@ cp_onclick_x:
     call cp_pick                ; --- left pane: which row? ---
     jc .done                    ; below the last row: nothing
     call cp_v2r                 ; ...and which RECORD that row names
-    jc .done
     cmp al, [cp_sel]
     je .done                    ; already showing: change nothing
     mov [cp_sel], al
@@ -678,32 +677,10 @@ cp_entry:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; cp_hidden - is this static row one the machine does not show?
-; in:  AL = record index (0..CP_ITEMS-1)
-; out: CF = 1 hidden, CF = 0 shown
-; clobbers: nothing (flags)
-; -----------------------------------------------------------------------------
-cp_hidden:
-    push ax
-    push cx
-    mov cl, al
-    mov al, 1
-    shl al, cl                  ; CP_ITEMS < 8, so the bit is in one byte
-    test [cp_hide], al
-    pop cx                      ; pop touches no flag, so the test survives
-    pop ax
-    jnz .hid
-    clc
-    ret
-.hid:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
 ; cp_v2r - a VISIBLE list ordinal -> the RECORD it names (SPEC.md 31.10.1)
 ;
 ; in:  AL = the ordinal, 0 = the top row on screen
-; out: CF = 0 and AL = the record index; CF = 1 = there is no such row
+; out: AL = the record index
 ; clobbers: AL (the output), flags
 ;
 ; THE ONE PLACE THE TWO SPACES MEET, and that is the whole design. cp_list
@@ -712,52 +689,47 @@ cp_hidden:
 ; second opinion about which is which - which is what indexing cp_items by a
 ; drawn position was - is what made a hidden row have to be LAST.
 ;
-; Statics come first and may be hidden; driver pages follow and never are, so
-; past the statics the answer is arithmetic. [cp_nst] is the count of statics
-; actually shown, which is what makes that last step one subtraction.
+; Statics come first and may be hidden, so those are WALKED against
+; [cp_hide]'s bits; driver pages follow and never are, so past them the answer
+; is arithmetic. [cp_nst] is the count of statics actually shown, which is
+; what makes that second half one subtraction and one addition.
+;
+; IT CANNOT FAIL AND ANSWERS NO CF. Both callers bound the ordinal with
+; cp_nitems before they ask, so there is always such a row; the CP_ITEMS test
+; in the walk is the terminator that keeps a caller's arithmetic mistake
+; inside the table rather than a contract anybody reads.
 ; -----------------------------------------------------------------------------
 cp_v2r:
     push bx
     push cx
+    cmp al, [cp_nst]
+    jae .drv                    ; past every shown static: a driver's page
     mov ch, al                  ; CH = the ordinal wanted
-    xor cl, cl                  ; CL = ordinals counted so far
-    xor bl, bl                  ; BL = the record being considered
+    xor bx, bx                  ; BL = the record, BH = ordinals counted
 .scan:
     cmp bl, CP_ITEMS
-    jae .drv
-    mov al, bl
-    call cp_hidden
-    jc .next                    ; not on screen: it takes no ordinal
-    cmp cl, ch
+    jae .hit                    ; the terminator (see above)
+    mov cl, bl
+    mov al, 1
+    shl al, cl                  ; CP_ITEMS < 8, so the bit is in one byte
+    test [cp_hide], al
+    jnz .next                   ; hidden: it takes no ordinal
+    cmp bh, ch
     je .hit
-    inc cl
+    inc bh
 .next:
     inc bl
     jmp short .scan
-.drv:
-    mov al, ch                  ; past every static: a driver's page, and
-    sub al, [cp_nst]            ; those are never hidden
-    jc .miss                    ; (an ordinal below the shown statics cannot
-                                ; reach here, but the borrow is free)
-    push ax
-    call KERNEL_SEG:cw_drv_cp_count
-    mov bh, al
-    pop ax
-    cmp al, bh
-    jae .miss
-    add al, CP_ITEMS
-    jmp short .out
 .hit:
     mov al, bl
-.out:
     pop cx
     pop bx
-    clc
     ret
-.miss:
+.drv:
+    sub al, [cp_nst]            ; the driver's own ordinal...
+    add al, CP_ITEMS            ; ...is a record past the end of the table
     pop cx
     pop bx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -767,7 +739,7 @@ cp_v2r:
 ; clobbers: AL (the output), flags
 ; -----------------------------------------------------------------------------
 cp_nitems:
-    call KERNEL_SEG:cw_drv_cp_count
+    call drv_cp_count_x
     add al, [cp_nst]
     ret
 
@@ -781,7 +753,7 @@ cp_drv_item:
     cmp al, CP_ITEMS            ; the static/driver boundary is a RECORD-space
     jb .static                  ; question, so it is the table's length and
     sub al, CP_ITEMS            ; not the count of rows on screen
-    call KERNEL_SEG:cw_drv_cp_class           ; CF=1 if the driver went away under us
+    call drv_cp_class_x           ; CF=1 if the driver went away under us
     jc .gone
     ret
 .gone:
@@ -804,7 +776,7 @@ cp_item_name:
     push ax
     call cp_drv_item
     jc .static
-    call KERNEL_SEG:cw_drv_cp_name            ; the staged copy, so font_str can read it
+    call drv_cp_name_x            ; the staged copy, so font_str can read it
     pop ax
     ret
 .static:
@@ -838,11 +810,11 @@ cp_item_paint:
     jc .static
     mov bx, di                  ; BX = the pane left, banked: drv_cls_svc
     mov dx, bp                  ; answers in DI, and DX is the driver ABI's
-    call KERNEL_SEG:cw_drv_cls_svc            ; pane top
+    call drv_cls_svc_x            ; pane top
     jc .done                    ; (AL survives: it is drv_cls_svc's input)
     mov bp, [di+DSV_CPPAINT]
     mov di, bx
-    call KERNEL_SEG:cw_drv_cp_call
+    call drv_cp_call_x
     jmp short .done
 .static:
     cmp al, CP_ITEMS            ; a vanished driver's row paints nothing -
@@ -872,11 +844,11 @@ cp_item_click:
     mov bx, dx                  ; BX = the pane-relative y...
     mov dx, bp                  ; ...DX the pane top, CX already the x
     mov si, di
-    call KERNEL_SEG:cw_drv_cls_svc
+    call drv_cls_svc_x
     jc .done
     mov bp, [di+DSV_CPCLICK]
     mov di, si
-    call KERNEL_SEG:cw_drv_cp_call
+    call drv_cp_call_x
     jmp short .done
 .static:
     cmp al, CP_ITEMS            ; a vanished driver's row refuses the click
@@ -2278,7 +2250,7 @@ cp_flush_x:
     push ax
     push bx
     push cx
-    call KERNEL_SEG:cw_drv_cfg_save
+    call drv_cfg_save_x
     mov byte [cp_dsave], 0
     jnc .say
     mov byte [cp_dsave], 2      ; the write itself failed: full, protected, I/O
@@ -2698,7 +2670,7 @@ cp_snd_click:
     cmp ah, [snd_route]
     je .redraw                  ; already the setting: still redraw, because
                                 ; the click clears a stale notice
-    call KERNEL_SEG:cw_drv_tier               ; ask the driver to move; AL = why not
+    call drv_tier_x               ; ask the driver to move; AL = why not
     jnc .take
     mov [cp_snd_err], al        ; the tier stands where it was, and the notice
     jmp short .redraw           ; line says which of the two reasons
@@ -2749,7 +2721,7 @@ cp_drv_paint:
 .row:
     push bx
     mov al, bl
-    call KERNEL_SEG:cw_drv_row                    ; BX = the drv_tab row
+    call drv_row_x                    ; BX = the drv_tab row
     cmp word [bx+DRVR_FILE], 0
     je .next                        ; an empty table row draws nothing
     mov si, [bx+DRVR_TITLE]
@@ -2763,7 +2735,7 @@ cp_drv_paint:
     call KERNEL_SEG:cw_font_str                   ; the driver's name
     pop bx
 
-    call KERNEL_SEG:cw_drv_status                 ; ...and what it is doing right now
+    call drv_status_x                 ; ...and what it is doing right now
     pop ax
     push ax
     call cp_drv_rowy
@@ -2859,7 +2831,7 @@ cp_drv_box1:
                                     ; runs and the documented pen would not
                                     ; hold. On the drawn path the control
                                     ; leaves it live by itself
-    call KERNEL_SEG:cw_drv_row      ; AL survives (drv_row preserves AX)
+    call drv_row_x      ; AL survives (drv_row preserves AX)
     cmp word [bx+DRVR_FILE], 0
     je .out                         ; an empty table row is not a control
     call cp_drv_rowy                ; DX = this row's glyph top - taken BEFORE
@@ -2940,26 +2912,26 @@ cp_drv_click:
     cmp ax, DRV_MAX
     jae .done
     push ax
-    call KERNEL_SEG:cw_drv_row
+    call drv_row_x
     cmp word [bx+DRVR_FILE], 0  ; an empty table row is not a control
     pop ax
     je .done
 
     push ax
-    call KERNEL_SEG:cw_drv_row
+    call drv_row_x
     cmp word [bx+DRVR_SEG], 0
     pop ax
     je .load
-    call KERNEL_SEG:cw_drv_unload             ; it is up: take it down
+    call drv_unload_x             ; it is up: take it down
     push ax
-    call KERNEL_SEG:cw_drv_row
+    call drv_row_x
     mov byte [bx+DRVR_WANT], 0
     mov byte [bx+DRVR_ERR], DRVE_OK ; nothing failed - it was turned off
     pop ax
     jmp short .save
 .load:
     push ax
-    call KERNEL_SEG:cw_drv_row
+    call drv_row_x
     cmp byte [bx+DRVR_WANT], 0  ; unloaded but WANTED: the boot tried and
     je .try                     ; failed (no card, no disk), and on a machine
     mov byte [bx+DRVR_WANT], 0  ; where that is permanent this click is the
@@ -2972,7 +2944,7 @@ cp_drv_click:
 .try:
     mov byte [bx+DRVR_WANT], 1  ; wanted first, so a failed load still
     pop ax                      ; persists the intent: put the disk in and
-    call KERNEL_SEG:cw_drv_load               ; the next boot picks it up
+    call drv_load_x               ; the next boot picks it up
 .save:
     mov byte [cp_wdirty], 1     ; ...and the settings file is OWED, not
                                 ; written: the close pays it (SPEC.md 31.8)
@@ -3024,10 +2996,10 @@ cp_drv_line1:
     push cx
     push dx
     push si
-    call KERNEL_SEG:cw_drv_row      ; AL survives both of these
+    call drv_row_x      ; AL survives both of these
     cmp word [bx+DRVR_FILE], 0
     je .out
-    call KERNEL_SEG:cw_drv_status   ; SI = what it is doing right now
+    call drv_status_x   ; SI = what it is doing right now
     call cp_drv_rowy                ; DX = this row's glyph top
     add dx, CP_DSTDY
     mov ax, CP_PLX                  ; ...and NOT CP_PMX: see above

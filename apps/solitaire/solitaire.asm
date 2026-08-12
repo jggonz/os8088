@@ -282,6 +282,21 @@ sol_entry:
                                     ; and geometry is what wm_su_ck already
                                     ; invalidates on, so skipping it costs
                                     ; nothing
+    mov al, 1                       ; ...AND IT OWNS ITS BACKGROUND (SPEC.md
+    call OSAPI_WM_OWNBG             ; 11.90.1/43.9.1): sol_drawall's first act
+                                    ; is a felt fill of the WHOLE content and
+                                    ; sol_pinv in front of it keeps no sliver,
+                                    ; so every pixel is written by us. The
+                                    ; kernel's white fill was therefore the
+                                    ; first layer of a double draw - and the
+                                    ; felt is CGREEN, which reduces to BLACK
+                                    ; on both mono adapters (39.4), so on the
+                                    ; machines this game is for it was the
+                                    ; window going WHITE and then black in
+                                    ; front of a 681 ms repaint. Neither this
+                                    ; nor the promise above touches the flags,
+                                    ; so wm_create's CF still rides out to the
+                                    ; loader
     mov si, sol_about
     call OSAPI_ABOUT_SET            ; 'About Solitaire' under our name in the
                                     ; bar (SPEC.md 12.2) - same contract, and
@@ -386,12 +401,27 @@ sol_drawall:
     mov dx, [sol_chgt]
     dec dx
     call sol_fillc
+    mov byte [sol_felt], 1          ; THE GROUND IS ALREADY FELT (SPEC.md
+                                    ; 43.9.2): the fill above covered every
+                                    ; pile rect, and pile rects are DISJOINT -
+                                    ; a column is one card wide at its own
+                                    ; pitch, the waste's is widened by the two
+                                    ; fan steps its cards use, and the top row
+                                    ; ends above [sol_taby] - so no pile drawn
+                                    ; earlier in this loop has put a pixel
+                                    ; inside a later one's. Each wipe below is
+                                    ; therefore a second fill of pixels that
+                                    ; are already that colour
     xor al, al
 .pile:
     call sol_drawpile
     inc al
     cmp al, SOL_NPILE
     jb .pile
+    mov byte [sol_felt], 0          ; ...and it stops being true here: the
+                                    ; plaque and the panel below draw on the
+                                    ; felt, and every later sol_drawpile is
+                                    ; a move repainting two piles in place
     cmp byte [sol_won], 0
     je .about
     call sol_banner
@@ -428,7 +458,11 @@ sol_drawpile:
     call sol_count                  ; CL = cards in the pile
     mov [sol_dpn], cl
     call sol_plan                   ; how much of a tableau column is already
-    call sol_covers                 ; right on the screen (0 for the others)
+                                    ; right on the screen (0 for the others)
+    cmp byte [sol_felt], 0          ; ...and whether anything needs erasing at
+    jne .nowipe                     ; all: sol_drawall has just felt-filled the
+                                    ; whole content, so this rect is already
+    call sol_covers                 ; the colour the wipe would make it
     jc .nowipe                      ; the card is about to cover every pixel
     mov al, SOL_TABLE               ; of this rect: erasing it first is a
     call OSAPI_SET_COLOR            ; second fill of the same pixels
@@ -3365,6 +3399,13 @@ sol_ic_ring:
     SBYTE sol_bkcol                 ; the card back's field colour
 
 ; --- sol_drawpile's loop -----------------------------------------------------
+    SBYTE sol_felt                  ; 1 = sol_drawall has just filled the whole
+                                    ; content with felt and nothing has drawn
+                                    ; over this pile's rect since, so its own
+                                    ; wipe is a second fill (SPEC.md 43.9.2).
+                                    ; Set only inside that loop; bss arrives
+                                    ; zeroed, which is the safe value for the
+                                    ; one-pile-at-a-time callers
     SBYTE sol_dpp                   ; the pile being drawn
     SBYTE sol_dpn                   ; its card count
     SBYTE sol_dpi                   ; card index

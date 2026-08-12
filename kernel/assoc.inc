@@ -90,6 +90,16 @@ assoc_dfold: db 1, 1, 1, 1             ; build-time folder: 0 root, 1 APPS,
                                        ; that cannot be a cluster, because no
                                        ; cluster is knowable at build time
 
+section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
+                                ; segment of its own, so it costs KERN_CODE_MAX
+                                ; nothing. DS is still KERNEL_SEG, so every data
+                                ; reference below is unchanged - but the DATA is
+                                ; not, and stays in .text at every toggle here.
+                                ; Nothing in this module runs faster than a
+                                ; double-click, and its heaviest callees
+                                ; (loader.inc, files.inc, diskw.inc) are cold
+                                ; too, so those calls are NEAR from here
+
 ; -----------------------------------------------------------------------------
 ; assoc_ext_of - the extension of a staged display name (SPEC.md 54.2)
 ; in:  SI -> a NUL-padded 16-byte display name (the SPEC.md 19.1 staged shape)
@@ -410,7 +420,7 @@ assoc_compose:
 ; footprint. Safe because nothing calls dsk_get_icon during a mount, which is
 ; the only place this runs - state the invariant if either ever moves.
 ; -----------------------------------------------------------------------------
-assoc_docicon:
+assoc_docicon_x:
     push ax
     push si
     push di
@@ -516,7 +526,7 @@ assoc_declare:
 ; a program lives in teaches the OS its location and its glyph at no extra
 ; I/O - the read already happened.
 ; -----------------------------------------------------------------------------
-assoc_note_app:
+assoc_note_app_x:
     push ax
     push bx
     push cx
@@ -581,6 +591,8 @@ assoc_dapp:  db 0xFF            ; the app slot to open it with, 0xFF = none
 assoc_argp:  db 0               ; 1 = a document is waiting to be claimed by
                                 ; the next OSAPI_ARG_FILE (SPEC.md 54.5)
 
+section .cold                   ; ...and back to cold code
+
 ; =============================================================================
 ; The open path (SPEC.md 54.4) - double-clicking a document
 ; =============================================================================
@@ -598,7 +610,7 @@ assoc_argp:  db 0               ; 1 = a document is waiting to be claimed by
 ; FS_DRV/FS_CWD instead (SPEC.md 54.9.1). That used to be a fmv_sync, a FULL
 ; mount, and all it was ever wanted for was those two words.
 ; -----------------------------------------------------------------------------
-assoc_post:
+assoc_post_x:
     push ax
     push cx
     push si
@@ -699,7 +711,7 @@ assoc_try:
     push cx
     push dx
     push si
-    call dsk_chdir_q            ; QUIET (SPEC.md 18.9): the question here is
+    call dsk_chdir_q_x            ; QUIET (SPEC.md 18.9): the question here is
     jc .no                      ; whether a FILE is in this directory, and
                                 ; dskw_stat walks the directory sectors to
                                 ; answer it. A listing would be a scan, a sort
@@ -707,7 +719,7 @@ assoc_try:
                                 ; entirely for an INDEX nobody needs now that
                                 ; the loader takes a name (SPEC.md 21.4)
     mov si, assoc_fnb
-    call dskw_stat              ; ...and since 18.4.3 it costs no re-read
+    call dskw_stat_x              ; ...and since 18.4.3 it costs no re-read
     jc .no
     pop si
     pop dx
@@ -744,10 +756,10 @@ assoc_tryfold:
 .named:
     push si
     xor ax, ax                  ; the volume's root first
-    call dsk_chdir_q            ; quiet, for assoc_try's reason
+    call dsk_chdir_q_x            ; quiet, for assoc_try's reason
     pop si
     jc .no
-    call dskw_stat              ; AL = attribute, BX = the FOLDER's own first
+    call dskw_stat_x              ; AL = attribute, BX = the FOLDER's own first
     jc .no                      ; cluster - no listing, no index and no staged
                                 ; entry, where this used to want all three
     test al, 0x10               ; ...and it must actually be a folder
@@ -848,7 +860,7 @@ assoc_locate:
     mov bl, cl
     cmp bl, [assoc_ddrv]
     je .volnext
-    call dsk_vol_row            ; a FREE row is skipped for the TIME, not for
+    call dsk_vol_row_x            ; a FREE row is skipped for the TIME, not for
     jc .volnext                 ; correctness: mounting one fails anyway, but
                                 ; that failure is the BIOS's retries and on a
                                 ; 4.77MHz machine those are seconds
@@ -867,7 +879,7 @@ assoc_locate:
     stc
     ret
 .found:
-    call asc_use                ; the volume that ANSWERED (SPEC.md 54.7.2):
+    call asc_use_x                ; the volume that ANSWERED (SPEC.md 54.7.2):
                                 ; seed EVERY association on it, not just the
                                 ; one we came for. assoc_try navigates with
                                 ; dsk_chdir_q and asc_use hangs off the
@@ -908,7 +920,7 @@ assoc_locate:
 ; asks with OSAPI_ARG_FILE - so nothing here has to be standing in the
 ; document's directory when the entry proc runs.
 ; -----------------------------------------------------------------------------
-assoc_run:
+assoc_run_x:
     push ax
     push bx
     push cx
@@ -952,7 +964,7 @@ assoc_run:
     mov byte [ld_painted], 0
     mov byte [assoc_argp], 1    ; armed ACROSS the load and disarmed after,
     mov si, assoc_fnb           ; '<STEM>.O88' - assoc_locate left us in its
-    call ld_run_name            ; directory and the name is what it matched
+    call ld_run_name_x            ; directory and the name is what it matched
                                 ; on, so no listing and no index (21.4)
     mov byte [assoc_argp], 0    ; a package launched later, by any route,
     mov [ld_status], al         ; must never inherit this document
@@ -960,7 +972,7 @@ assoc_run:
     push cx
     mov bx, fm_stattab
     mov cx, LD_NSTAT
-    call toast_say
+    call KERNEL_SEG:cw_toast_say
     pop cx
     pop bx
     push ds
@@ -968,10 +980,10 @@ assoc_run:
     call assoc_back             ; the user's volume FIRST, then the window
     cmp byte [ld_painted], 0
     jne .painted
-    call files_refresh
+    call files_refresh_x
     jmp short .out
 .painted:
-    call files_poster
+    call files_poster_x
     jmp short .out
 
 .nofile:
@@ -982,8 +994,8 @@ assoc_run:
     mov si, assoc_pnbuf         ; with no way to know WHICH program a document
     mov bx, assoc_s_lead        ; wanted - which is exactly the report that
     mov di, assoc_s_ttl         ; found this (SPEC.md 54.4.1)
-    call ui_note
-    call files_refresh
+    call KERNEL_SEG:cw_ui_note
+    call files_refresh_x
 .out:
     pop ax
     pop es
@@ -1004,7 +1016,7 @@ assoc_back:
     push dx
     mov ax, [assoc_dclus]
     mov dl, [assoc_ddrv]
-    call dsk_chdir_q            ; QUIET (SPEC.md 18.9/54.9): this restores the
+    call dsk_chdir_q_x            ; QUIET (SPEC.md 18.9/54.9): this restores the
                                 ; volume so the app can READ ITS DOCUMENT, and
                                 ; a read resolves by NAME through dskw_find's
                                 ; directory walk - it never touches the global
@@ -1014,12 +1026,17 @@ assoc_back:
     pop ax
     ret
 
+section .text                   ; DATA, so back to the kernel segment: cold
+                                ; code addresses its data through DS, which is
+                                ; still KERNEL_SEG (SPEC.md 2.6 rule 1)
 assoc_s_apps:   db 'APPS', 0
 assoc_s_games:  db 'GAMES', 0
 assoc_s_ttl:    db 'Open', 0
 assoc_s_lead:   db 'This document opens with', 0
 assoc_s_ptail:  db '.O88 - not on this disk', 0
 ASSOC_PTAIL     equ 24          ; ...NUL included, so one rep movsb ends it
+
+section .cold                   ; ...and back to cold code
 
 ; -----------------------------------------------------------------------------
 ; assoc_progname - the file name of an app slot, for the notice
@@ -1065,6 +1082,7 @@ assoc_progname:
     pop ax
     ret
 
+section .text                   ; DATA, so back to the kernel segment
 assoc_pnbuf:    times 8 + ASSOC_PTAIL db 0
 
 section .bss
@@ -1075,7 +1093,7 @@ assoc_ddrv:  resb 1             ; ...and volume
 assoc_pwin:  resw 1             ; the posting Disk window's STATE BLOCK, not
                                 ; its window record - FS_DRV/FS_CWD are read
                                 ; off it (SPEC.md 54.9.1), as ld_pwin is
-section .text
+section .cold                   ; ...and back to cold code
 
 ; =============================================================================
 ; The API surface (SPEC.md 54.5)
@@ -1099,7 +1117,7 @@ section .text
 ; over the locator instead moves the one dsk_chdir to where it can happen, and
 ; the app spends it with slots it already had.
 ; -----------------------------------------------------------------------------
-osapi_arg_file:
+osapi_arg_file_x:
     cmp byte [assoc_argp], 0
     je .none
     mov byte [assoc_argp], 0    ; spent
@@ -1131,7 +1149,7 @@ osapi_arg_file:
 ; (SPEC.md 54.6) quietly taking the extension back on the next mount of its
 ; folder.
 ; -----------------------------------------------------------------------------
-osapi_assoc_set:
+osapi_assoc_set_x:
     push ax
     push bx
     push cx
@@ -1391,7 +1409,7 @@ ASC_KB       equ 3              ; 32*80 + 16 + 24*4 = 2,672 bytes
 ; still stamped) so a disk with no ASSOC.DAT is not searched again on every
 ; directory change.
 ; -----------------------------------------------------------------------------
-asc_use:
+asc_use_x:
     push ax
     push bx
     push cx
@@ -1408,7 +1426,7 @@ asc_use:
     jne .haveseg
     mov ax, ASC_KB
     mov bx, MEM_K_ASC
-    call mem_claim
+    call mem_claim_x
     jc .out                     ; refused: tier 2, every lookup misses
     mov [asc_seg], dx
 .haveseg:
@@ -1425,7 +1443,7 @@ asc_use:
                                 ; the ONLY bound on what the rows below may say
     mov es, [asc_seg]
     xor bx, bx
-    call dsk_read_chain         ; ES:BX = the claim
+    call dsk_read_chain_x         ; ES:BX = the claim
     pop dx                      ; (pop leaves CF alone)
     jc .out
     mov es, [asc_seg]
@@ -1581,9 +1599,9 @@ asc_root_find:
     mov ax, LOW_SEG
     mov es, ax
     xor ax, ax                  ; 0 = the root
-    call dsk_dirw_start
+    call dsk_dirw_start_x
 .sector:
-    call dsk_dirw_get           ; either failure is "no cache here" (19.2.1)
+    call dsk_dirw_get_x           ; either failure is "no cache here" (19.2.1)
     jc .no
     mov di, dsk_secbuf
     mov cx, 512/32
@@ -1762,7 +1780,7 @@ asc_slot_of:
 ; size, and costs a wrong ICON - never a wrong load, which SPEC.md 54.4's name
 ; re-check governs separately.
 ; -----------------------------------------------------------------------------
-asc_lookup:
+asc_lookup_x:
     push ax
     push bx
     push cx
@@ -1821,7 +1839,7 @@ asc_lookup:
 ;      SI -> the staged directory entry
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-asc_take:
+asc_take_x:
     push ax
     push cx
     push dx
@@ -1837,10 +1855,10 @@ asc_take:
     mov si, di
     mov di, dsk_ico
     mov cx, 64
-    call dsk_copy_seg           ; DX = src seg, AX = dst seg
+    call dsk_copy_seg_x           ; DX = src seg, AX = dst seg
     pop ax                      ; ...the listing index again
     mov si, dsk_ico
-    call dsk_put_icon_k
+    call dsk_put_icon_k_x
     pop es
     pop di
     pop si
@@ -1903,6 +1921,31 @@ asc_note:
     pop ax
     ret
 
+; =============================================================================
+; Far entries (SPEC.md 2.6): the resident thunks in kernel.asm far-call these,
+; and these near-call the bodies above - so every routine here keeps its
+; ordinary near `ret`.
+; =============================================================================
+acf_assoc_post:     call assoc_post_x
+                retf
+acf_assoc_run:      call assoc_run_x
+                retf
+acf_assoc_docicon:  call assoc_docicon_x
+                retf
+acf_assoc_note_app: call assoc_note_app_x
+                retf
+acf_asc_use:        call asc_use_x
+                retf
+acf_asc_lookup:     call asc_lookup_x
+                retf
+acf_asc_take:       call asc_take_x
+                retf
+acf_osapi_arg_file: call osapi_arg_file_x
+                retf
+acf_osapi_assoc_set: call osapi_assoc_set_x
+                retf
+
+section .text                   ; DATA, so back to the kernel segment
 asc_s_name: db 'ASSOC   DAT'    ; the RAW 8.3 form: this walks directory
                                 ; sectors, not display names
 
