@@ -36747,8 +36747,38 @@ FSV_RENAME  equ 16      ; SI = old, DI = new
 FSV_MKDIR   equ 18      ; SI = name
 FSV_RMDIR   equ 20      ; SI = name
 FSV_DFREE   equ 22      ; -> DX:AX = free bytes, BX = the granule
-FSV_SIZE    equ 24
+FSV_ENUM    equ 24      ; AX = a folder's handle (0 = the root), CX = the
+                        ; ORDINAL, DX:BX = a 32-byte buffer
+                        ; out: CF=0 and the buffer is a §19.1 staged entry;
+                        ; CF=1 with AX = 0 past the end, AX = FERR_IO
+FSV_SIZE    equ 26
 ```
+
+**`FSV_ENUM` IS NOT `FSV_LIST`, AND THAT IS NOT A DUPLICATION.** They ask the
+same question of the same folder and they cannot share a verb, because
+`FSV_LIST` **appends into the kernel's ONE global listing** through
+`OSAPI_FS_ENT` and is gated to the moment of a mount. The copy engine walks a
+folder that is *not* the one on screen — the source of a paste, three levels
+down a tree — and it walks it while some other folder's listing is what the
+Disk window is drawing from. A shared verb would either destroy that listing
+or need a second one, and §22.1's rule is that there is exactly one.
+
+So `FSV_ENUM` returns **one entry into a buffer the caller names**, and the
+buffer is `dsk_ent` — the same 32 bytes `dsk_synth` fills on a FAT volume, so
+`fcp_scan`'s two paths converge at the instruction after it.
+
+**THE ORDINAL IS DENSE, AND IT MUST BE STABLE.** 0, 1, 2, … over the entries
+you would have listed, and *the same (handle, ordinal) must name the same
+entry for as long as that folder is unmodified*. That is not a nicety: the
+copy engine holds an ordinal per frame and **re-walks to it on every call**,
+which is what keeps the frame array small enough to recurse in (§22.6), and
+between two calls it will have stood in another volume entirely, written a
+file there, and been through the event loop answering a question. A driver
+that enumerates a live structure — a hash table, an open handle, anything
+with a cursor of its own — will hand back a different entry on the second
+walk and the copy will silently skip or duplicate a file. The FAT path rests
+on exactly this and says so: the ordinal is a raw slot number and a copy does
+not modify its source.
 
 **READS ARE BY HANDLE AND ONLY `FSV_STAT` TAKES A NAME.** Every other design
 here needs two contracts on one verb, because the two callers arrive with
@@ -37098,6 +37128,89 @@ monitor keeps its source and its section; it is no longer listed and no longer
 ships. **A fifth driver wants the scrolling list §31.1 already names as the
 answer, not a taller window** — and that, not the redirector, is what the next
 driver-shaped feature has to pay for.
+
+#### 62.9.7 Milestone 4 as built — a FOLDER crosses
+
+Milestones 1–3 left one hole and named it: a *file* copied on and off a
+redirected volume, and a **folder** did not. Two things in the copy engine
+were still FAT-only, and only one of them wanted a verb.
+
+**`fcp_scan` is the enumerate, and it needed `FSV_ENUM`.** It walks the
+source directory's **raw sectors** — `dsk_dirw_start`/`next`/`get`, an
+ordinal that is `sector*16 + slot`, the species filter applied to the 32 raw
+bytes, and `dsk_synth` to turn what survives into a §19.1 entry. None of that
+exists on a volume with no sectors. The new verb hands back **one** entry
+into `dsk_ent`, which is exactly where `dsk_synth` puts one — so the two
+paths converge on the instruction after it and the whole tail (the copy into
+`fcp_cname`, the type, the handle, the size) is shared rather than mirrored.
+Everything else a folder copy needs was already built: `FSV_MKDIR` makes the
+subdirectory, `fcp_goto`'s quiet-mount branch descends into it, and
+`FSV_READAT` + `FSV_WRITE`/`APPEND` move each file.
+
+**`fcp_relink` wanted a REFUSAL, not an implementation**, and that is the
+half worth reading. A same-volume Cut+Paste takes a fast path that moves no
+data at all: it writes the entry into the destination's directory slot and
+unnames the source (`dskw_ent_store`, `[dskw_fsec]`/`[dskw_foff]`/
+`[dskw_fend]`, and `fcp_rlup` rewriting the moved folder's own on-disk `..`).
+Every one of those is a raw directory slot, and a redirected volume has none.
+It is already a fast path **with a fallback** — `CF=1` with `AX=0` means "not
+attempted" and the caller falls through to the copy engine — so the fix is a
+gate at the top and the copy+delete path, entirely built, does the move. The
+`..` relink is moot there for a second reason: `FSV_CHDIR` answers the parent
+handle, so a redirected folder has no on-disk `..` to be stale.
+
+**Verified on a cycle-accurate 5150 with the period IBM ROM, and read back
+from OUTSIDE.** `DOCS` — holding `HELLO.TXT` and a `DEEP` subfolder with
+`BOTTOM.TXT` in it — copied off the redirected volume onto B:, and then
+`os88flush` walked B: **on the host**, which is the only way to check this
+that means anything: asking os8088 to list what os8088 just wrote is the
+writer and the reader agreeing, and both agreeing on the same wrong thing is
+the failure that cannot be seen from inside (docs/FIELD-NOTES.md 4).
+
+```
+DOCS/DEEP                    DIR       0
+DOCS/DEEP/BOTTOM.TXT         file    127
+DOCS/HELLO.TXT               file     26
+```
+
+The **bodies** came off too, byte-correct against their seeds — a directory
+entry that exists proves `fcp_mksub` and says nothing whatever about whether
+`FSV_READAT` delivered any bytes. The first run of this test looked like a
+pass on a screenshot for exactly that reason: `DOCS` appeared on B: with the
+`BX` bug live, because the top-level folder is made from the CLIPBOARD entry
+and never goes near the enumerate.
+
+**The other direction was run too and is checked from INSIDE, which is all
+that is available**: the RAM disk is a heap claim, so `os88flush` cannot
+reach it the way it reaches a floppy. That tree copied back onto the
+redirected volume arrives whole — free space 22K → 18K, which is the two
+files at one `RD_EXTKB` extent each and nothing for the folders, since a
+folder holds no extent. It exercises no new kernel path (the source
+enumerate is the FAT one and the destination is milestone 3's `FSV_MKDIR` and
+`FSV_WRITE`), but the COMBINATION had never run: a folder made by the copy
+engine, descended into, and written inside. It also has to reuse the tree the
+forward copy just made, because **every folder that ships on the apps disk
+holds a file bigger than `RD_EXTKB`** and would be refused `FERR_BIG` on its
+merits rather than on this feature's.
+
+**The trap it sprang was a register, and it was found by reading rather than
+by running.** `rd_stage` — the RAM disk's row-to-entry stager — spends `BX`
+walking the name, and `rd_enum` used `BX` afterwards as the offset of the
+caller's buffer. Nothing else holds that offset, so the 32 bytes would have
+gone into `KERNEL_SEG` at whatever `rd_stage` left behind: a plausible small
+number, no fault, and a corruption whose symptom arrives somewhere else
+entirely. It is `os88ui.inc`'s `AX`-is-live lesson again in another driver —
+**a helper that documents what it preserves is documenting what it does not**,
+and `rd_stage`'s header says "AX/BX/DI clobbered" in as many words.
+
+**What did NOT bite, and is worth knowing because it looks like it should**:
+the ordinal renumbering under a delete. `rd_enum` counts matching rows by
+index and a delete leaves a hole, so every later row's ordinal shifts — which
+would make the copy engine skip a file silently. It cannot happen, and the
+reason is already in the engine: a Cut removes its source at `.finish`,
+**"only once every byte of it has arrived"**, so nothing modifies the folder
+being walked while it is being walked. That is the same assumption the FAT
+path's raw-slot ordinal has always rested on.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

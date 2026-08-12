@@ -812,10 +812,30 @@ behind the driver's back and every later name resolved in the folder the copy
 came FROM. **A driver-side cwd is state the kernel can silently
 desynchronise.**
 
-**The remaining gap is copying a FOLDER**, not a file: `fcp_scan` enumerates a
-source directory by walking its raw sectors and there are none. That wants an
-enumerate-by-ordinal verb or the engine reading the kernel's own listing, and
-it is design work rather than a branch site.
+**MILESTONE 4 IS BUILT AND VERIFIED** (SPEC.md §62.9.7): a FOLDER crosses.
+The gap milestones 1-3 left was `fcp_scan`, which enumerates a source
+directory by walking its **raw sectors** — and there are none. `FSV_ENUM`
+(verb 24) hands back one entry by ORDINAL into `dsk_ent`, which is exactly
+where `dsk_synth` puts one, so the two paths converge on the instruction
+after it and the whole tail is shared rather than mirrored. The second
+FAT-only site wanted a REFUSAL rather than an implementation: `fcp_relink`,
+the same-volume move fast path, is raw directory slots end to end and is
+already a fast path **with a fallback**, so a redirected volume declines it
+and the copy engine — entirely built — does the move.
+
+**`.cold` +50, no rung crossed, footprint unchanged**; the driver grew 68
+bytes. Read back from OUTSIDE with `os88flush`, because asking os8088 to list
+what os8088 wrote is the writer and the reader agreeing: `DOCS/DEEP`,
+`DOCS/DEEP/BOTTOM.TXT` 127 bytes, `DOCS/HELLO.TXT` 26 bytes, both bodies
+byte-correct against their seeds.
+
+The harness paid again, and by being READ rather than run: `rd_stage` spends
+`BX` and `rd_enum` used it afterwards as the caller's buffer offset, so the
+32 bytes would have landed somewhere in `KERNEL_SEG`. The first run **looked
+like a pass on a screenshot** with that bug live, because the top-level
+folder is made from the clipboard entry and never goes near the enumerate —
+which is why the verification pulls the file bodies off the host rather than
+counting rows in a window.
 
 **THE ACTIVITY BAR REPORTS ON A CABLE NOW** (SPEC.md §12.8.1), which is the
 one thing three milestones of branch sites left visibly missing. §12.8's

@@ -410,7 +410,7 @@ Three things about it:
     "bss": 5611,
     "budget": 104960,
     "codemax": 65536,
-    "cold": 37308,
+    "cold": 37358,
     "coldpara": 2336,
     "fatpara": 288,
     "imgpara": 3232,
@@ -934,14 +934,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,732 | 36.9% |
-| the window system and its furniture | 19,038 | 22.9% |
+| the file system, end to end | 30,782 | 36.9% |
+| the window system and its furniture | 19,038 | 22.8% |
 | drawing: adapters, primitives, glyphs, icons | 12,636 | 15.2% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,438 | 11.3% |
 | the kernel proper: API table, heap, scheduler, events | 6,203 | 7.4% |
 | the Control Panel | 3,887 | 4.7% |
 | the three built-in kinds | 1,376 | 1.7% |
-| **total** | **83,310** | |
+| **total** | **83,360** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -959,7 +959,7 @@ generated in the first place.
 | `assoc.inc` — file type associations (§54) | 517 | 2,332 | **2,849** | 43 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
-| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,197 | **2,197** | 139 | — |
+| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,247 | **2,247** | 139 | — |
 | `memory.inc` — the claim heap (§50) | 14 | 2,014 | **2,028** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,837 | — | **1,837** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
@@ -983,7 +983,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,949 | — | **2,949** | — | — |
-| **total** | **46,002** | **37,308** | **83,310** | **5,611** | **7,762** |
+| **total** | **46,002** | **37,358** | **83,360** | **5,611** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

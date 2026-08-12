@@ -278,7 +278,13 @@ FSV_RENAME  equ 16              ; SI = old, DI = new
 FSV_MKDIR   equ 18              ; SI = name
 FSV_RMDIR   equ 20              ; SI = name
 FSV_DFREE   equ 22              ; -> DX:AX = free BYTES, BX = the granule
-FSV_SIZE    equ 24
+FSV_ENUM    equ 24              ; AX = a folder's handle, CX = the ordinal,
+                                ; DX:BX = a 32-byte buffer -> one SPEC.md
+                                ; 19.1 staged entry (SPEC.md 62.9.7). NOT
+                                ; FSV_LIST: that appends into the kernel's
+                                ; one global listing, and a folder COPY walks
+                                ; a folder that is not the one on screen
+FSV_SIZE    equ 26
 
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every
