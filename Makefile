@@ -481,7 +481,13 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 # ui_tm_open looks for (SPEC.md 28.3). Kernel machinery in a folder of its
 # own, so the root of a disk is the user's files - and the two disks agree,
 # because the chip menu cannot know which of them is in the drive.
-DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv $(BUILD)/net.drv
+# DEBUG.DRV is NOT here and its absence is deliberate: SPEC.md 58's monitor
+# lost its drv_tab row to the RAM disk (the Drivers page fits exactly four),
+# so nothing in the kernel names it and shipping the file would put a driver
+# on every disk that no Control Panel row can load. Its source and its rules
+# below are kept, so `make build/debug.drv` still builds it.
+DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/net.drv
+DRIVERS += $(BUILD)/ramdisk.drv
 # ...and the hard-disk driver's on-demand half, which rides every disk the
 # drivers do but is NOT one of them: nothing puts it in drv_tab, the Drivers
 # page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
@@ -645,6 +651,22 @@ $(BUILD)/net.bin: drivers/net/net.asm drivers/net/netui.inc \
 
 $(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/net.bin -o $@
+
+# RAMDISK.DRV - a DRVC_FILE volume with no hardware behind it (SPEC.md 62.9),
+# and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
+# the kernel runs on a cycle-accurate 8088 in a container, which is the one
+# thing block mode never had (docs/NET-PLAN.md 2.2.1). It ships because that is
+# DEBUG.DRV's argument - a knob kernel is a different binary, so what you
+# tested is not what ships - and it costs a machine that never ticks it one
+# drv_tab row and a file on the floppy.
+$(BUILD)/ramdisk.bin: drivers/ramdisk/ramdisk.asm drivers/os88drv.inc \
+                      apps/os88api.inc $(BUILD)/mines.o88 | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ramdisk/ -I drivers/ -I apps/ \
+	        -I $(BUILD)/ -o $@ $<
+	@echo "ramdisk: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/ramdisk.drv: $(BUILD)/ramdisk.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/ramdisk.bin -o $@
 
 $(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
                       drivers/net/lplslv.inc | $(BUILD)

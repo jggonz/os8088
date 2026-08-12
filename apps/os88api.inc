@@ -652,6 +652,48 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; zones. It takes the gfx lock ITSELF, so
                                  ; never from a callback that holds one
 
+; --- a REDIRECTED volume's listing (SPEC.md 62.9.1) -------------------------
+; A DRVC_FILE DRIVER's slot, and the narrowest fence in the table: it is legal
+; only from inside FSV_LIST, which is a gate on the MOMENT rather than on the
+; caller. The kernel raises it around that one call and lowers it after.
+%define OSAPI_FS_ENT        KERNEL_SEG:0x03C0   ; ES:SI -> a DSK_DE_SIZE-byte
+                                 ; staged SPEC.md 19.1 entry in YOUR OWN
+                                 ; segment: name at 0 (NUL-terminated 8.3),
+                                 ; type at 16 (0 file / 1 package / 2 folder -
+                                 ; NEVER 3, the parent link is the kernel's),
+                                 ; YOUR OPAQUE HANDLE at 18, size dword at 20,
+                                 ; bytes 24..31 zero.
+                                 ; out CF=0 and AX = the index it landed at;
+                                 ; CF=1 = the listing is full, or you called it
+                                 ; from outside FSV_LIST.
+                                 ; THE KERNEL STILL SORTS (19.4) AND STILL
+                                 ; SYNTHESIZES '..' (19.5) - do neither, or a
+                                 ; display index stops meaning what the
+                                 ; hit-test thinks it means
+%define DSK_DE_SIZE         32   ; ...the entry's stride, which is the
+                                 ; LISTING's and not the meaningful prefix's
+
+; --- a redirected transfer's PROGRESS (SPEC.md 12.8.1/62.9.1) ---------------
+; The other half of the same driver's contract, and the one thing the kernel
+; cannot do for you: it arms SPEC.md 12.8's file-activity bar from FSV_STAT's
+; size and is then ONE FAR CALL DEEP inside your FSV_READ, blind, until you
+; return. A floppy steps the bar from dsk_xfer's own per-sector loop; a cable
+; has no such loop in kernel code, so a redirected read of a 116KB module
+; reported nothing at all until this existed.
+%define OSAPI_FS_PROG       KERNEL_SEG:0x03C8   ; AX = bytes moved SINCE YOUR
+                                 ; LAST REPORT - a running total would advance
+                                 ; the bar by the whole file every call.
+                                 ; A short count is ordinary and not an error:
+                                 ; the remainder below 512 bytes is carried,
+                                 ; not rounded away, so reporting a wire's
+                                 ; every 64-byte frame is exact.
+                                 ; Unarmed it is a compare and a return, so
+                                 ; call it unconditionally and never test.
+                                 ; IT DRAWS - so the gfx lock must already be
+                                 ; held, which it is inside any file operation
+                                 ; (SPEC.md 18), and you must NEVER take it.
+                                 ; Preserves every register and the flags
+
 ; --- a driver's settings, inside SYSTEM.CFG (SPEC.md 51.9) ------------------
 ; A DRIVER's slot, fenced like the four above. The kernel carries DRV_BLOB_SZ
 ; opaque bytes to disk and back with the rest of the Control Panel; it never
