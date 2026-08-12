@@ -2061,7 +2061,7 @@ press outlives its dispatch — `ui_drag`'s own `.track` drains the queue lookin
 for the MUP and discards everything else, which is the first place to suspect
 of leaving one behind.
 
-## 21. No Drive B on the Packard Bell 286, and a 1.2MB drive sitting right there (FIXED, SPEC.md 18.97.2 — awaiting field confirmation)
+## 21. No Drive B on the Packard Bell 286, and a 1.2MB drive sitting right there (FIXED, SPEC.md 18.97.2 — CONFIRMED on the machine)
 
 **Reported:** the Packard Bell Victory 286 (docs/FIELD-MACHINES.md) comes up
 with **no Drive B on the desktop**. The machine has a 1.44MB drive A and a
@@ -2132,3 +2132,21 @@ unit, and it separates the three live possibilities in one line —
 a potted DS1287 whose battery is 30 years old is worth ruling out first),
 `claimed 2` + `probe stop 03` (this bug, now fixed), or `probe stop 04` (the
 controller refused, which keeps the drive and was never the symptom).
+
+**Confirmed on the machine.** A 1.44MB `combo` disk was built for it — the
+Packard Bell has no 360KB drive, which is the first time the register's
+default ask has not fitted a machine in it — and **drive B is back on the
+desktop**. That is the reported symptom, gone, on the hardware that reported
+it.
+
+**What that confirms and what it does not.** It confirms the diagnosis was in
+the right routine and that §18.97.2's tier test is what the machine needed:
+the equipment word DID claim two drives (so the `claimed 1` branch — a dead
+DS1287 — is ruled out), and the probe DID reach its removing path, because
+nothing else on that machine had changed. It does **not** explain the FDC:
+no `sysbench` report has come back yet, so the ST3/ST0 bytes this machine
+actually answers are still unread, and note 19's question — why a present
+drive reports TRK0 clear through a recalibrate, on two different controllers
+now — stays open. §57.5's block is on the disk that is over there; the run is
+still worth asking for, and it is now the only thing that could ever explain
+this rather than route around it.

@@ -349,13 +349,28 @@ was the report's own second guess: §18.2's BPB rule 11 whitelists 15 sectors
 per track and rule 13's `spt*heads*80` is 2,400 sectors — a 1.2MB disk
 exactly. What was missing was the drive's ICON, not its ability to mount.
 
-**What this machine is still owed:** a `sysbench` run off `combo.img` to say
-what its FDC actually answered. §57.5's `FD` block separates the three live
-possibilities in one line — `claimed 1` (the count never reached us; worth
-ruling out first on a machine whose potted DS1287 is thirty years old),
-`claimed 2` + `probe stop 03` (the bug above, now routed around but still
-unexplained at the controller), or `probe stop 04` (a refusal, which always
-kept the drive). It is the only machine in the register that can answer it.
+**Confirmed fixed on the machine: drive B is back.** So the equipment word
+really did claim two drives and the probe really did reach its removing path
+— the `claimed 1` branch, a dead DS1287, is ruled out.
+
+**AND IT IS THE ONE MACHINE HERE WITH NO 360KB DRIVE**, which is worth
+stating as a property of the register rather than as a detail of one bug:
+`make combo` builds a **360KB** disk because the calibration 5150 has one
+5.25" drive, and that disk cannot be read here at all. This machine takes
+**1.44MB** in drive A. Until a `combo144` target exists, the disk for it is
+`os88disk.py` called directly with `--size 1440`, `--boot build/boot.bin` and
+the Makefile's own `$(COMBOARGS)` — and 1.44MB is 2,847 clusters against the
+360's 354, so the three things `combo` documents dropping all fit: **BIGFILE.DAT**
+(without which `sysbench` skips the cache-capacity sweep and the DOS
+read-rate cross-check), BEVERLY.MOD and README.TXT. A disk built for this
+machine should carry them; there is no reason not to.
+
+**What this machine is still owed:** a `sysbench` run, to say what its FDC
+actually answered. §57.5's `FD` block is what carries it, and the run is now
+the only thing that could ever *explain* note 19/21 rather than route around
+it — the fix is a decision about the claim, not a diagnosis of the
+controller. It is one of two machines in the register that can answer it, and
+the only AT-class one.
 
 ---
 
