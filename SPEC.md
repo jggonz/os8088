@@ -28292,16 +28292,30 @@ answers, and `FERR_BIG` from `OSAPI_FILE_READ` still maps to it.
 **The blind path keeps the cap and stops being reached by ordinary loads.**
 It had quietly become the *association* route — §54.5 hands over a name, a
 cluster and a drive and no size at all, so double-clicking a `.MOD` on the
-desktop took the guess. Above the cap that is worse than a refusal: the read
-takes the file's first 128KB, `mp_load` validates happily because the
-**pattern** extent still fits, and the module plays with its later samples
-silently absent. `trk_sizeof` asks `OSAPI_FILE_FIND` — which answers all 32
-bits out of the directory (§19.7.1) — so the association and the dialog now
-size the claim identically, at the cost of one directory walk on a path that
-is about to read the whole file. Only a name in no directory is still a
-guess, and there the cap is doing the job it was written for: the claim is
-speculative and `trk_ring_probe` (§45.18) has to fund a ring out of what it
-leaves.
+desktop took the guess, and above the cap that guess is a 128KB claim the
+file does not fit. **`OSAPI_FILE_READ` then refuses it**: §18.4's
+`dskw_rbody` compares the directory entry's 32-bit size against the
+capacity **before any data I/O** and answers `FERR_BIG` with the
+destination untouched, which `trk_fdone`'s `.rderr` maps to the same
+`File too big`. So the association route was refusing a 300KB module too,
+by a different door and with the same words on screen. `trk_sizeof` asks
+`OSAPI_FILE_FIND` — which answers all 32 bits out of the directory
+(§19.7.1) — so the association and the dialog now size the claim
+identically, at the cost of one directory walk on a path that is about to
+read the whole file. Only a name in no directory is still a guess, and
+there the cap is doing the job it was written for: the claim is speculative
+and `trk_ring_probe` (§45.18) has to fund a ring out of what it leaves.
+
+**This paragraph said "silent truncation" first, and that was wrong** — the
+claim being *plausible* is why it is worth leaving the correction in.
+Reasoning from this app alone, a short read looks inevitable: the capacity
+is 128KB, the file is 300KB, and `mp_load` would indeed validate the result
+because `1084 + 1024·P` still fits and the sample extents clamp to the bytes
+present (§45.5). Every step of that is true and the conclusion is false,
+because the kernel never performs the read at all. **A claim about what a
+file operation does is a claim about `diskw.inc`, and it has to be read
+there** rather than derived from the caller's arithmetic. Measured, on the
+reference build: `File too big` / `No module loaded`, not a short module.
 
 **Measured, on a cycle-accurate 4.77MHz 8088 with 640KB and a Sound Blaster,
 same disk and same clicks:** the 300KB module is `File too big` /
@@ -37068,6 +37082,53 @@ click dispatchers on task 0's 1,024-byte stack, not in the worker's tree. That
 is a bound plus a peer comparison and not a field number; `tests/stackprobe`
 on real iron is still the only thing that settles the margin, because SeaBIOS
 hides a real BIOS's interrupt stack use (docs/TESTING.md).
+
+### 56.14 §45.3.1 and §45.5.1, ported — and §56.1 is why this is a second commit
+
+Tracker's 128KB module ceiling and its byte-wide pattern count were **both**
+here too, character for character, because this replayer is an independent
+copy of `trkplay.inc` (§56.1). `mpp_load_name` carried `cmp dx, 2` with the
+comment *"the same cap the blind path takes"* — the same borrowing §45.3.1
+describes, where a politeness bound on a speculative claim became a verdict on
+a file — and `mppmix.inc` carried `mov [mpm_npat], al` under the same *"P <=
+126 after the extent check (file cap)"*. §56.1 exists to say that a replayer
+bug fixed in one player is not fixed in the other; this is the first time that
+warning has been *collected*, and it is worth recording that the duplicated
+comment is what made the second one findable at all.
+
+The fix is §45.3.1's and §45.5.1's, and the reasoning is not repeated here.
+**Three things about this end differ.**
+
+**The blind path is the PLAYLIST, not an association.** ModPlug claims no
+extension — §54 points `MOD` at Tracker, and two players claiming it would
+make a double-click depend on load order (§56.13) — so it has no
+`OSAPI_ARG_FILE` route at all. What it has instead is `mpp_pl_play`, which
+calls `mpp_load_name` with the banked size already read-and-cleared, so
+**every track after the first** arrived as "size unknown" and took the capped
+guess — and `OSAPI_FILE_READ` refuses a file that does not fit the claim
+(§45.3.1's correction), so an oversized track in a playlist stopped the list
+with `File too big` on a feature whose whole purpose is unattended playback.
+`mpp_sizeof` is `trk_sizeof` with the same body and one difference of
+convention: it answers in **DX:CX**, because that is the register pair this
+proc already carries a size in.
+
+That refusal is the *measured* one and not the inferred one: driven through
+the PlayList editor on the reference build — Add…, then the queued entry —
+the player answers `File too big` with `Pos 00/00` and never opens the Sound
+Blaster stream at all (its capture is a 44-byte header). The same clicks on
+the ported build play it.
+
+**There is no readout to clamp.** Tracker prints the pattern count in FT2's
+two-digit `np` field and needed `tui_hexnp`; ModPlug's face has no such
+element — the LCD carries the title, the file name and the transport — so
+`mpm_npat` has exactly four references and all four are the replayer's.
+
+**And the refusal now happens after the stop.** `mpp_load_name` stops
+playback and frees the previous claim *before* it looks at the size, where
+Tracker refuses first and touches nothing; `.toobig`'s comment claiming
+"nothing is playing that this interrupted" was already wrong and is left
+alone, because the sized path can no longer reach it for any file a real heap
+could hold.
 
 ---
 

@@ -940,11 +940,15 @@ trk_is_mod:
 ; The dialog reports a size (SPEC.md 38.6) and an ASSOCIATION launch does not -
 ; it hands over a name, a cluster and a drive (SPEC.md 54.5) - so a module
 ; double-clicked on the desktop reached trk_fdone as "size unknown" and took
-; the speculative claim, which is capped. Above that cap it read a 300KB
-; module as its first 128KB: no error anywhere, samples silently short, and
-; mp_load happy because the PATTERN extent still fits. OSAPI_FILE_FIND answers
-; all 32 bits out of the directory, so both routes size the claim the same way
-; and the cap is left to the one case that still cannot know (SPEC.md 45.3.1).
+; the speculative claim, which is capped. A 300KB module then gets a 128KB
+; claim it does not fit, and OSAPI_FILE_READ REFUSES it: dskw_rbody compares
+; the directory size against the capacity before any data I/O and answers
+; FERR_BIG, which .rderr maps to the same 'File too big'. So this route was
+; refusing the file too, by a different door. (It is NOT a short read - that
+; was this comment's first draft and SPEC.md 45.3.1 keeps the correction.)
+; OSAPI_FILE_FIND answers all 32 bits out of the directory, so both routes
+; size the claim the same way and the cap is left to the one case that still
+; cannot know (SPEC.md 45.3.1).
 ;
 ; It costs one directory walk, on a path that is about to read the whole file.
 ; -----------------------------------------------------------------------------
