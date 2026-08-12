@@ -424,9 +424,8 @@ net_list:
     mov byte [net_full], 1
     jmp short .each
 .done:
-    call net_bye
-    clc
-    jmp short .out
+    clc                         ; ...AND NO net_bye. See net_fcmd's header:
+    jmp short .out              ; NC_BYE ends the SESSION, not the command
 .bad:
     call net_lost
     stc
@@ -464,7 +463,6 @@ net_chdir:
     call lp_rword               ; the parent's handle
     jc  .bad
     mov [net_up], ax
-    call net_bye
     mov ax, [net_arg2]          ; ONLY NOW is the move real: a refused chdir
     mov [net_cwd], ax           ; must leave us standing where we were, or
     mov dx, [net_up]            ; FSV_LIST lists a folder we never reached
@@ -505,7 +503,6 @@ net_dfree:
     jc  .bad
     mov bx, ax
     mov ax, [net_up]
-    call net_bye
     clc
     jmp short .out
 .bad:
@@ -527,6 +524,20 @@ net_dfree:
 ; that, and the two must not share a name however alike they read - one wire
 ; command per verb is 62.10.1's rule, and one routine per command shape is the
 ; same rule in the driver.
+;
+; **AND NO COMMAND ENDS WITH NC_BYE.** It reads like a frame terminator and it
+; is not one: `serve` on the far side LEAVES its command loop on NC_BYE and
+; goes back to hunting for the magic (lplslv.inc), so a bye after every verb
+; tore the session down and the next command arrived at a slave that was no
+; longer listening for one. The gap between commands is the user's THINKING
+; TIME and has no upper bound - which is exactly what lp_rbyte_w's unbounded
+; wait was built for, and this would have defeated it. NC_BYE is net_drop's
+; and net_connect's alone.
+;
+; It survived a whole scripted session against tests/lptlink/partner.py, whose
+; server read a bye as "carry on" - a harness MORE FORGIVING than the thing it
+; stands in for hides exactly the bugs it exists to find, so partner.py returns
+; on one now, as the real far end does.
 ; -----------------------------------------------------------------------------
 net_fcmd_h:
     push ax

@@ -37235,9 +37235,8 @@ that can exercise a redirected volume in a container.
 #### 62.10.1 The wire protocol
 
 §62.7's framing is unchanged and this is a second command set inside it: os8088
-is always the master, every exchange is request-then-response, and a command
-ends with `NC_BYE` so the far side may go back to listening. One wire command
-per `FSV_*` verb, so no command means two things:
+is always the master and every exchange is request-then-response. One wire
+command per `FSV_*` verb, so no command means two things:
 
 ```
 'L' LIST    in  handle word           out status, count word, count x 32-byte entry
@@ -37270,6 +37269,16 @@ errors are what every caller of these verbs already handles. And **the handle
 is the DOS side's to assign and the kernel's to treat as opaque** (§62.9.1),
 which is what lets the far end use whatever it likes: a directory ordinal, a
 hashed path, an index into its own table.
+
+**`NC_BYE` IS NOT A FRAME TERMINATOR AND NO COMMAND ENDS WITH ONE.** It reads
+like one and the first draft of this section said it was. It ends the
+**session**: the far side's command loop *leaves* on `NC_BYE` and goes back to
+hunting for the magic, so a bye after every verb tore the link down and the
+next command arrived at a slave that was no longer listening for one. The gap
+between commands is the user's THINKING TIME and has no upper bound — which
+is exactly what the slave's unbounded first-nibble wait was built for, and
+this would have defeated it. `NC_BYE` belongs to Connect (which leads with one
+to shake off a stale session) and to Disconnect, and to nothing else.
 
 #### 62.10.2 What the DOS side serves
 
@@ -37345,18 +37354,25 @@ The three verbs that make a volume **browsable**: `FSV_LIST`, `FSV_CHDIR` and
 `tests/lptlink/partner.py` as the far end, the driver otherwise unmodified
 from the field-proven block build:
 
-- **Connect** is `I C X L X` on the wire — info, chdir-to-root, bye, list,
-  bye. The mount ITSELF is what proves the far side is serving files rather
-  than sectors, because `disk_mount` branches on `DVK_FILE` and ends in
+- **Connect** was `I C X L X` on the wire — info, chdir-to-root, bye, list,
+  bye — and is `I C L` since the `NC_BYE`s came out (§62.10.1: they ended the
+  session). The mount ITSELF is what proves the far side is serving files
+  rather than sectors, because `disk_mount` branches on `DVK_FILE` and ends in
   `FSV_LIST`: a partner that answers the magic and cannot list is refused at
   Connect rather than at the first double-click.
-- **Opening the volume** is `C X L X F X`, and the Disk window reads
-  `Drive C: 4 files`, `DOCS / MINES.O88 4096 / READ.ME 512 / ZEBRA.TXT 99`,
-  `Size 4K  Free 1205K`. Everything in it came off the wire and none of it is
-  on either floppy. The rows are in a different order from the one they were
-  sent in, which is what proves the driver did not sort (§19.4) — and `DOCS`
-  has a folder icon and `MINES.O88` the package diamond, from the type word
-  at offset 16 alone.
+- **Opening the volume** was `C X L X F X`, so `C L F`, and the Disk window
+  reads `Drive C: 4 files`,
+  `DOCS / MINES.O88 4096 / READ.ME 512 / ZEBRA.TXT 99`, `Size 4K  Free 1205K`.
+  Everything in it came off the wire and none of it is on either floppy. The
+  rows are in a different order from the one they were sent in, which is what
+  proves the driver did not sort (§19.4) — and `DOCS` has a folder icon and
+  `MINES.O88` the package diamond, from the type word at offset 16 alone.
+
+**The two traces above are the PRE-FIX ones and the letters after them are
+derived, not measured** — the run that removes the byes from a real capture
+was still in flight when this was written. The listing, the sizes, the icons
+and the free space are measured and stand; if a later capture disagrees about
+the letters, it is right and this is wrong.
 
 Two things were wrong and both were silent. **`net_cmd` already existed** —
 the block side's, taking `AL` + `DX` + a run length — so the file side's
@@ -37393,6 +37409,74 @@ times: **a list of classes is a second opinion about which drivers serve
 volumes, and it goes stale the way a second opinion does.** It was found
 only because NET.DRV changed class onto the same path — nothing about the RAM
 disk had changed, and nothing was going to point at it.
+
+##### 62.10.4.2 The DOS side, executed
+
+Until this, `OS88NET.COM`'s own code — argument parsing, the handle table, the
+path walk, the two-pass listing — had run on exactly one machine in the world:
+the field one. `tests/dosstub` boots it on a cycle-accurate 8088 with a real
+port at `0x378` and no DOS under it, and `partner.py` plays NET.DRV, which is
+the *mirror* of §62.10.3 and needed no second transport: `lp_snib` and
+`lp_rnib` are the guest's whichever role it is in, so only who speaks first
+differs.
+
+Nine `int 21h` functions had to join the stub's seven — `0Eh 19h 1Ah 25h 36h
+3Bh 47h 4Eh 4Fh` — over a nine-row synthetic tree. That is the growth the
+stub's own header forbids ("must never grow towards being DOS") read
+correctly: what it implements is *what the program calls*, and the program
+calls nine more than it did.
+
+Verified: the root's four entries with `HELLO.O88` typed as a **package** from
+its extension alone, `CHDIR` into `GAMES` answering parent 0, `GAMES`
+listing `CHESS.EXE` and `SUB`, `CHDIR` into `SUB` answering parent = `GAMES`
+(so `hd_path` walked two levels), `DEEP.TXT` inside it, an **empty** folder as
+a count of zero rather than a refusal, a handle never issued refused with
+`NST_NOENT`, and free space. Under `/W`: the root lists `C:` as a folder, and
+chdir into it reaches that drive's root.
+
+**Five faults, and four of them were silent.**
+
+- **`mov [srv_cwd], ax` where `srv_cwd` is a `db`.** Wrong twice over: it
+  stored a *handle* in the field `NF_DFREE` reads as a *drive*, and the
+  word-sized store also wrote the byte after it — `nhd`'s low half — so one
+  chdir zeroed the handle count and every listing after it was refused on
+  handles the program had just issued. **NASM cannot warn**: the width comes
+  from the register, so `mov [byte_var], ax` assembles exactly as cleanly as
+  the byte store that was meant.
+- **`hd_path` asked before the whole-machine root was routed away from it.**
+  It refuses that handle deliberately — under `/W` the first level *is* a
+  drive, so the root has no path of its own — so `/W` answered `no such
+  handle` to every listing, on a link that was working perfectly. The same
+  fault in `srv_chdir` was worse: `disk_mount` chdirs to handle 0 before it
+  lists, so it would have been a volume that could not mount.
+- **The stub's directory table emitted 19 bytes a row against a `DR_SZ` of
+  20**, so every row after the first was read one byte short of where it was
+  written and the walk stopped after one entry. What that looks like from the
+  other end of a cable is a directory with one file in it — a plausible
+  answer, from a server that is working. It is a self-padding macro now, and a
+  name too long for the field fails the *build*.
+- **`make dosstub ARGS=…` rebuilt nothing.** None of the four knobs is a
+  prerequisite of anything, so a second run with a different tail ran the
+  *previous* run's arguments — which reads exactly like a switch that does not
+  work. Measured: `/W` was parsed correctly and never reached the binary.
+  `DSSTAMP` is `VIDSTAMP`'s answer to the identical trap.
+- And the one that was not silent, because the harness had been hiding it:
+  `partner.py`'s server read `NC_BYE` as "carry on", so the driver sent one
+  after every verb through a whole scripted session and the mount looked
+  perfect. **A stand-in kinder than the thing it stands in for hides
+  precisely the bugs it exists to find** — it returns on a bye now, as the
+  real far end does.
+
+One harness fact belongs here because no amount of reading finds it: **the
+wire is not idle when a slave has been dwelling.** MartyPC's status register
+reads **0** until something writes one, and `LP_WAIT` reads bit 7 *inverted*,
+so an untouched port looks to a listening slave like a permanently asserted
+strobe — it samples a garbage nibble, raises its ack and parks. The port
+genuinely reads D4 high before this end has sent anything, so the first
+nibble lands half a handshake out of step. A real cable's BUSY line is pulled
+to its idle level by the receiver; `Partner.sync()` is the harness doing that
+for itself, and it needs cycles as well as the write, because nothing else
+there runs the guest.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 

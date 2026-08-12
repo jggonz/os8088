@@ -2103,8 +2103,22 @@ ifneq ($(FAILOPEN),)
 DOSSTUB_DEF += -DFAILOPEN=1
 endif
 
+# ...AND A STAMP FILE, for exactly VIDSTAMP's reason (see its comment above).
+# None of these four knobs is a prerequisite of anything, so `make dosstub
+# ARGS='/P:378 /W'` after a plain `make dosstub` saw an up-to-date .bin and
+# rebuilt NOTHING - the program then ran with the PREVIOUS run's command tail,
+# which reads exactly like a switch that does not work. Measured: /W was
+# parsed correctly and never reached the binary at all.
+DSSTAMP := $(BUILD)/.dosstub-$(if $(FSIZE),$(FSIZE),def)$(if $(ARGS),-a$(shell echo '$(ARGS)' | tr -c 'A-Za-z0-9' '_'))$(if $(FAILOPEN),-fo$(FAILOPEN))$(if $(COMFILE),-c$(notdir $(COMFILE)))
+
 $(BUILD)/dosstub.bin: tests/dosstub/dosstub.asm $(BUILD)/os88net.com | $(BUILD)
+	@[ -f $(DSSTAMP) ] || { rm -f $(BUILD)/.dosstub-*; touch $(DSSTAMP); }
 	$(NASM) -f bin -w+error $(DOSSTUB_DEF) -o $@ tests/dosstub/dosstub.asm
+
+$(BUILD)/dosstub.bin: $(DSSTAMP)
+$(DSSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.dosstub-*
+	@touch $@
 
 $(BUILD)/dsboot.bin: boot/boot.asm $(BUILD)/dosstub.bin | $(BUILD)
 	$(NASM) -f bin -DSPT=9 -DHEADS=2 $(BOOTDEF) \

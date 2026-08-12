@@ -823,15 +823,20 @@ srv_list:
     jc  .lost
     mov [srv_h], ax
 
-    call hd_path                ; -> pathbuf, or CF=1 for a handle we never
-    jc  .nodir                  ; issued
-
+    ; THE WHOLE-MACHINE ROOT IS ANSWERED FIRST, and the order is the whole of
+    ; it: `hd_path` REFUSES that handle on purpose (its `.wroot` has nothing to
+    ; walk - under /W the first level IS a drive, so the root has no path of
+    ; its own), so asking it first turned every /W listing into `no such
+    ; handle` on a link that was working perfectly.
     cmp byte [wholemc], 0       ; the whole-machine root is a list of DRIVES
-    je  .files                  ; and not a directory at all
+    je  .named                  ; and not a directory at all
     cmp word [srv_h], 0
-    jne .files
+    jne .named
     call srv_drives
     jmp short .out
+.named:
+    call hd_path                ; -> pathbuf, or CF=1 for a handle we never
+    jc  .nodir                  ; issued
 
 .files:
     call srv_count              ; walk 1: how many are there
@@ -1256,9 +1261,21 @@ srv_chdir:
     call lp_rword
     jc  .lost
     mov [srv_h], ax
+    or  ax, ax                  ; THE ROOT IS ALWAYS VALID and has no path to
+    jz  .root                   ; check - under /W it has none at all, and
+                                ; hd_path refuses it (srv_list's note). It is
+                                ; also the FIRST thing the kernel asks for:
+                                ; disk_mount chdirs to 0 before it lists, so
+                                ; getting this wrong is a volume that will not
+                                ; mount rather than a folder that will not open
     call hd_path                ; the only validation there is: can we name it
     jc  .no
-    mov [srv_cwd], ax           ; ...AX is untouched by hd_path
+    call srv_drv_note           ; ...and the DRIVE it landed on, for NF_DFREE
+    jmp short .say
+.root:
+    mov byte [srv_cwd], 0       ; ...the default drive, which is the one this
+                                ; program was started on
+.say:
     mov al, NST_OK
     call lp_sbyte
     jc  .lost
@@ -1282,6 +1299,35 @@ srv_chdir:
     pop bx
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_drv_note - pathbuf's drive -> [srv_cwd], for the one verb with no handle
+;
+; It reads the PATH rather than being handed a number, because only hd_path
+; knows which drive a handle is on: under /W the first level IS a drive, and
+; without it every path is on the root's. 0 means "the default drive", which
+; is int 21h 36h's own convention and exactly right for the non-/W case.
+;
+; THE LINE THIS REPLACES WAS `mov [srv_cwd], ax` AND IT WAS WRONG TWICE. It
+; stored a HANDLE in a field NF_DFREE reads as a DRIVE - and `srv_cwd` is a
+; `db`, so a word-sized store from AX also wrote the byte after it, which is
+; `nhd`'s low half. One chdir therefore zeroed the handle count, and every
+; LIST after it was refused with `no such handle` on handles this program had
+; just issued. NASM cannot warn: the width comes from the register, so
+; `mov [byte_var], ax` assembles as cleanly as the byte store that was meant.
+; -----------------------------------------------------------------------------
+srv_drv_note:
+    push ax
+    mov byte [srv_cwd], 0
+    cmp byte [pathbuf+1], ':'
+    jne .out
+    mov al, [pathbuf]
+    or  al, 0x20
+    sub al, 'a' - 1             ; 'a' -> 1, which is 36h's numbering
+    mov [srv_cwd], al
+.out:
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

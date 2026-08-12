@@ -18,15 +18,29 @@
 ; WHAT IT IS. A bootable 360KB floppy carrying an int 21h stub and the .COM
 ; embedded in its own image. It boots on the same 4.77MHz 8088 MartyPC runs
 ; everything else on, with a REAL parallel port at 0x378, so the latch probe,
-; the port scan and the dwell all execute for real - which is the same
-; boundary NET.DRV has and for the same reason: MartyPC has a port and cannot
-; be a PARTNER, because its status lines read a constant.
+; the port scan and the dwell all execute for real.
+;
+; AND IT TALKS NOW, which reverses what this paragraph used to say. It said
+; MartyPC "cannot be a PARTNER, because its status lines read a constant" -
+; and the status lines a GUEST reads are whatever something wrote to them, so
+; the debug server can be the far end (SPEC.md 62.10.3).
+; tests/lptlink/partner.py in its MASTER role plays NET.DRV against this, and
+; that is what finally executed OS88NET.COM's own code: the argument parsing,
+; the handle table, the path walk and the two-pass listing had, until then,
+; run on exactly one machine in the world.
 ;
 ; WHAT IT IS NOT. It is not DOS and must never grow towards being DOS. It
-; implements the seven int 21h functions os88net.com actually calls and
-; refuses the rest LOUDLY - an unimplemented call prints its AH and halts,
-; rather than returning a plausible zero, because a stub that silently
-; succeeds is how a harness starts lying about the thing it is testing.
+; implements the int 21h functions os88net.com ACTUALLY CALLS and refuses the
+; rest LOUDLY - an unimplemented call prints its AH and halts, rather than
+; returning a plausible zero, because a stub that silently succeeds is how a
+; harness starts lying about the thing it is testing.
+;
+; That set is SIXTEEN now and it was seven, because the DOS side became a FILE
+; SERVER (SPEC.md 62.10): 0Eh 19h 1Ah 25h 36h 3Bh 47h 4Eh 4Fh joined the
+; original seven, over the nine-row synthetic directory below. That growth is
+; not the growth the paragraph above forbids - the rule is "what the program
+; calls", and the program calls nine more than it did. What would break the
+; rule is a function nothing here reaches.
 ;
 ;   make dosstub          build/dosstub.img, and how to run it
 ;
@@ -34,9 +48,15 @@
 ; reports is a pair of constants, so the sector-count arithmetic in
 ; open_image - a 32-bit byte count folded into a 16-bit sector count with no
 ; 32-bit registers - is exercised over its whole range without a 32MB image.
-;   make dosstub                     10MB, the ordinary path (20,480 sectors)
-;   make dosstub FSIZE=64M           past os8088's cap: 65,535, and it says so
-;   make dosstub FSIZE=256           under one sector: the refusal
+; The three FSIZE lines below need `/I:` IN THE TAIL to reach it at all now:
+; the redirector superseded block mode, so open_image returns at once unless a
+; run asks for an image by name (SPEC.md 62.10).
+;   make dosstub ARGS='/I:X'         10MB, the old ordinary path (20,480 secs)
+;   make dosstub FSIZE=64M ARGS='/I:X'  past os8088's cap: 65,535, and it says so
+;   make dosstub FSIZE=256 ARGS='/I:X'  under one sector: the refusal
+;   make dosstub ARGS='/P:378 /W'    ...and the whole-machine root, whose
+;                                    listing is srv_drives rather than a
+;                                    findfirst - a different walk entirely
 ;   make dosstub ARGS='/RO /P:378'   the command tail, which is code nothing
 ;                                    else in this tree executes
 ; =============================================================================
@@ -178,6 +198,24 @@ int21:
     je  f_seek
     cmp ah, 0x4C
     je  term
+    cmp ah, 0x0E
+    je  f_setdrv
+    cmp ah, 0x19
+    je  f_getdrv
+    cmp ah, 0x1A
+    je  f_setdta
+    cmp ah, 0x25
+    je  f_setvec
+    cmp ah, 0x36
+    je  f_dfree
+    cmp ah, 0x3B
+    je  f_chdir
+    cmp ah, 0x47
+    je  f_getcwd
+    cmp ah, 0x4E
+    je  f_findfirst
+    cmp ah, 0x4F
+    je  f_findnext
     jmp f_unimp
 
 ; --- AH=02h: DL to the screen -------------------------------------------------
@@ -304,6 +342,492 @@ f_seek:
     mov ax, [cs:fpos]
     mov dx, [cs:fpos+2]
     jmp cf_clear
+
+; =============================================================================
+; A DIRECTORY, for the half of OS88NET.COM that serves FILES (SPEC.md 62.10.2)
+;
+; SPEC.md 62.10.3 says the wire's verdict comes off two period boxes, and that
+; is about the CABLE. The DOS side's own code - argument parsing, the handle
+; table, the path walk, the two-pass listing - is not about the cable at all,
+; and until this existed the only machine it had ever run on was the field
+; one. That is the exact history this whole file was written to end.
+;
+; SO THE TREE IS A TABLE AND NOT A FILESYSTEM. Nine rows of (parent, name,
+; attribute, size), walked linearly - there is no free list, no allocation and
+; nothing writable, because phase 1 serves no write verb and a stub that
+; implemented one would be testing itself. Growing this towards DOS is the
+; thing this file's header forbids; growing it to cover what the program
+; ACTUALLY CALLS is what the file is for, and the program calls nine more
+; functions than it did.
+;
+;   \                 README.TXT 1234, HELLO.O88 4096, GAMES\, EMPTY\
+;   \GAMES            CHESS.EXE 20000, SUB\
+;   \GAMES\SUB        DEEP.TXT 7
+;   \EMPTY            - nothing, which is the case findfirst reports as an
+;                       ERROR and the server must report as a COUNT OF ZERO
+;
+; The shapes it exists to exercise: a folder inside a folder (so hd_path walks
+; more than one level), an .O88 (so ent_ispkg fires), a subdirectory whose
+; parent is not the root, and an empty one.
+; =============================================================================
+DR_PAR      equ 0               ; byte: the parent's row, 0xFF = the root
+DR_ATTR     equ 1               ; byte: 0x10 = directory
+DR_SIZE     equ 2               ; dword
+DR_NAME     equ 6               ; 13 bytes, ASCIIZ - the DTA's own layout
+DR_SZ       equ 20
+
+; A MACRO AND NOT HAND-COUNTED PADDING, because hand-counting it is exactly
+; how this shipped broken: every row emitted 19 bytes against a DR_SZ of 20,
+; so row 1 onward was read at an offset one byte short of where it was written
+; and the walk stopped after the first entry. What that looks like from the
+; other end of a cable is a directory with one file in it - a perfectly
+; plausible answer, on a server that is working. `times` computes the pad, and
+; a name too long for the field fails the BUILD with a negative count.
+%macro DR_ROW 4                 ; parent, attribute, size, name
+    db %1, %2
+    dd %3
+%%n:
+    db %4, 0
+    times DR_SZ - 6 - ($ - %%n) db 0
+%endmacro
+
+dr_tab:
+    DR_ROW 0xFF, 0x00, 1234,  'README.TXT'
+    DR_ROW 0xFF, 0x00, 4096,  'HELLO.O88'
+    DR_ROW 0xFF, 0x10, 0,     'GAMES'
+    DR_ROW 0xFF, 0x10, 0,     'EMPTY'
+    DR_ROW 2,    0x00, 20000, 'CHESS.EXE'
+    DR_ROW 2,    0x10, 0,     'SUB'
+    DR_ROW 5,    0x00, 7,     'DEEP.TXT'
+DR_N        equ ($ - dr_tab) / DR_SZ
+%if ($ - dr_tab) % DR_SZ != 0
+  %error "dosstub: dr_tab is not a whole number of DR_SZ rows"
+%endif
+
+; --- AH=0Eh: select disk. One drive, and it is C:. ---------------------------
+; It ACCEPTS any letter and reports one drive, because os88net only ever calls
+; it for a drive letter the user typed - and the honest failure for a wrong
+; one is the chdir that follows saying no, not this.
+f_setdrv:
+    mov al, 3
+    jmp cf_clear
+
+; --- AH=19h: current drive. 2 = C:. ------------------------------------------
+f_getdrv:
+    mov al, 2
+    jmp cf_clear
+
+; --- AH=1Ah: set the DTA -----------------------------------------------------
+f_setdta:
+    mov [cs:dta_off], dx
+    push ds
+    pop ax
+    mov [cs:dta_seg], ax
+    jmp cf_clear
+
+; --- AH=25h: set an interrupt vector -----------------------------------------
+; TAKEN AND HONOURED, not swallowed: os88net installs an int 24h handler and
+; a stub that pretended to would be hiding whether the program can be reached
+; by one. Nothing here raises a critical error, so it is never called - but
+; the vector is where the program put it.
+f_setvec:
+    push bx
+    push es
+    push ds
+    xor bx, bx
+    mov es, bx
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov [es:bx], dx
+    pop ax                      ; the caller's DS, pushed above
+    mov [es:bx+2], ax
+    push ax                     ; ...put back for the pop below
+    pop ds
+    pop es
+    pop bx
+    jmp cf_clear
+
+; --- AH=36h: free space. AX = spc, BX = free clusters, CX = bps, DX = total --
+; DL = 0 is the default drive and 1..26 are A:..Z:. Only C: answers, so /W's
+; drive scan sees exactly one live drive - which is the case worth testing,
+; because it is the one where the root's listing is a DIFFERENT walk from
+; every other folder's.
+f_dfree:
+    cmp dl, 0
+    je  .ok
+    cmp dl, 3                   ; C:
+    je  .ok
+    mov ax, 0xFFFF              ; ...and everything else is not there, which
+    jmp cf_clear                ; is what the int 24h path would otherwise be
+.ok:
+    mov ax, 4                   ; 2KB clusters
+    mov bx, 1000                ; 2,048,000 bytes free
+    mov cx, 512
+    mov dx, 5000
+    jmp cf_clear
+
+; --- AH=3Bh: chdir. DS:DX = the path. ----------------------------------------
+f_chdir:
+    push si
+    push di
+    mov si, dx
+    call dir_of                 ; the CALLER's DS:SI -> AL = a row, CF=1 = no
+    jc  .no
+    mov [cs:cwd_row], al
+    pop di
+    pop si
+    jmp cf_clear
+.no:
+    pop di
+    pop si
+    mov ax, 3                   ; DOS's 'path not found'
+    jmp cf_set
+
+; --- AH=47h: the current directory, INTO DS:SI, no drive and no leading \ ----
+; That shape is DOS's own oddity and os88net puts both back; getting it wrong
+; here would hide the fact that it does.
+f_getcwd:
+    push si
+    push di
+    push ds
+    pop es                      ; the caller's segment, for the write
+    mov di, si
+    mov al, [cs:cwd_row]
+    call path_to                ; ES:DI, root-relative
+    pop di
+    pop si
+    mov ax, 0x0100              ; DOS leaves this in AX, and something might
+    jmp cf_clear                ; one day read it
+
+; --- AH=4Eh / 4Fh: findfirst / findnext --------------------------------------
+; The wildcard is IGNORED. os88net only ever asks '*.*' (path_wild), so
+; matching a pattern would be code the program under test cannot reach - and
+; an unreachable branch that looks tested is what f_unimp exists to refuse.
+; What IS honoured is the directory the path names, which is the part the
+; program computes.
+f_findfirst:
+    push si
+    push di
+    mov si, dx
+    call dir_of                 ; the path, minus its last component
+    jc  .no
+    mov [cs:find_dir], al
+    mov byte [cs:find_row], 0
+    pop di
+    pop si
+    jmp f_findnext
+.no:
+    pop di
+    pop si
+    mov ax, 2                   ; 'file not found', which is also what DOS
+    jmp cf_set                  ; answers for an EMPTY folder - and the server
+                                ; must read that as a count of zero, not as a
+                                ; refusal
+f_findnext:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov al, [cs:find_row]
+    xor ah, ah
+.scan:
+    cmp ax, DR_N
+    jae .end
+    call dr_row                 ; AX -> BX
+    mov cl, [cs:find_dir]
+    cmp [cs:bx+DR_PAR], cl
+    je  .hit
+    inc ax
+    jmp short .scan
+.hit:
+    inc ax
+    mov [cs:find_row], al
+    mov es, [cs:dta_seg]        ; ...and fill the DTA the program set
+    mov di, [cs:dta_off]
+    mov al, [cs:bx+DR_ATTR]
+    mov [es:di+21], al
+    mov ax, [cs:bx+DR_SIZE]
+    mov [es:di+26], ax
+    mov ax, [cs:bx+DR_SIZE+2]
+    mov [es:di+28], ax
+    mov si, bx
+    add si, DR_NAME
+    add di, 30
+    mov cx, 13
+.nm:
+    mov al, [cs:si]
+    mov [es:di], al
+    inc si
+    inc di
+    loop .nm
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    jmp cf_clear
+.end:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    mov ax, 18                  ; 'no more files'
+    jmp cf_set
+
+; --- dr_row: AX = a row index -> BX = its address ----------------------------
+dr_row:
+    push ax
+    push dx
+    mov bx, DR_SZ
+    mul bx
+    mov bx, ax
+    add bx, dr_tab
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dir_of - the caller's DS:SI path -> AL = the row it names (0xFF = the root)
+; out: CF=1 = no such folder
+;
+; It drops 'X:', a leading '\', and a LAST COMPONENT CONTAINING A WILDCARD -
+; which is what lets findfirst and chdir share it. Anything else in the path
+; has to match a directory row.
+; -----------------------------------------------------------------------------
+dir_of:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dl, 0xFF                ; where we are: the root
+    cmp byte [si+1], ':'
+    jne .noc
+    inc si
+    inc si
+.noc:
+    cmp byte [si], '\'
+    jne .comp
+    inc si
+.comp:
+    cmp byte [si], 0
+    je  .done
+    mov di, cmpbuf              ; one component into our own buffer, so the
+    xor cx, cx                  ; comparison below is CS-relative on both
+.cp:                            ; sides
+    mov al, [si]
+    or  al, al
+    jz  .cend
+    cmp al, '\'
+    je  .cend
+    cmp cx, 12
+    jae .skipc
+    mov [cs:di], al
+    inc di
+    inc cx
+.skipc:
+    inc si
+    jmp short .cp
+.cend:
+    mov byte [cs:di], 0
+    cmp byte [si], '\'
+    jne .last                   ; the LAST component: a wildcard in it means
+    inc si                      ; it is findfirst's '*.*' and not a folder
+    call dir_step
+    jc  .no
+    mov dl, al
+    jmp short .comp
+.last:
+    call cmp_wild
+    jc  .done                   ; '*.*' - we are already standing in it
+    call dir_step
+    jc  .no
+    mov dl, al
+.done:
+    mov al, dl
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; dir_step - cmpbuf, a directory child of DL -> AL. CF=1 = no such child.
+dir_step:
+    push bx
+    push cx
+    push si
+    push di
+    xor ax, ax
+.l:
+    cmp ax, DR_N
+    jae .no
+    call dr_row
+    test byte [cs:bx+DR_ATTR], 0x10
+    jz  .nx
+    mov cl, [cs:bx+DR_PAR]
+    cmp cl, dl
+    jne .nx
+    mov si, bx
+    add si, DR_NAME
+    mov di, cmpbuf
+    call cs_eq
+    jc  .hit
+.nx:
+    inc ax
+    jmp short .l
+.hit:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    stc
+    ret
+
+; cmp_wild - does cmpbuf hold a '*' or a '?'. CF=1 = yes.
+cmp_wild:
+    push ax
+    push si
+    mov si, cmpbuf
+.l:
+    mov al, [cs:si]
+    or  al, al
+    jz  .no
+    cmp al, '*'
+    je  .yes
+    cmp al, '?'
+    je  .yes
+    inc si
+    jmp short .l
+.yes:
+    pop si
+    pop ax
+    stc
+    ret
+.no:
+    pop si
+    pop ax
+    clc
+    ret
+
+; cs_eq - CS:SI vs CS:DI, both ASCIIZ, case-insensitive. CF=1 = equal.
+cs_eq:
+    push ax
+    push bx
+    push si
+    push di
+.l:
+    mov al, [cs:si]
+    mov bl, [cs:di]
+    cmp al, 'A'
+    jb  .nl
+    cmp al, 'Z'
+    ja  .nl
+    add al, 0x20
+.nl:
+    cmp bl, 'A'
+    jb  .nl2
+    cmp bl, 'Z'
+    ja  .nl2
+    add bl, 0x20
+.nl2:
+    cmp al, bl
+    jne .no
+    or  al, al
+    jz  .yes
+    inc si
+    inc di
+    jmp short .l
+.yes:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+.no:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; path_to - AL = a row -> ES:DI, the path from the root, NO leading backslash
+; (int 21h 47h's shape). Walks UP onto the stack and builds down, os88net's
+; own hd_path in miniature - which is fitting, since proving that routine is
+; most of why this exists.
+; -----------------------------------------------------------------------------
+path_to:
+    push ax
+    push bx
+    push cx
+    push si
+    xor cx, cx
+.up:
+    cmp al, 0xFF
+    je  .base
+    cmp al, DR_N
+    jae .base
+    push ax
+    inc cx
+    xor ah, ah
+    call dr_row
+    mov al, [cs:bx+DR_PAR]
+    jmp short .up
+.base:
+    jcxz .done
+.step:
+    pop ax
+    xor ah, ah
+    call dr_row
+    mov si, bx
+    add si, DR_NAME
+.nm:
+    mov al, [cs:si]
+    or  al, al
+    jz  .nmd
+    mov [es:di], al
+    inc si
+    inc di
+    jmp short .nm
+.nmd:
+    dec cx
+    jcxz .done
+    mov byte [es:di], '\'
+    inc di
+    jmp short .step
+.done:
+    mov byte [es:di], 0
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; --- anything else: SAY SO AND STOP ------------------------------------------
 ; Never a plausible zero. A stub that quietly succeeds at a call it does not
@@ -468,6 +992,15 @@ cmdtail_txt:
 
 xfer:       dw 0
 fpos:       dd 0
+
+; --- the directory half's state ----------------------------------------------
+dta_seg:    dw 0
+dta_off:    dw 0
+cwd_row:    db 0xFF             ; the root
+find_dir:   db 0xFF             ; the folder the walk in progress is in
+find_row:   db 0                ; ...and how far through dr_tab it has got
+cmpbuf:     times 16 db 0       ; one path component, staged into CS so both
+                                ; sides of a comparison are CS-relative
 
     align 2
 com_image:

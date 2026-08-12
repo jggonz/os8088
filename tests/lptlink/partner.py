@@ -236,6 +236,95 @@ class Partner(object):
         self.send_byte(version)
         return MAGIC_Q
 
+    # --- getting the wire to a known state -----------------------------------
+    def sync(self, limit=200):
+        """Drive the line idle and let the guest come back to rest.
+
+        NEEDED WHEN THE GUEST HAS BEEN LISTENING, and it is a property of this
+        harness rather than of the transport. A real cable's BUSY line is
+        pulled to its idle level by the receiver; MartyPC's status register
+        reads **0** until something writes one, and LP_WAIT reads bit 7
+        INVERTED - so an untouched port looks to a dwelling slave like a strobe
+        that is permanently asserted. It samples a garbage nibble, raises its
+        ack, and parks in the second LP_WAIT waiting for a fall that cannot
+        come.
+
+        So the port genuinely reads D4 HIGH before this end has sent anything,
+        and `_await_strobe(True)` is satisfied by a cycle that never happened -
+        which puts the very first nibble half a handshake out of step, on a
+        link where every byte afterwards looks like a timeout.
+
+        Releasing the phantom strobe is one write; what it also needs is CYCLES,
+        because nothing else here runs the guest.
+        """
+        self._status(idle=True)
+        for _ in range(limit):
+            if not (self._data() & 0x10):
+                return
+            self._step()
+        raise LinkTimeout('the guest never dropped its ack: the wire is stuck '
+                          'with D4 high after %d steps' % (limit * STEP))
+
+    # --- ...and the OTHER role: the host as the MASTER ------------------------
+    # The nibble layer is symmetric - `lp_snib` and `lp_rnib` are the guest's
+    # whichever end it is playing - so nothing below this line needed a second
+    # transport. What differs is only who speaks first.
+    #
+    # This is what tests OS88NET.COM, which until it existed had run on exactly
+    # one machine: the field one. tests/dosstub boots it on a cycle-accurate
+    # 8088 with a real port at 0x378 and no DOS under it; this end asks the
+    # questions NET.DRV would.
+    def mst_hello(self):
+        """NET.DRV's own: send 'O88?', read 'O88!' and a version byte.
+
+        NO HUNT on this side. The slave hunts because the master sweeps ports
+        and it may join mid-transfer; the master has just spoken, so the reply
+        is the next thing on the wire by construction.
+        """
+        self.send(MAGIC_Q)
+        got = self.recv(4)
+        if got != MAGIC_R:
+            raise LinkTimeout('slave answered %r, wanted %r' % (got, MAGIC_R))
+        return self.recv_byte()
+
+    def mst_cmd(self, letter, arg=None):
+        """One command, and its argument word when it takes one."""
+        self.send_byte(ord(letter))
+        if arg is not None:
+            self.send_word(arg)
+
+    def mst_bye(self):
+        self.send_byte(ord('X'))
+
+    def mst_list(self, handle):
+        """NF_LIST -> (status, [32-byte entry]). The count is on the wire
+        before the entries are, so a refusal still completes the frame."""
+        self.mst_cmd('L', handle)
+        st = self.recv_byte()
+        n = self.recv_word()
+        ents = [self.recv(DE_SIZE) for _ in range(n)]
+        return st, ents             # ...and NO bye: that ends the session
+
+    def mst_chdir(self, handle):
+        """NF_CHDIR -> (status, parent handle). The parent comes back because
+        the kernel has no directory sector to read one out of."""
+        self.mst_cmd('C', handle)
+        st = self.recv_byte()
+        if st:
+            return st, None
+        par = self.recv_word()
+        return st, par
+
+    def mst_dfree(self):
+        """NF_DFREE -> (status, free bytes, granule)."""
+        self.mst_cmd('F')
+        st = self.recv_byte()
+        if st:
+            return st, None, None
+        free = self.recv_dword()
+        gran = self.recv_word()
+        return st, free, gran
+
     # --- serving, once the link is up ----------------------------------------
     def serve(self, tree, limit=64, idle=600000):
         """Answer commands until the master says NC_BYE, or `limit` of them.
@@ -270,8 +359,20 @@ class Partner(object):
             if self.spent - mark > idle:
                 return seen
             seen.append(chr(c))
-            if c == ord('X'):               # NC_BYE - back to listening
-                continue
+            if c == ord('X'):               # NC_BYE ENDS THE SESSION, exactly
+                return seen                 # as `serve` does on the real far
+                                            # end - it leaves its command loop
+                                            # and goes back to hunting for the
+                                            # magic. This used to `continue`,
+                                            # and that ONE LINE of forgiveness
+                                            # let the driver send a bye after
+                                            # every verb through a whole
+                                            # scripted session: the harness
+                                            # answered, the real slave would
+                                            # have stopped listening. A stand-in
+                                            # that is kinder than the thing it
+                                            # stands in for hides precisely the
+                                            # bugs it exists to find
             if c == ord('I'):               # NC_INFO
                 self.send_byte(0)           # status
                 self.send_word(0)           # sectors: NONE. A redirected

@@ -866,6 +866,29 @@ no rung crossed, footprint unchanged.**
 The cable's file client is now a SECOND `DRVC_FILE` driver against a kernel
 proven three milestones deep, which is what the whole RAM-disk detour bought.
 
+**PHASE 1 OF THAT CLIENT IS DONE AND BOTH ENDS HAVE RUN** (SPEC.md §62.10.4).
+`NET.DRV` is `DRVC_FILE`, publishes `FSV_LIST`/`CHDIR`/`DFREE`, and mounts a
+browsable volume over the cable: Connect is `I C X L X` on the wire and
+opening the volume is `C X L X F X`, with the Disk window showing a listing
+that exists nowhere on either floppy. The DOS side gained the same three verbs,
+a `(parent, name)` handle table walked upward to rebuild a path, the current
+directory as its default root and `/W` for the whole machine.
+
+Both halves ran on a cycle-accurate 5150 — which is the part §9 said could not
+be done. The os8088 half is `tests/lptlink/partner.py` as the far end; the DOS
+half is the *mirror*, `tests/dosstub` booting `OS88NET.COM` with `partner.py`
+playing NET.DRV, and it needed nine more `int 21h` functions in the stub over
+a nine-row synthetic tree. Five faults came out of it and four were silent —
+a word store into a `db` that clobbered the next variable, an ordering that
+made `/W` unmountable, a table row one byte short, a `make` knob that rebuilt
+nothing, and a harness that was kinder than the thing it stood in for. SPEC.md
+§62.10.4.2 has each of them.
+
+What is still owed at this boundary is the WIRE's verdict, which is unchanged:
+two period boxes and a cable. Phase 2 is the read path — `FSV_STAT`,
+`FSV_READ`, `FSV_READAT` — and it is where `OSAPI_FS_PROG` finally gets the
+consumer it was written for.
+
 ### 2.3 What was considered and rejected
 
 **A synthetic FAT image in RAM.** The driver fetches the remote listing,
