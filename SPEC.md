@@ -13837,17 +13837,30 @@ clamped to a word (§19) — a copy cannot work from a truncated length.
 
 ### 19.6.2 …and it stamped three bits while forgiving two
 
-Reported off the field as **a hard-disk install that errors naming
-`KERNEL.SYS`** — and only on a disk that already carries an install. A fresh
-format works, because there is no entry to replace and `dskw_wbody` never
-reaches its `.replace` arm at all.
+**This is a latent defect found while chasing a field report, and it is NOT
+that report's cause.** It was written up as the cause first, and the A/B is
+what took it back: `make INSTRO=1` restores the old mask, and a second
+hard-disk install onto the same partition **succeeds on both builds**. The
+installer's own line says why — `hd_inst_sys` *formats the slot, then copies
+the disk that is in A: now* — so `KERNEL.SYS` never exists when it is
+written, `dskw_wbody`'s `.replace` arm is never reached, and neither leg of
+that A/B touched the code below. The field's `KERNEL.SYS` failure is
+something else and is still open.
+
+What follows is real all the same, and worth having fixed: the arithmetic
+below is not in doubt, only its reach.
 
 §19.6 stamps **read-only + hidden + system** on `KERNEL.SYS` and every
 `*.DRV`. `DSKW_SPROT` — the mask `dskw_write_sys` replaces under — forgave
 `DSKW_SYSAT`, which is *hidden and system*. Read-only was left in, so **the
-kernel could not rewrite its own file**: the second install found the entry,
-tested it, and refused with `FERR_PROT`, which the installer reports as the
-name of the file it was copying.
+kernel cannot rewrite its own file**: anything replacing a `*.DRV` or
+`KERNEL.SYS` in place finds the entry, tests it, and is refused with
+`FERR_PROT`.
+
+**No shipped path reaches it today**, which is why it had never been seen and
+why the A/B above comes back null: the installer formats first, and every
+other producer of a system file writes it onto a volume that has just been
+made. It is a trap set for the next thing that replaces one in place.
 
 The tell was in the constant's own comment — *"Read-only, the volume label
 and a subdirectory still refuse"* — sitting directly beneath a line saying
@@ -13861,11 +13874,11 @@ forgiven is a file wearing the kernel's own species and nothing else. A
 driver still cannot replace a user's read-only document that happens to share
 a name.
 
-**`SYSTEM.CFG` needed none of this and shows why the bug survived**: it is
-deliberately *not* read-only precisely because the kernel rewrites it, so the
-one system file that is replaced on an ordinary machine was the one file the
-mask never had to forgive. Every other one is written once onto a disk that
-has just been formatted.
+**`SYSTEM.CFG` needed none of this and shows why the defect is invisible**:
+it is deliberately *not* read-only precisely because the kernel rewrites it,
+so the one system file that IS replaced on an ordinary machine is the one the
+mask never had to forgive. Every other one is written once, onto a volume
+that has just been formatted.
 
 The test is `dskw_pmask`, one routine where there had been two identical
 copies eleven hundred lines apart — `dskw_wbody`'s replace and
@@ -34606,9 +34619,63 @@ the system to save one indirection. §52.9's "the system disk stays A:" is
 half-right in the way that matters: what moves is *which volume is the system
 volume*, not *which volume is A:*.
 
-**And `HDD.DRV` must not mount the boot partition twice.** Its automount
-skips a partition already in the volume table, matched on device and base
-LBA — the kernel got there first, through the BIOS, and the row is live.
+**And `HDD.DRV` must not mount the boot partition twice.** `hd_mount` skips a
+partition already in the volume table, matched on device and base LBA — the
+kernel got there first, through the BIOS, and the row is live. §52.10.3.1 is
+what that took, and it is worth reading before trusting any other sentence in
+this section that describes behaviour rather than code.
+
+#### 52.10.3.1 CLOSED: the paragraph above was true and the code was not
+
+The rule was written and never implemented, and what it cost was the symptom
+it names: **install to a partition, boot from it, click Mount, and the disk is
+on the desktop twice** — C: from the kernel's adoption and D: from the
+driver, the same sectors under two letters, two FAT windows and two icons.
+Reported from the field in exactly those terms: *one from the mount, one from
+the BIOS*.
+
+The driver could not have got this right on its own, which is why it did not.
+`hd_already` — its only "is this mounted?" test — walks `hd_vols`, the rows
+**this driver** registered, and the kernel's adoption is by construction not
+one of them: it happened before the driver was loaded, out of a table the
+driver cannot see. **`OSAPI_VOL_AT` (slot 0x03E8)** is that half made askable:
+DL = an int 13h drive number, BX:CX = a 32-bit partition base, out CF = 0 and
+AL = the volume index already covering it.
+
+Four things about it.
+
+- **It answers about `DVK_BIOS` rows and only those**, and that is a
+  correctness bound rather than a scope one. A driver-backed row's `DV_UNIT`
+  is the *driver's own volume handle* — a small integer that would collide
+  with an int 13h drive number for free — and its partition base never
+  reaches the kernel at all, `dsk_xfer` handing out a volume-relative LBA and
+  the driver adding its own base (§18.7). A driver's rows stay the driver's
+  to recognise; this is the half it is blind to.
+- **`dsk_vbase` is written by `dsk_boot_from` alone, and that row can never
+  be freed** — `dsk_vol_del` takes `DVK_DRV` and `DVK_FILE` and nothing else
+  — so a stale base cannot be inherited by a row somebody takes later. That
+  is what makes the comparison safe with no clearing anywhere, and it is the
+  invariant to check before giving any other producer a base.
+- **The IDE rung answers "not the kernel's" and mounts.** The kernel's
+  transport is int 13h (rung 0, §52.1), so a device reached through the task
+  file is by definition not the drive the adoption named — and there is no
+  int 13h number to offer for one. That is the right answer for the drive the
+  BIOS does not know, which is the only drive rung 1 is for.
+- **The caption had to change with it.** `hd_mount`'s refusal was still
+  `'No FAT partition on it'` from the top of the loop, which about a
+  partition that is mounted and visible on the desktop is the one answer that
+  is not true. It reads `Already mounted` now, and the same string covers the
+  skip `hd_already` was already doing silently. The Mount button deliberately
+  does **not** become Unmount: the boot volume is not the driver's to drop,
+  and §47 rule 3's honest test is the click, which now says why.
+
+Verified end to end on a cycle-accurate 4.77MHz 8088 (`os8088_xt_hdd`, rung
+0, no floppy mounted), by reading `dsk_vtab` out of the guest rather than
+counting icons: booted from the partition, ticked the driver — which is read
+off that same volume — and clicked Mount. Before, **4 zones and two hard-disk
+volumes, C: and D:, on one partition**; after, **3 zones and one**. The
+ordinary case is unmoved and was checked the same way: boot the floppy on the
+same machine with the same disk attached, and Mount still lands it at C:.
 
 ### 52.10.4 The installer
 
