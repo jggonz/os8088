@@ -39191,10 +39191,36 @@ on `LP_TMO` and is a *different* bug wearing this one's clothes. And it is
 armed per command by `serve`, so a session can be fast everywhere and slow at
 the one verb whose far side would touch a disk.
 
-The A/B is what makes it a test: 40 ticks (2.2 s, five times the old
-deadline and a fifth of the new one) enters the folder and lists it on the
-shipped driver, and loses the link on one built with `REPLY_TMO` = 8. A
-harness that cannot produce the failure cannot be said to have found the fix.
+The A/B is what makes it a test, and `make NETTURN1=1` is the other build:
+40 ticks of stall — 2.2 s, five times the old deadline and a fifth of the new
+one — on the chdir alone, everything else in the session answered instantly.
+Measured, on `os8088_5150_cga_lpt`:
+
+| | shipped | `NETTURN1=1` |
+|---|---|---|
+| mount | `ICL` | `ICL` |
+| open the volume | `CLF` | `CLF` |
+| enter `APPS` | `CLF`, window titled `APPS`, 2 files | **the guest stops acking mid-reply** |
+
+**The failing leg fails in the field report's own words.** It is not that the
+listing comes back empty — it is that the far side, having finished its walk,
+offers the first byte of its answer and *nobody acks it*: os8088 gave up at
+440 ms, called `net_lost`, and stopped driving the wire. The harness spins on
+`_await_strobe` until its budget expires. That is "the dos side showed
+nothing (no exit or message)" seen from the DOS machine's side, and it is why
+`serve` raising `LinkTimeout` at that point is the RESULT rather than a
+harness failure.
+
+The first two rows being identical is the control: the old deadline is
+perfectly adequate for a partner that answers instantly, which is the whole
+reason every earlier run passed. A harness that cannot produce the failure
+cannot be said to have found the fix.
+
+And the failing leg reproduces it **on the glass**, not merely in the log:
+the Disk window reads `No os8088 disk (D:)` over `Size ?  Free ?`, which is
+the field photograph letter for letter. The far side's own log says
+`CHDIR handle=2 -> parent 0` — it resolved the folder correctly and then had
+nowhere to put the answer.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
