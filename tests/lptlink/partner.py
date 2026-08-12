@@ -387,6 +387,20 @@ class Partner(object):
         (lplslv.inc's own note on why lp_rbyte_w waits forever). So the wait
         for a command BYTE is allowed to expire and returns; a wait inside a
         half-answered command is not, and still raises.
+
+        `idle` IS HOW LONG THE MASTER MAY BE SILENT, and it has to cover the
+        slowest thing the guest can do BETWEEN two commands - which is not
+        bounded by the wire at all. Opening a document is the case that found
+        this: the association looks for the app on the redirected volume, does
+        not find it, and then MOUNTS A FLOPPY AND READS THE PACKAGE OFF IT
+        before coming back to read the document. That is seconds of guest time
+        on a cycle-accurate drive, and at the default this end had already
+        given up and stopped driving the wire - so the guest's next command
+        went into a cable nobody was holding, timed out, and Note Pad came up
+        empty. It read exactly like the read path being broken.
+
+        So: pass a generous `idle` for any phase that can include a load, and
+        remember the cost is paid ONCE per call, at the end.
         """
         seen = []
         for _ in range(limit):
