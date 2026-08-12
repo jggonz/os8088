@@ -279,18 +279,45 @@ class Partner(object):
     # one machine: the field one. tests/dosstub boots it on a cycle-accurate
     # 8088 with a real port at 0x378 and no DOS under it; this end asks the
     # questions NET.DRV would.
-    def mst_hello(self):
+    def mst_hello(self, tries=4, patience=3000000):
         """NET.DRV's own: send 'O88?', read 'O88!' and a version byte.
 
         NO HUNT on this side. The slave hunts because the master sweeps ports
         and it may join mid-transfer; the master has just spoken, so the reply
         is the next thing on the wire by construction.
+
+        IT RETRIES, because the slave's DWELL CAN EXPIRE UNDER IT. `slv_hunt`
+        waits SLAVE_DWELL ticks and then returns to `listen_once`, which
+        re-enters it - and the guest's clock runs while this end steps it, so
+        an exchange begun near the end of a dwell can have the magic accepted
+        and the reply never sent. Measured: the same script failed once and
+        passed once, decided by where 25 seconds of boot happened to leave the
+        guest.
+
+        That is not a fault to fix in the slave - it is what the dwell is FOR,
+        and a real master sweeps ports and re-sends for exactly this reason
+        (docs/NET-PLAN.md 1.4.5: the slave dwells and the master sweeps). So
+        this end sweeps too. `patience` is per attempt and deliberately short:
+        a reply that is coming at all is a few hundred thousand steps away.
         """
-        self.send(MAGIC_Q)
-        got = self.recv(4)
-        if got != MAGIC_R:
-            raise LinkTimeout('slave answered %r, wanted %r' % (got, MAGIC_R))
-        return self.recv_byte()
+        last = None
+        for _ in range(tries):
+            saved = self.budget
+            self.budget = self.spent + patience
+            try:
+                self.send(MAGIC_Q)
+                got = self.recv(4)
+                if got == MAGIC_R:
+                    ver = self.recv_byte()
+                    self.budget = saved
+                    return ver
+                last = 'slave answered %r, wanted %r' % (got, MAGIC_R)
+            except LinkTimeout as e:
+                last = str(e)
+            finally:
+                self.budget = saved
+            self.lastop = None          # a fresh attempt owes no turnaround
+        raise LinkTimeout('no hello in %d attempts: %s' % (tries, last))
 
     def mst_cmd(self, letter, arg=None):
         """One command, and its argument word when it takes one."""
