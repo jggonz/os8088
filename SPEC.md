@@ -40225,6 +40225,23 @@ untested and shipped — and it shipped in the one verb the field had not yet
 reached. *A fix aimed at one direction of a symmetric mechanism should be
 tested in both, or the second half is a field report waiting to happen.*
 
+###### 62.10.4.8.1 …and a goodbye goes back to being impatient
+
+Patience on the send side has one place it is wrong, and it is not a far side
+that is slow — it is one that is **not there**. `net_detach` and `net_drop`
+each send `NC_BYE`, whose own comment says it is best effort, and with the
+cable out that byte would now spend `REPLY_TMO`: **ten seconds of frozen UI,
+under the gfx lock**, for unticking a driver. Both put `[lp_turnw]` back to
+`TURN_RX` first. Nothing after them needs the long one — the next Connect's
+`lp_init` sets it regardless — so this costs a store and closes a freeze the
+fix would otherwise have introduced.
+
+It is worth noticing that the *ordinary* failure needs no such guard: a
+command whose far side has vanished spends one long wait and then `net_lost`
+takes the volume down, which is the same cost the receive side has had since
+§62.10.4.6. What made the goodbye different is that it is issued on a path the
+user is *waiting on*, and its result is discarded.
+
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
 466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
