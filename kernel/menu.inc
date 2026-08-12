@@ -141,30 +141,39 @@ MENU_TITLE_PAD equ 16           ; per-title cell padding (8px each side)
 ;   x 0 .. MENU_TXT_X0-1     the logo. Static: drawn only when something
 ;                            painted OVER the bar ([menu_bovr]).
 ;   x MENU_TXT_X0 .. hx-1    the menus: the app name and every cell title,
-;                            composed into menu_bcell and emitted as the ONE
-;                            font_run span that differs from what is already
-;                            on the glass.
-;   x [vid_clk_hx] .. w-1    the clock - AND the toast strip (SPEC.md 59),
-;                            which takes the LEFT end of that same field in
-;                            inverse video while a message is up, on the same
-;                            check word. It is only as wide as its message, so
-;                            what is left of the field goes on showing the
-;                            time.
+;                            composed into menu_bcell and emitted as the
+;                            font_run span(s) that differ from what is already
+;                            on the glass - AND, in the free gap past the last
+;                            title, the toast strip when it fits there
+;                            (SPEC.md 59.9).
+;   x [vid_clk_hx] .. w-1    the clock - and the toast strip when it does NOT
+;                            fit that gap (SPEC.md 59.8), taking the LEFT end
+;                            of this field in inverse video on the same check
+;                            word. It is only as wide as its message, so what
+;                            is left of the field goes on showing the time.
 ;
-; **THE TOAST IS IN THE CLOCK'S SEGMENT AND NOT IN THE MENUS'** (SPEC.md
-; 59.8), which is a correction: it borrowed the right end of the MENUS
-; segment, so a message long enough covered the frontmost application's own
-; menu titles - the strip sat on File, Edit and View and menu_bput's clamp
-; dropped them, which reads as an application losing its menus rather than as
-; a message arriving. The clock is the right neighbour to displace because it
-; is the one thing on the bar that is never a CONTROL: nothing in the clock
-; field can be clicked into except SPEC.md 31.5's Date/Time shortcut, it says
-; the same thing a second later, and it is the field a Macintosh puts its
-; own transient messages in. What it costs is the WIDTH: the field is 25
-; cells on every screen this runs on, against the menus segment's 50, which
-; is what TOAST_MAX = 23 and the message revisions of 59.8 are. It does not
-; cost the whole clock even then - the strip is as wide as its message and no
-; wider, so the time usually survives beside it.
+; **THE TOAST HAS TWO HOMES AND ONE PREFERENCE** (SPEC.md 59.9), and both of
+; them are corrections of the one before. It began at the right end of the
+; MENUS segment, where a long enough message covered the frontmost
+; application's own menu titles: the strip sat on File, Edit and View and
+; menu_bput's clamp dropped them, which reads as an application losing its
+; menus rather than as a message arriving. 59.8 moved it to the CLOCK, which
+; is the right neighbour to displace for a reason about kind rather than room -
+; it is the one thing on the bar that is never a CONTROL, nothing in that field
+; can be clicked into except SPEC.md 31.5's Date/Time shortcut, it says the
+; same thing again a second later, and it is where a Macintosh puts this kind
+; of message.
+;
+; 59.9 adds the placement that has no victim at all. The menus end wherever
+; the active application's last title ends, and everything from there to
+; [vid_clk_hx] is blank white - so a message that FITS between them is
+; centred in that gap and covers neither a menu title nor a clock cell. Only
+; when it will not fit does it fall back to 59.8's clock field and cost the
+; date. So the width the messages are written against is still the clock's -
+; the field is 25 cells on every screen this runs on, against the menus
+; segment's 50, which is what TOAST_MAX = 23 is - and the gap is a bonus
+; rather than a constraint, because a message may never depend on how many
+; menus the application in front happens to have.
 ;
 ; MENU_TXT_X0 is a glyph-cell boundary and so is [vid_clk_hx], so a segment
 ; is a whole number of 8px cells - which is what earns font_run's single-pass
@@ -961,20 +970,131 @@ menu_bar_text:
     jmp short .cell
 
 .tail:
-    mov ax, [menu_bn]           ; spaces to the clock: this is what erases
-    call menu_bpadc             ; the menus of the app that just went away
+    lea ax, [di+1]              ; --- WHERE THE MENUS END (SPEC.md 59.9). DI is
+    cmp ax, [menu_bn]           ; one past the last GLYPH, and a title's pen is
+    jbe .bend                   ; MB_XL + 8 with MENU_TITLE_PAD split 8px each
+    mov ax, [menu_bn]           ; side - so that cell is still inside the last
+.bend:                          ; menu's BOX and the one after it is the first
+    mov [menu_bend], ax         ; that no menu owns. Clamped, because the gap
+                                ; arithmetic subtracts this from [menu_bn]
 
-    mov bx, [menu_bfirst]       ; --- emit the span that moved -------------
+    mov ax, [menu_bn]           ; spaces to the clock: this is what erases
+    call menu_bpadc             ; the menus of the app that just went away -
+                                ; AND, on a toast's down edge, the strip below
+
+    call toast_place            ; --- and the toast strip, if the gap those
+    mov cx, [toast_scn]         ; spaces just laid down is wide enough for it
+    jcxz .diff                  ; (SPEC.md 59.9); 0 = the clock's field has it
+    mov di, [toast_scell]       ; and nothing here is owed
+    mov al, ' ' | 0x80
+    call menu_bput              ; the leading inverted space...
+    dec cx
+    dec cx
+    jcxz .strail
+    mov si, toast_buf
+.sch:
+    mov al, [si]                ; ...the message, **BIT 7 SET ON EVERY CELL**
+    inc si                      ; (SPEC.md 59.2): menu_bcell is the record of
+    or al, 0x80                 ; what is on the glass, so a cell whose
+    call menu_bput              ; CHARACTER did not change but whose HIGHLIGHT
+    loop .sch                   ; did has to read as a difference to menu_bput -
+.strail:                        ; and a space at the strip's edge is exactly
+    mov al, ' ' | 0x80          ; that cell. menu_bemit masks it off to draw
+    call menu_bput              ; ...and the trailing one
+
+.diff:
+    mov bx, [menu_bfirst]       ; --- emit the span(s) that moved -------------
     cmp bx, 0FFFFh
     je .out                     ; nothing on the bar changed: no pixels
+    mov dx, [menu_blast]
 
-    mov dx, [menu_blast]        ; ONE run, and one colour: this segment has
-    mov si, dx                  ; no second tenant since the toast moved to
-    inc si                      ; the clock (SPEC.md 59.8). font_run wants
-    mov al, [menu_bcell+si]     ; ASCIIZ and menu_bcell carries one spare
-    mov byte [menu_bcell+si], 0 ; cell for the NUL, banked and put back
+.piece:                         ; AT MOST THREE RUNS, and exactly one whenever
+    mov al, [menu_bcell+bx]     ; the strip is not in this segment: the span is
+    and al, 0x80                ; split wherever the inversion changes, and
+    mov si, bx                  ; 59.9's strip is the only thing that inverts
+.pscan:
+    inc si
+    cmp si, dx
+    ja .pemit
+    mov ah, [menu_bcell+si]
+    and ah, 0x80
+    cmp ah, al
+    je .pscan
+.pemit:
+    push dx                     ; the piece is BX .. SI-1, and SI is the next
+    push si                     ; piece's first cell
+    dec si
+    mov dx, si
+    or al, al
+    jz .pnorm
+    mov al, CWHITE              ; the strip: INVERSE VIDEO, the one distinction
+    mov ah, CBLACK              ; that survives SPEC.md 39.4's reduction intact
+    jmp short .pgo              ; on both mono adapters
+.pnorm:
+    mov al, CBLACK
+    mov ah, CWHITE
+.pgo:
+    call menu_bemit
+    pop bx
+    pop dx
+    cmp bx, dx
+    jbe .piece
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_bemit - letter cells BX..DX of the menus segment in one font_run
+; in:  BX = first cell, DX = last cell (inclusive), AL = ink, AH = background
+; out: nothing (all registers preserved)
+;
+; Split back out of menu_bar_text when SPEC.md 59.9 put the toast strip in the
+; segment's free tail: the strip is inverse video, so a differing span that
+; crosses one of its edges is more than one run with different colours rather
+; than one. What is unchanged is the rest - the byte just past the run is
+; banked and put back, because font_run wants ASCIIZ and menu_bcell carries one
+; spare cell for exactly that.
+;
+; **BIT 7 IN A CELL IS THE INVERSION FLAG AND NOT A CHARACTER** (SPEC.md 59.2),
+; so it is masked off across the run before the glyphs are drawn and put back
+; after - without the mask font_char indexes past the 95 glyphs it has. That is
+; exact rather than approximate: a run arriving here with CWHITE ink is wholly
+; inside the strip by construction, its caller having split the span on that
+; very bit, so every cell in it carries the bit and every cell in it gets it
+; back.
+; -----------------------------------------------------------------------------
+menu_bemit:
     push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
 
+    mov di, ax                  ; the colours, out of the way of the x
+    mov si, dx                  ; arithmetic below
+    inc si
+    mov al, [menu_bcell+si]
+    mov byte [menu_bcell+si], 0
+    push ax                     ; AL = the banked byte
+    push bx
+    push dx
+
+    cmp di, CWHITE              ; = CWHITE | (CBLACK << 8): "is this run the
+    jne .go                     ; inverted one"
+    mov si, bx
+.m:
+    and byte [menu_bcell+si], 0x7F
+    inc si
+    cmp si, dx
+    jbe .m
+.go:
     mov ax, bx
     mov cl, 3
     shl ax, cl
@@ -983,16 +1103,25 @@ menu_bar_text:
     mov si, menu_bcell          ; takes its single-pass path on mono)
     add si, bx
     mov dx, MENU_TEXT_Y
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, di
     call font_run
 
+    pop dx
+    pop bx
+    cmp di, CWHITE
+    jne .rb
+    mov si, bx
+.s:
+    or byte [menu_bcell+si], 0x80
+    inc si
+    cmp si, dx
+    jbe .s
+.rb:
     pop ax
-    mov si, [menu_blast]
+    mov si, dx
     inc si
     mov [menu_bcell+si], al
-.out:
-    pop es
+
     pop di
     pop si
     pop dx
@@ -1253,6 +1382,12 @@ menu_draw_clock:
     xor dh, dh                  ; --- and the toast strip over its left end,
     cmp byte [toast_on], 0      ; DH = how many cells of it are the strip
     je .hash
+    cmp word [toast_scn], 0     ; ...unless the MENUS segment took it, which is
+    jne .hash                   ; SPEC.md 59.9's first choice and costs this
+                                ; field nothing: the strip is then wholly in
+                                ; the gap the menus left and no clock cell is
+                                ; covered at all. One flag, read by the two
+                                ; painters, written by toast_place alone
     mov si, toast_buf           ; ...its length, plus the inverted space at
     xor cx, cx                  ; each end
 .tl:
@@ -2191,6 +2326,10 @@ menu_bcell: resb MENU_BCMAX + 1 ; the menus segment as it is ON THE GLASS, one
                                 ; against and emitted from. The spare cell is
                                 ; the NUL menu_bar_text plants past a run
 menu_bn:    resw 1              ; cells in it on THIS screen (SPEC.md 39.2)
+menu_bend:  resw 1              ; ...and the first cell past the last menu's
+                                ; BOX, so [menu_bn] - this is the free gap the
+                                ; toast strip prefers (SPEC.md 59.9). Written
+                                ; by menu_bar_text, read by toast_place only
 menu_bfirst: resw 1             ; the span that differs, 0FFFFh = none
 menu_blast: resw 1
 menu_ckck:  resw 1              ; the clock string's check word, 0 = nothing

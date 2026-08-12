@@ -38467,10 +38467,164 @@ second is what the machine sees.
 
 **§59.7's guard stays even though its tenant is gone.** `menu_bpadc`'s clamp
 was added because `toast_room` lowered `[menu_bn]` and a pad target beyond it
-spun forever with the gfx lock held. Nothing lowers `[menu_bn]` today, so the
-spin is unreachable again — and the clamp belongs where `menu_bput`'s
-drop-without-advancing is known, not to whichever caller last happened to need
-it.
+spun forever with the gfx lock held. Nothing lowers `[menu_bn]` today — §59.9's
+strip is composed *inside* the segment rather than by shortening it, which is
+the whole difference between the two tenancies — so the spin is unreachable,
+and the clamp belongs where `menu_bput`'s drop-without-advancing is known, not
+to whichever caller last happened to need it.
+
+### 59.9 …and it prefers the gap, where it covers nothing at all
+
+§59.8 chose the clock because a message must not cover a menu title, and read
+those as the only two options. **There is a third, and on an ordinary desktop
+it is available: the blank cells between the end of the last drawn menu and the
+start of the clock's field.** Nothing is there. A strip that fits in that gap
+costs neither a control nor the date — it is the one placement with no victim —
+so it is now the first choice, and §59.8's clock field is the fallback for a
+message too wide for it.
+
+The gap is real rather than theoretical because the menus segment is sized for
+the worst case and the bar in front of you is not it. Measured on the shipped
+kernel: Locator leaves **24 free cells** of a 50-cell segment on a 640px screen
+and **34** of 60 on a 720px one, so `Settings Saved` (16 cells),
+`Opened SUNSET.BMP` (19) and every other message in the tree bar the very
+widest land in it — and on Hercules the widest message there *is*
+(`TOAST_MAX` + 2 = 25 cells) still fits, so with Locator active the clock
+field's fallback is unreachable at that width.
+
+**Centred means the strip's MIDPOINT on the gap's midpoint** — not its left
+edge at the gap's start, which is the cheaper thing to write and the wrong
+picture. Left-aligned, the strip begins at the exact pen a fifth menu title
+would have had and reads as one; right-aligned it butts against the clock and
+reads as a prefix to it. Centred it reads as neither, which is what a message
+belonging to the *machine* rather than to either neighbour should look like.
+Half the slack goes at each end and `shr` floors, so an odd cell lands on the
+right.
+
+#### 59.9.1 The gap's right edge is the clock's first GLYPH, not its field
+
+Both ends of the gap are measured as **drawn**, and the clock is the end where
+that is not free. Its field is a fixed 25 cells and the line in it is not —
+`clk_fmt` answers 18..24 glyphs, because 12-hour mode drops the hour's leading
+zero and seconds are a setting — so `menu_draw_clock` right-aligns the line by
+leading spaces, and up to seven cells of the field's left end are white before
+anything is drawn.
+
+Measured against the *field*, `Saved` centred in Locator's gap lands at screen
+cell 38 on a 640px CGA; the eye puts the centre at 42, because it measures to
+the `J` of `Jul` and not to a boundary it cannot see. `toast_gapend` is that
+edge — `[menu_bn]` plus the leading spaces — and it is worth the ~50 bytes for
+the same reason `[menu_bend]` is one cell past the last *glyph* rather than
+`[menu_bn]`: a gap the user can see has two visible ends, and centring in
+anything else is centring in a rectangle nobody is looking at.
+
+**The ROOM is still the segment's even though the CENTRING is the eye's**, and
+that asymmetry is deliberate rather than an oversight. The strip is composed
+into `menu_bcell`, where `menu_bput` drops a cell at or past `[menu_bn]`
+*without advancing DI* — so a centre computed past that boundary would silently
+truncate the strip's right end, and `toast_place` clamps to
+`[menu_bn] - width`. Letting the strip use the clock field's blank cells
+instead would mean straddling the two buffers, which is what this section
+refuses for §59.1's reason. So: the room a strip may occupy is one segment's,
+and where it sits inside that room is what looks right.
+
+One consequence to accept rather than fix: the clock's width moves, so a strip
+raised at 9:59 and one raised at 10:01 in 12-hour mode sit half a cell apart.
+That is 4px, once an hour, on a message that lives three seconds.
+
+**Where the menus END is one cell past the last glyph, not the glyph itself.**
+`menu_bar_text`'s `DI` at `.tail` is one past the last character composed, and
+a title's pen is `MB_XL + 8` with `MENU_TITLE_PAD` split 8px each side — so
+that cell is still inside the last menu's *box*, and the first cell no menu
+owns is the one after it. `[menu_bend]` is that, clamped to `[menu_bn]` so the
+gap subtraction cannot underflow. Without the clearance a snug strip puts its
+black leading space inside the last menu's clickable box, which looks like the
+menu is highlighted — §59.8's confusion in miniature.
+
+**The fallback is the clock, and the two alternatives that look natural are
+both worse.** *Shortening the message* to fit whatever gap this application
+leaves makes the text depend on the menu bar — the same string reading
+differently in Paint and in Locator. *Starting in the gap and running on into
+the clock* straddles two separately composed buffers with two separate check
+words, which is two painters for one strip and exactly the divergence §59.1
+exists to avoid. So `TOAST_MAX` still measures against the clock's 25 cells,
+every message in the tree still fits there, and what this section adds is that
+the ones which fit the gap cost nothing.
+
+**`toast_place` is the single decision point** and both painters read its
+answer: `[toast_scn]` = how many cells the *menus* segment holds, 0 meaning the
+clock's field takes it. `menu_bar_text` calls it after composing the titles —
+so `[menu_bend]` is this bar's and not the previous owner's — and
+`menu_draw_clock` composes a strip only while that word is 0. One writer, two
+readers, and no way for the two fields to both think they have it.
+
+**Bit 7 of a `menu_bcell` byte is the inversion flag again**, which §59.2 had
+retired with the strip's first tenancy of this segment. It has to be:
+`menu_bcell` is the record of what is on the glass, so a cell whose *character*
+did not change but whose *highlight* did must read as a difference to
+`menu_bput` — and a space at the strip's edge is exactly that cell. Without it
+a strip that moved by a cell would leave its old padding inverted on screen
+for ever. `menu_bemit` comes back with it, masking the bit off across a run
+before `font_run` sees it (unmasked, `font_char` indexes past the 95 glyphs it
+has) and putting it back after, so the record keeps what the glass cannot show
+it. A run is uniform in that bit by construction, its caller having split the
+changed span on it.
+
+**The emit is therefore up to three runs** — the plain cells before the strip,
+the strip, the plain cells after — walked as maximal runs of equal inversion
+rather than special-cased, which costs a per-cell compare over the changed span
+and collapses to exactly one run whenever the strip is not in this segment.
+That is nearly always: the scan is a few instructions against a `font_run` that
+is ~1 ms per cell on the field machine (§6.1.1).
+
+**Every toast edge now sets `[menu_bdirty]`**, which §59.8 had removed as "a
+flag about the MENUS, which the strip has not been in since it moved".
+`menu_bar_text` is gated on it and is the only thing that composes in that
+segment, so without it a strip in the gap is never drawn and never erased. It
+is set on *both* edges and regardless of which home the strip takes, because
+which home it takes is `toast_place`'s answer and `toast_place` runs inside the
+pass the flag asks for — the flag cannot be conditioned on its own result. The
+cost of setting it wrongly is one composition that finds nothing differs and
+emits no pixels, which is what this segment answers most window operations
+with anyway.
+
+**Cost: `.text` +325, `.bss` +2, one image rung** (`KERN_SIZE` 102,400 →
+102,912, `KERN_BUDGET` spare 2,560 → 2,048, four steps). The rung was going to
+go whatever this cost — the rung it started in had **100 bytes** left — which is
+the guard working rather than the feature being dear, and it means the next byte
+added to `.text` anywhere pays 512 too.
+
+**Verified on the cycle-accurate 4.77MHz 8088, CGA, Hercules and VGA mode 12h.**
+Placement, read off the GLASS rather than out of the kernel: `Saved` centred in
+the gap leaves **96px of white either side on CGA and VGA and 136px on
+Hercules**, exact to the pixel; the cells that change on the whole bar are the
+strip's and nothing else's; the clock's field is byte-identical to the bare
+desktop while the gap holds the strip, and the whole menus band is
+byte-identical while the clock holds it; the widest strip a gap will take ends
+*inside* `[menu_bn]` and every one of its cells reaches the glass (the clamp,
+exercised at 24 cells on the 640px adapters); and an expiry puts both bands
+back byte for byte. Then the two A/Bs the claim actually needs, because a
+screenshot of one path cannot check "the picture is the same, only the number
+of times it was drawn changed": **0 differing pixels** against a forced full
+overdraw (`[menu_bovr]`) with the strip in each home, and **0 differing pixels
+over 27 steps** against a `REDRAWFULL=1` reference build. Driven end to end
+through `toast_show` as well — a Control Panel setting changed and the panel
+closed says `Settings Saved` in the gap, from inside the callback holding the
+gfx lock, so it is `toast_now`'s arm and not `toast_pass`'s.
+
+**Three things in the HARNESS failed first, and each looked like a kernel bug.**
+Worth recording because two of them are this tree's own documented traps: a
+darkness threshold is not an inversion test (a dense glyph like `M` or `8` fills
+more than half its cell, so the clock's own text read as strip); and a pixel
+count without a bounding box misattributes (PERFORMANCE.md Part 3.1's rule) —
+50 pixels in the same two cells of every step, including the one with no toast
+in it, were the clock's HOUR digits, because `clk_tick` raises its redraw bit
+only when the *minute* rolls, so a poked hour sits undrawn while `settle`
+correctly reports a still screen, and the reference build got the redraw for
+free from `menu_furniture` while the incremental build legitimately declined.
+`clk_str` did not reveal it either, because `toast_gapend` calls `clk_fmt`
+itself — so the staged string was fresh while the pixels were a minute old.
+`[menu_ckck] = 0` is what makes the two builds answer the same question.
 
 ## 60. cpudet.inc — the CPU tier
 
