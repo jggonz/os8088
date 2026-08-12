@@ -523,9 +523,8 @@ wm_strad_fit:
     jbe .none                   ; it starts below that display: nothing to do
     cmp [bx+W_H], si
     jbe .none                   ; already inside it
-    call wm_geom                ; CX/DX = the content size it has NOW, taken
-    mov [bx+W_H], si            ; BEFORE the store, so wm_sz_notify's compare
-    jmp short .tell             ; has the old pair and re-reads the new itself
+    mov [bx+W_H], si
+    jmp short .tell
 .stacked:
     mov si, [di+VID_CTX_VX]     ; STACKED: x is
     add si, [di+VID_CTX_CW]
@@ -533,7 +532,6 @@ wm_strad_fit:
     jbe .none
     cmp [bx+W_W], si
     jbe .none
-    call wm_geom
     mov [bx+W_W], si
 .tell:
     call wm_sz_notify           ; the window's box really did change under it
@@ -789,18 +787,11 @@ wm_nat_take:
 wm_refit:
     push bx
     push cx
-    push dx
-    push di
-    push bp
-    mov bx, wm_wins             ; walked to a BOUND rather than with a `loop`
-.next:                          ; counter: CX is the size wm_geom and
-                                ; wm_sz_notify both answer in, and a counter
-                                ; there would have to be saved twice per window
+    mov bx, wm_wins
+    mov cx, MAX_WIN
+.next:
     test word [bx+W_FLAGS], 1   ; used?
     jz .skip
-    call wm_geom                ; the content box it had, banked BEFORE anything
-    mov di, cx                  ; moves - wm_sz_notify compares against it and
-    mov bp, dx                  ; says nothing when it did not change (11.98)
     test word [bx+W_FLAGS], WF_FULL
     jnz .full
     call wm_nat_take            ; what it ASKED for, not what the screen it is
@@ -816,18 +807,16 @@ wm_refit:
                                 ; desktop band, and a fullscreen frame covers
                                 ; the bar and the dock by definition
 .told:
-    mov cx, di
-    mov dx, bp
-    call wm_sz_notify           ; ...and NOW tell it, while the caller's repaint
-                                ; is still ahead of us: an app that relayouts
-                                ; here is painted correctly the first time
+    call wm_sz_notify           ; ...and NOW tell it, unconditionally and while
+                                ; the caller's repaint is still ahead of us. An
+                                ; app that relayouts here is painted correctly
+                                ; the first time; and it is told even when its
+                                ; box did not move, because the ADAPTER may have
+                                ; and half the tree caches facts about that
+                                ; (SPEC.md 11.98)
 .skip:
     add bx, WIN_SIZE
-    cmp bx, wm_wins + MAX_WIN*WIN_SIZE
-    jb .next
-    pop bp
-    pop di
-    pop dx
+    loop .next
     pop cx
     pop bx
     ret
@@ -1050,15 +1039,26 @@ wm_szh_slot:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_sz_notify - tell BX its content box changed, if it asked to be told
+; wm_sz_notify - tell BX its environment moved, if it asked to be told
 ;                (SPEC.md 11.98)
-; in:  BX = window ptr, CX/DX = the content size BEFORE the change; the gfx
-;      lock held by the caller
+; in:  BX = window ptr; the gfx lock held by the caller
 ; out: nothing (all registers preserved, FLAGS INCLUDED)
 ;
-; THE COMPARE IS HERE AND NOT AT THE CALL SITE, so "only when it actually
-; changed" is one rule rather than one per caller. An adapter switch re-fits
-; every window and most of them do not move.
+; THERE IS NO COMPARE, AND THAT IS THE POINT. The first version fired only
+; when the content box had actually changed, which is the obvious economy and
+; is wrong for the case this exists for: what goes stale across an adapter
+; change is not only a window's BOX. apps/missile decides mc_mono, mc_ecoarse
+; and mc_caps from the adapter at launch, apps/arkanoid ark_bpp,
+; apps/solitaire sol_bpp, apps/paint pt_bpp - and a window small enough to fit
+; two geometries unchanged (100x100 across VGA -> Hercules) would have got no
+; notice at all and kept a stale bpp. On a 1bpp adapter apps/missile with
+; mc_mono = 0 is SPEC.md 48.8's unplayable case, reached by a change that told
+; it nothing.
+;
+; So the notice is "your environment moved - re-derive", one per window per
+; refit, and the app decides what of it matters: OSAPI_WM_GEOM for the box,
+; OSAPI_VIDEO for the adapter, both callable from here. It costs a handful of
+; callbacks on an event a human causes by clicking Activate Mode.
 ;
 ; It runs with the LOCK HELD and the handler may not draw - that is the
 ; contract, and it is W_ONSIZE's contract too. It is also the only ordering
@@ -1080,16 +1080,8 @@ wm_sz_notify:
     or bp, bp
     jz .out                     ; never asked to be told: one word, and this is
                                 ; the whole cost to every window that has not
-    mov di, cx                  ; bank the OLD pair - wm_geom answers into the
-    mov si, dx                  ; same two registers
     call wm_geom                ; CX/DX = the content size the record has NOW
-    cmp cx, di
-    jne .fire
-    cmp dx, si
-    je .out                     ; unmoved: the commonest case by far, an adapter
-                                ; change re-fitting a window that already fitted
-.fire:
-    mov si, bx                  ; SI = the window, CX/DX = the NEW content size
+    mov si, bx                  ; SI = the window
     call wm_pkgcall             ; (BP is the handler; wm_pkgcall puts ES =
                                 ; KERNEL_SEG for it, like every other callback)
 .out:
@@ -3747,12 +3739,28 @@ wm_hide_r   times 4 dw 0        ; wm_hide/wm_destroy: the vacated rect,
 wm_dg_r     times 4 dw 0        ; wm_dmg_gray's rect, banked across the
                                 ; region build that eats its registers
 
-wm_clipwin  dw 0                ; the window wm_clip_set was given, banked
-                                ; for cur_lazyck (SPEC.md 7.1.4)
+%ifdef CURFRAME
+wm_clipwin  dw 0                ; the window wm_clip_set was given, banked for
+                                ; the pre-7.1.4.2 cur_lazyck, which tested the
+                                ; window's FRAME. The region test wants no
+                                ; window at all, so this is the knob's alone
+%endif
 wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
                                 ; Initialized data, NOT .bss: every gfx_fill
                                 ; reads it, including the machine's first,
                                 ; and -f bin zeroes nothing.
+wm_clip_r0  db 0                ; wm_clip_rows' answer (SPEC.md 11.3.2): the
+wm_clip_rn  db 8                ; first drawable row of the cell it was last
+                                ; asked about, and how many from there. Valid
+                                ; only immediately after that call - the glyph
+                                ; renderers write them on their unclipped path
+                                ; too, so these are "the last row answer" and
+                                ; never a standing description of anything.
+                                ; .text for wm_clip_n's reason: font_char reads
+                                ; them before any code has written them.
+%if wm_clip_rn - wm_clip_r0 != 1
+  %error "wm_clip_r0/rn must stay adjacent: font_char sets both in one word store"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; wm_clip_set - arm clipping to a window's visible region
@@ -3792,8 +3800,11 @@ wm_clip_set:
                                 ; Per window (11.96.3) it drops only the
                                 ; drawer's own, where it used to drop whoever
                                 ; happened to hold the single cache
-    mov [wm_clipwin], bx        ; for cur_lazyck at .done (SPEC.md 7.1.4) -
-    mov word [wm_clip_n], 0     ; BX does not survive the fragment loop
+%ifdef CURFRAME
+    mov [wm_clipwin], bx        ; the knob's frame test at .done needs the
+                                ; window, and BX does not survive the loop
+%endif
+    mov word [wm_clip_n], 0
 
     mov ax, [bx+W_X]            ; seed with the content rect - the same one
     mov dx, [bx+W_Y]            ; wm_draw_win white-fills before W_PAINT
@@ -3825,16 +3836,23 @@ wm_clip_set:
     jmp short .out
 .done:
     ; The region is armed, and from here to gfx_unlock every clipped primitive
-    ; is CONFINED to it - so if the cursor is outside this window the deferred
+    ; is CONFINED to it - so if the cursor is outside THE REGION the deferred
     ; hide (SPEC.md 7.1.4) is not owed and the pointer stays on screen through
     ; the whole refresh. This is the one place that can prove that, and it is
     ; already on the path of all twelve background painters.
     ;
+    ; The region and not the window: the fragments are the content rect minus
+    ; the windows ON TOP of it, so a pointer over the window in FRONT of this
+    ; one is unreachable while the frame this used to test says otherwise
+    ; (SPEC.md 7.1.4.2).
+    ;
     ; The FAILURE path above deliberately does not check: with no region armed
     ; every primitive falls to its own unconditional cur_unlazy, which is the
     ; safe default and exactly what happened before any of this.
-    mov si, [wm_clipwin]        ; the window, banked at entry: BX does not
-    call cur_lazyck             ; survive the fragment loop
+%ifdef CURFRAME
+    mov si, [wm_clipwin]
+%endif
+    call cur_lazyck
     clc
 .out:
     pop si
@@ -4472,6 +4490,120 @@ wm_clip_walk:
     ret
 wm_clip_free:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_rows - which ROWS of a cell may be drawn? (SPEC.md 11.3.2)
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive; at most 255 rows tall)
+; out: CF = 0 and [wm_clip_r0] = the first drawable row as an offset from y1,
+;      [wm_clip_rn] = how many rows from there; CF = 1 not one row may be
+;      drawn - the caller must draw NOTHING, exactly as wm_clip_test says
+; clobbers: flags (every register preserved)
+;
+; wm_clip_test asks "may this WHOLE shape be drawn", which is the only
+; question a glyph could answer while its renderer drew eight rows or none.
+; A window edge crossing a line of text horizontally cuts every cell in it,
+; so that answer is no for the whole line and the visible slice of the text
+; is left STALE - a running Timer with its digits half covered stopped at the
+; second the covering window landed and stayed there (SPEC.md 14.4).
+;
+; A glyph cannot draw half a CELL, but it can draw whole ROWS of one, and a
+; horizontal cut is exactly the case where the rows either side of the edge
+; are each entirely in or entirely out. So this is the same walk with the
+; y test relaxed into an intersection: the fragment must still cover the
+; cell's FULL WIDTH - a vertical cut is refused here as it always was,
+; because half a row of a cell is the thing the renderers cannot express -
+; and what comes back is the tallest run of rows one fragment can offer.
+;
+; ONE fragment, not the union of several: the region is a rect LIST and two
+; fragments can offer disjoint slices of the same cell, which is not a row
+; range. Taking the best single fragment can only ever return FEWER rows than
+; are strictly visible, so the answer is always safe to draw and never draws
+; outside the region - which is the direction an error has to point.
+; -----------------------------------------------------------------------------
+wm_clip_rows:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov byte [wm_clip_r0], 0
+    cmp word [wm_clip_n], 0
+    je .all                     ; disarmed: every row, the same answer
+                                ; wm_clip_free gives for the whole shape
+%ifdef KERN_BIG
+    cmp byte [gfx_dnest], 0     ; SPEC.md 39.14.4, exactly as wm_clip_test:
+    je .armed                   ; inside a whole-shape hook the caller's rect
+    add ax, [vid_ox]            ; is in its display's space and wm_clip_tab is
+    add cx, [vid_ox]            ; virtual. No translation BACK is needed here -
+    add bx, [vid_oy]            ; every register is restored from the stack and
+    add dx, [vid_oy]            ; a row OFFSET is the same in both spaces
+.armed:
+%endif
+    mov si, wm_clip_tab
+    mov di, [wm_clip_n]
+    xor bp, bp                  ; BP = the best row count found so far
+.frag:
+    cmp ax, [si+WCR_X1]         ; the cell's full width, or nothing: a
+    jl .next                    ; part-width row is what cannot be drawn
+    cmp cx, [si+WCR_X2]
+    jg .next
+    push ax
+    push cx
+    mov ax, bx                  ; AX = max(y1, frag y1)
+    cmp ax, [si+WCR_Y1]
+    jge .lo
+    mov ax, [si+WCR_Y1]
+.lo:
+    mov cx, dx                  ; CX = min(y2, frag y2)
+    cmp cx, [si+WCR_Y2]
+    jle .hi
+    mov cx, [si+WCR_Y2]
+.hi:
+    sub cx, ax
+    jl .frag_no                 ; they do not overlap at all
+    inc cx                      ; CX = rows this fragment offers
+    cmp cx, bp
+    jbe .frag_no
+    mov bp, cx
+    sub ax, bx                  ; ...and where they start, from y1
+    mov [wm_clip_r0], al
+.frag_no:
+    pop cx
+    pop ax
+.next:
+    add si, WCR_SZ
+    dec di
+    jnz .frag
+    or bp, bp
+    jz .none
+    mov ax, bp                  ; a BYTE store: [wm_clip_rn] is a db, and
+    mov [wm_clip_rn], al        ; `mov [wm_clip_rn], bp` writes a WORD - it
+                                ; put BP's zero high byte over the first
+                                ; instruction of wm_clip_set, which is the
+                                ; next thing in .text. AX is dead here: it is
+                                ; restored from the stack four lines down
+    jmp short .ok
+.all:
+    mov ax, dx
+    sub ax, bx
+    inc ax
+    mov [wm_clip_rn], al
+.ok:
+    clc                         ; POP leaves the flags alone, so the answer
+    jmp short .out              ; is set before the epilogue rather than after
+.none:
+    stc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

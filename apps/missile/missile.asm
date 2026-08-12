@@ -262,27 +262,9 @@ mc_entry:
     mov [mc_scrw], ax
     mov [mc_dock], cx
 
-    mov byte [mc_expfr], MC_EXPFR   ; bss is zeroed, and a life of zero kills
-                                    ; every burst on the frame it is lit
-    cmp dh, 1                       ; a 1bpp adapter, or a tier-0 CPU, gets
-    ja .chkcpu                      ; the three-state explosion (SPEC.md
-    mov byte [mc_mono], 1           ; 48.8). Both are FACTS this code can
-    jmp short .coarse               ; test, which is the honest way to spend
-.chkcpu:                            ; an optimisation only the slow machine
-    call OSAPI_CPU_INFO             ; needs (PERFORMANCE.md rule 10). The
-    cmp al, CPU_8086                ; 1bpp half is banked as well, because
-    jne .fine                       ; SPEC.md 48.21's trail pens want it
-.coarse:
-    mov byte [mc_ecoarse], 1
-    mov byte [mc_expfr], MC_EXPFR3
-.fine:
-
-    call OSAPI_FSX_CAPS             ; can this adapter set Mode X? A fact,
-    mov [mc_caps], ax               ; decided once (SPEC.md 47/53.4): the
-    test ax, 1 << FSXM_MODEX        ; menu item is renamed to say WHY not,
-    jnz .fsxok                      ; and mc_cmd_modex refuses with the same
-    mov word [mc_mi_game+6], mc_s_xcmdn ; bit - one predicate for both
-.fsxok:
+    call mc_adapter                 ; everything this code believes about the
+                                    ; CARD, which SPEC.md 11.98's handler
+                                    ; re-runs when the machine changes it
 
     ; The window wants to be big: seven eighths of the desktop band, capped so
     ; a 640x480 screen still shows the desktop around it. Fullscreen (SPEC.md
@@ -347,6 +329,9 @@ mc_entry:
     call OSAPI_WM_CREATE
     jc .full
     mov [mc_win], bx
+    mov ax, mc_onresize             ; mc_mono / mc_ecoarse / mc_caps are facts
+    call OSAPI_WM_ONRESIZE          ; about the CARD, and it can change under
+                                    ; us (SPEC.md 11.98)
     mov al, 1                       ; keep our CONTENT ORIGIN 8-aligned
     call OSAPI_WM_SNAP              ; (SPEC.md 11.94): EVERY adapter - it was
                                     ; mono-only and VGA turned out to gain
@@ -385,6 +370,82 @@ mc_entry:
 ; WF_FULL (SPEC.md 11.2) the frame IS the content, so the -2 / -TITLE_H-1 an
 ; app would subtract itself is wrong in exactly the mode this game most wants
 ; to run in. One call answers both.
+; -----------------------------------------------------------------------------
+; mc_adapter - everything this game believes about the card it is drawing on
+;
+; in:  nothing
+; out: mc_mono, mc_ecoarse, mc_expfr, mc_caps and the Mode X item's caption
+;      (all registers preserved - mc_onresize is a callback and its caller's
+;      contract is the kernel's)
+;
+; EVERY BRANCH WRITES BOTH WAYS, which is the difference between this and the
+; entry-time code it came out of. That code only ever SET mc_mono and
+; mc_ecoarse - correct exactly once, on a machine whose adapter never changed
+; - so re-running it on a CGA -> VGA switch would leave a 4bpp machine on the
+; three-state explosion for ever, and the Mode X item greyed on a card that
+; has it.
+; -----------------------------------------------------------------------------
+mc_adapter:
+    push ax
+    push bx
+    push cx
+    push dx
+    call OSAPI_VIDEO                ; DH = bits per pixel
+    mov byte [mc_mono], 0
+    mov byte [mc_ecoarse], 0
+    mov byte [mc_expfr], MC_EXPFR   ; bss is zeroed, and a life of zero kills
+                                    ; every burst on the frame it is lit
+    cmp dh, 1                       ; a 1bpp adapter, or a tier-0 CPU, gets
+    ja .chkcpu                      ; the three-state explosion (SPEC.md
+    mov byte [mc_mono], 1           ; 48.8). Both are FACTS this code can
+    jmp short .coarse               ; test, which is the honest way to spend
+.chkcpu:                            ; an optimisation only the slow machine
+    call OSAPI_CPU_INFO             ; needs (PERFORMANCE.md rule 10). The
+    cmp al, CPU_8086                ; 1bpp half is banked as well, because
+    jne .fine                       ; SPEC.md 48.21's trail pens want it
+.coarse:
+    mov byte [mc_ecoarse], 1
+    mov byte [mc_expfr], MC_EXPFR3
+.fine:
+
+    call OSAPI_FSX_CAPS             ; can this adapter set Mode X? The menu
+    mov [mc_caps], ax               ; item is renamed to say WHY not, and
+    mov dx, mc_s_xcmd               ; mc_cmd_modex refuses with the same bit -
+    test ax, 1 << FSXM_MODEX        ; one predicate for both (SPEC.md 47/53.4)
+    jnz .fsxok
+    mov dx, mc_s_xcmdn
+.fsxok:
+    mov [mc_mi_game+6], dx
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mc_onresize - the adapter changed under us (SPEC.md 11.98)
+;
+; in:  SI = our window, CX/DX = the new content size; the gfx lock is HELD and
+;      this may not draw
+; out: nothing (all registers preserved)
+;
+; THE BOX IS NOT WHAT THIS IS FOR. mc_track already reads the content rect
+; every frame, so the playfield follows a resize on its own and always has.
+; What does not follow is what mc_entry decided about the CARD: mc_mono,
+; mc_ecoarse and mc_caps are facts about bits per pixel and Mode X, taken once
+; at launch, and a VGA taken to its CGA leaves this game drawing the fine
+; explosion ramp on a 1bpp adapter - SPEC.md 48.8's measured unplayable case,
+; reached by a change that used to tell it nothing.
+;
+; It is also why SPEC.md 11.98's notice has no "did the box move" test in it:
+; this handler wants to run when the box did NOT move.
+; -----------------------------------------------------------------------------
+mc_onresize:
+    call mc_adapter
+    mov byte [mc_full], 1           ; the ramp and the pens changed under every
+    ret                             ; burst on screen, so the next frame owes a
+                                    ; whole one rather than a difference
+
 ; -----------------------------------------------------------------------------
 mc_track:
     push ax

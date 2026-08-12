@@ -541,6 +541,63 @@ tm_init:
     ; it must not.
     mov ax, [tm_vdock]
     sub ax, MBAR_H + 1          ; AX = px available to the whole frame
+    call tm_layout              ; ...and everything derived from it, which the
+                                ; SPEC.md 11.98 handler below re-runs when the
+                                ; box moves under us
+    mov ax, [tm_tpl+6]          ; ...and AGAIN, from the frame it just CHOSE.
+    call tm_layout              ; The first pass answers "how many rows would
+                                ; the band allow", which is not the same
+                                ; question as "how many does this window have"
+                                ; whenever TMM_ROWS caps the height - 32 against
+                                ; 19 on a 480-row screen. The handler can only
+                                ; ever ask the second, so without this the two
+                                ; paths disagree about an identical frame and
+                                ; the launch figure is the loose one. It
+                                ; converges in one step by construction: the
+                                ; height is min(rows, TMM_ROWS) * pitch +
+                                ; chrome, so feeding it back yields
+                                ; min(rows, TMM_ROWS) and then stops
+
+    mov ax, [tm_tpl+6]          ; (the y clamp below wants the height back)
+
+    mov dx, [tm_vdock]          ; ...and a top that keeps y+h off the dock.
+    dec dx                      ; Deriving the height is not enough on its
+    sub dx, ax                  ; own: wm_fit clamps y to dock_y0 - h, which
+    cmp dx, 100                 ; puts the shadow row back on the strip for
+    jge .ykeep                  ; any frame tall enough to be clamped at all
+    cmp dx, MBAR_H              ; (signed - a tiny screen can drive this below
+    jge .yset                   ; the menu bar, and there it simply cannot win)
+    mov dx, MBAR_H
+.yset:
+    mov [tm_tpl+2], dx
+.ykeep:
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_layout - every derived layout word, from a frame this window can have
+;
+; in:  AX = the frame HEIGHT available, [tm_vw] = the frame WIDTH available
+; out: tm_colrows, tm_cols, tm_hcolrows, tm_col2rows, tm_maxrow and
+;      tm_tpl+4 / tm_tpl+6, all set
+; clobbers: AX, BX, DX
+;
+; FACTORED OUT OF tm_init FOR SPEC.md 11.98, and the two callers hand it two
+; different things that mean the same thing. At launch the frame does not
+; exist yet, so what is available is the desktop band and the screen's width,
+; and the template is what comes out. On a resize the frame is a fact and the
+; window cannot change it from inside the handler - so the caller passes the
+; box it was GIVEN, and the template words it writes are inert.
+;
+; Nothing here clears tm_rowck: the caller's repaint reaches tm_draw_full,
+; which calls tm_rowck_clear, and that routine's own comment already names a
+; resize as one of the three things that arrive there.
+; -----------------------------------------------------------------------------
+tm_layout:
     sub ax, TITLE_H + 1 + TMM_ROW_Y     ; ...less the chrome and the maps
     add ax, [tm_xoff]           ; ...and back the bar's height on a machine
                                 ; with no store, which is what turns the
@@ -636,23 +693,35 @@ tm_init:
                                 ; move; the performance list is bounded by its
                                 ; own `cmp si, TM_ROWS`, and the memory list's
                                 ; blank loop tests TMM_ROWS before this
+    ret
 
-    mov ax, [tm_tpl+6]          ; (the y clamp below wants the height back)
-
-    mov dx, [tm_vdock]          ; ...and a top that keeps y+h off the dock.
-    dec dx                      ; Deriving the height is not enough on its
-    sub dx, ax                  ; own: wm_fit clamps y to dock_y0 - h, which
-    cmp dx, 100                 ; puts the shadow row back on the strip for
-    jge .ykeep                  ; any frame tall enough to be clamped at all
-    cmp dx, MBAR_H              ; (signed - a tiny screen can drive this below
-    jge .yset                   ; the menu bar, and there it simply cannot win)
-    mov dx, MBAR_H
-.yset:
-    mov [tm_tpl+2], dx
-.ykeep:
-
+; -----------------------------------------------------------------------------
+; tm_onresize - the box moved and we did not ask for it (SPEC.md 11.98)
+;
+; in:  SI = our window, CX = the new content width, DX = the new content
+;      height; the gfx lock is HELD and this may not draw
+; out: nothing (all registers preserved)
+;
+; The Task Manager derives its row count and its column count ONCE, at launch,
+; from the desktop band - which is exactly the shape SPEC.md 11.98 exists for.
+; Without this, switching a VGA to its CGA left it laying out for 284 rows of
+; frame inside 155, and the surplus went through the bottom of its own frame
+; onto the desktop (gfx_* clips to the SCREEN, not to the window).
+;
+; It re-derives and returns. The repaint that follows is the kernel's, and it
+; is what puts the new layout on the glass.
+; -----------------------------------------------------------------------------
+tm_onresize:
+    push ax
+    push bx
+    push dx
+    mov ax, cx                  ; the FRAME this window now has: the column
+    add ax, 2                   ; test below is written against a frame width,
+    mov [tm_vw], ax             ; and at launch it is handed the screen's
+    mov ax, dx
+    add ax, TITLE_H + 1
+    call tm_layout
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -671,6 +740,10 @@ tm_kinit:
     push ax
     mov [tm_win], bx
 
+    mov ax, tm_onresize         ; tell us when the box moves under us and we
+    call OSAPI_WM_ONRESIZE      ; did not ask - an adapter change (SPEC.md
+                                ; 11.98). BX is the window, which is what this
+                                ; routine was handed
     mov al, 1                   ; every row this window draws is an opaque
     call OSAPI_WM_SNAP          ; text run, so it asks for its content origin
                                 ; on a multiple of 8 and every one of them

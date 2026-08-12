@@ -98,7 +98,38 @@ class Partner(object):
                                         # a session and nothing about WHICH
                                         # file, which is the question as soon
                                         # as anything goes wrong
+        self.stall = 0                  # TICKS to spend THINKING before the
+                                        # first byte of a reply - the far
+                                        # machine's floppy motor, which is the
+                                        # one thing this harness is otherwise
+                                        # incapable of being slow about. See
+                                        # _spend_stall
+        self._owed = False
         self._status(idle=True)
+
+    def _spend_stall(self):
+        """Run the guest for `self.stall` of ITS OWN ticks, answering nothing.
+
+        The field bug this exists for: the master's wait for a partner to
+        BEGIN answering was TURN_RX, 8 ticks, and entering a subdirectory on
+        the far machine spins a floppy motor - so the reply was certain to
+        arrive after the deadline and the driver called the link lost. A
+        harness that answers instantly can never show that, which is why the
+        deadline shipped wrong.
+
+        It is counted in the GUEST's ticks at 0040:006C, not in emulator
+        steps and not in host seconds: the deadline being tested is in ticks,
+        so anything else is a conversion that can be wrong in the direction
+        that makes the test pass.
+        """
+        if not self.stall:
+            return
+        t0 = int.from_bytes(self.m.read(0x46C, 2), 'little')
+        while True:
+            t = int.from_bytes(self.m.read(0x46C, 2), 'little')
+            if ((t - t0) & 0xFFFF) >= self.stall:
+                return
+            self.m.step(STEP * 8)
 
     # --- the two wires -------------------------------------------------------
     def _status(self, idle, nib=None):
@@ -165,6 +196,9 @@ class Partner(object):
         return (hi << 4) | lo
 
     def send_byte(self, b):
+        if self._owed:                  # the FIRST byte of a reply, and the
+            self._owed = False          # only place the far end's own work
+            self._spend_stall()         # would delay the wire
         self.send_nib(b & 0x0F)
         self.send_nib((b >> 4) & 0x0F)
 
@@ -488,6 +522,13 @@ class Partner(object):
             finally:
                 self.budget = saved
             seen.append(chr(c))
+            self._owed = True               # ...armed here and spent by the
+                                            # first send_byte, which is AFTER
+                                            # the arguments have been read:
+                                            # stalling any earlier stalls the
+                                            # master mid-transmission, which
+                                            # is a different bug wearing this
+                                            # one's clothes
             if c == ord('X'):               # NC_BYE ENDS THE SESSION, exactly
                 return seen                 # as `serve` does on the real far
                                             # end - it leaves its command loop
