@@ -6812,9 +6812,31 @@ is why this needs no clamp of its own and cannot fight `wm_dock_snap`,
 `ui_drag_dead` or §39.16's dual-display bounds. Rounding to the *nearest*
 multiple would halve the error and is not worth re-deriving those bounds for.
 
-**The price is up to 7px of horizontal drop precision, and it is paid by every
-window on every adapter**, because the byte phase is a property of the
-framebuffer rather than of the adapter — 8 pixels are one byte on both 1bpp
+**The price WAS up to 7px of horizontal drop precision paid by every window on
+every adapter — and §11.94.1 has since made it a fallback that nothing in the
+tree reaches.** Alignment is the default now, so `wm_snap_ax` has already put
+`W_X` on `≡ 7 (mod 8)` before `ui_drag_phase` runs, and `ui_origx` is on it too;
+the legal x's a drag moves between are therefore all one phase apart and `dx` is
+a multiple of 8 **by construction**. Measured at `ui_drag_phase`'s own entry, a
+13-pixel drag of a Disk window, Hercules and VGA alike: `W_X` 111 from
+`ui_origx` 103, **`dx = +8`, `dx & 7 = 0` — the snap moves nothing**. With
+`WF_NOSNAP` poked into the same window from outside the guest, the identical
+drag gives `dx = +13`, `dx & 7 = 5` and the snap earns its keep.
+
+So this routine is now the fallback for the two cases `wm_snap_ax` declines —
+an opted-out window, and one too wide for the snap to fit (§11.94) — and it
+must be KEPT for them, because in both the phase really is a coin toss. What is
+no longer true is the sentence this paragraph replaced: the 7px is not a cost
+the tree pays, it has been absorbed into §11.94's 8px drag *steps*, which is the
+sharper form of the same trade and was accepted separately. **The coin toss that
+justified building this is gone, and the measurement that proves it is the one
+above rather than an argument** — the ordering inside `ui_drag` is what makes it
+so, and a change that moved `ui_drag_phase` above `wm_snap_ax` would bring the
+coin toss back.
+
+The reasoning below is kept because it is still what makes the routine correct
+in those two cases. The byte phase is a property of the framebuffer rather than
+of the adapter — 8 pixels are one byte on both 1bpp
 cards and one byte per plane in mode 12h. §11.94's `WF_SNAP` is the precedent
 and the sharper form of the same trade (8px drag *steps*, not a 7px drop), and
 it is also why a `WF_SNAP` window always hit this path already: an absolute x
@@ -6845,6 +6867,18 @@ there the harness randomised what it should have fixed, here it fixed what it
 should have varied.
 
 #### 11.96.14 …and a destination off the screen clips instead of refusing
+
+**This one is ORTHOGONAL TO ALIGNMENT, and it is worth saying so at the top
+because the two gates are easy to conflate.** §11.96.13 is a *horizontal byte
+phase* — 8 pixels share a framebuffer byte, so the replay needs the same offset
+inside it — and §11.94's `WF_SNAP` subsumes it (§11.96.13's own measurement).
+This gate is a *vertical extent* leaving the screen, which is a question about
+bounds and clipping with no quantum in it at all: there is no sub-row unit
+vertically, a row is a row at any y, and PERFORMANCE.md Set 54 measured that
+there is no y-alignment win anywhere in this renderer to be had. **So no amount
+of snapping — in x, in y, or generalized — moves this gate**, and a window
+whose 303 rows do not fit a 305-row band is not made to fit by aligning
+anything. Clipping was the only answer available and is why §11.96.14 exists.
 
 §11.96.12's second refusal, and the one §11.96.13 left standing: `wm_su_try`
 asked `vid_span_one` whether the cached rect was **wholly** inside one display

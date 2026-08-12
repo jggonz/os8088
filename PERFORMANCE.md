@@ -6034,3 +6034,42 @@ recomputing, not by constraining where things sit. An 8px vertical drag quantum
 would have been the visible price of the wrong answer, and a dearer one than
 the horizontal quantum: a window steps more noticeably on a 348-row screen than
 on a 720-column one.
+
+### Set 55 — the drag cache's phase snap is now a no-op, and that is the win
+
+§11.96.13 added `ui_drag_phase` because the drag cache can only replay pixels at
+a `dx` whose low three bits are 0, and a hand drops a window on an arbitrary
+pixel — so seven drags in eight refused and redrew in full. It bought that with
+up to 7px of horizontal drop precision "paid by every window on every adapter".
+
+**Set 53's inversion has since made it free, and the two pieces of work were
+done independently.** Alignment is the default now, so `wm_snap_ax` puts `W_X`
+on `≡ 7 (mod 8)` before `ui_drag_phase` runs and `ui_origx` is on it too: every
+legal x a drag moves between is one phase, so `dx` is a multiple of 8 **by
+construction**. Measured at the routine's own entry with a breakpoint, a
+13-pixel drag of a Disk window:
+
+| window | `W_X` | `ui_origx` | `dx` | `dx & 7` | phase snap |
+|---|---:|---:|---:|---:|---|
+| default (snapped) | 111 | 103 | +8 | **0** | **moves nothing** |
+| `WF_NOSNAP` poked in | 124 | 111 | +13 | 5 | moves it 5px |
+
+Identical on `os8088_5150_herc` and `os8088_xt_vga`. The counterfactual is the
+half that makes it evidence rather than a coincidence: the flag was written into
+the live window record from outside the guest, and the same drag then behaved
+exactly as §11.96.13 described the whole tree behaving.
+
+So the drag cache reaches its fast path **structurally** rather than by
+correcting each drop, §11.96.13's 7px is a cost no window in the tree pays, and
+the routine is now the fallback for the two cases `wm_snap_ax` declines — an
+opted-out window, and one too wide for the snap to fit. **Keep it**: in both,
+the phase really is a coin toss. And keep `ui_drag`'s ordering, because
+`ui_drag_phase` above `wm_snap_ax` would bring the coin toss back.
+
+**Two gates, and only one of them is an alignment question.** §11.96.13 is a
+horizontal byte phase and generalized snapping subsumes it. §11.96.14 — a
+window's vertical extent running off the screen — has no quantum in it at all:
+there is no sub-row unit vertically (Set 54), so no snapping in x, y or
+otherwise moves it, and a Solitaire whose 303 rows do not fit a 305-row band is
+not made to fit by aligning anything. Clipping was the only answer. Conflating
+the two is easy enough that both sections now say which they are at the top.
