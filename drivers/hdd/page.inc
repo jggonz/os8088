@@ -848,11 +848,14 @@ hd_mount:
                                 ; kernel can carry (SPEC.md 18.7)
     call hd_already
     jnc .have                   ; this one is already mounted - by us...
-    call hd_kvol
-    jnc .have                   ; ...or by the KERNEL, which adopted the
-                                ; partition it booted from before we were
-                                ; loaded at all (SPEC.md 52.10.3). Mounting it
-                                ; again is a second icon on the same sectors
+    mov al, [hd_sel]            ; ...or by the KERNEL, which adopted the
+    call hd_kvol                ; partition it booted from before we were
+    jnc .have                   ; loaded at all (SPEC.md 52.10.3). Mounting it
+                                ; again is a second icon on the same sectors.
+                                ; It is hdcom.inc's and takes the DEVICE as an
+                                ; argument, because the installer asks the
+                                ; same question of a device of its own
+                                ; (SPEC.md 52.10.4.1)
     call hd_mount_one
     jmp short .next
 .have:
@@ -990,53 +993,6 @@ hd_already:
     pop bx
     pop ax
     clc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_kvol - has the KERNEL already got this partition? (SPEC.md 52.10.3)
-; in:  SI = the partition entry, [hd_sel] = the device
-; out: CF = 0 = it is already a volume (AL = which); CF = 1 = it is not
-; clobbers: AL, flags
-;
-; **The kernel gets there first on an installed machine.** dsk_boot_from
-; adopts the partition the BIOS booted from before any driver loads, because
-; HDD.DRV is a file on that very volume - so C: is live, ours, and invisible
-; to hd_already, which knows only what THIS driver mounted. Without this the
-; Mount button put a second volume and a second desktop icon on the same
-; sectors: one from the mount, one from the BIOS.
-;
-; **Only a BIOS row can be it.** The kernel's transport there is int 13h
-; (rung 0), so a device we reach through the task file is by definition not
-; the drive its adoption named - and we have no int 13h number to offer for
-; one anyway. An IDE row therefore answers "not the kernel's" and mounts,
-; which is right for the drive the BIOS does not know.
-; -----------------------------------------------------------------------------
-hd_kvol:
-    push bx
-    push cx
-    push dx
-    push di
-    mov al, [hd_sel]
-    call hd_dev_row
-    cmp byte [di+HDD_KIND], HDK_BIOS
-    jne .no
-    mov dl, [di+HDD_UNIT]       ; the int 13h drive, and the partition base as
-    mov cx, [si+HP_LBA]         ; the kernel keeps it: 32 bits, high word in BX
-    mov bx, [si+HP_LBA+2]
-    call OSAPI_VOL_AT           ; preserves everything but AL
-    jc .no
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
-.no:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------

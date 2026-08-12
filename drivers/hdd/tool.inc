@@ -89,6 +89,12 @@ HTS_VOL      equ 2              ; a volume
 HTS_ALIEN    equ 3              ; foreign type, or over the 65,535-sector
                                 ; ceiling (SPEC.md 18.7) - either way this
                                 ; kernel will never mount it
+HTS_LIVE     equ 4              ; ...and the volume THIS MACHINE BOOTED FROM,
+                                ; which Format and Delete must both refuse
+                                ; (SPEC.md 52.10.4.1). It is a state and not a
+                                ; flag beside one because it is the most
+                                ; important thing about that slot and the row
+                                ; is where a user looks for it
 
 hd_ttpl:    dw 90, 90, HTW_W, HTW_H, hd_s_ttitle, hd_tw_paint, 0, hd_tw_click
 hd_s_ttitle: db 'Format', 0
@@ -168,6 +174,15 @@ hd_tw_scan:
     jnc .store
     mov al, HTS_RAW
 .store:
+    cmp al, HTS_FREE            ; ...unless it is the one we are RUNNING FROM
+    je .put                     ; (SPEC.md 52.10.4.1). Last, after every fact
+    push ax                     ; about the TABLE, and skipped for a free slot,
+    mov al, [hd_tdev]           ; which has no base to compare. The DEVICE is
+    call hd_kvol                ; hd_tdev and never [hd_sel]: the panel
+    pop ax                      ; underneath stays clickable while this window
+    jc .put                     ; is up, which is the same reason every write
+    mov al, HTS_LIVE            ; in here uses it
+.put:
     push bx
     xor bh, bh
     mov [bx+hd_tstate], al
@@ -260,8 +275,10 @@ hd_tw_paint:
     mov si, hd_s_tfmt           ; the shared control takes the pen itself and
     mov ax, HTW_B0X             ; leaves it live, so there is no CBLACK to set
     mov bx, HTW_BW0             ; here and none to put back after Delete
-    xor cl, cl
-    call hd_tw_button
+    call hd_tw_fmtok            ; ...and the same predicate/carry idiom Delete
+    mov cl, 0                   ; uses below (SPEC.md 47 rule 2): it greys the
+    adc cl, 0                   ; button here and refuses the click in
+    call hd_tw_button           ; hd_tw_format
     call hd_tw_delok            ; the ONE predicate (SPEC.md 47 rule 2): it
     mov cl, 0                   ; greys the button here and refuses the click
     adc cl, 0                   ; in hd_tw_delete, so a greyed Delete can never
@@ -394,10 +411,16 @@ hd_tw_rowtext:
     mov al, [bx+hd_tstate]
     cmp al, HTS_ALIEN
     je .alien
+    cmp al, HTS_LIVE
+    je .live
     cmp al, HTS_VOL
     je .vol
     mov si, hd_s_traw           ; free and partitioned-but-empty read the same
     call hd_scat                ; on purpose: both mean Format makes a volume
+    jmp short .done
+.live:
+    mov si, hd_s_tlive          ; NOT its FAT type: what matters about this one
+    call hd_scat                ; is that the machine is standing on it
     jmp short .done
 .alien:
     mov si, hd_s_talien
@@ -554,6 +577,12 @@ hd_tw_format:
     push si
     push di
 
+    call hd_tw_fmtok            ; the boot partition is refused here as well as
+    jnc .table                  ; greyed (SPEC.md 47 rule 2), and says nothing
+    jmp .out                    ; more than the greyed button already does
+                                ; (rule 5). NEAR, like the confirm's jump
+                                ; below: .out is well past 127 bytes
+.table:
     cmp byte [hd_mbrok], HMB_BAD    ; we could not read what this would
     je .notable                     ; replace: never commit a fabrication
 
@@ -756,6 +785,37 @@ hd_tw_delok:
     mov al, [bx+hd_tstate]
     cmp al, HTS_FREE
     je .no
+    cmp al, HTS_LIVE            ; taking the boot partition's entry away is the
+    je .no                      ; same act as formatting it, one indirection
+    pop bx                      ; further out: the volume is live, the kernel
+    pop ax                      ; is reading its own files off it, and next
+    clc                         ; boot there would be nothing to boot
+    ret
+.no:
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tw_fmtok - may Format be clicked? (module internal)
+; out: CF = 0 yes / 1 no.  SPEC.md 47 rule 2's predicate for that button.
+;
+; Every slot is formattable - free, raw, alien or a volume - which is why this
+; button had no predicate at all until SPEC.md 52.10.4.1. There is exactly one
+; that is not: the partition this machine booted from, whose FAT and root the
+; format would rewrite under a kernel that is reading its own files out of
+; them, with a live FAT window (SPEC.md 18.8.1) and cached directory sectors
+; (19.2.3) describing a disk that stopped existing. It cannot be unmounted
+; first the way 52.10.8's destination is - it is where the kernel LIVES.
+; -----------------------------------------------------------------------------
+hd_tw_fmtok:
+    push ax
+    push bx
+    mov bl, [hd_tsel]
+    xor bh, bh
+    cmp byte [bx+hd_tstate], HTS_LIVE
+    je .no
     pop bx
     pop ax
     clc
@@ -883,6 +943,9 @@ hd_s_four:    db '     ', 0     ; slot digit -> size column
 hd_s_nosize:  db '     ', 0     ; ...and the size column when nothing claims it
 hd_s_traw:    db 'Not Formatted', 0
 hd_s_talien:  db 'Unmountable', 0
+hd_s_tlive:   db 'Booted From', 0   ; the installer's word for the same fact
+                                    ; (SPEC.md 52.10.4.1): two windows, one
+                                    ; thing to learn
 hd_s_tfmt:    db 'Format', 0
 hd_s_tdel:    db 'Delete', 0
 hd_s_tready:  db 'Pick a slot, then a button', 0

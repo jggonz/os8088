@@ -259,6 +259,61 @@ hd_part_ent:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_kvol - is this partition already a volume THE KERNEL carries?
+; in:  AL = the device index, SI = the partition entry
+; out: CF = 0 = yes, and AL = the volume index; CF = 1 = no
+; clobbers: AL, flags
+;
+; **The kernel gets there first on an installed machine.** `dsk_boot_from`
+; adopts the partition the BIOS booted from before any driver loads, because
+; HDD.DRV is a file on that very volume (SPEC.md 52.10.3) - so C: is live,
+; ours, and invisible to everything this driver keeps: `hd_vols` holds the
+; rows THIS driver registered, and that adoption is by construction not one
+; of them. `OSAPI_VOL_AT` is the half we cannot see, and it is the only
+; unfenced slot of the OSAPI_VOL_* family precisely so THIS file can call it
+; - hdcom.inc is assembled into both images, and the tool's segment is not
+; the published disk driver's, so a fenced slot would refuse it.
+;
+; It is here rather than in either caller because the two ask the same
+; question for opposite reasons and must not drift: `hd_mount` skips a
+; partition that is already on the desktop (52.10.3.1), and `hd_iw_scan`
+; refuses one as an install TARGET (52.10.4.1). One is a duplicate icon and
+; the other is formatting the volume the machine is running from.
+;
+; **Only a BIOS row can be it.** The kernel's transport there is int 13h
+; (rung 0), so a device reached through the task file is by definition not
+; the drive the adoption named - and there is no int 13h number to offer for
+; one anyway. An IDE row therefore answers "not the kernel's", which is right
+; for the drive the BIOS does not know.
+; -----------------------------------------------------------------------------
+hd_kvol:
+    push bx
+    push cx
+    push dx
+    push di
+    call hd_dev_row
+    cmp byte [di+HDD_KIND], HDK_BIOS
+    jne .no
+    mov dl, [di+HDD_UNIT]       ; the int 13h drive, and the partition base as
+    mov cx, [si+HP_LBA]         ; the kernel keeps it: 32 bits, high word in BX
+    mov bx, [si+HP_LBA+2]
+    call OSAPI_VOL_AT           ; preserves everything but AL
+    jc .no
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_part_used - is a slot in use?
 ; in:  SI = the entry
 ; out: CF = 0 in use (a known type and a non-zero length)

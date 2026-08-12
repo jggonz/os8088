@@ -34594,6 +34594,85 @@ WRITING, PERFORMANCE.md Part 2 Set 24) — so `fpg_begin`'s
 bar is stepped from inside the transfer loop, which is the one piece of code
 still running.
 
+#### 52.10.4.1 CLOSED: the volume the machine is RUNNING FROM was a target
+
+**Install offered the partition the machine had booted from, and preselected
+it.** `hd_iw_scan`'s ladder asks whether a slot is FAT-typed, inside the
+volume ceiling and at least `HIW_MINSEC` — and a system volume is all three,
+being the thing this dialog exists to produce. So on an installed machine
+with one partition the list read `Slot 1  31M  Ready`, highlighted, with
+Install live: two clicks from formatting the volume the running kernel reads
+its own files from.
+
+What that costs is worse than the duplicate icon of §52.10.3.1 and comes from
+the same blind spot. §52.10.8 already establishes that the destination must
+not be mounted while it is erased — a format rewrites the FAT and the root
+under a live `[dsk_fatseg]`, a banked BPB (§18.9.2) and cached directory
+sectors (§19.2.3) — and `hd_iunmount_dst` enforces it by walking `hd_vols`.
+The boot volume is not in `hd_vols` and **cannot be put right by unmounting**:
+the kernel is reading `KERNEL.SYS`, `CTRL.DRV` and `HDD.DRV` off it, and
+`[dsk_bootvol]` is where every later `drv_load` and `SYSTEM.CFG` write goes
+(§51.5.1). There is no state in which this install can succeed.
+
+So it is refused as a fact rather than a guess (§47 rule 3): `HIS_LIVE`, a
+fifth slot state whose row reads **`Booted From`**. Three things follow with
+no new code, which is what says the state belongs in that ladder rather than
+beside it — `hd_inst_ok` already greys Install for any selection that is not
+`HIS_OK`; `hd_iw_scan`'s pick loop already lands the default selection on the
+first `HIS_OK` slot, so on a disk with a spare partition the dialog simply
+opens on the one that works; and the row still shows its size, because the
+partition is fine and the machine is merely standing on it.
+
+**The row says why not; the caption says what to do.** A state word cannot
+carry `Boot from a floppy to replace it`, and on the single-partition machine
+— the common one — there is nothing pickable in the list at all, so
+`Pick a partition, then Install` would be the interface's last word on a
+dialog that can do nothing. `hd_iw_open` sets that caption when the selection
+comes back `HIS_LIVE`. It is set THERE and not in the scan: the scan is
+called from one place and `[hd_imsg]` belongs to the stage machine, so a
+caption written inside it would fight the arm/copy/done sequence the moment
+anything else called it.
+
+**The predicate is `hd_kvol`, and it is `hdcom.inc`'s** — assembled into both
+images, so the page and the installer cannot drift about what "the kernel
+already has this" means. `OSAPI_VOL_AT` being the one unfenced slot of the
+`OSAPI_VOL_*` family is what makes that possible: the tool is a second image
+whose segment is not the published disk driver's, so a fenced slot would
+refuse it (§52.11).
+
+**What is deliberately NOT refused**: a partition this driver has mounted
+itself. That one is unmounted before the format and always was (§52.10.8),
+and refusing it would take away the ordinary way to re-install — look at what
+is on a partition in a Disk window, then replace it.
+
+**The disk tool is the same hazard through two more buttons, and it had no
+predicate at all.** §52.2's Format is offered on every slot — free, raw,
+alien or a volume — which is right for all of them but one, and `hd_tw_fmtok`
+is the predicate that had never needed to exist. Delete is the same act one
+indirection further out: taking the boot partition's table entry away leaves
+the volume live in RAM, the kernel reading its own files off sectors nothing
+owns, and nothing to boot next time. Both grey on `HTS_LIVE`, both refuse the
+click, and the row reads `Booted From` in place of its FAT type — because
+what matters about that slot is not which FAT it holds. **Three windows now
+say the same word for the same fact**, which is the point of putting it in
+the state rather than beside it.
+
+**Which leaves the machine no way to replace its own system volume from
+inside itself, and that is correct.** The install set is two floppies and
+they are bootable; booting them is the supported path, and it is what the
+caption says. A driver cannot format the ground it is standing on, and an
+interface that offers to is not more capable — it is one confirmation click
+away from a machine that will not start.
+
+Verified on a cycle-accurate 4.77MHz 8088 booted from its own hard disk
+(`os8088_xt_hdd`, rung 0, no floppy): before, `Slot 1  31M  Ready` selected
+and Install live; after, `Slot 1  31M  Booted From`, Install greyed, and the
+caption reading `Boot from a floppy to replace it`. The tool window the same
+way — `Slot 1  31M  Booted From` with Format and Delete both greyed. The
+floppy-booted machine is unchanged, and that is the A/B that matters: the
+same disk on the same machine, one boot source apart, still reads `Ready`,
+still formats and still installs.
+
 ### 52.10.5 A disk already in the machine is not asked for
 
 The swap prompt is right on the machine this project is calibrated against
