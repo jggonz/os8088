@@ -365,12 +365,24 @@ the Makefile's own `$(COMBOARGS)` — and 1.44MB is 2,847 clusters against the
 read-rate cross-check), BEVERLY.MOD and README.TXT. A disk built for this
 machine should carry them; there is no reason not to.
 
-**What this machine is still owed:** a `sysbench` run, to say what its FDC
-actually answered. §57.5's `FD` block is what carries it, and the run is now
-the only thing that could ever *explain* note 19/21 rather than route around
-it — the fix is a decision about the claim, not a diagnosis of the
-controller. It is one of two machines in the register that can answer it, and
-the only AT-class one.
+**The `sysbench` came back and it diagnosed the controller** (SPEC.md
+§18.97.3, docs/FIELD-NOTES.md 21). `claimed 2` — so the count did reach us
+and the DS1287 is fine — with `ST3 = 0021` on **both** reads and `ST0 =
+0021`. Against the 5150's genuinely absent drive, which answers `ST3 = 0021`
+twice and `ST0 = 0071`, that is **the same ST3 byte for opposite ground
+truth**, and an ST0 that separates them outright: interrupt code 00, normal
+termination, no Equipment Check is the FDC saying *the recalibrate completed
+and the head reached track 0*. The drive is there, the head is where the
+controller says, and only TRK0's path to ST3 bit 4 is missing. ST0 is now
+consulted before any removal and only ever to answer *keep*.
+
+**Two rows in that report are not faults.** `mouse found 0` with both ports
+present is what a machine with nothing plugged in says — the rule above
+applies, ask what was connected. And **`est CPU MHz x100` reads 8879** on a
+16MHz 286, which is this machine's own long-standing outstanding item: the
+two 8088-only derived rows are computed against instruction timings a 286
+does not have, and should say so on a tier-1 machine rather than print a
+number. Still outstanding.
 
 ---
 

@@ -176,8 +176,14 @@ endif
 # makes testable. The conversation itself is still the 5150's question. Boot a
 # tier-0 machine with this and drive B must go; boot a tier-1 one and it must
 # stay, with `probe stop 03` and `verdict 1` in the published block.
-ifeq ($(FDDABSENT),1)
-VIDDEF += -DFDD_FORCE_ABSENT
+#
+# FDDABSENT=2 is the OTHER field signature (SPEC.md 18.97.2/18.97.3): the
+# Packard Bell's PRESENT 1.2MB drive, whose ST3 is byte-identical to the
+# 5150's absent one (21, twice) and whose ST0 is not - 21 against 71. It must
+# be kept on EVERY tier, tier 0 included, because ST0 saying the recalibrate
+# ended normally is positive evidence of a drive.
+ifneq ($(FDDABSENT),)
+VIDDEF += -DFDD_FORCE_ABSENT=$(FDDABSENT)
 endif
 
 # KERN_SMALL=1 selects the SMALL build of the kernel (docs/KERN-SPLIT-PLAN.md).

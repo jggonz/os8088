@@ -4704,8 +4704,8 @@ sb_l_mpt:    db '  winning row (0/2)', 0
 sb_l_mln:    db '  winning IRQ hex 10=4', 0
 
 sb_s_h_fdd:  db '-- the floppies: is drive B really there? (SPEC.md 18.97) --', 0
-sb_s_h_fdd3: db '   probe stop 00 not run 01 TRK0 02 TRK0 after seek 03 ABSENT 04 refused.', 0
-sb_s_h_fdd7: db '   ST3 bit 4 = TRK0, 2nd read decides. probe ran = bitmap. equip 7-6+1.', 0
+sb_s_h_fdd3: db '   stop 00 not run 01 TRK0 02 after seek 03 ABSENT 04 refused 05 ST0 ok.', 0
+sb_s_h_fdd7: db '   ST3 bit 4 = TRK0, ST0 overrules a clear one. ran bitmap. equip 7-6+1.', 0
 sb_s_fnone:  db '   this kernel publishes no floppy block (built before SPEC.md 57.5).', 0
 sb_l_feqp:   db '  drives int 11h claims', 0
 sb_l_feqw:   db '  equip word hex', 0
