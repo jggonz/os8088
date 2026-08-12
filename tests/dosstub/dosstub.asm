@@ -51,9 +51,9 @@
 ; The three FSIZE lines below need `/I:` IN THE TAIL to reach it at all now:
 ; the redirector superseded block mode, so open_image returns at once unless a
 ; run asks for an image by name (SPEC.md 62.10).
-;   make dosstub ARGS='/I:X'         10MB, the old ordinary path (20,480 secs)
-;   make dosstub FSIZE=64M ARGS='/I:X'  past os8088's cap: 65,535, and it says so
-;   make dosstub FSIZE=256 ARGS='/I:X'  under one sector: the refusal
+;   make dosstub ARGS='/I:IMAGE'         10MB, the old ordinary path (20,480 secs)
+;   make dosstub FSIZE=64M ARGS='/I:IMAGE'  past os8088's cap: 65,535, and it says so
+;   make dosstub FSIZE=256 ARGS='/I:IMAGE'  under one sector: the refusal
 ;   make dosstub ARGS='/P:378 /W'    ...and the whole-machine root, whose
 ;                                    listing is srv_drives rather than a
 ;                                    findfirst - a different walk entirely
@@ -240,11 +240,20 @@ f_putc:
 ; The NAME is at the CALLER's DS:DX and is printed before anything moves,
 ; which is the point of a harness: "the open failed" and "the open failed on
 ; THAT name" are different sentences.
-; A NAME IN THE TREE OPENS THE TREE; ANYTHING ELSE OPENS THE RAM FILE. Both
-; halves are wanted: the redirector reads files out of the synthetic directory
-; below, and block mode's `/I:` names something that is deliberately not in it,
-; so the FSIZE arithmetic keeps its harness. Which one a handle refers to is
-; [fh_row] - 0xFF for the RAM file.
+; A NAME IN THE TREE OPENS THE TREE; THE ONE NAME `IMAGE` OPENS THE RAM FILE;
+; ANYTHING ELSE FAILS. Both of the first two are wanted - the redirector reads
+; files out of the synthetic directory below, and block mode's `/I:` names
+; something deliberately not in it so the FSIZE arithmetic keeps its harness -
+; and the third is what makes the harness honest.
+;
+; It used to fall back to the RAM file for ANY unknown name, and that quietly
+; removed a whole class of test: `open a file that is not there` could not
+; fail, so FSV_APPEND to a missing file came back FERR_FULL (the RAM file
+; opened, the seek went past its real DSF_KB, the write came up short) where
+; DOS would have said FERR_NOENT. A stub that succeeds at an open the real
+; thing refuses is exactly the lying this file's header forbids.
+;
+; Which one a handle refers to is [fh_row] - 0xFF for the RAM file.
 ;
 ; It no longer PRINTS the name it was given. That was the right call when an
 ; open was a once-per-run event; a redirected read opens a file per command,
@@ -269,10 +278,14 @@ f_open:
     call row_of                 ; the caller's DS:SI, against the tree
     push cs
     pop ds
-    jc  .ram
+    jc  .notree
     mov [cs:fh_row], al
     jmp short .ok
-.ram:
+.notree:
+    mov si, cmpbuf              ; row_of left the last component here, whether
+    mov di, ram_name            ; or not it matched
+    call cs_eq
+    jnc .nofile
     mov byte [cs:fh_row], 0xFF
 .ok:
     pop ds
@@ -281,6 +294,11 @@ f_open:
     mov word [cs:fpos+2], 0
     mov ax, FH
     jmp cf_clear
+.nofile:
+    pop ds
+    pop si
+    mov ax, 2                   ; DOS's 'file not found', which is what an
+    jmp cf_set                  ; open of something absent has to be
 %endif
 
 ; --- AH=3Eh: close ------------------------------------------------------------
@@ -1597,6 +1615,7 @@ dta_off:    dw 0
 cwd_row:    db 0xFF             ; the root
 find_dir:   db 0xFF             ; the folder the walk in progress is in
 find_row:   db 0                ; ...and how far through dr_tab it has got
+ram_name:   db 'IMAGE',0       ; ...the ONE name that reaches the RAM file
 ren_row:    db 0                ; the row 56h is renaming
 find_one:   db 0                ; 0 = enumerate the folder, 1 = one named row
                                 ; still to hand over, 2 = and it has been
