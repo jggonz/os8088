@@ -7025,6 +7025,63 @@ only:
 | drag it back over | MISS, `W_PAINT` | **HIT**, no `W_PAINT` |
 | move it to a different part | MISS, `W_PAINT` | **HIT**, no `W_PAINT` |
 
+#### 11.96.15 …and it puts back only what nothing above will cover
+
+**§11.97's argument about the CHROME, applied to the content.** A pixel this
+window would put back underneath a window above it is a pixel that window is
+about to write anyway: §11.91's marking is transitive and upwards, and the
+draw loop runs back to front, so every visible window above this one that
+overlaps it is drawn **later in this same pass**. Dropping it is not losing
+it — which is the identical proof `wm_chrome_clip` already stands on, read for
+the restore instead of the outline.
+
+**Why it matters is the damage rect for a DRAG.** `ui_drag` passes the union
+of where the window was and where it is (§11.91), and for an eight-pixel move
+that union is very nearly the whole window. Reported from the field as four
+cascaded windows each redrawing in turn when the top one was dragged a few
+pixels. Traced on a cycle-accurate 5150/Hercules, the owed rect handed to each
+window was **60%, 95%, 100% and 100%** of its content — **180,297 pixels
+restored to reveal 2,880.**
+
+**It is not the accumulation.** §11.96.6 grows the damage by each drawn
+window's whole frame rect, which on a cache hit over-claims — it painted its
+clipped chrome, its title strip and the owed sub-rect, not its frame — and
+narrowing that to the strip was modelled against the same rects and is worth
+**0.08%**. The cost is the seed, not what is added to it. A bounding box
+cannot express the L that a move actually vacates, and the L's own bounding
+box is the whole of the old rect, so no single-rect answer exists.
+
+So `wm_su_occl` seeds `wm_clip_*` with the named sub-rect and subtracts every
+window above through `wm_clip_occl`, and `wm_su_try`'s fragment walk gains an
+inner loop: **once per piece, per buffer fragment**. `DI` — the fragment's base
+in the claim — is held across the inner walk and advanced by `wm_su_fsz` after
+it, because every piece is cut out of the same fragment.
+
+Modelled on the reported cascade's own rects, the three background windows go
+from **122,739 pixels to 2,134 — 58x** — and what is left of the pass is the
+mover redrawing its own content, which is 96% of the remainder and is the one
+window a drag is *supposed* to redraw.
+
+Four things hold it up.
+
+- **Both degradations are "restore the lot"**, which is what the walk did
+  before this existed and can only cost time: an overflow past `WM_CLIP_MAX`,
+  and an empty list — the second unreachable rather than merely rare, because
+  `wm_covered` has already skipped a wholly covered window.
+- **The caller's rect is banked across the walk and put back at both exits.**
+  `wm_su_srect` intersects against `wm_su_sx1..sy2`, so the piece has to be
+  written there — and `wm_damage` still owes the *application* the rect it was
+  handed if §11.96.11's bands send the draw on to `W_PAINT`, not whichever
+  piece the walk stopped on.
+- **The list is disarmed on the way out.** It is `wm_clip_*`, free at this
+  point because `wm_draw_win` zeroed it before the title bar (§11.97.1), and a
+  region left armed would clip the white fill and `W_PAINT` on the miss path —
+  §11.3's granularity rule, in the one place §11.97.1 says it must not bite.
+- **`gfx_restore` is off the clip list** (§11.3: a blit cannot take a sub-rect
+  without advancing its source), which is exactly why the pieces are walked
+  rather than armed: `wm_su_srect` and `gfx_sub_arm` already do that advancing,
+  and this reuses it once per piece instead of once per fragment.
+
 #### 11.96.7 A bank is only worth what was on the glass when it was taken
 
 `wm_su_take` reads the window's content **off the screen**, so it is valid only
