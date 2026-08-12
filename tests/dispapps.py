@@ -39,6 +39,7 @@ S = os88sym.linear
 VID_VGA, VID_CGA = 0, 2
 CHIP, MI_TASKS = (12, 8), (60, 60)
 TITLE_H = 18
+PN_KB_Y1, PN_KB_Y2_FULL = 88, 155   # apps/piano's own constants
 
 
 _MAPS = {}
@@ -146,7 +147,8 @@ def main(argv):
                           "ark_bpp"],
              "solitaire": ["sol_cw", "sol_ch", "sol_pitch", "sol_taby",
                            "sol_bpp"],
-             "missile": ["mc_mono", "mc_ecoarse", "mc_expfr", "mc_caps"]}
+             "missile": ["mc_mono", "mc_ecoarse", "mc_expfr", "mc_caps"],
+             "piano": ["pn_kby2", "pn_bky2", "pn_wlbl", "pn_blbl"]}
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
         mo = os88mouse.Mouse(marty=m)
         if dispfit.kind(m) != VID_VGA:
@@ -162,11 +164,37 @@ def main(argv):
         say("Task Manager: window %d, segment %04x, rect %r"
             % (slot, seg, dispcp.win_rect(m, S, slot)))
         segs = {"taskmgr": seg}
+        slots = {"taskmgr": slot}
 
         # ...and the two games, out of B:\GAMES
         dispcp.open_drive(m, mo, S, settle, "B")
         disk = dispcp.win_list(m, S)[-1]        # BANKED: once a game opens on
         wx, wy = dispcp.win_rect(m, S, disk)[:2]    # top of it, win_list's
+        # ...and apps/piano, out of B:\APPS - the fixed-layout case, whose
+        # keyboard is the only part of its content with any slack in it
+        wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
+        dispcp.open_row(m, mo, S, settle, wx, wy, 0)        # APPS
+        for _ in range(3):
+            wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
+            mo.click(wx + 40, wy + TITLE_H // 2)
+            settle(m)
+            dispcp.open_row(m, mo, S, settle, wx, wy, 7)    # PIANO.O88
+            m.advance(frames=120)
+            m.run()
+            got = pkg_seg(m, len(segs))
+            if got is not None:
+                break
+        if got is None:
+            sys.exit("dispapps: piano did not open")
+        segs["piano"] = got[1]
+        slots["piano"] = got[0]
+        say("piano: segment %04x" % got[1])
+
+        wx, wy, ww, wh = dispcp.win_rect(m, S, disk)        # ...back to B:\ and
+        mo.click(wx + 40, wy + TITLE_H // 2)                # on into GAMES
+        settle(m)
+        dispcp.open_row(m, mo, S, settle, wx, wy, 0)        # ..
+        wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
         dispcp.open_row(m, mo, S, settle, wx, wy, 1)        # GAMES
         for row, app in ((1, "arkanoid"), (4, "solitaire"), (3, "missile")):
             got = None
@@ -175,7 +203,7 @@ def main(argv):
                                     # retry on an already-selected row is just
                                     # another double-click, so it costs nothing
                 wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
-                mo.click(wx + ww // 2, wy + TITLE_H // 2)   # raise it back over
+                mo.click(wx + 40, wy + TITLE_H // 2)   # raise it back over
                 settle(m)                                   # whatever opened
                 dispcp.open_row(m, mo, S, settle, wx, wy, row)
                 m.advance(frames=120)
@@ -191,6 +219,7 @@ def main(argv):
                          % (app, [(i, dispcp.win_rect(m, S, i))
                                   for i in dispcp.win_list(m, S)]))
             segs[app] = got[1]
+            slots[app] = got[0]
             say("%s: segment %04x" % (app, got[1]))
 
         before = dict((a, words(m, segs[a], a, watch[a])) for a in segs)
@@ -221,6 +250,28 @@ def main(argv):
                         "adapter - SPEC.md 48.8's unplayable case")
         if not after["missile"]["mc_mono"]:
             fail.append("missile still thinks it is on a colour adapter")
+        # apps/piano's keyboard must END INSIDE the content box on both
+        # adapters, and be untouched at full height - the constants it came
+        # from are a ceiling now, not a layout.
+        for tag, vals in (("VGA", before), ("CGA", after)):
+            ch = dispcp.win_rect(m, S, slots["piano"])[3] - TITLE_H - 1
+            if vals is before:
+                ch = 177 - TITLE_H - 1          # its template, before the switch
+            if vals["piano"]["pn_kby2"] > ch - 1:
+                fail.append("piano's keyboard ends at row %d of a %d-row "
+                            "content box on %s - it is drawing through the "
+                            "bottom of its own frame"
+                            % (vals["piano"]["pn_kby2"], ch, tag))
+            if not (PN_KB_Y1 < vals["piano"]["pn_bky2"]
+                    < vals["piano"]["pn_kby2"]):
+                fail.append("piano's black keys (%d) are not inside its white "
+                            "ones (%d..%d) on %s"
+                            % (vals["piano"]["pn_bky2"], PN_KB_Y1,
+                               vals["piano"]["pn_kby2"], tag))
+        if before["piano"]["pn_kby2"] != PN_KB_Y2_FULL:
+            fail.append("piano's keyboard is %d at FULL height and the layout "
+                        "it was drawn for is %d - a VGA must be untouched"
+                        % (before["piano"]["pn_kby2"], PN_KB_Y2_FULL))
 
         dispfit.switch_to(m, mo, settle, 0, VID_VGA)
         back = dict((a, words(m, segs[a], a, watch[a])) for a in segs)
@@ -236,8 +287,8 @@ def main(argv):
         print("dispapps: FAIL: %s" % f)
     if fail:
         return 1
-    print("dispapps: taskmgr, arkanoid, solitaire and missile all re-derive "
-          "on an adapter change and come back - PASS")
+    print("dispapps: taskmgr, arkanoid, solitaire, missile and piano all "
+          "re-derive on an adapter change and come back - PASS")
     return 0
 
 

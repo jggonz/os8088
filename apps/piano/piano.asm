@@ -111,8 +111,15 @@ PN_ROW2_Y   equ 70                  ; songs row
 PN_BTN_H    equ 16
 PN_MSG_X    equ 112                 ; message text (area white-filled 110..219)
 PN_KB_Y1    equ 88                  ; keyboard: white keys y 88..155
-PN_KB_Y2    equ 155
-PN_BK_Y2    equ 129                 ; black keys y 88..129
+PN_KB_Y2    equ 155                 ; ...at FULL height, which is now a CEILING
+PN_BK_Y2    equ 129                 ; black keys y 88..129, likewise
+PN_WLBL_UP  equ 11                  ; the white key's letter, up from its foot
+PN_BLBL_UP  equ 13                  ; ...and the black key's
+PN_KB_MIN   equ 24                  ; the shortest white key worth drawing: a
+                                    ; floor, so a content box too short for a
+                                    ; keyboard gets a clipped one rather than
+                                    ; none. No adapter here reaches it - CGA's
+                                    ; 136 rows of content leave 45
 PN_WKEYS    equ 12                  ; white keys, 18 px wide at x=2+i*18
 PN_BKEYS    equ 8                   ; black keys, 10 px wide at x=18*slot+15
 
@@ -121,7 +128,7 @@ PN_MAXN     equ 300                 ; sequence cap (policy: full-stop)
 PN_LIVEDUR  equ 5                   ; live note duration, ticks
 PN_PRIO     equ 0x40                ; tone priority (the package default)
 
-PN_BSS_TOTAL equ 918                ; see the bss layout after OS88_IMAGE_END
+PN_BSS_TOTAL equ 926                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; pn_entry - package entry point (SPEC.md 20.2)
@@ -140,6 +147,10 @@ pn_entry:
     mov si, pn_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out                         ; no window: nothing to attach menus to
+    mov ax, pn_onresize             ; the keyboard's depth follows the box, and
+    call OSAPI_WM_ONRESIZE          ; the box is the kernel's (SPEC.md 11.98)
+    call OSAPI_WM_GEOM              ; CX/DX = the content we were actually
+    call pn_metrics                 ; given, which on a CGA is 22 rows short
     mov si, pn_menus
     call OSAPI_MENU_SET             ; BX = window ptr, SI = the set
     mov al, 1                       ; ...and it PROMISES its content stands
@@ -156,6 +167,75 @@ pn_entry:
 ; pn_paint - W_PAINT: full content repaint (content arrives white)
 ; in:  SI = window ptr; caller holds the gfx lock
 ; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+; pn_metrics - how deep the keyboard can be in the box we actually have
+;
+; in:  DX = the content HEIGHT
+; out: pn_kby2 / pn_bky2 / pn_wlbl / pn_blbl set; all registers preserved
+;
+; The window is 224x177 and its content 222x158, which fits a VGA and a
+; Hercules and does not fit a CGA: the desktop band there is 155 rows, so
+; wm_fit hands this window 136 rows of content and the keyboard's last 22 rows
+; were drawn through the bottom of its own frame onto the desktop - the
+; gfx_* primitives clip to the SCREEN, not to the window (SPEC.md 11.3).
+;
+; SHORTER KEYS rather than a second layout: everything above y=88 is text and
+; buttons at fixed rows and none of it can give anything up, so the keyboard
+; is the only part with slack in it - and a piano keyboard is a shape that
+; reads correctly at any height, which is why this is a scale rather than a
+; metric record like apps/arkanoid's.
+;
+; THE BLACK KEYS KEEP THEIR SHARE, 41/67 of the white key, so the instrument
+; stays in proportion instead of the black keys swallowing a short keyboard.
+; At full height that arithmetic returns exactly PN_BK_Y2, so a VGA and a
+; Hercules draw the identical pixels they always did.
+;
+; ...and both LETTERS come with them. They were at y=144 and y=116, inside a
+; key that ended at 155 - eleven and thirteen rows up from their own key's
+; foot - and left where they were they would have printed below a shortened
+; keyboard, which is the same bug one level down.
+; -----------------------------------------------------------------------------
+pn_metrics:
+    push ax
+    push bx
+    push dx
+    sub dx, 3                       ; the same 2px margin the full layout leaves
+    cmp dx, [pn_kby2]                ; ...never taller than it was designed for
+    jbe .wok
+    mov dx, PN_KB_Y2
+.wok:
+    cmp dx, PN_KB_Y1 + PN_KB_MIN    ; ...and never so short there is no key
+    jae .wok2
+    mov dx, PN_KB_Y1 + PN_KB_MIN
+.wok2:
+    mov [pn_kby2], dx
+    mov ax, dx
+    sub ax, PN_WLBL_UP
+    mov [pn_wlbl], ax
+    mov ax, dx                      ; the black key's share of the white one
+    sub ax, PN_KB_Y1
+    mov bx, PN_BK_Y2 - PN_KB_Y1
+    mul bx                          ; (DX:AX, and 67*67 cannot leave AX)
+    mov bx, PN_KB_Y2 - PN_KB_Y1
+    div bx
+    add ax, PN_KB_Y1
+    mov [pn_bky2], ax
+    sub ax, PN_BLBL_UP
+    mov [pn_blbl], ax
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pn_onresize - the box moved under us (SPEC.md 11.98)
+; in:  SI = our window, CX/DX = the new content size; gfx lock HELD, no drawing
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+pn_onresize:
+    call pn_metrics
+    ret
+
 ; -----------------------------------------------------------------------------
 pn_paint:
     push ax
@@ -205,9 +285,9 @@ pn_onclick:
     ; --- the keyboard ----------------------------------------------------------
     cmp dx, PN_KB_Y1
     jl .rows
-    cmp dx, PN_KB_Y2
+    cmp dx, [pn_kby2]
     jg .out
-    cmp dx, PN_BK_Y2                ; black keys sit above their bottom row
+    cmp dx, [pn_bky2]                ; black keys sit above their bottom row
     jg .white
     mov bx, 0                       ; test the 8 black keys first (they
 .bk:                                ; overlay the whites)
@@ -693,7 +773,7 @@ pn_draw_wkey:
     mov bx, PN_KB_Y1
     mov cx, di
     add cx, 18
-    mov dx, PN_KB_Y2
+    mov dx, [pn_kby2]
     call pn_cframe
     mov ax, bp                      ; AH = highlight state
     mov al, CWHITE
@@ -707,7 +787,8 @@ pn_draw_wkey:
     mov bx, PN_KB_Y1+1
     mov cx, di
     add cx, 17
-    mov dx, PN_KB_Y2-1
+    mov dx, [pn_kby2]
+    dec dx
     call pn_cfill
     mov ax, bp                      ; the map letter: CBLUE, CWHITE when lit
     mov al, CBLUE
@@ -721,7 +802,7 @@ pn_draw_wkey:
     mov al, [pn_wchar+bx]
     mov cx, di
     add cx, 5
-    mov dx, 144
+    mov dx, [pn_wlbl]
     call pn_cchar
     mov cx, 0                       ; re-draw the black keys overlapping
 .nb:                                ; this white key (slots idx-1 and idx)
@@ -780,7 +861,7 @@ pn_draw_bkey:
     mov bx, PN_KB_Y1
     mov cx, di
     add cx, 9
-    mov dx, PN_BK_Y2
+    mov dx, [pn_bky2]
     call pn_cfill
     mov ax, bp
     or ah, ah
@@ -792,7 +873,8 @@ pn_draw_bkey:
     mov bx, PN_KB_Y1+1
     mov cx, di
     add cx, 8
-    mov dx, PN_BK_Y2-1
+    mov dx, [pn_bky2]
+    dec dx
     call pn_cfill
 .letter:
     mov al, CWHITE
@@ -802,7 +884,7 @@ pn_draw_bkey:
     mov al, [pn_bchar+bx]
     mov cx, di
     inc cx
-    mov dx, 116
+    mov dx, [pn_blbl]
     call pn_cchar
     pop bp
     pop di
@@ -1284,4 +1366,9 @@ pn_vsh   equ os88_image_end + 16    ; byte: viewer scratch - sharp flag
                                     ; +17: pad
 pn_seqn  equ os88_image_end + 18    ; 300 bytes: note ids
 pn_seqt  equ os88_image_end + 318   ; 300 words: osapi_get_ticks stamps
-                                    ; total 918 = PN_BSS_TOTAL
+; --- the keyboard's depth, derived from the LIVE content box (SPEC.md 11.98) --
+pn_kby2  equ os88_image_end + 918   ; word: the white keys' last row
+pn_bky2  equ os88_image_end + 920   ; word: ...and the black keys'
+pn_wlbl  equ os88_image_end + 922   ; word: the white key letter's row
+pn_blbl  equ os88_image_end + 924   ; word: ...and the black one's
+                                    ; total 926 = PN_BSS_TOTAL

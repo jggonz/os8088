@@ -339,12 +339,16 @@ net_connect:
 .linked:
     mov byte [net_state], NS_LINKED
     mov byte [net_lost_f], 0    ; a fresh link is not the old one's failure
+%ifndef NET_TURN1               ; ...`make NETTURN1=1` is the A/B, and leaving
+                                ; the store out is the WHOLE of the old
+                                ; behaviour: lp_init already set TURN_RX
     mov byte [lp_turnw], REPLY_TMO  ; ...AND THE WAIT GETS LONGER NOW. Until
                                 ; this point every reversal was a port being
                                 ; TRIED and a quick refusal was the whole
                                 ; point; from here a reversal is the far side
                                 ; going to its disk, which is seconds. See
                                 ; REPLY_TMO in lplink.inc for the field bug
+%endif
     call net_info               ; how big is it, and may we write to it?
     jc  .lost
     call net_mount              ; osapi_vol_add + osapi_vol_mount
