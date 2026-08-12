@@ -2561,13 +2561,25 @@ gfx_xor_rect:
                                 ; bounding rect with anything - clipping it
                                 ; that way would draw edges through the
                                 ; middle of it, so it decomposes first
+                                ; (...and each strip meets GFXCLIP, whose
+                                ; clipped branch owes no hide: wm_clip_set
+                                ; already asked cur_lazyck - 7.1.4)
+    call cur_unlazy             ; UNCLIPPED, AND ABOVE THE [vid_mono] DISPATCH,
+                                ; which is GFXCLIP's own rule and the whole of
+                                ; SPEC.md 7.1.5: below it this hook covers VGA
+                                ; and silently does nothing on the two 1bpp
+                                ; adapters, where the software renderer IS the
+                                ; direct path (SPEC.md 39.5)
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne gfx_xor_rect_sw         ; the direct path (SPEC.md 39.5)
 vga_xor_rect_vram:
     call cur_unlazy             ; the drag outline bypasses the clip
                                 ; (SPEC.md 11.3): 7.1.4. VRAM body under its
                                 ; own name, which the transient overlays call
-                                ; direct
+                                ; direct - so it owes the hide on its own
+                                ; account. Reached from above the flag is
+                                ; already spent and this is three instructions
+                                ; (cur_unlazy is one-way within a hold)
     cmp byte [vid_mono], 0      ; ...but "direct" means the framebuffer, and
     jne gfx_xor_rect_sw         ; on a 1bpp adapter the software renderer IS
                                 ; the direct path (SPEC.md 39.5)
