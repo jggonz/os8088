@@ -6957,6 +6957,71 @@ session had. And a polluted cache is **invisible until it is used**: §11.96.7's
 paragraph says so, and it caught the author of this section out a second time in
 the same round.
 
+#### 11.96.9.1 …unless nothing is covering the window, and then it must
+
+§11.96.9 closes with *"the conservative direction costs a re-bank that would
+have been legal"*, and the bill for that came in from the field: **a Disk
+window that repaints in full every time another window is dragged off it, for
+the rest of the session.** Open B: as the first thing after a boot, walk into
+`GAMES`, launch Minesweeper over the listing, and from then on every drag that
+uncovers any part of that window is the whole listing going blank and filling
+back in — until some *other* window is raised over it, at which point it
+silently starts behaving. Measured under MartyPC on the reported sequence:
+`SU_MISS` and a `W_PAINT` on the Disk window at every step, with `wm_su_segs`
+for its slot **0 from the launch onwards**.
+
+Two things compose to get there and neither is wrong on its own.
+`files_poster` clears `Loading...` through `wm_clip_set`, which **drops that
+window's cache** (§11.96) — correct, the window is about to draw. And from
+that moment every draw of that window is a **damage** draw, which names a
+sub-rect, which sets `[wm_dw_part]`, which refuses the re-bank. **There is no
+path left that can put a cache back**: `wm_su_bank` is the only taker outside
+`wm_raise`, and `wm_raise` takes one only from the window *losing* the front —
+which is why raising something else over it is the cure, and why the report
+ends "after switching window orders this stops happening".
+
+**`[wm_dw_part]` is a proxy for the question, and the question is answerable
+directly.** What a bank needs is that every pixel of the content rect is this
+window's own *now*; "was a sub-rect named" answers that only while the window
+is still under whatever covered it. A drag that uncovers a window repairs the
+**vacated** rect and nothing else — so the draw is partial and the content is
+nonetheless whole, correct and on the glass, because §11.91's argument says
+every pixel outside the damage was already right. `wm_obscured` asks it as
+itself.
+
+So `wm_su_bank`'s partial arm is two tests, and the order is the point:
+
+1. **`wm_su_ck` — have I already got one?** §11.96.9's answer stands wherever
+   it applies: a partial draw changed nothing, so an existing cache is still
+   exactly right and re-taking it is ~10 ms of blit for a picture that is
+   already banked. It also asks *valid*, not merely *present*, so a cache the
+   rect no longer matches cannot be kept for ever by a window every one of
+   whose draws is partial.
+2. **`wm_obscured` — is any of me somebody else's pixels?** Only with no cache
+   at all, and the frame rect rather than the content, which is the
+   conservative direction of the two.
+
+**It refuses §11.96.7's hazard by construction rather than by ordering.** That
+section's bug was a bank taken after `wm_dock_under` had redrawn another
+window over this one; the general form is a marked window higher in `wm_zord`
+drawn later in the same pass, and `wm_obscured` answers CF = 1 for exactly
+that shape — the window above is in the z-order and overlaps, whether or not
+it has drawn yet. The pre-existing **whole**-draw arm is untouched and
+deliberately not given the same test: `wm_paint_all` paints back to front over
+a fresh desktop, so a window drawn there is banked from its own pixels while
+`wm_obscured` would call it covered, and adding the test would take a cache
+away that has always been correct.
+
+Measured on a cycle-accurate 5150/CGA over the reported sequence, Disk window
+only:
+
+| | before | after |
+|---|---|---|
+| launch Minesweeper over it | `take` 1, dropped, `fm_repaint` 1 | same |
+| drag Minesweeper clear | MISS, `W_PAINT`, no bank | MISS, `W_PAINT`, **bank** |
+| drag it back over | MISS, `W_PAINT` | **HIT**, no `W_PAINT` |
+| move it to a different part | MISS, `W_PAINT` | **HIT**, no `W_PAINT` |
+
 #### 11.96.7 A bank is only worth what was on the glass when it was taken
 
 `wm_su_take` reads the window's content **off the screen**, so it is valid only
@@ -16314,6 +16379,51 @@ is the fix. It is worth recording as the *reason* for the reference build
 rather than as a footnote to it: a full-repaint reference does not check the
 optimisation being made, it checks **every** cheap path the session touches,
 and this one had been cheap and slightly wrong since §22.9.
+
+#### 22.13.1 …and the status line stopped costing the window
+
+`fm_status_only` is the cheap path §22.13 exists to reach, and **it refused
+exactly when it was most needed**. It was a `gfx_fill` of the band and then
+`fm_draw_status`'s `font_str` over it — §6.1's erase-and-letter pair — so
+§11.3's granularity rule applied: a fill clips per pixel and a glyph per whole
+cell, and a clip edge crossing the line would erase rows the text could not be
+put back into, leaving it **blank rather than stale**. The gate was a
+`wm_clip_test` on the whole band and the fallback was `fm_repaint`.
+
+The case that gate fires in is not an edge case. A clip region is armed on a
+Disk window in exactly one place — `files_poster`, clearing `Loading...` after
+a load — and by then the application just launched **is sitting on top of the
+window**. So the ordinary act of opening a program out of a Disk window
+repainted that window in full behind it: §11.96's ~1,026 ms class of repaint,
+to correct eight rows of text. Reported from the field as exactly that, and it
+compounds — the repaint does not go through `wm_draw_win`, so it leaves no
+raise cache either (§11.96.9.1 is the other half of the same report).
+
+**`font_run` is the answer and it needed no new mechanism.** `fm_stat_line`
+pads `fm_hdrbuf` with spaces to the width the window fits and emits one opaque
+run at `[fm_cx] + 8`: the erase and the letter are one decision per cell, so
+the pair that produced the failure no longer exists, the caller needs no gate,
+and a cell an edge cuts is left **stale** — which is what a covered cell should
+be, since something is drawn over it. The band fill goes with it, the padding
+being the erase (§6.1, §27.2), and nothing else ever writes in those rows: the
+scroll bar stops at `fm_listb` two rows above and the selection bands stop with
+it. The only refusal `fm_status_only` has left is a content rect with nothing
+in it.
+
+Four things follow, and the last two are why this was not simply a deletion.
+The pen was **already** a multiple of 8 (§11.94.3), so the two mono adapters
+get `font_run`'s single-store path and the line stops flashing as well as
+stops escalating. The padding is capped at `FM_HDRMAX-1` as well as at the
+window's width, because it writes into `fm_hdrbuf` and a wide VGA window fits
+more cells than that buffer holds. **`wm_grow_paint` stays**: a padded run ends
+6px short of `[fm_rgt]` and the grow box starts 14 short, so it still overlaps
+and §22.13's own late-found defect is still there to repair. And
+`fm_stat_line`'s "empty buffer, draw nothing" early-out **had to go** — with no
+band fill in front of it, drawing nothing leaves the previous line on the
+glass, so an empty string now pads to a blank run and blanks it.
+
+Measured on a cycle-accurate 5150/CGA, launching Minesweeper from a Disk
+window it then covers: `fm_repaint` **1 → 0**.
 
 ### 22.14 The Disk window keeps §11.96's promise, and `fmv_store` is why
 

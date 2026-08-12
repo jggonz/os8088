@@ -2797,6 +2797,8 @@ cw_clk_snapshot:        call clk_snapshot
                     retf
 cw_evq_pop:             call evq_pop
                     retf
+cw_font_run:            call font_run
+                    retf
 cw_font_str:            call font_str
                     retf
 cw_font_width:          call font_width

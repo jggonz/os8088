@@ -1331,13 +1331,45 @@ The one consumer that had to follow is the file manager, and it got cheaper at
 both ends. A window that posted a load has `'Loading...'` in its status line,
 and nothing repaints it any more; `files_poster` arms `wm_clip_set` on that
 window and calls **`fm_status_only`** — one *line*, not the window's whole
-content. The double-click that posted the load does the same. Both fall back to
-`fm_repaint` when `wm_clip_test` says a clip edge crosses the line, because a
-fill clips per pixel and glyphs clip per cell, so the line would go blank rather
-than stale (the granularity rule). `files_poster` also needs `fm_win_of`, the
+content. The double-click that posted the load does the same. **Neither falls
+back to `fm_repaint` any more, and the fallback is what made this cost the
+window** (SPEC.md §22.13.1): the pair being protected was a `gfx_fill` of the
+band and `font_str` over it, which clip at different granularities, so a clip
+edge crossing the line left it blank rather than stale and the only safe answer
+was the whole window. The line is **one opaque `font_run`** now — `fm_stat_line`
+pads `fm_hdrbuf` to the width the window fits, so the padding is the erase and
+the two decisions are one per cell — and the gate and the band fill are gone
+with it. The case the gate fired in was not rare: a clip region is armed on a
+Disk window in exactly one place, `files_poster`, and by then the application
+just launched is sitting on top of it, so *opening a program out of a Disk
+window repainted that window in full behind it*. `files_poster` also needs `fm_win_of`, the
 reverse of `fm_vp_set`, because `[ld_pwin]` holds the poster's **state block**,
 not its window — a distinction that silently draws a Disk window's contents
 through a garbage rect if you miss it.
+
+**A covered window is put back rather than redrawn, and the rule for when the
+kernel may BANK it is `wm_obscured` — not "was this draw partial"** (SPEC.md
+§11.96, §11.96.9.1). `wm_su_take` reads a window's content off the screen and
+`wm_su_try` puts it back on a raise, which is ~10 ms of blit against 578 ms of
+glyphs. §11.96.9 stopped a *partial* draw re-banking, because a pass that
+repaired a strip leaves the rest of the rect holding whatever is on top — and
+`[wm_dw_part]` is a **proxy**: it is the wrong question the moment the window
+is out from under whatever covered it. A drag that uncovers a window repairs
+only the vacated rect, so the draw is partial while the content is whole and
+correct on the glass. Compose that with `wm_clip_set` dropping the cache
+(which `files_poster` does after every launch out of a Disk window) and there
+was **no path left that could put one back**: a Disk window repainted in full
+on every drag for the rest of the session, until something else was raised
+over it — which is `wm_raise`'s own `wm_su_take` and why the report ended "it
+stops happening after switching window orders". `wm_su_bank` asks
+`wm_su_ck` first (an existing cache is still right, and re-taking it is a blit
+for nothing) and then `wm_obscured`, which also refuses §11.96.7's hazard by
+construction. **The whole-draw arm deliberately does NOT get the same test**:
+`wm_paint_all` paints back to front over a fresh desktop, so a window banked
+there is banked from its own pixels while `wm_obscured` would call it covered.
+`tools/callfront.py` and `tools/subcheck.py` against `make REDRAWFULL=1` are
+the gates, and the first of them is the one written for the field defect this
+relaxes.
 
 ### The menu bar is three segments and the dock diffs its marks (SPEC.md §12.9/§30.3)
 
