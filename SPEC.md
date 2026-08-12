@@ -38074,3 +38074,172 @@ hand-drawn glyphs cannot be held against.
 That is the *opposite* of §6.2.1's conclusion for an 8x8 face, and both are
 right for their size: at 8 rows there is no curve to get right, only which of
 six pixels to light, so the hand wins. At 44 rows there is nothing but curve.
+
+## 64. blank.inc — the idle screen blanker
+
+After **five minutes** with no keyboard and no mouse, every monitor the
+machine has goes dark. The next input brings them all back, and that input is
+swallowed rather than acted on.
+
+It is for the **monitor**, not for the machine. The tubes this OS runs in
+front of — a 5151, a 5153, whatever is on the second card — burn a static
+image into the phosphor if they are left lit, and a desktop is the worst thing
+that could be left there: a menu bar, a dock strip and a drive column that
+never move, at full brightness, for as long as the machine is switched on.
+There is no power saving in it and none is attempted; hardware this old has no
+DPMS to signal to, and the CRT's heater and EHT stay up either way.
+
+### 64.1 What it costs when nothing is happening
+
+Two compares per UI pass, and one byte store per mouse packet. That is the
+whole steady-state cost, and getting it there is why the shape is what it is.
+
+`blk_pass` is one rung of the UI task's idle ladder (§13), placed **ahead of
+`evq_pop`** — see §64.2 for why that position is binding rather than
+convenient. It tests `[blk_act]`, the flag the mouse ISR sets, and then
+`[blk_on]`; on a machine somebody is using, both fall through.
+
+The mouse half is a **flag and not a timestamp**, set inside `mou_isr`:
+
+    cmp byte [mou_seen], 0
+    je .bout
+    mov byte [blk_act], 1
+
+One store, no register saved, and it sits **after** the `[mou_seen]` gate on
+purpose — a packet from a port that has not yet won §9.5's contest is not
+input, and a chattering modem must not be able to keep the screen awake all
+night on the strength of `no carrier` decoding as a mouse packet. Everything
+else is the UI task's: no ISR in the system reads a clock or writes a video
+port, which is what keeps this out of `mou_isr`'s critical path and out of any
+argument about re-entrancy.
+
+The idle period is measured in `[ticks]`, the BIOS counter at 18.2065 Hz, so
+five minutes is 5,461.95 of them and `BLK_IDLE` is **5462**. The rate is the
+BIOS's whether or not §53.2.1's sub-tick is armed: that divides IRQ0 three
+ways and only every third entry bumps `[ticks]`.
+
+The subtraction `[ticks] - [blk_t0]` is modular and **cannot wrap in
+service**: it stops being asked the moment it passes five minutes, and a word
+holds sixty. The one path that could have outrun it is a fullscreen bracket,
+which is §64.4.
+
+Nothing at all is added to the drawing path. There is no gate in `gfx_fill`,
+none in `font_char`, and no flag for a package to consult — see §64.3.
+
+### 64.2 The input that wakes the screen is consumed
+
+Both halves of a wake are dropped: the keystroke, and the button press.
+
+This is a **safety rule and not a borrowed convention**. While the screen is
+dark the user cannot see what is under the pointer, or which window has the
+keyboard, or that a modal file dialog is up. Acting on the input that arrives
+out of that state is acting blind — a click lands on whatever happens to be
+beneath it, and a keystroke goes to whichever window was frontmost five
+minutes ago. Restoring the display *is* the whole of what a wake event means.
+
+`blk_wake` answers **CF = 1** when it was the input that lit the screen, and
+the two callers spend it differently because the input reaches them by
+different routes:
+
+- **Keyboard.** `ui_task` has to fetch the key regardless — it is in the BIOS
+  buffer and leaving it there would queue every later key behind it — so the
+  fetch is common and only the delivery is skipped. The verdict is banked
+  across the `int 16h` in `pushf`/`popf`, because the flags a BIOS service
+  returns are its own business and not a value this loop may read.
+- **Mouse.** The press is already in the event ring by the time anything
+  notices, so `blk_pass` calls `evq_init` and drops the lot.
+
+**That is why `blk_pass` sits ahead of `evq_pop`.** Below it, the feature
+still blanks and still wakes and still looks correct on a screenshot — and
+the first click out of a dark screen is dispatched at whatever the pointer was
+left on. The ordering is the mechanism, not the tidiness.
+
+Mouse *motion* is not swallowed and could not usefully be: the ISR has already
+moved the pointer by the time the UI task runs, and moving a pointer damages
+nothing.
+
+### 64.3 The video signal is gated, not the framebuffer
+
+`vid_blank_kind` / `vid_unblank_kind` (§39.18.1) stop the card's video output
+and leave the CRTC running, so both syncs keep coming out and memory is
+untouched. Three consequences, all load-bearing:
+
+1. **Waking is instant and exact.** There is nothing to repaint, no mode to
+   set and no `wm_paint_all` — the picture that comes back is the one that
+   went away, including a half-finished Fractal pass.
+2. **A background task may keep drawing into a blanked card.** Timer, Bounce,
+   Fractal and a package worker carry on and cost nothing, which is what lets
+   the entire drawing path stay ignorant of this feature.
+3. **The monitor never re-acquires.** Sync never stops, so there is no
+   re-lock, no flash and no audible flyback transient on either edge — the
+   same property `vid_setmode`'s own blank-first sequence rests on (§39.6).
+
+**All three adapters, and the VGA arm had to be written for this.** Both
+bodies previously tested only for Hercules and sent everything else down the
+CGA branch, which writes 3D8h — a register a VGA does not implement, so the
+`out` was swallowed by the bus and did nothing. §39.11.4 records the hole as
+accepted, which it was for a card pairing nobody built and is not for a
+blanker: silently declining to blank on one adapter in three is precisely the
+failure this project keeps paying for. The VGA now uses Sequencer register 1
+(Clocking Mode) bit 5, **Screen Off**.
+
+That one access is a **read-modify-write and so runs with IF=0**. SR01's other
+bits are the dot clock and the character width; they belong to whatever mode
+the card is in and cannot be guessed, so the register must be read — an index
+write, a read and a data write, with two gaps in it. Every other sequencer
+access in the kernel is a single `out dx, ax`, atomic by construction; this
+one cannot be, and the gap is reachable, because `vga12.inc`'s plane loops
+leave the sequencer index at 2 (Map Mask) for the whole of a plane's
+`rep movsb` and any drawing task can be pre-empted mid-row. A switch landing
+in that gap would read the Map Mask and write the screen-off bit into it.
+`pushf`/`cli` … `popf`, never `cli`/`sti` (§1).
+
+**Every card, not just `[vid_kind]`'s.** On a two-monitor machine (§39.11) —
+the machine this project is calibrated against — the desktop spans both and
+both tubes are lit, so blanking the primary alone protects one monitor and
+leaves the other showing a frozen desktop all night. `blk_set` walks
+`[vid_ndisp]`, which is `vid_fsx_enter`'s own walk doing the same thing from
+the other end.
+
+The pair therefore moved **out of `vidsel.inc`'s dual-display fence**, where
+they were reachable only from the two fsx entry points, so kern_big was the
+only build with any way to dark a card. A 128KB machine has a monitor to
+protect too, and on the class of hardware kern_small exists for it is the
+older monitor.
+
+### 64.4 A fullscreen bracket is the user
+
+The UI task does not run inside an fsx bracket (§53.1), so nothing spends the
+idle clock while one is up — and nothing may: the app owns the video mode, and
+blanking a card the kernel is not driving is the one thing this feature must
+never do. Blanking during a bracket is therefore prevented **by construction**
+rather than by a test.
+
+What that leaves is the arithmetic on the way out. Somebody plays Missile
+Command or listens to a module for as long as they like, and an hour of it
+returns to a `[ticks] - [blk_t0]` that has not merely passed `BLK_IDLE` but
+**wrapped**, so the first UI pass after `fsx_restore` would dark the screen on
+a machine somebody is sitting in front of. `fsx_restore` calls `blk_wake` as
+its last act: the bracket was the user. Its CF is not read, because the screen
+cannot be dark there — entering a bracket took the input that lit it.
+
+### 64.5 What is deliberately not here
+
+**No Control Panel page and no `SYSTEM.CFG` key.** The period is a constant.
+A setting is the obvious next step and it is a real one — it wants a row, a
+`CP_*` item and a key in the 32-byte blob (§51.5) — but every one of those is
+a decision about which page it belongs on and what it displaces, and the
+Drivers page is already at four rows on CGA against `wm_fit`'s ceiling
+(§31.1). None of that is needed for the machine to stop burning its monitor.
+
+**No API slot.** A package cannot ask whether the screen is dark, force it
+dark, or suppress it. The first two are answerable, and the third is what
+would be asked for — "do not blank while my slideshow is running" — and it
+cannot be granted honestly: a package that forgets to withdraw the suppression
+leaves the monitor lit for the session, which is the whole failure this exists
+to prevent. An app that is genuinely being watched without input is a
+fullscreen bracket, and §64.4 already covers that.
+
+**No fade, no pattern, no bouncing anything.** Drawing a screen saver means
+running a task, holding the gfx lock and repainting the desktop underneath it
+on wake. Blanking the signal costs two `out`s and restores in zero.

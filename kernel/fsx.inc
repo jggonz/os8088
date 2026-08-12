@@ -297,6 +297,23 @@ fsx_restore:
                                 ; blanked on and lighting it first shows that
                                 ; one (SPEC.md 39.18.1)
 %endif
+    call blk_wake               ; the idle clock restarts here (SPEC.md 64.4).
+                                ; The UI task does not run inside a bracket
+                                ; (53.1), so nothing spends that clock while
+                                ; one is up and nothing may - the app owns the
+                                ; video mode, and blanking a card the kernel
+                                ; is not driving is the one thing this feature
+                                ; must never do. What that leaves is the
+                                ; arithmetic on the way out: somebody plays a
+                                ; game or a module for as long as they like,
+                                ; and an hour of it comes back to a
+                                ; [ticks] - [blk_t0] that has not only passed
+                                ; BLK_IDLE but wrapped, so the very first pass
+                                ; after this would dark the screen on a
+                                ; machine somebody is sitting in front of.
+                                ; The bracket WAS the user. CF is not read:
+                                ; the screen cannot be dark here, because
+                                ; entering a bracket took the input that lit it
     pop di
     pop ax
     ret
