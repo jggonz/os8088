@@ -6342,3 +6342,77 @@ figures. The 5150 is where they would land.
   time after the file was already modified, captured the change the restore was
   meant to undo, which is how b3c5219 shipped half of the grid change
   undocumented. **Rebuild after the pop; never reuse a backup path.**
+
+### Set 59 — Note Pad's panel goes on the bank quantum; Tracker is measured and left alone
+
+Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_cga` /
+`os8088_5150_herc` / `os8088_xt_vga`. Two more items off docs/SNAP-PLAN.md, and
+the second is a **negative result** — the more useful of the two.
+
+**Note Pad's find panel (SPEC.md §27.10.3): 0 bytes.** §27.10.2 makes opening or
+closing it one `OSAPI_GFX_SCROLL` of the whole text band, and the delta that blit
+is handed *is* the panel's height — so the height decides which of `gfx_scroll`'s
+two paths runs. Set 56's constant-delta path is gated on
+`dy & [vid_bmask] == 0`, and `bmask` is **3 on Hercules and 1 on the CGA**, so 29
+and 41 missed it on both. `NP_FP_H` is 32 now, 44 with Replace.
+
+SNAP-PLAN called this "one character" and it is not: `2*NP_FP_ROW +
+2*NP_FP_PAD + 1` is odd for **every** value of either constant, so the correction
+has to be explicit (`NP_FP_SLACK = (-NP_FP_RAW) & 3`). Verified 0 differing
+pixels against a forced full repaint on CGA and Hercules.
+
+**Tracker (SPEC.md §45.19): measured, and NOT changed.** §11.94.3 had it as the
+worst offender in the tree and SNAP-PLAN ranked it near the top. `make
+SNAPAUDIT=1`, one forced full repaint, histogram **filtered to Tracker's own
+record**:
+
+| adapter | glyph cells | aligned | off-grid buckets |
+|---|---:|---|---|
+| Hercules | 237 | 26.2% | 1:16, **5:159** |
+| VGA 12h | 354 | 39.3% | 1:16, 4:40, **5:159** |
+
+Four things the literal-pen sample could not see. Every value the playing view
+updates goes through `tui_rdout`, which **already rounds its pen down to a byte
+boundary when `[tui_mono]` is set** — so the frequently-drawn text is on
+`font_run`'s single-store path whatever the caller's constant says.
+`tui_top_cga`'s labels are already at 0/64/136/200/288. What is left is
+`tui_draw_all` — **event-driven**, where this plan claimed the app "redraws
+continuously while playing"; `tui_draw_dyn` draws only what changed against a
+`tui_l*` shadow. And 159 of the off-grid cells are `tui_s_logo` at 149, which is
+exactly `112 + (179-104)/2` — the centring of `'T R A C K E R'` in its
+112..290 box, a protected kind.
+
+Priced: alignment shaves a cell rather than removing it — Set 52's 3.4% on
+Hercules, 9.4% on VGA — so all 175 off-grid Hercules cells are worth **~6 ms of a
+~237 ms repaint, on an event**. Against Fractal (Set 58): 2,557 cells a hundred
+times a render, where the fix *removed* 78% of the glyphs. **Two orders of
+magnitude apart, and that is the whole decision.**
+
+What the measurement does point at is costed in §45.19 and not taken:
+`tui_rdout` deliberately keeps the erase-and-letter pair on colour, so VGA's
+per-frame values are drawn unaligned on the adapter where alignment is worth
+2.8x more — but fixing it is a refactor of that routine, not a constant.
+
+**THE MEASUREMENT ITSELF WAS WRONG TWICE, both in the flattering direction.**
+`os88snap.reset(m)` with no argument aims the filter at **every** window, so the
+first census read 487 cells that included the About panel being used to force the
+repaint and the Disk window behind it — an unknown share of a number reported as
+Tracker's. And the caller log's first 24 glyphs spelled `'os8088 1.0'`, which is
+not on the FT2 face at all: a **windowed** Tracker shows its splash card, and the
+pens §11.94.3 lists are on the fullscreen face. Filtering to Tracker's own record
+(`wm_wins - 0x600 + slot*28`) gave the numbers above.
+
+**And the row-index trap cost four runs in one session**, which is enough to call
+it a rule: a fixed number of `ArrowDown`s plus a fixed row opens a *different
+package on every adapter*, because `[fm_fit]` is ~5 rows on a 200-line CGA and 8
+on Hercules. It opened ArtfulType for Fractal, row 7 for piano, MODPLUG for Note
+Pad and PAINT for Tracker — each time silently, each time looking like the app
+under test was broken. Read `[fm_lscr]` and `[fm_fit]` out of the kernel and take
+the row the wanted directory index is actually on.
+
+**One more pointer fault, same family as Set 58's.** The find-panel check
+reported 80 differing pixels and "MISMATCH": they were the mouse arrow in two
+places — `mo.menu` releases it in the menu bar, the About close box is inside the
+window — and the union of those two cells is exactly the bbox reported, which
+reads precisely like a blit that moved a band of text. The reference build scored
+83 in the *identical* bbox, and that is what proved it was the instrument.

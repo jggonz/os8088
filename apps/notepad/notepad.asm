@@ -317,6 +317,30 @@ NP_FP_ROW    equ 12             ; the panel's row pitch: an 8px line plus 4
 NP_FP_PAD    equ 2              ; ...and the border above and below it
 NP_FP_LBL    equ 44             ; the 'Find:'/'Repl:' label column
 NP_FP_BTNH   equ 11             ; button height
+
+; THE PANEL'S HEIGHT IS A MULTIPLE OF 4, and that is SPEC.md 27.10.3 rather
+; than a layout preference. Opening or closing it is one OSAPI_GFX_SCROLL of
+; the whole text band (27.10.2), and the delta that blit is given is exactly
+; this height - so it is the height that decides which of gfx_scroll's two
+; paths runs. SPEC.md 5.5.1's constant-delta path derives the destination row
+; address ONCE and steps it, and on a banked adapter it is gated on
+; `dy & [vid_bmask] == 0`: bmask is 3 on Hercules and 1 on the CGA, so an ODD
+; height misses it on both and every row of the blit pays a gfx_rowbase walk.
+;
+; 2*ROW + 2*PAD + 1 is ODD for every value of ROW and PAD - 2*anything is even
+; and the separating rule adds one - so no choice of those two can fix it and
+; the correction has to be explicit. Rounding UP rather than down, because
+; down would have to take a pixel off something that is using it.
+NP_FP_RAW    equ NP_FP_ROW*2 + NP_FP_PAD*2 + 1     ; 29: two rows, the border
+                                                   ; above and below, and the
+                                                   ; 1px rule under it all
+NP_FP_SLACK  equ (-NP_FP_RAW) & 3                  ; 3, to the next multiple
+NP_FP_H      equ NP_FP_RAW + NP_FP_SLACK           ; 32 - and 44 with Replace,
+                                                   ; which needs NP_FP_ROW to
+                                                   ; be a multiple of 4 too:
+%if (NP_FP_ROW & 3) != 0
+  %error "NP_FP_ROW must be a multiple of 4, or the Replace row's +ROW breaks the alignment NP_FP_SLACK just bought"
+%endif
 NP_FPAN_NONE equ 0              ; [np_fpan]: closed / find / find + replace
 NP_FPAN_FIND equ 1
 NP_FPAN_REPL equ 2
@@ -8649,7 +8673,7 @@ np_absw:
 np_fph:
     cmp byte [np_fpan], NP_FPAN_NONE
     je .none
-    mov ax, NP_FP_ROW*2 + NP_FP_PAD*2 + 1
+    mov ax, NP_FP_H             ; a multiple of 4 - see the constant
     cmp byte [np_fpan], NP_FPAN_REPL
     jne .out
     add ax, NP_FP_ROW
