@@ -844,6 +844,9 @@ ui_drag:
     or di, di                   ; a click that only raised the window (above)
     jz .done                    ; leaves the screen already correct
 
+    mov bx, [ui_dragwin]        ; where the user put it is where it goes back to
+    call wm_nat_bank            ; when the adapter changes (SPEC.md 39.11.2.1)
+
 %ifndef NODRAGCACHE
     mov bx, [ui_dragwin]        ; THE DRAG CACHE (SPEC.md 11.96.12): bank the
     call wm_dc_take             ; content while it is still on the glass at the
@@ -1131,6 +1134,9 @@ ui_grow:
     push ax
     call wm_dock_snap
     pop ax
+    call wm_nat_bank            ; the size the user chose, banked AFTER the snap
+                                ; because the snap may have moved the origin
+                                ; (SPEC.md 39.11.2.1)
 
     ; Only the rect it had and the rect it has changed, so the repaint is
     ; their union: wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91).
