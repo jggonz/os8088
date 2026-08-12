@@ -1747,6 +1747,24 @@ dsk_vol_add:
     push di
     mov ah, al                  ; AH = the handle for the duration
     mov bx, dsk_vtab + 2*DV_SIZE    ; the ROW walks, not an index: the index
+    cmp byte [dsk_vcls], DRVC_DISK  ; ...AND C: IS RESERVED FOR A HARD DISK.
+    je .scan                        ; Index 2 is the first a driver may have
+    add bx, DV_SIZE                 ; and a RAM disk or a cable took it simply
+                                    ; by mounting first - so a machine that
+                                    ; gained a hard disk later found C: in use
+                                    ; and its partitions lettered from D:,
+                                    ; which is not what anybody who has used
+                                    ; DOS expects a hard disk to be called.
+                                    ; Everything that is not a DRVC_DISK now
+                                    ; starts its search one row up.
+                                    ;
+                                    ; THE GAP COSTS NOTHING ON THE DESKTOP:
+                                    ; desk_zone_xy places a zone by its ORDINAL
+                                    ; among the shown volumes (desk_ord), not
+                                    ; by its table index, so a reserved C: on a
+                                    ; machine with no hard disk leaves no hole -
+                                    ; the RAM disk is simply the third icon and
+                                    ; is called D:
 .scan:                          ; is derivable from the pointer, and the
     cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE     ; version that kept it in BL had
     jae .full                   ; to bank it across dsk_vol_slot - which it

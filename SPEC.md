@@ -9811,7 +9811,7 @@ The letter is the ROW INDEX and nothing else — six sites do `add al, 'A'`
 (`desk_zone_label`, `dsk_bootltr`, `fdlg`, and three in `files.inc`), so the
 whole of the lettering policy is *which row a volume is given*. There is no
 letter field, nothing persisted moves, and no display code knows this section
-exists.
+exists. §18.7.4 is that policy's one rule beyond "the first free row".
 
 Three conventions:
 
@@ -9919,6 +9919,24 @@ place that was still class-blind** — and worth reading together, because both
 are the same shape: a structure that was one-of-a-kind by accident rather than
 by design, and a second instance arriving years later with no diagnostic
 between the cause and the symptom.
+
+#### 18.7.4 C: is reserved for a hard disk
+
+Volume index 2 is the first row a driver may take, and until now whichever
+driver mounted first took it — so on a machine with a RAM disk or a parallel
+link and no hard disk yet, the link was **C:**, and adding a hard disk later
+lettered its partitions from D:. That is not what anybody who has used DOS
+expects a hard disk to be called.
+
+So `dsk_vol_add` starts its search at index 2 for a `DRVC_DISK` volume and at
+index **3** for everything else. A machine with no hard disk simply has no C:.
+
+**The gap costs nothing on the desktop**, which is the only reason this is a
+one-line change: `desk_zone_xy` places a zone by its ORDINAL among the shown
+volumes (`desk_ord`), not by its table index, so a reserved C: leaves no hole
+in the grid — the RAM disk is the third icon and is called D:. Everything else
+that derives from the index — the drive letter, `FS_DRV`, `osapi_file_here` —
+wants exactly this answer.
 
 ### 18.8 The FAT is a window, not a snapshot
 
