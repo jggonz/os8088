@@ -23051,6 +23051,71 @@ overlay code (§2.5) and is dead FAT by the time the Control Panel can change
 the adapter under it, so the arithmetic is resident and the overlay
 far-calls it through `ovw_desk_rowcalc` like any other overlay→text step.
 
+#### 39.11.2.1 …and back again — the natural bank
+
+**A clamp throws the number away, so `wm_refit` may not be given the clamp's
+own output to work from.** `wm_fit` takes `min` on every axis. Run it twice
+against two screens and the second run sees only what the first left, so the
+whole operation is one-way: VGA → CGA shrinks and CGA → VGA does nothing at
+all. Measured on a cycle-accurate 5150 with a VGA in it, driving the Display
+page twice, the Task Manager goes `(250, 100, 232, 284)` → `(247, 20, 232,
+155)` → **`(247, 20, 232, 155)`**, and the Control Panel's own window loses
+its y the same way. That is both halves of the reported fault: the window
+never returns to its size, **and** it draws outside its bounds — the app
+computed a layout for the frame it asked for, the `gfx_*` primitives clip to
+the *screen* rather than to the window (§11.3), so the rows it still believes
+in are drawn straight through the bottom of its frame and onto the desktop.
+
+So the rect a window **asked for** is banked beside it, in a per-slot side
+table (`wm_natr`, `NR_X`/`NR_Y`/`NR_W`/`NR_H`), and `wm_refit` replays that
+and re-clamps *it*. Clamping is then idempotent in both directions: a switch
+away shrinks from the bank, a switch back restores from the same bank, and a
+round trip is the identity. A side table and not four more words in the
+record, on §11.95's terms exactly — `WIN_SIZE` is what `wm_idx2ptr`
+multiplies by, and every reader of a window would pay for a wider record
+whether the machine has a second adapter or not. `NR_W = 0` is "nothing
+banked", `wm_zoomr`'s sentinel with `wm_zoomr`'s safety argument, and
+`wm_destroy` clears it so a reused slot cannot restore a stranger's rect.
+
+**Five sites may bank, and the list is closed** — a writer of the rect that
+forgets leaves a window restoring to a rect it stopped having some time ago:
+`wm_create` (the **template**, before `wm_fit` can see it — the only moment
+the unclamped rect exists, and what lets a window created while the machine
+is on the CGA still reach its full size afterwards), `wm_resize_nb` (an app
+sizing itself, §11.1 — and `wm_zoom`'s `.go`, which ends there), `wm_zoom`'s
+**restore** path (which writes the record directly and so is not covered by
+that), `ui_drag` and `ui_grow` (the user put it there and sized it there).
+
+**Three sites deliberately may not.** `wm_fit` and `wm_snap_win` are the
+clamp, and a clamp that banks is its own source. `wm_dock_snap` runs inside
+the two `ui_` paths, which bank after it. And **both fullscreen paths**:
+`wm_fs_setrect` takes the whole screen and `wm_fs_drop` gives back what
+`wm_fs_save` holds, and neither is a statement about the size the window
+wants *as a window*.
+
+That last one is why `wm_refit` branches on `WF_FULL` rather than treating
+every record alike. A fullscreen window replayed from its bank would come
+back at its **windowed** rect while still flagged `WF_FULL` and still holding
+`[wm_fs]` — the two disagreeing with nothing on screen saying so, which is
+§11.2's own failure. It gets `wm_fs_setrect` instead, the new screen being
+what a fullscreen window wants; `wm_fit` is wrong for it in the other
+direction too, clamping to the desktop band a fullscreen frame covers by
+definition. **And `wm_fs_drop` gained a `wm_fit`** as the other half of that:
+`wm_fs_save` was fitted to the screen the window went fullscreen *on*, the
+adapter can have changed under it since, and with `wm_refit` deliberately
+leaving that window's bank alone there is nothing else left to catch it. It
+is a no-op on every other path — an unchanged screen re-fits a rect that
+already fitted it.
+
+**What this does not do is tell the application.** An app that derived a
+layout from the screen at launch — the Task Manager derives its row count
+from `[vid_dock_y0]` (§28) — still holds the number it computed then, so
+while the machine is on the *smaller* adapter it can still draw past its own
+frame. The round trip is exact because the frame comes back; the smaller
+adapter's own layout is a separate question and wants a size-changed callback
+the window record does not have. `W_ONSIZE` (§11.1) is a *negotiator*, asked
+before a resize, not a notification after one.
+
 #### 39.11.3 Remembering it — the `VM` key
 
 `SYSTEM.CFG` gains **three** bytes, key `VM` (§51.5's keyed container): a
