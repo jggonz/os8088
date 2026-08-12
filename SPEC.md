@@ -39804,15 +39804,48 @@ an omission. It re-keys the cache to `[disk_drive]` and reads that volume's
 `ASSOC.DAT` — over a cable, exactly the traffic this exists to avoid — and it
 would evict the rows that make the pass work. The cache is used as it stands.
 
-Two consequences worth stating rather than discovering. It is **session
+Three consequences worth stating rather than discovering. It is **session
 state**: a Link listing shows a package's icon if the user has browsed a disk
 that also holds it, and the generic one after a fresh boot. That is inherent
 to "only if it is already in RAM" and nothing here may make it otherwise by
-going to look. And it is **packages only** — §54.3's document pass composes a
+going to look. It is **packages only** — §54.3's document pass composes a
 page from the *program's* icon, and on a redirected volume there is no such
 program to have learned one from, so a `.TXT` keeps the generic icon. It keeps
 it on a floppy too, so this closes the gap between the two rather than opening
-one.
+one. And the pass runs at **mount** time while a Disk window paints from its
+own view cache (§22.1), so a volume opened *before* the cache was warmed keeps
+its generic slots until something re-lists it — a Refresh, or a navigation.
+The cache cannot repaint a listing that was built before it existed.
+
+**Measured on a cycle-accurate 5150/CGA**, reading `disk_icons` out of the
+guest rather than judging pixels — cold, then `B:\GAMES` to warm the cache,
+then the same volume re-listed:
+
+| | `MINES.O88` (type 1) | `READ.ME` (type 0) |
+|---|---|---|
+| cold Link listing | 0 icon bytes | 0 |
+| warm, after Refresh | **60** | 0 |
+
+The cold leg is the half that matters: it is what says no `ASSOC.DAT` is being
+fetched over the cable to produce the warm one.
+
+###### 62.9.2.1.1 Two ways this test lied before it worked
+
+Worth keeping, because both failures *passed*. The first version read the
+**global mount snapshot** and assumed it was the window's — but a Disk window
+paints from its own cache, so when a double-click missed the drive zone the
+test compared `B:\GAMES` against itself and printed a confident pass with the
+right-looking numbers in it. `icons()` reports the volume it read now, and
+says so loudly when that is not the Link volume.
+
+The second version fixed that and still proved nothing: re-opening the volume
+showed the *cached* listing without touching the wire, so the pass under test
+never ran. The wire log is what gives it away — `open Link (warm)` sent zero
+commands. The warm leg clicks **Refresh**, and `CLF` on the wire is the
+evidence that a real `FSV_LIST` happened.
+
+*A verification that cannot say which object it examined, and cannot show that
+the code under test executed, is not a verification.*
 
 #### 62.9.3 The branch sites, and the order to build them in
 
