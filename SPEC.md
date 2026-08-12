@@ -6649,6 +6649,63 @@ bug**, which is §11.96.12's pinned-deal lesson arriving from the other side —
 there the harness randomised what it should have fixed, here it fixed what it
 should have varied.
 
+#### 11.96.14 …and a destination off the screen clips instead of refusing
+
+§11.96.12's second refusal, and the one §11.96.13 left standing: `wm_su_try`
+asked `vid_span_one` whether the cached rect was **wholly** inside one display
+and refused when it was not. That is the right answer for the case it was
+written for — a display **rearranged** under a rect that did not move
+(§39.14.8.1), where the banked pixels really do belong to a card that is no
+longer there — and the wrong one for a window **dragged** off the bottom,
+where the pixels are banked, correct, and merely partly headed off the glass.
+
+It cost the commonest drag there is, because `ui_drag` clamps the **title bar**
+onto the screen and not the window. On Hercules, Solitaire's 303 rows fill a
+~305-row desktop band, so its legal fully-on-screen `y` range is **18..20** —
+three positions — and every other vertical drag redrew the window card by card.
+Measured: dy = 40 was **868 calls / 747.3 ms** with 22 `gfx_blit4` and no
+`gfx_restore`, while the identical drag on a *Disk* window — short enough to
+stay on screen — restored in **92 calls / 203.7 ms**. That control is what said
+the refusal was the geometry and not `dy`.
+
+**No new mechanism, again.** §5.8's sub-rect restore already puts back part of
+a fragment, `wm_su_srect` already intersects a named rect against the fragment
+and arms `gfx_sub_*`, and `wm_damage` already drives all of it. `wm_su_vset` is
+`vid_span_one`'s question asked for an **answer** instead of a verdict: the far
+edges **clamp** and the near edges still refuse.
+
+Four things are load-bearing:
+
+- **It is a SECOND named rect, not an intersection into `wm_su_son`.** The two
+  say different things and have different owners: `wm_su_s*` is what a pass
+  **painted**, named by `wm_damage`, which owes the app that same rect
+  afterwards — narrowing it here would quietly change what the application is
+  told to repaint. `wm_su_v*` is what is on the **glass**, which is nobody's
+  argument but this one's. Each is intersected only if armed, because either
+  may be the only one set.
+- **The near edges still refuse, and that is `vid_span_one`'s dead-zone test
+  kept verbatim.** `vid_disp_of` falls back to the **primary** for a point no
+  display covers, so an origin outside its own display's bounds means the
+  answer is a fallback rather than a fact — and clamping against the wrong
+  display's far edge would put the restore on the wrong card. It is sound to
+  clamp only `x2`/`y2` because `ui_drag` clamps `x >= 0` and `y >= MBAR_H`, so
+  the overhang a drag can produce is always at the far corner.
+- **`wm_su_try` arms it and `wm_su_try` spends it**, at both exits, rather than
+  being cleared at `wm_draw_win`'s exit the way `wm_su_son` is. A one-shot
+  whose arm and spend are in one routine cannot be leaked onto the next window
+  by a path that skips — and `.no` is reached *after* the arm, because the
+  second `wm_su_ck` can still fail.
+- **`wm_dc_take` asks the same question and immediately drops the arm.** There
+  it is only a filter — is *any* of the destination visible — and the answer
+  that matters is asked again at the restore, against the rect as it will be
+  then.
+
+The window is not re-banked afterwards: `wm_su_bank` goes through `wm_su_take`,
+which still demands a whole rect on one display, so a window left hanging off
+the screen keeps the drag's cache (correct, since its content has not changed)
+and gets an ordinary full redraw the next time it is drawn somewhere that
+cache does not describe.
+
 It sits inside `ui_drag`'s own `%ifndef NODRAGCACHE`, so `make DRAGCACHE=0`
 drops a window exactly where it always did and the A/B stays honest.
 
