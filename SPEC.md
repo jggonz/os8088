@@ -7057,10 +7057,27 @@ inner loop: **once per piece, per buffer fragment**. `DI` — the fragment's bas
 in the claim — is held across the inner walk and advanced by `wm_su_fsz` after
 it, because every piece is cut out of the same fragment.
 
-Modelled on the reported cascade's own rects, the three background windows go
-from **122,739 pixels to 2,134 — 58x** — and what is left of the pass is the
-mover redrawing its own content, which is 96% of the remainder and is the one
-window a drag is *supposed* to redraw.
+**Measured** on a cycle-accurate 5150/Hercules, with a counter on the restore
+itself and the reduction switched off and on under `NOSUOCCL` so that both
+sides are the same kernel on the same disk — the reported cascade, top window
+dragged 8px right and 4px down:
+
+| | restores | pixels put back |
+|---|---|---|
+| reduction off | 3 | **125,454** |
+| reduction on | 7 | **59,646** |
+
+The mover's own content is 318x181 = **57,558** of that, so the three
+background windows go from **67,896 pixels to 2,088 — 32.5x** — and 96.5% of
+what remains is the one window a drag is *supposed* to redraw. It cost four
+more `gfx_restore` calls, which is the trade this makes: a region instead of a
+rect. The model this was built from predicted 2,134 against the 2,088
+measured, and the two agree on the residue to 2%.
+
+The **125,454** is smaller than the 180,297 the first trace reported, and the
+difference is not a disagreement: that figure counted every window's owed
+rect, and one of the four had no cache at all, so its share was paid as a
+`W_PAINT` and never reached a restore to be counted here.
 
 Four things hold it up.
 
@@ -7073,14 +7090,104 @@ Four things hold it up.
   written there — and `wm_damage` still owes the *application* the rect it was
   handed if §11.96.11's bands send the draw on to `W_PAINT`, not whichever
   piece the walk stopped on.
-- **The list is disarmed on the way out.** It is `wm_clip_*`, free at this
-  point because `wm_draw_win` zeroed it before the title bar (§11.97.1), and a
-  region left armed would clip the white fill and `W_PAINT` on the miss path —
-  §11.3's granularity rule, in the one place §11.97.1 says it must not bite.
+- **The list is disarmed by the routine that ARMED it, and only then.** It is
+  `wm_clip_*`, free at this point because `wm_draw_win` zeroed it before the
+  title bar (§11.97.1), and a region left armed would clip the white fill and
+  `W_PAINT` on the miss path — §11.3's granularity rule, in the one place
+  §11.97.1 says it must not bite. **Disarming it unconditionally at the exit
+  is what stopped `REDRAWFULL` being a reference at all**, and it is worth
+  knowing as a shape rather than as a typo: the reference build banks nothing,
+  so `wm_su_ck` always refuses and the *miss* path is the only path it ever
+  takes — the one path with no pieces on it. §11.97.1's zeroing is `%ifndef
+  REDRAWFULL`, so in that build a caller's region really was live across
+  `wm_su_try`, and a change meant to be invisible to the reference was
+  quietly editing it. Both sides of the gate then disagreed with the truth by
+  different amounts, and the residual between two wrong pictures read as a
+  small, plausible, nearly-passing number.
 - **`gfx_restore` is off the clip list** (§11.3: a blit cannot take a sub-rect
   without advancing its source), which is exactly why the pieces are walked
   rather than armed: `wm_su_srect` and `gfx_sub_arm` already do that advancing,
   and this reuses it once per piece instead of once per fragment.
+
+##### 11.96.15.1 The pieces are subtracted by the FRAME and rounded out to bytes
+
+Two corrections without which this loses pixels, and each is a rule the tree
+had already written down somewhere else.
+
+**The occluder is subtracted by its frame, not by the box it occupies.**
+`wm_clip_sub` takes `(x, y)..(x+w, y+h)`, and the drop shadow `wm_draw_win`
+draws is an **L** starting at `(+1,+1)` — so the top-right corner `(x+w, y)`
+and the bottom-left `(x, y+h)` are inside that box and are painted by nothing.
+Which direction that error runs in is decided by what the caller does with the
+answer, and the two callers want opposite things. For **occlusion** — *may I
+draw here?* — over-claiming is conservative and free: it says covered about a
+pixel that is not, and a clipped primitive declines to draw one nobody needed.
+For a **restore** it is the other direction and it strands a pixel: the one
+declined is one no window above will ever write, so the damage under it is
+never repaired and the artifact is permanent. §11.91.1 found exactly this at
+the desktop dither, one pixel at a time, and wrote `wm_clip_subf` for it;
+`wm_clip_occlf` is that same rect carried into the second place the kernel
+subtracts a window in order **not** to draw something.
+
+**And each piece's x edges are rounded OUTWARD to whole bytes.** `wm_su_edge`
+(§11.96.8) patches the buffer's partial edge bytes with the screen as it is
+now, keeping only the bits the restored rect owns — so it **overwrites the
+cached content of the bits it does not own**. One rect never noticed, those
+bits being outside the restore entirely. Two pieces side by side in the same
+rows share an edge byte, and then the left one's merge replaces exactly the
+cached bits the right one is about to put back: a stale sliver up to 8px wide
+down every vertical join, taken from whatever was on the glass.
+
+Rounding out **removes the case rather than sequencing it**. An aligned edge
+owns its whole byte, so `vga_lmtab`/`vga_rmtab` hand the merge a full mask, it
+keeps everything and writes nothing back — the corruption has no partial byte
+left to happen in. Two pieces may then overlap by one byte column and both put
+the same cached bytes there, which is idempotent, and it is a *cheaper* answer
+than ordering the merges because there is no order to get right.
+
+What licenses reaching outward at all is that the piece is **clamped back to
+the caller's own rect**, which is what this restore put on screen whole before
+any of this existed — so every piece is a subset of it and the worst case is
+the behaviour it replaced. The pixels reclaimed from an occluder belong to a
+window that overlaps ours, which is therefore MARKED by §11.91's transitive
+pass and redrawn later in this same back-to-front walk.
+
+##### 11.96.15.2 `CF` is the answer, and the gate that could not see it
+
+The first build of this lost pixels and the diagnosis was written up as three
+suspects in the region arithmetic. **All three were wrong about the symptom**,
+and it is worth keeping why, because the mistake is available to anything that
+adds a test to a routine's exit.
+
+`wm_su_try` answers in **CF**: clear means *the content is already on screen,
+do not paint it*. Its epilogue gained a `cmp word [wm_su_pn], 0` to decide
+whether a rect needed putting back — **below** the `stc` that reports a cache
+miss. `cmp` writes flags. So every miss returned "already on screen",
+`wm_draw_win` skipped both the white fill and `W_PAINT`, and **every window in
+the machine came up as bare chrome**. The hit path survived on luck: `clc` had
+just run and `cmp 0, 0` leaves CF clear too, so the one path that *was*
+exercised by the optimisation looked perfect. `wm_snap` banks its flags for
+this exact reason (§11.94), and so does this now.
+
+**What hid it was the gate.** `REDRAWFULL` banks nothing, so `wm_su_ck` always
+refuses and the reference build takes the **miss path only** — the broken one.
+Both sides of the A/B were drawing bare chrome, and the diff between two
+wrong pictures came back as 1,630 pixels and then a few hundred and then 57:
+small, stable, plausible numbers that read as a subtle region bug. The screen
+was never looked at. §11.96.7's own rule — *render the claim and look at it,
+the pixel diff is the second check* — is what breaks the tie, and one
+screenshot of either build would have ended it in a minute.
+
+**And `REDRAWFULL` cannot be the reference for a change that moves an image
+rung.** It compiles out every incremental path at once, which here made its
+kernel 512 bytes smaller, `KERNEL.SYS` a sector shorter and the volume a
+kilobyte freer — so the Disk window's own status line reads `Free 195K`
+against `Free 194K`, 25 pixels of one digit, in a gate whose standard is
+zero. `NOSUOCCL` is the reference this feature actually needs: the reduction
+stays compiled and only the call is skipped, so the two binaries are three
+bytes apart, land in the same rung and carry the same disk. Against it the
+change is **0 differing pixels in 11 steps on Hercules, CGA and VGA mode
+12h**, on both the §11.96.9 and §22.13 scripts.
 
 #### 11.96.7 A bank is only worth what was on the glass when it was taken
 

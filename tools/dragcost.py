@@ -8,9 +8,21 @@ Minesweeper and a second Disk window on A: - and drags the top one 8px right,
 4px down. Every coordinate comes from the guest (wm_wins / wm_zord /
 desk_zstep), so it runs on any adapter.
 
-It prints each window's raise-cache segment before and after. To see what each
-window is TOLD it owes, put a trace back into wm_dmg_wins beside wm_su_sub:
-that is what measured 180,297 pixels restored to reveal 2,880.
+It prints each window's raise-cache segment before and after.
+
+TWO INSTRUMENTS ARE NOT IN THE SHIPPED KERNEL, and this runs without either.
+To see what each window is TOLD it owes, put a trace back into wm_dmg_wins
+beside wm_su_sub (`dbgt`/`dbgt_n`, 14 bytes a row); the table below is skipped
+when those symbols are absent rather than raising. To see what a restore
+actually COSTS, put a counter and a 32-bit accumulator beside the gfx_restore
+in wm_su_try's piece loop - that is what measured SPEC.md 11.96.15's
+125,454 -> 59,646 pixels, and 32-bit because one drag of this cascade is more
+than a word.
+
+THE A/B IS `make NOSUOCCL=1`, NOT `make REDRAWFULL=1`. REDRAWFULL turns off
+every incremental path at once and its kernel is an image rung smaller, so the
+volume has a kilobyte more free and the Disk window's status line alone
+differs by 25 pixels in a gate whose standard is zero (SPEC.md 11.96.15.2).
 """
 import sys, os, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
@@ -49,9 +61,20 @@ def zone(m, vol):
 def row(e, n):
     return e["x"] + 48, e["y"] + TITLE_H + FM_ROW_Y0 + n * FM_ROW_H + 8
 
+def has_trace(m):
+    """The trace block is NOT in the shipped kernel - see the note above."""
+    try:
+        sym(m, "dbgt_n")
+        return True
+    except Exception:
+        return False
+
 def trace_reset(m):
-    m.write(sym(m, "dbgt_n"), b"\0\0")
+    if has_trace(m):
+        m.write(sym(m, "dbgt_n"), b"\0\0")
 def trace(m):
+    if not has_trace(m):
+        return []
     n = w(m, "dbgt_n")
     base = sym(m, "dbgt")
     out = []
