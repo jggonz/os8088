@@ -53,14 +53,14 @@ MAGQ = 0xF48383F3
 # the next; too large just wastes wall clock.
 STEP = 400
 
-# ...and how long a 3-byte mouse packet needs to CLEAR THE UART, in steps. The
-# serial mouse is 1200 baud, so a packet is ~25 ms of guest time, and packets
-# sent faster than that are DROPPED (CLAUDE.md). Pressing and releasing
-# back-to-back into a paused machine therefore delivers one event, none, or
-# two depending on nothing the caller can see: the same script produced a
-# clean four bytes on one run and no click at all on the next. Step this much
-# between them and it is deterministic.
-CLICK_STEP = 60000
+# NO BLIND STEPPING AFTER THE PRESS, and that is the whole of what
+# click_paused had to unlearn. Stepping a mouse packet's worth (60,000
+# instructions) to "let the UART clear" runs the guest straight through the
+# click dispatch and into net_connect, which sends NC_BYE and the magic into a
+# wire nobody is watching - so the partner starts looking after the
+# conversation has already begun and waits out its budget on nibbles that
+# came and went. The partner's own 400-step loop clocks the UART perfectly
+# well; it just has to be the thing doing the stepping.
 
 
 class LinkTimeout(Exception):
@@ -168,14 +168,14 @@ class Partner(object):
 
         The caller positions the cursor while the machine runs - mo.to()
         proves where it is by reading guest memory, which needs cycles - then
-        pauses, then calls this. Stepping between the two packets is what
-        makes it reliable; see CLICK_STEP.
+        pauses, then calls this, then starts receiving.
+
+        THE PRESS ALONE, and no release: ui_task dispatches a click on MDOWN,
+        so the press is what runs net_connect, and anything sent after it is
+        one more thing that can consume the cycles the handshake needs.
         """
         m = marty or self.m
         m.mouse(0, 0, l=True)
-        m.step(CLICK_STEP)
-        m.mouse(0, 0, l=False)
-        m.step(CLICK_STEP)
 
     # --- the handshake -------------------------------------------------------
     def hunt(self, limit=64):
