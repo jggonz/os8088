@@ -1758,6 +1758,34 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                                 ; you have asked for the
                                                 ; whole-content cache you were
                                                 ; trying to avoid
+; --- the pointer's picture, over YOUR window only (SPEC.md 7.2) -------------
+; AL is one of these. They all share the kernel's 8x12 cursor cell, which is
+; why a shape costs the machine nothing: every walk in the cursor renderer is
+; bounded by that cell, so a bigger picture would be paid on every gfx lock
+; hold on the machine rather than only where you asked for it.
+OSAPI_CUR_ARROW equ 0           ; the default, and what W_FLAGS arrives holding
+OSAPI_CUR_CROSS equ 1           ; the aiming crosshair, hot spot at its centre
+%define OSAPI_WM_CURSOR     KERNEL_SEG:0x03D0   ; BX = your window ptr, AL =
+                                                ; OSAPI_CUR_*. The pointer wears
+                                                ; it over your window's CONTENT
+                                                ; and nowhere else - the desktop,
+                                                ; other windows, and your own
+                                                ; title bar and its boxes stay
+                                                ; the arrow, because chrome is
+                                                ; the kernel's to draw and to
+                                                ; click. Set it once, at window
+                                                ; creation; it is remembered in
+                                                ; the record and dies with it.
+                                                ; It does NOT draw and does not
+                                                ; need the lock: the pointer may
+                                                ; not be over you, and only the
+                                                ; kernel knows - the swap lands
+                                                ; on the next UI pass. NOT worth
+                                                ; having inside an fsx bracket
+                                                ; (SPEC.md 53): the held lock
+                                                ; keeps the pointer off the
+                                                ; screen there, so an exclusive
+                                                ; app still draws its own
 %define OSAPI_WM_DAMAGE     KERNEL_SEG:0x03B0   ; BX = your window ptr, called
                                                 ; from inside your own W_PAINT.
                                                 ; CF=1 = draw the WHOLE content

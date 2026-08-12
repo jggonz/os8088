@@ -1681,7 +1681,17 @@ osapi_table:
                                   ;          gfx lock must already be held -
                                   ;          which it is, inside a file
                                   ;          operation (SPEC.md 18)
-osapi_table_end:                  ; 0x03D0
+    OSAPI_SLOT wm_cursor          ; 0x03D0 - BX = window, AL = OSAPI_CUR_*.
+                                  ;          The picture the pointer wears over
+                                  ;          THIS window's content, and nowhere
+                                  ;          else (SPEC.md 7.2). Takes effect on
+                                  ;          the next UI pass rather than now:
+                                  ;          the pointer may not be over you,
+                                  ;          and only the kernel knows. Chrome -
+                                  ;          the title bar and its boxes - stays
+                                  ;          the arrow, because it is the
+                                  ;          kernel's to draw and to click
+osapi_table_end:                  ; 0x03D8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1689,8 +1699,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 120 * 8
-%error "os8088 API jump table must be exactly 120 8-byte slots"
+%if OSAPI_TABLE_LEN != 121 * 8
+%error "os8088 API jump table must be exactly 121 8-byte slots"
 %endif
 
 ; =============================================================================
