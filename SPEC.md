@@ -5864,11 +5864,11 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 
 | what | off-grid pen | note |
 |---|---|---|
-| Disk window header | `fm_cx + 6` | one string per repaint; 6 → 8 fixes it |
-| Disk window icon grid | `fm_cx + 78 × col` | `FMI_CELL_W` 78 → 80 would align every column |
+| ~~Disk window header~~ | ~~`fm_cx + 6`~~ | **done** — 6 → 8, with the status line and the row icon; §22.11.1.1 |
+| ~~Disk window icon grid~~ | ~~icon at `fm_cellx + 31`~~ | **done** — `FMI_CELL_W` 78 → 80 and 31 → 32; §22.11.1.2. Its **label** is `(FMI_CELL_W - width)/2` and is a *centred string*, the second of the three kinds below that must not be "fixed" |
 | Tracker's FT2 UI | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | its *pattern grid* was aligned for §6.1 (§45.9); the rest of the face never was — 17% of sampled literal pens |
 | Tamegram HUD | 4, 60, 116, 164, 210 | 7 of 8 sampled pens ≡ 4 |
-| Fractal status row | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0 |
+| ~~Fractal status row~~ | ~~`FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250~~ | **done** — §40.2.1, together with the change that stops 78% of those glyphs being drawn at all |
 | Paint | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned |
 | ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
 | HDD Control Panel page | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
@@ -5892,10 +5892,11 @@ exact. The "sampled literal pens" rows are a **sample** — the literal `mov cx,
 values within a few lines of a text call — so they say *this app has off-grid
 pens* and not *this fraction of its glyphs are off-grid*; an app whose pens are
 all computed (Missile) shows as nothing at all. The "(measured)" entries come
-from `make SNAPAUDIT=1`. **That instrument has a known artifact**: every
-window's callback reports a constant 4 glyphs in bucket 7 per forced repaint,
-unexplained, so a count under about ten says nothing. Chase that before
-trusting small numbers out of it.
+from `make SNAPAUDIT=1`. **Its "known artifact" was the tool being right**
+(§11.94.2): the constant 4 glyphs in bucket 7 that every window reported were
+the *Disk window's `APPS` caption* behind them, `wm_draw_title` centring a pen
+no app can influence. A caption is chrome, it is attributed as chrome now, and
+small counts out of that instrument mean what they say.
 
 ### 11.95 Double-clicking a title bar zooms a resizable window
 
@@ -15600,32 +15601,30 @@ ticks between two runs of different speed — is excluded.
 
 #### 22.11.1 The blit rounds INWARD, and each strip it leaves is answered
 
-`gfx_scroll` wants byte columns at both ends, and a Disk window is not
-`WF_SNAP` (§11.94) — its content origin is `W_X+1`, wherever the user dragged
-it. So the span is rounded **inward**, which is the opposite of Note Pad's
-§27.7.2 and for a reason worth stating: `NP_MARGIN` is 8 there, so rounding a
-text band's `x1` DOWN still lands inside the content, while a Disk row's icon
-starts four pixels in — rounding down would put the blit's left edge outside
-the window altogether, onto the frame and then onto whatever is to the left
-of it. Inward rounding leaves two strips the blit cannot move, and each is
-answered rather than paid for:
+`gfx_scroll` wants byte columns at both ends, so the span is rounded
+**inward**, which is the opposite of Note Pad's §27.7.2 and for a reason worth
+stating: `NP_MARGIN` is 8 there, so rounding a text band's `x1` DOWN still
+lands inside the content, while rounding a Disk window's down would put the
+blit's left edge onto the frame and then onto whatever is to the left of it.
+Inward rounding leaves two strips the blit cannot move, and each is answered
+rather than paid for:
 
-- **Left, up to 7px**: white margin, plus at most three columns of the 16x16
-  icon at `x+4`. The strip is erased and those rows re-iconed
-  (`fm_draw_licon`), and **only when the rounding really did reach them** —
-  `align_up(cx) > cx+4` is true for three window positions in eight, and the
-  other five need no pass at all.
+- **Left, up to 7px**: white margin, and **nothing else** — see §22.11.1.1,
+  which is the reason that sentence is short now. It used to be white margin
+  *plus up to three columns of the 16x16 icon*, erased and re-iconed by
+  `fm_draw_licon` and only when the rounding really did reach them.
 
-  **The erase in front of it is not belt and braces, and leaving it out is the
-  one bug this shipped before the pixel diff caught it.** An icon is *not*
-  drawn opaque over its cell: `ico_core`'s white pass is the icon's own
-  **silhouette mask** — `ico_app16`'s is a diamond, `ico_disk32`'s a solid
-  rectangle, and a harvested one is whatever the package's author drew — so
-  re-drawing an icon leaves every pixel the *previous* row's icon lit outside
-  the new outline. It showed as a three-column stripe of stale icon edge down
-  the left of the row band, on the three window positions in eight that reach
-  it and no others, which is exactly the shape of bug an eyeball misses and an
-  A/B diff does not.
+  **The erase in front of that was not belt and braces, and leaving it out was
+  the one bug this shipped before the pixel diff caught it** — worth keeping
+  written down, because the same trap is waiting for anything that redraws an
+  icon in place. An icon is *not* drawn opaque over its cell: `ico_core`'s
+  white pass is the icon's own **silhouette mask** — `ico_app16`'s is a
+  diamond, `ico_disk32`'s a solid rectangle, and a harvested one is whatever
+  the package's author drew — so re-drawing an icon leaves every pixel the
+  *previous* row's icon lit outside the new outline. It showed as a
+  three-column stripe of stale icon edge down the left of the row band, on the
+  three window positions in eight that reached it and no others, which is
+  exactly the shape of bug an eyeball misses and an A/B diff does not.
 - **Right, up to 7px**: always white. The span stops at the byte column
   *before* the scroll bar, so the bar's frame, its two rules and its two arrow
   glyphs are never disturbed — only the thumb is redrawn — and a list row's
@@ -15646,10 +15645,82 @@ width of one fill the thumb is briefly doubled, and a doubled thumb reads as
 movement where an absent one reads as a blink. A step too small to move it
 draws nothing.
 
+##### 22.11.1.1 The strip pass is unreachable, and the icon inset is why
+
+The row icon is **8px** into the content, not 4, and the name is at **32**, not
+24 (`fm_draw_lrow`). Both are §11.94.3's alignment work — and one of them is
+not, which is the part to read before moving either.
+
+**What alignment buys here is not a text pen.** `ico_pass` lands each 16-pixel
+icon row in a **three-byte window** at a shift of `x & 7`, and at shift 0 the
+third byte is always zero and is skipped by the `or al,al / jz` already in the
+loop. So an aligned icon is two latched read-modify-writes per row instead of
+three, twice over — the mask pass and the data pass — which is 32 byte-writes
+saved per icon on the two 1bpp adapters and 32 fewer `GC8 Bit Mask` `out`s plus
+their read-modify-writes on VGA. That is an argument from the loop rather than a
+measured figure; it is not in PERFORMANCE.md and should not be quoted as if it
+were.
+
+**What it buys for free is this whole strip.** Inward rounding moves `x1` by at
+most 7 pixels, so an icon 8px in **cannot be cut by the strip at any window
+position** — and with §11.94.1's alignment default `x1 == fm_cx` exactly, so
+the strip is empty as well as harmless. `align_up(cx) > cx+8` is unsatisfiable.
+The pass is therefore dead code, and it is **kept** rather than deleted: it is
+four instructions of test that state the invariant, and moving the inset back
+would need it. Its residue is `wm_snap_ax`'s one refusal — a window as wide as
+the screen sitting at x=0, where 7 becomes the answer and those seven columns
+are margin.
+
+**The name had to move with the icon, and no size report or byte diff could
+have said so.** At icon +8 with the name still at +24, the 16px icon cell ends
+exactly where the name's first letter starts: `ARTFUL.O88`'s A touched the app
+diamond, `FRACTAL.O88`'s F touched its blob. +32 gives 8px of daylight, where
++4/+24 gave 4. `fm_layout`'s name budget went `(cw-88)/8` → `(cw-96)/8` to pay
+for it, which puts the column's **right** edge at `cw-64` either way, so the
+size column's clearance is unchanged and the only loss is one character on a
+window narrower than 184px of content — where an 8.3 name is already being
+truncated.
+
+**Cost: 0 bytes in every section**, all seven constants being `add`/`sub reg,
+imm8` at both the old and the new value; the header pen and the status line's
+moved 6 → 8 with their two truncation constants (`14 → 16`, `12 → 14`) in the
+same round. Verified on a cycle-accurate 5150 with CGA, Hercules and VGA mode
+12h: a four-row scroll against a forced full repaint of the same window is **0
+differing pixels** on all three, the only difference anywhere on screen being
+the menu-bar clock ticking between the two captures.
+
+##### 22.11.1.2 The grid cell is 80 wide so that the icon is on a byte
+
+`FMI_CELL_W` is **80**, and the icon sits at `fm_cellx + 32`. Neither number is
+about the blit — the grid takes `fm_rows_only` (§22.11.2) — and neither is about
+a text pen. It is §22.11.1.1's `ico_pass` argument applied to the *other* place
+this window draws icons, and the grid is where it is worth more: at 78 the
+columns started at 0, 78, 156 = **0, 6, 4 mod 8** and the icon's own centre was
+31 = **7 mod 8**, the worst phase there is, so every icon in the grid paid the
+third framebuffer byte on both of its passes. At 80 every `fm_cellx` is a
+multiple of 8 (the content origin being one, §11.94.1) and 32 is `(80-16)/2` —
+so the icon is **aligned and exactly centred at the same time**, which is why
+this needed no trade.
+
+**The label is centred and stays off-grid**, at `(FMI_CELL_W - width)/2`. That
+is §11.94.3's second protected kind and snapping it was considered and dropped:
+a 9-character name is 72px in an 80px cell, so there are 8px of slack and any
+rounding puts the label flush against one side of its cell.
+
+`FMI_CELL_W` is one `equ` read by `fm_layout` (the column count), `fm_hit` (the
+column a click is in) and the selection rect, so those three cannot disagree
+about a cell's width — that is the §22 one-place-for-geometry rule doing the
+work, and it is the whole reason this is a one-line change. The visible
+consequence is that `cols = max(1, (cw-16)/FMI_CELL_W)` answers one fewer at
+`cw` 250..255, where 78 fitted three columns and 80 fits two. Cost **0 bytes**;
+verified on a cycle-accurate 5150 with CGA, Hercules and VGA mode 12h — three
+columns on each, a click on column 1 selecting index 1, and a two-row grid
+scroll **0 differing pixels** against a forced full repaint.
+
 #### 22.11.2 The icon grid takes the middle tier, deliberately
 
-A grid cell is 78 wide and centres a 9-character name in it, so the leftmost
-cell's name can start 3px into the content and the rightmost can end 4px
+A grid cell is 80 wide and centres a 9-character name in it, so the leftmost
+cell's name can start 4px into the content and the rightmost can end 4px
 short of the last cell's edge — which is *inside* the strips inward rounding
 leaves. Repairing those means redrawing the first and last columns whole, and
 at the three columns a 320px window fits that is two thirds of the grid: the
@@ -25013,6 +25084,71 @@ text back into. Combined with §40.1
 the two halves cover the two ways a window loses its pixels: covering costs
 nothing because the worker keeps drawing what is visible and caching what is
 not, and moving costs one replay because the cache survives the repaint.
+
+### 40.2.1 A progress tick draws the percentage and nothing else
+
+`fr_status_maybe` runs up to a hundred times a render — its own comment always
+said so — and it used to call `fr_status`, which white-fills the whole strip and
+re-letters all five fields. That is about 27 glyph cells and a fill, a hundred
+times, to move a digit; PERFORMANCE.md prices a cell at ~1ms on the machine this
+app exists for, so it was seconds of drawing per render. The old comment even
+named the shape of it — *"the strip would otherwise flicker white-then-text on
+every scanline"* — and then did it a hundred times instead of once per row.
+
+**Nothing but the percentage can change while a render runs.** The type, the
+zoom and the palette all move through `fr_kick`, which calls `fr_status` itself.
+So a tick draws ONE field, as one **opaque** `font_run`, space-padded to
+`FR_PCT_CELLS`: §12.9's rule at the menu bar, §48.9.3's at Missile's banner and
+§56.12's at ModPlug's face, which is to say *only the segment that changed may
+put pixels on a strip*.
+
+Three things fall out. There is **no fill**, so the field is never momentarily
+blank — the padding IS the erase (§6.1) — which removes the flicker rather than
+reducing its frequency. There is **no `wm_clip_test` gate**, because `font_run`
+decides one cell at a time and cannot produce §11.3's granularity failure, where
+`fr_status` must ask about its whole rect because its fill and its glyphs clip
+differently. Since §11.3.2 that difference is a **vertical** cut only — a
+horizontal one now letters the rows on the visible side, in `font_run_cell` and
+in `font_char` alike — so `fr_status`'s gate is narrower than it was and is
+still needed: half a cell's *width* is the thing neither renderer can write.
+And `fr_redraw` had to stop asking `fr_status_maybe`
+for the strip: it parked an impossible `[fr_pct]` to force a full redraw, and
+that path draws one field now, so it would have left the percentage alone on an
+empty band. It calls `fr_pctcalc` and then `fr_status` — which is what it always
+meant.
+
+**The status strip's columns are all multiples of 8** (§11.94.3): `FR_X_NAME` 8,
+`FR_X_ZOOM` 128, `FR_X_ZNUM` 168, `FR_X_PCT` 200, `FR_X_PAL` 248, where they
+were 2, 130, 170, 200, 250 — four of the five at 2 mod 8, which the SNAPAUDIT
+histogram saw as **2,222 of 2,542 sampled glyphs in bucket 2**, the worst entry
+in that survey. They all moved LEFT except the name, because `FR_X_PAL` plus
+`'Spectrum'` is 312 of a 320px content and there is nowhere right to go; the
+name moved right, off the border, since 0 would abut the window frame. The cost
+is that `'Julia Dendrite'` — the longest type name, 112px — now clears `Zoom` by
+8px instead of 16. Looked at on CGA: one space, and legible.
+
+**Alignment and the split are one change, not two.** `font_run`'s single-store
+cell path needs `[vid_mono]` *and* `x & 7 == 0` (§6.1), so on the two adapters
+this app is slowest on, the aligned pen is what makes the opaque run pay.
+Measured with `make SNAPAUDIT=1` — one byte-identical kernel, two apps images, so
+the package is the only variable — over one `View ▸ Redraw` render on a
+cycle-accurate 5150/CGA:
+
+| | `font_char` calls | `font_run` calls | glyph **cells** | aligned |
+|---|---|---|---|---|
+| before | 2,542 | 3 | **2,557** | 12.5% |
+| after | 50 | 103 | **565** | **100%** |
+
+**4.5x**, and the off-grid glyph count is 2,222 → **0** — not aligned, *gone*,
+which is the better outcome of the two. The cells figure counts a `font_run` as
+its width (5) rather than as one call, because quoting the raw totals would
+flatter the new build by pricing a five-cell run as a single glyph. ~100
+`gfx_fill`s a render go with them. Verified on CGA, Hercules and VGA mode 12h:
+the strip after a hundred incremental ticks is **0 differing pixels** against a
+forced full repaint of the same window at the same percentage — the §59 failure,
+a fast path and a full painter drawing the same pixels with nothing but a diff
+to reconcile them. `snap_hrun` reported all 103 runs in bucket 0, which is what
+says the mono fast path was actually reached rather than merely permitted.
 
 ### 40.3 Acceptance
 
@@ -39485,10 +39621,36 @@ on `LP_TMO` and is a *different* bug wearing this one's clothes. And it is
 armed per command by `serve`, so a session can be fast everywhere and slow at
 the one verb whose far side would touch a disk.
 
-The A/B is what makes it a test: 40 ticks (2.2 s, five times the old
-deadline and a fifth of the new one) enters the folder and lists it on the
-shipped driver, and loses the link on one built with `REPLY_TMO` = 8. A
-harness that cannot produce the failure cannot be said to have found the fix.
+The A/B is what makes it a test, and `make NETTURN1=1` is the other build:
+40 ticks of stall — 2.2 s, five times the old deadline and a fifth of the new
+one — on the chdir alone, everything else in the session answered instantly.
+Measured, on `os8088_5150_cga_lpt`:
+
+| | shipped | `NETTURN1=1` |
+|---|---|---|
+| mount | `ICL` | `ICL` |
+| open the volume | `CLF` | `CLF` |
+| enter `APPS` | `CLF`, window titled `APPS`, 2 files | **the guest stops acking mid-reply** |
+
+**The failing leg fails in the field report's own words.** It is not that the
+listing comes back empty — it is that the far side, having finished its walk,
+offers the first byte of its answer and *nobody acks it*: os8088 gave up at
+440 ms, called `net_lost`, and stopped driving the wire. The harness spins on
+`_await_strobe` until its budget expires. That is "the dos side showed
+nothing (no exit or message)" seen from the DOS machine's side, and it is why
+`serve` raising `LinkTimeout` at that point is the RESULT rather than a
+harness failure.
+
+The first two rows being identical is the control: the old deadline is
+perfectly adequate for a partner that answers instantly, which is the whole
+reason every earlier run passed. A harness that cannot produce the failure
+cannot be said to have found the fix.
+
+And the failing leg reproduces it **on the glass**, not merely in the log:
+the Disk window reads `No os8088 disk (D:)` over `Size ?  Free ?`, which is
+the field photograph letter for letter. The far side's own log says
+`CHDIR handle=2 -> parent 0` — it resolved the folder correctly and then had
+nowhere to put the answer.
 
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
