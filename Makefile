@@ -492,6 +492,11 @@ DRIVERS += $(BUILD)/ramdisk.drv
 # drivers do but is NOT one of them: nothing puts it in drv_tab, the Drivers
 # page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
 DRIVERS += $(BUILD)/hddtool.drv
+# ...and the store above 1MB (SPEC.md 41.12), which is an overlay for the same
+# reason and rides every disk the same way: no drv_tab row, no Drivers-page
+# tick, no SYSTEM.CFG bit. The kernel's own boot sniff decides whether to read
+# it, so a machine with no memory up there never touches this file
+DRIVERS += $(BUILD)/xmem.drv
 SYSAPPS := $(BUILD)/taskmgr.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
@@ -568,6 +573,17 @@ $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
 
 $(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/sound.bin -o $@
+
+# The store above 1MB (SPEC.md 41.12). An OVERLAY, not a driver: os88drv.py
+# stamps it and names it 'overlay' because its class byte is DRVC_OVL, which
+# the kernel deliberately does not know - so nothing can load it but xm_boot.
+$(BUILD)/xmem.bin: drivers/xmem/xmem.asm drivers/os88drv.inc apps/os88api.inc \
+                   | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/xmem/xmem.asm
+	@echo "xmem:   $(call FILESIZE,$@) bytes"
+
+$(BUILD)/xmem.drv: $(BUILD)/xmem.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/xmem.bin -o $@
 
 # The MBR's 446 bytes of boot code (SPEC.md 52.10.1). Assembled on its own and
 # incbin'ed by drivers/hdd/part.inc, which is why the driver gets -I $(BUILD):
