@@ -39516,6 +39516,55 @@ the field photograph letter for letter. The far side's own log says
 `CHDIR handle=2 -> parent 0` — it resolved the folder correctly and then had
 nowhere to put the answer.
 
+##### 62.10.4.7 The second field run: a package listed with no handle
+
+Reported off the same pair, with the deadline fixed: Connect worked, `APPS`
+and `GAMES` navigated in and out, and launching Minesweeper answered
+**`Disk error`**.
+
+**`srv_ent` filled the entry's handle word in its `.dir` branch alone.** A
+folder got one, a file got zero — and so did a **package**, because the
+package arm sets the type and jumps straight to the exit. §19.1's
+first-cluster word at offset 18 *is* the driver's handle on a redirected
+volume, and `loader_run` is the one caller in the machine that arrives
+holding a handle rather than a name (`disk.inc`'s `DVK_FILE` branch reads by
+it and never resolves). So every package on the wire was offered to
+`open_handle` as handle 0, which it refuses outright as the root — the
+answer is a status, the loader's peek takes any failure as `.disk1`, and the
+message is `Disk error` on a link that never faltered.
+
+The shape is worth naming: **the type that worked was the type the walk had
+a reason to touch.** Folders need a handle to be dived into, so the branch
+that gives them one is the branch that already existed; a package needs one
+for a reason that lives in *another* module, three verbs later.
+
+**A plain file still gets 0, deliberately, and the asymmetry is the table.**
+Nothing reads offset 18 behind type 0 — `dskw_read` STATs by name and is
+handed a fresh handle — while `hdtab` holds 64 and a real DOS folder can
+hold hundreds, so a slot per file would exhaust it and break the folders
+that work today. The RAM disk hands one out for everything because it has no
+such table to spend, and that difference is why it could never have shown
+this.
+
+`srv_stat` also stopped answering **OK with handle 0** when `hd_get` finds
+the table full: 0 is the root, `open_handle` refuses it, so that was a
+success the caller could not use — the same lie one verb earlier.
+
+###### 62.10.4.7.1 The harness was kinder than the machine, again
+
+`partner.py`'s `FileTree.entry` wrote the node's handle at offset 18 for
+**every** entry, files and packages included. So the stand-in was the only
+thing in the world supplying a working package handle, and a package launch
+over the cable had been exercised repeatedly — with the harness quietly
+patching the defect under test.
+
+That is the second time in this driver's short history (`NC_BYE` was the
+first, §62.10.4.2) and the rule is the same both times: **a harness that is
+more generous than the thing it stands in for hides precisely the bugs it
+exists to find.** `entry` now applies os88net.asm's rule — a handle for a
+folder and a package, zero for a plain file — so the harness can fail the
+way the field does.
+
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
 466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
