@@ -187,10 +187,28 @@ FT_SIZE     equ 16
 ; the desktop is 156 rows and the content becomes 320x137.
 FR_STRIP_H  equ 10                  ; status strip: content rows 0..9
 FR_TXT_Y    equ 1                   ; text baseline inside the strip
-FR_X_ZOOM   equ 130                 ; status strip column layout
-FR_X_ZNUM   equ 170
-FR_X_PCT    equ 200
-FR_X_PAL    equ 250
+; Status strip column layout, EVERY COLUMN A MULTIPLE OF 8 (SPEC.md 11.94.3).
+; They were 2, 130, 170, 200, 250 - four of the five at 2 mod 8, which the
+; SNAPAUDIT histogram saw as 2,323 of 2,801 sampled glyphs in bucket 2, the
+; worst entry in the survey. The content origin is a multiple of 8 (11.94.1),
+; so a pen's offset mod 8 IS its screen phase, and on the two mono adapters an
+; aligned pen is what earns OSAPI_FONT_RUN's single-store cell path (6.1).
+; They all moved LEFT except the name, because FR_X_PAL + 'Spectrum' is 312 of
+; a 320px content and there is nowhere to the right to go.
+FR_X_NAME   equ 8                   ; ...and the name moved right, off the
+                                    ; border: 0 would abut the window frame
+FR_X_ZOOM   equ 128
+FR_X_ZNUM   equ 168
+FR_X_PCT    equ 200                 ; the one that was already aligned
+FR_X_PAL    equ 248
+FR_PCT_CELLS equ 5                  ; the percentage field's WIDTH in cells:
+                                    ; '100%' is four and the run is padded to
+                                    ; five, so it erases whatever the last one
+                                    ; wrote whether that was longer or shorter.
+                                    ; Asserted against fr_numbuf at the foot of
+                                    ; this file, because these bss offsets are
+                                    ; hand-computed and the gap to fr_line is
+                                    ; exactly six bytes
 
 ; --- the restore cache (see the file header) -----------------------------------
 ; ONE WORD per run: colour in bits 15..12, the run's last column in 11..0.
@@ -692,8 +710,14 @@ fr_redraw:
     mov ax, [fr_cnrow]
     mov [fr_prog], ax
     mov word [fr_restart], 2        ; 2 = resume, not restart
-    mov byte [fr_pct], 0xFF         ; no percentage: force the strip out with
-    call fr_status_maybe            ; the RESUMED number, not 0%
+    call fr_pctcalc                 ; the WHOLE strip, with the RESUMED number
+    mov [fr_pct], al                ; rather than 0% - wm_paint_all has just
+    call fr_status                   ; white-filled it, so every field is owed.
+                                    ; It used to park an impossible [fr_pct]
+                                    ; and go through fr_status_maybe; that path
+                                    ; draws one field now, so a repaint asking
+                                    ; it for the strip would get the percentage
+                                    ; alone on an empty band
     call fr_hire
     ret
 
@@ -1644,28 +1668,110 @@ fr_emit_body:
     ret
 
 ; -----------------------------------------------------------------------------
-; fr_status_maybe - redraw the status strip only when the percentage moved
+; fr_status_maybe - the PERCENTAGE, and only when it moved
 ; in:  [fr_prog], [fr_ch]; lock held, [fr_ox]/[fr_oy] valid
 ; out: nothing; preserves all registers
-; At most 100 strip redraws per frame instead of one per row - the strip
-; would otherwise flicker white-then-text on every scanline. fr_redraw forces
-; it by parking an impossible [fr_pct]: after a repaint the strip has to be
-; drawn whatever the number is, because wm_paint_all just white-filled it.
+;
+; At most 100 of these per frame instead of one per row. What each one costs is
+; the change: it used to call fr_status, which white-fills the whole strip and
+; re-letters all five fields - about 27 glyph cells and a fill, ~100 times a
+; pass, to move a digit. PERFORMANCE.md prices a cell at ~1ms on the machine
+; this app exists for, so that was seconds of drawing per pass, and the old
+; comment here admitted the shape of it ("the strip would otherwise flicker
+; white-then-text on every scanline") while still doing it a hundred times.
+;
+; Nothing but the percentage can change while a render runs: the type, the zoom
+; and the palette all move through fr_kick, which calls fr_status itself. So
+; this draws ONE field, as one OPAQUE run - SPEC.md 12.9's rule at the menu bar,
+; 48.9.3's at Missile's banner and 56.12's at ModPlug's face, which is to say
+; only the segment that changed may put pixels on a strip.
+;
+; Two things it no longer needs. There is no FILL, so the field is never
+; momentarily blank - the padding IS the erase (SPEC.md 6.1), which is what
+; removes the flicker rather than merely reducing it. And there is no
+; wm_clip_test gate: font_run decides one cell at a time and cannot produce
+; 11.3's granularity failure, so a clipped caller may draw through it
+; unguarded, where fr_status has to ask about its whole rect because its fill
+; and its glyphs clip differently.
 ; -----------------------------------------------------------------------------
 fr_status_maybe:
     push ax
+    call fr_pctcalc
+    cmp al, [fr_pct]
+    je .out
+    mov [fr_pct], al
+    call fr_status_pct
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_pctcalc - the render progress as 0..100
+; in:  [fr_prog], [fr_ch]
+; out: AL = the percentage; every other register preserved
+; Its own routine because fr_redraw wants the number without the comparison:
+; after a repaint the whole strip has to go out whatever the number is, and
+; that is fr_status, not this file's incremental path.
+; -----------------------------------------------------------------------------
+fr_pctcalc:
     push bx
     push dx
     mov ax, [fr_prog]
     mov bx, 100
     mul bx                          ; prog <= ch <= 460, so DX = 0 and the
     div word [fr_ch]                ; quotient 0..100 always fits AL
-    cmp al, [fr_pct]
-    je .out
-    mov [fr_pct], al
-    call fr_status
-.out:
     pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_status_pct - the percentage field alone: one opaque, space-padded run
+; in:  [fr_pct] already stored; [fr_ox]/[fr_oy] valid; lock held
+; out: nothing; preserves all registers
+;
+; The padding is what makes this safe to call without erasing first: the run is
+; FR_PCT_CELLS wide whatever the number is, so the field carries its own erase.
+; That is INSURANCE rather than a case this path reaches today - fr_prog only
+; ever increments while a render runs, so the number only grows, and the one
+; thing that lowers it (fr_redraw, resuming from the cache) draws the whole
+; strip through fr_status instead. The padding costs four instructions and
+; means nobody has to re-derive that argument before adding a field.
+; -----------------------------------------------------------------------------
+fr_status_pct:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, fr_numbuf
+    mov al, [fr_pct]
+    mov ah, 0
+    call fr_u2s                     ; DI -> the NUL it wrote
+    mov byte [di], '%'
+    inc di
+    mov bx, fr_numbuf               ; pad to the field width with spaces
+    add bx, FR_PCT_CELLS
+.pad:
+    cmp di, bx
+    jae .done
+    mov byte [di], ' '
+    inc di
+    jmp short .pad
+.done:
+    mov byte [di], 0
+    mov si, fr_numbuf
+    mov cx, [fr_ox]
+    add cx, FR_X_PCT
+    mov dx, [fr_oy]
+    add dx, FR_TXT_Y
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1720,7 +1826,7 @@ fr_status:
     add si, ax
     mov si, [si+FT_NAME]
     mov cx, [fr_ox]
-    add cx, 2
+    add cx, FR_X_NAME
     mov dx, [fr_oy]
     add dx, FR_TXT_Y
     call OSAPI_FONT_STR
@@ -2010,3 +2116,11 @@ fr_cfrom   equ os88_image_end + 410  ; byte: 1 = fr_line was REPLAYED, not
                                      ; computed
 fr_ckb     equ os88_image_end + 412  ; word: the claim's size in KB, which is
                                      ; what doubles; total 414 = FR_BSS_TOTAL
+
+; The percentage field's padding is written into fr_numbuf, and fr_numbuf's
+; size is the gap to the next bss symbol rather than a declaration - these are
+; hand-computed offsets, so nothing but this check stands between a wider field
+; and FR_PCT_CELLS silently overwriting the first byte of fr_line.
+%if FR_PCT_CELLS + 1 > fr_line - fr_numbuf
+  %error "FR_PCT_CELLS + a NUL does not fit fr_numbuf - widen the gap to fr_line"
+%endif

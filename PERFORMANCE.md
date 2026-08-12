@@ -6254,3 +6254,91 @@ measured. Reset with no filter and then LAUNCH the app.
 
 **Cost: nothing.** All of it is inside `%ifdef SNAPAUDIT`, and a plain build is
 **0 differing bytes** against the same commit before this work.
+
+### Set 58 — the Disk window and Fractal go on the grid, and one of them was not an alignment problem
+
+Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_cga` /
+`os8088_5150_herc` / `os8088_xt_vga`. Two items off docs/SNAP-PLAN.md's list,
+and the second is the interesting one.
+
+**The Disk window (SPEC.md §22.11.1.1/§22.11.2, seven constants + two): 0 bytes.**
+`.text`, `.bss`, `.cold`, `.lowbss`, `.ovl` all **+0**, no rung crossed,
+`KERN_BUDGET` spare unchanged at 3,072 — every one of the nine is an
+`add`/`sub reg, imm8` at both the old value and the new. What moved: the header
+pen and the status line's 6 → 8 (with their truncation constants 14 → 16 and
+12 → 14), the row icon 4 → 8, the row name 24 → 32, the name budget
+`(cw-88)/8` → `(cw-96)/8`, `fm_scrollpaint`'s strip test 4 → 8, `FMI_CELL_W`
+78 → 80 and the grid icon `fm_cellx + 31` → `+ 32`.
+
+**Two things the numbers could not see, and one of them was in this tree's own
+notes.** docs/SNAP-PLAN.md said an aligned content origin makes
+`fm_scrollpaint`'s left strip *always* 4px wide, so §22.11.1's strip pass runs on
+every scroll; that is backwards — `fm_bx1 = align_up(fm_cx)` and an aligned
+`fm_cx` already is a multiple of 8, so the strip is **empty** and §11.94.1's
+default had retired that pass already (it used to fire on three window positions
+in eight, not one). What 4 → 8 actually buys is that `ico_pass` lands each
+16-pixel icon row in a **three**-byte window at a shift of `x & 7` and at shift 0
+the third byte is always zero and skipped — two latched read-modify-writes a row
+instead of three, on both the mask and the data pass — plus the pass becomes
+unreachable at *every* window position rather than only the aligned ones. In the
+grid that argument is worth more: the columns started at 0, 78, 156 = **0, 6, 4
+mod 8** and the icon's own centre was 31 = **7 mod 8**, the worst phase there is.
+
+And moving the icon to +8 with the name still at +24 put the 16px icon cell's
+right edge **exactly on the name's first letter** — `ARTFUL.O88`'s A against the
+app diamond. Both numbers are multiples of 8, the kernel is 0 bytes bigger, and a
+four-row scroll stayed byte-identical to a full repaint on all three adapters:
+**nothing in the verification recipe could see it.** A 5x crop could. That is now
+a rule in docs/SNAP-PLAN.md §5 — look at the pixels that moved, every item.
+
+**Fractal (SPEC.md §40.2.1): 2,557 glyph cells → 565, 4.5x — and it was not an
+alignment item.** Set 57 put it first of what was left (2,542 glyphs sampled,
+12.5% aligned, 2,222 in bucket 2). The reason those glyphs existed is that
+`fr_status_maybe` runs up to a hundred times a render and called the FULL strip
+painter each time: a white fill plus five re-lettered fields, to move one digit.
+Nothing but the percentage can change while a render runs — type, zoom and
+palette all go through `fr_kick` — so a tick now draws ONE field as one opaque
+`font_run` padded to `FR_PCT_CELLS`, and the five pens became multiples of 8
+(`FR_X_NAME` 8, `FR_X_ZOOM` 128, `FR_X_ZNUM` 168, `FR_X_PCT` 200, `FR_X_PAL`
+248).
+
+Measured with `make SNAPAUDIT=1`, **one byte-identical kernel and two apps
+images** so the package is the only variable, over one `View ▸ Redraw` render:
+
+| | `font_char` calls | `font_run` calls | glyph **cells** | aligned |
+|---|---|---|---|---|
+| before | 2,542 | 3 | **2,557** | 12.5% |
+| after | 50 | 103 | **565** | **100%** |
+
+The cells column prices a `font_run` at its width (5) rather than at one call,
+because the raw totals would flatter the new build by counting a five-cell run as
+a single glyph. Off-grid glyphs 2,222 → **0** — not aligned, *gone*, which is the
+better of the two outcomes. ~100 `gfx_fill`s a render go with them. Package
++79 bytes of heap; **0 bytes of kernel**.
+
+**The two halves are one change.** `font_run`'s single-store cell path needs
+`[vid_mono]` *and* `x & 7 == 0` (§6.1), so on the adapters this app is slowest on
+the aligned pen is what makes the opaque run pay — and `snap_hrun` reported all
+103 runs in bucket 0, which is what says the fast path was reached rather than
+merely permitted.
+
+**These are COUNTS, under `-icount`-equivalent conditions on a cycle-accurate
+8088 — not microseconds on iron.** Part 2's ~1ms per glyph cell puts 2,557 cells
+at ~2.6 s of drawing per render against ~0.57 s, and ~100 fills at ~756us each at
+another ~76 ms; treat those as arithmetic from measured constants, not as field
+figures. The 5150 is where they would land.
+
+**Two harness traps, both of which produced a confident wrong answer:**
+
+- **`m.advance()` runs a bounded amount of guest time and STOPS.** A poll loop
+  that ends in one leaves the machine paused, and a paused guest processes no
+  UART packets — so every later `os88mouse` call fails with "stuck at" its
+  starting position, which reads exactly like a broken hit-test. One `m.run()`
+  between the loop and the first click.
+- **A stash-for-reference build leaves `build/` holding the REFERENCE.** Two
+  scratch images copied after `git stash pop` but before the rebuild were the old
+  package, and the run reported `image 3138` — the ref's size — while claiming to
+  test the new one. Related and worse: `cp file backup` run twice, the second
+  time after the file was already modified, captured the change the restore was
+  meant to undo, which is how b3c5219 shipped half of the grid change
+  undocumented. **Rebuild after the pop; never reuse a backup path.**
