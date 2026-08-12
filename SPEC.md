@@ -38823,6 +38823,52 @@ to its idle level by the receiver; `Partner.sync()` is the harness doing that
 for itself, and it needs cycles as well as the write, because nothing else
 there runs the guest.
 
+##### 62.10.4.6 The first field run: a deadline sized for a wire, not for a disk
+
+Reported off the 5150 with `OS88NET` serving a **floppy**: Connect worked, the
+root listing was correct, and double-clicking `APPS` spun the DOS machine's
+motor — after which the Disk window went blank, the Control Panel read
+`Link Lost`, and the DOS side printed nothing and stayed listening.
+
+**`TURN_RX` was 8 ticks — 440 ms — and that is how long the master waited for
+the far side to begin answering a command.** A floppy's motor spin-up alone
+exceeds it before a single directory sector has been read, so the timeout was
+certain rather than likely; the arithmetic settles it without a second run.
+os8088 gave up, `net_lost` dropped the volume, and the DOS side finished its
+walk and sent the reply into a wire nobody was reading — which is why it said
+nothing and went back to the dwell. That is correct behaviour on its part and
+says nothing at all about the fault.
+
+The root worked because it cost no disk: the program had just been loaded from
+that floppy and `setup_root` had just read it, so the motor was up and the
+directory was in DOS's own buffers.
+
+**Two things were wrong, and only the first is the bug.** The deadline was
+sized for the transport — "the far end is inside `lp_turn` and owes a whole
+tick" — which is true of the *wire* and false of a redirector, where a
+reversal means the far side has gone to its **disk**. And the same reasoning
+had exempted the mid-frame wait at `LP_TMO`'s 2 ticks, which is wrong for the
+same reason: `srv_list` walks the directory TWICE (the count must precede the
+entries, §62.10.1) and the second walk's `findfirst` lands *between* the count
+word and the first entry byte.
+
+So there is now one allowance for every wait-for-a-strobe, `[lp_turnw]`, and
+the branch that distinguished the two is gone with them. A **linked** master
+raises it to `REPLY_TMO` (182 ticks, 10 s); `lp_init` puts it back to
+`TURN_RX` for every port it tries. It cannot simply be raised outright: the
+port sweep's per-candidate cost *is* a reversal that times out, so a
+7-candidate pass would take 70 seconds instead of 3. **Short while looking,
+patient once found.**
+
+The wait for the strobe to FALL keeps `LP_TMO`, because by then the far side
+has committed that nibble and is not going anywhere.
+
+And the page said `Lost at LBA 2`, which is wrong twice: an LBA means nothing
+to a redirector — the number was whatever `DX` happened to hold — and it was
+drawn at `NP_VX + 48`, *inside* an eleven-character string, so it overprinted
+the word it was meant to follow. It names the **command** that died now
+(`Lost on L`), which is a fact this side actually has.
+
 ##### 62.10.4.5 Phase 3 — the write path
 
 `FSV_WRITE`, `FSV_APPEND`, `FSV_DELETE`, `FSV_RENAME`, `FSV_MKDIR`,

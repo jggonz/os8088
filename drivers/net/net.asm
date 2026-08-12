@@ -339,6 +339,12 @@ net_connect:
 .linked:
     mov byte [net_state], NS_LINKED
     mov byte [net_lost_f], 0    ; a fresh link is not the old one's failure
+    mov byte [lp_turnw], REPLY_TMO  ; ...AND THE WAIT GETS LONGER NOW. Until
+                                ; this point every reversal was a port being
+                                ; TRIED and a quick refusal was the whole
+                                ; point; from here a reversal is the far side
+                                ; going to its disk, which is seconds. See
+                                ; REPLY_TMO in lplink.inc for the field bug
     call net_info               ; how big is it, and may we write to it?
     jc  .lost
     call net_mount              ; osapi_vol_add + osapi_vol_mount
@@ -1249,6 +1255,7 @@ net_wrnorm:
 net_fcmd_h:
     push ax
     mov [net_arg], ax
+    mov [net_cmdip], bl         ; ...so a dead link can say what it died on
     mov al, bl
     call lp_sbyte
     jc  .bad
@@ -1265,6 +1272,7 @@ net_fcmd_h:
 
 net_fcmd:
     push ax
+    mov [net_cmdip], bl
     mov al, bl
     call lp_sbyte
     pop ax
@@ -1566,6 +1574,10 @@ net_cmd:
 ; -----------------------------------------------------------------------------
 net_lost:
     mov byte [net_state], NS_PORT
+    push ax
+    mov al, [net_cmdip]         ; WHICH COMMAND was in flight, for the page.
+    mov [net_lastcmd], al       ; An LBA meant something in block mode and
+    pop ax                      ; means nothing here (netui's note)
     mov [net_lastlba], dx       ; WHERE it died, for the page to report.
     mov byte [net_lost_f], 1    ; A link that drops on a real cable drops for
     ret                         ; a reason no emulator here can reproduce, so
@@ -1593,6 +1605,8 @@ net_secs:   dw 0                ; what the far side says its image holds
 net_flags:  db 0                ; bit 0 = it will not take writes
 net_lost_f: db 0                ; 1 = the last link ended by dying, not by us
 net_lastlba: dw 0               ; ...and the sector it was on when it did
+net_cmdip:  db 0                ; the NF_* letter in flight
+net_lastcmd: db 0               ; ...and the one the last failure died on
 net_rlen:   db 0                ; sectors in the command just sent
 net_rcnt:   db 0                ; ...and how many of them are still to go
 net_st:     db 0                ; the FIRST refusal in this transfer
