@@ -10993,9 +10993,11 @@ that sector back and compares. Four things about it:
   that reason has expired (17.2). It is kept because the remaining one is
   better: the user asked for a formatted disk, the drive cannot make the one
   they asked for, and the useful answer is the one it CAN make plus a toast
-  saying what happened and why — `Drive cannot reach 720K - made 360K`,
-  §59.6's subject/outcome/cause. Stopping would leave them with a disk that
-  is neither.
+  saying what happened — `Made 360K, not 720K` (it read
+  `Drive cannot reach 720K - made 360K` until §59.8 took the strip into the
+  clock's 25-cell field; the OUTCOME is the half a user has to act on, since
+  what they are now holding is a 360KB disk). Stopping would leave them with
+  a disk that is neither.
 - **And the key is offered on units 2 and 3 ONLY** (`fm_fmt_sizeable`). The
   toggle exists because `AH=08h` is refused and the drive cannot be asked how
   many cylinders it has — but that ignorance is only *actionable* on a drive
@@ -14825,10 +14827,12 @@ what is *true*, a toast says what *happened*.
 
 Three things are load-bearing, and each is somebody else's rule first:
 
-- **It is said AFTER `fmv_load`, not before.** A mount can arm §12.8's
-  file-activity widget, which owns those pixels and which `toast_show`
-  refuses while it is up — §59.6's own ordering, where the Control Panel's
-  save has to speak after `drv_cfg_save` rather than before it.
+- **It is said AFTER `fmv_load`, not before.** That was *forced* until §59.8:
+  a mount arms §12.8's file-activity widget, which shared the strip's pixels
+  and which `toast_show` refused while it was up — §59.6's own ordering, where
+  the Control Panel's save had to speak after `drv_cfg_save` rather than
+  before it. With the strip in the clock's field the two are independent and
+  this is merely the tidier order, the verdict after the work.
 - **ES is loaded explicitly**, because `toast_show` reads its string through
   `ES:SI` and `files.inc` is `.cold` (§2.6): CS there is `COLD_SEG`, so the
   `push cs` / `pop es` that would be right inside the kernel's own segment
@@ -35765,10 +35769,11 @@ notice; a toast you have to dismiss is a dialog.
 
 ### 59.1 It lives in the menu bar, and that is the whole design
 
-The strip is the right end of the **menus segment** (§12.9), on the
-file-activity widget's precedent (§12.8) — which reports a file operation *in
-flight* from those same pixels, so a toast is what that operation says when it
-finishes. Same conversation, same place.
+The strip is in the bar's right-hand field — **the clock's** (§12.9). It was
+the right end of the **menus** segment until §59.8, on the file-activity
+widget's precedent (§12.8), which reports a file operation *in flight* from
+those pixels; the two paragraphs below are why the BAR is right and are
+unchanged by the move, and §59.8 is why the clock is the right tenant of it.
 
 Two properties of that strip of screen do all the work, and neither is
 available anywhere in a window's content:
@@ -35797,30 +35802,19 @@ fast path and repainting the **whole content** on the next keystroke — a full
 every load. Paint's cost the artwork instead: its toast sat at `(2,2)` **on
 the picture**, and hiding it was a canvas blit.
 
-**And the erase was already written.** §12.9's composer holds `menu_bcell`,
-one byte per glyph cell, which is **both** the composition buffer **and** the
-record of what is on the glass — so composing *is* the diff, and one
-`font_run` puts back exactly the cells that moved. A toast expiring is *stop
-composing it*. There is no fill in `toast.inc`, no `menu_inval`, and no second
-drawing routine anywhere.
+**And the erase was already written.** The bar's two composers each hold the
+record of what is on their own glass, so composing *is* the diff and one
+`font_run` puts back exactly what moved — `menu_bcell` for the menus (§12.9),
+the check word plus `menu_clkbuf` for the clock's field. A toast expiring is
+*stop composing it*. There is no fill in `toast.inc`, no `menu_inval`, and no
+drawing routine in that file at all.
 
-The cost, stated because it is a real one: **a toast covers the rightmost
-menus while it is up.** On a 640-wide screen the menus segment is 50 cells
-(`([vid_clk_hx] - MENU_TXT_X0) / 8`, `vid_clk_hx = (640-206) & ~7 = 432`), so
-a 40-character toast leaves 8 cells of menus showing for about three seconds.
-Hercules gets 62 cells. `TOAST_MAX` is 40 for that reason and truncation is
-therefore unreachable in practice; `toast_room` clamps anyway.
+### 59.2 How the strip is composed
 
-### 59.2 How the strip is composed: bit 7 is the inversion flag
-
-The menus are composed into a **shorter segment**. `toast_room` runs at the
-top of `menu_bar_text`, subtracts the strip's width from `[menu_bn]`, and
-`menu_bput`'s existing clamp then drops whatever the strip covers — *"past the
-segment: dropped, exactly as `menu_layout` drops a cell that will not fit"*.
-So composition stays strictly left to right, nothing between there and
-`.tail` knows the strip exists, and `.tail`'s pad to `[menu_bn]` is what
-erases the menus the strip is about to sit on. `toast_compose` then restores
-`[menu_bn]` and owns the rest.
+`menu_draw_clock` composes it, because the strip is part of that field
+(§59.8). One routine stages the whole 25 cells: `clk_fmt`'s line first,
+right-aligned by leading spaces exactly as it always was, and then the strip
+laid over the field's **left** end.
 
 The strip is **inverse video** — `font_run` already takes an ink *and* a
 background, so "draw this run inverted" is `AL = CWHITE, AH = CBLACK` and
@@ -35828,33 +35822,52 @@ costs nothing extra. That is the one distinction which survives §39.4's
 reduction intact on both mono adapters: white and black are the solid classes,
 and a `CDGRAY` strip would have rounded to a checkerboard that every glyph on
 it has to compete with (§52.2.2's own trap). It carries **one inverted space
-of padding at each end**, which is what makes it read as a strip and also what
-keeps it flush against the clock — so it always ends at the segment's *last*
-cell, and a differing span therefore either misses it, lies wholly inside it,
-or crosses its left edge exactly once. **At most two runs**, never three.
+of padding at each end**, which is what makes it read as a strip.
 
-**Bit 7 of a cell byte is the inversion flag and is not a character.** It is
-in the cell byte rather than a table of its own for one binding reason:
-`menu_bcell` is the record of what is on the glass, so a cell whose
-*character* did not change but whose *highlight* did has to read as a
-difference to `menu_bput` — and a space at the strip's edge is exactly that
-cell. Without it the highlight is left behind or torn. Note Pad's selection
-hashes with bit 15 set for the identical reason (§27.8). The bar's characters
-are 7-bit by `toast_show`'s filter, so the bit is free.
+**It is as wide as its message and no wider, so it hides only the clock cells
+it actually covers.** `Saved` is 7 cells and an 18-glyph clock in a 25-cell
+field has 7 leading spaces, so that message costs the clock **nothing**; a
+longer one eats into the field from the left, which takes the date before the
+time. Blanking the field whole would have been one `font_run` instead of two
+and is the wrong trade: a toast is three seconds long and the clock is the one
+thing on the bar somebody may be watching.
 
-`menu_bemit` is the emit factored out of `menu_bar_text` to be called twice.
-It masks bit 7 off across the run before drawing and puts it back after, which
-is exact rather than approximate: a run arriving there with `CWHITE` ink is
-wholly inside the strip by construction, so every cell in it carries the bit
-and every cell in it gets it back. The byte just past the run is still banked
-and restored, because `font_run` wants ASCIIZ and `menu_bcell` carries one
-spare cell for it.
+**Left and not right**, which was the first cut and is worth recording because
+it looks like the natural one: the clock is right-aligned, so a snug strip at
+the right covers its last cells — the *time* — and leaves the date, and it
+puts the message exactly where the eye goes for the time. Left-aligned, the
+message arrives beside the clock and spends the date first.
+
+So the emit is **two runs** whenever the strip is narrower than the field: the
+strip, and the clock's surviving tail in the ordinary colours. They are
+disjoint cell ranges, each written exactly once, so there is no double-draw
+and no blank moment (PERFORMANCE.md Part 1) — and the check word answers every
+call in between, so it is twice per *change*, not twice per repaint.
+
+The check word hashes the **composed field** rather than either source string,
+which is what makes a minute rolling over under a live toast a difference like
+any other. `[menu_ckstrip]` — the strip's width in cells, 0 for none — carries
+the one property of the field that hashing its characters cannot see, so a
+message can never be left up behind a clock reading that happened to hash the
+same.
+
+**Bit 7 of a `menu_bcell` byte is no longer an inversion flag.** It was, while
+the strip lived in the menus segment: `menu_bcell` is the record of what is on
+the glass, so a cell whose *character* did not change but whose *highlight*
+did had to read as a difference to `menu_bput`, and a space at the strip's
+edge was exactly that cell. With the strip out of that segment there is
+nothing inverted in it, `menu_bemit` is folded back into `menu_bar_text` as
+the one plain run it always was, and the menus are 7-bit characters again.
+Note Pad's selection still hashes with bit 15 set for the reason this used
+bit 7 (§27.8).
 
 ### 59.3 `toast_show` stages; `toast_pass` draws
 
 **Slot 0x0380.** `ES:SI` = a NUL string, `CX` = ticks to live (0 =
 `TOAST_TICKS`, 55 ≈ 3.0 s at 18.2 Hz). `CF = 1` refused. Preserves every
-register.
+register. **Nothing refuses today** — the file-activity interlock below was
+the only refusal and §59.8 removed it — and the flag stays in the contract so
+that a refusal added later is not an ABI change (§20.8).
 
 `ES:SI` and not an X stub, for `clip_put`'s reason (§55): the text an app
 wants to say is very often not in the app's own image — a file name taken out
@@ -35884,9 +35897,9 @@ image rung); the flags are `.text` with real initialisers, because
 have run and `-f bin` zeroes nothing — `[fpg_on]`'s reasoning exactly.
 
 **The copy is bounded twice, and the second bound is the security one.**
-`TOAST_MAX` counts characters *kept*; the filter branches (controls dropped,
-bit 7 is the inversion flag, §59.2) do not pass through it, so it bounds
-nothing about a string that never offers a printable byte. `TOAST_SCAN` (256)
+`TOAST_MAX` counts characters *kept*; the filter branches (controls and
+high-bit bytes dropped, since neither letters as anything) do not pass through
+it, so it bounds nothing about a string that never offers a printable byte. `TOAST_SCAN` (256)
 bounds bytes *examined* — the scan runs interrupts-off through a
 package-supplied far pointer, every byte off a package is hostile (§19), and
 without it a segment holding no NUL and no printable spins the copy forever
@@ -35905,12 +35918,14 @@ Four things are load-bearing:
   callers hold the gfx lock. `[toast_dirty]` is the third state that exists
   for it: the two *edges* set it too, so `toast_pass` has exactly one test
   for "the composition changed and nobody has drawn it".
-- **`fpg_begin` retires a live toast**, because the widget is in those pixels
-  and is a newer, more urgent statement about the same conversation. Without
-  it a multi-chunk copy — which arms and disarms the widget per chunk — makes
-  the strip flicker against it. `toast_show` refuses while the widget is
-  armed, which in practice is unreachable: `fpg_end` runs inside the disk
-  pipeline before the file API returns to the app that will raise the toast.
+- **Neither of the file-activity interlocks exists any more** (§59.8).
+  `fpg_begin` used to retire a live toast and `toast_show` used to refuse
+  while the widget was armed, both because the widget is at
+  `[vid_clk_hx] - FPG_W` and the strip reached left into the same cells. The
+  strip is in the clock's field now, wholly right of `[vid_clk_hx]`, so the
+  two cannot touch and may be up together — which is right, because they say
+  different things: the widget that work is happening, the toast what
+  finished.
 - **`ui_task`'s ladder names the next step in every "nothing to do" jump**, so
   inserting `.chk_toast` meant re-pointing `.chk_zones`'s `je` at it. Get that
   wrong and the new step is unreachable on every pass where the previous one
@@ -36024,7 +36039,7 @@ floppy write per session instead of one per click — and until now a failure
 had nowhere to go. `[cp_dsave]` carried it to the Drivers page's caption, the
 only page with room for it, where it was drawn *the next time the panel was
 opened*: **a verdict stored to be found later**, which is precisely what a
-toast replaces. `Settings Saved` and `Error saving Settings` are said at the
+toast replaces. `Settings Saved` and its two failure lines are said at the
 moment they happen, on the bar, which no window can cover and which is still
 there after the panel's own window has been destroyed.
 
@@ -36035,24 +36050,25 @@ is what `cp_flush_close_x` already gates on — closing a panel nobody changed
 says nothing. The table is indexed by `[cp_dsave] + 1` so that slot 0 keeps
 `toast_say`'s "nothing to say".
 
-**Subject, outcome, cause — and one string per cause.** A message that says
-only that something failed sends the reader looking, and the two causes here
-want opposite things done about them:
+**Outcome, cause — and one string per cause.** A message that says only that
+something failed sends the reader looking, and the two causes here want
+opposite things done about them:
 
 | `[cp_dsave]` | | |
 |---|---|---|
 | 0 | `Settings Saved` | 14 chars |
-| 1 | `Settings not saved: wrong disk in A:` | 36 |
-| 2 | `Settings not saved: disk error` | 30 |
+| 1 | `Not saved: need disk A:` | 23 |
+| 2 | `Not saved: disk error` | 21 |
 
-**The bar has room, which is the thing that is easy to get wrong by
-assumption.** The menus segment is `([vid_clk_hx] - MENU_TXT_X0) / 8` = **50
-cells** on the narrowest adapter (640px) and 60 on Hercules, against 38 cells
-for the longest of these — and `TOAST_MAX` is 40. So a message twice this
-length still draws; what it costs is menu cells covered for three seconds
-(bar text measured to cell 23 under Locator and cell 37 under a Disk window,
-so any useful message covers some). Terseness buys nothing here and costs the
-reason.
+**The SUBJECT is what these gave up**, and until §59.8 they did not have to:
+the strip had the menus segment's 50 cells to sit in, so all three of
+subject/outcome/cause fitted (`Settings not saved: wrong disk in A:`, 36
+chars) and terseness would have bought nothing. In the clock's 25-cell field
+`TOAST_MAX` is 23 and one of the three has to go. It is the subject: the panel
+the user just closed is the only thing that was on screen, where dropping the
+cause leaves a message nobody can act on. `cp_s_noload` — *"the panel could
+not be opened"* — is the exception that proves it and spends the outcome
+instead, because there is no panel on screen to infer the subject from.
 
 `A:` is **stamped** at boot (§52.10.3) because the system volume is not A: on
 a machine booted from a hard disk, and a message naming the wrong drive is
@@ -36069,9 +36085,10 @@ Three orderings hold it up and all three are the difference between a message
 and no message:
 
 - **It is said AFTER the write.** `drv_cfg_save` arms §12.8's file-activity
-  widget, and `fpg_begin` retires a live toast because the two cannot share
-  those pixels (§59.3). Said first, it would be overdrawn by the thing it
-  announces.
+  widget, which shared the strip's pixels until §59.8 and retired a live
+  toast — said first, the message was overdrawn by the thing it announces.
+  The two are independent now and the ordering keeps a better reason: the
+  message *is* the verdict, and `drv_cfg_save` is what produces it.
 - **`toast_owner_gone` runs FIRST in `app_close_win`**, before the
   `KIND_CTRL` test rather than after `snd_release_rec`. The panel's last act
   is a report *about the panel*, raised during the panel's own teardown, so a
@@ -36127,6 +36144,103 @@ blank space, and it read exactly like a statement about the menus. The check
 now uses a message wide enough to cover **11 cells of Locator's menu text and
 21 of a Disk window's** (File, Folder, View, Special), on both owners, and
 requires the bar to come back byte-identical with no cell left inverted.
+
+### 59.8 It covers the clock, never a menu — and only the cells it needs
+
+The strip borrowed the right end of the **menus** segment (§59.1), where
+`menu_bput`'s clamp dropped whatever it covered. So a long enough message took
+the frontmost application's own menu titles off the bar with it — File, Edit,
+View gone for three seconds — and §59.6 had written that cost down as
+acceptable *because there was room for the message*, which measures the wrong
+thing: the cells were free, and what was in them was the user's way into the
+program. **A message is not more important than a control**, and a bar that
+loses its menus reads as the application breaking rather than as something
+being said.
+
+So the strip is in the **clock's** field now, and the layering is settled by
+geometry rather than by keeping every string short enough to hope. There is no
+message this can write that reaches a menu: `menu_bar_text` composes into the
+whole segment again and `toast_room`/`toast_compose` are gone.
+
+**The clock is the right thing to displace, and the reason is kind rather than
+room.** It is the one thing on the bar that is not a *control* — nothing in
+that field can be clicked into except §31.5's Date/Time shortcut, which is a
+convenience with a Control Panel row behind it — and it is *self-repairing* in
+a way a menu title is not: it says the same thing again a second later. It is
+also where a Macintosh puts this kind of message.
+
+**One painter, so there is no rule to break.** `menu_draw_clock` composes the
+field — clock first, strip over its left end — and emits it. "The clock may
+not draw while a toast is up" is therefore not something a second routine has
+to remember: there is no second routine, and the clock is not *suppressed*,
+it is simply not what those particular cells say. And the clock comes back on
+its own, because the strip going away is just a different composition of the
+same field. Nothing restores anything. `menu_furniture`'s `[menu_ckck] = 0`
+already meant "this field's glass is gone" and now covers both tenants, so a
+full-bar overdraw repairs a live toast for free.
+
+**And it hides only what it covers** (§59.2). The strip is its message plus
+one inverted space at each end and no wider; the clock is staged
+right-aligned, as it always was, so the cells the strip does not reach still
+show the time. On the common case that is *nothing at all*: an 18-glyph clock
+in the 25-cell field leaves 7 leading spaces, and `Saved` is exactly 7 cells.
+Longer messages eat the date first and the time last.
+
+**What it cost is width, and every message in the tree was revised rather than
+left to truncate.** The field is `([vid_wm8] - [vid_clk_hx]) / 8` = **25
+cells** on every screen this runs on (640 and 720 both subtract 206 and round
+to 8), against the menus segment's 50, so `TOAST_MAX` is **40 → 23**. The
+twenty-two strings that did not fit:
+
+| | was | is |
+|---|---|---|
+| `cp_s_dsdsk` | `Settings not saved: wrong disk in A:` | `Not saved: need disk A:` |
+| `cp_s_dserr` | `Settings not saved: disk error` | `Not saved: disk error` |
+| `cp_s_noload` | `Control Panel needs the system disk in A:` | `Control Panel needs A:` |
+| `fm_s_swapno` | `Format needs the system disk in A:` | `Format needs disk A:` |
+| `fm_s_fmtbad` | `Drive cannot reach 720K - made 360K` | `Made 360K, not 720K` |
+| `pt_s_crop` | `Would crop artwork - erase it first` | `Would crop artwork` |
+| `pt_s_noram` | `Not enough memory to resize` | `No memory to resize` |
+| `pt_s_nofsx` | `The screen is not free right now` | `The screen is not free` |
+| `pt_s_nodlg` | `Leave Full Screen to name a file` | `Leave Full Screen first` |
+| `pt_s_nu` | `Not enough RAM for undo here` | `No RAM for undo here` |
+| `pt_s_nc` | `Not enough RAM for the clipboard` | `No RAM for clipboard` |
+| `pt_s_ng` | `Not enough RAM for GIF here` | `No RAM for GIF here` |
+| `pt_s_nofmt` | `Only BMP and GIF are supported` | `Only BMP and GIF` |
+| `pt_s_badpic` | `Not a picture we can read` | `Unreadable picture` |
+| `pt_s_bigpic` | `Picture too big for free memory` | `Picture too big` |
+| `pt_s_nocomp` | `Compressed BMP not supported` | `No compressed BMP` |
+| `pt_s_nodepth` | `Need a 1, 4, 8 or 24-bit BMP` | `Need 1/4/8/24-bit BMP` |
+| `pt_s_toobig` | `GIF too big to save - try Bmp` | `GIF too big - try Bmp` |
+| `pt_s_nostage` | `Not enough memory to open a file` | `No memory to open file` |
+| `pt_s_trunc` | `Cropped on load - use Save As` | `Cropped - use Save As` |
+| `pt_s_bigsel` | `Selection too big to copy` | `Selection too big` |
+
+The one that says something general is `cp_s_dsdsk`. §59.6 asked for
+**subject, outcome, cause** and 23 cells will not carry all three, so the
+*subject* is what goes: the panel the user just closed is the only thing that
+was on screen, where dropping the cause leaves a message nobody can act on.
+`cp_s_noload` is the exception that proves it and keeps its subject instead —
+the panel never opened, so there is nothing on screen to infer it from.
+`Settings Saved` keeps everything, being short enough to.
+
+**Two interlocks went with it, and dropping them is the point rather than a
+tidy-up.** `toast_show` refused while §12.8's file-activity widget was armed
+and `fpg_begin` retired a live toast, both because that widget sits at
+`[vid_clk_hx] - FPG_W` and the strip reached left into the same cells. The
+strip is wholly right of `[vid_clk_hx]` now, so the two cannot touch and may
+be up together — which is what you want, since they say different things: the
+widget that work is happening, the toast what finished. A refusal there lost
+the message *silently and for good*, and the widget is armed by exactly the
+mounts and reads the messages worth saying are about, which is why three call
+sites in `files.inc` had to be ordered around it (§22.12.1, §59.6).
+
+**§59.7's guard stays even though its tenant is gone.** `menu_bpadc`'s clamp
+was added because `toast_room` lowered `[menu_bn]` and a pad target beyond it
+spun forever with the gfx lock held. Nothing lowers `[menu_bn]` today, so the
+spin is unreachable again — and the clamp belongs where `menu_bput`'s
+drop-without-advancing is known, not to whichever caller last happened to need
+it.
 
 ## 60. cpudet.inc — the CPU tier
 
