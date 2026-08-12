@@ -40,10 +40,27 @@ number comes off two period boxes and PERFORMANCE.md Set 39 already has it.
 MAGIC_Q = b'O88?'                # master -> slave
 MAGIC_R = b'O88!'                # slave -> master, then a version byte
 
+# ...and the same question as the HUNT WINDOW SEES IT. A byte goes low nibble
+# first (lp_sbyte), so 'O88?' = 4F 38 38 3F arrives as F,4,8,3,8,3,F,3 and the
+# eight-nibble window holds 0xF48383F3 - NOT 0x4F38383F. linksim.py calls this
+# MAGQ and the real slave compares against exactly it; deriving it from the
+# byte order instead is a window that can never match, on a wire that is
+# working perfectly.
+MAGQ = 0xF48383F3
+
 # How many emulator steps to let the guest run between our pokes. One nibble
 # is a few `in`/`out`s, so this only has to be enough to get from one poll to
 # the next; too large just wastes wall clock.
 STEP = 400
+
+# ...and how long a 3-byte mouse packet needs to CLEAR THE UART, in steps. The
+# serial mouse is 1200 baud, so a packet is ~25 ms of guest time, and packets
+# sent faster than that are DROPPED (CLAUDE.md). Pressing and releasing
+# back-to-back into a paused machine therefore delivers one event, none, or
+# two depending on nothing the caller can see: the same script produced a
+# clean four bytes on one run and no click at all on the next. Step this much
+# between them and it is deterministic.
+CLICK_STEP = 60000
 
 
 class LinkTimeout(Exception):
@@ -58,7 +75,7 @@ class Partner(object):
     Mouse and Flush already follow.
     """
 
-    def __init__(self, marty, base=0x378, budget=200000):
+    def __init__(self, marty, base=0x378, budget=4000000):
         self.m = marty
         self.base = base
         self.budget = budget            # emulator steps before we give up
@@ -145,12 +162,48 @@ class Partner(object):
         b = self.recv(4)
         return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
 
+    # --- driving the guest to the point of talking ---------------------------
+    def click_paused(self, marty=None):
+        """Press and release the left button on a PAUSED guest, deterministically.
+
+        The caller positions the cursor while the machine runs - mo.to()
+        proves where it is by reading guest memory, which needs cycles - then
+        pauses, then calls this. Stepping between the two packets is what
+        makes it reliable; see CLICK_STEP.
+        """
+        m = marty or self.m
+        m.mouse(0, 0, l=True)
+        m.step(CLICK_STEP)
+        m.mouse(0, 0, l=False)
+        m.step(CLICK_STEP)
+
     # --- the handshake -------------------------------------------------------
+    def hunt(self, limit=64):
+        """slv_hunt: slide an EIGHT-NIBBLE window until the magic is in it.
+
+        Nibble granularity and not byte, for the reason lplslv.inc gives: a
+        byte-granular window cannot recover from being half a byte out of
+        step, so a slave that joined in the middle of a transfer could never
+        resynchronise. SPEC.md 9.5's mouse resync, one level down.
+
+        It is also what a partner needs even when it did NOT join late. The
+        first attempt here read four bytes flat and got `XO88` - the master
+        sends NC_BYE ('X') to put the far end back to listening before it
+        says hello, so the magic is never the first thing on the wire and
+        assuming alignment is wrong from the very first exchange.
+        """
+        want = MAGQ
+        win = 0
+        for _ in range(limit * 2):
+            win = ((win << 4) | self.recv_nib()) & 0xFFFFFFFF
+            if win == want:
+                return True
+        raise LinkTimeout('no magic in %d nibbles (window %08X, wanted %08X)'
+                          % (limit * 2, win, want))
+
     def hello(self, version=1):
-        """mst_hello's other half: take 'O88?', answer 'O88!' and a version."""
-        q = self.recv(4)
-        if q != MAGIC_Q:
-            raise LinkTimeout('expected %r, got %r' % (MAGIC_Q, q))
+        """mst_hello's other half: hunt for 'O88?', answer 'O88!' + version."""
+        self.hunt()
         self.send(MAGIC_R)
         self.send_byte(version)
-        return q
+        return MAGIC_Q
