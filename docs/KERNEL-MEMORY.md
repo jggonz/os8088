@@ -442,7 +442,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2825,
     "stk0": 1024,
-    "text": 47443
+    "text": 47407
   },
   "small": {
     "bss": 5646,
@@ -459,7 +459,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2796,
     "stk0": 1024,
-    "text": 44621
+    "text": 44591
   }
 }
 ```
@@ -963,20 +963,20 @@ generated in the first place.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 30,414 | 37.2% |
-| the window system and its furniture | 19,743 | 24.1% |
-| drawing: adapters, primitives, glyphs, icons | 12,795 | 15.6% |
+| the window system and its furniture | 19,707 | 24.1% |
+| drawing: adapters, primitives, glyphs, icons | 12,795 | 15.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,761 | 11.9% |
 | the kernel proper: API table, heap, scheduler, events | 6,681 | 8.2% |
 | the three built-in kinds | 1,376 | 1.7% |
 | the Control Panel | 872 | 1.1% |
-| **total** | **81,766** | |
+| **total** | **81,730** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,097 | 7,881 | **8,978** | 339 | — |
-| `wm.inc` — the window manager (§11) | 8,841 | — | **8,841** | 789 | — |
+| `wm.inc` — the window manager (§11) | 8,805 | — | **8,805** | 789 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 358 | 5,917 | **6,275** | 890 | 3,584 |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,322 | — | **5,322** | 653 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 4,977 | **5,156** | 155 | — |
@@ -1013,7 +1013,7 @@ generated in the first place.
 | `blank.inc` — **(undescribed)** | 124 | — | **124** | — | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,979 | — | **2,979** | — | — |
-| **total** | **47,443** | **34,323** | **81,766** | **5,752** | **7,762** |
+| **total** | **47,407** | **34,323** | **81,730** | **5,752** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

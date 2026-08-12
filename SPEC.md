@@ -7164,9 +7164,20 @@ a wrong answer, it is a jump into the middle of its image.
 
 Four things bind it:
 
-- **The compare is in `wm_sz_notify`, not at the call sites.** "Only when it
-  actually changed" is one rule rather than one per caller, and an adapter
-  re-fit visits every window while moving most of them not at all.
+- **There is no compare, and that is the point.** The first version fired
+  only when the content box had actually changed — the obvious economy, and
+  wrong for the case this exists for. What goes stale across an adapter
+  change is not only a window's *box*: `apps/missile` decides `mc_mono`,
+  `mc_ecoarse` and `mc_caps` from the adapter at launch, `apps/arkanoid`
+  `ark_bpp`, `apps/solitaire` `sol_bpp`, `apps/paint` `pt_bpp` — and a window
+  small enough to fit two geometries unchanged (100x100 across VGA →
+  Hercules) would have got no notice at all and kept a stale bpp. On a 1bpp
+  adapter `apps/missile` with `mc_mono = 0` is §48.8's *unplayable* case,
+  reached by a change that told it nothing. So the notice is **"your
+  environment moved — re-derive"**, one per window per refit, and the app
+  decides what of it matters: `OSAPI_WM_GEOM` for the box, `OSAPI_VIDEO` for
+  the adapter, both callable from the handler. It costs a handful of
+  callbacks on an event a human causes by clicking Activate Mode.
 - **It runs under the gfx lock and MUST NOT DRAW** — `W_ONSIZE`'s contract,
   for `W_ONSIZE`'s reason.
 - **It is called BEFORE the caller's repaint, not deferred to the UI task.**
@@ -7174,13 +7185,24 @@ Four things bind it:
   correctly the first time, where a deferred notice would let one frame go up
   in the old layout. `vid_switch` owes its caller a repaint (§39.11.2) and
   `wm_refit` runs inside it, so the repaint is always still ahead.
-- **`wm_refit` walks to a bound rather than with a `loop` counter.** `CX` is
-  what `wm_geom` and `wm_sz_notify` both answer in, and a counter there would
-  have to be saved and restored twice per window.
+- **`wm_strad_fit` (§39.16.3) tells it too**, for the other half: there the
+  adapter has not moved and the box has, and the window is owed the same
+  notice for the same reason.
 
-**No shipped app registers one yet**, and that is deliberate: the mechanism is
-the kernel's half, and which apps need it is a per-app question — an app that
-asks `OSAPI_WM_GEOM` inside `W_PAINT` needs nothing at all.
+**Who registers one, and why the rest do not.** A survey of `apps/` splits
+three ways. **Re-derives once and keeps it** — `taskmgr` (`tm_colrows` and
+`tm_cols`, set in `tm_init` and read by five drawers), `arkanoid` and
+`solitaire` (both pick a whole metric record on screen height >= 300 and copy
+it into bss, so brick widths, card sizes, rail widths and ball speed are all
+laid down once): these three register. **Already reads the live box every
+frame** — `missile` (`mc_track` calls `OSAPI_WM_CONTENT` and
+`OSAPI_WM_GEOM` per frame), `tamegram`, `tracker`, `modplug`, `notepad`,
+`artful`, `fractal`: these need nothing for their geometry, though `missile`
+registers anyway for the adapter facts above. **Fixed layout, never asks its
+size** — `piano` (which reads only `OSAPI_WM_CONTENT`, the origin), `hello`,
+`mines`, `recorder`: a notice cannot help them, because there is no second
+layout to move to. `frotz` and `paint` install the *negotiator* instead and
+size themselves.
 
 ### 12.05 The bar is redrawn only when its contents changed
 

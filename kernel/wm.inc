@@ -523,9 +523,8 @@ wm_strad_fit:
     jbe .none                   ; it starts below that display: nothing to do
     cmp [bx+W_H], si
     jbe .none                   ; already inside it
-    call wm_geom                ; CX/DX = the content size it has NOW, taken
-    mov [bx+W_H], si            ; BEFORE the store, so wm_sz_notify's compare
-    jmp short .tell             ; has the old pair and re-reads the new itself
+    mov [bx+W_H], si
+    jmp short .tell
 .stacked:
     mov si, [di+VID_CTX_VX]     ; STACKED: x is
     add si, [di+VID_CTX_CW]
@@ -533,7 +532,6 @@ wm_strad_fit:
     jbe .none
     cmp [bx+W_W], si
     jbe .none
-    call wm_geom
     mov [bx+W_W], si
 .tell:
     call wm_sz_notify           ; the window's box really did change under it
@@ -789,18 +787,11 @@ wm_nat_take:
 wm_refit:
     push bx
     push cx
-    push dx
-    push di
-    push bp
-    mov bx, wm_wins             ; walked to a BOUND rather than with a `loop`
-.next:                          ; counter: CX is the size wm_geom and
-                                ; wm_sz_notify both answer in, and a counter
-                                ; there would have to be saved twice per window
+    mov bx, wm_wins
+    mov cx, MAX_WIN
+.next:
     test word [bx+W_FLAGS], 1   ; used?
     jz .skip
-    call wm_geom                ; the content box it had, banked BEFORE anything
-    mov di, cx                  ; moves - wm_sz_notify compares against it and
-    mov bp, dx                  ; says nothing when it did not change (11.98)
     test word [bx+W_FLAGS], WF_FULL
     jnz .full
     call wm_nat_take            ; what it ASKED for, not what the screen it is
@@ -816,18 +807,16 @@ wm_refit:
                                 ; desktop band, and a fullscreen frame covers
                                 ; the bar and the dock by definition
 .told:
-    mov cx, di
-    mov dx, bp
-    call wm_sz_notify           ; ...and NOW tell it, while the caller's repaint
-                                ; is still ahead of us: an app that relayouts
-                                ; here is painted correctly the first time
+    call wm_sz_notify           ; ...and NOW tell it, unconditionally and while
+                                ; the caller's repaint is still ahead of us. An
+                                ; app that relayouts here is painted correctly
+                                ; the first time; and it is told even when its
+                                ; box did not move, because the ADAPTER may have
+                                ; and half the tree caches facts about that
+                                ; (SPEC.md 11.98)
 .skip:
     add bx, WIN_SIZE
-    cmp bx, wm_wins + MAX_WIN*WIN_SIZE
-    jb .next
-    pop bp
-    pop di
-    pop dx
+    loop .next
     pop cx
     pop bx
     ret
@@ -1050,15 +1039,26 @@ wm_szh_slot:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_sz_notify - tell BX its content box changed, if it asked to be told
+; wm_sz_notify - tell BX its environment moved, if it asked to be told
 ;                (SPEC.md 11.98)
-; in:  BX = window ptr, CX/DX = the content size BEFORE the change; the gfx
-;      lock held by the caller
+; in:  BX = window ptr; the gfx lock held by the caller
 ; out: nothing (all registers preserved, FLAGS INCLUDED)
 ;
-; THE COMPARE IS HERE AND NOT AT THE CALL SITE, so "only when it actually
-; changed" is one rule rather than one per caller. An adapter switch re-fits
-; every window and most of them do not move.
+; THERE IS NO COMPARE, AND THAT IS THE POINT. The first version fired only
+; when the content box had actually changed, which is the obvious economy and
+; is wrong for the case this exists for: what goes stale across an adapter
+; change is not only a window's BOX. apps/missile decides mc_mono, mc_ecoarse
+; and mc_caps from the adapter at launch, apps/arkanoid ark_bpp,
+; apps/solitaire sol_bpp, apps/paint pt_bpp - and a window small enough to fit
+; two geometries unchanged (100x100 across VGA -> Hercules) would have got no
+; notice at all and kept a stale bpp. On a 1bpp adapter apps/missile with
+; mc_mono = 0 is SPEC.md 48.8's unplayable case, reached by a change that told
+; it nothing.
+;
+; So the notice is "your environment moved - re-derive", one per window per
+; refit, and the app decides what of it matters: OSAPI_WM_GEOM for the box,
+; OSAPI_VIDEO for the adapter, both callable from here. It costs a handful of
+; callbacks on an event a human causes by clicking Activate Mode.
 ;
 ; It runs with the LOCK HELD and the handler may not draw - that is the
 ; contract, and it is W_ONSIZE's contract too. It is also the only ordering
@@ -1080,16 +1080,8 @@ wm_sz_notify:
     or bp, bp
     jz .out                     ; never asked to be told: one word, and this is
                                 ; the whole cost to every window that has not
-    mov di, cx                  ; bank the OLD pair - wm_geom answers into the
-    mov si, dx                  ; same two registers
     call wm_geom                ; CX/DX = the content size the record has NOW
-    cmp cx, di
-    jne .fire
-    cmp dx, si
-    je .out                     ; unmoved: the commonest case by far, an adapter
-                                ; change re-fitting a window that already fitted
-.fire:
-    mov si, bx                  ; SI = the window, CX/DX = the NEW content size
+    mov si, bx                  ; SI = the window
     call wm_pkgcall             ; (BP is the handler; wm_pkgcall puts ES =
                                 ; KERNEL_SEG for it, like every other callback)
 .out:
