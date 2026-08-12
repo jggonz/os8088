@@ -5545,6 +5545,10 @@ holds everything.
 
 #### 11.94.3 Which windows do NOT align their own text
 
+**`docs/SNAP-PLAN.md` is the work list** — this section is the survey; that file
+carries the per-item fix, what each is worth, the ordering, and the two things
+to repair in the instrument before leaning on it.
+
 The inversion puts every window's content origin on a multiple of 8; whether the
 text *inside* it lands there is the app's own business, and getting it wrong
 costs the §6.1 fallback silently rather than drawing anything wrong. This is the
