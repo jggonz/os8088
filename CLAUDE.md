@@ -3222,10 +3222,30 @@ true now, are never *finished*, and so have no lifetime to share) and
 Missile's is a *banner* on a fullscreen exclusive surface where there is no
 bar to borrow. Those three did not move; Note Pad's and Paint's are gone.
 
-**It lives in the bar's right end — in the CLOCK's field** (§59.8; it was
-the menus segment's right end, on §12.8's file-activity widget's precedent,
-until a long enough message started covering the frontmost application's own
-menu titles). That placement is the whole design rather than a decoration.
+**It lives in the menu bar, and it has TWO HOMES with one preference**
+(§59.9). First choice is the **GAP** — the blank cells between the end of the
+last drawn menu and the clock — where it is **centred** and covers nothing at
+all: not a menu title (§59.8's whole subject) and not a clock cell (what §59.8
+settled for). When the message will not fit there it falls back to §59.8's
+**clock field**, left end, eating the date before the time. The gap is real
+rather than theoretical — Locator's menus leave ~24 free cells on a 640px
+screen and 34 on a 720px one, so `Settings Saved` (16 cells) and
+`Opened SUNSET.BMP` (19) both land in it — and it is a **bonus, never a
+constraint**: `TOAST_MAX` = 23 still measures against the clock's 25 cells, so
+no message ever depends on how many menus the application in front happens to
+have. Two things about the geometry are deliberate and both are §59.9.1.
+**Both ends of the gap are measured as DRAWN** — `[menu_bend]` is one cell past
+the last *glyph* (a title's box is 8px wider than its glyphs each side, so DI
+itself is still inside the last menu) and the right end is the clock's first
+*glyph*, `toast_gapend`, because the clock's field is a fixed 25 cells while
+`clk_fmt` answers 18..24 and is right-aligned inside it — centring on the field
+puts the strip visibly left of where the eye wants it. And **the ROOM is the
+segment's even though the CENTRING is the eye's**: the strip is composed into
+`menu_bcell`, where `menu_bput` drops a cell at or past `[menu_bn]` *without
+advancing DI*, so `toast_place` clamps to `[menu_bn] - width` — letting it use
+the clock field's blank cells instead would mean straddling two buffers with
+two check words, which is two painters for one strip.
+That placement is the whole design rather than a decoration.
 The bar
 **can never be covered** — windows clamp to `y >= MBAR_H` — so there is no
 clip region, no occlusion test, no `WF_SAVEU`/raise-cache interaction and
@@ -3260,6 +3280,24 @@ short message lands entirely in the leading spaces and costs the clock
 nothing, while a long one eats the date before the time. **The deadline test
 is `js`, not `jg`** — modular arithmetic between two free-running words,
 §45.15's trap.
+
+**Two more became load-bearing when the gap arrived** (§59.9). **Bit 7 of a
+`menu_bcell` byte is the inversion flag again** — §59.2 had retired it with the
+strip's first tenancy of that segment, and it has to come back for the reason
+it existed: `menu_bcell` is the record of what is on the glass, so a cell whose
+*character* did not change but whose *highlight* did must read as a difference
+to `menu_bput`, and a space at the strip's edge is exactly that cell.
+`menu_bemit` comes back with it, masking the bit off across a run before
+`font_run` sees it — unmasked, `font_char` indexes past the 95 glyphs it has —
+and putting it back after; the changed span is walked as maximal runs of equal
+inversion, so it is up to three runs with the strip in the segment and exactly
+one without. **And every toast edge sets `[menu_bdirty]`**, which §59.8 had
+removed as "a flag about the MENUS, which the strip has not been in since it
+moved": `menu_bar_text` is gated on it and is the only thing that composes
+there, so without it a strip in the gap is neither drawn nor erased. It is set
+on both edges and whichever home the strip takes, because which home it takes
+is `toast_place`'s answer and `toast_place` runs *inside* the pass the flag asks
+for — the flag cannot be conditioned on its own result.
 
 **The Disk window's verdicts went the same way (SPEC.md §59.5)**, and that is
 where the drawing code actually fell out. Its status line carried five things
