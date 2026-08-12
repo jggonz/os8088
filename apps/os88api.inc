@@ -627,6 +627,20 @@ CPU_8086            equ 0        ; tier 0: 8086/8088. No A20 line, no memory
 CPU_286             equ 1        ; tier 1: A20 + BIOS block move
 CPU_386             equ 2        ; tier 2: the above, plus unreal mode
 ;
+; ...and OSAPI_CPU_INFO's AH, which this file described in prose and did not
+; name. They are one contract with three readers now - the kernel publishes
+; them, XMEM.DRV is the only thing that SETS them (SPEC.md 41.12.2), and a
+; package may test them - so they are spelled once here rather than three
+; times. NONE OF THEM IS THE THING TO BRANCH ON: a package asks
+; OSAPI_XMEM_CAPS for KB, always, because these say what the machine can do
+; and that one says what is actually there.
+CPU_F_A20           equ 0x01     ; the A20 line VERIFIED open - by a
+                                 ; wraparound read, never by "we wrote to the
+                                 ; gate" (SPEC.md 41.2)
+CPU_F_HMA           equ 0x02     ; the High Memory Area is claimed (41.3)
+CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
+                                 ; data limit (41.4). Tier 2 only
+;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
 ; A DRVC_DISK DRIVER's slots, not an application's: all four are fenced on the
 ; caller being the driver whose disk services are published, so a package gets
@@ -1758,6 +1772,34 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                                 ; you have asked for the
                                                 ; whole-content cache you were
                                                 ; trying to avoid
+; --- the pointer's picture, over YOUR window only (SPEC.md 7.2) -------------
+; AL is one of these. They all share the kernel's 8x12 cursor cell, which is
+; why a shape costs the machine nothing: every walk in the cursor renderer is
+; bounded by that cell, so a bigger picture would be paid on every gfx lock
+; hold on the machine rather than only where you asked for it.
+OSAPI_CUR_ARROW equ 0           ; the default, and what W_FLAGS arrives holding
+OSAPI_CUR_CROSS equ 1           ; the aiming crosshair, hot spot at its centre
+%define OSAPI_WM_CURSOR     KERNEL_SEG:0x03D0   ; BX = your window ptr, AL =
+                                                ; OSAPI_CUR_*. The pointer wears
+                                                ; it over your window's CONTENT
+                                                ; and nowhere else - the desktop,
+                                                ; other windows, and your own
+                                                ; title bar and its boxes stay
+                                                ; the arrow, because chrome is
+                                                ; the kernel's to draw and to
+                                                ; click. Set it once, at window
+                                                ; creation; it is remembered in
+                                                ; the record and dies with it.
+                                                ; It does NOT draw and does not
+                                                ; need the lock: the pointer may
+                                                ; not be over you, and only the
+                                                ; kernel knows - the swap lands
+                                                ; on the next UI pass. NOT worth
+                                                ; having inside an fsx bracket
+                                                ; (SPEC.md 53): the held lock
+                                                ; keeps the pointer off the
+                                                ; screen there, so an exclusive
+                                                ; app still draws its own
 %define OSAPI_WM_DAMAGE     KERNEL_SEG:0x03B0   ; BX = your window ptr, called
                                                 ; from inside your own W_PAINT.
                                                 ; CF=1 = draw the WHOLE content

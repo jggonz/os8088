@@ -1033,7 +1033,15 @@ dsk_xfer:
 .served:
     add di, ax                  ; the same advance .ok makes, and no int 13h
     sub si, ax
-    push cx
+    push cx                     ; ...and THE SAME NOTCHES .notch makes, which
+    mov cx, ax                  ; is the whole of SPEC.md 12.8.2: a sector the
+.snotch:                        ; cache served is a sector the operation is
+    call KERNEL_SEG:cw_spl_step ; DONE with, and a bar that counts only what
+    call KERNEL_SEG:cw_fpg_step ; reached the drive stops short and vanishes
+    loop .snotch                ; there. Both preserve every register and the
+                                ; flags, so AX is still the count below and CX
+                                ; is 0 - which is why `mov cl, 9` still gives
+                                ; 9 and the pop is still the caller's
     mov cl, 9
     shl ax, cl
     pop cx

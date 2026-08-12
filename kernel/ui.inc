@@ -417,11 +417,20 @@ ui_task:
     call gfx_unlock
 .chk_zones:
     cmp byte [desk_zdirty], 0   ; a volume was mounted or unmounted (26.2),
-    je .chk_toast               ; posted for the same reason and drained in
+    je .chk_curs                ; posted for the same reason and drained in
     mov byte [desk_zdirty], 0   ; the same pass - but it costs the drive-zone
     call gfx_lock               ; grid and the windows over it, not the screen
     call desk_zones_paint
     call gfx_unlock
+.chk_curs:
+    call cur_shape_pass         ; which window is the pointer over, and does it
+                                ; want a different picture (SPEC.md 7.2)? One
+                                ; compare per pass when neither the pointer nor
+                                ; the z-order moved, which is nearly always -
+                                ; and it belongs HERE rather than in the mouse
+                                ; ISR because the UI task is the only mutator
+                                ; of wm_zord and the window rects, so wm_hit
+                                ; answers from it with no lock and no race
 .chk_toast:
     call toast_pass             ; put a staged toast up, or take an expired
                                 ; one down (SPEC.md 59). One compare per pass

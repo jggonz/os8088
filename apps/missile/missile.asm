@@ -357,6 +357,13 @@ mc_entry:
                                     ; still WM_CREATE's. The price is 8px
                                     ; drag steps on the two 1bpp adapters,
                                     ; which for a game window is nothing
+    mov al, OSAPI_CUR_CROSS         ; the pointer IS the gunsight, so the
+    call OSAPI_WM_CURSOR            ; kernel draws it over our content and we
+                                    ; stop drawing a second one on top of the
+                                    ; arrow (SPEC.md 7.2). Windowed only in
+                                    ; effect: inside an fsx bracket the held
+                                    ; lock keeps the kernel's pointer off the
+                                    ; screen, so mc_cross_* still runs there
     mov si, mc_menus
     call OSAPI_MENU_SET
     mov si, mc_about
@@ -937,6 +944,8 @@ mc_fsx_main:
     mov si, [mc_win]
     call mc_track                   ; 0,0,320,240 and the layout from it
     mov byte [mc_full], 1           ; everything draws from scratch
+    mov byte [mc_inbr], 1           ; ...and the crosshair is ours again for
+                                    ; the life of the bracket (SPEC.md 7.2)
     mov byte [mc_chshown], 0        ; the crosshair is not on this screen yet
     call OSAPI_MOUSE
     mov [mc_pbtn], al               ; no fire from the click that got us here
@@ -977,6 +986,8 @@ mc_fsx_main:
     jmp .loop
 .done:
     mov byte [mc_fsx], 0
+    mov byte [mc_inbr], 0           ; the kernel's pointer comes back with the
+                                    ; desktop, so ours stops being drawn
     mov byte [mc_chshown], 0        ; the crosshair on THIS screen dies with
                                     ; it - or the thawed worker XOR-erases
                                     ; one that was never drawn on the desktop
@@ -6095,6 +6106,17 @@ MC_CHARM  equ 8                     ; arm length. Big enough to read AROUND the
 
 mc_cross_on:
     push ax
+    cmp byte [mc_inbr], 0       ; WINDOWED the kernel draws it for us now
+    je .out                     ; (SPEC.md 7.2): OSAPI_WM_CURSOR put a
+                                ; crosshair on our window at launch, so this
+                                ; whole mechanism would be the SECOND pointer
+                                ; it exists to remove. Gating the DRAW alone
+                                ; disables all of it - mc_cross_off,
+                                ; mc_cross_moved and the eight mc_cross_need
+                                ; hooks all early-out on [mc_chshown], which
+                                ; nothing then sets. In a bracket the held
+                                ; lock keeps the kernel's pointer off the
+                                ; glass, so there it is still ours to draw
     cmp byte [mc_chshown], 0
     jne .out
     mov ax, [mc_chx]
@@ -7468,6 +7490,14 @@ mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
                                     ; same-mode bracket (SPEC.md 53.7) leaves
                                     ; this 0, because what it changes is who
                                     ; owns the machine and not how to draw
+    MBYTE mc_inbr                   ; inside a bracket AT ALL, which mc_fsx
+                                    ; above deliberately does not answer. It
+                                    ; is the crosshair's question and only the
+                                    ; crosshair's: a bracket holds the gfx
+                                    ; lock for its whole life, so the kernel's
+                                    ; pointer is off the glass and ours is the
+                                    ; only one - windowed it is the second
+                                    ; (SPEC.md 7.2)
     MBYTE mc_fsxm                   ; ...and the FSXM_* to set, or 0FFh for
                                     ; the same-mode bracket
                                     ; (SPEC.md 53) - the four primitives,

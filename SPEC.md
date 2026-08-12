@@ -2824,6 +2824,135 @@ flag is already spent — `cur_unlazy` is one-way within a hold. And
 same pair, but every public caller reaches it through `GFXCLIP`, which spends
 the hide above everything.
 
+### 7.2 A window names the pointer's picture, and it wears it over that window only
+
+`OSAPI_WM_CURSOR` (slot 0x03D0) takes `BX` = a window and `AL` = one of
+`CUR_NSHAPE` built-in shapes; the pointer wears that shape over that window's
+**content** and nowhere else. It exists because an application that wanted a
+different pointer had exactly one move available — draw a second one — and
+Missile Command did: `mc_cross_*` is an XOR crosshair the game paints, erases
+and re-paints itself, standing on top of the kernel arrow, which is still
+drawn at the same point. `MC_CHARM` is 8 rather than 4 for no better reason
+than that the arms have to be readable *around* the arrow. **Two pointers, one
+mouse**, and the game pays a measured **4.4 ms of every frame** (PERFORMANCE.md
+Part 9 Set 12) to draw the one that is not the system's.
+
+Three decisions carry it, and all three are about spending nothing.
+
+- **Every shape shares the 8x12 cell.** `CUR_GW`/`CUR_GH`/`CUR_SPAN` bound
+  every walk in `mouse.inc`, and §7.1 is the record of what shrinking them
+  bought: a quarter of the rows, a third of the bytes per row, and the cell's
+  third framebuffer byte retired outright. A shape wanting a 16x16 cell would
+  hand all of that back **on every lock hold in the machine, for every
+  application** — the crosshair over one window would be paid for by the
+  desktop, the Task Manager and every package that never asked. So the shapes
+  fit the arrow's cell or they do not ship, and `CUR_SHAPE_END` asserts it per
+  shape, at assembly time, exactly as the arrow alone used to be asserted.
+- **The picture is one indirection.** `mov si, cur_and` became
+  `mov si, [cur_tabp]` in the three loops that read a table — `cur_put_mono`,
+  `cur_move_mono`'s pass 2, and `cur_draw` — and that is the whole of what
+  changing the drawn shape costs. **`cur_get_mono` did not change at all**,
+  which is the property worth naming: the erase replays `[cur_off]`,
+  `[cur_rows]` and `[cur_b1ok]` and drains a save buffer, so it is a statement
+  about the *cell*, not about the picture inside it. Shapes that share a cell
+  therefore share an erase.
+- **Nothing is asked in the ISR.** §7.2.1 is where the question is asked.
+
+### 7.2.1 The shape rides in `W_FLAGS`, and the UI task asks the question
+
+The shape is a byte in **`W_FLAGS`' spare high byte**. No record grew, no
+template changed, and `wm_create`'s `mov word [bx+W_FLAGS], 1` and
+`wm_destroy`'s `mov word [bx+W_FLAGS], 0` already zero it — which is
+`CUR_ARROWSH`. So the default is the arrow because the byte arrives 0, and a
+package that dies holding a crosshair cannot leave one behind, because the
+record is zeroed on the way out and the next pass re-asks. **There is no
+lifetime problem to solve, and that is the built-in set earning its keep**: an
+app-supplied *bitmap* would have to be staged into the kernel (`font_str`
+reads through DS, and so does `cur_put_mono` — the driver Control Panel page
+name is the precedent, §31.9), kept alive past the package that owns it, and
+re-validated at run time for the one invariant `CUR_ROW` checks at assembly
+time. None of that is bought here.
+
+**`cur_shape_pass` is called from `ui_task`'s `.yield` tail**, beside
+`toast_pass`, and it is one compare per pass: `[cur_shx]`/`[cur_shy]` bank the
+position the last answer was for, and `[cur_shchk]` covers the case a position
+compare cannot see — the pointer standing still while the window under it is
+raised, hidden, closed, dragged or grown away. Two stores set that flag,
+`wm_raise` and `wm_paint_dmg`, because **every one of those five events pays a
+repaint through one of them**.
+
+The UI task rather than the mouse ISR, for two reasons and the second is the
+binding one. `wm_hit` is a z-order walk with an 8-bit `mul` per candidate, and
+the ISR runs per mouse packet — putting it there would give back a share of
+what §7.1 spent three optimisations winning. **And the UI task is the only
+mutator of `wm_zord` and the window rects**, so `wm_hit` answers from it with
+no gfx lock and no race, which is exactly what the ISR could not do. A frame
+of latency on a cosmetic change is invisible; a torn z-order walk is not.
+
+Chrome stays the arrow. `wm_hit` answers `AL != 0` for the title bar and its
+three boxes, and those are the kernel's to draw and to click — only a window's
+content is the application's to dress. `BX = 0` — the desktop, the drive
+zones, the dock and the menu bar — is the arrow for the same reason.
+
+**And it is worth nothing inside an fsx bracket** (§53): the held lock keeps
+the pointer off the screen there by construction, so an exclusive app draws
+its own pointer and always did. Missile Command therefore keeps `mc_cross_*`
+for its bracket and drops it windowed, which is where the two pointers were.
+
+### 7.2.2 The hot spot is the expensive half, and it is CLAMPED rather than clipped
+
+A crosshair is useless anchored at its top-left corner: the pixel the player
+is aiming at has to be the one under the pointer. So a shape carries a **hot
+spot** — the pixel inside the cell that sits under `mouse_x`/`mouse_y` — and
+that, not the picture, is what costs anything.
+
+The arrow's hot spot is (0,0), and for years **every walk in `mouse.inc`
+assumed it**: `mouse_x`/`mouse_y` are clamped to the screen, so the cell's
+top-left could never be negative, and `cur_geom` clips at the right and bottom
+edges only. A centred hot spot puts the cell's top-left at `pointer - hot`,
+which goes **negative within `hx` of the left edge and `hy` of the top** — and
+a negative byte column, or a negative row through `gfx_rowbase`, does not
+error. It addresses the row above the framebuffer.
+
+Left and top *clipping* is the correct fix and it is not a small one: a
+`cur_b0ok` beside `cur_b1ok`, a table start offset for the skipped rows, `sar`
+where the column shift is `shr`, and the two of those threaded through
+`cur_mvcols`/`cur_mvrow`/`cur_mvbg` — the four per-column answers §7.1.2 built
+to write every byte exactly once, whose cases double when either cell can lose
+its first column.
+
+**What ships is the clamp instead.** `cur_geom` and `cur_rect` subtract the
+hot spot and clamp the result at the display origin, which is four
+instructions each and can never address outside the framebuffer. Its only
+defect is that the picture stops moving in the outermost `hx` columns and
+`hy` rows — the crosshair's centre drifts up to 3 pixels from the pointer
+against the left edge of the screen, and 5 against the top. That is a
+deliberate trade, recorded here so that the day it is not good enough, the
+paragraph above says what the real fix is.
+
+Three things follow and each broke first:
+
+- **`[cur_cellx]`/`[cur_celly]` are banked by `cur_geom`**, because the cell's
+  top-left is no longer the pointer's position and `cur_move_mono` asks about
+  it three times — the old cell's byte column, pass 1's "will pass 2 cover
+  this row", and `cur_mvrow`. §7.1's rule applies unchanged: two derivations
+  of a save-under's geometry are two chances to disagree by a byte, and a byte
+  is a smear.
+- **`cur_lazyck` subtracts the hot spot too, and deliberately does NOT clamp.**
+  It asks whether an armed clip region can reach the cursor cell; unclamped is
+  a *superset* of where the cell really is, so the error can only ever be a
+  redundant hide. Forgetting it runs the other way — a painter told the cursor
+  is out of reach draws through the part of the cell reaching further left than
+  the test did, and §7.1.4's smear is permanent. It is the one site here that
+  fails silently and weeks later.
+- **The shape may only change while the cursor is off the glass.**
+  `cur_shape_set` calls `cur_unlazy` first and adds no hide/show pair of its
+  own: `gfx_lock` already promised the hide and `gfx_unlock` already owes the
+  show, so spending the promise is the whole of it. That hands `cur_move_mono`
+  its standing precondition — within one move the shape, and therefore the hot
+  spot, is fixed — which is what lets pass 1 and pass 2 subtract cell tops from
+  each other and get an honest answer.
+
 ## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
 - `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
@@ -7104,6 +7233,58 @@ a whole file in one `rep movsb`, so without it `OSAPI_FS_PROG` would ship
 with no consumer but the cable it was written for and no way to run it in a
 container — which is exactly how `OS88NET.COM` reached the field twice with
 not one instruction executed (§62.8).
+
+#### 12.8.2 A sector the CACHE served is a sector the bar must count
+
+`fpg_step` lives in `dsk_xfer`'s `.notch` loop, which is the right place for
+it and was for years the only place a sector could arrive. §18.95's cache
+sits **in the same routine, above the transfer**: `.served` short-circuits to
+the next run having advanced the LBA "the same advance `.ok` makes, and no
+`int 13h`" — and `.notch` is on the other branch. So every sector the cache
+answered was a sector the bar never heard about.
+
+The visible defect is **a progress bar that stops short and then vanishes**.
+Measured on a cycle-accurate 5150: loading `TASKMGR.O88` (6,905 bytes, 14
+sectors) armed the widget at 14 units and reported **9**, so the trough
+filled to 39 of its 62 pixels and the operation ended there. Nothing was
+wrong with either number — the cache really did serve five of the fourteen —
+and it is the *question* that was wrong. **The bar reports progress through
+the OPERATION, not through the drive**, and a sector already in memory is as
+done as a sector just read.
+
+So `.served` steps `spl_step` and `fpg_step` `AX` times, exactly as `.notch`
+does after a transfer. Three things make it free: both are a compare and a
+return when their bar is not live (§15.3, §12.8); both preserve every
+register and the flags, so `AX` survives to do the `<< 9` below it and the
+`loop` leaves `CX` at 0, which is why the `mov cl, 9` after it still yields
+9; and a cache hit is *rare enough to be the point* — the loop runs once per
+sector served, against ~24 ms for one that was not.
+
+**The splash bar is stepped for the same reason and not merely for
+symmetry.** `drv_boot` mounts and loads through `disk_read` while the splash
+still owns the screen, so a cache hit there is a notch the boot bar would
+likewise never make. It self-corrects at `spl_finish` where the file widget
+cannot, which makes it the *less* visible half of one defect rather than a
+different one.
+
+**A FILL still over-counts, and that is left alone deliberately.**
+`dsk_rah_fill` re-enters through `disk_read_x` with `[dsk_rah_busy]` set, so
+its read takes the `.nocache` path and `.notch` notches the *whole track* — including
+the speculative tail the caller never asked for. Suppressing that would be
+strictly more exact and is **not** worth it: both bars clamp at their total
+(`fpg_step` against `[fpg_total]`, `spl_step` at `total-1`), so an over-count
+is invisible — it reaches 100% a sector or two early and sits there, which is
+the condition the paragraph above already accepts and for the same reason. An
+under-count is not invisible. Suppressing it would also change the boot bar's
+accounting, which has an allowance of its own (§15.3), to fix something
+nobody can see.
+
+So the three cases, and only one of them was a defect: metadata sectors are
+outside the total and deliberately uncounted; a fill's surplus is outside the
+total and counted anyway, harmlessly, because the clamp eats it; and cached
+sectors are **inside** the total and were not counted at all. The first two
+make the bar clamp at full. The third made it stop short of full, which is
+the one a user can see.
 
 ### 12.9 The bar is three segments, and each answers for itself
 
@@ -19921,20 +20102,54 @@ not to draw it. So `[cp_nst]` — the number of static rows the list is
 showing — is `CP_ITEMS` normally and one fewer when `[vid_avail]` has a
 single bit set.
 
-**The Display item is LAST in `cp_items` and that is what makes it
-hideable.** Hiding a row in the *middle* of the table would mean every row
-below it maps to a different record, which is a second opinion about what the
-user just clicked on at four separate call sites. Last, it is simply a
-shorter list: row → record stays the identity and `cp_entry` does not change.
-It also leaves `CP_ITIME`/`CP_IDRV`/`CP_ISND` at the values they had before
-this page existed.
+**ANY row here may be hidden, and its position does not matter.** That is a
+change: the Display item had to be LAST, because hiding a row in the *middle*
+of the table renumbered every row below it — a second opinion about what the
+user just clicked on, at four separate call sites. "Last" was therefore doing
+real work, and it was a constraint that had already been spent twice
+elsewhere (`drv_tab`'s settings bitmap, §51.2.1) and was nearly spent a third
+time by §41.12.
 
-**`[cp_nst]` is the static/driver boundary, not just a row count.** §31.9's
-rebasing (`cmp al, CP_ITEMS` → `sub al, CP_ITEMS` → the class) is what
-decides whether a row is a static page or a driver's, so every one of those
-sites reads the byte instead of the constant — otherwise, on a machine with
-the page hidden, the first driver's row would dispatch as static item 5 and
-paint the Display page over it.
+**The fix is to stop conflating two index spaces.** A row has a RECORD index
+— its position in `cp_items`, stable for the life of the build — and a
+VISIBLE ORDINAL, its position in the list actually on screen. They were the
+same number, which is exactly why a hole could not be expressed.
+
+- `[cp_sel]`, `cp_entry`, `cp_item_name`, `cp_item_paint`, `cp_item_click`,
+  `cp_drv_item` and `cp_drv_gone_x` all name **records**. So `CP_ITIME` and
+  `CP_IDRV` still work as written at their five call sites: they name pages,
+  and a page does not move because another one is not shown.
+- `cp_list` and `cp_pick` work in **ordinals**, because that is what the
+  screen has.
+- **`cp_v2r` is the one place they meet.** It walks the statics skipping
+  `[cp_hide]`'s bits and, past them, subtracts `[cp_nst]` to reach a driver's
+  page — those are never hidden, so beyond the statics the answer is
+  arithmetic.
+
+**`[cp_hide]` is what `[cp_nst]` could not say.** A count can only make the
+list *shorter*; it cannot say WHICH row is missing, and that gap is precisely
+what forced the hidden row to the end. One byte, one bit per static record,
+written beside `[cp_nst]` by the same single writer.
+
+**The static/driver boundary went back to being `CP_ITEMS`.** §31.9's
+rebasing (`cmp al, CP_ITEMS` → `sub al, CP_ITEMS` → the class) is a question
+about the *table*, so it is the table's length again; it read `[cp_nst]` only
+because the two spaces used to be one, and a count of rows on screen is the
+wrong thing to ask there.
+
+**Verified by byte identity and then by doing the thing it exists for.** The
+same scripted Control Panel session — open it from the chip menu, click
+Drivers, click Sound, click back to Scheduler — on a cycle-accurate 5150/CGA
+where the Display page IS hidden: **four framebuffer captures, identical
+before and after**, digest for digest. (The Date/Time page is excluded on
+purpose: its live clock means it cannot be byte-compared between two runs,
+and a capture that caught it differed by exactly one second.) Then the case
+the old code could not express — `[cp_hide]` seeded to hide **Date/Time,
+record 1, a middle row**, on top of Display already being hidden: the list
+draws Scheduler / Drivers / Sound contiguously, and clicking the second
+visible row selects **Drivers** and paints the Drivers page. Under the old
+mapping that click would have selected Date/Time while the list drew
+"Drivers" over it.
 
 **One writer, and it is the only routine that could answer the question:**
 `vid_probe_avail` (§39.11.1), which sets it in the same pass that fills
@@ -24069,6 +24284,217 @@ of this feature that ever cost the machine time rather than bytes.
 - A settled desktop on a cycle-accurate 5150 with the real IBM Oct-82 BIOS:
   CGA at **60.0% lit**, `desktop_up` field/rule/dock 0.93/0.00/0.96, and the
   Task Manager opens and runs.
+
+### 41.12 The store is an OVERLAY, and only the machines that have one load it
+
+**`xmem.inc` is four API cells, a boot sniff and a dispatch. Everything else —
+the A20 gate, the HMA claim, the sizing, the allocator and both copy
+transports — is `XMEM.DRV`**, read off the system disk at boot on a machine
+with memory above 1MB and on no other.
+
+**The reason is the machine this project is calibrated against.** An 8088 has
+no A20 line and nothing above linear 0x0FFFFF, so every byte of this feature
+was reserved forever on a machine that can never reach it — about **1.2KB of
+kernel image**, which on the footprint guard is two 512-byte rungs and
+therefore **1,024 bytes of heap** that every XMS-less machine now keeps.
+§41.11 had already taken the whole feature out of `kern_small` for exactly
+that reason; this is the same removal for `kern_big`, without giving up the
+capability.
+
+**It is an OVERLAY and not a driver, and that is the load-bearing choice.** A
+`drv_tab` row buys *user management* — a Drivers-page tick, a `SYSTEM.CFG`
+bit, a caption, an unload — and there is nothing here for a user to decide: a
+machine either has memory up there or it does not, and §41.12.1's sniff
+answers that exactly. A tick box would only ever be a way to break a working
+machine. So this takes **`HDDTOOL.DRV`'s shape** (§52.11): the same header,
+the same `org 0`, the same three-byte dispatcher, the same one-claim load
+discipline, and a class byte `DRVC_OVL` the kernel deliberately does not know
+— no row, no publication slot, no page, no bitmap bit. The only difference
+from `HDDTOOL.DRV` is that **its owner is another driver and this one's is the
+kernel**.
+
+**`DRV_MAX` is still 4 and `DRVC_MAX` is still 5**, and that is the clearest
+statement that this did not touch the driver registry. It is also what the
+first draft of this change did not manage: a `drv_tab` row would have needed a
+hidden flag, and hiding a row is only cheap at the END of the table — a
+position already claimed twice over (§51.2.1's settings bitmap, and the
+Control Panel's own Display page at §31.10.1, which is last for precisely this
+reason). Not spending that constraint a third time is worth more than the
+~60 bytes the row and its class would have cost.
+
+**One loader, not two.** `drv_load_at` is `drv_load_x` with the row supplied
+instead of indexed — the volume bracket, the mount, `drv_find`, the single
+`MEM_K_DRV` claim, the read, `drv_check` and the shared failure tail. A
+`DRVC_OVL` row **stops after `drv_check`**: an overlay has no class, so it can
+neither publish nor be sent `DRVV_TIER` or `DRVV_READY`, and its owner
+attaches it. Copying that control flow instead would have been the shape that
+drifts, and the thing it drifts away from is `drv_vol_bank`/`drv_vol_back` —
+§51.5.2 is what a missing volume restore costs.
+
+**`xm_boot` is therefore `.cold`, and that is not a saving.** All three
+routines it calls — `drv_load_at`, `drv_call`, `drv_release` — are
+`driver.inc`'s, and `driver.inc` is in the cold segment (§2.6). From `.text`
+those would be three thunks and three far calls; from the same segment they
+are near calls and cost nothing at all. It runs once, at boot, which is what
+`.cold` is for. Everything else here stays resident: the four cells are API
+slots and an `OSAPI_SLOT` names a `KERNEL_SEG` offset, so their bodies cannot
+be cold.
+
+**`[xm_kb]` is the one gate**, and it means two things at once on purpose:
+*there is a store* and *the overlay is attached*. The kernel writes it last,
+after the service table is staged, and only on a successful attach — so every
+cell tests one word and there is no second flag to fall out of step with it.
+It is also the identical test each of those routines made when they were
+resident, which is why not one of their published contracts moved.
+
+**`drv_check` needed no change**, which is what made this cheap: it compares
+the image's class byte against **the row's own** `DRVR_CLASS` rather than
+against a list, so an overlay-shaped image validates against a standalone
+record with no new code, while `drv_cls_idx` still refuses `DRVC_OVL` by range
+and it can never take a publication slot by mistake.
+
+#### 41.12.1 The sniff is EXACT, and it asks before it pokes
+
+`xm_sniff` is in the boot overlay (§2.5), called from `kmain` — `drv_snd_sniff`'s
+own home, and for its own reason: `drv_boot`'s first mount writes over the
+overlay, so a probe called from there would be running FAT.
+
+```
+    cmp byte [cpu_tier], CPU_8086   ; the target machine leaves here
+    je  .out
+    mov ah, 0x88
+    int 0x15                        ; AX = KB above 1MB
+    jc  .out
+    or  ax, ax
+    jz  .out
+    mov byte [xm_row+DRVR_WANT], 1
+```
+
+**It is exact rather than heuristic, and that is what separates it from
+§51.3.1's.** `drv_snd_sniff` runs an OPL2 timer dance that is merely
+*correlated* with the sound driver finding a card — it can be wrong in both
+directions, which is why the `SNDSNIFF=` knob exists. This runs **the same
+`int 15h` AH=88h the overlay sizes the store with**, so a machine it skips is
+a machine that would have published `[xm_kb] = 0` anyway. There are no false
+negatives by construction, not by testing.
+
+The one false positive is a machine whose BIOS reports KB and whose **A20 gate
+will not verify**. The overlay loads, fails the gate at attach, refuses, and
+the kernel frees the image — the same answer as before, having spent one
+four-sector read. Nobody is told (§41.12.4).
+
+**Asking AH=88h before the gate is a strict improvement on the boot path this
+replaced.** `xm_init` tested the *verified* `CPU_F_A20` bit and only then
+issued AH=88h, so a 286 with exactly 1MB poked port 0x92, raced the keyboard
+controller for D1h/DFh and paid two bounded 65,536-poll timeouts to be told
+there was nothing up there. AH=88h reads CMOS and needs no gate at all. So the
+whole A20 sequence — **including the one with the documented reboot hazard in
+it** (§41.2: a stray byte to 0x60 between the D1h and the DFh lands on the
+active-low CPU reset line) — now runs only on a machine that has already
+reported RAM above 1MB.
+
+| machine | before | now |
+|---|---|---|
+| 8088 — the target | one `cmp` | one `cmp`, and ~1.2KB of image back |
+| 286+, exactly 1MB | 0x92 poke, the KBC race, two timeouts, then AH=88h | one `int 15h` |
+| 286+ with XMS | all of that resident | one `int 15h`, then ~4 sectors, then the gate inside attach |
+
+**Boot ordering is not a constraint, and the old comment saying otherwise was
+a comfort.** `kmain` ran `xm_init` before `sched_init` because "this is the
+last moment at which no kernel ISR is installed". `xm_arm` masks NMI and runs
+the entire CR0.PE window inside one `pushf`/`cli` … `popf`, and it has
+**always** been called at run time from `xm_ucopy` — once per 1KB chunk, with
+`int 08h` hooked and IRQ3/IRQ4 live. If an ISR could break the transition the
+shipped transport would have been broken since it was written. `xm_boot` runs
+from `kmain` after `drv_boot`, still on the splash bar and still before the
+first paint.
+
+Two neighbours were checked with it. **The A20 probe's scratch is still free**
+at that point: it writes one word at linear `0x0500` and one through the alias
+at `HMA_SEG:0510`, saving and restoring both under `cli`, and `KERNEL_SEG` is
+0x0060 (the kernel starts at 0x600) while §18.92's diskette parameter table is
+at `0000:0580`. **And the GDT works from a heap segment**: `xm_arm` computes
+the `lgdt` base from DS at run time rather than baking `KERNEL_SEG` in, and
+the image is an ordinary claim well below 1MB, so the 24 base bits a 16-bit
+`lgdt` loads are exact.
+
+#### 41.12.2 What crosses the boundary
+
+Three things the resident code read out of kernel state, and what replaces
+each:
+
+- **`[sch_lock]` is raised by the KERNEL now.** Both transports used to raise
+  it themselves; a loaded image cannot reach it — there is no API slot, and
+  `drivers/debug/debug.asm` records in its own header what that costs it. The
+  `xm_copy` cell raises it around the whole dispatch, which is strictly wider
+  than the two windows it replaces and is exactly how `dsk_xfer` hands a
+  locked scheduler to a block driver before `DSV_BLK`. §41.8's context rule is
+  therefore the kernel's to enforce rather than the image's to document.
+- **The requesting instance is stamped by the KERNEL**, in `BL`, for
+  `osapi_snd_fm`'s documented reason: `snd_req_inst` reads `[snd_inst]` and
+  the running task's `T_INST`, both kernel state, and an image that had to ask
+  would need an API slot of its own. `BL` and not `AL` because `AX` is the low
+  half of a 32-bit argument to two of the three callers.
+- **The copy's two ends travel as 32-bit LINEAR addresses in a parameter
+  block**, and that is forced rather than chosen. Slot 0x01A8 takes the
+  conventional end as `ES:SI`, and the dispatcher loads `ES` with
+  `KERNEL_SEG` on its way in, so the caller's segment cannot survive the
+  crossing. The kernel folds it down — arithmetic `xm_copy` did internally
+  anyway — into a 12-byte `XMC_` block it passes in `SI`, because the ABI
+  wants seven registers (two 32-bit ends, a count, a direction, an instance)
+  and there are not seven to spare.
+
+**The feature bits come back the other way.** `CPU_F_A20` / `_HMA` /
+`_UNREAL` have no readers outside these two modules (§41.11 established that
+by grep), so the image is their only writer; it hands them to the kernel in
+`DL` at attach and the kernel stamps `[cpu_feat]`, so `cpu_info`'s AH (slot
+0x0188) keeps meaning what it always meant. On a machine where the overlay
+never loads it reads 0 — no gate verified, no HMA claimed, no unreal mode
+armed — which is true, and is exactly what tier 0 answers.
+
+**The dispatcher bakes the row in rather than taking it in `BX`**, unlike
+`drv_svc_call`. `BX` is an argument here, and `drv_svc_call`'s own header
+records that exact class of bug happening twice in the sound ABI: a routine
+that quietly ate the FM frequency, and then one that quietly ate a staging
+destination.
+
+#### 41.12.3 It may claim nothing bulk (binding)
+
+`XMEM.DRV`'s block table is 64 bytes **inside its own image**, and that is an
+invariant rather than an observation.
+
+`mem_sum_kb` counts the image under System **by its owner tag**
+(`MEM_K_DRV`), not by `drv_tab` membership — which is precisely what lets an
+overlay with no row account correctly. But a heap claim the image made for
+itself would carry **its own segment** as the owner word, and `drv_owns_seg`
+answers about `drv_tab` rows (§51.1). Such a claim would therefore belong to
+nobody: counted in the `HEAP` and `RAM` totals, drawn in the memory map's
+bands, and named in no line of the Task Manager's list.
+
+The day this wants a buffer of its own is the day it needs a row back, or the
+day `mem_own_drv` has to learn about `xm_row`. It will not announce itself.
+
+#### 41.12.4 A failure is silent, and that is the design
+
+Three things can leave a machine that reported extended memory without a
+store: the A20 gate not verifying, a heap that cannot fund the image, and the
+file missing from a hand-built disk. **None of them is said out loud.** The
+image is freed, the four cells answer tier 0's answers, and the Task Manager's
+`XMS 0/0K` line is the only trace.
+
+Bad memory is the system's fault rather than the user's, and a boot-time
+notice would make it the user's problem at every boot without giving them an
+action — there is no page to send them to, by construction. It is also
+consistent with what §41.8 already tells every package (*branch on the caps,
+never on the tier*) and with §47 rule 3, which refuses to report a guess where
+the only honest test is doing the thing.
+
+**The right surface for that diagnosis is an application, not a notice**: a
+System Info tool in the CheckIt idiom — CPU tier, adapters found, the memory
+ladder, the A20 state, the RTC rung that answered, drivers loaded — asked for
+once, by somebody diagnosing. It would read slots that already exist
+(`OSAPI_CPU_INFO`, `OSAPI_XMEM_CAPS`, `OSAPI_VIDEO`, `OSAPI_SYS_KB`). It is
+not part of this work and is recorded so the decision is findable.
 
 ## 42. Paint — the seventh package (apps/paint/paint.asm)
 

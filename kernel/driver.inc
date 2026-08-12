@@ -75,6 +75,16 @@ DRVC_FILE   equ 5               ; a volume served by somebody ANSWERING
                                 ; four that can be tested in a container
 DRVC_MAX    equ 5               ; classes, and so publication slots
 
+DRVC_OVL    equ 0x40            ; NOT A CLASS, and mirrored from
+                                ; drivers/os88drv.inc: a driver-shaped image
+                                ; its OWNER loads and attaches, with no row in
+                                ; drv_tab, no publication slot and no Control
+                                ; Panel tick (SPEC.md 52.11). Well clear of
+                                ; DRVC_MAX, so drv_cls_idx refuses it by range
+                                ; alone and it can never take a class by
+                                ; accident. HDDTOOL.DRV's owner is HDD.DRV;
+                                ; XMEM.DRV's is the kernel (SPEC.md 41.12)
+
 ; --- driver table row, stride DRVR_SIZE --------------------------------------
 ; DRVR_DISP and DRVR_SEG are adjacent, in that order, ON PURPOSE: together
 ; they are the far pointer `call far [bx+DRVR_DISP]` reads, so arming the row
@@ -1608,7 +1618,57 @@ drv_load_x:
 
     call drv_vol_bank           ; this goes to A: to find the .DRV, and the
                                 ; user may have been anywhere (SPEC.md 51.5.2)
-    call drv_row_x                ; BX = the row for the whole routine
+    call drv_row_x              ; BX = the row for the whole routine
+%ifdef KERN_BIG                 ; ...and everything below is shared with
+    jmp short drv_load_row      ; drv_load_at, which is kern_big's alone
+
+; -----------------------------------------------------------------------------
+; drv_load_at - load into a row-shaped record that is NOT in drv_tab
+; in:  BX = a 16-byte DRVR_-shaped record, DRVR_FILE and DRVR_CLASS live
+; out: exactly drv_load's - CF = 0 loaded, CF = 1 and DRVR_ERR = the DRVE_*
+; clobbers: nothing else (flags)
+;
+; The whole of drv_load below the row lookup, reached with the row supplied
+; instead of indexed: the volume bracket, the mount, drv_find, the ONE
+; MEM_K_DRV claim, the read, drv_check and the shared failure tail. It exists
+; so an OVERLAY the kernel owns (SPEC.md 52.11) is loaded by this body and not
+; by a second copy of it - the copy being the shape that drifts, and the
+; volume bracket being exactly what went missing the last time this path was
+; duplicated in spirit (SPEC.md 51.5.2).
+;
+; A DRVC_OVL row stops after drv_check: an overlay has no class, so it can
+; neither publish nor be sent DRVV_TIER or DRVV_READY, and ITS OWNER ATTACHES
+; IT. That is the same division HDD.DRV and HDDTOOL.DRV already run on; here
+; the owner is the kernel. On that path DRVR_SEG and DRVR_ENT come back live
+; with nothing yet called, and the owner owes drv_release if it refuses.
+;
+; BEHIND %ifdef KERN_BIG, and it has to be: XMEM.DRV is its only caller and
+; kern_small has no store above 1MB (SPEC.md 41.11), so an unguarded
+; drv_load_at would be twenty-odd bytes of kern_big's feature charged to the
+; 128KB-floor product - docs/KERN-SPLIT-PLAN.md 2's first leak, "a hook left
+; outside its %ifdef", which is silent and which `make kernsplit` is the check
+; for. HDD.DRV loads HDDTOOL.DRV through the file API and not through this, so
+; nothing in kern_small wants it.
+; -----------------------------------------------------------------------------
+drv_load_at:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    call drv_vol_bank
+drv_load_row:
+%endif                          ; ...and the SHARED body starts here. The
+                                ; %endif belongs on this line and nowhere
+                                ; lower: it sat 88 lines down for one build,
+                                ; which took the whole middle of drv_load -
+                                ; the mount, drv_find, the claim, the read and
+                                ; drv_check - out of kern_small. It assembled
+                                ; without a word, because every label the
+                                ; guarded region defined was also inside it
     cmp word [bx+DRVR_SEG], 0
     jne .already
     cmp word [bx+DRVR_FILE], 0
@@ -1651,6 +1711,13 @@ drv_load_x:
     call drv_check              ; the header, against the image that arrived
     jc .badfree
 
+%ifdef KERN_BIG
+    cmp byte [bx+DRVR_CLASS], DRVC_OVL
+    je .ovl                     ; an OVERLAY stops here: no class, so nothing
+                                ; to publish and no verb the kernel may send.
+                                ; Its owner attaches it (drv_load_at above)
+%endif
+
     mov byte [bx+DRVR_ERR], DRVE_OK ; the previous attempt's code is cleared
                                 ; BEFORE the attach and not after it, because
                                 ; drv_attach may BANK one of its own off the
@@ -1665,6 +1732,10 @@ drv_load_x:
     clc
     jmp short .out
 
+%ifdef KERN_BIG
+.ovl:
+    mov byte [bx+DRVR_ERR], DRVE_OK
+%endif
 .already:
     clc
     jmp short .out

@@ -528,12 +528,23 @@ DRIVERS += $(BUILD)/ramdisk.drv
 # drivers do but is NOT one of them: nothing puts it in drv_tab, the Drivers
 # page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
 DRIVERS += $(BUILD)/hddtool.drv
-# ...and the ON-DEMAND KERNEL MODULES (SPEC.md 2.8), which are neither. They
-# are kernel code - cut out of the assembled kernel by tools/os88mod.py, not
-# assembled on their own - and they are .DRV for one reason: os88disk.py's
-# sys_attr stamps anything ending DRV read-only+hidden+system by EXTENSION
-# (SPEC.md 19.6), the installer's `*.DRV` copy rule picks them up, and
-# ld_check_hdr refuses to launch one. Nothing lists them as drivers.
+# ...and the store above 1MB (SPEC.md 41.12), which is an overlay for the same
+# reason and rides every disk the same way: no drv_tab row, no Drivers-page
+# tick, no SYSTEM.CFG bit. The kernel's own boot sniff decides whether to read
+# it, so a machine with no memory up there never touches this file
+DRIVERS += $(BUILD)/xmem.drv
+# ...and the ON-DEMAND KERNEL MODULES (SPEC.md 2.8), which are neither a driver
+# nor an overlay. Both of those are SELF-CONTAINED images with a dispatcher and
+# an ABI; a module is this kernel's OWN CODE, cut out of the assembled binary by
+# tools/os88mod.py, naming `cp_sel` and `dsk_secbuf` at the addresses this build
+# put them at. They are .DRV for one reason: os88disk.py's sys_attr stamps
+# anything ending DRV read-only+hidden+system by EXTENSION (SPEC.md 19.6), the
+# installer's `*.DRV` copy rule picks them up, and ld_check_hdr refuses to launch
+# one. Nothing lists them as drivers.
+#
+# LAST, because $(KMODS) is the only entry that reads $(KMODDIR), which the
+# non-default image rules override per target - which is also why DRIVERS is a
+# recursive `=` and not a `:=`.
 DRIVERS += $(KMODS)
 SYSAPPS := $(BUILD)/taskmgr.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
@@ -611,6 +622,17 @@ $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
 
 $(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/sound.bin -o $@
+
+# The store above 1MB (SPEC.md 41.12). An OVERLAY, not a driver: os88drv.py
+# stamps it and names it 'overlay' because its class byte is DRVC_OVL, which
+# the kernel deliberately does not know - so nothing can load it but xm_boot.
+$(BUILD)/xmem.bin: drivers/xmem/xmem.asm drivers/os88drv.inc apps/os88api.inc \
+                   | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/xmem/xmem.asm
+	@echo "xmem:   $(call FILESIZE,$@) bytes"
+
+$(BUILD)/xmem.drv: $(BUILD)/xmem.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/xmem.bin -o $@
 
 # The MBR's 446 bytes of boot code (SPEC.md 52.10.1). Assembled on its own and
 # incbin'ed by drivers/hdd/part.inc, which is why the driver gets -I $(BUILD):
