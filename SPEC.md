@@ -2638,6 +2638,44 @@ The general rule this is an instance of: **a routine that is reached from
 pair sits under every drawing site in the machine, kernel and package alike,
 and there is no call site that can compensate.
 
+### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
+
+`gfx_xor_rect`'s `cur_unlazy` sat **below** its `cmp byte [vid_mono], 0`, so on
+a 1bpp adapter — where the software renderer *is* the direct path (§39.5) — the
+unclipped drag outline jumped to `gfx_xor_rect_sw` and the promise was never
+spent. It is `GFXCLIP`'s documented rule, arriving at the one public rect entry
+that does not use the macro (an outline is not the intersection of its bounding
+rect with anything, so it decomposes before it clips), and its documented
+failure: **works on VGA, silently does nothing on Hercules and CGA.**
+
+**What it looks like is stray pixels, and they are not in the picture.** With
+the arrow still on the glass, an XOR that lands under it flips the *arrow's*
+bits, while the save-under still holds the background from before. The next
+`gfx_unlock` moves or restores the cursor, which writes that background back
+and takes the XOR with it — and then the app's own erase, an XOR of the same
+rect, flips a pixel that was never left lit. One stray dot per pointer
+position, wherever the outline passed under the cursor and the cursor then
+moved.
+
+Paint's rubber band is where it shows worst, and the reason is geometric rather
+than particular to Paint: the band's corner tracks the pointer, so the cursor
+is *on* the outline for the whole drag. Measured on a cycle-accurate 5150 with
+a Hercules card, one oval dragged out and then forced to repaint from the
+canvas: **2 differing pixels before, 0 after** — the anchor and one waypoint
+where the pointer paused. The rectangle tool leaks the same pixel from the same
+routine; nothing in `pt_oval` was ever wrong.
+
+Three things about the fix. It goes **between the clip test and the mono
+dispatch**, not at the top: the clipped path decomposes into `gfx_xor_fill`
+strips whose `GFXCLIP` owes no hide, because `wm_clip_set` already asked
+`cur_lazyck` (§7.1.4) and a region away from the pointer is the win this whole
+mechanism exists for. `vga_xor_rect_vram` keeps its own call, because the
+transient overlays enter there directly and it is three instructions when the
+flag is already spent — `cur_unlazy` is one-way within a hold. And
+`gfx_xor_fill` was **already right** and looks wrong: its raw body carries the
+same pair, but every public caller reaches it through `GFXCLIP`, which spends
+the hide above everything.
+
 ## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
 - `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
@@ -24489,6 +24527,60 @@ register. The alternative shape, deferring the whole repaint to `[pt_apend]`'s
 `OSAPI_WM_FRONT`, does not work and is why this was not noticed: `wm_front` on a
 window that is already frontmost and unobscured draws no window at all (§11.90),
 which is exactly the case at launch.
+
+### 42.11 A document handed over at launch is read BEFORE `wm_create`
+
+A picture double-clicked in a Disk window (§54.4) reached Paint as a name, and
+Paint spent it from its **first `W_PAINT`**. That is a paint the kernel has
+already drawn a frame for, so the picture's size arrived after the window's was
+decided, and every way out of that is a repair:
+
+- `pt_load` ends in `pt_wfollow`, which sizes `pt_tpl` and raises `[pt_wchg]`
+  for a caller to spend on `OSAPI_WM_RESIZE`. **That path had no caller.**
+  `pt_ondlg` spends it; `pt_argload` did not, and could not — `wm_resize`
+  repaints, so calling it from inside a paint proc re-enters the paint proc.
+- What ran instead was `pt_track`, a few instructions later, whose whole job is
+  to follow a **grow box** (§42.10): it found a canvas that disagreed with the
+  window and dragged the canvas back out to the window. The ink guard pinned
+  the *width* to the picture and let the *height* grow, so the 466x110 logo on
+  the system disk opened as a 466x110 picture in a **466x258** canvas — the
+  right width, the wrong height, and a white band under the artwork that is not
+  in the file. §42.9's own case, arriving down a different road.
+- `[pt_wchg]` then stayed raised for the session, so the next `File ▸ Open`
+  inherited a resize nothing had asked for.
+
+**So the load moved to the entry proc, above `wm_create`, and the repair
+disappears rather than being fixed**: `pt_tpl` carries the picture's size and
+its centred origin before the window exists, `wm_create` makes the window at
+it, `pt_track` finds canvas and content already equal, and there is no resize,
+no second repaint and no stale frame anywhere. The dialog path was always
+correct and is untouched — it has a window, holds the lock, and `OSAPI_WM_RESIZE`
+is exactly the right call there.
+
+**The entry proc may do this, and §20.2's contract is what says so.** It
+forbids `wm_show`/`wm_hide`/`wm_front`, spawning, and **drawing**; it explicitly
+permits heap claims "precisely so an app can size itself before it has one",
+which is this. Nothing in a load draws: the decoders write the canvas claim
+(`pt_line_put` — *canvas only, no screen*), `pt_caret_hide` and `pt_marq_hide`
+are gated on flags a freshly zeroed bss holds at 0, and the outcome is a
+**toast**, which §59.3 stages when no lock is held. The file API is legal on the
+UI task and the loader's own image read — with no lock held either — is a few
+hundred instructions behind us.
+
+Three things it needed. `pt_canvas_init` and `pt_font_init` move above
+`wm_create` too, because a decoder needs a canvas to decode INTO and the DIB
+header stamped; they took a `pushf`/`popf` pair with them, since the CF
+`wm_create` owes the loader is no longer in flight where they run.
+`pt_argload` **clears `[pt_wchg]` itself** — the template *is* the answer here,
+so the debt is paid before it is owed. And it shows `[pt_msgp]`, which the old
+path set and nobody read: a double-clicked picture that failed to decode used
+to say nothing at all.
+
+Measured on a cycle-accurate 5150 with a Hercules card, double-clicking
+`MEDIA/OS8088.GIF`: frame **494x300 → 512x152**, canvas **466x258 → 466x110**,
+`[pt_wchg]` **1 → 0** — identical, now, to what the same file through
+`File ▸ Open` has always produced. A Paint launched with no document is
+byte-identical either way.
 
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
