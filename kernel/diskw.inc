@@ -197,11 +197,18 @@ dskw_pmask:
     cmp byte [dskw_syswr], 0
     je .out
     mov al, DSKW_SPROT
+%ifndef INST_RDONLY             ; `make INSTRO=1` keeps read-only refusing,
+                                ; which is the A/B for 19.6.2: with it, a
+                                ; second install onto the same disk errors
+                                ; naming KERNEL.SYS, and a first onto a fresh
+                                ; format still works - the two legs the field
+                                ; reported
     mov bl, [dskw_raw+DSK_R_ATTR]
     and bl, DSKW_SYSAT
     cmp bl, DSKW_SYSAT          ; the kernel's own species, both bits?
     jne .out
     mov al, DSKW_KPROT
+%endif
 .out:
     pop bx
     ret
