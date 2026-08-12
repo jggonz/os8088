@@ -5619,18 +5619,23 @@ Four sites write `W_X` and all four go through `wm_snap_ax`:
   along without any of this (§45.9).
 
 A fifth site, **`wm_zoom`** (§11.95), shares the *gate* and not the
-arithmetic: `wm_snap_ax` moves left and re-tests the window's current width,
-and a zoom is the one case where x wants to move **right** and the width is
-about to shrink by the same seven pixels to pay for it. The three tests are
-therefore `wm_snap_want` (BX = window; CF = 1 = this window wants an 8-aligned
-content origin right now), which `wm_snap_ax` calls too — one answer to the
-question, two ways of acting on it.
+arithmetic: it goes to x = 0 and spans the screen, which §11.95.2 makes an
+aligned position by suppressing the left border, and on a secondary display
+(§39.17.2) — where x = 0 is not a screen edge — it falls back to moving
+**right** to the display's origin + 7 and shrinking the width to pay for it.
+Either way the gate is `wm_snap_want` (BX = window; CF = 1 = this window wants
+an 8-aligned content origin right now), which `wm_snap_ax` calls too — one
+answer to the question, two ways of acting on it.
 
 Three consequences worth naming:
 
-- **A snapped window cannot sit flush against the left edge.** The smallest x
-  with `x + 1` a multiple of 8 is 7, so that is as far left as it goes. Seven
-  pixels is the visible cost of the feature.
+- **A snapped window cannot sit flush against the left edge — unless it spans
+  the screen** (§11.95.2). The smallest x with `x + 1` a multiple of 8 is 7,
+  so that is as far left as an ordinary window goes, and seven pixels is the
+  visible cost of the feature. A window that reaches the right-hand edge from
+  x = 0 has no snapped position at all — the bullet below is `wm_snap_ax`
+  leaving it alone — and for that one the aligned origin is 0 with the left
+  border dropped.
 - **The snap moves LEFT**, so it can never violate the caller's right-edge
   clamp — except in the `x = 0..6` case, where the only answer is 7 and the
   right edge is re-tested. A window too wide for that is **left unsnapped**
@@ -5939,9 +5944,9 @@ double-click zooms afresh and banks where the drag left it.
 matters:
 
 ```
-x = 0                             (7 for a WF_SNAP window on mono — below)
+x = 0                             (the display's origin + 7 — below)
 y = MBAR_H
-w = [vid_w]                       (less that 7)
+w = [vid_pw]                      (less that 7)
 h = [vid_dock_y0] − MBAR_H − 1
 ```
 
@@ -5969,17 +5974,28 @@ reason. Three things about it:
 - **A restore does not spend the bank.** A refused shrink (below) has to be
   askable again, and a zoom re-banks anyway.
 
-**`WF_SNAP` is honoured, and it is the one case where a snap moves RIGHT.**
-§11.94's `wm_snap_ax` moves a candidate x *left* and re-tests the window's
-**current** width against the right edge — and at full screen width x = 7
-always fails that test, so a snapped window put through it would zoom to x = 0
-and silently lose the single-store fast path it asked for. So the gate alone
-is factored out as **`wm_snap_want`** (BX = window; CF = 1 if this window's
-content origin wants to be 8-aligned right now — `WF_SNAP` set, `WF_FULL`
-clear, `[vid_mono]` non-zero) and `wm_zoom` acts on it in the other direction:
-x = 7, and the width gives back exactly the seven pixels x took, so the right
-edge is unmoved. `wm_snap_ax` calls the same routine, so there is still one
-answer to the question and not two that can drift.
+**`WF_SNAP` is honoured, and x = 0 is where it is honoured BEST.** §11.94's
+`wm_snap_ax` moves a candidate x *left* to the nearest x with `x + 1` a
+multiple of 8, and at full screen width there is no such x that fits — so it
+leaves the window at 0, where the content origin would be 1 and the
+single-store fast path is lost. §11.95.2 is the answer and it costs nothing:
+a snapped frame spanning the screen drops its **left border**, so its content
+starts at x = 0, which is aligned. The standard rect is the whole desktop
+band, the seven pixels of desktop that used to show down the left of a
+maximized window are content now, and the chrome is one drawing call cheaper.
+
+**A secondary display is where the seven pixels are still paid** (§39.17.2).
+There x = 0 is not a screen edge but the boundary with the display beside it,
+so the border has something to separate the window from and `wm_flush`
+correctly says no. `wm_zoom` asks `wm_flush_ck` of the rect it is about to
+commit — the geometry half of §11.95.2's predicate, since the record does not
+hold that rect yet — and when the answer is no it does what it always did:
+x = the display's origin + 7, and the width gives back exactly the seven
+pixels x took, so the right edge is unmoved. The gate above both is
+**`wm_snap_want`** (BX = window; CF = 1 if this window's content origin wants
+to be 8-aligned right now — `WF_SNAP` set, `WF_FULL` clear). `wm_snap_ax`
+calls the same routine, so there is still one answer to the question and not
+two that can drift.
 
 **It asks the window — twice, and the second answer can be no.**
 `wm_ask_size` (§11.1) runs on the state being *tested* (so the compare above
@@ -6046,6 +6062,106 @@ behind it is popped by the UI loop and ignored, which is what that loop
 already does with every mouse-up. On a machine with no mouse (§9.6) the same
 press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
 exactly this case — a pass that dispatched a press and did not track it.
+
+### 11.95.2 A window that spans the screen has no left border
+
+**A border separates a window from what is beside it, and at the screen's left
+edge there is nothing beside it.** So a `WF_SNAP` window whose frame reaches
+from x = 0 to the last column of the screen does not draw one, and its content
+therefore starts **at** `W_X` rather than at `W_X + 1` — which is 0, and
+byte-aligned. The other three sides are untouched.
+
+That is what lets §11.95's standard rect be the whole screen. It used to be
+x = 7, w = screen − 7: §11.94's snap moving *right* to buy an aligned content
+origin, at the 7-pixel cost that section names. A maximized window therefore
+sat with its right edge flush and **seven columns of desktop dither showing
+down its left**, plus a border column — eight columns of content given up to
+land the origin on a byte boundary that x = 0 already is. The standard rect is
+now `x = 0, w = [vid_pw]` and the alignment is kept, not traded for.
+
+**Derived, never tracked** — §11.95's own rule, for its own reason. `wm_flush`
+(BX = window; CF = 1 = no left border; every register preserved) is
+`wm_snap_want` **and** `W_X = 0` **and** `W_X + W_W >= [vid_w]`. There is no
+flag, so there is no site that has to clear one: a window dragged or resized
+off that geometry has its border back at the next paint because the question is
+asked again. `wm_flush_ck` (AX = a candidate x, CX = a candidate width) is the
+geometry half on its own, because `wm_zoom` has to ask it of a rect it has not
+committed yet.
+
+**`wm_snap_want` is in the predicate for two distinct reasons**, and neither is
+decoration. A `WF_FULL` window is *already* borderless and its content IS its
+frame (§11.2), so adjusting it here would inset it twice. And a `WF_NOSNAP`
+window has opted out of having its geometry decided for it (§11.94.1), so it
+keeps its border and its `W_X + 1` content origin whatever it spans.
+
+**It composes with `wm_snap_ax` rather than fighting it, and that is why the
+snapper needed no change at all.** At x = 0 the snapped position is 7, and
+`wm_snap_ax` already **refuses** to move a window there when `7 + W_W` would
+hang it off the right edge — which is exactly the geometry this rule names. So
+a snapped window is either snappable to 7, in which case all four `W_X`
+writers have already put it there and it is never at 0, or it spans the screen,
+in which case x = 0 is the only aligned position it has. `wm_zoom`'s x = 0
+therefore survives `wm_resize_nb`'s `wm_snap_win` untouched. **The corollary is
+that this is not a new state for such windows**: one at x = 0 too wide to snap
+is a window that has been sitting there all along with an *unaligned* content
+origin, silently missing the fast path §11.94 exists for. It gains alignment
+here, it does not lose a position.
+
+**The outline is three sides, and that is a drawing call CHEAPER rather than
+dearer.** `gfx_frame` is four `gfx_fill`s — two `gfx_hline`, two `gfx_vline` —
+and a flush window emits the top, the bottom and the right. At
+PERFORMANCE.md Part 2's ~756µs of fixed cost per drawing call, whatever it
+draws, a maximized window's chrome costs one call less than it did.
+
+**The border may not be drawn and then covered**, which is the shape the first
+draft of this takes: leave `gfx_frame` alone and let the title-bar fill and the
+content fill overwrite column 0. Every pixel of that column is then written
+twice, and PERFORMANCE.md Part 1's double-draw flash is plainly visible on the
+target machine — a defect this container cannot show. Three sides, drawn once.
+
+Six sites answer the question, and they are every place a *content* rect is
+derived from `W_X`; a **frame** rect is unchanged, because the frame really
+does still span x = 0 to x + w − 1:
+
+| site | what changes |
+|---|---|
+| `wm_content` | content left is `W_X`, not `W_X + 1` |
+| `wm_geom` | content width is `W_W − 1`, not `W_W − 2` |
+| `wm_clip_set` | the seed rect, so an app may draw in column 0 |
+| `wm_su_rect` | the raise cache, `wm_cov_rect` and `wm_damage` behind it |
+| `wm_draw_win` | the outline's three sides, the content fill, the bottom drop shadow's left end |
+| `wm_draw_title` | the title-bar interior and the separator under it |
+
+`wm_hit` is **not** among them and needs nothing: it tests the frame rect and
+has never treated the border column as its own region, so a point in column 0
+already answered "content". Neither is `wm_title_set`, whose strip is the frame's
+full width already.
+
+**What does not move is everything positioned from the frame**: the close and
+minimize boxes at `W_X + 8`, the pinstripes inset 3, and the centred caption.
+The frame has not moved — only the fills that would otherwise leave a
+one-pixel hole at column 0 extend to reach it.
+
+**A seventh site had to change, and it is the one nothing pointed at:
+`ui_grow`.** The aligned x is a question about the *width* now — shrink a
+maximized window off the screen's right edge and it stops being flush, so
+column 0 stops being an aligned content origin and 7 is the leftmost one
+again. `ui_grow` never re-snapped, correctly, because until this **a width
+change could not move that origin**; without the `wm_snap_win` it now makes,
+one drag of the grow box left the window at x = 0 with its border back and its
+content at 1, *unaligned* — silently missing the fast path §11.94 exists for,
+which is the exact defect this section is meant to remove. `wm_resize` already
+made that call for its own reason (its x clamp can move the origin) and needed
+nothing.
+
+Its **damage union** follows: `ui_grow` took `x1 = W_X` and
+`x2 = W_X + max(old w, new w)`, which is the union of the two rects only while
+the origin is fixed. It is `min` and `max` over both rects' edges now — the
+same answer when nothing moved, and the seven columns the window vacates put
+back when it did. Verified on all three adapters: after a grow-box shrink from
+the zoomed state the window is at x = 7 with an aligned origin, and the screen
+the resize leaves is **0 differing pixels** against the same window drawn
+whole by `wm_show`.
 
 ### 11.95.1 A window that GREW reveals nothing
 
