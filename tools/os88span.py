@@ -242,10 +242,64 @@ def sc_paint(m, mo):
             lambda: m.mouse(0, 0, l=False), pt.i)
 
 
+def _sol_up(m, mo):
+    """Solitaire off soltest.img (root row 0), with the Disk window it came
+    from still open - which is the second window everything below needs."""
+    mo.dblclick(*su.zone(m, 1))
+    time.sleep(4)
+    disk = [w for w in su.windows(m) if w.visible][0]
+    mo.dblclick(*su.row(disk, 0))
+    time.sleep(25)
+    sol = [w for w in su.windows(m) if w.visible
+           and w.title.upper().startswith("SOL")]
+    if not sol:
+        raise SystemExit("os88span: Solitaire did not launch - is "
+                         "build/soltest.img built? (see tools/solcheck.py)")
+    return sol[0], [w for w in su.windows(m) if w.visible
+                    and w.i != sol[0].i][0]
+
+
+def sc_sol(m, mo):
+    """A Disk window dragged OFF Solitaire — reported from the field as
+    "a drag and drop did not seem to use this buffer", which is what
+    SPEC.md 11.96.4 was written for and is worth re-asking per window.
+
+    `gfx_blit4` is the tell and it is Solitaire's alone: card backs are the
+    only thing in this window that blits (SPEC.md 43.3/43.9), so a pass with a
+    blit in it is a pass in which sol_drawall ran and the cache did not."""
+    sol, disk = _sol_up(m, mo)
+    p = sc.titlebar(m, disk)
+    sc.pdrag(mo, p[0], p[1], sol.x + 40, sol.y + 60)     # ...onto Solitaire
+    os88marty.settle(m)
+    d = [w for w in su.windows(m) if w.visible and w.i == disk.i][0]
+    p = sc.titlebar(m, d)
+    mo.to(*p)
+    mo._edge(True)
+    mo.to(p[0] - 80, p[1] + 40, l=True)
+    print("dragging %r off solitaire %r" % (d, sol))
+    return (("wm_su_try", "gfx_restore", "gfx_blit4"),
+            lambda: m.mouse(0, 0, l=False), sol.i)
+
+
+def sc_solraise(m, mo):
+    """...and the other half: Solitaire COVERED and then called to the front,
+    through its dock tile (sc_raise's reasoning - a covered window's title
+    strip may not be clickable at all)."""
+    sol, disk = _sol_up(m, mo)
+    sc.pclick(mo, *su.tile(m, disk))            # cover Solitaire
+    os88marty.settle(m)
+    print("raising solitaire %r from under %r" % (sol, disk))
+    mo.to(*su.tile(m, sol))
+    return (("wm_draw_win", "wm_su_try", "gfx_restore", "gfx_blit4"),
+            lambda: m.mouse(0, 0, l=True), sol.i)
+
+
 SCENARIOS = {"raise": (sc_raise, "os8088-360.img", "apps360.img"),
              "dragoff": (sc_dragoff, "os8088-360.img", "apps360.img"),
              "paint": (sc_paint, "os8088-360.img", "pttest.img"),
-             "paintraise": (sc_paintraise, "os8088-360.img", "pttest.img")}
+             "paintraise": (sc_paintraise, "os8088-360.img", "pttest.img"),
+             "sol": (sc_sol, "os8088-360.img", "soltest.img"),
+             "solraise": (sc_solraise, "os8088-360.img", "soltest.img")}
 
 
 def main():

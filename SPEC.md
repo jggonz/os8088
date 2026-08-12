@@ -24737,6 +24737,46 @@ and is right not to: measured, that same drop is 309 calls before and after.
 The win is on the adapters with room — Hercules and VGA — which is where the
 columns are long enough for the waste to be worth anything.
 
+#### 43.10.1 Why §11.96's raise cache cannot do this, and what it does instead
+
+The obvious question is why an application needs a shadow of its own when the
+system already has one. **They answer different questions, and neither is a
+special case of the other.**
+
+§11.96's cache is about pixels **another window covered**. It is taken off the
+glass by `wm_su_bank` at the end of `wm_draw_win` and put back by `wm_su_try`,
+and §11.96.4's rule is the reason it cannot reach a drop: the bank **drops the
+front window's cache and takes everybody else's**, because the front window
+"has not finished with the pixels it has just been given — the next thing it
+does is change them". A card drop *is* that change, on the window that is by
+definition frontmost while it is being played. A cache taken before the drop is
+a picture of the wrong board, and one taken after it can only be as good as the
+drawing that put it there.
+
+So the two compose rather than overlap, and after §43.10 they compose over an
+incremental drawing that is exact (the gate above). **Measured on a
+cycle-accurate 5150/Hercules with `tools/os88span.py`:**
+
+| | | |
+|---|---|---:|
+| `solraise` | Solitaire covered, then called to the front | `wm_su_try` → `gfx_restore` **15.24 ms** |
+| `sol` | a Disk window dragged **off** Solitaire | `wm_su_try` → `gfx_restore` **32.76 ms** |
+
+**with zero `gfx_blit4` calls in either** — card backs are the only thing in
+this window that blits (§43.3), so a pass with no blit in it is a pass in which
+`sol_drawall` did not run. Against §43.9's 681 ms full repaint, that is the
+cache doing exactly what it is for.
+
+**The general statement is worth making because it is not Solitaire's.** The
+kernel's redraw work — §11.90's raise, §11.91's damage, §11.96's cache — stops
+at the window boundary, and it has to: *inside* a window only the application
+knows which pixels still mean what they meant. Every app whose content changes
+in place therefore owes itself the §43.10 shape — a record of what it put on
+the glass, diffed against what it wants there now — and the tree is full of
+that one idea under different names: `menu_bcell` (§12.9), `tm_rowck` (§11.3),
+`mppu_chk` (§56.12), `mc_srun` (§48.17), `np_sig` (§27.2). A system-wide buffer
+cannot substitute for any of them.
+
 **Face-down cards stop needing an argument of their own.** §43.7's reasoning
 was that every back is the same image, so the question is never *which* card
 but only *where and how big*; that is now just what a byte compare says, and

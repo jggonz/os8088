@@ -5675,6 +5675,37 @@ bytes of image and 1,276 -> 1,451 of bss — 203 bytes of shadow against the 28
 the sliver cache used — all of it inside the package's own region, which is a
 heap claim (§20.1). No kernel file changed.
 
+**And §11.96's raise cache was asked whether it covers any of this. It does
+not, and it is not idle either** (§43.10.1). The question arrived as *"a drag
+and drop did not seem to use this buffer — maybe this is a global issue?"*,
+which is the same words §11.96.4 was written for, so it was re-asked with the
+instrument rather than answered from the document. Two scenarios added to
+`tools/os88span.py`, cycle-accurate 5150/Hercules:
+
+| | | |
+|---|---|---:|
+| `solraise` | Solitaire covered, then called to the front | `wm_su_try` → `gfx_restore` **15.24 ms** |
+| `sol` | a Disk window dragged **off** Solitaire | `wm_su_try` → `gfx_restore` **32.76 ms** |
+| `dragoff` | ...and the same for two Disk windows, as a control | `wm_su_try` → `gfx_restore` **10.84 ms** |
+
+**Zero `gfx_blit4` in any of them**, so `sol_drawall` ran in none — against
+§43.9's 681 ms full repaint. The buffer works, for this package and generally.
+What it cannot do is a card drop: §11.96.4's bank **drops the front window's
+cache and takes everybody else's**, and the window a card is being dropped on
+is by definition the front one. The two mechanisms compose — the cache for
+what another window covered, the shadow for what the app moved itself — and
+after this change they compose over an incremental drawing that is exact.
+
+**One measurement here was wrong before it was right, and the reason is in
+`os88span.py`'s own docstring.** A first pass with a hand-rolled probe reported
+`wm_su_try` firing **zero** times on a Solitaire raise whose picture came back
+perfect, which reads as "the cache is being bypassed" — the very claim under
+test. It was the harness: the probe sent its press and release as back-to-back
+raw packets, which the 1200-baud UART drops (`subcheck.pclick` exists for
+exactly this), and armed the breakpoints before driving the input instead of
+after. **Drive the input before arming and send only the last packet**, which
+is what the scenarios above do and what that file has said since Set 30.
+
 **Verified by comparison, not by argument.** `tools/solcheck.py` grew a PLAY
 phase for this: fourteen real drags chosen from the guest's own board (so both
 builds play the same game off the same seeded deal), including a six-card run,
