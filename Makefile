@@ -894,11 +894,36 @@ $(BUILD)/net.drv: $(BUILD)/net.bin tools/os88drv.py
 # DEBUG.DRV's argument - a knob kernel is a different binary, so what you
 # tested is not what ships - and it costs a machine that never ticks it one
 # drv_tab row and a file on the floppy.
+# RAMSEED=1 fills the RAM disk with the folders and files the redirector's
+# branch sites were built against - two levels of directory, three text files
+# and a copy of MINES.O88 (SPEC.md 62.9.5.1). It is OFF by default: those
+# files cost the shipped floppy 1.8KB of driver image to carry a package it
+# already has, and they cost the KERNEL nothing either way, a .drv being a
+# heap claim. `make ramseed` is the target that builds it.
+RDSEEDDEF :=
+ifneq ($(RAMSEED),)
+RDSEEDDEF += -DRDSEED
+endif
+RDSTAMP := $(BUILD)/.ramdisk-$(if $(RAMSEED),seed,bare)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(RDSTAMP) ] || { rm -f $(BUILD)/.ramdisk-* $(BUILD)/ramdisk.bin \
+                                     $(BUILD)/ramdisk.drv; \
+                               touch $(RDSTAMP); })
+
 $(BUILD)/ramdisk.bin: drivers/ramdisk/ramdisk.asm drivers/os88drv.inc \
                       apps/os88api.inc $(BUILD)/mines.o88 | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/ramdisk/ -I drivers/ -I apps/ \
-	        -I $(BUILD)/ -o $@ $<
+	$(NASM) -f bin -w+error $(RDSEEDDEF) -I drivers/ramdisk/ -I drivers/ \
+	        -I apps/ -I $(BUILD)/ -o $@ $<
 	@echo "ramdisk: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/ramdisk.bin: $(RDSTAMP)
+
+# ramseed: the populated RAM disk, for debugging the redirector's branch sites
+# without a cable. Same disks, one driver rebuilt (SPEC.md 62.9.5.1).
+.PHONY: ramseed
+ramseed:
+	$(MAKE) RAMSEED=1
+	@echo "ramseed: build/ramdisk.drv carries DOCS/, DEEP/ and MINES.O88"
 
 $(BUILD)/ramdisk.drv: $(BUILD)/ramdisk.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/ramdisk.bin -o $@

@@ -48,7 +48,7 @@
 
 %include "os88drv.inc"
 
-    OS88_DRIVER 'Network', DRVC_FILE, net_entry
+    OS88_DRIVER 'os88net', DRVC_FILE, net_entry
 
 ; --- the wire protocol, master side ------------------------------------------
 ; os8088 is always the master and never receives unsolicited data (NET-PLAN
@@ -166,8 +166,8 @@ net_fsv_end:
   %error "net: the FSV_* table is not FSV_SIZE bytes - a swallowed row?"
 %endif
 
-net_name:   db 'Parallel Link', 0
-net_cpname: db 'Network', 0
+net_name:   db 'os88net', 0
+net_cpname: db 'os88net', 0
 
 ; =============================================================================
 ; ENTRY

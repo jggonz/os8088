@@ -449,7 +449,7 @@ drv_t_hdd:   db 'Hard Drive', 0
                                 ; and SPEC.md 58 still stands, but nothing in
                                 ; the kernel names it and nothing ships it
 drv_f_net:   db 'NET.DRV', 0
-drv_t_net:   db 'Network', 0
+drv_t_net:   db 'os88net', 0
 drv_f_ram:   db 'RAMDISK.DRV', 0
 drv_t_ram:   db 'Ram Disk', 0
 
