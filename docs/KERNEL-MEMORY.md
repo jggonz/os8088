@@ -421,7 +421,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 3139,
     "stk0": 1024,
-    "text": 46770
+    "text": 46773
   },
   "small": {
     "bss": 5495,
@@ -936,12 +936,12 @@ generated in the first place.
 |---|---:|---:|
 | the file system, end to end | 30,718 | 36.6% |
 | the window system and its furniture | 19,038 | 22.7% |
-| drawing: adapters, primitives, glyphs, icons | 12,628 | 15.1% |
+| drawing: adapters, primitives, glyphs, icons | 12,631 | 15.1% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 10,090 | 12.0% |
 | the kernel proper: API table, heap, scheduler, events | 6,209 | 7.4% |
 | the Control Panel | 3,836 | 4.6% |
 | the three built-in kinds | 1,376 | 1.6% |
-| **total** | **83,895** | |
+| **total** | **83,898** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -951,7 +951,7 @@ generated in the first place.
 | `wm.inc` — the window manager (§11) | 8,115 | — | **8,115** | 669 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 352 | 5,891 | **6,243** | 890 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,641 | **5,820** | 155 | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 5,203 | — | **5,203** | 653 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 5,206 | — | **5,206** | 653 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,883 | **4,106** | 106 | — |
 | `ctrl.inc` — the Control Panel (§31) | 672 | 3,164 | **3,836** | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
@@ -983,7 +983,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,955 | — | **2,955** | — | — |
-| **total** | **46,770** | **37,125** | **83,895** | **5,713** | **7,762** |
+| **total** | **46,773** | **37,125** | **83,898** | **5,713** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
