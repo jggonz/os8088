@@ -171,6 +171,16 @@ ifneq ($(INSTRO),)
 VIDDEF += -DINST_RDONLY
 endif
 
+# KEEPH=0 ignores SPEC.md 11.93's WF_KEEPH, so wm_fit shortens EVERY window
+# that will not fit the desktop band again - the pre-11.93 behaviour, and the
+# A/B for the whole flag. A knob rather than a second kernel because what it
+# proves is a CLICK: shortened, Minesweeper's bottom rows are drawn where no
+# window claims them and the press reaches the dock, which is a difference no
+# screenshot shows.
+ifeq ($(KEEPH),0)
+VIDDEF += -DNOKEEPH
+endif
+
 # FDDPROBE=0 never asks the FDC whether the second floppy drive is really there
 # (SPEC.md 18.97), so the int 11h equipment word decides on its own again - the
 # pre-18.97 behaviour, and the A/B for the whole probe. A knob for DIRW1's
@@ -413,11 +423,11 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 INSTRO FDDPROBE FDDABSENT REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
+                             DIRW1 INSTRO KEEPH FDDPROBE FDDABSENT REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
                              CURFRAME \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(CURFRAME),-cf$(CURFRAME))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(CURFRAME),-cf$(CURFRAME))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
