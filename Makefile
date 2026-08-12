@@ -151,6 +151,23 @@ ifeq ($(FDDPROBE),0)
 VIDDEF += -DNO_FDDPROBE
 endif
 
+# FDDABSENT=1 forces the probe's verdict to ABSENT for unit 1 without touching
+# a port, which is the only way to drive SPEC.md 18.97.2's DECISION on any
+# emulator in this tree: none of them can produce a real absent verdict, so the
+# retire path and the tier-1 keep path are both unreachable from a plain boot.
+# MartyPC synthesizes ST3 = 79 (TRK0 SET) for a drive its own config does not
+# have and QEMU's FDC answers 0x28 | (track==0 ? 0x10 : 0) off a track that is
+# 0 for an absent drive - so both say PRESENT unconditionally.
+#
+# It stubs the FDC conversation and nothing else, deliberately: what 18.97.2
+# changed is what the kernel DOES with an absent verdict, and that is what this
+# makes testable. The conversation itself is still the 5150's question. Boot a
+# tier-0 machine with this and drive B must go; boot a tier-1 one and it must
+# stay, with `probe stop 03` and `verdict 1` in the published block.
+ifeq ($(FDDABSENT),1)
+VIDDEF += -DFDD_FORCE_ABSENT
+endif
+
 # KERN_SMALL=1 selects the SMALL build of the kernel (docs/KERN-SPLIT-PLAN.md).
 #
 # The split is the one docs/KERNEL-MEMORY.md and kernel.asm have named for
@@ -335,16 +352,37 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 FDDPROBE REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
+                             DIRW1 FDDPROBE FDDABSENT REDRAWFULL NOSPLIT SNDSNIFF RAMKB DRAGCACHE \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
+                                      $(BUILD)/kernel-full.bin \
+                                      $(BUILD)/kmod/*.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
                                       $(BUILD)/hddtool.bin $(BUILD)/hddtool.drv; \
                                 touch $(VIDSTAMP); })
+# **kernel-full.bin IS ON THAT LIST AND WAS NOT, AND EVERY KNOB IN THIS FILE
+# WAS SILENTLY DEAD BECAUSE OF IT.** The list is the artifacts a knob can
+# change, and it was written when `kernel.bin` WAS the nasm output. The
+# on-demand module split put $(BUILD)/kernel-full.bin in front of it - that is
+# the file $(VIDDEF) is passed to - and kernel.bin became a DERIVED file that
+# os88mod.py carves out of it. So removing kernel.bin alone re-ran os88mod.py
+# over a kernel-full.bin nothing had rebuilt: `make VIDEO=cga` after a plain
+# `make` re-emitted the VGA kernel, changed the stamp, and said nothing.
+#
+# It is the exact failure CLAUDE.md warns about under VIDEO= - "make sees an
+# up-to-date kernel.bin, boots the previous adapter, and it reads exactly like
+# the probe being broken" - with the guard against it defeated by a later,
+# unrelated change. kernsize.py cannot catch it either: it re-assembles the
+# kernel ITSELF with $(VIDDEF), so it cheerfully reports the sizes of a binary
+# the build did not produce, which is how a +65 byte knob got reported for a
+# kernel that did not contain it.
+#
+# The carved modules go too ($(KMODS), and by wildcard so a new one needs no
+# edit here): they are cut from the same assembly and are just as stale.
 
 # --- the build number the About box shows (SPEC.md 14.2) ---------------------
 #

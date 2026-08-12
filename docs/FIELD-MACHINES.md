@@ -333,6 +333,30 @@ a known quirk — **it sometimes decides to boot in mono** — which may be what
 put it into the CGA path in the first place, and which the Display page can
 now correct from inside the running OS.
 
+**It has since found a real bug, and it is the second machine to find the same
+one** (docs/FIELD-NOTES.md 21, SPEC.md §18.97.2). It came up with **no Drive B**
+and a 1.2MB 5.25" drive plainly present: §18.97's probe removed the row,
+because its only removing path is "ST3's TRK0 read clear before and after a
+RECALIBRATE" and note 19's IBM 4865 had already shown a **present, working**
+drive answering exactly that. §18.97's justification is 5150-specific — the
+equipment word there is the SW1 **DIP switches**, a factory default worth
+disproving — and this machine takes the same count out of **CMOS setup**,
+where it is somebody's decision. The verdict is acted on **on tier 0 only**
+now; the probe still runs and still publishes.
+
+**And 1.2MB media was never the problem**, which is worth recording because it
+was the report's own second guess: §18.2's BPB rule 11 whitelists 15 sectors
+per track and rule 13's `spt*heads*80` is 2,400 sectors — a 1.2MB disk
+exactly. What was missing was the drive's ICON, not its ability to mount.
+
+**What this machine is still owed:** a `sysbench` run off `combo.img` to say
+what its FDC actually answered. §57.5's `FD` block separates the three live
+possibilities in one line — `claimed 1` (the count never reached us; worth
+ruling out first on a machine whose potted DS1287 is thirty years old),
+`claimed 2` + `probe stop 03` (the bug above, now routed around but still
+unexplained at the controller), or `probe stop 04` (a refusal, which always
+kept the drive). It is the only machine in the register that can answer it.
+
 ---
 
 ## The Compaq Portable III — `Elendilon/os8088`'s, and mostly unrecorded
