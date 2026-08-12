@@ -37212,6 +37212,100 @@ reason is already in the engine: a Cut removes its source at `.finish`,
 being walked while it is being walked. That is the same assumption the FAT
 path's raw-slot ordinal has always rested on.
 
+### 62.10 The cable's file client — `NET.DRV` becomes the redirector
+
+§62.9's kernel is finished and proven four milestones deep against a RAM
+disk. This is its first real client: the same LapLink cable, answering
+questions about **files** instead of about sectors.
+
+**`NET.DRV` CHANGES CLASS, from `DRVC_NET` to `DRVC_FILE`**, and that is a
+packaging decision with a reason rather than a preference. `drv_check` binds a
+`.DRV` to its row's class, the Drivers page holds exactly four rows (§62.9.4),
+and all four are spoken for — so a file client needs a row, and the only ones
+available are somebody's. Block mode's row is the one to take because **Stage
+2 supersedes Stage 1 outright**: no 32MB cap (§18.2 rule 8 refuses
+`TotSec16 == 0`, so block mode can never exceed 65,535 sectors), no
+cache-coherency hazard at all (the far side does its own file I/O through
+`int 21h`), and the remote machine's *real* filesystem rather than an image
+file. `drivers/net/net.asm`'s block half keeps its source and still builds —
+the `DEBUG.DRV` precedent (§58), used once already to make room for
+`RAMDISK.DRV` — and the RAM disk KEEPS its row, because it is the only thing
+that can exercise a redirected volume in a container.
+
+#### 62.10.1 The wire protocol
+
+§62.7's framing is unchanged and this is a second command set inside it: os8088
+is always the master, every exchange is request-then-response, and a command
+ends with `NC_BYE` so the far side may go back to listening. One wire command
+per `FSV_*` verb, so no command means two things:
+
+```
+'L' LIST    in  handle word           out status, count word, count x 32-byte entry
+'C' CHDIR   in  handle word           out status, PARENT handle word
+'S' STAT    in  13-byte name          out status, handle word, size dword, attr byte
+'R' READ    in  handle word, cap dword    out status, length dword, length bytes
+'A' READAT  in  handle word, off dword, cap word
+                                      out status, length word, length bytes
+'W' WRITE   in  13-byte name, len dword, len bytes    out status
+'P' APPEND  in  13-byte name, len dword, len bytes    out status
+'D' DELETE  in  13-byte name          out status
+'N' RENAME  in  13-byte old, 13-byte new              out status
+'M' MKDIR   in  13-byte name          out status
+'K' RMDIR   in  13-byte name          out status
+'F' DFREE   in  nothing               out status, free dword, granule word
+'E' ENUM    in  handle word, ordinal word             out status, 32-byte entry
+```
+
+**The entry on the wire is the §19.1 staged entry**, byte for byte — name at
+0, type at 16, the driver's opaque handle at 18, size dword at 20. The driver
+hands it to `OSAPI_FS_ENT` (inside `FSV_LIST`) or copies it to the kernel's
+buffer (`FSV_ENUM`) without reshaping it, so there is one entry format from
+the DOS side's `int 21h` findfirst all the way to the Disk window's row.
+
+Three rules carried over from block mode because they are the ones that keep a
+failure from hanging the link. **A length is on the wire before the bytes
+are**, so a refusal never leaves one end talking into an end that has stopped
+listening. **`status` is a `FERR_*`**, not an int 13h code — the file API's
+errors are what every caller of these verbs already handles. And **the handle
+is the DOS side's to assign and the kernel's to treat as opaque** (§62.9.1),
+which is what lets the far end use whatever it likes: a directory ordinal, a
+hashed path, an index into its own table.
+
+#### 62.10.2 What the DOS side serves
+
+**The CURRENT DIRECTORY by default**, and a switch for the whole machine.
+Defaulting to wherever `OS88NET` was started is the safe reading of the
+common case — a user in `C:\WORK` who wants that folder on the 5150 — and it
+makes the root a **fence** the DOS side enforces, so os8088 cannot walk out of
+it however malformed a name it sends. `/D:path` names a different subtree, and
+`/W` serves the whole machine with the drives as folders of a synthetic root.
+
+`/W` is deliberately opt-in and deliberately loud, because there is no fence
+behind it: a delete from os8088 is a delete on the DOS machine's real disk,
+and docs/FIELD-MACHINES.md's calibration machine has a live DOS 3.3 install
+on its C:.
+
+#### 62.10.3 The harness — the host answers as the partner
+
+docs/NET-PLAN.md §9 says nothing here can be tested end to end without two
+machines and a cable, and for the protocol's **verdict** that is still true.
+But the os8088 half is testable, and further than that section assumed:
+MartyPC's `ParallelController` implements `status_register_write`, which
+**stores the byte the guest then reads back**. So the debug server's `outb`
+can drive the status lines the guest polls, and a Python far end can answer as
+the partner — the host-side stub server §9 calls "the closest thing to a
+harness and worth building at step 1".
+
+It is exact rather than fast, and it is exact for the reason that matters:
+the far end **pauses the emulator** around each nibble, so neither end is
+racing the other and `lp_turn`'s tick-per-reversal costs nothing. Every
+deadline in the transport is in TICKS (docs/NET-PLAN.md §9.1's third defect),
+which is what makes a stepped partner legal at all.
+
+What it still cannot do is arbitrate the wire: the verdict on the cable comes
+off two period boxes. What it CAN do is find every defect that is not the
+cable's, which is what the RAM disk did for the kernel.
+
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
 466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
