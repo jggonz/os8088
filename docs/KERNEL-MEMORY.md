@@ -407,7 +407,7 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5611,
+    "bss": 5615,
     "budget": 104960,
     "codemax": 65536,
     "cold": 37308,
@@ -421,7 +421,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2782,
     "stk0": 1024,
-    "text": 46176
+    "text": 46488
   },
   "small": {
     "bss": 5495,
@@ -453,12 +453,19 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 47,134 + `.bss` 5,704) | 53,248 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
-| cold code | 36,864 B | 36,586 bytes with a CS of their own: the Control Panel, the five file modules, and SPEC.md §2.6's second round — assoc, disk, driver, memory and desk |
+| image (`.text` 46,314 + `.bss` 5,615) | 52,224 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| cold code | 37,376 B | 37,308 bytes with a CS of their own: the Control Panel, the five file modules, and SPEC.md §2.6's second round — assoc, disk, driver, memory and desk |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,762 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
-| the boot overlay | 0 B | 3,139 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **103,936 B** | of a 104,960-byte budget — **1,024 B spare, TWO steps** |
+| the boot overlay | 0 B | 2,782 bytes of code inside the FAT window, gone by the first mount |
+| **total** | **103,424 B** | of a 104,960-byte budget — **1,536 B spare, THREE steps** |
+
+**This table is HAND-WRITTEN and the block above it is not**, which is how it
+came to disagree with the blessed JSON by 800 bytes before this was noticed.
+`--bless` regenerates the baseline, the module table and the theme table; it
+does not touch these six rows. Re-derive them from `kernsize`'s own
+`sections` and `rungs` lines when you bless, or the next reader gets a
+confident wrong answer about how much room is left.
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
 (docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — in both
@@ -934,30 +941,30 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,732 | 36.8% |
-| the window system and its furniture | 19,212 | 23.0% |
+| the file system, end to end | 30,732 | 36.7% |
+| the window system and its furniture | 19,242 | 23.0% |
 | drawing: adapters, primitives, glyphs, icons | 12,636 | 15.1% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,438 | 11.3% |
-| the kernel proper: API table, heap, scheduler, events | 6,203 | 7.4% |
-| the Control Panel | 3,887 | 4.7% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,712 | 11.6% |
+| the kernel proper: API table, heap, scheduler, events | 6,211 | 7.4% |
+| the Control Panel | 3,887 | 4.6% |
 | the three built-in kinds | 1,376 | 1.6% |
-| **total** | **83,484** | |
+| **total** | **83,796** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,000 | 7,704 | **8,704** | 338 | — |
-| `wm.inc` — the window manager (§11) | 8,279 | — | **8,279** | 669 | — |
+| `wm.inc` — the window manager (§11) | 8,306 | — | **8,306** | 669 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 352 | 5,905 | **6,257** | 890 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,641 | **5,820** | 155 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,206 | — | **5,206** | 653 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,883 | **4,106** | 106 | — |
 | `ctrl.inc` — the Control Panel (§31) | 673 | 3,214 | **3,887** | — | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,467 | — | **3,467** | 149 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,471 | **2,881** | 341 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,332 | **2,849** | 43 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,637 | — | **2,637** | 40 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,640 | — | **2,640** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,197 | **2,197** | 139 | — |
 | `memory.inc` — the claim heap (§50) | 14 | 2,014 | **2,028** | 14 | 256 |
@@ -982,8 +989,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,949 | — | **2,949** | — | — |
-| **total** | **46,176** | **37,308** | **83,484** | **5,611** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,957 | — | **2,957** | — | — |
+| **total** | **46,488** | **37,308** | **83,796** | **5,615** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

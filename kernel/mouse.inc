@@ -112,6 +112,21 @@ CUR_TABSZ   equ CUR_H * 2       ; cur_data is exactly one table past cur_and,
                                 ; so one SI walks both (asserted below)
 CUR_SAVE_SZ equ CUR_SPAN * CUR_GH * 4       ; ...x four planes, for VGA
 
+; --- the shapes (SPEC.md 7.2) ------------------------------------------------
+; A window names one of these and the pointer wears it over that window and
+; nowhere else. They all share the cell above, which is the whole reason a
+; shape costs 64 bytes of .text and not one instruction anywhere in the draw:
+; every walk here is bounded by CUR_GW/CUR_GH/CUR_SPAN, so a shape needing a
+; bigger cell would hand back SPEC.md 7.1's savings on every lock hold in the
+; machine rather than only over the window that asked for it.
+CUR_ARROWSH equ 0               ; the Mac arrow, hot spot (0,0) - the default,
+                                ; and 0 for the reason W_FLAGS' spare byte
+                                ; arrives 0 (SPEC.md 7.2.1)
+CUR_CROSSSH equ 1               ; the aiming crosshair, hot spot at its centre
+CUR_NSHAPE  equ 2
+CUR_XHX     equ 3               ; the crosshair's hot spot inside the cell...
+CUR_XHY     equ 5               ; ...which is the only reason 7.2.2 exists
+
 ; -----------------------------------------------------------------------------
 ; The port table (SPEC.md 9.5)
 ;
@@ -1754,6 +1769,14 @@ cur_rect:
 %endif                          ; gated on [vid_ndisp]: display 0 is always at
                                 ; the virtual origin, so on a one-card machine
                                 ; this subtracts zero
+    sub ax, [cur_hx]            ; ...and off the HOT SPOT, clamped at the
+    jns .xok                    ; display origin rather than clipped there
+    xor ax, ax                  ; (SPEC.md 7.2.2)
+.xok:
+    sub bx, [cur_hy]
+    jns .yok
+    xor bx, bx
+.yok:
     mov cx, ax
     add cx, CUR_GW-1
     mov dx, bx
@@ -1778,12 +1801,25 @@ cur_geom:
     sub ax, [vid_oy]            ; cur_rect's subtraction, and for cur_rect's
 %endif                          ; reason: these two are the ONLY places a
                                 ; position becomes an ADDRESS (SPEC.md 39.15.1)
+    sub ax, [cur_hy]            ; ...and cur_rect's hot spot, clamped the same
+    jns .yok                    ; way, or a centred shape near the top edge
+    xor ax, ax                  ; addresses the row above the framebuffer
+.yok:
+    mov [cur_celly], ax         ; BANKED: the bottom clip below and
+                                ; cur_move_mono's row test both want the
+                                ; CELL's top row, which is no longer the
+                                ; pointer's y (SPEC.md 7.2.2)
     call gfx_rowbase
     mov di, ax
     mov bx, [cur_drawn_x]
 %ifdef KERN_BIG
     sub bx, [vid_ox]
 %endif
+    sub bx, [cur_hx]
+    jns .xok
+    xor bx, bx
+.xok:
+    mov [cur_cellx], bx         ; ...and its left column, for cur_move_mono
     mov ax, bx
     mov cl, 3
     shr ax, cl
@@ -1803,11 +1839,12 @@ cur_geom:
     mov byte [cur_b1ok], 1
 .cols_done:
     mov ax, [vid_ch]            ; UNSIGNED - vid_apply homes the cursor into
-    sub ax, [cur_drawn_y]       ; the new screen precisely so this cannot
-%ifdef KERN_BIG
-    add ax, [vid_oy]            ; ...and [vid_ch] is this DISPLAY's, so the y
-%endif                          ; it is measured against has to be too
-                                ; borrow. rows on screen at this y (>= 1)
+    sub ax, [cur_celly]         ; the new screen precisely so this cannot
+                                ; borrow. rows on screen at this y (>= 1).
+                                ; [cur_celly] is already this DISPLAY's and
+                                ; already hot-spot-relative, so the two
+                                ; corrections that used to be spelled out
+                                ; here are spent above, once
     cmp ax, CUR_GH
     jbe .rows_set
     mov ax, CUR_GH
@@ -1843,7 +1880,7 @@ cur_put_mono:
     jz .out                     ; wholly off the bottom: nothing to bank
     mov ax, [vid_seg]
     mov es, ax
-    mov si, cur_and
+    mov si, [cur_tabp]
     mov bp, [cur_sptr]          ; the live save buffer (SPEC.md 7.1.2)
 .row:
     mov ax, [si]                ; the white pass's row...
@@ -1970,12 +2007,23 @@ cur_lazyck:
     push si
     call wm_win_rect            ; AX/BX/CX/DX = the frame, drop shadow included
     mov si, [cur_drawn_x]       ; separated on x?  cell is [x, x+CUR_GW-1]
+    sub si, [cur_hx]            ; ...off the HOT SPOT, and deliberately NOT
+                                ; clamped (SPEC.md 7.2.2): unclamped is a
+                                ; superset of where the cell really is, so the
+                                ; error can only ever be a redundant hide.
+                                ; Forgetting it entirely is the other
+                                ; direction and does not show up for weeks -
+                                ; a painter told the cursor was out of reach
+                                ; draws through the part of the cell that
+                                ; reaches further left than this test does,
+                                ; and 7.1.4's smear is permanent
     cmp si, cx
     jg .clear                   ; ...wholly right of the frame
     add si, CUR_GW-1
     cmp si, ax
     jl .clear                   ; ...wholly left of it
     mov si, [cur_drawn_y]       ; ...and the same on y
+    sub si, [cur_hy]
     cmp si, dx
     jg .clear
     add si, CUR_GH-1
@@ -2045,6 +2093,135 @@ cur_lazyend:
     pop bp
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; The SHAPE (SPEC.md 7.2)
+;
+; A window names one of CUR_NSHAPE built-in pictures and the pointer wears it
+; over that window and nowhere else. Three things make it as cheap as it is:
+;
+;   - every shape shares the 8x12 cell, so nothing in the draw loops changed
+;     but `mov si, cur_and` becoming `mov si, [cur_tabp]` in three places;
+;   - the shape lives in the SPARE HIGH BYTE of W_FLAGS, so no window record
+;     grew, no template changed, and wm_create/wm_destroy already zero it -
+;     which is the arrow, so the default falls out rather than being arranged;
+;   - the question "which window is the pointer over" is asked on the UI TASK,
+;     once per pass and only when something moved, never in the ISR.
+;
+; That last one is not just a cost argument. The UI task is the ONLY mutator
+; of wm_zord and the window rects, so wm_hit answers from it without the gfx
+; lock and without a race - which is exactly what the ISR could not do.
+; -----------------------------------------------------------------------------
+
+; cur_shape_set - wear shape AL from now on.
+; in:  AL = CUR_*SH; the gfx lock held by the caller
+; out: nothing (all registers preserved)
+;
+; The picture may only change while the cursor is OFF THE GLASS, and
+; cur_unlazy is the whole of what that costs. gfx_lock merely PROMISES the
+; hide (SPEC.md 7.1.4); a promise that survives would leave the old picture on
+; screen with [cur_shape] naming the new one, and the move inside cur_lazyend
+; would then take pass 1's background from one shape's save buffer and draw
+; pass 2 from another's. Spending it here also hands cur_move_mono its
+; standing precondition - within one move the shape, and so the hot spot, is
+; fixed - and needs no hide/show pair of its own: gfx_unlock already owes a
+; cursor_show for the hide this just took, and that show draws the new shape.
+cur_shape_set:
+    cmp al, [cur_shape]
+    je .out                     ; the common answer, and the reason the UI
+                                ; pass may call this every time it looks
+    cmp al, CUR_NSHAPE
+    jae .out                    ; a shape nobody ships: keep the one we have
+                                ; rather than index off the end of the table
+    push ax
+    push bx
+    call cur_unlazy
+    mov [cur_shape], al
+    mov bl, al                  ; BX = shape * 2, which indexes BOTH tables -
+    xor bh, bh                  ; cur_shtab is a word a shape and cur_shhot is
+    add bx, bx                  ; two bytes a shape
+    mov ax, [bx + cur_shtab]
+    mov [cur_tabp], ax
+    mov al, [bx + cur_shhot]
+    xor ah, ah
+    mov [cur_hx], ax
+    mov al, [bx + cur_shhot + 1]
+    xor ah, ah
+    mov [cur_hy], ax
+    pop bx
+    pop ax
+.out:
+    ret
+
+; cur_shape_pass - the UI task's end-of-pass service: which window is the
+;                  pointer over, and does it want a different picture?
+; in:  nothing; NO lock held (this is a .yield-tail caller)
+; out: nothing (all registers preserved)
+;
+; One compare per pass when nothing moved, which is toast_pass's discipline
+; and for toast_pass's reason: this runs as fast as the scheduler lets ui_task
+; go round, and wm_hit is a z-order walk with a multiply per candidate.
+; [cur_shchk] covers the case the position compare cannot see - the pointer
+; standing still while the window under it is raised, hidden, closed or
+; dragged out from under it.
+cur_shape_pass:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [mouse_x]
+    mov bx, [mouse_y]
+    cmp byte [cur_shchk], 0
+    jne .look
+    cmp ax, [cur_shx]
+    jne .look
+    cmp bx, [cur_shy]
+    je .out
+.look:
+    mov byte [cur_shchk], 0
+    mov [cur_shx], ax
+    mov [cur_shy], bx
+    mov cx, ax
+    mov dx, bx
+    call wm_hit                 ; BX = the topmost visible window over the
+                                ; point (0 = none), AL = which part of it
+    mov ah, CUR_ARROWSH
+    or bx, bx
+    jz .set                     ; the desktop, the dock and the menu bar are
+                                ; the kernel's, and the kernel points with an
+                                ; arrow
+    or al, al
+    jnz .set                    ; the title bar and its three boxes are the
+                                ; kernel's too, drawn by the kernel and
+                                ; clicked through the kernel - only a window's
+                                ; CONTENT is the application's to dress
+    mov ah, [bx + W_FLAGS + 1]  ; the spare high byte (SPEC.md 7.2.1)
+.set:
+    cmp ah, [cur_shape]
+    je .out                     ; THE COMMON ANSWER, and the compare has to be
+                                ; HERE rather than only inside cur_shape_set:
+                                ; a pointer moving INSIDE the window it was
+                                ; already over would otherwise pay a
+                                ; gfx_lock/gfx_unlock pair per move for a
+                                ; shape that did not change - which is
+                                ; PERFORMANCE.md Part 9 Set 4's 21.8%, the
+                                ; single most expensive thing in this kernel,
+                                ; charged to every mouse move on every
+                                ; machine. It also leaves a window in which
+                                ; the arrow is off the glass, which is how it
+                                ; was caught: the no-regression A/B against a
+                                ; reference kernel found the pointer MISSING
+                                ; from 5 of 18 captured frames
+    mov al, ah
+    call gfx_lock               ; cur_shape_set draws, so it needs the lock -
+    call cur_shape_set          ; and this is a .yield caller, which holds
+    call gfx_unlock             ; none
+.out:
     pop dx
     pop cx
     pop bx
@@ -2166,12 +2343,19 @@ cur_move_mono:
     push ax
     push bx
     ; --- bank the OLD geometry, which cur_geom is about to overwrite ---------
-    mov ax, [cur_drawn_y]
+    ; [cur_cellx]/[cur_celly] and NOT [cur_drawn_x/y]: with a hot spot the two
+    ; differ, and everything below is about where the CELL is (SPEC.md 7.2.2).
+    ; A shape may only change while the cursor is hidden, so both cells here
+    ; are the same shape's and the row test stays an honest subtraction.
+    mov ax, [cur_celly]
     mov [mv_oy], ax
-    mov ax, [cur_drawn_x]
+    mov ax, [cur_cellx]
     mov cl, 3
     shr ax, cl
-    mov dx, ax                  ; DX = the old byte column
+    mov [mv_d], ax              ; the OLD byte column, banked in the word that
+                                ; will hold the DELTA: cur_geom clobbers DX
+                                ; and the new column is not known until it has
+                                ; run, so the subtraction moved below it
     mov al, [cur_rows]
     mov [mv_orows], al
     mov al, [cur_b1ok]
@@ -2191,12 +2375,15 @@ cur_move_mono:
     pop ax
     mov [cur_drawn_x], ax
     mov [cur_drawn_y], bx
-    mov cl, 3                   ; AX = new x still; d = newcol - oldcol
-    shr ax, cl
-    sub ax, dx
-    mov [mv_d], ax
     call cur_geom               ; DI = new offset, CL = shift, [cur_rows],
-                                ; [cur_b1ok], [cur_off] - all NEW now
+                                ; [cur_b1ok], [cur_off], [cur_cellx/y] - all
+                                ; NEW now
+    mov ax, [cur_cellx]         ; d = newcol - oldcol, and the shifts are
+    shr ax, 1                   ; single-bit because CL is cur_geom's answer
+    shr ax, 1                   ; and the pass-2 loop below still wants it -
+    shr ax, 1                   ; `mov cl, 3` here would eat the shift
+    sub ax, [mv_d]
+    mov [mv_d], ax
     call cur_mvcols             ; ...and the four per-column answers
 
     ; --- pass 1: the old background back, except where pass 2 will draw ------
@@ -2210,7 +2397,8 @@ cur_move_mono:
     mov bx, [mv_oy]
 .p1row:
     mov ax, bx                  ; is this row one pass 2 will draw into?
-    sub ax, [cur_drawn_y]
+    sub ax, [cur_celly]         ; the NEW cell's top row, which cur_geom has
+                                ; just published - not the pointer's y
     mov dl, [cur_rows]
     xor dh, dh
     cmp ax, dx
@@ -2255,7 +2443,7 @@ cur_move_mono:
     mov ax, [vid_seg]
     mov es, ax
     mov di, [cur_off]
-    mov si, cur_and
+    mov si, [cur_tabp]
     mov bp, [mv_nsave]
 .p2row:
     call cur_mvrow              ; [mv_orp] = this row's slot in the OLD save,
@@ -2353,8 +2541,8 @@ cur_mvcols:
 ; clobbers: ax, bx, flags
 cur_mvrow:
     push dx
-    mov ax, [cur_drawn_y]
-    add ax, [mv_prow]
+    mov ax, [cur_celly]         ; the NEW cell's top row (SPEC.md 7.2.2), not
+    add ax, [mv_prow]           ; the pointer's y - [mv_oy] is the OLD cell's
     sub ax, [mv_oy]             ; AX = the row's index in the OLD cell
     mov word [mv_orp], 0
     mov bl, [mv_orows]
@@ -2405,7 +2593,7 @@ cur_draw:
     jz .done                    ; wholly off the bottom
     mov ax, [vid_seg]
     mov es, ax
-    mov si, cur_and
+    mov si, [cur_tabp]
     mov dx, VGA_GC              ; the INDEX port: index and data go as one word
 .row:
     mov ax, [si]                ; AX = white: every pixel the arrow touches...
@@ -2512,30 +2700,105 @@ cur_draw:
     CUR_ROW 0x0000,             0x0000
 %endmacro
 
+; The crosshair (SPEC.md 7.2), hot spot at its centre. A 1px cross dilated by
+; a pixel is a 3px white bar with the black cross inside it - the same
+; outline-and-body construction the arrow uses, and the only one that reads on
+; both a white desktop and a black sky. It is 8x11 inside the arrow's own
+; 8x12 cell, which is the whole reason it costs the drawing code nothing:
+; CUR_GW/CUR_GH/CUR_SPAN are what every walk in this file is bounded by, and a
+; shape that needed a bigger cell would give SPEC.md 7.1's third-byte and
+; row-count savings back on EVERY lock hold in the machine, for every app.
+; The gap in the horizontal stroke must fall on the SAME column as the
+; vertical one - both are the hot spot, (CUR_XHX, CUR_XHY), and drawn a column
+; apart the cross reads as broken rather than as aiming at anything. Nothing
+; can assert that: it is a statement about which column means the hot spot,
+; and the tables do not know. Look at it.
+%macro CUR_CROSS 0
+    CUR_ROW 0x3800,             0x1000      ; ..***...  ...#....
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0xFF00,             0x0000      ; ********  ........
+    CUR_ROW 0xFF00,             0xEF00      ; ********  ###.####
+    CUR_ROW 0xFF00,             0x0000      ; ********  ........
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x3800,             0x1000
+    CUR_ROW 0x0000,             0x0000
+    CUR_ROW 0x0000,             0x0000
+    CUR_ROW 0x0000,             0x0000
+    CUR_ROW 0x0000,             0x0000
+    CUR_ROW 0x0000,             0x0000
+%endmacro
+
+; --- the shape table (SPEC.md 7.2) -------------------------------------------
+; One entry per shape, each a white table immediately followed by its black
+; one, so [cur_tabp] points at the white table and [si+CUR_TABSZ] still reads
+; the black row - the idiom every draw loop here already uses, unchanged.
+;
+; CUR_SHAPE_END asserts the SAME three facts per shape that the arrow alone
+; used to assert: the widest bit set, the last row that sets one, and that
+; every black bit is also a white one (that last inside CUR_ROW). All three
+; fail silently - a wider shape loses its right-hand column on the two mono
+; adapters, a taller one leaves its bottom rows on screen for the rest of the
+; session, and an escaped black bit is simply not drawn on VGA - so a shape
+; added here is checked at assembly time or it is not checked at all.
+%macro CUR_SHAPE_END 1
+  %if cur_hi > CUR_GH
+    %error %strcat("mouse: cursor shape ", %1, " is taller than CUR_GH")
+  %endif
+  %if (cur_bits & ((1 << (16 - CUR_GW)) - 1)) != 0
+    %error %strcat("mouse: cursor shape ", %1, " is wider than CUR_GW")
+  %endif
+%endmacro
+
+%assign cur_bits 0
+%assign cur_hi   0
 %assign cur_tab   0
 %assign cur_row_i 0
+cur_shapes:
 cur_and:                        ; white: the body dilated by 1px, right and down
     CUR_ARROW
-
 %assign cur_tab   1
 %assign cur_row_i 0
 cur_data:                       ; black: the arrow body itself
     CUR_ARROW
-
 cur_tabend:
+CUR_SHAPE_END "arrow"
 
-; --- what the drawing code above claims about those two tables ---------------
+%assign cur_bits 0
+%assign cur_hi   0
+%assign cur_tab   0
+%assign cur_row_i 0
+cur_cross_and:
+    CUR_CROSS
+%assign cur_tab   1
+%assign cur_row_i 0
+cur_cross_data:
+    CUR_CROSS
+CUR_SHAPE_END "crosshair"
+
+; --- the hot spot per shape, in the same order (SPEC.md 7.2) -----------------
+; Two bytes a shape: the pixel inside the cell that sits under the pointer.
+; The arrow's is (0,0), which is what every walk in this file assumed for
+; years - cur_geom and cur_rect subtract it now, and clamp the result at the
+; screen origin rather than clipping the cell (SPEC.md 7.2.2).
+cur_shtab   dw cur_and,       cur_cross_and
+cur_shhot   db 0, 0,          CUR_XHX, CUR_XHY
+
+; --- what the drawing code above claims about those tables -------------------
 %if cur_data - cur_and != CUR_TABSZ
   %error "mouse: cur_data must sit exactly one table past cur_and - cur_put_mono reads the black row at [si+CUR_TABSZ]"
 %endif
 %if cur_tabend - cur_data != CUR_TABSZ
   %error "mouse: a cursor table is not CUR_H rows"
 %endif
-%if cur_hi > CUR_GH
-  %error "mouse: the arrow is taller than CUR_GH - raise it, or its bottom rows are neither drawn nor erased"
+%if cur_cross_data - cur_cross_and != CUR_TABSZ
+  %error "mouse: a shape's black table must sit exactly one table past its white one"
 %endif
-%if (cur_bits & ((1 << (16 - CUR_GW)) - 1)) != 0
-  %error "mouse: the arrow is wider than CUR_GW - raise it, and give cur_pass and cur_put_mono the third byte back"
+%if (cur_shhot - cur_shtab) != CUR_NSHAPE * 2
+  %error "mouse: cur_shtab does not carry one entry per CUR_NSHAPE"
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -2550,6 +2813,27 @@ cur_sptr    dw cur_save         ; -> whichever save buffer is live. In .text
                                 ; arrives zeroed (kernel.asm - NASM pads the
                                 ; gap to OVL_START), and 0 here is a pointer
                                 ; at the API jump table
+cur_tabp    dw cur_and          ; -> the live shape's white table (SPEC.md
+                                ; 7.2). In .text with a real initialiser, for
+                                ; cur_sptr's reason above: -f bin zeroes
+                                ; nothing and 0 here is the API jump table.
+                                ; The three draw loops read it instead of
+                                ; naming cur_and, and that is the WHOLE of
+                                ; what changing the picture costs
+cur_hx      dw 0                ; ...and its hot spot: the pixel inside the
+cur_hy      dw 0                ; cell that sits under the pointer. WORDS
+                                ; rather than the bytes the table stores,
+                                ; because all three readers subtract them from
+                                ; a position and the two that matter have no
+                                ; scratch register left to widen a byte in
+cur_shape   db CUR_ARROWSH      ; which shape that is - compared per UI pass,
+                                ; so the swap is what is rare, not the check
+cur_shchk   db 0                ; "the window under the pointer may have
+                                ; changed without the pointer moving": a
+                                ; raise, a hide, a destroy or a drag. One
+                                ; byte, the [fm_fchk] shape (SPEC.md 22.8)
+cur_shx     dw -1               ; the position cur_shape_pass last answered
+cur_shy     dw -1               ; for; -1 cannot be a clamped mouse position
 cur_level   db -1               ; refcount; < 0 = hidden (boot state)
 cur_dirty   db 0                ; set when the ISR could not move the cursor
 cur_drawn_x dw 0                ; where the cursor pixels actually are, in
@@ -2709,6 +2993,12 @@ cur_off     resw 1              ; cur_geom's answers, banked for cur_get_mono:
 cur_rows    resb 1              ; the cell's top-left framebuffer byte, the
 cur_b1ok    resb 1              ; rows of it on screen, and whether the DI+1
                                 ; byte of each row is still inside the row
+cur_cellx   resw 1              ; ...and where the CELL is, display-local and
+cur_celly   resw 1              ; hot-spot-relative (SPEC.md 7.2.2). Banked
+                                ; for the same reason the three above are:
+                                ; cur_move_mono asks about it three times and
+                                ; two derivations of a save-under's geometry
+                                ; are two chances to disagree by a byte
 
 mv_oy       resw 1              ; cur_move's banked OLD geometry: top row,
 mv_ooff     resw 1              ; framebuffer offset, rows, right-byte clip

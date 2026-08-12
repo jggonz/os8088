@@ -5794,8 +5794,9 @@ delta; `wm_su_ck` then agrees and the raise cache's own restore — fragments,
 base it lands on, which is worth stating because both numbers are real.** On
 the branch it was written against it crossed no rung and the footprint moved
 **+0**. Merged onto `elendilon`, where §2.6's cold-segment round had left the
-image rung with **99 bytes** of slack, the same 174 bytes cross it: `KERN_SIZE`
-102,912 → **103,424**, `KERN_BUDGET` spare 2,048 → **1,536 (3 steps)**. That is
+image rung with under 200 bytes of slack, the same 174 bytes cross it:
+`KERN_SIZE` 102,912 → **103,424**, `KERN_BUDGET` spare 2,048 → **1,536
+(3 steps)**. That is
 docs/KERNEL-MEMORY.md's accounting rule working as written — a change that
 crosses no rung is not free, it has spent slack that belonged to the next
 feature, and here the next feature was the merge itself.
