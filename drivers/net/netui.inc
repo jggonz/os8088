@@ -121,21 +121,24 @@ net_cp_paint:
     mov cx, NP_VX + 48
     call net_declba
 
-    ; --- row 3: how big it is, when there is one -----------------------------
+    ; --- row 3: what the far side is serving, when there is one --------------
+    ; It used to be `Size <sectors>`, and a redirected volume HAS NO SECTORS
+    ; (SPEC.md 62.9), so that row printed a 0 that meant nothing at all. How
+    ; big the far side is now belongs to FSV_DFREE and shows up where every
+    ; other volume's does - the Disk window's status line (SPEC.md 22.7).
 .row3:
     cmp byte [net_state], NS_LINKED
     jne .btn
-    mov si, s_size
+    mov si, s_mode
     mov bx, NP_Y0 + 2*NP_ROW
     call net_lab
-    mov ax, [net_secs]
-    mov bx, NP_Y0 + 2*NP_ROW
-    call net_dec
+    mov si, s_files
     test byte [net_flags], 1
-    jz  .btn
-    mov si, s_ro
+    jz  .swr
+    mov si, s_filesro
+.swr:
     mov bx, NP_Y0 + 2*NP_ROW
-    mov cx, NP_VX + 54
+    mov cx, NP_VX
     call net_txt
 
     ; --- the button ----------------------------------------------------------
@@ -400,11 +403,14 @@ net_draw_btn:
 ; --- the page's strings ------------------------------------------------------
 s_port:     db 'Port', 0
 s_state:    db 'Link', 0
-s_size:     db 'Size', 0
+s_mode:     db 'Mode', 0     ; ...FOUR characters, like 'Port' and 'Link':
+                                ; net_lab and net_txt are two fixed columns
+                                ; and a longer label runs into the value
 s_sport:    db 'No partner', 0
 s_slinked:  db 'Linked', 0
 s_slost:    db 'Lost at LBA', 0
-s_ro:       db 'read only', 0
+s_files:    db 'Files', 0
+s_filesro:  db 'Files, read only', 0
 s_conn:     db 'Connect', 0
 s_disc:     db 'Disconnect', 0
 net_buf:    db 0,0,0,0,0,0,0,0,0

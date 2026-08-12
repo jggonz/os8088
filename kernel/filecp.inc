@@ -832,6 +832,20 @@ fcp_relink:
     mov bx, [fcp_cwd]
     call fcp_goto
     jc .no
+    cmp byte [dsk_vkind], DVK_FILE
+    je .no                      ; A REDIRECTED VOLUME DECLINES THIS WHOLE
+                                ; PATH (SPEC.md 62.9.7). Everything below is
+                                ; raw directory SLOTS - dskw_ent_store into
+                                ; [dskw_fsec]/[dskw_foff], the 0x00
+                                ; terminator, fcp_rlup rewriting the moved
+                                ; folder's own on-disk '..' - and there are
+                                ; none. It costs nothing to refuse: this is
+                                ; a fast path with a fallback, so AX = 0
+                                ; "not attempted" sends the caller into the
+                                ; copy engine, which is entirely built here.
+                                ; The '..' is moot too - FSV_CHDIR answers
+                                ; the parent handle, so there is no on-disk
+                                ; link to go stale
     mov si, fcp_name
     call dskw_stat_x            ; dskw_raw = its 32 bytes, BX = first cluster
     jc .no
@@ -1037,6 +1051,35 @@ fcp_scan:
     mov bx, [di+FCP_FSRC]
     call fcp_goto
     jc .ioerr
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .fatwalk
+
+    ; --- a REDIRECTED volume: one FSV_ENUM, BY ORDINAL (SPEC.md 62.9.7) -----
+    ; There are no directory sectors to walk, no raw 32 bytes to filter and no
+    ; dsk_synth to run - so the driver is asked for the Nth entry of this
+    ; folder and answers with the same staged entry dsk_synth would have
+    ; built. That is why this joins the FAT path at .stage instead of
+    ; repeating its tail: one copy of "what does the engine take from an
+    ; entry", not two that can drift.
+    mov ax, [di+FCP_FSRC]       ; the folder's handle...
+    mov cx, [di+FCP_FPOS]       ; ...and how far into it we already are
+    mov dx, ds                  ; DX:BX, not ES:BX (SPEC.md 51.8) - and DS
+    mov bx, dsk_ent             ; because dsk_ent is .bss, which is where the
+    push bp                     ; shared tail reads it from (ES is LOW_SEG
+    mov bp, FSV_ENUM            ; here, for the raw sectors this path has not
+    call drv_fs_call            ; got)
+    pop bp
+    jc .fsdone
+    inc word [di+FCP_FPOS]      ; consumed. THIS ordinal is dense where the
+    jmp .stage                  ; FAT one counts raw slots, and both are
+.fsdone:                        ; opaque to every caller above
+    or ax, ax
+    jnz .fsio                   ; (near jumps: .end and .ioerr are both out
+    jmp .end                    ; of a conditional's short range from here)
+.fsio:
+    jmp .ioerr
+
+.fatwalk:
     mov ax, [di+FCP_FSRC]
     call dsk_dirw_start_x
     mov ax, [di+FCP_FPOS]       ; the ordinal splits into a sector and a slot
@@ -1089,6 +1132,7 @@ fcp_scan:
     jnz .next                   ; hidden or system, exactly as the listing
     call dsk_synth_x              ; ES:SI -> dsk_ent (SPEC.md 19): the display
                                 ; name, the type word, the cluster, the size
+.stage:                         ; ...and FSV_ENUM's answer arrives here too
     push si
     push di
     mov si, dsk_ent
