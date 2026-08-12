@@ -184,21 +184,34 @@ font_char:
     ja .done
     cmp dx, [vid_chm8]
     ja .done
-    cmp word [wm_clip_n], 0     ; the cell whole against the clip region too
-    je .noclip                  ; (SPEC.md 11.3)
-    push ax
-    mov ax, cx
-    mov bx, dx
-    mov cx, ax
+    cmp word [wm_clip_n], 0     ; ...and against the clip region, which
+    je .noclip                  ; answers in ROWS (SPEC.md 11.3.2): a cell an
+    push ax                     ; edge crosses horizontally draws the rows on
+    mov ax, cx                  ; our side of it rather than nothing at all,
+    mov bx, dx                  ; which is what left a half-covered Timer
+    mov cx, ax                  ; frozen at the second it was covered
     add cx, 7
     mov dx, bx
     add dx, 7
-    call wm_clip_test
+    call wm_clip_rows
     mov cx, ax                  ; MOV and POP leave CF alone
     mov dx, bx
     pop ax
     jc .done
+    jmp short .rows
 .noclip:
+    ; The whole cell, said in the one place the renderers below read it from -
+    ; and said in ONE word store rather than two byte ones, because this is the
+    ; path every unclipped glyph in the system takes and an 8088 pays 4.34
+    ; clocks per instruction BYTE (PERFORMANCE.md Part 9), so 6 bytes against
+    ; 12 is worth having. MEASURED on fontbench's PAIR rows it is worth less
+    ; than the byte count suggests - 2.18% -> 2.04% - because what dominates is
+    ; the four-instruction bias below, not these stores; the arithmetic said
+    ; ~0.8% and the machine said 0.14%, which is why the figure quoted here is
+    ; the machine's. The two bytes are adjacent by assertion, not by hope
+    ; - see wm_clip_r0.
+    mov word [wm_clip_r0], (8 << 8) | 0
+.rows:
 
     sub al, FONT_FIRST          ; SI = glyph row data
     mov ah, 0
@@ -207,6 +220,10 @@ font_char:
     shl si, 1
     shl si, 1
     add si, font_glyphs
+    mov al, [wm_clip_r0]        ; AL is spent (SI carries the glyph now), so
+    mov ah, 0                   ; the row bias costs no register: start at
+    add si, ax                  ; the glyph's row r0...
+    add dx, ax                  ; ...and at the screen row it belongs on
 
     cmp byte [vid_mono], 0      ; 1bpp? the software renderer IS the direct
     je .vram                    ; path there (SPEC.md 39.5)
@@ -235,8 +252,8 @@ font_char:
     mov ax, 0x0F01
     out dx, ax                  ; GC1 enable Set/Reset on all planes
 
-    mov ch, 8                   ; row counter
-.row:
+    mov ch, [wm_clip_rn]        ; row counter: the rows the region allows,
+.row:                           ; 8 whenever it is not cutting this cell
     mov ah, [ss:si]             ; glyph row in the high byte of the window
     inc si
     xor al, al
@@ -338,7 +355,7 @@ font_char_bb:
     mov es, dx
     mov si, [font_bb_si]
     mov di, [font_bb_di]
-    mov bh, 8                   ; row counter
+    mov bh, [wm_clip_rn]        ; row counter - see font_char's .rows
     test ch, 1                  ; this plane's ink, decided ONCE rather than
     jnz .srow                   ; once per row - and so is the disabled
     cmp byte [font_dith], 0     ; dither, which is mono-only and therefore
@@ -1011,19 +1028,23 @@ font_run_cell:
 
     cmp cx, [vid_cwm8]          ; x only: the run's y was tested once, by the
     ja .out                     ; caller (SPEC.md 6.1.6)
-    cmp word [wm_clip_n], 0     ; the cell whole against the region, exactly as
-    je .noclip                  ; its glyphs would be, background with them
-    push ax
+    cmp word [wm_clip_n], 0     ; the cell against the region in ROWS, exactly
+    je .noclip                  ; as its glyphs are, background with them
+    push ax                     ; (SPEC.md 11.3.2)
     mov ax, cx
     mov bx, dx
     mov cx, ax
     add cx, 7
     mov dx, bx
     add dx, 7
-    call wm_clip_test           ; CX and DX are spent here and NOT put back:
+    call wm_clip_rows           ; CX and DX are spent here and NOT put back:
     pop ax                      ; nothing below reads them, the masks arriving
     jc .out                     ; in CX from memory instead
+    jmp short .have_rows
 .noclip:
+    mov byte [wm_clip_r0], 0
+    mov byte [wm_clip_rn], 8
+.have_rows:
     cmp al, FONT_FIRST
     jb .blank
     cmp al, FONT_LAST
@@ -1043,7 +1064,21 @@ font_run_cell:
     mov es, [vid_rseg]          ; the framebuffer (SPEC.md 39.3); DI arrived
     mov cl, [font_rn_xm]        ; pointing at this cell's first byte
     mov ch, [font_rn_bm]        ; CL = ink XOR background, CH = background
-    mov bh, 8                   ; row counter
+    mov bh, [wm_clip_rn]        ; row counter - the rows the region allows
+    mov al, [wm_clip_r0]        ; ...and where they start. AL is spent (SI
+    mov ah, 0                   ; carries the glyph), BL is free until .row
+    or al, al
+    jz .row                     ; the whole cell: the common case skips this
+    add si, ax                  ; the glyph's first drawable row...
+    mov bl, al
+.skip:
+    add di, [cs:vid_rowadd]     ; ...and DI down to the screen row it goes on.
+    test di, [cs:vid_wrapbit]   ; Stepped rather than multiplied because the
+    jz .sknw                    ; layout is BANKED (SPEC.md 39.3) - r0 is 1..7
+    add di, [cs:vid_wrapfix]    ; on a path that until now drew nothing at all
+.sknw:
+    dec bl
+    jnz .skip
 .row:
     mov al, [ss:si]             ; AL = the glyph row
     inc si
@@ -1091,13 +1126,27 @@ font_run_scell:
     add cx, 7
     mov dx, bx
     add dx, 7
-    call wm_clip_test
-    jc .out                     ; crossed: leave its pixels alone, BOTH halves
+    call wm_clip_rows           ; ...in ROWS (SPEC.md 11.3.2), so a cell an
+    jc .out                     ; edge crosses draws its visible band rather
+                                ; than nothing; a vertical cut still refuses
+    push ax                     ; bank the cell's own origin - the fill wants
+    push bx                     ; the band, font_char wants the cell
+    push cx
+    mov ch, 0
+    mov cl, [wm_clip_r0]
+    add bx, cx                  ; BX = the band's first row...
+    mov cl, [wm_clip_rn]
+    mov dx, bx
+    add dx, cx
+    dec dx                      ; ...and DX its last
+    pop cx
     push ax                     ; (the pen loads clobber AL, which is x1's low
     mov al, [font_rn_bg]        ; byte - gfx_fill still needs the rect)
     mov [gfx_color], al
     pop ax
-    call gfx_fill
+    call gfx_fill               ; the BAND, not the cell: the erase has to
+    pop bx                      ; cover what the glyph is about to letter and
+    pop ax                      ; nothing else, or the two disagree again
     push ax
     mov al, [font_rn_fg]
     mov [gfx_color], al
@@ -1105,8 +1154,8 @@ font_run_scell:
     mov cx, ax                  ; font_char takes x,y in CX,DX
     mov dx, bx
     mov al, [font_rn_ch]
-    call font_char
-.out:
+    call font_char              ; ...and asks the region the same question,
+.out:                           ; so it letters exactly the rows just erased
     pop dx
     pop cx
     pop bx

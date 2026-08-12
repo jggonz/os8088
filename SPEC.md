@@ -4787,6 +4787,108 @@ Cost: 22 bytes of `.text`, no rung crossed, footprint unchanged (`KERN_SIZE`
 left alone; each is now redundant and none is wrong, and removing them would
 touch six packages to delete a `test`/`jz`.
 
+#### 11.3.2 A glyph cannot draw half a cell, but it can draw whole ROWS of one
+
+The granularity rule above says a caller must not let its fill and its
+lettering disagree, and every way out it offers ends in *draw neither*. That
+is the right answer for the cut the rule was written about — a **vertical**
+edge, where the visible part of a cell is a few columns of an 8-pixel-wide
+byte and there is genuinely nothing a renderer can express. It is the wrong
+answer for a **horizontal** one, and horizontal is the cut a window edge
+usually makes across a line of text.
+
+A window edge crossing a line horizontally cuts **every cell in it**, because
+the cells of a run share one y. So `wm_clip_test` answers no about all of
+them, nothing is drawn, and what is left on the glass is whatever was there
+when the covering window landed. The display does not go blank — the gate is
+working — it goes **stale, and stays stale for as long as the window sits
+there**. On a Timer that is a running clock stopped at a second that has long
+passed while its own buttons say it is running (§14.4).
+
+**Rows are the unit that survives.** A cell an edge crosses horizontally has
+rows that are entirely visible and rows that are entirely covered; there is no
+partial row to express. `wm_clip_rows` is `wm_clip_test` with the y test
+relaxed from containment to intersection:
+
+| `wm_clip_rows` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, at most 255 rows tall); out CF = 0 and `[wm_clip_r0]` = the first drawable row as an offset from y1, `[wm_clip_rn]` = how many rows from there; CF = 1 not one row may be drawn. Preserves every register. Kernel-internal — **no API slot**, so no package was invalidated. |
+
+Four things about it are load-bearing.
+
+**The fragment must still cover the cell's FULL WIDTH.** A vertical cut is
+refused here exactly as it always was, and that is not a simplification to be
+improved later: half a row of a cell is the thing the renderers cannot write,
+on a 1bpp adapter because the cell owns its framebuffer byte and on VGA
+because the glyph's bit mask is the whole cell's.
+
+**ONE fragment, never the union of several.** The region is a rect *list*, and
+two fragments can offer disjoint slices of the same cell — which is not a row
+range. Taking the tallest single fragment can only ever return **fewer** rows
+than are strictly visible, so the answer is always safe to draw and can never
+draw outside the region. That is the direction the error has to point, and it
+is the opposite of `wm_clip_set`'s overflow degradation (§11.3) for the same
+reason: there, skipping loses pixels; here, drawing too much corrupts a window
+that is on top.
+
+**The renderers take it as a bias and a count, not as a test.** `font_char`
+advances the glyph pointer by `r0` and the destination y with it, and the row
+counter that was a literal 8 becomes `[wm_clip_rn]` — in `font_char`'s VRAM
+path, in `font_char_bb`'s per-plane loop, and in `font_run_cell`'s. Nothing
+else in those loops changes, and the banked mono layout (§39.3) is why
+`font_run_cell` *steps* DI down to its first row rather than multiplying: it
+arrives holding a framebuffer byte, not a y.
+
+**The two halves still have to agree.** `font_run_scell` — the slow cell, for
+a planar target or an unaligned x — fills and then letters, so its fill is
+restricted to the same band rather than left to `gfx_fill`'s own per-pixel
+clip. Per-pixel clipping would paint every visible row of the cell including
+ones a *second* fragment owns, and the glyph would letter only the rows of the
+first: the granularity rule breaking in miniature, inside the routine written
+to hold it.
+
+**Every pixel it can newly draw is a pixel that was not being drawn at all**,
+so no output moved. Verified on a cycle-accurate 5150 by driving the identical
+scripted session — desktop, both Disk windows, a drag, one Disk window
+overlapping the other's text, a menu — through this kernel and through the one
+before it: **0 differing pixels** at every step on CGA, on Hercules and on VGA
+mode 12h. The cut case was then measured inside each kernel rather than across
+them, because the covering window is itself a running Timer and a cross-kernel
+diff would only be reporting that the two runs are at different seconds: the
+visible slice **freezes before and updates after** on all three adapters,
+while the strip of the covered digits that lies *under* the top window is
+untouched in both and hashes identically between them.
+
+**And a vertical cut is unchanged, which is the regression this could have
+been.** With the covering window's left edge dropped inside a digit cell, the
+whole cells our side of it keep updating, the cell the edge crosses is still
+refused, and **not one pixel lands past the edge** — measured on CGA and VGA.
+
+**Cost, measured.** `.text` + `.bss` **+234 bytes** (52,712 → 52,946 of
+`KERN_CODE_MAX`, 12,590 left), and that **crossed an image rung**: 103 → 104
+steps of 512, `KERN_SIZE` 101,376 → 101,888, `KERN_BUDGET` spare **3,584 →
+3,072** — six steps, still above the four the tree treats as standard. The
+rung is charged to a 234-byte change because it had 129 bytes of slack in it,
+which is docs/KERNEL-MEMORY.md's accounting rule working as written: the
+machine's RAM really did move, and the next feature has one step less.
+
+Per-glyph, on `tests/fontbench` (N=120, CGA, cycle-accurate 4.77MHz):
+`RUN aligned` — the single-store path every aligned run on a mono adapter
+takes, and what the Timer, Note Pad, the menu bar and the Disk window all
+draw through — is **479,470 → 479,477 counts, +0.001%**, which is to say
+untouched. What pays is `font_char`: the `PAIR` rows (`gfx_fill` + `font_str`,
+the older idiom §6.1 already prices at 2.5% *above* `font_run`) go
+1,484,837 → 1,515,082, **+2.04%**, and a skewed run the same. That is not the
+row-clipping — a cell that is not cut never runs it — it is the four
+instructions that bias the glyph pointer and the destination y, and on an 8088
+their cost is mostly the **4.34 clocks per instruction byte** rather than the
+work: folding the two default byte stores into one word store (which is why
+`wm_clip_r0`/`wm_clip_rn` are adjacent by assertion) moved it 2.18% → 2.04%,
+and the rest is the bias itself. Removing that last 1% needs the glyph-address
+computation duplicated so the unclipped path can jump over the bias, or an
+invariant that the two bytes are left at 0/8 between calls — a promise that
+survives across call sites, which §7.1.4.1 is the standing argument against.
+It was not taken: a correctness fix on a path the target machine mostly does
+not use is worth 2% of the primitive it does not use.
+
 ### 11.90 Showing a window costs one window, not one screen
 
 `wm_show` does **not** call `wm_paint_all`. Showing a window is the one
@@ -8561,6 +8663,48 @@ never edited by anyone. The release process reads the former out of this file
 (`.claude/skills/release-os8088`, which greps `os8088` in `kernel/apps.inc`)
 and the string keeps `os8088 1.0` intact and ahead of the build number for
 exactly that reason.
+
+### 14.4 A half-covered Timer stopped, and the app was not what was wrong
+
+Reported from the field with a picture: two Timers open, the second dropped so
+that its top edge crosses the first one's digits, and the first one's visible
+digits **stop moving** — reading `00:00:04` while the timer on top of it read
+`00:27:19`. The covered one is running the whole time. Its own buttons say so:
+`Start` is greyed, which is the app's *state*, drawn by a path that is not
+clipped, so the window says "running" and "00:00:04" at the same moment.
+
+**Nothing in `apps.inc` was wrong**, and that is the part worth keeping.
+`app_tmr_task` re-checks visibility under the lock, arms `wm_clip_set`, and
+takes CF = 1 as "not one visible pixel" exactly as §11.3 asks; `app_tmr_render`
+asks `wm_clip_test` about the whole line and, when an edge cuts it, forgets
+`TMR_SHOWN` and draws the line whole so that a cell the region refuses can
+never be recorded as shown (§14.1). Every one of those steps is right. The
+line simply had **no drawable cell left**: the cells of a run share one y, so a
+horizontal edge crosses all eight, and eight refusals is a line that never
+draws again until something repaints the window.
+
+So the fix is §11.3.2's, one layer down, and the Timer needed **no change at
+all** — which is the confirmation that the diagnosis was in the right place.
+`app_tmr_render`'s cut-line path already forgets and re-letters all eight
+cells every pass, so the moment the renderer can put the visible rows down,
+the digits track the clock again. What it costs while a window cuts the line
+is eight cells re-lettered twice a second instead of the one or two §14.1's
+span normally draws — about 8 ms of a 4.77MHz machine, twice a second, for as
+long as the line is cut and never when it is not.
+
+**The stale half is worse than the missing half, and that is the judgement
+this encodes.** §11.3 reasoned that "half an 8x8 glyph is unreadable anyway",
+which is true of the glyph and not of the line: what the user sees is not an
+unreadable digit but a *readable and wrong* time, with no cue that it is old.
+A clock that is half visible and current is honest; a clock that is half
+visible and twenty-seven minutes behind is not.
+
+**Verified against the report's own geometry** rather than against a synthetic
+one: two Timers, the second dragged so its top edge lands 3 rows into the
+first's digit row, sampled a second and a half apart. Before, the band is
+bit-identical across the sample and stays so indefinitely; after, it changes
+every second, and the rows below the edge are untouched — the covering window
+is byte-identical either way.
 
 ## 15. kernel.asm — boot sequence
 
