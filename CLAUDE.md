@@ -310,9 +310,22 @@ make dosstub  # JUST ENOUGH DOS TO RUN A .COM, on a machine that has none
               # FSIZE=64M / FSIZE=256 (the size arithmetic at its ends),
               # FAILOPEN=1 (DOS says no), ARGS='/RO /P:378' (the command
               # tail - argument parsing is code nothing else here executes).
+              # THEY ARE STAMPED (DSSTAMP), because none of them is a
+              # prerequisite of anything and a second `make dosstub` with a
+              # different tail used to rebuild NOTHING and run the previous
+              # run's arguments - VIDSTAMP's trap exactly, and it cost a run
+              # that said /W did not work when /W had never reached the binary
               # It refuses an unimplemented int 21h call LOUDLY, printing AH
               # and halting: a stub that returns a plausible zero is a harness
-              # that has started lying about the thing under test
+              # that has started lying about the thing under test. It
+              # implements what OS88NET.COM CALLS and nothing else - which is
+              # sixteen int 21h functions now, not seven, because the DOS side
+              # became a file server (SPEC.md 62.10.4.2): a nine-row synthetic
+              # directory behind 4Eh/4Fh/47h/3Bh/36h/19h/0Eh/1Ah/25h. Growing
+              # it towards what the program does NOT call is what its header
+              # forbids; growing it to cover what the program does is the file
+              # working. Drive it with tests/lptlink/partner.py in its MASTER
+              # role, which is what finally executed that half of the cable
 make comscan  # the SERIAL PORT SURVEY (tests/comscan) - the field diagnostic
               # for "the mouse was not detected on real hardware" (SPEC.md
               # 9.5). Builds build/comscan.img (360K, BOOTABLE - no DOS, no
@@ -2674,26 +2687,40 @@ one-of-a-kind by accident rather than by design, meeting its second instance
 years later with no diagnostic between the cause and the symptom.**
 
 **NET.DRV is that second instance, and it is a LapLink cable as a volume**
-(SPEC.md §62, docs/NET-PLAN.md). The DOS side (`OS88NET.COM`) serves 512-byte
-sectors out of an image file and everything above `dsk_xfer` works unchanged —
-which is why block mode is stage 1 and the file redirector is stage 2: this is
-~2KB of driver and **172 bytes of kernel**, the redirector is ~400 more across
-twelve branch sites, and it is worth building on a transport somebody has used
-in anger. **3,741 bytes/second measured** (PERFORMANCE.md Set 39), 5.7x slower
-than the 5150's own floppy; what it buys is not speed but that a file crosses
-it without docs/FIELD-MACHINES.md's seven-step path. Three things to know
-before touching it. The transport (`drivers/net/lplink.inc`) is `%include`d by
+(SPEC.md §62, docs/NET-PLAN.md). **It is a `DRVC_FILE` REDIRECTOR now, not a
+block volume** (SPEC.md §62.10): the far side answers questions about FILES
+and `DSV_BLK` is 0, so nothing in os8088 asks it for a sector any more. Block
+mode was stage 1 and everything above `dsk_xfer` worked unchanged, which was
+the whole bet and it paid — the source is kept and still builds, behind
+`OS88NET`'s `/I:` on the DOS end, because stage 2 supersedes it outright (no
+32MB cap, no cache-coherency hazard, the remote machine's *real* filesystem).
+**3,741 bytes/second measured** (PERFORMANCE.md Set 39), 5.7x slower than the
+5150's own floppy; what it buys is not speed but that a file crosses it
+without docs/FIELD-MACHINES.md's seven-step path. Four things to know before
+touching it. The transport (`drivers/net/lplink.inc`) is `%include`d by
 **both** the driver and `tests/lptlink`, so a wire fix cannot drift between the
 diagnostic and the thing it diagnoses. **Every deadline is in TICKS and never
 in polls** — a poll is ~15us on a 4.77MHz 8088 and ~1us on anything modern, so
 a poll-counted timeout had the fast end giving up inside the slow end's
 ordinary response, and the whole point of this cable is that the two ends are
-not alike. And **MartyPC can test everything except the partner**:
-`os8088_5150_cga_lpt` and `os8088_xt_hdd` have Centronics cards with readable
-data registers, so the scan, the attach, the publication, the page and
-`net_connect`'s bounded failure are all verified there — but the status lines
-read a constant, so `mst_hello` always times out. The wire is the 5150's
-question.
+not alike. **`NC_BYE` ends the SESSION and terminates no command** — the far
+side leaves its command loop on one and goes back to hunting for the magic, so
+a bye after every verb tore the link down and the next command arrived at a
+slave that had stopped listening; it belongs to Connect and Disconnect alone.
+**A LETTER IS NOT FREE JUST BECAUSE THE VERB IS NEW** — `READ` and `WRITE`
+were pinned as `R` and `W` in SPEC.md §62.10.1 from the verb names alone, and
+block mode already had both, in the same one-byte space and the same DOS-side
+command loop; they are `G` and `U`, and the mode flag that would have "fixed"
+it is this tree's own second-opinion failure wearing a new hat.
+And **BOTH ENDS RUN ON MARTYPC NOW**, which reverses what this paragraph used
+to say. `tests/lptlink/partner.py` drives the status lines the guest polls
+(SPEC.md §62.10.3) so the os8088 half completes a real handshake and a real
+mount; and the DOS half is the mirror — `tests/dosstub` boots `OS88NET.COM`
+on a cycle-accurate 8088 with a real port at `0x378`, and `partner.py` plays
+NET.DRV. Only the WIRE's verdict is still the 5150's question. **A harness
+that is kinder than the thing it stands in for hides precisely the bugs it
+exists to find**: `partner.py` read `NC_BYE` as "carry on" and the protocol
+bug above survived a whole scripted session looking perfect.
 
 **Every volume can own its FAT window, floppies included** (SPEC.md
 §18.8.1/§18.8.2) — `DSK_FAT_SECS` sectors of heap, claimed at
@@ -3278,6 +3305,71 @@ the clock untouched), a 17-char one (19 cells) and `TOAST_MAX` exactly (the
 whole 25-cell field). A/B'd against `REDRAWFULL=1`: **0 differing pixels** at
 the desktop, with a strip up, and with a strip up through a full bar
 overdraw.
+### The screen blanks after five minutes (SPEC.md §64, `kernel/blank.inc`)
+
+**No keyboard and no mouse for `BLK_IDLE` (5462 ticks) and every monitor the
+machine has goes dark; the next input brings them back and is itself
+swallowed.** It is for the MONITOR — the tubes this runs in front of burn a
+static image into the phosphor, and a desktop is the worst thing to leave
+there: a menu bar, a dock strip and a drive column that never move, at full
+brightness, all night. There is no power saving in it, because hardware this
+old has no DPMS to signal to.
+
+**What is gated is the video SIGNAL, not the framebuffer**, through §39.18.1's
+`vid_blank_kind` — the CRTC keeps running, both syncs keep coming out, memory
+is untouched. Three things fall out and all three are why this costs nothing:
+waking is instant and *exact* (no repaint, no mode set, no `wm_paint_all` —
+the picture that comes back is the one that went away, half-finished Fractal
+pass included); a background task may keep drawing into a blanked card, which
+is why there is **not one gate anywhere in `gfx_*`**; and the monitor never
+re-acquires, so neither edge flashes. Steady-state cost is **two compares per
+UI pass and one byte store per mouse packet** — `mou_isr` sets `[blk_act]`
+*after* §9.5's `[mou_seen]` gate, so a modem losing the port contest cannot
+keep the screen awake all night, and no ISR reads a clock or writes a video
+port.
+
+**The wake input is CONSUMED, and that is a safety rule.** While the screen is
+dark the user cannot see what is under the pointer or which window has the
+keyboard, so acting on that input is acting blind. `blk_wake` answers CF = 1
+when it was the input that lit the screen; `ui.inc` drops the keystroke it has
+already had to fetch (banking the verdict in `pushf`/`popf`, because the flags
+a BIOS service returns are its own business), and **`blk_pass` sits AHEAD of
+`evq_pop`** so the press is drained before it can be dispatched. Move it below
+and the feature still blanks, still wakes, still looks right in a screenshot —
+and the first click out of a dark screen lands wherever the pointer was left.
+
+**A fullscreen bracket is the user (§64.4).** The UI task does not run inside
+one (§53.1) so nothing spends the idle clock there and nothing may — the app
+owns the video mode. What that leaves is the arithmetic on the way out: an
+hour of Missile Command returns to a `[ticks] - [blk_t0]` that has passed
+`BLK_IDLE` and *wrapped*, so `fsx_restore` calls `blk_wake` as its last act.
+
+**Two things it found in code that was already there.** `vid_blank_kind`'s
+Hercules arm wrote **0** to 3B8h, which clears the video-enable bit and the
+GRAPHICS bit with it — so the card was not being blanked, it was being put
+into MDA *text* mode with a 6845 still carrying 720x348 timings. It writes
+`0x02` now, byte for byte what `vid_setmode`'s own blank-first sequence
+(§39.6) uses. And both bodies sent **VGA** down the CGA branch, which writes
+3D8h — a register a VGA does not implement — so §39.11.4's "a VGA-plus-
+Hercules machine keeps its VGA lit" was the whole VGA story; there is a real
+arm now (Sequencer register 1 bit 5, Screen Off) and it is the one access in
+the kernel that **must run with IF=0**, because SR01 has to be *read* and
+`vga12.inc` leaves the sequencer index at 2 across a plane's `rep movsb`. The
+pair also moved **out of the dual-display fence**, where kern_big was the only
+build that could dark a card at all.
+
+**What is measured, and what could not be.** On a cycle-accurate 4.77MHz 8088
+the threshold is **5463–5465 ticks = 300.1 s** on four machines, taken off the
+SHIPPED kernel with `[blk_t0]` wound back rather than five minutes waited out.
+**CGA is proven end to end**: rendered raster 76,218 lit → **0**, VRAM
+unchanged at 76,218, wake back to exactly 76,218. **Neither MartyPC nor QEMU
+rasterises Screen Off on VGA, and MartyPC does not model the mono
+video-enable bit** — hand-forcing the identical bit from the debugger leaves
+the raster lit too, which is what says it is the emulator; the VGA register
+write itself was read back from outside the guest as `0x01 → 0x21`, bit 5 up
+and the dot clock intact. **Those two adapters are the 5150's question.**
+Cost: `.text` **+189**, one image rung, `KERN_BUDGET` spare 4,096 → 3,584
+(7 steps); kern_small's footprint **did not move at all**.
 
 ### The system clipboard (SPEC.md §55, `kernel/clip.inc`)
 

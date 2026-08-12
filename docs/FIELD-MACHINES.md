@@ -325,10 +325,12 @@ and `shl clk/bit x100` read **29**, both because they are computed against
 **That half is solved: send it `combo.img`.** It carries the ordinary shipped
 kernel with no adapter forced, so the §39.1 probe runs and answers VGA on
 this machine — there is no "VGA field disk" to add, and the trap that ate the
-first set is not in the default ask any more. What is still outstanding is
-the other half: the two **8088-only derived rows** (`est CPU MHz x100` and
-`shl clk/bit x100`) should say so on a tier-1 machine rather than printing a
-number computed against instruction timings a 286 does not have. It also has
+first set is not in the default ask any more. **And the other half is now
+closed too**: the two 8088-only derived rows (`est CPU MHz x100` and `shl
+clk/bit x100`) carry a book per CPU tier and pick by `[cpu_tier]`
+(PERFORMANCE.md Part 8.1) — this machine's own report is what validated
+them, and it now reads its clock correctly instead of printing a number
+computed against timings a 286 does not have. It also has
 a known quirk — **it sometimes decides to boot in mono** — which may be what
 put it into the CGA path in the first place, and which the Display page can
 now correct from inside the running OS.
@@ -376,13 +378,19 @@ and the head reached track 0*. The drive is there, the head is where the
 controller says, and only TRK0's path to ST3 bit 4 is missing. ST0 is now
 consulted before any removal and only ever to answer *keep*.
 
-**Two rows in that report are not faults.** `mouse found 0` with both ports
+**One row in that report is not a fault:** `mouse found 0` with both ports
 present is what a machine with nothing plugged in says — the rule above
-applies, ask what was connected. And **`est CPU MHz x100` reads 8879** on a
-16MHz 286, which is this machine's own long-standing outstanding item: the
-two 8088-only derived rows are computed against instruction timings a 286
-does not have, and should say so on a tier-1 machine rather than print a
-number. Still outstanding.
+applies, ask what was connected.
+
+**And one of them closed this machine's oldest outstanding item.**
+`est CPU MHz x100` read **8879** on a 16MHz 286, because the CPU block quoted
+Intel's 8086 table on every machine. `sysbench` carries a book per tier now
+(PERFORMANCE.md Part 8.1) and **this report is what validated it**: re-derived
+against the 286 book from its own measured column, the two independent
+estimates are **15.83 and 15.86 MHz** — agreeing to 0.2% on a machine the
+table above calls 16 MHz. `shl clk/bit` went the same way, from a
+meaningless 28 to **92** against the 286's book value of 100. A re-run here
+will print them directly.
 
 ---
 

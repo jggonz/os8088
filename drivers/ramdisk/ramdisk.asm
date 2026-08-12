@@ -171,6 +171,7 @@ rd_fsv:
     dw rd_mkdir                 ; FSV_MKDIR
     dw rd_rmdir                 ; FSV_RMDIR
     dw rd_dfree                 ; FSV_DFREE
+    dw rd_enum                  ; FSV_ENUM
 rd_fsv_end:
 %if rd_fsv_end - rd_fsv != FSV_SIZE
   %error "ramdisk: the FSV_* table is not FSV_SIZE bytes - a swallowed row?"
@@ -798,6 +799,71 @@ rd_list:
     pop bx
     pop ax
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_ENUM - the Nth entry of a folder, by ordinal (SPEC.md 62.9.7)
+; in:  AL = the folder's handle (0 = the root), CX = the ordinal,
+;      DX:BX = a 32-byte buffer
+; out: CF=0 and the buffer holds a staged SPEC.md 19.1 entry;
+;      CF=1 with AX = 0 = past the end (not an error)
+;
+; rd_list's walk, stopped at an ordinal instead of appending all of it - and
+; it is a separate verb for the reason SPEC.md 62.9.7 gives: FSV_LIST appends
+; into the kernel's ONE global listing, and a folder copy walks a folder that
+; is not the one on screen.
+;
+; THE ORDINAL HAS TO BE STABLE, and that is a property of walking the ROW
+; ARRAY BY INDEX rather than of anything clever: rows are laid down in
+; creation order and never compacted, so the same (handle, ordinal) names the
+; same row for as long as the FOLDER is unmodified. Deleting from it
+; renumbers everything after the hole - which is inside the contract, because
+; a copy does not modify its source, and it is exactly what the FAT path's
+; raw slot ordinal already assumes.
+; -----------------------------------------------------------------------------
+rd_enum:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ah, al                  ; AH = the folder, so AL is free to load rows
+    mov si, rd_dir
+    mov di, RD_MAXENT
+.row:
+    cmp byte [si+RDE_TYPE], RD_FREE
+    je .skip
+    mov al, [si+RDE_PAR]
+    cmp al, ah
+    jne .skip                   ; somebody else's child
+    jcxz .found                 ; ...this is the one asked for
+    dec cx
+.skip:
+    add si, RDE_SZ
+    dec di
+    jnz .row
+    xor ax, ax                  ; past the end, and NOT an error: it is how
+    stc                         ; every walk of every folder finishes
+    jmp short .out
+.found:
+    push bx                     ; RD_STAGE SPENDS BX - its name copy walks the
+    call rd_stage               ; row through it - and BX is the caller's
+    pop bx                      ; buffer offset, which nothing else holds
+    push es                     ; ...and out to that buffer, which is DX:BX
+    mov es, dx                  ; because ES is KERNEL_SEG on entry to
+    mov si, rd_ent              ; anything the kernel far-calls (SPEC.md 51.8)
+    mov di, bx
+    mov cx, DSK_DE_SIZE
+    cld
+    rep movsb
+    pop es
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------

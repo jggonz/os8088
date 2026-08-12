@@ -552,6 +552,174 @@ vid_switch:
 ; 756 us per-call floor is under a tenth of one primitive - paid only when the
 ; display actually changes, which spatial coherence makes rare.
 ; =============================================================================
+
+; -----------------------------------------------------------------------------
+; vid_blank_kind / vid_unblank_kind - dark a card and bring it back
+;                                     (SPEC.md 39.18.1, 64.3)
+;
+; in:       AL = the VID_* kind whose card to blank/unblank
+; out:      -
+; clobbers: flags
+;
+; vid_blank (39.11.4) is written for a SWITCH - it takes the kind being moved
+; TO and reads [vid_kind] for the one being left. An fsx bracket blanks a card
+; that nobody is switching away from, so it needs the question asked directly,
+; and SPEC.md 64's idle blanker asks it of every card the machine has.
+;
+; OUTSIDE THE DUAL-DISPLAY FENCE BELOW, which is where these two used to live.
+; They were reachable only from vid_fsx_enter/vid_fsx_unblank, so kern_big was
+; the only build that had a way to dark a card at all - and the idle blanker is
+; not a dual-display feature. A 128KB machine has a monitor to protect too, and
+; on the class of hardware kern_small exists for it is the older monitor.
+;
+; ALL THREE ADAPTERS, and the VGA arm is the one that had to be written. Both
+; bodies used to test only for Hercules and send everything else to the CGA
+; branch, which writes 3D8h - a register a VGA does not implement, so the OUT
+; was swallowed by the bus and did nothing at all. vid_blank's own header
+; records the resulting hole as accepted ("a VGA-plus-Hercules machine keeps
+; its VGA lit"), which is affordable for a pairing nobody built and is not
+; affordable for a blanker: silently declining to blank on one adapter in three
+; is exactly the class of failure this tree keeps paying for. So the VGA gets
+; its own arm - Sequencer register 1 (Clocking Mode) bit 5, Screen Off.
+;
+; All three gate the video SIGNAL and nothing else: the CRTC keeps running and
+; both syncs keep coming out, so the tube stays locked, the monitor is never
+; asked to re-acquire, and what the card holds in memory is untouched. That is
+; the property the whole feature rests on - vid_setmode's own blank-first
+; sequence (39.6) says the same thing from the other end - and it is why
+; blanking may be done to a card that a background task is drawing on.
+;
+; THE HERCULES ARM WRITES 0x02 AND NOT 0, WHICH IS A FIX. Zero clears bit 3,
+; the video enable - and it clears bit 1, the GRAPHICS bit, with it, so the
+; card was not being blanked at all: it was being put into MDA TEXT mode, with
+; a 6845 still carrying 720x348 timings and the graphics framebuffer under it
+; being drawn as character cells. On real iron bit 3 is down so nothing of that
+; reaches the tube and it merely looks like a blank; on a machine whose mono
+; card models the mode bit and not the enable bit it is plainly visible, and
+; that is how it was found (MartyPC: 136,377 lit pixels before, 138,046 after
+; a "blank"). 0x02 is what vid_setmode itself writes to blank the card across
+; its own mode change - graphics, page 0, video off - so the two agree now, and
+; a blank changes exactly one bit and leaves the mode alone. 3BFh is left
+; alone for the same reason: the old pair also locked graphics back out, which
+; is a second piece of state for the unblank to put back and buys nothing when
+; the video signal is already gated.
+;
+; UNBLANKING IS NOT vid_setmode. Re-running the mode set on a card whose mode
+; never changed buys a 32KB clear nobody asked for and a 6845 sync transient
+; somebody might see. The inverses are exact instead: the Hercules' two are
+; the two vid_setmode itself writes (3BFh graphics allowed, then 3B8h graphics
+; + page 0 + video), the CGA's comes out of the BIOS's own shadow of 3D8h
+; at 40:65h - which is write-only on the card, so there is nothing to read
+; back and the ROM's record is the only honest source - and the VGA's is the
+; same SR01 with bit 5 put back down.
+; -----------------------------------------------------------------------------
+vid_blank_kind:
+    push ax
+    push dx
+    push es
+    cmp al, VID_HERC
+    je .mono
+    cmp al, VID_VGA
+    je .vga
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x0065]         ; the BIOS's shadow of 3D8h...
+    and al, ~8                  ; ...minus the video-enable bit
+    mov dx, 0x3D8
+    out dx, al
+    jmp short .out
+.mono:
+    mov dx, 0x3B8               ; graphics + page 0, video OFF (bit 3 clear) -
+    mov al, 0x02                ; byte for byte the value vid_setmode's own
+    out dx, al                  ; blank-first sequence writes (SPEC.md 39.6)
+    jmp short .out
+.vga:
+    mov al, 0x20                ; SR01 bit 5 up: Screen Off
+    call vid_seq1_blank
+.out:
+    pop es
+    pop dx
+    pop ax
+    ret
+
+vid_unblank_kind:
+    push ax
+    push dx
+    push es
+    cmp al, VID_HERC
+    je .mono
+    cmp al, VID_VGA
+    je .vga
+    mov ax, 0x0040
+    mov es, ax
+    mov al, [es:0x0065]         ; ...exactly what the ROM's mode set left
+    mov dx, 0x3D8
+    out dx, al
+    jmp short .out
+.mono:
+    mov dx, 0x3BF               ; the order vid_setmode uses: allow graphics
+    mov al, 1                   ; first, then turn the video on
+    out dx, al
+    mov dx, 0x3B8
+    mov al, 0x0A
+    out dx, al
+    jmp short .out
+.vga:
+    xor al, al                  ; SR01 bit 5 down again
+    call vid_seq1_blank
+.out:
+    pop es
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_seq1_blank - internal: write bit 5 of the VGA's Sequencer register 1
+;
+; in:       AL = 0x20 to dark the screen, 0 to light it
+; out:      -
+; clobbers: flags (AL is consumed)
+;
+; IT RUNS WITH IF=0, AND THAT IS THE ONLY INTERESTING THING ABOUT IT. SR01's
+; other bits are the dot clock and the character width; they belong to whatever
+; mode the card is in and cannot be guessed, so the register has to be READ -
+; which makes this an index write, a read and a data write, three instructions
+; with two gaps in them.
+;
+; Every other Sequencer access in the kernel is a single `out dx, ax`, index
+; and data in one instruction, which is atomic by construction and needs
+; nothing. This one cannot be, and the gap is reachable: vga12.inc's plane
+; loops leave the Sequencer INDEX at 2 (Map Mask) for the whole of a plane's
+; rep movsb, and every drawing task can be pre-empted mid-row. A switch landing
+; between the index write and the read below would read the Map Mask and then
+; write the screen-off bit INTO it - a card blanked by having one plane's write
+; mask corrupted, which is neither of the two things this routine can be asked
+; for. pushf/cli ... popf, never cli/sti (SPEC.md 1).
+;
+; Leaving the index at 1 afterwards costs nothing, for the same reason: every
+; reader re-selects with its own word OUT.
+; -----------------------------------------------------------------------------
+vid_seq1_blank:
+    push ax
+    push bx
+    push dx
+    mov bl, al                  ; the wanted state of bit 5
+    pushf
+    cli
+    mov dx, VGA_SEQ
+    mov al, 1                   ; SR01, Clocking Mode
+    out dx, al
+    inc dx
+    in al, dx
+    and al, ~0x20               ; ...with bit 5 replaced and the dot clock,
+    or al, bl                   ; the character width and the rest untouched
+    out dx, al
+    popf
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 %ifdef KERN_BIG
 
 VID_NDISP_MAX equ 2             ; the machine this is for holds two cards
@@ -763,76 +931,6 @@ vid_ctx_init:
     pop es
     pop di
     pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vid_blank_kind / vid_unblank_kind - dark a card and bring it back
-;                                     (SPEC.md 39.18.1)
-;
-; in:       AL = the VID_* kind whose card to blank/unblank
-; out:      -
-; clobbers: flags
-;
-; vid_blank (39.11.4) is written for a SWITCH - it takes the kind being moved
-; TO and reads [vid_kind] for the one being left. An fsx bracket blanks a card
-; that nobody is switching away from, so it needs the question asked directly.
-;
-; UNBLANKING IS NOT vid_setmode. Re-running the mode set on a card whose mode
-; never changed buys a 32KB clear nobody asked for and a 6845 sync transient
-; somebody might see. The inverses are exact instead: the Hercules' two are
-; the two vid_setmode itself writes (3BFh graphics allowed, then 3B8h graphics
-; + page 0 + video), and the CGA's comes out of the BIOS's own shadow of 3D8h
-; at 40:65h - which is write-only on the card, so there is nothing to read
-; back and the ROM's record is the only honest source.
-; -----------------------------------------------------------------------------
-vid_blank_kind:
-    push ax
-    push dx
-    push es
-    cmp al, VID_HERC
-    jne .colour
-    mov dx, 0x3B8               ; video off, and 3BF back to "graphics not
-    xor al, al                  ; allowed" - vid_blank's own pair
-    out dx, al
-    mov dx, 0x3BF
-    out dx, al
-    jmp short .out
-.colour:
-    mov ax, 0x0040
-    mov es, ax
-    mov al, [es:0x0065]         ; the BIOS's shadow of 3D8h...
-    and al, ~8                  ; ...minus the video-enable bit
-    mov dx, 0x3D8
-    out dx, al
-.out:
-    pop es
-    pop dx
-    pop ax
-    ret
-
-vid_unblank_kind:
-    push ax
-    push dx
-    push es
-    cmp al, VID_HERC
-    jne .colour
-    mov dx, 0x3BF               ; the order vid_setmode uses: allow graphics
-    mov al, 1                   ; first, then turn the video on
-    out dx, al
-    mov dx, 0x3B8
-    mov al, 0x0A
-    out dx, al
-    jmp short .out
-.colour:
-    mov ax, 0x0040
-    mov es, ax
-    mov al, [es:0x0065]         ; ...exactly what the ROM's mode set left
-    mov dx, 0x3D8
-    out dx, al
-.out:
-    pop es
-    pop dx
     pop ax
     ret
 

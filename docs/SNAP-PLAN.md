@@ -81,9 +81,9 @@ one-place-for-geometry rule).
 |---|---|---|
 | **Tracker** | 6, 38, 108, 111, 116, 150, 205, 210, 258, 290 | the **largest** item here. Its pattern grid was already moved onto 8px boundaries to earn §6.1 (SPEC.md §45.9); the rest of the FT2 face never was — 17% of sampled literal pens aligned. It also redraws continuously while playing, so this is the app where the percentage is spent most often |
 | **Tamegram** | 4, 60, 116, 164, 210 | HUD; 7 of 8 sampled pens ≡ 4, so a single `+4` on the base would align nearly all of it |
-| **Fractal** | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0. Four constants in one table, and the status row is redrawn per progress tick |
+| **Fractal** | `FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250 | all ≡ 2; `FR_X_PCT` 200 is already 0. **Confirmed by measurement, and it is the worst in the tree: 2,801 glyphs in one launch, 16% aligned, 2,323 of them at bucket 2** — the status row redrawn per progress tick. Four constants in one table |
 | **Paint** | `PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2 | 2 of 5 sampled pens aligned. The palette is drawn on every tool change |
-| **ArtfulType** | ≡ 3 (measured), and a literal 14 | its own menu bar and status line; the 8 and 16 elsewhere are already right. §46 is a *writer*, so its per-keystroke line draw is exactly the typebench case |
+| **ArtfulType** | a literal 14 | **the "≡ 3 (measured)" here was its own CAPTION** — 10 centred glyphs the kernel drew, now excluded (§11.94.2). Its 8 and 16 are already right. Re-audit before moving anything; §46 is a *writer*, so its per-keystroke line draw is the typebench case |
 | **HDD Control Panel page** | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
 | **HDD tool window** | `HTW_LX` 4 | the installer's own `HIW_LX` is already 8 |
 | **Recorder** | 4 | |
@@ -91,7 +91,7 @@ one-place-for-geometry rule).
 | **Piano** | 2 | one sampled pen — low confidence, needs the runtime audit |
 | **Arkanoid** | 2 | one sampled pen — same |
 | **Task Manager** | five literal `+6` sites | despite `TM_PEN` being 8 and `TM_MPEN` 16. SPEC.md §11.94 records moving `TM_PEN` 6 → 8; these five were missed |
-| **Hello** | ≡ 3 for 5 of its 35 glyphs | deliberately the minimal package; fix it anyway, because it is what a new package is copied from |
+| ~~**Hello**~~ | **not a defect** | `hl_line` CENTRES every string — `(HL_CONT_W - width)/2 + content_left` — so it is §3's category 2 and must not be "fixed". Its earlier "≡ 3 for 5 glyphs" was its own caption plus that centring |
 | **Missile Command** | unresolved | every pen is computed at run time. Needs `make SNAPAUDIT=1`, not a grep |
 | `DEBUG.DRV` | `DBGP_LX` 1 | unshipped (SPEC.md §62.9.4); fix if it is ever restored |
 
@@ -142,17 +142,25 @@ A plain build emits not one byte of it — macro and counters live inside the
 same `%ifdef`, and it sits at the top of `font_char`, the innermost drawing
 call in the system.
 
-**Two things to fix in the instrument before leaning on it:**
+**The artifact is FIXED and the instrument now names the string** (SPEC.md
+§11.94.2, PERFORMANCE.md Set 57). The "constant 4 glyphs in bucket 7" was
+`wm_draw_title`: a caption is **centred in the title bar by the kernel**, no app
+can influence it, and it was being attributed to whichever callback bracket
+happened to be open — the constant 4 being the **`'APPS'` caption of the Disk
+window sitting behind every app under test**. `wm_draw_title` suspends the
+attribution now. The log also records the pen y and the **character**, so it
+prints the off-grid text rather than a bucket count.
 
-- **A known artifact.** Every window's callback reports a constant **4 glyphs
-  in bucket 7** per forced repaint, whatever the app, and it has not been
-  chased down. A count under about ten therefore says nothing. This is why
-  Piano, Arkanoid and Missile are still marked low-confidence or unresolved.
-- **Driving it is the expensive part.** An app has to be made to *draw text*,
-  and several draw none until interacted with — an empty Note Pad draws no
-  glyphs at all, which is what a first attempt at this survey measured. A
-  repaint is forced by dragging the window a whole number of 8px steps and
-  back, which a snapped window returns from exactly.
+**Two things about driving it:**
+
+- **A drag no longer forces a repaint.** §11.96.12's drag cache replays the
+  content instead of calling `W_PAINT`, so a dragged window reports nothing —
+  which is what the first version of this survey did. Reset with **no filter**
+  and then launch the app: its first paint runs inside its own `wm_pkgcall`, so
+  it lands in `snap_h*`. Two windows' callbacks then share that table, which the
+  pen y separates.
+- **Several apps draw no text until interacted with** — an empty Note Pad draws
+  no glyphs at all, which an early attempt measured as "aligned".
 
 The `§2` figures marked "sampled literal pens" come from neither: they are the
 literal `mov cx, N` values within a few lines of a text call, so they say *this
@@ -257,11 +265,11 @@ a third of it** — and the fill, doing comparable per-row work with a register
 row step, costs less than half as much per row.
 
 The fix is the fill's: hoist one row address out of the loop, step it with the
-register form, and derive the other end from a constant delta. Estimated
-**~1.45x on `GFX_SCROLL`** for the mono adapters (51,229 → ~35,000 µs) and
-**~1.3x** on VGA. It should be costed against §48.18.1's precedent before
-being built — that one recovered 4% and was dropped — but the arithmetic here
-is per-row rather than per-call, so it scales with the band's height.
+register form, and derive the other end from a constant delta. **BUILT and
+measured** (SPEC.md §5.5.1, PERFORMANCE.md Set 56): `GFX_SCROLL 256x128` goes
+51,229 → **34,472 µs on Hercules (1.49x)** and 29,096 → **19,194 µs on VGA
+(1.52x)**, against an estimate of ~1.45x and ~1.3x. The estimate was low on VGA
+because the two `mul`s were a larger share of a shorter per-row cost there.
 
 ### 6.4 …and where a vertical quantum earns its keep — `nbanks`, not 8
 

@@ -4520,6 +4520,21 @@ wm_idx2ptr:
 ; other path reaches it through wm_draw_win and never notices.
 ; -----------------------------------------------------------------------------
 wm_draw_title:
+%ifdef SNAPAUDIT
+    ; SPEC.md 11.94.2: THE CAPTION IS CHROME. The pen is centred in the title
+    ; bar by the kernel and no application can influence it, so attributing it
+    ; to whichever callback bracket happens to be open is wrong twice - it
+    ; reported a window's own caption as the app's off-grid text, and it
+    ; reported OTHER windows' captions the same way when a callback caused a
+    ; repaint. Suspending the attribution here fixes both by construction,
+    ; because it keys on who CHOSE the pen rather than on who is on the stack.
+    ; No pushf: push, pop and mov write no flags, and the test below sets them.
+    push ax
+    mov ax, [snap_cur]
+    mov [snap_tsave], ax
+    mov word [snap_cur], 0
+    pop ax
+%endif
     test word [di+W_FLAGS], WF_FULL
     jnz .none                   ; a fullscreen window HAS no title bar
                                 ; (SPEC.md 11.2), and drawing one anyway put
@@ -4668,6 +4683,12 @@ wm_draw_title:
     pop bx
     pop ax
 .none:
+%ifdef SNAPAUDIT
+    push ax
+    mov ax, [snap_tsave]
+    mov [snap_cur], ax
+    pop ax
+%endif
     ret
 
 ; -----------------------------------------------------------------------------

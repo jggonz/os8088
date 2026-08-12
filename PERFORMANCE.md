@@ -1424,8 +1424,75 @@ was ruled out (tens of seconds per 448×280 frame before the dither).
 | Paint's design notes and what it cost | [docs/PAINT-NOTES.md](docs/PAINT-NOTES.md) |
 | Per-device cycle budgets on the floor machine | [docs/SOUND-PLAN.md](docs/SOUND-PLAN.md) |
 | Memory, and why there is no growth room | [docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md) |
+| `sysbench`'s three CPU books, and the tier that picks one | Part 8.1, below |
 | The benchmarks themselves | `tests/fontbench/`, `tests/typebench/`, `tests/gfxbench/`, `tests/sysbench/` (`make bench`) |
 | The field measurements they produced | Part 9, below |
+
+---
+
+## Part 8.1 — `sysbench`'s CPU rows carry THREE books, and pick by tier
+
+`tests/sysbench`'s CPU block measures each instruction and prints the
+**book** figure beside it, so the ratio column says how far the machine is
+from the manual. That book was Intel's **8086** table, unconditionally, on
+every machine — which is right on the target and wrong on everything else,
+and the Packard Bell Victory 286 (docs/FIELD-MACHINES.md) is where it showed:
+
+```
+est CPU MHz x100 MUL    8879        <- an 8879 on a 16MHz 286
+est CPU MHz x100 DIV    9759
+shl clk/bit x100 ~400     28
+```
+
+**None of those three is a measurement error.** `est CPU MHz` inverts
+`MHz = 4.7727 x nominal / measured`, which is exact — with the *right*
+nominal. A 286 does `mul r16` in 21 clocks and an 8086 in 125, so quoting the
+8086's figure inflates the answer by exactly that ratio. Re-derived against
+the 286 book, from the same report's own measured column:
+
+| | measured x100 | 8086 book | est MHz | 286 book | est MHz |
+|---|---|---|---|---|---|
+| `mov ax,i + mul r16` | 693 | 12900 | **88.79** | 2300 | **15.83** |
+| `xor+mov+div r16` | 782 | 16000 | **97.59** | 2600 | **15.86** |
+
+Two independent rows landing on 15.83 and 15.86 for a machine the register
+calls a **16 MHz** AMD 286 — agreeing with each other to 0.2% — is the
+cross-check `sb_mhz` was written to provide, working for the first time on a
+machine that is not an 8088.
+
+**One row per instruction, three book columns, `sb_nomof` picks.** The
+alternative is a table per CPU, which is three places that must agree about
+what row 12 is. `sb_entof` owns the stride for the same reason: it was 8
+bytes with four sites open-coding `shl bx, 3`, and an open-coded stride is a
+silently wrong row rather than a build error.
+
+**The ratio column reads differently on a fast machine and that is not a
+defect.** It is measured-in-4.77MHz-units over book, so on a 16MHz machine
+every execution-bound row lands near **477/1584 = 30**. The Packard Bell's
+register rows duly cluster at 26–30 with the 286 book, where the 8086 book
+scattered them from 4 to 29 — and the rows that do *not* join the cluster are
+the interesting ones: its memory rows sit at 61–81, which is real bus cost
+the 286's zero-wait-state book does not carry.
+
+**`shl clk/bit` had to change currency, not just books.** It is a slope — the
+two `shl r16,cl` rows nine bits apart, subtracted — and it was reported in
+4.77MHz clock periods, so a 286's one-clock-per-bit shift measured **0.28 of
+one**: true, and unreadable against any book. It is scaled by the MUL
+estimate into the machine's own clocks now (`x100 * MHzx100 / 477`), which on
+a 4.77MHz machine is a factor of 1 **by construction**, so tier 0's published
+figure does not move. The Packard Bell reads **92** against the 286 book's
+100. The book row beside it is derived from the same two table rows the
+measurement subtracts — `(nom13 - nom4) / 9`, giving 400 / 100 / **0** — and
+the 386's zero is the barrel shifter, which is the whole reason this row
+stopped meaning anything past tier 0.
+
+**What is validated and what is not.** The 286 column is confirmed against
+field data, above. The 386 column is **book figures that have not yet met
+hardware** — and its MUL and DIV are *early-out* on that part, data-dependent
+in a way the 286's are not, so treat a 386 `est CPU MHz` as approximate until
+a 386 report lands in Part 9. What is verified for it is the mechanism: a
+tier-2 run prints `against the 80386 book` with the 386 column beside every
+row and `shl clk/bit book` at 0.
 
 ---
 
@@ -6073,3 +6140,117 @@ there is no sub-row unit vertically (Set 54), so no snapping in x, y or
 otherwise moves it, and a Solitaire whose 303 rows do not fit a 305-row band is
 not made to fit by aligning anything. Clipping was the only answer. Conflating
 the two is easy enough that both sections now say which they are at the top.
+
+### Set 56 — the scroll stops recomputing its row address: 1.49x and 1.52x
+
+Set 54 found `gfx_scroll` computing a full row address for both ends of every
+row when the address advances by a constant, and priced the waste with a
+breakpoint: `gfx_rowbase` is 11 instructions and **319 cycles = 66.84 µs** on a
+Hercules, so two calls were 134 µs of a 400 µs row. Built (SPEC.md §5.5.1).
+
+| `GFX_SCROLL 256x128` | before | after | |
+|---|---:|---:|---:|
+| Hercules | 51,229.07 µs | **34,471.99 µs** | **1.49x** |
+| VGA | 29,095.95 µs | **19,194.37 µs** | **1.52x** |
+
+400 → 269 µs a row on Hercules against the 134 µs the change removes, so the
+saving landed where the measurement pointed. **VGA beat its own estimate** —
+~1.3x predicted, 1.52x measured — because the two `mul`s were a bigger share of
+a shorter per-row cost there, and the rewrite also took `cld` and two adds out
+of the loop.
+
+**`GFX_FILL 256x128` reports byte-identical counts in both runs** — 174,235 on
+Hercules, 100,611 on VGA — which is the control that makes the comparison mean
+anything: the fill was not touched, so two runs agreeing on it are two runs that
+can be compared on the scroll.
+
+**`make SCROLLROW=1` is the reference build, and it reproduces the previous
+kernel's image byte for byte** (md5 47074a3c…, the same image shipped at
+9abacfa) — which is how the A/B proves the reference arm really is the old code
+rather than something that merely resembles it.
+
+**A scroll is a COPY, so byte identity is the whole claim**: a wrong delta shows
+the wrong pixels, not no pixels, and "it looks right" is exactly what a wrong
+offset also looks like. Verified against `SCROLLROW=1` on identical scripted
+sessions:
+
+| adapter | what it drives | steps | result |
+|---|---|---:|---|
+| VGA | Note Pad caret scroll, both directions + page jumps | 6 | **0 differing bytes** |
+| Hercules | the same | 6 | identical md5 at every step |
+| CGA (2 banks, not 4) | Disk window row scroll + page jumps | 5 | identical md5 at every step |
+| Hercules | Note Pad's find panel — `dy` 29 then 41, **UNALIGNED** | 4 | identical but for the clock's last glyph cell |
+
+That last row is the one that matters most for the banked fast path: it is the
+tree's only scroll whose `dy` is not a whole number of banks, so it proves the
+dispatch still falls to the general form instead of taking a constant delta that
+does not exist there.
+
+**One bug, and it is SPEC.md §5.7.1's rule arriving from the other side.** The
+first version stepped the destination with `add di, stride` and was wrong on
+every adapter — **`rep movsb` has already advanced DI by the row's byte count**,
+and the reference form never had to care because it recomputed DI from scratch
+each row. 14,580 differing bytes on the very first VGA capture. The fix is free
+on the linear path (fold `-nb` into the increment, which is computed once) and
+one `sub di, [vgas_nb]` on the banked one, where `gfx_nextrow` is
+column-preserving and so has to start from the column it is preserving. **The
+A/B is what caught it**: the pixels were plausible, the window looked like a
+window, and nothing errored.
+
+**Cost: `.text` +116, no rung crossed — but the image rung is down to 48 bytes
+of slack** (164 before). The next addition to `.text` anywhere buys a whole
+sector, which is the guard working rather than this change being dear.
+
+### Set 57 — the audit's "artifact" was a window CAPTION, and the tool was right
+
+`make SNAPAUDIT=1` carried a documented unexplained artifact: every window's
+callback reported a **constant 4 glyphs in bucket 7** whatever the app, which
+made any count under about ten worthless and left Piano, Arkanoid and Missile
+Command unresolved in `docs/SNAP-PLAN.md`.
+
+**It was `wm_draw_title`.** A caption's pen is **centred in the title bar by the
+kernel** and no application can influence it, and it was being attributed to
+whichever `wm_pkgcall` bracket happened to be open. The constant 4 was the
+**`'APPS'` caption of the Disk window sitting behind every app under test** —
+four characters, identical in every run, which is exactly why it read as an
+instrument fault rather than as data. `wm_draw_title` suspends the attribution
+now, keying on who *chose* the pen rather than on who is on the stack.
+
+Measured after: the audited window reports **nothing** of its own and
+`snap_kchar` grows by exactly the two captions — 151 → 165, gaining `[3:10, 7:4]`
+for `'ArtfulType'` and `'APPS'`.
+
+**What made it findable was logging the CHARACTER**, and two ways of reading a
+stack produced confident nonsense on the way there:
+
+- The caller's `AX` is at `[ss:sp+2]`, not `[ss:sp]` — the latter is the saved
+  `BX`, which is **constant inside `font_str_x`'s loop** and therefore looks
+  exactly like a real answer. Every logged character came out `'R'`.
+- A return address must be resolved in **`KERNEL_SEG` only**: `.cold` code
+  cannot near-call `font_char`, it goes through a far `cw_` shim (SPEC.md §2.6),
+  so resolving against `.cold` too picks a nearer symbol by accident — it named
+  `dskw_rbody.fatname`, a *disk* routine, as the thing that drew a glyph.
+
+Both are the same shape as this session's other traps: **a wrong reading that is
+stable is indistinguishable from a right one**, and only a value that had to
+vary — the characters spelling `APPS` and `ArtfulType` — could tell them apart.
+
+**Three corrections to §11.94.3's list fall out**, and they are corrections in
+the direction of less work rather than more:
+
+- **Hello is not a defect at all.** `hl_line` centres every string —
+  `(HL_CONT_W - width)/2 + content_left` — so it is §3's category 2. Its earlier
+  "≡ 3 for 5 of its 35 glyphs" was its caption plus that centring.
+- **ArtfulType's "≡ 3 (measured)" was its own caption**, ten centred glyphs the
+  kernel drew. Its literal 14 stands; re-audit before moving anything.
+- **Fractal is confirmed and is the worst in the tree**: 2,801 glyphs in one
+  launch, **16% aligned, 2,323 of them at bucket 2** — the status row redrawn per
+  progress tick, at the `FR_X_*` constants the static pass had already named.
+
+**And a note for whoever finishes the list: a drag no longer forces a repaint.**
+§11.96.12's cache replays the content instead of calling `W_PAINT`, so a dragged
+window reports nothing — which is what the first version of this survey
+measured. Reset with no filter and then LAUNCH the app.
+
+**Cost: nothing.** All of it is inside `%ifdef SNAPAUDIT`, and a plain build is
+**0 differing bytes** against the same commit before this work.

@@ -3296,6 +3296,7 @@ gfx_scroll:
 vgas_lincopy:
     push ds
     mov es, dx
+%ifdef SCROLL_ROWBASE           ; the reference form: two muls a row (SPEC 5.5.1)
     mov ax, [vgas_rows]
     mov [vgas_left], ax
     mov bx, [vgas_ydst]
@@ -3319,6 +3320,48 @@ vgas_lincopy:
     add bx, [vgas_step]
     dec word [vgas_left]
     jnz .r
+%else
+    ; --- SPEC.md 5.5.1: the row address ADVANCES, so derive it once ----------
+    ; A linear framebuffer has one bank, so rowbase(y) is y * stride and the
+    ; two ends of the copy are a CONSTANT dy * stride apart - for any dy, with
+    ; no alignment precondition anywhere. Both products are taken here instead
+    ; of twice a row.
+    mov ax, [vgas_rows]
+    mov [vgas_left], ax
+    mov ax, [vgas_ydst]
+    mul word [vid_stride]
+    add ax, [vgas_col]
+    mov di, ax                  ; DI = the destination cursor
+    mov ax, [vgas_sdy]          ; the delta, ONCE. `mul` is unsigned and sdy is
+    mul word [vid_stride]       ; signed, and that is fine: only the low word
+    mov dx, ax                  ; is used, and a product mod 65536 does not
+                                ; care which sign the operand was read as -
+                                ; the same reason DI itself may wrap
+    mov bx, [vid_stride]        ; BX = the per-row step, in the walk's own
+    cmp word [vgas_step], 0     ; direction (down: bottom-up, so backwards)
+    jg .fwd
+    neg bx
+.fwd:
+    sub bx, [vgas_nb]           ; ...LESS what the rep movsb will already have
+                                ; added to DI. SPEC.md 5.7.1's rule, and the
+                                ; A/B caught its absence: a string op advances
+                                ; its pointer, and the reference form never had
+                                ; to care because it recomputed DI every row.
+                                ; Folded into the increment, so it is free
+    cld                         ; nothing in the loop touches DF
+.r:
+    mov si, di
+    add si, dx
+    mov cx, [vgas_nb]
+    push es
+    pop ds                      ; DS = ES = the target for the movs
+    rep movsb
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    add di, bx
+    dec word [vgas_left]
+    jnz .r
+%endif
     pop ds
     ret
 
@@ -3335,6 +3378,65 @@ vgas_bankcopy:
     mov ax, [vgas_rows]
     mov [vgas_left], ax
     mov bx, [vgas_ydst]
+%ifndef SCROLL_ROWBASE
+    ; --- SPEC.md 5.5.1: a whole number of BANKS makes the delta constant -----
+    ; rowbase(y) is banktab[y & bmask] + (y >> bshift) * stride, so the two ends
+    ; of the copy are a constant apart exactly when dy leaves the bank field
+    ; alone - dy a multiple of 2 on CGA and of 4 on Hercules. Then the quotients
+    ; differ by dy >> bshift and nothing else, and the destination can walk with
+    ; gfx_nextrow instead of being recomputed. The test costs two instructions
+    ; on the path that cannot use it.
+    mov ax, [vgas_sdy]
+    and ax, [vid_bmask]         ; a negative dy is fine: two's complement keeps
+    jnz .gen                    ; the low bits' residue
+    mov ax, bx
+    call gfx_rowbase            ; the destination base, ONCE
+    add ax, [vgas_col]
+    mov di, ax
+    mov ax, [vgas_sdy]          ; delta = (dy >> bshift) * stride, signed - SAR
+    mov cl, [vid_bshift]        ; because dy may be negative and the shift has
+    sar ax, cl                  ; to floor; exact, because dy is a multiple of
+    mul word [vid_stride]       ; the bank count (mul's low word again)
+    mov dx, ax
+    cld
+    cmp word [vgas_step], 0
+    jl .rdn
+.rup:                           ; up: destination walks DOWN the screen
+    mov si, di
+    add si, dx
+    mov cx, [vgas_nb]
+    push es
+    pop ds
+    rep movsb
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    sub di, [vgas_nb]           ; back to the row's own byte: rep movsb left DI
+                                ; nb past it, and the advance below is
+                                ; column-preserving, so it has to start from
+                                ; the column it is preserving (SPEC.md 5.7.1)
+    call gfx_nextrow            ; DI and flags only, and CS-relative reads, so
+    dec word [vgas_left]        ; it is safe whatever DS was left at
+    jnz .rup
+    jmp short .out
+.rdn:                           ; down: bottom-up, so the mirror
+    mov si, di
+    add si, dx
+    mov cx, [vgas_nb]
+    push es
+    pop ds
+    rep movsb
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    sub di, [vgas_nb]           ; back to the row's own byte: rep movsb left DI
+                                ; nb past it, and the advance below is
+                                ; column-preserving, so it has to start from
+                                ; the column it is preserving (SPEC.md 5.7.1)
+    call gfx_prevrow
+    dec word [vgas_left]
+    jnz .rdn
+    jmp short .out
+%endif
+.gen:                           ; the general form: one rowbase per END per row
 .r:
     mov ax, bx
     add ax, [vgas_sdy]
@@ -3355,6 +3457,7 @@ vgas_bankcopy:
     add bx, [vgas_step]
     dec word [vgas_left]
     jnz .r
+.out:
     pop ds
     ret
 

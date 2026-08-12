@@ -30,6 +30,11 @@ FONT_RN_MAX equ 90
 ; 3; below that the run takes the plain walk and pays nothing at all.
 FONT_RN_KMIN equ 3
 
+SNAP_ENT     equ 8              ; bytes per caller-log entry: x, y, char, ret
+SNAP_NCALL   equ 24             ; SPEC.md 11.94.2: off-grid callers logged per
+                                ; reset. A repaint draws hundreds of glyphs and
+                                ; the first two dozen name every routine in it
+
 ; -----------------------------------------------------------------------------
 ; SPEC.md 11.94.1's INSTRUMENT: `make SNAPAUDIT=1` histograms the x & 7 of
 ; every glyph the machine draws, so "which app does not align its text" is a
@@ -70,6 +75,44 @@ FONT_RN_KMIN equ 3
     shl ax, 1
     add bx, ax
     inc word [cs:bx]            ; cs: - .text, and CS is KERNEL_SEG here
+
+    ; --- WHO DREW IT: the off-grid caller names itself (SPEC.md 11.94.2) -----
+    ; A bucket count says an app is off-grid and not WHERE, and reading layout
+    ; constants to find out is what left Piano, Arkanoid and Missile unresolved.
+    ; So an off-grid glyph inside the AUDITED window records the pen and its
+    ; caller's return address, and tools/os88snap.py maps that back to a symbol
+    ; through os88sym. First SNAP_NCALL of them, because a repaint draws
+    ; hundreds and the first few name the routine just as well.
+    or ax, ax
+    jz %%done                   ; bucket 0: aligned, nothing to report
+    cmp bx, %1 + 16             ; the audited window's table? (its 8 words end
+    jae %%done                  ; there) - the chrome's callers are not the ask
+    mov bx, [cs:snap_ncall]
+    cmp bx, SNAP_NCALL * SNAP_ENT
+    jae %%done
+    add word [cs:snap_ncall], SNAP_ENT
+    mov bx, sp                  ; the macro pushed flags, ax, bx - so the frame
+                                ; from SP is [+0] bx, [+2] ax, [+4] flags,
+                                ; [+6] the caller's return address. ss: because
+                                ; SS is not DS in this kernel
+    mov ax, [ss:bx + 2]         ; the caller's AX: AL is the CHARACTER, and
+    mov [cs:snap_tmpc], ax      ; reading [+0] instead gets the saved BX, which
+                                ; is constant inside font_str_x's loop and
+                                ; therefore looks exactly like a real answer
+    mov ax, [ss:bx + 6]
+    mov [cs:snap_tmpr], ax
+    mov bx, [cs:snap_ncall]     ; ...and the slot this entry goes in
+    sub bx, SNAP_ENT
+    mov ax, cx
+    mov [cs:bx + snap_calls], ax        ; pen x
+    mov ax, dx
+    mov [cs:bx + snap_calls + 2], ax    ; pen y
+    mov ax, [cs:snap_tmpc]
+    mov ah, 0
+    mov [cs:bx + snap_calls + 4], ax    ; the character
+    mov ax, [cs:snap_tmpr]
+    mov [cs:bx + snap_calls + 6], ax    ; who called
+%%done:
     pop bx
     pop ax
     popf
@@ -1264,6 +1307,16 @@ snap_hchar: times 8 dw 0        ; font_char inside a window callback
 snap_hrun:  times 8 dw 0        ; font_run  inside a window callback
 snap_kchar: times 8 dw 0        ; font_char outside one - chrome, menus, desktop
 snap_krun:  times 8 dw 0        ; font_run  outside one
+snap_calls: times SNAP_NCALL*(SNAP_ENT/2) dw 0 ; 11.94.2's log: (pen x, pen y,
+                                ; character, return address) per off-grid
+                                ; glyph in the audited window - what turns
+                                ; "this app is off-grid" into the STRING
+snap_ncall: dw 0                ; bytes used of it, so 0 means empty
+snap_tmpc:  dw 0                ; the log's scratch: the caller's AX and
+snap_tsave: dw 0                ; wm_draw_title's banked snap_cur: the
+                                ; caption is CHROME (SPEC.md 11.94.2)
+snap_tmpr:  dw 0                ; its return address, banked while BX is
+                                ; needed for the slot address
 snap_cur:   dw 0                ; the window whose callback is running, 0 =
                                 ; none (wm_pkgcall stacks it)
 snap_win:   dw 0                ; the HOST's filter: only this window's glyphs

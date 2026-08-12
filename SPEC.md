@@ -1192,6 +1192,74 @@ Verified against a byte-exact reference on all three: the mono path over
 CGA's bank boundary, and the buffered path pixel-for-pixel against the
 direct one.
 
+#### 5.5.1 The row address ADVANCES, so it is derived once, not recomputed
+
+**Both backends used to compute a full row address for both ends of every
+row**, which is the largest avoidable cost in the primitive. `vgas_lincopy`
+took two `mul word [vid_stride]` per row; `vgas_bankcopy` called `gfx_rowbase`
+twice, and that routine is a `mul`, a variable `shr`, a bank-table lookup and a
+`call`/`ret`. **Measured on a cycle-accurate 4.77MHz 8088 with a Hercules card,
+`gfx_rowbase` is 11 instructions and 319 cycles — 66.84 µs** — so the two calls
+were 134 µs of a per-row cost `gfxbench` measured at 400 µs, a third of the
+whole primitive. The same band as a `gfx_fill`, which walks its rows with
+`sw_plane_op`'s register-held step (§5.7), costs ~185 µs a row.
+
+So the fill already knew the answer and the scroll did not, and the answer is
+**hold the increment rather than recompute the position** — the same shape as
+§5.7's and as `font_run`'s §6.1.6.
+
+**Measured, `gfxbench`'s `GFX_SCROLL 256x128` on a cycle-accurate 4.77MHz
+8088:**
+
+| adapter | before | after | |
+|---|---:|---:|---:|
+| Hercules | 51,229.07 µs | **34,471.99 µs** | **1.49x** |
+| VGA | 29,095.95 µs | **19,194.37 µs** | **1.52x** |
+
+Per row that is 400 → 269 µs on Hercules, against 134 µs of `gfx_rowbase` the
+change removes — so the saving lands where the measurement said it would.
+**`GFX_FILL 256x128` reports byte-identical counts in both runs** (174,235 on
+Hercules, 100,611 on VGA), which is the control: the fill was not touched, so
+two runs that agree on it are two runs that can be compared on the scroll.
+
+**On VGA it needs no precondition at all.** A linear framebuffer has one bank,
+so `rowbase(y)` is `y * stride` and the two ends of the copy are a constant
+`dy * stride` apart for *any* `dy`. Both products are taken once; the row then
+advances by `± stride`.
+
+**On the banked adapters the constant exists exactly when `dy` is a whole
+number of banks** — a multiple of 2 on CGA, 4 on Hercules. `rowbase(y)` is
+`banktab[y & bmask] + (y >> bshift) * stride`, so a `dy` that leaves the bank
+field alone leaves the quotients differing by `dy >> bshift` and nothing else;
+the destination then walks with `gfx_nextrow` (or `gfx_prevrow` going up, §5.6.7's
+mirror) and the source is a constant away. **This is the one place a VERTICAL
+quantum earns anything in this renderer** (PERFORMANCE.md Set 54 measured that
+there is no y-alignment win in text, fills or blits), and note what it is a
+quantum *of*: the bank count, applied to the scroll **delta**, not 8 applied to
+a window origin. An unaligned `dy` keeps the general form, so it cannot regress.
+
+Three things are load-bearing:
+
+- **`mul` is unsigned and `dy` is signed, and that is fine**, because only the
+  low word of the product is used and a product mod 65536 does not care which
+  sign its operand was read as — the same reason `DI` itself may wrap. What is
+  *not* interchangeable is the shift: `dy >> bshift` must be **`sar`**, because
+  a negative `dy` has to floor, and it is exact only because `dy` is a multiple
+  of the bank count.
+- **The bank test is `dy & bmask`**, and a negative `dy` passes it correctly:
+  two's complement preserves the low bits' residue, so `-8 & 3` is 0.
+- **The two mono loops are written out rather than sharing a body with a
+  direction flag.** The advance is `gfx_nextrow` one way and `gfx_prevrow` the
+  other, and a per-row test of the direction is a memory read and a branch
+  inside the innermost loop of the primitive — `font_char_bb`'s
+  `.srow`/`.crow`/`.drow` is the precedent.
+
+**`make SCROLLROW=1` builds the reference form**, and it is not optional
+diligence: a scroll is a **copy**, so a wrong offset shows the wrong pixels
+rather than no pixels, and "it looks right" is exactly what a wrong delta also
+looks like. The claim is byte identity against that build, on every adapter and
+in both directions.
+
 ### 5.6 `gfx_line` — an arbitrary-angle line (API slot 0x02E0)
 
 **in** AX/BX = x1/y1, CX/DX = x2/y2, inclusive, absolute screen
@@ -5533,6 +5601,39 @@ counters, drives, and reads them back.
 It is a knob rather than a permanent counter because it sits at the top of
 `font_char`, which is the innermost drawing call in the system; a plain build
 emits not one byte of it, macro and counters living inside the same `%ifdef`.
+
+**IT LOGS THE STRING, not just a bucket count** (§11.94.3's list was built
+before this and shows it). An off-grid glyph inside the audited window records
+its pen x, its pen y, the CHARACTER and the caller's return address, so
+`tools/os88snap.py` prints the text that is off-grid and where. Two traps in
+reading the log itself, both of which produced confident nonsense first: the
+caller's `AX` is at `[ss:sp+2]` and not at `[ss:sp]` — the latter is the saved
+`BX`, which is *constant inside `font_str_x`'s loop* and so looks exactly like a
+real answer (every logged character came out `'R'`); and a return address must be
+resolved in **`KERNEL_SEG` only**, because `.cold` code cannot near-call
+`font_char` at all — it goes through a far `cw_` shim (§2.6) — so resolving
+against `.cold` too picks a nearer symbol by accident and names a *disk* routine
+as the thing that drew a glyph.
+
+**THE CAPTION IS CHROME, and getting that wrong was the instrument's one real
+defect.** Every window's callback used to report a constant 4 glyphs in bucket 7
+whatever the app, which was written off as an unexplained artifact and made every
+count under ten worthless. It was `wm_draw_title`: the pen is **centred in the
+title bar by the kernel**, no application can influence it, and it was being
+attributed to whichever callback bracket happened to be open. The constant 4 was
+the **`'APPS'` caption of the Disk window behind the app** — four characters,
+the same in every run. `wm_draw_title` suspends the attribution now, which is
+right by construction because it keys on who *chose* the pen rather than on who
+is on the stack. Measured after: the audited window reports nothing of its own,
+and `snap_kchar` grows by exactly the two captions (151 → 165, gaining
+`[3:10, 7:4]` for `'ArtfulType'` and `'APPS'`).
+
+**A drag is no longer a way to force a repaint**, which matters for driving this:
+§11.96.12's drag cache replays the window's content instead of calling `W_PAINT`,
+so a dragged window reports nothing. Reset with **no filter** before launching
+the app instead — its first paint runs inside its own `wm_pkgcall`, so it lands
+in `snap_h*` and the chrome lands beside it. The cost of no filter is that two
+windows' callbacks share `snap_h*`, which the pen y separates.
 
 **Reading it: a non-zero bucket is not automatically a defect.** Three things
 land off-boundary for reasons that are correct — a right-aligned numeric column
@@ -38061,8 +38162,38 @@ FSV_RENAME  equ 16      ; SI = old, DI = new
 FSV_MKDIR   equ 18      ; SI = name
 FSV_RMDIR   equ 20      ; SI = name
 FSV_DFREE   equ 22      ; -> DX:AX = free bytes, BX = the granule
-FSV_SIZE    equ 24
+FSV_ENUM    equ 24      ; AX = a folder's handle (0 = the root), CX = the
+                        ; ORDINAL, DX:BX = a 32-byte buffer
+                        ; out: CF=0 and the buffer is a §19.1 staged entry;
+                        ; CF=1 with AX = 0 past the end, AX = FERR_IO
+FSV_SIZE    equ 26
 ```
+
+**`FSV_ENUM` IS NOT `FSV_LIST`, AND THAT IS NOT A DUPLICATION.** They ask the
+same question of the same folder and they cannot share a verb, because
+`FSV_LIST` **appends into the kernel's ONE global listing** through
+`OSAPI_FS_ENT` and is gated to the moment of a mount. The copy engine walks a
+folder that is *not* the one on screen — the source of a paste, three levels
+down a tree — and it walks it while some other folder's listing is what the
+Disk window is drawing from. A shared verb would either destroy that listing
+or need a second one, and §22.1's rule is that there is exactly one.
+
+So `FSV_ENUM` returns **one entry into a buffer the caller names**, and the
+buffer is `dsk_ent` — the same 32 bytes `dsk_synth` fills on a FAT volume, so
+`fcp_scan`'s two paths converge at the instruction after it.
+
+**THE ORDINAL IS DENSE, AND IT MUST BE STABLE.** 0, 1, 2, … over the entries
+you would have listed, and *the same (handle, ordinal) must name the same
+entry for as long as that folder is unmodified*. That is not a nicety: the
+copy engine holds an ordinal per frame and **re-walks to it on every call**,
+which is what keeps the frame array small enough to recurse in (§22.6), and
+between two calls it will have stood in another volume entirely, written a
+file there, and been through the event loop answering a question. A driver
+that enumerates a live structure — a hash table, an open handle, anything
+with a cursor of its own — will hand back a different entry on the second
+walk and the copy will silently skip or duplicate a file. The FAT path rests
+on exactly this and says so: the ordinal is a raw slot number and a copy does
+not modify its source.
 
 **READS ARE BY HANDLE AND ONLY `FSV_STAT` TAKES A NAME.** Every other design
 here needs two contracts on one verb, because the two callers arrive with
@@ -38413,6 +38544,569 @@ ships. **A fifth driver wants the scrolling list §31.1 already names as the
 answer, not a taller window** — and that, not the redirector, is what the next
 driver-shaped feature has to pay for.
 
+#### 62.9.7 Milestone 4 as built — a FOLDER crosses
+
+Milestones 1–3 left one hole and named it: a *file* copied on and off a
+redirected volume, and a **folder** did not. Two things in the copy engine
+were still FAT-only, and only one of them wanted a verb.
+
+**`fcp_scan` is the enumerate, and it needed `FSV_ENUM`.** It walks the
+source directory's **raw sectors** — `dsk_dirw_start`/`next`/`get`, an
+ordinal that is `sector*16 + slot`, the species filter applied to the 32 raw
+bytes, and `dsk_synth` to turn what survives into a §19.1 entry. None of that
+exists on a volume with no sectors. The new verb hands back **one** entry
+into `dsk_ent`, which is exactly where `dsk_synth` puts one — so the two
+paths converge on the instruction after it and the whole tail (the copy into
+`fcp_cname`, the type, the handle, the size) is shared rather than mirrored.
+Everything else a folder copy needs was already built: `FSV_MKDIR` makes the
+subdirectory, `fcp_goto`'s quiet-mount branch descends into it, and
+`FSV_READAT` + `FSV_WRITE`/`APPEND` move each file.
+
+**`fcp_relink` wanted a REFUSAL, not an implementation**, and that is the
+half worth reading. A same-volume Cut+Paste takes a fast path that moves no
+data at all: it writes the entry into the destination's directory slot and
+unnames the source (`dskw_ent_store`, `[dskw_fsec]`/`[dskw_foff]`/
+`[dskw_fend]`, and `fcp_rlup` rewriting the moved folder's own on-disk `..`).
+Every one of those is a raw directory slot, and a redirected volume has none.
+It is already a fast path **with a fallback** — `CF=1` with `AX=0` means "not
+attempted" and the caller falls through to the copy engine — so the fix is a
+gate at the top and the copy+delete path, entirely built, does the move. The
+`..` relink is moot there for a second reason: `FSV_CHDIR` answers the parent
+handle, so a redirected folder has no on-disk `..` to be stale.
+
+**Verified on a cycle-accurate 5150 with the period IBM ROM, and read back
+from OUTSIDE.** `DOCS` — holding `HELLO.TXT` and a `DEEP` subfolder with
+`BOTTOM.TXT` in it — copied off the redirected volume onto B:, and then
+`os88flush` walked B: **on the host**, which is the only way to check this
+that means anything: asking os8088 to list what os8088 just wrote is the
+writer and the reader agreeing, and both agreeing on the same wrong thing is
+the failure that cannot be seen from inside (docs/FIELD-NOTES.md 4).
+
+```
+DOCS/DEEP                    DIR       0
+DOCS/DEEP/BOTTOM.TXT         file    127
+DOCS/HELLO.TXT               file     26
+```
+
+The **bodies** came off too, byte-correct against their seeds — a directory
+entry that exists proves `fcp_mksub` and says nothing whatever about whether
+`FSV_READAT` delivered any bytes. The first run of this test looked like a
+pass on a screenshot for exactly that reason: `DOCS` appeared on B: with the
+`BX` bug live, because the top-level folder is made from the CLIPBOARD entry
+and never goes near the enumerate.
+
+**The other direction was run too and is checked from INSIDE, which is all
+that is available**: the RAM disk is a heap claim, so `os88flush` cannot
+reach it the way it reaches a floppy. That tree copied back onto the
+redirected volume arrives whole — free space 22K → 18K, which is the two
+files at one `RD_EXTKB` extent each and nothing for the folders, since a
+folder holds no extent. It exercises no new kernel path (the source
+enumerate is the FAT one and the destination is milestone 3's `FSV_MKDIR` and
+`FSV_WRITE`), but the COMBINATION had never run: a folder made by the copy
+engine, descended into, and written inside. It also has to reuse the tree the
+forward copy just made, because **every folder that ships on the apps disk
+holds a file bigger than `RD_EXTKB`** and would be refused `FERR_BIG` on its
+merits rather than on this feature's.
+
+**The trap it sprang was a register, and it was found by reading rather than
+by running.** `rd_stage` — the RAM disk's row-to-entry stager — spends `BX`
+walking the name, and `rd_enum` used `BX` afterwards as the offset of the
+caller's buffer. Nothing else holds that offset, so the 32 bytes would have
+gone into `KERNEL_SEG` at whatever `rd_stage` left behind: a plausible small
+number, no fault, and a corruption whose symptom arrives somewhere else
+entirely. It is `os88ui.inc`'s `AX`-is-live lesson again in another driver —
+**a helper that documents what it preserves is documenting what it does not**,
+and `rd_stage`'s header says "AX/BX/DI clobbered" in as many words.
+
+**What did NOT bite, and is worth knowing because it looks like it should**:
+the ordinal renumbering under a delete. `rd_enum` counts matching rows by
+index and a delete leaves a hole, so every later row's ordinal shifts — which
+would make the copy engine skip a file silently. It cannot happen, and the
+reason is already in the engine: a Cut removes its source at `.finish`,
+**"only once every byte of it has arrived"**, so nothing modifies the folder
+being walked while it is being walked. That is the same assumption the FAT
+path's raw-slot ordinal has always rested on.
+
+### 62.10 The cable's file client — `NET.DRV` becomes the redirector
+
+§62.9's kernel is finished and proven four milestones deep against a RAM
+disk. This is its first real client: the same LapLink cable, answering
+questions about **files** instead of about sectors.
+
+**`NET.DRV` CHANGES CLASS, from `DRVC_NET` to `DRVC_FILE`**, and that is a
+packaging decision with a reason rather than a preference. `drv_check` binds a
+`.DRV` to its row's class, the Drivers page holds exactly four rows (§62.9.4),
+and all four are spoken for — so a file client needs a row, and the only ones
+available are somebody's. Block mode's row is the one to take because **Stage
+2 supersedes Stage 1 outright**: no 32MB cap (§18.2 rule 8 refuses
+`TotSec16 == 0`, so block mode can never exceed 65,535 sectors), no
+cache-coherency hazard at all (the far side does its own file I/O through
+`int 21h`), and the remote machine's *real* filesystem rather than an image
+file. `drivers/net/net.asm`'s block half keeps its source and still builds —
+the `DEBUG.DRV` precedent (§58), used once already to make room for
+`RAMDISK.DRV` — and the RAM disk KEEPS its row, because it is the only thing
+that can exercise a redirected volume in a container.
+
+#### 62.10.1 The wire protocol
+
+§62.7's framing is unchanged and this is a second command set inside it: os8088
+is always the master and every exchange is request-then-response. One wire
+command per `FSV_*` verb, so no command means two things:
+
+```
+'L' LIST    in  handle word           out status, count word, count x 32-byte entry
+'C' CHDIR   in  handle word           out status, PARENT handle word
+'S' STAT    in  handle word, 13-byte name
+                                      out status, handle word, size dword, attr byte
+'G' READ    in  handle word, cap dword    out status, length dword, length bytes
+'A' READAT  in  handle word, off dword, cap word
+                                      out status, length word, length bytes
+'U' WRITE   in  handle word, 13-byte name, len dword, len bytes   out status
+'P' APPEND  in  handle word, 13-byte name, len WORD, len bytes    out status
+'D' DELETE  in  handle word, 13-byte name             out status
+'N' RENAME  in  handle word, 13-byte old, 13-byte new out status
+'M' MKDIR   in  handle word, 13-byte name             out status
+'K' RMDIR   in  handle word, 13-byte name             out status
+'F' DFREE   in  nothing               out status, free dword, granule word
+'E' ENUM    in  handle word, ordinal word             out status, 32-byte entry
+```
+
+**READ is `G` and WRITE is `U` because `R` and `W` WERE ALREADY TAKEN** — by
+block mode's `NC_READ` and `NC_WRITE`, in the same one-byte space and, on the
+DOS side, in the same command loop. This table was first written from the verb
+names alone and pinned both collisions; they were found at the moment the read
+path was built, which is the cheapest place to find them and later than it had
+to be.
+
+The tempting resolution is a mode flag — a run of `OS88NET` serves *either* an
+image or files, never both, so `R` could dispatch on which. That is exactly
+the "no command means two things" rule this section opens with, restated as a
+second opinion about the mode, and this tree has been bitten by that shape
+three times over (§18.7.3, §51.2.1, §62.10.4.1). Sixteen distinct letters in
+a space of 256 is not a scarcity worth managing.
+
+**`STAT` CARRIES THE FOLDER, and every verb that names a file will.** The
+kernel's `FSV_STAT` resolves "a name in the current folder" and the far side
+could have tracked that from the last `CHDIR` — which is the same second
+opinion in the same place, one command's state carried across to another's.
+It costs one word on a wire that is about to move a file, and it leaves the
+DOS side stateless but for the handle table.
+
+**The entry on the wire is the §19.1 staged entry**, byte for byte — name at
+0, type at 16, the driver's opaque handle at 18, size dword at 20. The driver
+hands it to `OSAPI_FS_ENT` (inside `FSV_LIST`) or copies it to the kernel's
+buffer (`FSV_ENUM`) without reshaping it, so there is one entry format from
+the DOS side's `int 21h` findfirst all the way to the Disk window's row.
+
+Three rules carried over from block mode because they are the ones that keep a
+failure from hanging the link. **A length is on the wire before the bytes
+are**, so a refusal never leaves one end talking into an end that has stopped
+listening. **`status` is a `FERR_*`**, not an int 13h code — the file API's
+errors are what every caller of these verbs already handles. And **the handle
+is the DOS side's to assign and the kernel's to treat as opaque** (§62.9.1),
+which is what lets the far end use whatever it likes: a directory ordinal, a
+hashed path, an index into its own table.
+
+**`NC_BYE` IS NOT A FRAME TERMINATOR AND NO COMMAND ENDS WITH ONE.** It reads
+like one and the first draft of this section said it was. It ends the
+**session**: the far side's command loop *leaves* on `NC_BYE` and goes back to
+hunting for the magic, so a bye after every verb tore the link down and the
+next command arrived at a slave that was no longer listening for one. The gap
+between commands is the user's THINKING TIME and has no upper bound — which
+is exactly what the slave's unbounded first-nibble wait was built for, and
+this would have defeated it. `NC_BYE` belongs to Connect (which leads with one
+to shake off a stale session) and to Disconnect, and to nothing else.
+
+#### 62.10.2 What the DOS side serves
+
+**The CURRENT DIRECTORY by default**, and a switch for the whole machine.
+Defaulting to wherever `OS88NET` was started is the safe reading of the
+common case — a user in `C:\WORK` who wants that folder on the 5150 — and it
+makes the root a **fence** the DOS side enforces, so os8088 cannot walk out of
+it however malformed a name it sends. A **bare argument** names a different
+subtree, and `/W` serves the whole machine with the drives as folders of a
+synthetic root.
+
+The bare argument is the folder because the redirector is what the cable is
+FOR now; block mode's image moved behind **`/I:`**, which is the same
+demotion its `DSV_BLK` cell got. A named folder is **entered rather than
+remembered** — `chdir` and then `int 21h` 47h — so DOS resolves `..`, a bare
+drive letter and a relative path, and what this program stores is always the
+fully-qualified answer every path it builds is rooted on. Storing the
+argument would put all three of those cases in the DOS side, badly.
+
+`/W` is deliberately opt-in and deliberately loud, because there is no fence
+behind it: a delete from os8088 is a delete on the DOS machine's real disk,
+and docs/FIELD-MACHINES.md's calibration machine has a live DOS 3.3 install
+on its C:.
+
+**A handle is a slot in an append-only table of `(parent, 8.3 name)`**, so a
+path is rebuilt by walking UP — 16 bytes a folder rather than the 68 a path
+table costs, and the parent word is then not overhead at all, because
+`FSV_CHDIR` has to answer with it (§62.9.1) and a path table would have to
+parse one back out of a string. DOS has no inode to borrow, so something has
+to hold the shape of the tree. It is deduped on `(parent, name)`, which is
+what makes a handle survive the kernel caching one in a Disk window's listing
+and using it minutes later.
+
+**The listing walks the directory TWICE**, and that is the price of §62.10.1's
+fixed frame: the count is on the wire before the entries are, and DOS's
+findfirst/findnext will not say how many there are. The second walk is
+**clamped to the first's count in both directions** — short is padded with a
+blank entry, long is cut — because a directory can change between two walks
+and a wire that has promised a number must deliver it.
+
+**`int 24h` is answered FAIL before anything touches a drive.** Nobody is
+standing at the DOS machine: it is a transfer station with a cable in it, and
+the master is inside a bounded wait. DOS's own Abort/Retry/Fail prompt would
+stop the program dead with the other end reporting a timeout — the one
+failure that looks like a broken cable and is not. An empty floppy drive met
+by `/W`'s drive scan is the ordinary way to reach it.
+
+#### 62.10.3 The harness — the host answers as the partner
+
+docs/NET-PLAN.md §9 says nothing here can be tested end to end without two
+machines and a cable, and for the protocol's **verdict** that is still true.
+But the os8088 half is testable, and further than that section assumed:
+MartyPC's `ParallelController` implements `status_register_write`, which
+**stores the byte the guest then reads back**. So the debug server's `outb`
+can drive the status lines the guest polls, and a Python far end can answer as
+the partner — the host-side stub server §9 calls "the closest thing to a
+harness and worth building at step 1".
+
+It is exact rather than fast, and it is exact for the reason that matters:
+the far end **pauses the emulator** around each nibble, so neither end is
+racing the other and `lp_turn`'s tick-per-reversal costs nothing. Every
+deadline in the transport is in TICKS (docs/NET-PLAN.md §9.1's third defect),
+which is what makes a stepped partner legal at all.
+
+What it still cannot do is arbitrate the wire: the verdict on the cable comes
+off two period boxes. What it CAN do is find every defect that is not the
+cable's, which is what the RAM disk did for the kernel.
+
+#### 62.10.4 Phase 1 — mount and list, both ends
+
+The three verbs that make a volume **browsable**: `FSV_LIST`, `FSV_CHDIR` and
+`FSV_DFREE`, plus the class change. Measured on a cycle-accurate 5150 with
+`tests/lptlink/partner.py` as the far end, the driver otherwise unmodified
+from the field-proven block build:
+
+- **Connect** is `I C L` on the wire — info, chdir-to-root, list. It was
+  `I C X L X` before the `NC_BYE`s came out (§62.10.1: they ended the
+  session). The mount ITSELF is what proves the far side is serving files
+  rather than sectors, because `disk_mount` branches on `DVK_FILE` and ends in
+  `FSV_LIST`: a partner that answers the magic and cannot list is refused at
+  Connect rather than at the first double-click.
+- **Opening the volume** is `C L F` — chdir, list, free space — and the Disk
+  window reads `Drive C: 4 files`,
+  `DOCS / MINES.O88 4096 / READ.ME 512 / ZEBRA.TXT 99`, `Size 4K  Free 1205K`.
+  Everything in it came off the wire and none of it is on either floppy. The
+  rows are in a different order from the one they were sent in, which is what
+  proves the driver did not sort (§19.4) — and `DOCS` has a folder icon and
+  `MINES.O88` the package diamond, from the type word at offset 16 alone.
+- The Control Panel page reads `Port 0378 / Link Linked / Mode Files`.
+
+Two things were wrong and both were silent. **`net_cmd` already existed** —
+the block side's, taking `AL` + `DX` + a run length — so the file side's
+command opener had to be `net_fcmd`; one wire command per verb is §62.10.1's
+rule and one routine per command SHAPE is the same rule inside the driver.
+And **`FSV_LIST` takes no argument**: the first draft passed a handle, which
+is a second opinion about where the driver is standing, and two places
+deciding that is how a listing stops describing the folder the hit-test
+resolves against. `[net_cwd]` is the one opinion, written by `FSV_CHDIR`
+**only after the far side has accepted the move**, so a refused chdir leaves
+the driver standing where it was.
+
+**The page's `Size <sectors>` row went with the class.** A redirected volume
+has no sectors, so that row printed a `0` that meant nothing; it is `Mode
+Files` / `Mode Files, read only` now, and how big the far side is belongs to
+`FSV_DFREE` and shows up where every other volume's does — the Disk window's
+status line (§22.7). The label is four characters like `Port` and `Link`,
+because `net_lab` and `net_txt` are two fixed columns and `Serving` ran into
+the value.
+
+##### 62.10.4.1 The bug the class change surfaced
+
+`drv_detach` decides whether to drop a driver's volumes from a **list of
+classes** — `DRVC_DISK`, then `DRVC_NET` when the cable arrived — and
+`DRVC_FILE` was never added to it. `dsk_vol_drop_drv` has had the `DVK_FILE`
+arm all along, so the machinery was complete and simply never reached:
+**unticking the RAM disk left a mounted volume whose driver image had been
+freed** — a desktop zone, a browsable drive letter and a Disk window all
+dispatching through `drv_fs_call` into memory the next claim owns.
+
+It is the sibling of the bug §51.2.1's per-class publication fixed and of
+§18.7.3's class-blind `dsk_xfer`, and the shape is the same one all three
+times: **a list of classes is a second opinion about which drivers serve
+volumes, and it goes stale the way a second opinion does.** It was found
+only because NET.DRV changed class onto the same path — nothing about the RAM
+disk had changed, and nothing was going to point at it.
+
+##### 62.10.4.2 The DOS side, executed
+
+Until this, `OS88NET.COM`'s own code — argument parsing, the handle table, the
+path walk, the two-pass listing — had run on exactly one machine in the world:
+the field one. `tests/dosstub` boots it on a cycle-accurate 8088 with a real
+port at `0x378` and no DOS under it, and `partner.py` plays NET.DRV, which is
+the *mirror* of §62.10.3 and needed no second transport: `lp_snib` and
+`lp_rnib` are the guest's whichever role it is in, so only who speaks first
+differs.
+
+Nine `int 21h` functions had to join the stub's seven — `0Eh 19h 1Ah 25h 36h
+3Bh 47h 4Eh 4Fh` — over a nine-row synthetic tree. That is the growth the
+stub's own header forbids ("must never grow towards being DOS") read
+correctly: what it implements is *what the program calls*, and the program
+calls nine more than it did.
+
+Verified: the root's four entries with `HELLO.O88` typed as a **package** from
+its extension alone, `CHDIR` into `GAMES` answering parent 0, `GAMES`
+listing `CHESS.EXE` and `SUB`, `CHDIR` into `SUB` answering parent = `GAMES`
+(so `hd_path` walked two levels), `DEEP.TXT` inside it, an **empty** folder as
+a count of zero rather than a refusal, a handle never issued refused with
+`NST_NOENT`, and free space. Under `/W`: the root lists `C:` as a folder, and
+chdir into it reaches that drive's root.
+
+**Five faults, and four of them were silent.**
+
+- **`mov [srv_cwd], ax` where `srv_cwd` is a `db`.** Wrong twice over: it
+  stored a *handle* in the field `NF_DFREE` reads as a *drive*, and the
+  word-sized store also wrote the byte after it — `nhd`'s low half — so one
+  chdir zeroed the handle count and every listing after it was refused on
+  handles the program had just issued. **NASM cannot warn**: the width comes
+  from the register, so `mov [byte_var], ax` assembles exactly as cleanly as
+  the byte store that was meant.
+- **`hd_path` asked before the whole-machine root was routed away from it.**
+  It refuses that handle deliberately — under `/W` the first level *is* a
+  drive, so the root has no path of its own — so `/W` answered `no such
+  handle` to every listing, on a link that was working perfectly. The same
+  fault in `srv_chdir` was worse: `disk_mount` chdirs to handle 0 before it
+  lists, so it would have been a volume that could not mount.
+- **The stub's directory table emitted 19 bytes a row against a `DR_SZ` of
+  20**, so every row after the first was read one byte short of where it was
+  written and the walk stopped after one entry. What that looks like from the
+  other end of a cable is a directory with one file in it — a plausible
+  answer, from a server that is working. It is a self-padding macro now, and a
+  name too long for the field fails the *build*.
+- **`make dosstub ARGS=…` rebuilt nothing.** None of the four knobs is a
+  prerequisite of anything, so a second run with a different tail ran the
+  *previous* run's arguments — which reads exactly like a switch that does not
+  work. Measured: `/W` was parsed correctly and never reached the binary.
+  `DSSTAMP` is `VIDSTAMP`'s answer to the identical trap.
+- And the one that was not silent, because the harness had been hiding it:
+  `partner.py`'s server read `NC_BYE` as "carry on", so the driver sent one
+  after every verb through a whole scripted session and the mount looked
+  perfect. **A stand-in kinder than the thing it stands in for hides
+  precisely the bugs it exists to find** — it returns on a bye now, as the
+  real far end does.
+
+##### 62.10.4.3 Phase 2 — the read path
+
+`FSV_STAT`, `FSV_READ` and `FSV_READAT`, which between them are what makes a
+redirected volume's files *readable*: a size and a handle, the whole file, and
+a window of one. The kernel's three branch sites were built with the RAM disk
+(§62.9) and did not change.
+
+Three things in the driver are worth knowing before touching it.
+
+**The capacity goes OUT with the command.** `'G' READ` carries the caller's
+32-bit buffer size, so the far side answers `min(size, cap)` and an oversized
+file is cut *at the source*. The alternative — send it all and discard the
+excess here — is half a minute of wire for a 116KB module at 3,741 bytes/s.
+It is still checked on arrival, because "the other machine is well behaved" is
+not a thing this side can know, and a refusal then **consumes** the run: the
+frame is a fixed size whatever this end does with it, so a wire left short is
+the link dead where a discarded file is one operation failed.
+
+**The destination is re-normalised every `NET_PCHUNK` bytes** — the paragraph
+part of the offset folded into the segment, `dskw_norm`'s arithmetic inside a
+driver — so a read longer than 64KB cannot carry off the end of a segment.
+The same test steps `OSAPI_FS_PROG`, because both want the same cadence and a
+second constant is a second thing to keep in step. That report is **bytes
+since the last one**, which is the slot's contract: a running total would
+advance §12.8's bar by the whole file every call.
+
+**All of the read state is in memory rather than registers**, and that is
+forced: a handle, a 32-bit capacity, a 32-bit length, a 32-bit offset and a
+destination that walks, each of which has to survive a call into `lp_rbyte`.
+
+On the DOS side a **file** earns a handle only in `FSV_STAT` — the listing
+hands them to folders alone, because a directory of 300 files would exhaust
+the table on rows nothing ever asks about, and `STAT` is the ask. `hd_get`
+dedupes on `(parent, name)`, so a second stat of the same file answers the
+same handle; measured, `STAT GAMES` returned handle 1, which is exactly what
+the listing had already given it.
+
+Verified against `tests/dosstub` with `partner.py` as the master, the contents
+**checked byte for byte** rather than merely counted — the stub generates a
+row's bytes as `(i + 7r) & 0xFF` and the host predicts them, which is
+`sysbench`'s `BENCH.DAT` trick one file down: `STAT` of a file (handle, size
+1234, attr 00), of a folder (attr 0x10), and of a name that is not there
+(status 2); `READ` whole and `READ` capped at 100, both correct; `READAT` at
+offset 1000 for 234 bytes, correct; and `READAT` past the end answering **zero
+bytes with status 0**, which is the contract and not an error.
+
+That needed one real fix in the stub and it is the interesting one.
+`path_split` replaces `dir_of`, which resolved the last component too and
+dropped it only when it held a **wildcard** — fine for `chdir` and for `*.*`,
+and wrong for everything else: a `findfirst` of `C:\GAMES\CHESS.EXE`, which is
+how a size and an attribute are asked for, looked for a *directory* called
+`CHESS.EXE` and answered "no such path" about a file that was right there.
+
+**And the driver's half is proven by A PACKAGE LAUNCHED OFF THE WIRE**, which
+docs/NET-PLAN.md has listed as owed since block mode — a document open there
+resolved its app off the *floppy*, so nothing had ever been loaded and run
+from the cable. It is also the cleanest possible test of these two verbs:
+`loader_run` peeks the header, claims a region and reads the file whole, with
+no association, no file dialog and no app of its own in the way.
+`MINES.O88` served from `tests/lptlink` and double-clicked in the network
+Disk window:
+
+```
+READAT handle=2 off=0 cap=512  -> 512 bytes     the loader's header peek
+READ   handle=2 cap=1536       -> 1517 bytes    the package
+```
+
+…and Minesweeper runs, owning the menu bar with its own dock tile. **Every one
+of those 1,517 bytes arrived correct**, and nothing in the harness had to
+check that: the loader validates the header and the code then executes.
+
+One driver bug was found by reading rather than by running, and is worth
+recording because of its shape: **`net_stat` pushed its own outputs.** `AX`,
+`BX`, `CX` and `DX` are all results there, and it preserved three of them —
+popping the size and the attribute back a few instructions after reading them
+off the wire. It would have answered a stale register triple with `CF = 0`:
+the link works, the file is found, and the kernel is told it is some other
+size. `rd_stat`'s header says `clobbers: AX, BX, CX, DX, SI, DI` and had said
+so all along.
+
+##### 62.10.4.4 What the harness's own limits look like from a transcript
+
+Three of the four failures in phase 2 were `partner.py` and not the code under
+test, and each presented as a defect in the thing being measured. They are
+written down because the transcript cannot tell them apart from the real
+thing.
+
+- **`serve`'s idle exit added to the budget instead of bounding against it**,
+  so "the master has nothing more to say" cost the whole 60-million-step
+  budget — about two and a half minutes at the end of *every* call. Two of
+  those is a test that times out before printing its first line.
+- **`pkill -f martypc_headless` killed its own shell**: the pattern matches the
+  calling shell's command line. `launch()` already reaps survivors by PID out
+  of `/proc`, which is why it does it that way.
+- **The idle window was too short for a phase containing a floppy load.**
+  Opening a document across the cable made the association look for the app on
+  the redirected volume, correctly fail to find it, and then **mount A: and
+  read `NOTEPAD.O88` off it** before coming back for the document — seconds of
+  guest time on a cycle-accurate drive. This end had already returned and
+  stopped driving the wire, so the guest's next command went into a cable
+  nobody was holding. **Note Pad came up empty and the trace showed three
+  stats and no read, which is precisely what a broken read path would look
+  like.**
+
+The instrument that ended each of these was the same one: `serve` records what
+every command was ABOUT, not just its letter. A string of letters says the
+shape of a session and nothing about which file — and the shape is only the
+question until something goes wrong.
+
+One harness fact belongs here because no amount of reading finds it: **the
+wire is not idle when a slave has been dwelling.** MartyPC's status register
+reads **0** until something writes one, and `LP_WAIT` reads bit 7 *inverted*,
+so an untouched port looks to a listening slave like a permanently asserted
+strobe — it samples a garbage nibble, raises its ack and parks. The port
+genuinely reads D4 high before this end has sent anything, so the first
+nibble lands half a handshake out of step. A real cable's BUSY line is pulled
+to its idle level by the receiver; `Partner.sync()` is the harness doing that
+for itself, and it needs cycles as well as the write, because nothing else
+there runs the guest.
+
+##### 62.10.4.5 Phase 3 — the write path
+
+`FSV_WRITE`, `FSV_APPEND`, `FSV_DELETE`, `FSV_RENAME`, `FSV_MKDIR`,
+`FSV_RMDIR`. Like phase 2 it **cost the kernel nothing**: all six branch sites
+were built with the RAM disk, they share `dskw_fsop`, and none of them changed.
+
+Six verbs, one shape — a folder handle, a name, whatever the verb carries, and
+**one status byte back**. They are short on the driver side because everything
+hard about a write is on the *other* side of the cable: there is no commit
+ordering here, no FAT to flush and no rollback, because §18.4's three rules
+are the FAT path's and a redirected volume has none of it. What this end owes
+is the frame.
+
+**A status is a `FERR_*` and it is passed through untranslated.** The far side
+knows why a write failed — a full disk, a read-only file, a name already
+taken — and the kernel's callers already handle every one of them; translating
+here would be a second opinion about somebody else's filesystem. That is also
+where a real bug lived: **the file verbs spent phases 1 and 2 answering `2`
+for "no such thing", which is the BLOCK protocol's numbering** (`NST_*`, int
+13h codes) and is `FERR_IO` in the file protocol's. It cost nothing while the
+driver mapped every non-zero status onto a code of its own, and stopped being
+free the moment `net_wstat` began passing one through. Two numberings that are
+both small integers do not announce the difference.
+
+Three rules carry the write side, and each is a failure that would not
+announce itself:
+
+- **The bytes are consumed whatever happens to them.** The length is on the
+  wire ahead of them, so a refusal — read-only, no such folder, a full disk —
+  still has to take the run off the cable. The alternative is a wire with a
+  file's worth of bytes on it and nobody listening, which is the link dead
+  rather than one operation failed.
+- **A refusal sends exactly one status.** `wr_gate` answers `/RO` by sending
+  `FERR_WPROT` itself, so the drain that follows must not send a second byte —
+  the master is not reading one, and the frame desynchronises rather than the
+  operation failing. `0xFF` is the internal "already said so" marker.
+- **A short DOS write is a full disk**, and DOS reports it by returning fewer
+  bytes rather than by setting carry — so it is a compare, not a `jc` alone.
+  The verdict is banked and the run still drained.
+
+`/RO` is enforced in `wr_gate` and nowhere else, which is the point of one
+routine every verb calls first: a verb added later inherits the refusal by
+construction rather than by its author remembering. The machine at that end
+may be somebody's real DOS box — docs/FIELD-MACHINES.md keeps a live DOS 3.3
+install on the calibration machine's C: — so the switch has to mean it.
+
+One driver-side trap is worth naming because the first draft walked into it
+and left a comment asserting the opposite. **`net_wrrun` walks the source
+through `ES`, not `DS`**: `lplink.inc` addresses `[lp_base]`, `[lp_lastop]`
+and `[lp_dlset]` through `DS` with no segment override anywhere in the file,
+so a routine that repoints `DS` at the caller's buffer hands the transport a
+garbage port number and a garbage turnaround flag. The wire would simply have
+stopped. The assertion cost nothing to check.
+
+**Verified both ends.** The DOS side against `tests/dosstub` with
+`partner.py` as the master — twelve cases, every refusal, and a final listing
+back to its starting four so nothing leaked:
+
+```
+MKDIR / again        ok / EXIST(5)
+WRITE 300b  -> stat  300
+APPEND 44b  -> stat  344
+APPEND to a missing file   NOENT(4)
+RENAME               ok, and the listing shows it
+RMDIR empty / GAMES  ok / PROT(8), not empty
+DELETE / again       ok / NOENT(4)
+DELETE a directory   PROT(8) - 41h is not 3Ah
+```
+
+…and the os8088 side by **`File ▸ New Folder…` in a network Disk window**,
+which is the one verb with no application behind it: `M C L F` on the wire —
+`FSV_MKDIR`, then `dskw_sync`'s re-list (§22.8's coherence rule, arriving as
+`CHDIR` + `LIST`), then the status line's free space — and `OVERHERE` appears
+in the window and on the far side.
+
+Two things that test found are the harness's, not the code's, and both are
+the kind that read as a broken feature. **A menu pick that talks to the far
+end is not obviously one**: `Folder ▸ New Window` (item 0 of the *other*
+menu — New Folder is `File` item 1) opens a second Disk window, which
+*mounts*, which needs a wire nobody was driving, so the link dropped and the
+window read `No os8088 disk (C:)`. And **the slave's dwell can expire
+mid-handshake**: `slv_hunt` waits a bounded number of ticks and returns to
+`listen_once`, and the guest's clock runs while a stepped partner works — so
+an exchange begun near the end of a dwell has its magic accepted and its
+reply never sent. That is what the dwell is *for*, and docs/NET-PLAN.md's
+own rule is that the slave dwells and the **master sweeps**; the harness now
+sweeps too.
+
 ## 63. The logo (`tools/os88logo.py`, `MEDIA/OS8088.GIF`)
 
 466x110 pixels of two-colour GIF87a, 2,138 bytes, and the one file in
@@ -38523,3 +39217,172 @@ hand-drawn glyphs cannot be held against.
 That is the *opposite* of §6.2.1's conclusion for an 8x8 face, and both are
 right for their size: at 8 rows there is no curve to get right, only which of
 six pixels to light, so the hand wins. At 44 rows there is nothing but curve.
+
+## 64. blank.inc — the idle screen blanker
+
+After **five minutes** with no keyboard and no mouse, every monitor the
+machine has goes dark. The next input brings them all back, and that input is
+swallowed rather than acted on.
+
+It is for the **monitor**, not for the machine. The tubes this OS runs in
+front of — a 5151, a 5153, whatever is on the second card — burn a static
+image into the phosphor if they are left lit, and a desktop is the worst thing
+that could be left there: a menu bar, a dock strip and a drive column that
+never move, at full brightness, for as long as the machine is switched on.
+There is no power saving in it and none is attempted; hardware this old has no
+DPMS to signal to, and the CRT's heater and EHT stay up either way.
+
+### 64.1 What it costs when nothing is happening
+
+Two compares per UI pass, and one byte store per mouse packet. That is the
+whole steady-state cost, and getting it there is why the shape is what it is.
+
+`blk_pass` is one rung of the UI task's idle ladder (§13), placed **ahead of
+`evq_pop`** — see §64.2 for why that position is binding rather than
+convenient. It tests `[blk_act]`, the flag the mouse ISR sets, and then
+`[blk_on]`; on a machine somebody is using, both fall through.
+
+The mouse half is a **flag and not a timestamp**, set inside `mou_isr`:
+
+    cmp byte [mou_seen], 0
+    je .bout
+    mov byte [blk_act], 1
+
+One store, no register saved, and it sits **after** the `[mou_seen]` gate on
+purpose — a packet from a port that has not yet won §9.5's contest is not
+input, and a chattering modem must not be able to keep the screen awake all
+night on the strength of `no carrier` decoding as a mouse packet. Everything
+else is the UI task's: no ISR in the system reads a clock or writes a video
+port, which is what keeps this out of `mou_isr`'s critical path and out of any
+argument about re-entrancy.
+
+The idle period is measured in `[ticks]`, the BIOS counter at 18.2065 Hz, so
+five minutes is 5,461.95 of them and `BLK_IDLE` is **5462**. The rate is the
+BIOS's whether or not §53.2.1's sub-tick is armed: that divides IRQ0 three
+ways and only every third entry bumps `[ticks]`.
+
+The subtraction `[ticks] - [blk_t0]` is modular and **cannot wrap in
+service**: it stops being asked the moment it passes five minutes, and a word
+holds sixty. The one path that could have outrun it is a fullscreen bracket,
+which is §64.4.
+
+Nothing at all is added to the drawing path. There is no gate in `gfx_fill`,
+none in `font_char`, and no flag for a package to consult — see §64.3.
+
+### 64.2 The input that wakes the screen is consumed
+
+Both halves of a wake are dropped: the keystroke, and the button press.
+
+This is a **safety rule and not a borrowed convention**. While the screen is
+dark the user cannot see what is under the pointer, or which window has the
+keyboard, or that a modal file dialog is up. Acting on the input that arrives
+out of that state is acting blind — a click lands on whatever happens to be
+beneath it, and a keystroke goes to whichever window was frontmost five
+minutes ago. Restoring the display *is* the whole of what a wake event means.
+
+`blk_wake` answers **CF = 1** when it was the input that lit the screen, and
+the two callers spend it differently because the input reaches them by
+different routes:
+
+- **Keyboard.** `ui_task` has to fetch the key regardless — it is in the BIOS
+  buffer and leaving it there would queue every later key behind it — so the
+  fetch is common and only the delivery is skipped. The verdict is banked
+  across the `int 16h` in `pushf`/`popf`, because the flags a BIOS service
+  returns are its own business and not a value this loop may read.
+- **Mouse.** The press is already in the event ring by the time anything
+  notices, so `blk_pass` calls `evq_init` and drops the lot.
+
+**That is why `blk_pass` sits ahead of `evq_pop`.** Below it, the feature
+still blanks and still wakes and still looks correct on a screenshot — and
+the first click out of a dark screen is dispatched at whatever the pointer was
+left on. The ordering is the mechanism, not the tidiness.
+
+Mouse *motion* is not swallowed and could not usefully be: the ISR has already
+moved the pointer by the time the UI task runs, and moving a pointer damages
+nothing.
+
+### 64.3 The video signal is gated, not the framebuffer
+
+`vid_blank_kind` / `vid_unblank_kind` (§39.18.1) stop the card's video output
+and leave the CRTC running, so both syncs keep coming out and memory is
+untouched. Three consequences, all load-bearing:
+
+1. **Waking is instant and exact.** There is nothing to repaint, no mode to
+   set and no `wm_paint_all` — the picture that comes back is the one that
+   went away, including a half-finished Fractal pass.
+2. **A background task may keep drawing into a blanked card.** Timer, Bounce,
+   Fractal and a package worker carry on and cost nothing, which is what lets
+   the entire drawing path stay ignorant of this feature.
+3. **The monitor never re-acquires.** Sync never stops, so there is no
+   re-lock, no flash and no audible flyback transient on either edge — the
+   same property `vid_setmode`'s own blank-first sequence rests on (§39.6).
+
+**All three adapters, and the VGA arm had to be written for this.** Both
+bodies previously tested only for Hercules and sent everything else down the
+CGA branch, which writes 3D8h — a register a VGA does not implement, so the
+`out` was swallowed by the bus and did nothing. §39.11.4 records the hole as
+accepted, which it was for a card pairing nobody built and is not for a
+blanker: silently declining to blank on one adapter in three is precisely the
+failure this project keeps paying for. The VGA now uses Sequencer register 1
+(Clocking Mode) bit 5, **Screen Off**.
+
+That one access is a **read-modify-write and so runs with IF=0**. SR01's other
+bits are the dot clock and the character width; they belong to whatever mode
+the card is in and cannot be guessed, so the register must be read — an index
+write, a read and a data write, with two gaps in it. Every other sequencer
+access in the kernel is a single `out dx, ax`, atomic by construction; this
+one cannot be, and the gap is reachable, because `vga12.inc`'s plane loops
+leave the sequencer index at 2 (Map Mask) for the whole of a plane's
+`rep movsb` and any drawing task can be pre-empted mid-row. A switch landing
+in that gap would read the Map Mask and write the screen-off bit into it.
+`pushf`/`cli` … `popf`, never `cli`/`sti` (§1).
+
+**Every card, not just `[vid_kind]`'s.** On a two-monitor machine (§39.11) —
+the machine this project is calibrated against — the desktop spans both and
+both tubes are lit, so blanking the primary alone protects one monitor and
+leaves the other showing a frozen desktop all night. `blk_set` walks
+`[vid_ndisp]`, which is `vid_fsx_enter`'s own walk doing the same thing from
+the other end.
+
+The pair therefore moved **out of `vidsel.inc`'s dual-display fence**, where
+they were reachable only from the two fsx entry points, so kern_big was the
+only build with any way to dark a card. A 128KB machine has a monitor to
+protect too, and on the class of hardware kern_small exists for it is the
+older monitor.
+
+### 64.4 A fullscreen bracket is the user
+
+The UI task does not run inside an fsx bracket (§53.1), so nothing spends the
+idle clock while one is up — and nothing may: the app owns the video mode, and
+blanking a card the kernel is not driving is the one thing this feature must
+never do. Blanking during a bracket is therefore prevented **by construction**
+rather than by a test.
+
+What that leaves is the arithmetic on the way out. Somebody plays Missile
+Command or listens to a module for as long as they like, and an hour of it
+returns to a `[ticks] - [blk_t0]` that has not merely passed `BLK_IDLE` but
+**wrapped**, so the first UI pass after `fsx_restore` would dark the screen on
+a machine somebody is sitting in front of. `fsx_restore` calls `blk_wake` as
+its last act: the bracket was the user. Its CF is not read, because the screen
+cannot be dark there — entering a bracket took the input that lit it.
+
+### 64.5 What is deliberately not here
+
+**No Control Panel page and no `SYSTEM.CFG` key.** The period is a constant.
+A setting is the obvious next step and it is a real one — it wants a row, a
+`CP_*` item and a key in the 32-byte blob (§51.5) — but every one of those is
+a decision about which page it belongs on and what it displaces, and the
+Drivers page is already at four rows on CGA against `wm_fit`'s ceiling
+(§31.1). None of that is needed for the machine to stop burning its monitor.
+
+**No API slot.** A package cannot ask whether the screen is dark, force it
+dark, or suppress it. The first two are answerable, and the third is what
+would be asked for — "do not blank while my slideshow is running" — and it
+cannot be granted honestly: a package that forgets to withdraw the suppression
+leaves the monitor lit for the session, which is the whole failure this exists
+to prevent. An app that is genuinely being watched without input is a
+fullscreen bracket, and §64.4 already covers that.
+
+**No fade, no pattern, no bouncing anything.** Drawing a screen saver means
+running a task, holding the gfx lock and repainting the desktop underneath it
+on wake. Blanking the signal costs two `out`s and restores in zero.

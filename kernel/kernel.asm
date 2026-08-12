@@ -2689,6 +2689,13 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "events.inc"
 %include "clock.inc"            ; the system clock (SPEC.md 37): after
                                 ; sched.inc, whose [ticks] it advances from
+%include "blank.inc"            ; the idle screen blanker (SPEC.md 64): after
+                                ; sched.inc for [ticks], events.inc for the
+                                ; evq_init that drops the wake press, and
+                                ; vidsel.inc for the vid_blank_kind pair -
+                                ; which is every module it reads, so this is
+                                ; the first place it can go with none of its
+                                ; dependencies still ahead of it
 %include "wm.inc"
 %include "memory.inc"           ; the claim heap (SPEC.md 50): after
                                 ; instance.inc, whose records own the claims

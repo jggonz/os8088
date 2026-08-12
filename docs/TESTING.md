@@ -1136,6 +1136,32 @@ pasted into [PERFORMANCE.md](../PERFORMANCE.md).
 | `gfxbench` on VGA / Hercules / CGA | `GFXVGA.TXT` / `GFXHERC.TXT` / `GFXCGA.TXT` |
 | `sysbench` | `SYSBENCH.TXT` |
 
+**Driving one from a SCRIPT is four steps and three of them have a trap in
+them.** Written down because getting a benchmark to run unattended cost most
+of a session, and none of the failures says what it is:
+
+- **Reach the app through the Bench MENU, not a keystroke.** A scripted
+  `m.key("KeyR")` did not reach `sysbench` in a run measured here — the
+  splash was still up 150 s later — while `mo.menu(110, 8, 110, 26)` (its
+  first item, `Run`) started it every time. The app is frontmost and its
+  menu bar is drawn in both cases, so nothing on screen tells the two apart.
+- **Do NOT `settle()` after starting the run.** The machine is deliberately
+  FROZEN while a benchmark runs, so stillness means nothing, and a `settle`
+  after it never returned inside a 600 s limit here. Sleep a fixed generous
+  span instead — the app says ~40 s on a 4.77 MHz 8088 — and read the file.
+- **Read the FILE, not the screen**: the report self-saves when it finishes,
+  and the whole thing is forty-plus rows the screen pages through.
+  `os88flush.Flush(marty=m).volume(0).read("SYSBENCH.TXT")` is it, sharing
+  the one debug connection (a second `Marty` HANGS).
+- **Keep the driver script OUT of the session scratchpad.** One vanished
+  mid-session here and the run died with `can't open file` — which reads
+  exactly like a path typo. `/tmp/<something>/` of your own is fine.
+
+...and CLAUDE.md's `pgrep -f` warning applies to waiting for it, twice over:
+`pgrep -f runsb.py` matches the very shell running the `until` loop, so the
+loop never ends, and a `( ... ) &` nested inside a backgrounded tool call is
+reaped before it finishes. Wait on the tool call itself.
+
 **On an extended desktop the name is the card the SANDBOX is on**, not
 `[vid_kind]` — `gfxbench` resolves its own window's origin against §57.4's
 `VD` block, and the framebuffer segment, stride, bank count, status port and
