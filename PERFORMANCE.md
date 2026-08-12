@@ -6479,3 +6479,75 @@ instrument: what matters is not one repaint but how much text the game draws per
 second, and a fixed frame span answers exactly that. And `os88sym` refused a stale
 map when `build/kernel.bin` had been rebuilt without the knob — the guard working
 as designed, and the reason to `make SNAPAUDIT=1` immediately before an audit run.
+
+### Set 61 — the survey's tail, walked in one batch: one change, six reasons not to
+
+Emulator: MartyPC, cycle-accurate 4.77MHz 8088, `os8088_5150_herc`. The last
+entries in docs/SNAP-PLAN.md §2 — the Task Manager, Recorder, Minesweeper, the two
+HDD pages, Piano, Arkanoid, Missile Command. **One change came out of them**, and
+the reasons the others did not are the useful part.
+
+**Task Manager (SPEC.md §28.5): four pens, 0 bytes — and the plan said five.**
+Three of the "five literal `+6` sites" are `add ax, 6` on **frame rects** — the CPU
+graph's frame, the bar's, the RAM map's — and a rect has no glyph phase. The four
+that are text pens are the memory page's XMS line and the heap page's
+TOTAL/SPLIT/FRAG summaries, one `font_str` each from `tm_str`, each gated by
+`tm_elchk`. They sat at 6 while `TM_PEN` is 8 and `TM_MPEN` is 16, giving this
+window a third inset of its own; they are at `TM_PEN` now. `tm_rowfill` still
+erases the band from `rowx+6`, and those two calls plus the `font_str` are the
+only operations on it, so **what moves is two erased columns nobody letters**.
+
+**Minesweeper: its off-grid text is CENTRING, and it is the app's densest.** The
+number on every revealed cell is `add cx, 4` — an 8px glyph in a 16px cell, which
+is `(16-8)/2` exactly. Aligning it would sit every number on the grid 4px
+off-centre in its square. The mode text is `MN_BOARD_W/2`. A two-glyph mine
+counter is all that is genuinely off-grid.
+
+**Piano: largely not a constant.** `PN_MSG_X` is 112, already aligned. The key
+letter is `key_x + 5`, and since §11.98.1 `key_x` comes from `pn_metrics` scaling
+the keyboard into whatever content height the window has — so **no constant can
+align it on any adapter**, and the +5 centres the glyph in a key whose width is
+derived. One label at `cx, 2` on a full repaint is the whole of that row, which
+means SNAP-PLAN's "Piano | 2" was stale the moment §11.98.1 landed.
+
+**Arkanoid: four of six sites are `OSAPI_FONT_WIDTH`-centred**, a fifth is a
+letter centred in a power-up body. The sixth is the score at `cx, 2`.
+
+**Recorder** is two strings in `rc_draw_status`, whose only caller is
+`rc_draw_all` — repaint-only. **The HDD pages** draw on open and on a click.
+**Missile Command** computes every pen, and Set 46's `mc_srun` already reduced its
+status strip to the span between the first and last differing cell.
+
+**WHAT THE WHOLE SURVEY TURNED OUT TO BE**, across Sets 52–61. Three entries
+mattered:
+
+| item | what it really was | measured |
+|---|---|---|
+| Fractal (§40.2.1) | a **redraw defect wearing an alignment costume** | 2,557 cells → 565, **4.5x** |
+| Disk window (§22.11.1.1/.2) | genuinely alignment — the ~40 rows that dominate `fm_repaint` | 0 bytes, 9 constants |
+| Tamegram (§49.5.1) | genuinely alignment, uniformly — 6 of 7 pens at ≡ 4 | 0% → **100%** aligned |
+
+Every other entry was one of four things, and **a literal-pen grep cannot tell any
+of them from a defect**: *centring* (protected — Hello, Minesweeper's cell
+numbers, Arkanoid's four, Tracker's logo, Tamegram's banner, Paint's About card),
+*not a text pen at all* (three of the Task Manager's five; Paint's `PT_PAL_X0`),
+*geometry derived at run time* (Piano's keys), or *a handful of cells on an event*
+(Recorder, the HDD pages, Paint's size box, Tracker's whole face). That is 11 of
+14 entries, and each one had to be censused to know which.
+
+**The two rules the survey earned**, both of which cost a round before they were
+written down. *Ask how often a pen is drawn before moving it* — Fractal's 78%
+saving came from not drawing, not from aligning, and Tracker's 237 event-driven
+cells looked identical to it in a grep. And *look at a zoomed crop*: a 0-byte,
+byte-identical, fully-aligned change still made a window worse when the Disk
+window's icon landed on its own label.
+
+**One harness note.** The Task Manager cannot be driven with the pointer — it
+refreshes twice a second and holds the gfx lock, so 1200-baud packets never
+converge (measured: stuck 139px short, the same failure Fractal's worker
+produces). Its pages cycle on a click in the content, so `[tm_view]` was written
+from outside the guest instead, with the offset taken from nasm's own `[map]` via
+`tests/dispapps.py` rather than counted by hand. That poke skips `tm_click`'s
+erase fill, so the capture shows the outgoing page underneath — the summary lines
+themselves are the evidence, and the two-pixel claim rests on `tm_rowfill`'s span
+rather than on the picture.

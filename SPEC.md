@@ -5935,14 +5935,14 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 | ~~Fractal status row~~ | ~~`FR_X_ZOOM` 130, `FR_X_ZNUM` 170, `FR_X_PAL` 250~~ | **done** — §40.2.1, together with the change that stops 78% of those glyphs being drawn at all |
 | ~~Paint~~ | ~~`PT_PAL_X0` 1, plus pens at ≡ 1 and ≡ 2~~ | **measured 100% ALIGNED on a repaint** (62 cells) — §42.12. Its size-box field pen is geometrically forced off-grid: an 8px label plus a 32px framed field is 40 of a 43px palette strip |
 | ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
-| HDD Control Panel page | `HDP_LX` 2 | `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned |
+| HDD Control Panel page | `HDP_LX` 2 | **left** — a panel page draws on open and on a click. `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned; §11.94.4 |
 | HDD tool window | `HTW_LX` 4 | |
-| Recorder | 4 | |
-| Minesweeper | 4 | also draws at 8 |
-| Piano, Arkanoid | 2 | one sampled pen each — low confidence |
-| Task Manager | five literal `+6` sites | despite `TM_PEN` being 8 |
+| Recorder | 4 | **left** — two strings in `rc_draw_status`, whose one caller is `rc_draw_all`. Repaint-only; §11.94.4 |
+| ~~Minesweeper~~ | ~~4~~ | **protected, not a defect** — its densest text, the number on every revealed cell, is `+4` = an 8px glyph centred in a 16px cell; the mode text is `MN_BOARD_W/2`. Only a 2-glyph counter is genuinely off-grid. §11.94.4 |
+| ~~Piano, Arkanoid~~ | ~~2~~ | **left, and mostly not movable** — Piano's `PN_MSG_X` is already 112, and its key letter is `key_x + 5` off §11.98.1's run-time scaled keyboard; 4 of Arkanoid's 6 text sites are `OSAPI_FONT_WIDTH`-centred. What is left is one label and one score. §11.94.4 |
+| ~~Task Manager~~ | ~~five literal `+6` sites~~ | **done, and it was four** — §28.5: three of the five are `add ax, 6` on FRAME RECTS (the CPU graph, the bar, the RAM map), not pens. The four real ones are the memory page's XMS line and the heap page's three summaries, now at `TM_PEN`; §28.5 |
 | Hello | ≡ 3 for 5 of 35 glyphs | deliberately the minimal package |
-| Missile Command | unresolved | every pen is computed; needs the runtime audit |
+| Missile Command | unresolved | **left** — every pen computed, and its status strip is already §48.17's `mc_srun`, which emits only the span from the first differing cell to the last. §11.94.4 |
 | `DEBUG.DRV` | `DBGP_LX` 1 | unshipped (§62.9.4) |
 
 **Three kinds of off-grid pen are correct and must not be "fixed"**: a
@@ -5961,6 +5961,51 @@ from `make SNAPAUDIT=1`. **Its "known artifact" was the tool being right**
 the *Disk window's `APPS` caption* behind them, `wm_draw_title` centring a pen
 no app can influence. A caption is chrome, it is attributed as chrome now, and
 small counts out of that instrument mean what they say.
+
+#### 11.94.4 The rest of the survey, closed: what an off-grid pen usually is
+
+The remaining entries were walked in one batch and **one change came out of
+them**. This section is the reason, so the census is not re-run.
+
+**Three of the five "literal `+6` sites" in the Task Manager are `add ax, 6` on
+FRAME RECTS** — the CPU graph's frame, the bar's, the RAM map's — and a rect has
+no glyph phase. The four that are text pens are the memory page's XMS line and
+the heap page's TOTAL/SPLIT/FRAG summaries, one `font_str` each from `tm_str` and
+each gated by `tm_elchk`, so they draw only when their own figure changed. Those
+four moved to `TM_PEN` (§28.5): 0 bytes, and the pane stops having a second inset
+of its own.
+
+**Minesweeper's off-grid text is CENTRING, and it is the app's densest text.**
+The number on every revealed cell is `add cx, 4` — an 8px glyph in a 16px cell,
+which is exactly `(16-8)/2`. Aligning it would sit every number 4px off-centre in
+its square, across the whole grid. Its mode text is `MN_BOARD_W/2`. What is left
+off-grid is a two-glyph mine counter.
+
+**Piano's is mostly not a constant at all.** `PN_MSG_X` is 112 and already
+aligned; the key letter is `key_x + 5`, and since §11.98.1 `key_x` comes from
+`pn_metrics` scaling the keyboard into whatever content height the window has —
+so no constant can align it, on any adapter, and the +5 is centring in a key
+whose width is derived. One label at `cx, 2` on a full repaint is the whole of
+that row.
+
+**Four of Arkanoid's six text sites go through `OSAPI_FONT_WIDTH`** and are
+centred; a fifth is a letter centred in a power-up body. The sixth is the score
+at `cx, 2`.
+
+**Recorder** is two strings in `rc_draw_status`, whose only caller is
+`rc_draw_all` — repaint-only. **The HDD pages** draw on open and on a click.
+**Missile Command** computes every pen, and §48.17 already reduced its status
+strip to the span between the first and last differing cell.
+
+**The shape of the whole survey, in one line.** Of §11.94.3's original entries,
+three mattered: **Fractal** (§40.2.1 — 2,557 cells a hundred times a render,
+which was a redraw defect wearing an alignment costume), the **Disk window**
+(§22.11.1.1 — the ~40 row strings that dominate `fm_repaint`), and **Tamegram**
+(§49.5.1 — uniformly off-grid, uniformly fixable). Everything else is one of four
+things: **centring** (protected), a **frame rect** counted as a pen, geometry
+**derived at run time**, or a handful of cells on an **event**. A literal-pen
+grep cannot tell those apart from a defect, which is why every remaining entry
+was censused before anything moved.
 
 ### 11.95 Double-clicking a title bar zooms a resizable window
 
@@ -20227,6 +20272,31 @@ Cost, measured: the package image is **6,903 → 6,916 bytes**, 13 of them the
 longer strings and `tm_put2`'s five instructions. That is heap while the
 window is open and nothing when it is closed (§28), it is charged against no
 kernel guard, and the widest caption is 27 characters before and after.
+
+### 28.5 The summary lines sit at `TM_PEN`, so the pane has one inset
+
+The memory page's XMS line and the heap page's TOTAL, SPLIT and FRAG summaries
+letter at `[tm_cx] + TM_PEN` (8). They were at a literal `+6`, which gave this
+window a *third* inset — `TM_PEN` 8 for the process list and the captions,
+`TM_MPEN` 16 for the memory list, and 6 for these four — and 6 is 6 mod 8, so
+every one of them missed `font_char`'s single-byte cell row (§11.94.3).
+
+**Nothing but white margin moves.** `tm_lfill` → `tm_rowfill` erases the band from
+`rowx + 6` to `rowx + TM_RW`, and those two calls plus the `font_str` are the only
+operations on it, so shifting the pen to 8 leaves two erased columns nobody
+letters. That is not the memory *list* row's case, where `rowx+6` carries the
+legend square (§11.3's chunk discussion) — these are summary lines drawn by
+`tm_lfill`, which has no square.
+
+Each is gated by `tm_elchk`, so it draws only when its own figure changed. Cost
+**0 bytes**; verified by reading both pages on a cycle-accurate 5150/Hercules with
+`[tm_view]` written from outside the guest, `tm_view`'s offset taken from nasm's
+own `[map]` via `tests/dispapps.py` rather than counted by hand. **The pointer
+cannot be driven onto this window** — it refreshes twice a second and holds the
+gfx lock, so 1200-baud packets never converge — which is why the page is selected
+by a poke rather than by the click `tm_click` implements; the poke skips that
+routine's erase fill, so the capture shows the outgoing page underneath and only
+the summary lines themselves are the evidence.
 
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
