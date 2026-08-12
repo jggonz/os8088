@@ -843,3 +843,52 @@ overlays = [
     bus_type = "ISA"
     type = "CGA"
     clock_mode = "Dynamic"
+
+# --- THE 1.44MB MACHINE, and it is an ANACHRONISM ON PURPOSE ----------------
+# `make combo144` builds a 1.44MB disk and nothing in this file could read one:
+# every machine above takes `pcxt_2_360k_floppies`, so a 1.44MB image could be
+# built here and never booted here, which is the shape this tree keeps paying
+# for (a deliverable no harness can exercise).
+#
+# What it is NOT is a machine anybody had. A 1.44MB disk needs 500 kbps off the
+# controller and the IBM XT's 8-bit card runs 250, so no stock XT reads one -
+# it took a third-party 8-bit HD controller and a driver, and the 5150's own
+# ROM tops out at 360KB whatever is plugged into it. MartyPC models the DRIVE
+# (FloppyDriveType::Floppy144M, `1.44m`) but its FDC is the one `IbmNec` type,
+# so what this proves is that OUR boot sector and OUR FAT12 code handle 18 spt
+# on an 8088 - not that the media is period. Take no PERFORMANCE.md number off
+# it and put no 1.44MB disk in the calibration 5150 (docs/FIELD-MACHINES.md).
+#
+# GLaBIOS rather than the IBM ROM for the ordinary reason - the IBM ROM is not
+# in this container - and Hercules because that is the adapter the drag-cache
+# work is driven on. The fdc is INLINE rather than an overlay so that no file
+# of upstream's has to be patched: build.sh copies install/ wholesale and only
+# ever APPENDS this file.
+[[machine]]
+name = "os8088_5150_herc_gla_144"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.fdc]
+    bus_type = "ISA"
+    type = "IbmNec"
+        [[machine.fdc.drive]]
+        type = "1.44m"
+        [[machine.fdc.drive]]
+        type = "1.44m"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
