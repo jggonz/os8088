@@ -602,14 +602,28 @@ os88ui_krect: resw 4
 section .cold
 
 ; -----------------------------------------------------------------------------
-; os88ui_btn_f - the far entry, for .text callers (SPEC.md 2.6)
+; os88ui_btn_f / os88ui_glyph_f - the far entries (SPEC.md 2.6)
 ;
-; The body above is a near proc in .cold, which is where its callers are -
-; fdlg.inc and ctrl.inc are cold in their entirety. apps.inc is NOT, so the
-; Timer's button reaches it through here, the same fdf_/cpf_ shape every other
-; text-to-cold crossing in this kernel uses. Packages never see this.
+; The bodies above are near procs in .cold, which is where MOST of their
+; callers are - fdlg.inc is cold in its entirety. Two kinds of caller are
+; not, and both reach them through here, the same fdf_/cpf_ shape every other
+; crossing in this kernel uses: apps.inc, which is .text (the Timer's button),
+; and ctrl.inc, which is an ON-DEMAND MODULE now (SPEC.md 2.8) and so runs
+; from a heap claim with a CS of its own.
+;
+; The Control Panel is why the glyph entry exists. Its eleven near calls to
+; os88ui_glyph and os88ui_btn were legal for as long as ctrl.inc was cold and
+; became a jump into its own image the day it stopped being - which
+; tools/os88ovlchk.py could not see, because it globbed kernel/*.inc and this
+; file is not one. It scans this file now; that is the more important half of
+; the fix, and the EXTRA table there is where a third such file goes.
+;
+; Packages never see either: both are inside %ifdef OS88UI_KERNEL.
 ; -----------------------------------------------------------------------------
 os88ui_btn_f:
     call os88ui_btn
+    retf
+os88ui_glyph_f:
+    call os88ui_glyph
     retf
 %endif

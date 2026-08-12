@@ -188,8 +188,10 @@ class Mouse:
 
     def click(self, x, y, settle=1.5):
         self.to(x, y)
-        self._pk(l=True)
-        self._pk()
+        if self.where()[2] & 1:         # a button left down by something else
+            self._edge(False)           # would make this press no edge at all
+        self._edge(True)
+        self._edge(False)
         time.sleep(settle)
 
     # --- clicking that PROVES itself ---------------------------------------
@@ -248,20 +250,27 @@ class Mouse:
         and then polls a level, so a press-and-release in place opens it and
         closes it in the same breath - which is SPEC.md 9.6.1's flashing menu
         seen from the harness side.
+
+        BOTH EDGES ARE PROVEN, for the reason `dblclick`'s are. These used to
+        be bare `_pk` packets, and a dropped RELEASE is the worst available
+        failure here: the press landed, the pull-down opened, the item
+        highlighted, and the command never ran - so a screenshot shows a menu
+        that looks exactly like one being used and every later step reads the
+        window as unchanged. It cost half a dozen runs of a diagnosis that was
+        chasing a kernel bug at the time.
         """
-        self.to(x0, y0)
-        self._pk(l=True)
-        self.to(x1, y1, l=True)
-        self._pk(l=True)
-        self._pk()
-        time.sleep(settle)
+        self._press_drag_release(x0, y0, x1, y1, settle)
 
     def drag(self, x0, y0, x1, y1, settle=1.5):
+        self._press_drag_release(x0, y0, x1, y1, settle)
+
+    def _press_drag_release(self, x0, y0, x1, y1, settle):
         self.to(x0, y0)
-        self._pk(l=True)
+        if self.where()[2] & 1:
+            self._edge(False)
+        self._edge(True)
         self.to(x1, y1, l=True)
-        self._pk(l=True)
-        self._pk()
+        self._edge(False)
         time.sleep(settle)
 
 

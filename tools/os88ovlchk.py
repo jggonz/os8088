@@ -40,12 +40,27 @@ CALL = re.compile(r'\b(?:call|jmp|j[a-z]{1,3}|loop[a-z]{0,2})\s+'
 # an API cell macro whose body near-calls its LAST argument
 CELL = re.compile(r'^\s*OSAPI_(?:SLOT|NSTUB|XSTUB)\s+(?:\w+\s*,\s*)?'
                   r'([A-Za-z_]\w*)\s*$')
-FAR = ('.ovl', '.cold')     # sections with a vstart of their own
+MODS = ('.modc', '.modf')   # on-demand module images (SPEC.md 2.8)
+FAR = ('.ovl', '.cold') + MODS   # sections with a vstart of their own
+
+
+# A file the kernel %includes from OUTSIDE kernel/, and the section its
+# contents therefore land in.  apps/os88ui.inc is the shared button and glyph
+# (SPEC.md 20.5.1): one source for two worlds, %included by fdlg.inc from
+# inside a `.cold` block, so every label in it is cold - and a NEAR call to
+# one from another address space is the exact bug this file exists to refuse.
+#
+# It was not scanned at all until an on-demand module (SPEC.md 2.8) near-called
+# os88ui_glyph from `.modc`.  The label was not in the map, so the call was
+# untested rather than reported, and the Control Panel painted itself and then
+# ran off the end of its own image into whatever was above it.  A file that
+# emits code into the kernel belongs here whatever directory it is in.
+EXTRA = {'apps/os88ui.inc': '.cold'}
 
 
 def sections(path):
     """yield (section, line-number, source-line) with comments stripped"""
-    cur = '.text'
+    cur = EXTRA.get(path, '.text')
     for n, raw in enumerate(open(path), 1):
         line = raw.split(';')[0]
         m = re.match(r'^\s*section\s+(\.\w+)', line)
@@ -56,7 +71,8 @@ def sections(path):
 
 
 def main():
-    files = sorted(glob.glob('kernel/*.inc')) + ['kernel/kernel.asm']
+    kfiles = sorted(glob.glob('kernel/*.inc')) + ['kernel/kernel.asm']
+    files = kfiles + sorted(EXTRA)
     where = {}                       # label -> section it is defined in
     for f in files:
         for sect, n, line in sections(f):
@@ -103,10 +119,19 @@ def main():
     # `cs lodsw`).
     CS = re.compile(r'\b(?:push\s+cs|mov\s+\w+\s*,\s*cs|cs\s*:'
                     r'|cs\s+(?:lods|movs|stos|scas))', re.I)
+    # SCOPED TO kernel/, and EXTRA's files are deliberately left out. A
+    # one-source-two-worlds include (apps/os88ui.inc, SPEC.md 20.5.1) is half
+    # package and half kernel behind `%ifdef OS88UI_KERNEL`, and this scanner
+    # does not evaluate the preprocessor - so the PACKAGE half's `os88ui_armw:
+    # dw 0`, which never reaches the kernel at all, reads here as data in
+    # .cold. The near-call check above still needs the file, and needs it
+    # badly: it is where eleven real crossings hid (SPEC.md 2.8). What these
+    # two checks ask - where does THIS file's code land - is the question a
+    # dual-world include does not have one answer to.
     cs_bad = []
-    for f in files:
+    for f in kfiles:
         for sect, n, line in sections(f):
-            if sect == '.cold' and CS.search(line):
+            if sect in ('.cold',) + MODS and CS.search(line):
                 cs_bad.append((f, n, line.strip()[:60]))
     for f, n, src in cs_bad:
         print("%s:%d: .cold assumes CS: %s" % (f, n, src), file=sys.stderr)
@@ -136,9 +161,14 @@ def main():
     DATA = re.compile(r'^\s*(?:[A-Za-z_]\w*:?\s+)?(?:d[bwdq]|times|resb|resw)\b',
                       re.I)
     d_bad = []
-    for f in files:
+    for f in kfiles:                     # kernel/ only - see the note above
         for sect, n, line in sections(f):
             if sect == '.cold' and DATA.match(line):
+                # ...and a MODULE's data is its header and nothing else
+                # (SPEC.md 2.8): that block is read through ES by the loader,
+                # never through DS by the module, so it is the one legitimate
+                # `dw` on the far side of a boundary. mod_hdr_ok below is what
+                # proves it stops there.
                 d_bad.append((f, n, line.strip()[:60]))
     for f, n, src in d_bad:
         print("%s:%d: data in .cold: %s" % (f, n, src), file=sys.stderr)
@@ -146,6 +176,38 @@ def main():
         sys.exit("os88ovlchk: %d data directive(s) in .cold - SPEC.md 2.6 "
                  "rule 1 (data stays in .text)" % len(d_bad))
     print("os88ovlchk: no data in .cold")
+
+    # --- and a module's data is its HEADER, at its head, and nothing else ---
+    # A module (SPEC.md 2.8) runs with CS = a heap claim and DS = KERNEL_SEG,
+    # so rule 1 binds it exactly as it binds .cold - with ONE exception, which
+    # is the 12-byte header plus its entry table: those bytes are read through
+    # ES by mod_need, never through DS by the module, and they have to be at
+    # offset 0 because that is where the loader looks.
+    #
+    # So the check is positional rather than absolute: data before the first
+    # instruction is the header, and data after it is the bug rule 1 describes.
+    # Without this the module sections would be the one place in the kernel
+    # where a stray `dw` is not refused by anything.
+    m_bad = []
+    CODEISH = re.compile(r'^\s*(?:[A-Za-z_]\w*:\s*)?(?:call|jmp|ret|retf|push|'
+                         r'pop|mov|cmp|add|sub|xor|or|and|test|inc|dec|les|lds)\b',
+                         re.I)
+    for f in kfiles:
+        seen_code = {}
+        for sect, n, line in sections(f):
+            if sect not in MODS:
+                continue
+            if CODEISH.match(line):
+                seen_code[sect] = True
+            elif DATA.match(line) and seen_code.get(sect):
+                m_bad.append((f, n, sect, line.strip()[:50]))
+    for f, n, sect, src in m_bad:
+        print("%s:%d: data in %s after its header: %s" % (f, n, sect, src),
+              file=sys.stderr)
+    if m_bad:
+        sys.exit("os88ovlchk: %d data directive(s) past a module header - "
+                 "SPEC.md 2.8 (a module's data stays in .text)" % len(m_bad))
+    print("os88ovlchk: no data past a module header")
 
     # --- and no TAIL CALL to a cw_ shim -------------------------------------
     # A cw_ shim is `call <target>` / `retf`: it exists to turn a far CALL

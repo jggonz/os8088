@@ -1218,7 +1218,6 @@ fm_s_delq:    db '? Del=yes Esc=no', 0   ; the DELETE key, not Enter (SPEC.md
                                     ; 22): the key that asked is the key that
                                     ; answers, and it carries no ASCII, so no
                                     ; keystroke a name is made of can reach it
-%ifndef KERN_SMALL
 fm_s_fmtpr2:  db 'ERASE and format ', 0  ; ...when the volume MOUNTED, which is
                                     ; the whole of what removing 22.12's old
                                     ; refusal costs: the disk has files on it
@@ -1230,6 +1229,26 @@ fm_s_fmtq:    db 'K?', 0            ; the status line itself - as one line it
                                     ; truncates at ([fm_cw]-12)/8 = 38 on the
                                     ; 320px template, losing 'Esc=no'
 fm_s_fmtk:    db 'Enter=yes  Esc=no', 0
+
+; The DISK SWAP the module costs a one-floppy machine (SPEC.md 2.8.5). The
+; formatter is a file on the system disk now, and the disk this operation is
+; about is the one in the drive - so on the calibration machine, which has
+; ONE, the code cannot be read at the moment it is wanted. MS-DOS charged
+; exactly this for FORMAT and nobody minded, because preparing a disk already
+; has a trip to the disk box in it.
+;
+; ONE mode with a STEP byte rather than two modes: the two lines differ only
+; in their first, they are answered by the same key, and a second FS_EDIT
+; value would be a second thing every ladder in this file has to know about.
+fm_s_swap1:   db 'Insert the system disk in ', 0
+fm_s_swapd:   db 'A:', 0        ; stamped by dsk_bootltr like every other
+                                ; message that names the system volume
+fm_s_swap2:   db 'Insert the disk to format, then Enter', 0
+fm_s_swapk:   db 'Enter=ready  Esc=no', 0
+fm_s_swapno:  db 'Format needs the system disk in '
+fm_s_swapnd:  db 'A:', 0        ; stamped, same rule
+fm_swaptab:   dw 0, fm_s_swapno ; toast_say never uses index 0
+FM_NSWAP  equ 2
 fm_s_fmtk2:   db 'Spc=size  Enter=yes  Esc=no', 0   ; ...when there IS another
                                     ; size to offer (rows 2 and 3 alone)
 fm_s_fmtok:   db 'Formatted ', 0    ; ...and the verdict, SPEC.md 59.6's own
@@ -1239,7 +1258,6 @@ fm_s_fmtok:   db 'Formatted ', 0    ; ...and the verdict, SPEC.md 59.6's own
 fm_s_fmtbad:  db 'Drive cannot reach 720K - made 360K', 0
 fm_fmtbadt:   dw 0, fm_s_fmtbad     ; toast_say never uses index 0, so a
 FM_NFMTBAD    equ 2                 ; one-message table is two slots (59.5)
-%endif
 fm_s_delq2:   db ' +contents? Del=yes Esc=no', 0   ; ...for a folder
 fm_s_size:    db 'Size ', 0         ; ...and the resting status line, which
 fm_s_free:    db '   Free ', 0      ; carries both figures (SPEC.md 22.7)
@@ -1293,11 +1311,9 @@ fm_s_pastin:  db 'Paste Into', 0
 ; fm_bar_gate does the swap on the press that opens the bar, exactly as
 ; ui_loc_gate does for Close Window and for its reason: nothing relays the
 ; bar out when a mount verdict changes.
-%ifndef KERN_SMALL              ; kern_big only (SPEC.md 18.96's foot)
 fm_s_fsep:    db MENU_DIS, '--------------', 0
 fm_s_format:  db 'Format Disk...', 0
 fm_s_formatx: db MENU_DIS, 'Format Disk...', 0
-%endif
 fm_s_refr:    db 'Refresh', 0
 fm_s_up:      db 'Up One Folder', 0
 fm_s_rootf:   db 'Root Folder', 0
@@ -1310,15 +1326,11 @@ fm_s_opennew: db 'Open in New Window', 0
 
 fm_items_file:
     dw fm_s_open, fm_s_mkdir, fm_s_rename, fm_s_delete
-%ifndef KERN_SMALL
     dw fm_s_fsep, fm_s_format   ; fm_bar_gate rewrites this last word
 FM_IFMT     equ 5               ; ...at this item index, which is also
                                 ; FMC_FORMAT - FMC_OPEN, and is written down
                                 ; once rather than being counted at the store
 FM_NFILE    equ 6               ; items in the File menu
-%else
-FM_NFILE    equ 4               ; kern_small: no rule and no Format
-%endif
 fm_items_edit:
     dw fm_s_cut, fm_s_copy, fm_s_paste
 fm_items_fold:
@@ -1546,7 +1558,6 @@ fm_front_win:
     pop ax
     ret
 
-%ifndef KERN_SMALL              ; kern_big only (SPEC.md 18.96's foot)
 ; -----------------------------------------------------------------------------
 ; fm_bar_gate - point Format Disk... at its live or disabled string, just
 ;               before the bar can drop a menu (SPEC.md 22.12, 47 rule 5)
@@ -1595,7 +1606,6 @@ fm_bar_gate_x:
     pop bx
     pop ax
     ret
-%endif                          ; KERN_SMALL: no formatter
 
 ; -----------------------------------------------------------------------------
 ; fm_seed - park a target directory for the next fm_kinit (SPEC.md 22.1)
@@ -2827,18 +2837,10 @@ fm_jmp:
                                 ; (MENU_DIS), and a `ret` rather than a hole
                                 ; because fm_docmd's bound is FMC_COUNT and
                                 ; every id below it must land somewhere
-%ifndef KERN_SMALL
     dw fm_c_format              ; inline (probes the disk under the lock, like
                                 ;         Refresh; arms the CONFIRM line, and
                                 ;         the disk is WRITTEN at Enter -
                                 ;         SPEC.md 22.12)
-%else
-    dw fm_c_nop                 ; kern_small has no formatter, and the ID
-                                ; STAYS so that every FMC_* below keeps its
-                                ; number in both builds - the two kernels
-                                ; differ by two menu items, not by a
-                                ; renumbering nobody can see
-%endif
     dw fm_c_cut                 ; inline (the clipboard is a memory write)
     dw fm_c_copy                ; inline (ditto)
     dw fm_c_paste               ; inline (disk I/O under the lock, like
@@ -3016,7 +3018,6 @@ fm_arm_sel:
     mov byte [fm_cmdchg], FMD_NONE  ; - and a no-op draws nothing (22.13)
     ret
 
-%ifndef KERN_SMALL              ; kern_big only (SPEC.md 18.96's foot)
 ; -----------------------------------------------------------------------------
 ; fm_fmt_ok - may the window whose block is in DI be formatted? (SPEC.md 22.12)
 ; in:  DI = a state block
@@ -3242,6 +3243,31 @@ fm_c_format:                    ; File > Format Disk... (SPEC.md 22.12)
     call fm_fmt_ok              ; the greying is the primary answer; this is
     jc .no                      ; the belt, because a body may not assume
                                 ; which surface picked it
+    ; THE IMAGE COMES FIRST (SPEC.md 2.8.5), before the probe touches the
+    ; drive, because the probe reads the disk that is IN it and the module is
+    ; on the system disk. Where the two are the same drive - one floppy - the
+    ; user is asked to swap; where they are not, or where the image is still
+    ; loaded from a previous format, this is six compares and nothing is asked.
+    push ax
+    mov al, MOD_FMT
+    call mod_need
+    pop ax
+    jnc fm_fmt_go
+    mov byte [fm_fmtstep], 0    ; ...and if it could not: the swap prompt
+    mov di, [fm_vp]
+    mov al, 6
+    jmp fm_edit_arm
+.no:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_fmt_go - probe the disk in the drive and ask (SPEC.md 22.12)
+;
+; A label of its own because the swap prompt's second Enter arrives here too,
+; with the target disk newly inserted - so what used to be the tail of
+; fm_c_format is now the half that runs once the IMAGE is known to be here.
+; -----------------------------------------------------------------------------
+fm_fmt_go:                      ; the image is here; the drive is the user's
     call fmv_sync_x             ; stand on THIS window's volume. It may or may
                                 ; not mount - both are formattable now (22.12)
                                 ; - and either way [disk_drive] is left naming
@@ -3265,7 +3291,6 @@ fm_c_format:                    ; File > Format Disk... (SPEC.md 22.12)
     pop bx
 .no:
     ret
-%endif                          ; KERN_SMALL: no formatter
 
 fm_c_cut:                       ; File > Cut - the selection, onto the
     mov al, FCP_CUT             ; clipboard (SPEC.md 22.3)
@@ -3674,13 +3699,13 @@ fm_editkey:
     mov di, [fm_vp]
     cmp byte [di+FS_EDIT], 4
     je .replace
-%ifndef KERN_SMALL
+    cmp byte [di+FS_EDIT], 6
+    je .swap                    ; the disk-swap prompt (SPEC.md 2.8.5)
     cmp byte [di+FS_EDIT], 5
     je .confirmf                ; Format (SPEC.md 22.12) takes mode 3's
                                 ; asymmetry unchanged, and wants it more:
                                 ; there is no undo, and the operation is not
                                 ; one file but every one of them
-%endif
     cmp byte [di+FS_EDIT], 3
     je .confirm
     cmp al, 13
@@ -3709,7 +3734,8 @@ fm_editkey:
     inc bx
     mov byte [fm_ebuf+bx], 0
     mov [fm_elen], bl
-    jmp short .lineonly
+    jmp .lineonly               ; NEAR: the swap prompt (SPEC.md 2.8.5) sits
+                                ; between here and .lineonly now
 
 .back:
     mov bl, [fm_elen]
@@ -3719,7 +3745,7 @@ fm_editkey:
     dec bl                      ; `dec bl` IS `dec bx` here (BH is 0), so BX
     mov [fm_elen], bl           ; is the NEW length and the terminator lands
     mov byte [fm_ebuf+bx], 0    ; on the character just dropped - the -1 that
-    jmp short .lineonly         ; used to be here punched a NUL one byte
+    jmp .lineonly               ; used to be here punched a NUL one byte
                                 ; EARLIER, so the name displayed short and
                                 ; every character typed after a backspace
                                 ; landed behind that NUL and never appeared
@@ -3747,7 +3773,6 @@ fm_editkey:
     call fm_paste_res
     jmp short .out
 
-%ifndef KERN_SMALL
     ; Format's confirmation takes ONE key the other two do not: Space offers
     ; the other row with the same media sectors-per-track (SPEC.md 18.96).
     ; That pair exists for 9-sector media alone - rows 2 and 3, 720K and 360K
@@ -3770,12 +3795,44 @@ fm_editkey:
                                 ; redraw is the one a typed rename character
                                 ; already takes - nothing else on the window
                                 ; moved
-%endif
+.swap:
+    ; Enter advances a step and anything else abandons the whole operation -
+    ; mode 5's asymmetry, for mode 5's reason. Step 0 asks for the system disk
+    ; and step 1 asks for the disk to be formatted, so the SECOND Enter is the
+    ; one that reaches the probe.
+    cmp al, 13
+    jne .cancel                 ; two lines, so .cancel takes .cancelfull
+    cmp byte [fm_fmtstep], 0
+    jne .swapgo
+    push ax
+    mov al, MOD_FMT
+    call mod_need               ; the system disk is in NOW - or it is not
+    pop ax
+    jc .swapno
+    mov byte [fm_fmtstep], 1
+    mov al, 6                   ; re-arm the same mode; only the line changes
+    jmp .swaparm
+.swapno:
+    push bx                     ; it still could not be read: say which disk
+    push cx                     ; and leave the window as it was (SPEC.md 59)
+    mov al, 1
+    mov bx, fm_swaptab
+    mov cx, FM_NSWAP
+    call KERNEL_SEG:cw_toast_say
+    pop cx
+    pop bx
+    jmp short .cancelfull
+.swapgo:
+    call fm_edit_end            ; the prompt is spent; fm_fmt_go arms the
+    call fm_fmt_go              ; confirmation, or toasts an unreadable medium
+    jmp .out
+.swaparm:
+    call fm_edit_arm
+    jmp .out
+
 .confirm:
-%ifndef KERN_SMALL
     cmp byte [di+FS_EDIT], 5    ; ...and the FORMAT confirmation still takes
     je .confirme                ; ENTER (SPEC.md 22.12): what it borrows from
-%endif                          ; mode 3 is the ASYMMETRY, not the key - a
                                 ; format was asked for by neither Delete nor
                                 ; any other key, so there is no gesture to
                                 ; complete
@@ -3783,17 +3840,14 @@ fm_editkey:
     jne .cancel                 ; yes and EVERY other key - Enter included -
                                 ; says no (SPEC.md 22). The whole word again:
                                 ; AL = 0 is what keeps a NumLock '.' out
-%ifndef KERN_SMALL
     jmp short .commit
 .confirme:
     cmp al, 13
     jne .cancel                 ; anything but Enter means no (SPEC.md 22.12)
-%endif
 .commit:
     call fm_edit_commit
     jmp short .out
 .cancel:
-%ifndef KERN_SMALL
     ; The FORMAT prompt is TWO lines (SPEC.md 22.12), so one status line
     ; cannot undo it: .lineonly is CF = 0, "the status line is all that
     ; moved", and fm_status_only repaints exactly that. Escape therefore left
@@ -3808,16 +3862,15 @@ fm_editkey:
     ; which is exactly how every test in this tree missed it.
     cmp byte [di+FS_EDIT], 5
     je .cancelfull
-%endif
+    cmp byte [di+FS_EDIT], 6    ; the swap prompt is two lines too
+    je .cancelfull
     call fm_edit_end
 .lineonly:
     clc                         ; CF = 0: the typed name is ON the status line
     jmp short .pops             ; and NOTHING else on this window moved, so a
-%ifndef KERN_SMALL
 .cancelfull:                    ; ...two lines: the caller owes the window
     call fm_edit_end
     jmp short .out
-%endif
 .out:                           ; keystroke owes one line, not a repaint
     stc                         ; anything else - commit, cancel, the replace
 .pops:                          ; question - changed the listing or the mode
@@ -3914,10 +3967,8 @@ fm_edit_commit:
     push di
     mov di, [fm_vp]
     mov al, [di+FS_EDIT]
-%ifndef KERN_SMALL
     cmp al, 5
     je .fmt
-%endif
     cmp al, 3
     je .del
     cmp byte [fm_elen], 0
@@ -3937,7 +3988,6 @@ fm_edit_commit:
     mov di, fm_ebuf             ; ...new name; the eleven name bytes and
     call dskw_rename_x          ; nothing else move (SPEC.md 18.4)
     jmp .verdict                ; NEAR, for the reason above
-%ifndef KERN_SMALL
     ; Format (SPEC.md 22.12). The row is the one the PROMPT was built from,
     ; not one re-derived now, for the reason Rename and Delete work from
     ; fm_onam rather than from FS_SEL: what the line asked about has to be
@@ -4019,7 +4069,6 @@ fm_edit_commit:
     pop cx
     pop bx
     jmp short .bcast
-%endif
 .del:
     call fmv_sync_x
     mov si, fm_onam
@@ -4708,6 +4757,22 @@ fm_edit_end:
     mov di, fm_pool
     mov cx, FM_MAXWIN
 .clr:
+    ; A format confirmation ending is where FORMAT.DRV goes back (SPEC.md
+    ; 2.8.3). Here rather than at the four paths that end one, because this
+    ; is what all four go through - and it is the moment nothing of the image
+    ; is on the stack, which is the whole rule about dropping a module.
+    ;
+    ; Gated on a format mode actually having been armed, so an ordinary
+    ; rename or delete ending costs a compare. fm_edit_arm calls this too, so
+    ; without the gate arming the confirmation would drop the image the probe
+    ; had just loaded and the status line would read it back off the floppy.
+    cmp byte [di+FS_EDIT], 5
+    je .fmtgone
+    cmp byte [di+FS_EDIT], 6
+    jne .clrit
+.fmtgone:
+    call fm_fmt_drop
+.clrit:
     mov byte [di+FS_EDIT], 0
     add di, FS_SIZE
     loop .clr
@@ -5876,10 +5941,10 @@ fm_draw_status:
     je .fs_st_del
     cmp al, 4
     je .fs_st_rep
-%ifndef KERN_SMALL
     cmp al, 5
     je .fs_st_fmt
-%endif
+    cmp al, 6
+    je .fs_st_swap              ; the disk-swap prompt (SPEC.md 2.8.5)
     mov si, fm_s_newfld
     cmp al, 1
     je .fs_st_prompt
@@ -5908,7 +5973,6 @@ fm_draw_status:
     mov si, fm_s_repk           ; other status line goes
     jmp .fs_stat                ; NEAR: the format question below sits between
                                 ; here and .fs_stat
-%ifndef KERN_SMALL
     ; "Format A: as 720K?" over "Spc=size  Enter=yes  Esc=no" (SPEC.md 22.12),
     ; the replace question's own two-line shape. The SIZE is the point of
     ; naming it: dskw_fmt_probe cannot always tell 360K media from
@@ -5949,7 +6013,28 @@ fm_draw_status:
     jc .fs_stat
     mov si, fm_s_fmtk2
     jmp short .fs_stat
-%endif
+.fs_st_swap:
+    ; The swap prompt (SPEC.md 2.8.5): the row above says which disk is wanted
+    ; and the status line says the keys, which is the format question's own
+    ; two-line shape. [fm_fmtstep] picks the first line, so one mode does both
+    ; halves and no ladder in this file gained a second value to know about.
+    mov si, fm_s_swap2
+    cmp byte [fm_fmtstep], 0
+    jne .fs_swapl
+    mov si, fm_s_swap1
+    call fm_scat
+    mov si, fm_s_swapd          ; ...the drive letter, stamped
+.fs_swapl:
+    call fm_scat
+    mov byte [di], 0
+    mov dx, [fm_cy]
+    add dx, [fm_staty]
+    sub dx, 9
+    call fm_stat_line
+    mov di, fm_hdrbuf
+    mov si, fm_s_swapk
+    jmp .fs_stat
+
 .fs_st_del:
     mov si, fm_s_delpr          ; "Delete NAME? Del=yes Esc=no", or
     call fm_scat                ; "Delete NAME +contents? ..." for a folder
@@ -6246,7 +6331,11 @@ fm_cmdchg:  resb 1              ; FMD_*: how much of the acting window the
                                 ; described one of its values rather than
                                 ; what it held, which is the shape SPEC.md
                                 ; 48.22.1 is about
-%ifndef KERN_SMALL
+fm_fmtstep: resb 1              ; the swap prompt's step (SPEC.md 2.8.5):
+                                ; 0 = the system disk is wanted, 1 = the disk
+                                ; to be formatted. Not per window for
+                                ; fm_fmtrow's reason - at most one status-line
+                                ; confirmation exists in the machine at a time
 fm_fmtrow:  resb 1              ; the dskw_fmt_tab row the FORMAT confirmation
                                 ; (SPEC.md 22.12) was built from, banked when
                                 ; the mode was armed. Not per-window, because
@@ -6255,7 +6344,6 @@ fm_fmtrow:  resb 1              ; the dskw_fmt_tab row the FORMAT confirmation
                                 ; the machine at a time, which is the same
                                 ; thing that lets fm_onam and fm_ebuf be
                                 ; single copies
-%endif
 
 fm_delt:    resw 1              ; [ticks] at the last DELETE key fm_onkey saw,
                                 ; arming and confirming alike (SPEC.md 22):
@@ -6330,10 +6418,8 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
                                 ; routine here keeps its ordinary near `ret`
 fmf_files_init:         call files_init_x
                     retf
-%ifndef KERN_SMALL
 fmf_fm_bar_gate:        call fm_bar_gate_x
                     retf
-%endif
 fmf_files_open:         call files_open_x
                     retf
 fmf_files_open_drive:   call files_open_drive_x

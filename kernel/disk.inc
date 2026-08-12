@@ -1485,7 +1485,12 @@ dsk_ltrtab:                     ; every message that names the system disk
     dw ui_s_nodisk_l            ; the Task Manager's notice (SPEC.md 28.3)
     dw cp_s_dsdrv               ; the Control Panel's save refusal (51.5.1)
     dw drv_e1_l                 ; DRVE_DISK, the Drivers page's status (51)
-DSK_LTRN equ 3
+    dw cp_s_nodrv               ; ...and its OPEN refusal (SPEC.md 2.8.4), now
+                                ; that the panel's own code is a file on that
+                                ; same disk
+    dw fm_s_swapd               ; ...and the formatter's swap prompt (2.8.5),
+    dw fm_s_swapnd              ; which names it twice: the ask and the refusal
+DSK_LTRN equ 6
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own. DS is still KERNEL_SEG,
                                 ; so the DATA stays in .text at every toggle
@@ -6020,5 +6025,25 @@ dsk_rover:    resw 1            ; next cluster the allocator examines
 dsk_fatd1:    resw 1            ; the dirty range's high end; the low end is
                                 ; dsk_fatd0 in .text (it must read CLEAN before
                                 ; the first mount, and .bss reads as 0)
+
+section .text
+
+section .cold                   ; ...the far entries themselves live HERE, or
+                                ; their `call <body>` would cross too
+; -----------------------------------------------------------------------------
+; Far entries for the ON-DEMAND MODULES (SPEC.md 2.8)
+;
+; The floppy formatter is a module now (SPEC.md 18.96), and sectors are what
+; it is FOR: its whole outbound surface is these three plus a duplicated error
+; mapper. A module runs from a heap claim with a CS of its own, so a near call
+; from `.modf` into this segment is the bug tools/os88ovlchk.py refuses - the
+; same one SPEC.md 2.6 refuses between `.text` and `.cold`.
+; -----------------------------------------------------------------------------
+dskf_disk_read:          call disk_read_x
+                    retf
+dskf_disk_write:         call disk_write_x
+                    retf
+dskf_dsk_vol_row:        call dsk_vol_row_x
+                    retf
 
 section .text

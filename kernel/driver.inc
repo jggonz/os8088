@@ -2996,8 +2996,17 @@ drv_notice_x:
     je .out
     mov byte [drv_nerr], 0
     mov byte [cp_sel], CP_IDRV
-    mov al, KIND_CTRL
-    call KERNEL_SEG:cw_app_launch
+    call cp_open_x              ; SPEC.md 2.8.4. drv_notice runs BEFORE
+                                ; ui_task starts, so the system disk is still
+                                ; the one the machine booted from and this
+                                ; load is as reliable as the boot was - which
+                                ; is what makes the panel affordable as a
+                                ; module at all (docs/ONDEMAND-PLAN.md 2.2).
+                                ;
+                                ; The _x BODY, near: driver.inc is cold now
+                                ; and so is ctrl.inc, so routing this out to
+                                ; the .text thunk and straight back in would
+                                ; be SPEC.md 2.6's double crossing
 .out:
     pop ax
     ret
@@ -3073,5 +3082,47 @@ drv_svc:    resb DSV_SIZE*DRVC_MAX  ; ...and a copy of each one's table, so
                                 ; names the SOUND driver's and did not change
 drv_cfg:    resb CFG_NB         ; the live settings, staged (layout above)
 drv_cfgbuf: resb CFG_FBUF       ; the file itself, records and all
+
+section .text
+
+section .cold                   ; ...the far entries themselves live HERE, or
+                                ; their `call <body>` would cross too
+; -----------------------------------------------------------------------------
+; Far entries for the ON-DEMAND MODULES (SPEC.md 2.8)
+;
+; The Control Panel is a module now, and its Drivers page is most of what
+; reaches in here - eleven bodies, twenty-one call sites. Every one of them
+; was a near call the day driver.inc went cold and ctrl.inc was still cold
+; with it; the module boundary is what made them far again.
+;
+; A module is `.cold` in every respect but its address: it runs from a heap
+; claim with a CS of its own, so a near call from `.modc`/`.modf` into this
+; segment is the bug tools/os88ovlchk.py exists to refuse - the same one
+; SPEC.md 2.6 refuses between `.text` and `.cold`. These are `dwf_*`'s idiom
+; with a module on the other end instead of `.text`, and they are four bytes
+; each because the bodies keep the near `ret` they have always had.
+; -----------------------------------------------------------------------------
+drvf_drv_row:            call drv_row_x
+                    retf
+drvf_drv_status:         call drv_status_x
+                    retf
+drvf_drv_cp_call:        call drv_cp_call_x
+                    retf
+drvf_drv_cls_svc:        call drv_cls_svc_x
+                    retf
+drvf_drv_unload:         call drv_unload_x
+                    retf
+drvf_drv_tier:           call drv_tier_x
+                    retf
+drvf_drv_load:           call drv_load_x
+                    retf
+drvf_drv_cp_name:        call drv_cp_name_x
+                    retf
+drvf_drv_cp_count:       call drv_cp_count_x
+                    retf
+drvf_drv_cp_class:       call drv_cp_class_x
+                    retf
+drvf_drv_cfg_save:       call drv_cfg_save_x
+                    retf
 
 section .text

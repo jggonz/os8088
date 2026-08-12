@@ -133,6 +133,26 @@ def segment_of(name, defines=(), check=True):
     return equ[nm]
 
 
+def _modcut(blob):
+    """Where the on-demand modules begin, out of the image's own trailer.
+
+    SPEC.md 2.8: the kernel assembles whole and tools/os88mod.py splits it, so
+    an assembly done here is longer than the shipped build/kernel.bin by
+    however much module code the tree currently carries.  Returns len(blob)
+    when there is no trailer, so a kernel built before this existed - or one
+    built with the sections empty - still compares whole.
+    """
+    if len(blob) < 16 or int.from_bytes(blob[-2:], "little") != 0x384F:
+        return len(blob)
+    off = int.from_bytes(blob[-6:-2], "little")
+    if off + 6 > len(blob) or blob[off:off + 4] != b"O8MM":
+        return len(blob)
+    n = blob[off + 4]
+    if n == 0:
+        return off
+    return int.from_bytes(blob[off + 6:off + 10], "little")
+
+
 def _load(defines=(), check=True):
     key = tuple(defines)
     if key in _cache:
@@ -162,7 +182,14 @@ def _load(defines=(), check=True):
 
     built = os.path.join(ROOT, "build", "kernel.bin")
     if check and os.path.exists(built):
-        if open(binf, "rb").read() != open(built, "rb").read():
+        # build/kernel.bin is the assembled image with the on-demand modules
+        # CUT OFF (SPEC.md 2.8), so compare against the same prefix rather
+        # than the whole thing.  The trailer os88mod.py reads is what says
+        # where that cut falls, and reusing it here is what stops this file
+        # growing a second opinion about the layout.
+        mine = open(binf, "rb").read()
+        mine = mine[:_modcut(mine)]
+        if mine != open(built, "rb").read():
             raise RuntimeError(
                 "the map describes a DIFFERENT kernel from build/kernel.bin: "
                 "run `make` (or pass the knob's --define) before trusting any "

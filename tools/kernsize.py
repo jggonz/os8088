@@ -147,7 +147,7 @@ THEMES = (
      ("vga12.inc", "softgfx.inc", "font.inc", "icons.inc", "viddet.inc",
       "vidsel.inc", "splash.inc")),
     ("the kernel proper: API table, heap, scheduler, events",
-     (RESIDUAL, "memory.inc", "sched.inc", "events.inc")),
+     (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc")),
     ("the Control Panel", ("ctrl.inc",)),
     ("the three built-in kinds", ("apps.inc",)),
 )

@@ -407,21 +407,21 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 5713,
+    "bss": 5748,
     "budget": 104960,
     "codemax": 65536,
-    "cold": 37125,
-    "coldpara": 2336,
+    "cold": 34140,
+    "coldpara": 2144,
     "fatpara": 288,
-    "imgpara": 3296,
-    "kend": 6592,
+    "imgpara": 3328,
+    "kend": 6432,
     "kseg": 96,
-    "ksize": 103936,
+    "ksize": 101376,
     "lowbss": 7762,
     "lowpara": 576,
     "ovl": 3139,
     "stk0": 1024,
-    "text": 46773
+    "text": 46997
   },
   "small": {
     "bss": 5495,
@@ -934,30 +934,29 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,718 | 36.6% |
-| the window system and its furniture | 19,038 | 22.7% |
-| drawing: adapters, primitives, glyphs, icons | 12,631 | 15.1% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,090 | 12.0% |
-| the kernel proper: API table, heap, scheduler, events | 6,209 | 7.4% |
-| the Control Panel | 3,836 | 4.6% |
-| the three built-in kinds | 1,376 | 1.6% |
-| **total** | **83,898** | |
+| the file system, end to end | 30,380 | 37.4% |
+| the window system and its furniture | 19,033 | 23.5% |
+| drawing: adapters, primitives, glyphs, icons | 12,631 | 15.6% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,130 | 12.5% |
+| the kernel proper: API table, heap, scheduler, events | 6,671 | 8.2% |
+| the three built-in kinds | 1,376 | 1.7% |
+| the Control Panel | 916 | 1.1% |
+| **total** | **81,137** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 1,000 | 7,704 | **8,704** | 338 | — |
+| `files.inc` — the Disk window (§22) | 1,127 | 7,881 | **9,008** | 339 | — |
 | `wm.inc` — the window manager (§11) | 8,115 | — | **8,115** | 669 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 352 | 5,891 | **6,243** | 890 | 3,584 |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,641 | **5,820** | 155 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 358 | 5,903 | **6,261** | 890 | 3,584 |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,206 | — | **5,206** | 653 | — |
-| `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,883 | **4,106** | 106 | — |
-| `ctrl.inc` — the Control Panel (§31) | 672 | 3,164 | **3,836** | — | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 4,977 | **5,156** | 155 | — |
+| `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,887 | **4,110** | 106 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,193 | — | **3,193** | 145 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,448 | **2,858** | 341 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,488 | **2,898** | 341 | — |
 | `assoc.inc` — file type associations (§54) | 517 | 2,332 | **2,849** | 43 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,627 | — | **2,627** | 40 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,622 | — | **2,622** | 40 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,555 | — | **2,555** | 194 | 98 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,197 | **2,197** | 139 | — |
 | `memory.inc` — the claim heap (§50) | 14 | 2,014 | **2,028** | 14 | 256 |
@@ -973,17 +972,19 @@ generated in the first place.
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 15 | 1,052 | **1,067** | 18 | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
+| `ctrl.inc` — the Control Panel (§31) | 718 | 198 | **916** | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 916 | — | **916** | 9 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 815 | — | **815** | — | — |
 | `loader.inc` — the package loader (§21) | — | 799 | **799** | 58 | — |
 | `dock.inc` — the dock (§30) | 793 | — | **793** | 34 | — |
-| `toast.inc` — **(undescribed)** | 481 | — | **481** | 43 | — |
+| `toast.inc` — the menu bar's transient message (§59) | 481 | — | **481** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 454 | — | **454** | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 36 | 412 | **448** | 34 | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,955 | — | **2,955** | — | — |
-| **total** | **46,773** | **37,125** | **83,898** | **5,713** | **7,762** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,969 | — | **2,969** | — | — |
+| **total** | **46,997** | **34,140** | **81,137** | **5,748** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1350,6 +1351,55 @@ thunks rather than through the window record.
 `.cold` and `.ovl` relieve the segment. Nothing relieves the footprint any
 more except doing less. There is one precedent for doing less, and it is the
 Task Manager.
+
+> **A second lever exists now and the first thing has gone through it** —
+> SPEC.md §2.8, docs/ONDEMAND-PLAN.md. The **Control Panel** is a file
+> (`CTRL.DRV`, 3,185 bytes) read into a heap claim when it is opened and freed
+> when it closes: measured, `KERN_SIZE` **102,912 → 100,352, −2,560 bytes**,
+> five 512-byte steps, on both builds. What is left in the table below for
+> `ctrl.inc` is its DATA and the two routines that could not go
+> (`cp_tick_due`, `cp_drv_gone`) — 918 bytes against 3,876.
+>
+> **The floppy formatter went through next** (`FORMAT.DRV`, 802 bytes), and
+> its payoff is the other kind: it was `%ifndef KERN_SMALL`, a whole feature
+> compiled out, so **the 128KB machine now HAS a formatter it never had** —
+> and `kern_small` came out of the same round at **97,280 → 96,256 with 1,024
+> spare**, against the zero it stood at. `kern_big` is **102,912 → 99,840**.
+>
+> **Neither is free against the other guard, and that is the number to watch
+> now.** `.text` + `.bss` is **65,375 of 65,536 — 161 bytes left**. The
+> dispatch really is free (the `.text` thunks did not change), but the loader's
+> five `cw_*` shims, two thunks, the module table and — mostly — the four
+> refusal and prompt strings are `.text` all the same. **The next addition to
+> `.text` or `.bss` anywhere will need one of the levers in this document**,
+> and this is the guard nobody can raise.
+>
+> **On-demand kernel modules**, in the original note's words: It is this one without the
+> published ABI: `.cold` is already `vstart=0`, contains **zero data
+> directives**, runs with `DS = KERNEL_SEG` and calls out only through the 107
+> `cw_*` shims, so cold code is already position-independent at paragraph
+> granularity and could execute from a heap claim unchanged. Making the *cold*
+> thunk load-and-dispatch spends **no `.text`**, which is the guard with 438
+> bytes left.
+>
+> **What may go is decided by the user and not by the seam**, which is that
+> document's ONDEMAND-PLAN §1 and the thing to read first: a feature qualifies
+> only if the system disk is already required to use it, or can be required
+> without interrupting what the user was doing — on a one-floppy machine every
+> load is a disk swap. Two candidates survive it. The **Control Panel**, worth
+> **3,072 bytes on both builds**, whose precondition is one it already has
+> (`cp_flush_close` writes `SYSTEM.CFG` to that disk). And **Disk Format**,
+> which is not a saving at all: it is compiled out of `kern_small` by
+> `%ifndef KERN_SMALL`, so on demand **gives that build a feature it does not
+> have**, funded by the panel's 3,072. MS-DOS drew the same line — `COPY` in
+> `COMMAND.COM`, `FORMAT` external — and the file dialog and Cut/Copy/Paste
+> fail it for `COPY`'s reason.
+>
+> The passage above says the Control Panel is *"the window you want when a
+> driver will not attach"*, and it is right that this is the objection to
+> weigh; ONDEMAND-PLAN §2.2 weighs it and finds it survivable, because
+> `drv_notice` runs before `ui_task` starts and so before any disk can have
+> been swapped.
 
 A cold segment would have taken about 4,900 bytes off `KERN_CODE_MAX` and
 **nothing** off `KERN_BUDGET`. Making it a package on the system disk took

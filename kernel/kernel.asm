@@ -953,6 +953,24 @@ section .lowbss  nobits vstart=0
 section .bss     nobits vfollows=.text valign=1
 section .cold    start=COLD_START vstart=0
 section .ovl     start=OVL_START vstart=0
+; --- on-demand kernel modules (SPEC.md 2.8, docs/ONDEMAND-PLAN.md) -----------
+; Code that is NOT in KERNEL.SYS at all. Each of these is assembled here, with
+; this kernel's data addresses, and then SPLIT OUT of the binary by
+; tools/os88mod.py into a file of its own; the kernel loads one into a heap
+; claim when the feature is asked for and frees it when the feature is done.
+;
+; They are `.cold` in every respect that matters - vstart=0, CS of their own,
+; DS still KERNEL_SEG, out through the cw_* shims - which is exactly why they
+; can leave: cold code was already position-independent at paragraph
+; granularity and nothing but the constant in its inbound thunk tied it to
+; COLD_SEG. Being part of THIS assembly is the whole trick, and it is what
+; keeps a module's view of kernel data from being a second opinion.
+;
+; They are LAST in the file and unpadded, so truncating at MODC_START yields
+; byte for byte the kernel.bin that would have been emitted without them.
+section .modc    start=MODC_START vstart=0
+section .modf    start=MODF_START vstart=0
+section .modmap  start=MODMAP_START vstart=0
 section .text
 
 ; =============================================================================
@@ -2163,6 +2181,15 @@ kmain:
     call mem_init               ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
+    call mod_init               ; on-demand modules (SPEC.md 2.8): point every
+                                ; entry slot at mod_gone. `-f bin` zeroes no
+                                ; .bss, so until this runs those slots hold
+                                ; whatever was in memory - and they are
+                                ; far-call targets. It is here rather than
+                                ; lower down because it needs nothing but the
+                                ; table itself, and the rule for a thing that
+                                ; makes a jump target safe is that it cannot
+                                ; be after anything that could jump
 %ifdef BAKED_FONT
     call FAT_SEG:ovl_font_init  ; the typeface this BUILD carries (SPEC.md
                                 ; 6.2), out of the overlay - so it needs no
@@ -2569,6 +2596,11 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "assoc.inc"          ; file type associations (SPEC.md 54): the
                               ; tables and the icon composition. BEFORE
                               ; disk.inc, whose harvest calls into it
+%include "mod.inc"            ; on-demand kernel modules (SPEC.md 2.8): the
+                              ; loader and the far-pointer table. BEFORE
+                              ; every module it serves, because a module's
+                              ; own section carries the header that names
+                              ; MOD_* and MOD_NENT
 %include "disk.inc"
 %include "diskw.inc"          ; the FAT write path (SPEC.md 18.4): after
                                 ; disk.inc, whose constants and layout it uses
@@ -2723,11 +2755,17 @@ cw_vga_xor_rect_vram:   call vga_xor_rect_vram
                     retf
 cw_vid_avail_test:      call vid_avail_test
                     retf
-cw_vid_disp_init:        call vid_disp_init
-                     retf
 cw_vid_switch:          call vid_switch
                     retf
 %ifdef KERN_BIG
+; vidsel.inc's whole dual-display half is inside one %ifdef KERN_BIG, so these
+; three bodies do not exist in the small build. cw_vid_disp_init was OUTSIDE
+; the guard while its two siblings were inside it, which broke `make small`
+; outright - the assembly stops at an undefined symbol. Its one caller
+; (drv_vid_apply) is itself KERN_BIG-guarded, so nothing but the shim was
+; wrong and nothing in the big build moves.
+cw_vid_disp_init:       call vid_disp_init
+                    retf
 cw_vid_dual_ok:         call vid_dual_ok
                     retf
 cw_vid_disp_relay:      call vid_disp_relayout
@@ -2783,6 +2821,8 @@ cw_wm_win_rect:         call wm_win_rect
 ; ...and the other direction: what the kernel calls IN the Control Panel.
 ; cp_tpl and the driver/UI call sites still name these, so nothing outside
 ; ctrl.inc changed at all.
+cp_open:              call COLD_SEG:cpf_cp_open
+                    ret
 cp_paint:             call COLD_SEG:cpf_cp_paint
                     ret
 cp_onclick:           call COLD_SEG:cpf_cp_onclick
@@ -2850,6 +2890,7 @@ fm_rcmd:              call COLD_SEG:fmf_fm_rcmd
                     ret
 ld_run_body:          call COLD_SEG:ldf_ld_run_body
                     ret
+mod_init:             call COLD_SEG:modf_mod_init
 loader_init:          call COLD_SEG:ldf_loader_init
                     ret
 loader_run:           call COLD_SEG:ldf_loader_run
@@ -3079,6 +3120,50 @@ COLD_SIZE equ cold_end - $$
 section .ovl
 ovl_end:
 OVL_SIZE equ ovl_end - $$
+
+; --- the on-demand modules' file positions (SPEC.md 2.8) ---------------------
+; UNPADDED, unlike COLD_START and OVL_START, and that is the point: a module
+; is extracted into a file of its own rather than read at an address, so
+; nothing needs it aligned - and MODC_START is then exactly where the kernel
+; image ends, so `truncate to MODC_START` reproduces the pre-module kernel.bin
+; byte for byte. tools/os88mod.py proves that rather than trusting it.
+MODC_START   equ OVL_START + OVL_SIZE
+MODF_START   equ MODC_START + MODC_SIZE
+MODMAP_START equ MODF_START + MODF_SIZE
+
+section .modc
+modc_end:
+MODC_SIZE equ modc_end - $$
+
+section .modf
+modf_end:
+MODF_SIZE equ modf_end - $$
+
+; --- the split table, which is HOST-SIDE ONLY --------------------------------
+; os88mod.py has to know where each module starts and how long it is, and the
+; only thing that can answer without a second opinion is this assembly. So it
+; says so, in a trailer: the file's last two bytes are the magic and the two
+; before them point back at the table. The whole of it - modules and trailer -
+; is stripped from kernel.bin, so not one byte of this reaches a machine.
+;
+; The alternative was assembling the kernel a second time under -DKERNSIZE and
+; parsing the `ks:` line, which is what tools/kernsize.py does. It works and it
+; costs an assembly; this costs 18 bytes of a file that is about to be cut up.
+section .modmap
+mod_map:
+    db 'O8MM'
+    db MOD_MAX                  ; rows below
+    db 0
+    dd MODC_START, MODC_SIZE    ; DWORDS: a file offset past 64KB is the
+                                ; ordinary case here, the kernel being ~100KB
+                                ; before a module is added, and a `dw` of it
+                                ; assembles as a silent truncation under any
+                                ; flags but this tree's -w+error
+    dd MODF_START, MODF_SIZE
+    dd MODMAP_START             ; ...where the table began, and
+    dw 0x384F                   ; the last two bytes of the file
+modmap_end:
+MODMAP_SIZE equ modmap_end - $$
 
 ; What the Task Manager's RAM view reports (SPEC.md 28), in KB rounded up:
 ; the whole kernel, buffers and stacks included, because since SPEC.md 2 that

@@ -80,6 +80,11 @@ MEM_K_ASC  equ 0xFF06           ; one volume's ASSOC.DAT cache (SPEC.md
                                 ; 54.7) - shared, reloaded on a volume switch
 MEM_K_FATW equ 0xFF05           ; one volume's private FAT window (18.8.1),
                                 ; held for as long as that volume is mounted
+MEM_K_MOD  equ 0xFF08           ; an on-demand kernel module's image (SPEC.md
+                                ; 2.8) - claimed top-down like a driver's,
+                                ; because its base IS its CS and so it can
+                                ; never move, and freed by the feature that
+                                ; asked for it rather than by a teardown
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,
