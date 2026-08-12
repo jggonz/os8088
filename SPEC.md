@@ -1192,6 +1192,74 @@ Verified against a byte-exact reference on all three: the mono path over
 CGA's bank boundary, and the buffered path pixel-for-pixel against the
 direct one.
 
+#### 5.5.1 The row address ADVANCES, so it is derived once, not recomputed
+
+**Both backends used to compute a full row address for both ends of every
+row**, which is the largest avoidable cost in the primitive. `vgas_lincopy`
+took two `mul word [vid_stride]` per row; `vgas_bankcopy` called `gfx_rowbase`
+twice, and that routine is a `mul`, a variable `shr`, a bank-table lookup and a
+`call`/`ret`. **Measured on a cycle-accurate 4.77MHz 8088 with a Hercules card,
+`gfx_rowbase` is 11 instructions and 319 cycles — 66.84 µs** — so the two calls
+were 134 µs of a per-row cost `gfxbench` measured at 400 µs, a third of the
+whole primitive. The same band as a `gfx_fill`, which walks its rows with
+`sw_plane_op`'s register-held step (§5.7), costs ~185 µs a row.
+
+So the fill already knew the answer and the scroll did not, and the answer is
+**hold the increment rather than recompute the position** — the same shape as
+§5.7's and as `font_run`'s §6.1.6.
+
+**Measured, `gfxbench`'s `GFX_SCROLL 256x128` on a cycle-accurate 4.77MHz
+8088:**
+
+| adapter | before | after | |
+|---|---:|---:|---:|
+| Hercules | 51,229.07 µs | **34,471.99 µs** | **1.49x** |
+| VGA | 29,095.95 µs | **19,194.37 µs** | **1.52x** |
+
+Per row that is 400 → 269 µs on Hercules, against 134 µs of `gfx_rowbase` the
+change removes — so the saving lands where the measurement said it would.
+**`GFX_FILL 256x128` reports byte-identical counts in both runs** (174,235 on
+Hercules, 100,611 on VGA), which is the control: the fill was not touched, so
+two runs that agree on it are two runs that can be compared on the scroll.
+
+**On VGA it needs no precondition at all.** A linear framebuffer has one bank,
+so `rowbase(y)` is `y * stride` and the two ends of the copy are a constant
+`dy * stride` apart for *any* `dy`. Both products are taken once; the row then
+advances by `± stride`.
+
+**On the banked adapters the constant exists exactly when `dy` is a whole
+number of banks** — a multiple of 2 on CGA, 4 on Hercules. `rowbase(y)` is
+`banktab[y & bmask] + (y >> bshift) * stride`, so a `dy` that leaves the bank
+field alone leaves the quotients differing by `dy >> bshift` and nothing else;
+the destination then walks with `gfx_nextrow` (or `gfx_prevrow` going up, §5.6.7's
+mirror) and the source is a constant away. **This is the one place a VERTICAL
+quantum earns anything in this renderer** (PERFORMANCE.md Set 54 measured that
+there is no y-alignment win in text, fills or blits), and note what it is a
+quantum *of*: the bank count, applied to the scroll **delta**, not 8 applied to
+a window origin. An unaligned `dy` keeps the general form, so it cannot regress.
+
+Three things are load-bearing:
+
+- **`mul` is unsigned and `dy` is signed, and that is fine**, because only the
+  low word of the product is used and a product mod 65536 does not care which
+  sign its operand was read as — the same reason `DI` itself may wrap. What is
+  *not* interchangeable is the shift: `dy >> bshift` must be **`sar`**, because
+  a negative `dy` has to floor, and it is exact only because `dy` is a multiple
+  of the bank count.
+- **The bank test is `dy & bmask`**, and a negative `dy` passes it correctly:
+  two's complement preserves the low bits' residue, so `-8 & 3` is 0.
+- **The two mono loops are written out rather than sharing a body with a
+  direction flag.** The advance is `gfx_nextrow` one way and `gfx_prevrow` the
+  other, and a per-row test of the direction is a memory read and a branch
+  inside the innermost loop of the primitive — `font_char_bb`'s
+  `.srow`/`.crow`/`.drow` is the precedent.
+
+**`make SCROLLROW=1` builds the reference form**, and it is not optional
+diligence: a scroll is a **copy**, so a wrong offset shows the wrong pixels
+rather than no pixels, and "it looks right" is exactly what a wrong delta also
+looks like. The claim is byte identity against that build, on every adapter and
+in both directions.
+
 ### 5.6 `gfx_line` — an arbitrary-angle line (API slot 0x02E0)
 
 **in** AX/BX = x1/y1, CX/DX = x2/y2, inclusive, absolute screen

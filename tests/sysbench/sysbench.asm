@@ -534,7 +534,7 @@ sb_header:
     mov si, sb_l_img
     mov ax, [sb_syskb + SK_IMG]
     call sb_num
-    call sb_build                   ; ...and WHICH BUILD (SPEC.md 57.6), which
+    call sb_build                   ; ...and WHICH BUILD (PERFORMANCE.md Part 8.1), which
                                     ; the two KB rows above cannot say: they
                                     ; round, and three disks whose kernels
                                     ; differ can print the same numbers
@@ -634,12 +634,10 @@ sb_cpu:
     mov bx, [sb_i]
     cmp bx, SB_NCPU
     jae .done
-    mov cl, 3
-    shl bx, cl
-    add bx, sb_ctab
+    call sb_entof
     mov ax, [bx+2]                  ; the body
     mov [bl_body], ax
-    mov ax, [bx+6]                  ; ...and its iteration count
+    mov ax, [bx+10]                 ; ...and its iteration count
     mov [bl_n], ax
     mov si, [bx]                    ; the label
     xor al, al                      ; method P
@@ -663,6 +661,49 @@ sb_cpu:
     pop ax
     ret
 
+; sb_entof - BX = a row index -> BX = its sb_ctab entry (PERFORMANCE.md Part 8.1)
+;
+; The stride lives HERE and in SB_ENTSZ and nowhere else. It was 8 and four
+; sites open-coded `shl bx, 3`; a third book per row made it 12, and an
+; open-coded shift is a silent wrong row rather than a build error.
+; Clobbers BX and flags only - callers hold results in AX/DX/CX/SI.
+sb_entof:
+    push ax
+    push cx
+    mov ax, bx
+    mov cl, 3
+    shl bx, cl                      ; i*8
+    mov cl, 2
+    shl ax, cl                      ; i*4
+    add bx, ax                      ; ...= i*12
+    add bx, sb_ctab
+    pop cx
+    pop ax
+    ret
+
+; sb_nomof - BX = an sb_ctab entry -> AX = the nominal for THIS cpu, x100
+;
+; Three books ride in the row (+4 8086, +6 286, +8 386) and [sb_cputier]'s low
+; byte picks the column. Anything newer than a 386 reads the 386 column: this
+; is a period OS and the tier ladder stops there, and a 486 running the 386's
+; book is a closer answer than a 486 running the 8086's - which is what every
+; non-8088 machine got until PERFORMANCE.md Part 8.1.
+sb_nomof:
+    push bx
+    push cx
+    mov al, [sb_cputier]
+    xor ah, ah
+    cmp ax, 2
+    jbe .have
+    mov ax, 2
+.have:
+    shl ax, 1                       ; a word per book
+    add bx, ax
+    mov ax, [bx+4]
+    pop cx
+    pop bx
+    ret
+
 ; --- block 2: the same rows as clocks, against the 8086 book -----------------
 ;
 ; measured clocks x100 = counts * 400 / (N * SB_UNROLL) - exact on a period
@@ -676,7 +717,13 @@ sb_cpuderive:
     push si
     push di
     call bl_blank
-    mov si, sb_s_h_der
+    mov si, sb_s_h_der              ; ...and SAY which book, because the ratio
+    cmp byte [sb_cputier], CPU_286  ; column is meaningless without it and the
+    jb .book                        ; report is read months later, off a disk,
+    mov si, sb_s_h_d286             ; by somebody who was not at the machine
+    je .book
+    mov si, sb_s_h_d386
+.book:
     call bl_sline
     mov si, sb_s_h_der2
     call bl_sline
@@ -685,9 +732,7 @@ sb_cpuderive:
     mov bx, [sb_i]
     cmp bx, SB_NCPU
     jae .done
-    mov cl, 3
-    shl bx, cl
-    add bx, sb_ctab
+    call sb_entof
     mov [sb_ent], bx
     mov bx, [sb_i]
     shl bx, 1
@@ -696,7 +741,7 @@ sb_cpuderive:
     mov ax, [bx]
     mov dx, [bx+2]
     mov bx, [sb_ent]
-    mov cx, [bx+6]                  ; N
+    mov cx, [bx+10]                 ; N
     call sb_clkx100                 ; DX:AX = measured clocks x100
     mov [sb_meas], ax
     mov [sb_meas+2], dx
@@ -711,8 +756,8 @@ sb_cpuderive:
     mov di, 22
     mov cx, 9
     call bl_dec
-    mov bx, [sb_ent]                ; the 8086 book figure
-    mov ax, [bx+4]
+    mov bx, [sb_ent]                ; ...the book figure for THIS cpu
+    call sb_nomof
     xor dx, dx
     mov di, 32
     mov cx, 9
@@ -720,7 +765,8 @@ sb_cpuderive:
     mov ax, [sb_meas]               ; ...and measured / nominal, x100
     mov dx, [sb_meas+2]
     mov bx, [sb_ent]
-    mov bx, [bx+4]
+    call sb_nomof
+    mov bx, ax
     xor cx, cx
     call gb_ratio_sb
     mov di, 42
@@ -779,10 +825,9 @@ sb_est:
     push si
     push di
     mov di, bx                      ; DI = the entry index
-    mov cl, 3
-    shl bx, cl
-    add bx, sb_ctab
-    mov si, [bx+4]                  ; SI = the nominal, clocks x100
+    call sb_entof
+    call sb_nomof                   ; ...this cpu's book, not the 8086's
+    mov si, ax                      ; SI = the nominal, clocks x100
     mov bx, di
     call sb_clkof                   ; DX:AX = measured clocks x100
     mov bx, ax
@@ -805,10 +850,8 @@ sb_clkof:
     push cx
     push si
     mov si, bx
-    mov cl, 3
-    shl bx, cl
-    add bx, sb_ctab
-    mov cx, [bx+6]                  ; CX = the row's iteration count
+    call sb_entof
+    mov cx, [bx+10]                 ; CX = the row's iteration count
     mov bx, si
     shl bx, 1
     shl bx, 1
@@ -855,12 +898,54 @@ sb_shlbit:
     mov cx, 9
     call bl_div48
     call bl_get32
+    ; ...and INTO THIS MACHINE'S OWN CLOCKS (PERFORMANCE.md Part 8.1). sb_clkx100 counts
+    ; in 4.77MHz periods, because that is what a PIT count is four of - so on a
+    ; 16MHz 286 a one-clock-per-bit shift measures 0.28 of one. A true number
+    ; in the wrong currency, and unreadable against any book. Scaling by the
+    ; MUL estimate above puts it back: x100 * MHzx100 / 477, and on a 4.77MHz
+    ; machine that factor is 1 BY CONSTRUCTION, so tier 0's published figure
+    ; does not move.
+    push dx                         ; bank the gap: sb_est below runs the same
+    push ax                         ; 48-bit accumulator this came out of
+    mov bx, SB_I_MUL
+    call sb_est                     ; DX:AX = est MHz x100
+    mov bx, ax
+    mov cx, dx                      ; CX:BX = it
+    pop ax
+    pop dx                          ; DX:AX = the per-bit gap again
+    call sb_mul16                   ; ...times the estimate
+    mov bx, 477
+    xor cx, cx
+    call sb_divby
     jmp short .show
 .bad:
     xor ax, ax
     xor dx, dx
 .show:
     mov si, sb_d_shlbit
+    mov cx, 9
+    call bl_kv
+    ; What the book says for THIS cpu, and it is DERIVED FROM THE SAME TWO
+    ; ROWS the measurement subtracts rather than being a fourth constant
+    ; somebody has to keep in step: (nom13 - nom4) / 9. 8086 400, 286 100,
+    ; 386 0 - the barrel shifter, which is the whole reason this row stopped
+    ; meaning anything past tier 0.
+    mov bx, SB_I_SHL13
+    call sb_entof
+    call sb_nomof
+    mov cx, ax
+    mov bx, SB_I_SHL4
+    call sb_entof
+    call sb_nomof
+    sub cx, ax
+    mov ax, cx
+    xor dx, dx
+    mov cx, 1                       ; load the accumulator, then the 9 bits
+    call bl_mul48
+    mov cx, 9
+    call bl_div48
+    call bl_get32
+    mov si, sb_d_shlnom
     mov cx, 9
     call bl_kv
     pop si
@@ -1881,7 +1966,7 @@ sb_fdd:
     ret
 
 ; -----------------------------------------------------------------------------
-; sb_build - one row naming the kernel this report came off (SPEC.md 57.6)
+; sb_build - one row naming the kernel this report came off (PERFORMANCE.md Part 8.1)
 ;
 ; The SUM of the three published section lengths. The block holds them
 ; separately - a debugger sees which section moved - but the report has room
@@ -4543,42 +4628,48 @@ sb_ttl:     db 'Sys Bench', 0
 ; one, and the reload instructions counted where a row has them. It is the
 ; BOOK figure and not a claim about this machine - the whole point of the row
 ; beside it is to find out how far apart the two are.
+; label, body, 8086 x100, 286 x100, 386 x100, iterations.  (PERFORMANCE.md Part 8.1)
+;
+; THREE BOOKS IN ONE ROW, because a row is one instruction and the books
+; disagree about it - and the alternative, a table per CPU, is three places
+; that have to stay in step about what row 12 is. sb_nomof picks the column.
 sb_ctab:
-    dw sb_c_nop,     sb_b_nop,       300, 800    ; nop
-    dw sb_c_movrr,   sb_b_movrr,     200, 800    ; mov r16,r16
-    dw sb_c_add,     sb_b_add,       300, 800    ; add r16,r16
-    dw sb_c_inc,     sb_b_inc,       200, 800    ; inc r16
-    dw sb_c_cmp,     sb_b_cmp,       300, 800    ; cmp r16,r16
-    dw sb_c_xchg,    sb_b_xchg,      300, 800    ; xchg ax,r16
-    dw sb_c_shl1,    sb_b_shl1,      200, 800    ; shl r16,1
+    dw sb_c_nop,     sb_b_nop,       300,  300,  300, 800
+    dw sb_c_movrr,   sb_b_movrr,     200,  200,  200, 800
+    dw sb_c_add,     sb_b_add,       300,  200,  200, 800
+    dw sb_c_inc,     sb_b_inc,       200,  200,  200, 800
+    dw sb_c_cmp,     sb_b_cmp,       300,  200,  200, 800
+    dw sb_c_xchg,    sb_b_xchg,      300,  300,  300, 800
+    dw sb_c_shl1,    sb_b_shl1,      200,  200,  300, 800
 sb_e_shl4:
-    dw sb_c_shlcl,   sb_b_shlcl,    2400, 400    ; shl r16,cl  (8 + 4*4)
+    dw sb_c_shlcl,   sb_b_shlcl,    2400,  900,  300, 400  ; 8+4n / 5+n / 3
 sb_e_shl13:
-    dw sb_c_shlcl13, sb_b_shlcl13,  6000, 400    ; shl r16,cl  (8 + 4*13)
-    dw sb_c_load,    sb_b_load,     1400, 400    ; mov ax,[disp16]  (8 + EA 6)
-    dw sb_c_store,   sb_b_store,    1500, 400    ; mov [disp16],ax  (9 + EA 6)
-    dw sb_c_noovr,   sb_b_noovr,    1300, 400    ; mov al,[si]      (8 + EA 5)
-    dw sb_c_ovr,     sb_b_ovr,      1500, 400    ; ...with a segment override
-    dw sb_c_idx,     sb_b_idx,      1700, 400    ; mov al,[bx+disp16] (8 + EA 9)
-    dw sb_c_jmp,     sb_b_jmp,      1500, 400    ; jmp short, taken
-    dw sb_c_pushpop, sb_b_pushpop,  1900, 300    ; push ax + pop ax (11 + 8)
-    dw sb_c_callret, sb_b_callret,  2700, 300    ; call near + ret  (19 + 8)
+    dw sb_c_shlcl13, sb_b_shlcl13,  6000, 1800,  300, 400  ; ...the 386 is flat
+    dw sb_c_load,    sb_b_load,     1400,  500,  400, 400
+    dw sb_c_store,   sb_b_store,    1500,  300,  200, 400
+    dw sb_c_noovr,   sb_b_noovr,    1300,  500,  400, 400
+    dw sb_c_ovr,     sb_b_ovr,      1500,  500,  400, 400  ; no override
+    dw sb_c_idx,     sb_b_idx,      1700,  500,  400, 400  ; penalty past 8086
+    dw sb_c_jmp,     sb_b_jmp,      1500,  700,  700, 400
+    dw sb_c_pushpop, sb_b_pushpop,  1900,  800,  600, 300  ; 11+8 / 3+5 / 2+4
+    dw sb_c_callret, sb_b_callret,  2700, 1800, 1700, 300  ; 19+8 / 7+11 / 7+10
 sb_e_mul:
-    dw sb_c_mul,     sb_b_mul,      12900, 100   ; mov ax,imm + mul r16 (4+125)
-    dw sb_c_mulm,    sb_b_mulm,     13800, 100   ; ...+ mul word [m] (4+128+EA 6)
+    dw sb_c_mul,     sb_b_mul,     12900, 2300, 2400, 100  ; 4+125 / 2+21 / 2+22
+    dw sb_c_mulm,    sb_b_mulm,    13800, 2600, 2600, 100
 sb_e_div:
-    dw sb_c_div,     sb_b_div,      16000, 60    ; xor + mov + div r16 (3+4+153)
+    dw sb_c_div,     sb_b_div,     16000, 2600, 2600, 60   ; 3+4+153 / 2+2+22
 sb_ctab_end:
 
-SB_NCPU  equ (sb_ctab_end - sb_ctab) / 8
+SB_ENTSZ equ 12
+SB_NCPU  equ (sb_ctab_end - sb_ctab) / SB_ENTSZ
 ; The rows other blocks reach for BY INDEX, derived from the table rather
 ; than written down: sb_mhz reads the machine's clock out of the two
 ; execution-bound rows and sb_shlbit subtracts the two shift rows, so a row
 ; inserted above them used to move the answer instead of the row.
-SB_I_MUL   equ (sb_e_mul   - sb_ctab) / 8
-SB_I_DIV   equ (sb_e_div   - sb_ctab) / 8
-SB_I_SHL4  equ (sb_e_shl4  - sb_ctab) / 8
-SB_I_SHL13 equ (sb_e_shl13 - sb_ctab) / 8
+SB_I_MUL   equ (sb_e_mul   - sb_ctab) / SB_ENTSZ
+SB_I_DIV   equ (sb_e_div   - sb_ctab) / SB_ENTSZ
+SB_I_SHL4  equ (sb_e_shl4  - sb_ctab) / SB_ENTSZ
+SB_I_SHL13 equ (sb_e_shl13 - sb_ctab) / SB_ENTSZ
 
 sb_c_nop:     db 'nop', 0
 sb_c_movrr:   db 'mov r16,r16', 0
@@ -4613,7 +4704,7 @@ sb_n_nostamp: db 'unknown (boot sector predates the timer)', 0
 sb_n_yes:   db 'yes', 0
 sb_n_no:    db 'no (CF set)', 0
 
-sb_h_1:     db 'The machine under the graphics: 8086 book clocks against this CPU, RAM', 0
+sb_h_1:     db 'The machine under the graphics: book clocks against this CPU, RAM', 0
 sb_h_2:     db 'bandwidth, the clock, what the kernel own interrupts cost, and the floppy.', 0
 sb_h_3:     db '   R  or the Bench menu   run it.  About 40 seconds on a 4.77MHz 8088 -', 0
 sb_h_4:     db '                          most of it the two 16KB floppy reads - and the', 0
@@ -4743,6 +4834,8 @@ sb_s_warn4: db 'tick - true on a fast host, and never true on the machine this i
 
 sb_s_h_cpu:  db '-- cpu: 32 copies of one instruction per iteration --', 0
 sb_s_h_der:  db '-- the same rows as clocks, against the 8086 book --', 0
+sb_s_h_d286: db '-- the same rows as clocks, against the 80286 book --', 0
+sb_s_h_d386: db '-- the same rows as clocks, against the 80386 book --', 0
 sb_s_h_der2: db 'instruction           measx100  nom x100  ratiox100', 0
 sb_s_h_mem:  db '-- RAM bandwidth: 2048 bytes an iteration (gfxbench has the VRAM) --', 0
 sb_s_h_clk:  db '-- the clock and the timers --', 0
@@ -4875,7 +4968,8 @@ sb_l_cmax:   db 'longest run, sectors', 0
 sb_l_crst:   db 'controller resets', 0
 sb_d_cspc:   db 'sectors per call x100', 0
 sb_d_hdrate: db 'hdd bytes/sec', 0
-sb_d_shlbit: db 'shl clk/bit x100 ~400', 0
+sb_d_shlbit: db 'shl clk/bit x100 meas', 0
+sb_d_shlnom: db 'shl clk/bit x100 book', 0
 
 sb_s_noclaim: db '  (no 32KB heap claim available: the file rows were skipped)', 0
 
