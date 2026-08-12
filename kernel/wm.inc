@@ -7298,12 +7298,28 @@ wm_su_bank:
     cmp bx, di
     je .front
     cmp byte [wm_dw_part], 0    ; A PARTIAL DRAW MAY NOT RE-BANK (SPEC.md
-    jne .out                    ; 11.96.9): the screen inside this window's
-                                ; content is not all ours, so banking it would
-                                ; store the covering window's pixels as our own.
-                                ; Keeping the cache we already have is not a
-                                ; compromise - a partial draw changed nothing,
-                                ; so the old one is still exactly right
+    je .take                    ; 11.96.9): the pass repaired part of this
+                                ; window, so what it drew is no evidence about
+                                ; the rest
+    call wm_su_ck               ; ...but the cache it already has IS. A partial
+    jnc .out                    ; draw changed nothing, so an existing one is
+                                ; still exactly right and re-taking it is a
+                                ; blit for nothing
+    mov bx, di                  ; ...AND WITH NO CACHE AT ALL, ASK THE SCREEN
+    call wm_obscured            ; (SPEC.md 11.96.9.1). "Was this draw partial"
+    jc .out                     ; is a proxy for "is some of this window's
+                                ; content somebody else's pixels", and it is
+                                ; the wrong question once the window is out
+                                ; from under whatever covered it: a drag that
+                                ; uncovers a window repairs only the vacated
+                                ; rect, so the draw is partial while the whole
+                                ; content is now on the glass and correct.
+                                ; wm_obscured asks that directly, and it
+                                ; refuses 11.96.7's hazard too - a window
+                                ; drawn earlier in this same pass with a
+                                ; marked window above it still to come is
+                                ; covered by construction
+.take:
     call wm_su_take             ; covered, or minimized a moment from now:
     jmp short .out              ; its pixels stand until something draws it
 .front:
