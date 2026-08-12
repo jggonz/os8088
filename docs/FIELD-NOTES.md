@@ -2150,3 +2150,57 @@ drive reports TRK0 clear through a recalibrate, on two different controllers
 now — stays open. §57.5's block is on the disk that is over there; the run is
 still worth asking for, and it is now the only thing that could ever explain
 this rather than route around it.
+
+**The `sysbench` came back, and it diagnoses the controller** (SPEC.md
+§18.97.3). Unit 1 on the Packard Bell, whose drive is present and works:
+
+```
+drives int 11h claims    2      ST3 motor off hex    0021
+probe ran bitmap hex  0002      ST3 after seek hex   0021
+probe stop hex        0003      ST0 drained hex      0021
+```
+
+`claimed 2` closes the last alternative — the count did reach us, so the
+DS1287 is fine and the probe really did reach its removing path. And set
+against §18.97.1's 5150, whose drive B genuinely is not there, the two bytes
+say opposite things:
+
+| | ST3, twice | ST0 | truth |
+|---|---|---|---|
+| Packard Bell, unit 1 | **`21`** | `21` — IC 00, SE, **EC clear** | present |
+| 5150, unit 1 | **`21`** | `71` — IC 01, SE, **EC set** | absent |
+
+**ST3 is the same byte for a present drive and an absent one.** Not similar —
+identical, on both reads, on two machines with opposite ground truth. That
+retires the last hope that §18.97's discriminator could be made to work by
+being read more carefully.
+
+**ST0 separates them outright**, and it says something specific: interrupt
+code **00, normal termination**, seek end set, no Equipment Check is the
+controller reporting *the recalibrate completed and the head reached track
+0*. So the drive is there, the head is where the FDC says it is, and only
+TRK0's path to ST3 bit 4 is missing. That is a fact about a **controller**,
+not about a drive — which is the shape note 19 has been missing, and the
+first real progress on it.
+
+**So ST0 is now consulted before anything is removed, and only ever to change
+the answer to *keep*** (`FDD_S_SEEKST0`, step 05). EC clear proves presence;
+EC **set proves nothing**, because the 4865 above is present and sets it.
+That asymmetry is the whole design and it is why this cannot make the probe
+remove a drive it would not already have removed.
+
+**It is a second guard, not a replacement for §18.97.2**, and they cover
+different machines: the tier test declines a 5150-shaped correction on a
+machine whose count came from CMOS, and this one saves a **tier 0** machine
+with a drive of this kind — which the tier test by construction cannot. The
+Packard Bell needed the first. The next XT with a 1.2MB drive needs this.
+Measured, all four cells (`make FDDABSENT=1` / `=2`, MartyPC 5150 and QEMU):
+the only one that removes a drive is an absent drive on tier 0.
+
+**Two things in that report are NOT faults and should not be chased.**
+`mouse found 0` with both ports present and no identify bytes is what a
+machine with nothing plugged into either port says — ask before diagnosing
+it (docs/FIELD-MACHINES.md's rule, learned on the 5150). And `est CPU MHz
+x100` reading **8879** on a 16MHz 286 is the known 8088-only derived row,
+still outstanding in the register: it is computed against instruction timings
+a 286 does not have, and it should say so rather than print a number.

@@ -268,6 +268,16 @@ FDD_S_SEEKOK equ 2               ; ...said it after the recalibrate: the drive
 FDD_S_NOTRK0 equ 3               ; the recalibrate ran and TRK0 never came up.
                                  ; THE absent drive, and the one verdict in
                                  ; this list that removes anything
+FDD_S_SEEKST0 equ 5              ; ST3 never showed TRK0 and ST0 says the
+                                 ; recalibrate ended NORMALLY - so the drive is
+                                 ; there and its TRK0 line is not reaching ST3
+                                 ; (SPEC.md 18.97.3). The Packard Bell Victory
+                                 ; 286's 1.2MB drive B, measured: ST3 = 21
+                                 ; twice, ST0 = 21, against the 5150's absent
+                                 ; drive answering ST3 = 21 twice and ST0 = 71.
+                                 ; A KEEP-ONLY signal: EC clear proves presence,
+                                 ; EC set proves nothing (the 4865 is present
+                                 ; and sets it - docs/FIELD-NOTES.md 19)
 FDD_S_NORDY  equ 4               ; the controller never took a byte, or never
                                  ; offered one - a refusal, and it KEEPS the
                                  ; drive like every other thing that goes wrong
@@ -5569,12 +5579,22 @@ dsk_fdd_probe:
                                 ; again, which is the encoding 18.98 spent a
                                 ; paragraph removing
     or byte [fdd_dbg_ran], 2    ; bit 1 = unit 1 was asked
-    mov byte [fdd_dbg_u+FDU_ST3],  0x21 ; the field 5150's own two reads and
-    mov byte [fdd_dbg_u+FDU_ST3B], 0x21 ; its drained ST0 (SPEC.md 18.97.1),
-    mov byte [fdd_dbg_u+FDU_ST0],  0x71 ; so a forced report is one a reader
-    mov byte [fdd_dbg_u+FDU_STEP], FDD_S_NOTRK0    ; has already seen on iron
+    mov byte [fdd_dbg_u+FDU_ST3],  0x21 ; ST3 is 21 on BOTH field machines -
+    mov byte [fdd_dbg_u+FDU_ST3B], 0x21 ; that is 18.97.3's whole point - so
+                                        ; only ST0 below differs between them
+%if FDD_FORCE_ABSENT == 2
+    mov byte [fdd_dbg_u+FDU_ST0],  0x21 ; FDDABSENT=2: the PACKARD BELL's
+                                        ; present 1.2MB drive - IC 00, SE, no
+    mov byte [fdd_dbg_u+FDU_STEP], FDD_S_SEEKST0    ; EC, unit 1. Kept on EVERY
+    mov byte [fdd_dbg_u+FDU_VRD],  1                ; tier, 18.97.3's branch
+    mov al, 1
+%else
+    mov byte [fdd_dbg_u+FDU_ST0],  0x71 ; FDDABSENT=1: the 5150's genuinely
+                                        ; absent drive - IC 01, SE, EC, unit 1
+    mov byte [fdd_dbg_u+FDU_STEP], FDD_S_NOTRK0
     mov byte [fdd_dbg_u+FDU_VRD],  0
     xor al, al
+%endif
     ret
 .real:
 %endif
@@ -5675,6 +5695,29 @@ dsk_fdd_probe:
     pop ax
     test al, 0x10               ; TRACK 0: did the head reach it?
     jnz .seekok
+                                ; ...ST3 says no, and SPEC.md 18.97.3 says ask
+                                ; ST0 before believing it. The Packard Bell's
+                                ; present 1.2MB drive and the 5150's absent one
+                                ; give the SAME ST3 - 21 both, twice each - and
+                                ; ST0 tells them apart outright: 21 there
+                                ; against 71 here. A recalibrate that ended
+                                ; NORMALLY is the controller saying it found
+                                ; track 0, which is positive evidence of a
+                                ; drive whatever the status line does
+    mov al, [si+FDU_ST0]
+    and al, 0xF8                ; IC (7-6), SE (5), EC (4), NR (3)
+    cmp al, 0x20                ; IC=00 normal + seek end, no equipment check,
+    jne .gone                   ; drive not-ready clear. FDU_ST0 initialises to
+                                ; FF and is written only on success, so a sense
+                                ; that never answered fails this by itself
+    mov al, [si+FDU_ST0]
+    and al, 3                   ; ...and it is THIS unit's result, not one the
+    cmp al, [fdd_unit]          ; queue was still holding (18.97.1's whole
+    jne .gone                   ; lesson - the drain makes it ours, this proves
+                                ; it)
+    mov byte [si+FDU_STEP], FDD_S_SEEKST0
+    jmp short .keep
+.gone:
     mov byte [si+FDU_STEP], FDD_S_NOTRK0
     mov byte [si+FDU_VRD], 0
     xor al, al                  ; THE one path that removes a drive

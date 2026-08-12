@@ -11644,6 +11644,72 @@ own config does not have, and QEMU's FDC returns `0x28 | (track==0 ? 0x10 :
 0)` off a `track` that is 0 for an absent drive — so both answer *present*
 unconditionally and neither can produce, or refute, an absent verdict.
 
+### 18.97.3 ST3 could not tell the two field machines apart; ST0 can
+
+**The Packard Bell's `sysbench` came back, and it is the diagnosis §18.97.2
+said it could not give.** Unit 1, on a machine whose 1.2MB 5.25" drive B is
+present and works:
+
+```
+drives int 11h claims    2      ST3 motor off hex    0021
+probe ran bitmap hex  0002      ST3 after seek hex   0021
+probe stop hex        0003      ST0 drained hex      0021
+                                verdict 1=kept 0=gone   1
+```
+
+Set that beside §18.97.1's 5150, whose drive B genuinely is not there:
+
+| | ST3, twice | ST0 | the drive |
+|---|---|---|---|
+| Packard Bell 286, unit 1 | **`21`** | `21` — IC 00, SE, **EC clear** | **present** |
+| IBM 5150, unit 1 | **`21`** | `71` — IC 01, SE, **EC set** | **absent** |
+| IBM 5150, unit 2 (4865) | `22` | `72` — IC 01, SE, **EC set** | present (§19) |
+
+**ST3 is byte-identical for a present drive and an absent one** — `0x21` on
+both machines, on both reads, before and after the recalibrate — so the
+discriminator §18.97 was built on cannot separate the two cases it exists to
+separate. That is no longer an inference from §18.98.1's 4865; it is the same
+byte from two machines with opposite ground truth.
+
+**ST0 separates them outright.** `0x21` is interrupt code **00 — normal
+termination** — with seek end set and Equipment Check clear: the controller
+saying *the recalibrate completed and the head reached track 0*. `0x71` is
+code 01 with EC set: *77 steps and no track 0*. So on the Packard Bell the
+FDC found track 0 and the TRK0 status line did not reach ST3's bit 4; the
+head is where the controller says it is, and only the reporting path is
+missing. That is the answer to docs/FIELD-NOTES.md 19's question in one
+direction, and it is a fact about a *controller*, not about a drive.
+
+**It is a KEEP-ONLY signal, and the 4865 is why.** EC **clear** proves
+presence — nothing else makes a 765 report a normal seek end. EC **set**
+proves nothing at all: the 5150's absent drive sets it and the 5150's
+*present* 4865 sets it too. So `dsk_fdd_probe` consults ST0 only on the path
+that was about to remove a drive, and only ever to change its mind towards
+keeping — `FDD_S_SEEKST0`, step **05**. It cannot make the probe remove
+anything it would not already have removed, which is §18.97's asymmetry
+argument applied to its own newest evidence.
+
+**The unit bits are checked with it**, because §18.97.1's lesson is that a
+sense answers the queue rather than the question: `ST0 & 3` must be the unit
+the probe asked about. The drain makes it ours and this proves it, on the one
+path where being wrong would keep a drive that is not there.
+
+**This is a second, independent guard and not a replacement for §18.97.2.**
+They fail differently and are wanted together. §18.97.2 is about the CLAIM —
+it declines to act on a 5150-shaped correction where the count came from CMOS
+— and covers any AT-class machine whatever its controller answers. This is
+about the EVIDENCE, and it covers a **tier 0** machine with a drive of this
+kind, which §18.97.2 by construction does not: without it, an 8088 with a
+drive whose TRK0 never reaches ST3 still loses it. The Packard Bell needed
+the first; the next XT with a 1.2MB drive in it needs this one.
+
+**Testing both branches: `make FDDABSENT=2`** is the Packard Bell's
+signature, against `FDDABSENT=1`'s 5150 one — same ST3, different ST0, and
+the ST0 case must be **kept on every tier including tier 0** while the 5150's
+is still retired there. Neither emulator can produce either naturally
+(§18.97.2 has the measurements), so the knob is the only way this branch is
+ever exercised outside the field.
+
 ### 18.98 The third and fourth floppy — a row, and nothing else
 
 The IBM 5.25" Diskette Drive Adapter has an **external 37-pin D connector**
