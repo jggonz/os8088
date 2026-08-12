@@ -93,6 +93,11 @@ class Partner(object):
         self.nib = 0                    # the nibble we are presenting
         self.trace = []                 # every nibble received, for diagnosis
         self.lastop = None              # 'r'/'s', for the reversal guard
+        self.log = []                   # ...what was asked, and answered. A
+                                        # letter per command says the shape of
+                                        # a session and nothing about WHICH
+                                        # file, which is the question as soon
+                                        # as anything goes wrong
         self._status(idle=True)
 
     # --- the two wires -------------------------------------------------------
@@ -423,6 +428,7 @@ class Partner(object):
             elif c == ord('L'):             # NF_LIST: handle -> count, entries
                 h = self.recv_word()
                 ents = tree.list(h)
+                self.log.append('LIST folder=%d -> %d entries' % (h, len(ents)))
                 self.send_byte(0)
                 self.send_word(len(ents))
                 for e in ents:
@@ -430,6 +436,7 @@ class Partner(object):
             elif c == ord('C'):             # NF_CHDIR: handle -> parent
                 h = self.recv_word()
                 par = tree.parent(h)
+                self.log.append('CHDIR handle=%d -> parent %s' % (h, par))
                 if par is None:
                     self.send_byte(0x02)    # no such folder
                     continue
@@ -439,6 +446,9 @@ class Partner(object):
                 fold = self.recv_word()
                 name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
                 h = tree.find(fold, name)
+                self.log.append('STAT folder=%d %r -> %s'
+                                % (fold, name,
+                                   'handle %d' % h if h else 'NOT FOUND'))
                 if h is None:
                     self.send_byte(0x02)
                     continue
@@ -450,9 +460,12 @@ class Partner(object):
                 h = self.recv_word()
                 cap = self.recv_dword()
                 if h not in tree.meta:
+                    self.log.append('READ handle=%d -> NO SUCH HANDLE' % h)
                     self.send_byte(0x02)
                     continue
                 d = tree.data(h)[:cap]      # THE CAP IS HONOURED HERE, so an
+                self.log.append('READ handle=%d cap=%d -> %d bytes'
+                                % (h, cap, len(d)))
                 self.send_byte(0)           # oversized file is short at the
                 self.send_dword(len(d))     # source rather than sent and
                 self.send(d)                # thrown away
@@ -461,9 +474,12 @@ class Partner(object):
                 off = self.recv_dword()
                 cap = self.recv_word()
                 if h not in tree.meta:
+                    self.log.append('READAT handle=%d -> NO SUCH HANDLE' % h)
                     self.send_byte(0x02)
                     continue
                 d = tree.data(h)[off:off + cap]
+                self.log.append('READAT handle=%d off=%d cap=%d -> %d bytes'
+                                % (h, off, cap, len(d)))
                 self.send_byte(0)
                 self.send_word(len(d))      # ...ZERO past the end, which is
                 self.send(d)                # the contract and not an error
