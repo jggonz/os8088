@@ -294,7 +294,9 @@ pt_entry:
     jne .make                       ; nothing to decode into
     call pt_canvas_init             ; the canvas to decode INTO - the header
     call pt_font_init               ; and the white, before anything fills it
-    call pt_argload                 ; ...and the picture, which sizes pt_tpl
+    call pt_argload                 ; ...and the picture, if pt_arg found one:
+                                    ; the [pt_argp] gate is pt_argload's own,
+                                    ; and the comment there says why
 .make:
     push si
     mov si, pt_tpl
@@ -7461,7 +7463,8 @@ pt_arg:
 
 ; -----------------------------------------------------------------------------
 ; pt_argload - spend it, from the ENTRY PROC (SPEC.md 54.5/42.11)
-; in:  no window yet, no gfx lock, [pt_argp] = 1 and pt_name the document
+; in:  no window yet, no gfx lock; [pt_argp] = 1 and pt_name the document, or
+;      [pt_argp] = 0 and there is nothing to do
 ; out: pt_tpl sized for the picture; preserves all registers
 ;
 ; Called before wm_create, which is the whole of SPEC.md 42.11: pt_load ends
@@ -7469,8 +7472,23 @@ pt_arg:
 ; window is created at it. From the first paint - where this used to run -
 ; the same call could only ask for a resize, and the asking is what had no
 ; answer.
+;
+; THE [pt_argp] GATE IS THIS ROUTINE'S OWN, and it is here rather than at the
+; call site because it has already been lost once by being left there. It was
+; a `cmp byte [pt_argp], 0 / je` around the call in pt_paint; SPEC.md 42.11
+; moved the call up to the entry proc and the gate did not come with it, so
+; EVERY Paint launch ran the launch-document load. With no document pt_name is
+; the empty string a zeroed bss holds, and an empty name is exactly what
+; dskw_name83 refuses - so an ordinary double-click on PAINT.O88 answered
+; FERR_NAME and toasted 'Bad file name', with OSAPI_FILE_GOTO having quietly
+; moved the machine to A: root (drive 0, cluster 0) on the way past. A gate
+; the ROUTINE holds cannot be left behind by the next caller that moves.
 ; -----------------------------------------------------------------------------
 pt_argload:
+    cmp byte [pt_argp], 0           ; nothing was handed to us (SPEC.md 54.5):
+    jne .have                       ; no document, no volume switch, no read
+    ret
+.have:
     push ax
     push bx
     push cx
