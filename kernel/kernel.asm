@@ -2742,31 +2742,23 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; W_ONKEY is never reaching the package and the stall is in ui_task's own
 ; `.keys` branch - between int 16h and wm_pkgcall.
 ;
-; It writes RAW FRAMEBUFFER BYTES and calls nothing, which is the whole point:
-; three of the sites it marks run before gfx_lock is taken and one of them IS
-; gfx_lock, so an instrument that drew through the gfx_* slots could deadlock
-; on exactly the routine under suspicion, and one that took the lock could not
-; be placed before it at all. Ten instructions, no locks, no calls, and every
-; register AND the flags preserved - CF is live across blk_wake and kbm_key.
+; ONE BYTE STORE, and it draws nothing. It painted raw framebuffer cells at
+; x = 0 once, and lost that ground to the heartbeat, which needs the width;
+; what it does now is set the byte the heartbeat paints AS ITS THIRD CELL, so
+; a photograph of a stopped machine carries the mark as well as everything
+; else. That also removes what made the first version delicate - three of the
+; sites it marks run before gfx_lock is taken and one of them IS gfx_lock, so
+; anything that drew through the gfx_* slots could deadlock on exactly the
+; routine under suspicion.
 ;
-; It paints n black cells at the TOP-LEFT of the screen, scanline 0, which is
-; offset 0 in both 1bpp adapters' banked layouts (SPEC.md 39.3). Always from
-; x = 0, so a later mark covers an earlier one and the picture is the highest
-; step reached. Mono only - [vid_rseg] is the software renderer's target and
-; on VGA the planes are behind the Graphics Controller - which is what the
-; reporting machine is.
+; A later mark overwrites an earlier one, so the value is the HIGHEST step the
+; last keystroke reached. It preserves every register and the flags - CF is
+; live across blk_wake and kbm_key - which `mov` gives for free, and CS = DS
+; in the kernel's near model so the store needs no segment setup.
 ; =============================================================================
 %macro KFZ 1
 %ifdef KFZTRACE
-    ; RETIRED, deliberately, and left as a no-op rather than deleted so the
-    ; nine call sites in ui.inc still document the path. It painted from
-    ; offset 0 and the heartbeat now starts there - it needs the width, having
-    ; grown to eleven values, and the right-hand end was running into the
-    ; clock field where its cells could not be told from the glyphs. What
-    ; these marks had to teach is also spent: they read ZERO in the field,
-    ; which is what moved the search into the kernel in the first place, and
-    ; the interrupted CS:IP answers the same question exactly rather than by
-    ; elimination.
+    mov byte [khb_kfz], %1
 %endif
 %endmacro
 
