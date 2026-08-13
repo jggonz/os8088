@@ -21,6 +21,9 @@ VM    := $(CURDIR)/vm/xt
 VM640 := $(CURDIR)/vm/xt640
 VMCGA := $(CURDIR)/vm/xt-cga
 VMHERC := $(CURDIR)/vm/xt-hercules
+# The DUAL-DISPLAY machine (SPEC.md 39.12-39.19): the same XT with BOTH mono
+# cards in it, each on its own monitor window.
+VMMULTI := $(CURDIR)/vm/xt-multimon
 VM286 := $(CURDIR)/vm/286
 VM386SX := $(CURDIR)/vm/386sx
 VM386DX := $(CURDIR)/vm/386dx
@@ -281,7 +284,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
-        xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
+        xt-hercules xt-multimon 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field stackprobe trklog npbench clicktest marty comscan \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
@@ -2151,6 +2154,54 @@ xt-cga: $(IMG360) $(APPSIMG360)
 xt-hercules: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT) $(VMHERC)/86box.cfg
 	$(BOX) -P $(VMHERC) -N
+
+# ...and the same XT with BOTH of them in it: SPEC.md 39.12-39.19's extended
+# desktop on the machine it was written for. A CGA at B8000 and a Hercules at
+# B0000, two CRTCs, two monitors, and 86Box opens a window per card ("86Box
+# Monitor #2" is the Hercules). That pairing is the one thing QEMU cannot
+# stage at all and the one `vid_dual_ok` accepts: [vid_avail] must be exactly
+# VID_A_HERC | VID_A_CGA, so a second VGA-shaped card would not do.
+#
+# THE SECOND CARD IS `hercules_plus` AND NOT `hercules`, WHICH IS NOT A
+# PREFERENCE - it is the difference between a machine that offers the extended
+# desktop and one that silently does not. 86Box's plain `hercules` does not
+# answer 32KB at B0000 while the card is still in the text mode POST left it
+# in: vid_memchk writes 0x55 at B000:0000 and 0xAA at B000:1000 and reads the
+# first back, and on that device the second write lands on the first. That is
+# the MDA signature the probe exists to reject (SPEC.md 39.11.1 - a text-only
+# 4KB card has no 720x348 mode to offer), so the kernel is right and the model
+# is what differs; `hercules_plus` - a real 1986 HGC+, and period hardware for
+# an ibmxt86 - keeps the two offsets apart and is found. MEASURED, both ways,
+# by forcing [vid_dmode] to Extend and watching which card the desktop grows
+# onto: `hercules` stays black in POST's text mode, `hercules_plus` comes up
+# carrying the desktop. If the Control Panel has no Display page on some other
+# 86Box video pairing, this is the first thing to suspect - the page is hidden
+# when [vid_avail] has one bit (SPEC.md 31.10.1) and nothing announces why.
+#
+# THE CGA IS PRIMARY, which is what `gfxcard` means here - `gfxcard_2` is the
+# card the BIOS does not own, and the OS duly comes up on the colour one. That
+# matters because the primary is what the chrome is drawn on (SPEC.md 39.16)
+# and what sits at the virtual origin. Swapping which monitor carries the menu
+# bar is the Control Panel's job (Display -> a row -> Activate,
+# SPEC.md 39.19.2), not this file's.
+# It also matches vm/xt-multimon's opposite number under MartyPC,
+# os8088_5150_both, which the tools/martypc configs put in the same order for
+# a POST reason - so the two emulators disagree about nothing.
+#
+# THE EXTENDED DESKTOP IS OFF WHEN IT BOOTS, and that is SPEC.md 39.19.1: the
+# kernel can detect a second CARD and nothing can detect a second MONITOR, so
+# Single is the default and the second window stays dark until the machine is
+# told. Control Panel -> Display -> Desktop: Right or Below. The setting is
+# written to SYSTEM.CFG when the panel is CLOSED (SPEC.md 31.8), so close it
+# with the box on the title bar and the next boot comes up extended.
+#
+# 640KB on an `ibmxt86` planar, where the two mono machines above are 256KB on
+# an `ibmxt`: a second display costs no conventional RAM (both framebuffers
+# are card memory) but the windows opened across it do, and a machine bought
+# to have more desktop should be able to fill it.
+xt-multimon: $(IMG360) $(APPSIMG360)
+	@$(UNPROTECT) $(VMMULTI)/86box.cfg
+	$(BOX) -P $(VMMULTI) -N
 
 # The other end of the range: an AT-class machine, VGA, more RAM than the OS
 # can reach. os8088 is 8086 code in real mode, so a 286/386 runs it verbatim -

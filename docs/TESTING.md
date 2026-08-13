@@ -121,6 +121,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | CGA 640x200 mono | ✅ | ✅ | `make test VIDEO=cga` | renders; dumps 640x400 (line-doubled) |
 | Hercules 720x348 mono | ✅ | ✅ | `make test VIDEO=herc HERCSEG=0x7000` | renders; 55.8% lit at the desktop |
 | Adapter switching (SPEC.md §39.11) | ⚠️ | ➖ | the `os8088_xt_vga` / `_5150_both` / `_5150_herc` / `_5150_cga` machines | MartyPC is the instrument, and one direction is out of its reach. Verified: the page lists **Vga + Cga** on `_xt_vga`, **Hercules + Cga** on `_5150_both`, and exactly **one** row on the two single-card machines; the live switch works **both ways on `_xt_vga`** and **CGA → Hercules on `_5150_both`**; the choice survives a reboot through `SYSTEM.CFG`'s `VM` key; and a disk asking for a card the machine lacks is **refused**, staying on the probe's answer. NOT verifiable here: **Hercules → CGA on a dual-card machine**, because MartyPC's MDA decodes the whole 64KB at B0000–BFFFF whatever 3BFh's page bit says — measured, B0000 and B8000 read back byte-identical — so the two cards contend for B8000 and the CGA's rendered output stays black although the card is correctly in `Mode6HiResGraphics`. A real HGC with that bit clear (which `vid_setmode` leaves clear) decodes B0000–B7FFF only. **That direction wants a run on the 5150.** The same aliasing is what `vid_cga_alias` (§39.11.1) exists to reject, and it is why the Hercules-only machine stopped reporting a CGA that is not there. **Hiding the page** (§31.10.1) verified on both single-card 5150s — the list is Scheduler/Buffer/Date-Time/Drivers/Sound and no Display row — with the static/driver boundary checked on `os8088_xt_hdd`, where the hard-disk driver's own page lands at row 5 (the slot the hidden page vacated) and dispatches to the driver, not to Display. **Blanking the outgoing card** (§39.11.4) verified on `_5150_both` in both directions: CGA → Hercules takes the CGA card from `Mode6HiResGraphics` to `Mode1TextCo40` (3D8h video bit clear), and Hercules → CGA trips an I/O breakpoint on 3B8h — a port `vid_setmode`'s CGA path never touches, so that write is `vid_blank` and nothing else |
+| Two displays at once (SPEC.md §39.12–§39.19) | ✅ | ❌ | `tests/dualcheck.py` on the `os8088_5150_both` machine, or `make xt-multimon` | MartyPC is the instrument, because only it can read the guest's own answer back; 86Box is where the pair is two 6845s on a period bus. Verified on `xt-multimon` (an `ibmxt86`, 640KB, `gfxcard = cga` + `gfxcard_2 = hercules_plus`): the machine boots to the desktop on the **CGA**, the probe finds the mono card, and forcing `[vid_dmode]` to Extend grows the desktop onto "86Box Monitor #2" - §39.13's bring-up of a card the ROM never touched, on a second card that works. **`gfxcard_2 = hercules` is NOT found, and reads exactly like the feature being missing**: 86Box's plain Hercules answers only 4KB at B0000 while it is still in POST's text mode, so `vid_memchk`'s 0xAA at B000:1000 lands on its 0x55 at B000:0000 and the card is rejected as the text-only MDA that signature means (§39.11.1). The kernel is right and the model differs; the symptom is a Control Panel with **no Display page at all** (§31.10.1 hides it when `[vid_avail]` has one bit), which announces nothing about why. NOT verifiable here: **the extend as the user reaches it**. 86Box has no automation socket, the Desktop row is a mouse click (`tests/dispcp.py`'s coordinates, driven by hand), and macOS will not let a script synthesise one - so `[vid_dmode]` forced in a scratch build is how the machine was checked, and `dualcheck.py` is what says the geometry is right |
 | PC speaker | ✅ | ✅ | `make test-snd`, or `MARTYPC_WAV=` | dominant 880.0 Hz (891.0 on MartyPC, inside tolerance) |
 | AdLib / OPL2 | ✅ | ✅ | `make test-snd ADLIB=1`, or the `os8088_5150_sb` machine | dominant 880.0 Hz from a keyed 440; the Sound page's Test tone came out of MartyPC's OPL2 at 660 Hz |
 | Sound Blaster (DMA streams) | ✅ | ✅ | `make test-snd SB16=1 TESTAPPS=build/sbtest.img`, or the `os8088_5150_sb` machine | 2.00 s at 1000.0 Hz on BOTH. MartyPC's is a DSP **2.01** by default — the classic `0x48`+`0x1C` auto-init path — where QEMU's is an SB16; `dsp_version` picks |
@@ -1646,8 +1647,22 @@ Narrower than it was, now that MartyPC covers the 8088 probe, the 6845 and
 the sound cards: **a machine that is not an 8088** (the 286, 386, 486 and
 Pentium targets), a **period bus** under a card rather than a modelled one,
 and a second opinion on the video probe. `make xt`,
-`xt-640`, `xt-cga`, `xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`,
-`386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`.
+`xt-640`, `xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `286`,
+`286-sound`, `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`.
+
+`xt-multimon` is the **two-card** XT — a CGA and a Hercules in one box, one
+monitor window each, which is what SPEC.md §39.12–§39.19's extended desktop
+is for. 86Box takes the second card as `gfxcard_2 = hercules_plus` alongside
+`gfxcard = cga` and opens it as "86Box Monitor #2"; that key was established
+the same way every other machine setting in this file was, by reading the
+config back after an exit. **`hercules_plus` and not `hercules`** — the matrix
+row above has the measurement, and the failure mode is a Control Panel with no
+Display page rather than an error. It is a **second instrument** for a machine
+MartyPC already has (`os8088_5150_both`, and `tests/dualcheck.py` is the
+gate), and the card order matches it, so the two emulators disagree about
+nothing. What 86Box adds is a real 6845 pair on a period bus; what it lacks
+is `dualcheck.py`'s reach into guest memory, so what it answers is *"does it
+look right"* rather than *"is it right"*.
 
 The last pair are the Frotz machines (SPEC.md 59.9) and are the only targets
 that put something other than the apps disk in B:. They also cover a drive
