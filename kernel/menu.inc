@@ -938,9 +938,24 @@ menu_bar_text:
                                 ; toast strip used to borrow the right end of
                                 ; this segment and cover them (SPEC.md 59.8);
                                 ; it is in the clock's field now, so nothing
-                                ; below here has a tenant to make room for
+                                ; below here has a tenant to make room for -
+                                ; **except SPEC.md 12.8's widget, which is
+                                ; drawn straight onto this segment's last
+                                ; cells and is not composed at all** (59.9.2).
+                                ; [menu_bres] is how many of them it holds,
+                                ; and it bounds the GAP alone: the menus are
+                                ; laid out against [vid_clk_hx] by
+                                ; menu_layout, the padding still has to reach
+                                ; [menu_bn] to erase an application's menus
+                                ; when it goes away, and only the strip's
+                                ; placement has to keep off
 
     mov word [menu_bfirst], 0FFFFh
+    mov word [menu_blast], 0    ; SEEDED now that it is a maximum (menu_bput).
+                                ; It needed none while it was assigned beside
+                                ; [menu_bfirst] on every difference; 0 is
+                                ; below every cell and is read only when
+                                ; [menu_bfirst] says something differed at all
     xor di, di                  ; DI = cell index, 0 = x MENU_TXT_X0
 
     mov bx, [menu_abcell]       ; --- the application's name ----------------
@@ -1241,10 +1256,28 @@ menu_bput:
     cmp [menu_bcell+bx], al
     je .same
     mov [menu_bcell+bx], al
-    cmp word [menu_bfirst], 0FFFFh
-    jne .last
+                                ; **A MINIMUM AND A MAXIMUM, because
+                                ; composition is NOT in x order** (SPEC.md
+                                ; 59.9.2). These were "the first difference"
+                                ; and "the last difference" - which is the
+                                ; same thing only while the cells are written
+                                ; left to right, and 59.9's strip is composed
+                                ; AFTER menu_bpadc has run to [menu_bn], at a
+                                ; cell that may be to its left. So a strip
+                                ; that moved left or got SHORTER dragged
+                                ; [menu_blast] back over the padding that had
+                                ; just erased its tail: those cells were
+                                ; recorded as blank and never drawn, and
+                                ; menu_bcell is the record of what is on the
+                                ; GLASS, so nothing ever repaired them. Two
+                                ; compares, and the ordering rule stops being
+                                ; something a caller has to keep
+    cmp di, [menu_bfirst]       ; 0FFFFh is above every cell, so the seed at
+    jae .last                   ; the top of menu_bar_text still means "none"
     mov [menu_bfirst], di
 .last:
+    cmp di, [menu_blast]
+    jbe .same
     mov [menu_blast], di
 .same:
     inc di

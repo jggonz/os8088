@@ -3282,7 +3282,24 @@ bar to borrow. Those three did not move; Note Pad's and Paint's are gone.
 last drawn menu and the clock — where it is **centred** and covers nothing at
 all: not a menu title (§59.8's whole subject) and not a clock cell (what §59.8
 settled for). When the message will not fit there it falls back to §59.8's
-**clock field**, left end, eating the date before the time. The gap is real
+**clock field**, left end, eating the date before the time. **Those cells were
+never actually blank, and §59.9.2 is the correction**: §12.8's file-activity
+widget is drawn onto the gap's right end, is composed into no buffer, and so
+is invisible to the diff that arbitrates everything else on the bar — measured,
+Paint's own `Saving...` and the widget wanted the *same eleven cells*, and the
+widget's bed fill destroyed the message for the length of a save. `toast_place`
+reserves the widget's cells while `[fpg_on]` is set (derived, not published —
+the widget's right edge *is* the segment's), `fpg_begin` arms **before it draws
+a pixel** and asks for one composition so a live strip moves instead of dying,
+and `fpg_end` sets `[menu_bdirty]` itself rather than trusting the flag its
+`menu_inval` set to survive the operation. **The residue everyone actually saw
+was a third bug, in `menu_bput`**: `[menu_bfirst]`/`[menu_blast]` were "first
+and last difference", which equals a minimum and a maximum only while cells are
+written left to right — and §59.9's strip is composed *after* the padding, to
+its left, so a toast that got shorter dragged `[menu_blast]` back over the
+cells that padding had just erased. They were recorded blank, never drawn, and
+`menu_bcell` is the record of the GLASS, so nothing could ever repair them.
+A shrinking toast is the *second* of any two toasts, so this fired constantly. The gap is real
 rather than theoretical — Locator's menus leave ~24 free cells on a 640px
 screen and 34 on a 720px one, so `Settings Saved` (16 cells) and
 `Opened SUNSET.BMP` (19) both land in it — and it is a **bonus, never a

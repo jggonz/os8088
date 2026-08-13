@@ -42,7 +42,15 @@ FPG_ISP    equ 4                ; icon -> box gap
 FPG_BOX_W  equ 64               ; the line box, frame included
 FPG_BOX_H  equ 9                ; rows FPG_BOX_Y..FPG_BOX_Y+8
 FPG_BOX_Y  equ 5
-FPG_GAP    equ 8                ; box -> clock cell gap
+FPG_GAP    equ 0                ; box -> clock cell gap. It was 8, and the
+                                ; whole cell it cost is worth more to the
+                                ; TOAST than to the eye (SPEC.md 59.9.2): the
+                                ; widget's reservation is FPG_W / 8 cells off
+                                ; the gap a message has to fit in, and the
+                                ; clock's own field is right-aligned with
+                                ; seven or so blank cells at its left end, so
+                                ; the separation the eye sees is unchanged
+                                ; while the strip gets a cell back
 FPG_W      equ FPG_ICO_W + FPG_ISP + FPG_BOX_W + FPG_GAP    ; 88
 FPG_BAR_PX equ FPG_BOX_W - 2    ; 62: the trough, in pixels
 FPG_MINX   equ MENU_SYS_XR + 8  ; an origin left of this would collide with
@@ -131,14 +139,36 @@ fpg_begin:
                                 ; wrong (SPEC.md 12.8.1). fpg_step never reads
                                 ; it, so the sector path is untouched
 
-                                ; NO toast_kill here any more (SPEC.md 59.8):
-                                ; the strip used to reach left into these
-                                ; cells, and it is in the CLOCK's field now -
-                                ; wholly right of [vid_clk_hx], where this
-                                ; widget's right edge is [vid_clk_hx] - 1. The
-                                ; two can be up together because they are
-                                ; about different things: this says work is
-                                ; happening, a toast says what finished
+    mov byte [fpg_on], 1        ; **ARMED BEFORE THE FIRST PIXEL, so that the
+    mov byte [menu_bdirty], 1   ; TOAST CAN GET OUT OF THE WAY** (SPEC.md
+    call menu_draw_bar          ; 59.9.2). A strip is placed where it fitted
+                                ; when it went up, and SPEC.md 59.9's first
+                                ; choice - the gap the menus leave - is the
+                                ; same stretch of bar this widget is about to
+                                ; be drawn on; measured on a 5150/CGA, Paint's
+                                ; own `Saving...` lands on cells 43..53 and
+                                ; the widget takes 43..53. Without this the
+                                ; bed fill below simply destroys the message
+                                ; and the operation runs with `Sa` and half a
+                                ; document icon on the bar.
+                                ;
+                                ; Re-placing it costs one composition, which
+                                ; is a compare per cell plus at most one
+                                ; font_run, once per file operation - against
+                                ; a disk this is not measurable. It is done
+                                ; HERE and not by asking toast_kill to retire
+                                ; the message, which is what this site used to
+                                ; do: a refusal loses the message for good and
+                                ; silently, and the messages worth saying are
+                                ; exactly the ones about the operation that is
+                                ; starting.
+                                ;
+                                ; [menu_bdirty] because the reservation
+                                ; changed, not the text: nothing menu_bar_text
+                                ; composes has moved, so the flag is the only
+                                ; thing that can ask for the placement to be
+                                ; taken again. menu_inval below re-sets it, so
+                                ; fpg_end's own pass is not spent here
 
     call cur_unlazy             ; spend gfx_lock's promised hide before we
                                 ; draw anywhere near the arrow (SPEC.md 7.1.4)
@@ -165,8 +195,6 @@ fpg_begin:
     mov bx, FPG_BOX_Y
     mov dx, FPG_BOX_Y + FPG_BOX_H - 1
     call gfx_frame
-
-    mov byte [fpg_on], 1
                                 ; widget waits for a gfx_unlock that does not
                                 ; come until the operation is over (SPEC.md 32)
 .out:
@@ -346,6 +374,16 @@ fpg_end:
     mov dx, MBAR_H - 2
     call gfx_fill
 
+    mov byte [menu_bdirty], 1   ; **THE TEXT BAND IS OURS TO ASK FOR.** The
+                                ; box's rows MENU_TEXT_Y..+7 are erased by
+                                ; nothing here - the opaque run that rewrites
+                                ; them is the erase (above) - and that run
+                                ; only happens if the flag is set. fpg_begin's
+                                ; menu_inval sets it, but anything composing
+                                ; the bar in between SPENDS it, and then the
+                                ; box frame stays on the glass for good. One
+                                ; store makes the erase this routine's own
+                                ; rather than a debt somebody else may settle
     call menu_draw_bar          ; the text band, as the ONE run that differs
 .out:
     pop dx
