@@ -713,6 +713,18 @@ message that does **not** take `dsk_bootltr`'s stamped drive letter
 (§52.10.3), because it names the system disk rather than lettering it and so
 reads the same on a floppy machine and an installed one.
 
+**A letter would be accurate here and would still mislead, which is why it
+went.** `mod_need` searches nothing: it goes to `[dsk_bootvol]` and only
+there, so the letter the old string stamped was always the right one. What
+the user *sees* is a different matter, and it was reported from the field as
+the panel spinning both drives. Traced at the int 13h boundary from outside
+the guest — the drive the ROM was actually told to select — a refusal with
+the current volume on A: is **one call, on A:**, and with a Disk window open
+on B: it is **two on A: and one on B:**. The second drive is
+`drv_vol_back` putting the user's own volume back (§51.5.2), not a second
+place the panel was looked for. Naming the drive invites the reader to
+reconcile one letter with two motors; naming the disk does not.
+
 **Two Control Panel routines stay resident**, and both would otherwise force
 a load at a moment when there is no panel at all: `cp_tick_due` (called once
 a second from `ui_task`, panel or no panel) and `cp_drv_gone` (called from
