@@ -106,6 +106,14 @@ HIS_LIVE     equ 4              ; the volume THIS MACHINE BOOTED FROM, which is
 ; is refused with a reason rather than allowed to produce a full disk.
 HIW_MINSEC   equ 4096           ; 2MB in sectors
 
+; How far hd_iapps_scan walks the volume table looking for the apps disk. It
+; is a BOUND and not a shared constant: the SDK publishes no volume count, and
+; an index past the kernel's own DVOL_MAX is refused by OSAPI_VOL_KIND with no
+; I/O at all - so this is deliberately generous, because too small silently
+; misses a drive (SPEC.md 18.98 letters a floppy as far out as E:) and too
+; large costs a compare.
+HIA_VMAX     equ 16
+
 HII_IDLE     equ 0
 HII_ARMED    equ 1
 HII_SYSDONE  equ 2
@@ -1489,10 +1497,29 @@ hd_inst_apps:
                                 ; was found and this runs on from hd_inst_sys
     mov al, [hd_iautod]         ; an auto-detected apps disk overrides THAT one
     cmp al, 0xFF                ; and never hd_ivdrv, or the restore below puts
-    je .src                     ; the user on a drive they were never on
+    je .look                    ; the user on a drive they were never on
     mov [hd_isrcdrv], al
     mov byte [hd_iautod], 0xFF  ; spent: a second install asks afresh
-.src:
+    jmp short .src
+.look:
+    ; NO PRE-SWAP ANSWER, SO ASK AGAIN NOW (SPEC.md 52.10.5.1). The banked
+    ; volume is where the user was BROWSING when they started the install, and
+    ; it was never a statement about where the apps disk is - it is stage 1
+    ; that reads the disk the user was standing on, and even stage 1 has to
+    ; correct for it (hd_isrc_ck). What has happened since the probe refused
+    ; is exactly the thing that changes the answer: the user was asked to swap
+    ; disks and did. So this asks the machine the same question stage 1's
+    ; probe asks, and SKIPS NOTHING - the drive the probe ruled out held a
+    ; system disk a moment ago and holds the apps disk now.
+    mov al, 0xFF
+    call hd_iapps_scan
+    jc .src                     ; NOT FOUND: the banked volume stands, exactly
+    mov [hd_isrcdrv], al        ; as it did before any of this existed. The
+.src:                           ; three tests define OUR apps disk, and a
+                                ; hand-made floppy carrying only GAMES fails
+                                ; all three while being precisely what the user
+                                ; meant to copy - so a miss may not become a
+                                ; refusal. The scan can only IMPROVE the guess
     call hd_icopy_tree
     jc .failed
     call hd_ivol_back           ; NO commit here: the system phase already
@@ -1625,9 +1652,21 @@ hd_ibuf_put:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_ivol_bank / hd_ivol_back - the user's volume (SPEC.md 51.5.2)
+; hd_ivol_bank / hd_ivol_bankv / hd_ivol_back - the user's volume (SPEC.md
+; 51.5.2)
 ; BOTH PRESERVE THE FLAGS: each caller's result is in CF and a failed restore
 ; must not read as a failed install.
+;
+; TWO ENTRIES BECAUSE THEY ARE TWO STATEMENTS. `hd_ivol_bank` says "remember
+; where the user was AND read the files from there", which is what a phase
+; wants on the way in; `hd_ivol_bankv` says only the first half, which is what
+; a routine that is merely standing somewhere for a moment wants. hd_iksecs
+; was the second kind through the first door, and that cost SPEC.md 52.10.5.1
+; a whole round: it runs from hd_inst_vbr at the END of the system phase, so
+; it quietly put [hd_isrcdrv] back to the user's volume - overwriting
+; hd_isrc_ck's A: fallback - and the apps probe then skipped the wrong drive.
+; Invisible until something read that byte after the copy, which is exactly
+; what the probe now does.
 ; -----------------------------------------------------------------------------
 hd_ivol_bank:
     pushf
@@ -1635,10 +1674,18 @@ hd_ivol_bank:
     push bx
     push dx
     call OSAPI_FILE_HERE        ; DX = the directory, BL = the drive
-    mov [hd_ivcwd], dx
-    mov [hd_ivdrv], bl
     mov [hd_isrcdrv], bl        ; the copy reads from there too, unless the
                                 ; caller overrides it after this returns
+    jmp short hd_ivol_bank_v2
+hd_ivol_bankv:
+    pushf
+    push ax
+    push bx
+    push dx
+    call OSAPI_FILE_HERE
+hd_ivol_bank_v2:
+    mov [hd_ivcwd], dx
+    mov [hd_ivdrv], bl
     pop dx
     pop bx
     pop ax
@@ -1660,17 +1707,93 @@ hd_ivol_back:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_iapps_find - is the apps disk already in the OTHER floppy drive?
-; in:  the volume is wherever hd_inst_sys left it (the user's, restored)
-; out: CF = 0 and AL = that drive; CF = 1 = ask the user to swap
-; clobbers: AX, flags. The volume is put back on EVERY path.
+; hd_ifdd2 - has this machine a SECOND floppy drive? (module internal)
+; out: CF = 0 = yes; CF = 1 = one drive, or none
+; clobbers: flags
 ;
-; A one-drive machine has to be asked to swap disks and a two-drive machine
-; usually does not, because the disk is already sitting in B:. int 11h is the
-; only honest source for how many drives there are - bits 7:6 are the count
-; less one, and the kernel's volume table is no help at all, since A: and B:
-; are unconditional rows in it and on a one-drive PC the BIOS aliases unit 1
-; onto the same physical drive.
+; int 11h is the only honest source, bits 7:6 being the count less one, and
+; the kernel's volume table is no help AT THIS ONE QUESTION: rows 0 and 1 are
+; live on every machine (SPEC.md 18.98's `.zloop` takes the ZONE away and
+; keeps the row, because [disk_drive] may still name it and a mount of an
+; absent drive is an ordinary failed mount), so B: answers VK_REMOVABLE on a
+; one-drive PC exactly as it does on a two-drive one - where the BIOS aliases
+; unit 1 onto the same physical drive, so a probe of B: reads the disk that is
+; in A: and answers a question nobody asked.
+;
+; UNITS 2 AND 3 NEED NO TEST OF THEIR OWN: SPEC.md 18.98 only MAKES those rows
+; when the machine claims the drives, so the row existing is already the
+; answer and hd_iapps_cand's OSAPI_VOL_KIND is the whole of it.
+; -----------------------------------------------------------------------------
+hd_ifdd2:
+    push ax
+    push bx                     ; int 11h answers in AX and says nothing about
+    push cx                     ; the rest; BX is the scan's cursor
+    int 0x11                    ; the equipment word
+    test al, 1                  ; ...any floppy drive at all
+    jz .no
+    mov cl, 6
+    shr al, cl                  ; bits 7:6 = drives - 1
+    or al, al
+    jz .no
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iapps_cand - is this volume worth asking about? (module internal)
+; in:  BL = a volume index, BH = one to skip (0xFF = none)
+; out: CF = 0 = ask it; CF = 1 = skip it
+; clobbers: flags. No I/O of any kind: this is what keeps a scan of eight
+;           volumes down to the two or three drives a machine really has.
+;
+; A REMOVABLE volume and nothing else (SPEC.md 18.7.2): the apps disk is a
+; floppy, so a hard-disk partition - the destination included - and a
+; redirected network volume (SPEC.md 62.9) are out by their KIND rather than
+; by their index, which is what makes this right on a machine whose floppies
+; are lettered A:, B:, D: and E: (SPEC.md 18.98).
+; -----------------------------------------------------------------------------
+hd_iapps_cand:
+    push ax
+    cmp bl, bh
+    je .no                      ; the drive we already know the answer for
+    cmp bl, 1
+    jne .kind
+    call hd_ifdd2               ; B: ON A ONE-DRIVE MACHINE IS A:
+    jc .no
+.kind:
+    mov al, bl
+    call OSAPI_VOL_KIND
+    jc .no                      ; no such volume
+    cmp al, VK_REMOVABLE
+    jne .no                     ; a hard disk is not where the apps disk is
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iapps_at - is the disk in THIS drive the apps disk? (module internal)
+; in:  BL = a volume index
+; out: CF = 0 = yes; CF = 1 = no
+; clobbers: flags
+;
+; IT LEAVES THE VOLUME ON THE CANDIDATE, deliberately: hd_iapps_scan restores
+; once at the end instead of once per drive, which is a whole remount saved
+; for every candidate that answers no. Both gotos are QUIET (SPEC.md 19.2.2)
+; for hd_isrc's reason - nothing here SHOWS a folder, OSAPI_FILE_FIND walking
+; raw directory sectors - and the restore at the boundary is the full one,
+; which is what pays the [dsk_lstale] debt they leave.
 ;
 ; The test for the disk itself is an APPS FOLDER in its root, which is what
 ; makes it the apps disk (SPEC.md 19.2) and what the system disk does not
@@ -1678,27 +1801,17 @@ hd_ivol_back:
 ; a data disk, no disk at all - this refuses and the swap prompt happens
 ; exactly as it did before.
 ; -----------------------------------------------------------------------------
-hd_iapps_find:
+hd_iapps_at:
+    push ax
     push bx
     push cx
     push dx
     push si
     push di
     mov byte [hd_iafound], 0
-    int 0x11                    ; the equipment word
-    test al, 1                  ; ...any floppy drive at all
-    jz .refuse
-    mov cl, 6
-    shr al, cl                  ; bits 7:6 = drives - 1
-    or al, al
-    jz .refuse                  ; one drive: there is nowhere else to look
-    mov bl, [hd_ivdrv]          ; the drive stage 1 read from
-    cmp bl, 2
-    jae .refuse                 ; not a floppy at all: "the other one" has no
-    xor bl, 1                   ; meaning, so ask
     push bx
     xor dx, dx                  ; its ROOT
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q
     pop bx
     jc .refuse                  ; no disk in it, or one we cannot read
     xor cx, cx
@@ -1747,7 +1860,7 @@ hd_iapps_find:
     ; is about to move.
     push bx
     mov dx, [hd_iappsc]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q
     pop bx
     jc .refuse
     xor cx, cx
@@ -1765,13 +1878,9 @@ hd_iapps_find:
     mov si, hd_ifind
     call hd_io88
     jnc .pscan
-
-    call hd_ivol_back           ; found it - and the volume goes back either
-    mov al, bl                  ; way, because hd_inst_apps banks afresh
     clc
     jmp short .out
 .refuse:
-    call hd_ivol_back
     stc
 .out:
     pop di
@@ -1779,7 +1888,65 @@ hd_iapps_find:
     pop dx
     pop cx
     pop bx
+    pop ax                      ; ...and a pop leaves CF alone
     ret
+
+; -----------------------------------------------------------------------------
+; hd_iapps_scan - WHICH drive has the apps disk in it? (SPEC.md 52.10.5)
+; in:  AL = a volume to skip (0xFF = none)
+; out: CF = 0 and AL = that volume; CF = 1 = it is not in the machine
+; clobbers: AX, flags. The volume is put back on EVERY path, including the
+;           ones that stood on a candidate to look at it - the caller has
+;           already restored the user's volume by then (SPEC.md 51.5.2) and a
+;           probe that moved it would be a navigation nobody asked for.
+;
+; LOWEST INDEX FIRST, so A: is asked before B: and before SPEC.md 18.98's
+; external pair. That is the order the user was told to use - the prompt says
+; to insert the apps disk, and the drive they take the system disk out of is
+; the one they put it back into - and on a machine where it is wrong the disk
+; is found one drive later at the cost of a mount.
+; -----------------------------------------------------------------------------
+hd_iapps_scan:
+    push bx
+    mov bh, al                  ; the one to skip, held in BH because BL walks
+    xor bl, bl                  ; the volumes and both survive every call below
+.next:
+    call hd_iapps_cand
+    jc .step
+    call hd_iapps_at
+    jnc .found
+.step:
+    inc bl
+    cmp bl, HIA_VMAX
+    jb .next
+    call hd_ivol_back
+    stc
+    jmp short .out
+.found:
+    call hd_ivol_back           ; ...which preserves the flags AND AX, so the
+    mov al, bl                  ; answer is taken after it either way
+    clc
+.out:
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iapps_find - is the apps disk already in the machine? (SPEC.md 52.10.5)
+; in:  the volume is wherever hd_inst_sys left it (the user's, restored)
+; out: CF = 0 and AL = that drive; CF = 1 = ask the user to swap
+; clobbers: AX, flags. The volume is put back on EVERY path.
+;
+; THE DRIVE IT SKIPS IS THE ONE STAGE 1 READ, and not the one the user is
+; standing on. That disk is a system disk, which hd_iapps_at's KERNEL.SYS test
+; would refuse anyway, so skipping it saves a mount rather than deciding
+; anything - where skipping [hd_ivdrv] decided a great deal and decided it
+; wrong: it is where the user was BROWSING, so a user who had opened a Disk
+; window on the drive holding the apps disk was asked to swap in a disk that
+; was already in the machine.
+; -----------------------------------------------------------------------------
+hd_iapps_find:
+    mov al, [hd_isrcdrv]
+    jmp short hd_iapps_scan
 
 ; -----------------------------------------------------------------------------
 ; hd_isrc / hd_isrc_sub / hd_idst / hd_idst_sub - stand somewhere (internal)
@@ -2857,7 +3024,10 @@ hd_iksecs:
     push cx
     push dx
     push si
-    call hd_ivol_bank
+    call hd_ivol_bankv          ; the VOLUME only: this is standing on the
+                                ; destination to read one size, not setting up
+                                ; a copy, and [hd_isrcdrv] is hd_isrc_ck's
+                                ; answer by the time anything gets here
     call hd_idst
     jc .fail
     mov si, hd_s_kernel
