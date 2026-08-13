@@ -708,9 +708,10 @@ The load is therefore placed where a failure can still be reported *instead
 of* the feature rather than *inside* it. `cp_open` loads **before**
 `app_launch`, so a machine with the wrong disk in the drive never gets a
 Control Panel window with no Control Panel in it — it gets no window and a
-toast naming the disk (§59), with the drive letter stamped by
-`dsk_bootltr` like every other message that names the system volume
-(§52.10.3).
+toast naming the disk (§59): `Panel Needs Sys Disk`. It is the one such
+message that does **not** take `dsk_bootltr`'s stamped drive letter
+(§52.10.3), because it names the system disk rather than lettering it and so
+reads the same on a floppy machine and an installed one.
 
 **Two Control Panel routines stay resident**, and both would otherwise force
 a load at a moment when there is no panel at all: `cp_tick_due` (called once
@@ -39293,9 +39294,12 @@ subject/outcome/cause fitted (`Settings not saved: wrong disk in A:`, 36
 chars) and terseness would have bought nothing. In the clock's 25-cell field
 `TOAST_MAX` is 23 and one of the three has to go. It is the subject: the panel
 the user just closed is the only thing that was on screen, where dropping the
-cause leaves a message nobody can act on. `cp_s_noload` — *"the panel could
-not be opened"* — is the exception that proves it and spends the outcome
-instead, because there is no panel on screen to infer the subject from.
+cause leaves a message nobody can act on. `cp_s_noload` — `Panel Needs Sys
+Disk` — is the exception that proves it and spends the outcome instead,
+because there is no panel on screen to infer the subject from. It is also
+the one message here that **names** the system disk rather than lettering it,
+so it is not stamped and not in `dsk_ltrtab`: the save refusal is telling the
+user which drive to put a disk in, and this one is telling them which disk.
 
 `A:` is **stamped** at boot (§52.10.3) because the system volume is not A: on
 a machine booted from a hard disk, and a message naming the wrong drive is
@@ -39423,7 +39427,7 @@ twenty-two strings that did not fit:
 |---|---|---|
 | `cp_s_dsdsk` | `Settings not saved: wrong disk in A:` | `Not saved: need disk A:` |
 | `cp_s_dserr` | `Settings not saved: disk error` | `Not saved: disk error` |
-| `cp_s_noload` | `Control Panel needs the system disk in A:` | `Control Panel needs A:` |
+| `cp_s_noload` | `Control Panel needs the system disk in A:` | `Panel Needs Sys Disk` |
 | `fm_s_swapno` | `Format needs the system disk in A:` | `Format needs disk A:` |
 | `fm_s_fmtbad` | `Drive cannot reach 720K - made 360K` | `Made 360K, not 720K` |
 | `pt_s_crop` | `Would crop artwork - erase it first` | `Would crop artwork` |

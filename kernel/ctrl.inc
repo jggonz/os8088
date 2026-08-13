@@ -388,10 +388,13 @@ CP_NSAVE  equ 4
 ; own code is a file on the system disk now, so OPENING it can fail for the
 ; same reason SAVING it can. This one keeps its subject and spends the outcome
 ; instead, because there is nothing on screen to infer the subject FROM - the
-; panel never opened. It shares the stamped drive letter, which is what makes
-; it one fact the user can act on rather than two messages about one disk.
-cp_s_noload: db 'Control Panel needs '
-cp_s_nodrv:  db 'A:', 0         ; stamped beside cp_s_dsdrv, same rule
+; panel never opened.
+; It NAMES the disk rather than lettering it, which is the one message here
+; that does: it is not stamped, so it is not in dsk_ltrtab (SPEC.md 52.10.3)
+; and it says the same thing on a floppy machine and an installed one. The
+; save refusal above still letters, because there the user is being told which
+; drive to put a disk in; here they are being told which disk.
+cp_s_noload: db 'Panel Needs Sys Disk', 0
 cp_opentab: dw 0, cp_s_noload
 CP_NOPEN  equ 2
 
