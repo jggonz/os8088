@@ -811,8 +811,9 @@ KHB_STK     equ 20              ; x = 160: where sch_stkdie says the canary
                                 ; died, well clear of the heartbeat
 KHB_IPOFF   equ 34              ; this block's 8 pushed words + sch_isr's 9,
                                 ; so [sp+34] is the IP the CPU pushed
-KHB_X       equ 32              ; x = 320: blank bar between the menus and the
-                                ; clock, and clear of the key breadcrumbs at 0
+KHB_X       equ 0               ; the LEFT EDGE: eleven values are 55 bytes and
+                                ; anything further right runs into the clock,
+                                ; whose glyphs cannot be told from cells
 khb_beat:   db 0                ; the heartbeat's own counter, in .text so the
                                 ; ISR can reach it through CS before DS is ours
 khb_sph:    db 0                ; SP high / low at the last tick, and whether

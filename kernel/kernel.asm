@@ -2758,38 +2758,16 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; =============================================================================
 %macro KFZ 1
 %ifdef KFZTRACE
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    push es
-    mov es, [vid_rseg]
-    cld
-    xor bx, bx                  ; BX = the bank base, 0x2000 apart (SPEC.md
-    mov dx, 4                   ; 39.3). Four of them: a 1bpp adapter's
-%%bank:                         ; consecutive scan lines are in DIFFERENT
-    mov di, bx                  ; banks, so this is how a mark gets HEIGHT -
-    mov cx, (%1) * 2            ; and height is what makes it photographable,
-    xor al, al                  ; which is the whole delivery mechanism here
-    rep stosb
-    mov di, bx                  ; ...and the same again one row down inside
-    add di, [vid_stride]        ; the bank, so the bar is 8 scan lines tall
-    mov cx, (%1) * 2            ; on Hercules and 4 on a CGA
-    xor al, al
-    rep stosb
-    add bx, 0x2000
-    dec dx
-    jnz %%bank
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf                        ; ...and the flags back: the caller's CF is an
-%endif                          ; argument at three of these sites
+    ; RETIRED, deliberately, and left as a no-op rather than deleted so the
+    ; nine call sites in ui.inc still document the path. It painted from
+    ; offset 0 and the heartbeat now starts there - it needs the width, having
+    ; grown to eleven values, and the right-hand end was running into the
+    ; clock field where its cells could not be told from the glyphs. What
+    ; these marks had to teach is also spent: they read ZERO in the field,
+    ; which is what moved the search into the kernel in the first place, and
+    ; the interrupted CS:IP answers the same question exactly rather than by
+    ; elimination.
+%endif
 %endmacro
 
 ; -----------------------------------------------------------------------------
