@@ -1497,15 +1497,15 @@ mou_byte:
     call mou_clamp              ; ...and DX is untouched by it, which the
     mov [mouse_x], ax           ; button decode below relies on
     mov [mouse_y], bx
-%ifndef CURFRAME
+%ifdef CURFIX
     mov cx, [ticks]             ; THE HAND IS MOVING (SPEC.md 7.1.4.3), which
     mov [cur_mvt], cx           ; is what decides whether the deferred hide is
                                 ; worth keeping. CX is dead here - it was the
                                 ; shift count above and the ISR pushed it -
                                 ; and DX is not, which is why it is not DX.
-                                ; Gated with its reader, so CURFRAME=1 is the
-                                ; pre-7.1.4.2 ISR too and not this one with a
-                                ; dead store in it - an A/B disk that carries
+                                ; Gated with its reader, so a DEFAULT build is
+                                ; the pre-7.1.4.2 ISR too and not that one with
+                                ; a dead store in it - an A/B disk carrying
                                 ; half of what it is testing is not an A/B
 %endif
 
@@ -2049,7 +2049,7 @@ cur_unlazy:
 cur_lazyck:
     cmp byte [cur_lazy], 0
     je .out
-%ifndef CURFRAME
+%ifdef CURFIX
     push ax                     ; IS THE HAND MOVING? (SPEC.md 7.1.4.3) If it
     mov ax, [ticks]             ; is, keeping the arrow lit is the WRONG trade:
     sub ax, [cur_mvt]           ; the ISR cannot move it under the lock either
@@ -2062,7 +2062,7 @@ cur_lazyck:
                                 ; and its cost is one redundant hide. `pop`
                                 ; leaves the flags the `cmp` set
 %endif
-%ifdef CURFRAME
+%ifndef CURFIX
     push ax
     push bx
     push cx
@@ -2928,7 +2928,7 @@ mouse_x     dw SCREEN_W/2       ; public: cursor position, 0..639
 mouse_y     dw SCREEN_H/2       ; public: 0..479
 mouse_btn   db 0                ; public: bit 0 = left, bit 1 = right
 
-%ifndef CURFRAME
+%ifdef CURFIX
 cur_mvt     dw 0                ; [ticks] at the last movement packet (SPEC.md
                                 ; 7.1.4.3). In .text with a real initialiser
                                 ; for cur_sptr's reason below - and 0 is the

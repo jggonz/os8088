@@ -2869,6 +2869,11 @@ and there is no call site that can compensate.
 
 ### 7.1.4.2 The test is the REGION, and the frame answered a different question
 
+> **THIS IS OFF BY DEFAULT — `make CURFIX=1` turns it on, together with
+> §7.1.4.3.** A plain build does what this section says the frame test did,
+> and everything below describes the *knob*, not the shipped kernel. §7.1.4.4
+> is why, and is the section to read first.
+
 `cur_lazyck` tested the window's **frame** rect, and §7.1.4 above records the
 reasoning: the region is the content minus what covers it, so outside the frame
 is outside every fragment, and one rect test is far cheaper than sixteen. Both
@@ -2939,7 +2944,7 @@ permanently smeared cursor. Four readings, each on CGA, Hercules and VGA mode
 | the fix | pointer over the panel, inside the TM's frame: the arrow's cell changes in **0 of 90** consecutive displayed frames |
 | positive control | pointer over the EXPOSED Task Manager, inside its region: **4–7 of 90**, worst 42 px — the overlap branch still fires, so the walk is not answering "clear" to everything |
 | arrow integrity | Bounce drawing behind the panel, 1,000–1,600 px of it, sampled 20 times across ~10 s: the arrow's own cell **0 px** changed, and the cell it vacates **0 px** after |
-| byte identity | against `make CURFRAME=1`, the same scripted session: **0 differing pixels** outside the arrow and the two areas that are live on *both* builds |
+| byte identity | against a default (frame-test) build, the same scripted session: **0 differing pixels** outside the arrow and the two areas that are live on *both* builds |
 
 Two things about that last row. The live areas are the menu bar's clock and
 the exposed Task Manager's own cycle counts, and they are named by *measuring*
@@ -2962,6 +2967,9 @@ it measures a cell the cursor was never in and passes by measuring nothing.
 Cost: `.text` **+17 bytes**, no rung crossed, `KERN_BUDGET` untouched.
 
 ### 7.1.4.3 A MOVING pointer wants the hide; only a still one wants the arrow
+
+> **OFF BY DEFAULT with §7.1.4.2, behind the same `CURFIX=1`** — the two are
+> one behaviour and neither is worth building without the other. §7.1.4.4.
 
 §7.1.4.2 shipped and was reported back as **"the cursor freezes and jerks as
 it moves with the Task Manager open"** — from the field, and it is real.
@@ -3019,6 +3027,48 @@ needs a moving-pointer reading and a still-pointer reading, and they are
 different measurements*: `tools/` has the flicker one; the motion one is a
 sweep with `[gfx_lock_flag]` and `[cur_lazy]` sampled below frame resolution,
 because the question is what share of locked time the arrow is on the glass.
+
+### 7.1.4.4 Both are behind `CURFIX=1`, and the default is the old behaviour
+
+**§7.1.4.2 and §7.1.4.3 are OFF unless `make CURFIX=1` asks for them.** A
+plain build is `cur_lazyck` testing the window's frame, with no movement stamp
+in `mou_isr` and no `[cur_mvt]` at all — the behaviour that shipped for years.
+
+**Why, when both measure better.** On a cycle-accurate 5150 the parked blink
+goes from 83 frames in 90 to **0**, and the moving pointer is left exactly
+where the frame test had it (0 holds with the arrow lit throughout, either
+way). Against that, the reports coming back from the iron are that it may
+still not be an improvement. Those are not in conflict: **every instrument
+here reads the arrow's pixels and the gfx lock, and none of them reads how
+motion looks to a person.** A stop-start pointer, a blink, and a pointer that
+lags and catches up are three things the same numbers can describe, and only
+the machine in the room can rank them. When the measurement and the eye
+disagree about a thing that exists to be looked at, the eye is the
+instrument — so the code stays, the default does not.
+
+**It is ONE knob for two sections on purpose.** §7.1.4.3 exists only because
+§7.1.4.2 changed which pointers stay lit; building either alone produces a
+state nobody has ever asked for and nobody should be asked to judge — the
+region test without the gate is the reported stutter, and the gate without
+the region test is a stamp with no reader.
+
+**The knob's polarity was INVERTED rather than the code being reverted**, and
+that inversion is verified byte-exact in both directions at one commit: a
+plain `make` reproduces the old `CURFRAME=1` kernel exactly, and
+`make CURFIX=1` reproduces the old default exactly. So nothing about the two
+changes moved; only which one you get for free.
+
+**How to compare them, since that is what this is for.** `make combo` and
+`make combo CURFIX=1` are two 360KB field disks differing in the kernel alone;
+give each a marker file in its root so the machine can say which is in the
+drive, because both carry the same commit and therefore the same build number
+in the About box. And read §7.1.4.3's last paragraph before adding a
+measurement: a cursor change needs a **moving** reading and a **still**
+reading, and they are different instruments.
+
+Revisit after the next upstream squash (docs/UPSTREAM.md): the branch is
+disposable at that boundary, so this is the natural point to either take the
+pair or drop it.
 
 ### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
 

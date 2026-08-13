@@ -3875,7 +3875,7 @@ wm_hide_r   times 4 dw 0        ; wm_hide/wm_destroy: the vacated rect,
 wm_dg_r     times 4 dw 0        ; wm_dmg_gray's rect, banked across the
                                 ; region build that eats its registers
 
-%ifdef CURFRAME
+%ifndef CURFIX
 wm_clipwin  dw 0                ; the window wm_clip_set was given, banked for
                                 ; the pre-7.1.4.2 cur_lazyck, which tested the
                                 ; window's FRAME. The region test wants no
@@ -3940,7 +3940,7 @@ wm_clip_set:
                                 ; Per window (11.96.3) it drops only the
                                 ; drawer's own, where it used to drop whoever
                                 ; happened to hold the single cache
-%ifdef CURFRAME
+%ifndef CURFIX
     mov [wm_clipwin], bx        ; the knob's frame test at .done needs the
                                 ; window, and BX does not survive the loop
 %endif
@@ -3991,7 +3991,7 @@ wm_clip_set:
     ; The FAILURE path above deliberately does not check: with no region armed
     ; every primitive falls to its own unconditional cur_unlazy, which is the
     ; safe default and exactly what happened before any of this.
-%ifdef CURFRAME
+%ifndef CURFIX
     mov si, [wm_clipwin]
 %endif
     call cur_lazyck
