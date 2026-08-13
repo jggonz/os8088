@@ -8101,6 +8101,47 @@ you can click are one rect or they are a bug.
 A piano keyboard is a shape that reads correctly at any height, which is why
 this is a *scale* and not a second metric record like `apps/arkanoid`'s.
 
+###### 11.98.1.1 …and the clamp it needs is the CONSTANT, not its own output
+
+The measurement above — `pn_kby2` = 133 and `pn_bky2` = 115 on a CGA — is what
+§11.98.1 was written to produce, and it is not what shipped. `pn_metrics`
+clamped the height it had been handed against **`[pn_kby2]`**, the word it is
+about to write, instead of against **`PN_KB_Y2`**, the constant that word is a
+ceiling on. The two read alike and behave nothing alike:
+
+- `[pn_kby2]` is `.bss`, so the loader hands it over as **0**, and *no* box is
+  shorter than 0. The first call — `pn_entry`'s, off `OSAPI_WM_GEOM`, the only
+  one that runs on a machine that never resizes the window — therefore took
+  the `mov dx, PN_KB_Y2` arm whatever it had been given, and the keyboard came
+  out at its full 155 rows in a 136-row box. **On CGA the keys and both letter
+  rows drew ~19 rows through the bottom of the window's own frame onto the
+  desktop**, which is precisely the defect §11.98.1's header describes as the
+  reason it exists. VGA and Hercules hid it: 158 rows of content give
+  `dx` = 155, which is what the broken arm assigns, so the two paths agree by
+  arithmetic coincidence on two adapters out of three.
+- It is also a **ratchet**, and that half is latent rather than observed —
+  worth writing down because the shape is the defect and the shape outlives
+  the arithmetic that currently hides it. Once the word holds a short answer,
+  a later `pn_onresize` giving *more* room but not all of it compares against
+  that short value, finds itself above it, and jumps to the full 155. It is
+  unreachable today for two reasons that are both accidents: this window is
+  not `WF_SIZABLE`, so the only thing that re-fits it is `wm_refit` on a
+  §39.11 adapter switch; and the two content heights an adapter can hand it
+  are 158 and 136, whose larger one IS `PN_KB_Y2` — so the wrong branch
+  returns the right number. A third height, from any source, makes it a bug.
+
+One word: `cmp dx, PN_KB_Y2`. It is a no-op on VGA and Hercules by
+construction, and was verified that way (identical scripted session, **0
+differing framebuffer bytes** on both), and on CGA it is the keyboard inside
+its own frame with `pn_kby2` = 133 and `pn_bky2` = 115 — the figures §11.98.1
+already claimed.
+
+**The shape worth recognising**: a routine whose clamp reads its own output is
+a state machine pretending to be arithmetic, and it is *right* on every call
+after the first. Nothing in the tree tested the first call on the adapter that
+distinguishes them, and the SPEC recorded the numbers the design intended
+rather than the numbers the build produced.
+
 ### 12.05 The bar is redrawn only when its contents changed
 
 `menu_draw_bar` is on the same hot path as `dock_paint` — every window
