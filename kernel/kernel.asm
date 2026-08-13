@@ -1944,9 +1944,9 @@ dbg_reg:
 ;
 ; The optional third argument is V - "resolve this in the CALLING INSTANCE's
 ; directory" (SPEC.md 19.2.1). It goes on every cell that resolves a file
-; name and on nothing else: api_fdlg_open uses this macro too and must NOT
-; have it, because fdlg_home_go is the routine that decides where a DIALOG
-; opens and a volume switch underneath it would pre-empt that decision.
+; name and on nothing else. api_fdlg_open is NOT one of these cells at all -
+; see the stub below it, and the reason there is why this macro cannot serve
+; it: every one of these names is MANDATORY, so the stage is unconditional.
 %macro OSAPI_NSTUB 2-3 0
 %1:
     push ds
@@ -1975,10 +1975,55 @@ dbg_reg:
     OSAPI_NSTUB api_file_write,  dskw_write,  1
     OSAPI_NSTUB api_file_read,   dskw_read,   1
     OSAPI_NSTUB api_file_delete, dskw_delete, 1
-    OSAPI_NSTUB api_fdlg_open,   fdlg_open       ; NO V - see the macro
     OSAPI_NSTUB api_file_append, dskw_append, 1
     OSAPI_NSTUB api_file_read_at, dskw_read_at, 1
     OSAPI_NSTUB api_file_mkdir,  dskw_mkdir,  1
+
+; -----------------------------------------------------------------------------
+; api_fdlg_open - slot 0x0150. The N stub's shape with ONE difference, and it
+; is why this cannot be an OSAPI_NSTUB: every other N cell's name is an
+; argument the operation cannot run without, and THIS one's is optional -
+; SPEC.md 38.6 publishes SI as "a default name, or 0", and fdlg_open_x tests
+; it (`or si, si / jnz .setname`) to choose between the caller's default and
+; SPEC.md 38.10's "the name this application last picked".
+;
+; Staged unconditionally, that 0 became `api_name` - a kernel address, never
+; zero - holding whatever the copy found at the CALLER's offset 0, which for a
+; package is its own 32-byte header (SPEC.md 20.2). So an app that asked for
+; no default got `O8` and the version bytes in the name box, and fdlg_home_name
+; was unreachable from any package: the branch that calls it cannot be taken
+; through a stub that never leaves SI zero. Four of the six packages that use
+; the dialog ask for no default - Tracker, Frotz (twice) and ModPlug (twice,
+; Open and PlayList > Add...) - so this was every one of them.
+;
+; It takes no V for the reason the macro's header gives: fdlg_home_go decides
+; where a DIALOG opens, and a volume switch underneath it would pre-empt that.
+; -----------------------------------------------------------------------------
+api_fdlg_open:
+    push ds
+    push si
+    push di
+    push es
+    push cs
+    pop es                      ; ES = KERNEL for the copy destination
+    mov di, api_name
+    or si, si
+    jz .nodef                   ; "no default": the ZERO is the argument, so it
+    call api_copyname           ; must reach fdlg_open unstaged and unchanged
+    mov si, api_name            ; a kernel offset, so it survives the DS switch
+    jmp short .go
+.nodef:
+    xor si, si
+.go:
+    pop es                      ; the caller's ES back: it is the buffer
+    pop di                      ; and its DI, which fdlg_open needs as an
+                                ; input (the completion proc's offset)
+    push cs
+    pop ds                      ; DS = KERNEL
+    call fdlg_open
+    pop si
+    pop ds
+    retf
 
 ; -----------------------------------------------------------------------------
 ; api_file_find - slot 0x0348 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ

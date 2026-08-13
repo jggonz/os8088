@@ -24452,6 +24452,26 @@ Seven things about it:
 - **The caller's default name still wins.** `fdlg_open`'s `SI` is the
   document the app is actually on; the remembered name is what fills the box
   when `SI` is 0, which is the case that used to give an empty box.
+- **...and `SI = 0` has to SURVIVE THE STUB, which for a while it did not.**
+  Slot 0x0150 was an `OSAPI_NSTUB`, and that macro stages the caller's
+  `DS:SI` into `api_name` **unconditionally** — right for the six file cells
+  it also serves, where a name is an argument the operation cannot run
+  without, and wrong here, where the published contract is *"a name, or 0"*.
+  A staged 0 arrives as `api_name`, a kernel address and so never zero,
+  holding whatever `api_copyname` found at the caller's offset 0 — which for
+  a package is its own 32-byte header (§20.2). So an app asking for **no**
+  default got `O8` and the version bytes in the box, the Open button went
+  **live on a name no volume has**, and the branch above this one was
+  unreachable from any package: nothing could take it, because nothing could
+  leave `SI` zero. Four of the six packages that use the dialog ask for no
+  default — Tracker, Frotz twice, and ModPlug twice (Open, and PlayList ▸
+  Add…) — so it was all of them, and the feature above had never once run
+  outside the kernel. `api_fdlg_open` is its own stub now: it tests `SI`,
+  stages only a real name, and passes the zero through untouched. The shape
+  to recognise is that **a shared stub encodes a contract, and this cell's
+  differed from the other six in the one place the macro had no opinion** —
+  the `V` flag had already been reasoned about for it and the optional
+  argument had not.
 - **The banked fallback is taken FIRST**, because a remembered folder can
   have gone away — the disk was swapped, or the directory deleted — and
   `dsk_chdir`'s failure path leaves `[dsk_cwd]` at 0 on the drive it tried.
