@@ -270,12 +270,15 @@ loader_run_x:
     pop cx                      ; window at all and appears at the moment of
     pop bx                      ; the act (SPEC.md 22.9)
     cmp byte [ld_painted], 0
-    jne .painted                ; the success path published the status and
-                                ; drew the new window itself; all that is
-                                ; left is the poster's own status line, which
-                                ; still reads "Loading..."
+    jne .done                   ; the success path published the status, paid
+                                ; the poster's status line and THEN drew the
+                                ; new window over it (SPEC.md 22.17) - so
+                                ; nothing is owed here, and a second
+                                ; files_poster would only arm wm_clip_set on
+                                ; a window that is covered now and drop the
+                                ; cache wm_show took
     cmp al, LD_EABORT           ; ...and a FAILED load drew nothing AT ALL, so
-    jne .painted                ; it owes exactly the same one line - 'Bad
+    jne .poster                 ; it owes exactly the same one line - 'Bad
                                 ; package' where 'Loading...' is. This was an
                                 ; unconditional files_refresh, which is
                                 ; wm_paint_all: the desktop dither, the drive
@@ -286,9 +289,9 @@ loader_run_x:
                                 ; put pixels anywhere before it said no
     call files_refresh_x
     jmp short .done
-.painted:
-    call files_poster_x
-.done:
+.poster:                        ; (named for what it DOES: since the success
+    call files_poster_x         ; path pays its own poster above, everything
+.done:                          ; reaching here is a load that failed)
 
     pop es
     pop bp
@@ -645,6 +648,21 @@ ld_run_body_x:
     ; every successful launch, purely to correct one line of text.
     mov byte [ld_status], LD_OK
     mov byte [ld_painted], 1    ; ...and this pass IS the repaint
+    ; --- and the POSTER is paid BEFORE it is covered (SPEC.md 22.17) --------
+    ; The window that posted this load still has 'Loading...' on its status
+    ; line and [ld_pending] went to 0 in ui.inc before we were called, so the
+    ; line's final text has been known since the top of loader_run - it was
+    ; simply drawn after wm_show, which is one instruction too late. By then
+    ; the new window is on top, so files_poster's wm_clip_set drops the raise
+    ; cache wm_show has just taken (11.96) and there is no longer anything on
+    ; the glass to bank a new one from: the poster repainted in full on every
+    ; interaction for the rest of the session (11.96.9.1's remaining row).
+    ; Paid here it costs the same one font_run, on a window nothing is
+    ; covering, and what wm_show banks a moment later is the window as it
+    ; will actually look. fm_status_only reads the WINDOW's own state block
+    ; (FS_USED/FS_FREE), never the mounted volume, so nothing here depends on
+    ; assoc_back having put the user's disk back yet.
+    call files_poster_x         ; preserves BX, which is still the window
     call KERNEL_SEG:cw_gfx_lock
     call KERNEL_SEG:cw_wm_show  ; in: BX = window ptr; repaints all
     call KERNEL_SEG:cw_gfx_unlock

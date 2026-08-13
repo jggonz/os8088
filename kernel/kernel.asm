@@ -2964,7 +2964,7 @@ cw_wm_show:             call wm_show
                     retf
 cw_xm_release_rec:      call xm_release_rec
                     retf
-cw_wm_su_drop:          call wm_su_drop
+cw_wm_su_stale:         call wm_su_stale
                     retf
 cw_wm_title_set:        call wm_title_set
                     retf

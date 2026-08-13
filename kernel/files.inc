@@ -566,7 +566,12 @@ fmv_store:
     push di
     call fmv_winof              ; BEFORE the .none early-out: a window with no
     jc .nowin                   ; view claim paints from the global snapshot,
-    call KERNEL_SEG:cw_wm_su_drop   ; which is changing under it too
+    call KERNEL_SEG:cw_wm_su_stale  ; which is changing under it too - and it is
+                                ; STALE rather than merely uncached (SPEC.md
+                                ; 11.96.16.1): this window's pixels are the
+                                ; folder as it was, and fmv_bcast leaves a
+                                ; SIBLING in exactly that state on purpose,
+                                ; so nothing may bank them until it is redrawn
 .nowin:
     call fmv_fit                ; the claim has to be big enough for THIS
     mov ax, [di+FS_VSEG]        ; volume's listing before anything is copied
@@ -5128,6 +5133,23 @@ fm_repaint:
     push bx
     push cx
     push dx
+
+    and word [si+W_FLAGS], ~WF_STALE & 0xFFFF
+                                ; THE PIXELS DESCRIBE THE LISTING AGAIN (SPEC.md
+                                ; 11.96.16.1), so this window may be banked once
+                                ; more. fmv_store sets the bit at the one place
+                                ; a listing is replaced and this is the one
+                                ; place the window is drawn from it - which is
+                                ; why the clear is HERE and not in wm_draw_win:
+                                ; every navigation calls fm_repaint directly,
+                                ; so a kernel-side clear left a Disk window
+                                ; permanently stale and permanently uncached,
+                                ; which is the bug this whole section is about
+                                ; wearing the fix's clothes. The three cheap
+                                ; painters (fm_rows_only, fm_scrollpaint,
+                                ; fm_status_only) deliberately do NOT clear it:
+                                ; a strip made current says nothing about the
+                                ; rest
 
     call fm_title_flush
 
