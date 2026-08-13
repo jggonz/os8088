@@ -5584,6 +5584,54 @@ for the same reason, and it is not worth it either.
 a palette, a tool window, an inspector — where the transitive case is the
 common one rather than the absent one. os8088 has none today.
 
+#### 11.91.4 …and a window that draws nothing still owes its DROP SHADOW
+
+§11.91.1 and §11.91.2 are each correct alone and their premises contradict.
+The dither subtracts every visible window's **frame** and deliberately not its
+occupied box, because the box holds two corners — `(x+w, y)` and `(x, y+h)` —
+that the shadow's **L** never covers, and claiming those leaves a stale pixel
+(§11.91.1's own measurement: one differing pixel, at a restored window's
+top-right shadow corner). So the shadow *is* dithered over, and what puts it
+back is the window's own redraw. §11.91.2 then stopped redrawing a window
+whose ground was never uncovered — and its soundness note says, in as many
+words, "`wm_dmg_gray` subtracts every visible window (§11.91.1), so the dither
+never reaches inside one". It reaches the shadow.
+
+The result is a **1px black line eaten out of a window nobody touched**, along
+whichever of its right or bottom edges the damage rect swept across, and it
+survives until something forces a full repaint. Reported from the field as
+corruption while dragging a window on Hercules; reproduced on all three
+adapters (102 differing pixels against a forced `wm_paint_all`, on a single
+row, on Hercules, CGA and VGA mode 12h alike).
+
+**A window exempted by §11.91.2 owes its shadow and nothing else.**
+`wm_dmg_shadowed` asks whether the damage reaches the L — the column `x+w` or
+the row `y+h`, two compares against a rect the caller has already proved
+overlaps — and `wm_dmg_shad` records it, a second bitmask beside
+`wm_dmg_mask`. The draw loop then puts back **two drawing calls** where the
+alternative was a full repaint, which is what keeps §11.91.2's win.
+
+Four things are load-bearing.
+
+- **It is `wm_dmg_shad`, not `wm_dmg_mask`.** Marking the window instead is
+  correct and is §11.91.2 undone: the case that reaches this test is exactly
+  the case that optimisation exists for.
+- **The repair runs in the same back-to-front loop**, at that window's own
+  place in the z-order, so a marked window above still draws over it. A pass
+  of its own would land the shadow on the wrong side of a lower window.
+- **It is clipped by `wm_chrome_clip`**, exactly as `wm_draw_win` confines its
+  own chrome (§11.97). A window above may be sitting on the shadow, and an
+  unmarked one will not redraw over us — and those pixels were never dithered
+  either, because the dither subtracted *that* window's frame.
+- **Fullscreen draws no shadow** (§11.2), and `wm_win_rect` has already shrunk
+  the rect to say so, so the test refuses it rather than reading the frame's
+  own edge as an L.
+
+`wm_draw_shadow` is that L lifted out of `wm_draw_win` unchanged, keeping its
+§11.95.2 case (a window flush against the screen's left edge has no left
+border for the shadow to sit under, so the bottom edge starts at `x`, not
+`x+1`). Cost: `.text` +94 bytes, no rung crossed, footprint unchanged.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
