@@ -11322,6 +11322,48 @@ and the walk fails rather than freeing the clusters of files it could not see.
 Whatever happens — success, refusal, or a read error half way down — the
 volume is put back in the directory the call started in.
 
+#### 18.90.1 …and on a REDIRECTED volume it is not a walk at all
+
+Everything above this line reads **directory sectors** — `dskw_find`,
+`dskw_rt_scan`, `dsk_dotdot`, `dskw_rt_byclus` — and a `DRVC_FILE` volume has
+none (§62.9): `dsk_xfer` refuses one outright. So `dskw_rtbody` branches on
+`[dsk_vkind]` at its top, exactly as the other nine write bodies in
+`diskw.inc` do, and hands a redirected folder to **`dskw_rmbody`** — whose own
+`DVK_FILE` arm is the `FSV_RMDIR` call.
+
+**It was the tenth of ten and the only one that never grew the branch**, and
+the reason is written down in §62.10.4.5: the os8088 side of the write path
+was verified with `File ▸ New Folder` alone — the one verb with no application
+behind it — and nothing ever drove a **Delete** from this end. Without the
+branch the walk went straight into `dsk_xfer`, which refused, so **Delete on a
+folder of a network or RAM-disk volume did nothing at all, silently**: no
+removal, no verdict, the folder still on screen. Measured on a cycle-accurate
+5150 against the RAM disk, before and after, with an empty folder made in the
+window and the seeded `DOCS`:
+
+```
+                      before              after
+  Delete EMPTY        still there         gone
+  Delete DOCS         still there         still there, and it SAYS 'Protected'
+```
+
+It goes to `dskw_rmbody` rather than to `dskw_fsop` directly so that *what a
+redirected rmdir is* has one answer; a second `mov bp, FSV_RMDIR` here is a
+second thing to keep in step. Cost: **`.cold` +10 bytes**, and because the cold
+rung had **3 bytes** left, one cold rung and one image rung — `KERN_BUDGET`
+spare 1,024 → 512. Any change at all cost that 512; the guard is working
+rather than the fix being dear.
+
+**A redirected tree is therefore NOT walked, and that is a real difference
+from the FAT path.** Emptiness is the driver's test here, for the reason
+`dskw_rmbody`'s own branch gives — only the side holding the directory can
+answer it — so a folder with anything in it comes back `FERR_PROT` and the
+file manager says so, which is what the confirmation line's `+contents`
+over-promises. Recursing would mean the kernel walking the far side's tree,
+and the only verb for that is **`FSV_ENUM`**, which the RAM disk publishes and
+**`NET.DRV` does not** (its table carries 0 there). A recursive delete over
+the cable is a change at both ends of the protocol, not a branch here.
+
 ### 18.7 A volume is a small index, and the driver holds the partition base
 
 `[disk_drive]` is a **volume index** — 0 = A:, 1 = B:, 2 = C:, 3 = D: — and
@@ -42212,6 +42254,15 @@ RMDIR empty / GAMES  ok / PROT(8), not empty
 DELETE / again       ok / NOENT(4)
 DELETE a directory   PROT(8) - 41h is not 3Ah
 ```
+
+**Verifying the os8088 side with ONE verb left a hole, and §18.90.1 is it.**
+`File ▸ Delete` on a **folder** does not reach `FSV_RMDIR` at all — it reaches
+`dskw_rmtree`, which was the only write body in `diskw.inc` with no `DVK_FILE`
+branch, so it walked directory sectors a redirected volume does not have and
+did nothing, silently. Six verbs answered correctly on the wire while the menu
+item above one of them was dead. The lesson is the shape rather than the bug:
+*the branch sites came for free with the RAM disk* was true of the six this
+phase added and false of the one it did not.
 
 …and the os8088 side by **`File ▸ New Folder…` in a network Disk window**,
 which is the one verb with no application behind it: `M C L F` on the wire —

@@ -847,6 +847,49 @@ dskw_rtbody:
     stc
     ret
 .gated:
+    cmp byte [dsk_vkind], DVK_FILE
+    je dskw_rmbody              ; A REDIRECTED VOLUME HAS NO DIRECTORY SECTORS
+                                ; (SPEC.md 62.9) and everything below this line
+                                ; reads them - dskw_find, dskw_rt_scan,
+                                ; dsk_dotdot and dskw_rt_byclus all walk the
+                                ; disk. Without this the walk went straight
+                                ; into dsk_xfer, which REFUSES a DVK_FILE
+                                ; volume outright, so Delete on a folder of a
+                                ; network or RAM-disk volume did nothing at
+                                ; all, silently, and left the folder on screen
+                                ; with no verdict. This is the tenth of ten
+                                ; write bodies in this file and the only one
+                                ; that never grew the branch: SPEC.md
+                                ; 62.10.4.5 verified the os8088 side with
+                                ; `File > New Folder` alone - the one verb
+                                ; with no application behind it - and nothing
+                                ; ever drove a Delete from this end.
+                                ;
+                                ; IT GOES TO dskw_rmbody RATHER THAN STRAIGHT
+                                ; TO dskw_fsop so that "what a redirected
+                                ; rmdir is" has ONE answer: that body's own
+                                ; DVK_FILE arm two hundred lines up is the
+                                ; FSV_RMDIR call, and a second copy here is a
+                                ; second thing to keep in step. It re-runs the
+                                ; [dsk_mntok] gate, which is free, and it takes
+                                ; SI = the name, which is what we were handed.
+                                ;
+                                ; SO A REDIRECTED TREE IS NOT WALKED, and that
+                                ; is a real difference from the FAT path worth
+                                ; stating rather than leaving to be found.
+                                ; Emptiness is the driver's test here (the same
+                                ; reason dskw_rmbody's own branch gives), so a
+                                ; folder with anything in it comes back
+                                ; FERR_PROT and the file manager SAYS SO -
+                                ; which is the honest answer this end can give
+                                ; and is what the confirm line's "+contents"
+                                ; over-promises. Recursing would mean the
+                                ; kernel walking the far side's tree, and the
+                                ; only verb for that is FSV_ENUM, which
+                                ; NET.DRV does not publish (its table carries 0
+                                ; there) - a recursive delete over the cable is
+                                ; a change at both ends of the protocol, not a
+                                ; branch here.
     mov ax, [dsk_cwd]           ; where we must end up, whatever happens
     mov [dskw_rt_home], ax
     mov di, dskw_rt_name        ; keep the caller's name: the last removal
