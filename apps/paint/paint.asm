@@ -6040,15 +6040,27 @@ pt_oncmd:
     call pt_msg_show
     ret
 .save_go:
-    mov si, pt_s_saving             ; an encode runs before the floppy does and
-    call pt_msg_show                ; the file-activity widget cannot see it;
-                                    ; SPEC.md 59.4 gets this on the glass
+                                    ; NO 'Saving...' here - the Open path's
+                                    ; reasoning (below), which this one was
+                                    ; the exception to and no longer is.
+                                    ; SPEC.md 12.8's file-activity widget
+                                    ; reports the write live, and since
+                                    ; SPEC.md 59.9 the toast strip's FIRST
+                                    ; home is the gap between the last menu
+                                    ; and the clock - which is exactly the
+                                    ; 88 pixels the widget borrows. The two
+                                    ; are no longer neighbours sharing a bar;
+                                    ; they are two things drawing the same
+                                    ; cells, and a strip put up before the
+                                    ; write is still up when fpg_begin fills
+                                    ; over it
     call pt_save                    ; pt_save only SETS its toast: the dialog's
     mov si, [pt_msgp]               ; completion callback is what shows it on the
-    or si, si                       ; Save As path, and this path has none
-    jz .out
-    call pt_msg_show                ; (which replaces "Saving..." )
-    ret
+    or si, si                       ; Save As path, and this path has none.
+    jz .out                         ; Either way it is said HERE, after the
+    call pt_msg_show                ; write returned and fpg_end gave the bar
+    ret                             ; back (SPEC.md 12.8) - so 'Saved' lands
+                                    ; on a bar the widget has finished with
 .open:
     mov al, FDLG_OPEN
     jmp short .dlg
@@ -7652,13 +7664,15 @@ pt_ondlg:
                                     ; line - and it said it over the widget's
                                     ; own pixels, which is why fpg_begin used
                                     ; to retire it a moment after it went up.
-                                    ; Since SPEC.md 59.8 the strip is in the
-                                    ; clock's field and would simply survive
-                                    ; beside the widget, saying the same thing
-                                    ; twice; the decision stands on the first
-                                    ; reason alone. The SAVE below keeps its
-                                    ; message because an encode comes FIRST
-                                    ; there and the widget cannot see it
+                                    ; SPEC.md 59.8 moved the strip to the
+                                    ; clock's field, which read for a while as
+                                    ; "it would survive beside the widget,
+                                    ; saying the same thing twice" - and
+                                    ; SPEC.md 59.9 then gave it a FIRST home
+                                    ; in the gap left of the clock, where the
+                                    ; widget lives, so the original reason is
+                                    ; live again and literal. The SAVE below
+                                    ; says nothing either, for the same reason
     mov si, pt_name
     call pt_load
     jmp short .draw
@@ -7669,16 +7683,12 @@ pt_ondlg:
     mov word [pt_msgp], pt_s_bigpic
     jmp short .draw
 .save:
-    mov si, pt_s_saving             ; ...but a save is not the mirror of it: a
-    call pt_msg_show                ; GIF encodes 125,000 pixels BEFORE the
-                                    ; floppy starts, and the file-activity
-                                    ; widget cannot report work that has not
-                                    ; reached the disk. SPEC.md 59.4's
-                                    ; toast_now is what puts this on the glass
-                                    ; before the machine goes quiet, and is
-                                    ; why the pt_wait that used to be here for
-                                    ; the lock round trip is gone
-    call pt_save
+    call pt_save                    ; ...and the outcome is said at .toast
+                                    ; below, after the write has returned and
+                                    ; the canvas has been put back - never
+                                    ; before it, where a strip in the gap sits
+                                    ; under the widget fpg_begin is about to
+                                    ; draw there
 .draw:
     cmp byte [pt_wchg], 0           ; a load that resized the window has to
     je .plain                       ; repaint the DESKTOP too, not just us:
@@ -9732,7 +9742,6 @@ pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 pt_s_crop:   db 'Would crop artwork', 0
 pt_s_noram:  db 'No memory to resize', 0
-pt_s_saving: db 'Saving...', 0
 pt_s_wlab:   db 'W', 0
 pt_s_hlab:   db 'H', 0
 pt_s_apply:  db 'Apply', 0

@@ -3372,9 +3372,24 @@ once, and a toast belongs to no window. `toast_say` (AL = index, BX = table,
 CX = length) is the shared body, carrying in one place the bound whose absence
 once made that whole ladder silent. **Paint's `Loading...` went from the other
 direction**: §12.8's widget reports the same read *live*, and back when the
-two shared pixels `fpg_begin` retired the toast moments after it went up. Its
-`Saving...` stays — a GIF encodes 125,000 pixels before the floppy starts and
-the widget cannot report work that has not reached the disk.
+two shared pixels `fpg_begin` retired the toast moments after it went up.
+**And `Saving...` has now gone after it — a message about a file operation is
+said when the operation is OVER, never before it, and that is a RULE now
+rather than Paint's taste.** It stayed on the argument that a GIF encodes
+125,000 pixels before the floppy starts, so the widget cannot report the work;
+what expired was the premise underneath it, which is the shape to recognise.
+§59.8 moved the strip into the clock's field — wholly right of
+`[vid_clk_hx]`, where the widget's right edge is `[vid_clk_hx] - 1` — and
+`fpg_begin` dropped its `toast_kill` on exactly that reasoning. **§59.9 then
+gave the strip a FIRST home in the GAP**, the blank cells between the last
+menu and the clock, which is the 88 pixels the widget borrows: so a short
+message put up in front of a write chose the widget's cells *by preference*,
+was white-filled over by `fpg_begin`, and was composed back on top of it by
+`fpg_end` for the rest of its three seconds. `Saved` stays and is raised after
+`pt_save` returns — after `dskw_write_x` has called `fpg_end` and handed the
+bar back — on both save paths. §59.4's `toast_now` is untouched and is what
+puts it on the glass at the moment of the act; what it no longer has is a
+caller for the *announce it first* case it was written for.
 
 **The Control Panel's save result went too (SPEC.md §59.6).** `cp_flush_x`
 writes `SYSTEM.CFG` when the panel CLOSES, and a failure had nowhere to go —

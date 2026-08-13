@@ -133,12 +133,31 @@ fpg_begin:
 
                                 ; NO toast_kill here any more (SPEC.md 59.8):
                                 ; the strip used to reach left into these
-                                ; cells, and it is in the CLOCK's field now -
-                                ; wholly right of [vid_clk_hx], where this
-                                ; widget's right edge is [vid_clk_hx] - 1. The
-                                ; two can be up together because they are
-                                ; about different things: this says work is
-                                ; happening, a toast says what finished
+                                ; cells, and 59.8 moved it to the CLOCK's
+                                ; field - wholly right of [vid_clk_hx], where
+                                ; this widget's right edge is [vid_clk_hx]-1.
+                                ; The two are about different things (this
+                                ; says work is happening, a toast says what
+                                ; finished), so they may be up together.
+                                ;
+                                ; **THAT IS TRUE OF THE FIELD AND NOT OF THE
+                                ; GAP** (SPEC.md 59.9): the strip's FIRST home
+                                ; is now [menu_bend]..[menu_bn], the blank
+                                ; cells left of the clock - which is exactly
+                                ; the span this widget borrows, so a strip
+                                ; short enough to fit there is a strip under
+                                ; the fill below. The answer is SPEC.md 59.5's
+                                ; rule at the raiser rather than a kill here:
+                                ; a message about a file operation is said
+                                ; when the operation is over, and nothing in
+                                ; the tree announces one any more (Paint's
+                                ; 'Saving...' was the last). A toast still
+                                ; running its three seconds when an operation
+                                ; STARTS is the case this does not cover, and
+                                ; it is left uncovered deliberately - killing
+                                ; a message the user may not have read yet is
+                                ; the worse of the two outcomes, and fpg_end's
+                                ; menu_draw_bar puts the strip back whole
 
     call cur_unlazy             ; spend gfx_lock's promised hide before we
                                 ; draw anywhere near the arrow (SPEC.md 7.1.4)
