@@ -979,11 +979,11 @@ assoc_run_x:
     pop es                      ; ld_run_body's failure exits leave ES adrift
     call assoc_back             ; the user's volume FIRST, then the window
     cmp byte [ld_painted], 0
-    jne .painted
+    jne .out                    ; ld_run_body paid the poster's status line
+                                ; before its wm_show covered it (SPEC.md
+                                ; 22.15); a second files_poster here would
+                                ; drop the raise cache that took
     call files_refresh_x
-    jmp short .out
-.painted:
-    call files_poster_x
     jmp short .out
 
 .nofile:
