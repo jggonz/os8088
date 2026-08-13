@@ -13824,6 +13824,20 @@ The cluster is range-checked at the slot, because the quiet path skips
 `disk_mount`'s own `.cwd_lost` validation. That is `fcp_goto`'s reason and
 the same two compares.
 
+**`[dsk_mntok]` is asked FIRST, and the word path is wrong without it.**
+`[disk_drive]` is where the machine *believes* it stands, not proof that
+anything is mounted there, and the two part company at exactly one place:
+`dsk_vol_del` unmounting the volume the machine was standing on sets
+`[disk_drive]` back to 0 **and clears `[dsk_mntok]` beside it** — A: is the
+fallback marker, not a volume anybody mounted (§18.3). A quiet goto to A:
+then matched on the index, stored `[dsk_cwd]` and answered CF = 0 having done
+nothing, while the BPB, the FAT window and every derived geometry still
+described the volume that had just been dropped; every read after it failed.
+`dsk_here_ok` (§18.9.1) opens with that same compare and says why — the two
+routines answer the same question and must not disagree about it. The hard-
+disk installer is where it surfaced: unmount the drive, stand on A: to read
+`KERNEL.SYS`, and the stand is a no-op (§52.10.8.1).
+
 **It is not a replacement for `GOTO` and must not become one.** It leaves the
 global listing empty and `[dsk_lstale]` raised, so a caller about to *show* a
 folder wants the other slot; and it deliberately does not move the instance's
@@ -36138,6 +36152,61 @@ stages and ended `Done - remove the floppy, Restart`. After this fix **both**
 do: 870 sectors / 206 `int 13h` mounted, 868 / 199 not, the difference being
 the pre-existing mount's own reads. Both stages run under one Install because
 B: holds the apps disk and it is found — the swap prompt is the other path.
+
+#### 52.10.8.1 CLOSED: it is the DRIVE that must not be mounted, not the slot
+
+§52.10.8 fixed the case it was written against — install to the partition you
+had just mounted — and left its sibling standing, with the identical symptom
+and the identical first sentence: **`KERNEL.SYS` in the status line, after a
+Mount.** The report that found it names the difference exactly: *install, then
+restart, then Mount the drive, then install again*, and the install it fails
+on is to a slot **other** than the one that was mounted.
+
+**Three facts compose into it and each is reasonable alone.** Mount is per
+DEVICE — `hd_mount` walks all four slots and mounts every FAT one — so the
+volume left CURRENT is the last partition of that drive, whichever slot the
+user was thinking about. `osapi_vol_mount` ends in `disk_mount`, so mounting
+IS a navigation: `[disk_drive]` names that volume afterwards. And
+`hd_ivol_bank` takes the install's source from `OSAPI_FILE_HERE`, which for a
+driver is the machine's own position (§19.2.1) — so the source of the *system
+files* became a hard-disk partition. `hd_iunmount_dst` then unmounted the
+DESTINATION slot, which on this path is not the mounted one, so nothing
+reset `[hd_isrcdrv]` and nothing said so.
+
+What the copy read from is then whatever that partition happens to hold. On
+the machine that reported it that was a **data volume written from Windows —
+two `.MOD` files, a `$RECYCLE.BIN` and a `System Volume Information`** — with
+no `KERNEL.SYS` anywhere in it, so `hd_istat` answered "not there" about the
+first file the install asks for. The message is `hd_icopy_one` naming the file
+it stopped on, exactly as §52.10.7 taught it to, and exactly as misleading:
+the file is fine, on a disk nobody was reading.
+
+**Two changes, and the second is the one that matters most.**
+
+- **`hd_iunmount_dst` unmounts the whole destination DEVICE**, all four slots,
+  resetting `[hd_ivdrv]`/`[hd_isrcdrv]` for each volume that goes rather than
+  for the one the destination slot happened to hold. The invariant it enforces
+  was never "the destination is not mounted" but *the install is not standing
+  on the drive it is about to write* — one partition of that drive being
+  mounted is enough, because mounting moves the machine onto it.
+- **`hd_isrc_ck` asks whether there is a system disk to copy BEFORE anything
+  is erased**, one line above `hd_inst_fmt`. Every answer below that line is
+  given with the destination already formatted, which is what turned "the
+  source was wrong" into a partition that is gone — and the source is a guess
+  in more ways than this one: a Disk window left open on B:, a RAM disk, a
+  redirected volume (§62.9), a second hard disk. The test is `KERNEL.SYS` in
+  the root, the same marker `drv_cfg_save` uses to find the system volume
+  (§51.5.1) and `hd_iapps_find` uses to rule one *out*, and the fallback is A:
+  — silently, because the user asked to install os8088 and not to install
+  whatever they were last looking at. `[hd_ivdrv]` is untouched, so they are
+  still put back where they were.
+
+**Measured on `os8088_xt_hdd`, driving the reporter's own 128MB VHD**: the
+same nine clicks with and without one Mount, installing to Slot 1 both times.
+Before: `KERNEL.SYS` with the Mount, `Done - remove the floppy, Restart`
+without. After: `Done` on both. The A/B is one click wide and everything else
+— disk, slot, floppies, machine — is held still, which is what says the
+destination was never the question.
 
 ### 52.10.9 What an install COSTS, per phase
 
