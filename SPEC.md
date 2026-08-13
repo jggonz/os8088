@@ -708,22 +708,23 @@ The load is therefore placed where a failure can still be reported *instead
 of* the feature rather than *inside* it. `cp_open` loads **before**
 `app_launch`, so a machine with the wrong disk in the drive never gets a
 Control Panel window with no Control Panel in it — it gets no window and a
-toast naming the disk (§59): `Panel Needs Sys Disk`. It is the one such
-message that does **not** take `dsk_bootltr`'s stamped drive letter
-(§52.10.3), because it names the system disk rather than lettering it and so
-reads the same on a floppy machine and an installed one.
+toast naming the disk (§59): `Panel Needs Sys Disk A:`, with the letter
+stamped by `dsk_bootltr` like every other message that names the system
+volume (§52.10.3).
 
-**A letter would be accurate here and would still mislead, which is why it
-went.** `mod_need` searches nothing: it goes to `[dsk_bootvol]` and only
-there, so the letter the old string stamped was always the right one. What
-the user *sees* is a different matter, and it was reported from the field as
-the panel spinning both drives. Traced at the int 13h boundary from outside
-the guest — the drive the ROM was actually told to select — a refusal with
-the current volume on A: is **one call, on A:**, and with a Disk window open
-on B: it is **two on A: and one on B:**. The second drive is
-`drv_vol_back` putting the user's own volume back (§51.5.2), not a second
-place the panel was looked for. Naming the drive invites the reader to
-reconcile one letter with two motors; naming the disk does not.
+**It says the disk AND the drive, and the letter is the half that was
+questioned.** `mod_need` searches nothing — it goes to `[dsk_bootvol]` and
+only there — so the letter is not a guess about where the file might be, it
+is the one volume the panel is ever looked for on, and on an installed
+machine that is C: rather than A:. The doubt came from the field, where the
+refusal was seen to spin **both** floppies, which reads as a search. It is
+not one. Traced at the int 13h boundary from outside the guest — the drive
+the ROM was actually told to select — a refusal with the current volume on
+A: is **one call, on A:**, and with a Disk window open on B: it is **two on
+A: and one on B:**. That second drive is `drv_vol_back` putting the user's
+*own* volume back afterwards (§51.5.2), not a second place the panel was
+looked for. So the letter stands, and this paragraph is here because the
+motors say something the message does not.
 
 **Two Control Panel routines stay resident**, and both would otherwise force
 a load at a moment when there is no panel at all: `cp_tick_due` (called once
@@ -39297,8 +39298,15 @@ opposite things done about them:
 | `[cp_dsave]` | | |
 |---|---|---|
 | 0 | `Settings Saved` | 14 chars |
-| 1 | `Not saved: need disk A:` | 23 |
+| 1 | `Not Saved: No Sys in A:` | 23 |
 | 2 | `Not saved: disk error` | 21 |
+
+Slot 1 says **`No Sys in A:` and not `need disk A:`**, because those are two
+different refusals and this is only ever the second. There *is* a disk in the
+drive — the user has been working off it — and what it is not is the *system*
+disk (`drv_cfg_save` asks `dskw_stat` for `KERNEL.SYS`, §51.5.1). `need disk`
+reads as an empty drive and sends the reader to look at the light rather than
+at the label.
 
 **The SUBJECT is what these gave up**, and until §59.8 they did not have to:
 the strip had the menus segment's 50 cells to sit in, so all three of
@@ -39307,11 +39315,14 @@ chars) and terseness would have bought nothing. In the clock's 25-cell field
 `TOAST_MAX` is 23 and one of the three has to go. It is the subject: the panel
 the user just closed is the only thing that was on screen, where dropping the
 cause leaves a message nobody can act on. `cp_s_noload` — `Panel Needs Sys
-Disk` — is the exception that proves it and spends the outcome instead,
-because there is no panel on screen to infer the subject from. It is also
-the one message here that **names** the system disk rather than lettering it,
-so it is not stamped and not in `dsk_ltrtab`: the save refusal is telling the
-user which drive to put a disk in, and this one is telling them which disk.
+Disk A:` — is the exception that proves it and spends the outcome instead,
+because there is no panel on screen to infer the subject from.
+
+All three of these name the **disk** and the **drive** both, which 24 cells
+will just carry, and §2.8.4 is why the letter is worth one of them: the panel
+and the settings file are looked for on exactly one volume, `[dsk_bootvol]`,
+so the letter is not a hint about where to search but the whole answer to
+*which disk, where*.
 
 `A:` is **stamped** at boot (§52.10.3) because the system volume is not A: on
 a machine booted from a hard disk, and a message naming the wrong drive is
@@ -39437,9 +39448,9 @@ twenty-two strings that did not fit:
 
 | | was | is |
 |---|---|---|
-| `cp_s_dsdsk` | `Settings not saved: wrong disk in A:` | `Not saved: need disk A:` |
+| `cp_s_dsdsk` | `Settings not saved: wrong disk in A:` | `Not Saved: No Sys in A:` |
 | `cp_s_dserr` | `Settings not saved: disk error` | `Not saved: disk error` |
-| `cp_s_noload` | `Control Panel needs the system disk in A:` | `Panel Needs Sys Disk` |
+| `cp_s_noload` | `Control Panel needs the system disk in A:` | `Panel Needs Sys Disk A:` |
 | `fm_s_swapno` | `Format needs the system disk in A:` | `Format needs disk A:` |
 | `fm_s_fmtbad` | `Drive cannot reach 720K - made 360K` | `Made 360K, not 720K` |
 | `pt_s_crop` | `Would crop artwork - erase it first` | `Would crop artwork` |

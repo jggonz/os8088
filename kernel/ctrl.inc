@@ -366,8 +366,14 @@ cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
 ; closed is the subject, and it was the only thing on screen - where dropping
 ; the cause would leave a message that cannot be acted on. The success line
 ; keeps it, being short enough to.
+;
+; `No Sys in A:` rather than `need disk A:`, because the two are not the same
+; refusal and only one of them is this one: there IS a disk in the drive - the
+; user has been working off it - and what it is not is the SYSTEM disk
+; (drv_cfg_save asks dskw_stat for KERNEL.SYS, SPEC.md 51.5.1). `need disk`
+; reads as an empty drive and sends the reader to look at the light.
 cp_s_dsok:  db 'Settings Saved', 0
-cp_s_dsdsk: db 'Not saved: need disk '
+cp_s_dsdsk: db 'Not Saved: No Sys in '
 cp_s_dsdrv: db 'A:', 0          ; the letter, stamped (SPEC.md 52.10.3): the
                                 ; system volume is not A: on a machine booted
                                 ; from a hard disk, and a message that names
@@ -388,13 +394,13 @@ CP_NSAVE  equ 4
 ; own code is a file on the system disk now, so OPENING it can fail for the
 ; same reason SAVING it can. This one keeps its subject and spends the outcome
 ; instead, because there is nothing on screen to infer the subject FROM - the
-; panel never opened.
-; It NAMES the disk rather than lettering it, which is the one message here
-; that does: it is not stamped, so it is not in dsk_ltrtab (SPEC.md 52.10.3)
-; and it says the same thing on a floppy machine and an installed one. The
-; save refusal above still letters, because there the user is being told which
-; drive to put a disk in; here they are being told which disk.
-cp_s_noload: db 'Panel Needs Sys Disk', 0
+; panel never opened. It says the DISK and the DRIVE both, which is what the
+; 24-cell field will just carry: the disk because that is what is wanted, and
+; the letter because mod_need looks on exactly one volume - [dsk_bootvol] -
+; and telling the user which one is the difference between a message they can
+; act on and one they have to guess at.
+cp_s_noload: db 'Panel Needs Sys Disk '
+cp_s_nodrv:  db 'A:', 0         ; stamped beside cp_s_dsdrv, same rule
 cp_opentab: dw 0, cp_s_noload
 CP_NOPEN  equ 2
 

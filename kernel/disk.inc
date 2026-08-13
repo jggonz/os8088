@@ -1503,12 +1503,12 @@ dsk_ltrtab:                     ; every message that names the system disk
     dw ui_s_nodisk_l            ; the Task Manager's notice (SPEC.md 28.3)
     dw cp_s_dsdrv               ; the Control Panel's save refusal (51.5.1)
     dw drv_e1_l                 ; DRVE_DISK, the Drivers page's status (51)
+    dw cp_s_nodrv               ; ...and its OPEN refusal (SPEC.md 2.8.4), now
+                                ; that the panel's own code is a file on that
+                                ; same disk
     dw fm_s_swapd               ; ...and the formatter's swap prompt (2.8.5),
     dw fm_s_swapnd              ; which names it twice: the ask and the refusal
-DSK_LTRN equ 5                  ; the panel's OPEN refusal (SPEC.md 2.8.4) was
-                                ; the sixth and is not lettered any more: it
-                                ; names the system disk instead, so there is
-                                ; nothing in it to stamp
+DSK_LTRN equ 6
 section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
                                 ; segment of its own. DS is still KERNEL_SEG,
                                 ; so the DATA stays in .text at every toggle
