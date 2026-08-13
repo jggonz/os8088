@@ -53,6 +53,15 @@ UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
 ; -----------------------------------------------------------------------------
 ui_task:
 .loop:
+%ifdef KFZTRACE
+    inc word [khb_uipass]       ; ONE PASS OF THE UI TASK. The watchdog keyed
+                                ; on a HELD mutex and never fired in the field,
+                                ; which is itself the finding: the lock is
+                                ; taken and released over and over, so the
+                                ; machine is LIVELOCKED rather than halted and
+                                ; no lock-held counter can see it. What does
+                                ; not happen is this line.
+%endif
     ; --- 0. a posted restart, spent with NOTHING held (SPEC.md 20.10) --------
     cmp byte [ui_rebootq], 0
     je .keys

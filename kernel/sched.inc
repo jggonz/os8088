@@ -825,8 +825,10 @@ khb_csh:    db 0                ; CS high: 00 kernel, 0D cold, else a package
 khb_iph:    db 0                ; the interrupted IP: which routine the machine
 khb_ipl:    db 0                ; is standing in when it stops
 khb_wide:   db 0x00, 0x0F, 0xF0, 0xFF   ; two bits -> four pixels each
-khb_stuck:  dw 0                ; consecutive ticks the mutex has been held
-khb_msg:    db 'AT 00:0000 OWN 00 CUR 00 SP 0000', 0
+khb_stuck:  dw 0                ; consecutive ticks with NO ui_task pass
+khb_uipass: dw 0                ; bumped once per ui_task loop
+khb_uilast: dw 0                ; ...and what it read at the last tick
+khb_msg:    db 'AT 00:0000 OWN 00 CUR 00 SP 0000 R 0000 0000 0000', 0
 KHB_M_CS    equ 3                ; 'AT cc:iiii OWN oo CUR cc SP ssss' - every
 KHB_M_IPH   equ 6                ; one of these counted off the literal above,
 KHB_M_IPL   equ 8                ; which is what the first version did not do:
@@ -834,6 +836,7 @@ KHB_M_OWN   equ 15               ; the fields landed on each other and on the
 KHB_M_CUR   equ 22               ; NUL, so the report ran on into the hex digit
 KHB_M_SPH   equ 28               ; table and printed it
 KHB_M_SPL   equ 30
+KHB_M_RET   equ 35
 khb_hexd:   db '0123456789ABCDEF'
 
 ; khb_hex - AL as two hex digits at DS:SI (KFZ only; clobbers AX, BX)
@@ -991,10 +994,13 @@ sch_isr:
     ; instant this fires nothing else is ever going to run again, so the rules
     ; it would break have no one left to protect. It forces the mutex open and
     ; disarms the clip so font_str can work at all.
-    cmp byte [gfx_lock_flag], 0
-    jne .khbheld
-    mov word [khb_stuck], 0
-    jmp short .khbout
+    mov ax, [khb_uipass]        ; HAS THE UI TASK COMPLETED A PASS? The old
+    cmp ax, [khb_uilast]        ; trigger was "the mutex has been held N ticks"
+    je .khbheld                 ; and the field never tripped it - because the
+    mov [khb_uilast], ax        ; loop takes and releases it every iteration.
+    mov word [khb_stuck], 0     ; A livelock is invisible to a held-lock timer
+    jmp .khbout                 ; and obvious to a progress one (NEAR: the
+                                ; report below put .khbout out of short range)
 .khbheld:
     inc word [khb_stuck]
     cmp word [khb_stuck], KHB_STUCK
@@ -1021,6 +1027,23 @@ sch_isr:
     mov si, khb_msg + KHB_M_SPL
     mov al, [khb_spl]
     call khb_hex
+    mov bx, sp                  ; ...and three words of the interrupted code's
+    mov cx, 3                   ; OWN stack: the return addresses that name the
+    mov di, khb_msg + KHB_M_RET ; LOOP, where the IP only names its leaf
+.khbret:
+    mov ax, [ss:bx+KHB_IPOFF+6]
+    push ax
+    mov si, di                  ; khb_hex preserves AX, BX, CX and leaves SI
+    mov al, ah                  ; alone, so the pair below is all this needs
+    call khb_hex
+    pop ax
+    mov si, di
+    inc si
+    inc si
+    call khb_hex
+    add di, 5
+    add bx, 2
+    loop .khbret
     mov byte [gfx_lock_flag], 0 ; force it open: font_str asserts the caller
     mov word [wm_clip_n], 0     ; holds it, and a live clip would truncate us
     mov byte [gfx_dis], 0
