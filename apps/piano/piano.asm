@@ -200,10 +200,15 @@ pn_metrics:
     push bx
     push dx
     sub dx, 3                       ; the same 2px margin the full layout leaves
-    cmp dx, [pn_kby2]                ; ...never taller than it was designed for
-    jbe .wok
-    mov dx, PN_KB_Y2
-.wok:
+    cmp dx, PN_KB_Y2                ; ...never taller than it was DESIGNED for,
+    jbe .wok                        ; which is the constant and never [pn_kby2]:
+    mov dx, PN_KB_Y2                ; that word is this routine's own OUTPUT, it
+.wok:                               ; is bss so it arrives 0, and 0 fails this
+                                    ; test for every box there is - so the first
+                                    ; call took the full height whatever it was
+                                    ; handed, which is the bug the header above
+                                    ; describes, still happening on the one
+                                    ; adapter it was written for (11.98.1.1)
     cmp dx, PN_KB_Y1 + PN_KB_MIN    ; ...and never so short there is no key
     jae .wok2
     mov dx, PN_KB_Y1 + PN_KB_MIN
