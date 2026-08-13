@@ -949,6 +949,13 @@ LOW_SEG     equ FAT_SEG + FAT_PARA    ; .lowbss (task stacks + disk buffers)
                                 ; and, on top of it, task 0's own stack
 LOW_PARA    equ ((KLOW_SIZE + STK0_SIZE + 511) / 512) * 32
 STK0_TOP    equ KLOW_SIZE + STK0_SIZE - 2   ; task 0's stack top, growing down
+STK0_BOT    equ KLOW_SIZE       ; ...and the floor it grows down ONTO, which is
+                                ; the top of .lowbss - the other tasks' slices,
+                                ; the glyph table and the disk buffers. Task 0
+                                ; is the one stack sch_switch's canary check
+                                ; skips, so an overrun here is silent; KFZ=1
+                                ; seeds a word at this address and the
+                                ; heartbeat reports whether it survived
                                 ; onto the top of .lowbss; guard 3 proves the
                                 ; two cannot meet
 KERN_END    equ LOW_SEG + LOW_PARA    ; ...and there the kernel stops

@@ -130,6 +130,15 @@ sched_init:
     mov word [sch_wd_hits], 0   ; zeroed HERE by hand: nothing clears .bss at
                                 ; boot, so an uninitialised sch_coop would
                                 ; boot into a random mode
+%ifdef KFZTRACE
+    push es                     ; TASK 0 HAS NO CANARY (see sch_switch's
+    push ax                     ; .nocanary) and its stack grows DOWN onto the
+    mov ax, LOW_SEG             ; top of .lowbss - the other tasks' slices, the
+    mov es, ax                  ; glyph table, the disk buffers - so an overrun
+    mov word [es:STK0_BOT], SCH_MAGIC ; there is silent. Seed one so the
+    pop ax                      ; heartbeat can report it
+    pop es
+%endif
     mov byte [sch_tasks+T_STATE], 1     ; task 0 = this thread, ready
     mov byte [sch_tasks+T_INST], 0xFF   ; the UI task owns no instance
     mov byte [sch_tasks+T_FLAGS], 0
@@ -872,6 +881,27 @@ sch_isr:
     inc si
     add di, 2                   ; one blank byte between cells
     loop .khbcell
+    ; ...then the two the table cannot carry: how DEEP this stack is, and
+    ; whether task 0's own bottom word is still there.
+    mov di, dx
+    add di, KHB_X + 10
+    sub di, 0x2000              ; DX has already advanced past this bank
+    mov ax, sp                  ; raw SP: the frames above it are a constant
+    mov cl, al                  ; (this block's 8 + sch_isr's 9 + the int's 3)
+    mov al, ah
+    not al
+    mov [es:di], al             ; SP high...
+    mov al, cl
+    not al
+    mov [es:di+2], al           ; ...then SP low, and NOT at di-2, which is
+                                ; cell 4 and had been overwriting gfx_lock_own
+    xor al, al
+    cmp word [ss:STK0_BOT], SCH_MAGIC
+    je .khbok
+    dec al                      ; AL = 0xFF -> painted SOLID BLACK: the UI
+.khbok:                         ; task's stack has been through the floor
+    not al
+    mov [es:di+4], al
     add dx, 0x2000
     cmp dx, 0x8000
     jb .khbank
