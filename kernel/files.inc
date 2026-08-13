@@ -156,7 +156,41 @@ FS_USED     equ 22              ; word: KB summed over this folder's listed
                                 ; entries, 0xFFFF = not known. Derived from
                                 ; the window's own cache, so it costs no I/O
                                 ; and follows the cache the paint reads
+
+; --- the remembered path (docs/TITLE-PLAN.md) - KERN_BIG ONLY --------------
+; The folders this window was walked DOWN through, so that going back up can
+; name what it arrives at. A folder's name is free on the way down (the row
+; the user clicked) and the kernel used to throw it away, so on the way up it
+; had nothing left to say and the caption read 'Folder'.
+;
+; It records the USER'S NAVIGATION and never the volume's identifiers, which
+; is what makes it the same code on a FAT floppy and on a redirected volume
+; (SPEC.md 62.9.1 - a handle is opaque to the kernel, so nothing keyed on one
+; could work there). The alternatives all needed I/O to print a string: the
+; name of a folder is only in its PARENT's listing, so deriving it costs a
+; whole mount - ~12 sectors, seconds of motor on the target machine, under
+; the gfx lock, to change a word in a title bar.
+;
+; kern_small keeps the caption it ships today. This is 33 bytes a window plus
+; a helper, for a caption, on a build whose whole reason is a 128KB machine.
+PTH_LOST    equ 0               ; byte: how many levels BELOW the deepest one
+                                ; PTH_BUF records this window currently is.
+                                ; It is what keeps the thing honest at depth:
+                                ; a path too long for the buffer is COUNTED
+                                ; rather than half-recorded, so the names come
+                                ; back as it unwinds and no level can ever be
+                                ; given its ancestor's name
+PTH_BUF     equ 1               ; 'SYSTEM\DOS', NUL-terminated
+PTH_MAX     equ 32              ; ...bytes of it, the NUL included: two 8.3
+                                ; names with room, three ordinary ones
+PTH_SIZE    equ PTH_BUF+PTH_MAX
+
+%ifdef KERN_BIG
+FS_PATH     equ 24              ; PTH_SIZE bytes, the block above
+FS_SIZE     equ FS_PATH+PTH_SIZE    ; = the Disk kind's KD_SSIZE
+%else
 FS_SIZE     equ 24              ; = the Disk kind's KD_SSIZE
+%endif
 
 FM_MAXWIN   equ VIEW_SLOTS      ; = KD_CAP: one cache slot per window
 FV_ICONS    equ DSK_NENT*DSK_DE_SIZE    ; icon images start here inside a
@@ -297,6 +331,17 @@ fm_kinit_x:
     mov dx, [fm_seed_cwd]
     call fmv_load               ; DI = block: mount, then fill its own cache
     mov si, [fm_seed_nam]       ; the folder's name when the caller knew it
+%ifdef KERN_BIG
+    mov bx, di                  ; a KD_POOL block is REUSED, so the path is
+    add bx, FS_PATH             ; cleared rather than assumed empty (.bss gets
+    call pth_clear              ; no image bytes and nothing zeroes it)
+    cmp word [di+FS_CWD], 0
+    je .noseed                  ; a root has no path, whatever it was asked for
+    or si, si
+    jz .noseed
+    call pth_push               ; a FRAGMENT: this window was PUT here rather
+.noseed:                        ; than walked here, so nothing above the seed
+%endif                          ; is recorded and going up reads 'Folder'
     call fm_settitle
     mov word [fm_tdirty], 0     ; app_launch's wm_show draws this window whole
                                 ; a moment from now, caption included - do not
@@ -521,7 +566,12 @@ fmv_store:
     push di
     call fmv_winof              ; BEFORE the .none early-out: a window with no
     jc .nowin                   ; view claim paints from the global snapshot,
-    call KERNEL_SEG:cw_wm_su_drop   ; which is changing under it too
+    call KERNEL_SEG:cw_wm_su_stale  ; which is changing under it too - and it is
+                                ; STALE rather than merely uncached (SPEC.md
+                                ; 11.96.16.1): this window's pixels are the
+                                ; folder as it was, and fmv_bcast leaves a
+                                ; SIBLING in exactly that state on purpose,
+                                ; so nothing may bank them until it is redrawn
 .nowin:
     call fmv_fit                ; the claim has to be big enough for THIS
     mov ax, [di+FS_VSEG]        ; volume's listing before anything is copied
@@ -671,6 +721,14 @@ fmv_load:
     mov [di+FS_DRV], al
     mov ax, [dsk_cwd]
     mov [di+FS_CWD], ax
+%ifdef KERN_BIG
+    or ax, ax                   ; AT A ROOT - asked for, or fallen back to by
+    jnz .haspath                ; a failed mount (SPEC.md 19.2) - so whatever
+    mov bx, di                  ; this window remembers walking down through,
+    add bx, FS_PATH             ; it is not in it. THE ONLY CLEAR SITE: every
+    call pth_clear              ; way of ending at a root comes through here,
+.haspath:                       ; so a new one cannot forget to (TITLE-PLAN 4)
+%endif
     mov byte [di+FS_MOK], 0
     cmp byte [dsk_mntok], 0     ; the write gate IS the mount's verdict, and
     je .listed                  ; unlike CF it survives the stores above
@@ -1466,6 +1524,17 @@ fm_choose:
     call fm_vp_set
     mov di, [fm_vp]
     call fmv_load               ; AL = drive, DX = cwd, DI = block
+%ifdef KERN_BIG
+    mov bx, di                  ; this window is being MOVED to a folder it
+    add bx, FS_PATH             ; did not walk to, so its path starts here -
+    call pth_clear              ; a fragment, exactly as fm_kinit's seed is
+    cmp word [di+FS_CWD], 0
+    je .nopath
+    or si, si
+    jz .nopath
+    call pth_push
+.nopath:
+%endif
     call fm_settitle            ; SI = the name, still untouched
     mov si, bx
     call fm_repaint
@@ -2582,10 +2651,22 @@ fm_open_sel:
     call fm_stage_name          ; fm_name = the folder's display name, out
     mov ax, bx                  ; of the staged entry while it still exists
     mov si, fm_name
-    cmp word [fm_ftype], 3      ; ...except '..', which has no caption worth
-    jne .titled                 ; having: the parent cannot be named without
-    xor si, si                  ; the grandparent's listing (SPEC.md 22), so
-.titled:                        ; it derives one, exactly as fm_c_up does
+    cmp word [fm_ftype], 3      ; ...except '..', which is the way UP and so
+%ifdef KERN_BIG                 ; is named by the path and not by the row
+    je .up
+    mov bx, di                  ; SI -> fm_name, which pth_push preserves; BX
+    add bx, FS_PATH             ; is free, its cluster already banked in AX
+    call pth_push
+    jmp short .titled
+.up:
+    mov bx, di
+    add bx, FS_PATH
+    call pth_pop                ; SI = the folder we arrive in, or 0
+%else                           ; kern_small keeps no path, so the parent
+    jne .titled                 ; cannot be named (SPEC.md 22) - and these two
+    xor si, si                  ; instructions are the SHAPE this site shipped
+%endif                          ; with, so its bytes do not move
+.titled:
     call fm_go
 .out:
     pop di
@@ -2679,6 +2760,199 @@ fm_reload:
     pop dx
     pop ax
     ret
+
+%ifdef KERN_BIG
+; =============================================================================
+; The remembered path (docs/TITLE-PLAN.md) - KERN_BIG only
+;
+; Four routines over the PTH_* block above. They are SHARED with fdlg.inc,
+; which keeps one for the modal dialog, so they carry a prefix of their own
+; rather than fm_ - both modules are .cold, so the call is near and the
+; segment is COLD_SEG for caller and callee alike (SPEC.md 2.6).
+;
+; Every one of them takes BX -> the block and touches the volume not at all.
+; That is the whole design: there is no FAT path and no redirector path here
+; to keep in step, because the only thing the two volume kinds disagree about
+; is identifiers and none of these reads one.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; pth_clear - this window is at a root, or somewhere it cannot name
+; in:  BX -> the path block
+; out: nothing (all registers and flags preserved)
+; -----------------------------------------------------------------------------
+pth_clear:
+    mov byte [bx+PTH_LOST], 0
+    mov byte [bx+PTH_BUF], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; pth_lastsep - the last separator in the path (module-internal)
+; in:  BX -> the path block
+; out: AX = its address, or 0 = the path has none (one component, or empty)
+; clobbers: AX (the output), flags
+;
+; Bounded by PTH_MAX rather than by the NUL it is looking for. The buffer is
+; terminated by construction - pth_clear writes one and pth_push writes one -
+; and a scan that trusts that would walk into the next window's block if it
+; were ever untrue.
+; -----------------------------------------------------------------------------
+pth_lastsep:
+    push cx
+    push di
+    xor ax, ax
+    lea di, [bx+PTH_BUF]
+    mov cx, PTH_MAX
+.s:
+    cmp byte [di], 0
+    je .done
+    cmp byte [di], '\'
+    jne .n
+    mov ax, di
+.n:
+    inc di
+    loop .s
+.done:
+    pop di
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; pth_leaf - the name of the folder this path ends at
+; in:  BX -> the path block
+; out: SI -> a NUL-terminated name, or 0 = it cannot be named
+; clobbers: SI (the output), flags
+; -----------------------------------------------------------------------------
+pth_leaf:
+    push ax
+    cmp byte [bx+PTH_LOST], 0
+    jne .none                   ; below what the buffer records
+    cmp byte [bx+PTH_BUF], 0
+    je .none                    ; empty: a root, and a root names itself
+    call pth_lastsep
+    or ax, ax
+    jz .whole
+    mov si, ax
+    inc si                      ; the byte after the last separator
+    jmp short .out
+.whole:
+    mov si, bx                  ; one component: the whole buffer is the name
+    add si, PTH_BUF
+    jmp short .out
+.none:
+    xor si, si
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pth_push - the user has descended into a folder
+; in:  BX -> the path block, SI -> its NUL-terminated display name
+; out: nothing (all registers preserved)
+;
+; It MEASURES before it writes, and that is not tidiness: a push that ran out
+; of room half way would leave a partial component in the buffer, and every
+; later pop would then hand a window a name that is not any folder's. On a
+; refusal the buffer is left exactly as it was and PTH_LOST counts the level,
+; which is recoverable - the name comes back when the user climbs out again.
+; -----------------------------------------------------------------------------
+pth_push:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [bx+PTH_LOST], 0
+    jne .lose                   ; already below the buffer: stay there, and
+                                ; count this level so the way back up is right
+    lea di, [bx+PTH_BUF]        ; DI -> the NUL, CX = bytes from it to the end
+    mov cx, PTH_MAX
+.scan:
+    cmp byte [di], 0
+    je .atend
+    inc di
+    dec cx
+    jnz .scan
+    jmp short .lose             ; no terminator: cannot happen, and refusing
+                                ; beats writing past the block to prove it
+.atend:
+    xor dx, dx                  ; DX = what this push needs, in bytes
+    mov ax, bx
+    add ax, PTH_BUF
+    cmp di, ax
+    je .measure
+    inc dx                      ; ...a separator, unless the path is empty
+.measure:
+    push si
+.mlen:
+    lodsb                       ; DF=0 per SPEC.md 1
+    or al, al
+    jz .mdone
+    inc dx
+    cmp dx, PTH_MAX             ; bounded for pth_lastsep's reason: a 16-byte
+    jb .mlen                    ; name field is NUL-PADDED, not terminated
+    pop si
+    jmp short .lose
+.mdone:
+    pop si
+    inc dx                      ; ...and the NUL
+    cmp dx, cx
+    ja .lose                    ; it does not fit
+    mov ax, bx
+    add ax, PTH_BUF
+    cmp di, ax
+    je .copy
+    mov byte [di], '\'
+    inc di
+.copy:
+    lodsb
+    mov [di], al
+    inc di
+    or al, al
+    jnz .copy
+    jmp short .out
+.lose:
+    inc byte [bx+PTH_LOST]
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pth_pop - the user has gone up one level
+; in:  BX -> the path block
+; out: SI -> the folder they arrive in, or 0 = it cannot be named
+; clobbers: SI (the output), flags
+; -----------------------------------------------------------------------------
+pth_pop:
+    cmp byte [bx+PTH_LOST], 0
+    je .real
+    dec byte [bx+PTH_LOST]      ; one of the levels the buffer never held...
+    jnz .stillost
+    jmp pth_leaf                ; ...and if that was the LAST of them we are
+.stillost:                      ; back AT the buffer's own end, which IS
+    xor si, si                  ; named. Answering 0 here would throw away a
+    ret                         ; name the buffer is holding, which is the one
+                                ; way this can be wrong in the direction of
+                                ; saying LESS than it knows
+.real:
+    push ax
+    call pth_lastsep
+    or ax, ax
+    jz .toroot
+    mov si, ax
+    mov byte [si], 0            ; the parent is the prefix that is left...
+    pop ax
+    jmp pth_leaf                ; ...and its name is that prefix's last part
+.toroot:
+    mov byte [bx+PTH_BUF], 0    ; one component, so above it is the root -
+    pop ax                      ; which names itself out of FS_CWD, and never
+    xor si, si                  ; out of this buffer (docs/TITLE-PLAN.md 4.2)
+    ret
+%endif                          ; KERN_BIG
 
 ; -----------------------------------------------------------------------------
 ; fm_settitle - point the window's caption at where the volume now is
@@ -3462,12 +3736,32 @@ fm_c_up:                        ; Nav > Up One Folder
     cmp word [di+FS_CWD], 0
     je .none                    ; already at the root: nothing is above it,
                                 ; and saying so is not worth an error line
-    call fmv_sync_x             ; dsk_dotdot walks [dsk_cwd], so that had
-                                ; better be OUR folder (SPEC.md 22.1)
-    call dsk_dotdot_x ; AX = the parent's first cluster (19.2)
-    jc .none                    ; a missing or corrupt '..': stay put
+    call fmv_sync_x             ; so the cache below - or the globals it falls
+                                ; back to when a window has none - is OUR
+                                ; folder (SPEC.md 22.1)
+    xor ax, ax                  ; SLOT 0 OF A SUBDIRECTORY'S LISTING IS THE
+    call fmv_get_dir            ; PARENT LINK (SPEC.md 19.5), and dsk_synth_up
+    cmp word [si+16], 3         ; filled it for whichever volume kind this is:
+    jne .none                   ; from '..' on a FAT disk, from [dsk_fsup] on
+    mov ax, [si+18]             ; a REDIRECTED one, which has no sectors at
+                                ; all. This used to call dsk_dotdot, which
+                                ; reads a directory SECTOR - so Backspace and
+                                ; Nav > Up One Folder were silently DEAD on
+                                ; the RAM disk and the network volume, while
+                                ; the '..' ROW right above them worked, that
+                                ; being this same entry read the same way
+                                ; (fm_open_sel, fdlg_dive). The type test is
+                                ; what a missing link now looks like
+%ifdef KERN_BIG
+    push ax                     ; the cluster fm_go wants, across the pop
+    mov bx, [fm_vp]
+    add bx, FS_PATH
+    call pth_pop                ; SI = the folder we arrive in, or 0
+    pop ax
+%else
     xor si, si                  ; the parent cannot be named without the
-    jmp fm_go                   ; grandparent's listing (SPEC.md 22)
+%endif                          ; grandparent's listing (SPEC.md 22)
+    jmp fm_go
 .none:
     ret
 
@@ -4070,8 +4364,8 @@ fm_edit_commit:
     ; It is said AFTER fmv_load, not before. That was FORCED until SPEC.md
     ; 59.8: a mount arms SPEC.md 12.8's file-activity widget, which shared
     ; the strip's pixels and which toast_show refused while it was up. The
-    ; strip is in the clock's field now and the two are independent, so this
-    ; is just the tidier order - the verdict after the work.
+    ; refusal is gone and the two are laid out apart (SPEC.md 59.9.2), so
+    ; this is just the tidier order now - the verdict after the work.
     pop ax                      ; ...the banked verdict
     or al, al
     jnz .fmtfell                ; it could not reach 720K and made 360K
@@ -4839,6 +5133,23 @@ fm_repaint:
     push bx
     push cx
     push dx
+
+    and word [si+W_FLAGS], ~WF_STALE & 0xFFFF
+                                ; THE PIXELS DESCRIBE THE LISTING AGAIN (SPEC.md
+                                ; 11.96.16.1), so this window may be banked once
+                                ; more. fmv_store sets the bit at the one place
+                                ; a listing is replaced and this is the one
+                                ; place the window is drawn from it - which is
+                                ; why the clear is HERE and not in wm_draw_win:
+                                ; every navigation calls fm_repaint directly,
+                                ; so a kernel-side clear left a Disk window
+                                ; permanently stale and permanently uncached,
+                                ; which is the bug this whole section is about
+                                ; wearing the fix's clothes. The three cheap
+                                ; painters (fm_rows_only, fm_scrollpaint,
+                                ; fm_status_only) deliberately do NOT clear it:
+                                ; a strip made current says nothing about the
+                                ; rest
 
     call fm_title_flush
 
@@ -6365,8 +6676,17 @@ fmv_uy1:    resw 1              ; every Disk window's frame is folded into,
 fmv_ux2:    resw 1              ; spent as ONE wm_paint_dmg so that no window
 fmv_uy2:    resw 1              ; is painted twice
 fmv_uany:   resb 1              ; 0 = nothing folded in yet
-fm_pool:    resb 96             ; FM_MAXWIN x FS_SIZE (4 x 24; a literal per
-                                ; the no-forward-ref-in-bss rule)
+%ifdef KERN_BIG
+fm_pool:    resb 4*57           ; FM_MAXWIN x FS_SIZE (4 x 57; a literal per
+ %if FM_MAXWIN*FS_SIZE != 4*57  ; the no-forward-ref-in-bss rule - so the equs
+  %error "files: fm_pool's literal has drifted from FM_MAXWIN x FS_SIZE"
+ %endif                         ; check it, or growing the block silently
+%else                           ; overruns the pool into the words below it
+fm_pool:    resb 4*24
+ %if FM_MAXWIN*FS_SIZE != 4*24
+  %error "files: fm_pool's literal has drifted from FM_MAXWIN x FS_SIZE"
+ %endif
+%endif
 
 ; --- the acting window, published by fm_vp_set and read everywhere ----------
 fm_vp:      resw 1              ; -> its 16-byte state block above

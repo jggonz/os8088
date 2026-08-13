@@ -2,7 +2,7 @@
 """os88disk: build (or verify) a FAT data floppy image from .o88 packages.
 
     python3 tools/os88disk.py -o OUT.img --size {1440,720,360}
-                             [--folder NAME ...] [[DIR:]PKG.o88 ...]
+                             [--folder PATH ...] [[DIR[/DIR...]:]PKG.o88 ...]
     python3 tools/os88disk.py --verify IMG
 
 The image is a canonical DOS FAT floppy (SPEC.md section 19): boot sector
@@ -403,8 +403,37 @@ def folder83(name: str) -> bytes:
     return up.encode().ljust(11)
 
 
+def folder_key(spec: str) -> str:
+    """Normalise a folder specification to its key: 'system/dos' -> the
+    key 'SYSTEM/DOS'. A key is the path from the root with '/' between the
+    components and '' for the root itself, so a folder's parent is one
+    rpartition away and no second structure records the tree.
+
+    Every component is validated as an 8.3 stem, which is what makes a
+    nested folder exactly as constrained as a top-level one - the kernel
+    walks '..' off the disk (SPEC.md 19.2) and so has no idea how deep it
+    is, but a directory ENTRY is 8.3 at every level."""
+    parts = spec.replace("\\", "/").split("/")
+    if any(not p for p in parts):
+        fail(f"folder '{spec}': empty path component")
+    for p in parts:
+        folder83(p)                              # per component, not per path
+    return "/".join(p.upper() for p in parts)
+
+
+def folder_parent(key: str) -> str:
+    """The key of this folder's parent ('' = the root)."""
+    return key.rpartition("/")[0]
+
+
+def folder_leaf(key: str) -> str:
+    """The folder's own name - what its directory ENTRY is called."""
+    return key.rpartition("/")[2]
+
+
 def split_spec(arg: str):
-    """'GAMES:build/mines.o88' -> ('GAMES', 'build/mines.o88')."""
+    """'GAMES:build/mines.o88' -> ('GAMES', 'build/mines.o88'), and
+    'SYSTEM/DOS:build/os88net.com' -> ('SYSTEM/DOS', ...)."""
     folder, sep, path = arg.partition(":")
     if not sep:
         return None, arg
@@ -454,6 +483,19 @@ def build(args) -> int:
     groups: dict = {}                            # folder ('' = root) -> list
     seen: dict = {}                              # folder -> set of name11
 
+    # A folder comes into existence because something named it, and naming
+    # SYSTEM/DOS names SYSTEM too - so `ensure` walks up, and a parent is
+    # therefore always created BEFORE its children. Everything below reads
+    # that ordering: the directory chains are laid out in it, and a folder's
+    # entry in its parent is written from the same list.
+    def ensure(key: str):
+        if key in groups:
+            return
+        if key:
+            ensure(folder_parent(key))
+        groups[key] = []
+        seen[key] = set()
+
     # --folder makes a folder with NOTHING in it. A folder normally comes into
     # existence because a package named it, which cannot express the one case
     # the system disk needs: MEDIA is where the Standard File dialog opens
@@ -461,20 +503,12 @@ def build(args) -> int:
     # empty directory is one cluster holding '.' and '..', so the code below
     # needs no special case - only a key with an empty list.
     for folder in args.folder:
-        key = folder.upper()
-        if key not in groups:
-            folder83(key)
-            groups[key] = []
-            seen[key] = set()
+        ensure(folder_key(folder))
 
     for arg in args.packages:
         folder, path = split_spec(arg)
-        key = folder or ""
-        if key not in groups:
-            groups[key] = []
-            seen[key] = set()
-            if folder:
-                folder83(folder)                 # validate once, on creation
+        key = folder_key(folder) if folder else ""
+        ensure(key)
         name11 = name83(path, seen[key])
         # Only *.O88 entries are packages; anything else ships as data, so a
         # disk can carry a module, a picture or a text file next to the
@@ -488,8 +522,12 @@ def build(args) -> int:
         groups[key].append((name11, data, nclusters))
 
     # Root order: every folder first, in first-appearance order, then the
-    # root-level packages. Folders cost one root entry each.
+    # root-level packages. Only a TOP-LEVEL folder costs a root entry; a
+    # nested one costs an entry in its parent instead, which is the whole of
+    # what nesting changes about the directory arithmetic below.
     dirs = [k for k in groups if k]
+    kids = {k: [c for c in dirs if folder_parent(c) == k] for k in dirs}
+    root_dirs = [k for k in dirs if not folder_parent(k)]
     root_files = groups.get("", [])
 
     # A warm ASSOC.DAT (SPEC.md 54.7), from the packages on this disk. It is
@@ -500,22 +538,42 @@ def build(args) -> int:
         root_files = root_files + [(
             ASC_NAME, asc,
             max(1, (len(asc) + lay.cluster_bytes - 1) // lay.cluster_bytes))]
+    # A folder and a file are two entries in the same directory, so they can
+    # collide - `SYSTEM/DOS` beside a file called `DOS` writes one name twice
+    # and the volume is broken in a way no FAT rule catches. The per-file
+    # duplicate check cannot see it: `seen` holds files, and a folder is not
+    # one. This is the second half of it, and it is new because a folder had
+    # nowhere but the root to be until folders nested.
+    for key in list(dirs) + [""]:
+        taken = dict.fromkeys(n for n, _, _ in groups.get(key, []))
+        for c in (kids[key] if key else root_dirs):
+            n = folder83(folder_leaf(c))
+            if n in taken:
+                fail(f"'{folder_leaf(c)}' is both a folder and a file in "
+                     f"{key or 'the root'}")
+            taken[n] = None
+
     for key in dirs:
-        if len(groups[key]) > MAX_FILES:
-            fail(f"{len(groups[key])} entries in folder {key}; the kernel "
+        shown = len(kids[key]) + sum(
+            1 for n, _, _ in groups[key]
+            if not sys_attr(n, bool(boot)) & A_HIDDEN)
+        if shown > MAX_FILES:
+            fail(f"{shown} listed entries in folder {key}; the kernel "
                  f"lists at most {MAX_FILES} per directory")
     # MAX_FILES is a DISPLAY cap, so only what the kernel would list counts
     # against it: a hidden system file (SPEC.md 19.6) never takes a listing
     # slot. It still takes a directory slot, which is the second check.
-    shown = len(dirs) + sum(1 for n, _, _ in root_files
-                            if not sys_attr(n, bool(boot)) & A_HIDDEN)
+    shown = len(root_dirs) + sum(1 for n, _, _ in root_files
+                                 if not sys_attr(n, bool(boot)) & A_HIDDEN)
     if shown > MAX_FILES:
         fail(f"{shown} listed root entries; the kernel lists "
              f"at most {MAX_FILES} per directory")
 
     # A folder's own directory is a cluster chain like any other file: two
-    # link entries ('.', '..') plus its members, rounded up to clusters.
-    dir_nclus = {k: max(1, ((2 + len(groups[k])) * 32 + lay.cluster_bytes - 1)
+    # link entries ('.', '..'), one entry per subfolder, and its files,
+    # rounded up to clusters.
+    dir_nclus = {k: max(1, ((2 + len(kids[k]) + len(groups[k])) * 32
+                            + lay.cluster_bytes - 1)
                         // lay.cluster_bytes) for k in dirs}
 
     files = [f for k in dirs for f in groups[k]] + root_files
@@ -525,7 +583,7 @@ def build(args) -> int:
         fail(f"packages need {need} clusters; disk holds {lay.nclus}")
     # The root directory is a fixed number of 32-byte slots: the volume
     # label, KERNEL.SYS on a boot disk, then every folder and root file.
-    slots = 1 + (1 if boot else 0) + len(dirs) + len(root_files)
+    slots = 1 + (1 if boot else 0) + len(root_dirs) + len(root_files)
     if slots > root_ent:
         fail(f"{slots} root entries; the root directory holds {root_ent}")
 
@@ -591,10 +649,20 @@ def build(args) -> int:
     at = 0
     for k in dirs:
         raw = bytearray(len(dir_chains[k]) * lay.cluster_bytes)
+        parent = folder_parent(k)
         raw[0:32] = dirent(b".".ljust(11), 0x10, dir_chains[k][0], 0)
-        raw[32:64] = dirent(b"..".ljust(11), 0x10, 0, 0)   # 0 = the root
+        # '..' is the PARENT's first cluster, with the FAT convention that a
+        # parent of the root is written 0 - which is what dsk_dotdot reads to
+        # go up, so a nested folder needs nothing else to be navigable.
+        raw[32:64] = dirent(b"..".ljust(11), 0x10,
+                            dir_chains[parent][0] if parent else 0, 0)
+        slot = 2
+        for c in kids[k]:
+            raw[slot * 32:(slot + 1) * 32] = dirent(
+                folder83(folder_leaf(c)), 0x10, dir_chains[c][0], 0)
+            slot += 1
         for i, (name11, body, _) in enumerate(groups[k]):
-            off = (i + 2) * 32
+            off = (slot + i) * 32
             raw[off:off + 32] = dirent(name11, sys_attr(name11, boot),
                                        chains[at + i][0], len(body))
         at += len(groups[k])
@@ -607,9 +675,9 @@ def build(args) -> int:
         root[slot * 32:(slot + 1) * 32] = dirent(
             KERNEL_NAME, A_SYSTEM, kchain[0], len(kern))
         slot += 1
-    for k in dirs:
+    for k in root_dirs:
         root[slot * 32:(slot + 1) * 32] = dirent(
-            folder83(k), 0x10, dir_chains[k][0], 0)
+            folder83(folder_leaf(k)), 0x10, dir_chains[k][0], 0)
         slot += 1
     for i, (name11, body, _) in enumerate(root_files):
         chain = chains[len(files) - len(root_files) + i]
@@ -836,12 +904,15 @@ def main() -> int:
     ap.add_argument("--kernel", metavar="KERNEL.bin",
                     help="the kernel, placed in the FAT reserved area so the "
                          "boot sector's raw LBA read still finds it")
-    ap.add_argument("--folder", metavar="NAME", action="append", default=[],
+    ap.add_argument("--folder", metavar="PATH", action="append", default=[],
                     help="create this folder even if no file names it "
-                         "(repeatable); an 8.3 stem, no extension")
-    ap.add_argument("packages", metavar="[DIR:]PKG.o88", nargs="*",
+                         "(repeatable); each component an 8.3 stem with no "
+                         "extension, '/' between them for a nested one")
+    ap.add_argument("packages", metavar="[DIR[/DIR...]:]PKG.o88", nargs="*",
                     help="package files, in directory order "
-                         "(none = empty disk)")
+                         "(none = empty disk); the prefix is the folder to "
+                         "put it in, and naming a nested one makes every "
+                         "folder above it too")
     args = ap.parse_args()
 
     if args.verify:

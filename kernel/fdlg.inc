@@ -338,6 +338,13 @@ fdlg_home_go:
     push bx
     push dx
     push si                     ; the MEDIA lookup below stages an entry
+%ifdef KERN_BIG
+    mov bx, fdlg_path           ; the dialog is being PLACED, so it has walked
+    call pth_clear              ; nowhere yet (docs/TITLE-PLAN.md 5). Cleared
+                                ; here rather than in fdlg_open_x because this
+                                ; is what MOVES it, and .bss arrives holding
+                                ; whatever the last dialog left
+%endif
     mov al, [disk_drive]        ; the RECOVERY only: where the machine is now,
     mov [fdlg_hdrv], al         ; for the case where this instance's own
     mov ax, [dsk_cwd]           ; volume cannot be mounted at all
@@ -380,6 +387,11 @@ fdlg_home_go:
     mov dl, [fdlg_idrv]
     call dsk_chdir_x
     jc .cur
+%ifdef KERN_BIG
+    mov bx, fdlg_path           ; the ONE default that can be named: the
+    mov si, fdlg_s_media        ; dialog really did walk into MEDIA, and BX
+    call pth_push               ; and SI are both saved by the prologue above
+%endif
 .done:
     pop si
     pop dx
@@ -999,6 +1011,15 @@ fdlg_go:
     jc .moved                   ; a FAILED mount lands at the root of the
     call fdlg_home_dir          ; drive it tried with the gate shut - not a
 .moved:                         ; folder to bring an app back to
+%ifdef KERN_BIG
+    cmp word [dsk_cwd], 0       ; AT A ROOT - asked for, or fallen back to -
+    jne .haspath                ; so the dialog is in nothing it walked into.
+    push bx                     ; files.inc's rule in the other module: the
+    mov bx, fdlg_path           ; ONE clear site, so a new way of ending at a
+    call pth_clear              ; root cannot forget to
+    pop bx
+.haspath:
+%endif
     mov word [fdlg_sel], 0xFFFF
     mov word [fdlg_scrl], 0
     call fdlg_unfold            ; a folder name half typed here would be made
@@ -1445,8 +1466,16 @@ fdlg_paint_x:
     mov si, fdlg_s_root
     cmp word [dsk_cwd], 0
     je .place
-    mov si, fdlg_s_sub
-.place:
+%ifdef KERN_BIG
+    push bx                     ; the folder's own name, when the dialog
+    mov bx, fdlg_path           ; walked here (docs/TITLE-PLAN.md 5). The pen
+    call pth_leaf               ; is x=30 and the list frame starts at
+    pop bx                      ; FD_LX2=213, so 22 cells are free and the
+    or si, si                   ; longest 8.3 name needs 12 - measured before
+    jnz .place                  ; it was allowed here, not after
+%endif
+    mov si, fdlg_s_sub          ; ...and a folder it was PLACED in still reads
+.place:                         ; 'Folder', which is what it always read
     cmp byte [dsk_mntok], 0     ; a failed mount says so rather than showing
     jne .hdr                    ; an empty folder that is not empty
     mov si, fdlg_s_nodisk
@@ -2165,6 +2194,20 @@ fdlg_dive:
     mov ax, [fdlg_sel]
     call dsk_get_dir_x ; SI -> the staged entry
     mov ax, [si+18]             ; its first cluster (SPEC.md 19)
+%ifdef KERN_BIG
+    push ax                     ; ...and the NAME, while the staged entry is
+    push bx                     ; still there: fdlg_go below remounts, and a
+    mov bx, fdlg_path           ; mount rebuilds dsk_ent - the same trap
+    cmp word [si+16], 3         ; fm_open_sel banks its own two values against
+    je .updir                   ; 3 = the parent link (19.5): the way UP
+    call pth_push               ; SI -> the entry's 16-byte name field
+    jmp short .pdone
+.updir:
+    call pth_pop                ; ...which is where the name comes BACK from
+.pdone:
+    pop bx
+    pop ax
+%endif
     pop si
     mov dl, [disk_drive]
     call fdlg_go
@@ -2682,6 +2725,18 @@ fdlg_idrv:  resb 1              ; ...and the INSTANCE's drive, banked across
                                 ; the MEDIA lookup, which needs it for the
                                 ; chdir to the root and again for the chdir
                                 ; into the folder that root named
+%ifdef KERN_BIG
+fdlg_path:  resb PTH_SIZE       ; the folders this dialog was walked down
+                                ; through (docs/TITLE-PLAN.md 5), the PTH_*
+                                ; block files.inc defines. ONE of them, not
+                                ; one per window: the dialog is MODAL, so it
+                                ; can only ever be in one place at a time -
+                                ; the same fact that lets it read the global
+                                ; mount snapshot instead of a view cache
+                                ; (SPEC.md 38.2). .bss is safe because
+                                ; fdlg_home_go clears it on every open, which
+                                ; is what the reused KD_POOL block needs too
+%endif
 fdlg_rqcb:  resw 1              ; ...its near completion proc...
 fdlg_rqrec: resw 1              ; ...its instance record...
 fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR: the staleness

@@ -4216,7 +4216,7 @@ The keys:
 
 | key | scan | does |
 |---|---|---|
-| the eight keypad directions | 47/48/49/4B/4D/4F/50/51 | move, clamped to `[vid_wm1]`/`[vid_hm1]` exactly as the ISR clamps |
+| the eight keypad directions | 47/48/49/4B/4D/4F/50/51 | move, clamped to `[vid_wm1]`/`[vid_hm1]` exactly as the ISR clamps — **by one ITEM rather than by pixels while a menu is dropped** (§9.6.3) |
 | **keypad 0 (Ins)**, **keypad 5**, **Space** | 52 / 4C / 39 | the **button** — one action, three keys (§9.6.1). Space and keypad 5 are matched **above** the `AL = 0` gate, keypad 0 below it |
 | **Del** | 53 | the right button, latching; press edge only (§9) |
 | **ScrollLock** | — | the **latch** — hand the whole keyboard to the window under the pointer (§9.6.2). Not a key here: a level (§9.6) |
@@ -4312,6 +4312,130 @@ what keeps the keypad's `0` typing a digit. Reproduce the field's behaviour
 here by turning **NumLock on** — SeaBIOS then sends `AL` = `'5'` with scan 4C,
 which is exactly the byte the Compaq sends.
 
+**…and that match could never fire in the mode this feature runs in, which
+§9.6.4 is the fix for.** The paragraph above is right about `AL` and wrong
+about the conclusion it drew, because the mode it verified in is the mode
+where there is no keyboard mouse: with NumLock **off** the BIOS does not put a
+wrong byte in `AL`, it **discards the key entirely**. Keypad 5 having no
+cursor function is not merely why `AL` is unreliable — it is why the BIOS's
+cursor-mode table has nothing to translate it *to*.
+
+#### 9.6.4 …so the kernel reads keypad 5's SCANCODE, and it is the one hook
+
+**Measured on a cycle-accurate 5150 with a period BIOS**, pressing each key
+and reading the guest's own keyboard buffer at `0040:001A`/`001C`:
+
+| key | NumLock **off** | NumLock **on** |
+|---|---|---|
+| keypad 0 (Ins) | head/tail 32 → 34, **AX = 5200** | AX = 5230 — `AL` = `'0'`, so the ASCII gate passes it to the app |
+| keypad 8 (Up) | 30 → 32, **AX = 4800** | AX = 4838 — a digit, untouched, exactly as §9.6 says |
+| **keypad 5** | 30 → **30**: *nothing at all* | 34 → 36, **AX = 4C35** |
+
+So `cmp ah, 0x4C` fires **only with NumLock on** — the mode in which the
+arrows are digits and the pointer cannot move. **The key was a button only
+where the feature it belongs to is switched off**, which is why "we document
+numpad 5 as a click but it currently doesn't" and why every test of it
+passed: §9.6.1 verified this key by turning NumLock on, that being the one
+mode in which it arrives. **A harness kinder than the machine hides precisely
+the bug it exists to find** — the same shape `partner.py` reading `NC_BYE` as
+"carry on" produced at §62.10.
+
+int 16h therefore cannot deliver this key, on any BIOS, in cursor mode. So the
+kernel reads the **scancode** instead: `kbm_isr` hooks **int 09h**, and it is
+the only place os8088 touches the keyboard hardware. It does the least a hook
+can do — **peek port 60h and chain**. On the 8088's 8255 the byte is latched
+in port A until the BIOS acknowledges it with bit 7 of port 61h, so reading it
+early consumes nothing; the real handler reads the same byte and does all the
+work, the ack, the shift states and the EOI included. Nothing in the hook
+writes a port, queues a key or ends an interrupt.
+
+Five things hold it up.
+
+- **Whether the BIOS discards keypad 5 is a property of the BIOS, not of the
+  machine class** — which is why this is installed on **every tier**, and it
+  is a reversal of the first version. Measured on the same NumLock-off
+  setting: a period 5150 ROM **discards** it, and **SeaBIOS delivers** it
+  (`AL` = 0, `AH` = 4Ch). So the hook is a **fallback**: `kbm_poll0` looks at
+  int 16h first, `kbm_key` claims a delivered key and **clears `[kbm_p5]`**
+  (the store at the top of `kbm_btn`), and the pending scancode then finds
+  nothing. Without that guard both paths fire on a delivering BIOS and one
+  press opens a menu and shuts it again — §9.6.1's flashing menu from a
+  fourth direction, and the reason the guard is not optional.
+- **Three gates come before the peek, in cost order.** `[mou_seen]` first, so
+  a machine with a mouse never reads the port at all and pays one compare;
+  then **NumLock**, because with it on int 16h *does* deliver the key and
+  `kbm_key` already claims it — without this gate one press would toggle the
+  button twice; then **ScrollLock**, §9.6.2's hatch, which must hand this key
+  back with all the others.
+- **The ISR only ever sets a byte.** The event, the latch and the repeat guard
+  are all `kbm_btn`'s, and `kbm_btn` runs in **task** context where every
+  other button key already reaches it — so IRQ1 pushes nothing onto the event
+  queue and this needed no new rule about what an ISR may call.
+  `kbm_p5spend` is the spender, and it reads-and-clears with one `xchg`
+  (`fr_restart`'s idiom, for its reason).
+- **It is spent from two places, which between them cover every state the
+  machine can be in**: `kbm_poll0` — the modal loops and a package's own
+  tracking loop — and the end of `kbm_ui`, an ordinary `ui_task` pass. In
+  `kbm_ui` it must come **after `.relax`**, or the press is released by the
+  same pass that made it, which is §9.6.1's flashing menu from a third
+  direction; and `.relax`'s two "nothing to release" exits jump to it rather
+  than past it, because that is the commonest pass there is and exactly the
+  one a fresh press arrives in.
+- **The break code (0CCh) matches nothing**, and typematic repeats collapse
+  into one press because `kbm_btn`'s existing `KBM_GAP` guard is what spends
+  them.
+
+**The 8042 is the one claim here a period ROM has not been put to**, and it is
+stated rather than buried because it is the only reason the first version
+gated this to tier 0. An 8088's 8255 latches the byte until the BIOS pulses
+port 61h, so the peek is *provably* free there. A 286+ **8042** clears
+output-buffer-full on the read while the data register keeps the byte, so a
+BIOS whose int 09h tested OBF before reading would find none — a dead
+keyboard. No handler tried does test it: SeaBIOS reads 60h directly, the IBM
+ROM is already inside the interrupt when it reads, and **the keyboard is
+verified alive through this hook on both**. What that does not cover is a
+period AT ROM (an IBM AT, an AMI or Award 286), which needs 86Box with those
+ROM sets or the **Packard Bell 286** in docs/FIELD-MACHINES.md. If one is ever
+found to test OBF, the one-line fix is the gate this used to have —
+`cmp byte [cpu_tier], CPU_8086` / `jne` around the install in `mouse_init`,
+7 bytes — and nothing else changes, because the guard above already makes the
+hook redundant wherever int 16h delivers the key.
+
+**What keypad 5 costs, measured by building the kernel three times** rather
+than by counting instructions: the hook is **114 bytes** of `.text`, the
+pre-existing `cmp ah, 0x4C` that could only ever fire with NumLock on is
+**11**, so removing keypad 5 as a button key *entirely* — leaving Ins and
+Space, which are the same one action (§9.6.1) — would give back **125**.
+Un-gating it to every tier was **−2** (the 7-byte tier test out, the 5-byte
+guard in `kbm_btn` in, and `kbm_poll0`'s reorder free). It is kept at that
+price; docs/KERNEL-MEMORY.md carries the figures beside the rest of the
+keyboard mouse's.
+
+Verified on a mouseless cycle-accurate 5150, CGA and Hercules alike: all three
+button keys press and release, keypad 5 opens a menu **while its BIOS buffer
+head and tail never move** — which is what says the press came from the
+scancode and not from int 16h — and with NumLock on one press opens the menu
+and it *stays* open, so the gate is doing its job rather than the two paths
+both firing. **And on QEMU — a 386 with an 8042 and a BIOS that *does*
+deliver the key** — the hook is installed, the menu opens on one press with
+`[kbm_p5]` clear (the guard, not the hook, being what claimed it), and the
+keyboard still works afterwards: the AT-class half of the same table. The peek itself was proved by single-stepping the ISR from
+outside the guest: `AX = 004C` after the `in`. **And a machine with a mouse is
+byte-identical to the kernel before this**: the same scripted session — five
+pointer moves, a menu opened, tracked and closed with the real mouse — is **0
+differing framebuffer bytes** of 128,000 across four captures. Cost:
+**`.text` +114 bytes**, no rung crossed, the footprint unmoved.
+
+**The first version of the peek shipped a wrong segment and the trace is why
+it took minutes rather than a day.** It loaded `ES = 0` before testing
+`[es:0x17]` — the vector-install idiom four lines above, not `kbm_slock`'s —
+so it read linear `0x17`, the middle of the IVT, which has bits in `0x30` set:
+the NumLock/ScrollLock gate therefore refused *every* press and the key stayed
+exactly as dead as before, with the port read working perfectly. **A gate that
+always says no is indistinguishable from a feature that never ran**, and the
+only thing that separated them was watching the ISR execute instruction by
+instruction.
+
 `fm_drag` is the one that cannot be fixed by servicing it. It exists to
 disambiguate a click from a drag, and it waits with the button down to find
 out which — but the button is latched for the whole `W_ONCLICK` dispatch and
@@ -4370,7 +4494,96 @@ where the two separate on an 18.2Hz clock — and the step grows `KBM_ACC` per
 press to `KBM_MAX`. The direction reset is not a refinement: without it the
 *correction* travels at full speed too, and a menu item sits unreachable
 between two 24px strides. That is exactly how the first version failed to pick
-one.
+one. **A pixel ramp is still the wrong instrument inside a dropped menu, and
+§9.6.3 is what replaces it there.**
+
+#### 9.6.3 A dropped menu is navigated by ITEM, not by pixel
+
+**A menu is a LIST, so the unit an arrow key moves in it is one item.** With
+the pixel ramp alone it was `MENU_ITEM_H` / `KBM_MIN` = 16 / 3, and that is
+what a mouseless machine actually measured on a cycle-accurate 5150: **6
+presses to enter the menu, then 6, 5, 5 to walk three items** — 22 presses to
+cross a three-item pull-down, with the pointer visibly creeping 3px at a time
+and the highlight changing on one press in six. Reported off the field as
+"it takes multiple presses to get it to go up or down in selection", which
+is the symptom stated exactly.
+
+**The ramp cannot fix it and must not be asked to**, which is the reason this
+is a separate mechanism rather than a bigger `KBM_MIN`. Held, the ramp is 3,
+9, 18, 30, 45 px cumulative against 16px cells, so it steps *over* items —
+§9.6.2's direction reset exists precisely because it did — and a step sized
+for a menu is far too small to cross a screen with. The two demands are
+opposed, and no single number satisfies both.
+
+**Worse, the highlight goes AWAY rather than merely lagging.** Separators are
+`MENU_DIS` items (§12.2 — `menu_s_msep`, `fm_s_fsep`), so the System menu is
+About / Control Panel / Task Manager / **rule** / Restart, and `menu_hover`
+answers `0xFFFF` for the whole of that fourth cell. Six presses in the middle
+of a menu that highlight nothing at all do not read as slowness; they read as
+the menu having stopped working.
+
+So while a pull-down is on screen, a direction key with a **vertical**
+component places the pointer on the **centre of the next item cell in that
+direction**, skipping every disabled one, and the ordinary pixel step is not
+taken at all:
+
+| the press | what it does |
+|---|---|
+| Up / Down (and the four diagonals, whose dy is what counts) | one **item**, disabled cells skipped |
+| Left / Right | the **ordinary pixel step** — unchanged, and it is how the pointer leaves a menu sideways |
+| the pointer is beside the menu (x outside its rect) | re-enter at the near end: Down at the first item, Up at the last |
+| a step off either end | one cell **outside** the frame — nothing highlighted, which is what the mouse does at the same place, and a button press there dismisses the menu (a keyboard cancel that otherwise cost ~35 presses sideways) |
+| a further press past that end | nothing moves. The pointer is parked one cell out and stays there; Left/Right still walk it away |
+
+Six things hold it up.
+
+- **`menu_kbnav` (`menu.inc`) is asked before `kbm_accel` is called**, so a
+  placed press never touches the ramp: `[kbm_last]` is not stamped, and the
+  first arrow press *after* the menu closes therefore sees a large tick gap
+  and starts fresh at `KBM_MIN`, which is what it should do anyway.
+- **It is gated on `[menu_dropd]`**, a byte set by `menu_drop` once the menu
+  is on the screen and cleared the instant its poll loop ends. `menu_drop` is
+  the one tracker both the bar (§12) and the context menu (§12.4) go through,
+  so a popup gets this without knowing it exists. The byte is in `.text` with
+  a real initialiser and not in `.bss`, for `fdlg_win`'s reason: `-f bin`
+  zeroes nothing, and this is read on the machine's first arrow key.
+- **The row is taken from GEOMETRY, not from `menu_hover`**, which answers
+  `0xFFFF` for a disabled cell as well as for "outside" — stepping from that
+  would restart at the end of the menu every time the pointer was parked on a
+  separator.
+- **One formula covers the two off-the-end rows**: the target y is
+  `[menu_y1] + 1 + row × MENU_ITEM_H + MENU_ITEM_H/2` with `row` **signed**,
+  so row −1 lands 7px above the frame and row `[menu_cnt]` lands 8px below
+  `[menu_y2]`. Neither needs a case of its own, and both are positions the
+  mouse can reach, so `menu_hover` and the highlight need no new rule.
+- **x is left alone while it is inside the rect** — a pointer the user has
+  put in a column stays in it — and is otherwise snapped to `[menu_x1] + 8`,
+  where the item text starts.
+- **The placement goes through `mou_clamp`** (§39.15.4), the same clamp the
+  ISR uses, so the two-display seam is honoured by construction rather than
+  by a rectangle this routine would have had to know about.
+
+Measured on the same mouseless cycle-accurate 5150/CGA, the identical
+scripted session: **22 presses to cross a three-item menu → 4** (one to enter,
+one per item, one to step off the end), the highlight moving on **every**
+press, and the pointer landing on 29, 45, 61 — the cell centres — instead of
+creeping 3px at a time. On the System menu, Down walks **0, 1, 2, 4** and Up
+walks **4, 2, 1, 0**: the `MENU_DIS` separator at 3 is crossed by one press
+rather than by six that show nothing. Left still moves 3px, so the sideways
+exit is unchanged. Cost: **`.text` +186 bytes**, no rung crossed, the
+footprint unmoved.
+
+**The instrument had to be corrected twice, and both faults made a broken
+build look fine** — which is why the numbers above are stated with the method.
+A press count times an assumed step is not a position: MartyPC headless runs
+the guest *faster* than real time, so a fixed host-side gap between keystrokes
+landed more than `KBM_GAP` apart in guest ticks, the ramp never accelerated,
+and 40 "held" presses moved 120px instead of crossing the screen — leaving the
+pointer on the wrong menu. The pointer is positioned by a **closed loop**
+(press, read `mouse_x`/`mouse_y` back, press again), which is
+`tools/os88mouse.py`'s rule arrived at from the other direction. And
+`menu_sel` is meaningless unless a menu is actually dropped — it holds the
+last menu's answer — so every reading of it is gated on `[menu_dropd]`.
 
 **Cost, and a standing recommendation.** 406 bytes of `.text` to begin with,
 which took one 512-byte step of `KERN_BUDGET` (§15.1) — spare 4,096 → 3,584,
@@ -4390,7 +4603,9 @@ remove** — either dropped entirely or built only into the testing and
 benchmark kernels, where the harness drives the mouse over QMP and never needs
 it. What depends on it is one module plus **six** call sites: `ui_task`'s key
 poll and its deferred ladder, the `kbm_poll` in `menu_track` / `ui_drag` /
-`ui_grow`, and `osapi_mouse`.
+`ui_grow`, and `osapi_mouse` — plus §9.6.3's one call the other way,
+`kbm_move` → `menu_kbnav`, which `menu.inc` answers `CF = 1` to whenever no
+menu is dropped and which therefore costs a removal nothing but a stub.
 
 ## 10. events.inc
 
@@ -7907,6 +8122,115 @@ of the *whole* rect before any of it is reached, and `wm_su_ck` demands the
 claim's header equal the window's content rect exactly — so a shrunken rect
 disagrees with its own cache. It is a real piece of work and it is not this
 one.
+
+#### 11.96.16 A window ABOUT to appear banks what it is about to cover
+
+§11.96.4 takes the cache at the one place every window is **drawn**, which
+covers every window drawn since it last lost one — and says nothing about a
+window that lost its cache and which nothing has drawn since. That state is
+ordinary rather than exotic: `wm_clip_set` drops one on every background
+painter's frame (§11.96) and `fmv_store` on every re-list (§22.14). What makes
+it expensive is a **new window landing on such a window**, because from that
+moment its content is somebody else's pixels and there is no longer anything
+to bank a cache from — so it repaints in full on every interaction until
+something raises over it, which is §11.96.9.1's shape one layer up.
+
+`wm_raise` already banks exactly **one** window for this reason — the
+outgoing front, which by definition has no cache because §11.96.4 drops the
+front window's. Everything below it in the z-order got nothing, and that is
+the reported case: *open the file manager, launch Minesweeper out of it, and
+any action that affects a window under the newcomer redraws it whole.*
+
+So `wm_su_precover` asks the question of **every window the incoming rect
+lands on**, from `wm_show`, and the four gates are each somebody else's rule:
+`WF_SAVEU` (§11.96.1's promise — asked here as well as inside `wm_su_take`, to
+keep the walk cheap on a desktop full of windows that cannot use one),
+`wm_win_over` (does the newcomer touch it at all — a window it misses owes no
+blit), `wm_obscured` (§11.96.7's hazard: content that is already somebody
+else's pixels cannot be banked) and `wm_su_ck` (a cache it already holds is
+still exactly right, because nothing has drawn since, so re-taking it is
+~10 ms of blit for a picture we have).
+
+**The moment is the whole design and it is not tidiness.** The pass runs
+*before* `wm_show` sets the visible bit, because `wm_create` put the incoming
+window in `wm_zord` at creation — so the instant it is visible it becomes
+`wm_obscured`'s answer about every window underneath it and the pass would
+refuse them all. Running first is what leaves the one window whose pixels are
+**not** on the glass out of the test that asks which pixels are on the glass.
+It follows that a `wm_show` on a window that is **already visible** skips the
+pass entirely: what it covers is covered by *it*, so a bank there would store
+the incoming window's own pixels as somebody else's content.
+
+Two windows are skipped by name. Ourselves, and `wm_top` — which `wm_raise`
+banks a few instructions later and **must**, because `wm_draw_title` and
+`wm_grow_erase` change its pixels first (§11.1.1): a cache taken here would
+hold a grow box the window is about to lose, and re-taking it there is a drop
+plus a blit for a picture that had to be thrown away. `wm_front` gets no such
+pass at all, for the already-visible reason above.
+
+`wm_win_over` is `wm_obscured`'s own overlap arithmetic lifted out whole
+rather than copied — drop shadow included, so *not overlapping* means none of
+the incoming window's pixels sit over ours. Two copies would be two opinions
+about what "covers" means, and the shadow is exactly the detail one of them
+would lose.
+
+**Measured, it fires rarely, and the reason is worth knowing before anyone
+reaches for it to explain a slow redraw.** A/B'd on a cycle-accurate
+5150/CGA by poking `0xC3` at its entry in the running guest and comparing
+`wm_su_segs` after every step, three sessions — two Disk windows plus a
+package launched over them; a third window; and Paint's large claim shedding
+the purgeable caches (§50.6) — came back **byte-identical with the pass
+stubbed out**. §11.96.4 is simply thorough: every window a newcomer can land
+on has normally been *drawn* since it last lost a cache, so `wm_su_bank`
+already gave it one, and the poster is §22.17's.
+
+What is left is exactly the set of windows that lost a cache and were **not**
+redrawn through `wm_draw_win` afterwards, and there is one live producer of
+it: a `WF_SAVEU` window with a background painter. Note Pad is the only one
+in the tree — its worker's four drawers ask `OSAPI_WM_OBSCURED` and then
+redraw through `wm_clip_set`, which drops the cache (§11.96) while leaving
+the pixels current, and no `wm_su_bank` follows because no `wm_draw_win` ran.
+Backgrounded, unobscured and freshly settled, that window is cacheless with a
+correct picture on the glass, and a program opening over it is the case this
+pass exists for. So it is kept — but the pass and §11.96.16.1's guard together
+are **`.text` +127**, no rung crossed and the footprint unchanged, for a narrow
+case; if the footprint ever needs those bytes back this is a candidate, ahead
+of anything the measurements show firing.
+
+#### 11.96.16.1 …and "no cache" is not the same as "please take one"
+
+The pass is only safe if a window with no cache has pixels that *describe its
+content*, and one shape in the tree breaks that: `fmv_bcast` replaces a
+**sibling** Disk window's listing and deliberately does not repaint it — its
+own comment says so, *"nothing redraws it, so its pixels are still the folder
+as it was"* — leaving it visible, unobscured, not front and cacheless, with a
+picture of a folder that has moved on. Every gate above passes it. Banking it
+would put a stale listing back on a later damage restore, which is
+docs/FIELD-NOTES.md 4 with a new way in, and it would be a *regression*: today
+that window has no cache, so any repaint draws it from the listing it now has.
+
+`WF_STALE` (bit 8, kernel-internal and not in the SDK) is that difference said
+out loud, and its two ends are the two routines §22 already names. `fmv_store`
+— the single place a window's listing is replaced (§22.14) — calls
+**`wm_su_stale`** rather than `wm_su_drop`; **`fm_repaint`** — the single place
+a Disk window is drawn from that listing — clears it. It is tested in exactly
+one place, `wm_su_take`, so every taker inherits it and `wm_su_bank`'s test is
+free.
+
+**The clear does NOT belong in `wm_draw_win`, and putting it there cost a
+round.** That reads as the general home for "this window has been drawn
+whole", and it is not one: every *navigation* calls `fm_repaint` directly, so
+the bit survived into the next listing and a Disk window went permanently
+stale and permanently uncached — the bug this section exists to prevent,
+wearing the fix's clothes, and caught by the gate's own first check reading
+`wm_su_segs = 0000` again. The three cheap painters (`fm_rows_only`,
+`fm_scrollpaint`, `fm_status_only`) deliberately do not clear it: a strip made
+current says nothing about the rest.
+
+**A package cannot reach this state**, which is why the bit is not published:
+the only way in is the kernel replacing a window's data behind the
+application's back, and the only thing that does that is the file manager on
+its own windows.
 
 ### 11.97 A window below does not draw chrome where something above will cover it
 
@@ -13500,6 +13824,20 @@ The cluster is range-checked at the slot, because the quiet path skips
 `disk_mount`'s own `.cwd_lost` validation. That is `fcp_goto`'s reason and
 the same two compares.
 
+**`[dsk_mntok]` is asked FIRST, and the word path is wrong without it.**
+`[disk_drive]` is where the machine *believes* it stands, not proof that
+anything is mounted there, and the two part company at exactly one place:
+`dsk_vol_del` unmounting the volume the machine was standing on sets
+`[disk_drive]` back to 0 **and clears `[dsk_mntok]` beside it** — A: is the
+fallback marker, not a volume anybody mounted (§18.3). A quiet goto to A:
+then matched on the index, stored `[dsk_cwd]` and answered CF = 0 having done
+nothing, while the BPB, the FAT window and every derived geometry still
+described the volume that had just been dropped; every read after it failed.
+`dsk_here_ok` (§18.9.1) opens with that same compare and says why — the two
+routines answer the same question and must not disagree about it. The hard-
+disk installer is where it surfaced: unmount the drive, stand on A: to read
+`KERNEL.SYS`, and the stand is a no-op (§52.10.8.1).
+
 **It is not a replacement for `GOTO` and must not become one.** It leaves the
 global listing empty and `[dsk_lstale]` raised, so a caller about to *show* a
 folder wants the other slot; and it deliberately does not move the instance's
@@ -15533,10 +15871,12 @@ than at a literal, so one write retitles the window, its dock tile (§30)
 and its Task Manager row (§28) together. Navigation rewrites it: entering a
 folder by name writes that name, and anything that lands at the root writes
 `"Disk"`. Going **up** into a directory that is not the root writes
-`"Folder"` — the honest answer, because naming it would need the
-grandparent's listing, which is a second mount to display a string. Names
-are ≤ 12 chars (§19) and `I_NAME` is 16 with a permanent NUL at byte 15, so
-no bound can be exceeded.
+`"Folder"` on **kern_small**, and on **kern_big** the folder's own name, out
+of §22.16's remembered path. Naming it from the volume would need the
+grandparent's listing — a second mount to display a string — which is why
+the small build still answers `"Folder"` and why neither build ever asks.
+Names are ≤ 12 chars (§19) and `I_NAME` is 16 with a permanent NUL at byte
+15, so no bound can be exceeded.
 
 The rule has one non-navigation case, and it is the one that used to break
 it. `fmv_sync` (§22.1) re-lists a window where it already is, so it
@@ -15853,7 +16193,7 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Open | `fm_open_sel` — inline (loader is deferred, `dsk_chdir` is I/O under the lock like Refresh) |
 | New Folder… / Rename… / Delete | inline: enters edit mode, draws nothing but the status line. The disk is touched at **Enter**, not here |
 | Refresh / Drive A: / Drive B: | inline `disk_mount`, exactly as the button and the a/b/r keys already do |
-| Up One Folder / Root Folder | inline: `fmv_sync`, then `dsk_dotdot` + `fmv_load` / `fmv_load` AX=0 |
+| Up One Folder / Root Folder | inline: `fmv_sync`, then the **`..` row's own handle** + `fmv_load` / `fmv_load` AX=0 |
 | New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
 | as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL`. Not on the bar since §22.15 — the context menu and the in-window button reach them |
 | Timer / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
@@ -15867,6 +16207,22 @@ saying which column of that table it is in.
 
 Up One Folder at the root is a no-op rather than an error; there is nothing
 above the root and nothing useful to say about it.
+
+**It takes the parent out of slot 0 of the window's own listing, and it used
+to call `dsk_dotdot`.** That routine reads the directory's first **sector**
+to find the `..` entry, and a `DRVC_FILE` volume (§62.9) has no sectors — so
+it answered CF=1 and Up One Folder, and the Backspace bound to it, were
+**silently dead on the RAM disk and the network volume**. The `..` *row*
+directly above them worked the whole time, because `dsk_synth_up` fills it
+from `[dsk_fsup]` for a redirected volume and from the disk for a FAT one
+(§19.5), and `fm_open_sel` takes the handle straight out of it — which is
+also `fdlg_dive`'s route, and why the file dialog never had this. Reading
+that same row is one entry out of the cache the window is already painting
+from, so it is volume-agnostic by construction rather than by a branch. A
+missing parent link is now a **type test** (`type != 3`) instead of a CF,
+and the `fmv_sync` above it stays: a window whose `VIEW_KB` claim was
+refused reads the globals, and they have to be this window's folder first.
+**+9 bytes of `.cold`, both builds.**
 
 ### The context menu — `fm_rclick` and `fm_rcmd`
 
@@ -17432,6 +17788,120 @@ background window in order to act in its folder and draws no pixels at all.
 closed still owing a refresh must not hand that debt to the next window in
 its slot.
 
+### 22.16 The remembered path — naming the folder you are standing in
+
+**KERN_BIG ONLY.** kern_small keeps the caption it shipped with, and
+docs/TITLE-PLAN.md is the investigation.
+
+A folder's name is free on the way **down** — it is the row the user
+clicked — and the kernel used to throw it away, so on the way **up** it had
+nothing left to say and titled the window `Folder`. The dialog was worse: it
+picked one of three fixed words on `cmp word [dsk_cwd], 0` and so read
+`Folder` for *every* subdirectory, including ones it had walked into by
+name, and §38.10 opens an app that has chosen nowhere in `MEDIA` — so the
+first `File ▸ Open` a new user ever ran was the defect.
+
+`FS_PATH` is a `PTH_SIZE` block per Disk window and `fdlg_path` is one more
+for the modal dialog: a byte `PTH_LOST` and 32 bytes holding `SYSTEM\DOS`,
+NUL-terminated. Four routines over it — `pth_clear`, `pth_push`, `pth_pop`,
+`pth_leaf`, all taking BX — shared between `files.inc` and `fdlg.inc`, which
+are both `.cold` so the call is near.
+
+**It asks the volume nothing, and that is the design rather than an
+economy.** It records the USER'S NAVIGATION, never the volume's identifiers,
+so there is no FAT path and no redirector path to keep in step — identifiers
+are the only thing the two volume kinds disagree about. The three designs
+that suggest themselves first all die on a `DRVC_FILE` volume: naming a
+cluster needs the grandparent's listing (a whole mount, ~12 sectors — and
+impossible where §62.9.1 makes the handle opaque), a `(cluster → name)`
+cache can be handed a reused cluster and answer with a **wrong** name, and a
+`FSV_NAME` verb is a fourteenth verb plus a round trip that does nothing for
+FAT.
+
+Five rules hold it up:
+
+1. **`FS_CWD` stays the authority for "am I at a root", and the path is only
+   ever consulted for a NAME.** `fm_settitle` tests `FS_CWD == 0` first and
+   answers `Disk`; everything here does is give SI a better value on the
+   paths that passed 0. So a path that is empty, lost or stale degrades to
+   **the caption this kernel already printed**, and a new lie is
+   unreachable.
+2. **One clear site per module, and it is inside the routine that records
+   where the mount LANDED** — `fmv_load` for a window, `fdlg_go` for the
+   dialog. Every way of ending at a root goes through it: a drive change,
+   Root Folder, a format, `fmv_sync`'s folder-vanished fallback, and a
+   *failed* mount, which leaves `[dsk_cwd]` 0 on the drive it tried (§19.2).
+   A new way of reaching a root cannot forget to clear.
+3. **`pth_push` measures before it writes.** A push that ran out of room
+   half way would leave a partial component behind, and every later pop
+   would hand a window a name that is not any folder's.
+4. **`PTH_LOST` counts the levels the buffer could not hold, and spending
+   the last of them lands back AT the buffer's end — which is named.**
+   Answering "no name" there would throw away a name the buffer is still
+   holding. Verified by reading the block out of a running guest: four
+   8-character levels give `lost=1` with the first three intact, and the
+   names come back in order on the way up.
+5. **A window PLACED in a folder — a seed, `fm_choose` — records a
+   fragment**, so going up empties the path while `FS_CWD` is non-zero and
+   the caption is `Folder`. That is rule 1 doing its job, not a special
+   case.
+
+The dialog's header draws the leaf where it drew `fdlg_s_sub`: its pen is
+x=30 and the list frame starts at `FD_LX2` = 213, so 22 cells are free
+against the 12 an 8.3 name needs — measured before the name was allowed
+there. A folder it was *placed* in still reads `Folder`, and the one default
+that can be named is `MEDIA`, which `fdlg_home_go` really does walk into.
+
+Cost, measured: `.text` +11, `.bss` +165 (4 × 33 for the windows, 33 for the
+dialog), `.cold` +349 — **no rung crossed anywhere and `KERN_SIZE`
+unchanged**, so it costs the machine nothing. It leaves the cold rung with
+**14 bytes**, which is the number to know before the next cold addition.
+kern_small is byte-identical with and without it.
+
+### 22.17 The poster's status line is paid BEFORE the new window covers it
+
+§11.96.9.1 fixed the *drag* half of "launch Minesweeper over a Disk window
+and that window repaints in full for ever" and its own measurement table
+left the first row unchanged: **`take` 1, dropped, `fm_repaint` 1**. That
+row is this section. The window that posted the load has `Loading...` on its
+status line; `wm_show` banks the window as it looks *with that word on it*,
+and `files_poster` then clears the word through `wm_clip_set`, which drops
+the cache — correctly, the window is about to draw. What it cannot do is
+take a new one, because by then the new window is on top and the content is
+somebody else's pixels (§11.96.7).
+
+**The line's final text has been known since before the load started.**
+`ui.inc` zeroes `[ld_pending]` when it *consumes* the click, so by the time
+`loader_run` is entered the status line already reads `Size … Free …`;
+§59.5 moved the load's own verdict (`Bad package`) out to a toast, so
+nothing about the line waits on the result. The only reason it was drawn
+after `wm_show` is that `wm_show` is where the success path ended.
+
+So `ld_run_body`'s step 9 calls `files_poster` **immediately before** it takes
+the gfx lock and shows the window, and `loader_run` and `assoc_run` stop
+calling it afterwards on the success path. It costs the identical one
+`font_run`, on a window nothing is covering — and what `wm_show` banks a
+moment later is the window as it will actually look, so the cache survives
+the launch.
+
+Three things make it safe, and each was checked rather than assumed.
+`fm_status_only` reads the **window's own state block** (`FS_USED`/`FS_FREE`
+through `fm_layout`), never the mounted volume, so it does not care that
+`assoc_back` has not put the user's disk back yet — which is what lets the
+document-open path (§54.9) take the same ordering. `files_poster` preserves
+`BX`, still the window pointer step 9 owes `wm_show`. And the failure paths
+are untouched: a load that never reached step 9 covered nothing, so it still
+pays the same line afterwards, and `LD_EABORT` still takes the full repaint
+an entry proc that may have drawn anywhere has earned.
+
+Measured on a cycle-accurate 5150/Hercules over the reported sequence —
+open Drive B, into `GAMES`, launch Minesweeper:
+
+| Disk window after the launch | before | after |
+|---|---|---|
+| `wm_su_segs` for its slot | **0000** | a live claim |
+| drag Minesweeper off it | MISS, `W_PAINT` | **HIT**, no `W_PAINT` |
+
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
 Not kernel code: a .o88 package built with os88api.inc, org 0 (§20.1), all
@@ -17545,6 +18015,20 @@ and non-zero exit + stderr message on any validation failure.
   - `--scramble` (hidden test flag): reallocates cluster chains
     round-robin-interleaved across files — a **legally fragmented** image
     for chain-walk verification. Never used by the Makefile.
+  - **Folders NEST**, and the prefix is a path: `SYSTEM/DOS:FILE` puts a
+    file two deep, `--folder A/B` makes an empty one, and each component is
+    validated as its own 8.3 stem because a directory *entry* is 8.3 at
+    every level. Naming a folder makes every folder **above** it, so
+    parents are always created — and always laid out — before their
+    children. Three things follow and each is a rule the emission obeys:
+    `..` carries the **parent's** first cluster, with the FAT convention
+    that a parent of the root is written 0, which is exactly what
+    `dsk_dotdot` reads to go up (§19.2) — so the kernel needed nothing for
+    this; only a **top-level** folder costs a root-directory slot, a nested
+    one costing an entry in its parent instead; and a folder's own
+    directory is sized `2 + subfolders + files` entries, with the §19
+    listing cap counting its subfolders alongside its visible files.
+    Depth is not bounded here because nothing in the kernel counts it.
   - `--verify IMG`: standalone structural fsck — the §18.2 BPB rules, FAT
     type detection, FAT1==FAT2, every entry's chain walks to EOC with
     length matching its byte size, no cross-links, no lost clusters.
@@ -17566,11 +18050,13 @@ and non-zero exit + stderr message on any validation failure.
   the Tracker package plays — a data file rides its folder exactly like a
   package, and this is the folder a File Open starts in, §38.10), and
   `SYSTEM` the chip menu's `TASKMGR.O88` (§28.3 — its copy for a
-  single-floppy machine). The **system** disks carry the same two kernel
-  folders: `SYSTEM/TASKMGR.O88`, and a `MEDIA` that is **empty**, because a
-  boot floppy has no media on it and the folder still has to exist for the
-  dialog to open on. The grouping lives in the Makefile —
-  `APPS_TOOLS`/`APPS_GAMES`/`APPS_DATA`/`APPS_SYS` become the
+  single-floppy machine) **and one folder of its own, `DOS`, holding
+  `OS88NET.COM`** (§24.2). The **system** disks carry the same two kernel
+  folders: `SYSTEM/TASKMGR.O88`, and a `MEDIA` holding the logo (§63) —
+  which used to be empty, and could not stay so, because the dialog opens
+  there and a boot floppy with nothing in it showed a new user an empty
+  list on a working machine. The grouping lives in the Makefile —
+  `APPS_TOOLS`/`APPS_GAMES`/`APPS_DATA`/`APPS_SYS`/`APPS_DOS` become the
   `DIR:`-prefixed `APPSARGS`, and the empty folder is os88disk.py's
   `--folder MEDIA` — not in the tool.
   **Order within a list means nothing and nothing may be built on it**: the
@@ -17592,9 +18078,48 @@ check apply the same either way; only the package validation is skipped.
 Nothing in the kernel changed for this. A non-package already listed with the
 generic icon and did nothing on a double-click — that has always been the
 behaviour for any file a host OS put on the volume, and this only makes the
-*builder* able to produce one. The shipped apps disks carry no data files;
-`build/filetest.img` carries `BIG.DAT` for §18.4.1's check, generated rather
-than committed.
+*builder* able to produce one. The shipped apps disks carry three data
+files — `MEDIA/BEVERLY.MOD`, the module Tracker was written against, and
+`SYSTEM/DOS/OS88NET.COM` (§24.2) — and the system disks `MEDIA/OS8088.GIF`
+(§63) and `README.TXT`; `build/filetest.img` carries `BIG.DAT` for §18.4.1's
+check, generated rather than committed.
+
+### 24.2 The DOS end of the link rides the apps disk
+
+`OS88NET.COM` (§62) is the one thing on either floppy that **does not run on
+os8088 at all**: it is an MS-DOS `.COM` for the machine at the other end of
+the parallel cable. It ships in `SYSTEM/DOS/` on all three apps disks,
+built by the same Makefile rule that has always built it.
+
+It ships because of what it is *for*. The link is how a file reaches these
+disks in the first place (§62 — the alternative on the calibration machine
+is a seven-step path through another computer, docs/FIELD-MACHINES.md), so
+"copy `OS88NET.COM` onto the DOS box" cannot be allowed to depend on already
+having a way to move a file across. It used to be built here and **sent**,
+which is a distribution route that works for exactly one person: whoever has
+this repository and a toolchain.
+
+Three placement decisions, each of which could have gone the other way:
+
+- **The apps disk, not the system disk.** A single-floppy machine boots from
+  A: and swaps to the apps disk to reach anything; putting it on the system
+  disk would mean ejecting the disk the machine is running from to get at
+  the file. The apps disk is the one already in the drive when the user is
+  looking for something.
+- **`SYSTEM/`, not the root.** It is machinery, not a program to go and
+  find — `TASKMGR.O88`'s argument (§28.3), and the same reason nothing of
+  ours is loose in a root.
+- **`DOS/` under it, rather than beside `TASKMGR.O88`.** The folder is what
+  says which *machine* the file is for. A `.COM` sitting next to a `.O88`
+  invites a double-click, and a double-click gives `Bad package` — the
+  loader refuses anything that is not a v3 package (§21) — which reads as a
+  broken file rather than as a file for another computer.
+
+It is an ordinary file on an ordinary volume: `sys_attr` stamps a non-boot
+disk's entries `A_ARCH` (§19.6 locks down the *system* disk only), so it
+copies, and the user is meant to copy it. Nesting it is what §24's folder
+paths exist for, and it is the first and so far only shipped use of them.
+
 ## 25. icons.inc — icon format, draw routine, built-in library
 
 1-bit icons with a mask, classic Mac style, drawn exactly like the mouse
@@ -35628,6 +36153,61 @@ do: 870 sectors / 206 `int 13h` mounted, 868 / 199 not, the difference being
 the pre-existing mount's own reads. Both stages run under one Install because
 B: holds the apps disk and it is found — the swap prompt is the other path.
 
+#### 52.10.8.1 CLOSED: it is the DRIVE that must not be mounted, not the slot
+
+§52.10.8 fixed the case it was written against — install to the partition you
+had just mounted — and left its sibling standing, with the identical symptom
+and the identical first sentence: **`KERNEL.SYS` in the status line, after a
+Mount.** The report that found it names the difference exactly: *install, then
+restart, then Mount the drive, then install again*, and the install it fails
+on is to a slot **other** than the one that was mounted.
+
+**Three facts compose into it and each is reasonable alone.** Mount is per
+DEVICE — `hd_mount` walks all four slots and mounts every FAT one — so the
+volume left CURRENT is the last partition of that drive, whichever slot the
+user was thinking about. `osapi_vol_mount` ends in `disk_mount`, so mounting
+IS a navigation: `[disk_drive]` names that volume afterwards. And
+`hd_ivol_bank` takes the install's source from `OSAPI_FILE_HERE`, which for a
+driver is the machine's own position (§19.2.1) — so the source of the *system
+files* became a hard-disk partition. `hd_iunmount_dst` then unmounted the
+DESTINATION slot, which on this path is not the mounted one, so nothing
+reset `[hd_isrcdrv]` and nothing said so.
+
+What the copy read from is then whatever that partition happens to hold. On
+the machine that reported it that was a **data volume written from Windows —
+two `.MOD` files, a `$RECYCLE.BIN` and a `System Volume Information`** — with
+no `KERNEL.SYS` anywhere in it, so `hd_istat` answered "not there" about the
+first file the install asks for. The message is `hd_icopy_one` naming the file
+it stopped on, exactly as §52.10.7 taught it to, and exactly as misleading:
+the file is fine, on a disk nobody was reading.
+
+**Two changes, and the second is the one that matters most.**
+
+- **`hd_iunmount_dst` unmounts the whole destination DEVICE**, all four slots,
+  resetting `[hd_ivdrv]`/`[hd_isrcdrv]` for each volume that goes rather than
+  for the one the destination slot happened to hold. The invariant it enforces
+  was never "the destination is not mounted" but *the install is not standing
+  on the drive it is about to write* — one partition of that drive being
+  mounted is enough, because mounting moves the machine onto it.
+- **`hd_isrc_ck` asks whether there is a system disk to copy BEFORE anything
+  is erased**, one line above `hd_inst_fmt`. Every answer below that line is
+  given with the destination already formatted, which is what turned "the
+  source was wrong" into a partition that is gone — and the source is a guess
+  in more ways than this one: a Disk window left open on B:, a RAM disk, a
+  redirected volume (§62.9), a second hard disk. The test is `KERNEL.SYS` in
+  the root, the same marker `drv_cfg_save` uses to find the system volume
+  (§51.5.1) and `hd_iapps_find` uses to rule one *out*, and the fallback is A:
+  — silently, because the user asked to install os8088 and not to install
+  whatever they were last looking at. `[hd_ivdrv]` is untouched, so they are
+  still put back where they were.
+
+**Measured on `os8088_xt_hdd`, driving the reporter's own 128MB VHD**: the
+same nine clicks with and without one Mount, installing to Slot 1 both times.
+Before: `KERNEL.SYS` with the Mount, `Done - remove the floppy, Restart`
+without. After: `Done` on both. The A/B is one click wide and everything else
+— disk, slot, floppies, machine — is held still, which is what says the
+destination was never the question.
+
 ### 52.10.9 What an install COSTS, per phase
 
 `make DISKCNT=1` builds the kernel's own instrument (§18.94) **and** this one,
@@ -38898,6 +39478,68 @@ the whole difference between the two tenancies — so the spin is unreachable,
 and the clamp belongs where `menu_bput`'s drop-without-advancing is known, not
 to whichever caller last happened to need it.
 
+### 59.8.1 The bed is inset from both neighbours, and the padding is 4px
+
+§59.8 put the strip flush against both ends of the clock's field, with one
+whole inverted CELL of padding at each end. Both halves of that were wrong on
+the glass. On the left the bed's black ran straight into §12.8's file-activity
+widget — whose progress trough fills **black** — so a full trough and the
+strip merged into one bar with no seam. On the right the bed ended at the
+field's edge, which is the bar's own 8px margin, so it read as running off the
+screen.
+
+**So the strip is inset by one cell and padded by 4px:**
+
+```
+ [vid_clk_hx]      +4        +8                        +8+n*8
+ |                 |         |                              |
+ |   4px WHITE     | 4px BLK |  n glyphs, 8px each          | 8px WHITE
+ +-----------------+---------+------------------------------+ (the margin)
+   the gap from      the       ALWAYS at [vid_clk_hx]+8, so
+   the widget        lead      `test cx, 7` is 0 and font_run
+                               keeps its single-store path
+```
+
+Four things fall out of it, and each is why it is built this way rather than
+another.
+
+**The glyphs never leave the 8px grid.** `font_run` gates its single-store
+path on `test cx, 7` (§6.1), so a bed simply shifted right by 4 would put
+every cell of every toast on the `.slow` fill-then-letter path. Measured on a
+cycle-accurate 5150 with a Hercules card, one `menu_draw_clock` that drew:
+**46,642 cycles aligned against 133,240 unaligned — 2.76x**, 9.77 ms against
+27.92. Putting the *gap* in cell 0 and starting the glyphs at cell 1 buys the
+inset for one fill instead.
+
+**The 4px lead is a `gfx_fill`, because there is no glyph for half a cell.**
+The table is 95 glyphs, ASCII 32..126 (§6.2) — CP437's `▌` is not in it and
+cannot be. The fill costs **4,142 cycles = 0.87 ms** on that machine, which
+is almost exactly PERFORMANCE.md Part 2's ~756 µs per-call floor: the 32
+pixels are ~110 µs and the rest is arriving. A wider lead would cost the same.
+
+**There is no trailing lead, and that is the FONT's doing rather than an
+oversight.** Column 7 of the cell is lit in **2 of the 95 glyphs — `*` and
+`_`** — so every other character already carries a blank column on its right,
+which inverts to 1px of black. The right-hand padding is therefore that 1px
+plus the bar's 8px margin, against 4px on the left. Deliberately asymmetric:
+a trailing fill would have to reach past `[vid_clk_hx] + 200` to fit 24
+glyphs, which is **outside the clock field**, where no painter owns the pixels
+and the retire path would owe a fourth fill to blank them. One character in
+95 sits flush against the margin and none of the messages in the tree end in
+either.
+
+**`TOAST_MAX` is 23 → 24.** The strip is now the gap cell plus n glyph cells =
+**n+1**, where §59.8's was n+2, so the same 25-cell field holds one more
+character. Nothing in the tree needs it — the three longest messages are
+exactly 23 — so it is headroom, and it is free.
+
+The gap home (§59.9) takes the same treatment for the same look: its strip is
+`n+1` cells, and `menu_bemit` white-fills the left 4px of the run's first cell
+after the inverted `font_run`. There it is cosmetic rather than structural —
+a strip in the gap floats in white space and touches neither the widget nor
+the margin — but two toasts that pad differently depending on which home they
+landed in is a defect by itself.
+
 ### 59.9 …and it prefers the gap, where it covers nothing at all
 
 §59.8 chose the clock because a message must not cover a menu title, and read
@@ -39050,6 +39692,96 @@ free from `menu_furniture` while the incremental build legitimately declined.
 `clk_str` did not reveal it either, because `toast_gapend` calls `clk_fmt`
 itself — so the staged string was fresh while the pixels were a minute old.
 `[menu_ckck] = 0` is what makes the two builds answer the same question.
+
+#### 59.9.2 …and the gap already had a tenant: §12.8's progress widget
+
+§59.9 took the blank cells between the last menu and the clock and called them
+"the one placement with no victim". **They are not blank.** The file-activity
+widget (§12.8) is drawn at `[vid_clk_hx] - FPG_W`, which is the *right end of
+those very cells*, and it is the one thing on the bar that is drawn straight
+onto the glass and composed into no buffer at all — so `menu_bcell` cannot see
+it, the diff cannot arbitrate between them, and §59.1's "the bar has ONE
+painter" quietly stopped being true. Two painters, one strip of glass.
+
+The collision was not a corner case. Measured on a cycle-accurate 5150/CGA,
+with Paint frontmost, its own `Saving...` is placed at screen cells **43..53**
+and the widget takes **43..53** — the same eleven cells, exactly — because the
+strip's clamp puts a message that nearly fills the gap flush against
+`[menu_bn]`, and that is where the widget lives. Locator's desktop is barely
+better: the strip lands at 40..50 against the widget's 43..53, eight cells of
+overlap. Both are the *ordinary* case, not a wide-message edge.
+
+What it looks like is a message being destroyed rather than covered: the
+widget's bed fill is white over the whole 88px, so `Saving...` becomes `Sa`
+with a document icon and a progress box drawn through it, and on the field
+machine a Paint save is seconds of that. Three comments in the tree — here, in
+`fprog.inc` and in `files.inc` — asserted that "the strip is in the clock's
+field now and the two are independent", which was true of §59.8 and stopped
+being true the moment §59.9 gave the strip a second home. **A placement rule
+written when there was one tenant does not survive a second one being added
+above it.**
+
+**The widget's cells are reserved, and `toast_place` is where the reservation
+is honoured.** With `[fpg_on]` set, the gap's right edge — for the fit test,
+for the eye's centring and for the clamp alike — is `[menu_bn] - FPG_W / 8`
+rather than `[menu_bn]`, so a message that still fits sits to the widget's
+left, centred between the last menu and the widget's own edge, and one that
+does not falls back to §59.8's clock field. **That fallback is what makes the
+reservation free**: the clock's field is wholly right of `[vid_clk_hx]` and the
+widget wholly left of it, so the message is said in full either way, and there
+is no width at which a toast has to be shortened for the widget's sake.
+
+Three things make it cost almost nothing:
+
+- **The reservation is DERIVED, not published.** The widget's right edge *is*
+  the segment's right edge, so the cells it holds are the last `FPG_W / 8` of
+  them, and `[fpg_on]` is the whole of the state. A published cell count would
+  be a second opinion about where the widget is, and something to keep in step
+  at four sites.
+- **`fpg_begin` arms BEFORE it draws a pixel**, and asks for one composition
+  (`[menu_bdirty]` + `menu_draw_bar`) while the cells are still the toast's.
+  That is what moves a live strip out of the way instead of destroying it —
+  and it is the reverse of what this site used to do, which was `toast_kill`:
+  a refusal loses the message for good and in silence, and the messages worth
+  saying are exactly the ones about the operation that is starting. The cost
+  is a compare per cell and at most one `font_run`, once per file operation,
+  against a disk.
+- **`FPG_GAP` 8 → 0.** The widget's separation from the clock was a whole
+  glyph cell, and the clock's field is right-aligned with ~7 blank cells at its
+  left end — so the eye sees the same gap and the strip gets a cell back.
+
+**`fpg_end` asks for its own erase.** The box's rows `MENU_TEXT_Y..+7` are
+erased by nothing in `fprog.inc` — the opaque run that rewrites the text band
+*is* the erase, which is §12.9's whole economy — and that run only happens if
+`[menu_bdirty]` is set. It was set by `fpg_begin`'s `menu_inval` and left to
+survive the operation; anything composing the bar in between spends it, and the
+box frame then stays on the glass for good. One store makes the erase this
+routine's own rather than a debt somebody else may settle.
+
+**And the bug that actually left pixels behind was in `menu_bput`, not in
+either tenant.** `[menu_bfirst]` and `[menu_blast]` bounded the changed span as
+"the first difference" and "the last difference" — which is the same thing as a
+minimum and a maximum *only while the cells are written left to right*. §59.9's
+strip is composed **after** `menu_bpadc` has run to `[menu_bn]`, at
+`[toast_scell]`, which may be to its left. So a strip that got shorter or moved
+left dragged `[menu_blast]` back over the padding that had just erased its
+tail: those cells were recorded blank and never drawn, and `menu_bcell` is the
+record of what is on the *glass*, so no later pass could ever repair them.
+
+Measured, before the fix: Paint's save leaves `Saving...`'s last two cells
+(screen 52..53, 124 lit pixels) inverted on the bar **permanently** — through
+the `Saved` toast that replaces it, through that toast's expiry, and for the
+rest of the session. The kernel's own record read `0x20 0x20` for those cells
+while the glass held black. That is the reported "the toast fails to clean up",
+and it is independent of the overlap: it needs only a toast that shrinks or
+shifts left within the segment, which the second of any two toasts usually
+does.
+
+The fix is two compares — a genuine minimum and a genuine maximum — plus a seed
+for `[menu_blast]`, which needed none while it was assigned beside
+`[menu_bfirst]` on every difference. It puts the ordering requirement inside
+the routine rather than leaving it as a rule callers have to keep, which is the
+same argument `menu_bpadc`'s own clamp makes.
 
 ## 60. cpudet.inc — the CPU tier
 
@@ -39910,8 +40642,10 @@ the transcript.
 ## 62. NET.DRV — the parallel link (`drivers/net/net.asm`)
 
 **A LapLink cable between the parallel ports of an os8088 machine and a DOS
-machine, as a mounted volume.** The DOS side runs `OS88NET.COM`, which serves
-512-byte sectors out of an image file; os8088 mounts them and everything above
+machine, as a mounted volume.** The DOS side runs `OS88NET.COM` — which ships
+in `SYSTEM/DOS/` on the apps disk (§24.2), because the link is how a file
+reaches these disks and so cannot require one to have crossed already — and it
+serves 512-byte sectors out of an image file; os8088 mounts them and everything above
 `dsk_xfer` — the BPB validator, the FAT window, the directory walker, the whole
 write path with its commit ordering, the Disk window, the Standard File dialog,
 the copy engine, the loader and the association cache — works unchanged.

@@ -938,9 +938,24 @@ menu_bar_text:
                                 ; toast strip used to borrow the right end of
                                 ; this segment and cover them (SPEC.md 59.8);
                                 ; it is in the clock's field now, so nothing
-                                ; below here has a tenant to make room for
+                                ; below here has a tenant to make room for -
+                                ; **except SPEC.md 12.8's widget, which is
+                                ; drawn straight onto this segment's last
+                                ; cells and is not composed at all** (59.9.2).
+                                ; [menu_bres] is how many of them it holds,
+                                ; and it bounds the GAP alone: the menus are
+                                ; laid out against [vid_clk_hx] by
+                                ; menu_layout, the padding still has to reach
+                                ; [menu_bn] to erase an application's menus
+                                ; when it goes away, and only the strip's
+                                ; placement has to keep off
 
     mov word [menu_bfirst], 0FFFFh
+    mov word [menu_blast], 0    ; SEEDED now that it is a maximum (menu_bput).
+                                ; It needed none while it was assigned beside
+                                ; [menu_bfirst] on every difference; 0 is
+                                ; below every cell and is read only when
+                                ; [menu_bfirst] says something differed at all
     xor di, di                  ; DI = cell index, 0 = x MENU_TXT_X0
 
     mov bx, [menu_abcell]       ; --- the application's name ----------------
@@ -987,9 +1002,8 @@ menu_bar_text:
     jcxz .diff                  ; (SPEC.md 59.9); 0 = the clock's field has it
     mov di, [toast_scell]       ; and nothing here is owed
     mov al, ' ' | 0x80
-    call menu_bput              ; the leading inverted space...
-    dec cx
-    dec cx
+    call menu_bput              ; the gap cell: menu_bemit white-fills its left
+    dec cx                      ; 4px after the run, so both homes pad alike
     jcxz .strail
     mov si, toast_buf
 .sch:
@@ -999,8 +1013,9 @@ menu_bar_text:
     call menu_bput              ; CHARACTER did not change but whose HIGHLIGHT
     loop .sch                   ; did has to read as a difference to menu_bput -
 .strail:                        ; and a space at the strip's edge is exactly
-    mov al, ' ' | 0x80          ; that cell. menu_bemit masks it off to draw
-    call menu_bput              ; ...and the trailing one
+                                ; that cell. menu_bemit masks it off to draw.
+                                ; NO trailing cell: SPEC.md 59.8.1's font
+                                ; argument holds here too
 
 .diff:
     mov bx, [menu_bfirst]       ; --- emit the span(s) that moved -------------
@@ -1106,6 +1121,18 @@ menu_bemit:
     mov ax, di
     call font_run
 
+    cmp di, CWHITE              ; the STRIP: take its first cell's left 4px
+    jne .nogap                  ; back to white, so the gap home pads exactly
+    mov ax, cx                  ; as the clock home does (SPEC.md 59.8.1).
+    mov cx, ax                  ; Drawn and then half-erased rather than
+    add cx, 3                   ; composed as two halves, because menu_bcell
+    push bx                     ; is a record of CELLS and half a cell is not
+    mov byte [gfx_color], CWHITE
+    mov bx, MENU_TEXT_Y
+    mov dx, MENU_TEXT_Y + 7
+    call gfx_fill
+    pop bx
+.nogap:
     pop dx
     pop bx
     cmp di, CWHITE
@@ -1241,10 +1268,28 @@ menu_bput:
     cmp [menu_bcell+bx], al
     je .same
     mov [menu_bcell+bx], al
-    cmp word [menu_bfirst], 0FFFFh
-    jne .last
+                                ; **A MINIMUM AND A MAXIMUM, because
+                                ; composition is NOT in x order** (SPEC.md
+                                ; 59.9.2). These were "the first difference"
+                                ; and "the last difference" - which is the
+                                ; same thing only while the cells are written
+                                ; left to right, and 59.9's strip is composed
+                                ; AFTER menu_bpadc has run to [menu_bn], at a
+                                ; cell that may be to its left. So a strip
+                                ; that moved left or got SHORTER dragged
+                                ; [menu_blast] back over the padding that had
+                                ; just erased its tail: those cells were
+                                ; recorded as blank and never drawn, and
+                                ; menu_bcell is the record of what is on the
+                                ; GLASS, so nothing ever repaired them. Two
+                                ; compares, and the ordering rule stops being
+                                ; something a caller has to keep
+    cmp di, [menu_bfirst]       ; 0FFFFh is above every cell, so the seed at
+    jae .last                   ; the top of menu_bar_text still means "none"
     mov [menu_bfirst], di
 .last:
+    cmp di, [menu_blast]
+    jbe .same
     mov [menu_blast], di
 .same:
     inc di
@@ -1317,6 +1362,31 @@ menu_bput:
 ; the strip's WIDTH is the one thing about the field that hashing its
 ; characters cannot see. One byte, one compare.
 ; -----------------------------------------------------------------------------
+; menu_tbar_k - the toast strip's 4px black lead (SPEC.md 59.8.1)
+; in:  AX = x1, CX = x2 (inclusive); MENU_TEXT_Y is the row
+; out: nothing - all registers AND the flags preserved
+;
+; A gfx_fill and not a glyph because there is no glyph: the table is ASCII
+; 32..126 and holds no half-cell block. It costs 4,142 cycles on a 4.77MHz
+; 8088 - PERFORMANCE.md Part 2's per-call floor almost exactly, the 32 pixels
+; being ~110us of it - so a wider lead would cost the same.
+menu_tbar_k:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CBLACK
+    mov bx, MENU_TEXT_Y
+    mov dx, MENU_TEXT_Y + 7
+    call gfx_fill
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
 menu_draw_clock:
     push ax
     push bx
@@ -1397,7 +1467,9 @@ menu_draw_clock:
     inc cx
     jmp short .tl
 .tld:
-    add cx, 2
+    inc cx                      ; the gap cell plus n glyph cells (SPEC.md
+                                ; 59.8.1) - where this was n+2, one whole
+                                ; inverted cell of padding at each end
     cmp cx, bx
     jbe .wide
     mov cx, bx                  ; wider than the whole field: it takes the lot
@@ -1405,17 +1477,15 @@ menu_draw_clock:
     cmp cx, 2                   ; so unreachable) - and a field too narrow to
     jb .hash                    ; hold even the padding gets no strip at all,
                                 ; because the two decs below would wrap
-    mov dh, cl                  ; (the field is 25 cells, so CL is the whole)
+    mov dh, cl
     mov di, menu_clkbuf
     mov si, toast_buf
     mov al, ' '
-    stosb                       ; the leading inverted space...
-    dec cx
-    dec cx
+    stosb                       ; cell 0 is the GAP, and it is a SPACE so the
+    dec cx                      ; ordinary clock run paints it white for free
     jcxz .trail
-    rep movsb                   ; ...the message, over the clock cells it
-.trail:                         ; reaches and no others...
-    stosb                       ; ...and the trailing one (AL survives movsb)
+    rep movsb                   ; ...and the message from cell 1, on the grid
+.trail:
 
 .hash:
     xor ax, ax                  ; --- one check word over the composed FIELD,
@@ -1451,14 +1521,43 @@ menu_draw_clock:
     call font_run
     jmp short .out
 .strip:
-    mov al, [menu_clkbuf+di]    ; --- the strip. font_run wants ASCIIZ and the
-    push ax                     ; buffer's own NUL is at the field's end, so
-    mov byte [menu_clkbuf+di], 0    ; the cell past the strip is banked and
-    mov al, CWHITE              ; put back (menu_bar_text's idiom). INVERSE
-    mov ah, CBLACK              ; VIDEO: the one distinction that survives
-    call font_run               ; SPEC.md 39.4's reduction on both mono
-    pop ax                      ; adapters intact
+    mov al, [menu_clkbuf+1]     ; --- cell 0 FIRST, in the clock's own colours:
+    push ax                     ; it is a space, so this is the 4px white gap
+    mov byte [menu_clkbuf+1], 0 ; that keeps the bed off SPEC.md 12.8's widget
+    mov al, CBLACK              ; (whose trough fills BLACK) - and it is free,
+    mov ah, CWHITE              ; the clock having to paint that cell anyway
+    call font_run
+    pop ax
+    mov [menu_clkbuf+1], al
+
+    mov ax, cx                  ; --- the 4px black lead. No glyph can do this:
+    add ax, 4                   ; the table is 95 glyphs, ASCII 32..126 (6.2),
+    push cx                     ; so CP437's half-block is not available
+    mov cx, ax
+    add cx, 3
+    call menu_tbar_k
+    pop cx
+
+    mov al, [menu_clkbuf+di]    ; --- and the message. font_run wants ASCIIZ
+    push ax                     ; and the buffer's own NUL is at the field's
+    mov byte [menu_clkbuf+di], 0    ; end, so the cell past the strip is
+    push cx                     ; banked and put back (menu_bar_text's idiom)
+    push si
+    add cx, 8                   ; ALWAYS cell 1: `test cx, 7` stays 0, so the
+    inc si                      ; single-store path survives the inset - 2.76x
+    mov al, CWHITE              ; on a Hercules 5150 if it does not (59.8.1)
+    mov ah, CBLACK              ; INVERSE VIDEO: the one distinction that
+    call font_run               ; survives SPEC.md 39.4's reduction intact
+    pop si
+    pop cx
+    pop ax
     mov [menu_clkbuf+di], al
+
+                                ; ...and NO trailing lead: column 7 is lit in
+                                ; 2 of the 95 glyphs, so every other character
+                                ; brings 1px of black with it, and a fill here
+                                ; would have to reach outside the field, where
+                                ; no painter owns the pixels (SPEC.md 59.8.1)
 
     cmp di, bx
     jae .out                    ; the strip took the whole field: no clock left
@@ -1845,6 +1944,11 @@ menu_drop:
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
+    mov byte [menu_dropd], 1    ; ...and while this is up, the keyboard mouse
+                                ; steps by ITEM rather than by KBM_MIN pixels
+                                ; (SPEC.md 9.6.3). Set HERE and not in either
+                                ; caller, so the context menu gets it without
+                                ; knowing it exists
 .poll:
     mov al, [menu_btn]
     test [mouse_btn], al
@@ -1875,6 +1979,9 @@ menu_drop:
 
     ; --- released: put the screen back, report the selection -------------------
 .up:
+    mov byte [menu_dropd], 0    ; the arrows are a pointer again (SPEC 9.6.3).
+                                ; The poll loop above has exactly this one way
+                                ; out, so no path can leave the flag standing
     mov ax, [menu_sseg]         ; restore erases the menu and any highlight
     or ax, ax
     jz .repaint
@@ -1943,6 +2050,127 @@ menu_drop:
     pop dx
     pop cx
     pop bx
+    ret
+
+menu_dropd  db 0                ; a pull-down is on the screen (SPEC.md 9.6.3).
+                                ; In .text with a real initialiser rather than
+                                ; in .bss, for fdlg_win's reason: -f bin zeroes
+                                ; nothing and this is read on the machine's
+                                ; very first arrow key
+
+; -----------------------------------------------------------------------------
+; menu_kbnav - the keyboard mouse steps a dropped menu by ITEM (SPEC.md 9.6.3)
+;
+; in:  AL = the direction key's dy: -1 up, 0 none, +1 down
+; out: CF = 0 - the pointer has been PLACED; the caller owes only the repaint
+;      CF = 1 - not ours: step the pointer the ordinary way
+; clobbers: AX, flags
+;
+; A menu is a LIST, so the unit an arrow key moves in it is one item - and the
+; pixel ramp is measurably the wrong instrument for that. MENU_ITEM_H /
+; KBM_MIN is 16 / 3, which a mouseless 5150 measured as 6, 5, 5 presses for
+; three items, with the highlight moving on one press in six. The ramp cannot
+; be the fix either: held, it is 3, 9, 18, 30, 45 px cumulative against 16px
+; cells, so it steps OVER items - which is exactly why 9.6.2's direction reset
+; had to exist - and a step sized for a menu could never cross a screen.
+;
+; Worse than slow, it goes BLANK: a separator is a MENU_DIS item (SPEC.md
+; 12.2), so menu_hover answers 0xFFFF for that whole cell and six presses in
+; the middle of a menu highlight nothing at all. So disabled cells are SKIPPED
+; here rather than merely landed on and rejected.
+;
+; The row is taken from GEOMETRY and never from menu_hover, which answers
+; 0xFFFF for a disabled cell as well as for "outside": stepping from that
+; would restart at the end of the menu every time the pointer was parked on a
+; separator.
+; -----------------------------------------------------------------------------
+menu_kbnav:
+    cmp byte [menu_dropd], 0
+    je .no                      ; nothing is dropped: an ordinary pointer
+    or al, al
+    jz .no                      ; Left/Right keep their pixel step, which is
+                                ; how the pointer leaves a menu sideways
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cbw
+    mov si, ax                  ; SI = the direction, and the sign the scan
+                                ; below walks in
+
+    ; --- which row is the pointer on? -1 above the menu, [menu_cnt] below ----
+    mov ax, [mouse_x]           ; the same x test menu_hover makes, so the two
+    cmp ax, [menu_x1]           ; can never disagree about what "in the menu"
+    jb .beside                  ; means
+    cmp ax, [menu_x2]
+    jbe .inx
+.beside:                        ; the pointer is off to one side: come back in
+    mov di, -1                  ; at the end this key is heading AWAY from, so
+    or si, si                   ; Down enters at the first item and Up at the
+    jns .step                   ; last
+    mov di, [menu_cnt]
+    jmp short .step
+.inx:
+    mov ax, [mouse_y]
+    mov bx, [menu_y1]
+    inc bx                      ; the top frame row is not a cell (menu_hover)
+    sub ax, bx
+    mov di, -1
+    js .step                    ; above the first cell
+    mov cl, 4
+    shr ax, cl                  ; / MENU_ITEM_H -> the cell under the pointer
+    mov di, ax
+    cmp di, [menu_cnt]
+    jb .step
+    mov di, [menu_cnt]          ; below the last cell
+
+    ; --- one cell that way, over any that cannot be selected ------------------
+.step:
+    add di, si
+    js .top                     ; off the top...
+    cmp di, [menu_cnt]
+    jb .live
+    mov di, [menu_cnt]          ; ...or off the bottom: park one cell OUTSIDE
+    jmp short .place            ; the frame, where the mouse would be if it had
+.top:                           ; left the menu the same way - nothing is
+    mov di, -1                  ; highlighted there, and a button press
+    jmp short .place            ; dismisses (SPEC.md 9.6.3)
+.live:
+    mov ax, di
+    call menu_item_dis          ; a greyed item or a separator is not a place
+    jc .step                    ; to stop. DI only ever moves one way, so this
+                                ; walks off an end rather than looping
+
+    ; --- and place the pointer ------------------------------------------------
+.place:
+    mov ax, di
+    mov cl, 4
+    shl ax, cl                  ; DI x MENU_ITEM_H, SIGNED - which is what lets
+    add ax, [menu_y1]           ; the two off-the-end rows fall out of the one
+    add ax, 1 + MENU_ITEM_H / 2 ; formula instead of needing cases of their own
+    mov bx, ax                  ; BX = y, the cell's middle row
+    mov ax, [mouse_x]           ; x is left alone while it is inside the menu,
+    cmp ax, [menu_x1]           ; so a pointer the user has put in a column
+    jb .xsnap                   ; stays in it
+    cmp ax, [menu_x2]
+    jbe .xok
+.xsnap:
+    mov ax, [menu_x1]
+    add ax, 8                   ; ...and otherwise where the item text starts
+.xok:
+    call mou_clamp              ; the clamp the ISR itself uses, so the
+    mov [mouse_x], ax           ; two-display seam is honoured by construction
+    mov [mouse_y], bx           ; rather than by a rectangle known here
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------

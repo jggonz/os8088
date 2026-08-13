@@ -166,7 +166,7 @@ The bottom line names the clock chip the machine has, or says none. Without one 
 os8088 can borrow the files of a DOS machine beside it, over a cable between the two printer ports. That machine's folder appears as another drive icon, and you open, copy and save on it as if it were a floppy - the easy way to get files onto these disks.
 
 WHAT YOU NEED
-A parallel data-transfer cable, the kind sold for LapLink, InterLnk or FastLynx. An ordinary printer cable will NOT do - it does not carry the return wires. You also need OS88NET.COM, which is on the apps disk, copied onto the DOS machine.
+A parallel data-transfer cable, the kind sold for LapLink, InterLnk or FastLynx. An ordinary printer cable will NOT do - it does not carry the return wires. You also need OS88NET.COM, which is on the apps disk in the folder SYSTEM, inside DOS, copied onto the DOS machine.
 
 ON THE DOS MACHINE
 Change to the folder you want to share and run the program:

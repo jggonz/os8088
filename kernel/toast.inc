@@ -82,13 +82,15 @@
 
 section .text
 
-TOAST_MAX   equ 23              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
+TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; 59.8). The clock's field is ([vid_wm8] -
                                 ; [vid_clk_hx]) / 8 = 200/8 = 25 cells on
                                 ; every screen this runs on - 640 and 720 both
                                 ; subtract the same 206 and round to the same
-                                ; 8 - and the strip spends one inverted space
-                                ; at each end, so 23 is what is left. It was
+                                ; 8 - and the strip spends ONE of them on the
+                                ; gap that keeps its bed off SPEC.md 12.8's
+                                ; widget (59.8.1), so 24 is what is left. It
+                                ; was 23 while both ends cost a whole cell. It was
                                 ; 40 while this borrowed the menus segment's
                                 ; 50, and shortening it is what made the move
                                 ; safe: every message in the tree was revised
@@ -141,16 +143,22 @@ toast_scn:   dw 0               ; and how many cells it takes there - 0 meaning
 ; an app that wants to take its message down early has one call to make and
 ; does not have to know whether one is up.
 ;
-; **IT NO LONGER DEFERS TO THE FILE-ACTIVITY WIDGET** (SPEC.md 12.8). It used
-; to refuse outright while [fpg_on] was set, and fpg_begin retired whatever
-; was up - both of which were about PIXELS, the widget sitting at
-; [vid_clk_hx] - FPG_W and the strip reaching left into the same cells. The
-; strip is in the clock's field now, wholly to the RIGHT of the widget's
-; right edge, so the two cannot touch and neither rule has anything left to
-; protect. Dropping them is the point rather than a tidy-up: a refusal here
-; loses the message for good, silently, and the widget is armed by exactly
-; the mounts and reads that the messages worth saying are about - which is
-; why three call sites in files.inc had to be ordered around it.
+; **IT NO LONGER DEFERS TO THE FILE-ACTIVITY WIDGET** (SPEC.md 12.8), and
+; that is still right, but NOT for the reason this paragraph used to give. It
+; used to refuse outright while [fpg_on] was set, and fpg_begin retired
+; whatever was up - both of which were about PIXELS, the widget sitting at
+; [vid_clk_hx] - FPG_W and the strip reaching left into the same cells.
+; Dropping them is the point rather than a tidy-up: a refusal here loses the
+; message for good, silently, and the widget is armed by exactly the mounts
+; and reads that the messages worth saying are about.
+;
+; What replaced them was the claim that the strip lives in the clock's field,
+; wholly RIGHT of the widget's right edge, "so the two cannot touch". SPEC.md
+; 59.9 then gave the strip a second home - the gap the menus leave - and that
+; gap's right end is precisely where the widget is drawn, so they touched
+; again and nobody re-read this. They are kept apart by GEOMETRY now
+; (toast_place reserves the widget's cells, SPEC.md 59.9.2) rather than by a
+; property of where the strip happens to live.
 ;
 ; The stage runs with interrupts off: a worker task and the UI task can both
 ; raise, and a half-copied buffer would letter as garbage. 23 bytes of
@@ -446,6 +454,7 @@ toast_place:
     push ax
     push bx
     push cx
+    push dx
     mov word [toast_scn], 0
     cmp byte [toast_on], 0
     je .out
@@ -459,26 +468,51 @@ toast_place:
     jmp short .l
 .ld:
     jcxz .out                   ; nothing sayable. toast_show cannot stage that
-    add cx, 2                   ; (an empty string is a retire), but reading the
+    inc cx                      ; (an empty string is a retire), but reading the
                                 ; buffer rather than trusting the flag is what
                                 ; keeps the two decs below off a negative count
-    mov ax, [menu_bn]           ; the GAP: the cells between the end of the last
-    sub ax, [menu_bend]         ; drawn menu and the start of the clock's field
+    mov dx, [menu_bn]           ; **DX = ONE PAST THE LAST CELL THE STRIP MAY
+    cmp byte [fpg_on], 0        ; TAKE**, which is the end of the segment
+    je .gap                     ; UNLESS SPEC.md 12.8's widget is armed
+    sub dx, FPG_W / 8           ; (59.9.2). The widget is drawn straight onto
+                                ; the segment's last cells and is composed
+                                ; into no buffer at all, so menu_bcell cannot
+                                ; see it and the diff cannot arbitrate: two
+                                ; painters, one strip of glass, which is
+                                ; exactly what 59.1 exists to prevent. It sits
+                                ; at [vid_clk_hx] - FPG_W and its right edge
+                                ; IS the segment's, so the cells it holds are
+                                ; the last FPG_W / 8 of them - derived here
+                                ; rather than published, because a second
+                                ; opinion about where the widget is, is a
+                                ; second thing to keep in step
+.gap:
+    mov ax, dx                  ; the GAP: the cells between the end of the last
+    sub ax, [menu_bend]         ; drawn menu and whatever is on our right
     jbe .out                    ; the menus fill the segment: no gap at all
     cmp ax, cx
     jb .out                     ; will not fit - the clock's field takes it and
                                 ; costs the date, exactly as it did before this
-                                ; section existed (SPEC.md 59.8)
+                                ; section existed (SPEC.md 59.8). That fallback
+                                ; is what makes the widget's reservation free:
+                                ; the field is wholly RIGHT of [vid_clk_hx] and
+                                ; the widget wholly left of it, so the message
+                                ; is still said in full and still covers neither
+                                ; a menu title nor the widget
 
     call toast_gapend           ; --- and CENTRED on what the EYE sees, which
-    sub ax, [menu_bend]         ; is the clock's first GLYPH and not its field's
-    sub ax, cx                  ; left edge (SPEC.md 59.9.1): AX = the slack,
-    jns .half                   ; half of it each side
+    cmp ax, dx                  ; is the clock's first GLYPH and not its field's
+    jbe .eye                    ; left edge (SPEC.md 59.9.1) - but with the
+    mov ax, dx                  ; widget armed the clock is not our right-hand
+.eye:                           ; neighbour any more and the widget is
+    sub ax, [menu_bend]
+    sub ax, cx                  ; AX = the slack, half of it each side
+    jns .half
     xor ax, ax                  ; a clock so wide it reaches the menus: flush
 .half:                          ; left, and the clamp below is what keeps it in
     shr ax, 1
     add ax, [menu_bend]
-    mov bx, [menu_bn]           ; **THE ROOM IS THE SEGMENT'S EVEN THOUGH THE
+    mov bx, dx                  ; **THE ROOM IS THE SEGMENT'S EVEN THOUGH THE
     sub bx, cx                  ; CENTRING IS THE EYE'S**: the strip is composed
     cmp ax, bx                  ; into menu_bcell, where menu_bput DROPS a cell
     jbe .set                    ; at or past [menu_bn] without advancing - so a
@@ -487,6 +521,7 @@ toast_place:
     mov [toast_scell], ax
     mov [toast_scn], cx
 .out:
+    pop dx
     pop cx
     pop bx
     pop ax

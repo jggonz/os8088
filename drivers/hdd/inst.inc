@@ -1382,6 +1382,10 @@ hd_inst_sys:
                                 ; floppy (SPEC.md 18.9.3). Nothing closes it:
                                 ; the unlock that ends this callback does, and
                                 ; that is true of the failure paths too
+    call hd_isrc_ck             ; ...and IS THERE A SYSTEM DISK TO COPY? Asked
+    jc .nosys                   ; here, one line above the format, because
+                                ; every answer below this point is given with
+                                ; the destination already erased (52.10.8.1)
 %ifdef INSTBENCH
     call hd_bn_bank             ; SPEC.md 52.10.9: the format on its own, which
 %endif                          ; is the phase with no file in it at all
@@ -1437,6 +1441,8 @@ hd_inst_sys:
     call hd_ibuf_put            ; the user and a different half to debug. The
     stc                         ; volume is already back (SPEC.md 52.10.10 put
     jmp short .out              ; the commit AFTER hd_ivol_back)
+.nosys:                         ; NOTHING HAS BEEN ERASED on this path, which
+    mov word [hd_imsg], hd_s_inosys ; is the only reason it is worth having
 .failed:
     call hd_ivol_back
     call hd_ibuf_put
@@ -2382,6 +2388,69 @@ hd_iwrite_chunk:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_isrc_ck - is the source really the SYSTEM DISK? (SPEC.md 52.10.8.1)
+; out: CF = 0 and [hd_isrcdrv] names a volume with KERNEL.SYS in its root;
+;      CF = 1 = there is no system disk to install FROM
+; clobbers: flags
+;
+; **It runs BEFORE the format, and that is the whole of what it is for.** The
+; source is wherever the user was standing (§51.5.2's bank), which is right on
+; the machine this was written for - one floppy, and the disk it booted from
+; still in it - and is a guess everywhere else: a Disk window left open on B:,
+; a RAM disk, a network volume, or the hard-disk partition §52.10.8.1 is about.
+; Every one of those reaches `hd_icopy_one` with the destination ALREADY
+; ERASED, which turns "I picked the wrong source" into a partition that is
+; gone. Asked here it is a refusal that costs one quiet mount and a directory
+; walk.
+;
+; The test is KERNEL.SYS in the root - the same marker `drv_cfg_save` uses to
+; find the system volume (§51.5.1) and `hd_iapps_find` uses to rule one OUT,
+; so there is one answer in this system to "which disk is that" rather than
+; three that can drift.
+;
+; **A: is the fallback and it is not a guess either**: the machine booted off
+; a floppy (§52.10.4.1 refuses the other case outright), `drv_boot` mounts A:
+; to read this very driver, and §51.5.1 already treats A: as where the system
+; disk is. Falling back is silent because the user asked to install os8088 and
+; not to install whatever they were last looking at - the volume they were on
+; is put back afterwards either way ([hd_ivdrv] is untouched here).
+; -----------------------------------------------------------------------------
+hd_isrc_ck:
+    push ax
+    push si
+    call hd_isrc_ck_one         ; where the bank left us...
+    jnc .ok
+    cmp byte [hd_isrcdrv], 0
+    je .no                      ; ...which WAS A:, so there is nowhere else
+    mov byte [hd_isrcdrv], 0
+    call hd_isrc_ck_one
+    jc .no
+.ok:
+    pop si
+    pop ax
+    clc
+    ret
+.no:
+    pop si
+    pop ax
+    stc
+    ret
+
+; hd_isrc_ck_one - KERNEL.SYS in [hd_isrcdrv]'s root? (module internal)
+; The root, always: [hd_iinsub] belongs to the tree walk and nothing has set
+; it yet, but saying so costs nothing and this must not follow it if it ever
+; does.
+hd_isrc_ck_one:
+    push si
+    call hd_isrc                ; the ROOT of the source volume
+    jc .out
+    mov si, hd_s_kernel
+    call hd_istat               ; CF = 1 = not there, and it is not our disk
+.out:
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_isrc_here / hd_idst_here - the folder this file lives in (module internal)
 ; A root file goes to the root; a file inside a folder goes to that folder on
 ; both volumes, which [hd_iinsub] is what distinguishes.
@@ -2572,8 +2641,8 @@ hd_inst_fmt:
     ret
 
 ; -----------------------------------------------------------------------------
-; hd_iunmount_dst - the destination cannot be mounted while we erase it
-;                   (SPEC.md 52.10.8)
+; hd_iunmount_dst - NOTHING ON THE DESTINATION DRIVE may be mounted while we
+;                   install to it (SPEC.md 52.10.8, 52.10.8.1)
 ; out: nothing; every register preserved
 ;
 ; **This is what "Install stops on KERNEL.SYS" was.** Arriving at Install with
@@ -2597,26 +2666,47 @@ hd_inst_fmt:
 ; put back to A: when the volume that goes is the one they named -
 ; `[hd_isrcdrv]` especially, because that is where KERNEL.SYS is read FROM
 ; and a dead volume there fails the copy just as thoroughly.
+;
+; **IT IS THE WHOLE DRIVE AND NOT THE DESTINATION SLOT, and that is
+; §52.10.8.1.** The slot-only version fixed the case it was written against -
+; install to the partition you had mounted - and left the sibling untouched:
+; MOUNT is per DEVICE (`hd_mount` walks all four slots), the volume that ends
+; up CURRENT is the last one it mounted, and installing to any OTHER slot
+; unmounted a partition nobody was standing on while `[hd_isrcdrv]` went on
+; naming one that was still there. The copy then read the system files off a
+; hard-disk partition - on the machine that reported it, a data volume with
+; MOD files and no KERNEL.SYS in it at all. One click of Mount is the whole
+; difference between `Done` and `KERNEL.SYS`, on the same disk and the same
+; slot, which is what says the destination was never the question: what has
+; to be true is that the install is not standing on the drive it is about to
+; write.
 ; -----------------------------------------------------------------------------
 hd_iunmount_dst:
     push ax
-    mov al, [hd_isel]
+    push cx
+    xor cl, cl                  ; EVERY slot, because one partition of this
+.slot:                          ; drive being mounted is enough - it need not
+    mov al, cl                  ; be the one being installed to
     mov ah, [hd_idev]
     call hd_tw_unmount_slot     ; -> [hd_tdrop], [hd_tdropv]
     cmp byte [hd_tdrop], 0
-    je .out
+    je .next
     mov al, [hd_tdropv]
     cmp al, 0xFF
-    je .out
+    je .next
     cmp al, [hd_ivdrv]
     jne .src
     mov byte [hd_ivdrv], 0      ; nowhere to go back to: the system disk
     mov word [hd_ivcwd], 0
 .src:
     cmp al, [hd_isrcdrv]
-    jne .out
+    jne .next
     mov byte [hd_isrcdrv], 0    ; ...and nowhere to read the files from
-.out:
+.next:                          ; per SLOT, because [hd_tdropv] names the last
+    inc cl                      ; volume THIS call dropped and the next call
+    cmp cl, 4                   ; overwrites it
+    jb .slot
+    pop cx
     pop ax
     ret
 
@@ -2911,6 +3001,7 @@ hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone, hd_s_ilive
     HIMSG hd_s_ilboot, 'Boot from a floppy to replace it'
     HIMSG hd_s_inomem, 'Not enough memory to copy'
     HIMSG hd_s_inomb, 'Cannot read the partition table'
+    HIMSG hd_s_inosys, 'No system disk in A: - nothing done'
     HIMSG hd_s_ifmt, 'Could not format that partition'
     HIMSG hd_s_imnt, 'Formatted, but it would not mount'
     HIMSG hd_s_ierr, 'Disk error - the install stopped'
