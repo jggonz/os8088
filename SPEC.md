@@ -35830,15 +35830,31 @@ confirm.
 
 Three things decide it, and each answers a question nothing else can:
 
-- **How many floppy drives there are is `int 11h`'s answer**, bits 7:6 (the
-  count less one), and the kernel's volume table is no help at all: A: and
-  B: are unconditional rows in `dsk_vtab`, because on a one-drive PC the
-  BIOS aliases unit 1 onto the same physical drive and DOS asks for the
-  swap. Reading the volume table would say "two drives" on every machine
-  there is.
-- **Which drive to look in is the OTHER one** — `[hd_ivdrv] XOR 1`, and only
-  when the drive stage 1 read was a floppy at all. A hard-disk source makes
-  "the other one" meaningless, so that case asks.
+- **Whether B: is a drive at all is `int 11h`'s answer**, bits 7:6 (the
+  count less one), and the kernel's volume table is no help at *that*
+  question: rows 0 and 1 are live on every machine, because `[disk_drive]`
+  may still name one and a mount of an absent drive is an ordinary failed
+  mount — §18.98's `.zloop` takes the ZONE away and keeps the row. So B:
+  answers `VK_REMOVABLE` on a one-drive PC exactly as it does on a two-drive
+  one, where the BIOS aliases unit 1 onto the same physical drive: a probe
+  there reads the disk that is in A: and answers a question nobody asked.
+  **Units 2 and 3 need no such test** — §18.98 only *makes* those rows when
+  the machine claims the drives, so the row existing is already the answer.
+- **Which drives to look in is every REMOVABLE volume, lowest index first.**
+  `OSAPI_VOL_KIND` (§18.7.2) is what says which those are, so the
+  destination partition, any other hard disk and a redirected network volume
+  (§62.9) are excluded by their KIND rather than by their index — which is
+  what makes this right on a machine whose floppies are lettered A:, B:, D:
+  and E: (§18.98). The one it skips is the drive **stage 1 read the system
+  disk from** (`[hd_isrcdrv]`, which §52.10.5.1 had to make honest first),
+  and skipping it decides nothing: that disk has `KERNEL.SYS` on it and the
+  test below would refuse it anyway, so what the skip buys is one mount.
+
+  It was `[hd_ivdrv] XOR 1`, and that expression was wrong twice. It asked
+  about the drive the user had last been **browsing** rather than the drive
+  the install had just read, so a user with a Disk window open on the drive
+  holding the apps disk was asked to swap in a disk that was already in the
+  machine — and "the other one" has no meaning at all past two drives.
 - **What makes a disk the apps disk takes THREE tests, and two of them are
   not enough.** An `APPS` folder in the root was the first answer and it has
   a short life, because the system disk is going to carry one too. Adding
@@ -35876,6 +35892,71 @@ The source drive is its own byte. `[hd_isrcdrv]` is what `hd_isrc` and
 on; `hd_ivol_bank` sets both and the auto-detected drive overrides only the
 first. One word for both would have ended the install with the user standing
 on a drive they were never on.
+
+#### 52.10.5.1 CLOSED: the second stage copied from wherever the user stood
+
+**A 5150 with an internal 360KB drive and an external 720KB one installed its
+system disk perfectly, was correctly told the disk in B: was not the apps
+disk, was asked to swap — and then read B: anyway and reported `Done`.**
+Nothing had been copied and nothing said so.
+
+The probe above is **stage 1's**, and there was no stage 2 probe at all.
+`hd_inst_apps` takes its source from `hd_ivol_bank`, which is *the volume the
+user was standing on* (§51.5.2's bank) — on that machine B:, because the
+blank disk in the external drive had been looked at before the install was
+started. So the prompt asked for a disk, the user put it in A:, and the copy
+read the drive the answer had nothing to do with. A walk of an empty root
+copies no files and fails at nothing, which is why the dialog then said the
+install was finished.
+
+**The banked volume was never a statement about where the apps disk is.** It
+is where the user was *browsing*, and stage 1 already had to correct for
+exactly that: §52.10.8.1's `hd_isrc_ck` tests the banked drive for
+`KERNEL.SYS` and falls back to A: when it is not the system disk. The
+correction was simply never made a second time — and the swap prompt is the
+one moment in the whole install when the machine's disks are *guaranteed* to
+have changed since anything last looked at them.
+
+So the retry asks the same question stage 1's probe asks. `hd_iapps_scan` is
+that probe with the drive lifted out of it: `hd_iapps_at` tests one volume,
+`hd_iapps_cand` says which are worth testing, and the scan walks them
+**lowest index first, skipping nothing** — A: before B: before §18.98's
+external pair. Skipping nothing is the point: the drive the pre-swap probe
+ruled out held a system disk a moment ago and holds the apps disk now.
+Ordering by index is not arbitrary either — the prompt says to insert the
+apps disk, and the drive the user takes the system disk *out of* is the one
+they put it back into.
+
+**A total miss still copies from the banked volume, and that is deliberate.**
+The three tests define *our* apps disk, and a hand-made floppy carrying only
+`GAMES`, or packages loose in its root, fails all three while being precisely
+what the user meant to copy. Turning a miss into a refusal would trade a
+silent wrong disk for a refused right one; the scan may only ever **improve**
+the guess. What is left unfixed by that choice is narrower than what it
+protects: a machine with no apps disk in it anywhere still copies whatever is
+in the banked drive and still reports `Done`.
+
+**And skipping the source drive turned out to rest on a byte that was being
+put back underneath it.** `hd_ivol_bank` sets `[hd_ivdrv]` *and*
+`[hd_isrcdrv]`, which is right for a phase starting up and wrong for a
+routine merely standing somewhere for a moment — and `hd_iksecs` is the
+second kind: it runs from `hd_inst_vbr` at the **end** of the system phase,
+banks, goes to the destination to read `KERNEL.SYS`'s size and comes back.
+So it quietly rewrote `[hd_isrcdrv]` with the user's volume, throwing away
+§52.10.8.1's A: fallback *after* the copy that fallback was for had already
+happened. Invisible for as long as nothing read that byte afterwards; the
+probe reads it, and the first build of this section skipped the wrong drive
+on exactly the machine the section is about. `hd_ivol_bankv` is the volume
+half on its own, and the pair now says which statement each caller is making.
+
+**Restoring once rather than per candidate is what keeps it affordable.**
+`hd_iapps_at` leaves the volume on the drive it looked at and the scan calls
+`hd_ivol_back` on every path out, so a candidate that answers no costs one
+mount instead of two — and both of its own `goto`s are quiet (§19.2.2),
+because nothing in this module ever *shows* a folder and `OSAPI_FILE_FIND`
+walks raw directory sectors. The full restore at the boundary is what pays
+the `[dsk_lstale]` debt they leave, which is `hd_isrc`'s rule exactly:
+quiet inside the loop, full at the edge.
 
 ### 52.10.6 Restart, and a dialog that stops flashing
 
