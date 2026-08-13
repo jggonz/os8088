@@ -2869,6 +2869,11 @@ and there is no call site that can compensate.
 
 ### 7.1.4.2 The test is the REGION, and the frame answered a different question
 
+> **THIS IS OFF BY DEFAULT — `make CURFIX=1` turns it on, together with
+> §7.1.4.3.** A plain build does what this section says the frame test did,
+> and everything below describes the *knob*, not the shipped kernel. §7.1.4.4
+> is why, and is the section to read first.
+
 `cur_lazyck` tested the window's **frame** rect, and §7.1.4 above records the
 reasoning: the region is the content minus what covers it, so outside the frame
 is outside every fragment, and one rect test is far cheaper than sixteen. Both
@@ -2939,7 +2944,7 @@ permanently smeared cursor. Four readings, each on CGA, Hercules and VGA mode
 | the fix | pointer over the panel, inside the TM's frame: the arrow's cell changes in **0 of 90** consecutive displayed frames |
 | positive control | pointer over the EXPOSED Task Manager, inside its region: **4–7 of 90**, worst 42 px — the overlap branch still fires, so the walk is not answering "clear" to everything |
 | arrow integrity | Bounce drawing behind the panel, 1,000–1,600 px of it, sampled 20 times across ~10 s: the arrow's own cell **0 px** changed, and the cell it vacates **0 px** after |
-| byte identity | against `make CURFRAME=1`, the same scripted session: **0 differing pixels** outside the arrow and the two areas that are live on *both* builds |
+| byte identity | against a default (frame-test) build, the same scripted session: **0 differing pixels** outside the arrow and the two areas that are live on *both* builds |
 
 Two things about that last row. The live areas are the menu bar's clock and
 the exposed Task Manager's own cycle counts, and they are named by *measuring*
@@ -2962,6 +2967,9 @@ it measures a cell the cursor was never in and passes by measuring nothing.
 Cost: `.text` **+17 bytes**, no rung crossed, `KERN_BUDGET` untouched.
 
 ### 7.1.4.3 A MOVING pointer wants the hide; only a still one wants the arrow
+
+> **OFF BY DEFAULT with §7.1.4.2, behind the same `CURFIX=1`** — the two are
+> one behaviour and neither is worth building without the other. §7.1.4.4.
 
 §7.1.4.2 shipped and was reported back as **"the cursor freezes and jerks as
 it moves with the Task Manager open"** — from the field, and it is real.
@@ -3019,6 +3027,48 @@ needs a moving-pointer reading and a still-pointer reading, and they are
 different measurements*: `tools/` has the flicker one; the motion one is a
 sweep with `[gfx_lock_flag]` and `[cur_lazy]` sampled below frame resolution,
 because the question is what share of locked time the arrow is on the glass.
+
+### 7.1.4.4 Both are behind `CURFIX=1`, and the default is the old behaviour
+
+**§7.1.4.2 and §7.1.4.3 are OFF unless `make CURFIX=1` asks for them.** A
+plain build is `cur_lazyck` testing the window's frame, with no movement stamp
+in `mou_isr` and no `[cur_mvt]` at all — the behaviour that shipped for years.
+
+**Why, when both measure better.** On a cycle-accurate 5150 the parked blink
+goes from 83 frames in 90 to **0**, and the moving pointer is left exactly
+where the frame test had it (0 holds with the arrow lit throughout, either
+way). Against that, the reports coming back from the iron are that it may
+still not be an improvement. Those are not in conflict: **every instrument
+here reads the arrow's pixels and the gfx lock, and none of them reads how
+motion looks to a person.** A stop-start pointer, a blink, and a pointer that
+lags and catches up are three things the same numbers can describe, and only
+the machine in the room can rank them. When the measurement and the eye
+disagree about a thing that exists to be looked at, the eye is the
+instrument — so the code stays, the default does not.
+
+**It is ONE knob for two sections on purpose.** §7.1.4.3 exists only because
+§7.1.4.2 changed which pointers stay lit; building either alone produces a
+state nobody has ever asked for and nobody should be asked to judge — the
+region test without the gate is the reported stutter, and the gate without
+the region test is a stamp with no reader.
+
+**The knob's polarity was INVERTED rather than the code being reverted**, and
+that inversion is verified byte-exact in both directions at one commit: a
+plain `make` reproduces the old `CURFRAME=1` kernel exactly, and
+`make CURFIX=1` reproduces the old default exactly. So nothing about the two
+changes moved; only which one you get for free.
+
+**How to compare them, since that is what this is for.** `make combo` and
+`make combo CURFIX=1` are two 360KB field disks differing in the kernel alone;
+give each a marker file in its root so the machine can say which is in the
+drive, because both carry the same commit and therefore the same build number
+in the About box. And read §7.1.4.3's last paragraph before adding a
+measurement: a cursor change needs a **moving** reading and a **still**
+reading, and they are different instruments.
+
+Revisit after the next upstream squash (docs/UPSTREAM.md): the branch is
+disposable at that boundary, so this is the natural point to either take the
+pair or drop it.
 
 ### 7.1.5 The hide must be spent ABOVE the `[vid_mono]` dispatch
 
@@ -5583,6 +5633,54 @@ for the same reason, and it is not worth it either.
 **What WOULD flip this**: a UI with small windows floating over large ones —
 a palette, a tool window, an inspector — where the transitive case is the
 common one rather than the absent one. os8088 has none today.
+
+#### 11.91.4 …and a window that draws nothing still owes its DROP SHADOW
+
+§11.91.1 and §11.91.2 are each correct alone and their premises contradict.
+The dither subtracts every visible window's **frame** and deliberately not its
+occupied box, because the box holds two corners — `(x+w, y)` and `(x, y+h)` —
+that the shadow's **L** never covers, and claiming those leaves a stale pixel
+(§11.91.1's own measurement: one differing pixel, at a restored window's
+top-right shadow corner). So the shadow *is* dithered over, and what puts it
+back is the window's own redraw. §11.91.2 then stopped redrawing a window
+whose ground was never uncovered — and its soundness note says, in as many
+words, "`wm_dmg_gray` subtracts every visible window (§11.91.1), so the dither
+never reaches inside one". It reaches the shadow.
+
+The result is a **1px black line eaten out of a window nobody touched**, along
+whichever of its right or bottom edges the damage rect swept across, and it
+survives until something forces a full repaint. Reported from the field as
+corruption while dragging a window on Hercules; reproduced on all three
+adapters (102 differing pixels against a forced `wm_paint_all`, on a single
+row, on Hercules, CGA and VGA mode 12h alike).
+
+**A window exempted by §11.91.2 owes its shadow and nothing else.**
+`wm_dmg_shadowed` asks whether the damage reaches the L — the column `x+w` or
+the row `y+h`, two compares against a rect the caller has already proved
+overlaps — and `wm_dmg_shad` records it, a second bitmask beside
+`wm_dmg_mask`. The draw loop then puts back **two drawing calls** where the
+alternative was a full repaint, which is what keeps §11.91.2's win.
+
+Four things are load-bearing.
+
+- **It is `wm_dmg_shad`, not `wm_dmg_mask`.** Marking the window instead is
+  correct and is §11.91.2 undone: the case that reaches this test is exactly
+  the case that optimisation exists for.
+- **The repair runs in the same back-to-front loop**, at that window's own
+  place in the z-order, so a marked window above still draws over it. A pass
+  of its own would land the shadow on the wrong side of a lower window.
+- **It is clipped by `wm_chrome_clip`**, exactly as `wm_draw_win` confines its
+  own chrome (§11.97). A window above may be sitting on the shadow, and an
+  unmarked one will not redraw over us — and those pixels were never dithered
+  either, because the dither subtracted *that* window's frame.
+- **Fullscreen draws no shadow** (§11.2), and `wm_win_rect` has already shrunk
+  the rect to say so, so the test refuses it rather than reading the frame's
+  own edge as an L.
+
+`wm_draw_shadow` is that L lifted out of `wm_draw_win` unchanged, keeping its
+§11.95.2 case (a window flush against the screen's left edge has no left
+border for the shadow to sit under, so the bottom edge starts at `x`, not
+`x+1`). Cost: `.text` +94 bytes, no rung crossed, footprint unchanged.
 
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
@@ -15666,31 +15764,34 @@ Behaviour:
 `fm_kinit` stores it into `W_MENUS`, so the bar carries the file manager's
 menus exactly while one of its windows is active and Locator's desktop
 menus otherwise. Four menus, and the layout is pinned because
-`menu_relayout` drops any cell that would reach `[vid_clk_hx]` (§39.2 — 434
-on either 640-wide adapter and more on Hercules, so 434 is the binding case):
-`'Locator'` is 56px so the first cell starts at 38+56+16 = **110**, and
-cells are `font_width + MENU_TITLE_PAD`:
+`menu_relayout` drops any cell that would reach `[vid_clk_hx]` (§39.2 — **432**
+on either 640-wide adapter and more on Hercules, so 432 is the binding case;
+§12.9 floors it to a glyph-cell boundary, which is why it is not the 434 the
+arithmetic gives). `'Locator'` is 56px so the first cell starts at
+38+56+16 = 110, snapped up to **112**, and cells are
+`font_width + MENU_TITLE_PAD`:
 
 | menu | width | x range | items |
 |------|-------|---------|-------|
 | **File** | 48 | 112..159 | Open · New Folder… · Rename… · Delete · ──── · Format Disk… |
 | **Edit** | 48 | 160..207 | Cut · Copy · Paste |
-| **Folder** | 64 | 208..271 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
-| **View** | 48 | 272..319 | as List · as Icons |
-| **Builtins** | 80 | 320..399 | Timer · Bounce · Disk |
+| **Nav** | 40 | 208..247 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **Builtins** | 80 | 248..327 | Timer · Bounce · Disk |
 
-399 against a 432 limit is 33px of slack — enough that a longer item
+327 against a 432 limit is 105px of slack — enough that a longer item
 string can never push a *title* off the bar, since item widths do not enter
-the layout at all. `MENU_APPMAX` is 5 and all five are used; it was 4 and
-File carried Cut/Copy/Paste as well, until §22.12 needed a sixth item and a
-seven-item File menu stopped being a menu and started being a list.
+the layout at all. `MENU_APPMAX` is 5 and **four** are used, which is
+§22.15: there were five, and a `View` cell holding `as List` · `as Icons`
+was retired to the context menu and the in-window toggle button that already
+carried both. It was 4 before that too, File carrying Cut/Copy/Paste as
+well, until §22.12 needed a sixth item there and a seven-item File menu
+stopped being a menu and started being a list.
 
-The slack is 33px rather than 108 because §12.9 snapped the bar to 8px cells
-and widened `MENU_TITLE_PAD`, and because a fifth title costs its own width
-plus that padding. It is still slack in the direction that matters: nothing
-here is measured against the number of menus, only against where the next
-cell's right edge lands, so the fifth title is laid out or it is not and no
-other cell is affected either way.
+Nothing here is measured against the number of menus, only against where the
+next cell's right edge lands, so a title is laid out or it is not and no
+other cell is affected either way — which is why §12.9 could snap the bar to
+8px cells and widen `MENU_TITLE_PAD`, and why §22.15 could take a cell out,
+without either re-measuring anything but this table.
 
 **Dispatch.** `fm_oncmd` turns (menu, item) into one `FMC_*` id —
 `bl = fm_menu_base[ah] + al`, bounds-checked, then `shl bx,1` and
@@ -15713,7 +15814,7 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Refresh / Drive A: / Drive B: | inline `disk_mount`, exactly as the button and the a/b/r keys already do |
 | Up One Folder / Root Folder | inline: `fmv_sync`, then `dsk_dotdot` + `fmv_load` / `fmv_load` AX=0 |
 | New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
-| as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL` |
+| as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL`. Not on the bar since §22.15 — the context menu and the in-window button reach them |
 | Timer / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
 | Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
 | Restart | **deferred** — `ui_post_cmd` CMD_REBOOT; `ui_cmd` takes the lock and never gives it back |
@@ -16697,6 +16798,64 @@ arithmetic (`wm_su_edge` computes its row count and stride from the rect
 rather than reading back what `vga_rect_setup` clipped), but it is written
 down because it is why the first measurement of this said the cache was dead
 for Note Pad too.
+
+### 22.15 The bar is four cells — View retired, `Folder` renamed to `Nav`
+
+Two changes to `fm_menus`' cell list and nothing else. **The `View` cell is
+gone** and **`Folder` is `Nav`**, so the bar reads **File · Edit · Nav ·
+Builtins** and the layout in §22's table above is the live one.
+
+**`as List` and `as Icons` did not go with the cell.** They are still
+`FMC_LIST` and `FMC_ICONS`, still in `fm_jmp`, and still reached from two
+surfaces: the context menu's `fm_ctx_dir` descriptor (§12.4) and the
+in-window toggle button, whose label is the view a click switches *to*. The
+button is what makes the retirement safe on a **one-button machine**, which
+queues no `EVT_RDOWN` at all — the same argument §22's context-menu section
+already makes for why that button stays. A two-item menu whose whole content
+is duplicated by a button in the window it acts on is a cell spent on
+nothing.
+
+**Nothing renumbers**, and the reason is worth stating because it is not
+§12.7's. `fm_oncmd` builds an id as `fm_menu_base[menu] + item`, so retiring
+a cell removes one **entry** from `fm_menu_base` — the remaining entries are
+`FMC_*` *values*, not positions, so `FMC_TIMER` stays 18 while its menu index
+falls from 4 to 3. `FMC_LIST`/`FMC_ICONS` simply stop being producible by
+that sum, exactly as `FMC_CLOSEW` did; the context menu names them and does
+not care.
+
+`AM_COUNT` goes 5 → 4 and `FM_NMENUS` with it — the two must agree, since
+`FM_NMENUS` is what bounds the `fm_menu_base` read and `menu_relayout` clamps
+the cell index to `AM_COUNT`. **`MENU_APPMAX` stays 5**: it is the bar's
+capacity and `menu_bar`'s size (§12.2), a ceiling every application shares
+rather than this set's count, and lowering it would narrow a published clamp
+to save 14 bytes of `.lowbss`.
+
+**Layout, on the binding 640-wide case** (`[vid_clk_hx]` = 432, §39.2):
+`'Locator'` still puts the first cell at 112, and cells are
+`font_width + MENU_TITLE_PAD`:
+
+| menu | width | x range | items |
+|------|-------|---------|-------|
+| **File** | 48 | 112..159 | Open · New Folder… · Rename… · Delete · ──── · Format Disk… |
+| **Edit** | 48 | 160..207 | Cut · Copy · Paste |
+| **Nav** | 40 | 208..247 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **Builtins** | 80 | 248..327 | Timer · Bounce · Disk |
+
+327 against 432 is **105px of slack**, up from 33 — a cell's width and a
+title's, which is the whole of what the two changes buy the bar. Item strings
+still do not enter that arithmetic.
+
+**`Nav` rather than `Folder` because the old word named two different
+things.** Three items in the *File* menu act on a folder — `New Folder…`,
+and `Rename…`/`Delete` on a folder row — while the `Folder` menu never acted
+on one: every item in it is somewhere to **go** (a drive, the root, the
+parent, a second window onto here). A user who reads `Folder` as "the folder
+commands" opens the wrong menu and finds seven items that are not it. The
+label changed; the item list did not, and neither did one command body.
+`fm_s_mfold`/`fm_items_fold` are `fm_s_mnav`/`fm_items_nav` to match, which
+is label hygiene and not a second change — `fm_ctx_fold` and `fm_cxi_fold`
+keep their names, because *those* really are about a folder under the
+pointer.
 
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
@@ -21470,7 +21629,7 @@ CPT_BX    equ 150   ; button column x         CPT_BW equ 28  ; button size
 CPT_BUY   equ 22    ; '+' button top          CPT_BH equ 18
 CPT_BDY   equ 44    ; '-' button top
 CPT_O0Y   equ 68    ; option row 0 glyph top  CPT_O1Y equ 84 ; option row 1
-CPT_CAP1Y equ 102   ; instruction caption     CPT_CAP2Y equ 112 ; RTC caption
+CPT_CAP2Y equ 112   ; RTC caption
 ```
 
 **Field table (binding).** Seven entries, `db x, w, y, 0` — stride 4, so
@@ -21510,9 +21669,8 @@ selected one — white on a black `gfx_fill` box inset 2px around the glyphs
 - `cp_time_paint` — heading, `cp_time_rows`, both buttons (`cp_timebtn`,
   a `gfx_frame` + white interior + centred `'+'`/`'-'` glyph), the two
   option rows (12×12 `os88ui_glyph` check at CP_PGX, label at
-  CP_PLX — the Sound page's checkbox idiom, §31.4), and two captions:
-  `'Click a field, then + or -'` at CPT_CAP1Y and, at CPT_CAP2Y,
-  the `cp_rtcnam` row for `[clk_tier]` — `'Hardware clock: none'`,
+  CP_PLX — the Sound page's checkbox idiom, §31.4), and one caption, at
+  CPT_CAP2Y: the `cp_rtcnam` row for `[clk_tier]` — `'Hardware clock: none'`,
   `'... AT 70h'`, `'... 58167 2C0h'`, `'... 5C01 2C0h'` or `'... BIOS'`,
   read live from `[clk_rtc]`/`[clk_tier]` (§37.90). The three-layer refusal
   idiom again, and it names the RUNG rather than answering yes/no because
@@ -27295,8 +27453,40 @@ to say nothing at all.
 Measured on a cycle-accurate 5150 with a Hercules card, double-clicking
 `MEDIA/OS8088.GIF`: frame **494x300 → 512x152**, canvas **466x258 → 466x110**,
 `[pt_wchg]` **1 → 0** — identical, now, to what the same file through
-`File ▸ Open` has always produced. A Paint launched with no document is
-byte-identical either way.
+`File ▸ Open` has always produced.
+
+#### 42.11.1 The `[pt_argp]` gate belongs to `pt_argload`, not to its caller
+
+§42.11 shipped saying *"a Paint launched with no document is byte-identical
+either way"*, and it was not: the move dropped the gate. The old call site, in
+`pt_paint`, was `cmp byte [pt_argp], 0` / `je` around the call; the new one, in
+the entry proc, is reached whenever `[pt_mode]` is `PT_M_LIVE` — which is the
+test for *can this machine fund a canvas*, not for *were we given a document*.
+So **every** Paint launch ran the launch-document load.
+
+With no document `pt_name` is the empty string a zeroed bss holds, and an empty
+name is precisely what `dskw_name83` refuses (`.stem_end`'s `jcxz .bad`), so
+`OSAPI_FILE_READ` answered `FERR_NAME` and `pt_ferr` toasted **`Bad file
+name`** — on an ordinary double-click of `PAINT.O88`, naming a file the user
+had not asked for and Paint had never held. The second symptom was quieter and
+worse: `pt_argclus`/`pt_argdrv` are 0 too, so the `OSAPI_FILE_GOTO` above the
+read is a navigation to **drive 0, cluster 0**, and launching Paint from `B:`
+silently moved the machine to `A:` root — §51.5.2's defect, from a new
+direction, and the reason the next `File ▸ Open` opened on the wrong volume.
+
+**The gate is inside `pt_argload` now, at the routine rather than at its
+callers**, which is §59.7's clamp for §59.7's reason: a precondition a call
+site holds is a precondition the next move can leave behind, and this one
+already has been. The routine already cleared `[pt_argp]` itself ("once,
+whatever happens below"), so testing it there costs one `cmp`/`jne` and makes
+the documented input a fact rather than a promise.
+
+Measured on a cycle-accurate 5150 with a CGA, double-clicking `B:\APPS\PAINT.O88`
+against a reference build with the gate removed: toast `Bad file name` → **none
+staged at all**, and `([disk_drive], [dsk_cwd])` **(1, 2) → (0, 0)** → **(1, 2),
+unmoved**. The document path is unchanged — `MEDIA/OS8088.GIF` still opens at
+466x110 and toasts `Opened` — and `File ▸ Open` now opens on `B:\MEDIA`, which
+is what §38.10 always specified.
 
 ### 42.12 Its text is already aligned, and the one pen that is not is forced
 

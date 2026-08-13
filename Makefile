@@ -287,28 +287,34 @@ ifneq ($(REDRAWFULL),)
 VIDDEF += -DREDRAWFULL
 endif
 
-# CURFRAME=1 puts cur_lazyck back on the window's FRAME rect, which is what it
-# tested before SPEC.md 7.1.4.2 - so the deferred cursor hide is spent whenever
-# the pointer is anywhere over the updating window's frame, rather than only
-# where the ARMED REGION can actually reach it. It is the A/B for the reported
-# flash: park the pointer over a window that is IN FRONT of an updating one and
-# the knob build blinks the arrow once per refresh where the shipped one does
-# not. The other half of what it is for is SAFETY - the frame is a strict
-# superset of the region, so the two builds must put the identical picture on
-# screen and only the number of times the arrow was drawn may differ:
+# CURFIX=1 turns ON the two cursor-hide changes, and they are OFF BY DEFAULT.
+# SPEC.md 7.1.4.2 makes cur_lazyck test the ARMED REGION rather than the
+# window's frame, so a pointer parked over a window IN FRONT of an updating
+# one stops blinking; 7.1.4.3 then hides it again while the hand is MOVING,
+# because a lit arrow that cannot move under the gfx lock reads as a stutter.
+# They are one knob because they are one behaviour and neither is worth
+# testing without the other.
 #
-#   make && cp build/os8088-360.img /tmp/rgn.img
-#   make CURFRAME=1 && cp build/os8088-360.img /tmp/ref.img
-#   ...drive the same script on each and diff the framebuffers.
+# THE DEFAULT IS OFF because the field has not settled. Both measure better
+# on a cycle-accurate 5150 - the parked blink goes from 83 frames in 90 to 0,
+# and the moving pointer is left exactly where it was - and the reports back
+# from real iron are that it may still not be an improvement. Instruments
+# here read the arrow's pixels and the gfx lock; they cannot read how motion
+# looks to a person, and on that question the machine in the room wins. So
+# the code stays, the default is the behaviour that shipped for years, and
+# this is revisited after the next upstream squash.
 #
-# Verified that way (SPEC.md 7.1.4.2): 0 differing pixels on CGA, Hercules and
-# VGA mode 12h, outside the arrow's own cell and the two areas that are live on
-# BOTH builds - the menu bar clock and the exposed Task Manager's cycle counts,
-# which differ between two runs of the SAME build and so set the floor the A/B
-# is read against. Inside the arrow's cell the two are SUPPOSED to differ: a
-# still frame of this build caught the pointer simply absent.
-ifneq ($(CURFRAME),)
-VIDDEF += -DCURFRAME
+#   make                -> the frame test, no motion gate (what ships)
+#   make CURFIX=1       -> both changes in
+#   make combo CURFIX=1 -> ...as a field disk, which is how they are compared
+#
+# It is in $(VIDSTAMP) and $(KNOBS) below, so changing it rebuilds the kernel
+# (39.14.6's trap: a knob outside the stamp drives the PREVIOUS build and the
+# A/B comes back null). Verified at the polarity flip: a plain `make` now
+# reproduces the opt-out kernel byte for byte and `make CURFIX=1` the old
+# default, so the inversion moved no code.
+ifneq ($(CURFIX),)
+VIDDEF += -DCURFIX
 endif
 
 # DRAGCACHE=0 removes SPEC.md 11.96.12's drag cache, so a window dragged by its
@@ -438,10 +444,10 @@ endif
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              DIRW1 INSTRO KEEPH FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
-                             CURFRAME \
+                             CURFIX \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFRAME),-cf$(CURFRAME))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
