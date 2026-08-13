@@ -74,17 +74,27 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty
 from os88mouse import Mouse
 import sucheck as su
+from os88geom import CUR_XHX, CUR_XHY
 
 MASK_Y = 18                     # the menu bar: clock + toast (SPEC.md 12.9/59)
 TITLE_H = 18
 
 
 def curbox(mo):
-    """The cell the mouse arrow may or may not be occupying, 16x16 at its
-    published position - CUR_GW/CUR_GH are 8x12 (SPEC.md 7.1) and this is
-    generous on purpose."""
+    """The cell the mouse pointer may or may not be occupying, at its published
+    position - CUR_GW/CUR_GH are 8x12 (SPEC.md 7.1) and 16x16 is generous on
+    purpose.
+
+    IT REACHES UP AND LEFT AS WELL, and that is not slack: a shape carries a
+    HOT SPOT and its cell starts at (pointer - hot), so the crosshair's cell
+    begins 3px left and 5px above mouse_x/mouse_y (SPEC.md 7.2.2). Anchored at
+    the published position this mask fits the ARROW alone, whose hot spot is
+    (0,0) - and over any window that names another shape it leaves a sliver of
+    pointer in the capture. Measured: 14 pixels of crosshair over a Disk
+    window's file row, reported as a redraw defect in a step where the two
+    kernels drew identically."""
     x, y, _ = mo.where()
-    return (x, y, x + 15, y + 15)
+    return (x - CUR_XHX, y - CUR_XHY, x + 15, y + 15)
 
 
 def shot(m, tag, out, log, mo=None):

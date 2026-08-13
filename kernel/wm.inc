@@ -88,6 +88,20 @@ WF_NOSNAP  equ 16               ; W_FLAGS bit4: this window OPTS OUT of having
                                 ; 1 and wm_destroy writes 0, so a fresh or
                                 ; reused record is snapped with nothing to
                                 ; set and no template word to carry
+WF_STALE   equ 256             ; W_FLAGS bit8: THE PIXELS ON THE GLASS NO LONGER
+                               ; DESCRIBE THIS WINDOW'S CONTENT (SPEC.md
+                               ; 11.96.16.1), so nothing may bank them until it
+                               ; has been drawn whole again. Kernel-internal and
+                               ; deliberately NOT published in apps/os88api.inc:
+                               ; a package cannot get into this state, because
+                               ; the only way in is the kernel replacing a
+                               ; window's data behind its back - fmv_store
+                               ; swapping a Disk window's listing for a folder
+                               ; that changed (SPEC.md 22.14). Set THERE and
+                               ; cleared in fm_repaint, the one place a Disk
+                               ; window is drawn from that listing - NOT in
+                               ; wm_draw_win, which every navigation bypasses;
+                               ; and read in ONE place, wm_su_take
 WF_KEEPH   equ 128             ; W_FLAGS bit7: this window's HEIGHT is not the
                                 ; kernel's to reduce (SPEC.md 11.93). wm_fit
                                 ; shortens a frame that will not fit the
@@ -1806,7 +1820,15 @@ wm_show:
     call wm_top                 ; BX = the OUTGOING front window (0 if none).
     mov bp, bx                  ; BEFORE the visible bit goes on: wm_create
     mov bx, di                  ; already appended us to wm_zord, so once we
-    or word [bx+W_FLAGS], 2     ; are visible wm_top answers with US
+    test word [bx+W_FLAGS], 2   ; are visible wm_top answers with US
+    jnz .onglass                ; ...and for the same reason this is the last
+    call wm_su_precover         ; moment the windows we are about to land on
+.onglass:                       ; can be banked (SPEC.md 11.96.16). A window
+                                ; ALREADY on the glass is skipped: what it
+                                ; covers is covered by IT, so a bank there
+                                ; would store this window's own pixels as
+                                ; somebody else's content
+    or word [bx+W_FLAGS], 2
     mov al, 1                   ; a newly visible window has no pixels on
     call wm_raise               ; screen: it is drawn WHOLE
     pop di
@@ -3789,6 +3811,54 @@ wm_geom:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_win_over - does window DI, drop shadow included, land on window BX?
+; in:  DI = the covering window, BX = the covered one (neither is tested for
+;      visibility: both callers have their own reason to ask)
+; out: CF = 0 = the two rects overlap; CF = 1 = they do not
+; clobbers: nothing else (flags)
+;
+; DI's rect is (x, y, w+1, h+1) - the drop shadow is on row y+h and column
+; x+w, so "not overlapping" really means none of its pixels sit over ours.
+;
+; Lifted out of wm_obscured whole, because wm_su_precover (SPEC.md 11.96.16)
+; asks the same question about a window that is not in the z-order's answer
+; yet: it is the ONE window whose pixels are not on the glass, which is why
+; the pass runs before its visible bit goes on. Two copies of this arithmetic
+; would be two opinions about what "covers" means, and the shadow is exactly
+; the sort of detail one of them would lose.
+; -----------------------------------------------------------------------------
+wm_win_over:
+    push ax
+    push dx
+    mov ax, [di+W_X]            ; above.x <= our right edge?
+    mov dx, [bx+W_X]
+    add dx, [bx+W_W]
+    cmp ax, dx
+    jge .no
+    mov ax, [di+W_X]            ; above right edge + shadow >= our left?
+    add ax, [di+W_W]
+    cmp ax, [bx+W_X]
+    jl .no
+    mov ax, [di+W_Y]            ; above.y <= our bottom edge?
+    mov dx, [bx+W_Y]
+    add dx, [bx+W_H]
+    cmp ax, dx
+    jge .no
+    mov ax, [di+W_Y]            ; above bottom edge + shadow >= our top?
+    add ax, [di+W_H]
+    cmp ax, [bx+W_Y]
+    jl .no
+    pop dx                      ; a pop touches no flag, so the clc/stc below
+    pop ax                      ; is what the caller reads
+    clc
+    ret
+.no:
+    pop dx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_obscured - is anything covering this window? (SPEC.md 11.3.1)
 ; in:  BX = window ptr
 ; out: CF = 1 if BX is not visible at all, or a visible window later in
@@ -3848,24 +3918,8 @@ wm_obscured:
     pop bx
     test word [di+W_FLAGS], 2
     jz .scan
-    mov ax, [di+W_X]            ; above.x <= our right edge?
-    mov dx, [bx+W_X]
-    add dx, [bx+W_W]
-    cmp ax, dx
-    jge .scan
-    mov ax, [di+W_X]            ; above right edge + shadow >= our left?
-    add ax, [di+W_W]
-    cmp ax, [bx+W_X]
-    jl .scan
-    mov ax, [di+W_Y]            ; above.y <= our bottom edge?
-    mov dx, [bx+W_Y]
-    add dx, [bx+W_H]
-    cmp ax, dx
-    jge .scan
-    mov ax, [di+W_Y]            ; above bottom edge + shadow >= our top?
-    add ax, [di+W_H]
-    cmp ax, [bx+W_Y]
-    jl .scan
+    call wm_win_over            ; does DI land on BX? (SPEC.md 11.96.16)
+    jc .scan
     stc                         ; overlap: we are obscured
     jmp .out
 .clear:
@@ -6614,6 +6668,24 @@ wm_su_drop:
     popf
     ret
 
+; wm_su_stale - forget window BX's cache, and refuse to take another until it
+;               has been drawn whole (SPEC.md 11.96.16.1)
+; preserves every register and the flags
+;
+; wm_su_drop was the whole of what fmv_store did, and "no cache" used to be
+; indistinguishable from "please take one" because nothing but wm_draw_win
+; ever took one - so the drop and the redraw could not get out of step. The
+; moment a window can be banked from anywhere else (wm_su_precover), the
+; difference matters: fmv_bcast replaces a SIBLING window's listing and
+; deliberately does not repaint it, so its pixels are the folder as it was,
+; and a cache taken from them is docs/FIELD-NOTES.md 4's stale listing with a
+; new way in. The flag is that difference, said out loud.
+wm_su_stale:
+    pushf                       ; `or` writes flags and wm_su_drop banks its
+    or word [bx+W_FLAGS], WF_STALE  ; OWN caller's, which would be these - so
+    popf                        ; the restore has to happen on this side of it
+    jmp wm_su_drop
+
 ; wm_su_ck - CF=0 if the cache describes window DI as it is right now, and
 ;            then AX = the claim's segment and wm_su_x1..y2 hold the rect it
 ;            was taken over. AX is scratch on CF=1.
@@ -6822,6 +6894,15 @@ wm_su_take:
     call wm_dc_ok
     jc .out                     ; it made no promise, so its pixels may be
                                 ; stale by the time it is raised (11.96.1)
+    test word [di+W_FLAGS], WF_STALE
+    jnz .out                    ; ...and the kernel has replaced its data
+                                ; without redrawing it, so the pixels are a
+                                ; picture of a folder that has moved on
+                                ; (SPEC.md 11.96.16.1). Tested HERE and in no
+                                ; other place, so every taker inherits it -
+                                ; wm_su_bank's is free, wm_draw_win having
+                                ; cleared the bit a moment earlier on exactly
+                                ; the draws that earn it
     test word [di+W_FLAGS], 2   ; not visible: there are no pixels to bank
     jz .out
     test word [di+W_FLAGS], WF_FULL
@@ -7748,6 +7829,99 @@ wm_su_bank:
 .out:
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_su_precover - bank what a window ABOUT TO APPEAR is going to cover
+; in:  DI = the incoming window. Its rect is final, its visible bit is still
+;      CLEAR and it has no pixels on the glass; caller holds the gfx lock
+; out: nothing (all registers preserved)
+;
+; SPEC.md 11.96.16. wm_su_bank (11.96.4) takes a cache at the one place every
+; window is DRAWN, which covers every window that has been drawn since it
+; last lost its cache - and a window whose cache was dropped and which nobody
+; has drawn since has none at all. wm_clip_set drops one on every background
+; painter's frame (11.96) and fmv_store on every re-list (22.14), so that
+; state is ordinary rather than exotic; what makes it expensive is a NEW
+; window landing on such a window, because from that moment its content is
+; somebody else's pixels and there is no longer anything to bank.
+;
+; wm_raise already banks ONE window for this reason - the outgoing front,
+; which by definition has no cache (11.96.4 drops the front window's) - and
+; that is the whole of what the case was ever given. Everything below it in
+; the z-order got nothing.
+;
+; So the question is asked of every window the incoming rect lands on, and
+; the moment is the last one at which it can be asked: BEFORE the visible bit
+; goes on. That is not tidiness. wm_obscured is the test for "is any of this
+; window's content already somebody else's pixels", 11.96.7's hazard, and the
+; incoming window is in wm_zord from wm_create - so once it is visible it is
+; the answer to that question about every window underneath it, and the pass
+; would refuse them all. Running first is what makes the one window whose
+; pixels are NOT on the glass invisible to the test.
+;
+; Two windows are skipped for reasons of their own. OURSELVES, and the
+; frontmost window, which wm_raise banks itself a few instructions later -
+; and must, because wm_draw_title and wm_grow_erase change its pixels first
+; (11.1.1) and a cache taken here would hold a grow box it is about to lose.
+; Re-taking it there is a drop and a ~10 ms blit for a picture we would have
+; had to throw away anyway.
+; -----------------------------------------------------------------------------
+wm_su_precover:
+%ifndef REDRAWFULL
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    call wm_top                 ; BP = the frontmost visible window, or 0
+    mov bp, bx
+    mov si, wm_zord
+    mov cl, [wm_zn]
+    xor ch, ch
+    jcxz .out
+.scan:
+    mov al, [si]
+    inc si
+    push cx
+    push si
+    call wm_idx2ptr             ; BX = the record this z-order slot names
+    cmp bx, di
+    je .next                    ; ourselves: we are what is doing the covering
+    cmp bx, bp
+    je .next                    ; wm_raise's own, above
+    test word [bx+W_FLAGS], 2
+    jz .next                    ; hidden: no pixels on the glass to bank
+    test word [bx+W_FLAGS], WF_SAVEU
+    jz .next                    ; made no promise - wm_su_take would refuse,
+                                ; and asking here keeps the walk cheap on a
+                                ; desktop full of windows that cannot use one
+    call wm_win_over            ; DI = us: do we land on it at all? A window
+    jc .next                    ; we do not touch keeps whatever it has and
+                                ; owes us no blit
+    call wm_obscured            ; ...and is its content still its own? (11.96.7)
+    jc .next                    ; Something already drawn over it would be
+                                ; banked as this window's content
+    push di
+    mov di, bx
+    call wm_su_ck               ; a cache it already has is still exactly right
+    jnc .have                   ; - nothing has drawn since - so re-taking it
+    call wm_su_take             ; is a blit for a picture we hold already
+.have:
+    pop di
+.next:
+    pop si
+    pop cx
+    loop .scan
+.out:
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+%endif
     ret
 
 ; -----------------------------------------------------------------------------

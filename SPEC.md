@@ -8123,6 +8123,115 @@ claim's header equal the window's content rect exactly — so a shrunken rect
 disagrees with its own cache. It is a real piece of work and it is not this
 one.
 
+#### 11.96.16 A window ABOUT to appear banks what it is about to cover
+
+§11.96.4 takes the cache at the one place every window is **drawn**, which
+covers every window drawn since it last lost one — and says nothing about a
+window that lost its cache and which nothing has drawn since. That state is
+ordinary rather than exotic: `wm_clip_set` drops one on every background
+painter's frame (§11.96) and `fmv_store` on every re-list (§22.14). What makes
+it expensive is a **new window landing on such a window**, because from that
+moment its content is somebody else's pixels and there is no longer anything
+to bank a cache from — so it repaints in full on every interaction until
+something raises over it, which is §11.96.9.1's shape one layer up.
+
+`wm_raise` already banks exactly **one** window for this reason — the
+outgoing front, which by definition has no cache because §11.96.4 drops the
+front window's. Everything below it in the z-order got nothing, and that is
+the reported case: *open the file manager, launch Minesweeper out of it, and
+any action that affects a window under the newcomer redraws it whole.*
+
+So `wm_su_precover` asks the question of **every window the incoming rect
+lands on**, from `wm_show`, and the four gates are each somebody else's rule:
+`WF_SAVEU` (§11.96.1's promise — asked here as well as inside `wm_su_take`, to
+keep the walk cheap on a desktop full of windows that cannot use one),
+`wm_win_over` (does the newcomer touch it at all — a window it misses owes no
+blit), `wm_obscured` (§11.96.7's hazard: content that is already somebody
+else's pixels cannot be banked) and `wm_su_ck` (a cache it already holds is
+still exactly right, because nothing has drawn since, so re-taking it is
+~10 ms of blit for a picture we have).
+
+**The moment is the whole design and it is not tidiness.** The pass runs
+*before* `wm_show` sets the visible bit, because `wm_create` put the incoming
+window in `wm_zord` at creation — so the instant it is visible it becomes
+`wm_obscured`'s answer about every window underneath it and the pass would
+refuse them all. Running first is what leaves the one window whose pixels are
+**not** on the glass out of the test that asks which pixels are on the glass.
+It follows that a `wm_show` on a window that is **already visible** skips the
+pass entirely: what it covers is covered by *it*, so a bank there would store
+the incoming window's own pixels as somebody else's content.
+
+Two windows are skipped by name. Ourselves, and `wm_top` — which `wm_raise`
+banks a few instructions later and **must**, because `wm_draw_title` and
+`wm_grow_erase` change its pixels first (§11.1.1): a cache taken here would
+hold a grow box the window is about to lose, and re-taking it there is a drop
+plus a blit for a picture that had to be thrown away. `wm_front` gets no such
+pass at all, for the already-visible reason above.
+
+`wm_win_over` is `wm_obscured`'s own overlap arithmetic lifted out whole
+rather than copied — drop shadow included, so *not overlapping* means none of
+the incoming window's pixels sit over ours. Two copies would be two opinions
+about what "covers" means, and the shadow is exactly the detail one of them
+would lose.
+
+**Measured, it fires rarely, and the reason is worth knowing before anyone
+reaches for it to explain a slow redraw.** A/B'd on a cycle-accurate
+5150/CGA by poking `0xC3` at its entry in the running guest and comparing
+`wm_su_segs` after every step, three sessions — two Disk windows plus a
+package launched over them; a third window; and Paint's large claim shedding
+the purgeable caches (§50.6) — came back **byte-identical with the pass
+stubbed out**. §11.96.4 is simply thorough: every window a newcomer can land
+on has normally been *drawn* since it last lost a cache, so `wm_su_bank`
+already gave it one, and the poster is §22.17's.
+
+What is left is exactly the set of windows that lost a cache and were **not**
+redrawn through `wm_draw_win` afterwards, and there is one live producer of
+it: a `WF_SAVEU` window with a background painter. Note Pad is the only one
+in the tree — its worker's four drawers ask `OSAPI_WM_OBSCURED` and then
+redraw through `wm_clip_set`, which drops the cache (§11.96) while leaving
+the pixels current, and no `wm_su_bank` follows because no `wm_draw_win` ran.
+Backgrounded, unobscured and freshly settled, that window is cacheless with a
+correct picture on the glass, and a program opening over it is the case this
+pass exists for. So it is kept — but the pass and §11.96.16.1's guard together
+are **`.text` +127**, no rung crossed and the footprint unchanged, for a narrow
+case; if the footprint ever needs those bytes back this is a candidate, ahead
+of anything the measurements show firing.
+
+#### 11.96.16.1 …and "no cache" is not the same as "please take one"
+
+The pass is only safe if a window with no cache has pixels that *describe its
+content*, and one shape in the tree breaks that: `fmv_bcast` replaces a
+**sibling** Disk window's listing and deliberately does not repaint it — its
+own comment says so, *"nothing redraws it, so its pixels are still the folder
+as it was"* — leaving it visible, unobscured, not front and cacheless, with a
+picture of a folder that has moved on. Every gate above passes it. Banking it
+would put a stale listing back on a later damage restore, which is
+docs/FIELD-NOTES.md 4 with a new way in, and it would be a *regression*: today
+that window has no cache, so any repaint draws it from the listing it now has.
+
+`WF_STALE` (bit 8, kernel-internal and not in the SDK) is that difference said
+out loud, and its two ends are the two routines §22 already names. `fmv_store`
+— the single place a window's listing is replaced (§22.14) — calls
+**`wm_su_stale`** rather than `wm_su_drop`; **`fm_repaint`** — the single place
+a Disk window is drawn from that listing — clears it. It is tested in exactly
+one place, `wm_su_take`, so every taker inherits it and `wm_su_bank`'s test is
+free.
+
+**The clear does NOT belong in `wm_draw_win`, and putting it there cost a
+round.** That reads as the general home for "this window has been drawn
+whole", and it is not one: every *navigation* calls `fm_repaint` directly, so
+the bit survived into the next listing and a Disk window went permanently
+stale and permanently uncached — the bug this section exists to prevent,
+wearing the fix's clothes, and caught by the gate's own first check reading
+`wm_su_segs = 0000` again. The three cheap painters (`fm_rows_only`,
+`fm_scrollpaint`, `fm_status_only`) deliberately do not clear it: a strip made
+current says nothing about the rest.
+
+**A package cannot reach this state**, which is why the bit is not published:
+the only way in is the kernel replacing a window's data behind the
+application's back, and the only thing that does that is the file manager on
+its own windows.
+
 ### 11.97 A window below does not draw chrome where something above will cover it
 
 Reported from the field alongside §11.96.9's ghost: **dragging a window, the one
@@ -17718,6 +17827,50 @@ dialog), `.cold` +349 — **no rung crossed anywhere and `KERN_SIZE`
 unchanged**, so it costs the machine nothing. It leaves the cold rung with
 **14 bytes**, which is the number to know before the next cold addition.
 kern_small is byte-identical with and without it.
+
+### 22.17 The poster's status line is paid BEFORE the new window covers it
+
+§11.96.9.1 fixed the *drag* half of "launch Minesweeper over a Disk window
+and that window repaints in full for ever" and its own measurement table
+left the first row unchanged: **`take` 1, dropped, `fm_repaint` 1**. That
+row is this section. The window that posted the load has `Loading...` on its
+status line; `wm_show` banks the window as it looks *with that word on it*,
+and `files_poster` then clears the word through `wm_clip_set`, which drops
+the cache — correctly, the window is about to draw. What it cannot do is
+take a new one, because by then the new window is on top and the content is
+somebody else's pixels (§11.96.7).
+
+**The line's final text has been known since before the load started.**
+`ui.inc` zeroes `[ld_pending]` when it *consumes* the click, so by the time
+`loader_run` is entered the status line already reads `Size … Free …`;
+§59.5 moved the load's own verdict (`Bad package`) out to a toast, so
+nothing about the line waits on the result. The only reason it was drawn
+after `wm_show` is that `wm_show` is where the success path ended.
+
+So `ld_run_body`'s step 9 calls `files_poster` **immediately before** it takes
+the gfx lock and shows the window, and `loader_run` and `assoc_run` stop
+calling it afterwards on the success path. It costs the identical one
+`font_run`, on a window nothing is covering — and what `wm_show` banks a
+moment later is the window as it will actually look, so the cache survives
+the launch.
+
+Three things make it safe, and each was checked rather than assumed.
+`fm_status_only` reads the **window's own state block** (`FS_USED`/`FS_FREE`
+through `fm_layout`), never the mounted volume, so it does not care that
+`assoc_back` has not put the user's disk back yet — which is what lets the
+document-open path (§54.9) take the same ordering. `files_poster` preserves
+`BX`, still the window pointer step 9 owes `wm_show`. And the failure paths
+are untouched: a load that never reached step 9 covered nothing, so it still
+pays the same line afterwards, and `LD_EABORT` still takes the full repaint
+an entry proc that may have drawn anywhere has earned.
+
+Measured on a cycle-accurate 5150/Hercules over the reported sequence —
+open Drive B, into `GAMES`, launch Minesweeper:
+
+| Disk window after the launch | before | after |
+|---|---|---|
+| `wm_su_segs` for its slot | **0000** | a live claim |
+| drag Minesweeper off it | MISS, `W_PAINT` | **HIT**, no `W_PAINT` |
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
