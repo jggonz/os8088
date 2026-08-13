@@ -15533,10 +15533,12 @@ than at a literal, so one write retitles the window, its dock tile (§30)
 and its Task Manager row (§28) together. Navigation rewrites it: entering a
 folder by name writes that name, and anything that lands at the root writes
 `"Disk"`. Going **up** into a directory that is not the root writes
-`"Folder"` — the honest answer, because naming it would need the
-grandparent's listing, which is a second mount to display a string. Names
-are ≤ 12 chars (§19) and `I_NAME` is 16 with a permanent NUL at byte 15, so
-no bound can be exceeded.
+`"Folder"` on **kern_small**, and on **kern_big** the folder's own name, out
+of §22.16's remembered path. Naming it from the volume would need the
+grandparent's listing — a second mount to display a string — which is why
+the small build still answers `"Folder"` and why neither build ever asks.
+Names are ≤ 12 chars (§19) and `I_NAME` is 16 with a permanent NUL at byte
+15, so no bound can be exceeded.
 
 The rule has one non-navigation case, and it is the one that used to break
 it. `fmv_sync` (§22.1) re-lists a window where it already is, so it
@@ -17431,6 +17433,76 @@ background window in order to act in its folder and draws no pixels at all.
 `fm_kinit` clears it because a `KD_POOL` block is reused (§29.3) and a window
 closed still owing a refresh must not hand that debt to the next window in
 its slot.
+
+### 22.16 The remembered path — naming the folder you are standing in
+
+**KERN_BIG ONLY.** kern_small keeps the caption it shipped with, and
+docs/TITLE-PLAN.md is the investigation.
+
+A folder's name is free on the way **down** — it is the row the user
+clicked — and the kernel used to throw it away, so on the way **up** it had
+nothing left to say and titled the window `Folder`. The dialog was worse: it
+picked one of three fixed words on `cmp word [dsk_cwd], 0` and so read
+`Folder` for *every* subdirectory, including ones it had walked into by
+name, and §38.10 opens an app that has chosen nowhere in `MEDIA` — so the
+first `File ▸ Open` a new user ever ran was the defect.
+
+`FS_PATH` is a `PTH_SIZE` block per Disk window and `fdlg_path` is one more
+for the modal dialog: a byte `PTH_LOST` and 32 bytes holding `SYSTEM\DOS`,
+NUL-terminated. Four routines over it — `pth_clear`, `pth_push`, `pth_pop`,
+`pth_leaf`, all taking BX — shared between `files.inc` and `fdlg.inc`, which
+are both `.cold` so the call is near.
+
+**It asks the volume nothing, and that is the design rather than an
+economy.** It records the USER'S NAVIGATION, never the volume's identifiers,
+so there is no FAT path and no redirector path to keep in step — identifiers
+are the only thing the two volume kinds disagree about. The three designs
+that suggest themselves first all die on a `DRVC_FILE` volume: naming a
+cluster needs the grandparent's listing (a whole mount, ~12 sectors — and
+impossible where §62.9.1 makes the handle opaque), a `(cluster → name)`
+cache can be handed a reused cluster and answer with a **wrong** name, and a
+`FSV_NAME` verb is a fourteenth verb plus a round trip that does nothing for
+FAT.
+
+Five rules hold it up:
+
+1. **`FS_CWD` stays the authority for "am I at a root", and the path is only
+   ever consulted for a NAME.** `fm_settitle` tests `FS_CWD == 0` first and
+   answers `Disk`; everything here does is give SI a better value on the
+   paths that passed 0. So a path that is empty, lost or stale degrades to
+   **the caption this kernel already printed**, and a new lie is
+   unreachable.
+2. **One clear site per module, and it is inside the routine that records
+   where the mount LANDED** — `fmv_load` for a window, `fdlg_go` for the
+   dialog. Every way of ending at a root goes through it: a drive change,
+   Root Folder, a format, `fmv_sync`'s folder-vanished fallback, and a
+   *failed* mount, which leaves `[dsk_cwd]` 0 on the drive it tried (§19.2).
+   A new way of reaching a root cannot forget to clear.
+3. **`pth_push` measures before it writes.** A push that ran out of room
+   half way would leave a partial component behind, and every later pop
+   would hand a window a name that is not any folder's.
+4. **`PTH_LOST` counts the levels the buffer could not hold, and spending
+   the last of them lands back AT the buffer's end — which is named.**
+   Answering "no name" there would throw away a name the buffer is still
+   holding. Verified by reading the block out of a running guest: four
+   8-character levels give `lost=1` with the first three intact, and the
+   names come back in order on the way up.
+5. **A window PLACED in a folder — a seed, `fm_choose` — records a
+   fragment**, so going up empties the path while `FS_CWD` is non-zero and
+   the caption is `Folder`. That is rule 1 doing its job, not a special
+   case.
+
+The dialog's header draws the leaf where it drew `fdlg_s_sub`: its pen is
+x=30 and the list frame starts at `FD_LX2` = 213, so 22 cells are free
+against the 12 an 8.3 name needs — measured before the name was allowed
+there. A folder it was *placed* in still reads `Folder`, and the one default
+that can be named is `MEDIA`, which `fdlg_home_go` really does walk into.
+
+Cost, measured: `.text` +11, `.bss` +165 (4 × 33 for the windows, 33 for the
+dialog), `.cold` +349 — **no rung crossed anywhere and `KERN_SIZE`
+unchanged**, so it costs the machine nothing. It leaves the cold rung with
+**14 bytes**, which is the number to know before the next cold addition.
+kern_small is byte-identical with and without it.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 

@@ -1,11 +1,15 @@
 # Naming the folder you are standing in
 
-**Status: INVESTIGATED, NOT BUILT.** The defect is reproduced on a
-cycle-accurate 4.77MHz 8088, its cause is read out of the source rather than
-guessed, and the design below asks the volume nothing — which is what makes it
-work on a redirected volume, where the obvious designs cannot work at all.
-Nothing in this document has been implemented. The costs in §6 are estimates
-and say so; every other number was measured.
+**Status: BUILT, for KERN_BIG only — SPEC.md §22.16.** kern_small keeps the
+caption it shipped with and is **byte-identical** with and without the change.
+§9 is what the build found; the estimates in §6 are left as they were written,
+with the measured figures beside them.
+
+**Cost, measured:** `.text` +11, `.bss` +165, `.cold` +349 — **no rung crossed
+anywhere**, `KERN_SIZE` unchanged, so it costs the machine nothing. The
+estimate in §6 said "likely one 512-byte step"; it landed inside the rungs
+already open. What it did spend is the cold rung's slack, which is **14 bytes**
+now, and that is the number the next cold addition pays against.
 
 The one-line summary: **the folder's name is free on the way DOWN and the
 kernel throws it away, so on the way UP it has nothing left to say.** This is
@@ -257,3 +261,90 @@ recognise something. And the dialog's `B: Folder` is on the screen where the
 user is choosing a file to overwrite: §38.10 went to real trouble to make each
 app open in its own remembered place, and then the dialog does not say which
 place that is.
+
+---
+
+## 9. What building it found
+
+Three things, and the first two are the reason §7's test list was written the
+way it was.
+
+### 9.1 The over-deep case caught a real defect, exactly where it was aimed
+
+§4.1 said `pth_pop` should "if `PTH_LOST` is non-zero, `dec` it and answer *no
+name*". That is wrong, and no shipped disk can show it: spending the **last**
+lost level lands back **at** the buffer's own end, which the buffer still
+names. As written it would have thrown that name away and printed `Folder`
+one level too high. It is one `jnz` — but it is a bug the design document
+itself contained, and the only thing that could have found it is a disk built
+to be deeper than the buffer.
+
+Read out of a running guest, four 8-character levels on a hand-built image
+(`AAAAAAAA\BBBBBBBB\CCCCCCCC\DDDDDDDD` is 35 characters against `PTH_MAX` 32):
+
+```
+  down into AAAAAAAA  lost=0 path='AAAAAAAA'
+  down into BBBBBBBB  lost=0 path='AAAAAAAA\BBBBBBBB'
+  down into CCCCCCCC  lost=0 path='AAAAAAAA\BBBBBBBB\CCCCCCCC'
+  down into DDDDDDDD  lost=1 path='AAAAAAAA\BBBBBBBB\CCCCCCCC'
+  up  #1              lost=0 path='AAAAAAAA\BBBBBBBB\CCCCCCCC'
+  up  #2              lost=0 path='AAAAAAAA\BBBBBBBB'
+  up  #3              lost=0 path='AAAAAAAA'
+  up  #4              lost=0 path=''
+```
+
+The fourth push is **counted and not half-written** — the buffer is intact
+behind it — and the names come back in order. **The captions alone could not
+have shown this**: a descent is titled from the row it clicked, so level 4
+reads `DDDDDDDD` whether or not the path recorded it, and the whole walk looks
+identical with `PTH_MAX` large enough to hold it. That is why the check reads
+the block rather than the screen.
+
+### 9.2 Backspace does not work at all on a redirected volume
+
+**Pre-existing, unrelated to the caption, and not fixed here.** `fm_c_up`
+calls `dsk_dotdot`, which reads a directory **sector** to find the parent —
+and a `DRVC_FILE` volume has none. It answers CF=1 and `fm_c_up` takes its
+`.none` branch, so Backspace and `Nav ▸ Up One Folder` are silently dead on
+the RAM disk and on the network volume. The `..` **row** works, because
+`dsk_synth_up` fills it from `[dsk_fsup]` for a `DVK_FILE` volume (§62.9.1)
+and `fm_open_sel` takes the handle out of the row — which is also what
+`fdlg_dive` does, and why the dialog has never had this problem.
+
+So the redirector leg of §7 was driven through the `..` row, and it passes:
+`DOCS` → `DEEP` → up reads **`DOCS`**, on a volume with opaque handles and no
+`..` on any platter.
+
+The fix is small and is `fdlg_dive`'s shape — take the parent's handle out of
+the window's own cache, where slot 0 of a subdirectory is always the parent
+link (§19.5), instead of asking the volume for a sector. It is a **functional**
+change rather than a caption one, so it wants its own decision and its own
+testing.
+
+### 9.3 A `%else` is not free
+
+The first cut of the `..` branch put the `%ifdef` around the wrong part and
+restructured kern_small's instruction sequence — a `je` plus a `jmp short`
+where a `jne` had been. Same behaviour, different bytes, on the build whose
+whole reason is that its bytes are counted. **A KERN_BIG feature is not proven
+by kern_small still assembling**; it is proven by kern_small being
+byte-identical, and that is the check to run.
+
+`make small` was already **broken on `elendilon` before any of this** —
+kern_small is over `KERN_BUDGET` (99,328) and refuses to build. It is not
+something this change caused and it is not fixed here; the byte-identity check
+above was made by lifting the guard locally, building both trees, and putting
+it back.
+
+## 10. What is still owed
+
+- **The seeded-window case** (§7's last bullet) is covered by construction —
+  `pth_clear` then a one-component push, so going up empties the path while
+  `FS_CWD` is non-zero and the caption is `Folder` — but it has **not been
+  driven**, because reaching `fm_kinit`'s seed or `fm_choose`'s in-place move
+  from a script needs a drag or the four-window cap. It is the one leg of §7
+  that was not exercised.
+- **§9.2's Backspace**, if it is wanted.
+- The dialog's `fdlg_home_go` names `MEDIA` and nothing else; the remembered
+  folder and the recovery branch still read `Folder`, which §5 called for
+  deliberately.
