@@ -798,6 +798,8 @@ sched_mode_get:
 ; out:      via iret, possibly into a different task
 ; -----------------------------------------------------------------------------
 %ifdef KFZTRACE
+KHB_STK     equ 20              ; x = 160: where sch_stkdie says the canary
+                                ; died, well clear of the heartbeat
 KHB_X       equ 40              ; x = 320: blank bar between the menus and the
                                 ; clock, and clear of the key breadcrumbs at 0
 khb_beat:   db 0                ; the heartbeat's own counter, in .text so the
@@ -1059,6 +1061,36 @@ sch_resume:
 ; assumed. Re-run the 0xCC fill probe (docs/KERNEL-MEMORY.md) if it ever hits.
 ; -----------------------------------------------------------------------------
 sch_stkdie:
+%ifdef KFZTRACE
+    ; --- SAY SO (KFZ only) ---------------------------------------------------
+    ; This is the only cli+hlt in the kernel, so it is the only thing that can
+    ; stop the heartbeat - and a stopped heartbeat is exactly what the field
+    ; reports. Silent, it is indistinguishable from a wild jump; one solid bar
+    ; and a task number turn it into a diagnosis a photograph can carry.
+    ; Registers are free: the next instruction halts for ever.
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    mov bx, [vid_rseg]
+    or bx, bx
+    jz .nomark                  ; no adapter yet: nothing to say it on
+    mov es, bx
+    xor dx, dx
+    cld
+.skbank:
+    mov di, dx
+    add di, KHB_STK
+    mov cx, 8                   ; a 64px black bar: THE CANARY DIED
+    xor al, al
+    rep stosb
+    inc di                      ; ...one white cell, then WHICH TASK overran
+    mov al, [sch_cur]
+    not al
+    mov [es:di], al
+    add dx, 0x2000
+    cmp dx, 0x8000
+    jb .skbank
+.nomark:
+%endif
     cli
 .hang:
     hlt
