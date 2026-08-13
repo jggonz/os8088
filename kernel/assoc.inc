@@ -981,7 +981,7 @@ assoc_run_x:
     cmp byte [ld_painted], 0
     jne .out                    ; ld_run_body paid the poster's status line
                                 ; before its wm_show covered it (SPEC.md
-                                ; 22.15); a second files_poster here would
+                                ; 22.17); a second files_poster here would
                                 ; drop the raise cache that took
     call files_refresh_x
     jmp short .out

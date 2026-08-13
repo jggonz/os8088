@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The OPENING-WINDOW gate (SPEC.md 11.96.16 / 22.15) - does a program that
+"""The OPENING-WINDOW gate (SPEC.md 11.96.16 / 22.17) - does a program that
 opens on top of another program leave that other program with a raise cache?
 
     python3 tools/precover.py capture DIR [machine [-D...]]
@@ -14,7 +14,7 @@ measured that exact launch and recorded the row it did NOT fix:
 
 Two things go wrong there and this gate covers both.
 
-  22.15 - THE POSTER IS PAID TOO LATE. wm_show banks the Disk window with
+  22.17 - THE POSTER IS PAID TOO LATE. wm_show banks the Disk window with
     'Loading...' still on its status line, and files_poster then clears that
     word through wm_clip_set, which drops the cache - correctly, the window is
     about to draw. It cannot take a new one, because by then Minesweeper is on
@@ -115,7 +115,7 @@ def capture(out, machine, defines=()):
         mo.dblclick(*su.row(b, ROW_MINES)); time.sleep(9)
         sc.shot(m, "mines-launched", out, shots, mo)
 
-        # --- CHECK 1: the poster kept a cache through the launch (22.15) -----
+        # --- CHECK 1: the poster kept a cache through the launch (22.17) -----
         # It is the window the newcomer covers, and until this it was the one
         # window in the system guaranteed NOT to have one.
         cache = segs(m)[b.i]
@@ -124,7 +124,7 @@ def capture(out, machine, defines=()):
             raise SystemExit(
                 "precover: FAIL - the Disk window that launched Minesweeper has\n"
                 "no raise cache (wm_su_segs[%d] = 0). That is the reported bug:\n"
-                "every later action on it is a full fm_repaint (SPEC.md 22.15)."
+                "every later action on it is a full fm_repaint (SPEC.md 22.17)."
                 % b.i)
 
         mines = [w for w in sc.wins(m) if w.i != b.i]

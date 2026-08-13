@@ -272,7 +272,7 @@ loader_run_x:
     cmp byte [ld_painted], 0
     jne .done                   ; the success path published the status, paid
                                 ; the poster's status line and THEN drew the
-                                ; new window over it (SPEC.md 22.15) - so
+                                ; new window over it (SPEC.md 22.17) - so
                                 ; nothing is owed here, and a second
                                 ; files_poster would only arm wm_clip_set on
                                 ; a window that is covered now and drop the
@@ -648,7 +648,7 @@ ld_run_body_x:
     ; every successful launch, purely to correct one line of text.
     mov byte [ld_status], LD_OK
     mov byte [ld_painted], 1    ; ...and this pass IS the repaint
-    ; --- and the POSTER is paid BEFORE it is covered (SPEC.md 22.15) --------
+    ; --- and the POSTER is paid BEFORE it is covered (SPEC.md 22.17) --------
     ; The window that posted this load still has 'Loading...' on its status
     ; line and [ld_pending] went to 0 in ui.inc before we were called, so the
     ; line's final text has been known since the top of loader_run - it was
