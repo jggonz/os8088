@@ -268,16 +268,19 @@ FDD_S_SEEKOK equ 2               ; ...said it after the recalibrate: the drive
 FDD_S_NOTRK0 equ 3               ; the recalibrate ran and TRK0 never came up.
                                  ; THE absent drive, and the one verdict in
                                  ; this list that removes anything
-FDD_S_SEEKST0 equ 5              ; ST3 never showed TRK0 and ST0 says the
-                                 ; recalibrate ended NORMALLY - so the drive is
-                                 ; there and its TRK0 line is not reaching ST3
-                                 ; (SPEC.md 18.97.3). The Packard Bell Victory
+FDD_S_SEEKST0 equ 5              ; ST3 never showed TRK0 and ST0 DID NOT PROVE
+                                 ; ABSENCE - so the drive is kept and its TRK0
+                                 ; line is not reaching ST3 (SPEC.md
+                                 ; 18.97.3/18.97.4). The Packard Bell Victory
                                  ; 286's 1.2MB drive B, measured: ST3 = 21
                                  ; twice, ST0 = 21, against the 5150's absent
                                  ; drive answering ST3 = 21 twice and ST0 = 71.
-                                 ; A KEEP-ONLY signal: EC clear proves presence,
-                                 ; EC set proves nothing (the 4865 is present
-                                 ; and sets it - docs/FIELD-NOTES.md 19)
+                                 ; A KEEP-ONLY signal, and it is now everything
+                                 ; that is not 71's exact shape rather than 21's:
+                                 ; EC clear proves presence, EC set proves
+                                 ; nothing (the 4865 is present and sets it -
+                                 ; docs/FIELD-NOTES.md 19), and a sense that
+                                 ; answered nothing proves less than either
 FDD_S_NORDY  equ 4               ; the controller never took a byte, or never
                                  ; offered one - a refusal, and it KEEPS the
                                  ; drive like every other thing that goes wrong
@@ -5820,17 +5823,34 @@ dsk_fdd_probe:
                                 ; NORMALLY is the controller saying it found
                                 ; track 0, which is positive evidence of a
                                 ; drive whatever the status line does
+                                ;
+                                ; **THE TEST IS FOR ABSENCE, NOT FOR PRESENCE
+                                ; (SPEC.md 18.97.4).** It read the other way -
+                                ; keep on exactly 20 and retire on everything
+                                ; else - so a sense that answered NOTHING
+                                ; USEFUL retired a drive, which is the one
+                                ; thing this routine's header forbids. That is
+                                ; not a corner: measured on two cycle-accurate
+                                ; machines with a present, working drive B and
+                                ; the branch forced, the drained ST0 reads 04
+                                ; and 01. Both fail `cmp al, 0x20`, and only
+                                ; TRK0 coming up first kept the drive.
     mov al, [si+FDU_ST0]
     and al, 0xF8                ; IC (7-6), SE (5), EC (4), NR (3)
-    cmp al, 0x20                ; IC=00 normal + seek end, no equipment check,
-    jne .gone                   ; drive not-ready clear. FDU_ST0 initialises to
-                                ; FF and is written only on success, so a sense
-                                ; that never answered fails this by itself
+    cmp al, 0x70                ; IC=01 ABNORMAL + seek end + EQUIPMENT CHECK,
+    jne .keepst0                ; drive ready: the 765 saying it stepped 77
+                                ; times and never saw TRK0, which is the only
+                                ; positive evidence of absence anybody has
+                                ; recorded (the field 5150's missing drive B,
+                                ; ST0 = 71). FF - a sense that never answered -
+                                ; is IC=11 and fails this, so a failure keeps
+                                ; the drive the way everything else here does
     mov al, [si+FDU_ST0]
     and al, 3                   ; ...and it is THIS unit's result, not one the
     cmp al, [fdd_unit]          ; queue was still holding (18.97.1's whole
-    jne .gone                   ; lesson - the drain makes it ours, this proves
-                                ; it)
+    jne .keepst0                ; lesson - the drain makes it ours, this proves
+    jmp short .gone             ; it)
+.keepst0:
     mov byte [si+FDU_STEP], FDD_S_SEEKST0
     jmp short .keep
 .gone:

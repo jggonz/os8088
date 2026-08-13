@@ -13372,6 +13372,68 @@ is still retired there. Neither emulator can produce either naturally
 (§18.97.2 has the measurements), so the knob is the only way this branch is
 ever exercised outside the field.
 
+### 18.97.4 …and the ST0 test asks for ABSENCE now, not for presence
+
+§18.97.3's test was written the other way round: **keep on exactly `ST0 & F8
+== 20`, retire on everything else.** That reads as "prove to me the drive is
+there", and it is the wrong way round for a routine whose header says *EVERY
+FAILURE KEEPS THE DRIVE* — a controller that answered nothing useful landed
+in the same bucket as one that positively reported no drive. Its own comment
+said so approvingly: *"FDU_ST0 initialises to FF and is written only on
+success, so a sense that never answered fails this by itself."*
+
+**It is not a corner.** Measured on two cycle-accurate machines — an IBM-ROM
+5150 and a 5160 — with a present, working drive B and the branch forced with
+a throwaway `jmp .motor` over step 1's TRK0 test, the drained ST0 reads
+**04** and **01**. Both are healthy machines with a real drive on the cable;
+both fail `cmp al, 0x20`; and the only reason drive B survived is that TRK0
+came up in ST3B first and the ST0 test was never reached. Take TRK0 away and
+those machines retire a drive that is plainly there.
+
+So the test is now the 5150's recorded absent-drive signature and nothing
+else: `ST0 & F8 == 70` — **IC = 01 abnormal termination, seek end, EQUIPMENT
+CHECK set, drive ready** — plus §18.97.1's unit match. That is the 765 saying
+it stepped 77 times and never found track 0, which is the only positive
+evidence of absence anybody has recorded. Every other answer keeps the drive,
+`FF` (a sense that never answered, IC = 11) included.
+
+Every recorded field verdict is unchanged, and that is checked rather than
+argued — `make FDDABSENT=1` (the 5150's absent drive B, `ST0 = 71`) still
+answers **ABSENT**, and `FDDABSENT=2` (the Packard Bell's present 1.2MB drive,
+`ST0 = 21`) still answers **KEEP** by the same `FDD_S_SEEKST0` step. What
+moved is the middle — and the middle is where a working machine's controller
+actually answers:
+
+| a present drive, TRK0 never reaching ST3 | `ST0` | before | after |
+|---|---|---|---|
+| IBM-ROM 5150 | `04` | `NOTRK0` → **drive B removed** | `SEEKST0` → KEEP |
+| 5160 / XT | `01` | `NOTRK0` → **drive B removed** | `SEEKST0` → KEEP |
+
+Both rows are a throwaway kernel with `test al, 0x10` cut to `test al, 0x00`
+at both of the probe's TRK0 tests, so the branch runs against the emulated
+765's own answers rather than a forced verdict — the drive really is there,
+and before this the desktop really did come up with one floppy icon.
+
+**What makes the middle reachable at all is a WARM RESTART**, and that is the
+field report this came from: *"Boot, open Paint, close Paint, Chip menu ▸
+Restart — drive B is not mounted."* `int 19h` resets no hardware (§51.2 and
+`ui_cmd_reboot` both say so), so the second boot inherits drive B's head
+wherever the first session left it. Measured on an IBM-ROM 5150: a fresh boot
+reads `ST3 = 39`, **TRK0 set**, so the probe stops at step 1 and keeps the
+drive; loading one package off B: leaves `ST3 = 29`, **TRK0 clear**. On the
+next boot step 1 therefore fails and the destructive branch runs — on every
+restart after any use of B:, on the one tier where §18.97.2 lets it act.
+
+**Neither emulator here can carry that across the reboot**, which is why this
+is a narrowing rather than a fix with a repro attached: MartyPC's FDC returns
+drive 1's cylinder to 0 on the controller reset the BIOS does at boot, so the
+second boot reads `39` again and keeps the drive. Verified three ways — a
+scripted Restart, a host-driven `SEEK` to cylinder 20 through the emulated
+765, and a read of ST3 at the second boot's own boot sector. **Whether the
+recalibrate then answers `71` on the reporting machine is the 5150's
+question**, and the probe already publishes what it saw: §57.5's `'FD'`
+block, which `tests/sysbench` prints. `make FDDPROBE=0` is the A/B.
+
 ### 18.98 The third and fourth floppy — a row, and nothing else
 
 The IBM 5.25" Diskette Drive Adapter has an **external 37-pin D connector**
