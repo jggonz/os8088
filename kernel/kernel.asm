@@ -2726,6 +2726,65 @@ osapi_video:
 
 osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 
+; =============================================================================
+; KFZ - the kernel breadcrumb (make KFZ=1; ships nowhere)
+;
+; For a reported hard freeze on ANY key ModPlug takes, on a machine with a
+; hard disk mounted, that no emulator in this container reproduces. The
+; package-side instrument (MPPDBG, apps/modplug) came back reading ZERO, so
+; W_ONKEY is never reaching the package and the stall is in ui_task's own
+; `.keys` branch - between int 16h and wm_pkgcall.
+;
+; It writes RAW FRAMEBUFFER BYTES and calls nothing, which is the whole point:
+; three of the sites it marks run before gfx_lock is taken and one of them IS
+; gfx_lock, so an instrument that drew through the gfx_* slots could deadlock
+; on exactly the routine under suspicion, and one that took the lock could not
+; be placed before it at all. Ten instructions, no locks, no calls, and every
+; register AND the flags preserved - CF is live across blk_wake and kbm_key.
+;
+; It paints n black cells at the TOP-LEFT of the screen, scanline 0, which is
+; offset 0 in both 1bpp adapters' banked layouts (SPEC.md 39.3). Always from
+; x = 0, so a later mark covers an earlier one and the picture is the highest
+; step reached. Mono only - [vid_rseg] is the software renderer's target and
+; on VGA the planes are behind the Graphics Controller - which is what the
+; reporting machine is.
+; =============================================================================
+%macro KFZ 1
+%ifdef KFZTRACE
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov es, [vid_rseg]
+    cld
+    xor bx, bx                  ; BX = the bank base, 0x2000 apart (SPEC.md
+    mov dx, 4                   ; 39.3). Four of them: a 1bpp adapter's
+%%bank:                         ; consecutive scan lines are in DIFFERENT
+    mov di, bx                  ; banks, so this is how a mark gets HEIGHT -
+    mov cx, (%1) * 2            ; and height is what makes it photographable,
+    xor al, al                  ; which is the whole delivery mechanism here
+    rep stosb
+    mov di, bx                  ; ...and the same again one row down inside
+    add di, [vid_stride]        ; the bank, so the bar is 8 scan lines tall
+    mov cx, (%1) * 2            ; on Hercules and 4 on a CGA
+    xor al, al
+    rep stosb
+    add bx, 0x2000
+    dec dx
+    jnz %%bank
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf                        ; ...and the flags back: the caller's CF is an
+%endif                          ; argument at three of these sites
+%endmacro
+
 ; -----------------------------------------------------------------------------
 %include "viddet.inc"           ; video adapters (SPEC.md 39): the splash
                                 ; probes and sets the mode on its first tick,
