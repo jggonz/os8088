@@ -53,6 +53,15 @@ UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
 ; -----------------------------------------------------------------------------
 ui_task:
 .loop:
+%ifdef KFZTRACE
+    inc word [khb_uipass]       ; ONE PASS OF THE UI TASK. The watchdog keyed
+                                ; on a HELD mutex and never fired in the field,
+                                ; which is itself the finding: the lock is
+                                ; taken and released over and over, so the
+                                ; machine is LIVELOCKED rather than halted and
+                                ; no lock-held counter can see it. What does
+                                ; not happen is this line.
+%endif
     ; --- 0. a posted restart, spent with NOTHING held (SPEC.md 20.10) --------
     cmp byte [ui_rebootq], 0
     je .keys
@@ -64,26 +73,33 @@ ui_task:
     mov ah, 0x01                ; any key pending?
     int 0x16
     jz .events
+    KFZ 1                       ; 1: a key is pending
     call blk_wake               ; a key is USER INPUT whatever it turns out to
                                 ; be, so the idle clock restarts here (SPEC.md
                                 ; 64.2) and CF says whether this keystroke is
                                 ; the one that lit the screen
+    KFZ 2                       ; 2: blk_wake returned (SPEC.md 64)
     mov ah, 0x00                ; fetch it: AL = ascii, AH = scan - the wake
     pushf                       ; case still has to take the key OUT of the
     int 0x16                    ; BIOS buffer, so only the DELIVERY differs.
     popf                        ; The verdict is banked across the call: int
                                 ; 16h is a BIOS service and the flags it
                                 ; returns are its own business, not ours
+    KFZ 3                       ; 3: the key is out of the BIOS buffer
     jc .events                  ; the screen was dark, so the user never saw
                                 ; the window this would have gone to: drop it
     call kbm_key                ; with no mouse on the machine, the arrows ARE
     jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
                                 ; the application's. One compare per keystroke
                                 ; on a machine that has one
+    KFZ 4                       ; 4: kbm_key passed it through (SPEC.md 9.6)
     call gfx_lock               ; handler draws; it runs under the lock
+    KFZ 5                       ; 5: WE HAVE THE GFX LOCK. A bar that stops at
+                                ;    4 is a mutex nobody released
     call wm_top                 ; BX = frontmost visible window, 0 if none
     call fdlg_top               ; ...unless a modal file dialog is up, which
                                 ; takes every key (SPEC.md 38.2)
+    KFZ 6                       ; 6: the target window is resolved
     or bx, bx
     jz .key_done
     cmp word [bx + W_ONKEY], 0  ; window may not take keys
@@ -101,7 +117,9 @@ ui_task:
     push bx
     push bp
     mov bp, [si + W_ONKEY]      ; wm_pkgcall: record in SI (where the
+    KFZ 7                       ; 7: about to far-call the package
     call wm_pkgcall             ; contract already puts it), offset in BP
+    KFZ 8                       ; 8: the handler returned
     pop bp
     pop ax
     pop dx
@@ -112,6 +130,7 @@ ui_task:
     call inst_charge
 .key_done:
     call gfx_unlock
+    KFZ 9                       ; 9: a healthy keystroke, start to finish
 
     ; --- 2. events: pop one, act on EVT_MDOWN ---------------------------------
 .events:

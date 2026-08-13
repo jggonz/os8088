@@ -130,6 +130,15 @@ sched_init:
     mov word [sch_wd_hits], 0   ; zeroed HERE by hand: nothing clears .bss at
                                 ; boot, so an uninitialised sch_coop would
                                 ; boot into a random mode
+%ifdef KFZTRACE
+    push es                     ; TASK 0 HAS NO CANARY (see sch_switch's
+    push ax                     ; .nocanary) and its stack grows DOWN onto the
+    mov ax, LOW_SEG             ; top of .lowbss - the other tasks' slices, the
+    mov es, ax                  ; glyph table, the disk buffers - so an overrun
+    mov word [es:STK0_BOT], SCH_MAGIC ; there is silent. Seed one so the
+    pop ax                      ; heartbeat can report it
+    pop es
+%endif
     mov byte [sch_tasks+T_STATE], 1     ; task 0 = this thread, ready
     mov byte [sch_tasks+T_INST], 0xFF   ; the UI task owns no instance
     mov byte [sch_tasks+T_FLAGS], 0
@@ -797,6 +806,199 @@ sched_mode_get:
 ; in:       hardware interrupt (any task, any DS/ES)
 ; out:      via iret, possibly into a different task
 ; -----------------------------------------------------------------------------
+%ifdef KFZTRACE
+KHB_STK     equ 20              ; x = 160: where sch_stkdie says the canary
+                                ; died, well clear of the heartbeat
+KHB_STUCK   equ 546             ; ticks (30s) with NO ui_task pass before the
+                                ; watchdog prints. It was 5 seconds against the
+                                ; old held-mutex trigger, and 5 seconds of NO
+                                ; PASS is something a healthy machine really
+                                ; does: ModPlug's opening W_PAINT is one pass
+                                ; and takes tens of seconds on the machine this
+                                ; is for, so a short threshold would have the
+                                ; instrument firing in the middle of the very
+                                ; draw the bug lives in - MANUFACTURING the
+                                ; failure it exists to observe. The reported
+                                ; freeze is permanent (180s and counting), so
+                                ; nothing is lost by waiting
+KHB_IPOFF   equ 34              ; this block's 8 pushed words + sch_isr's 9,
+                                ; so [sp+34] is the IP the CPU pushed
+KHB_X       equ 0               ; the LEFT EDGE: fifteen values are 75 bytes and
+                                ; anything further right runs into the clock,
+                                ; whose glyphs cannot be told from cells
+khb_beat:   db 0                ; the heartbeat's own counter, in .text so the
+                                ; ISR can reach it through CS before DS is ours
+khb_kfz:    db 0                ; how far ui_task's `.keys` branch got with the
+                                ; last keystroke (the KFZ macro in kernel.asm).
+                                ; The package-side instrument came back reading
+                                ; ZERO, so W_ONKEY never reaches ModPlug and the
+                                ; stall is somewhere between int 16h and
+                                ; wm_pkgcall - which is nine marks wide
+khb_chain:  db 0                ; ...and how many times the BIOS int 08h chain
+                                ; CAME BACK: beat - chain is 0 or 1, and which
+                                ; one it is says whether the machine stopped
+                                ; inside the interrupt or outside it
+khb_sph:    db 0                ; SP high / low at the last tick, and whether
+khb_spl:    db 0                ; task 0's floor word is still there - staged
+khb_bad:    db 0                ; so the emit loop can treat them as table rows
+khb_csh:    db 0                ; CS high: 00 kernel, 0D cold, else a package
+khb_iph:    db 0                ; the interrupted IP: which routine the machine
+khb_ipl:    db 0                ; is standing in when it stops
+khb_imr:    db 0                ; --- WHY THE MACHINE STOPS, three readings ---
+khb_pisr:   db 0                ; The field reports a HARD freeze and a strip
+khb_flg:    db 0                ; that stops moving, and IRQ0 is the only thing
+                                ; painting the strip - so whatever ends the
+                                ; machine ends IRQ0, and there are exactly four
+                                ; ways for that to happen. The PIC's MASK
+                                ; register says whether IRQ0 was masked off; its
+                                ; IN-SERVICE register says whether an EOI went
+                                ; missing (bit 0 is always set here - this ISR
+                                ; is the one in service - so it is any OTHER bit
+                                ; that means something); and the high byte of
+                                ; the interrupted FLAGS carries IF in bit 1,
+                                ; which says whether the code we interrupted was
+                                ; running with interrupts off. The fourth, a
+                                ; reprogrammed PIT, is what a beat that stops
+                                ; while these three read normal would leave.
+khb_wide:   db 0x00, 0x0F, 0xF0, 0xFF   ; two bits -> four pixels each
+khb_stuck:  dw 0                ; consecutive ticks with NO ui_task pass
+khb_uipass: dw 0                ; bumped once per ui_task loop
+khb_uilast: dw 0                ; ...and what it read at the last tick
+khb_msg:    db 'AT 00:0000 OWN 00 CUR 00 SP 0000 R 0000 0000 0000 M 00 V 00 F 00 BK 0000', 0
+KHB_M_CS    equ 3                ; 'AT cc:iiii OWN oo CUR cc SP ssss' - every
+KHB_M_IPH   equ 6                ; one of these counted off the literal above,
+KHB_M_IPL   equ 8                ; which is what the first version did not do:
+KHB_M_OWN   equ 15               ; the fields landed on each other and on the
+KHB_M_CUR   equ 22               ; NUL, so the report ran on into the hex digit
+KHB_M_SPH   equ 28               ; table and printed it
+KHB_M_SPL   equ 30
+KHB_M_RET   equ 35
+KHB_M_IMR   equ 52               ; ...and the four that say WHY it stopped:
+KHB_M_ISR   equ 57               ; mask, in-service, the interrupted FLAGS, and
+KHB_M_FLG   equ 62               ; the entry/chain pair
+KHB_M_BEAT  equ 68
+KHB_M_CHAIN equ 70
+khb_hexd:   db '0123456789ABCDEF'
+
+; khb_hex - AL as two hex digits at DS:SI (KFZ only; clobbers AX, BX)
+khb_hex:
+    push bx
+    push ax
+    mov bl, al
+    push cx
+    mov cl, 4
+    shr al, cl
+    pop cx
+    and al, 0x0F
+    xor bh, bh
+    push bx
+    mov bl, al
+    mov al, [khb_hexd+bx]
+    pop bx
+    mov [si], al
+    mov al, bl
+    and al, 0x0F
+    push bx
+    mov bl, al
+    mov al, [khb_hexd+bx]
+    pop bx
+    mov [si+1], al
+    pop ax
+    pop bx
+    ret
+khb_srcs:   dw khb_beat, khb_chain, khb_kfz, sch_cur, sch_lock, gfx_lock_flag
+            dw gfx_lock_own, khb_sph, khb_spl, khb_bad, khb_csh, khb_iph
+            dw khb_ipl, khb_imr, khb_pisr, 0
+                                ; FIFTEEN cells is 75 of a CGA row's 80 bytes.
+                                ; khb_flg is deliberately NOT here: IRQ0 is
+                                ; delivered only with IF set, so the one bit
+                                ; anybody would read it for is a CONSTANT in
+                                ; this context. It stays in the text report,
+                                ; where the width costs nothing, for DF and OF
+
+; -----------------------------------------------------------------------------
+; khb_paint - the strip (KFZ only). Preserves every register and the flags.
+;
+; CALLED TWICE PER TICK, and that is the whole of what makes khb_beat and
+; khb_chain mean anything. Painting once at entry cannot say which side of the
+; BIOS chain a machine died on - the entry paint of the tick that died and the
+; entry paint of a healthy tick are the same picture, beat one ahead of chain
+; in both. Painted again after the chain returns, the LAST picture on a stopped
+; screen answers it: equal counters mean the interrupt ran to the end and
+; whatever stopped the machine is out in task code, one apart means it never
+; came back from the BIOS.
+;
+; Two bits per framebuffer byte, four pixels per bit, high bit first, a set bit
+; BLACK on the white menu bar, four banks tall (SPEC.md 39.3). At one pixel per
+; bit a photographed cell is unreadable: the field's screenshots arrive at about
+; 2x, so a bit was two screen pixels and every reading was a guess.
+; -----------------------------------------------------------------------------
+khb_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    pushf
+    mov bx, [vid_rseg]          ; NOT BEFORE THE ADAPTER IS PICKED: this ISR
+    or bx, bx                   ; runs from the first tick, which is during the
+    jz .out                     ; splash, and [vid_rseg] is 0 until vid_setmode
+                                ; publishes it - so an unguarded paint lands at
+                                ; segment 0, which is the INTERRUPT VECTOR TABLE
+    mov es, bx
+    xor dx, dx
+.bank:
+    mov si, khb_srcs
+    mov di, dx
+    add di, KHB_X
+.cell:
+    mov bx, [cs:si]
+    or bx, bx
+    jz .next                    ; 0 ends the table
+    inc si
+    inc si
+    mov al, [cs:bx]
+    mov cx, 4                   ; four bytes per value, two bits each
+.nib:
+    mov ah, al
+    push cx
+    mov cl, 6
+    shr ah, cl
+    pop cx
+    and ah, 3
+    push bx
+    mov bl, ah
+    xor bh, bh
+    mov ah, [cs:khb_wide+bx]
+    pop bx
+    not ah                      ; a set bit is black on the white bar
+    mov [es:di], ah
+    inc di
+    push cx
+    mov cl, 2
+    shl al, cl
+    pop cx
+    loop .nib
+    inc di                      ; one blank byte between values
+    jmp short .cell
+.next:
+    add dx, 0x2000
+    cmp dx, 0x8000
+    jb .bank
+.out:
+    popf
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 sch_isr:
     push ax                     ; frame layout documented at top of file
     push cx
@@ -810,6 +1012,186 @@ sch_isr:
     mov ax, KERNEL_SEG
     mov ds, ax
 
+%ifdef KFZTRACE
+    ; --- the heartbeat (SPEC.md 7/8, KFZ only) -------------------------------
+    ; Painted from IRQ0, which is the whole point: on the machine this exists
+    ; for the timer is the last thing still running, so it is the only context
+    ; able to report. Eight bytes of kernel state, left to right:
+    ;
+    ;   beat  sch_cur  sch_lock  gfx_lock_flag  gfx_lock_own  SPhi  SPlo  stk0
+    ;
+    ; EACH IS 32 PIXELS WIDE - two bits per framebuffer byte, four pixels per
+    ; bit, high bit first - because at one pixel per bit a photographed cell
+    ; is unreadable: the field screenshots arrive at about 2x, so a bit was
+    ; two screen pixels and every reading was a guess.
+    ;
+    ; A set bit is BLACK on the white menu bar. Four banks tall (SPEC.md 39.3).
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    pushf
+    ; --- AND WHERE THE MACHINE ACTUALLY IS ----------------------------------
+    ; The interrupted IP, straight off the frame the CPU pushed. On a machine
+    ; that has stopped this is the one reading that NAMES the code rather than
+    ; describing the symptom: nasm -l turns it back into a routine. The offset
+    ; is this block's 8 words plus sch_isr's 9, both fixed.
+    mov bx, sp
+    mov ax, [ss:bx+KHB_IPOFF]
+    mov [cs:khb_ipl], al
+    mov [cs:khb_iph], ah
+    mov ax, [ss:bx+KHB_IPOFF+2] ; ...and the HIGH BYTE of CS with it, which is
+    mov [cs:khb_csh], ah        ; all that is needed to say WHICH segment: 00
+                                ; kernel, 0D the cold segment, anything else a
+                                ; package - an IP alone is ambiguous across
+                                ; three address spaces
+    mov ax, [ss:bx+KHB_IPOFF+4] ; ...and the FLAGS above it: IF is bit 9, so
+    mov [cs:khb_flg], ah        ; bit 1 of the byte kept here
+    in al, 0x21                 ; the PIC's mask: is IRQ0 (bit 0) still let in?
+    mov [cs:khb_imr], al
+    mov al, 0x0B                ; OCW3 read-select: bit 3 distinguishes it from
+    out 0x20, al                ; OCW2, so this cannot be mistaken for the EOI
+    in al, 0x20                 ; the IN-SERVICE register
+    mov [cs:khb_pisr], al
+    mov al, 0x0A                ; ...and put the selection back to the IRR,
+    out 0x20, al                ; because RIS is STICKY: a later `in al, 0x20`
+                                ; anywhere else would otherwise be handed the
+                                ; in-service register and believe it
+    inc byte [cs:khb_beat]      ; ...AFTER the IP read, which needs BX itself -
+                                ; taking the framebuffer segment in the middle
+                                ; left ES pointing at the stack pointer and the
+                                ; whole strip went blank
+    mov ax, sp                  ; the depth of the stack we interrupted; the
+    mov [cs:khb_spl], al        ; frames above it are a constant
+    mov [cs:khb_sph], ah
+    mov al, 0
+    cmp word [ss:STK0_BOT], SCH_MAGIC
+    je .khbcan
+    dec al                      ; 0xFF -> a SOLID 32px BLOCK: task 0's stack
+.khbcan:                        ; has been through the floor
+    mov [cs:khb_bad], al
+    call khb_paint
+
+    ; --- THE WATCHDOG: when it stops, WRITE IT DOWN IN HEX -------------------
+    ; Four rounds of asking the field to photograph bit patterns and I could
+    ; not read them reliably at the scale a screenshot arrives in. So once the
+    ; machine is provably wedged, print the answer as TEXT and stop asking.
+    ;
+    ; The trigger is KHB_STUCK ticks with NO ui_task pass. It was the drawing
+    ; mutex held continuously for the same span, and the field ran that for
+    ; thirty seconds and printed nothing - which is the finding rather than a
+    ; failure of the instrument: a loop that takes and releases the mutex
+    ; every iteration is invisible to a held-lock timer however long it spins.
+    ;
+    ; Drawing from inside IRQ0 is not something the kernel may do. At the
+    ; instant this fires the machine is PROBABLY never going to run again, so
+    ; the rules it breaks have nobody left to protect - but "probably" is the
+    ; operative word at a 30-second threshold, so everything it forces open is
+    ; banked and put back below.
+    mov ax, [khb_uipass]        ; HAS THE UI TASK COMPLETED A PASS? The old
+    cmp ax, [khb_uilast]        ; trigger was "the mutex has been held N ticks"
+    je .khbheld                 ; and the field never tripped it - because the
+    mov [khb_uilast], ax        ; loop takes and releases it every iteration.
+    mov word [khb_stuck], 0     ; A livelock is invisible to a held-lock timer
+    jmp .khbout                 ; and obvious to a progress one (NEAR: the
+                                ; report below put .khbout out of short range)
+.khbheld:
+    inc word [khb_stuck]
+    cmp word [khb_stuck], KHB_STUCK
+    jne .khbout                 ; ...and EXACTLY at the threshold, so the
+                                ; report is printed once and never repaints
+    mov si, khb_msg + KHB_M_CS  ; CS:IP - which routine it stopped in
+    mov al, [khb_csh]
+    call khb_hex
+    mov si, khb_msg + KHB_M_IPH
+    mov al, [khb_iph]
+    call khb_hex
+    mov si, khb_msg + KHB_M_IPL
+    mov al, [khb_ipl]
+    call khb_hex
+    mov si, khb_msg + KHB_M_OWN ; who holds the mutex...
+    mov al, [gfx_lock_own]
+    call khb_hex
+    mov si, khb_msg + KHB_M_CUR ; ...and who is running
+    mov al, [sch_cur]
+    call khb_hex
+    mov si, khb_msg + KHB_M_SPH
+    mov al, [khb_sph]
+    call khb_hex
+    mov si, khb_msg + KHB_M_SPL
+    mov al, [khb_spl]
+    call khb_hex
+    mov bx, sp                  ; ...and three words of the interrupted code's
+    mov cx, 3                   ; OWN stack: the return addresses that name the
+    mov di, khb_msg + KHB_M_RET ; LOOP, where the IP only names its leaf
+.khbret:
+    mov ax, [ss:bx+KHB_IPOFF+6]
+    push ax
+    mov si, di                  ; khb_hex preserves AX, BX, CX and leaves SI
+    mov al, ah                  ; alone, so the pair below is all this needs
+    call khb_hex
+    pop ax
+    mov si, di
+    inc si
+    inc si
+    call khb_hex
+    add di, 5
+    add bx, 2
+    loop .khbret
+    mov si, khb_msg + KHB_M_IMR ; the PIC's mask...
+    mov al, [khb_imr]
+    call khb_hex
+    mov si, khb_msg + KHB_M_ISR ; ...what it has in service...
+    mov al, [khb_pisr]
+    call khb_hex
+    mov si, khb_msg + KHB_M_FLG ; ...and whether the interrupted code was
+    mov al, [khb_flg]           ; running with interrupts off (bit 1 here)
+    call khb_hex
+    mov si, khb_msg + KHB_M_BEAT ; ...and the pair, which HERE is always one
+    mov al, [khb_beat]           ; apart by construction - this runs in the
+    call khb_hex                 ; entry block, after the beat and before the
+    mov si, khb_msg + KHB_M_CHAIN; chain. It is the STRIP, painted once on each
+    mov al, [khb_chain]          ; side of the BIOS call, whose pair answers
+    call khb_hex                 ; which side a stopped machine died on; these
+                                 ; two only say that both counters are moving
+    mov al, [gfx_lock_flag]     ; BANKED, not just forced: the trigger is 30
+    mov ah, [wm_clip_n]         ; seconds without a ui_task pass and a healthy
+    push ax                     ; machine really can spend that inside ONE
+    mov al, [gfx_dis]           ; pass - ModPlug's opening W_PAINT is one - so
+    mov ah, [gfx_color]         ; a fire that turns out to be spurious must not
+    push ax                     ; leave the mutex open behind it and MAKE the
+    mov byte [gfx_lock_flag], 0 ; freeze it was watching for. Forced open
+    mov word [wm_clip_n], 0     ; because the primitives assume the caller
+    mov byte [gfx_dis], 0       ; holds it, and a live clip would truncate us
+    mov byte [gfx_color], CBLACK
+    mov cx, 8
+    mov dx, MBAR_H + 8
+    mov si, khb_msg
+    mov ax, (CWHITE << 8) | CBLACK  ; OPAQUE: the line lands on the desktop,
+    call font_run               ; which is a 50% dither, and font_str is
+                                ; transparent - the first one printed was a
+                                ; photograph of black glyphs on a checkerboard
+                                ; and could not be read at all
+    pop ax
+    mov [gfx_dis], al
+    mov [gfx_color], ah
+    pop ax
+    mov [gfx_lock_flag], al
+    mov [wm_clip_n], ah         ; the count is a word and its high byte cannot
+    mov byte [wm_clip_n+1], 0   ; exceed WM_CLIP_MAX, so the byte is the whole
+.khbout:
+    popf
+    pop es                      ; ...and the four the loop added, in order: an
+    pop di                      ; instrument that unbalances the stack of the
+    pop si                      ; TIMER ISR wedges the machine in the splash,
+    pop dx                      ; which is what this did before it was counted
+    pop cx
+    pop bx
+    pop ax
+%endif
     inc word [sch_subs]         ; EVERY entry, sub-ticks included: fsx_wait's
                                 ; frame clock waits on this (SPEC.md 53.5.1),
                                 ; and it must count the interrupts the PIT
@@ -836,6 +1218,22 @@ sch_isr:
 .full:
     pushf                       ; chain: BIOS ticks its count and sends EOI
     call far [sch_old08]
+%ifdef KFZTRACE
+    inc byte [khb_chain]        ; THE CHAIN CAME BACK. khb_beat counts entries
+    call khb_paint              ; ...and the strip is painted a SECOND time, or
+                                ; the two counters say nothing: at the entry
+                                ; paint they are one apart in a healthy tick and
+                                ; in a dying one alike
+                                ; to this ISR and this counts the BIOS handler
+                                ; returning, so ONE photograph of a stopped
+                                ; machine says which side of that call it died
+                                ; on: equal means the interrupt completed and
+                                ; whatever stopped the machine is in task code,
+                                ; one apart means it never left the BIOS - and
+                                ; the two were indistinguishable before, which
+                                ; is why the field has been asked for a second
+                                ; picture every round
+%endif
 
     inc word [ticks]
     call sch_account            ; after the inc, so [ticks] and the freshly
@@ -986,6 +1384,36 @@ sch_resume:
 ; assumed. Re-run the 0xCC fill probe (docs/KERNEL-MEMORY.md) if it ever hits.
 ; -----------------------------------------------------------------------------
 sch_stkdie:
+%ifdef KFZTRACE
+    ; --- SAY SO (KFZ only) ---------------------------------------------------
+    ; This is the only cli+hlt in the kernel, so it is the only thing that can
+    ; stop the heartbeat - and a stopped heartbeat is exactly what the field
+    ; reports. Silent, it is indistinguishable from a wild jump; one solid bar
+    ; and a task number turn it into a diagnosis a photograph can carry.
+    ; Registers are free: the next instruction halts for ever.
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    mov bx, [vid_rseg]
+    or bx, bx
+    jz .nomark                  ; no adapter yet: nothing to say it on
+    mov es, bx
+    xor dx, dx
+    cld
+.skbank:
+    mov di, dx
+    add di, KHB_STK
+    mov cx, 8                   ; a 64px black bar: THE CANARY DIED
+    xor al, al
+    rep stosb
+    inc di                      ; ...one white cell, then WHICH TASK overran
+    mov al, [sch_cur]
+    not al
+    mov [es:di], al
+    add dx, 0x2000
+    cmp dx, 0x8000
+    jb .skbank
+.nomark:
+%endif
     cli
 .hang:
     hlt

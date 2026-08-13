@@ -819,6 +819,33 @@ mouse_unhook:
     cmp bx, MOU_PEND
     jb .port
 
+    ; --- AND INT 09h, WHICH NOTHING PUT BACK (SPEC.md 9.6.5) -----------------
+    ; mouse_init hooks int 09h for keypad 5 and this is the only place that
+    ; can undo it. It went missing because the loop above walks mou_ivecs and
+    ; the keyboard is not a UART, so the one vector installed outside that
+    ; table was the one vector nothing restored - and the cost of that is not
+    ; a leak, it is a HARD FREEZE ON THE NEXT KEYSTROKE.
+    ;
+    ; The only caller is sched_unhook, and the only caller of THAT is the
+    ; Chip menu's Restart, which ends in int 19h. int 19h is the bootstrap
+    ; loader and not POST: it does not reset the interrupt vector table. So
+    ; int 09h survived the restart pointing at KERNEL_SEG:kbm_isr, the boot
+    ; sector read a fresh kernel over that same segment, and mouse_init then
+    ; saved the vector it found - its own predecessor, at its own offset -
+    ; into kbm_old9. kbm_isr's `jmp far [cs:kbm_old9]` was a jump to itself.
+    ;
+    ; It does not grow the stack, so nothing overruns and nothing faults: it
+    ; is a tight loop inside an interrupt gate, so IF is 0, IRQ1 is in service
+    ; with no EOI coming, and the machine stops dead with the picture it had.
+    ; The first key pressed after a soft restart ended the session.
+    pushf
+    cli
+    mov ax, [kbm_old9]
+    mov [es:0x24], ax
+    mov ax, [kbm_old9+2]
+    mov [es:0x26], ax
+    popf
+
     pop es
     pop si
     pop cx
@@ -1288,9 +1315,30 @@ kbm_isr:
     mov byte [kbm_p5], 1        ; ...otherwise it is a press, spent in task
                                 ; context by kbm_p5spend
 .chain:
+    ; A CHAIN TO OURSELVES IS A DEAD MACHINE, so it is refused rather than
+    ; taken (SPEC.md 9.6.5). mouse_unhook puts int 09h back now and that is
+    ; what stops kbm_old9 ever naming this routine - but the vector outlives
+    ; any path that skips the unhook, and the failure it produces is the worst
+    ; in the system: a tight loop inside an interrupt gate, IF clear, IRQ1 in
+    ; service and no EOI ever sent. Nothing faults, nothing overruns, the
+    ; screen keeps whatever it had and every clock in the machine stops.
+    ;
+    ; No BIOS handler lives in the kernel's segment, so the segment alone is
+    ; the whole test. Refusing costs the keystroke and an EOI the BIOS would
+    ; otherwise have sent - a keyboard that has stopped working, on a machine
+    ; that is still running, in a state this can no longer reach.
+    mov ax, cs
+    cmp [cs:kbm_old9+2], ax
+    je .selfchain
     pop ds
     pop ax
     jmp far [cs:kbm_old9]       ; CS, not DS: DS is the interrupted code's again
+.selfchain:
+    mov al, 0x20                ; the EOI is the BIOS's job and there is no
+    out 0x20, al                ; BIOS below us: without it IRQ1 stays in
+    pop ds                      ; service and takes the mouse's IRQ3/IRQ4 down
+    pop ax                      ; with it
+    iret
 
 ; -----------------------------------------------------------------------------
 ; kbm_p5spend - turn a keypad-5 press the ISR saw into the button press

@@ -4436,6 +4436,80 @@ always says no is indistinguishable from a feature that never ran**, and the
 only thing that separated them was watching the ISR execute instruction by
 instruction.
 
+#### 9.6.5 …and the hook that nothing put back froze the machine on the next key
+
+**`mouse_init` installed int 09h and nothing ever restored it.** The vector
+was the one thing hooked outside `mou_ivecs` — the keyboard is not a UART, so
+the loop `mouse_unhook` walks to put the serial vectors back never reached
+it — and what that cost is not a leak. It is a **hard freeze on the first
+keystroke after a soft restart**, and it took the field, a photographed
+heartbeat and four rounds of instrument to find.
+
+The chain is short and every link is ordinary. The Chip menu's Restart
+(§20.10) ends in `int 19h`, which is the **bootstrap loader and not POST**: it
+re-reads the boot sector and does not reset the interrupt vector table. So
+int 09h survived the restart still naming `KERNEL_SEG:kbm_isr`; the boot
+sector then read a fresh kernel over that same segment, at the same offsets;
+and `mouse_init` saved the vector it found — its own predecessor, at its own
+address — into `kbm_old9`. **`kbm_isr`'s `jmp far [cs:kbm_old9]` was a jump to
+itself.**
+
+**It is the worst failure shape in the system, and that is why it looked like
+nothing.** The loop pushes two words and pops them before the jump, so the
+stack does not grow: nothing overruns, no canary dies, no fault is raised. It
+runs inside an interrupt gate, so `IF` is clear and no `sti` is coming; IRQ1
+is in service with no EOI behind it. Every clock in the machine stops with
+whatever was on the screen still on it. The kernel is not running, so no
+kernel instrument can report — which is exactly what the field kept sending
+back: *the entire system freezes, no bar changing, nothing after 60 s*.
+
+**What identified it was a counter painted twice.** `khb_beat` counts entries
+to `sch_isr` and `khb_chain` counts the BIOS `int 08h` chain returning, and
+the heartbeat is painted once on each side of that call; the field photograph
+read **`beat` one ahead of `chain`**, so the machine died inside the timer
+interrupt without ever coming back from the BIOS. The IBM ROM's `int 08h`
+does `sti` early, so IRQ1 nests inside it — and the nested int 09h never
+returned. The same photograph read `kfz = 00`, meaning `ui_task` never saw
+the key at all, which is what ruled out everything downstream of it.
+
+**A/B'd on a cycle-accurate 5150 with the period IBM ROM**, same script both
+times: open the System menu, pick Restart, wait for the card to come back to
+`Mode6HiResGraphics` — so the machine really did reboot into the desktop and
+this is not a BIOS that stalled — then send one keystroke and read
+`0040:006C`. Without the fix: **2144, 2144, 2144**, and it never moves again.
+With it: **2112, 2463, 2821**.
+
+**On the GLaBIOS twin the restart does not complete at all** — `int 19h`
+leaves a blank 80-column text screen with the tick still running, on both
+kernels — so the machine to run this on is `os8088_5150_cga`, and the
+difference is the BIOS rather than either build. It is also why the unfixed
+GLaBIOS run dies about two seconds after the click, *before* the kernel is
+back: the orphaned vector is pointing into a segment the boot sector is
+overwriting, so the reboot's own keyboard traffic executes rubble. An emulator
+that refuses to execute that rather than trying is reporting the same defect
+as a panic.
+
+Two changes, and the first is the fix:
+
+- **`mouse_unhook` restores int 09h**, beside the serial vectors it already
+  restored. Its only caller is `sched_unhook` and that runs before `int 19h`,
+  so the poisoned state can no longer be created.
+- **`kbm_isr` refuses to chain to itself.** No BIOS handler lives in the
+  kernel's segment, so `kbm_old9`'s segment against `CS` is the whole test.
+  It costs the keystroke and owes the EOI the BIOS would have sent —
+  a keyboard that has stopped working on a machine that is still running.
+  It is insurance against a path that skips the unhook, and with the fix
+  above it should never fire.
+
+**A vector installed outside the table that undoes them is the shape to
+recognise**, and it is the second time this tree has produced it: §51.2's
+detach exists because a driver that hooks an interrupt and is then freed
+leaves the vector pointing into a heap the next claim reuses. The rule is the
+same one — **whatever installs, uninstalls, in the same routine's mirror** —
+and a hook that does not fit the loop its neighbours are restored by is
+precisely the one that will be left out of it.
+
+
 `fm_drag` is the one that cannot be fixed by servicing it. It exists to
 disambiguate a click from a drag, and it waits with the button down to find
 out which — but the button is latched for the whole `W_ONCLICK` dispatch and
@@ -24466,6 +24540,26 @@ Seven things about it:
 - **The caller's default name still wins.** `fdlg_open`'s `SI` is the
   document the app is actually on; the remembered name is what fills the box
   when `SI` is 0, which is the case that used to give an empty box.
+- **...and `SI = 0` has to SURVIVE THE STUB, which for a while it did not.**
+  Slot 0x0150 was an `OSAPI_NSTUB`, and that macro stages the caller's
+  `DS:SI` into `api_name` **unconditionally** — right for the six file cells
+  it also serves, where a name is an argument the operation cannot run
+  without, and wrong here, where the published contract is *"a name, or 0"*.
+  A staged 0 arrives as `api_name`, a kernel address and so never zero,
+  holding whatever `api_copyname` found at the caller's offset 0 — which for
+  a package is its own 32-byte header (§20.2). So an app asking for **no**
+  default got `O8` and the version bytes in the box, the Open button went
+  **live on a name no volume has**, and the branch above this one was
+  unreachable from any package: nothing could take it, because nothing could
+  leave `SI` zero. Four of the six packages that use the dialog ask for no
+  default — Tracker, Frotz twice, and ModPlug twice (Open, and PlayList ▸
+  Add…) — so it was all of them, and the feature above had never once run
+  outside the kernel. `api_fdlg_open` is its own stub now: it tests `SI`,
+  stages only a real name, and passes the zero through untouched. The shape
+  to recognise is that **a shared stub encodes a contract, and this cell's
+  differed from the other six in the one place the macro had no opinion** —
+  the `V` flag had already been reasoned about for it and the optional
+  argument had not.
 - **The banked fallback is taken FIRST**, because a remembered folder can
   have gone away — the disk was swapped, or the directory deleted — and
   `dsk_chdir`'s failure path leaves `[dsk_cwd]` at 0 on the drive it tried.
