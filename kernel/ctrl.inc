@@ -342,7 +342,6 @@ CPV_MB2   equ CPV_MY + CP_GW + 3
 
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
-cp_s_tcap:  db 'Click a field, then + or -', 0
 
 ; --- Drivers page (SPEC.md 31.6/51) ------------------------------------------
 ; One row per drv_tab row: a checkbox, the driver's name, and - in the caption
@@ -442,7 +441,6 @@ CPT_BUY   equ 22                ; '+' button top
 CPT_BDY   equ 44                ; '-' button top
 CPT_O0Y   equ 68                ; option row 0 glyph top ('12-hour clock')
 CPT_O1Y   equ 84                ; option row 1 glyph top ('Seconds in...')
-CPT_CAP1Y equ 102               ; instruction caption row
 CPT_CAP2Y equ 112               ; hardware-clock caption row
 
 ; Option hit bands: the whole pane width, generous and contiguous like the
@@ -1882,14 +1880,7 @@ cp_time_paint:
     call cp_timechk
 
     mov byte [gfx_color], CBLACK
-    mov si, cp_s_tcap           ; caption 1: how the page is worked
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CPT_CAP1Y
-    call KERNEL_SEG:cw_font_str
-
-    mov si, cp_s_tnrt           ; caption 2: read live from the probe's
+    mov si, cp_s_tnrt           ; the caption: read live from the probe's
     cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37.90) - informative only,
     je .cap                     ; since editing works either way
     push bx

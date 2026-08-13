@@ -21629,7 +21629,7 @@ CPT_BX    equ 150   ; button column x         CPT_BW equ 28  ; button size
 CPT_BUY   equ 22    ; '+' button top          CPT_BH equ 18
 CPT_BDY   equ 44    ; '-' button top
 CPT_O0Y   equ 68    ; option row 0 glyph top  CPT_O1Y equ 84 ; option row 1
-CPT_CAP1Y equ 102   ; instruction caption     CPT_CAP2Y equ 112 ; RTC caption
+CPT_CAP2Y equ 112   ; RTC caption
 ```
 
 **Field table (binding).** Seven entries, `db x, w, y, 0` — stride 4, so
@@ -21669,9 +21669,8 @@ selected one — white on a black `gfx_fill` box inset 2px around the glyphs
 - `cp_time_paint` — heading, `cp_time_rows`, both buttons (`cp_timebtn`,
   a `gfx_frame` + white interior + centred `'+'`/`'-'` glyph), the two
   option rows (12×12 `os88ui_glyph` check at CP_PGX, label at
-  CP_PLX — the Sound page's checkbox idiom, §31.4), and two captions:
-  `'Click a field, then + or -'` at CPT_CAP1Y and, at CPT_CAP2Y,
-  the `cp_rtcnam` row for `[clk_tier]` — `'Hardware clock: none'`,
+  CP_PLX — the Sound page's checkbox idiom, §31.4), and one caption, at
+  CPT_CAP2Y: the `cp_rtcnam` row for `[clk_tier]` — `'Hardware clock: none'`,
   `'... AT 70h'`, `'... 58167 2C0h'`, `'... 5C01 2C0h'` or `'... BIOS'`,
   read live from `[clk_rtc]`/`[clk_tier]` (§37.90). The three-layer refusal
   idiom again, and it names the RUNG rather than answering yes/no because
