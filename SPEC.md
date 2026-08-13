@@ -27545,15 +27545,10 @@ allow, from 32x16 up, and everything else follows from that:
   frontmost while it tracks, and since §11.3 a background painter under it
   draws its own visible region rather than over the top — so the released-lock
   window is safer than it was when this was written against `wm_obscured`.
-  **Nothing is drawn *before* a long operation here any more, and that is
-  §59.5's rule rather than Paint's taste.** This bullet used to end with the
-  `Loading...` toast a file dialog's completion callback put up, followed by
-  one `pt_wait` so a buffered machine flushed it before the read rather than
-  after. Both halves are gone: the toast, because §12.8's widget reports the
-  read live in the same pixels, and `pt_wait`, because §59.4's `toast_now`
-  ends in `gfx_flush` itself. `Saving...` followed it for the same reason
-  (§59.5). What Paint says about a file operation, it says when the operation
-  has returned.
+  The same rule applies to anything drawn *before* a long operation rather than
+  during one: the "Loading..." toast a file dialog's completion callback puts up
+  is followed by one `pt_wait`, or the buffered machine flushes it only after
+  the load it was announcing.
 
 ### 42.1 About Paint, and why it is not a window
 
@@ -39145,17 +39140,6 @@ cannot disagree about what "the strip goes up" means. It clears
 `[toast_dirty]` because on the immediate path the draw has just happened;
 `toast_pass` re-sets it and draws.
 
-**The case above no longer has a caller, and the mechanism is kept anyway.**
-Paint's `Encoding...`/`Saving...` was the *before a long operation* case this
-was written for, and §59.5 retired it: since §59.9 gave the strip a first home
-in the gap left of the clock, a message put up before a file operation is a
-message put up **in §12.8's cells**, and the widget draws over it. What
-`toast_now` is still for is the other half of the same sentence — a toast
-raised *after* the work, from a callback that then returns, reaches the glass
-at the moment of the act instead of a tick later. `Saved` and `Settings Saved`
-are both that. **Do not read this section as a licence to announce a file
-operation before it runs**; §59.5 is the rule.
-
 ### 59.5 A verdict is a toast; a status line is not
 
 The Disk window's status line (§22.7/§22.9) carried five things on one row and
@@ -39202,34 +39186,9 @@ strings are `.text`, so `mov si, [bx]` through DS reaches them from either.
 **`Loading...` in Paint went for the same reason from the other direction**
 (docs/PAINT-NOTES.md): it announced a floppy read that §12.8's file-activity
 widget now reports *live*, in the same pixels — so `fpg_begin` retired the
-toast a moment after it went up.
-
-**And `Saving...` has now gone after it, which is §59.9 catching up with a
-paragraph that outlived its reason.** It stayed on the argument that a GIF
-encodes 125,000 pixels *before* the floppy starts, so the widget cannot report
-the work — true, and beside the point once the two are in the same pixels
-again. §59.8 moved the strip into the clock's field, wholly right of
-`[vid_clk_hx]`, and `fpg_begin` dropped its `toast_kill` on exactly that:
-the widget's right edge is `[vid_clk_hx] - 1`, so the two could be up together
-because they were about different things. §59.9 then gave the strip a *first*
-home in the **gap** — `[menu_bend]` to `[menu_bn]`, the blank cells left of the
-clock — which is the 88 pixels `fpg_begin` borrows. A short message prefers the
-gap, so `Saving...` (11 cells) took the widget's cells by preference, was
-white-filled over by `fpg_begin` a moment later, and was composed back on top
-by `fpg_end`'s `menu_draw_bar` while the strip's three seconds ran.
-
-**The rule that replaces it: a message about a file operation is said when the
-operation is OVER, never before it.** `Saved` is raised after `pt_save`
-returns — which is after `dskw_write_x` has called `fpg_end` and given the bar
-back (§12.8) — on both of Paint's save paths, the menu one and the Save As
-dialog's completion. That is where every other file verdict in the tree was
-already said (§59.5's Disk-window ladder, §59.6's `Settings Saved`), and it is
-what makes the ordering an invariant rather than a coincidence: the widget owns
-those cells for exactly as long as the disk is moving, and nothing else may
-draw there in that window. §59.4's `toast_now` is untouched and still earns its
-keep — it is what puts `Saved` on the glass at the moment of the act rather
-than a tick later — but the *before a long operation* case it was written for
-no longer has a caller.
+toast a moment after it went up. Its `Saving...` stays, because a GIF encodes
+125,000 pixels **before** the floppy starts and the widget cannot report work
+that has not reached the disk.
 
 ### 59.6 The Control Panel's save result
 

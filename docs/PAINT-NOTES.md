@@ -503,44 +503,17 @@ which `pt_save` and `pt_load` set and their callers say.
 
 Two things worth knowing before adding another message here:
 
-- **Say it when the operation is OVER, never before it** (SPEC.md 59.5). Paint
-  had `Saving...` in front of both save paths, and it was the last message in
-  the tree that announced work rather than reporting it. SPEC.md 12.8's
-  file-activity widget borrows 88 pixels immediately left of the clock, and
-  since SPEC.md 59.9 the toast strip's *first* home is the gap those same
-  pixels are in — so a short message put up before a write was placed under the
-  widget by preference, white-filled over by `fpg_begin`, and composed back on
-  top of it by `fpg_end` for the rest of its three seconds. That is the
-  overrun. `Saved` is raised where it always should have been: after `pt_save`
-  returns, which is after `dskw_write_x` has called `fpg_end` and handed the
-  bar back. **−22 bytes.**
-
-  **Measured on a cycle-accurate 5150/CGA rather than reasoned about**, by
-  reading `[toast_scell]`/`[toast_scn]` and `[fpg_x0]` out of the guest at the
-  instant the widget arms: the strip was 11 cells at cell 39 = **x 344..431**
-  and the widget is 88 pixels at **x 344..431** — the *same* span, to the
-  pixel, which is arithmetic rather than luck (a `Saving...` strip is 9
-  characters plus §59's two inverted spaces = 11 cells = 88 px, and the
-  centring in an 18-cell gap lands it flush against the clock field, where the
-  widget also anchors). Sampling both flags through a whole save: **100 of 100
-  samples with the widget armed also had a toast up** before, and **0 of 99**
-  after, on both save paths. The file itself is unchanged — flushed off the
-  guest's floppy and read on the host, `PICTURE.BMP` is 24,758 bytes, `BM`,
-  448x110 at 4bpp, and `os88disk --verify` calls the volume coherent.
-- **The GIF encode is the case that argued the other way, and it loses.** LZW
-  runs over 125,000 pixels *before* the floppy starts, so the widget genuinely
-  cannot report it and a GIF save is now quiet until the write begins. That is
-  a real cost and it is the smaller one: a message that is going to be drawn
-  over is worse than no message, and the thing it was announcing reports itself
-  a moment later. If it is ever wanted back, it needs a home the widget does
-  not take — not a call in front of `pt_save`.
-- **A message put up before a long operation still WORKS**, and that took
-  kernel work rather than luck: SPEC.md 59.4's `toast_now` draws on the spot
-  when the caller provably holds the gfx lock, which a menu command always
-  does, and ends in `gfx_flush` so the `pt_wait` this used to need is gone.
-  The mechanism is sound and is what puts `Saved` up at the moment of the act;
-  what changed is that Paint no longer has anything to say in front of a file
-  operation.
+- **A message put up BEFORE a long operation still works**, and that took
+  kernel work rather than luck. `Encoding...` precedes seconds of LZW inside a
+  window callback, so a purely deferred toast would have appeared *after* the
+  thing it announced; SPEC.md 59.4's `toast_now` draws on the spot when the
+  caller provably holds the gfx lock, which a menu command always does. The
+  `pt_wait` that used to exist to flush it on a double-buffered machine is
+  no longer needed for that reason — `toast_now` draws on the spot itself.
+- **A file operation retires it.** `fpg_begin` (SPEC.md §12.8) is in the same
+  pixels and is a live progress bar rather than a static line, so it wins.
+  That is why `Saving...` before a `pt_save` is redundant with the widget and
+  only `Encoding...`, which precedes work the widget cannot see, is not.
 
 ## The background is ours now (SPEC.md §11.90.1)
 
