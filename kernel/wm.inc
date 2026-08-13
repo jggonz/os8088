@@ -158,14 +158,22 @@ wm_strseg:
 ; proc.
 ; -----------------------------------------------------------------------------
 wm_pkgcall:
+%ifdef SNAPAUDIT
+    push word [snap_cur]        ; OUTSIDE the ds/es pair, because the restore
+                                ; below addresses DS and DS is the PACKAGE's
+                                ; until `pop ds` runs - inside it, the write
+                                ; landed 0xD5F9 bytes past the package's base
+                                ; (SPEC.md 51.2.4, which is drv_call's bug in
+                                ; the audit build)
+%endif
     push ds
     push es
     push cs
     pop es                      ; ES = KERNEL_SEG: the record lives here and
                                 ; the callback may read it
 %ifdef SNAPAUDIT
-    push word [snap_cur]        ; SPEC.md 11.94.2: everything drawn from here
-    mov [snap_cur], si          ; down belongs to THIS WINDOW, and this is the
+    mov [snap_cur], si          ; SPEC.md 11.94.2: everything drawn from here
+                                ; down belongs to THIS WINDOW, and this is the
                                 ; one site that covers both kinds - a package
                                 ; through its dispatcher, a kernel window
                                 ; through BP. Stacked rather than a depth
@@ -183,14 +191,14 @@ wm_pkgcall:
 .near:
     call bp                     ; a kernel window: DS is already ours
 .out:
+    pop es
+    pop ds
 %ifdef SNAPAUDIT
     pop word [snap_cur]         ; POP writes no flags, and a callback returns
                                 ; values IN THEM (CF from an entry proc,
                                 ; W_ONSIZE's answer) - so this needs no
                                 ; pushf/popf around it and must not grow one
 %endif
-    pop es
-    pop ds
     ret
 
 ; -----------------------------------------------------------------------------

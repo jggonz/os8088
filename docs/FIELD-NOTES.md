@@ -2277,3 +2277,47 @@ pattern, `F96` at row 0 and `F3C` at row 32 — reads **BPM 150** for rows
 0..31 and **BPM 60** for 32..63, tracking the effect exactly. A negative
 result across three files is not evidence about a field until one file
 disagrees with it.
+
+---
+
+## 23. A black dash on the desktop after mounting a hard drive (FIXED, SPEC.md 51.2.4)
+
+Reported off a PCem 286/VGA machine with a screenshot: one 16-pixel black run
+on a single scan line of the bare desktop, well below the Control Panel
+window, appearing when a hard drive was mounted or unmounted. Two things in
+the report were worth more than the picture. **"On at least vga"** — the
+reporter had only seen it there. And, in the second message, **"I've been
+seeing this on and off; after a reboot mount/unmount is not recreating it,
+but during the boot when it happened each mount/unmount would redraw it."**
+
+That pair is the whole diagnosis in advance: *deterministic within a boot,
+different between boots* is memory nobody initialised, and *one adapter only*
+is an address that lands somewhere harmless on the other two.
+
+**QEMU could not show it, and the reason is worth keeping.** `make test`
+reproduces nothing here because QEMU hands the guest **zeroed RAM**, and the
+value being written was 0. `.bss` is not the variable either — `-f bin`
+zeroes nothing, but `.cold`'s `start=COLD_START` makes nasm pad the file with
+zeros across the whole `.bss` range and the boot sector's single read lands
+that padding on it, so kernel scratch arrives zeroed by accident on every
+machine. **The heap does not**, and that is what differs from boot to boot on
+iron. `make DIRTYRAM=1` was written for this: it fills the claim heap with
+0xAA before anything can claim from it, and with that one knob the defect
+reproduced under QEMU on the first try, in the same shape, at a different
+position.
+
+**Finding it from there took one watchpoint.** `qmp.py … 'gdbserver tcp::1234'`
+on the running machine, `gdb` with a hardware watchpoint on the framebuffer
+byte the artifact sits in (`0xA0000 + row*80 + x/8`), then the click. It
+stopped on `pop word [snd_inst]` in `drv_call` with `CS = COLD_SEG` and
+**`DS = 0x9B00`, a heap segment** — the driver's own — so the restore was
+writing 0xD5F9 bytes past the driver's base, which on a 640KB machine is past
+the top of the heap and inside VGA memory. Two bytes, one scan line, sixteen
+pixels. On Hercules and CGA the same address is the unused hole below B000,
+which is the whole of "at least vga".
+
+The fix and both defects are SPEC.md §51.2.4. What it says generally:
+**anything banked in kernel memory across a call that changes `DS` is pushed
+before `DS` and popped after it is back** — `loader.inc` had it right, the two
+driver dispatchers did not, and `wm_pkgcall`'s `SNAPAUDIT` bracket had the
+same shape.

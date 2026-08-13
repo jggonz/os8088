@@ -747,8 +747,32 @@ without that nothing at all would rebuild, since the knob touches neither
 `boot.asm` nor `kernel.bin`. It moves the SECTOR only: the kernel still reads
 the real `int 12h` for its heap, so this is not a small-machine simulation.
 
-A sixth gives the kernel a typeface of its own instead of the machine's
-(SPEC.md §6.2). It is **not** a testing knob like the five above — it changes
+**A sixth makes the emulator stop lying about uninitialised memory, and it is
+the one to reach for the moment a field report says "on and off between
+boots"** (SPEC.md §51.2.4, docs/FIELD-NOTES.md 23):
+
+```
+make DIRTYRAM=1        # fill the claim heap with 0xAA before anything claims
+```
+
+**QEMU hands the guest ZEROED RAM and a real machine does not**, so a routine
+that reads or writes through memory nothing has initialised is *invisible*
+here and is a different bug on every boot in the field. `.bss` is not where
+that bites, and the reason is worth knowing rather than re-deriving: `-f bin`
+zeroes nothing, but `.cold`'s `start=COLD_START` makes nasm pad the file with
+zeros across the whole `.bss` range and the boot sector's one contiguous read
+lands that padding on it — so kernel scratch arrives zeroed **by accident**,
+on every machine, and stays that way only while `.cold` exists. **The HEAP is
+the real difference**, and this knob is it: with it on, the drive-zone line
+artifact reproduced under QEMU on the first try, where a plain `make test`
+could not show it at all. Pair it with a framebuffer watchpoint —
+`qmp.py build/qmp.sock 'gdbserver tcp::1234'` on a RUNNING machine, then
+`gdb -ex 'target remote :1234' -ex 'watch *(unsigned char *) 0xA0000+row*80+x/8'` —
+and the stop names the instruction, the segment it addressed through and the
+caller. That pair took SPEC.md §51.2.4 from a screenshot to a fix in one run.
+
+A seventh gives the kernel a typeface of its own instead of the machine's
+(SPEC.md §6.2). It is **not** a testing knob like the six above — it changes
 what ships when it is asked for — and it is off by default, so a plain `make`
 is byte-identical with or without it:
 
