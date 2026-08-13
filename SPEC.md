@@ -8247,6 +8247,103 @@ claim's header equal the window's content rect exactly — so a shrunken rect
 disagrees with its own cache. It is a real piece of work and it is not this
 one.
 
+#### 11.96.14.1 …and a far edge may only clamp away what is not another display's glass
+
+Reported from the field as *"drag a window to straddle between the two screens
+and the primary draws and the secondary does not. Dragging again while it
+straddles makes it draw correctly. I suspect it's trying to use a SU/drag
+buffer to draw when it can't."* That last sentence is the diagnosis.
+
+**§11.96.14 is right about the case it was written for and the clamp it
+introduced does not distinguish two facts that look identical.** "Past this
+display's far edge" means *off the desktop* for a window dragged off the
+bottom of a one-card machine — there is nothing there, so replaying only the
+rows that survive is exactly correct — and it means *the other monitor* on an
+extended desktop, where the discarded pixels are on glass the user is looking
+at. `wm_su_vset` clamped in both.
+
+**The failure is silent in the way §39.14.8 predicted, one level up.** A
+clipped restore does not report that it was clipped: `wm_su_try` answers
+CF = 0, `wm_draw_win` reads that as *the content is already back on screen*
+and skips **both** the white fill and `W_PAINT` (§11.96), and nothing else in
+the pass has any reason to draw the rest. So the primary's slice is replayed
+perfectly, the secondary's slice keeps whatever was under the window, and no
+gate anywhere notices — which is §39.14.8's own sentence, *a cut save and a
+cut restore agree with each other*, arriving through the one caller that had
+been given permission to cut.
+
+**And the second drag coming out right is the same mechanism, not a
+workaround.** Its SOURCE straddles, so `wm_su_take`'s `vid_span_one` refuses,
+no cache is taken, `wm_su_try` finds nothing and the window redraws in full.
+The bug is therefore reachable exactly once per crossing — which is what makes
+it read as intermittent.
+
+`wm_su_vset` asks **`vid_disp_find`** — `vid_disp_of`'s question allowed to
+answer NO (§39.15.4's primitive, its second consumer) — about the first pixel
+each far edge is about to discard. A display holds it: **refuse**, and the
+caller repaints. Nothing does: **clamp**, exactly as §11.96.14 does today.
+
+Four things are load-bearing:
+
+- **One point answers for the whole cut edge, and that is the arrangement
+  rather than an approximation.** The x test probes at `y1` and the y test at
+  `x1` — the *near* coordinates, which the dead-zone test a few lines above
+  has already proved belong to this display, so neither probe can land in
+  `vid_disp_of`'s primary fallback and be believed. What makes one probe
+  enough is that the two displays share the origin corner on the axis being
+  cut (§39.19.2 places them edge to edge; Right shares the top, Below shares
+  the left), so the second display's extent along that axis is an interval
+  starting at the near end. A miss at the near coordinate therefore means the
+  rect starts beyond the second display altogether — and every coordinate
+  further out is beyond it too, since `wm_fit` confines a frame to the box of
+  the display its origin is on (§39.16.1). There is no rect that misses at the
+  near end and has glass at the far one.
+- **It is one routine and it covers both ends.** `wm_su_vset` is called by
+  `wm_su_try` (the restore, where refusing is the correctness fix) and by
+  `wm_dc_take` (the bank, where refusing means the ~4 ms `gfx_save` is not
+  spent on a cache that would be refused, and no straddling rect is ever
+  written into a claim header). The second falls out of the first at no cost.
+- **A refusal here is the pre-§11.96.14 behaviour and nothing worse.** That is
+  what makes this safe to take: the fallback is a full redraw, which is what
+  every straddling drag did before the drag cache existed.
+- **It is `KERN_BIG` only by construction.** The `%else` branch has one
+  display, so there is no seam for a far edge to fall on and the clamp is
+  unconditionally right there.
+
+**Measured on a cycle-accurate 5150 with a Hercules and a CGA in it**
+(`os8088_5150_both_gla`, CGA primary), one Disk window parked clear of the
+seam and dragged across it, against the `make DRAGCACHE=0` reference build
+driven through the identical session — the whole second card, every pixel:
+
+| | the seam | before | after |
+|---|---|---:|---:|
+| **Extend Right** | x = 640; the window at x = 479, 159 of its 320 columns across | **10,194** px | **0** |
+| **Extend Below** | y = 200; the window at y = 120, 75 of its 155 rows across | **11,404** px | **0** |
+
+**Both arms were broken and both had to be measured**, which is the reason
+this table has two rows rather than one: the x clamp and the y clamp are
+separate code with separate register juggling, and a fix verified on Right
+alone would have left Below asserted rather than tested.
+
+Each broken run's bounding box is the window's *content* rect exactly —
+virtual x 640..797, y 38..173 on Right; x 104..421, y 200..273 on Below, both
+running from `y + TITLE_H` to `y + h - 2` — **with the chrome around it
+correct**. That is the shape that says the fill and `W_PAINT` were skipped
+rather than that anything drew wrongly, and it is what identifies the defect
+as this one and not a drawing hook. `tests/dispdrag.py` is the gate, and it
+takes `--layout right|below` because one run cannot cover both seams.
+
+**What it must not have cost is the drag cache itself**, and that is checked
+rather than reasoned about: `tools/winmove.py disk` on a single-display
+machine is **92 calls / 221.6 ms with one `gfx_restore` and 4 `font_char`**,
+which is §11.96.14's own recorded shape for that drag — the listing is still
+not re-lettered.
+
+Cost: `.text` **+22** on `kern_big`, no image rung crossed and the footprint
+unchanged at 512 spare; `kern_small` is **byte-identical** — the whole change
+is inside the `KERN_BIG` arm, which is the shape a one-display machine should
+see and a claim worth checking rather than assuming.
+
 #### 11.96.16 A window ABOUT to appear banks what it is about to cover
 
 §11.96.4 takes the cache at the one place every window is **drawn**, which
