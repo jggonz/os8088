@@ -2570,7 +2570,36 @@ nothing. **The step accelerates
 and the ramp RESETS on a change of direction** - not a refinement: without it
 the correction travels at full speed too and a menu item sits unreachable
 between two 24px strides, which is exactly how the first version failed to
-pick one. **It costs 520 bytes and two 512-byte steps of `KERN_BUDGET` (spare
+pick one. **A DROPPED MENU IS NAVIGATED BY ITEM AND NOT BY PIXEL, THOUGH
+(SPEC.md 9.6.3)**, because a ramp is the wrong instrument in a list:
+`MENU_ITEM_H`/`KBM_MIN` is 16/3, measured on a mouseless 5150 as **6, 5, 5
+presses to walk three items - 22 to cross the menu** - and held it is 3, 9,
+18, 30, 45px cumulative against 16px cells, so it steps OVER items instead.
+Worse than slow, it goes BLANK: **a separator is a `MENU_DIS` item**, so six
+presses in the middle of a menu highlight nothing at all and it reads as
+broken rather than sluggish. `menu_kbnav` places the pointer on the next
+enabled cell's CENTRE, skipping disabled ones, and `kbm_move` asks it BEFORE
+`kbm_accel` so a placed press never stamps the ramp. **22 presses -> 4**, and
+one press crosses the separator. The row comes from GEOMETRY and never from
+`menu_hover`, which answers 0xFFFF for a disabled cell as well as for
+"outside"; one signed formula covers the two off-the-end rows, and stepping
+off an end parks the pointer one cell outside the frame - nothing
+highlighted, which is what the mouse does there and is also the keyboard
+cancel. **And keypad 5 was documented as a button key and could not be one
+(SPEC.md 9.6.4)**: with NumLock OFF the BIOS **discards** it - measured, the
+buffer head and tail do not move, where Ins gives 5200h - because it is the
+one keypad key with no cursor function, so cursor mode has nothing to
+translate it to. `cmp ah, 0x4C` could therefore only ever fire with NumLock
+ON, which is the mode where the ASCII gate makes the arrows digits and there
+is no pointer to click with; **the key worked only where the feature did
+not**, and every test passed because 9.6.1 verified it by turning NumLock on
+- a harness kinder than the machine. So `kbm_isr` hooks **int 09h**, PEEKS
+port 60h (the 8255 latches it until the BIOS acks, so this consumes nothing)
+and chains; it is the only place os8088 touches the keyboard hardware and it
+is installed on **tier 0 alone**, because a 286+ 8042 hands the byte over
+once and a BIOS that tests output-buffer-full would then find none - a dead
+keyboard for a convenience alias. The ISR only sets a byte; `kbm_btn` does
+everything else in task context. **It costs 520 bytes and two 512-byte steps of `KERN_BUDGET` (spare
 4,096 → 3,584 → 3,072)**, the first decided on when that step was half the
 slack rather than an eighth of it, the second bought by 9.6.1/9.6.2 - **114
 bytes of code for a whole step, because the image rung had ONE byte of slack**

@@ -4216,7 +4216,7 @@ The keys:
 
 | key | scan | does |
 |---|---|---|
-| the eight keypad directions | 47/48/49/4B/4D/4F/50/51 | move, clamped to `[vid_wm1]`/`[vid_hm1]` exactly as the ISR clamps |
+| the eight keypad directions | 47/48/49/4B/4D/4F/50/51 | move, clamped to `[vid_wm1]`/`[vid_hm1]` exactly as the ISR clamps — **by one ITEM rather than by pixels while a menu is dropped** (§9.6.3) |
 | **keypad 0 (Ins)**, **keypad 5**, **Space** | 52 / 4C / 39 | the **button** — one action, three keys (§9.6.1). Space and keypad 5 are matched **above** the `AL = 0` gate, keypad 0 below it |
 | **Del** | 53 | the right button, latching; press edge only (§9) |
 | **ScrollLock** | — | the **latch** — hand the whole keyboard to the window under the pointer (§9.6.2). Not a key here: a level (§9.6) |
@@ -4312,6 +4312,104 @@ what keeps the keypad's `0` typing a digit. Reproduce the field's behaviour
 here by turning **NumLock on** — SeaBIOS then sends `AL` = `'5'` with scan 4C,
 which is exactly the byte the Compaq sends.
 
+**…and that match could never fire in the mode this feature runs in, which
+§9.6.4 is the fix for.** The paragraph above is right about `AL` and wrong
+about the conclusion it drew, because the mode it verified in is the mode
+where there is no keyboard mouse: with NumLock **off** the BIOS does not put a
+wrong byte in `AL`, it **discards the key entirely**. Keypad 5 having no
+cursor function is not merely why `AL` is unreliable — it is why the BIOS's
+cursor-mode table has nothing to translate it *to*.
+
+#### 9.6.4 …so the kernel reads keypad 5's SCANCODE, and it is the one hook
+
+**Measured on a cycle-accurate 5150 with a period BIOS**, pressing each key
+and reading the guest's own keyboard buffer at `0040:001A`/`001C`:
+
+| key | NumLock **off** | NumLock **on** |
+|---|---|---|
+| keypad 0 (Ins) | head/tail 32 → 34, **AX = 5200** | AX = 5230 — `AL` = `'0'`, so the ASCII gate passes it to the app |
+| keypad 8 (Up) | 30 → 32, **AX = 4800** | AX = 4838 — a digit, untouched, exactly as §9.6 says |
+| **keypad 5** | 30 → **30**: *nothing at all* | 34 → 36, **AX = 4C35** |
+
+So `cmp ah, 0x4C` fires **only with NumLock on** — the mode in which the
+arrows are digits and the pointer cannot move. **The key was a button only
+where the feature it belongs to is switched off**, which is why "we document
+numpad 5 as a click but it currently doesn't" and why every test of it
+passed: §9.6.1 verified this key by turning NumLock on, that being the one
+mode in which it arrives. **A harness kinder than the machine hides precisely
+the bug it exists to find** — the same shape `partner.py` reading `NC_BYE` as
+"carry on" produced at §62.10.
+
+int 16h therefore cannot deliver this key, on any BIOS, in cursor mode. So the
+kernel reads the **scancode** instead: `kbm_isr` hooks **int 09h**, and it is
+the only place os8088 touches the keyboard hardware. It does the least a hook
+can do — **peek port 60h and chain**. On the 8088's 8255 the byte is latched
+in port A until the BIOS acknowledges it with bit 7 of port 61h, so reading it
+early consumes nothing; the real handler reads the same byte and does all the
+work, the ack, the shift states and the EOI included. Nothing in the hook
+writes a port, queues a key or ends an interrupt.
+
+Five things hold it up.
+
+- **It is installed on tier 0 alone** (`mouse_init`, gated on `[cpu_tier]` ==
+  `CPU_8086`), and that gate is the safety argument rather than a scruple. A
+  286 and up decode 60h through an **8042**, where a read clears
+  output-buffer-full and a BIOS that tests that flag before reading would then
+  find no data — **a dead keyboard**, bought for a convenience alias on a
+  machine class this feature is not for. On tier 0 the latch makes the peek
+  provably safe, and tier 0 *is* the target machine. `cpu_detect` runs before
+  `sched_init` and so long before this (§41.1).
+- **Three gates come before the peek, in cost order.** `[mou_seen]` first, so
+  a machine with a mouse never reads the port at all and pays one compare;
+  then **NumLock**, because with it on int 16h *does* deliver the key and
+  `kbm_key` already claims it — without this gate one press would toggle the
+  button twice; then **ScrollLock**, §9.6.2's hatch, which must hand this key
+  back with all the others.
+- **The ISR only ever sets a byte.** The event, the latch and the repeat guard
+  are all `kbm_btn`'s, and `kbm_btn` runs in **task** context where every
+  other button key already reaches it — so IRQ1 pushes nothing onto the event
+  queue and this needed no new rule about what an ISR may call.
+  `kbm_p5spend` is the spender, and it reads-and-clears with one `xchg`
+  (`fr_restart`'s idiom, for its reason).
+- **It is spent from two places, which between them cover every state the
+  machine can be in**: `kbm_poll0` — the modal loops and a package's own
+  tracking loop — and the end of `kbm_ui`, an ordinary `ui_task` pass. In
+  `kbm_ui` it must come **after `.relax`**, or the press is released by the
+  same pass that made it, which is §9.6.1's flashing menu from a third
+  direction; and `.relax`'s two "nothing to release" exits jump to it rather
+  than past it, because that is the commonest pass there is and exactly the
+  one a fresh press arrives in.
+- **The break code (0CCh) matches nothing**, and typematic repeats collapse
+  into one press because `kbm_btn`'s existing `KBM_GAP` guard is what spends
+  them.
+
+**On a 286 and up keypad 5 is still NumLock-on only**, which is the honest
+outcome of the gate and is stated here rather than left to be discovered: Ins
+and Space are the button keys there, as they are everywhere, and the three
+keys are one action (§9.6.1).
+
+Verified on a mouseless cycle-accurate 5150, CGA and Hercules alike: all three
+button keys press and release, keypad 5 opens a menu **while its BIOS buffer
+head and tail never move** — which is what says the press came from the
+scancode and not from int 16h — and with NumLock on one press opens the menu
+and it *stays* open, so the gate is doing its job rather than the two paths
+both firing. The peek itself was proved by single-stepping the ISR from
+outside the guest: `AX = 004C` after the `in`. **And a machine with a mouse is
+byte-identical to the kernel before this**: the same scripted session — five
+pointer moves, a menu opened, tracked and closed with the real mouse — is **0
+differing framebuffer bytes** of 128,000 across four captures. Cost:
+**`.text` +114 bytes**, no rung crossed, the footprint unmoved.
+
+**The first version of the peek shipped a wrong segment and the trace is why
+it took minutes rather than a day.** It loaded `ES = 0` before testing
+`[es:0x17]` — the vector-install idiom four lines above, not `kbm_slock`'s —
+so it read linear `0x17`, the middle of the IVT, which has bits in `0x30` set:
+the NumLock/ScrollLock gate therefore refused *every* press and the key stayed
+exactly as dead as before, with the port read working perfectly. **A gate that
+always says no is indistinguishable from a feature that never ran**, and the
+only thing that separated them was watching the ISR execute instruction by
+instruction.
+
 `fm_drag` is the one that cannot be fixed by servicing it. It exists to
 disambiguate a click from a drag, and it waits with the button down to find
 out which — but the button is latched for the whole `W_ONCLICK` dispatch and
@@ -4370,7 +4468,96 @@ where the two separate on an 18.2Hz clock — and the step grows `KBM_ACC` per
 press to `KBM_MAX`. The direction reset is not a refinement: without it the
 *correction* travels at full speed too, and a menu item sits unreachable
 between two 24px strides. That is exactly how the first version failed to pick
-one.
+one. **A pixel ramp is still the wrong instrument inside a dropped menu, and
+§9.6.3 is what replaces it there.**
+
+#### 9.6.3 A dropped menu is navigated by ITEM, not by pixel
+
+**A menu is a LIST, so the unit an arrow key moves in it is one item.** With
+the pixel ramp alone it was `MENU_ITEM_H` / `KBM_MIN` = 16 / 3, and that is
+what a mouseless machine actually measured on a cycle-accurate 5150: **6
+presses to enter the menu, then 6, 5, 5 to walk three items** — 22 presses to
+cross a three-item pull-down, with the pointer visibly creeping 3px at a time
+and the highlight changing on one press in six. Reported off the field as
+"it takes multiple presses to get it to go up or down in selection", which
+is the symptom stated exactly.
+
+**The ramp cannot fix it and must not be asked to**, which is the reason this
+is a separate mechanism rather than a bigger `KBM_MIN`. Held, the ramp is 3,
+9, 18, 30, 45 px cumulative against 16px cells, so it steps *over* items —
+§9.6.2's direction reset exists precisely because it did — and a step sized
+for a menu is far too small to cross a screen with. The two demands are
+opposed, and no single number satisfies both.
+
+**Worse, the highlight goes AWAY rather than merely lagging.** Separators are
+`MENU_DIS` items (§12.2 — `menu_s_msep`, `fm_s_fsep`), so the System menu is
+About / Control Panel / Task Manager / **rule** / Restart, and `menu_hover`
+answers `0xFFFF` for the whole of that fourth cell. Six presses in the middle
+of a menu that highlight nothing at all do not read as slowness; they read as
+the menu having stopped working.
+
+So while a pull-down is on screen, a direction key with a **vertical**
+component places the pointer on the **centre of the next item cell in that
+direction**, skipping every disabled one, and the ordinary pixel step is not
+taken at all:
+
+| the press | what it does |
+|---|---|
+| Up / Down (and the four diagonals, whose dy is what counts) | one **item**, disabled cells skipped |
+| Left / Right | the **ordinary pixel step** — unchanged, and it is how the pointer leaves a menu sideways |
+| the pointer is beside the menu (x outside its rect) | re-enter at the near end: Down at the first item, Up at the last |
+| a step off either end | one cell **outside** the frame — nothing highlighted, which is what the mouse does at the same place, and a button press there dismisses the menu (a keyboard cancel that otherwise cost ~35 presses sideways) |
+| a further press past that end | nothing moves. The pointer is parked one cell out and stays there; Left/Right still walk it away |
+
+Six things hold it up.
+
+- **`menu_kbnav` (`menu.inc`) is asked before `kbm_accel` is called**, so a
+  placed press never touches the ramp: `[kbm_last]` is not stamped, and the
+  first arrow press *after* the menu closes therefore sees a large tick gap
+  and starts fresh at `KBM_MIN`, which is what it should do anyway.
+- **It is gated on `[menu_dropd]`**, a byte set by `menu_drop` once the menu
+  is on the screen and cleared the instant its poll loop ends. `menu_drop` is
+  the one tracker both the bar (§12) and the context menu (§12.4) go through,
+  so a popup gets this without knowing it exists. The byte is in `.text` with
+  a real initialiser and not in `.bss`, for `fdlg_win`'s reason: `-f bin`
+  zeroes nothing, and this is read on the machine's first arrow key.
+- **The row is taken from GEOMETRY, not from `menu_hover`**, which answers
+  `0xFFFF` for a disabled cell as well as for "outside" — stepping from that
+  would restart at the end of the menu every time the pointer was parked on a
+  separator.
+- **One formula covers the two off-the-end rows**: the target y is
+  `[menu_y1] + 1 + row × MENU_ITEM_H + MENU_ITEM_H/2` with `row` **signed**,
+  so row −1 lands 7px above the frame and row `[menu_cnt]` lands 8px below
+  `[menu_y2]`. Neither needs a case of its own, and both are positions the
+  mouse can reach, so `menu_hover` and the highlight need no new rule.
+- **x is left alone while it is inside the rect** — a pointer the user has
+  put in a column stays in it — and is otherwise snapped to `[menu_x1] + 8`,
+  where the item text starts.
+- **The placement goes through `mou_clamp`** (§39.15.4), the same clamp the
+  ISR uses, so the two-display seam is honoured by construction rather than
+  by a rectangle this routine would have had to know about.
+
+Measured on the same mouseless cycle-accurate 5150/CGA, the identical
+scripted session: **22 presses to cross a three-item menu → 4** (one to enter,
+one per item, one to step off the end), the highlight moving on **every**
+press, and the pointer landing on 29, 45, 61 — the cell centres — instead of
+creeping 3px at a time. On the System menu, Down walks **0, 1, 2, 4** and Up
+walks **4, 2, 1, 0**: the `MENU_DIS` separator at 3 is crossed by one press
+rather than by six that show nothing. Left still moves 3px, so the sideways
+exit is unchanged. Cost: **`.text` +186 bytes**, no rung crossed, the
+footprint unmoved.
+
+**The instrument had to be corrected twice, and both faults made a broken
+build look fine** — which is why the numbers above are stated with the method.
+A press count times an assumed step is not a position: MartyPC headless runs
+the guest *faster* than real time, so a fixed host-side gap between keystrokes
+landed more than `KBM_GAP` apart in guest ticks, the ramp never accelerated,
+and 40 "held" presses moved 120px instead of crossing the screen — leaving the
+pointer on the wrong menu. The pointer is positioned by a **closed loop**
+(press, read `mouse_x`/`mouse_y` back, press again), which is
+`tools/os88mouse.py`'s rule arrived at from the other direction. And
+`menu_sel` is meaningless unless a menu is actually dropped — it holds the
+last menu's answer — so every reading of it is gated on `[menu_dropd]`.
 
 **Cost, and a standing recommendation.** 406 bytes of `.text` to begin with,
 which took one 512-byte step of `KERN_BUDGET` (§15.1) — spare 4,096 → 3,584,
@@ -4390,7 +4577,9 @@ remove** — either dropped entirely or built only into the testing and
 benchmark kernels, where the harness drives the mouse over QMP and never needs
 it. What depends on it is one module plus **six** call sites: `ui_task`'s key
 poll and its deferred ladder, the `kbm_poll` in `menu_track` / `ui_drag` /
-`ui_grow`, and `osapi_mouse`.
+`ui_grow`, and `osapi_mouse` — plus §9.6.3's one call the other way,
+`kbm_move` → `menu_kbnav`, which `menu.inc` answers `CF = 1` to whenever no
+menu is dropped and which therefore costs a removal nothing but a stub.
 
 ## 10. events.inc
 

@@ -330,6 +330,26 @@ mouse_init:
     cmp bx, MOU_PEND
     jb .hook
 
+    ; --- int 09h, for the one button key the BIOS discards (SPEC.md 9.6.4) ---
+    ; TIER 0 ONLY, and that is the safety argument rather than caution: the
+    ; hook PEEKS port 60h, which an 8088's 8255 latches until the BIOS acks it
+    ; and a 286+'s 8042 hands over once. cpu_detect has run by here (kmain
+    ; orders it before sched_init, long before this).
+    cmp byte [cpu_tier], CPU_8086
+    jne .no9
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli
+    mov ax, [es:0x24]           ; int 09h's vector, saved for the chain
+    mov [kbm_old9], ax
+    mov ax, [es:0x26]
+    mov [kbm_old9+2], ax
+    mov word [es:0x24], kbm_isr
+    mov [es:0x26], cs
+    popf
+.no9:
+
     ; --- UART: 1200 baud, 7 data bits, no parity, 1 stop ---------------------
     mov ax, 0x0382              ; LCR: DLAB=1 + 7N1 bits
     call mou_pall
@@ -1023,7 +1043,16 @@ mou_clamp:
 %endif
 
 ; --- a direction: step, clamp, and move the arrow ----------------------------
+; A DROPPED MENU IS A LIST, and gets asked first (SPEC.md 9.6.3): a press with
+; a vertical component there moves one ITEM rather than KBM_MIN pixels, and
+; menu_kbnav has already placed the pointer when it answers CF = 0. Asking it
+; ABOVE kbm_accel is what keeps the two mechanisms apart - a placed press never
+; stamps [kbm_last], so the first arrow AFTER the menu closes sees a large tick
+; gap and starts fresh at KBM_MIN, which is what it should do anyway.
 kbm_move:
+    mov al, [bx+2]              ; dy: the axis a menu is a list along
+    call menu_kbnav
+    jnc .paint                  ; placed - the repaint below is all that is left
     call kbm_accel              ; DL = px this press is worth, and imul does
     mov al, [bx+1]              ; not disturb it, so it serves both axes
     imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
@@ -1042,6 +1071,7 @@ kbm_move:
     call mou_clamp
     mov [mouse_x], ax
     mov [mouse_y], bx
+.paint:
     call kbm_paint
     pop dx
     pop cx
@@ -1174,6 +1204,103 @@ kbm_btn:
     stc
     ret
 
+; -----------------------------------------------------------------------------
+; kbm_isr - int 09h, because the BIOS will not deliver the keypad's 5
+;           (SPEC.md 9.6.4)
+;
+; Keypad 5 is the one keypad key with NO cursor function, and that is not only
+; why 9.6.1 has to match it on its scancode alone - it is why, with NumLock
+; OFF, THE BIOS HAS NOTHING TO TRANSLATE IT TO AND THROWS IT AWAY. Measured on
+; a period BIOS, pressing it moves the keyboard buffer's head and tail not at
+; all, where Ins gives 5200h and Up 4800h. So int 16h can never report it, and
+; kbm_key's `cmp ah, 0x4C` can only ever fire with NumLock ON - which is the
+; mode where the ASCII gate makes the arrows digits and there is no keyboard
+; mouse to press a button for. The key worked only where the feature did not.
+;
+; That is also why every test of it passed: 9.6.1 verified this key by turning
+; NumLock on, which is the one mode in which it arrives. A harness kinder than
+; the machine hides exactly the bug it exists to find.
+;
+; So the kernel reads the SCANCODE rather than the BIOS's translation of it.
+; This is the only place os8088 touches the keyboard hardware, and it does the
+; least a hook can do: it PEEKS port 60h and chains. On the 8088's 8255 the
+; byte is latched in port A until the BIOS acknowledges it with bit 7 of port
+; 61h, so reading it early is not consuming it - the real handler below reads
+; the same byte and does all the work, including the ack, the shift states and
+; the EOI. Nothing here writes a port, queues a key or ends an interrupt.
+;
+; IT IS INSTALLED ON TIER 0 ONLY (mouse_init), and that gate is the whole
+; safety argument rather than a scruple: a 286 and up decode 60h through an
+; 8042, where a read clears the output-buffer-full flag and a BIOS that tests
+; it before reading would then find no data - a dead keyboard, bought for a
+; convenience alias on a machine class this feature is not for. On tier 0 the
+; latch makes the peek provably safe, and tier 0 is the target machine.
+;
+; Three gates before the peek, in cost order: a mouse that has spoken (so a
+; machine with one never reads the port at all), then NumLock - on, int 16h
+; delivers the key and kbm_key already has it, so claiming it here as well
+; would toggle the button twice for one press - and ScrollLock, which is
+; 9.6.2's hatch and must hand this key back with all the others.
+;
+; The break code (0CCh) matches nothing, and typematic repeats collapse into
+; one press because kbm_btn's own KBM_GAP guard is what spends this.
+; -----------------------------------------------------------------------------
+KBM_5SCAN   equ 0x4C            ; the keypad's centre key, make code
+
+kbm_isr:
+    push ax
+    push ds
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    cmp byte [mou_seen], 0
+    jne .chain                  ; a real mouse has spoken: never intercept, and
+                                ; never read the port either
+    in al, 0x60                 ; PEEK - see above: the 8255 holds it until the
+    cmp al, KBM_5SCAN           ; BIOS acks, so this consumes nothing
+    jne .chain
+    push es
+    mov ax, 0x40                ; the BIOS data area, NOT zero: KB_FLAG is at
+    mov es, ax                  ; 0040:0017, and an ES of 0 reads the middle of
+                                ; the vector table instead - which has bits in
+                                ; 0x30 set, so the test below always chained
+                                ; and this key stayed dead (kbm_slock is the
+                                ; idiom; the vector install above is not)
+    test byte [es:0x17], 0x30   ; KB_FLAG: NumLock (20h) - int 16h will deliver
+    pop es                      ; it and kbm_key claims it - or ScrollLock
+    jnz .chain                  ; (10h), the hatch. pop leaves the flags alone
+    mov byte [kbm_p5], 1        ; ...otherwise it is a press, spent in task
+                                ; context by kbm_p5spend
+.chain:
+    pop ds
+    pop ax
+    jmp far [cs:kbm_old9]       ; CS, not DS: DS is the interrupted code's again
+
+; -----------------------------------------------------------------------------
+; kbm_p5spend - turn a keypad-5 press the ISR saw into the button press
+;
+; The ISR only ever sets a byte: everything else the button does - the event,
+; the latch, the repeat guard - is kbm_btn's, and kbm_btn runs in TASK context
+; where every other button key already reaches it. So IRQ1 pushes nothing onto
+; the event queue and this needed no new rule about what an ISR may call.
+;
+; Called from the two places the keyboard mouse is serviced from, which
+; between them cover every state the machine can be in: kbm_poll0 (the modal
+; loops and a package's own tracking loop) and the end of kbm_ui (an ordinary
+; ui_task pass). In kbm_ui it must come AFTER .relax, or the press is released
+; by the same pass that made it - 9.6.1's flashing menu from a third direction.
+; out: nothing (all registers preserved, flags clobbered)
+; -----------------------------------------------------------------------------
+kbm_p5spend:
+    push ax
+    xor al, al
+    xchg al, [kbm_p5]           ; read-and-clear in one, so a press arriving
+    or al, al                   ; between the test and the store cannot be lost
+    jz .out                     ; (fr_restart's idiom, and for its reason)
+    call kbm_btn                ; the same one action Ins and Space take
+.out:
+    pop ax
+    ret
+
 kbm_rclick:                     ; latches too - menu_popup ends on a level poll
     push ax                     ; of bit 1 exactly as menu_track does on bit 0
     xor byte [mouse_btn], 0x02
@@ -1228,6 +1355,9 @@ kbm_poll:
     mov byte [kbm_eat], 0
 kbm_poll0:
     push ax
+    call kbm_p5spend            ; the one button key that arrives as a SCANCODE
+                                ; and never as a keystroke (SPEC.md 9.6.4), so
+                                ; int 16h below will never report it
     mov ah, 0x01
     int 0x16
     jz .out                     ; nothing waiting
@@ -1295,14 +1425,18 @@ kbm_ui:
     call gfx_unlock
 .relax:
     cmp word [ui_ev + EV_TYPE], EVT_MDOWN
-    jne .out
-    test byte [mouse_btn], 0x01
-    jz .out
+    jne .p5                     ; .p5 and NOT .out: nothing to release is the
+    test byte [mouse_btn], 0x01 ; commonest pass there is, and it is exactly
+    jz .p5                      ; the pass a fresh keypad-5 press arrives in
     push ax
     and byte [mouse_btn], 0xFE  ; bit 1 is the right button's own latch, and is
     mov ax, EVT_MUP             ; released by its own key (SPEC.md 12.4)
     call kbm_post
     pop ax
+.p5:
+    call kbm_p5spend            ; LAST, and after .relax: a press spent above
+                                ; the release would be taken back by the very
+                                ; pass that made it (SPEC.md 9.6.4)
 .out:
     ret
 
@@ -1321,6 +1455,11 @@ kbm_post:
     pop si
     ret
 
+kbm_old9    dd 0                ; the BIOS's int 09h, chained by kbm_isr
+                                ; (SPEC.md 9.6.4). .text with a real
+                                ; initialiser: -f bin zeroes nothing, and the
+                                ; ISR reads this through CS
+kbm_p5      db 0                ; ...and a keypad-5 press it saw, not yet spent
 kbm_step    db KBM_MIN          ; px the current run of repeats is worth
 kbm_lastk   db 0                ; ...and which direction it is a run OF
 kbm_last    dw 0                ; tick of the last movement key
