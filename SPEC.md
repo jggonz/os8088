@@ -34499,6 +34499,45 @@ the foreground's stamp is a race rather than a fix; `drv_blk_call` is
 `dsk_xfer`'s inner loop and sits *below* the file layer, so it resolves no
 names. Neither can reach a cell that asks `inst_caller`.
 
+### 51.2.4 A memory restore addresses `DS`, so it goes AFTER `pop ds`
+
+§51.2.3's bracket is `push word [snd_inst]` … far call … `pop word
+[snd_inst]`, and for two years both `drv_call` and `drv_cp_call` wrote that
+restore **inside** the `push ds` / `pop ds` pair. `pop word [mem]` addresses
+`DS`, and `DS` between the far call and the `pop ds` is the **driver's**
+segment — so the restore put two bytes at the driver's base plus
+`snd_inst`'s kernel offset (0xD5F9 in the build this was found on) and the
+kernel's own stamp was never restored at all.
+
+Two defects, and the second is the one that got reported:
+
+- **The stamp stayed cleared.** Every sound grant made after a driver call
+  inside a Control Panel dispatch was attributed to the kernel rather than to
+  the instance — §51.2.3's whole subject, silently undone by its own
+  implementation.
+- **A two-byte wild write, ~54KB past the driver's base.** A driver's region
+  is `mem_claim_hi`'s, off the **top** of the heap, so on a 640KB machine
+  that address is past the top of RAM and lands in the **VGA framebuffer**:
+  16 pixels of one scan line written to colour 0, a black dash on the bare
+  desktop, redrawn on every dispatch — which is every `DRVV_*` verb and
+  every press on a driver's page, Mount and Unmount included. Its position is
+  wherever the heap happened to put that driver, so it moves from boot to
+  boot and reads as intermittent.
+
+**It is invisible on the two mono adapters**, whose framebuffers are at B000
+and B800: the same linear address is the unused hole below them, so the write
+lands nowhere and nothing shows. That is why it arrived as *"on at least
+vga"*. It is also invisible on a machine with enough RAM above the driver for
+the address to stay inside the heap — where it is not harmless but silent,
+two bytes of somebody else's claim.
+
+`loader.inc`'s package entry had the ordering right the whole time: `pop ds`,
+then `pop word [snd_inst]`. So the rule is the general one, and it binds
+`wm_pkgcall`'s `SNAPAUDIT` bracket (§11.94.2) as well, which had the identical
+shape: **anything banked in kernel memory across a call that changes `DS` is
+pushed before `DS` and popped after it is back.** All three still end in
+flag-writing-free instructions, so a callback's `CF` comes out untouched.
+
 ### 51.3 Loading, and what happens when it fails
 
 `drv_load` is the package loader's order (§21) with the instance half

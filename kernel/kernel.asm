@@ -2351,6 +2351,41 @@ kmain:
     call mem_init               ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
+%ifdef DIRTYRAM
+    ; --- DIAGNOSTIC ONLY (make DIRTYRAM=1): fill the heap with a pattern -----
+    ; QEMU hands the guest zeroed RAM and a real machine does not, so a read
+    ; of a claim nothing has written yet is INVISIBLE here and is whatever
+    ; the last thing to use that memory left behind out in the field. This
+    ; makes that difference reproducible: every heap byte starts 0xAA, so a
+    ; claim used before it is filled draws, counts or points somewhere
+    ; obviously wrong instead of somewhere accidentally right.
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov bx, [mem_base]
+    mov dx, [mem_top]
+.dirty:
+    cmp bx, dx
+    jae .dirtied
+    mov es, bx
+    xor di, di
+    mov cx, 512                 ; 1KB per pass, as words
+    mov ax, 0xAAAA
+    cld
+    rep stosw
+    add bx, 64
+    jmp short .dirty
+.dirtied:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%endif
     call mod_init               ; on-demand modules (SPEC.md 2.8): point every
                                 ; entry slot at mod_gone. `-f bin` zeroes no
                                 ; .bss, so until this runs those slots hold
