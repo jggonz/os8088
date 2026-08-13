@@ -797,6 +797,14 @@ sched_mode_get:
 ; in:       hardware interrupt (any task, any DS/ES)
 ; out:      via iret, possibly into a different task
 ; -----------------------------------------------------------------------------
+%ifdef KFZTRACE
+KHB_X       equ 40              ; x = 320: blank bar between the menus and the
+                                ; clock, and clear of the key breadcrumbs at 0
+khb_beat:   db 0                ; the heartbeat's own counter, in .text so the
+                                ; ISR can reach it through CS before DS is ours
+khb_srcs:   dw khb_beat, sch_cur, sch_lock, gfx_lock_flag, gfx_lock_own
+%endif
+
 sch_isr:
     push ax                     ; frame layout documented at top of file
     push cx
@@ -810,6 +818,71 @@ sch_isr:
     mov ax, KERNEL_SEG
     mov ds, ax
 
+%ifdef KFZTRACE
+    ; --- the heartbeat (SPEC.md 7/8, KFZ only) -------------------------------
+    ; Painted from IRQ0, which is the whole point: on the machine this exists
+    ; for, ticks keep advancing while nothing else responds, so the timer is
+    ; the one context still able to report. Five bytes of kernel state as raw
+    ; pixels on scanline 0, complemented so a SET bit is a BLACK pixel on the
+    ; white menu bar and a photograph is the reading:
+    ;
+    ;   [beat] [sch_cur] [sch_lock] [gfx_lock_flag] [gfx_lock_own]
+    ;
+    ; A beat that moves says the machine is alive; sch_cur says WHICH TASK it
+    ; is stuck in; sch_lock says whether switching is barred; and the last two
+    ; say whether a drawing mutex is held and by whom. Between them those five
+    ; bytes separate a starved UI task from a leaked scheduler lock from a
+    ; deadlocked gfx lock without another build.
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    pushf
+    mov ax, KERNEL_SEG          ; DS is not ours yet at this point
+    mov es, ax
+    mov bx, [es:vid_rseg]
+    or bx, bx                   ; ...AND NOT BEFORE THE ADAPTER IS PICKED: this
+    jz .khbout                  ; ISR runs from the first tick, which is during
+                                ; the splash, and [vid_rseg] is 0 until
+                                ; vid_setmode publishes it - so an unguarded
+                                ; paint lands at segment 0, which is the
+                                ; INTERRUPT VECTOR TABLE. Measured: the machine
+                                ; never reached the desktop
+    inc byte [cs:khb_beat]
+    mov es, bx
+    xor dx, dx                  ; DX = the bank base, four of them for height
+.khbank:
+    mov si, khb_srcs            ; SI -> the five addresses to sample
+    mov di, dx
+    add di, KHB_X               ; ...laid out from KHB_X, clear of the key
+    mov cx, 5                   ; breadcrumbs at offset 0
+.khbcell:
+    push si
+    mov bx, [cs:si]
+    mov al, [cs:bx]
+    not al                      ; a SET bit is a BLACK pixel on the white bar
+    mov [es:di], al
+    pop si
+    inc si
+    inc si
+    add di, 2                   ; one blank byte between cells
+    loop .khbcell
+    add dx, 0x2000
+    cmp dx, 0x8000
+    jb .khbank
+.khbout:
+    popf
+    pop es                      ; ...and the four the loop added, in order: an
+    pop di                      ; instrument that unbalances the stack of the
+    pop si                      ; TIMER ISR wedges the machine in the splash,
+    pop dx                      ; which is what this did before it was counted
+    pop cx
+    pop bx
+    pop ax
+%endif
     inc word [sch_subs]         ; EVERY entry, sub-ticks included: fsx_wait's
                                 ; frame clock waits on this (SPEC.md 53.5.1),
                                 ; and it must count the interrupts the PIT
