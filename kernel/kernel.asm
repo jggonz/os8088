@@ -359,7 +359,7 @@ KERN_BUDGET equ 104960          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; the two by 2KB, which is the direction it
                                 ; should drift from here.
 %else
-KERN_BUDGET equ 99328           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 102400          ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
                                 ;
@@ -484,6 +484,47 @@ KERN_BUDGET equ 99328           ; the whole kernel's FOOTPRINT. Growing past
                                 ; carries it, because a figure nobody re-asks
                                 ; about is exactly how the fifth move's 2,048
                                 ; became 512.
+                                ;
+                                ; THE TWENTY-THIRD MOVE, 99,328 -> 102,400,
+                                ; ASKED FOR AND GRANTED, 3KB, and it is
+                                ; ALLOCATED TO PERFORMANCE AND DISK.
+                                ;
+                                ; IT REPAIRS THE SAME BREAKAGE THE TWENTY-
+                                ; SECOND DID, WHICH IS THE POINT WORTH TAKING
+                                ; FROM IT. `make small` had stopped assembling
+                                ; again: measured by bisecting the guard,
+                                ; KERN_SIZE is 100,864 - 1,536 over the old
+                                ; figure, three rungs - and once again nobody
+                                ; saw it arrive, because `all` still never
+                                ; builds kern_small and nothing else does
+                                ; either. Twice now this figure has been
+                                ; discovered broken rather than reported
+                                ; broken. That is not the guard failing; it is
+                                ; the guard being the ONLY thing watching, and
+                                ; being asked only when somebody happens to
+                                ; run the target.
+                                ;
+                                ; WHICH IS WHY IT IS 3KB AND NOT THE 1KB FIRST
+                                ; ASKED FOR. 1KB - 100,352 - does not clear
+                                ; 100,864 at all and would have failed on the
+                                ; next assemble; the smallest figure that
+                                ; assembles is 100,864 EXACTLY, which is 0
+                                ; spare and hands the next byte added anywhere
+                                ; the same failure. 3KB lands 1,536 spare,
+                                ; three steps, and keeps the whole-KB unit this
+                                ; figure's own rule sets. The twenty-second's
+                                ; 2KB landed two steps and called that the
+                                ; smallest honest landing place; this is that
+                                ; judgement applied to an overshoot half again
+                                ; as large.
+                                ;
+                                ; The fifth move's rule binds the remainder
+                                ; exactly as before - headroom for ordinary
+                                ; growth, not an invitation to spend it - and
+                                ; the 1KB unit is NOT withdrawn by this move
+                                ; any more than it was by the twenty-second:
+                                ; the next move is 1KB again unless somebody
+                                ; says otherwise.
                                 ;
                                 ; It had moved fourteen times before that, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
