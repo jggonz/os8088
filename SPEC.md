@@ -4436,6 +4436,63 @@ always says no is indistinguishable from a feature that never ran**, and the
 only thing that separated them was watching the ISR execute instruction by
 instruction.
 
+#### 9.6.5 …and the hook that nothing put back froze the machine on the next key
+
+**`mouse_init` installed int 09h and nothing ever restored it.** The vector
+was the one thing hooked outside `mou_ivecs` — the keyboard is not a UART, so
+the loop `mouse_unhook` walks to put the serial vectors back never reached
+it — and what that cost is not a leak. It is a **hard freeze on the first
+keystroke after a soft restart**, and it took the field, a photographed
+heartbeat and four rounds of instrument to find.
+
+The chain is short and every link is ordinary. The Chip menu's Restart
+(§20.10) ends in `int 19h`, which is the **bootstrap loader and not POST**: it
+re-reads the boot sector and does not reset the interrupt vector table. So
+int 09h survived the restart still naming `KERNEL_SEG:kbm_isr`; the boot
+sector then read a fresh kernel over that same segment, at the same offsets;
+and `mouse_init` saved the vector it found — its own predecessor, at its own
+address — into `kbm_old9`. **`kbm_isr`'s `jmp far [cs:kbm_old9]` was a jump to
+itself.**
+
+**It is the worst failure shape in the system, and that is why it looked like
+nothing.** The loop pushes two words and pops them before the jump, so the
+stack does not grow: nothing overruns, no canary dies, no fault is raised. It
+runs inside an interrupt gate, so `IF` is clear and no `sti` is coming; IRQ1
+is in service with no EOI behind it. Every clock in the machine stops with
+whatever was on the screen still on it. The kernel is not running, so no
+kernel instrument can report — which is exactly what the field kept sending
+back: *the entire system freezes, no bar changing, nothing after 60 s*.
+
+**What identified it was a counter painted twice.** `khb_beat` counts entries
+to `sch_isr` and `khb_chain` counts the BIOS `int 08h` chain returning, and
+the heartbeat is painted once on each side of that call; the field photograph
+read **`beat` one ahead of `chain`**, so the machine died inside the timer
+interrupt without ever coming back from the BIOS. The IBM ROM's `int 08h`
+does `sti` early, so IRQ1 nests inside it — and the nested int 09h never
+returned. The same photograph read `kfz = 00`, meaning `ui_task` never saw
+the key at all, which is what ruled out everything downstream of it.
+
+Two changes, and the first is the fix:
+
+- **`mouse_unhook` restores int 09h**, beside the serial vectors it already
+  restored. Its only caller is `sched_unhook` and that runs before `int 19h`,
+  so the poisoned state can no longer be created.
+- **`kbm_isr` refuses to chain to itself.** No BIOS handler lives in the
+  kernel's segment, so `kbm_old9`'s segment against `CS` is the whole test.
+  It costs the keystroke and owes the EOI the BIOS would have sent —
+  a keyboard that has stopped working on a machine that is still running.
+  It is insurance against a path that skips the unhook, and with the fix
+  above it should never fire.
+
+**A vector installed outside the table that undoes them is the shape to
+recognise**, and it is the second time this tree has produced it: §51.2's
+detach exists because a driver that hooks an interrupt and is then freed
+leaves the vector pointing into a heap the next claim reuses. The rule is the
+same one — **whatever installs, uninstalls, in the same routine's mirror** —
+and a hook that does not fit the loop its neighbours are restored by is
+precisely the one that will be left out of it.
+
+
 `fm_drag` is the one that cannot be fixed by servicing it. It exists to
 disambiguate a click from a drag, and it waits with the button down to find
 out which — but the button is latched for the whole `W_ONCLICK` dispatch and
