@@ -809,6 +809,8 @@ sched_mode_get:
 %ifdef KFZTRACE
 KHB_STK     equ 20              ; x = 160: where sch_stkdie says the canary
                                 ; died, well clear of the heartbeat
+KHB_STUCK   equ 91              ; ticks (5s) of a HELD mutex before the
+                                ; watchdog prints; a real hold is ms
 KHB_IPOFF   equ 34              ; this block's 8 pushed words + sch_isr's 9,
                                 ; so [sp+34] is the IP the CPU pushed
 KHB_X       equ 0               ; the LEFT EDGE: eleven values are 55 bytes and
@@ -823,6 +825,43 @@ khb_csh:    db 0                ; CS high: 00 kernel, 0D cold, else a package
 khb_iph:    db 0                ; the interrupted IP: which routine the machine
 khb_ipl:    db 0                ; is standing in when it stops
 khb_wide:   db 0x00, 0x0F, 0xF0, 0xFF   ; two bits -> four pixels each
+khb_stuck:  dw 0                ; consecutive ticks the mutex has been held
+khb_msg:    db 'AT 00:0000 OWN 00 CUR 00 SP 0000', 0
+KHB_M_CS    equ 3                ; 'AT cc:iiii OWN oo CUR cc SP ssss' - every
+KHB_M_IPH   equ 6                ; one of these counted off the literal above,
+KHB_M_IPL   equ 8                ; which is what the first version did not do:
+KHB_M_OWN   equ 15               ; the fields landed on each other and on the
+KHB_M_CUR   equ 22               ; NUL, so the report ran on into the hex digit
+KHB_M_SPH   equ 28               ; table and printed it
+KHB_M_SPL   equ 30
+khb_hexd:   db '0123456789ABCDEF'
+
+; khb_hex - AL as two hex digits at DS:SI (KFZ only; clobbers AX, BX)
+khb_hex:
+    push bx
+    push ax
+    mov bl, al
+    push cx
+    mov cl, 4
+    shr al, cl
+    pop cx
+    and al, 0x0F
+    xor bh, bh
+    push bx
+    mov bl, al
+    mov al, [khb_hexd+bx]
+    pop bx
+    mov [si], al
+    mov al, bl
+    and al, 0x0F
+    push bx
+    mov bl, al
+    mov al, [khb_hexd+bx]
+    pop bx
+    mov [si+1], al
+    pop ax
+    pop bx
+    ret
 khb_srcs:   dw khb_beat, sch_cur, sch_lock, gfx_lock_flag, gfx_lock_own
             dw khb_sph, khb_spl, khb_bad, khb_csh, khb_iph, khb_ipl, 0
 %endif
@@ -938,6 +977,58 @@ sch_isr:
     add dx, 0x2000
     cmp dx, 0x8000
     jb .khbank
+
+    ; --- THE WATCHDOG: when it stops, WRITE IT DOWN IN HEX -------------------
+    ; Four rounds of asking the field to photograph bit patterns and I could
+    ; not read them reliably at the scale a screenshot arrives in. So once the
+    ; machine is provably wedged, print the answer as TEXT and stop asking.
+    ;
+    ; The trigger is the drawing mutex held CONTINUOUSLY for KHB_STUCK ticks.
+    ; A legitimate hold is milliseconds; ModPlug's long face draw is many
+    ; SHORT holds, one per worker frame, so it does not trip this.
+    ;
+    ; Drawing from inside IRQ0 is not something the kernel may do - but at the
+    ; instant this fires nothing else is ever going to run again, so the rules
+    ; it would break have no one left to protect. It forces the mutex open and
+    ; disarms the clip so font_str can work at all.
+    cmp byte [gfx_lock_flag], 0
+    jne .khbheld
+    mov word [khb_stuck], 0
+    jmp short .khbout
+.khbheld:
+    inc word [khb_stuck]
+    cmp word [khb_stuck], KHB_STUCK
+    jne .khbout                 ; ...and EXACTLY at the threshold, so the
+                                ; report is printed once and never repaints
+    mov si, khb_msg + KHB_M_CS  ; CS:IP - which routine it stopped in
+    mov al, [khb_csh]
+    call khb_hex
+    mov si, khb_msg + KHB_M_IPH
+    mov al, [khb_iph]
+    call khb_hex
+    mov si, khb_msg + KHB_M_IPL
+    mov al, [khb_ipl]
+    call khb_hex
+    mov si, khb_msg + KHB_M_OWN ; who holds the mutex...
+    mov al, [gfx_lock_own]
+    call khb_hex
+    mov si, khb_msg + KHB_M_CUR ; ...and who is running
+    mov al, [sch_cur]
+    call khb_hex
+    mov si, khb_msg + KHB_M_SPH
+    mov al, [khb_sph]
+    call khb_hex
+    mov si, khb_msg + KHB_M_SPL
+    mov al, [khb_spl]
+    call khb_hex
+    mov byte [gfx_lock_flag], 0 ; force it open: font_str asserts the caller
+    mov word [wm_clip_n], 0     ; holds it, and a live clip would truncate us
+    mov byte [gfx_dis], 0
+    mov byte [gfx_color], CBLACK
+    mov cx, 8
+    mov dx, MBAR_H + 8
+    mov si, khb_msg
+    call font_str
 .khbout:
     popf
     pop es                      ; ...and the four the loop added, in order: an
