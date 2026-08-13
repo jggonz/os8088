@@ -1696,10 +1696,19 @@ wm_destroy:
                                 ; a stranger's near pointer called in a new
                                 ; tenant's segment is not a wrong answer, it is
                                 ; a jump into the middle of its image
-    shr si, 1
+    shl si, 1                   ; ...and the four BAND extents (SPEC.md
+    mov word [wm_su_ext+si], 0  ; 11.96.11), which is the same rule a fourth
+    mov word [wm_su_ext+si+2], 0; time: the fragment layout is a function of
+                                ; them, so a new tenant that named no band has
+                                ; its cache laid out for the last one's and
+                                ; restores the wrong rows into the middle of
+                                ; its own content. Their declaration says all
+                                ; four zero is what every window has "by
+                                ; construction rather than by initialisation",
+                                ; and that is true of a VIRGIN slot only
     shl si, 1                   ; ...and its zoom bank, for the same reason:
-    shl si, 1                   ; a reused slot must not restore to the rect
-    shl si, 1                   ; the last tenant was zoomed out of (11.95).
+                                ; a reused slot must not restore to the rect
+                                ; the last tenant was zoomed out of (11.95).
     mov word [wm_zoomr+si+ZR_W], 0  ; the sentinel word is the whole of it
     mov word [wm_natr+si+NR_W], 0   ; ...and its natural rect, for the same
                                 ; reason again (SPEC.md 39.11.2.1). The two

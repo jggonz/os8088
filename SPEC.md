@@ -7941,6 +7941,42 @@ the two sites that can skip a window. That also retired §11.96.11's
 bank-and-restore pair, which existed only because `wm_su_edge` was borrowing
 those four words.
 
+#### 11.96.11.2 …and a window SLOT hands its band on to the next tenant
+
+Reported from the field as *"open Paint, close Paint, open Piano, drag the
+Piano — the Piano is now corrupt,"* with the middle of its content coming back
+as desktop dither with the keyboard's letters drawn through the button row.
+
+**`wm_su_ext` is per window SLOT and nothing cleared it at `wm_destroy`.** Paint
+is the only caller of `wm_band` in the tree, so it is the only thing that ever
+writes those four bytes — it names left = 44 and bottom = 23 for its tool
+palette and its colour strip — and its window is slot 1 on any ordinary
+desktop. Close Paint, open anything else, and the new window is slot 1 too:
+`wm_su_flay` then lays that window's cache out as **four fragments for bands it
+never asked for**, so §11.96.12's drag replay puts the fragments back at offsets
+the save never wrote them from. The array's own declaration is where the
+assumption is written down — all four zero is what every window has *"by
+construction rather than by initialisation"* — and that is true of a **virgin**
+slot only.
+
+`wm_destroy` already clears five per-slot side tables for exactly this reason
+(`wm_owner`, `wm_about`, `wm_onsz`, `wm_zoomr`, `wm_natr`, each with a comment
+saying a reused slot must not inherit the last tenant's). The band extents are
+the sixth and were missed; they are cleared there now, on the index the block
+already holds — `wm_about`'s `slot*2` doubled once more, which costs two `mov`s
+and two fewer shifts than the `shr`/`shl`/`shl`/`shl` it replaced.
+
+Cost: **`.text` +8, no rung crossed, footprint unchanged.** Verified on a
+cycle-accurate 5150 by driving the reported session — Disk window, Paint, close,
+Piano, drag — against a control that never opens Paint: **0 differing pixels of
+128,000 on CGA and of 307,200 on VGA mode 12h**, where the build before it
+differs by 1,382 and 1,873 in the middle of the Piano's content.
+
+**The gate is only worth what it can fail**, and the first CGA run was worth
+nothing: the drag started inside the window rather than on its title bar, so no
+window moved, and the pre-fix and fixed builds agreed to the pixel. A control
+that passes on the broken build is not a control.
+
 #### 11.96.12 A window MOVED replays its content instead of drawing it
 
 Reported from the field as *"drag the whole Solitaire window by its title and
