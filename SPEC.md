@@ -27406,8 +27406,40 @@ to say nothing at all.
 Measured on a cycle-accurate 5150 with a Hercules card, double-clicking
 `MEDIA/OS8088.GIF`: frame **494x300 → 512x152**, canvas **466x258 → 466x110**,
 `[pt_wchg]` **1 → 0** — identical, now, to what the same file through
-`File ▸ Open` has always produced. A Paint launched with no document is
-byte-identical either way.
+`File ▸ Open` has always produced.
+
+#### 42.11.1 The `[pt_argp]` gate belongs to `pt_argload`, not to its caller
+
+§42.11 shipped saying *"a Paint launched with no document is byte-identical
+either way"*, and it was not: the move dropped the gate. The old call site, in
+`pt_paint`, was `cmp byte [pt_argp], 0` / `je` around the call; the new one, in
+the entry proc, is reached whenever `[pt_mode]` is `PT_M_LIVE` — which is the
+test for *can this machine fund a canvas*, not for *were we given a document*.
+So **every** Paint launch ran the launch-document load.
+
+With no document `pt_name` is the empty string a zeroed bss holds, and an empty
+name is precisely what `dskw_name83` refuses (`.stem_end`'s `jcxz .bad`), so
+`OSAPI_FILE_READ` answered `FERR_NAME` and `pt_ferr` toasted **`Bad file
+name`** — on an ordinary double-click of `PAINT.O88`, naming a file the user
+had not asked for and Paint had never held. The second symptom was quieter and
+worse: `pt_argclus`/`pt_argdrv` are 0 too, so the `OSAPI_FILE_GOTO` above the
+read is a navigation to **drive 0, cluster 0**, and launching Paint from `B:`
+silently moved the machine to `A:` root — §51.5.2's defect, from a new
+direction, and the reason the next `File ▸ Open` opened on the wrong volume.
+
+**The gate is inside `pt_argload` now, at the routine rather than at its
+callers**, which is §59.7's clamp for §59.7's reason: a precondition a call
+site holds is a precondition the next move can leave behind, and this one
+already has been. The routine already cleared `[pt_argp]` itself ("once,
+whatever happens below"), so testing it there costs one `cmp`/`jne` and makes
+the documented input a fact rather than a promise.
+
+Measured on a cycle-accurate 5150 with a CGA, double-clicking `B:\APPS\PAINT.O88`
+against a reference build with the gate removed: toast `Bad file name` → **none
+staged at all**, and `([disk_drive], [dsk_cwd])` **(1, 2) → (0, 0)** → **(1, 2),
+unmoved**. The document path is unchanged — `MEDIA/OS8088.GIF` still opens at
+466x110 and toasts `Opened` — and `File ▸ Open` now opens on `B:\MEDIA`, which
+is what §38.10 always specified.
 
 ### 42.12 Its text is already aligned, and the one pen that is not is forced
 
