@@ -39106,6 +39106,96 @@ free from `menu_furniture` while the incremental build legitimately declined.
 itself — so the staged string was fresh while the pixels were a minute old.
 `[menu_ckck] = 0` is what makes the two builds answer the same question.
 
+#### 59.9.2 …and the gap already had a tenant: §12.8's progress widget
+
+§59.9 took the blank cells between the last menu and the clock and called them
+"the one placement with no victim". **They are not blank.** The file-activity
+widget (§12.8) is drawn at `[vid_clk_hx] - FPG_W`, which is the *right end of
+those very cells*, and it is the one thing on the bar that is drawn straight
+onto the glass and composed into no buffer at all — so `menu_bcell` cannot see
+it, the diff cannot arbitrate between them, and §59.1's "the bar has ONE
+painter" quietly stopped being true. Two painters, one strip of glass.
+
+The collision was not a corner case. Measured on a cycle-accurate 5150/CGA,
+with Paint frontmost, its own `Saving...` is placed at screen cells **43..53**
+and the widget takes **43..53** — the same eleven cells, exactly — because the
+strip's clamp puts a message that nearly fills the gap flush against
+`[menu_bn]`, and that is where the widget lives. Locator's desktop is barely
+better: the strip lands at 40..50 against the widget's 43..53, eight cells of
+overlap. Both are the *ordinary* case, not a wide-message edge.
+
+What it looks like is a message being destroyed rather than covered: the
+widget's bed fill is white over the whole 88px, so `Saving...` becomes `Sa`
+with a document icon and a progress box drawn through it, and on the field
+machine a Paint save is seconds of that. Three comments in the tree — here, in
+`fprog.inc` and in `files.inc` — asserted that "the strip is in the clock's
+field now and the two are independent", which was true of §59.8 and stopped
+being true the moment §59.9 gave the strip a second home. **A placement rule
+written when there was one tenant does not survive a second one being added
+above it.**
+
+**The widget's cells are reserved, and `toast_place` is where the reservation
+is honoured.** With `[fpg_on]` set, the gap's right edge — for the fit test,
+for the eye's centring and for the clamp alike — is `[menu_bn] - FPG_W / 8`
+rather than `[menu_bn]`, so a message that still fits sits to the widget's
+left, centred between the last menu and the widget's own edge, and one that
+does not falls back to §59.8's clock field. **That fallback is what makes the
+reservation free**: the clock's field is wholly right of `[vid_clk_hx]` and the
+widget wholly left of it, so the message is said in full either way, and there
+is no width at which a toast has to be shortened for the widget's sake.
+
+Three things make it cost almost nothing:
+
+- **The reservation is DERIVED, not published.** The widget's right edge *is*
+  the segment's right edge, so the cells it holds are the last `FPG_W / 8` of
+  them, and `[fpg_on]` is the whole of the state. A published cell count would
+  be a second opinion about where the widget is, and something to keep in step
+  at four sites.
+- **`fpg_begin` arms BEFORE it draws a pixel**, and asks for one composition
+  (`[menu_bdirty]` + `menu_draw_bar`) while the cells are still the toast's.
+  That is what moves a live strip out of the way instead of destroying it —
+  and it is the reverse of what this site used to do, which was `toast_kill`:
+  a refusal loses the message for good and in silence, and the messages worth
+  saying are exactly the ones about the operation that is starting. The cost
+  is a compare per cell and at most one `font_run`, once per file operation,
+  against a disk.
+- **`FPG_GAP` 8 → 0.** The widget's separation from the clock was a whole
+  glyph cell, and the clock's field is right-aligned with ~7 blank cells at its
+  left end — so the eye sees the same gap and the strip gets a cell back.
+
+**`fpg_end` asks for its own erase.** The box's rows `MENU_TEXT_Y..+7` are
+erased by nothing in `fprog.inc` — the opaque run that rewrites the text band
+*is* the erase, which is §12.9's whole economy — and that run only happens if
+`[menu_bdirty]` is set. It was set by `fpg_begin`'s `menu_inval` and left to
+survive the operation; anything composing the bar in between spends it, and the
+box frame then stays on the glass for good. One store makes the erase this
+routine's own rather than a debt somebody else may settle.
+
+**And the bug that actually left pixels behind was in `menu_bput`, not in
+either tenant.** `[menu_bfirst]` and `[menu_blast]` bounded the changed span as
+"the first difference" and "the last difference" — which is the same thing as a
+minimum and a maximum *only while the cells are written left to right*. §59.9's
+strip is composed **after** `menu_bpadc` has run to `[menu_bn]`, at
+`[toast_scell]`, which may be to its left. So a strip that got shorter or moved
+left dragged `[menu_blast]` back over the padding that had just erased its
+tail: those cells were recorded blank and never drawn, and `menu_bcell` is the
+record of what is on the *glass*, so no later pass could ever repair them.
+
+Measured, before the fix: Paint's save leaves `Saving...`'s last two cells
+(screen 52..53, 124 lit pixels) inverted on the bar **permanently** — through
+the `Saved` toast that replaces it, through that toast's expiry, and for the
+rest of the session. The kernel's own record read `0x20 0x20` for those cells
+while the glass held black. That is the reported "the toast fails to clean up",
+and it is independent of the overlap: it needs only a toast that shrinks or
+shifts left within the segment, which the second of any two toasts usually
+does.
+
+The fix is two compares — a genuine minimum and a genuine maximum — plus a seed
+for `[menu_blast]`, which needed none while it was assigned beside
+`[menu_bfirst]` on every difference. It puts the ordering requirement inside
+the routine rather than leaving it as a rule callers have to keep, which is the
+same argument `menu_bpadc`'s own clamp makes.
+
 ## 60. cpudet.inc — the CPU tier
 
 **Which CPU is this?** Two published bytes and two routines, and that is

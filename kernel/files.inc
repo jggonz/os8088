@@ -4070,8 +4070,8 @@ fm_edit_commit:
     ; It is said AFTER fmv_load, not before. That was FORCED until SPEC.md
     ; 59.8: a mount arms SPEC.md 12.8's file-activity widget, which shared
     ; the strip's pixels and which toast_show refused while it was up. The
-    ; strip is in the clock's field now and the two are independent, so this
-    ; is just the tidier order - the verdict after the work.
+    ; refusal is gone and the two are laid out apart (SPEC.md 59.9.2), so
+    ; this is just the tidier order now - the verdict after the work.
     pop ax                      ; ...the banked verdict
     or al, al
     jnz .fmtfell                ; it could not reach 720K and made 360K
