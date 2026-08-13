@@ -4351,14 +4351,16 @@ writes a port, queues a key or ends an interrupt.
 
 Five things hold it up.
 
-- **It is installed on tier 0 alone** (`mouse_init`, gated on `[cpu_tier]` ==
-  `CPU_8086`), and that gate is the safety argument rather than a scruple. A
-  286 and up decode 60h through an **8042**, where a read clears
-  output-buffer-full and a BIOS that tests that flag before reading would then
-  find no data — **a dead keyboard**, bought for a convenience alias on a
-  machine class this feature is not for. On tier 0 the latch makes the peek
-  provably safe, and tier 0 *is* the target machine. `cpu_detect` runs before
-  `sched_init` and so long before this (§41.1).
+- **Whether the BIOS discards keypad 5 is a property of the BIOS, not of the
+  machine class** — which is why this is installed on **every tier**, and it
+  is a reversal of the first version. Measured on the same NumLock-off
+  setting: a period 5150 ROM **discards** it, and **SeaBIOS delivers** it
+  (`AL` = 0, `AH` = 4Ch). So the hook is a **fallback**: `kbm_poll0` looks at
+  int 16h first, `kbm_key` claims a delivered key and **clears `[kbm_p5]`**
+  (the store at the top of `kbm_btn`), and the pending scancode then finds
+  nothing. Without that guard both paths fire on a delivering BIOS and one
+  press opens a menu and shuts it again — §9.6.1's flashing menu from a
+  fourth direction, and the reason the guard is not optional.
 - **Three gates come before the peek, in cost order.** `[mou_seen]` first, so
   a machine with a mouse never reads the port at all and pays one compare;
   then **NumLock**, because with it on int 16h *does* deliver the key and
@@ -4383,17 +4385,41 @@ Five things hold it up.
   into one press because `kbm_btn`'s existing `KBM_GAP` guard is what spends
   them.
 
-**On a 286 and up keypad 5 is still NumLock-on only**, which is the honest
-outcome of the gate and is stated here rather than left to be discovered: Ins
-and Space are the button keys there, as they are everywhere, and the three
-keys are one action (§9.6.1).
+**The 8042 is the one claim here a period ROM has not been put to**, and it is
+stated rather than buried because it is the only reason the first version
+gated this to tier 0. An 8088's 8255 latches the byte until the BIOS pulses
+port 61h, so the peek is *provably* free there. A 286+ **8042** clears
+output-buffer-full on the read while the data register keeps the byte, so a
+BIOS whose int 09h tested OBF before reading would find none — a dead
+keyboard. No handler tried does test it: SeaBIOS reads 60h directly, the IBM
+ROM is already inside the interrupt when it reads, and **the keyboard is
+verified alive through this hook on both**. What that does not cover is a
+period AT ROM (an IBM AT, an AMI or Award 286), which needs 86Box with those
+ROM sets or the **Packard Bell 286** in docs/FIELD-MACHINES.md. If one is ever
+found to test OBF, the one-line fix is the gate this used to have —
+`cmp byte [cpu_tier], CPU_8086` / `jne` around the install in `mouse_init`,
+7 bytes — and nothing else changes, because the guard above already makes the
+hook redundant wherever int 16h delivers the key.
+
+**What keypad 5 costs, measured by building the kernel three times** rather
+than by counting instructions: the hook is **114 bytes** of `.text`, the
+pre-existing `cmp ah, 0x4C` that could only ever fire with NumLock on is
+**11**, so removing keypad 5 as a button key *entirely* — leaving Ins and
+Space, which are the same one action (§9.6.1) — would give back **125**.
+Un-gating it to every tier was **−2** (the 7-byte tier test out, the 5-byte
+guard in `kbm_btn` in, and `kbm_poll0`'s reorder free). It is kept at that
+price; docs/KERNEL-MEMORY.md carries the figures beside the rest of the
+keyboard mouse's.
 
 Verified on a mouseless cycle-accurate 5150, CGA and Hercules alike: all three
 button keys press and release, keypad 5 opens a menu **while its BIOS buffer
 head and tail never move** — which is what says the press came from the
 scancode and not from int 16h — and with NumLock on one press opens the menu
 and it *stays* open, so the gate is doing its job rather than the two paths
-both firing. The peek itself was proved by single-stepping the ISR from
+both firing. **And on QEMU — a 386 with an 8042 and a BIOS that *does*
+deliver the key** — the hook is installed, the menu opens on one press with
+`[kbm_p5]` clear (the guard, not the hook, being what claimed it), and the
+keyboard still works afterwards: the AT-class half of the same table. The peek itself was proved by single-stepping the ISR from
 outside the guest: `AX = 004C` after the `in`. **And a machine with a mouse is
 byte-identical to the kernel before this**: the same scripted session — five
 pointer moves, a menu opened, tracked and closed with the real mouse — is **0
