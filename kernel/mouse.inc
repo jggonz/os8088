@@ -330,13 +330,12 @@ mouse_init:
     cmp bx, MOU_PEND
     jb .hook
 
-    ; --- int 09h, for the one button key the BIOS discards (SPEC.md 9.6.4) ---
-    ; TIER 0 ONLY, and that is the safety argument rather than caution: the
-    ; hook PEEKS port 60h, which an 8088's 8255 latches until the BIOS acks it
-    ; and a 286+'s 8042 hands over once. cpu_detect has run by here (kmain
-    ; orders it before sched_init, long before this).
-    cmp byte [cpu_tier], CPU_8086
-    jne .no9
+    ; --- int 09h, for the one button key some BIOSes discard (SPEC.md 9.6.4) -
+    ; EVERY TIER, which is a change from the first version and is what the
+    ; guard in kbm_btn buys: the hook is a FALLBACK for a BIOS that throws
+    ; keypad 5 away, and on one that delivers it int 16h wins and this claims
+    ; nothing. The peek reads port 60h without acknowledging it, which is the
+    ; same access DOS's own keyboard code makes.
     xor ax, ax
     mov es, ax
     pushf
@@ -348,7 +347,6 @@ mouse_init:
     mov word [es:0x24], kbm_isr
     mov [es:0x26], cs
     popf
-.no9:
 
     ; --- UART: 1200 baud, 7 data bits, no parity, 1 stop ---------------------
     mov ax, 0x0382              ; LCR: DLAB=1 + 7N1 bits
@@ -1185,6 +1183,15 @@ kbm_paint:
 ; produced. The stamp moves on an ignored repeat too, so a key held down stays
 ; held rather than firing again once the repeats have drifted KBM_GAP apart.
 kbm_btn:
+    mov byte [kbm_p5], 0        ; WHICHEVER ROUTE GOT HERE, one press (9.6.4):
+                                ; whether this BIOS discards keypad 5 or
+                                ; delivers it is a property of the BIOS, so on
+                                ; one that delivers it BOTH kbm_isr and this
+                                ; would claim the same keystroke - the menu
+                                ; opening and shutting in one press. int 16h
+                                ; is always looked at first, so cancelling the
+                                ; pending scancode here is what makes the hook
+                                ; a FALLBACK rather than a second opinion
     push ax
     mov ax, [ticks]
     sub ax, [kbm_btick]         ; wrap-safe, like every other tick compare here
@@ -1229,18 +1236,28 @@ kbm_btn:
 ; the same byte and does all the work, including the ack, the shift states and
 ; the EOI. Nothing here writes a port, queues a key or ends an interrupt.
 ;
-; IT IS INSTALLED ON TIER 0 ONLY (mouse_init), and that gate is the whole
-; safety argument rather than a scruple: a 286 and up decode 60h through an
-; 8042, where a read clears the output-buffer-full flag and a BIOS that tests
-; it before reading would then find no data - a dead keyboard, bought for a
-; convenience alias on a machine class this feature is not for. On tier 0 the
-; latch makes the peek provably safe, and tier 0 is the target machine.
+; WHETHER THE BIOS DISCARDS IT IS A PROPERTY OF THE BIOS, NOT OF THE MACHINE
+; CLASS, which is why this is installed on every tier and not only on the
+; 8088. Measured: a period 5150 ROM throws keypad 5 away in cursor mode, and
+; SeaBIOS DELIVERS it (AL = 0, AH = 4Ch) on the same setting. So the hook is a
+; FALLBACK: on a BIOS that delivers the key, int 16h is looked at first,
+; kbm_key claims it and clears [kbm_p5], and this claims nothing. Without that
+; guard both would fire and one press would open a menu and shut it again.
 ;
 ; Three gates before the peek, in cost order: a mouse that has spoken (so a
 ; machine with one never reads the port at all), then NumLock - on, int 16h
-; delivers the key and kbm_key already has it, so claiming it here as well
-; would toggle the button twice for one press - and ScrollLock, which is
-; 9.6.2's hatch and must hand this key back with all the others.
+; delivers the key on every BIOS tried and kbm_key has it - and ScrollLock,
+; which is 9.6.2's hatch and must hand this key back with all the others.
+;
+; ON THE 8042 THE READ IS NOT ACKNOWLEDGED EITHER, but the reasoning differs
+; and is worth stating because the first version gated this to tier 0 over it.
+; An 8088's 8255 latches the byte until the BIOS pulses port 61h, so a peek is
+; provably free. A 286+ 8042 clears output-buffer-full on the read while the
+; data register keeps the byte, so a BIOS that tests OBF before reading would
+; find none. No int 09h handler tried does test it - SeaBIOS reads 60h
+; directly, and the IBM ROM is already inside the interrupt when it reads -
+; and the keyboard is verified alive through this hook on both. It is the one
+; claim here that a period AT ROM has not been put to.
 ;
 ; The break code (0CCh) matches nothing, and typematic repeats collapse into
 ; one press because kbm_btn's own KBM_GAP guard is what spends this.
@@ -1355,20 +1372,21 @@ kbm_poll:
     mov byte [kbm_eat], 0
 kbm_poll0:
     push ax
-    call kbm_p5spend            ; the one button key that arrives as a SCANCODE
-                                ; and never as a keystroke (SPEC.md 9.6.4), so
-                                ; int 16h below will never report it
     mov ah, 0x01
     int 0x16
-    jz .out                     ; nothing waiting
+    jz .p5                      ; nothing waiting
     call kbm_key
     jc .take                    ; ours, and acted on: take it out
     cmp byte [kbm_eat], 0
-    je .out                     ; not ours, and somebody else will read it
+    je .p5                      ; not ours, and somebody else will read it
 .take:
     mov ah, 0x00
     int 0x16
-.out:
+.p5:
+    call kbm_p5spend            ; LAST, so int 16h gets first refusal: on a
+                                ; BIOS that delivers keypad 5 the call above
+                                ; has already claimed it and cleared the flag
+                                ; (SPEC.md 9.6.4), and this finds nothing
     pop ax
     ret
 

@@ -2595,11 +2595,20 @@ is no pointer to click with; **the key worked only where the feature did
 not**, and every test passed because 9.6.1 verified it by turning NumLock on
 - a harness kinder than the machine. So `kbm_isr` hooks **int 09h**, PEEKS
 port 60h (the 8255 latches it until the BIOS acks, so this consumes nothing)
-and chains; it is the only place os8088 touches the keyboard hardware and it
-is installed on **tier 0 alone**, because a 286+ 8042 hands the byte over
-once and a BIOS that tests output-buffer-full would then find none - a dead
-keyboard for a convenience alias. The ISR only sets a byte; `kbm_btn` does
-everything else in task context. **It costs 520 bytes and two 512-byte steps of `KERN_BUDGET` (spare
+and chains; it is the only place os8088 touches the keyboard hardware. The
+ISR only sets a byte; `kbm_btn` does everything else in task context.
+**WHETHER THE BIOS DISCARDS THE KEY IS A PROPERTY OF THE BIOS AND NOT OF THE
+MACHINE CLASS**, which is why it is installed on every tier: a period 5150
+ROM throws keypad 5 away and **SeaBIOS delivers it**, on the same NumLock-off
+setting. So the hook is a FALLBACK - int 16h is looked at first and
+`kbm_btn` clears the pending scancode - and without that guard both paths
+fire on a delivering BIOS and one press opens a menu and shuts it again. The
+8042 is the one untested claim (a read clears output-buffer-full where the
+8255 latches), and the fix if a period AT ROM ever objects is the 7-byte
+`[cpu_tier]` gate this used to have. **Keypad 5 costs 125 bytes in total -
+114 the hook, 11 the pre-existing compare - measured by building three
+kernels**, which is the figure to weigh if it is ever questioned again;
+un-gating it to every tier was -2. **It costs 520 bytes and two 512-byte steps of `KERN_BUDGET` (spare
 4,096 → 3,584 → 3,072)**, the first decided on when that step was half the
 slack rather than an eighth of it, the second bought by 9.6.1/9.6.2 - **114
 bytes of code for a whole step, because the image rung had ONE byte of slack**

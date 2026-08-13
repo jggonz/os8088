@@ -195,9 +195,23 @@ which is the same guard reporting the opposite answer and is worth recording
 beside the paragraph above for exactly that reason. §9.6.3's item-granular
 menu navigation is **+186** (`menu_kbnav` and one byte of `.text` state in
 `menu.inc`, plus the hook in `kbm_move`) and §9.6.4's int 09h peek for keypad
-5 is **+114** (`kbm_isr`, `kbm_p5spend`, a saved vector and the tier-gated
-install). The image rung had 483 bytes of slack when they were written and has
-183 after, so the footprint did not move at all and `KERN_SIZE` is unchanged.
+5 is **+114** (`kbm_isr`, `kbm_p5spend`, a saved vector and the install). The
+image rung had 483 bytes of slack when they were written and has 183 after, so
+the footprint did not move at all and `KERN_SIZE` is unchanged.
+
+**Keypad 5's total is 125 bytes, and that figure is the one to quote if it is
+ever weighed again** — measured by building the kernel three times rather than
+by counting instructions, which is the only honest way to price a removal:
+`.text` is 48,858 as shipped, 48,744 with §9.6.4 taken out, and 48,733 with
+the key gone as a button key altogether. So the hook is 114 and the
+pre-existing `cmp ah, 0x4C` (which could only ever fire with NumLock on, and
+so in the mode where the keyboard mouse is switched off) is another 11. It
+survived that weighing on the grounds that 125 is well inside the slack and
+that Ins and Space, the other two keys of the same one action, are not
+affected either way. **Extending it from tier 0 to every tier cost −2**: the
+7-byte `[cpu_tier]` test came out and a 5-byte guard went into `kbm_btn`,
+which is what makes the hook a fallback on a BIOS that delivers the key
+rather than a second opinion that double-presses.
 Both are measured with `make`'s own report rather than inferred, and neither
 is a candidate for removal ahead of the feature they belong to: they are the
 difference between a keyboard mouse that can reach a menu item and one that
