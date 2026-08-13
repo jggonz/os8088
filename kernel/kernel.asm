@@ -2605,6 +2605,21 @@ osapi_file_goto:
 ; where the application now believes it lives.
 osapi_file_goto_q:
     push dx
+    cmp byte [dsk_mntok], 0     ; IS ANYTHING MOUNTED? dsk_here_ok asks this
+    je .full                    ; first and for the same reason (SPEC.md
+                                ; 18.9.1): [disk_drive] is where the machine
+                                ; BELIEVES it stands, and dsk_vol_del sets it
+                                ; to 0 when the volume under it is unmounted -
+                                ; without mounting A:, which is what the
+                                ; cleared [dsk_mntok] beside it says. The
+                                ; compare below then read "already on A:" off
+                                ; a machine whose BPB, FAT window and geometry
+                                ; still described the dead volume, and this
+                                ; cell answered CF = 0 having done nothing at
+                                ; all. Every read after it failed, which on
+                                ; the hard-disk installer's path is a copy
+                                ; that stops on its first file (SPEC.md
+                                ; 52.10.8.1)
     cmp bl, [disk_drive]
     jne .full
     or dx, dx
