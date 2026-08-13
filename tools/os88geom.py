@@ -111,6 +111,14 @@ _MIRROR = {
     "MBAR_H": ("kernel/kernel.asm", 20),
     "TITLE_H": ("kernel/kernel.asm", 18),
     "MENU_ITEM_H": ("kernel/menu.inc", 16),
+    # kernel/mouse.inc - the pointer's CELL and the worst hot spot in it
+    # (SPEC.md 7.1/7.2.2). A shape's cell starts at (pointer - hot), so a
+    # harness masking the arrow's 8x12 at the published position misses the
+    # part of a hot-spotted shape that sits ABOVE and LEFT of it.
+    "CUR_GW": ("kernel/mouse.inc", 8),
+    "CUR_GH": ("kernel/mouse.inc", 12),
+    "CUR_XHX": ("kernel/mouse.inc", 3),
+    "CUR_XHY": ("kernel/mouse.inc", 5),
     "KERNEL_SEG": ("kernel/kernel.asm", 0x0060),
     # kernel/memory.inc - the claim table (SPEC.md 50)
     "MEM_MAX": ("kernel/memory.inc", 32),
