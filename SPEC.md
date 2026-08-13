@@ -16044,7 +16044,7 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Open | `fm_open_sel` — inline (loader is deferred, `dsk_chdir` is I/O under the lock like Refresh) |
 | New Folder… / Rename… / Delete | inline: enters edit mode, draws nothing but the status line. The disk is touched at **Enter**, not here |
 | Refresh / Drive A: / Drive B: | inline `disk_mount`, exactly as the button and the a/b/r keys already do |
-| Up One Folder / Root Folder | inline: `fmv_sync`, then `dsk_dotdot` + `fmv_load` / `fmv_load` AX=0 |
+| Up One Folder / Root Folder | inline: `fmv_sync`, then the **`..` row's own handle** + `fmv_load` / `fmv_load` AX=0 |
 | New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
 | as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL`. Not on the bar since §22.15 — the context menu and the in-window button reach them |
 | Timer / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
@@ -16058,6 +16058,22 @@ saying which column of that table it is in.
 
 Up One Folder at the root is a no-op rather than an error; there is nothing
 above the root and nothing useful to say about it.
+
+**It takes the parent out of slot 0 of the window's own listing, and it used
+to call `dsk_dotdot`.** That routine reads the directory's first **sector**
+to find the `..` entry, and a `DRVC_FILE` volume (§62.9) has no sectors — so
+it answered CF=1 and Up One Folder, and the Backspace bound to it, were
+**silently dead on the RAM disk and the network volume**. The `..` *row*
+directly above them worked the whole time, because `dsk_synth_up` fills it
+from `[dsk_fsup]` for a redirected volume and from the disk for a FAT one
+(§19.5), and `fm_open_sel` takes the handle straight out of it — which is
+also `fdlg_dive`'s route, and why the file dialog never had this. Reading
+that same row is one entry out of the cache the window is already painting
+from, so it is volume-agnostic by construction rather than by a branch. A
+missing parent link is now a **type test** (`type != 3`) instead of a CF,
+and the `fmv_sync` above it stays: a window whose `VIEW_KB` claim was
+refused reads the globals, and they have to be this window's folder first.
+**+9 bytes of `.cold`, both builds.**
 
 ### The context menu — `fm_rclick` and `fm_rcmd`
 

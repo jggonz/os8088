@@ -300,9 +300,12 @@ reads `DDDDDDDD` whether or not the path recorded it, and the whole walk looks
 identical with `PTH_MAX` large enough to hold it. That is why the check reads
 the block rather than the screen.
 
-### 9.2 Backspace does not work at all on a redirected volume
+### 9.2 Backspace did not work at all on a redirected volume — FIXED
 
-**Pre-existing, unrelated to the caption, and not fixed here.** `fm_c_up`
+**Pre-existing and unrelated to the caption. Fixed in a follow-up commit at
++9 bytes of `.cold`, under the 30 the requester allowed for it; the
+alternative on the table was removing the shortcut, on the grounds that a
+partially working one nobody knows about is worse than none.** `fm_c_up`
 calls `dsk_dotdot`, which reads a directory **sector** to find the parent —
 and a `DRVC_FILE` volume has none. It answers CF=1 and `fm_c_up` takes its
 `.none` branch, so Backspace and `Nav ▸ Up One Folder` are silently dead on
@@ -315,11 +318,21 @@ So the redirector leg of §7 was driven through the `..` row, and it passes:
 `DOCS` → `DEEP` → up reads **`DOCS`**, on a volume with opaque handles and no
 `..` on any platter.
 
-The fix is small and is `fdlg_dive`'s shape — take the parent's handle out of
-the window's own cache, where slot 0 of a subdirectory is always the parent
-link (§19.5), instead of asking the volume for a sector. It is a **functional**
-change rather than a caption one, so it wants its own decision and its own
-testing.
+The fix is `fdlg_dive`'s shape — take the parent's handle out of the window's
+own cache, where slot 0 of a subdirectory is always the parent link (§19.5),
+instead of asking the volume for a sector. One entry out of the listing the
+window is already painting from, so it is volume-agnostic by construction
+rather than by a branch, and a missing link becomes a **type test** instead of
+a CF. The `fmv_sync` above it stays: a window whose `VIEW_KB` claim was refused
+reads the globals, and those have to be its folder first.
+
+Measured on the RAM disk after the fix: `DOCS` → `DEEP` → **Backspace** lands
+in `DOCS` and names it, a second Backspace reaches the root, and the `..` row
+still does what it always did. The floppy is unchanged, and the over-deep probe
+still reads `lost=1` with the buffer intact behind it.
+
+It applies to **both builds** — the bug is not caption-related, so it is
+outside the `%ifdef`.
 
 ### 9.3 A `%else` is not free
 

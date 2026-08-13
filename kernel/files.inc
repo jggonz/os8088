@@ -3731,10 +3731,22 @@ fm_c_up:                        ; Nav > Up One Folder
     cmp word [di+FS_CWD], 0
     je .none                    ; already at the root: nothing is above it,
                                 ; and saying so is not worth an error line
-    call fmv_sync_x             ; dsk_dotdot walks [dsk_cwd], so that had
-                                ; better be OUR folder (SPEC.md 22.1)
-    call dsk_dotdot_x ; AX = the parent's first cluster (19.2)
-    jc .none                    ; a missing or corrupt '..': stay put
+    call fmv_sync_x             ; so the cache below - or the globals it falls
+                                ; back to when a window has none - is OUR
+                                ; folder (SPEC.md 22.1)
+    xor ax, ax                  ; SLOT 0 OF A SUBDIRECTORY'S LISTING IS THE
+    call fmv_get_dir            ; PARENT LINK (SPEC.md 19.5), and dsk_synth_up
+    cmp word [si+16], 3         ; filled it for whichever volume kind this is:
+    jne .none                   ; from '..' on a FAT disk, from [dsk_fsup] on
+    mov ax, [si+18]             ; a REDIRECTED one, which has no sectors at
+                                ; all. This used to call dsk_dotdot, which
+                                ; reads a directory SECTOR - so Backspace and
+                                ; Nav > Up One Folder were silently DEAD on
+                                ; the RAM disk and the network volume, while
+                                ; the '..' ROW right above them worked, that
+                                ; being this same entry read the same way
+                                ; (fm_open_sel, fdlg_dive). The type test is
+                                ; what a missing link now looks like
 %ifdef KERN_BIG
     push ax                     ; the cluster fm_go wants, across the pop
     mov bx, [fm_vp]
