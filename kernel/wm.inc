@@ -6012,6 +6012,28 @@ wm_su_sub:
 ; fallback rather than a fact, and clamping against the wrong display's far
 ; edge would put the restore on the wrong card. ui_drag clamps x >= 0 and
 ; y >= MBAR_H, so the overhang a drag can produce is always at x2/y2.
+;
+; ...AND A FAR EDGE MAY ONLY CLAMP AWAY WHAT IS NOT ANOTHER DISPLAY'S GLASS
+; (SPEC.md 11.96.14.1). That is the whole distinction this routine turns on and
+; the first version did not make it: "past this display's right edge" is two
+; completely different facts on an extended desktop. Off the DESKTOP, there is
+; nothing there to draw and clipping the replay is exactly right - which is the
+; window-dragged-off-the-bottom case this routine was written for. Across a
+; SEAM, the pixels being clipped away are on a monitor the user is looking at,
+; and a clipped restore is silent: wm_su_try answers CF = 0, wm_draw_win reads
+; that as "the content is already back" and skips both the white fill and
+; W_PAINT, so nothing draws the other display's slice at all. Reported from the
+; field as a window dragged across the seam appearing on the primary and not on
+; the secondary, and coming right when dragged a SECOND time - the second drag's
+; SOURCE straddles, so wm_su_take's vid_span_one refuses, no cache is taken and
+; the window redraws in full.
+;
+; So the far edge asks vid_disp_find - the same question vid_disp_of asks,
+; allowed to answer NO - about the first pixel it is about to discard. A display
+; holds it: refuse, and the caller repaints. Nothing does: clamp, as before.
+; One point answers for the whole cut edge because the displays are placed edge
+; to edge in one of two arrangements (SPEC.md 39.19.2), so the cut runs along a
+; seam or along the desktop's own boundary and never along both.
 ; -----------------------------------------------------------------------------
 wm_su_vset:
     push ax
@@ -6033,6 +6055,11 @@ wm_su_vset:
     dec ax                      ; AX = the last legal x on this display
     cmp cx, ax
     jle .xok
+    push ax                     ; ...and what is one column past it? BX is
+    inc ax                      ; still y1, which the near-edge test above has
+    call vid_disp_find          ; already proved is a row THIS display has - so
+    pop ax                      ; a hit is a seam and a miss is the desktop's
+    jnc .no                     ; own edge (a pop touches no flag, so CF lives)
     mov cx, ax
 .xok:
     mov ax, [di+VID_CTX_VY]
@@ -6040,6 +6067,15 @@ wm_su_vset:
     dec ax
     cmp dx, ax
     jle .yok
+    push ax                     ; ...the same question one row further down,
+    push bx                     ; at x1 - which is this display's by the same
+    mov bx, ax                  ; test. vid_disp_find takes the point in AX/BX
+    inc bx                      ; and answers in AL, so x has to be put there
+    mov ax, si
+    call vid_disp_find
+    pop bx
+    pop ax
+    jnc .no
     mov dx, ax
 .yok:
     mov ax, si                  ; x1 BACK: the bounds arithmetic above spent AX

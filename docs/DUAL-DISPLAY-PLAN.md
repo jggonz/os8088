@@ -669,6 +669,7 @@ at B8000* (SPEC.md §39.6). Order stops deciding anything.
 | `tests/dispband.py` | can a window use the second display's top rows? (SPEC.md §39.16.2) |
 | `tests/dispblit.py` | does a straddled canvas survive its own repaint? (SPEC.md §39.14.7) |
 | `tests/dispsave.py` | is the raise cache taken, and right, on the second display? (SPEC.md §39.14.8) |
+| `tests/dispdrag.py` | does a window DRAGGED across the seam arrive on both displays? (SPEC.md §11.96.14.1) — `--layout right\|below`, because the two seams are separate arms |
 | `tests/dispvy.py` | can a STRADDLING window reach the second monitor's first row? (SPEC.md §39.19.3) |
 | `tests/dispnp.py` | does a WIDE straddling window letter its whole row? (SPEC.md §27.2.2) |
 

@@ -211,8 +211,15 @@ def main(argv):
                             "framebuffer" % (d, ctx[d][11]))
         if (ctx[0][18], ctx[0][19]) != (0, 0):
             fail.append("display 0 is not at the virtual origin")
-        if (ctx[1][18], ctx[1][19]) != (ctx[0][7], 0):
-            fail.append("display 1 is not immediately right of display 0")
+        # ...and its top row is the DESKTOP's, not the screen's (SPEC.md
+        # 39.19.3). This wanted 0, which was right until that landed and has
+        # failed ever since - the same staleness dispsave.py's own comment
+        # records fixing on its side ("y used to be taken raw").
+        if (ctx[1][18], ctx[1][19]) != (ctx[0][7], os88geom.MBAR_H):
+            fail.append("display 1 is not immediately right of display 0, at "
+                        "the desktop band's top row (SPEC.md 39.19.3): it is "
+                        "at (%d,%d) and display 0 is %d wide"
+                        % (ctx[1][18], ctx[1][19], ctx[0][7]))
         live = [u16(m.read(S("vid_seg"), 36), i * 2) for i in range(18)]
         if live != ctx[0][:18]:
             fail.append("the live block is not display 0's record")
