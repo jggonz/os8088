@@ -185,6 +185,22 @@ sector is both more faithful and shorter-gapped. It did not save GLaBIOS,
 because that BIOS's limit turned out to be on the whole operation rather than
 on silence — but the model is right for the reason it was changed.
 
+### `int 19h` does not restart the machine on a GLaBIOS twin
+
+The Chip menu's Restart (SPEC.md 20.10) ends in `int 19h`, and on
+`os8088_5150_cga_gla` that leaves a **blank 80-column text screen with the
+tick still running** and never boots — measured on two kernels that differ by
+33 bytes, so it is the BIOS and not the build. On `os8088_5150_cga`, the same
+script reboots properly: the card comes back to `Mode6HiResGraphics` about
+twenty guest seconds later and the desktop is up.
+
+So **a restart is tested on an IBM-ROM machine**, and that is not a
+convenience: SPEC.md 9.6.5's freeze only exists on the far side of a completed
+reboot, and a machine that never gets there measures the wrong thing twice
+over — a `int 19h` that stalls in the BIOS still ticks, so a liveness check on
+`0040:006C` alone will call it healthy. Gate on the video MODE coming back to
+graphics before you believe anything after a Restart.
+
 ### What it measures now
 
 `boot ticks`, os8088's own counter, on the 360KB image:

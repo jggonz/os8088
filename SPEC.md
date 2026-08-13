@@ -4472,6 +4472,23 @@ does `sti` early, so IRQ1 nests inside it — and the nested int 09h never
 returned. The same photograph read `kfz = 00`, meaning `ui_task` never saw
 the key at all, which is what ruled out everything downstream of it.
 
+**A/B'd on a cycle-accurate 5150 with the period IBM ROM**, same script both
+times: open the System menu, pick Restart, wait for the card to come back to
+`Mode6HiResGraphics` — so the machine really did reboot into the desktop and
+this is not a BIOS that stalled — then send one keystroke and read
+`0040:006C`. Without the fix: **2144, 2144, 2144**, and it never moves again.
+With it: **2112, 2463, 2821**.
+
+**On the GLaBIOS twin the restart does not complete at all** — `int 19h`
+leaves a blank 80-column text screen with the tick still running, on both
+kernels — so the machine to run this on is `os8088_5150_cga`, and the
+difference is the BIOS rather than either build. It is also why the unfixed
+GLaBIOS run dies about two seconds after the click, *before* the kernel is
+back: the orphaned vector is pointing into a segment the boot sector is
+overwriting, so the reboot's own keyboard traffic executes rubble. An emulator
+that refuses to execute that rather than trying is reporting the same defect
+as a panic.
+
 Two changes, and the first is the fix:
 
 - **`mouse_unhook` restores int 09h**, beside the serial vectors it already
