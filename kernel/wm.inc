@@ -2899,6 +2899,56 @@ wm_dmg_vacate:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_dmg_bit - the wm_dmg_mask/wm_dmg_shad bit for window SI
+; in:  SI = window ptr
+; out: AX = its bit; every other register and the flags' usefulness are the
+;      caller's - CX and DI are preserved because the marking pass's inner
+;      loop holds live values in both
+; -----------------------------------------------------------------------------
+wm_dmg_bit:
+    push cx
+    push di
+    mov ax, si
+    sub ax, wm_wins
+    mov cl, WIN_SIZE
+    div cl                      ; (AH = 0: a window ptr is record-aligned)
+    xor ah, ah
+    mov di, ax
+    shl di, 1
+    mov ax, [wm_bit1+di]
+    pop di
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_dmg_shadowed - does the damage rect reach this window's DROP SHADOW?
+; in:  AX,BX,CX,DX = its occupied rect (wm_win_rect: shadow included), SI = it;
+;      the caller has already established that the rect overlaps the damage
+; out: CF = 1 = the shadow is inside the damage. All registers preserved.
+;
+; SPEC.md 11.91.4. The shadow is the L at (+1,+1): the column x+w, which is
+; CX, and the row y+h, which is DX. Given an overlap the caller has already
+; proved, the damage reaches one of them exactly when it extends to or past
+; that column or that row - two compares, and the direction is the safe one,
+; since claiming a shadow that was not dithered costs two drawing calls and
+; missing one leaves a black line eaten out of a window nobody touched.
+; -----------------------------------------------------------------------------
+wm_dmg_shadowed:
+    test word [si+W_FLAGS], WF_FULL
+    jnz .no                     ; fullscreen draws none (SPEC.md 11.2), and
+                                ; wm_win_rect has shrunk the rect to say so
+    cmp [wm_dmg_x2], cx
+    jge .yes
+    cmp [wm_dmg_y2], dx
+    jge .yes
+.no:
+    clc
+    ret
+.yes:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_dmg_stale - can any pixel of this window have gone stale?
 ; in:  AX = x1, BX = y1, CX = x2, DX = y2 (the window's rect); wm_dmg_hit has
 ;      already said it overlaps the damage
@@ -3331,6 +3381,7 @@ wm_dmg_wins:
     ; pass reaches the whole transitive closure. Nothing here may keep a loop
     ; counter in a general register: wm_win_rect writes all four of them.
     mov word [wm_dmg_mask], 0
+    mov word [wm_dmg_shad], 0
     xor bp, bp                  ; BP = index into wm_zord
 .mark:
     mov al, [wm_zn]
@@ -3355,6 +3406,11 @@ wm_dmg_wins:
                                 ; tests below: the dock is drawn UNDER windows,
                                 ; and a marked window BELOW is redrawn whole
                                 ; and reaches wherever its own rect reaches
+    call wm_dmg_shadowed        ; ...but it still owes its DROP SHADOW, because
+    jnc .mnodmg                 ; 11.91.1's dither subtracts the frame and eats
+    call wm_dmg_bit             ; the L (SPEC.md 11.91.4). Two lines, not a
+    or [wm_dmg_shad], ax        ; repaint - and NOT wm_dmg_mask, or this would
+                                ; be 11.91.2 undone
 .mnodmg:
     cmp byte [wm_dmg_dk], 0     ; the strip was drawn, and it is drawn UNDER
     je .mnodock                 ; windows, so a window reaching into it is
@@ -3384,14 +3440,7 @@ wm_dmg_wins:
     inc word [wm_dmg_j]
     jmp short .mbelow
 .mset:
-    mov ax, si                  ; AL = our window index
-    sub ax, wm_wins
-    mov cl, WIN_SIZE
-    div cl                      ; (AH = 0: a window ptr is record-aligned)
-    xor ah, ah
-    mov di, ax
-    shl di, 1
-    mov ax, [wm_bit1+di]
+    call wm_dmg_bit
     or [wm_dmg_mask], ax
 .mnext:
     inc bp
@@ -3407,8 +3456,9 @@ wm_dmg_wins:
     ; rect as damage after the marking pass above, and wm_paint_dmg's .promote
     ; below reads only wm_dmg_mask.
 .draw:
-    cmp word [wm_dmg_mask], 0
-    je .wdone
+    mov ax, [wm_dmg_mask]
+    or ax, [wm_dmg_shad]        ; a pass may owe nothing but a shadow
+    jz .wdone
     call wm_top
     mov bp, bx                  ; BP = frontmost visible (0 if none)
     xor si, si                  ; SI = index into wm_zord
@@ -3425,7 +3475,21 @@ wm_dmg_wins:
     shl bx, 1
     mov bx, [wm_bit1+bx]
     test [wm_dmg_mask], bx
-    jz .dnext
+    jnz .dfull
+    test [wm_dmg_shad], bx      ; not redrawn, but the dither ate its drop
+    jz .dnext                   ; shadow: put the L back and nothing else
+    call wm_idx2ptr             ; (SPEC.md 11.91.4). IN THIS LOOP rather than
+    test word [bx+W_FLAGS], 2   ; in a pass of its own, so it lands at this
+    jz .dnext                   ; window's own place in the z-order
+    push si
+    mov di, bx
+    call wm_chrome_clip         ; confined exactly as wm_draw_win confines its
+    mov byte [gfx_color], CBLACK; own chrome (SPEC.md 11.97) - a window above
+    call wm_draw_shadow         ; may be sitting on this shadow, and an
+    mov word [wm_clip_n], 0     ; unmarked one will not redraw over us
+    pop si
+    jmp short .dnext
+.dfull:
     call wm_idx2ptr
     test word [bx+W_FLAGS], 2
     jz .dnext
@@ -3851,6 +3915,10 @@ wm_dmg_y1   dw 0                ; inclusive and already clamped to the screen
 wm_dmg_x2   dw 0
 wm_dmg_y2   dw 0
 wm_dmg_mask dw 0                ; bit n = window n must be redrawn
+wm_dmg_shad dw 0                ; bit n = window n owes its DROP SHADOW and
+                                ; nothing else (SPEC.md 11.91.4). Never both:
+                                ; a window in wm_dmg_mask is redrawn whole and
+                                ; the shadow comes with it
 wm_dmg_zn   db 0                ; bit n = drive zone n must be redrawn
 wm_dmg_fs   db 0                ; 1 = a fullscreen window is over the chrome,
                                 ; so this pass draws windows and nothing else
@@ -7395,6 +7463,42 @@ wm_su_try:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; wm_draw_shadow - a window's drop shadow, the L at (+1,+1) (SPEC.md 11.91.4)
+; in:  DI = the window; [gfx_color] = CBLACK; gfx lock held, region as the
+;      caller left it
+; out: nothing; clobbers AX, BX, DX, flags - wm_draw_win's own contract, which
+;      is what lets this be lifted out of it unchanged
+;
+; Lifted out of wm_draw_win because it is separately OWED. 11.91.1's dither
+; subtracts each window's FRAME and not its occupied box - deliberately, since
+; the box holds two corners the shadow's L never covers - so the shadow is
+; dithered over and put back by the window's own redraw. 11.91.2 then stopped
+; redrawing a window whose ground was never uncovered, and those two are only
+; jointly true while every window in the damage is redrawn. This is what a
+; window that is NOT being redrawn owes: two drawing calls against a repaint.
+; -----------------------------------------------------------------------------
+wm_draw_shadow:
+    mov ax, [di+W_X]            ; right edge: x+w, y+1..y+h
+    add ax, [di+W_W]
+    mov bx, [di+W_Y]
+    inc bx
+    mov dx, [di+W_Y]
+    add dx, [di+W_H]
+    call gfx_vline
+    mov bx, di                  ; bottom edge: y+h, x+1..x+w - and x..x+w with
+    call wm_flush               ; no left border to sit under, or the corner
+    mov ax, [di+W_X]            ; pixel is left unpainted (SPEC.md 11.95.2)
+    jc .bot
+    inc ax
+.bot:
+    mov bx, [di+W_X]
+    add bx, [di+W_W]
+    mov dx, [di+W_Y]
+    add dx, [di+W_H]
+    call gfx_hline
+    ret
+
 wm_draw_win:
     push ax
     push bx
@@ -7472,24 +7576,9 @@ wm_draw_win:
     pop di
     pop si
 .shadow:
-    mov ax, [di+W_X]            ; drop shadow, right edge: x+w, y+1..y+h
-    add ax, [di+W_W]
-    mov bx, [di+W_Y]
-    inc bx
-    mov dx, [di+W_Y]
-    add dx, [di+W_H]
-    call gfx_vline
-    mov bx, di                  ; drop shadow, bottom edge: y+h, x+1..x+w -
-    call wm_flush               ; and x..x+w with no left border to sit under,
-    mov ax, [di+W_X]            ; or the corner pixel is left unpainted
-    jc .shbot                   ; (SPEC.md 11.95.2)
-    inc ax
-.shbot:
-    mov bx, [di+W_X]
-    add bx, [di+W_W]
-    mov dx, [di+W_Y]
-    add dx, [di+W_H]
-    call gfx_hline
+    call wm_draw_shadow         ; the L, and it is a routine of its own because
+                                ; a window can owe its SHADOW and nothing else
+                                ; (SPEC.md 11.91.4)
 
 %ifndef REDRAWFULL
     mov word [wm_clip_n], 0     ; ...AND THE REGION DIES BEFORE THE TITLE BAR,
