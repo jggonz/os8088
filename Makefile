@@ -877,8 +877,10 @@ $(BUILD)/debug.drv: $(BUILD)/debug.bin tools/os88drv.py
 # NET.DRV - a LapLink parallel cable as a block volume (docs/NET-PLAN.md stage
 # 1). Its transport is drivers/net/lplink.inc, which tests/lptlink includes
 # too, so the thing PERFORMANCE.md Part 9 Set 39 measured is the thing that
-# ships. OS88NET.COM is the other end of the cable and does NOT go on an
-# os8088 disk - it is a DOS program for the far machine, built here and sent.
+# ships. OS88NET.COM is the other end of the cable: a DOS program for the FAR
+# machine, which rides the apps disk in SYSTEM/DOS (APPS_DOS below) so the
+# user has a copy to carry across - it used to be built here and sent, which
+# only ever worked for someone with this repository.
 #
 # NETTURN1=1 leaves the reply deadline at TURN_RX once the link is up, which
 # is the pre-SPEC.md-62.10.4.6 behaviour: 440ms for the far side to BEGIN
@@ -2495,17 +2497,42 @@ APPS_DATA := apps/tracker/beverly.mod
 # go and find, it is the chip menu's, and a copy in APPS/ would be a second
 # one to double-click by mistake.
 APPS_SYS := $(SYSAPPS)
-APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS)
+
+# OS88NET.COM, the DOS end of the parallel link (SPEC.md 62), in SYSTEM/DOS.
+# It is the one thing on either floppy that does not run on os8088 at all: it
+# is an MS-DOS .COM for the machine at the OTHER end of the cable, and it is
+# here so that the user has it - the link is how files reach these disks in
+# the first place, so "copy it off the disk that came with the OS" cannot
+# depend on already having a way to move a file across.
+#
+# On the APPS disk rather than the system disk, so a single-floppy machine
+# does not have to eject the disk it booted from to reach it; and in SYSTEM/
+# rather than the root because it is machinery and not a program to go and
+# find - the same argument that put TASKMGR.O88 there (SPEC.md 28.3). DOS/
+# below it is what says which machine it is for: a .COM in SYSTEM/ beside a
+# .O88 invites a double-click, which gives 'Bad package' (the loader refuses
+# anything that is not a v3 package) and reads as a broken file rather than
+# as a file for another computer.
+APPS_DOS := $(BUILD)/os88net.com
+APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
 # reads a "DIR:" prefix per package, so the grouping lives here rather than
 # in the tool; no prefix means the root - and no package uses it any more, so
-# the apps disk lists three folders and nothing else (ASSOC.DAT is the tool's
+# the apps disk lists four folders and nothing else (ASSOC.DAT is the tool's
 # own, and hidden).
+#
+# "SYSTEM/DOS:" is a NESTED folder: the prefix is a path now, every component
+# an 8.3 stem, and naming a folder makes every folder above it - so SYSTEM/
+# is made by whichever of these two arguments os88disk.py reads first. The
+# kernel needs nothing for it: a subdirectory's '..' carries its parent's
+# first cluster (SPEC.md 19.2), so dsk_dotdot walks back up out of a folder
+# two deep exactly as it does out of one.
 APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
             $(addprefix GAMES:,$(APPS_GAMES)) \
             $(addprefix MEDIA:,$(APPS_DATA)) \
-            $(SYSAPPSARGS)
+            $(SYSAPPSARGS) \
+            $(addprefix SYSTEM/DOS:,$(APPS_DOS))
 
 $(APPSIMG): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)

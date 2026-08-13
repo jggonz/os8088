@@ -17504,6 +17504,20 @@ and non-zero exit + stderr message on any validation failure.
   - `--scramble` (hidden test flag): reallocates cluster chains
     round-robin-interleaved across files — a **legally fragmented** image
     for chain-walk verification. Never used by the Makefile.
+  - **Folders NEST**, and the prefix is a path: `SYSTEM/DOS:FILE` puts a
+    file two deep, `--folder A/B` makes an empty one, and each component is
+    validated as its own 8.3 stem because a directory *entry* is 8.3 at
+    every level. Naming a folder makes every folder **above** it, so
+    parents are always created — and always laid out — before their
+    children. Three things follow and each is a rule the emission obeys:
+    `..` carries the **parent's** first cluster, with the FAT convention
+    that a parent of the root is written 0, which is exactly what
+    `dsk_dotdot` reads to go up (§19.2) — so the kernel needed nothing for
+    this; only a **top-level** folder costs a root-directory slot, a nested
+    one costing an entry in its parent instead; and a folder's own
+    directory is sized `2 + subfolders + files` entries, with the §19
+    listing cap counting its subfolders alongside its visible files.
+    Depth is not bounded here because nothing in the kernel counts it.
   - `--verify IMG`: standalone structural fsck — the §18.2 BPB rules, FAT
     type detection, FAT1==FAT2, every entry's chain walks to EOC with
     length matching its byte size, no cross-links, no lost clusters.
@@ -17525,11 +17539,13 @@ and non-zero exit + stderr message on any validation failure.
   the Tracker package plays — a data file rides its folder exactly like a
   package, and this is the folder a File Open starts in, §38.10), and
   `SYSTEM` the chip menu's `TASKMGR.O88` (§28.3 — its copy for a
-  single-floppy machine). The **system** disks carry the same two kernel
-  folders: `SYSTEM/TASKMGR.O88`, and a `MEDIA` that is **empty**, because a
-  boot floppy has no media on it and the folder still has to exist for the
-  dialog to open on. The grouping lives in the Makefile —
-  `APPS_TOOLS`/`APPS_GAMES`/`APPS_DATA`/`APPS_SYS` become the
+  single-floppy machine) **and one folder of its own, `DOS`, holding
+  `OS88NET.COM`** (§24.2). The **system** disks carry the same two kernel
+  folders: `SYSTEM/TASKMGR.O88`, and a `MEDIA` holding the logo (§63) —
+  which used to be empty, and could not stay so, because the dialog opens
+  there and a boot floppy with nothing in it showed a new user an empty
+  list on a working machine. The grouping lives in the Makefile —
+  `APPS_TOOLS`/`APPS_GAMES`/`APPS_DATA`/`APPS_SYS`/`APPS_DOS` become the
   `DIR:`-prefixed `APPSARGS`, and the empty folder is os88disk.py's
   `--folder MEDIA` — not in the tool.
   **Order within a list means nothing and nothing may be built on it**: the
@@ -17551,9 +17567,48 @@ check apply the same either way; only the package validation is skipped.
 Nothing in the kernel changed for this. A non-package already listed with the
 generic icon and did nothing on a double-click — that has always been the
 behaviour for any file a host OS put on the volume, and this only makes the
-*builder* able to produce one. The shipped apps disks carry no data files;
-`build/filetest.img` carries `BIG.DAT` for §18.4.1's check, generated rather
-than committed.
+*builder* able to produce one. The shipped apps disks carry three data
+files — `MEDIA/BEVERLY.MOD`, the module Tracker was written against, and
+`SYSTEM/DOS/OS88NET.COM` (§24.2) — and the system disks `MEDIA/OS8088.GIF`
+(§63) and `README.TXT`; `build/filetest.img` carries `BIG.DAT` for §18.4.1's
+check, generated rather than committed.
+
+### 24.2 The DOS end of the link rides the apps disk
+
+`OS88NET.COM` (§62) is the one thing on either floppy that **does not run on
+os8088 at all**: it is an MS-DOS `.COM` for the machine at the other end of
+the parallel cable. It ships in `SYSTEM/DOS/` on all three apps disks,
+built by the same Makefile rule that has always built it.
+
+It ships because of what it is *for*. The link is how a file reaches these
+disks in the first place (§62 — the alternative on the calibration machine
+is a seven-step path through another computer, docs/FIELD-MACHINES.md), so
+"copy `OS88NET.COM` onto the DOS box" cannot be allowed to depend on already
+having a way to move a file across. It used to be built here and **sent**,
+which is a distribution route that works for exactly one person: whoever has
+this repository and a toolchain.
+
+Three placement decisions, each of which could have gone the other way:
+
+- **The apps disk, not the system disk.** A single-floppy machine boots from
+  A: and swaps to the apps disk to reach anything; putting it on the system
+  disk would mean ejecting the disk the machine is running from to get at
+  the file. The apps disk is the one already in the drive when the user is
+  looking for something.
+- **`SYSTEM/`, not the root.** It is machinery, not a program to go and
+  find — `TASKMGR.O88`'s argument (§28.3), and the same reason nothing of
+  ours is loose in a root.
+- **`DOS/` under it, rather than beside `TASKMGR.O88`.** The folder is what
+  says which *machine* the file is for. A `.COM` sitting next to a `.O88`
+  invites a double-click, and a double-click gives `Bad package` — the
+  loader refuses anything that is not a v3 package (§21) — which reads as a
+  broken file rather than as a file for another computer.
+
+It is an ordinary file on an ordinary volume: `sys_attr` stamps a non-boot
+disk's entries `A_ARCH` (§19.6 locks down the *system* disk only), so it
+copies, and the user is meant to copy it. Nesting it is what §24's folder
+paths exist for, and it is the first and so far only shipped use of them.
+
 ## 25. icons.inc — icon format, draw routine, built-in library
 
 1-bit icons with a mask, classic Mac style, drawn exactly like the mouse
@@ -39869,8 +39924,10 @@ the transcript.
 ## 62. NET.DRV — the parallel link (`drivers/net/net.asm`)
 
 **A LapLink cable between the parallel ports of an os8088 machine and a DOS
-machine, as a mounted volume.** The DOS side runs `OS88NET.COM`, which serves
-512-byte sectors out of an image file; os8088 mounts them and everything above
+machine, as a mounted volume.** The DOS side runs `OS88NET.COM` — which ships
+in `SYSTEM/DOS/` on the apps disk (§24.2), because the link is how a file
+reaches these disks and so cannot require one to have crossed already — and it
+serves 512-byte sectors out of an image file; os8088 mounts them and everything above
 `dsk_xfer` — the BPB validator, the FAT window, the directory walker, the whole
 write path with its commit ordering, the Disk window, the Standard File dialog,
 the copy engine, the loader and the association cache — works unchanged.
