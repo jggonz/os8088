@@ -305,6 +305,48 @@ overlays = [
 # machine with one page an off-by-one there is invisible. It costs the machine
 # nothing otherwise: no driver touches 0x378 unless NET.DRV is ticked, and no
 # row is wanted by default (SPEC.md 51.3).
+# ...and the same disk on a 5150 WITH THE PERIOD ROM, which is the shape a
+# field report arrives in: docs/FIELD-MACHINES.md's machine is a 5150 with an
+# ST-225 on an ST11M, and a controller with its own option ROM is rung 0 there
+# exactly as XT-IDE is here. Every other hard-disk machine in this file is an
+# Ibm5160 on GLaBIOS, so until this existed there was NO way to run a hard disk
+# behind the IBM ROM - and this tree already has one defect (SPEC.md 18.91's
+# `AL`) that only the period ROM exposes, so "a hard disk" and "the ROM the
+# reporter runs" were two axes that could never be crossed.
+#
+# It needs the ROM this tree cannot ship (romdef `ibm5150_82_v4`, md5
+# f453eb2df6daf21ec644d33663d85434 at media/roms/), so a container without one
+# runs the GLaBIOS twins only - the same standing caveat every IBM-ROM machine
+# here carries.
+[[machine]]
+name = "os8088_5150_cga_hdd"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
 [[machine]]
 name = "os8088_xt_hdd"
 type = "Ibm5160"

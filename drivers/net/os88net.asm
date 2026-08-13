@@ -3298,8 +3298,7 @@ s_help:
     db '  /P:base   pin the parallel port, in hex - /P:378, /P:278,',13,10
     db '            /P:3BC. Default: scan and use the first that answers.',13,10
     db '  /I:image  block mode: serve 512-byte sectors out of an image',13,10
-    db '            file instead of serving files. Superseded by the',13,10
-    db '            file link and kept because the wire is the same.',13,10
+    db '            file instead of serving files.',13,10
     db '  /?        this.',13,10,13,10
     db 'ESC stops a run. os8088 connects from Control Panel, os88net.',13,10,0
 sf_wtag:    db 'W'              ; the tag wr_arg's log line carries. A byte of

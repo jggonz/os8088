@@ -913,11 +913,25 @@ drv_nostamp:
 ;
 ; The stamp comes off for the duration (SPEC.md 51.2.3). `pop word [mem]`
 ; touches no flag, so CF still comes back out of the driver.
+;
+; **THE STAMP IS PUSHED FIRST AND POPPED LAST, BECAUSE `pop word [mem]` GOES
+; THROUGH DS AND DS IS THE DRIVER'S UNTIL `pop ds` RUNS** (SPEC.md 51.2.4).
+; It used to sit inside the pair, so the restore wrote `[snd_inst]`'s offset
+; into the DRIVER'S segment: two bytes 0xD5F9 past the driver's base, which
+; on a 640KB machine is past the top of the heap and lands in the VGA
+; framebuffer - a 16px black run on one scan line of the desktop, redrawn on
+; every dispatch. On the two mono adapters the same address is the unused
+; hole below B000 and nothing shows at all, which is why it was reported as
+; a VGA defect; on a smaller machine it is two bytes of somebody else's claim
+; and shows as nothing until it shows as something else entirely. The stamp
+; was not restored either, so every sound grant after a driver call was
+; attributed to the kernel. loader.inc's package entry is the shape that was
+; always right: restore the segment, THEN the word.
 ; -----------------------------------------------------------------------------
 drv_call:
+    push word [snd_inst]        ; ...while DS still names the kernel
     push ds
     push es
-    push word [snd_inst]
     call drv_nostamp            ; ...and it preserves DS, which the next two
     push ds                     ; lines depend on: ES = KERNEL_SEG is taken
                                 ; from DS and NOT from CS, because this module
@@ -926,9 +940,9 @@ drv_call:
     pop es
     mov ds, [es:bx+DRVR_SEG]
     call far [es:bx+DRVR_DISP]
-    pop word [snd_inst]
     pop es
-    pop ds
+    pop ds                      ; DS names the kernel again...
+    pop word [snd_inst]         ; ...so the stamp lands in the kernel
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1122,9 +1136,11 @@ drv_cp_call_x:
     mov si, di                  ; SI = the far pointer
     pop di
     push di                     ; ...and DI is the pane left again
+    push word [snd_inst]        ; FIRST in and LAST out, for drv_call's
+                                ; reason: the restore addresses DS and DS is
+                                ; the driver's until `pop ds` (SPEC.md 51.2.4)
     push ds
     push es
-    push word [snd_inst]
     call drv_nostamp            ; ...and it preserves DS, which the next two
     push ds                     ; lines depend on: ES = KERNEL_SEG is taken
                                 ; from DS and NOT from CS, because this module
@@ -1133,9 +1149,9 @@ drv_cp_call_x:
     pop es
     mov ds, [es:si+2]
     call far [es:si]
-    pop word [snd_inst]
     pop es
     pop ds
+    pop word [snd_inst]
 .out:
     pop di
     pop si

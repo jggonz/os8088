@@ -233,6 +233,13 @@ endif
 # big-only code, and it would read as a double negative at every site - which
 # on a conditional whose whole job is "which build is this" is exactly where a
 # reader gets it backwards. kernel.asm asserts that precisely one arrives.
+# KFZ=1 builds the kernel breadcrumb (the KFZ macro in kernel.asm): raw
+# framebuffer marks through ui_task's keyboard branch, for a reported freeze
+# that reaches no package. Mono adapters only, ships nowhere.
+ifneq ($(KFZ),)
+VIDDEF += -DKFZTRACE
+endif
+
 ifneq ($(KERN_SMALL),)
 VIDDEF += -DKERN_SMALL
 else
@@ -315,6 +322,16 @@ endif
 # default, so the inversion moved no code.
 ifneq ($(CURFIX),)
 VIDDEF += -DCURFIX
+endif
+
+# DIRTYRAM=1 fills the claim heap with 0xAA at boot, before anything can claim
+# from it. It is a DIAGNOSTIC and never ships: QEMU gives the guest zeroed RAM
+# where a real machine gives it whatever was there, so a routine that reads a
+# claim it has not written is invisible under the emulator and is a different
+# bug on every boot out in the field. With this on it is the same bug every
+# time. It is in $(VIDSTAMP) and $(KNOBS) below, like every other knob.
+ifneq ($(DIRTYRAM),)
+VIDDEF += -DDIRTYRAM
 endif
 
 # DRAGCACHE=0 removes SPEC.md 11.96.12's drag cache, so a window dragged by its
@@ -443,11 +460,11 @@ endif
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             DIRW1 INSTRO KEEPH FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
+                             KFZ DIRW1 INSTRO KEEPH DIRTYRAM FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
                              CURFIX \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(DIRTYRAM),-dr$(DIRTYRAM))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -1136,6 +1153,41 @@ $(BUILD)/modplug.bin: apps/modplug/modplug.asm apps/modplug/mppmix.inc \
 
 $(BUILD)/modplug.o88: $(BUILD)/modplug.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/modplug.bin -o $@
+
+# ...and the SAME SOURCE with -DMPPDEBUG, which is the tests/trklog.inc shape
+# (SPEC.md 45.14): one source, every hook inside %ifdef, so the shipped
+# MODPLUG.O88 carries none of it and the two cannot drift. It exists for a
+# reported hard freeze on 'L' that reproduces on nobody's emulator here - see
+# the MPPDBG macro in modplug.asm for what it draws and why the screen is the
+# only channel a stopped machine still has.
+#
+# It builds a WHOLE FLOPPY PAIR rather than a package, because the reporter
+# needs something to boot: build/dbg-os8088-360.img is the ordinary system
+# disk and build/dbg-apps360.img is the apps disk with the instrumented
+# player in place of the shipped one. Nothing here is in `all` and nothing
+# ships.
+modplugdbg: $(BUILD)/dbg-apps360.img
+
+$(BUILD)/dbg/modplug.bin: apps/modplug/modplug.asm apps/modplug/mppmix.inc \
+                      apps/modplug/mppui.inc apps/modplug/mppset.inc \
+                      apps/modplug/mpplist.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(BUILD)/dbg
+	$(NASM) -f bin -w+error -DMPPDEBUG -I apps/ -I apps/modplug/ -o $@ \
+	        apps/modplug/modplug.asm
+	@echo "modplug (MPPDEBUG): $(call FILESIZE,$@) bytes"
+
+$(BUILD)/dbg/modplug.o88: $(BUILD)/dbg/modplug.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/dbg/modplug.bin -o $@
+
+$(BUILD)/dbg-apps360.img: $(BUILD)/dbg/modplug.o88 $(APPS_TOOLS) $(APPS_GAMES) \
+                          $(SYSAPPS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+	    $(patsubst %,APPS:%,$(filter-out $(BUILD)/modplug.o88,$(APPS_TOOLS))) \
+	    APPS:$(BUILD)/dbg/modplug.o88 \
+	    $(patsubst %,GAMES:%,$(APPS_GAMES)) \
+	    MEDIA:apps/tracker/beverly.mod \
+	    $(patsubst %,SYSTEM:%,$(SYSAPPS))
+	@echo "modplugdbg: boot build/os8088-360.img with $@ as the APPS disk"
 
 # ArtfulType, the eleventh shipped package (SPEC.md 46): a port of
 # ActionRetro's ArtfulType, the distraction-free Markdown writer for classic

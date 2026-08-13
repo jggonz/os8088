@@ -185,6 +185,22 @@ sector is both more faithful and shorter-gapped. It did not save GLaBIOS,
 because that BIOS's limit turned out to be on the whole operation rather than
 on silence — but the model is right for the reason it was changed.
 
+### `int 19h` does not restart the machine on a GLaBIOS twin
+
+The Chip menu's Restart (SPEC.md 20.10) ends in `int 19h`, and on
+`os8088_5150_cga_gla` that leaves a **blank 80-column text screen with the
+tick still running** and never boots — measured on two kernels that differ by
+33 bytes, so it is the BIOS and not the build. On `os8088_5150_cga`, the same
+script reboots properly: the card comes back to `Mode6HiResGraphics` about
+twenty guest seconds later and the desktop is up.
+
+So **a restart is tested on an IBM-ROM machine**, and that is not a
+convenience: SPEC.md 9.6.5's freeze only exists on the far side of a completed
+reboot, and a machine that never gets there measures the wrong thing twice
+over — a `int 19h` that stalls in the BIOS still ticks, so a liveness check on
+`0040:006C` alone will call it healthy. Gate on the video MODE coming back to
+graphics before you believe anything after a Restart.
+
 ### What it measures now
 
 `boot ticks`, os8088's own counter, on the 360KB image:
@@ -612,6 +628,7 @@ guest's turnaround puts it. Quote the **class**, not the machine.
 | `os8088_xt_vga` | an IBM 5160 XT with GLaBIOS and a VGA — SPEC.md §39's mode 12h |
 | `os8088_xt_vga_sb` | ...and the same XT with the AdLib + Sound Blaster pair, which exists **to be run with `--turbo`** — see below |
 | `os8088_xt_hdd` | the same XT with an **XT-IDE** controller — SPEC.md §52's rung 0 — **and a parallel port**, which makes it the one machine here where TWO drivers publish a Control Panel page at once (SPEC.md §31.9/§62.7). That is what exercises `drv_cp_class`'s ordinal-to-class walk rather than asserting it: Hard Drive lands on row 5 and Network on row 6 with class 3 unpublished in between, and on a machine with one page an off-by-one there is invisible |
+| `os8088_5150_cga_hdd` | the same XT-IDE disk on a **5150 behind the PERIOD ROM**, which every other hard-disk machine here lacks — the rest are `Ibm5160` on GLaBIOS, so until this existed "a hard disk" and "the ROM the reporter runs" were two axes that could not be crossed. That matters because this tree already has one defect (SPEC.md §18.91's `AL`) that *only* the IBM ROM exposes, and because a field report arrives in this shape: docs/FIELD-MACHINES.md's machine is a 5150 with an ST-225 on an ST11M, where a controller's own option ROM is rung 0 exactly as XT-IDE is here. Needs the ROM this tree cannot ship, so a container without one runs the GLaBIOS twins only |
 | `os8088_5150_cga_lpt` | the CGA GLaBIOS 5150 with a **Centronics card at 0x378** — SPEC.md §62's machine, and the only other one here with a parallel port. MartyPC's `ParallelPort` has a readable data register, so `lp_latch` succeeds and the whole os8088 side of the link is testable: the scan, the attach, the publication, the page, and `net_connect` failing in bounded time. It has **no partner and cannot be given one** — the status lines read a constant, so `mst_hello` always times out and the page says `No partner`, which is docs/NET-PLAN.md §1.4.4's own distinction being drawn by the machine rather than by an argument. The WIRE is the 5150's question and `tests/lptlink` is how it is asked. GLaBIOS on purpose: nothing here is a timing question, so this is one of the machines that runs in a container with no IBM ROM |
 | `os8088_5150_both` | **two cards**: a CGA *and* a Hercules, which is docs/FIELD-MACHINES.md's machine as it actually is. SPEC.md §39.11's adapter switching exists for this, and docs/DUAL-DISPLAY-PLAN.md is the study of driving both at once |
 | `os8088_5150_both_gla` | its GLaBIOS twin, and the one `tests/dualcheck.py` runs by default — the IBM ROM this tree cannot ship is what the other needs |

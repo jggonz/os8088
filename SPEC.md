@@ -708,9 +708,23 @@ The load is therefore placed where a failure can still be reported *instead
 of* the feature rather than *inside* it. `cp_open` loads **before**
 `app_launch`, so a machine with the wrong disk in the drive never gets a
 Control Panel window with no Control Panel in it — it gets no window and a
-toast naming the disk (§59), with the drive letter stamped by
-`dsk_bootltr` like every other message that names the system volume
-(§52.10.3).
+toast naming the disk (§59): `Panel Needs Sys Disk A:`, with the letter
+stamped by `dsk_bootltr` like every other message that names the system
+volume (§52.10.3).
+
+**It says the disk AND the drive, and the letter is the half that was
+questioned.** `mod_need` searches nothing — it goes to `[dsk_bootvol]` and
+only there — so the letter is not a guess about where the file might be, it
+is the one volume the panel is ever looked for on, and on an installed
+machine that is C: rather than A:. The doubt came from the field, where the
+refusal was seen to spin **both** floppies, which reads as a search. It is
+not one. Traced at the int 13h boundary from outside the guest — the drive
+the ROM was actually told to select — a refusal with the current volume on
+A: is **one call, on A:**, and with a Disk window open on B: it is **two on
+A: and one on B:**. That second drive is `drv_vol_back` putting the user's
+*own* volume back afterwards (§51.5.2), not a second place the panel was
+looked for. So the letter stands, and this paragraph is here because the
+motors say something the message does not.
 
 **Two Control Panel routines stay resident**, and both would otherwise force
 a load at a moment when there is no panel at all: `cp_tick_due` (called once
@@ -4435,6 +4449,80 @@ exactly as dead as before, with the port read working perfectly. **A gate that
 always says no is indistinguishable from a feature that never ran**, and the
 only thing that separated them was watching the ISR execute instruction by
 instruction.
+
+#### 9.6.5 …and the hook that nothing put back froze the machine on the next key
+
+**`mouse_init` installed int 09h and nothing ever restored it.** The vector
+was the one thing hooked outside `mou_ivecs` — the keyboard is not a UART, so
+the loop `mouse_unhook` walks to put the serial vectors back never reached
+it — and what that cost is not a leak. It is a **hard freeze on the first
+keystroke after a soft restart**, and it took the field, a photographed
+heartbeat and four rounds of instrument to find.
+
+The chain is short and every link is ordinary. The Chip menu's Restart
+(§20.10) ends in `int 19h`, which is the **bootstrap loader and not POST**: it
+re-reads the boot sector and does not reset the interrupt vector table. So
+int 09h survived the restart still naming `KERNEL_SEG:kbm_isr`; the boot
+sector then read a fresh kernel over that same segment, at the same offsets;
+and `mouse_init` saved the vector it found — its own predecessor, at its own
+address — into `kbm_old9`. **`kbm_isr`'s `jmp far [cs:kbm_old9]` was a jump to
+itself.**
+
+**It is the worst failure shape in the system, and that is why it looked like
+nothing.** The loop pushes two words and pops them before the jump, so the
+stack does not grow: nothing overruns, no canary dies, no fault is raised. It
+runs inside an interrupt gate, so `IF` is clear and no `sti` is coming; IRQ1
+is in service with no EOI behind it. Every clock in the machine stops with
+whatever was on the screen still on it. The kernel is not running, so no
+kernel instrument can report — which is exactly what the field kept sending
+back: *the entire system freezes, no bar changing, nothing after 60 s*.
+
+**What identified it was a counter painted twice.** `khb_beat` counts entries
+to `sch_isr` and `khb_chain` counts the BIOS `int 08h` chain returning, and
+the heartbeat is painted once on each side of that call; the field photograph
+read **`beat` one ahead of `chain`**, so the machine died inside the timer
+interrupt without ever coming back from the BIOS. The IBM ROM's `int 08h`
+does `sti` early, so IRQ1 nests inside it — and the nested int 09h never
+returned. The same photograph read `kfz = 00`, meaning `ui_task` never saw
+the key at all, which is what ruled out everything downstream of it.
+
+**A/B'd on a cycle-accurate 5150 with the period IBM ROM**, same script both
+times: open the System menu, pick Restart, wait for the card to come back to
+`Mode6HiResGraphics` — so the machine really did reboot into the desktop and
+this is not a BIOS that stalled — then send one keystroke and read
+`0040:006C`. Without the fix: **2144, 2144, 2144**, and it never moves again.
+With it: **2112, 2463, 2821**.
+
+**On the GLaBIOS twin the restart does not complete at all** — `int 19h`
+leaves a blank 80-column text screen with the tick still running, on both
+kernels — so the machine to run this on is `os8088_5150_cga`, and the
+difference is the BIOS rather than either build. It is also why the unfixed
+GLaBIOS run dies about two seconds after the click, *before* the kernel is
+back: the orphaned vector is pointing into a segment the boot sector is
+overwriting, so the reboot's own keyboard traffic executes rubble. An emulator
+that refuses to execute that rather than trying is reporting the same defect
+as a panic.
+
+Two changes, and the first is the fix:
+
+- **`mouse_unhook` restores int 09h**, beside the serial vectors it already
+  restored. Its only caller is `sched_unhook` and that runs before `int 19h`,
+  so the poisoned state can no longer be created.
+- **`kbm_isr` refuses to chain to itself.** No BIOS handler lives in the
+  kernel's segment, so `kbm_old9`'s segment against `CS` is the whole test.
+  It costs the keystroke and owes the EOI the BIOS would have sent —
+  a keyboard that has stopped working on a machine that is still running.
+  It is insurance against a path that skips the unhook, and with the fix
+  above it should never fire.
+
+**A vector installed outside the table that undoes them is the shape to
+recognise**, and it is the second time this tree has produced it: §51.2's
+detach exists because a driver that hooks an interrupt and is then freed
+leaves the vector pointing into a heap the next claim reuses. The rule is the
+same one — **whatever installs, uninstalls, in the same routine's mirror** —
+and a hook that does not fit the loop its neighbours are restored by is
+precisely the one that will be left out of it.
+
 
 `fm_drag` is the one that cannot be fixed by servicing it. It exists to
 disambiguate a click from a drag, and it waits with the button down to find
@@ -24466,6 +24554,26 @@ Seven things about it:
 - **The caller's default name still wins.** `fdlg_open`'s `SI` is the
   document the app is actually on; the remembered name is what fills the box
   when `SI` is 0, which is the case that used to give an empty box.
+- **...and `SI = 0` has to SURVIVE THE STUB, which for a while it did not.**
+  Slot 0x0150 was an `OSAPI_NSTUB`, and that macro stages the caller's
+  `DS:SI` into `api_name` **unconditionally** — right for the six file cells
+  it also serves, where a name is an argument the operation cannot run
+  without, and wrong here, where the published contract is *"a name, or 0"*.
+  A staged 0 arrives as `api_name`, a kernel address and so never zero,
+  holding whatever `api_copyname` found at the caller's offset 0 — which for
+  a package is its own 32-byte header (§20.2). So an app asking for **no**
+  default got `O8` and the version bytes in the box, the Open button went
+  **live on a name no volume has**, and the branch above this one was
+  unreachable from any package: nothing could take it, because nothing could
+  leave `SI` zero. Four of the six packages that use the dialog ask for no
+  default — Tracker, Frotz twice, and ModPlug twice (Open, and PlayList ▸
+  Add…) — so it was all of them, and the feature above had never once run
+  outside the kernel. `api_fdlg_open` is its own stub now: it tests `SI`,
+  stages only a real name, and passes the zero through untouched. The shape
+  to recognise is that **a shared stub encodes a contract, and this cell's
+  differed from the other six in the one place the macro had no opinion** —
+  the `V` flag had already been reasoned about for it and the optional
+  argument had not.
 - **The banked fallback is taken FIRST**, because a remembered folder can
   have gone away — the disk was swapped, or the directory deleted — and
   `dsk_chdir`'s failure path leaves `[dsk_cwd]` at 0 on the drive it tried.
@@ -34391,6 +34499,45 @@ the foreground's stamp is a race rather than a fix; `drv_blk_call` is
 `dsk_xfer`'s inner loop and sits *below* the file layer, so it resolves no
 names. Neither can reach a cell that asks `inst_caller`.
 
+### 51.2.4 A memory restore addresses `DS`, so it goes AFTER `pop ds`
+
+§51.2.3's bracket is `push word [snd_inst]` … far call … `pop word
+[snd_inst]`, and for two years both `drv_call` and `drv_cp_call` wrote that
+restore **inside** the `push ds` / `pop ds` pair. `pop word [mem]` addresses
+`DS`, and `DS` between the far call and the `pop ds` is the **driver's**
+segment — so the restore put two bytes at the driver's base plus
+`snd_inst`'s kernel offset (0xD5F9 in the build this was found on) and the
+kernel's own stamp was never restored at all.
+
+Two defects, and the second is the one that got reported:
+
+- **The stamp stayed cleared.** Every sound grant made after a driver call
+  inside a Control Panel dispatch was attributed to the kernel rather than to
+  the instance — §51.2.3's whole subject, silently undone by its own
+  implementation.
+- **A two-byte wild write, ~54KB past the driver's base.** A driver's region
+  is `mem_claim_hi`'s, off the **top** of the heap, so on a 640KB machine
+  that address is past the top of RAM and lands in the **VGA framebuffer**:
+  16 pixels of one scan line written to colour 0, a black dash on the bare
+  desktop, redrawn on every dispatch — which is every `DRVV_*` verb and
+  every press on a driver's page, Mount and Unmount included. Its position is
+  wherever the heap happened to put that driver, so it moves from boot to
+  boot and reads as intermittent.
+
+**It is invisible on the two mono adapters**, whose framebuffers are at B000
+and B800: the same linear address is the unused hole below them, so the write
+lands nowhere and nothing shows. That is why it arrived as *"on at least
+vga"*. It is also invisible on a machine with enough RAM above the driver for
+the address to stay inside the heap — where it is not harmless but silent,
+two bytes of somebody else's claim.
+
+`loader.inc`'s package entry had the ordering right the whole time: `pop ds`,
+then `pop word [snd_inst]`. So the rule is the general one, and it binds
+`wm_pkgcall`'s `SNAPAUDIT` bracket (§11.94.2) as well, which had the identical
+shape: **anything banked in kernel memory across a call that changes `DS` is
+pushed before `DS` and popped after it is back.** All three still end in
+flag-writing-free instructions, so a callback's `CF` comes out untouched.
+
 ### 51.3 Loading, and what happens when it fails
 
 `drv_load` is the package loader's order (§21) with the instance half
@@ -35830,15 +35977,31 @@ confirm.
 
 Three things decide it, and each answers a question nothing else can:
 
-- **How many floppy drives there are is `int 11h`'s answer**, bits 7:6 (the
-  count less one), and the kernel's volume table is no help at all: A: and
-  B: are unconditional rows in `dsk_vtab`, because on a one-drive PC the
-  BIOS aliases unit 1 onto the same physical drive and DOS asks for the
-  swap. Reading the volume table would say "two drives" on every machine
-  there is.
-- **Which drive to look in is the OTHER one** — `[hd_ivdrv] XOR 1`, and only
-  when the drive stage 1 read was a floppy at all. A hard-disk source makes
-  "the other one" meaningless, so that case asks.
+- **Whether B: is a drive at all is `int 11h`'s answer**, bits 7:6 (the
+  count less one), and the kernel's volume table is no help at *that*
+  question: rows 0 and 1 are live on every machine, because `[disk_drive]`
+  may still name one and a mount of an absent drive is an ordinary failed
+  mount — §18.98's `.zloop` takes the ZONE away and keeps the row. So B:
+  answers `VK_REMOVABLE` on a one-drive PC exactly as it does on a two-drive
+  one, where the BIOS aliases unit 1 onto the same physical drive: a probe
+  there reads the disk that is in A: and answers a question nobody asked.
+  **Units 2 and 3 need no such test** — §18.98 only *makes* those rows when
+  the machine claims the drives, so the row existing is already the answer.
+- **Which drives to look in is every REMOVABLE volume, lowest index first.**
+  `OSAPI_VOL_KIND` (§18.7.2) is what says which those are, so the
+  destination partition, any other hard disk and a redirected network volume
+  (§62.9) are excluded by their KIND rather than by their index — which is
+  what makes this right on a machine whose floppies are lettered A:, B:, D:
+  and E: (§18.98). The one it skips is the drive **stage 1 read the system
+  disk from** (`[hd_isrcdrv]`, which §52.10.5.1 had to make honest first),
+  and skipping it decides nothing: that disk has `KERNEL.SYS` on it and the
+  test below would refuse it anyway, so what the skip buys is one mount.
+
+  It was `[hd_ivdrv] XOR 1`, and that expression was wrong twice. It asked
+  about the drive the user had last been **browsing** rather than the drive
+  the install had just read, so a user with a Disk window open on the drive
+  holding the apps disk was asked to swap in a disk that was already in the
+  machine — and "the other one" has no meaning at all past two drives.
 - **What makes a disk the apps disk takes THREE tests, and two of them are
   not enough.** An `APPS` folder in the root was the first answer and it has
   a short life, because the system disk is going to carry one too. Adding
@@ -35876,6 +36039,71 @@ The source drive is its own byte. `[hd_isrcdrv]` is what `hd_isrc` and
 on; `hd_ivol_bank` sets both and the auto-detected drive overrides only the
 first. One word for both would have ended the install with the user standing
 on a drive they were never on.
+
+#### 52.10.5.1 CLOSED: the second stage copied from wherever the user stood
+
+**A 5150 with an internal 360KB drive and an external 720KB one installed its
+system disk perfectly, was correctly told the disk in B: was not the apps
+disk, was asked to swap — and then read B: anyway and reported `Done`.**
+Nothing had been copied and nothing said so.
+
+The probe above is **stage 1's**, and there was no stage 2 probe at all.
+`hd_inst_apps` takes its source from `hd_ivol_bank`, which is *the volume the
+user was standing on* (§51.5.2's bank) — on that machine B:, because the
+blank disk in the external drive had been looked at before the install was
+started. So the prompt asked for a disk, the user put it in A:, and the copy
+read the drive the answer had nothing to do with. A walk of an empty root
+copies no files and fails at nothing, which is why the dialog then said the
+install was finished.
+
+**The banked volume was never a statement about where the apps disk is.** It
+is where the user was *browsing*, and stage 1 already had to correct for
+exactly that: §52.10.8.1's `hd_isrc_ck` tests the banked drive for
+`KERNEL.SYS` and falls back to A: when it is not the system disk. The
+correction was simply never made a second time — and the swap prompt is the
+one moment in the whole install when the machine's disks are *guaranteed* to
+have changed since anything last looked at them.
+
+So the retry asks the same question stage 1's probe asks. `hd_iapps_scan` is
+that probe with the drive lifted out of it: `hd_iapps_at` tests one volume,
+`hd_iapps_cand` says which are worth testing, and the scan walks them
+**lowest index first, skipping nothing** — A: before B: before §18.98's
+external pair. Skipping nothing is the point: the drive the pre-swap probe
+ruled out held a system disk a moment ago and holds the apps disk now.
+Ordering by index is not arbitrary either — the prompt says to insert the
+apps disk, and the drive the user takes the system disk *out of* is the one
+they put it back into.
+
+**A total miss still copies from the banked volume, and that is deliberate.**
+The three tests define *our* apps disk, and a hand-made floppy carrying only
+`GAMES`, or packages loose in its root, fails all three while being precisely
+what the user meant to copy. Turning a miss into a refusal would trade a
+silent wrong disk for a refused right one; the scan may only ever **improve**
+the guess. What is left unfixed by that choice is narrower than what it
+protects: a machine with no apps disk in it anywhere still copies whatever is
+in the banked drive and still reports `Done`.
+
+**And skipping the source drive turned out to rest on a byte that was being
+put back underneath it.** `hd_ivol_bank` sets `[hd_ivdrv]` *and*
+`[hd_isrcdrv]`, which is right for a phase starting up and wrong for a
+routine merely standing somewhere for a moment — and `hd_iksecs` is the
+second kind: it runs from `hd_inst_vbr` at the **end** of the system phase,
+banks, goes to the destination to read `KERNEL.SYS`'s size and comes back.
+So it quietly rewrote `[hd_isrcdrv]` with the user's volume, throwing away
+§52.10.8.1's A: fallback *after* the copy that fallback was for had already
+happened. Invisible for as long as nothing read that byte afterwards; the
+probe reads it, and the first build of this section skipped the wrong drive
+on exactly the machine the section is about. `hd_ivol_bankv` is the volume
+half on its own, and the pair now says which statement each caller is making.
+
+**Restoring once rather than per candidate is what keeps it affordable.**
+`hd_iapps_at` leaves the volume on the drive it looked at and the scan calls
+`hd_ivol_back` on every path out, so a candidate that answers no costs one
+mount instead of two — and both of its own `goto`s are quiet (§19.2.2),
+because nothing in this module ever *shows* a folder and `OSAPI_FILE_FIND`
+walks raw directory sectors. The full restore at the boundary is what pays
+the `[dsk_lstale]` debt they leave, which is `hd_isrc`'s rule exactly:
+quiet inside the loop, full at the edge.
 
 ### 52.10.6 Restart, and a dialog that stops flashing
 
@@ -39284,8 +39512,15 @@ opposite things done about them:
 | `[cp_dsave]` | | |
 |---|---|---|
 | 0 | `Settings Saved` | 14 chars |
-| 1 | `Not saved: need disk A:` | 23 |
+| 1 | `Not Saved: No Sys in A:` | 23 |
 | 2 | `Not saved: disk error` | 21 |
+
+Slot 1 says **`No Sys in A:` and not `need disk A:`**, because those are two
+different refusals and this is only ever the second. There *is* a disk in the
+drive — the user has been working off it — and what it is not is the *system*
+disk (`drv_cfg_save` asks `dskw_stat` for `KERNEL.SYS`, §51.5.1). `need disk`
+reads as an empty drive and sends the reader to look at the light rather than
+at the label.
 
 **The SUBJECT is what these gave up**, and until §59.8 they did not have to:
 the strip had the menus segment's 50 cells to sit in, so all three of
@@ -39293,9 +39528,15 @@ subject/outcome/cause fitted (`Settings not saved: wrong disk in A:`, 36
 chars) and terseness would have bought nothing. In the clock's 25-cell field
 `TOAST_MAX` is 23 and one of the three has to go. It is the subject: the panel
 the user just closed is the only thing that was on screen, where dropping the
-cause leaves a message nobody can act on. `cp_s_noload` — *"the panel could
-not be opened"* — is the exception that proves it and spends the outcome
-instead, because there is no panel on screen to infer the subject from.
+cause leaves a message nobody can act on. `cp_s_noload` — `Panel Needs Sys
+Disk A:` — is the exception that proves it and spends the outcome instead,
+because there is no panel on screen to infer the subject from.
+
+All three of these name the **disk** and the **drive** both, which 24 cells
+will just carry, and §2.8.4 is why the letter is worth one of them: the panel
+and the settings file are looked for on exactly one volume, `[dsk_bootvol]`,
+so the letter is not a hint about where to search but the whole answer to
+*which disk, where*.
 
 `A:` is **stamped** at boot (§52.10.3) because the system volume is not A: on
 a machine booted from a hard disk, and a message naming the wrong drive is
@@ -39421,9 +39662,9 @@ twenty-two strings that did not fit:
 
 | | was | is |
 |---|---|---|
-| `cp_s_dsdsk` | `Settings not saved: wrong disk in A:` | `Not saved: need disk A:` |
+| `cp_s_dsdsk` | `Settings not saved: wrong disk in A:` | `Not Saved: No Sys in A:` |
 | `cp_s_dserr` | `Settings not saved: disk error` | `Not saved: disk error` |
-| `cp_s_noload` | `Control Panel needs the system disk in A:` | `Control Panel needs A:` |
+| `cp_s_noload` | `Control Panel needs the system disk in A:` | `Panel Needs Sys Disk A:` |
 | `fm_s_swapno` | `Format needs the system disk in A:` | `Format needs disk A:` |
 | `fm_s_fmtbad` | `Drive cannot reach 720K - made 360K` | `Made 360K, not 720K` |
 | `pt_s_crop` | `Would crop artwork - erase it first` | `Would crop artwork` |
