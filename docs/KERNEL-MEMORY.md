@@ -190,6 +190,19 @@ back needs 666 bytes out of `.text`, and `.cold` has 160 bytes of rung slack,
 so moving a module cold would only spend the same step over there. Measured
 with the bisect above, not inferred.
 
+**A third addition — SPEC.md §9.6.3/§9.6.4 — cost 300 bytes and NO step**,
+which is the same guard reporting the opposite answer and is worth recording
+beside the paragraph above for exactly that reason. §9.6.3's item-granular
+menu navigation is **+186** (`menu_kbnav` and one byte of `.text` state in
+`menu.inc`, plus the hook in `kbm_move`) and §9.6.4's int 09h peek for keypad
+5 is **+114** (`kbm_isr`, `kbm_p5spend`, a saved vector and the tier-gated
+install). The image rung had 483 bytes of slack when they were written and has
+183 after, so the footprint did not move at all and `KERN_SIZE` is unchanged.
+Both are measured with `make`'s own report rather than inferred, and neither
+is a candidate for removal ahead of the feature they belong to: they are the
+difference between a keyboard mouse that can reach a menu item and one that
+takes six presses per item and shows nothing at all on a separator.
+
 **Recommend it; do not remove it unasked.** On a machine with no working
 mouse, taking it out means the desktop cannot be clicked at all.
 

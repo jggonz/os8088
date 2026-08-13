@@ -1845,6 +1845,11 @@ menu_drop:
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
+    mov byte [menu_dropd], 1    ; ...and while this is up, the keyboard mouse
+                                ; steps by ITEM rather than by KBM_MIN pixels
+                                ; (SPEC.md 9.6.3). Set HERE and not in either
+                                ; caller, so the context menu gets it without
+                                ; knowing it exists
 .poll:
     mov al, [menu_btn]
     test [mouse_btn], al
@@ -1875,6 +1880,9 @@ menu_drop:
 
     ; --- released: put the screen back, report the selection -------------------
 .up:
+    mov byte [menu_dropd], 0    ; the arrows are a pointer again (SPEC 9.6.3).
+                                ; The poll loop above has exactly this one way
+                                ; out, so no path can leave the flag standing
     mov ax, [menu_sseg]         ; restore erases the menu and any highlight
     or ax, ax
     jz .repaint
@@ -1943,6 +1951,127 @@ menu_drop:
     pop dx
     pop cx
     pop bx
+    ret
+
+menu_dropd  db 0                ; a pull-down is on the screen (SPEC.md 9.6.3).
+                                ; In .text with a real initialiser rather than
+                                ; in .bss, for fdlg_win's reason: -f bin zeroes
+                                ; nothing and this is read on the machine's
+                                ; very first arrow key
+
+; -----------------------------------------------------------------------------
+; menu_kbnav - the keyboard mouse steps a dropped menu by ITEM (SPEC.md 9.6.3)
+;
+; in:  AL = the direction key's dy: -1 up, 0 none, +1 down
+; out: CF = 0 - the pointer has been PLACED; the caller owes only the repaint
+;      CF = 1 - not ours: step the pointer the ordinary way
+; clobbers: AX, flags
+;
+; A menu is a LIST, so the unit an arrow key moves in it is one item - and the
+; pixel ramp is measurably the wrong instrument for that. MENU_ITEM_H /
+; KBM_MIN is 16 / 3, which a mouseless 5150 measured as 6, 5, 5 presses for
+; three items, with the highlight moving on one press in six. The ramp cannot
+; be the fix either: held, it is 3, 9, 18, 30, 45 px cumulative against 16px
+; cells, so it steps OVER items - which is exactly why 9.6.2's direction reset
+; had to exist - and a step sized for a menu could never cross a screen.
+;
+; Worse than slow, it goes BLANK: a separator is a MENU_DIS item (SPEC.md
+; 12.2), so menu_hover answers 0xFFFF for that whole cell and six presses in
+; the middle of a menu highlight nothing at all. So disabled cells are SKIPPED
+; here rather than merely landed on and rejected.
+;
+; The row is taken from GEOMETRY and never from menu_hover, which answers
+; 0xFFFF for a disabled cell as well as for "outside": stepping from that
+; would restart at the end of the menu every time the pointer was parked on a
+; separator.
+; -----------------------------------------------------------------------------
+menu_kbnav:
+    cmp byte [menu_dropd], 0
+    je .no                      ; nothing is dropped: an ordinary pointer
+    or al, al
+    jz .no                      ; Left/Right keep their pixel step, which is
+                                ; how the pointer leaves a menu sideways
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cbw
+    mov si, ax                  ; SI = the direction, and the sign the scan
+                                ; below walks in
+
+    ; --- which row is the pointer on? -1 above the menu, [menu_cnt] below ----
+    mov ax, [mouse_x]           ; the same x test menu_hover makes, so the two
+    cmp ax, [menu_x1]           ; can never disagree about what "in the menu"
+    jb .beside                  ; means
+    cmp ax, [menu_x2]
+    jbe .inx
+.beside:                        ; the pointer is off to one side: come back in
+    mov di, -1                  ; at the end this key is heading AWAY from, so
+    or si, si                   ; Down enters at the first item and Up at the
+    jns .step                   ; last
+    mov di, [menu_cnt]
+    jmp short .step
+.inx:
+    mov ax, [mouse_y]
+    mov bx, [menu_y1]
+    inc bx                      ; the top frame row is not a cell (menu_hover)
+    sub ax, bx
+    mov di, -1
+    js .step                    ; above the first cell
+    mov cl, 4
+    shr ax, cl                  ; / MENU_ITEM_H -> the cell under the pointer
+    mov di, ax
+    cmp di, [menu_cnt]
+    jb .step
+    mov di, [menu_cnt]          ; below the last cell
+
+    ; --- one cell that way, over any that cannot be selected ------------------
+.step:
+    add di, si
+    js .top                     ; off the top...
+    cmp di, [menu_cnt]
+    jb .live
+    mov di, [menu_cnt]          ; ...or off the bottom: park one cell OUTSIDE
+    jmp short .place            ; the frame, where the mouse would be if it had
+.top:                           ; left the menu the same way - nothing is
+    mov di, -1                  ; highlighted there, and a button press
+    jmp short .place            ; dismisses (SPEC.md 9.6.3)
+.live:
+    mov ax, di
+    call menu_item_dis          ; a greyed item or a separator is not a place
+    jc .step                    ; to stop. DI only ever moves one way, so this
+                                ; walks off an end rather than looping
+
+    ; --- and place the pointer ------------------------------------------------
+.place:
+    mov ax, di
+    mov cl, 4
+    shl ax, cl                  ; DI x MENU_ITEM_H, SIGNED - which is what lets
+    add ax, [menu_y1]           ; the two off-the-end rows fall out of the one
+    add ax, 1 + MENU_ITEM_H / 2 ; formula instead of needing cases of their own
+    mov bx, ax                  ; BX = y, the cell's middle row
+    mov ax, [mouse_x]           ; x is left alone while it is inside the menu,
+    cmp ax, [menu_x1]           ; so a pointer the user has put in a column
+    jb .xsnap                   ; stays in it
+    cmp ax, [menu_x2]
+    jbe .xok
+.xsnap:
+    mov ax, [menu_x1]
+    add ax, 8                   ; ...and otherwise where the item text starts
+.xok:
+    call mou_clamp              ; the clamp the ISR itself uses, so the
+    mov [mouse_x], ax           ; two-display seam is honoured by construction
+    mov [mouse_y], bx           ; rather than by a rectangle known here
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
