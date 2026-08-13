@@ -1137,6 +1137,41 @@ $(BUILD)/modplug.bin: apps/modplug/modplug.asm apps/modplug/mppmix.inc \
 $(BUILD)/modplug.o88: $(BUILD)/modplug.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/modplug.bin -o $@
 
+# ...and the SAME SOURCE with -DMPPDEBUG, which is the tests/trklog.inc shape
+# (SPEC.md 45.14): one source, every hook inside %ifdef, so the shipped
+# MODPLUG.O88 carries none of it and the two cannot drift. It exists for a
+# reported hard freeze on 'L' that reproduces on nobody's emulator here - see
+# the MPPDBG macro in modplug.asm for what it draws and why the screen is the
+# only channel a stopped machine still has.
+#
+# It builds a WHOLE FLOPPY PAIR rather than a package, because the reporter
+# needs something to boot: build/dbg-os8088-360.img is the ordinary system
+# disk and build/dbg-apps360.img is the apps disk with the instrumented
+# player in place of the shipped one. Nothing here is in `all` and nothing
+# ships.
+modplugdbg: $(BUILD)/dbg-apps360.img
+
+$(BUILD)/dbg/modplug.bin: apps/modplug/modplug.asm apps/modplug/mppmix.inc \
+                      apps/modplug/mppui.inc apps/modplug/mppset.inc \
+                      apps/modplug/mpplist.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(BUILD)/dbg
+	$(NASM) -f bin -w+error -DMPPDEBUG -I apps/ -I apps/modplug/ -o $@ \
+	        apps/modplug/modplug.asm
+	@echo "modplug (MPPDEBUG): $(call FILESIZE,$@) bytes"
+
+$(BUILD)/dbg/modplug.o88: $(BUILD)/dbg/modplug.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/dbg/modplug.bin -o $@
+
+$(BUILD)/dbg-apps360.img: $(BUILD)/dbg/modplug.o88 $(APPS_TOOLS) $(APPS_GAMES) \
+                          $(SYSAPPS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+	    $(patsubst %,APPS:%,$(filter-out $(BUILD)/modplug.o88,$(APPS_TOOLS))) \
+	    APPS:$(BUILD)/dbg/modplug.o88 \
+	    $(patsubst %,GAMES:%,$(APPS_GAMES)) \
+	    MEDIA:apps/tracker/beverly.mod \
+	    $(patsubst %,SYSTEM:%,$(SYSAPPS))
+	@echo "modplugdbg: boot build/os8088-360.img with $@ as the APPS disk"
+
 # ArtfulType, the eleventh shipped package (SPEC.md 46): a port of
 # ActionRetro's ArtfulType, the distraction-free Markdown writer for classic
 # 68k Macs, onto the fullscreen surface (SPEC.md 11.2). Windowed it is the

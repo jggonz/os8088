@@ -234,6 +234,52 @@ mpp_entry:
 ; The player window's callbacks
 ; =============================================================================
 
+; =============================================================================
+; MPPDBG - the breadcrumb (build with `make modplugdbg`, ships nowhere)
+;
+; A reported hard freeze on the 'L' key that no emulator here reproduces: it
+; needs a hard disk MOUNTED, ModPlug rather than any other loader, and a
+; pristine post-boot heap (File > Open first, and 'L' stops freezing). So the
+; instrument has to run on the REPORTER's machine, survive a machine that has
+; stopped, and need no tooling at the other end - which means the screen.
+;
+; MPPDBG n paints a black bar n cells long on the bare desktop at the LEFT
+; edge, under the menu bar. It is drawn from x = 0 every time, so a longer bar
+; simply overwrites a shorter one and the picture is always "the highest step
+; reached". Read it by counting 8-pixel blocks in a photograph.
+;
+; The band is chosen so that nothing on this path can erase it: ModPlug's own
+; frame starts at x = 111 on a 640px screen and the Standard File dialog at
+; x = 87, so x = 0..79 is desktop that neither covers, and the row is below
+; MBAR_H so the menu bar cannot reach it either.
+;
+; It draws through OSAPI_GFX_FILL, which is legal here for the reason the
+; whole path is: every one of these sites runs inside a window callback with
+; the gfx lock already held (SPEC.md 20.3 rule 7).
+; =============================================================================
+MPPDBG_Y    equ MBAR_H + 4          ; the first desktop row nothing here uses
+MPPDBG_H    equ 8
+
+%macro MPPDBG 1
+%ifdef MPPDEBUG
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    xor ax, ax                      ; x1 = 0: always from the left edge, so a
+    mov bx, MPPDBG_Y                ; later step simply covers an earlier one
+    mov cx, (%1) * 8 - 1
+    mov dx, MPPDBG_Y + MPPDBG_H - 1
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%endif
+%endmacro
+
 ; -----------------------------------------------------------------------------
 ; mpp_paint - W_PAINT: layout (once), worker hire (retried), full redraw
 ; in:  SI = window ptr; caller holds the gfx lock
@@ -300,9 +346,14 @@ mpp_onkey:
     push si
     push di
     mov bx, ax                      ; BL = ascii, BH = scan
+    MPPDBG 1                        ; 1: W_ONKEY was dispatched at all
     call mpp_reap
+    MPPDBG 2                        ; 2: mpp_reap returned (the .drain spin in
+                                    ;    mpp_stream_close is the one unbounded
+                                    ;    wait in this package)
     call mpp_abdismiss              ; any key takes the About panel down and
     jc .done                        ; is spent doing it
+    MPPDBG 3                        ; 3: past the About dismissal
     or bl, bl                       ; the SPEC.md 44.2 keypad gate: the numeric
     jnz .ascii                      ; keypad sends digits with ARROW scan
                                     ; codes, so ascii is tested before any
@@ -403,7 +454,9 @@ mpp_onkey:
     call mpp_stop
     jmp .redraw
 .open:
+    MPPDBG 4                        ; 4: 'l' decoded and dispatched to Open
     call mpp_do_open
+    MPPDBG 9                        ; 9: the whole thing came back
     jmp .done
 .plist:
     call mppl_toggle
@@ -750,13 +803,19 @@ mpp_do_open:
     push bx
     push si
     push di
+    MPPDBG 5                        ; 5: inside mpp_do_open
     mov byte [mpp_addpl], 0         ; a plain Open replaces what is playing
     call mpp_pl_walk_reset
+    MPPDBG 6                        ; 6: past the playlist reset
     mov al, FDLG_OPEN
     mov bx, [mpp_win]
     mov di, mpp_fdone
     xor si, si
+    MPPDBG 7                        ; 7: about to cross into the KERNEL. A bar
+                                    ;    that stops here is the kernel's dialog
+                                    ;    open; one that stops earlier is ours
     call OSAPI_FILE_DLG
+    MPPDBG 8                        ; 8: OSAPI_FILE_DLG returned
     pop di
     pop si
     pop bx
