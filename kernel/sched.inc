@@ -809,6 +809,8 @@ sched_mode_get:
 %ifdef KFZTRACE
 KHB_STK     equ 20              ; x = 160: where sch_stkdie says the canary
                                 ; died, well clear of the heartbeat
+KHB_IPOFF   equ 34              ; this block's 8 pushed words + sch_isr's 9,
+                                ; so [sp+34] is the IP the CPU pushed
 KHB_X       equ 32              ; x = 320: blank bar between the menus and the
                                 ; clock, and clear of the key breadcrumbs at 0
 khb_beat:   db 0                ; the heartbeat's own counter, in .text so the
@@ -816,9 +818,12 @@ khb_beat:   db 0                ; the heartbeat's own counter, in .text so the
 khb_sph:    db 0                ; SP high / low at the last tick, and whether
 khb_spl:    db 0                ; task 0's floor word is still there - staged
 khb_bad:    db 0                ; so the emit loop can treat them as table rows
+khb_csh:    db 0                ; CS high: 00 kernel, 0D cold, else a package
+khb_iph:    db 0                ; the interrupted IP: which routine the machine
+khb_ipl:    db 0                ; is standing in when it stops
 khb_wide:   db 0x00, 0x0F, 0xF0, 0xFF   ; two bits -> four pixels each
 khb_srcs:   dw khb_beat, sch_cur, sch_lock, gfx_lock_flag, gfx_lock_own
-            dw khb_sph, khb_spl, khb_bad, 0
+            dw khb_sph, khb_spl, khb_bad, khb_csh, khb_iph, khb_ipl, 0
 %endif
 
 sch_isr:
@@ -858,7 +863,24 @@ sch_isr:
     pushf
     mov ax, KERNEL_SEG          ; DS is not ours yet at this point
     mov es, ax
-    mov bx, [es:vid_rseg]
+    ; --- AND WHERE THE MACHINE ACTUALLY IS ----------------------------------
+    ; The interrupted IP, straight off the frame the CPU pushed. On a machine
+    ; that has stopped this is the one reading that NAMES the code rather than
+    ; describing the symptom: nasm -l turns it back into a routine. The offset
+    ; is this block's 8 words plus sch_isr's 9, both fixed.
+    mov bx, sp
+    mov ax, [ss:bx+KHB_IPOFF]
+    mov [cs:khb_ipl], al
+    mov [cs:khb_iph], ah
+    mov ax, [ss:bx+KHB_IPOFF+2] ; ...and the HIGH BYTE of CS with it, which is
+    mov [cs:khb_csh], ah        ; all that is needed to say WHICH segment: 00
+                                ; kernel, 0D the cold segment, anything else a
+                                ; package - an IP alone is ambiguous across
+                                ; three address spaces
+    mov bx, [es:vid_rseg]   ; ...AFTER the IP read, which needs BX itself -
+                                ; taking it in the middle left ES pointing at
+                                ; the stack pointer instead of the framebuffer
+                                ; and the whole strip went blank
     or bx, bx                   ; ...AND NOT BEFORE THE ADAPTER IS PICKED: this
     jz .khbout                  ; ISR runs from the first tick, which is during
                                 ; the splash, and [vid_rseg] is 0 until
