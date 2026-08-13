@@ -1002,9 +1002,8 @@ menu_bar_text:
     jcxz .diff                  ; (SPEC.md 59.9); 0 = the clock's field has it
     mov di, [toast_scell]       ; and nothing here is owed
     mov al, ' ' | 0x80
-    call menu_bput              ; the leading inverted space...
-    dec cx
-    dec cx
+    call menu_bput              ; the gap cell: menu_bemit white-fills its left
+    dec cx                      ; 4px after the run, so both homes pad alike
     jcxz .strail
     mov si, toast_buf
 .sch:
@@ -1014,8 +1013,9 @@ menu_bar_text:
     call menu_bput              ; CHARACTER did not change but whose HIGHLIGHT
     loop .sch                   ; did has to read as a difference to menu_bput -
 .strail:                        ; and a space at the strip's edge is exactly
-    mov al, ' ' | 0x80          ; that cell. menu_bemit masks it off to draw
-    call menu_bput              ; ...and the trailing one
+                                ; that cell. menu_bemit masks it off to draw.
+                                ; NO trailing cell: SPEC.md 59.8.1's font
+                                ; argument holds here too
 
 .diff:
     mov bx, [menu_bfirst]       ; --- emit the span(s) that moved -------------
@@ -1121,6 +1121,18 @@ menu_bemit:
     mov ax, di
     call font_run
 
+    cmp di, CWHITE              ; the STRIP: take its first cell's left 4px
+    jne .nogap                  ; back to white, so the gap home pads exactly
+    mov ax, cx                  ; as the clock home does (SPEC.md 59.8.1).
+    mov cx, ax                  ; Drawn and then half-erased rather than
+    add cx, 3                   ; composed as two halves, because menu_bcell
+    push bx                     ; is a record of CELLS and half a cell is not
+    mov byte [gfx_color], CWHITE
+    mov bx, MENU_TEXT_Y
+    mov dx, MENU_TEXT_Y + 7
+    call gfx_fill
+    pop bx
+.nogap:
     pop dx
     pop bx
     cmp di, CWHITE
@@ -1350,6 +1362,31 @@ menu_bput:
 ; the strip's WIDTH is the one thing about the field that hashing its
 ; characters cannot see. One byte, one compare.
 ; -----------------------------------------------------------------------------
+; menu_tbar_k - the toast strip's 4px black lead (SPEC.md 59.8.1)
+; in:  AX = x1, CX = x2 (inclusive); MENU_TEXT_Y is the row
+; out: nothing - all registers AND the flags preserved
+;
+; A gfx_fill and not a glyph because there is no glyph: the table is ASCII
+; 32..126 and holds no half-cell block. It costs 4,142 cycles on a 4.77MHz
+; 8088 - PERFORMANCE.md Part 2's per-call floor almost exactly, the 32 pixels
+; being ~110us of it - so a wider lead would cost the same.
+menu_tbar_k:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CBLACK
+    mov bx, MENU_TEXT_Y
+    mov dx, MENU_TEXT_Y + 7
+    call gfx_fill
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
 menu_draw_clock:
     push ax
     push bx
@@ -1430,7 +1467,9 @@ menu_draw_clock:
     inc cx
     jmp short .tl
 .tld:
-    add cx, 2
+    inc cx                      ; the gap cell plus n glyph cells (SPEC.md
+                                ; 59.8.1) - where this was n+2, one whole
+                                ; inverted cell of padding at each end
     cmp cx, bx
     jbe .wide
     mov cx, bx                  ; wider than the whole field: it takes the lot
@@ -1438,17 +1477,15 @@ menu_draw_clock:
     cmp cx, 2                   ; so unreachable) - and a field too narrow to
     jb .hash                    ; hold even the padding gets no strip at all,
                                 ; because the two decs below would wrap
-    mov dh, cl                  ; (the field is 25 cells, so CL is the whole)
+    mov dh, cl
     mov di, menu_clkbuf
     mov si, toast_buf
     mov al, ' '
-    stosb                       ; the leading inverted space...
-    dec cx
-    dec cx
+    stosb                       ; cell 0 is the GAP, and it is a SPACE so the
+    dec cx                      ; ordinary clock run paints it white for free
     jcxz .trail
-    rep movsb                   ; ...the message, over the clock cells it
-.trail:                         ; reaches and no others...
-    stosb                       ; ...and the trailing one (AL survives movsb)
+    rep movsb                   ; ...and the message from cell 1, on the grid
+.trail:
 
 .hash:
     xor ax, ax                  ; --- one check word over the composed FIELD,
@@ -1484,14 +1521,43 @@ menu_draw_clock:
     call font_run
     jmp short .out
 .strip:
-    mov al, [menu_clkbuf+di]    ; --- the strip. font_run wants ASCIIZ and the
-    push ax                     ; buffer's own NUL is at the field's end, so
-    mov byte [menu_clkbuf+di], 0    ; the cell past the strip is banked and
-    mov al, CWHITE              ; put back (menu_bar_text's idiom). INVERSE
-    mov ah, CBLACK              ; VIDEO: the one distinction that survives
-    call font_run               ; SPEC.md 39.4's reduction on both mono
-    pop ax                      ; adapters intact
+    mov al, [menu_clkbuf+1]     ; --- cell 0 FIRST, in the clock's own colours:
+    push ax                     ; it is a space, so this is the 4px white gap
+    mov byte [menu_clkbuf+1], 0 ; that keeps the bed off SPEC.md 12.8's widget
+    mov al, CBLACK              ; (whose trough fills BLACK) - and it is free,
+    mov ah, CWHITE              ; the clock having to paint that cell anyway
+    call font_run
+    pop ax
+    mov [menu_clkbuf+1], al
+
+    mov ax, cx                  ; --- the 4px black lead. No glyph can do this:
+    add ax, 4                   ; the table is 95 glyphs, ASCII 32..126 (6.2),
+    push cx                     ; so CP437's half-block is not available
+    mov cx, ax
+    add cx, 3
+    call menu_tbar_k
+    pop cx
+
+    mov al, [menu_clkbuf+di]    ; --- and the message. font_run wants ASCIIZ
+    push ax                     ; and the buffer's own NUL is at the field's
+    mov byte [menu_clkbuf+di], 0    ; end, so the cell past the strip is
+    push cx                     ; banked and put back (menu_bar_text's idiom)
+    push si
+    add cx, 8                   ; ALWAYS cell 1: `test cx, 7` stays 0, so the
+    inc si                      ; single-store path survives the inset - 2.76x
+    mov al, CWHITE              ; on a Hercules 5150 if it does not (59.8.1)
+    mov ah, CBLACK              ; INVERSE VIDEO: the one distinction that
+    call font_run               ; survives SPEC.md 39.4's reduction intact
+    pop si
+    pop cx
+    pop ax
     mov [menu_clkbuf+di], al
+
+                                ; ...and NO trailing lead: column 7 is lit in
+                                ; 2 of the 95 glyphs, so every other character
+                                ; brings 1px of black with it, and a fill here
+                                ; would have to reach outside the field, where
+                                ; no painter owns the pixels (SPEC.md 59.8.1)
 
     cmp di, bx
     jae .out                    ; the strip took the whole field: no clock left

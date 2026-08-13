@@ -39409,6 +39409,68 @@ the whole difference between the two tenancies — so the spin is unreachable,
 and the clamp belongs where `menu_bput`'s drop-without-advancing is known, not
 to whichever caller last happened to need it.
 
+### 59.8.1 The bed is inset from both neighbours, and the padding is 4px
+
+§59.8 put the strip flush against both ends of the clock's field, with one
+whole inverted CELL of padding at each end. Both halves of that were wrong on
+the glass. On the left the bed's black ran straight into §12.8's file-activity
+widget — whose progress trough fills **black** — so a full trough and the
+strip merged into one bar with no seam. On the right the bed ended at the
+field's edge, which is the bar's own 8px margin, so it read as running off the
+screen.
+
+**So the strip is inset by one cell and padded by 4px:**
+
+```
+ [vid_clk_hx]      +4        +8                        +8+n*8
+ |                 |         |                              |
+ |   4px WHITE     | 4px BLK |  n glyphs, 8px each          | 8px WHITE
+ +-----------------+---------+------------------------------+ (the margin)
+   the gap from      the       ALWAYS at [vid_clk_hx]+8, so
+   the widget        lead      `test cx, 7` is 0 and font_run
+                               keeps its single-store path
+```
+
+Four things fall out of it, and each is why it is built this way rather than
+another.
+
+**The glyphs never leave the 8px grid.** `font_run` gates its single-store
+path on `test cx, 7` (§6.1), so a bed simply shifted right by 4 would put
+every cell of every toast on the `.slow` fill-then-letter path. Measured on a
+cycle-accurate 5150 with a Hercules card, one `menu_draw_clock` that drew:
+**46,642 cycles aligned against 133,240 unaligned — 2.76x**, 9.77 ms against
+27.92. Putting the *gap* in cell 0 and starting the glyphs at cell 1 buys the
+inset for one fill instead.
+
+**The 4px lead is a `gfx_fill`, because there is no glyph for half a cell.**
+The table is 95 glyphs, ASCII 32..126 (§6.2) — CP437's `▌` is not in it and
+cannot be. The fill costs **4,142 cycles = 0.87 ms** on that machine, which
+is almost exactly PERFORMANCE.md Part 2's ~756 µs per-call floor: the 32
+pixels are ~110 µs and the rest is arriving. A wider lead would cost the same.
+
+**There is no trailing lead, and that is the FONT's doing rather than an
+oversight.** Column 7 of the cell is lit in **2 of the 95 glyphs — `*` and
+`_`** — so every other character already carries a blank column on its right,
+which inverts to 1px of black. The right-hand padding is therefore that 1px
+plus the bar's 8px margin, against 4px on the left. Deliberately asymmetric:
+a trailing fill would have to reach past `[vid_clk_hx] + 200` to fit 24
+glyphs, which is **outside the clock field**, where no painter owns the pixels
+and the retire path would owe a fourth fill to blank them. One character in
+95 sits flush against the margin and none of the messages in the tree end in
+either.
+
+**`TOAST_MAX` is 23 → 24.** The strip is now the gap cell plus n glyph cells =
+**n+1**, where §59.8's was n+2, so the same 25-cell field holds one more
+character. Nothing in the tree needs it — the three longest messages are
+exactly 23 — so it is headroom, and it is free.
+
+The gap home (§59.9) takes the same treatment for the same look: its strip is
+`n+1` cells, and `menu_bemit` white-fills the left 4px of the run's first cell
+after the inverted `font_run`. There it is cosmetic rather than structural —
+a strip in the gap floats in white space and touches neither the widget nor
+the margin — but two toasts that pad differently depending on which home they
+landed in is a defect by itself.
+
 ### 59.9 …and it prefers the gap, where it covers nothing at all
 
 §59.8 chose the clock because a message must not cover a menu title, and read

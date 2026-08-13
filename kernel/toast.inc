@@ -82,13 +82,15 @@
 
 section .text
 
-TOAST_MAX   equ 23              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
+TOAST_MAX   equ 24              ; characters, AND IT IS THE TIGHT ONE (SPEC.md
                                 ; 59.8). The clock's field is ([vid_wm8] -
                                 ; [vid_clk_hx]) / 8 = 200/8 = 25 cells on
                                 ; every screen this runs on - 640 and 720 both
                                 ; subtract the same 206 and round to the same
-                                ; 8 - and the strip spends one inverted space
-                                ; at each end, so 23 is what is left. It was
+                                ; 8 - and the strip spends ONE of them on the
+                                ; gap that keeps its bed off SPEC.md 12.8's
+                                ; widget (59.8.1), so 24 is what is left. It
+                                ; was 23 while both ends cost a whole cell. It was
                                 ; 40 while this borrowed the menus segment's
                                 ; 50, and shortening it is what made the move
                                 ; safe: every message in the tree was revised
@@ -466,7 +468,7 @@ toast_place:
     jmp short .l
 .ld:
     jcxz .out                   ; nothing sayable. toast_show cannot stage that
-    add cx, 2                   ; (an empty string is a retire), but reading the
+    inc cx                      ; (an empty string is a retire), but reading the
                                 ; buffer rather than trusting the flag is what
                                 ; keeps the two decs below off a negative count
     mov dx, [menu_bn]           ; **DX = ONE PAST THE LAST CELL THE STRIP MAY
