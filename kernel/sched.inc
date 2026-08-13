@@ -809,11 +809,16 @@ sched_mode_get:
 %ifdef KFZTRACE
 KHB_STK     equ 20              ; x = 160: where sch_stkdie says the canary
                                 ; died, well clear of the heartbeat
-KHB_X       equ 40              ; x = 320: blank bar between the menus and the
+KHB_X       equ 32              ; x = 320: blank bar between the menus and the
                                 ; clock, and clear of the key breadcrumbs at 0
 khb_beat:   db 0                ; the heartbeat's own counter, in .text so the
                                 ; ISR can reach it through CS before DS is ours
+khb_sph:    db 0                ; SP high / low at the last tick, and whether
+khb_spl:    db 0                ; task 0's floor word is still there - staged
+khb_bad:    db 0                ; so the emit loop can treat them as table rows
+khb_wide:   db 0x00, 0x0F, 0xF0, 0xFF   ; two bits -> four pixels each
 khb_srcs:   dw khb_beat, sch_cur, sch_lock, gfx_lock_flag, gfx_lock_own
+            dw khb_sph, khb_spl, khb_bad, 0
 %endif
 
 sch_isr:
@@ -832,18 +837,17 @@ sch_isr:
 %ifdef KFZTRACE
     ; --- the heartbeat (SPEC.md 7/8, KFZ only) -------------------------------
     ; Painted from IRQ0, which is the whole point: on the machine this exists
-    ; for, ticks keep advancing while nothing else responds, so the timer is
-    ; the one context still able to report. Five bytes of kernel state as raw
-    ; pixels on scanline 0, complemented so a SET bit is a BLACK pixel on the
-    ; white menu bar and a photograph is the reading:
+    ; for the timer is the last thing still running, so it is the only context
+    ; able to report. Eight bytes of kernel state, left to right:
     ;
-    ;   [beat] [sch_cur] [sch_lock] [gfx_lock_flag] [gfx_lock_own]
+    ;   beat  sch_cur  sch_lock  gfx_lock_flag  gfx_lock_own  SPhi  SPlo  stk0
     ;
-    ; A beat that moves says the machine is alive; sch_cur says WHICH TASK it
-    ; is stuck in; sch_lock says whether switching is barred; and the last two
-    ; say whether a drawing mutex is held and by whom. Between them those five
-    ; bytes separate a starved UI task from a leaked scheduler lock from a
-    ; deadlocked gfx lock without another build.
+    ; EACH IS 32 PIXELS WIDE - two bits per framebuffer byte, four pixels per
+    ; bit, high bit first - because at one pixel per bit a photographed cell
+    ; is unreadable: the field screenshots arrive at about 2x, so a bit was
+    ; two screen pixels and every reading was a guess.
+    ;
+    ; A set bit is BLACK on the white menu bar. Four banks tall (SPEC.md 39.3).
     push ax
     push bx
     push cx
@@ -860,48 +864,54 @@ sch_isr:
                                 ; the splash, and [vid_rseg] is 0 until
                                 ; vid_setmode publishes it - so an unguarded
                                 ; paint lands at segment 0, which is the
-                                ; INTERRUPT VECTOR TABLE. Measured: the machine
-                                ; never reached the desktop
+                                ; INTERRUPT VECTOR TABLE
     inc byte [cs:khb_beat]
-    mov es, bx
-    xor dx, dx                  ; DX = the bank base, four of them for height
-.khbank:
-    mov si, khb_srcs            ; SI -> the five addresses to sample
-    mov di, dx
-    add di, KHB_X               ; ...laid out from KHB_X, clear of the key
-    mov cx, 5                   ; breadcrumbs at offset 0
-.khbcell:
-    push si
-    mov bx, [cs:si]
-    mov al, [cs:bx]
-    not al                      ; a SET bit is a BLACK pixel on the white bar
-    mov [es:di], al
-    pop si
-    inc si
-    inc si
-    add di, 2                   ; one blank byte between cells
-    loop .khbcell
-    ; ...then the two the table cannot carry: how DEEP this stack is, and
-    ; whether task 0's own bottom word is still there.
-    mov di, dx
-    add di, KHB_X + 10
-    sub di, 0x2000              ; DX has already advanced past this bank
-    mov ax, sp                  ; raw SP: the frames above it are a constant
-    mov cl, al                  ; (this block's 8 + sch_isr's 9 + the int's 3)
-    mov al, ah
-    not al
-    mov [es:di], al             ; SP high...
-    mov al, cl
-    not al
-    mov [es:di+2], al           ; ...then SP low, and NOT at di-2, which is
-                                ; cell 4 and had been overwriting gfx_lock_own
-    xor al, al
+    mov ax, sp                  ; the depth of the stack we interrupted; the
+    mov [cs:khb_spl], al        ; frames above it are a constant
+    mov [cs:khb_sph], ah
+    mov al, 0
     cmp word [ss:STK0_BOT], SCH_MAGIC
-    je .khbok
-    dec al                      ; AL = 0xFF -> painted SOLID BLACK: the UI
-.khbok:                         ; task's stack has been through the floor
-    not al
-    mov [es:di+4], al
+    je .khbcan
+    dec al                      ; 0xFF -> a SOLID 32px BLOCK: task 0's stack
+.khbcan:                        ; has been through the floor
+    mov [cs:khb_bad], al
+    mov es, bx
+    xor dx, dx
+.khbank:
+    mov si, khb_srcs
+    mov di, dx
+    add di, KHB_X
+.khbcell:
+    mov bx, [cs:si]
+    or bx, bx
+    jz .khbnext                 ; 0 ends the table
+    inc si
+    inc si
+    mov al, [cs:bx]
+    mov cx, 4                   ; four bytes per value, two bits each
+.khbnib:
+    mov ah, al
+    push cx
+    mov cl, 6
+    shr ah, cl
+    pop cx
+    and ah, 3
+    push bx
+    mov bl, ah
+    xor bh, bh
+    mov ah, [cs:khb_wide+bx]
+    pop bx
+    not ah                      ; a set bit is black on the white bar
+    mov [es:di], ah
+    inc di
+    push cx
+    mov cl, 2
+    shl al, cl
+    pop cx
+    loop .khbnib
+    inc di                      ; one blank byte between values
+    jmp short .khbcell
+.khbnext:
     add dx, 0x2000
     cmp dx, 0x8000
     jb .khbank
