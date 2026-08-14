@@ -251,9 +251,19 @@ rd_ready:
     xor dx, dx                  ; no donated listing claim: the .lowbss floor
     mov si, rd_label
     call OSAPI_VOL_ADD
-    jc  .out
+    jc  .norow                  ; the table is full: there is no volume to
+                                ; reach the arena through, so it goes back
+                                ; here rather than sitting on the heap until
+                                ; the user unticks a driver that does nothing
     mov [rd_vol], al
     call OSAPI_VOL_MOUNT        ; AL survives: it is the volume index
+    jmp short .out
+.norow:
+    cmp word [rd_arena], 0
+    je .out
+    mov dx, [rd_arena]
+    call OSAPI_MEM_FREE
+    mov word [rd_arena], 0
 .out:
     clc                         ; a refused mount is the Drivers page's to
     ret                         ; report, not a reason to fail the attach

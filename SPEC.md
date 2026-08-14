@@ -34698,6 +34698,22 @@ A memory cell is what a full register file leaves you.
 class in the middle would renumber every user's saved settings and turn "I
 had the hard disk on" into "I had the debug monitor on". Appending cannot.
 
+**One slot per class means one DRIVER per class at a time, and `drv_load`
+refuses the second.** Immediately before the attach it compares
+`[drv_owner]` for the row's class against the row itself: a slot held by a
+*different* row is `DRVE_TWICE`, the image goes straight back, and the row
+reads `Attached twice (bug)` beside its own name on the Drivers page.
+Without that test `drv_publish` overwrites the slot unconditionally — the
+first driver's volumes stay mounted and browsable while every verb on them
+dispatches into the SECOND driver, which is this section's own bug one level
+in. It is reachable rather than theoretical: `RAMDISK.DRV` and `NET.DRV` are
+both `DRVC_FILE` (§62.10) and both ship, so **the two are mutually exclusive
+at run time** and the refusal is what says so. It is also what keeps
+`dsk_vol_drop_drv`'s class key (§51.8) honest, since a class can never hold
+two drivers' volumes at once. Genuine coexistence is a `[drv_fscls]` resolved
+from the VOLUME's row rather than from a constant, which `drv_fs_call`'s own
+header already names.
+
 ### 51.2.2 `DRVV_READY` — the earliest point a driver may call back
 
 Attach happens **before** `drv_publish` arms the class's slot, and that is
@@ -34842,7 +34858,10 @@ re-claim something it already holds: **refuse, touch nothing, return the
 code.** Do not free-and-re-claim to paper over it, which is what makes the
 caller's bug invisible; `sbl_attach` tests `[sbl_seg]` before the state reset
 and before the first port write, so the live ring, the hooked vector and the
-running DSP are all exactly as they were.
+running DSP are all exactly as they were. **The kernel raises it in one place
+too** — a load into a class whose publication slot another row already holds
+(§51.2.1) — and it is the same sentence: the machine is fine, and the
+software is asking for something a class-keyed slot cannot do.
 
 Two plumbing details make it *arrive*, and without either the refusal is
 correct and silent. `drv_attach` **banks a `DRVV_READY` refusal into
@@ -35368,6 +35387,16 @@ publication fixed, surviving in the one path that was still class-blind, and
 the lesson is the same one: **a teardown that says "this driver's" while
 meaning "every driver's" reads correctly right up until a second driver
 exists.**
+
+**And the gate is the publication SLOT, not the class byte alone.**
+`drv_release` drops volumes only on the path where `[drv_owner]` for the
+class named the row being released — a row that never published cannot have
+registered a volume, because `osapi_vol_fence` answers only the driver whose
+class is published. Falling into the class ladder from the not-published path
+drops *whoever does own the slot's* volumes: a second `DRVC_FILE` driver
+refused by §51.2.1's occupancy guard took the RAM disk's drive zone off the
+desktop on its way back out, with the RAM disk still loaded and still
+published. Same sentence, one rung further in.
 
 ### 51.9 A driver's own settings, inside SYSTEM.CFG
 
@@ -42068,7 +42097,11 @@ cache-coherency hazard at all (the far side does its own file I/O through
 file. `drivers/net/net.asm`'s block half keeps its source and still builds —
 the `DEBUG.DRV` precedent (§58), used once already to make room for
 `RAMDISK.DRV` — and the RAM disk KEEPS its row, because it is the only thing
-that can exercise a redirected volume in a container.
+that can exercise a redirected volume in a container. **Keeping the row is
+not keeping both attached**: one class is one publication slot, so ticking
+whichever of them is second is refused with `DRVE_TWICE` (§51.2.1) — the RAM
+disk and the cable are mutually exclusive at run time, and that is a stated
+limitation rather than an oversight.
 
 #### 62.10.1 The wire protocol
 

@@ -1792,6 +1792,22 @@ drv_load_row:
                                 ; Its owner attaches it (drv_load_at above)
 %endif
 
+    mov al, [bx+DRVR_CLASS]     ; ONE DRIVER PER CLASS AT A TIME, and this is
+    call drv_cls_idx            ; the only place that can say so: a class IS
+    jc .clsfree                 ; the publication slot (SPEC.md 51.2.1), so a
+    shl di, 1                   ; second driver in one class does not share the
+    mov ax, [di+drv_owner]      ; slot - drv_publish OVERWRITES it, and every
+    or ax, ax                   ; later dispatch goes to whoever attached last
+    jz .clsfree                 ; while the first driver's volumes stay mounted
+    cmp ax, bx                  ; and browsable. RAMDISK.DRV and NET.DRV are
+    je .clsfree                 ; both DRVC_FILE, so the user can ask for it
+    mov al, DRVE_TWICE          ; from the Drivers page. REFUSE AND SAY SO
+    jmp short .failfree         ; instead: 'Attached twice (bug)' beside the
+                                ; second row, and the image handed straight
+                                ; back. Genuine coexistence is a [drv_fscls]
+                                ; resolved from the VOLUME's row, which
+                                ; drv_fs_call's own header already names
+.clsfree:
     mov byte [bx+DRVR_ERR], DRVE_OK ; the previous attempt's code is cleared
                                 ; BEFORE the attach and not after it, because
                                 ; drv_attach may BANK one of its own off the
@@ -2201,10 +2217,21 @@ drv_release:
     jz .out
     mov al, [bx+DRVR_CLASS]     ; disarm DISPATCH before a byte is freed:
     call drv_cls_idx            ; snd_tick far-calls through drv_fseg inside
-    jc .norow                   ; IRQ0, and a tick landing between the free
+    jc .novol                   ; IRQ0, and a tick landing between the free
     shl di, 1                   ; and a later disarm ran freed code. The
     cmp bx, [di+drv_owner]      ; single word store is atomic against it
-    jne .norow
+    jne .novol                  ; ...AND A ROW THAT DOES NOT OWN THE SLOT HAS
+                                ; NO VOLUMES TO DROP: osapi_vol_fence only
+                                ; answers the driver whose class is published,
+                                ; so a row that never published can never have
+                                ; registered one - while the class ladder
+                                ; below, reached with the row's class in AL,
+                                ; would drop the volumes of whoever DOES own
+                                ; it. That is a refused second DRVC_FILE
+                                ; driver (51.2.1) unmounting the RAM disk on
+                                ; its way back out, and it was visible: the
+                                ; drive zone left the desktop the moment the
+                                ; cable was ticked
     mov al, [bx+DRVR_CLASS]
     call drv_cls_fp_x
     mov word [di+2], 0
@@ -2213,7 +2240,6 @@ drv_release:
     call cp_drv_gone_x            ; a page this driver owned is on screen no
                                 ; longer, and [cp_sel] must not name it
                                 ; (SPEC.md 31.9)
-.norow:
     mov al, [bx+DRVR_CLASS]     ; A VOLUME BELONGS TO A CLASS, and this is
     cmp al, DRVC_DISK           ; where it is named. dsk_vol_drop_drv used to
     je .dropvol                 ; drop EVERY driver-backed row - no argument
