@@ -30,6 +30,20 @@ from os88geom import (MBAR_H, MENU_ITEM_H, TITLE_H, KERNEL_SEG,  # noqa: E402
                       FM_ROW_Y0, FM_ROW_H)
 SYS_X, SYS_Y = 12, 8
 
+# [vid_kind] -> the type name `cards` reports, and the --primary spelling ->
+# the same. viddet.inc's VID_VGA/VID_HERC/VID_CGA are 0/1/2. Here rather than
+# in each test because there are three of them now and a VGA machine is the
+# case they all used to get wrong: `"mda" if kind == 1 else "cga"` looks for a
+# CGA card that a VGA+Hercules machine does not have, and raises IndexError
+# several frames away from the reason (docs/DUAL-DISPLAY-VGA.md).
+KIND_CARD = {0: "vga", 1: "mda", 2: "cga"}
+PRIMARY_CARD = {"herc": "mda", "cga": "cga", "vga": "vga"}
+
+# The two two-card pairings. A VGA machine also carries the CGA bit, unprobed,
+# because mode 6 is a standard BIOS mode there - so VGA+Hercules reads 7, and
+# the CGA bit in it is that VGA's own second mode rather than a third card.
+AVAIL_HERC_CGA, AVAIL_VGA_HERC = 0x06, 0x07
+
 # ctrl.inc's geometry, content-relative. The item list on the left, then the
 # pane, then SPEC.md 31.10.2's row inside it.
 CP_IX, CP_I0Y, CP_IROWH = 6, 6, 14
@@ -116,6 +130,19 @@ def close_panel(m, mo, S, settle, card=None):
     settle(m, card=card)
     time.sleep(1.0)                     # the floppy write is seconds of motor
                                         # on the machine this is modelled on
+
+
+def adapter_row(avail, kind):
+    """Which row of the Display page's adapter list is VID_* `kind`?
+
+    The page lists the adapters the machine HAS, in VID_VGA/VID_HERC/VID_CGA
+    order, so a row index is the number of available adapters below the one
+    wanted - 0 for the Hercules on a Hercules+CGA machine and 1 on a
+    VGA+Hercules one, where the VGA is listed above it. Derived rather than
+    written down, because the two pairings disagree and a hard-coded row is
+    right on whichever machine it was written on.
+    """
+    return bin(avail & ((1 << kind) - 1)).count("1")
 
 
 def set_primary(m, mo, S, settle, slot, card=None):

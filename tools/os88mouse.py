@@ -80,6 +80,10 @@ STEP = 100
 # the client times out, which reads exactly like a hung emulator.
 GAP = 0.12
 SETTLE = 0.25                   # let the ISR and the UI task see the packet
+BUSY = 6.0                      # ...and how long a repaint may hold the guest
+                                # before `to` gives up on it. A window
+                                # straddling two displays repainting on a
+                                # 4.77MHz 8088 is the worst case measured
 
 # The BIOS tick count, 18.2 Hz. A fact about the PC rather than about os8088 -
 # sch_isr chains the ROM's handler (SPEC.md 7), so this advances on every
@@ -157,16 +161,25 @@ class Mouse:
         self.m.mouse(dx, dy, l=l)
         time.sleep(GAP)
 
-    def to(self, x, y, tries=None, l=False):
+    def to(self, x, y, tries=None, l=False, retry=True):
         """Drive to (x, y) and PROVE it, or raise."""
         if tries is None:
             # A packet moves at most STEP per axis, so the budget has to scale
             # with the DISTANCE: a fixed six was enough for a short hop and
             # silently too few to cross the screen, which reported a target as
             # unreachable while walking steadily towards it.
+            #
+            # AND THE SLACK HAS TO SCALE TOO, which is what a fixed `+ 4` did
+            # not. A dropped packet costs one try wherever it happens, so a
+            # 900px drag across an extended desktop had nine packets of work
+            # and four of margin - and a drag is exactly when drops are likely,
+            # because the guest is redrawing an XOR outline between them on a
+            # 4.77MHz machine. Doubling the packet count is margin proportional
+            # to the exposure; it cannot turn an unreachable target into a
+            # reachable one, since the loop still requires exact arrival.
             cx, cy, _ = self.where()
             far = max(abs(x - cx), abs(y - cy))
-            tries = (far + STEP - 1) // STEP + 4
+            tries = ((far + STEP - 1) // STEP) * 2 + 6
         for n in range(tries):
             cx, cy, _ = self.where()
             dx, dy = x - cx, y - cy
@@ -182,9 +195,30 @@ class Mouse:
         if (cx, cy) == (x, y):          # a target needing exactly `tries`
             return                      # packets is reported as unreachable
                                         # while sitting precisely on it
-        raise MartyError("could not reach (%d,%d): stuck at (%d,%d). A target "
-                         "outside the screen, or off the kernel's clamp, "
-                         "cannot be reached." % (x, y, cx, cy))
+
+        # A BUSY GUEST LOOKS EXACTLY LIKE A CLAMP, and that is the failure
+        # this exists to stop. The 8250 has no FIFO, so a byte arriving before
+        # the previous one is read is an overrun and is GONE - and a repaint
+        # on a 4.77MHz 8088 is SECONDS, not milliseconds. A window straddling
+        # two displays is the worst case in the tree. The whole budget above
+        # is ~`tries` x SETTLE, so a guest busy for longer than that eats
+        # every packet and the pointer does not move AT ALL, which reads as
+        # "the kernel will not let me go there" and has now cost two
+        # investigations - one of them concluding a drag clamp that does not
+        # exist (docs/DUAL-DISPLAY-VGA.md 8(10)).
+        #
+        # So exhaustion is not a verdict: wait out the repaint and run the
+        # loop again, ONCE. It cannot turn an unreachable target into a
+        # reachable one, because arrival is still tested exactly - it can only
+        # stop a slow one being called impossible.
+        if retry:
+            time.sleep(BUSY)
+            self.to(x, y, tries=tries, l=l, retry=False)
+            return
+        raise MartyError("could not reach (%d,%d): stuck at (%d,%d) after a "
+                         "%.0fs wait, so it is not the guest being busy. A "
+                         "target outside the screen, or off the kernel's "
+                         "clamp, cannot be reached." % (x, y, cx, cy, BUSY))
 
     def click(self, x, y, settle=1.5):
         self.to(x, y)
@@ -200,14 +234,29 @@ class Mouse:
         b = self._raw(BIOS_TICKS, 4)
         return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
 
-    def _edge(self, down, tries=60):
+    def _edge(self, down, tries=60, resend=20):
         """One button edge, PROVEN: send the packet, then wait until the
         published mouse_btn agrees. A packet clocked into the UART while the
         previous one is still in flight is simply dropped, and the only
-        difference a caller can see is that the guest did nothing."""
-        self.m.mouse(0, 0, l=down)
+        difference a caller can see is that the guest did nothing.
+
+        AND A DROPPED PACKET IS RE-SENT RATHER THAN WAITED FOR, which is what
+        the paragraph above asks for and this routine did not do: it sent once
+        and then polled 60 times, so a drop could only ever end in the raise
+        below. Waiting longer cannot recover a packet the UART never carried.
+
+        Re-sending is safe because a Microsoft packet carries the button's
+        LEVEL and not an edge, so a duplicate that arrives after the first one
+        was decoded says what the guest already believes and produces no second
+        press. That is what keeps this from manufacturing a double-click out of
+        a retry - and the loop still requires the guest's own published
+        mouse_btn to agree before it returns, so a re-send cannot turn a
+        genuinely stuck button into a pass.
+        """
         want = 1 if down else 0
-        for _ in range(tries):
+        for i in range(tries):
+            if i % resend == 0:
+                self.m.mouse(0, 0, l=down)
             if (self.where()[2] & 1) == want:
                 return
             time.sleep(0.02)

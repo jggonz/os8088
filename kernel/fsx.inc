@@ -60,32 +60,49 @@ FSIF_PLANAR equ 2
 FSIF_BANKED equ 4
 
 ; -----------------------------------------------------------------------------
-; fsx_caps - which FSXM ids the live adapter can set (SPEC.md 53.8, 0x02C0)
+; fsx_caps - which FSXM ids a window's display can set (SPEC.md 53.8, 0x02C0)
 ;
-; in:       nothing
-; out:      AX = bitmask (bit n = FSXM id n settable), DL = [vid_kind]; CF=0
+; in:       BX = the window to ask ABOUT, or 0 for "whatever is frontmost"
+; out:      AX = bitmask (bit n = FSXM id n settable), DL = the answering
+;           display's VID_* kind; CF=0
 ; clobbers: nothing else. Any context, lock held or not (the osapi_video
 ;           precedent) - an app greys its mode menu with this per SPEC.md 47,
 ;           and fsx_mode refuses with the same bit, one predicate for both.
+;
+; IT TAKES THE WINDOW BECAUSE IT USED TO GUESS ONE (SPEC.md 39.18.2). The
+; guess was wm_top, on the reasoning that an app greying its own mode menu is
+; frontmost by construction - true when the menu is used and false when the
+; question is asked, because a package's entry proc runs BEFORE its window
+; exists and gets an answer about the window it was launched from. Missile
+; Command launched off a Disk window on the Hercules read HERC's caps and
+; greyed Mode X on a machine with a VGA in it.
 ; -----------------------------------------------------------------------------
 fsx_caps:
     push bx
     mov dl, [vid_kind]
 %ifdef KERN_BIG
-    cmp byte [vid_ndisp], 1     ; ...of the display the ASKING window is on
-    jbe .kind                   ; (SPEC.md 39.18.1). Inside a bracket
-    cmp byte [fsx_task], 0xFF   ; [vid_kind] has already moved and is the
-    jne .kind                   ; answer; outside one it is the primary's, and
-    push ax                     ; an app greying its own mode menu (SPEC.md
-    call wm_top                 ; 47) is frontmost by construction
-    or bx, bx
+    cmp byte [vid_ndisp], 1     ; ...of the display the ASKED-ABOUT window is
+    jbe .kind                   ; on (SPEC.md 39.18.1). ONE DISPLAY covers a
+                                ; mode-setting bracket too, which is what
+                                ; collapsed the machine (39.18.3) and moved
+                                ; [vid_kind] to the bracket's own card - so
+                                ; there is no second test for that, and a
+                                ; SAME-MODE bracket, which does not collapse,
+                                ; correctly falls through and answers about
+                                ; the window it was handed
+    push ax
+    or bx, bx                   ; BX = 0: no window to ask about - an entry
+    jnz .win                    ; proc, or a caller that has none. Fall back
+    call wm_top                 ; to the frontmost, and to the primary below
+    or bx, bx                   ; if nothing is visible at all
     jz .notop
+.win:
     push di
-    call wm_disp_of
-    call vid_ctx_ptr
-    mov dl, [di+VID_CTX_KIND]
-    pop di
-.notop:
+    call wm_disp_of             ; the CENTRE, then the origin, then the
+    call vid_ctx_ptr            ; primary (SPEC.md 39.17) - so a straddling
+    mov dl, [di+VID_CTX_KIND]   ; window belongs to the display holding more
+    pop di                      ; of it, which is the same rule wm_fullscreen
+.notop:                         ; and wm_zoom ask
     pop ax
 .kind:
 %endif
@@ -206,10 +223,19 @@ fsx_run:
     pop ax
 
 %ifdef KERN_BIG
-    push ax                     ; ONE DISPLAY from here to fsx_restore, the
-    call wm_disp_of             ; one this window is on, with every other card
-    call vid_fsx_enter          ; dark (SPEC.md 39.18). BX is still the
-    pop ax                      ; window; AX is the app's entry, owed below
+    push ax                     ; WHICH DISPLAY this bracket is on - banked,
+    call wm_disp_of             ; not acted on (SPEC.md 39.18.3). BX is still
+    mov [fsx_wdisp], al         ; the window; AX is the app's entry, owed
+    pop ax                      ; below.
+                                ;
+                                ; THE SINGLE-DISPLAY COLLAPSE MOVED TO
+                                ; fsx_mode, because it is a consequence of
+                                ; SETTING A MODE and not of taking the
+                                ; machine. A same-mode bracket (SPEC.md 53.7)
+                                ; promises that "the drawing slots stay legal
+                                ; and the geometry is still the desktop's",
+                                ; and collapsing here broke exactly that
+                                ; promise on the secondary display.
 %endif
 
     push bp                     ; the app owns the machine from here to its
@@ -342,7 +368,19 @@ fsx_mode:
     cmp al, FSXM_COUNT
     jae .fail
     mov bl, [vid_kind]          ; the caps bit - the same predicate the
-    xor bh, bh                  ; app's greying used (SPEC.md 47)
+%ifdef KERN_BIG                 ; app's greying used (SPEC.md 47), and for
+    cmp byte [vid_ndisp], 1     ; THE DISPLAY THIS BRACKET IS ON rather than
+    jbe .kind                   ; the primary (SPEC.md 39.18.3/39.18.2). Once
+    push ax                     ; the collapse below has run there is only one
+    push di                     ; display left and [vid_kind] IS that one, so
+    mov al, [fsx_wdisp]         ; a second fsx_mode call takes the short path
+    call vid_ctx_ptr
+    mov bl, [di+VID_CTX_KIND]
+    pop di
+    pop ax
+.kind:
+%endif
+    xor bh, bh
     shl bx, 1
     mov dx, [bx+fsx_capstab]
     mov cl, al
@@ -350,6 +388,15 @@ fsx_mode:
     shl bx, cl
     test dx, bx
     jz .fail
+
+%ifdef KERN_BIG
+    push ax                     ; ...and ONLY NOW is the machine one display
+    mov al, [fsx_wdisp]         ; with every other card dark (SPEC.md 39.18):
+    call vid_fsx_enter          ; a mode is about to be set, which makes every
+    pop ax                      ; other display's geometry meaningless. After
+%endif                          ; the caps test, so a REFUSED mode leaves the
+                                ; desktop exactly as it found it; idempotent,
+                                ; because vid_fsx_enter no-ops at ndisp <= 1
 
     mov ch, al                  ; CH = the id, live across the mode set
     cmp al, FSXM_TEXT80
@@ -686,5 +733,14 @@ fsx_cur:   resb 1               ; the FSXM id on screen, 0xFF = unswitched.
                                 ; Written by fsx_run before anything reads
                                 ; it, so it needs no boot-time init.
 fsx_evtmp: resb 8               ; fsx_restore's event-drain scratch
+%ifdef KERN_BIG
+fsx_wdisp: resb 1               ; the display the running bracket's window is
+                                ; on (SPEC.md 39.18.3). Written by fsx_run
+                                ; before the app's proc runs and read only by
+                                ; fsx_mode, so it needs no boot-time init
+                                ; either - and it is the ONE fact fsx_run
+                                ; still establishes about displays, the acting
+                                ; on it having moved to the mode set
+%endif
 
 section .text

@@ -1554,15 +1554,32 @@ OS88_BSS_SIZE equ 0
 
 ; --- fullscreen exclusive (SPEC.md 53) ---------------------------------------
 
-%define OSAPI_FSX_CAPS      KERNEL_SEG:0x02C0   ; out AX = bitmask (bit n =
-                                                ; FSXM id n settable on the
-                                                ; live adapter), DL =
-                                                ; vid_kind. Any context, lock
-                                                ; held or not. Grey your mode
-                                                ; menu with this (SPEC.md 47)
-                                                ; - fsx_mode refuses with the
+%define OSAPI_FSX_CAPS      KERNEL_SEG:0x02C0   ; in BX = the window to ask
+                                                ; ABOUT (0 = whatever is
+                                                ; frontmost); out AX =
+                                                ; bitmask (bit n = FSXM id n
+                                                ; settable on the display
+                                                ; that window is on), DL =
+                                                ; that display's VID_* kind.
+                                                ; Any context, lock held or
+                                                ; not. Grey your mode menu
+                                                ; with this (SPEC.md 47) -
+                                                ; fsx_mode refuses with the
                                                 ; same bit, one predicate for
                                                 ; both.
+                                                ;
+                                                ; PASS YOUR WINDOW, AND ASK
+                                                ; AGAIN WHEN THE ANSWER IS
+                                                ; USED. On a two-display
+                                                ; machine (SPEC.md 39.18.1)
+                                                ; this is a question about a
+                                                ; DISPLAY, and a window moves
+                                                ; between them: an answer
+                                                ; banked in your entry proc
+                                                ; describes the window you
+                                                ; were LAUNCHED FROM, because
+                                                ; yours does not exist yet.
+                                                ; SPEC.md 39.18.2.
 
 %define OSAPI_FSX_RUN       KERNEL_SEG:0x02C8   ; the bracket (SPEC.md 53.1).
                                                 ; In AX = a near proc in your

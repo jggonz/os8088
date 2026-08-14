@@ -934,3 +934,67 @@ overlays = [
     type = "MDA"
     subtype = "Hercules"
     clock_mode = "Dynamic"
+
+# A VGA AND A HERCULES, WHICH IS THE OTHER TWO-CARD MACHINE
+# (docs/DUAL-DISPLAY-VGA.md). os8088_5150_both_gla is a Hercules beside a CGA -
+# the calibration 5150's own pair, and the one SPEC.md 39.12-39.19's extended
+# desktop ships for. This is the pair nobody in docs/FIELD-MACHINES.md owns and
+# that the period actually built the most of: EGA/VGA plus MDA is what CodeView
+# and Turbo Debugger ran on, the debugger on the mono monitor beside the
+# application on the colour one.
+#
+# THE APERTURES ARE DISJOINT AND NO PATCH IS NEEDED, which is the whole of what
+# Step 0 had to find out and is the opposite of the answer the Hercules+CGA pair
+# got. Read out of the two constructors rather than assumed:
+#
+#   vga/mmio.rs   get_mapping() -> 0xA0000 (planes) and 0xB8000 (CGA window)
+#   mda/mmio.rs   get_mapping() -> 0xB0000 only, since patches/02
+#
+# So `Bus::register_map`'s last-writer-wins has nothing to resolve, and the
+# order of the two blocks below decides nothing at all - where for
+# os8088_5150_both it decided which card silently vanished. os8088's own
+# separation is the same one: mode 12h decodes A0000 (GR06 = 01b) and a
+# Hercules' page 0 is B0000, and vid_setmode leaves 3BFh bit 1 clear so page 1
+# never reaches B8000.
+#
+# ONE FIDELITY GAP, WRITTEN DOWN BECAUSE IT IS THE SHAPE THAT PRODUCES A FALSE
+# PASS: MartyPC's VGA claims B8000 unconditionally, in the constructor, exactly
+# as the MDA used to claim page 1 - a real VGA in mode 12h RELEASES B8000. It
+# does not bite here, because the Hercules is at B0000 and os8088 never probes
+# B8000 on a VGA machine (vid_probe_avail sets the CGA bit unprobed, mode 6
+# being a standard BIOS mode there - SPEC.md 39.11.1). It WOULD bite a machine
+# with a VGA and a real CGA in it, and that machine must not be added here
+# without narrowing the VGA's mapping the way patches/02 narrowed the MDA's.
+#
+# The 5160 and glabios_xt because that is what os8088_xt_vga is and it is the
+# VGA machine known to come up with a video BIOS in this tree; the IBM ROM sets
+# are not in this container at all. Hercules second so that MartyPC's own
+# primary is the VGA, which is also the card os8088's probe answers with
+# (vid_detect's AH=1Ah DCC rung is reached before the equipment word) - so
+# nothing here needs --primary and the boot gate watches card 0 by default.
+[[machine]]
+name = "os8088_xt_vga_herc"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"

@@ -52,6 +52,26 @@ def cache_of(m, slot):
     return u16(m.read(S("wm_su_segs") + slot * 2, 2))
 
 
+def surface(m, sec):
+    """The secondary's pixels as (w, h, rows-of-bits), whatever card it is.
+
+    `vram` is the right instrument for a 1bpp secondary and cannot be used at
+    all for a VGA one: mode 12h is four planes behind the Graphics Controller's
+    Read Map Select, so it is not flat-readable memory (see os88marty.vram).
+    `fbuf` asks the card what it RASTERISED instead, which covers every
+    adapter - and is not simply used for both, because MartyPC's MDA aperture
+    in Hercules graphics is offset by (-16, +2) from the guest's own
+    coordinates (docs/MARTYPC-DEBUG.md), so the two disagree about where a
+    pixel is on exactly the card this test spends most of its time on.
+    """
+    if sec["type"] != "vga":
+        return m.vram("herc" if sec["type"] == "mda" else "cga")
+    w, h, px = m.fbuf(card=sec["idx"])
+    rows = [[1 if px[(y * w + x) * 3:(y * w + x) * 3 + 3] != b"\x00\x00\x00"
+             else 0 for x in range(w)] for y in range(h)]
+    return w, h, rows
+
+
 def region(rows, x0, x1, y0, y1):
     out = bytearray()
     for y in range(y0, y1 + 1):
@@ -64,6 +84,15 @@ def main(argv):
     ap.add_argument("--machine", default="os8088_5150_both_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--swap", action="store_true",
+                    help="make the MONO card the primary after extending. On "
+                         "a VGA+Hercules machine that is the mixed-depth case "
+                         "with teeth (docs/DUAL-DISPLAY-VGA.md 4.3): the cache "
+                         "is sized from one display and gfx_save writes with "
+                         "the planes of another, so a 1-plane primary and a "
+                         "4-plane secondary is a buffer sized x1 written x4. "
+                         "A no-op on a machine whose displays agree about "
+                         "depth, which is every one but that pairing.")
     a = ap.parse_args(argv)
 
     fail = []
@@ -79,15 +108,19 @@ def main(argv):
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_panel(m, mo, S, os88marty.settle)
         dispcp.set_mode(m, mo, S, os88marty.settle, "right")
+        if a.swap:
+            avail = m.read(S("vid_avail"), 1)[0]
+            dispcp.set_primary(m, mo, S, os88marty.settle,
+                               dispcp.adapter_row(avail, 1))     # 1 = VID_HERC
+            say("primary swapped to the mono card")
         dispcp.close_panel(m, mo, S, os88marty.settle)
         if m.read(S("vid_ndisp"), 1)[0] != 2:
             sys.exit("dispsave: the Control Panel did not turn Extend on")
 
         kind = m.read(S("vid_kind"), 1)[0]
-        pri = [c for c in cards if c["type"] == ("mda" if kind == 1
-                                                 else "cga")][0]
+        pri = [c for c in cards if c["type"] == dispcp.KIND_CARD[kind]][0]
         sec = [c for c in cards if c is not pri][0]
-        skind = "herc" if sec["type"] == "mda" else "cga"
+        skind = "herc" if sec["type"] == "mda" else sec["type"]
         ctx = m.read(S("vid_ctx"), 2 * VID_CTX_SZ)
         seam = u16(ctx, VID_CTX_SZ + VID_CTX_VX)
         secw = u16(ctx, VID_CTX_SZ + VID_CTX_CW)
@@ -124,7 +157,7 @@ def main(argv):
             sys.exit("dispsave: the back window did not reach display 1")
 
         # the reference: the back window, uncovered, as it is now
-        sw, sh, rows = m.vram(skind)
+        sw, sh, rows = surface(m, sec)
         # BOTH axes come off the display's origin. y used to be taken raw,
         # which was right only while VY was 0 (SPEC.md 39.19.3) and then
         # compared two different bands and called it corruption.
@@ -145,6 +178,27 @@ def main(argv):
         # --- 1: was a cache taken for a window on the SECOND display? -------
         seg = cache_of(m, back)
         say("wm_su_segs[%d] = 0x%04X after being covered" % (back, seg))
+
+        # ...and the cache was SIZED FOR THE DISPLAY IT IS ON, not for whichever
+        # one happens to be current (docs/DUAL-DISPLAY-VGA.md 4.3). gfx_save
+        # takes GFXDENTER, so it writes with the planes of the display the rect
+        # is on, while wm_su_flay used to size the claim from [vid_planes_w] -
+        # the primary's, every hook restoring it. Same number on any machine
+        # whose displays agree about depth; on a VGA beside a Hercules the two
+        # differ by 4x, in the direction of a heap overrun when the mono card
+        # is primary. This is the only check here that can tell them apart, and
+        # it is worth more than the pixels: the safe direction merely wastes
+        # memory and looks perfect.
+        pw = u16(m.read(S("wm_su_pw"), 2))
+        pl = u16(m.read(S("vid_planes_w"), 2))
+        want = 4 if sec["type"] == "vga" else 1
+        say("wm_su_pw = %d (the %s the window is on), vid_planes_w = %d"
+            % (pw, sec["type"], pl))
+        if pw != want:
+            fail.append("the cache is sized %d planes for a window on the %s, "
+                        "wanted %d" % (pw, sec["type"], want))
+        elif pw != pl:
+            say("  ...and they DIFFER, which is the case that discriminates")
         if seg == 0:
             fail.append("no raise cache was taken for a window on display 1 - "
                         "wm_su_take's gate is still asking about [vid_cw], "
@@ -157,7 +211,7 @@ def main(argv):
         if nb[:2] != (bx, by):
             fail.append("the back window moved to %s - the comparison below "
                         "is not the same rectangle" % (nb[:2],))
-        sw, sh, rows = m.vram(skind)
+        sw, sh, rows = surface(m, sec)
         after = region(rows, x0, x1, y0, y1)
         d = sum(1 for p, q in zip(ref, after) if p != q)
         say("after the raise: %d px of %d differ from the uncovered reference"

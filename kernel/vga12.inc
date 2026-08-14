@@ -1666,10 +1666,49 @@ gfx_blit4:
     jz .out
     or dx, dx
     jz .out
+
+%ifdef KERN_BIG
+    ; --- THE WHOLE-SHAPE HOOK, TAKEN WHEN THE BLOCK FITS ONE DISPLAY -------
+    ; SPEC.md 39.14.7.1. This is the gate 39.14.7 considered and declined,
+    ; and the field priced what declining it cost: a two-display machine sent
+    ; EVERY blit down .slow, which is not "per-run gfx_disp_run instead of
+    ; two compares" - it is giving up 5.4.1's fast path altogether, so each
+    ; coalesced run became a full gfx_fill at its own ~756us arrival instead
+    ; of a direct write into the framebuffer.
+    ;
+    ; Only AX/BX need translating: CX and DX are a WIDTH and a HEIGHT, which
+    ; no display origin can move. That is why there is no GFXDORG here and
+    ; why this costs one macro rather than the "second path through the
+    ; routine" 39.14.7 weighed - the straddling case below is not a second
+    ; path, it is the one that was already there.
+    mov byte [gfx_blit_hk], 0
+    cmp byte [vid_ndisp], 1
+    jbe .hkdone                 ; one display: nothing to decide, and this is
+                                ; every machine that was already fast
+    cmp byte [gfx_dnest], 0
+    jne .hkdone                 ; nested: an outer whole-shape hook owns the
+                                ; translation and .slow is what it wants
+    push cx
+    push dx
+    add cx, ax                  ; vid_span_one takes an INCLUSIVE rect and
+    dec cx                      ; this routine takes a width and a height
+    add dx, bx
+    dec dx
+    call vid_span_one
+    pop dx
+    pop cx
+    jc .hkdone                  ; STRADDLING: leave the destination virtual
+                                ; and let each run split itself, which is
+                                ; 39.14.7's mechanism and still correct
+    mov byte [gfx_blit_hk], 1
+    GFXDENTER                   ; ...one display, so the block is local now
+.hkdone:
+%endif
+
     mov [gfx_blit_w], cx        ; lock-held scratch, like vga12's rect block:
     mov [gfx_blit_x], ax        ; every drawing entry runs under the gfx lock
     mov [gfx_blit_h], dx        ; (SPEC.md 1 rule 6), so one copy serves
-    mov [gfx_blit_sv], si
+    mov [gfx_blit_sv], si       ; - and AX is the TRANSLATED x by here
 
     ; --- may a run go straight into the framebuffer? (SPEC.md 5.4.1) -------
     cmp word [wm_clip_n], 0
@@ -1677,9 +1716,14 @@ gfx_blit4:
                                 ; itself against it - which only gfx_fill does
 %ifdef KERN_BIG
     cmp byte [vid_ndisp], 1
-    ja .slow                    ; two displays: a run splits itself through
-    cmp byte [gfx_dnest], 0     ; gfx_fill's own GFXDISP (SPEC.md 39.14.7), and
-    jne .slow                   ; a nested hook has already translated
+    jbe .dsp1                   ; one display: the fast path as it always was
+    cmp byte [gfx_blit_hk], 0   ; two, and we took the hook above: the block
+    je .slow                    ; is display-local and one display is current,
+                                ; so the fast path is exactly right. Without
+                                ; it - straddling, or nested by somebody else
+                                ; - a run splits itself through gfx_fill's own
+                                ; GFXDISP (SPEC.md 39.14.7)
+.dsp1:
 %endif
     cmp byte [vid_mono], 0
     je .vga
@@ -1822,6 +1866,12 @@ gfx_blit4:
     jne .done                   ; for the whole call (SPEC.md 5.4.1)
     call vga_gc_reset
 .done:
+%ifdef KERN_BIG
+    cmp byte [gfx_blit_hk], 0   ; ...and the nest comes down only if this call
+    je .nohk                    ; put it up: the two guards above can reach
+    GFXDLEAVE                   ; .out without ever having taken the hook
+.nohk:
+%endif
     pop bp
     pop di
     pop si
@@ -2539,30 +2589,6 @@ vga_xor_hline:
 ; out:      -
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
-; SPEC.md 39.14.5: sw_xor_rect decomposes into sw_xor_fill - the RENDERER's
-; body, below the public gfx_xor_fill where GFXDISP sits - so the unclipped
-; path had no display hook at all and drew the drag outline and Missile
-; Command's crosshair into the primary at the other display's coordinates. It
-; is whole-shape here rather than split, for gfx_blit4's reason: an outline is
-; not the intersection of its bounding rect with anything (see the clipped
-; path below), and the four strips it decomposes into are already inside the
-; nest by the time they are drawn. A field gfxbench caught it as a 673us
-; GFX_XOR_RECT row - which is not a fast rectangle, it is one clipped away.
-gfx_xor_rect_sw:
-    push ax                     ; the frame is OUT HERE, where gfx_line and
-    push bx                     ; gfx_scroll keep theirs: the hook translates
-    push cx                     ; AX/BX and GFXDORG CX/DX, and nothing puts
-    push dx                     ; them back (SPEC.md 39.14.2), so without it a
-    GFXDENTER                   ; primitive whose contract is `out: -` answers
-    GFXDORG cx, dx              ; DISPLAY-LOCAL coordinates. sw_xor_rect banks
-    call sw_xor_rect            ; them itself, which is why only the hooked
-    GFXDLEAVE                   ; entry leaks
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 gfx_xor_rect:
     cmp word [wm_clip_n], 0     ; clipped background draw? (SPEC.md 11.3)
     jne gfx_xor_rect_clip       ; an OUTLINE is not the intersection of its
@@ -2572,14 +2598,9 @@ gfx_xor_rect:
                                 ; (...and each strip meets GFXCLIP, whose
                                 ; clipped branch owes no hide: wm_clip_set
                                 ; already asked cur_lazyck - 7.1.4)
-    call cur_unlazy             ; UNCLIPPED, AND ABOVE THE [vid_mono] DISPATCH,
-                                ; which is GFXCLIP's own rule and the whole of
-                                ; SPEC.md 7.1.5: below it this hook covers VGA
-                                ; and silently does nothing on the two 1bpp
-                                ; adapters, where the software renderer IS the
-                                ; direct path (SPEC.md 39.5)
-    cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
-    jne gfx_xor_rect_sw         ; the direct path (SPEC.md 39.5)
+    call cur_unlazy             ; UNCLIPPED: 7.1.4/7.1.5
+    jmp short gfx_xor_rect_d
+
 vga_xor_rect_vram:
     call cur_unlazy             ; the drag outline bypasses the clip
                                 ; (SPEC.md 11.3): 7.1.4. VRAM body under its
@@ -2588,9 +2609,53 @@ vga_xor_rect_vram:
                                 ; account. Reached from above the flag is
                                 ; already spent and this is three instructions
                                 ; (cur_unlazy is one-way within a hold)
-    cmp byte [vid_mono], 0      ; ...but "direct" means the framebuffer, and
-    jne gfx_xor_rect_sw         ; on a 1bpp adapter the software renderer IS
-                                ; the direct path (SPEC.md 39.5)
+
+; SPEC.md 39.14.6: THE DISPLAY HOOK GOES ABOVE THE [vid_mono] DISPATCH, and
+; the reason is the same one SPEC.md 11.3 gives for the clip hook - except
+; that here getting it the wrong way round does not merely fail to draw.
+; `[vid_mono]` is not a property of the MACHINE on a two-card desktop, it is a
+; property of the display the renderer is pointed at, and only GFXDENTER
+; points it. Tested first, it answers about whichever display the LAST
+; primitive happened to leave current (39.14.3 deliberately does not restore
+; one), so a rect on the VGA dispatched while the Hercules was still active
+; chose the SOFTWARE renderer - and then GFXDENTER switched the live block to
+; the VGA underneath it, where [vid_rseg] is 0. sw_col then wrote through
+; ES:DI = 0960:8FC1, which is COLD_SEG:45C1: the file manager's own code.
+; Measured, one click on a Disk window with a straddling window over it left
+; 34 differing runs in .cold at a stride of 80 - a scan line - and what it
+; overwrote next ran: a `call far` became `cbw`, DS went to 0, fm_layout's
+; stores landed 0x600 low across ui_rebootq, and the machine rebooted or
+; froze (docs/DUAL-DISPLAY-VGA.md 8(11), docs/FIELD-NOTES.md).
+;
+; It is whole-shape rather than split, for gfx_blit4's reason: an outline is
+; not the intersection of its bounding rect with anything (see the clipped
+; path below), and the four strips it decomposes into - either renderer's -
+; are already inside the nest by the time they are drawn. The frame is OUT
+; HERE, where gfx_line and gfx_scroll keep theirs: the hook translates AX/BX
+; and GFXDORG CX/DX and nothing puts them back (39.14.2), so without it a
+; primitive whose contract is `out: -` answers DISPLAY-LOCAL coordinates.
+gfx_xor_rect_d:
+    push ax
+    push bx
+    push cx
+    push dx
+    GFXDENTER
+    GFXDORG cx, dx
+    call gfx_xor_rect_raw
+    GFXDLEAVE
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; gfx_xor_rect_raw - internal: the outline, in the ACTIVE display's own
+;                    coordinates and on whichever renderer that display wants
+; clobbers: flags
+gfx_xor_rect_raw:
+    cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
+    jne sw_xor_rect             ; the direct path (SPEC.md 39.5), and it banks
+                                ; its own registers
     push bx
     push dx
     push si
@@ -3503,6 +3568,12 @@ gfx_blit_pb: resb 1             ; PAIR of that colour holds (c | c<<4)
 gfx_blit_ro: resw 1             ; SPEC.md 5.4.1's direct paths: this row's base
 gfx_blit_tb: resw 1             ; byte, its pair table, and which path is armed
 gfx_blit_fst:resb 1             ; (0 = gfx_fill, 1 = the decoder, 2 = VGA spans)
+%ifdef KERN_BIG
+gfx_blit_hk: resb 1             ; did THIS call take the whole-shape display
+                                ; hook? (SPEC.md 39.14.7.1) - .out must not
+                                ; bring a nest down that it never put up, and
+                                ; the two early guards can reach it
+%endif
 gfx_pairtab0: resb 256          ; ...and the pair tables themselves, built once
 gfx_pairtab1: resb 256          ; from gfx_inktab by sw_pairbuild
 
