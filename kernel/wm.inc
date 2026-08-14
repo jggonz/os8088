@@ -1720,15 +1720,6 @@ wm_destroy:
                                 ; reason again (SPEC.md 39.11.2.1). The two
                                 ; tables share a stride, so they share the
                                 ; index SI already holds
-    shr si, 1                   ; ...and its four BAND extents, which have HALF
-    mov word [wm_su_ext+si], 0  ; that stride (SPEC.md 11.96.11): wm_band's
-    mov word [wm_su_ext+si+2], 0    ; WF_OWNBG interlock is on the WRITE alone,
-                                ; so a new tenant inheriting Paint's left strip
-                                ; has wm_su_flay lay its cache out around a
-                                ; band it never named and wm_draw_win skip the
-                                ; white fill every other app draws on top of
-                                ; (SI is dead from here - the z-order walk
-                                ; below reloads it)
     mov ch, 0
     mov cl, [wm_zn]
     jcxz .paint                 ; empty z-order: nothing to remove
