@@ -501,10 +501,15 @@ toast_place:
                                 ; a menu title nor the widget
 
     call toast_gapend           ; --- and CENTRED on what the EYE sees, which
-    cmp ax, dx                  ; is the clock's first GLYPH and not its field's
-    jbe .eye                    ; left edge (SPEC.md 59.9.1) - but with the
-    mov ax, dx                  ; widget armed the clock is not our right-hand
-.eye:                           ; neighbour any more and the widget is
+    cmp byte [fpg_on], 0        ; is the clock's first GLYPH and not its field's
+    je .eye                     ; left edge (SPEC.md 59.9.1). gapend's answer is
+    cmp ax, dx                  ; [menu_bn] PLUS the leading spaces, so clamping
+    jbe .eye                    ; it to DX unconditionally would discard the
+    mov ax, dx                  ; whole correction on the ordinary bar and centre
+.eye:                           ; on the room again - the clamp belongs to the
+                                ; armed widget alone, which IS our right-hand
+                                ; neighbour then and sits left of the glyph
+                                ; (59.9.2)
     sub ax, [menu_bend]
     sub ax, cx                  ; AX = the slack, half of it each side
     jns .half

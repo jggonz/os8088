@@ -4727,7 +4727,11 @@ Single system queue, 16 records, ring buffer in .bss. Producers may be ISRs:
 `pushf`/`cli` … `popf` so the caller's IF is preserved — it is called from
 the mouse ISR, which must keep IF=0 throughout (§7); never a bare `sti`;
 drops silently when full) and `evq_pop` (DI → destination; CF=1 if empty;
-same `pushf`/`cli` … `popf` guard).
+same `pushf`/`cli` … `popf` guard). `evq_init` resets head, tail and count
+under that same guard: it is no longer only a boot-time call, because
+`blk_pass` drops the wake press with it (§64.2) from the UI task with the
+mouse ISR live — and an `evq_push` landing between the tail store and the
+count store leaves head one record behind tail for the rest of the session.
 Keyboard events are *not* queued — the UI task polls BIOS int 16h directly.
 
 ## 11. wm.inc — windows

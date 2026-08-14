@@ -36,11 +36,20 @@ EVQ_MASK    equ (EVQ_RECSIZE * EVQ_CAP) - 1     ; byte-offset wrap mask (0x7F)
 ; in:  nothing
 ; out: nothing
 ; clobbers: nothing (flags only)
+; ISR-safe, and it has to be: kmain is no longer the only caller - blk_pass
+; drops the press that woke the screen with it (SPEC.md 64.2), from the UI
+; task with the mouse ISR live. An evq_push landing between the tail store
+; and the count store writes at tail 0 and leaves tail one record ahead of
+; head for the rest of the session, so every later evq_pop answers the
+; PREVIOUS push's record.
 ; -----------------------------------------------------------------------------
 evq_init:
+    pushf
+    cli
     mov word [evq_head], 0
     mov word [evq_tail], 0
     mov word [evq_count], 0
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
