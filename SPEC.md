@@ -21345,6 +21345,16 @@ order is **column-major**: rows `0..[tm_colrows]-1` fill column 0, then
 row has no place" monotone — once one row is refused every later row is too,
 so a caller may stop rather than test the rest.
 
+**A column the layout does not have refuses the row, whatever the counts say.**
+`tm_row_place` tests the column it just derived against `[tm_cols]` before it
+places anything, and that test is the structural one: `[tm_maxrow]` is a single
+bound shared by three pages whose column 0 are *not* the same depth (§28.4), so
+an index inside the bound is not proof there is a column to put it in. Without
+it the memory view drew its first over-long row at `[tm_cx] + TM_COLW` — a
+column width past its own frame, on the desktop, because nothing in the kernel
+clips a draw to a window. It stays monotone: the column index rises with the
+row index, so once one row is off the end every later one is too.
+
 Three traps:
 
 - **`[tm_cols]`, `[tm_colrows]`, `[tm_col2rows]` and `[tm_maxrow]` are set at
@@ -21507,9 +21517,11 @@ derived from the FRAME and never from the dock**, which is the trap:
 what the dock allows, so on a tall screen a dock-derived depth names rows the
 frame cannot show — and `tm_row_place` would then wrap *past* rows `tm_ylim`
 had already refused, losing them instead of moving them into the next column.
-`[tm_maxrow]` takes the deeper of the two, which cannot hurt the other two
-pages: the performance list is bounded by its own `cmp si, TM_ROWS`, the
-memory list tests `TMM_ROWS` first, and `tm_ylim` clamps both.
+`[tm_maxrow]` takes the deeper of the two, so it never hides a row of any page
+— but it does name indices the shallower pages have no column for, and those
+are refused on `tm_row_place`'s column test (§28.1.1) rather than on the count.
+The rest holds: the performance list is bounded by its own `cmp si, TM_ROWS`,
+the memory list tests `TMM_ROWS` first, and `tm_ylim` clamps both.
 
 **A heading is never left on the foot of a column** (`tm_mrow_nolast`). The
 list is column-major, so a heading landing on a column's last row is

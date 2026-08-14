@@ -3537,12 +3537,15 @@ pt_fsx_main:
     mov bx, [pt_win]                ; ONE draw, and it is the app's ordinary
     call pt_org                     ; one at a new size: pt_org now answers
     call pt_track                   ; the whole screen, pt_track grows the
-    call pt_fsbed                   ; canvas into it (memory only - pt_resize
-    call pt_repaint                 ; never draws), and pt_repaint is the same
-                                    ; body W_PAINT runs. Coming home costs the
-                                    ; one wm_paint_all fsx_restore owes the
-                                    ; desktop anyway, so a round trip is two
-                                    ; full-screen redraws and neither is spare
+    call pt_repaint                 ; canvas into it (memory only - pt_resize
+                                    ; never draws), and pt_repaint is the same
+                                    ; body W_PAINT runs - it forces [pt_dall]
+                                    ; and lays the bed itself, so a pt_fsbed
+                                    ; here would only fill it a second time.
+                                    ; Coming home costs the one wm_paint_all
+                                    ; fsx_restore owes the desktop anyway, so a
+                                    ; round trip is two full-screen redraws and
+                                    ; neither is spare
     call OSAPI_MOUSE                ; AL = buttons, CX/DX = screen position
     mov [pt_pbtn], al               ; the click or key that got us here must
     mov [pt_ptrx], cx               ; not read as a fresh press on the first

@@ -3430,6 +3430,12 @@ tm_row_place:
     xor dx, dx                  ; down it
     div word [tm_col2rows]
     inc ax                      ; 0 was column 1
+    cmp ax, [tm_cols]           ; ...which has to EXIST: [tm_maxrow] is ONE
+    jb .col                     ; bound over three pages whose column 0 are not
+    pop cx                      ; the same depth (SPEC.md 28.4), so it can name
+    jmp short .nofit            ; an index this page has no column for - and the
+.col:                           ; row then went a TM_COLW past the frame's right
+                                ; edge, onto the desktop, which nothing clips
     push dx                     ; DX is the row within the column and `mul`
     mov bx, ax                  ; writes it - it does not survive this
     mov ax, TM_COLW
