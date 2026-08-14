@@ -1106,6 +1106,41 @@ drv_fs_call:
     jmp drv_svc_none
 
 ; -----------------------------------------------------------------------------
+; drv_fs_has - does the DRVC_FILE driver publish this verb? (SPEC.md 62.9.1)
+; in:  BP = the FSV_* verb
+; out: CF = 0 when drv_fs_call would reach a proc for it, CF = 1 when it
+;      would answer drv_svc_none. Every register preserved.
+;
+; THE SAME DSV_FS READ AS ABOVE, WITHOUT THE FAR CALL, and it exists because
+; drv_fs_call's refusal is ambiguous by design: an absent verb answers CF=1
+; with AX=0, and so does FSV_ENUM at the end of a folder (SPEC.md 62.9.1's
+; table). A caller that RECURSES cannot tell those apart - "this folder is
+; empty" and "this driver cannot enumerate" build the same empty tree - so
+; the copy engine asks BEFORE it believes the first one (SPEC.md 62.9.7).
+; -----------------------------------------------------------------------------
+drv_fs_has:
+    push es
+    push di
+    cmp word [drv_fseg5], 0     ; class 5 = DRVC_FILE, exactly as above
+    je .no
+    mov di, [drv_svc + (DRVC_FILE-1)*DSV_SIZE + DSV_FS]
+    or di, di
+    jz .no                      ; a DRVC_FILE driver that published no table
+    add di, bp                  ; ...+ the verb
+    mov es, [drv_fseg5]
+    cmp word [es:di], 0
+    je .no
+    pop di
+    pop es
+    clc
+    ret
+.no:
+    pop di
+    pop es
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; drv_cp_call - dispatch one class's Control Panel page proc (SPEC.md 31.9)
 ; in:  AL = class, BP = the published near offset, and DI/DX (+ CX/BX for a
 ;      click) = the page ABI's own arguments

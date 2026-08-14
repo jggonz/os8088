@@ -1194,6 +1194,24 @@ fcp_mkroot:
     call fcp_srcclus            ; BX = the source folder's own cluster
     jc .err
     mov [fcp_csrc], bx
+
+    ; --- CAN this source be walked at all? (SPEC.md 62.9.7) ---------------
+    ; fcp_srcclus left the SOURCE volume standing, which is the only place
+    ; this question can be asked: a redirected source whose driver publishes
+    ; no FSV_ENUM answers every fcp_scan with CF=1 and AX=0, and that is
+    ; letter for letter what the END of a folder answers - so the walk would
+    ; build the top folder, find it empty and report FCPS_DONE over a copy
+    ; that moved nothing. Asked HERE and not in fcp_scan because it is one
+    ; probe per paste instead of one per entry, and because it comes before
+    ; the destination folder is made rather than after.
+    cmp byte [dsk_vkind], DVK_FILE
+    jne .dest
+    push bp
+    mov bp, FSV_ENUM
+    call drv_fs_has
+    pop bp
+    jc .noenum
+.dest:
     mov al, [fcp_ddrv]
     mov bx, [fcp_dcwd]
     call fcp_goto
@@ -1205,6 +1223,9 @@ fcp_mkroot:
     pop cx
     clc
     ret
+.noenum:
+    mov ax, FERR_PROT           ; the same honest refusal dskw_rmbody gives
+                                ; for the same absence (SPEC.md 62.10.4.5)
 .err:
     pop si
     pop cx

@@ -2783,11 +2783,18 @@ disk_mount_x:
     jae .done
     mov ax, dx
     call dsk_get_dir_x          ; SI -> dsk_ent
-    cmp word [si+16], 1         ; packages only: a folder's icon is built in
-    jne .fsico_next             ; and a document's would need 54.3's pass,
-    call asc_lookup_x           ; which composes from a program THIS listing
-    jc .fsico_next              ; has no icon for either
-    call asc_take_x
+    cmp word [si+16], 2         ; a folder or the parent link (SPEC.md 19.5)
+    jae .fsfolder               ; takes the built-in body the harvest above
+    cmp word [si+16], 1         ; copies in - it comes out of .text, so it
+    jne .fsico_next             ; costs no I/O here either. Below it, packages
+    call asc_lookup_x           ; only: a document's icon would need 54.3's
+    jc .fsico_next              ; pass, which composes from a program THIS
+    call asc_take_x             ; listing has no icon for
+    jmp short .fsico_next
+.fsfolder:
+    mov si, dsk_folder_ico
+    mov ax, dx
+    call dsk_put_icon_k_x
 .fsico_next:
     inc dx
     jmp short .fsico

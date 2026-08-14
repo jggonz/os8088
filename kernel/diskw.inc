@@ -1344,6 +1344,12 @@ dskw_wbody:
     call dskw_norm              ; the source becomes seg:0..15 + a run, so the
                                 ; driver is handed a normalised (seg, offset)
                                 ; exactly as a read is
+    mov cx, [dskw_len]          ; ...and arm the widget as the FAT arm below
+    mov dx, [dskw_lenhi]        ; does (DX:CX = the job in BYTES, SPEC.md
+    call KERNEL_SEG:cw_fpg_begin    ; 12.8.1): the driver steps it from inside
+                                ; FSV_WRITE through OSAPI_FS_PROG, and without
+                                ; this that report has nothing to report into.
+                                ; dskw_write_x ends it either way
     mov bx, [dskw_src]
     mov dx, [dskw_seg]          ; DX:BX = the bytes (SPEC.md 51.8's rule)
     mov cx, [dskw_len]
@@ -2730,6 +2736,10 @@ dskw_apbody:
 .gated:
     cmp byte [dsk_vkind], DVK_FILE
     jne .fatap
+    mov cx, [dskw_len]          ; arm the widget as the FAT arm below does,
+    mov dx, [dskw_lenhi]        ; so a file-manager copy over a cable reports
+    call KERNEL_SEG:cw_fpg_begin    ; chunk by chunk too (SPEC.md 12.8.1);
+                                ; dskw_append_x ends it either way
     mov dx, es                  ; DX:BX = the bytes, CX = how many - the same
     mov bp, FSV_APPEND          ; three registers this cell was handed
     jmp dskw_fsop

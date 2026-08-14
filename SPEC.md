@@ -9366,6 +9366,14 @@ geometry.
   `(FPG_UNIT - 1 + bytes) / FPG_UNIT` *is* `ceil(bytes / FPG_UNIT)` at every
   point, not merely at the end. `fpg_step` never reads it, so the sector path
   is untouched.
+- **The WRITE and the APPEND arm too, and from `[dskw_len]`.** Their
+  redirected arms in `dskw_wbody`/`dskw_apbody` branch straight to
+  `dskw_fsop`, so they run past the `fpg_begin` the FAT path does further
+  down and a driver's `OSAPI_FS_PROG` reports into an unarmed widget — the
+  bar simply never appears, on the direction that takes just as long over the
+  cable. The count is already in `[dskw_lenhi]:[dskw_len]` at that point, and
+  `dskw_write_x`/`dskw_append_x` call `fpg_end` however the body returned, so
+  there is nothing new to tear down.
 - **The loader's arm is one sector coarse, deliberately.** `dsk_read_chain`
   is handed sectors and multiplies, so a redirected package load is scaled to
   the *capacity* the driver is given rather than to the file — the same number
@@ -41626,12 +41634,21 @@ an omission. It re-keys the cache to `[disk_drive]` and reads that volume's
 `ASSOC.DAT` — over a cable, exactly the traffic this exists to avoid — and it
 would evict the rows that make the pass work. The cache is used as it stands.
 
+**A FOLDER IS NOT PART OF THAT AND STILL GETS ITS ICON.** `dsk_folder_ico` is
+the one body not harvested off a disk — it lives in `.text`, so copying it in
+costs nothing on a volume with no sectors either — and this pass copies it for
+every type-2-or-3 entry exactly as §18.3 step 4's `.h_folder` arm does. The
+blank slot is not a neutral fallback here: `fm_draw_icon16` substitutes the
+generic **application** icon for an all-zero body and has no folder case, so
+leaving it blank drew every remote folder as a program.
+
 Three consequences worth stating rather than discovering. It is **session
 state**: a Link listing shows a package's icon if the user has browsed a disk
 that also holds it, and the generic one after a fresh boot. That is inherent
 to "only if it is already in RAM" and nothing here may make it otherwise by
-going to look. It is **packages only** — §54.3's document pass composes a
-page from the *program's* icon, and on a redirected volume there is no such
+going to look. The **cache** half of it is **packages only** — §54.3's
+document pass composes a page from the *program's* icon, and on a redirected
+volume there is no such
 program to have learned one from, so a `.TXT` keeps the generic icon. It keeps
 it on a floppy too, so this closes the gap between the two rather than opening
 one. And the pass runs at **mount** time while a Disk window paints from its
@@ -41924,6 +41941,19 @@ paths converge on the instruction after it and the whole tail (the copy into
 Everything else a folder copy needs was already built: `FSV_MKDIR` makes the
 subdirectory, `fcp_goto`'s quiet-mount branch descends into it, and
 `FSV_READAT` + `FSV_WRITE`/`APPEND` move each file.
+
+**A DRIVER THAT PUBLISHES NO `FSV_ENUM` IS REFUSED, NOT WALKED.** An absent
+verb and the end of a folder are the *same* answer out of `drv_fs_call` —
+`CF=1` with `AX=0` — so an engine that believes the first one it is given
+makes the top folder (which comes from the clipboard entry and never
+enumerates), finds it "empty" and reports `FCPS_DONE` over a paste that moved
+nothing. `NET.DRV` is exactly that driver: its table carries `0` there, for
+the reason §62.10.4.5 gives about a recursive delete. So `fcp_mkroot` reads
+the cell itself — `drv_fs_has`, the same `DSV_FS` resolution as the dispatch
+without the far call — at the one moment the SOURCE volume is standing, which
+is right after `fcp_srcclus`, and answers `FERR_PROT` when the verb is not
+published. One probe per paste rather than one per entry, and before the
+destination folder is created rather than after it exists and is empty.
 
 **`fcp_relink` wanted a REFUSAL, not an implementation**, and that is the
 half worth reading. A same-volume Cut+Paste takes a fast path that moves no
