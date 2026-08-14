@@ -5744,8 +5744,14 @@ wm_su_owed:
     pop di
     jl .out                     ; ...or this window does not reach it
     xor ax, ax                  ; it does, and the strip is drawn UNDER windows,
-    mov cx, [vid_pwm1]          ; so this window owes the whole width of it
-    mov dx, [vid_phm1]
+    cmp cx, [vid_pwm1]          ; so this window owes the whole width of it -
+    jge .noc                    ; as a WIDENING of the painted box, never a
+    mov cx, [vid_pwm1]          ; replacement. The strip is the PRIMARY's
+.noc:                           ; (39.14), so replacing would hand a window on
+    cmp dx, [vid_phm1]          ; display 1 a rect disjoint from itself, and
+    jge .nod                    ; wm_su_srect reads that as "nothing this pass
+    mov dx, [vid_phm1]          ; painted reached the content" - which is
+.nod:                           ; permanent, nothing repaints it after
     cmp bx, [vid_dock_y0]
     jle .out
     mov bx, [vid_dock_y0]

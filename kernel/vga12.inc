@@ -2549,10 +2549,18 @@ vga_xor_hline:
 ; nest by the time they are drawn. A field gfxbench caught it as a 673us
 ; GFX_XOR_RECT row - which is not a fast rectangle, it is one clipped away.
 gfx_xor_rect_sw:
-    GFXDENTER
-    GFXDORG cx, dx
-    call sw_xor_rect
-    GFXDLEAVE
+    push ax                     ; the frame is OUT HERE, where gfx_line and
+    push bx                     ; gfx_scroll keep theirs: the hook translates
+    push cx                     ; AX/BX and GFXDORG CX/DX, and nothing puts
+    push dx                     ; them back (SPEC.md 39.14.2), so without it a
+    GFXDENTER                   ; primitive whose contract is `out: -` answers
+    GFXDORG cx, dx              ; DISPLAY-LOCAL coordinates. sw_xor_rect banks
+    call sw_xor_rect            ; them itself, which is why only the hooked
+    GFXDLEAVE                   ; entry leaks
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 gfx_xor_rect:
@@ -2776,11 +2784,19 @@ vga_xor_fill_vram:
 gfx_save:
     call cur_unlazy             ; the menu save-under READS the screen, so
                                 ; the arrow must not be in what it banks
+    push ax                     ; the rect is banked around the hook, which
+    push bx                     ; translates it and never puts it back - DI is
+    push cx                     ; NOT, because DI advancing is this routine's
+    push dx                     ; documented answer
     GFXDENTER                   ; ...and it reads it off ONE CARD (SPEC.md
     GFXDORG cx, dx              ; 39.14.8): a save is pixels, and pixels live
     call vga_save_vram          ; on a card rather than in a coordinate space,
     GFXDLEAVE                   ; so this is whole-shape like gfx_scroll and
-    ret                         ; NOT split like a blit's runs. The caller owes
+    pop dx                      ; NOT split like a blit's runs. The caller owes
+    pop cx
+    pop bx
+    pop ax
+    ret
                                 ; the straddle test - wm_su_take asks
                                 ; vid_span_one - because a cut save and a cut
                                 ; restore agree with each other and leave the
@@ -2988,10 +3004,18 @@ gfx_sub_off:
 ; -----------------------------------------------------------------------------
 gfx_restore:
     call cur_unlazy             ; ...and writes it back, unclipped
+    push ax                     ; same frame as gfx_save's, and SI is outside
+    push bx                     ; it for the same reason: SI advancing is what
+    push cx                     ; this routine answers
+    push dx
     GFXDENTER                   ; ...onto the card it came off (SPEC.md
     GFXDORG cx, dx              ; 39.14.8) - gfx_save's twin, and it has to be
     call vga_restore_vram       ; the same hook or a rect banked on one display
     GFXDLEAVE                   ; could be put back on the other
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 vga_restore_vram:
     cmp byte [vid_mono], 0      ; see vga_save_vram

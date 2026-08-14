@@ -423,7 +423,8 @@ font_char_bb:
 .snw:
     dec bh
     jnz .srow
-    jmp short .pnext
+    jmp .pnext                  ; NEAR: .dstart's seed put .pnext out of a
+                                ; short jump's reach from here
 .crow:
     mov ah, [ss:si]
     inc si
@@ -452,10 +453,19 @@ font_char_bb:
 ; rather than an `and ah, [font_dmask]` in .crow itself: that is the innermost
 ; loop of every string on the slowest machines we run on, and a memory-operand
 ; AND per byte per row is real money there for something almost no glyph wants.
-; The phase restarts at AA for every cell, so a whole line is in step - text
-; rows are 8px apart, which is even, so lines are in step with each other too.
+; The phase is the CELL's row 0, so a whole line is in step - text rows are 8px
+; apart, which is even, so lines are in step with each other too. It is seeded
+; off [wm_clip_r0] rather than always AA because the first row DRAWN is not
+; always the cell's first (SPEC.md 11.3.2): a clip edge cutting a cell biases
+; both the glyph pointer and the screen row, and an unbiased seed would flip
+; the checkerboard's phase against the rows drawn either side of it.
 .dstart:
-    mov byte [font_dmask], 0xAA
+    mov al, 0xAA                ; AL is free here - SI carries the glyph, and
+    test byte [wm_clip_r0], 1   ; the row loop reloads AX every pass
+    jz .dset
+    mov al, 0x55
+.dset:
+    mov [font_dmask], al
 .drow:
     mov ah, [ss:si]
     inc si
