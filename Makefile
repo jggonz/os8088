@@ -46,6 +46,12 @@ VMPENT := $(CURDIR)/vm/pentium
 VMXTZ := $(CURDIR)/vm/xt-z
 VM386Z := $(CURDIR)/vm/386-z
 
+# The two WORD machines (SPEC.md 65.5): the same pairing as the Frotz two -
+# an XT with the 720KB Word disk in B:, a 386 with the 1.44MB one - but no
+# sound card on either, because Word makes no sound.
+VMXTWORD := $(CURDIR)/vm/xt-word
+VM386WORD := $(CURDIR)/vm/386-word
+
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
 # this exists because QEMU emulates no CGA and no Hercules card, and forcing
@@ -555,6 +561,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         comscan lptlink \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
+        worddisk xt-word 386-word \
         checkdocs clean clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -1522,6 +1529,42 @@ $(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat/disk2/CATALOG.TXT \
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		$(BUILD)/zcat/disk2/CATALOG.TXT $(ZS_DISK2) \
 		ART:$(BUILD)/BRONZE.PIX --folder SAVES
+
+# =============================================================================
+# MICROSOFT WORD and its document floppy (SPEC.md 65) - ON DEMAND: `make worddisk`
+# =============================================================================
+# Word follows Frotz's precedent (SPEC.md 65.5) exactly: WORD.O88 does NOT
+# ride the shipped apps disks - it gets its own floppy in all three
+# geometries, each with an empty DOCS\ folder where the file dialog lands the
+# user's documents, and `all` does not build any of them. The xt-word and
+# 386-word machines below put this disk in B: instead of the apps disk.
+# WELCOME.DOC rides the root of all three: a native .DOC (SPEC.md 65.4)
+# generated DETERMINISTICALLY by tools/os88doc.py from apps/word/welcome.wtx
+# - a document that exercises the formatting the same engine renders, so the
+# disk demonstrates the product the moment it is double-clicked.
+WORDSRC := apps/word/word.asm
+
+$(BUILD)/WELCOME.DOC: tools/os88doc.py apps/word/welcome.wtx | $(BUILD)
+	python3 tools/os88doc.py apps/word/welcome.wtx -o $@
+	@echo "welcome: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/word.bin: $(WORDSRC) apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/word/ -o $@ apps/word/word.asm
+	@echo "word:   $(call FILESIZE,$@) bytes"
+
+$(BUILD)/word.o88: $(BUILD)/word.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/word.bin -o $@
+
+worddisk: $(BUILD)/word.img $(BUILD)/word720.img $(BUILD)/word360.img
+
+$(BUILD)/word.img: $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC --folder DOCS
+
+$(BUILD)/word720.img: $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC --folder DOCS
+
+$(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC --folder DOCS
 
 # --- the Frotz gate (ON DEMAND: `make ztest`) --------------------------------
 # tests/frotz/zopstest.inf is a STORY, not a package, because the thing under
@@ -3087,6 +3130,36 @@ xt-z: $(IMG360) $(BUILD)/zork720.img
 386-z: $(IMG) $(BUILD)/zork.img $(BUILD)/zork2.img
 	@$(UNPROTECT) $(VM386Z)/86box.cfg
 	$(BOX) -P $(VM386Z) -N
+
+# The two WORD machines (SPEC.md 65.5), both with the Word document floppy in
+# B: instead of the apps disk - Frotz's precedent, for Frotz's reason: an app
+# whose documents live on its own disk is best launched from that disk.
+#
+#   xt-word   An IBM XT at 4.77MHz with the FULL 640KB - the document, CHP,
+#             save-staging and undo claims are what the memory is for
+#             (SPEC.md 65.5) - booting the 360KB system floppy with the
+#             720KB Word disk in B: (the 3.5" DD drive xt-z already
+#             established as period-plausible). NO sound card: Word makes no
+#             sound, so the plain-machine precedent applies rather than the
+#             sound-machine one.
+#
+#   386-word  The comfortable target the same code also has to be right on:
+#             a 386DX/25 with TWO 1.44MB drives, B: = build/word.img.
+#             AT-class, so the first launch stops at the BIOS setup wanting
+#             a CMOS - pick EXIT FOR BOOT once and 86Box writes
+#             vm/386-word/nvr/ for every later boot.
+#
+# Both call $(UNPROTECT) for the standing reason: 86Box re-adds wp:// to its
+# floppy paths on exit, which turns every guest write into FERR_WPROT - and
+# here that is every document save, reading as a Word bug rather than an
+# emulator setting.
+xt-word: $(IMG360) $(BUILD)/word720.img
+	@$(UNPROTECT) $(VMXTWORD)/86box.cfg
+	$(BOX) -P $(VMXTWORD) -N
+
+386-word: $(IMG) $(BUILD)/word.img
+	@$(UNPROTECT) $(VM386WORD)/86box.cfg
+	$(BOX) -P $(VM386WORD) -N
 
 # The MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug server bolted
 # into MartyPC's headless frontend, giving memory, registers, breakpoints,

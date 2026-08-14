@@ -67,14 +67,15 @@ exactly like the feature being broken.
 
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
 `xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `286`, `286-sound`,
-`386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`; plus `marty`
-(MartyPC). `xt-multimon` is the **two-card** XT — a CGA and a Hercules, a
-monitor window each — and the only 86Box machine that can show §39.12–§39.19's
-extended desktop; it boots Single, and Control Panel → Display → Desktop is
-what extends it (§39.19.1). `xt-z` and `386-z` are the Frotz machines (§61.9)
-and the only ones that put a story floppy in B: instead of the apps disk —
-`make zdisk` builds it, and `tools/getstories.py` fetches the stories, which
-are never committed.
+`386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
+`386-word`; plus `marty` (MartyPC). `xt-multimon` is the **two-card** XT — a
+CGA and a Hercules, a monitor window each — and the only 86Box machine that
+can show §39.12–§39.19's extended desktop; it boots Single, and Control Panel
+→ Display → Desktop is what extends it (§39.19.1). `xt-z` and `386-z` are the
+Frotz machines (§61.9), and `xt-word`/`386-word` are the Word machines (§65.5)
+— the four that put a dedicated floppy in B: instead of the apps disk. `make
+zdisk` builds the story disk (`tools/getstories.py` fetches the stories, which
+are never committed) and `make worddisk` builds the Word disk.
 
 **Nothing in `build/` is tracked — never commit a binary.** The toolchain is
 deterministic on purpose (`tools/os88disk.py` pins the volume serial and every

@@ -43204,3 +43204,307 @@ fullscreen bracket, and §64.4 already covers that.
 **No fade, no pattern, no bouncing anything.** Drawing a screen saver means
 running a task, holding the gfx lock and repainting the desktop underneath it
 on wake. Blanking the signal costs two `out`s and restores in zero.
+
+## 65. Microsoft Word — the word processor (`apps/word/word.asm`)
+
+A faithful native reimplementation of Microsoft Word for Windows 1.1a
+("Opus") as an os8088 package. The UI — the nine-menu bar, the ribbon, the
+ruler, the status line, the dialog contents, the keyboard map — follows the
+Computer History Museum source release of Opus verbatim (menu strings from
+`Opus/resource/menus.cmd`, ribbon/ruler layout from `Opus/ibdefs.h`, dialogs
+from `Opus/dlg/*.des`, keys from `Opus/resource/keys.cmd`). The reasoning and
+the full feature inventory are docs/WORD-PLAN.md; this section is the binding
+contract. The text engine is Note Pad's (§27), transplanted with prefix `wd_`.
+
+### 65.1 The mode is Draft view
+
+os8088 has one 8×8 fixed font and no styles in the renderer (§6), and Word
+1.1a shipped View > Draft for exactly that situation. Character formatting is
+synthesized per §61.5's precedent: bold = double-strike, italic = sheared
+glyphs pre-rendered into a 4bpp table and drawn one `gfx_blit4` per run,
+underline / word underline / double underline = drawn rules (cell rows 7,
+non-space spans, 6+7), small caps = case-mapped, hidden = omitted from
+layout. Center/right alignment render with the run offset rounded down to a
+multiple of 8 px (the byte-aligned fast path survives); justified records the
+attribute and renders as left — draft view's own simplification.
+
+The styled flush is Note Pad's row flush with runs: the accumulated row
+carries a parallel per-cell attribute array, split at draw time into runs of
+equal CHP — a plain run is one opaque `font_run`; bold adds a transparent
+second strike at x+1 (a cell whose OLD attribute could bleed a pixel into
+its right neighbour widens the delta span by one cell, so a style taken off
+never strands its bleed); an italic run is staged from the sheared table and
+lands as one `gfx_blit4` (bold-italic ANDs the staged row with itself
+shifted one pixel — ink is the 0 nibble, so AND is the OR of ink); underline
+rules are drawn after the run. The italic table is built at first use into a
+3KB claim from `OSAPI_FONT_GLYPHS`; if the heap refuses it, italic degrades
+to the plain glyph (plus the double-strike when bold) — grey the fact. The
+build runs on the UI task only: a WORKER draw pass that meets italic text
+before the table exists never claims (§20.6 forbids `OSAPI_MEM_*` there) —
+it letters the run plain for that frame and the next UI redraw builds the
+table. Small
+caps are case-mapped and hidden characters dropped at accumulate time (a
+hidden character occupies no cell; the word-wrap lookahead still counts it,
+a documented draft approximation). Show ¶ gives each paragraph mark a cell
+of its own, stamped from an 8×8 pilcrow image; the mark's cell and CHP byte
+fold into the row signature, so toggling Show ¶ dirties exactly the rows
+that carry a mark. Row signatures fold each character's CHP byte beside the
+character, so a formatting change dirties exactly the rows it touched, and
+the append fast path is taken only when the typing attribute is plain (all
+bits clear) — it patches the signature with the attribute's extra rotate.
+
+### 65.2 The chrome is drawn in the window
+
+`MENU_APPMAX` (§12.2) is five; Word's bar is nine menus, so the window draws
+its own chrome and registers no kernel menus: menu bar (14 px), ribbon
+(16 px), ruler (18 px), text area with its own scrollbar, status bar (12 px).
+The kernel bar carries an EMPTY menu set whose `AM_NAME` reads 'Microsoft
+Word', with the About handler (`OSAPI_ABOUT_SET`) opening the same box as
+Help > About… (three lines — 'Microsoft Word', 'Version 1.1a for os8088',
+the Computer History Museum credit — also on F1; Help > Index stays greyed
+because no help files exist on this platform). The os8088 TITLE BAR shows
+'Microsoft Word - <NAME>': the window template's title points at a bss
+buffer composed from the live document name, recomposed (and `OSAPI_WM_TITLE`
+told) on every name change — Save As, Open, a launch document — and the
+Window menu's item 1 carries the same live name. Ribbon, ruler and status
+bar toggle from the View menu; a toggle re-lays the text band with the
+band blit when only the band's top moved (the blit spans from the smaller
+of the old and new chrome tops) and repaints whole otherwise. Dropdown menus support both period gestures —
+press-drag-release with an XOR item highlight, and click-open ("sticky")
+with Esc / arrows / Enter / mnemonic keys, `Alt+mnemonic` opening from the
+keyboard — and close by repainting exactly what they covered: the strips
+they overlapped, and the text rows via one fill plus one clipped walk.
+Disabled items use the disabled pen (§47) — Print, Spelling, Macro and the
+rest of the platform-impossible commands are present and greyed as facts.
+The status line shows `Pg n  Sec 1  p/t  At nli  Ln n  Col n` live from the
+caret — status.h's field order: `p/t` is the page over the total pages (the
+total derived from `[wd_drows]`, a lower bound until the height count lands,
+never lowered), and At wears the `li` unit, the honest draft-view measure (a
+page is 54 lines, so At and Ln agree by construction; the text is
+delta-cached so a keystroke letters only the cells that changed). A window
+too narrow to show every cell DROPS the At field first — it duplicates Ln
+by construction, and losing it keeps Ln and Col, which the right-edge clamp
+would otherwise cut off; the lamps stand down whole when they would collide
+with the text. Four lamps
+at the right end, inverse-video when lit: EXT (F8 extend-selection mode:
+F8 arms it, plain caret motion then EXTENDS the selection, Esc or any edit
+disarms), CAPS and NUM from the BIOS keyboard flag byte at 0040:0017 (polled
+by the worker because a lock key alone emits no key event), and OVR —
+overtype, toggled by Ins: a typed printable REPLACES the character under the
+caret (recorded as delete + insert, so it undoes) except at a ¶ or the end,
+where it inserts. File > Close and Exit close the window: there is no
+self-close API slot, so the UI half hides the window and raises a flag, and
+the worker destroys the record and dies inside its next `OSAPI_TASK_ALIVE` —
+the kernel's own teardown path frees the task, region and claims. Both
+prompt first when the document is dirty (§65.4); the kernel close box
+CANNOT prompt — the kernel tears the instance down itself, a documented
+limitation.
+
+### 65.3 Document model: CHP bytes and PAP on the paragraph mark
+
+Three claims (§50.3): the text (¶ = byte 13, tab = 9, ceiling `WD_MAXKB` =
+30KB), one CHP attribute byte per character (bit 0 bold, 1 italic,
+2 underline, 3 word-ul, 4 double-ul, 5 small caps, 6 hidden, 7 reserved)
+mirroring every gap operation, and a 256-entry dictionary of unique paragraph
+formats (4 bytes: packed align/spacing/space-before, left, first (signed),
+right — indents in character cells, one cell = 1/10 inch). **A paragraph
+mark's CHP byte is its paragraph's dictionary index** — paragraph formatting
+lives on the ¶ exactly as in Word, so deleting a ¶ merges into the following
+paragraph's format, and undo/cut/paste need only the text+CHP machinery.
+Dictionary entries are deduplicated and session-lived; a 257th unique format
+is refused with a toast.
+
+Typing inserts the current typing-attributes byte `[wd_chp]`; a caret move
+without a selection re-reads it from the character left of the caret (Word's
+rule). Applying an attribute over a selection follows Word's semantics — if
+any character in the span lacks it, set it on all, else clear it on all —
+and records ONE undo group. Undo blobs capture text AND CHP in two parallel
+arenas at identical offsets (`[wd_useg]`/`[wd_cuseg]`), so every arena
+operation — append, prepend, oldest-drop slide, restore — mirrors
+byte-for-byte and no offset arithmetic forks; a formatting-only change is an
+ordinary bulk record whose text half happens to be unchanged. The ribbon's
+B I K / U W D cells and Ctrl-B/U/W/D/K toggle the six synthesized formats on
+the selection or the typing attributes; the pressed state is the cell
+XOR-inverted, delta-cached against the caret's attribute byte (the
+selection's first character while one is up); the superscript/subscript pair
+stays greyed; the ¶ cell (and Ctrl-Shift-8's sibling in spirit) toggles
+Show-all. Ctrl-H/I/M collide with BS/Tab/CR in int 16h, so italic and hidden
+arrive through the Format Character dialog instead; Ctrl-Space resets to
+plain, detected by the BIOS ctrl flag at 0040:0017 bit 2 because int 16h
+folds Ctrl-Space into a plain Space. Format > Character is a modal dialog
+drawn centred over the content from a control descriptor (labels, check
+boxes, radios, greyed combos, buttons) that painter and hit test share; the
+seven check boxes are live ('Small Kaps' spelled as the authentic char.des
+string), Font/Points/Color/Position/Spacing are present and greyed, every
+key and click routes to it while open (Enter = OK, Esc = Cancel, a mnemonic
+letter toggles its box), and closing repaints what it covered through the
+dropdown's repair path. Toggling hidden re-lays the text (a hidden character
+occupies no cell), so it also drops the checkpoint and row tables.
+
+**Paragraph formatting is live** on top of the dictionary above. The 4-byte
+entry packs alignment (2 bits), line spacing (2 bits: 8/12/16 px advance)
+and space-before (1 bit: +8 px on the paragraph's first row) into byte 0,
+then left indent, first-line indent (SIGNED, relative to left) and right
+indent in cells — one cell = 8 px = 1/10" at pica pitch, the ruler's own
+scale. Entry 0 is Normal and pre-seeded; `wd_papfind` deduplicates and the
+dictionary never renumbers, so an undo blob's old index still names the old
+format. Splitting a paragraph (Enter) writes the SPLIT paragraph's index
+onto the new ¶ — never the typing attributes; deleting a ¶ merges the text
+into the following paragraph's format by construction; a pasted ¶ joins the
+paragraph it was pasted into; a plain-text load zeroes every index. Every
+door — Ctrl keys, the ruler's cells, the marker drags, the Format Paragraph
+dialog — funnels through ONE span modifier (`wd_modpap`): it rewrites the
+¶ marks the selection touches (each to the index of its own modified
+format) as ONE bulk text+CHP undo group; the tail paragraph's index lives
+in `[wd_pap_tail]` outside the buffers and is the one paragraph fact undo
+cannot restore. A ¶ mark's byte being an index also means `wd_chpsync`,
+the ribbon state, and every character-attribute sweep step OVER marks.
+
+**Tabs**: byte 9 is one selectable character occupying the cells to the
+next default stop — every `WD_TABSTOP` (5) cells from the row's own start
+pen; custom stops are out of scope and the ruler's tab-type cells are
+greyed to say so. A tab's cells wear its CHP dress (an underlined tab draws
+its rule), it ends a word like a space, and `[wd_hastab]` — set-only, like
+`[wd_hashid]` — stands the two column-arithmetic fast paths down.
+
+**The keyboard map goes fully authentic** (keys.cmd): Ctrl-X/C/V are
+ResetPara / CenterPara / (unbound), cut/copy/paste ride Shift+Del /
+Ctrl+Ins / Shift+Ins (decoded from the scan code plus the BIOS shift
+flags, so NumLock's '0' and '.' still type), Alt+BkSp is undo, and
+C-L/R/J/E/O/N/T/G carry the paragraph formats; C-M (UnIndent) is int 16h's
+Enter and rides the dialog and the markers instead. Deliberate deviations,
+each commented at the constant: Ctrl-A Select All, Ctrl-S Save, Ctrl-F/R
+Search/… as before Ctrl-R — Ctrl-R is RightPara now and Replace is the
+menu's.
+
+**The ruler is live**: the alignment, spacing and open/close cells fire
+`wd_modpap` and their pressed state is delta-cached against the CARET's
+paragraph exactly as the ribbon's cells are against its attributes; the
+indent markers draw at the caret paragraph's indents on the inch scale and
+DRAG — an XOR guide over the text band, the release snapped to whole cells.
+Format > Paragraph reuses the modal framework with live radios (grouped)
+and live edit fields (inches; cells = tenths; click or Tab focuses, digits
+'.' '-' '"' type, BkSp deletes); the Keep/Border/Pattern/Style groups are
+omitted rather than greyed — with them the dialog cannot fit a CGA content
+box, and a Format command that refuses on one adapter of three is worse.
+
+### 65.4 File format and association
+
+Native `.DOC`: a 16-byte os8088 FIB, then the three structures verbatim —
+
+| off | size | content |
+|---|---|---|
+| +0 | 2 | magic 0xA59B (Opus's real `wIdent`) |
+| +2 | 2 | version = 1 |
+| +4 | 2 | text length in bytes (≤ `WD_MAXKB`×1024) |
+| +6 | 2 | CHP length (= text length; the two arrays are parallel) |
+| +8 | 2 | PAP entry count, 1..256 |
+| +10 | 2 | flags: low byte = the TAIL paragraph's PAP index (the last paragraph has no ¶ to carry it), high byte 0 |
+| +12 | 4 | pad, 0 |
+
+then text, CHP, PAP (count × 4 bytes). Save assembles header + text + CHP +
+PAP into a staging claim and writes it with ONE `OSAPI_FILE_WRITE` — and
+Save always writes the native format whatever the name's extension, as the
+real product's Save did. Save As through the kernel `FDLG_SAVE` appends
+`.DOC` to an extensionless typed name. Open reads the whole file into a
+staging claim first (the fdlg completion refuses a file larger than the
+staging ceiling from the dialog's own DX:CX size, BEFORE any read), then
+sniffs the magic: native validates every FIB field against the file size and
+refuses a corrupt file with a toast, the document untouched; anything else
+imports as plain text (CRLF and lone LF fold to ¶, tabs kept, other
+controls dropped, CHP zeroed, every paragraph Normal). The loaded PAP table
+becomes the session dictionary — indices never renumber, so the saved table
+may carry entries the document no longer references, and `[wd_hasfmt]` is
+raised whenever the count exceeds 1.
+
+**Dirty tracking**: every buffer or format mutation sets `[wd_dirty]`; a
+successful Save (and a load, and File > New) clears it. File > New / Open… /
+Close / Exit on a dirty document raise Word's own modal prompt — 'Do you
+want to save changes to <NAME>?' with Yes / No / Cancel (Y and N answer from
+the keyboard, Enter = Yes, Esc = Cancel): Yes saves and proceeds only if the
+save succeeded (a failed save's toast stands and the action aborts), No
+proceeds, Cancel aborts.
+
+The package's association block claims `DOC`; a desktop double-click arrives
+via `OSAPI_ARG_FILE`. The shipped `WELCOME.DOC` is generated
+deterministically (no timestamps) by `tools/os88doc.py` from
+`apps/word/welcome.wtx`, a minimal line-based markup — one line per
+paragraph, leading `.c/.r/.j/.sp15/.sp2/.open/.li n/.fi n/.ri n` directives
+for the PAP, `{b}…{/b}`-style spans for bold/italic/underline/word-ul/
+double-ul/small caps — so the disk ships a document that exercises the
+formatting the same engine renders.
+
+### 65.5 The dedicated disk and the two machines
+
+Frotz's precedent (§61.9), exactly: `WORD.O88` rides its own floppy, never
+the apps disks. `make worddisk` builds `build/word.img` / `word720.img` /
+`word360.img` — root holds `WORD.O88` + `WELCOME.DOC`, plus an empty `DOCS\`
+folder for the user's documents. On demand; `all` does not build them.
+
+`make xt-word`: an IBM XT at 4.77MHz with 640KB (the document claims are what
+the memory is for), booting the 360KB system floppy with the 720KB Word disk
+in B: (3.5" DD, xt-z's drive). No sound card — Word makes none. `make
+386-word`: a 386DX/25 with two 1.44MB drives, B: = `word.img`; AT-class, so
+the first boot wants its CMOS answered once. Both targets unprotect their
+cfg first — a `wp://` floppy turns every document save into FERR_WPROT.
+
+### 65.6 Performance posture
+
+Note Pad's architecture is kept whole: one layout walk answering paint /
+caret / hit-test / row queries, row signatures widening a damage range, one
+opaque `font_run` per plain span with styled overlays after it, blit
+scrolling with the row description shifted alongside, the append fast path,
+and the lazy worker paying wrap/height debts. Line spacing (8/12/16 px row
+advance, +8 before an open paragraph) adds a per-visible-row height array
+beside the row-start table — the one structural change. The standing budget
+is unchanged: a keystroke letters ~2 cells; nothing repaints more than it
+changed.
+
+The height array is `wd_ryb` — each visible row's GLYPH y, banked beside
+`wd_rows`/`wd_sig`, shifted (and value-adjusted) with them by the scroll's
+description shift. It carries four duties: a seeded walk resumes its y from
+the row above the seed (the rows the seed's licence already says stood
+still); pass 1 compares each row's computed y against it, so a row whose
+pixels MOVED without a character changing is dirty, and the band repaint
+first ERASES the union of the moved rows' old and new extents (a glyph run
+only self-erases at its own y); `wd_yrow` answers click-y → row from it; and
+a downward blit-scroll takes its pixel delta from it. While `[wd_hasfmt]`
+is clear — every document until a paragraph format is applied — none of
+this costs a memory reference beyond the bank itself and every path is the
+uniform 8 px engine unchanged. Formatted documents give three things back,
+each a documented degrade, never a wrong pixel: UPWARD blit-scrolls (the
+entering rows' heights are unknown) fall back to the full repaint, the
+View-toggle band blit likewise, and the visual break and append
+fast paths stand down (as they already did for hidden text). Entering a
+paragraph scans forward to its ¶ for the governing format — each walked
+byte is read at most twice, Word's own arrangement — and a centred or
+right-aligned row is dry-run once through the SAME wrap helpers to learn
+its width before its pen is offset. Caret geometry goes row-first: the walk
+banks `[wd_currow]` beside the pixel pair, `wd_vmove`/`wd_hmove`/`wd_move`
+ask for rows, and `wd_seecaret` scrolls by rows against `[wd_vfit]` — the
+rows GUARANTEED to fit (band/24 under formats, all of them while uniform).
+
+### 65.7 Search, Replace, Go To
+
+Word 1.1 had no regex, and neither does this port: Note Pad's regex engine
+and its docked find panel are GONE (the bytes reclaimed), replaced by the
+authentic modal dialogs on the §65.3 framework. **Edit > Search…** (Ctrl-F)
+is search.des: a Search For edit, Whole Word and Match Upper/Lowercase
+check boxes, Up/Down Direction radios, OK/Cancel. The engine is a literal
+scan: case folds BOTH sides when Match Upper/Lowercase is clear, Whole Word
+demands non-word neighbours (word characters are A-Z a-z 0-9), a search
+wraps around the document exactly once, a hit is selected and scrolled
+visible, a miss toasts 'Search text not found'. F4 / Shift-F4 repeat the
+last search down / up. **Edit > Replace…** is replace.des: Replace With and
+a Confirm Changes check box on top of the Search set. OK with Confirm clear
+sweeps the whole document as ONE bulk undo record and toasts 'n changes';
+with Confirm set each match is selected in turn under a small Yes / No /
+Cancel prompt pinned to the BOTTOM of the content (the dialog closes,
+repairs, and reopens per step so the selection is never lettered under it);
+each confirmed replacement is its own undo record. **Edit > Go To…** (F5)
+asks for a page number and puts the caret at the start of line
+(page−1) × 54, scrolling it to the top of the view. The dialog framework
+grew what these need: free-text edit fields (`WDDF_TXT`, printable 32..126,
+per-record capacity — a focused text edit consumes letters, so check-box
+mnemonics answer only while none is), per-dialog check-state initialisation,
+and a third button verb (No) beside OK and Cancel.
