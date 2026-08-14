@@ -41309,7 +41309,15 @@ have hidden from the other:
   because an unbounded wait would otherwise make a **re**-connect impossible
   (the magic is not a command, so a stale slave would discard it),
   `net_connect` sends `NC_BYE` before its hello to shake one loose. The two
-  halves are one fix and neither works alone.
+  halves are one fix and neither works alone. **And ESC means ESC**: the wait
+  CONSUMES the key it tests, so a wait that ended on any key ended a live
+  session on an accidental brush of the DOS keyboard — silently, because the
+  swallowed key then defeated the main loop's own ESC test as well. It filters
+  for 27, as `slv_hunt` always has, and records `[slv_abort]` — **and the
+  serve loop now reads that flag**, which is the half that was missing at both
+  waits: an ESC in `slv_hunt` set it, `listen_once` ended its sweep on it, and
+  the loop above went straight back in because the key it tests for was
+  already eaten. `Stopped.` was unreachable from either wait.
 - **`getkey` ate every keystroke.** Copied from `comscan`, where
   `push ax / xor ax,ax / int 16h / pop ax` is a correct "press any key" pause
   and fatal as a menu read. Both the boot disk and the DOS program read as
@@ -42163,6 +42171,19 @@ is the DOS side's to assign and the kernel's to treat as opaque** (§62.9.1),
 which is what lets the far end use whatever it likes: a directory ordinal, a
 hashed path, an index into its own table.
 
+**A REFUSAL KEEPS THE FRAME'S SHAPE.** Where a verb's reply is a status alone
+— `CHDIR`, `DFREE` and every write verb — a non-zero status ends it. Where
+the status is followed by a fixed field, that field is still on the wire:
+`LIST` answers a handle it never issued with `FERR_NOENT` **and a count of
+zero**, and the master reads the count whatever the status said. One shape
+per verb is what the master resynchronises against; two — a long one for
+success and a short one for refusal — is a wire where an ordinary "no such
+folder" leaves the far end driving nibbles at an end that has stopped
+listening, which ends the SESSION rather than the command. And a non-zero
+status is read as a refusal and not as a dead link at every verb that has
+one: `net_lost` is for the transport failing, never for the far side saying
+no.
+
 **`NC_BYE` IS NOT A FRAME TERMINATOR AND NO COMMAND ENDS WITH ONE.** It reads
 like one and the first draft of this section said it was. It ends the
 **session**: the far side's command loop *leaves* on `NC_BYE` and goes back to
@@ -42507,10 +42528,15 @@ announce itself:
   still has to take the run off the cable. The alternative is a wire with a
   file's worth of bytes on it and nobody listening, which is the link dead
   rather than one operation failed.
-- **A refusal sends exactly one status.** `wr_gate` answers `/RO` by sending
-  `FERR_WPROT` itself, so the drain that follows must not send a second byte —
-  the master is not reading one, and the frame desynchronises rather than the
-  operation failing. `0xFF` is the internal "already said so" marker.
+- **A refusal sends exactly one status, and sends it when the wire is
+  quiet.** `wr_gate` REPORTS `/RO` — `CF=1` with `AL = FERR_WPROT` — and
+  transmits nothing, because it is called from `wr_open` *before* the body
+  the master is still sending. A gate that answered for itself would drive
+  the cable while the other end was driving it: both four-phase handshakes
+  complete against each other's strobe, no byte crosses, the drain is one
+  short for ever and the master's own status wait never ends. The status is
+  the CALLER's to send — after the arguments, and for `WRITE`/`APPEND` after
+  `sink_body` has taken the whole run off the cable.
 - **A short DOS write is a full disk**, and DOS reports it by returning fewer
   bytes rather than by setting carry — so it is a compare, not a `jc` alone.
   The verdict is banked and the run still drained.
@@ -42795,11 +42821,19 @@ under the gfx lock**, for unticking a driver. Both put `[lp_turnw]` back to
 `lp_init` sets it regardless — so this costs a store and closes a freeze the
 fix would otherwise have introduced.
 
-It is worth noticing that the *ordinary* failure needs no such guard: a
-command whose far side has vanished spends one long wait and then `net_lost`
-takes the volume down, which is the same cost the receive side has had since
-§62.10.4.6. What made the goodbye different is that it is issued on a path the
-user is *waiting on*, and its result is discarded.
+It is worth noticing that the *ordinary* failure pays that wait ONCE, and
+only because the second half of the guard is in `net_lost`. `net_lost` cannot
+call `OSAPI_VOL_DEL` from where it runs, so the volume stays on the desktop
+until the Control Panel or the next Connect clears it — and every click on it
+is another file verb. So **the file verbs are gated on `NS_LINKED`, in
+`net_fcmd`/`net_fcmd_h` rather than in fourteen bodies**: every verb already
+treats their `CF=1` as its dead-link path, and a verb added later inherits the
+gate the way a write verb inherits `wr_gate`. `net_lost` also puts
+`[lp_turnw]` back to `TURN_RX`, for the same reason the goodbye does — a path
+that still reaches the wire after a loss fails in 440 ms and not in ten
+seconds — and `net_connect` raises it to `REPLY_TMO` again on the next link.
+What made the goodbye different from all of this is that it is issued on a
+path the user is *waiting on*, and its result is discarded.
 
 #### 62.10.5 The DOS end says what it is doing
 

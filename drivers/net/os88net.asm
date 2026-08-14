@@ -200,10 +200,13 @@ start:
     call puts
 .serve:
     call listen_once            ; one full sweep of the candidates
+    cmp byte [slv_abort], 0     ; an ESC pressed INSIDE a wait is consumed
+    jne .stop                   ; there, so the test below cannot see it
     call lpl_kbhit
     jnc .serve
     cmp al, 27
     jne .serve
+.stop:
     mov si, s_stopped
     call puts
 .bye:
@@ -2077,13 +2080,19 @@ str_cpy16:
 ; has to mean it.
 ; =============================================================================
 
-; wr_gate - may this run write at all? CF=1 = no, and the status is sent
+; wr_gate - may this run write at all? CF=1 = no, AL = the FERR_* to answer
+;
+; IT REPORTS AND DOES NOT TRANSMIT. wr_open calls it while the master is still
+; SENDING the file body, so a gate that answered for itself would drive the
+; cable while the other end was driving it: the two four-phase handshakes
+; complete against each other's strobe, no byte crosses, the drain is one byte
+; short for ever and the master's own status wait never ends. The status is the
+; caller's to send, once the wire is quiet (SPEC.md 62.10.4.5)
 wr_gate:
     cmp byte [roflag], 0
     je  .ok
     mov al, FERR_WPROT          ; the MEDIA answer, which is what a read-only
-    call lp_sbyte               ; run is from the other end's point of view
-    stc
+    stc                         ; run is from the other end's point of view
     ret
 .ok:
     clc
@@ -2149,8 +2158,8 @@ srv_copy:
     call srv_rname
     jc  .lost
 
-    call wr_gate                ; /RO: the status has already gone out
-    jc  .out
+    call wr_gate                ; /RO, with every argument now off the wire
+    jc  .gsay
 
     call hd_path                ; the SOURCE, as a path
     jc  .nodir
@@ -2222,6 +2231,10 @@ srv_copy:
     jmp short .out
 .nosrc:
     mov al, FERR_NOENT
+    call wr_done
+    jmp short .out
+.gsay:
+    mov al, FERR_WPROT          ; wr_gate's answer, sent by its caller
     call wr_done
     jmp short .out
 .nodir:
@@ -2305,10 +2318,8 @@ srv_write:
     mov [srv_fail], al          ; the reason, banked across the drain
     call sink_body
     jc  .lost
-    cmp byte [srv_fail], 0xFF   ; wr_gate ALREADY sent its status, and a
-    je  .out                    ; second one is a frame the master is not
-    mov al, [srv_fail]          ; reading - the link desynchronises rather
-    call wr_done                ; than one operation failing
+    mov al, [srv_fail]          ; ...and said ONLY NOW, with the whole run off
+    call wr_done                ; the cable and the master listening for it
     jmp short .out
 .rlost:
     call close_handle
@@ -2368,10 +2379,8 @@ srv_append:
     mov [srv_fail], al          ; the reason, banked across the drain
     call sink_body
     jc  .lost
-    cmp byte [srv_fail], 0xFF   ; wr_gate ALREADY sent its status, and a
-    je  .out                    ; second one is a frame the master is not
-    mov al, [srv_fail]          ; reading - the link desynchronises rather
-    call wr_done                ; than one operation failing
+    mov al, [srv_fail]          ; ...and said ONLY NOW, with the whole run off
+    call wr_done                ; the cable and the master listening for it
     jmp short .out
 .rlost:
     call close_handle
@@ -2418,7 +2427,7 @@ srv_name1:
     call wr_arg
     jc  .lost
     call wr_gate
-    jc  .out                    ; ...the status has already gone
+    jc  .gsay                   ; /RO, with the name already off the wire
     cmp byte [srv_ok], 0
     je  .nodir
     mov dx, wildbuf
@@ -2441,6 +2450,10 @@ srv_name1:
     jmp short .out
 .doserr:
     call dos_ferr               ; AX = DOS's code -> AL = a FERR_*
+    call wr_done
+    jmp short .out
+.gsay:
+    mov al, FERR_WPROT          ; wr_gate's answer, sent by its caller
     call wr_done
     jmp short .out
 .nodir:
@@ -2484,7 +2497,7 @@ srv_rename:
     call srv_rname              ; the NEW name -> namebuf
     jc  .lost
     call wr_gate
-    jc  .out
+    jc  .gsay                   ; /RO, with BOTH names already off the wire
     cmp byte [srv_ok], 0
     je  .nodir
     call path_join              ; the new name, in the same folder
@@ -2500,6 +2513,10 @@ srv_rename:
     jmp short .out
 .doserr:
     call dos_ferr
+    call wr_done
+    jmp short .out
+.gsay:
+    mov al, FERR_WPROT          ; wr_gate's answer, sent by its caller
     call wr_done
     jmp short .out
 .nodir:
@@ -2555,9 +2572,8 @@ wr_open:
     stc
     ret
 .gated:
-    mov al, 0xFF                ; wr_gate has ALREADY sent its status, so the
-    stc                         ; caller must drain and say nothing more
-    ret
+    stc                         ; AL is wr_gate's FERR_WPROT: the caller sends
+    ret                         ; it once the whole run is off the wire
 
 wr_openap:
     mov word [rfh], 0xFFFF

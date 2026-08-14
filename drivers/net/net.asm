@@ -415,7 +415,7 @@ net_info:
 ; FSV_LIST - the folder we are STANDING IN, one entry at a time
 ;            (SPEC.md 62.9.1/62.10.1)
 ; in:  nothing - the driver holds its own cwd, put there by FSV_CHDIR
-; out: CF=0; CF=1 = the link went away
+; out: CF=0; CF=1 = the far side refused, or the link went away
 ;
 ; The wire hands back a COUNT and then that many 32-byte SPEC.md 19.1 entries,
 ; and each is passed to OSAPI_FS_ENT unreshaped - the far side's findfirst
@@ -450,7 +450,7 @@ net_list:
     call lp_rbyte               ; status
     jc  .bad
     or  al, al
-    jnz .bad
+    jnz .no
     call lp_rword               ; how many entries follow
     jc  .bad
     mov di, ax
@@ -476,6 +476,15 @@ net_list:
 .done:
     clc                         ; ...AND NO net_bye. See net_fcmd's header:
     jmp short .out              ; NC_BYE ends the SESSION, not the command
+.no:
+    call lp_rword               ; A REFUSED LISTING IS STILL A FULL FRAME: the
+    jc  .bad                    ; count follows the status whatever it said
+    stc                         ; (62.10.1), so it is read and thrown away
+    jmp short .out              ; rather than left on a wire the far side is
+                                ; still driving - which ends the SESSION and
+                                ; not the command. A far side saying `no such
+                                ; folder` is not the link failing, so NO
+                                ; net_lost: only .bad is transport
 .bad:
     call net_lost
     stc
@@ -491,7 +500,7 @@ net_list:
 ; -----------------------------------------------------------------------------
 ; FSV_CHDIR - stand in a folder, and say what is above it (SPEC.md 62.9.1)
 ; in:  AX = a handle out of an entry, 0 = the root
-; out: CF=0 and DX = THE PARENT'S HANDLE; CF=1 refused
+; out: CF=0 and DX = THE PARENT'S HANDLE; CF=1 and AX = FERR_*
 ;
 ; The parent comes back from the far side because the handle is ITS to assign
 ; and opaque here (62.9.1) - the kernel synthesizes '..' and has no directory
@@ -509,7 +518,7 @@ net_chdir:
     call lp_rbyte               ; status
     jc  .bad
     or  al, al
-    jnz .bad
+    jnz .no
     call lp_rword               ; the parent's handle
     jc  .bad
     mov [net_up], ax
@@ -518,6 +527,10 @@ net_chdir:
     mov dx, [net_up]            ; FSV_LIST lists a folder we never reached
     clc
     jmp short .out
+.no:
+    mov ax, FERR_NOENT          ; the far side's own refusal - status only, and
+    stc                         ; a folder that is not there is not the cable
+    jmp short .out              ; coming out. net_stat's two exits, here too
 .bad:
     call net_lost
     stc
@@ -530,7 +543,7 @@ net_chdir:
 
 ; -----------------------------------------------------------------------------
 ; FSV_DFREE - free space, in BYTES (SPEC.md 62.9.1)
-; out: CF=0 with DX:AX = free bytes and BX = the granule; CF=1 refused
+; out: CF=0 with DX:AX = free bytes and BX = the granule; CF=1 and AX = FERR_*
 ; -----------------------------------------------------------------------------
 net_dfree:
     push cx
@@ -542,7 +555,7 @@ net_dfree:
     call lp_rbyte               ; status
     jc  .bad
     or  al, al
-    jnz .bad
+    jnz .no
     call lp_rword
     jc  .bad
     mov [net_up], ax            ; low half, banked across the next two reads
@@ -555,6 +568,10 @@ net_dfree:
     mov ax, [net_up]
     clc
     jmp short .out
+.no:
+    mov ax, FERR_NOENT          ; ...and the same two exits here: a refusal is
+    stc                         ; status-only on the wire, so nothing is left
+    jmp short .out              ; unread and nothing is lost
 .bad:
     call net_lost
     stc
@@ -1293,7 +1310,16 @@ net_wrnorm:
 ; net_fcmd / net_fcmd_h - open a FILE-mode command, with and without an
 ;                         argument word
 ; in:  BL = the NF_* letter;  net_fcmd_h also takes AX = the handle
-; out: CF=1 = the link went away
+; out: CF=1 = there is no link, or it went away; AX = FERR_IO for the first
+;
+; **THE NS_LINKED GATE IS HERE AND NOT IN FOURTEEN VERB BODIES.** net_lost
+; cannot take the volume down from where it runs (see its header), so the
+; volume stays on the desktop after a cable comes out and every click on it is
+; another file verb - each one going to a wire we already know is dead, and
+; each paying a full REPLY_TMO before saying so. Every verb already treats a
+; CF=1 from here as its dead-link path, so gating the two prologues costs no
+; verb a line and a verb added later inherits it - wr_gate's argument, on this
+; side of the cable.
 ;
 ; `net_cmd` is the BLOCK side's and takes AL + DX + [net_rlen]; these are not
 ; that, and the two must not share a name however alike they read - one wire
@@ -1315,6 +1341,8 @@ net_wrnorm:
 ; on one now, as the real far end does.
 ; -----------------------------------------------------------------------------
 net_fcmd_h:
+    cmp byte [net_state], NS_LINKED
+    jne .nolink
     push ax
     mov [net_arg], ax
     mov [net_cmdip], bl         ; ...so a dead link can say what it died on
@@ -1331,8 +1359,14 @@ net_fcmd_h:
     pop ax
     stc
     ret
+.nolink:
+    mov ax, FERR_IO             ; ...and NOT net_cmdip: the page reports the
+    stc                         ; command that DIED, not the ones refused
+    ret                         ; after it
 
 net_fcmd:
+    cmp byte [net_state], NS_LINKED
+    jne net_fcmd_h.nolink
     push ax
     mov [net_cmdip], bl
     mov al, bl
@@ -1640,6 +1674,11 @@ net_cmd:
 ; -----------------------------------------------------------------------------
 net_lost:
     mov byte [net_state], NS_PORT
+    mov byte [lp_turnw], TURN_RX    ; net_detach's reason on the failure path:
+                                ; anything that still reaches the wire after
+                                ; this fails in 440 ms rather than in ten
+                                ; frozen seconds. net_connect raises it back
+                                ; to REPLY_TMO on the next link
     push ax
     mov al, [net_cmdip]         ; WHICH COMMAND was in flight, for the page.
     mov [net_lastcmd], al       ; An LBA meant something in block mode and

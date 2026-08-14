@@ -130,8 +130,14 @@ lp_rbyte_w:
     call lp_rnib
     jnc .got
     call lpl_kbhit              ; ESC is the only deadline left
-    jc .bad
-    jmp short .w
+    jnc .w
+    cmp al, 27                  ; ...and ONLY ESC: lpl_kbhit CONSUMES the key,
+    jne .w                      ; so ending on any of them ends a live session
+                                ; on a brush of the DOS keyboard - and the
+                                ; swallowed key then defeats the main loop's
+                                ; own ESC test, so nothing is even reported
+    mov byte [slv_abort], 1     ; slv_hunt's flag: the sweep above stops too
+    jmp short .bad
 .got:
     mov bl, al
     call lp_rnib
