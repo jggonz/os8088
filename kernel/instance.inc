@@ -118,10 +118,10 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     dw app_tpl_bounce, app_bounce_task, app_ball_pool, 8,   app_bounce_kinit, app_ttl_bounce
     dw inst_ico_bounce
     db 10, 0                    ; Bounce: 10 x 8-byte ball state, one task each
-    dw fm_tpl,         0,               fm_pool,       24,  fm_kinit,         fm_ttl
+    dw fm_tpl,         0,               fm_pool,       FS_SIZE,  fm_kinit,     fm_ttl
     dw inst_ico_disk
     db VIEW_SLOTS, WF_SIZABLE   ; Disk: FOUR windows, each with its own
-                                ; 24-byte state block and its own claimed
+                                ; FS_SIZE-byte state block and its own claimed
                                 ; listing cache; resizable (SPEC.md 22/22.1).
                                 ; The cap, VIEW_SLOTS and fm_pool's size are
                                 ; one number wearing three hats.

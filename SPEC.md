@@ -16153,7 +16153,9 @@ remounts **only** if the acting window's `(drive, cwd)` differs from
 `([disk_drive], [dsk_cwd])` — in the common case, where you act in the
 window you last navigated, a compare and a `ret`.
 
-**Per-window state** is a 24-byte `KD_POOL` block (`fm_pool`, 4 × 24, §29.3),
+**Per-window state** is an `FS_SIZE`-byte `KD_POOL` block (`fm_pool`,
+4 × `FS_SIZE`, §29.3) — 57 bytes under `KERN_BIG`, 24 under `KERN_SMALL`,
+which is why the Disk row's `KD_SSIZE` is the symbol and never a literal —
 allocated and cascaded by `app_launch` and handed to `fm_kinit` in DI:
 
 | off | field | meaning |
@@ -16173,6 +16175,7 @@ allocated and cascaded by `app_launch` and handed to `fm_kinit` in DI:
 | 19 | `FS_DIRTY` b | 1 = a file operation changed this folder under it, and neither its cache nor its pixels shows that yet (§22.8) |
 | 20 | `FS_FREE` w | KB free on its volume, 0xFFFF = not known (§22.7) |
 | 22 | `FS_USED` w | KB summed over its listed entries, 0xFFFF = not known (§22.7) |
+| 24 | `FS_PATH` | `PTH_SIZE` bytes of remembered path — **`KERN_BIG` only** (§22.16) |
 
 `FS_CLKT` moves with `FS_SEL` or not at all: shared, a click on row 3 in
 window A followed within 9 ticks by a click on row 3 in window B would
@@ -21860,7 +21863,7 @@ row keeps 0.
 
 Pinned caps: About 1 (stateless), Timer 10
 (stride 16 — 8 of state and 8 of §14.1's TMR_SHOWN), Bounce 10 (stride 8),
-**Files 4 (stride 16, pool `fm_pool`)**,
+**Files 4 (stride `FS_SIZE`, pool `fm_pool`)**,
 TaskMgr 1 (one sampler), Control Panel 1 (no per-instance state, §31). The
 Files cap is 4 because each window claims its own `VIEW_KB` cache (§2.3); `KD_CAP`, `VIEW_SLOTS` and the `fm_pool` size are one
 number wearing three hats and must move together. The

@@ -19,12 +19,12 @@
 ; I/O. Anything that acts calls fmv_sync first, which remounts only when the
 ; acting window's (drive, cwd) is not the one currently mounted.
 ;
-; Per-window state is a 24-byte KD_POOL block (fm_pool, 4 x 24) that
-; app_launch allocates and hands to fm_kinit in DI. fm_vp_set publishes the
-; acting window's block, cache segment and instance record into [fm_vp] /
-; [fm_vseg] / [fm_vinst], and fm_layout mirrors the fields the 400-line
-; painter reads on its hot path - it uses every register including BP and
-; has none free to thread a pointer through.
+; Per-window state is an FS_SIZE-byte KD_POOL block (fm_pool, 4 x FS_SIZE)
+; that app_launch allocates and hands to fm_kinit in DI. fm_vp_set
+; publishes the acting window's block, cache segment and instance record
+; into [fm_vp] / [fm_vseg] / [fm_vinst], and fm_layout mirrors the fields
+; the 400-line painter reads on its hot path - it uses every register
+; including BP and has none free to thread a pointer through.
 ;
 ; The window is RESIZABLE (KD_WFLAG = WF_SIZABLE, the one built-in that is)
 ; and the directory SCROLLS, in either of two views: a list (16px rows:
