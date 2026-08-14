@@ -7941,6 +7941,42 @@ the two sites that can skip a window. That also retired §11.96.11's
 bank-and-restore pair, which existed only because `wm_su_edge` was borrowing
 those four words.
 
+#### 11.96.11.2 …and a window SLOT hands its band on to the next tenant
+
+Reported from the field as *"open Paint, close Paint, open Piano, drag the
+Piano — the Piano is now corrupt,"* with the middle of its content coming back
+as desktop dither with the keyboard's letters drawn through the button row.
+
+**`wm_su_ext` is per window SLOT and nothing cleared it at `wm_destroy`.** Paint
+is the only caller of `wm_band` in the tree, so it is the only thing that ever
+writes those four bytes — it names left = 44 and bottom = 23 for its tool
+palette and its colour strip — and its window is slot 1 on any ordinary
+desktop. Close Paint, open anything else, and the new window is slot 1 too:
+`wm_su_flay` then lays that window's cache out as **four fragments for bands it
+never asked for**, so §11.96.12's drag replay puts the fragments back at offsets
+the save never wrote them from. The array's own declaration is where the
+assumption is written down — all four zero is what every window has *"by
+construction rather than by initialisation"* — and that is true of a **virgin**
+slot only.
+
+`wm_destroy` already clears five per-slot side tables for exactly this reason
+(`wm_owner`, `wm_about`, `wm_onsz`, `wm_zoomr`, `wm_natr`, each with a comment
+saying a reused slot must not inherit the last tenant's). The band extents are
+the sixth and were missed; they are cleared there now, on the index the block
+already holds — `wm_about`'s `slot*2` doubled once more, which costs two `mov`s
+and two fewer shifts than the `shr`/`shl`/`shl`/`shl` it replaced.
+
+Cost: **`.text` +8, no rung crossed, footprint unchanged.** Verified on a
+cycle-accurate 5150 by driving the reported session — Disk window, Paint, close,
+Piano, drag — against a control that never opens Paint: **0 differing pixels of
+128,000 on CGA and of 307,200 on VGA mode 12h**, where the build before it
+differs by 1,382 and 1,873 in the middle of the Piano's content.
+
+**The gate is only worth what it can fail**, and the first CGA run was worth
+nothing: the drag started inside the window rather than on its title bar, so no
+window moved, and the pre-fix and fixed builds agreed to the pixel. A control
+that passes on the broken build is not a control.
+
 #### 11.96.12 A window MOVED replays its content instead of drawing it
 
 Reported from the field as *"drag the whole Solitaire window by its title and
@@ -8210,6 +8246,103 @@ of the *whole* rect before any of it is reached, and `wm_su_ck` demands the
 claim's header equal the window's content rect exactly — so a shrunken rect
 disagrees with its own cache. It is a real piece of work and it is not this
 one.
+
+#### 11.96.14.1 …and a far edge may only clamp away what is not another display's glass
+
+Reported from the field as *"drag a window to straddle between the two screens
+and the primary draws and the secondary does not. Dragging again while it
+straddles makes it draw correctly. I suspect it's trying to use a SU/drag
+buffer to draw when it can't."* That last sentence is the diagnosis.
+
+**§11.96.14 is right about the case it was written for and the clamp it
+introduced does not distinguish two facts that look identical.** "Past this
+display's far edge" means *off the desktop* for a window dragged off the
+bottom of a one-card machine — there is nothing there, so replaying only the
+rows that survive is exactly correct — and it means *the other monitor* on an
+extended desktop, where the discarded pixels are on glass the user is looking
+at. `wm_su_vset` clamped in both.
+
+**The failure is silent in the way §39.14.8 predicted, one level up.** A
+clipped restore does not report that it was clipped: `wm_su_try` answers
+CF = 0, `wm_draw_win` reads that as *the content is already back on screen*
+and skips **both** the white fill and `W_PAINT` (§11.96), and nothing else in
+the pass has any reason to draw the rest. So the primary's slice is replayed
+perfectly, the secondary's slice keeps whatever was under the window, and no
+gate anywhere notices — which is §39.14.8's own sentence, *a cut save and a
+cut restore agree with each other*, arriving through the one caller that had
+been given permission to cut.
+
+**And the second drag coming out right is the same mechanism, not a
+workaround.** Its SOURCE straddles, so `wm_su_take`'s `vid_span_one` refuses,
+no cache is taken, `wm_su_try` finds nothing and the window redraws in full.
+The bug is therefore reachable exactly once per crossing — which is what makes
+it read as intermittent.
+
+`wm_su_vset` asks **`vid_disp_find`** — `vid_disp_of`'s question allowed to
+answer NO (§39.15.4's primitive, its second consumer) — about the first pixel
+each far edge is about to discard. A display holds it: **refuse**, and the
+caller repaints. Nothing does: **clamp**, exactly as §11.96.14 does today.
+
+Four things are load-bearing:
+
+- **One point answers for the whole cut edge, and that is the arrangement
+  rather than an approximation.** The x test probes at `y1` and the y test at
+  `x1` — the *near* coordinates, which the dead-zone test a few lines above
+  has already proved belong to this display, so neither probe can land in
+  `vid_disp_of`'s primary fallback and be believed. What makes one probe
+  enough is that the two displays share the origin corner on the axis being
+  cut (§39.19.2 places them edge to edge; Right shares the top, Below shares
+  the left), so the second display's extent along that axis is an interval
+  starting at the near end. A miss at the near coordinate therefore means the
+  rect starts beyond the second display altogether — and every coordinate
+  further out is beyond it too, since `wm_fit` confines a frame to the box of
+  the display its origin is on (§39.16.1). There is no rect that misses at the
+  near end and has glass at the far one.
+- **It is one routine and it covers both ends.** `wm_su_vset` is called by
+  `wm_su_try` (the restore, where refusing is the correctness fix) and by
+  `wm_dc_take` (the bank, where refusing means the ~4 ms `gfx_save` is not
+  spent on a cache that would be refused, and no straddling rect is ever
+  written into a claim header). The second falls out of the first at no cost.
+- **A refusal here is the pre-§11.96.14 behaviour and nothing worse.** That is
+  what makes this safe to take: the fallback is a full redraw, which is what
+  every straddling drag did before the drag cache existed.
+- **It is `KERN_BIG` only by construction.** The `%else` branch has one
+  display, so there is no seam for a far edge to fall on and the clamp is
+  unconditionally right there.
+
+**Measured on a cycle-accurate 5150 with a Hercules and a CGA in it**
+(`os8088_5150_both_gla`, CGA primary), one Disk window parked clear of the
+seam and dragged across it, against the `make DRAGCACHE=0` reference build
+driven through the identical session — the whole second card, every pixel:
+
+| | the seam | before | after |
+|---|---|---:|---:|
+| **Extend Right** | x = 640; the window at x = 479, 159 of its 320 columns across | **10,194** px | **0** |
+| **Extend Below** | y = 200; the window at y = 120, 75 of its 155 rows across | **11,404** px | **0** |
+
+**Both arms were broken and both had to be measured**, which is the reason
+this table has two rows rather than one: the x clamp and the y clamp are
+separate code with separate register juggling, and a fix verified on Right
+alone would have left Below asserted rather than tested.
+
+Each broken run's bounding box is the window's *content* rect exactly —
+virtual x 640..797, y 38..173 on Right; x 104..421, y 200..273 on Below, both
+running from `y + TITLE_H` to `y + h - 2` — **with the chrome around it
+correct**. That is the shape that says the fill and `W_PAINT` were skipped
+rather than that anything drew wrongly, and it is what identifies the defect
+as this one and not a drawing hook. `tests/dispdrag.py` is the gate, and it
+takes `--layout right|below` because one run cannot cover both seams.
+
+**What it must not have cost is the drag cache itself**, and that is checked
+rather than reasoned about: `tools/winmove.py disk` on a single-display
+machine is **92 calls / 221.6 ms with one `gfx_restore` and 4 `font_char`**,
+which is §11.96.14's own recorded shape for that drag — the listing is still
+not re-lettered.
+
+Cost: `.text` **+22** on `kern_big`, no image rung crossed and the footprint
+unchanged at 512 spare; `kern_small` is **byte-identical** — the whole change
+is inside the `KERN_BIG` arm, which is the shape a one-display machine should
+see and a claim worth checking rather than assuming.
 
 #### 11.96.16 A window ABOUT to appear banks what it is about to cover
 
@@ -13335,6 +13468,68 @@ the ST0 case must be **kept on every tier including tier 0** while the 5150's
 is still retired there. Neither emulator can produce either naturally
 (§18.97.2 has the measurements), so the knob is the only way this branch is
 ever exercised outside the field.
+
+### 18.97.4 …and the ST0 test asks for ABSENCE now, not for presence
+
+§18.97.3's test was written the other way round: **keep on exactly `ST0 & F8
+== 20`, retire on everything else.** That reads as "prove to me the drive is
+there", and it is the wrong way round for a routine whose header says *EVERY
+FAILURE KEEPS THE DRIVE* — a controller that answered nothing useful landed
+in the same bucket as one that positively reported no drive. Its own comment
+said so approvingly: *"FDU_ST0 initialises to FF and is written only on
+success, so a sense that never answered fails this by itself."*
+
+**It is not a corner.** Measured on two cycle-accurate machines — an IBM-ROM
+5150 and a 5160 — with a present, working drive B and the branch forced with
+a throwaway `jmp .motor` over step 1's TRK0 test, the drained ST0 reads
+**04** and **01**. Both are healthy machines with a real drive on the cable;
+both fail `cmp al, 0x20`; and the only reason drive B survived is that TRK0
+came up in ST3B first and the ST0 test was never reached. Take TRK0 away and
+those machines retire a drive that is plainly there.
+
+So the test is now the 5150's recorded absent-drive signature and nothing
+else: `ST0 & F8 == 70` — **IC = 01 abnormal termination, seek end, EQUIPMENT
+CHECK set, drive ready** — plus §18.97.1's unit match. That is the 765 saying
+it stepped 77 times and never found track 0, which is the only positive
+evidence of absence anybody has recorded. Every other answer keeps the drive,
+`FF` (a sense that never answered, IC = 11) included.
+
+Every recorded field verdict is unchanged, and that is checked rather than
+argued — `make FDDABSENT=1` (the 5150's absent drive B, `ST0 = 71`) still
+answers **ABSENT**, and `FDDABSENT=2` (the Packard Bell's present 1.2MB drive,
+`ST0 = 21`) still answers **KEEP** by the same `FDD_S_SEEKST0` step. What
+moved is the middle — and the middle is where a working machine's controller
+actually answers:
+
+| a present drive, TRK0 never reaching ST3 | `ST0` | before | after |
+|---|---|---|---|
+| IBM-ROM 5150 | `04` | `NOTRK0` → **drive B removed** | `SEEKST0` → KEEP |
+| 5160 / XT | `01` | `NOTRK0` → **drive B removed** | `SEEKST0` → KEEP |
+
+Both rows are a throwaway kernel with `test al, 0x10` cut to `test al, 0x00`
+at both of the probe's TRK0 tests, so the branch runs against the emulated
+765's own answers rather than a forced verdict — the drive really is there,
+and before this the desktop really did come up with one floppy icon.
+
+**What makes the middle reachable at all is a WARM RESTART**, and that is the
+field report this came from: *"Boot, open Paint, close Paint, Chip menu ▸
+Restart — drive B is not mounted."* `int 19h` resets no hardware (§51.2 and
+`ui_cmd_reboot` both say so), so the second boot inherits drive B's head
+wherever the first session left it. Measured on an IBM-ROM 5150: a fresh boot
+reads `ST3 = 39`, **TRK0 set**, so the probe stops at step 1 and keeps the
+drive; loading one package off B: leaves `ST3 = 29`, **TRK0 clear**. On the
+next boot step 1 therefore fails and the destructive branch runs — on every
+restart after any use of B:, on the one tier where §18.97.2 lets it act.
+
+**Neither emulator here can carry that across the reboot**, which is why this
+is a narrowing rather than a fix with a repro attached: MartyPC's FDC returns
+drive 1's cylinder to 0 on the controller reset the BIOS does at boot, so the
+second boot reads `39` again and keeps the drive. Verified three ways — a
+scripted Restart, a host-driven `SEEK` to cylinder 20 through the emulated
+765, and a read of ST3 at the second boot's own boot sector. **Whether the
+recalibrate then answers `71` on the reporting machine is the 5150's
+question**, and the probe already publishes what it saw: §57.5's `'FD'`
+block, which `tests/sysbench` prints. `make FDDPROBE=0` is the A/B.
 
 ### 18.98 The third and fourth floppy — a row, and nothing else
 
