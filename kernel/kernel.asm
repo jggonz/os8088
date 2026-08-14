@@ -832,15 +832,14 @@ KERN_BUDGET equ 102400          ; the whole kernel's FOOTPRINT. Growing past
                                 ; machine can still install, just slowly.
 %endif                          ; KERN_BIG
 
-KERN_SMALL_BUDGET equ 99328     ; ...and kern_small's, named separately so it
+KERN_SMALL_BUDGET equ 102400    ; ...and kern_small's, named separately so it
                                 ; can be REPORTED on a big build rather than
-                                ; only enforced on a small one. tools/
-                                ; kernsplit.py reads both out of the map and
-                                ; says what the big build costs over the
-                                ; small; without a name for the small figure
-                                ; the only way to ask that question is to
-                                ; build twice and remember, which is how a
-                                ; number goes stale.
+                                ; only enforced on a small one: the %else arm
+                                ; above is not taken on a kern_big assembly, so
+                                ; without a name here the figure the 128KB
+                                ; machine lives under cannot be quoted at all
+                                ; without building twice and remembering, which
+                                ; is how a number goes stale.
                                 ;
                                 ; It is the figure that has to be DEFENDED.
                                 ; kern_big has a machine with RAM behind it;
@@ -873,6 +872,20 @@ KERN_SMALL_BUDGET equ 99328     ; ...and kern_small's, named separately so it
                                 ; - and the grant repairs that and leaves two
                                 ; steps in front of the size-changed
                                 ; notification.
+                                ;
+                                ; And again at the TWENTY-THIRD, 99,328 ->
+                                ; 102,400, 3KB, allocated to performance and
+                                ; disk; the terms are at KERN_BUDGET above. This
+                                ; copy of the figure was left behind by that
+                                ; move - a build reading 99,328 here while
+                                ; assembling against 102,400 - which is what the
+                                ; assertion below now refuses. A figure written
+                                ; twice needs something that says so.
+%ifndef KERN_BIG
+ %if KERN_BUDGET != KERN_SMALL_BUDGET
+%error "KERN_SMALL_BUDGET and kern_small's KERN_BUDGET disagree - move both"
+ %endif
+%endif
 
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
@@ -3216,6 +3229,7 @@ fm_rcmd:              call COLD_SEG:fmf_fm_rcmd
 ld_run_body:          call COLD_SEG:ldf_ld_run_body
                     ret
 mod_init:             call COLD_SEG:modf_mod_init
+                    ret
 loader_init:          call COLD_SEG:ldf_loader_init
                     ret
 loader_run:           call COLD_SEG:ldf_loader_run
@@ -3466,6 +3480,18 @@ section .modf
 modf_end:
 MODF_SIZE equ modf_end - $$
 
+; ...and each of them has to fit the claim mod_need makes for it. MOD_MAX_KB
+; (mod.inc) is a RUN-TIME test - a module over it is refused cleanly, the
+; feature simply does not open - so nothing would say a word at build time
+; about an image that has grown past the only claim there is to put it in.
+; This is where that gets said, while the number is still a constant.
+%if MODC_SIZE > MOD_MAX_KB*1024
+%error "the ctrl module is over MOD_MAX_KB - mod_need would refuse it at run time"
+%endif
+%if MODF_SIZE > MOD_MAX_KB*1024
+%error "the format module is over MOD_MAX_KB - mod_need would refuse it at run time"
+%endif
+
 ; --- the split table, which is HOST-SIDE ONLY --------------------------------
 ; os88mod.py has to know where each module starts and how long it is, and the
 ; only thing that can answer without a second opinion is this assembly. So it
@@ -3548,7 +3574,18 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 ;    shipped kernel this guard exists to steer. tools/fieldsize.py is the
 ;    other half - it reports whether the field kernel and the shipped one
 ;    share a KIMG_PARA rung, so "bigger" stays known about rather than silent.
+;    KFZTRACE is the second instrument to need the same exemption and for the
+;    same reason: it costs 765 bytes of .text and one image rung, which put
+;    `make KFZ=1` 512 over the guard in the DEFAULT kern_big configuration - so
+;    the one build that could answer the field freeze it was written for was
+;    the one build that would not assemble.
 %ifdef DISK_COUNTERS
+%define KERN_INSTR                  ; one name for "this is an instrument", so
+%endif                              ; the exemption below is written once
+%ifdef KFZTRACE                     ; (NASM has no defined() to say it in one
+%define KERN_INSTR                  ; %if)
+%endif
+%ifdef KERN_INSTR
 KERN_CEIL equ KERN_BUDGET + 4096    ; ...and a BOUND, not a free hand: four
 %else                               ; steps, so the instrument cannot quietly
 KERN_CEIL equ KERN_BUDGET           ; become the reason the kernel grew

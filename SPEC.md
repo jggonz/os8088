@@ -604,7 +604,8 @@ code and §2.6's cold segment is still resident; moving a module cold to fix a
 footprint overrun is a no-op that looks like a fix. Taking it off the disk
 entirely is not.
 
-**A MODULE IS NOT AN OVERLAY, and both now ride every disk.** §52.11's
+**A MODULE IS NOT AN OVERLAY, and both now ride every disk** — with the one
+exception §41.12 states, `XMEM.DRV` being `kern_big`'s alone. §52.11's
 `HDDTOOL.DRV` and §41.12's `XMEM.DRV` are `DRVC_OVL` images: driver header,
 driver dispatcher, driver load discipline, an ABI of their own, and no
 `drv_tab` row. They are *self-contained* — assembled on their own, loaded by
@@ -27431,6 +27432,13 @@ therefore **1,024 bytes of heap** that every XMS-less machine now keeps.
 §41.11 had already taken the whole feature out of `kern_small` for exactly
 that reason; this is the same removal for `kern_big`, without giving up the
 capability.
+
+**So the file ships on the `kern_big` disks and on no `kern_small` one.**
+`xmem.inc` is wholly inside `%ifdef KERN_BIG` and so is `drv_load_at`, its
+only loader, and it has no `drv_tab` row that a Drivers page could tick — so
+nothing on a `kern_small` volume can name, read or load it, and a file no code
+can reach is weight on a 360KB disk and nothing else. The Makefile says the
+same thing in one line, `$(SMALLDRIVERS)`.
 
 **It is an OVERLAY and not a driver, and that is the load-bearing choice.** A
 `drv_tab` row buys *user management* — a Drivers-page tick, a `SYSTEM.CFG`

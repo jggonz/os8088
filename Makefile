@@ -462,8 +462,16 @@ endif
 # are two SHIPPED PRODUCTS (docs/KERN-SPLIT-PLAN.md), `make small` builds one
 # into a directory of its own and it forces no probe; everything else here
 # produces a kernel nobody ships.
+#
+# EVERY OTHER KNOB IN $(VIDSTAMP) BELOW BELONGS HERE TOO. SNAPAUDIT and
+# SCROLLROW were in the stamp and not in this list, so the kernel duly rebuilt
+# for them and the banner said nothing about the kernel it had just built -
+# each of them changes the binary (see their ifneqs at the top of this file).
+# BOOTDIAG is the one asymmetry that is meant to be one: it feeds $(BOOTDEF)
+# alone, and the stamp deletes boot.bin/boot360.bin whatever it says.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              KFZ DIRW1 INSTRO KEEPH DIRTYRAM FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
+                             SNAPAUDIT SCROLLROW \
                              CURFIX \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
@@ -624,12 +632,6 @@ $(BUILD)/kernel-full.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) $(B
 $(BUILD)/kernel.bin: $(BUILD)/kernel-full.bin tools/os88mod.py | $(BUILD)
 	python3 tools/os88mod.py $< -k $@ $(KMODARGS) --build $(BUILDNUM)
 	@echo "kernel: $(call FILESIZE,$@) bytes (image rung + boot overlay)$(if $(filter-out 0,$(BUILDNUM)), - build $(BUILDNUM), - NO build number: buildnum.py said why)"
-
-# The modules fall out of the rule above rather than having one of their own:
-# a second recipe would run os88mod.py a second time, and GNU make would run
-# it once PER TARGET for a multi-target rule, which is the classic way to get
-# a file written twice and a race with -j.
-$(KMODS): $(BUILD)/kernel.bin ;
 # What that cost, per section and in 512-byte rungs, against the baseline in
 # docs/KERNEL-MEMORY.md. A REPORT and never a gate: the guards inside
 # kernel.asm are what refuse an overrun, and this says how close you came and
@@ -637,6 +639,12 @@ $(KMODS): $(BUILD)/kernel.bin ;
 # extra assembly of the kernel, which is why it is not folded into the line
 # above: -w+error would turn its %warning into an error, and relaxing that
 # for every build would silence a %warning somebody meant as an alarm.
+#
+# IT BELONGS TO THIS RULE AND NOT TO THE MODULES' BELOW. Both lines sat after
+# $(KMODS) for a while, which made them the MODULE rule's recipe - and that
+# rule is up to date the moment os88mod.py has written the files, so on an
+# ordinary build neither the report nor the banner ran at all. A guard that
+# stops being asked reads exactly like a guard that passes.
 	@python3 tools/kernsize.py --build $(BUILD) $(VIDDEF) || true
 # ...and this tests the KNOBS, not $(VIDDEF), and NAMES them: the banner used
 # to be a row of blank assignments, which says no more than the alarm itself.
@@ -649,6 +657,12 @@ ifneq ($(KNOBS),)
 	@echo "  *** (SPEC.md 18.94.1) and costs the image 0 bytes. Any OTHER   ***"
 	@echo "  *** knob above is the one to be surprised by.                  ***"
 endif
+
+# The modules fall out of the rule above rather than having one of their own:
+# a second recipe would run os88mod.py a second time, and GNU make would run
+# it once PER TARGET for a multi-target rule, which is the classic way to get
+# a file written twice and a race with -j.
+$(KMODS): $(BUILD)/kernel.bin ;
 
 # The boot sector needs to know how many sectors to read, so we measure the
 # kernel at build time and assemble the count in. Reading exactly what exists
@@ -720,9 +734,12 @@ DRIVERS += $(BUILD)/ramdisk.drv
 # page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
 DRIVERS += $(BUILD)/hddtool.drv
 # ...and the store above 1MB (SPEC.md 41.12), which is an overlay for the same
-# reason and rides every disk the same way: no drv_tab row, no Drivers-page
-# tick, no SYSTEM.CFG bit. The kernel's own boot sniff decides whether to read
-# it, so a machine with no memory up there never touches this file
+# reason and rides every KERN_BIG disk the same way: no drv_tab row, no
+# Drivers-page tick, no SYSTEM.CFG bit. The kernel's own boot sniff decides
+# whether to read it, so a machine with no memory up there never touches this
+# file - and kern_small filters it back out again ($(SMALLDRIVERS) below),
+# because SPEC.md 41.11 took the whole feature out of that kernel and nothing
+# in it can name, read or load the file
 DRIVERS += $(BUILD)/xmem.drv
 # ...and the ON-DEMAND KERNEL MODULES (SPEC.md 2.8), which are neither a driver
 # nor an overlay. Both of those are SELF-CONTAINED images with a dispatcher and
@@ -2080,28 +2097,37 @@ FIELDKNOBS := DISKCNT=1
 # design is written to avoid.
 SMALLDIR := $(BUILD)/smallk
 
+# ...and its drivers are $(DRIVERS) LESS THE STORE ABOVE 1MB. XMEM.DRV is dead
+# weight on this kernel and only on this one: xmem.inc is entirely inside
+# %ifdef KERN_BIG and so is drv_load_at, its only loader, and it has no drv_tab
+# row that a Drivers page could tick - so nothing on a kern_small disk can name
+# it, read it or load it. Same reason DEBUG.DRV is not in $(DRIVERS) at all.
+# RECURSIVE, like $(DRIVERS) itself: $(KMODS) inside it still reads the
+# per-target KMODDIR.
+SMALLDRIVERS = $(filter-out $(BUILD)/xmem.drv,$(DRIVERS))
+
 small: $(BUILD)/small360.img $(BUILD)/small.img
 	@python3 tools/kernsplit.py $(SMALLDIR)/kernel.bin $(BUILD)/kernel.bin
 
 # its kernel is $(SMALLDIR)'s, so its modules are too
 $(BUILD)/small360.img: KMODDIR := $(SMALLDIR)
 
-$(BUILD)/small360.img: $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(BUILD)/small360.img: $(SMALLDRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(SMALLDIR)/boot360.bin --kernel $(SMALLDIR)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(SMALLDRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
 	@echo "small: $@ - kern_small on 360KB. Its apps disk is the ordinary"
 	@echo "       build/apps360.img: one package, both kernels"
 
 # its kernel is $(SMALLDIR)'s, so its modules are too
 $(BUILD)/small.img: KMODDIR := $(SMALLDIR)
 
-$(BUILD)/small.img: $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+$(BUILD)/small.img: $(SMALLDRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot.bin
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(SMALLDIR)/boot.bin --kernel $(SMALLDIR)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+		$(SMALLDRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
 
 # ...and the size comparison on its own, for when you want the numbers without
 # building two floppies for them. SMALL FIRST in the argument order, because it
@@ -2205,7 +2231,14 @@ field: $(BUILD)/herc.img $(BUILD)/cga.img $(BUILD)/cga720.img $(BUILD)/flop1.img
 # would boot a counted kernel whose installer had no phase table, and nothing
 # would say so. The rebuild is seconds and the stamp puts build/ back to the
 # shipped bytes on the next knobless make.
-FIELDDRV = @$(MAKE) $(FIELDKNOBS) $(DRIVERS)
+#
+# THE MODULES ARE FILTERED OUT OF IT, and they are the one entry that has to
+# be. $(DRIVERS) expands here with the rule's own KMODDIR, so it names the
+# FIELD kernel's modules - and this sub-make builds into the default $(BUILD),
+# where no rule can make them. They are not skipped: the sub-make on the next
+# line of each rule builds <dir>/kernel.bin, whose own recipe cuts <dir>'s
+# ctrl.drv and format.drv out of it (SPEC.md 2.8).
+FIELDDRV = @$(MAKE) $(FIELDKNOBS) $(filter-out $(KMODS),$(DRIVERS))
 
 # its kernel is $(HERCDIR)'s, so its modules are too
 $(BUILD)/herc.img: KMODDIR := $(HERCDIR)
