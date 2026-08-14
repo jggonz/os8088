@@ -355,6 +355,107 @@ vid_equip:
     ret
 
 ; -----------------------------------------------------------------------------
+; vid_mono_text - put the REAL mono card into 80x25 text, when int 10h cannot
+;                 (SPEC.md 39.20)
+;
+; in:       [vid_kind] is VID_HERC and the caller has already blanked 3B8h and
+;           written 3BFh = 0
+; out:      CF = 1 this card is now in text and the caller must NOT call
+;                  int 10h; CF = 0 not this machine's problem, use the ROM
+; clobbers: flags
+;
+; The one case is A VGA IN THE MACHINE. Everything else - a lone MDA, a lone
+; Hercules, Hercules+CGA - has an int 10h owned by the motherboard ROM, whose
+; mode 7 IS this card and whose mode set is equipment-driven, so vid_equip
+; above already names it and this returns CF = 0 having touched nothing. That
+; is why the shipping pairing cannot change behaviour here.
+;
+; IT IS A PRE-EXISTING BUG AND NOT THIS BRANCH'S, which is worth stating
+; because it sits in a file the extended desktop is being built in. Reaching
+; it needs no extended desktop at all: a VGA and a Hercules in one machine,
+; the Display page (SPEC.md 31.10) used to make the Hercules primary, and then
+; a reboot - all of which the shipped kernel does today. vid_dual_ok's refusal
+; gates the DESKTOP, never vid_switch.
+;
+; What it does NOT do is update 40:49/40:63. Those describe the card int 10h
+; drives, and on this machine that is the VGA - saying "mode 7 at 3B4" there
+; would point the ROM at a card it has never heard of. vid_reboot below is
+; where the other card is given something the BIOS can honestly print on.
+; -----------------------------------------------------------------------------
+vid_mono_text:
+    test byte [vid_avail], VID_A_VGA
+    jnz .mine
+    clc                         ; the ROM's mode 7 is this card: let it
+    ret
+.mine:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov si, vid_6845t           ; MDA 80x25, cursor off (viddet.inc)
+    call vid_6845_prog
+    mov ax, VID_HERC_SEG        ; and clear the page, which the ROM's mode set
+    mov es, ax                  ; would have done: what is in there is a
+    xor di, di                  ; 720x348 graphics desktop, and read as
+    mov ax, 0x0720              ; characters it is noise. Space on attribute 7
+    mov cx, 2000
+    cld
+    rep stosw
+    mov dx, 0x3B8               ; high-res text, video ON, blink on - IBM's own
+    mov al, 0x29                ; mode 7 value, and the last write for the same
+    out dx, al                  ; reason vid_setmode's is (39.6): onto a page
+    pop es                      ; that is already blank
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_reboot - the text mode CMD_REBOOT wants, on every card (SPEC.md 39.20.1)
+;
+; in:       -
+; out:      -
+; clobbers: flags
+;
+; vid_text names the PRIMARY's card. int 19h is a bootstrap and not a POST -
+; it re-reads the boot sector and jumps, resetting no video at all - so what
+; prints next comes out of int 10h, and on a machine with a VGA in it int 10h
+; is the VGA's whatever os8088 was using. Leaving that card in mode 12h means
+; the next boot's messages are rendered as graphics over a stale desktop.
+;
+; So the OTHER card gets a mode too, and the equipment flag goes with it:
+; vid_cga_equip is exactly the same manoeuvre viddet.inc already makes to
+; reach a second card, DOS's own MODE CO80. The VGA's mode 3 cannot disturb
+; the mono card - different aperture, different CRTC - and it runs AFTER
+; vid_text on purpose, so that if some ROM does something surprising the last
+; writes to the mono card are still ours.
+;
+; fsx (FSXM_TEXT80) deliberately calls vid_text and NOT this: inside a bracket
+; the other display has been darked (39.18) and a mode set would light it with
+; an empty text screen, which is the one thing that path exists to prevent.
+; -----------------------------------------------------------------------------
+vid_reboot:
+    push ax
+    call vid_text
+    cmp byte [vid_kind], VID_HERC   ; the mono card is the ONLY primary int 10h
+    jne .out                    ; does not drive - and on a VGA machine the CGA
+                                ; row IS the VGA doing mode 6, so vid_text has
+                                ; already given that case its mode 3
+    test byte [vid_avail], VID_A_VGA
+    jz .out                     ; no VGA: int 10h drove the primary already
+    call vid_cga_equip          ; 40:10 -> colour, or the ROM's mode set can
+    mov ax, 0x0003              ; refuse on a machine flagged mono
+    int 0x10
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; spl_reset - put the loading screen back after a mode switch (SPEC.md 39.11.3)
 ;
 ; in:       nothing
@@ -421,28 +522,45 @@ spl_reset:
 ;
 ; Nothing has to be un-blanked: vid_setmode re-enables whichever card it
 ; programmes, on both paths.
+;
+; IT IS THE TEST AND NOTHING ELSE NOW - vid_blank_kind does the darking
+; (39.18.1), and this routine had its own copy of it for as long as that one
+; was behind the dual-display fence. Two defects came with the copy and both
+; were live, which is what a second implementation of one operation costs:
+;
+;   * THE HERCULES ARM WROTE 3B8h = 0, which clears bit 1 - the GRAPHICS bit -
+;     along with bit 3, so the card was not blanked but put into MDA TEXT mode
+;     with a 6845 still carrying 720x348 timings. vid_blank_kind's header
+;     records the fix (0x02, graphics + page 0 + video off) and the measurement
+;     that found it; the fix was never brought back here.
+;   * THE COLOUR ARM WROTE 3D8h UNCONDITIONALLY, a register a VGA does not
+;     implement, so the OUT was swallowed by the bus. That was accepted while
+;     "a VGA beside a Hercules" was believed to be a pairing nobody built - it
+;     is in fact the one the period built most (docs/DUAL-DISPLAY-VGA.md 1.3) -
+;     and on such a machine switching to the Hercules left the VGA lit with a
+;     frozen desktop on it. vid_blank_kind has a real VGA arm (SR01 bit 5).
+;
+; So the question this answers is "are these two kinds two CARDS", and the
+; answer to "how is a card darked" belongs in one place.
 ; -----------------------------------------------------------------------------
 vid_blank:
     push ax
-    push dx
-    cmp al, VID_HERC
-    je .tomono
-    cmp byte [vid_kind], VID_HERC
-    jne .out                    ; colour -> colour: one card, nothing to do
-    mov dx, 0x3B8               ; leaving the Hercules: video off (bit 3), and
-    xor al, al                  ; 3BFh back to "graphics not allowed", which is
-    out dx, al                  ; also the page-1 decode locked out again
-    mov dx, 0x3BF
-    out dx, al
-    jmp short .out
-.tomono:
-    cmp byte [vid_kind], VID_HERC
-    je .out                     ; already there; vid_switch caught this anyway
-    mov dx, 0x3D8               ; leaving a CGA: mode control, video bit clear.
-    xor al, al                  ; A VGA does not implement 3D8h at all, so a
-    out dx, al                  ; VGA-plus-Hercules machine keeps its VGA lit -
-.out:                           ; accepted, that pairing being one nobody built
-    pop dx
+    push bx
+    xor bl, bl                  ; count the mono cards among the two kinds:
+    cmp al, VID_HERC            ; exactly one means two cards, which is the
+    jne .a                      ; only case with anything to dark. Two means
+    inc bl                      ; the switch is a no-op vid_switch already
+.a:                             ; caught; zero means colour -> colour, which
+    cmp byte [vid_kind], VID_HERC   ; on a VGA is ONE card doing two modes
+    jne .b
+    inc bl
+.b:
+    dec bl
+    jnz .out
+    mov al, [vid_kind]          ; dark the card being LEFT
+    call vid_blank_kind
+.out:
+    pop bx
     pop ax
     ret
 
@@ -891,6 +1009,12 @@ vid_ctx_act:
     mov [vid_ox], ax
     mov ax, [di+VID_CTX_VY]
     mov [vid_oy], ax
+    mov al, [di+VID_CTX_KIND]   ; ...and HOW DEEP this display is, which is not
+    call vid_depth_set          ; in the eighteen-word run and is what every
+                                ; primitive dispatches on. Two 1bpp displays
+                                ; agree about it and a VGA beside a Hercules
+                                ; does not - see vid_depth_set for what the
+                                ; omission measured as
     pop ax
     pop di
 .out:
@@ -1205,6 +1329,41 @@ vid_disp_find:
     ret
 
 ; -----------------------------------------------------------------------------
+; vid_disp_planes - how deep is the display holding the virtual point (AX, BX)?
+;
+; in:       AX = x, BX = y, in VIRTUAL desktop coordinates
+; out:      CX = 1 or 4
+; clobbers: CX, flags
+;
+; SPEC.md 11.96's raise cache is the one consumer, and what it needs is not
+; "how deep is the screen" but "how deep is the card these pixels are ON".
+; Those are the same question on every machine with one display and on both
+; displays of a Hercules+CGA pair; a VGA beside a Hercules is where they part
+; (docs/DUAL-DISPLAY-VGA.md 4.3).
+;
+; It DERIVES rather than being told, and that is deliberate: the cache already
+; carries the rect its pixels were taken over, in the claim's own header, so
+; the display is a function of something the buffer already knows and storing
+; a plane count beside it would be a second opinion that can go stale. The
+; header's own comment makes the argument for the rect - "it travels with the
+; pixels it describes and cannot get out of step with them" - and this is that
+; sentence applied one field further.
+; -----------------------------------------------------------------------------
+vid_disp_planes:
+    push ax
+    push di
+    call vid_disp_of            ; AL = the display holding it...
+    call vid_ctx_ptr            ; ...DI = its record, AX preserved
+    mov cx, 4
+    cmp byte [di+VID_CTX_KIND], VID_VGA
+    je .out
+    mov cx, 1
+.out:
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; vid_pt_local - a virtual point in the display holding it (SPEC.md 39.15)
 ; in:       AX = x, BX = y, virtual
 ; out:      CL = the display, AX/BX its own coordinates
@@ -1277,17 +1436,80 @@ vid_pt_clamp:
 ; none of the three can disagree about what this machine can do. There is no
 ; GREYING in that list on purpose: a machine with no choice is not shown the
 ; control (31.10.1's answer), which is why this never has to explain itself.
+;
+; A MONO CARD AND A COLOUR CARD, which is a sentence about cards where this
+; used to be an equality against HERC|CGA exactly. The equality was right about
+; every value it refused but one, and the one it got wrong is the pairing the
+; period built most of (docs/DUAL-DISPLAY-VGA.md):
+;
+;   HERC|CGA        a Hercules and a real CGA          two - as before
+;   VGA|HERC|CGA    a VGA and a real Hercules          two - NEW
+;   VGA|CGA         ONE card: a VGA that can also do
+;                   mode 6                             one
+;   one bit         the ordinary machine               one
+;
+; WHAT MAKES THE THIRD ROW SEPARABLE FROM THE SECOND IS THAT ONE BIT IS
+; EVIDENCE AND THE OTHER IS NOT. The HERC bit is only ever set by a probe that
+; found memory at B0000 which the running card demonstrably is not
+; (vid_memchk, and a VGA in mode 12h decodes A0000 alone), or by the machine
+; running on it. The CGA bit is SYNTHETIC on any VGA - vid_probe_avail sets it
+; without probing anything, because mode 6 is a standard BIOS mode there. So
+; "is there a second card" is exactly "is the HERC bit set", and the colour
+; half is then whichever colour card the machine has.
+;
+; SPEC.md 39.13 refused VGA|HERC|CGA on the grounds that the bitmap cannot say
+; whether the CGA bit is that VGA's mode 6 or a third card. That is true and it
+; does not decide anything: either way the machine has a colour card and a mono
+; card, and pairing the two is right. What it does mean is that a machine with
+; a VGA, a Hercules AND a real CGA is indistinguishable from one without the
+; CGA, and gets the VGA - the third card is never programmed. Accepted, and the
+; alternative is probing B8000 for a card distinct from the VGA's own mode 6,
+; which is vid_cga_alias's problem again on a machine nobody has.
 ; -----------------------------------------------------------------------------
 vid_dual_ok:
-    push ax
-    mov al, [vid_avail]
-    cmp al, VID_A_HERC | VID_A_CGA
-    pop ax                      ; POP does not touch flags
-    je .yes
+    test byte [vid_avail], VID_A_HERC
+    jz .no                      ; nothing to extend ONTO...
+    test byte [vid_avail], VID_A_VGA | VID_A_CGA
+    jz .no                      ; ...or nothing to extend FROM
+    clc
+    ret
+.no:
     stc
     ret
-.yes:
-    clc
+
+; -----------------------------------------------------------------------------
+; vid_disp_other - which adapter is the display that is NOT the primary?
+;
+; in:       [vid_kind] = the primary, [vid_avail]
+; out:      AL = a VID_* kind
+; clobbers: AL, flags
+;
+; vid_dual_ok's other half, and it is a routine rather than four lines inside
+; vid_disp_init because the two have to agree: a predicate that says "yes, two
+; displays" and a derivation that then names a card the machine does not have
+; is a mode set into an empty socket.
+;
+; It reads as "the other one" and the VGA is why it cannot be written that way.
+; With a Hercules and a CGA the two kinds are a pair and flipping between them
+; is the whole rule, which is what this used to be. On a VGA machine the CGA
+; row is that VGA doing mode 6 (SPEC.md 39.11.1), so flipping away from the
+; mono card lands on a kind that is not a second card at all - it is the same
+; silicon in another mode, and vid_disp_init would then programme one card
+; twice and place two displays on one monitor.
+;
+; So the mono card is the pivot: away from it the answer is always the mono
+; card, and towards it the answer is the machine's colour card, which is the
+; VGA when there is one.
+; -----------------------------------------------------------------------------
+vid_disp_other:
+    mov al, VID_HERC            ; on a colour card: the other one is the mono
+    cmp byte [vid_kind], VID_HERC   ; card, the only second card 39.13 admits
+    jne .out
+    mov al, VID_CGA             ; on the mono card: the colour one - and a VGA
+    test byte [vid_avail], VID_A_VGA    ; wears the CGA bit as well, so the VGA
+    jz .out                             ; bit has to be asked about FIRST
+    mov al, VID_VGA
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1349,12 +1571,10 @@ vid_disp_init:
     call vid_dual_ok
     jc .out                     ; one display - or a pairing we do not take
 
-    mov ah, [vid_kind]          ; the other kind is the one this machine has
-    mov al, VID_CGA             ; and is not running on
-    cmp ah, VID_HERC
-    je .other
-    mov al, VID_HERC
-.other:
+    mov ah, [vid_kind]          ; the primary, banked across the two applies
+    call vid_disp_other         ; ...and AL = the other display's adapter, which
+                                ; is NOT simply the other of two kinds - see
+                                ; there, and see what a VGA's CGA bit means
     cmp byte [vid_dmode], 0
     jne .extend
 

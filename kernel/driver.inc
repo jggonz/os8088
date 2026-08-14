@@ -929,6 +929,43 @@ drv_nostamp:
 ; always right: restore the segment, THEN the word.
 ; -----------------------------------------------------------------------------
 drv_call:
+    cmp bx, drv_tab             ; ...AND BX MUST BE A ROW AT ALL. This one is
+    jb .none                    ; checked FIRST and on BX itself, because it is
+    cmp bx, drv_tab + DRV_MAX * DRVR_SIZE   ; the only test here that does not
+    jae .none                   ; go through DS - and DS is exactly what cannot
+                                ; be trusted when this fires. Measured in the
+                                ; field chase: drv_call entered with BX = 0x157D
+                                ; and DS = 0x007C, so the row read below was a
+                                ; garbage segment out of a garbage address, and
+                                ; the far call went into zeroed memory
+                                ; (docs/DUAL-DISPLAY-VGA.md 8(11)). A range test
+                                ; on BX turns that into a refusal whatever DS
+                                ; holds. It does not FIX the caller - something
+                                ; is violating SPEC.md 2.6's "DS still
+                                ; KERNEL_SEG" on the way into .cold - it stops
+                                ; the kernel executing zeros because of it
+    cmp word [bx+DRVR_SEG], 0   ; NOT LOADED IS A REFUSAL, NOT A FAR CALL
+    jne .go                     ; (SPEC.md 51.2). DRVR_SEG's own declaration
+.none:                          ; says "0 = not loaded" and this read it
+    xor ax, ax                  ; straight past that into `call far`, so a row
+    stc                         ; nothing had attached to sent the CPU to
+    ret                         ; 0000:0000 - and a bad BX to somewhere worse.
+                                ; 0000:0000 - or to whatever a detached row
+                                ; left behind. It executes zeros from there,
+                                ; scribbling memory as it goes, and the machine
+                                ; dies somewhere unrelated: caught in the field
+                                ; as a reboot, because one of the bytes the
+                                ; wild run happened to write was ui_rebootq
+                                ; (docs/DUAL-DISPLAY-VGA.md 8(11)).
+                                ;
+                                ; CF = 1 with AX = 0 is drv_svc_call's own
+                                ; "nothing publishes it", so the answer a
+                                ; caller gets for an absent driver is the same
+                                ; whichever door it came in by. BX is a kernel
+                                ; offset and DS is KERNEL_SEG at entry - ES is
+                                ; not yet, which is why this reads through DS
+                                ; and the body below reads through ES.
+.go:
     push word [snd_inst]        ; ...while DS still names the kernel
     push ds
     push es

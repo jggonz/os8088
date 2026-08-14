@@ -13,6 +13,13 @@ The ask, in the requester's words:
 - Investigate making this a **loadable driver to minimize kernel impact**.
 - ABI compatibility is **not** required — it may be rewritten completely.
 
+**Steps 1–7 have since landed** (SPEC.md §39.12–§39.19), and none of what they
+built names an adapter. **docs/DUAL-DISPLAY-VGA.md** is the same question asked
+of **VGA + Hercules** — a pair whose apertures (A0000 against B0000) do not
+touch at all, where this one's share the B segment — and it is much the smaller
+piece of work, because what refuses that pair today is one equality test plus
+the one thing this pair never had: **mixed colour depth**.
+
 ---
 
 ## 0. The verdict, up front

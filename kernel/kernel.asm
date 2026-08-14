@@ -170,11 +170,41 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 104960          ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 107008          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE TWENTY-FIRST MOVE, 104,960 -> 107,008,
+                                ; ASKED FOR AND GRANTED, kern_big's alone -
+                                ; kern_small is untouched at three steps spare
+                                ; and needs nothing. 2KB, four steps, which is
+                                ; the standard headroom the fifth move settled
+                                ; on and which the tree had run out of: merged,
+                                ; the footprint sat at 104,960 of 104,960, ZERO
+                                ; spare, so the next byte anywhere in .text
+                                ; failed the build.
+                                ;
+                                ; NAMED FOR TWO THINGS, on the grant's own
+                                ; terms: docs/DUAL-DISPLAY-VGA.md's VGA +
+                                ; HERCULES EXTENDED DESKTOP, and BUGFIXES.
+                                ;
+                                ; WHAT ARRIVED AT ZERO IS WORTH THE LINE,
+                                ; because neither half did it alone and the
+                                ; attribution was measured rather than
+                                ; inferred - origin/elendilon built on its own
+                                ; is 104,448 with 512 spare and 121 bytes left
+                                ; in its image rung, and this branch's +162 of
+                                ; .text landed on that 121 and crossed it. So
+                                ; steps 1-3 (62 bytes) would have fitted and
+                                ; step 4's 100 - SPEC.md 39.20, the reboot
+                                ; path naming the CARD rather than asking
+                                ; int 10h for a mode - is what spent the last
+                                ; step. It is a correctness fix for a bus
+                                ; conflict between a VGA in mode 7 and a real
+                                ; Hercules, so trimming it to stay under was
+                                ; not the trade to make.
                                 ;
                                 ; THREE MOVES MET IN ONE MERGE, and none of
                                 ; them cancels another: the eighteenth was
@@ -2824,8 +2854,23 @@ osapi_vol_kind:
     ret                         ; CF alone)
 
 osapi_video:
-    mov ax, [vid_w]
-    mov bx, [vid_h]
+    mov ax, [vid_pwm1]          ; THE PRIMARY, NOT THE DESKTOP UNION (39.2.1).
+    inc ax                      ; [vid_w]/[vid_h] are the whole virtual
+    mov bx, [vid_phm1]          ; desktop once a second display is extended,
+    inc bx                      ; and a package has no use for that number:
+                                ; windows open on the primary, wm_fit confines
+                                ; a frame to one display, and everything a
+                                ; package draws is window-relative. Answering
+                                ; the union made Arkanoid lay itself out for a
+                                ; 1360px screen and then draw 115px of that
+                                ; layout onto the OTHER MONITOR.
+                                ;
+                                ; The slot was already answering the primary
+                                ; for CX below - the dock is chrome and chrome
+                                ; is the primary's - so it was mixing the two
+                                ; and could not have been right either way.
+                                ; Identical on every one-display machine, where
+                                ; [vid_pwm1]+1 IS [vid_w].
     mov cx, [vid_dock_y0]
     mov dl, [vid_kind]
     mov dh, 4

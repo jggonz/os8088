@@ -390,7 +390,16 @@ mc_adapter:
     push bx
     push cx
     push dx
-    call OSAPI_VIDEO                ; DH = bits per pixel
+    mov bx, [mc_win]                ; ONE QUESTION FOR BOTH FACTS, and it is
+    call OSAPI_FSX_CAPS             ; about OUR WINDOW'S DISPLAY: AX = the
+    mov [mc_caps], ax               ; Mode X mask, DL = that display's VID_*
+    mov dh, 4                       ; kind, which is also how deep it is.
+    cmp dl, VID_VGA                 ; OSAPI_VIDEO's DH answers about the
+    je .bpp                         ; PRIMARY (SPEC.md 39.2.1) - right for
+    mov dh, 1                       ; sizing a window and wrong for this, and
+.bpp:                               ; taking both from one call is what keeps
+                                    ; mc_mono and mc_caps from disagreeing
+                                    ; about which monitor this game is on
     mov byte [mc_mono], 0
     mov byte [mc_ecoarse], 0
     mov byte [mc_expfr], MC_EXPFR   ; bss is zeroed, and a life of zero kills
@@ -408,11 +417,10 @@ mc_adapter:
     mov byte [mc_expfr], MC_EXPFR3
 .fine:
 
-    call OSAPI_FSX_CAPS             ; can this adapter set Mode X? The menu
-    mov [mc_caps], ax               ; item is renamed to say WHY not, and
-    mov dx, mc_s_xcmd               ; mc_cmd_modex refuses with the same bit -
-    test ax, 1 << FSXM_MODEX        ; one predicate for both (SPEC.md 47/53.4)
-    jnz .fsxok
+    mov ax, [mc_caps]               ; ...and the menu item says WHY not, from
+    mov dx, mc_s_xcmd               ; the mask read above. mc_cmd_modex
+    test ax, 1 << FSXM_MODEX        ; refuses with the same bit - one
+    jnz .fsxok                      ; predicate for both (SPEC.md 47/53.4)
     mov dx, mc_s_xcmdn
 .fsxok:
     mov [mc_mi_game+6], dx
@@ -1374,9 +1382,55 @@ mc_worker:
     jg .frame                       ; deadline, so the next short frame catches
     mov [mc_due], ax                ; up. Hopelessly late and the deadline is
 .frame:                             ; re-anchored, or it runs away and this
-    call mc_update                  ; loop never sleeps again
+    call mc_dispck                  ; loop never sleeps again
+    call mc_update
     call mc_render
     jmp .loop
+
+; -----------------------------------------------------------------------------
+; mc_dispck - has our window moved to a display that answers differently?
+; preserves all registers
+;
+; SPEC.md 39.18.2. mc_adapter's three facts - mc_mono, mc_ecoarse and mc_caps -
+; are questions about a DISPLAY, and on an extended desktop a window moves
+; between them: dragged from a VGA to a Hercules this game would go on drawing
+; SPEC.md 48.8's fine explosion ramp on a 1bpp card, which is the measured
+; unplayable case, and its Mode X item would go on offering a mode that card
+; does not have. mc_onresize (SPEC.md 11.98) catches an adapter CHANGE and a
+; move is not one.
+;
+; So it is asked every frame, which is Arkanoid's SPEC.md 44.8 pattern and for
+; the same reason: there is no "your window moved" callback, the worker is
+; already running, and the call is a far call plus two point-in-rect tests
+; against a 55 ms tick. mc_adapter runs only when the answer actually differs.
+;
+; NOT inside a bracket: [mc_fsx] says the mode is foreign and [mc_fs] that the
+; SPEC.md 11.2 surface is up, and in the first the caps are the bracket's
+; rather than the desktop's. The worker does not run inside an fsx bracket at
+; all (no FSXF_KEEPWORKER), so this is belt and braces for the same-mode case.
+;
+; THE CAPTION STORE IS SAFE FROM HERE even though the UI task reads it when it
+; draws the menu: it is one word, and an 8086 recognises an interrupt only at
+; an instruction boundary, so a task switch cannot land inside the store.
+; -----------------------------------------------------------------------------
+mc_dispck:
+    push ax
+    push bx
+    push dx
+    cmp byte [mc_fsx], 0
+    jne .out
+    mov bx, [mc_win]
+    or bx, bx
+    jz .out
+    call OSAPI_FSX_CAPS             ; AX = the mask, DL = that display's kind
+    cmp ax, [mc_caps]
+    je .out                         ; the same display, or one that answers
+    call mc_adapter                 ; the same: nothing to re-decide
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; mc_update - advance one frame. NO lock held, nothing drawn.

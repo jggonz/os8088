@@ -47,6 +47,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88marty                                            # noqa: E402
+
+# ...the kind/card maps and the two pairings live in dispcp, which is where
+# every dual-display test already shares its one copy of a fact.
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
@@ -118,7 +121,44 @@ def lit(px):
 
 def dark(m, card):
     """Is this monitor showing nothing? Two adapters, two answers, and the
-    disjunction is what covers both (SPEC.md 39.18.1). Returns (bool, why)."""
+    disjunction is what covers both (SPEC.md 39.18.1). Returns (bool, why).
+
+    ...EXCEPT THAT ONE OF THE TWO CANNOT BE ASKED ON THIS EMULATOR, and saying
+    so is better than a red result nobody can act on. MartyPC's MDA does not
+    model 3B8h's VIDEO ENABLE bit. Measured by driving the port from the host
+    on a Hercules that os8088 has PROGRAMMED (an unprogrammed one reads 0
+    frames and 0 lit whatever you write to it, which is what the first attempt
+    at this measured), the three values are:
+
+        3B8h = 0x0A   graphics + video ON     75 frames/0.7s, 367,488 lit
+        3B8h = 0x02   graphics, video OFF     76 frames/0.7s, 367,488 lit
+        3B8h = 0x00   text, video off          0 frames/0.7s
+
+    `0x02` is what vid_blank_kind writes to blank the card, and it is
+    INDISTINGUISHABLE from `0x0A` here - same raster, same pixels. So no
+    observation of this card can tell a blanked Hercules from a live one, and
+    what stops its raster in MartyPC is leaving GRAPHICS mode (bit 1), not
+    disabling VIDEO (bit 3).
+
+    The kernel is right and the model is short: bit 3 is the video enable on
+    every MDA and HGC, and gating it is what SPEC.md 39.18.1 specifies and what
+    keeps the CRTC running so the monitor never re-acquires. Writing 0x00
+    instead would "pass" here and is the defect vid_blank_kind's own header
+    records being fixed - it does not blank the card, it puts it into MDA TEXT
+    mode with a 6845 still carrying 720x348 timings. (Note the 0x00 row above
+    has no lit count: `fbuf` on a stopped card hands back the last frame it
+    rasterised, so it reads as a perfectly ordinary desktop.)
+
+    So a MONO secondary is reported and not judged. A CGA one still is: 3D8h
+    bit 3 clear takes its lit count to 0 with the CRTC running, which the model
+    does show. The 5150 is where the mono half lands (docs/FIELD-MACHINES.md) -
+    it is one of the three things only a real monitor can answer.
+
+    tests/fsxdisp.py's header carries a "3B8h bit 3 clear -> 163 frames/s
+    becomes 0" from before that fix landed (a32be1d predates e3e0fb2), so it
+    is a measurement of 0x00 wearing bit 3's name. Its Hercules leg is
+    measuring the model rather than the kernel too, and has not been re-run.
+    """
     idx = card["idx"]
     a = [c for c in m.cards() if c["idx"] == idx][0]["frames"]
     time.sleep(1.0)
@@ -128,6 +168,9 @@ def dark(m, card):
         return True, "stopped scanning (0 frames/s)"
     if n == 0:
         return True, "scanning nothing (%d frames/s, 0 lit)" % f
+    if card["type"] == "mda":
+        return None, ("%d frames/s with %d lit - NOT JUDGED: MartyPC's MDA "
+                      "does not model 3B8h bit 3 (see dark())" % (f, n))
     return False, "%d frames/s with %d pixels lit" % (f, n)
 
 
@@ -136,7 +179,7 @@ def main(argv):
     ap.add_argument("--machine", default="os8088_5150_both_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
     ap.add_argument("--apps", default="build/apps360.img")
-    ap.add_argument("--primary", choices=("auto", "herc", "cga"),
+    ap.add_argument("--primary", choices=("auto", "herc", "cga", "vga"),
                     default="auto",
                     help="which card the KERNEL drives; anything but auto "
                          "means a VIDEO= build, and picks the boot gate's card")
@@ -162,16 +205,14 @@ def main(argv):
     gate = None
     if a.primary != "auto":
         gate = [c for c in cards
-                if c["type"] == ("mda" if a.primary == "herc"
-                                 else "cga")][0]["idx"]
+                if c["type"] == dispcp.PRIMARY_CARD[a.primary]][0]["idx"]
     m.run()
     os88marty.settle(m, gate=os88marty.desktop_up, card=gate)
 
     try:
         v = VD(m)
         say("at boot: %s" % v)
-        pri = [c for c in cards if c["type"] == ("mda" if v.kind == 1
-                                                 else "cga")][0]
+        pri = [c for c in cards if c["type"] == dispcp.KIND_CARD[v.kind]][0]
         sec = [c for c in cards if c is not pri][0]
         if gate is None:
             gate = pri["idx"]
@@ -179,10 +220,11 @@ def main(argv):
             % (pri["idx"], pri["type"], sec["idx"], sec["type"]))
 
         # --- 1: the default is Single, and the other monitor is dark --------
-        if v.avail != 6:
-            fail.append("[vid_avail] is %#x, not 6 - this machine is not the "
-                        "Hercules+Cga pairing everything below is about"
-                        % v.avail)
+        if v.avail not in (dispcp.AVAIL_HERC_CGA, dispcp.AVAIL_VGA_HERC):
+            fail.append("[vid_avail] is %#x, and this machine is neither of "
+                        "the two-card pairings everything below is about: "
+                        "%#x is a Hercules and a CGA, %#x a VGA and a Hercules"
+                        % (v.avail, dispcp.AVAIL_HERC_CGA, dispcp.AVAIL_VGA_HERC))
         if v.ndisp != 1 or v.dmode != 0:
             fail.append("a machine that has never been asked came up with "
                         "ndisp=%d dmode=%d - SPEC.md 39.19.1 says Single"
@@ -192,7 +234,7 @@ def main(argv):
                         % (v.desk, v.chrome))
         ok, why = dark(m, sec)
         say("the second card at boot: %s" % why)
-        if not ok:
+        if ok is False:
             fail.append("the second card is live on a Single machine - it is "
                         "showing whatever was on it before os8088 booted")
         # ...and this one cannot tell "blanked" from "never programmed", which
@@ -234,7 +276,7 @@ def main(argv):
                             "it stays the primary's %s"
                             % (which, v.chrome, (d0["cw"], d0["ch"])))
             ok, why = dark(m, sec)
-            if ok:
+            if ok is True:
                 fail.append("the second card is dark while extended: %s" % why)
 
         # --- 3b: swapping the PRIMARY is the other two arrangements --------
@@ -295,7 +337,7 @@ def main(argv):
                         % (v.desk, v.chrome))
         ok, why = dark(m, sec)
         say("the second card after 'single': %s" % why)
-        if not ok:
+        if ok is False:
             fail.append("'single' left the second card live: %s" % why)
         # ...and every window has to be back on a screen that exists. The
         # Control Panel is the one on screen, and it is the one that would be

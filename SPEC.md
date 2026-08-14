@@ -8098,6 +8098,35 @@ says so in capitals and this had to learn it again): Solitaire seeds from
 different card layouts. `[osapi_seed]` is written and **N** pressed before the
 drag, exactly as `solcheck` does.
 
+##### 11.96.12.1 …and the two displays must agree about DEPTH
+
+`wm_dc_take` refuses when the display holding the window's **old** origin and
+the one holding its **new** origin answer `vid_disp_planes` differently.
+
+It is the byte-phase refusal above, one axis over. That one declines a
+horizontal drag whose delta is not a multiple of 8, because `gfx_save` lays
+the buffer out from `x1` rounded down to a framebuffer byte and the pixels can
+only be replayed where they sit at the same offset inside their byte. **Depth
+is the same argument about planes**: a window banked on a Hercules is
+`w × h / 8` bytes of one plane, and replaying it onto a VGA writes four, so
+the buffer means something else where it lands — and mode 12h renders 1bpp
+bytes as colour.
+
+**Reported from the field on 86Box** (`XTDualVideoVGA`, VGA primary with a
+Hercules secondary): drag a Disk window onto the Hercules, then back onto the
+VGA, and its content arrives as magenta and cyan noise inside a correct frame.
+The drags before it are correct for reasons worth knowing — the straddling one
+and the one *onto* the Hercules both have a source that straddles, so
+§11.96's `vid_span_one` refuses the cache and the window redraws in full.
+**Only a drag whose source is wholly on one card and whose destination is
+wholly on the other reaches this**, which is why it reads as intermittent.
+
+Cost: `.text` +28, no rung crossed, and **one full repaint on the one drag in
+a session that crosses a depth change**. **Hercules+CGA can never reach it** —
+both displays are 1bpp, so the two answers are always equal and the test is a
+compare; the whole body is inside `%ifdef KERN_BIG`, so `kern_small`, which
+has one display by construction, does not assemble it at all.
+
 #### 11.96.13 …and the drop is moved onto the phase, not left to chance
 
 Reported from the field as *"drag and drop window moves were supposed to use
@@ -25041,6 +25070,72 @@ Three sites are worth knowing because they are not obviously renderer:
   against is `vga_rect_setup` clipping — a renderer question wearing a window
   manager's clothes.
 
+#### 39.2.1 …and `OSAPI_VIDEO` answers the PRIMARY, not the desktop union
+
+Slot 0x0158 returns the **primary display's** width and height
+(`[vid_pwm1]+1`, `[vid_phm1]+1`), never `[vid_w]`/`[vid_h]`. On every machine
+with one display those are the same words; on an extended desktop `[vid_w]` is
+the whole virtual desktop, and **a package has no use for that number**:
+windows open on the primary, `wm_fit` confines a frame to one display, and
+everything a package draws is window-relative.
+
+**The slot was already answering the primary for CX** — the dock is chrome and
+chrome is the primary's (DUAL-DISPLAY-PLAN §3.1) — so it was mixing the two
+and could not have been right either way. That is the argument; the field
+report is what found it.
+
+**Reported on 86Box**, VGA primary with a Hercules secondary: launch Arkanoid
+and it draws part of itself on the *other monitor*. It sizes and centres
+itself from this slot, so it laid out for a **1360px** screen, `wm_fit` then
+clamped its window to the primary (x 511..638, 128 wide), and the layout it
+kept drawing was ~242px — the overflow landing across the seam. Measured in
+the harness: the window is wholly on display 0 and launching it changes
+**1,572 pixels on the secondary**, in a bounding box of x 0..114 — and a
+forced `wm_paint_all` reproduces them, so it is the app's own drawing and not
+a stale-pixel artifact.
+
+**Every package that sizes itself from this slot had the same latent bug**, so
+the fix belongs here rather than in Arkanoid: Missile Command, Paint,
+Solitaire and Tamegram all ask the same question and would all have laid out
+for a desktop none of them can draw on.
+
+#### 39.2.2 …and so does `[vid_clk_hx]`, which is why the machine froze
+
+The same disease one layer down, and it is a **buffer overrun** rather than a
+misplaced picture. `vid_apply` derives the menu bar's clock cell from the
+screen width:
+
+```
+    vid_clk_hx = (w - 8 - MENU_CLK_W - 6) & ~7
+```
+
+and `w` was `[vid_w]` — the **desktop union**. The routine's own comment three
+lines above says what the right answer is: `vid_pw`/`vid_pwm1` are the
+primary's, *"what every strip measures itself against"*, and the menu bar is a
+strip. `[vid_wm1]`/`[vid_wm8]` beside it stay the desktop's and are right to —
+the pointer clamps across the whole of it.
+
+**The arithmetic is the whole diagnosis.** On a 1360px extended desktop
+`vid_clk_hx` is **1152**, which is **cell 144** of `menu_bcell` — a buffer of
+`MENU_BCMAX` = **62**. The primary's 640 gives cell 54, comfortably inside.
+Composing the bar therefore ran ~80 bytes past the end of a `.bss` buffer,
+wrecking whatever follows, and the machine died somewhere else entirely with
+`SP` outside `.lowbss` and `DS` = 0.
+
+**Reported from the field**: extended desktop, VGA primary with a Hercules
+secondary; a Disk window, Note Pad dragged to straddle the seam, then a
+**second** click on an already-selected row — the system freezes, tick and
+all. Both the overlapping and non-overlapping arrangements reach it, which is
+what says the covering window was never the mechanism. The stack names
+`toast_place`, reached through `ui_task.chk_toast → toast_pass →
+menu_draw_bar → menu_bar_text`, and §59.7 records that same routine hanging
+the machine once before for the neighbouring reason — a strip wider than the
+segment it is composed into.
+
+**It was reachable before any of this branch's work and is not new**; what
+changed is how often the bar is recomposed, so a repaint path that had been
+rare started reaching it every time.
+
 ### 39.3 The parameterized software renderer
 
 **There is no second graphics driver.** `softgfx.inc` (§32) is a latch-free,
@@ -26111,6 +26206,54 @@ answer and the reason `GFX_SCROLL 256x128` reads 368us in a straddled
 keep theirs too (§39.14.5): a line's unit is a pixel, and resolving a display
 per pixel is the inner loop §5.6.6 exists to keep tight.
 
+#### 39.14.7.1 …and the gate §39.14.7 declined, priced by the field
+
+*"Something hurt paint performance. Build 674 renders `OS8088.GIF` in roughly
+a second, on 704 it takes more than 10."* Paint's binary is **byte-identical**
+between the two (`md5sum build/paint.o88`), so it is kernel-side; and it needs
+the desktop **extended**, with Paint's window wholly on one monitor.
+
+**§39.14.7 got the cost of its own decision wrong, and said so in the shape of
+the sentence**: *"What it costs is per RUN and only on a two-card machine:
+`gfx_disp_run` instead of `GFXDISP`'s two compares, against a call that
+already costs ~756us"*, followed by *"That per-run figure is MODELLED and is
+not a field number"*. It is not what it costs. Removing the whole-shape hook
+left `gfx_blit4`'s own guard reading
+
+```
+    cmp byte [vid_ndisp], 1
+    ja .slow            ; two displays: a run splits itself through gfx_fill
+```
+
+— and `.slow` is not a slower way of writing a run, it is **giving up §5.4.1's
+fast path altogether**. A blit on a two-display machine stopped writing runs
+straight into the framebuffer (the 1bpp row decoder, or the planar span writer
+whose Enable Set/Reset is armed once for the whole call) and started paying a
+full `gfx_fill` per run, each with its own ~756us of arrival. That is a
+factor, not a few per cent.
+
+**The gate is taken now, and it is the one that was declined**: if the
+destination block lies wholly inside one display (`vid_span_one`), take
+`GFXDENTER` and keep the fast path; if it straddles, leave the destination
+virtual and let each run split itself exactly as §39.14.7 built it. Two things
+make it smaller than the version that was weighed. **Only `AX`/`BX` need
+translating** — `CX` and `DX` are a width and a height, which no display
+origin can move — so there is no `GFXDORG` and no second opinion about the
+block's extent. And **the straddling case is not a new path**: it is the path
+that was already there, reached by falling through.
+
+`[gfx_blit_hk]` is the byte, and it exists for `.out` rather than for the
+drawing: the two early guards (`CX` or `DX` zero) reach `.out` without having
+taken the hook, so a `GFXDLEAVE` keyed on anything else would bring down a
+nest this call never put up.
+
+**Measured on a cycle-accurate XT with a VGA and a Hercules in it**, the same
+scripted open of `OS8088.GIF` through the association: one display **34.44 s**,
+extended **48.62 s**, and extended with this gate **33.35 s** — so the
+extension's cost is back inside the run-to-run noise of the one-display
+figure, where it had been 41% of the whole operation, and the drawing half of
+it, which is what the field was watching, is what a one-display machine does.
+
 #### 39.14.8 `gfx_save` / `gfx_restore` — the two writers the audit missed
 
 §39.14.5's rule is **a path that writes the framebuffer without passing a
@@ -26263,6 +26406,86 @@ AND clamped to the display — a clip rect may span the seam, and a box reaching
 past this card's last column would have `gfx_lstep_mono` addressing off the end
 of its own framebuffer. A one-display machine pays two adds per resolve.
 
+#### 39.14.10 `[vid_mono]` IS A QUESTION ABOUT A DISPLAY — the reboot
+
+*"Booted with extended desktop on VGA primary, Hercules secondary. Opened a B:
+Disk window, opened Note Pad, dragged Note Pad to straddle, single-clicked in
+the middle of the Disk window. System freezes."* — and, three times in a row on
+a second attempt, **resets**. It is the same defect either way, and it is the
+worst one this branch has produced: the kernel was overwriting its own code.
+
+**The rule is §39.14.1's, one level up. `GFXDISP`/`GFXDENTER` goes ABOVE the
+`cmp byte [vid_mono], 0` dispatch, because on a two-card desktop
+`[vid_mono]` is not a property of the MACHINE — it is a property of the
+display the renderer is currently pointed at, and only the display hook points
+it.** Every other primitive already had that order (`gfx_fill`,
+`gfx_fill_gray`, `gfx_fill_pat`, `gfx_xor_fill` put `GFXDISP` between their
+`GFXCLIP` and their `_raw` body; `gfx_line`, `gfx_save` and `gfx_restore` put
+`GFXDENTER` at the top). **`gfx_xor_rect` and `vga_xor_rect_vram` did not**:
+they tested `[vid_mono]` first and jumped to `gfx_xor_rect_sw`, whose
+`GFXDENTER` — added by §39.14.5, correctly, for a different half of the same
+routine — ran *after* the renderer had already been chosen.
+
+**What that costs is not a mis-drawn rectangle.** §39.14.3 deliberately does
+not restore the display, so the flag answers about whichever display the last
+primitive left current. A rect on the VGA dispatched while the Hercules was
+still active chose the SOFTWARE renderer; `GFXDENTER` then switched the live
+block to the VGA underneath it, where `[vid_rseg]` is **0** because a VGA has
+no software-renderer target. `sw_col` computed its destination from that zero
+and wrote through `ES:DI = 0960:8FC1` — flat `0x125C1`, which is
+`COLD_SEG:45C1`, which is `fm_layout`. **The kernel drew a dock tile's active
+ring into the file manager's own code.**
+
+**Everything that had been investigated for a fortnight was downstream of
+that.** One click left 34 differing runs in `.cold` at a stride of **80** — a
+640-pixel 1bpp scan line, which is what said it was a *drawing* operation and
+not a stray pointer. What the pixels landed on then ran: `9A B6 BE 60 00`
+(`call far KERNEL_SEG:cw_wm_content`) became `98` (`cbw`) and the bytes after
+it decoded as something else entirely, DS went to 0, and `fm_layout`'s stores
+— `mov [fm_lscr], ax` at DS-relative `0xD3B2` — landed 0x600 bytes low, which
+is exactly `ui_rebootq`. `ui_task` then read a non-zero restart flag and
+rebooted the machine honestly. Whether a given run froze or rebooted is only
+whether the garbage that landed on that byte was non-zero and whether the UI
+task got another pass.
+
+**Four instruments were wrong before one was right, and the reasons are worth
+keeping.** A `mem` breakpoint on `ui_rebootq` trips on the bus cycle and the
+CPU then runs on to the next instruction boundary — through `mov byte
+[ui_rebootq], 0` on the one pass that mattered — so both the obvious filters,
+CS:IP and the flag's own value, called the fatal pass benign; the first catch
+it produced reported `sch_isr`'s entry with an interrupt frame whose return
+was `ui_task+5`. An exec breakpoint fires on the 8088's **prefetch**, so one
+at `ui_task+7` stopped with IP still on the `je` at `+5` and ZF=1. Patching
+the flag's read to leave the byte it saw in AL is what finally answered the
+question — **AL = 0xC8**, so the flag was genuinely non-zero and was not the
+`1` that `ui_reboot_post` writes. And a `.text` diff against `kernel.bin` has
+a 283-byte noise floor, because `.text` is full of initialised data;
+**`.cold` has none, by §2.6 rule 1 and `tools/os88ovlchk.py`, so every byte of
+it that differs from the built image is corruption.** That is the sharpest
+memory check in the tree and `tests/dispcold.py` is it.
+
+**The fix is the ordering and nothing else.** Both public entries push their
+frame, `GFXDENTER` + `GFXDORG`, and call `gfx_xor_rect_raw`, which makes the
+renderer choice in the active display's own coordinates; `gfx_xor_rect_sw` is
+gone, because it existed only to be the mono target of the two dispatches and
+a second place that owns the hook is a second place that can disagree about
+where it goes. It stays whole-shape rather than split, for §39.14.5's reason:
+an outline is not the intersection of its bounding rect with anything, and the
+four strips either renderer decomposes into are already inside the nest.
+
+**Measured: `.text` −2 bytes, no rung crossed.** Verified three ways.
+`tests/dispcold.py` — six clicks on the reproduction, **0 writes into `.cold`
+and 0 differing bytes**, against 34 differing runs from a single click before.
+`tests/dispfreeze.py` — the field's own sequence, all six clicks alive at
+~1,350 `ui_task` passes each, against a freeze at **0** passes on click 1.
+And `tests/xorrect.py` — because `gfx_xor_rect` draws the drag outline on
+**every** machine, an identical scripted CGA session (menu, live drag outline
+captured mid-drag at two positions, release) through this kernel and the one
+before it: **0 differing framebuffer bytes** across all five captures. A
+one-display machine was expected to be untouched by construction, the hook
+macros being empty in kern_small and one compare in kern_big — that is the
+claim this checks rather than asserts, and the routine did also lose a
+duplicate `cur_unlazy` and gain two registers of preservation.
 
 #### 39.14.8.1 …and the RESTORE had to learn the same question
 
@@ -26661,11 +26884,121 @@ exactly that bug and could only see it on a Hercules-primary build).
 
 **`fsx_caps` answers for the display the asking window is on.** Inside a
 bracket that is `[vid_kind]`, which §39.18 has already moved; outside one it
-is the frontmost window's display, because an app greying its own mode menu
-(§47) is frontmost by construction. On a Hercules+CGA machine that is `0x011`
-or `0x00F`, so Mode X is refused either way — and `fsx_mode` re-checks the
-same bit against the live `[vid_kind]` once the bracket has been entered,
-which is the answer that binds.
+is the display holding the window it was **handed** — see §39.18.2, which is
+where the "frontmost by construction" version of that sentence went wrong. On
+a Hercules+CGA machine the answer is `0x011` or `0x00F`, so Mode X is refused
+either way — and `fsx_mode` re-checks the same bit against the live
+`[vid_kind]` once the bracket has been entered, which is the answer that
+binds.
+
+#### 39.18.3 The collapse belongs to the MODE SET, not to the bracket
+
+Two field reports, both with Missile Command's centre on the Hercules of a
+VGA-primary desktop: going fullscreen *"gated the mouse to the right edge of
+the herc screen"*, and coming out *"only drew the vga side"*. They are one
+cause, and a third defect nobody had reported yet came with them.
+
+**`fsx_run` collapsed the machine to one display unconditionally**, and
+§53.7's same-mode bracket promises the opposite in as many words: *"exclusive
+but same mode … no `fsx_mode` call, so the drawing slots stay legal and the
+geometry is still the desktop's"*. It was not. `vid_fsx_enter` publishes the
+bracket display's geometry, sets `[vid_ndisp] = 1` and puts the origin at
+`(0,0)` — a machine that is one display at the virtual origin — while
+**everything that lives in virtual coordinates stays where it was**. On the
+secondary display that is a 640-pixel lie:
+
+- **The pointer.** `mouse_x` is virtual (§39.15) and was at 940. With
+  `[vid_ndisp] = 1`, `mou_clamp` takes the per-axis path and clamps into
+  `0..[vid_wm1]` = `0..719`, and `cur_geom` subtracts an origin of 0 — so the
+  arrow is drawn hard against the right edge of a 720-pixel card and the
+  virtual position is destroyed. Measured across one round trip: **940 → 360 →
+  320**, which is to say the pointer ends the trip on the *other monitor*.
+- **The window's rect.** `wm_fs_setrect` gives the fullscreen window its
+  display's rect in virtual coordinates — `x 640..1359` — and the app then
+  draws there into a framebuffer 720 wide. Missile's fullscreen Hercules shows
+  the HUD **twice**, once at each interpretation, and 27,225 lit pixels
+  against the desktop's 39,615.
+- **The way back.** `wm_paint_all` after the bracket left the Hercules holding
+  the game's own field with a window frame drawn over it, 15px off.
+
+**So the collapse moved to `fsx_mode`, where a mode is actually set** — which
+is the only thing that makes the other displays' geometry meaningless. A
+bracket that sets no mode now changes nothing about displays at all, and every
+virtual coordinate keeps working because none of them was ever wrong. Three
+orderings hold it up. `fsx_run` still resolves the display and banks it
+(`fsx_wdisp`) — that is the one display fact a bracket establishes, and
+`fsx_mode` cannot re-derive it, having no window. The **caps test runs before
+the collapse**, against the bracket display's kind read out of its `vid_ctx`
+record rather than `[vid_kind]`, so a refused mode leaves the desktop exactly
+as it found it. And `vid_fsx_enter` is idempotent at `[vid_ndisp] <= 1`, so a
+second `fsx_mode` call is free and reads `[vid_kind]` directly, the collapse
+having already made it that display's.
+
+**`fsx_caps` lost a test to this rather than gaining one.** Its
+`[fsx_task] != 0xFF` shortcut — *inside a bracket `[vid_kind]` has already
+moved and is the answer* — is exactly true when the machine has collapsed, and
+`[vid_ndisp] <= 1` already says so one line above. Dropping it leaves a
+same-mode bracket falling through to the window logic, which is the correct
+answer there and was the wrong one before.
+
+**What a same-mode bracket gives up is the darking of the other cards, and it
+should never have had it**: the desktop on the other monitor is still valid and
+still on screen. The app took the machine, not the monitors.
+
+#### 39.18.2 `fsx_caps` takes the window; the APP asks again when it moves
+
+*"Missile Command would not go into Mode X"*, on a VGA-primary machine with a
+Hercules beside it. Mode X is gated on the **adapter and nothing else** —
+`fsx_capstab` is indexed by `VID_*` (VGA `0x01EF` carries bit 8, HERC `0x0011`
+and CGA `0x000F` do not) and neither `fsx_caps` nor `fsx_mode` consults the
+CPU tier. What was wrong is *which display* got asked.
+
+**`fsx_caps` used to GUESS the asking window, and the guess was `wm_top`.**
+The reasoning was that an app greying its own mode menu is frontmost by
+construction — which is true **when the answer is used** and false **when the
+question is asked**. A package's entry proc runs before `OSAPI_WM_CREATE`, so
+`wm_top` is still the window it was *launched from*. Measured on one machine
+in one session: Missile launched from a Disk window on the VGA banks
+`mc_caps = 0x01EF`, and from the same Disk window dragged onto the Hercules
+banks `0x0011` — its own window opening on the VGA either way, so the menu
+item reads `Mode X (Vga)` on a machine that has one (`tests/dispmodex.py`).
+
+**So the slot takes `BX` = the window to ask about**, 0 meaning "whatever is
+frontmost" for a caller that genuinely has none. `wm_disp_of` then answers the
+question it always answered — **centre, then origin, then the primary**
+(§39.17) — so a straddling window belongs to the display holding more of it,
+the same rule `wm_fullscreen` and `wm_zoom` already ask. It is a contract
+change at a live number, which §20.8 rule 4 permits while this tree hosts
+every caller: two callers, both rebuilt.
+
+**That is half of it, and the app owns the other half.** A window MOVES
+between displays, and nothing re-asks: `mc_onresize` (§11.98) catches an
+adapter *change* and a drag is not one. So the three facts `mc_adapter`
+decides — `mc_caps`, `mc_mono` and `mc_ecoarse` — were per-display facts held
+as per-machine facts, which is §39.14.10's class exactly. `mc_dispck` asks
+every frame from the worker, which is Arkanoid's §44.8 pattern and for the
+same reason: there is no *your window moved* callback, the worker is already
+running, and the call is a far call plus two point-in-rect tests against a
+55 ms tick. `mc_adapter` re-runs only when the answer differs.
+
+**The depth had to come from the same call**, or the re-run would recompute
+the old answer: `OSAPI_VIDEO`'s `DH` is the **primary's** (§39.2.1), which is
+right for sizing a window and wrong for this — a Missile dragged onto the
+Hercules kept drawing §48.8's fine explosion ramp on a 1bpp card, the measured
+unplayable case. `fsx_caps` already returns `DL` = the answering display's
+`VID_*` kind, so one call gives both and they cannot disagree about which
+monitor the game is on. The mask/kind mapping is a bijection over the three
+rows, which is what lets `mc_dispck` compare the *mask* and know the kind
+followed it.
+
+**Two things it is safe to write from the worker**, and both are worth stating
+because a callback would normally own them. The caption pointer
+(`mc_mi_game+6`) is read by the UI task when it draws the menu, and the store
+is one word: an 8086 recognises an interrupt only at an instruction boundary,
+so a task switch cannot land inside it. And `mc_dispck` is skipped while
+`[mc_fsx]` is set, because inside a bracket the caps are the bracket's rather
+than the desktop's — belt and braces, since Missile takes no
+`FSXF_KEEPWORKER` and its worker does not run there at all.
 
 ### 39.19 Single or Extend, and where the second display sits
 
@@ -26740,6 +27073,82 @@ convention already being violated.
 `vid_disp_find`'s unsigned compares, `vid_desk_union`'s bounding box from
 (0,0) and `mou_clamp` all rest on. There is no signed virtual coordinate
 anywhere and this is why.
+
+### 39.20 Going back to text names the CARD, because int 10h cannot
+
+`vid_text` is how os8088 hands the machine back — `CMD_REBOOT` before its
+`int 19h`, and §53.4's `FSXM_TEXT80` bracket. It asked for a *mode*: mode 3
+on a colour primary, mode 7 on a Hercules one. **"Mode 7" and "program the
+mono card" are the same statement only while the machine has one mono card**,
+and that stopped being true the moment a VGA could sit beside a Hercules.
+
+A VGA's option ROM takes `int 10h` over at POST, and its mode 7 is the
+**VGA's own** mono text: aperture at **B0000**, CRTC at **3B4**. Both are
+where the real Hercules is. Two cards driving one address space is exactly
+what §39.6 leaves 3BFh bit 1 clear to avoid, arrived at from the other end —
+and on the way out of the GUI, with the next instruction being a bootstrap.
+
+**§39.11's `vid_equip` is the same shape one machine class down, and it does
+not reach this one.** On Hercules+CGA the equipment flag at 40:10 really does
+name the card, because an XT ROM's mode set is equipment-driven — that is
+what its own header is about, a machine that rebooted to a dead mono monitor
+until the flag was put back. A VGA BIOS keeps its own state and is not talked
+out of itself by a flag. So on this pairing the only way to program the mono
+card is **to program the mono card**.
+
+`vid_mono_text` is that, and its contract is a refusal as much as an action:
+
+| machine | answer |
+|---|---|
+| a VGA in it (`[vid_avail]` bit `VID_A_VGA`) | programs the 6845 from `vid_6845t`, clears B0000 to `0x0720`, 3B8h ← `0x29`, **CF = 1: do not call int 10h at all** |
+| anything else — lone MDA, lone Hercules, Hercules+CGA | **CF = 0**, having touched nothing: the ROM's mode 7 *is* this card |
+
+Four things are load-bearing.
+
+- **The blank and the graphics lock-out stay in front of both paths.**
+  3B8h ← 0 then 3BFh ← 0 are this card's registers whichever way the call
+  goes, and the ROM's mode 7 reprograms the 6845 with video live otherwise.
+- **One loop, two tables.** `vid_6845_prog` is `vid_setmode`'s CRTC loop
+  factored out; `vid_6845t` is IBM's mode 7 values with **R10 = 0x20, cursor
+  off**, because neither caller wants one — the fsx bracket hides it with an
+  `int 10h` that on this machine talks to the other card, and the reboot path
+  is only ever taken when a VGA is present, so nothing will print here.
+- **40:49 and 40:63 are deliberately NOT written.** They describe the card
+  `int 10h` drives, which here is the VGA; writing "mode 7 at 3B4" there
+  points the ROM at a card it has never heard of.
+- **It is a pre-existing defect, not the extended desktop's.** Reaching it
+  needs no second display at all — a VGA and a Hercules in one machine,
+  §31.10's Display page used to make the Hercules primary, then a reboot.
+  `vid_dual_ok` gates the *desktop* and never `vid_switch`. Both kernel
+  builds carry the fix for that reason.
+
+#### 39.20.1 …and the card that is going to print gets a mode too
+
+`int 19h` is a **bootstrap, not a POST**: it re-reads the boot sector and
+jumps, resetting no video. So what prints next comes out of `int 10h`, and on
+a machine with a VGA in it that is the VGA — whatever os8088 was using.
+Leaving it in mode 12h means the next boot's messages are rendered as
+graphics over a stale desktop.
+
+`vid_reboot` is `vid_text` plus that handoff: when the primary is not the VGA
+and the machine has one, `vid_cga_equip` then `int 10h AX=0003h`. It is the
+same manoeuvre §39.9 already makes to reach a second card, and DOS's own
+`MODE CO80`. Three properties:
+
+- **The VGA's mode 3 cannot disturb the mono card** — different aperture,
+  different CRTC — and it runs **after** `vid_text` so that the last writes
+  to the mono card are ours whatever a ROM does in between.
+- **`CMD_REBOOT` calls this; fsx calls `vid_text`.** Inside a bracket the
+  other display has been darked (§39.18) and a mode set would light it with
+  an empty text screen, which is the one thing that path exists to prevent.
+- **On every machine with no VGA it is `vid_text` and one compare.**
+
+**What it does not promise is that the boot appears on the monitor the user
+was looking at.** On a VGA+MDA machine it cannot: the BIOS owns `int 10h` and
+prints on the VGA, and "which card is primary" is an os8088 idea the next
+operating system has never heard of. What the user gets is both monitors in a
+sane state — a clean text page on the mono card instead of a frozen graphics
+desktop, and a legible boot on the colour one.
 
 ## 40. apps/fractal — the progressive renderer and its restore cache
 

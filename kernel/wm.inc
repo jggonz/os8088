@@ -5638,6 +5638,45 @@ wm_su_fn: dw 0                  ; ...which one the loop in hand is on
 wm_su_fsz: dw 0                 ; ...and how many buffer bytes it occupies
 wm_su_scrb: dw 0                ; where the fragments end and 11.96.2's edge
 wm_su_scrsz: dw 0               ; scratch begins, and how big that is
+%ifdef KERN_BIG
+wm_su_pw: dw 4                  ; HOW DEEP THE DISPLAY THIS CACHE IS ON IS, in
+                                ; planes, which is not [vid_planes_w] the
+                                ; moment two displays can differ
+                                ; (docs/DUAL-DISPLAY-VGA.md 4.3). Set by
+                                ; wm_su_flay, which is the one place both the
+                                ; take and the check establish the content
+                                ; rect, and read by wm_su_bytes, wm_su_scrset,
+                                ; wm_su_edge and wm_su_merge - the sizing, the
+                                ; scratch, the restore stride and the merge.
+                                ;
+                                ; THE BUG IT CLOSES IS A HEAP OVERRUN, not a
+                                ; wrong picture. gfx_save takes GFXDENTER and
+                                ; so writes with the planes of the display the
+                                ; rect is ON, while the claim was sized from
+                                ; whichever display happened to be current -
+                                ; the primary, since every hook restores it.
+                                ; Primary Hercules with a window on the VGA is
+                                ; a buffer sized x1 and a save that writes x4.
+                                ; The other way round merely wastes.
+                                ;
+                                ; .text with a real initialiser for this file's
+                                ; own reason: -f bin zeroes nothing.
+%endif
+
+; ...AND kern_small READS [vid_planes_w] DIRECTLY, because that build has ONE
+; display by construction and the two words can never differ in it. Selecting
+; the NAME here rather than keeping the word and feeding it is what makes the
+; small build measure +0: the word, the store and the four instructions that
+; bank CX/DX around it are not assembled at all. Written down because the
+; plan (docs/DUAL-DISPLAY-VGA.md 6) calls that +0 non-negotiable and it is
+; the cheapest regression test the whole feature has - and because the first
+; version of this DID cost it 17 bytes, by writing [vid_planes_w] into a word
+; nothing else could ever have put anything different in.
+%ifdef KERN_BIG
+%define WM_SU_PW wm_su_pw
+%else
+%define WM_SU_PW vid_planes_w
+%endif
 wm_su_fbase: dw 0               ; ...and where the fragment being restored
                                 ; STARTS, which is what wm_su_edge patches
                                 ; relative to. It was WSU_IMG, which is the
@@ -6305,6 +6344,17 @@ wm_su_flay:
     mov [wm_su_y1], bx
     mov [wm_su_x2], cx
     mov [wm_su_y2], dx
+
+%ifdef KERN_BIG
+    push cx                     ; ...and HOW DEEP the display holding it is,
+    push dx                     ; before anything sizes a buffer from it. Here
+    call vid_disp_planes        ; because this is the one routine both the take
+    mov [WM_SU_PW], cx          ; and the check reach the content rect through
+    pop dx                      ; (AX/BX are still its top-left)
+    pop cx
+%endif                          ; kern_small: WM_SU_PW IS [vid_planes_w] and
+                                ; there is nothing to establish
+
     call wm_su_eptr
     mov ax, cx
     sub ax, [wm_su_x1]
@@ -6538,8 +6588,8 @@ wm_su_bytes:
     mul si
     or dx, dx
     jnz .big
-    mov si, [vid_planes_w]
-    mul si
+    mov si, [WM_SU_PW]          ; the display THIS CACHE IS ON (4.3), not the
+    mul si                      ; one that happens to be current
     or dx, dx
     jnz .big
     mov [wm_su_fsz], ax
@@ -6601,7 +6651,7 @@ wm_su_scrset:
     mov [wm_su_scrb], di
     mov ax, si
     add ax, ax                  ; two byte columns...
-    mov cx, [vid_planes_w]
+    mov cx, [WM_SU_PW]
     mul cx                      ; ...x planes, of the tallest fragment
     or dx, dx
     jnz .big
@@ -6903,6 +6953,25 @@ wm_dc_take:
                                 ; rows are whole - so a vertical drag always
                                 ; takes this path and a horizontal one takes it
                                 ; once every eight pixels
+%ifdef KERN_BIG
+    mov ax, [di+W_X]            ; ...AND THE DEPTH IS THE SECOND THING IT
+    mov bx, [di+W_Y]            ; CANNOT DO (docs/DUAL-DISPLAY-VGA.md 4.3.1).
+    call vid_disp_planes        ; The byte phase above is this same argument
+    mov si, cx                  ; about x; this is it about PLANES. gfx_save
+    mov ax, [ui_origx]          ; lays the buffer out with the depth of the
+    mov bx, [ui_origy]          ; display the pixels are ON, so a window banked
+    call vid_disp_planes        ; on a Hercules is w*h/8 bytes of one plane and
+    cmp cx, si                  ; replaying it onto a VGA writes four - the
+    jne .out                    ; buffer then means something else where it
+%endif                          ; lands, and mode 12h renders 1bpp bytes as
+                                ; colour. Reported from the field on 86Box:
+                                ; drag a Disk window off the Hercules onto the
+                                ; VGA and its content arrives as magenta and
+                                ; cyan noise inside a correct frame. Refusing
+                                ; costs one full repaint on the one drag in a
+                                ; session that crosses a depth change, and
+                                ; Hercules+CGA can never reach it - both 1bpp,
+                                ; so the two answers are always equal
     mov [wm_dc_win], di         ; ...the waiver, for this window alone
     mov cx, [di+W_X]            ; wm_su_take reads the geometry, and the pixels
     mov si, [di+W_Y]            ; are still where the window WAS - so put it
@@ -7192,7 +7261,7 @@ wm_su_edge:
     sub ax, [wm_su_ey1]         ; every walk below is bounded by
     inc ax
     mov [wm_su_srow], ax
-    mov cx, [vid_planes_w]      ; ...x planes = the bytes gfx_save writes for
+    mov cx, [WM_SU_PW]          ; ...x planes = the bytes gfx_save writes for
     mul cx                      ; one screen column, so the second column's
     mov [wm_su_nrow], ax        ; scratch starts that far past the first
 
@@ -7317,7 +7386,7 @@ wm_su_merge:
     mov dh, dl
     not dh                      ; ...and the bits to take from the screen
     mov bx, [wm_su_bpr]
-    mov bp, [vid_planes_w]
+    mov bp, [WM_SU_PW]
 .plane:
     mov cx, [wm_su_srow]
 .row:

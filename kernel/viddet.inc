@@ -181,6 +181,16 @@ vid_force   db VID_FORCE        ; 0 = probe; 1/2/3 = VGA/Herc/CGA
 vid_6845    db 0x35, 0x2D, 0x2E, 0x07, 0x5B, 0x02
             db 0x57, 0x57, 0x02, 0x03, 0x00, 0x00
 
+; ...and R0..R11 for MDA 80x25 TEXT, which vid_mono_text needs for the same
+; reason: on a machine whose int 10h belongs to a VGA there is no BIOS call
+; that will program THIS card (SPEC.md 39.20). IBM's own mode 7 values, with
+; one deliberate difference - R10 = 0x20 is bit 5, CURSOR OFF, because
+; neither caller wants one. The fsx bracket hides it with int 10h and on this
+; class of machine that int 10h talks to the other card; the reboot path is
+; only ever taken when a VGA is present, so nothing will print here.
+vid_6845t   db 0x61, 0x50, 0x52, 0x0F, 0x19, 0x06
+            db 0x19, 0x19, 0x02, 0x0D, 0x20, 0x00
+
 ; Colour -> ink for the 1bpp adapters (SPEC.md 39.4). 00h = black, FFh =
 ; white, 01h = the 50% dither class, which reuses the machinery gfx_fill_gray
 ; already has. The mapping is chosen so that every distinction the shipped UI
@@ -275,6 +285,46 @@ vid_detect:
 ; ~65500, the row count stays 16, and the very first cursor draw writes past
 ; the end of the framebuffer.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; vid_depth_set - publish how deep adapter AL's framebuffer is
+;
+; in:       AL = a VID_* kind
+; out:      [vid_mono], [vid_planes], [vid_planes_w]
+; clobbers: flags
+;
+; THESE THREE ARE NOT IN THE PER-DISPLAY RUN AND HAVE TO FOLLOW A SWAP ANYWAY,
+; which is the whole reason this is a routine rather than eleven lines inside
+; vid_apply. SPEC.md 39.12's context is the eighteen contiguous words from
+; vid_seg to vid_chm8; [vid_mono] and the two plane counts sit above that run,
+; are DERIVED from the kind rather than being vid_tab columns, and are what
+; every primitive dispatches on. So vid_ctx_act has to publish them as well,
+; and if it did so from its own copy of the rule the two could disagree.
+;
+; IT WAS UNREACHABLE UNTIL THE TWO DISPLAYS COULD DIFFER IN DEPTH. A Hercules
+; and a CGA are both 1bpp, so every swap SPEC.md 39.12-39.19 shipped moved
+; geometry between two displays that already agreed about all three bytes.
+; A VGA beside a Hercules is the first pairing where they do not
+; (docs/DUAL-DISPLAY-VGA.md), and the failure is not subtle: [vid_rseg] IS in
+; the run, so activating the VGA display while [vid_mono] still says 1 points
+; the SOFTWARE renderer at the VGA's rseg, which vid_apply sets to 0 because
+; nothing on a VGA routes through it. A white fill then writes 0xFF through
+; SEGMENT ZERO - measured, as a wide 0xFF splatter across kernel .text on the
+; first primary swap of a VGA+Hercules machine, with [vid_ndisp] among the
+; casualties.
+; -----------------------------------------------------------------------------
+vid_depth_set:
+    cmp al, VID_VGA
+    je .colour
+    mov byte [vid_mono], 1      ; 1bpp: the software renderer IS the direct
+    mov byte [vid_planes], 1    ; path (SPEC.md 39.5)
+    mov word [vid_planes_w], 1
+    ret
+.colour:
+    mov byte [vid_mono], 0
+    mov byte [vid_planes], 4
+    mov word [vid_planes_w], 4
+    ret
+
 vid_apply:
     push ax
     push bx
@@ -327,12 +377,22 @@ vid_apply:
 
     mov ax, [vid_w]             ; --- widths
     dec ax
-    mov [vid_wm1], ax
-    sub ax, 7
+    mov [vid_wm1], ax           ; these two are the DESKTOP's, and right to be:
+    sub ax, 7                   ; the pointer clamps across the whole of it
     mov [vid_wm8], ax
+    mov ax, [vid_pw]            ; ...AND THE CLOCK IS THE PRIMARY'S, because the
+    dec ax                      ; MENU BAR is (SPEC.md 39.2.2). This was taken
+    sub ax, 7                   ; from [vid_w] like the two above it, which is
     sub ax, 198                 ; w - 8 - MENU_CLK_W - 6, floored to a glyph
     and ax, 0FFF8h              ; cell: the bar's segments are cell ranges
-    mov [vid_clk_hx], ax
+    mov [vid_clk_hx], ax        ; the union once a second display is extended -
+                                ; 1152 on a 1360px desktop, which is CELL 144
+                                ; of a menu_bcell holding MENU_BCMAX = 62. The
+                                ; overrun wrecks whatever follows it in .bss
+                                ; and the machine dies somewhere else entirely,
+                                ; with a stack pointer outside .lowbss. The
+                                ; primary's 640 gives cell 54, inside the
+                                ; buffer, which is the number this always meant
 
     mov ax, [vid_h]             ; --- heights
     dec ax
@@ -374,17 +434,13 @@ vid_apply:
 .pop:
     mov [vid_popmax], ax
 
-    mov byte [vid_mono], 0      ; --- the renderer's target
-    mov byte [vid_planes], 4
-    mov word [vid_planes_w], 4
+    mov al, [vid_kind]          ; --- the renderer's DEPTH, in one place
+    call vid_depth_set          ; (see there: a display swap needs it too)
     xor ax, ax                  ; VGA: the renderer has no target until
     mov bx, SW_PLANE_PARA       ; unreachable: [vid_rseg] is 0 here
     xor dx, dx
     cmp byte [vid_kind], VID_VGA
     je .rend
-    mov byte [vid_mono], 1
-    mov byte [vid_planes], 1
-    mov word [vid_planes_w], 1
     mov ax, [vid_seg]           ; the software renderer draws straight into
     mov bx, 1                   ; the framebuffer - one "plane", and a step
     mov dx, ax                  ; of 1 paragraph purely so sw_xfer's segment
@@ -424,6 +480,35 @@ vid_apply:
     ret
 
 ; -----------------------------------------------------------------------------
+; vid_6845_prog - write R0..R11 of the mono card's CRTC from a 12-byte table
+;
+; in:       SI = the table, R0 first
+; out:      -
+; clobbers: AX, DX, SI, flags - DOCUMENTED rather than preserved, because both
+;           callers are mode sets that reload everything they use immediately
+;           afterwards, and this is an out-loop on a 4.77MHz machine.
+;
+; Factored out of vid_setmode when vid_mono_text needed the identical loop with
+; a different table (SPEC.md 39.20). Two tables and one loop rather than two of
+; each, for gfxbench's reason: the second copy is the one that does not get the
+; fix. It leaves DX = 0x3B4, which neither caller relies on.
+; -----------------------------------------------------------------------------
+vid_6845_prog:
+    mov dx, 0x3B4
+    xor ah, ah                  ; AH = CRTC register index
+.crtc:
+    mov al, ah
+    out dx, al                  ; index port
+    inc dx
+    lodsb
+    out dx, al                  ; data port
+    dec dx
+    inc ah
+    cmp ah, 12
+    jb .crtc
+    ret
+
+; -----------------------------------------------------------------------------
 ; vid_setmode - put the card into its graphics mode (SPEC.md 39.6)
 ;
 ; in:       [vid_kind]
@@ -457,6 +542,7 @@ vid_apply:
 ; has one), but it is a single mistimed frame with the drive never stopping,
 ; and behind the blank it is invisible.
 ; -----------------------------------------------------------------------------
+
 vid_setmode:
     push ax
     push bx
@@ -514,18 +600,7 @@ vid_setmode:
     mov al, 0x02                ; clear). From here to the last write of this
     out dx, al                  ; routine the tube is dark - see the header.
     mov si, vid_6845
-    mov dx, 0x3B4
-    xor ah, ah                  ; AH = CRTC register index
-.crtc:
-    mov al, ah
-    out dx, al                  ; index port
-    inc dx
-    lodsb
-    out dx, al                  ; data port
-    dec dx
-    inc ah
-    cmp ah, 12
-    jb .crtc
+    call vid_6845_prog
     mov ax, [vid_seg]           ; 32KB clear - nobody else will do it, and it
     mov es, ax                  ; happens BEHIND the blank, so the powered-up
     xor di, di                  ; contents of the card's DRAM are never shown
@@ -623,10 +698,31 @@ vid_init:
     ret
 
 ; -----------------------------------------------------------------------------
-; vid_text - back to a text mode (used by CMD_REBOOT)
+; vid_text - back to a text mode (CMD_REBOOT and fsx's FSXM_TEXT80)
 ; in:       -
 ; out:      -
 ; clobbers: flags
+;
+; IT NAMES THE CARD NOW, AND int 10h CANNOT (SPEC.md 39.20). Mode 7 is "mono
+; text" and on a machine with one mono card that is the same statement as
+; "program the MDA" - which is every machine this had until a VGA could sit
+; beside a Hercules. A VGA's option ROM takes int 10h over at POST and its
+; mode 7 is the VGA's OWN mono text: aperture at B0000, CRTC at 3B4, both
+; directly on top of the real Hercules. Two cards driving one address space is
+; exactly what vid_setmode leaves 3BFh bit 1 clear to avoid, arrived at from
+; the other end.
+;
+; vid_equip is the fix for the same shape one machine class down and it does
+; not reach this one, which is worth reading its header for: on Hercules+CGA
+; the flag at 40:10 names the card because an XT ROM's mode set is
+; equipment-driven. A VGA BIOS keeps its own state and is not talked out of
+; itself by a flag - so the only way to program the mono card on such a
+; machine is to program the mono card.
+;
+; vid_mono_text is that, and it answers CF = 1 for "done, do not call int 10h
+; at all". The blank and the graphics lock-out below stay in front of both
+; paths: they are this card's registers either way, and the ROM's mode 7
+; reprograms the 6845 with video live otherwise.
 ; -----------------------------------------------------------------------------
 vid_text:
     push ax
@@ -644,12 +740,15 @@ vid_text:
     out dx, al                  ; 7 set below reprograms the 6845 with video
     mov dx, 0x3BF               ; live otherwise. Then lock graphics back out
     out dx, al                  ; (AL is still 0) and let mode 7 re-enable.
+    call vid_mono_text          ; ...unless int 10h would land on a VGA, in
+    jc .out                     ; which case that call has just done it here
     mov ax, 0x0007
     jmp short .go
 .colour:
     mov ax, 0x0003
 .go:
     int 0x10
+.out:
     pop es
     pop bp
     pop di

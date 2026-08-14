@@ -1960,7 +1960,9 @@ ui_cmd_reboot:
                                 ; scheduler alive - and before the lock,
                                 ; because that wait yields
     call gfx_lock               ; never released - the GUI is done
-    call vid_text
+    call vid_reboot             ; a text mode on the primary AND on whichever
+                                ; card int 10h is going to print on after the
+                                ; int 19h below (SPEC.md 39.20.1)
     call sched_unhook           ; restores int 08h/0Ch (unhooks the mouse too)
     int 0x19
     jmp ui_cmd_reboot           ; unreachable; int 19h does not return
