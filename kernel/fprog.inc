@@ -51,7 +51,7 @@ FPG_GAP    equ 0                ; box -> clock cell gap. It was 8, and the
                                 ; seven or so blank cells at its left end, so
                                 ; the separation the eye sees is unchanged
                                 ; while the strip gets a cell back
-FPG_W      equ FPG_ICO_W + FPG_ISP + FPG_BOX_W + FPG_GAP    ; 88
+FPG_W      equ FPG_ICO_W + FPG_ISP + FPG_BOX_W + FPG_GAP    ; 80
 FPG_BAR_PX equ FPG_BOX_W - 2    ; 62: the trough, in pixels
 FPG_MINX   equ MENU_SYS_XR + 8  ; an origin left of this would collide with
                                 ; the System menu: refuse the whole feature

@@ -883,7 +883,7 @@ Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
 | `gfx_fill`      | AX=x1, BX=y1, CX=x2, DX=y2           | solid rect, inclusive corners         |
 | `gfx_frame`     | AX=x1, BX=y1, CX=x2, DX=y2           | 1px outline rect                      |
 | `gfx_fill_gray` | AX=x1, BX=y1, CX=x2, DX=y2           | 50% dither: black/white checkerboard (pixel parity (x+y)&1: even=white, odd=black) — ignores gfx_color |
-| `gfx_fill_pat`  | AX=x1, BX=y1, CX=x2, DX=y2, `[gfx_pat]` = near ptr to 8 pattern bytes | 8×8 dither fill, screen-aligned: row y uses byte `pat[y&7]`, bit 7 = leftmost pixel of each screen byte, bit set = white (15), clear = black (0) — ignores gfx_color. Writes only colors 0/15, so like `gfx_fill_gray` it never retires `[bb_mono]` (§32) |
+| `gfx_fill_pat`  | AX=x1, BX=y1, CX=x2, DX=y2, `[gfx_pat]` = near ptr to 8 pattern bytes | 8×8 dither fill, screen-aligned: row y uses byte `pat[y&7]`, bit 7 = leftmost pixel of each screen byte, bit set = white (15), clear = black (0) — ignores gfx_color. Writes only colors 0/15, so it is a pattern rather than a solid colour |
 | `gfx_blit4`     | ES:SI=source, BP=source stride (bytes), AX=dest x, BX=dest y, CX=width px, DX=height rows | draw a block of packed 4bpp pixels (§5.4) |
 | `gfx_xor_rect`  | AX=x1, BX=y1, CX=x2, DX=y2           | 1px outline, XOR 0Fh (drag outline)   |
 | `gfx_xor_fill`  | AX=x1, BX=y1, CX=x2, DX=y2           | filled rect, XOR 0Fh (menu highlight) |
@@ -4766,15 +4766,22 @@ W_DISP  equ 20   ; dword: the far pointer `wm_pkgcall` calls to reach any of
 W_SEG   equ 22   ; this window's procs - {PKG_DISP, the owning package's
                  ; segment}. W_SEG doubles as THE SEGMENT every near pointer
                  ; in this record belongs to: title, paint, onkey, onclick,
-                 ; menus and onsize. Zero means a KERNEL window and makes the
-                 ; dispatch an ordinary near call (§20.1). Set by wm_create
-                 ; from the segment the CALLER called it in.
+                 ; menus, onsize and onmouseup. Zero means a KERNEL window
+                 ; and makes the dispatch an ordinary near call (§20.1). Set
+                 ; by wm_create from the segment the CALLER called it in.
 W_ONSIZE equ 24  ; word: near ptr or 0 - the resize negotiator (§11.1).
                  ; Called BEFORE a new size is committed, with SI = window,
                  ; CX/DX = the proposed frame size; answers in CX/DX with the
                  ; size it will accept. NOT a template word: wm_create zeroes
                  ; it, `wm_onsize` (API slot 0x0220) sets it.
-WIN_SIZE equ 26
+W_ONMOUSEUP equ 26 ; word: near ptr or 0 - the RELEASE half of a content
+                 ; click (§13.7). CX = x, DX = y, SI = window, the same
+                 ; environment as W_ONCLICK. Called ONLY if this window's
+                 ; W_ONCLICK ran for the matching press, and called EVEN IF
+                 ; the release landed outside the window. NOT a template
+                 ; word: wm_create zeroes it, `wm_onmouseup` (API slot
+                 ; 0x01F0) sets it.
+WIN_SIZE equ 28
 MAX_WIN  equ 12
 
 WF_SIZABLE equ 4  ; W_FLAGS bit2: the window can be resized (§11.1)
@@ -4783,16 +4790,16 @@ WMIN_W     equ 96 ; smallest frame a resize can leave, outer px (§11.1)
 WMIN_H     equ 64
 ```
 
-(WIN_SIZE grew 16 → 18 → 20 → 24 → 26: never a shift idiom, always a true
+(WIN_SIZE grew 16 → 18 → 20 → 24 → 26 → 28: never a shift idiom, always a true
 multiply or `div cl`. The wm_create template stays **16 bytes**:
 {x,y,w,h,title,paint,onkey,onclick} words — everything added since is set by
 the kernel or by an explicit call, never by the template, so every shipped
-.o88's 16-byte template stays valid. That is the rule the last three
+.o88's 16-byte template stays valid. That is the rule the last four
 additions were designed around: WF_SIZABLE is OR-ed in after wm_create
 (KD_WFLAG for built-ins, §29.3; `wm_sizable` for packages, §20.3), W_MENUS
-comes from `OSAPI_MENU_SET`, W_ONSIZE from `OSAPI_WM_ONSIZE`, and W_DISP/W_SEG
-from wm_create itself. MAX_WIN grew 8 → 12 for instancing (§29);
-`apps/os88api.inc` mirrors it. **W_W/W_H are no longer set-once**: `wm_create`
+comes from `OSAPI_MENU_SET`, W_ONSIZE from `OSAPI_WM_ONSIZE`, W_ONMOUSEUP
+from `OSAPI_WM_ONMOUSEUP`, and W_DISP/W_SEG from wm_create itself. MAX_WIN
+grew 8 → 12 for instancing (§29); `apps/os88api.inc` mirrors it. **W_W/W_H are no longer set-once**: `wm_create`
 clamps them through `wm_fit` (§39.7), and `ui_grow` (§13), `wm_resize`
 (§11.1) and `wm_fullscreen` (§11.2) rewrite them at runtime, so a window's
 W_PAINT/W_ONCLICK must derive their layout from the live record every call —
@@ -9221,8 +9228,9 @@ FPG_ISP    equ 4                ; icon -> box gap
 FPG_BOX_W  equ 64               ; the line box, frame included
 FPG_BOX_H  equ 9                ; rows FPG_BOX_Y..FPG_BOX_Y+8
 FPG_BOX_Y  equ 5
-FPG_GAP    equ 8                ; box -> clock cell gap
-FPG_W      equ FPG_ICO_W + FPG_ISP + FPG_BOX_W + FPG_GAP    ; 88
+FPG_GAP    equ 0                ; box -> clock cell gap; was 8, and the whole
+                                ; cell it cost went to the toast strip (§59.9.2)
+FPG_W      equ FPG_ICO_W + FPG_ISP + FPG_BOX_W + FPG_GAP    ; 80
 FPG_BAR_PX equ FPG_BOX_W - 2    ; 62: the trough, in pixels
 ```
 
@@ -11210,13 +11218,14 @@ volume could hold. Neither is reachable from a legal floppy.
 **What went, and what it cost.** `dskw_readbig` and its two private bodies
 are gone, and so is the "the buffer must not wrap its segment" argument
 check that both pipelines used to open with — a buffer that spans segments
-is now the *normal* case, not an error. **API slot 0x01E8 is retired but not
-reused** (§20.8 rule 4): the cell still exists and answers CF=1 with
-`FERR_NAME`, so every slot above it keeps its number, and `apps/os88api.inc`
-publishes no `OSAPI_FILE_READBIG`, so a package source that still names it
-fails to assemble instead of silently calling a routine whose BX it never
-set. Slots 0x0120 and 0x0128 **changed contract**, which is the one thing
-§20.8 otherwise forbids; it is a deliberate, recorded exception, taken while
+is now the *normal* case, not an error. **API slot 0x01E8 was retired here**
+(§20.8 rule 4): the cell was left answering CF=1 with `FERR_NAME`, so every
+slot above it kept its number, and `apps/os88api.inc` published no
+`OSAPI_FILE_READBIG`, so a package source that still named it failed to
+assemble instead of silently calling a routine whose BX it never set. That
+deleted `%define` is also what later made the number safe to take back: the
+cell is `OSAPI_VOL_KIND` today, under §20.3.1. Slots 0x0120 and 0x0128
+**changed contract**, which is the one thing §20.8 otherwise forbids; it is a deliberate, recorded exception, taken while
 every package that calls them is still in this tree and rebuilt by `make`.
 
 **It allocates nothing**, in either direction. There is no staging buffer
@@ -15106,7 +15115,7 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 
 0x01B0 wm_geom         0x01D8 gfx_blit4         0x0200 mem_claim      (X)
 0x01B8 cm_alloc    (X) 0x01E0 wm_about_set      0x0208 mem_free       (X)
-0x01C0 cm_free     (X) 0x01E8 (retired)         0x0210 mem_avail
+0x01C0 cm_free     (X) 0x01E8 osapi_vol_kind    0x0210 mem_avail
 0x01C8 cm_caps         0x01F0 wm_onmouseup      0x0218 osapi_font_glyphs
 0x01D0 wm_resize       0x01F8 gfx_scroll        0x0220 wm_onsize
                                                 0x0228 osapi_file_here
@@ -15249,16 +15258,19 @@ Slot-specific contracts that are not simply their target routine's:
                          normalised to an offset under 16 and the transfer
                          walks the segment (§18.4.1). The pair is the whole
                          read/write surface — 0x01E8 was the big-file
-                         sibling and is retired, below.
+                         sibling, retired here and since taken back for
+                         osapi_vol_kind (§20.3.1, below).
 0x0130 dskw_delete       in SI = name; out CF=0 AX=0, else CF=1 AX=FERR_*.
 0x0138 dskw_rename       in SI = old name, DI = new name; out as delete.
 0x0140 dskw_dfree        out CF=0, DX:AX = free bytes, BX = sectors per
                          cluster; CF=1 AX = FERR_*. No disk I/O — the
                          resident FAT snapshot answers it.
-0x01E8 (retired)         was dskw_readbig; dskw_read absorbed it (§18.4.1).
-                         The cell answers CF=1 with AX = FERR_NAME and the
-                         SDK publishes no name for it, so nothing above it
-                         renumbered and nothing can call it by accident.
+0x01E8 osapi_vol_kind    in AL = a volume index (0 = A:); out CF=1 = there is
+                         no such volume, else CF=0 with AL = VK_REMOVABLE /
+                         VK_FIXED and AH = VT_BIOS / VT_DRIVER (§18.7.2) —
+                         the medium and the transport are two questions.
+                         WAS dskw_readbig, retired when dskw_read absorbed it
+                         (§18.4.1) and taken back under §20.3.1.
 0x0148 menu_win_set      in BX = win ptr, SI = app menu set (0 = none).
                          Stores [BX+W_MENUS] and relayouts the bar when BX
                          is active. Draws nothing, takes no lock, and
@@ -15869,8 +15881,9 @@ without anyone noticing it was a rule.
    stubs already built are correct and re-treading them buys nothing; what
    changes is that a *new* retirement need not add another. **And a retired
    cell is a FREE LIST rather than a headstone** — §20.3.1: 0x01F0
-   (`gfx_dbuf_gone`, §32) has been reused for `wm_onmouseup`, and 0x01E8
-   (`dskw_gone`, §18.4.1) is what is left of it. And the
+   (`gfx_dbuf_gone`, §32) has been reused for `wm_onmouseup` and 0x01E8
+   (`dskw_gone`, §18.4.1) for `OSAPI_VOL_KIND`, which leaves the list
+   EMPTY — the next slot appends. And the
    §18.4.1 unification of 0x0120/0x0128, which kept two numbers while
    changing their register contracts (CX became DX:CX, `dskw_read`'s answer
    became DX:AX), is no longer an exception to anything — it is kept in the
@@ -18172,7 +18185,7 @@ that suggest themselves first all die on a `DRVC_FILE` volume: naming a
 cluster needs the grandparent's listing (a whole mount, ~12 sectors — and
 impossible where §62.9.1 makes the handle opaque), a `(cluster → name)`
 cache can be handed a reused cluster and answer with a **wrong** name, and a
-`FSV_NAME` verb is a fourteenth verb plus a round trip that does nothing for
+`FSV_NAME` verb is one more verb plus a round trip that does nothing for
 FAT.
 
 Five rules hold it up:
@@ -22373,16 +22386,19 @@ CP_I_PAINT equ 2   ; -> page paint proc   (in DI = pane left, BP = pane top)
 CP_I_CLICK equ 4   ; -> page click proc   (in DI/BP, CX/DX = pane-relative)
 CP_ISTRIDE equ 8   ; 4th word = the dispatch class (§31.9): 0 = a kernel proc
 cp_items:  dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
-           dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0   ; §31.10
-           dw cp_s_buf,   cp_buf_paint,   cp_buf_click,   0   ; §31.3
            dw cp_s_time,  cp_time_paint,  cp_time_click,  0   ; §31.5
            dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0   ; §31.6
            dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0   ; §31.7
+           dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0   ; §31.10
 cp_items_end:
 CP_ITEMS   equ (cp_items_end - cp_items) / CP_ISTRIDE
-CP_ITIME   equ 3     ; the Date/Time item's index: §12.1 selects it by name
-CP_IDRV    equ 4     ; ...the Drivers item (§51.3's drv_notice opens it)
-CP_ISND    equ 5     ; ...and Sound (§34.8)
+CP_ITIME   equ 1     ; the Date/Time item's index: §12.1 selects it by name
+CP_IDRV    equ 2     ; ...the Drivers item (§51.3's drv_notice opens it)
+CP_ISND    equ 3     ; ...and Sound (§34.8)
+CP_IVID    equ 4     ; ...and Display, the one row that is HIDDEN on a
+                     ; single-adapter machine (§39.11.1). It is named here
+                     ; rather than found as "the last one", which is what
+                     ; frees the order above (§31.10.1)
 ```
 
 **List names are at most 9 characters** (72px): the selection bar runs from
@@ -22539,9 +22555,10 @@ a tone route, to allow or forbid exclusive clips, and to
 play a test clip through the sound card. With one sink there is nothing to
 choose, and the page went with §34's driver table. `CP_ITIME` — the
 Date/Time item index ui.inc selects when the menu-bar clock is clicked
-(§12.1) — is therefore **2**, not 3, and §31.10's Display page did not move
-it: that page is appended LAST, for §31.10.1's reason. `CP_IDRV` is 3 and
-`CP_ISND` 4.
+(§12.1) — dropped by one with it, and §31.10's Display page did not move it
+back: that page is appended LAST, for §31.10.1's reason. With §31.3's page
+gone too the numbers are the ones §31.3 states — `CP_ITIME` 1, `CP_IDRV` 2,
+`CP_ISND` 3.
 
 The three-layer refusal idiom the page demonstrated (setter refuses,
 caption explains, click ignored) is not retired with it: §31.3's Buffer
@@ -22549,7 +22566,7 @@ page still uses it, and §50.5 extends it to "Not Enough Ram".
 
 ### 31.5 Date/Time page — setting the system clock
 
-Fourth item in the panel list, index `CP_ITIME` = 3, list name and heading
+Second item in the panel list, index `CP_ITIME` = 1, list name and heading
 `'Date/Time'`. It is the editor for the system clock of §37 and the target
 of a click on the menu-bar clock (§12.1). Two rows of fields — the date
 above, the time below — one of which is *selected*, a `+` / `-` button pair
@@ -22653,7 +22670,7 @@ Kernel routines this page reaches (all ordinary near calls since §33):
 
 ### 31.6 Drivers page — loading and unloading, and remembering it
 
-Fourth item, index `CP_IDRV` = 3, list name and heading `'Drivers'`. One row
+Third item, index `CP_IDRV` = 2, list name and heading `'Drivers'`. One row
 per `drv_tab` row (§51): a checkbox, the driver's name, and under it the
 sentence `drv_status` derives from the row's live state — `'Loaded'`,
 `'Not loaded'`, or why the last attempt failed.
@@ -22749,7 +22766,7 @@ a load that fails into a longer string than the one it replaces.
 
 ### 31.7 Sound page — which sound hardware the machine uses
 
-Fifth item, index `CP_ISND` = 4. **Three** radio rows on the Display page's
+Fourth item, index `CP_ISND` = 3. **Three** radio rows on the Display page's
 geometry — **PC Speaker**, **AdLib**, **Sound Blaster** — and a **Test**
 button under them that plays one second of 660 Hz at `SND_PRI_UI` through
 whatever is selected. The answer to "did that do anything?" is one click away
@@ -23829,9 +23846,9 @@ keys, a live note viewer (a scrolling mini-staff), a recorded sequence with
 timed replay, and three embedded public-domain songs. Prefix `pn_`,
 embedded piano-keys icon (flags bit 0). Directory order on the apps disks
 stays pinned: mines, hello, notepad — **piano is appended
-fifth** so the earlier indices hold. Drawing uses colors beyond 0/15,
-which retires `[bb_mono]` (§32) — supported and expected; on a 1bpp adapter
-they reduce to §39.4's three inks.
+fifth** so the earlier indices hold. Drawing uses colors beyond 0/15 —
+supported and expected; on a 1bpp adapter they reduce to §39.4's three
+inks.
 
 - Window: "Piano", 224×177 at (250,100) → content 222×158 — the authored
   frame, which `wm_fit` clamps onto the live screen (§39.7), so at 640x200
@@ -27410,8 +27427,9 @@ claimed, no unreal mode armed) and is also exactly what tier 0 answers.
 tables must stay the same length in both builds or a package built against one
 kernel far-calls into whatever follows the other's table — here the debug
 registry, not code — which assembles, loads, launches and dies somewhere
-unrelated. So `kern_small` carries the cells with bodies that answer, exactly
-as retired slot 0x01E8 does.
+unrelated. So `kern_small` carries the cells with bodies that answer, on the
+same argument that gave every retired cell a refusing stub rather than a hole
+(§20.8 rule 4).
 
 **And the answers are TIER 0's, byte for byte**, which is the safety argument
 rather than a convenience. The target machine is an 8088, so a `kern_big`
@@ -27691,9 +27709,9 @@ Four of them have since landed and this section reflects them: the claim heap
 (§50) replaced the app's unsanctioned grab of linear 0x66000, `gfx_blit4`
 (§5.4) replaced its own run-coalescing blitter, `osapi_font_glyphs` (§6)
 replaced its int 10h ROM-font probe, and `wm_resize` + `W_ONSIZE` (§11.1)
-replaced its writing of W_W/W_H behind the kernel's back. It uses colours beyond 0/15, which
-retires `[bb_mono]` (§32) — supported and expected; on a 1bpp adapter its
-palette drops to §39.4's three ink classes.
+replaced its writing of W_W/W_H behind the kernel's back. It uses colours
+beyond 0/15 — supported and expected; on a 1bpp adapter its palette drops to
+§39.4's three ink classes.
 
 Eight tools (pencil, eraser, dropper, rectangle, ellipse, selection, flood
 fill, text), a per-tool line width that also sets an unfilled shape's border
@@ -41466,9 +41484,9 @@ one byte, and the Disk window's rows, icons, sort, view cache, `fm_hit`, the
 #### 62.9.1 The dispatch, and why it is a pointer
 
 `DSV_SIZE` is 26 and every cell is spoken for, so a file driver does **not**
-get thirteen more: `DSV_FS` is one added word pointing at a verb table **in
-the driver's own segment**, and `drv_fs_call` resolves it. Thirteen cells
-would cost `13 × 2 × DRVC_MAX` bytes of `.bss` on every machine including the
+get fourteen more: `DSV_FS` is one added word pointing at a verb table **in
+the driver's own segment**, and `drv_fs_call` resolves it. Fourteen cells
+would cost `14 × 2 × DRVC_MAX` bytes of `.bss` on every machine including the
 ones with no driver at all; one pointer costs `2 × DRVC_MAX` = 10.
 
 ```
@@ -41502,7 +41520,13 @@ FSV_ENUM    equ 24      ; AX = a folder's handle (0 = the root), CX = the
                         ; ORDINAL, DX:BX = a 32-byte buffer
                         ; out: CF=0 and the buffer is a §19.1 staged entry;
                         ; CF=1 with AX = 0 past the end, AX = FERR_IO
-FSV_SIZE    equ 26
+FSV_COPY    equ 26      ; AX = source folder, DX = destination folder,
+                        ; SI = the name (both ends), in KERNEL_SEG
+                        ; out: CF=0; CF=1 and AX = FERR_*. BOTH ENDS ON ONE
+                        ; VOLUME (§62.9.8). PUBLISHING IT IS OPTIONAL: leave
+                        ; the row 0 and the copy engine streams through
+                        ; FSV_READAT/FSV_WRITE as it always did
+FSV_SIZE    equ 28
 ```
 
 **`FSV_ENUM` IS NOT `FSV_LIST`, AND THAT IS NOT A DUPLICATION.** They ask the
@@ -41573,7 +41597,7 @@ and the handle is opaque besides: only the driver knows what its own parent
 is. It is answered by `FSV_CHDIR` rather than by a verb of its own because
 **`dsk_chdir` is the only thing that ever moves `[dsk_cwd]`** — the driver is
 being told where to go at the exact moment it could say what is above it, so
-a fourteenth verb would ask a question the thirteenth has just answered.
+a verb of its own would ask a question `FSV_CHDIR` has just answered.
 `disk_mount` banks it in `[dsk_fsup]` and `dsk_synth_up` spends it, which is
 one word of `.bss` against a whole round trip per listing.
 

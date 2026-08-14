@@ -510,16 +510,6 @@ VID_CGA    equ 2
                                  ; you were using readbig: pass your base
                                  ; segment in ES with BX = 0 and call
                                  ; OSAPI_FILE_READ.
-
-                                 ; for your own drawing (SPEC.md 32): AL = 1
-                                 ; on / 0 off, lock HELD. Out CF=0 and AL =
-                                 ; the state before, which you hand straight
-                                 ; back when you are done so the user's own
-                                 ; Control Panel setting survives. CF=1 = you
-                                 ; did not get it: a mono adapter (which
-                                 ; renders through the same code and has
-                                 ; nothing to double) or a heap too small.
-                                 ; Refusal is normal - draw unbuffered.
 %define OSAPI_GFX_SCROLL    KERNEL_SEG:0x01F8   ; move a rect's contents up or
                                  ; down instead of redrawing them (SPEC.md
                                  ; 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive
@@ -535,14 +525,19 @@ VID_CGA    equ 2
                                  ; cannot be cut per pixel (SPEC.md 11.3).
 
 ; --- the KB-counting memory slots (SPEC.md 50.3) --------------------------------
-; EVERY slot main published keeps main's number and contract - including the
-; three paragraph-counting arena slots at 0x01B8..0x01C8 (OSAPI_MEM_ALLOC /
-; OSAPI_MEM_FREE / OSAPI_MEM_AVAIL in main's SDK), which are answered by the
-; claim heap through converting wrappers, so a package built against main's
-; os88api.inc runs on this kernel unchanged. New code should prefer the KB
-; slots below: they are the native shape, they work from the entry proc, and
-; only they carry the DMA-page and regrow contracts. Everything this branch
-; ADDED starts at 0x0200, main's next free number.
+; Main's three paragraph-counting arena slots at 0x01B8..0x01C8 (OSAPI_MEM_ALLOC
+; / OSAPI_MEM_FREE / OSAPI_MEM_AVAIL in main's SDK) keep main's numbers and
+; contracts, and are answered by the claim heap through converting wrappers. New
+; code should prefer the KB slots below: they are the native shape, they work
+; from the entry proc, and only they carry the DMA-page and regrow contracts.
+; Every slot this branch APPENDED starts at 0x0200, main's next free number.
+;
+; ONE slot main published CHANGED CONTRACT: 0x01F0 was OSAPI_GFX_DBUF and is now
+; OSAPI_WM_ONMOUSEUP, taken off SPEC.md 20.3.1's free list once 32's back buffer
+; was withdrawn. So REBUILD every package against this SDK - a main-era .o88
+; still loads (same format version, same KERNEL_SEG) and would far-call 0x01F0
+; expecting the double buffer, so a main-era apps disk must not be booted
+; against this kernel.
 %define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0200   ; the claim heap (SPEC.md 50.3):
                                  ; AX = KB wanted; out CF=0 and DX = the base
                                  ; segment, CF=1 refused. This is how you get
@@ -2115,6 +2110,8 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
 %define OSAPI_FILE_APPEND_SYS KERNEL_SEG:0x03A0 ; SI = NUL 8.3 name, ES:BX =
                                  ; bytes, CX = count; out as
                                  ; OSAPI_FILE_APPEND. DRIVERS ONLY.
+
+; --- back to the application slots: window callbacks (SPEC.md 13.7/11.93) -----
 %define OSAPI_WM_ONMOUSEUP  KERNEL_SEG:0x01F0   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it): the RELEASE
                                  ; half of a content click (SPEC.md 13.7).

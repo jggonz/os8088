@@ -1,12 +1,18 @@
 # os8088 parallel network plan
 
-**Research document, not a contract.** SPEC.md is the binding contract for what
+**Research document, not a contract — and now PARTLY IMPLEMENTED.**
+> The study below was written before the code and is kept as the reasoning
+> behind it. What shipped is SPEC.md §62 (block mode) and SPEC.md §62.9 (the
+> `DRVC_FILE` redirector), and `NET.DRV` is on every disk; where the two
+> disagree, SPEC.md is the contract. §2.2.1 records which milestones are
+> built and which are not.
+
+SPEC.md is the binding contract for what
 the kernel *is*; this is the study of what it would take to put a **LapLink
 parallel link to a DOS machine** behind a loadable driver (SPEC.md §51) — a
 `Network` volume on the desktop that the file manager browses and writes, plus
-a path for a package to reach an **mTCP** connection on the DOS side. Nothing
-here is implemented. Every interface named would land in SPEC.md *before* its
-code.
+a path for a package to reach an **mTCP** connection on the DOS side. Every
+interface named still lands in SPEC.md *before* its code.
 
 The ask, in the requester's words:
 
