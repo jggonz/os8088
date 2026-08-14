@@ -88,10 +88,16 @@ WF_NOSNAP  equ 16               ; W_FLAGS bit4: this window OPTS OUT of having
                                 ; 1 and wm_destroy writes 0, so a fresh or
                                 ; reused record is snapped with nothing to
                                 ; set and no template word to carry
-WF_STALE   equ 256             ; W_FLAGS bit8: THE PIXELS ON THE GLASS NO LONGER
-                               ; DESCRIBE THIS WINDOW'S CONTENT (SPEC.md
+WF_STALE   equ 0x8000          ; W_FLAGS bit15: THE PIXELS ON THE GLASS NO
+                               ; LONGER DESCRIBE THIS WINDOW'S CONTENT (SPEC.md
                                ; 11.96.16.1), so nothing may bank them until it
-                               ; has been drawn whole again. Kernel-internal and
+                               ; has been drawn whole again. THE TOP BIT of the
+                               ; high byte and not its bottom one, because the
+                               ; REST of that byte is SPEC.md 7.2.1's cursor
+                               ; shape: at bit 8 this bit WAS CUR_CROSSSH, so a
+                               ; window handed a new listing wore the aiming
+                               ; crosshair and a package asking for one refused
+                               ; itself a cache. Kernel-internal and
                                ; deliberately NOT published in apps/os88api.inc:
                                ; a package cannot get into this state, because
                                ; the only way in is the kernel replacing a
@@ -1714,6 +1720,13 @@ wm_destroy:
                                 ; reason again (SPEC.md 39.11.2.1). The two
                                 ; tables share a stride, so they share the
                                 ; index SI already holds
+    shr si, 1                   ; ...and its four BAND extents, which have HALF
+    mov word [wm_su_ext+si], 0  ; that stride (SPEC.md 11.96.11): wm_band's
+    mov word [wm_su_ext+si+2], 0    ; WF_OWNBG interlock is on the WRITE alone,
+                                ; so a new tenant inheriting Paint's left strip
+                                ; has wm_su_flay lay its cache out around a
+                                ; band it never named and wm_draw_win skip the
+                                ; white fill every other app draws on top of
                                 ; (SI is dead from here - the z-order walk
                                 ; below reloads it)
     mov ch, 0
@@ -2680,13 +2693,19 @@ wm_lift:
 ; in:  BX = window ptr, AL = CUR_*SH (SPEC.md 7.2)
 ; out: nothing (all registers preserved)
 ;
-; The shape rides in W_FLAGS' spare HIGH BYTE, so no record grew and no
-; template changed - and wm_create's `mov word [bx+W_FLAGS], 1` and
-; wm_destroy's `mov word [bx+W_FLAGS], 0` already zero it, which is
-; CUR_ARROWSH. A package that never asks gets the arrow because the byte is 0,
-; not because anything put it there; and a package that dies with a crosshair
-; set cannot leave one behind, because its record is zeroed on the way out and
-; cur_shape_pass re-asks on the next UI pass.
+; The shape rides in W_FLAGS' HIGH BYTE, so no record grew and no template
+; changed - and wm_create's `mov word [bx+W_FLAGS], 1` and wm_destroy's
+; `mov word [bx+W_FLAGS], 0` already zero it, which is CUR_ARROWSH. A package
+; that never asks gets the arrow because the byte is 0, not because anything
+; put it there; and a package that dies with a crosshair set cannot leave one
+; behind, because its record is zeroed on the way out and cur_shape_pass
+; re-asks on the next UI pass.
+;
+; THE BYTE IS SHARED: bits 0..6 are the shape and bit 7 is WF_STALE, so the
+; store is a READ-MODIFY-WRITE under the flags already saved above. A whole-byte
+; store was the same bit twice - a stale Disk window wore the crosshair, and
+; Missile Command asking for one marked itself stale and could never be
+; banked.
 ;
 ; It does not draw. The pointer may not even be over this window, and the one
 ; place that knows is cur_shape_pass - so this stores and posts, exactly as
@@ -2710,6 +2729,14 @@ wm_cursor:
     jae .out                    ; refuse a shape nobody ships HERE as well as
                                 ; in cur_shape_set: a bad byte written into
                                 ; the record would be re-read every pass
+    cli                         ; the pushf above is this section's other half:
+                                ; wm_cursor runs on a PACKAGE task while
+                                ; wm_su_stale ORs WF_STALE into the same word
+                                ; from the UI task, so the read-modify-write
+                                ; below cannot be interruptible
+    mov ah, [bx + W_FLAGS + 1]
+    and ah, WF_STALE >> 8       ; keep the kernel's bit, drop the old shape
+    or al, ah
     mov [bx + W_FLAGS + 1], al
     mov byte [cur_shchk], 1
 .out:

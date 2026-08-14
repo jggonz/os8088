@@ -3159,18 +3159,28 @@ Three decisions carry it, and all three are about spending nothing.
 
 ### 7.2.1 The shape rides in `W_FLAGS`, and the UI task asks the question
 
-The shape is a byte in **`W_FLAGS`' spare high byte**. No record grew, no
+The shape is **bits 0..6 of `W_FLAGS`' high byte**. No record grew, no
 template changed, and `wm_create`'s `mov word [bx+W_FLAGS], 1` and
 `wm_destroy`'s `mov word [bx+W_FLAGS], 0` already zero it — which is
 `CUR_ARROWSH`. So the default is the arrow because the byte arrives 0, and a
 package that dies holding a crosshair cannot leave one behind, because the
-record is zeroed on the way out and the next pass re-asks. **There is no
-lifetime problem to solve, and that is the built-in set earning its keep**: an
-app-supplied *bitmap* would have to be staged into the kernel (`font_str`
-reads through DS, and so does `cur_put_mono` — the driver Control Panel page
-name is the precedent, §31.9), kept alive past the package that owns it, and
-re-validated at run time for the one invariant `CUR_ROW` checks at assembly
-time. None of that is bought here.
+record is zeroed on the way out and the next pass re-asks.
+
+**Bit 7 of that byte is NOT the shape's**: it is `WF_STALE` (§11.96.16.1),
+which is why `wm_cursor` stores with a read-modify-write under its own
+`pushf`/`cli` — it runs on a *package* task while `wm_su_stale` ORs the same
+word from the UI task — and why `cur_shape_pass` masks the byte it reads. The
+two features were first given the same bit, and it aliased in both directions:
+a Disk window handed a new listing wore the aiming crosshair until something
+repainted it, and Missile Command asking for a crosshair marked its own window
+stale, so `wm_su_take` refused it a cache for the rest of the game.
+
+**There is no lifetime problem to solve, and that is the built-in set earning
+its keep**: an app-supplied *bitmap* would have to be staged into the kernel
+(`font_str` reads through DS, and so does `cur_put_mono` — the driver Control
+Panel page name is the precedent, §31.9), kept alive past the package that
+owns it, and re-validated at run time for the one invariant `CUR_ROW` checks
+at assembly time. None of that is bought here.
 
 **`cur_shape_pass` is called from `ui_task`'s `.yield` tail**, beside
 `toast_pass`, and it is one compare per pass: `[cur_shx]`/`[cur_shy]` bank the
@@ -7856,7 +7866,12 @@ Six things are load-bearing:
   clear the kernel white-fills the whole content before `W_PAINT`, which would
   wipe the band it has just restored. Refusing at registration makes "a band
   implies the app owns its background" a property of the build rather than a
-  rule for a reader to keep — §11.90.2's own interlock, one level up.
+  rule for a reader to keep — §11.90.2's own interlock, one level up. The
+  interlock is on the WRITE alone, so **`wm_destroy` zeroes the slot's four
+  extents**, beside the `wm_owner` and `wm_about` entries it already clears:
+  nothing retires a band at quit, and a new tenant of Paint's slot would
+  otherwise have `wm_su_flay` lay its cache out around a tool column it never
+  named — and `wm_draw_win`, seeing bands, skip the white fill it does need.
 - **A hit no longer means "skip `W_PAINT`".** With a band, `wm_draw_win`
   restores and then *falls into* the paint, because what came back is the
   furniture and the app still owes the rest. Without one it skips as before.
@@ -8431,13 +8446,14 @@ would put a stale listing back on a later damage restore, which is
 docs/FIELD-NOTES.md 4 with a new way in, and it would be a *regression*: today
 that window has no cache, so any repaint draws it from the listing it now has.
 
-`WF_STALE` (bit 8, kernel-internal and not in the SDK) is that difference said
-out loud, and its two ends are the two routines §22 already names. `fmv_store`
-— the single place a window's listing is replaced (§22.14) — calls
-**`wm_su_stale`** rather than `wm_su_drop`; **`fm_repaint`** — the single place
-a Disk window is drawn from that listing — clears it. It is tested in exactly
-one place, `wm_su_take`, so every taker inherits it and `wm_su_bank`'s test is
-free.
+`WF_STALE` (bit 15, kernel-internal and not in the SDK — the TOP bit of the
+high byte, because §7.2.1's cursor shape owns the rest of it) is that
+difference said out loud, and its two ends are the two routines §22 already
+names. `fmv_store` — the single place a window's listing is replaced (§22.14)
+— calls **`wm_su_stale`** rather than `wm_su_drop`; **`fm_repaint`** — the
+single place a Disk window is drawn from that listing — clears it. It is
+tested in exactly one place, `wm_su_take`, so every taker inherits it and
+`wm_su_bank`'s test is free.
 
 **The clear does NOT belong in `wm_draw_win`, and putting it there cost a
 round.** That reads as the general home for "this window has been drawn
