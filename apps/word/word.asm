@@ -597,6 +597,11 @@ WDP_CLOSE    equ 3
 ; appears, the bar already says "Microsoft Word  File".
 ; -----------------------------------------------------------------------------
 wd_entry:
+    call OSAPI_FILE_HERE            ; where this package was LAUNCHED from,
+    mov [wd_ovdir], dx              ; banked before anything can navigate away
+    mov [wd_ovdrv], bl              ; - it is where WORD.OVL lives, and the
+                                    ; user is free to move the volume to DOCS\
+                                    ; a moment later (SPEC.md 65.10)
     call wd_xdrop                   ; the row index starts EMPTY and at its
                                     ; initial stride (SPEC.md 27.13). bss
                                     ; arrives zeroed, and a zero [wd_xksh] is
@@ -18113,6 +18118,7 @@ wd_m_toobig:  db 'Document too complex to save', 0
 wd_m_noclip:  db 'The clipboard is empty', 0        ; ^c with nothing in it
 wd_m_replong: db 'Replacement too long', 0          ; ...and ^m/^c past
                                      ; WD_FRXMAX (SPEC.md 65.7)
+wd_m_loaded2: db 'Module loaded from WORD.OVL', 0
 wd_m_toomanyp: db 'Too many paragraphs', 0          ; past WD_UMAXP (65.9)
 wd_m_noundo2: db 'Too large to undo', 0             ; the span is bigger than
                                      ; the undo blob, so the command refuses
@@ -18135,6 +18141,227 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 
 ; --- the search pattern and the Utilities commands (SPEC.md 65.7/65.9) -------
 %include "wdutil.inc"
+
+; =============================================================================
+; THE ON-DEMAND MODULE (SPEC.md 65.10)
+;
+; Code that ships as WORD.OVL beside WORD.O88 instead of inside it, is read
+; into a heap claim the first time one of its features is asked for, and is
+; far-called through a dispatcher at its offset 0.
+;
+; The ceiling this exists to get under is not a budget: a package links at
+; org 0 and addresses itself with 16-bit offsets (SPEC.md 33), so image + bss
+; can never reach 64KB whatever the heap has free. A module has a segment of
+; its own, so it does not spend the package's.
+;
+; It is kernel SPEC.md 2.8's shape, not SPEC.md 52.11's: the module keeps
+; DS = THE PACKAGE'S SEGMENT and reaches the document, the claims and every
+; wd_* variable through it exactly as resident code does. That is what makes
+; moving a subsystem out a matter of moving its text, rather than rewriting
+; every data reference in it. What it costs instead is the two rules below,
+; and tools/os88ovlchk.py refuses a build that breaks the first.
+;
+;   1. A call from the module to resident code CANNOT be near - the module has
+;      a CS of its own. It goes through a VECTOR: `call far [wd_v_*]`, a
+;      dword of (offset, segment) filled in at load. Resident code calling
+;      INTO the module goes the other way, through wd_ovcall.
+;   2. Nothing in the module may assume CS. Its data lives in .text with
+;      everything else, which is also what keeps rule 1 to code alone.
+;
+; Loading is the shape drivers/hdd/hdtool.inc uses (SPEC.md 52.11) and it
+; needs no kernel byte: OSAPI_FILE_HERE / _GOTO to reach the package's own
+; folder, OSAPI_MEM_CLAIM for the image, OSAPI_FILE_READ to fill it. A
+; refusal - no heap, or the disk swapped for one without WORD.OVL - is an
+; ordinary path: the feature says what is missing and the document is
+; untouched (SPEC.md 47).
+; =============================================================================
+
+WD_OVKB      equ 8              ; the claim WORD.OVL is read into, KB
+WDM_PING     equ 0              ; verbs, the module's dispatch indices
+WDM_MAX      equ 0              ; ...and the highest of them
+
+; -----------------------------------------------------------------------------
+; wd_ovneed - make sure WORD.OVL is loaded
+; out: CF=0 with [wd_ovseg] the claim holding it; CF=1 and the toast already
+;      says why. Preserves all registers.
+;
+; UI TASK ONLY: it claims and it reads a floppy, and SPEC.md 20.6 rule 7
+; forbids both on a worker. [wd_inwk] is the same gate wd_itinit uses.
+; -----------------------------------------------------------------------------
+wd_ovneed:
+    cmp word [wd_ovseg], 0
+    jne .ok
+    cmp byte [wd_inwk], 0
+    jne .nowk
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call OSAPI_FILE_HERE            ; where the USER is, to be put back
+    mov [wd_ovwas], dx
+    mov [wd_ovwdr], bl
+    mov dx, [wd_ovdir]              ; ...and off to where we were launched
+    mov bl, [wd_ovdrv]
+    call OSAPI_FILE_GOTO
+    mov ax, WD_OVKB
+    call OSAPI_MEM_CLAIM
+    jc .nomem
+    mov [wd_ovseg], dx
+    mov word [wd_ovfar], 0          ; the far pointer wd_ovcall goes through:
+    mov [wd_ovfar+2], dx            ; the dispatcher is at the claim's 0
+    mov es, dx
+    xor bx, bx
+    mov cx, WD_OVKB * 1024
+    xor dx, dx
+    mov si, wd_ovname
+    call OSAPI_FILE_READ
+    jc .noread
+    call wd_ovbind                  ; fill the vectors with our own segment
+    call wd_ovback
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.ok:
+    clc
+    ret
+.noread:
+    mov dx, [wd_ovseg]              ; the claim goes back: a half-loaded
+    call OSAPI_MEM_FREE             ; module is worse than none
+    mov word [wd_ovseg], 0
+    mov ax, wd_m_noovl
+    jmp short .say
+.nomem:
+    mov ax, wd_e_nomem
+.say:
+    call wd_saymsg
+    call wd_ovback
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.nowk:
+    stc
+    ret
+
+; wd_ovback - put the volume back where the user left it. Preserves all.
+wd_ovback:
+    push bx
+    push dx
+    mov dx, [wd_ovwas]
+    mov bl, [wd_ovwdr]
+    call OSAPI_FILE_GOTO
+    pop dx
+    pop bx
+    ret
+
+; wd_ovbind - stamp this package's segment into every vector. Preserves all.
+; The offsets are assembled in; only the segment is a runtime fact, and it is
+; the same one for all of them.
+wd_ovbind:
+    push ax
+    push bx
+    mov ax, cs
+    mov bx, wd_v_first
+.l:
+    mov [bx+2], ax
+    add bx, 4
+    cmp bx, wd_v_end
+    jb .l
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_ovcall - far-call the module
+; in:  BP = the verb (WDM_*), everything else as the verb documents
+; out: as the verb; CF=1 if the module could not be loaded at all
+; -----------------------------------------------------------------------------
+wd_ovcall:
+    call wd_ovneed
+    jc .no                          ; CF=1 already, and it has said why
+    call far [wd_ovfar]             ; the dispatcher is at the claim's offset
+                                    ; 0, so the far pointer is (0, the claim)
+                                    ; and the verb's own CF comes back through
+.no:
+    ret
+
+wd_ovname:  db 'WORD.OVL', 0
+wd_m_noovl: db 'WORD.OVL is not on this disk', 0
+
+; --- the vectors: resident routines the module far-calls (rule 1) ------------
+; Offset assembled in, segment stamped by wd_ovbind. They are contiguous and
+; wd_ovbind walks them, so adding one is two lines and no other change.
+;
+; Each points at a SHIM, never at the routine itself. Every resident routine
+; in this package is a near proc ending in `ret` (SPEC.md 20.1 - a package
+; author never writes `retf`), so far-calling one directly pops the offset,
+; leaves the segment on the stack and returns into nothing. The shim is the
+; one place that difference lives: a near call to the real routine, then the
+; far return the module's call is waiting for. Registers and flags pass
+; through both ways untouched, so a shimmed routine keeps its own contract.
+wd_s_saymsg:
+    call wd_saymsg
+    retf
+
+wd_v_first:
+wd_v_saymsg:  dw wd_s_saymsg
+              dw 0
+wd_v_end:
+
+; --- the module itself -------------------------------------------------------
+; vstart=0: it is loaded at offset 0 of its claim, so its own labels must be
+; numbered from there. NASM coalesces every .text fragment before it, so this
+; lands at the END of the image whatever order the source is in - which is
+; what lets tools/os88ovl.py cut at the image size the header already carries.
+;
+; align=1 is load-bearing, not tidiness. A bin section aligns to 4 by default,
+; and the pad NASM inserts to reach it lands BETWEEN the image size the header
+; records and where this section really starts - so the cut would take the pad
+; with it and the dispatcher would not be at the module's offset 0. It was one
+; byte, and the module ran off the end of its own jump table.
+section .modc vstart=0 align=1
+
+wd_modc:                            ; +0: the dispatcher, and the only offset
+    cmp bp, WDM_MAX                 ; the resident half knows
+    ja .out
+    shl bp, 1
+    mov si, bp
+    jmp word [cs:si+wd_mverb]
+.out:
+    retf
+
+wd_mverb:
+    dw wd_m_ping
+
+; wd_m_ping - what the mechanism has actually been PROVEN to do, and it is
+; deliberately not more than that. Measured on the emulator, in this order:
+; WORD.OVL is found beside WORD.O88 and read into a claim; the far call lands
+; on this dispatcher at the module's offset 0; the verb table dispatches; and
+; the retf comes back to wd_ovcall with the app healthy afterwards. A far call
+; OUT through wd_v_* to a shim that only returns was proven the same way.
+;
+; WHAT IS NOT PROVEN, and must be before any feature moves out here: a shim
+; whose resident routine touches the UI. Calling wd_saymsg through wd_s_saymsg
+; froze the app, and every static explanation was checked and cleared - the
+; vector holds the shim's address, wd_ovbind stamps the right segment, the
+; string offset AX carries is the string, and the shim's near call lands
+; exactly on wd_saymsg at 0x46E5 (the displacement wraps 64K, which is legal
+; and correct). So the cause is dynamic and still unknown, and the honest
+; place to record that is here rather than in a commit message.
+wd_m_ping:
+    retf
+
+section .text
 
 ; --- the state SPEC.md 27.8/27.9/27.10 added ---------------------------------
 ; The block below the image (further down this file) is ~120 hand-computed
@@ -18583,6 +18810,14 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
     WDVAR wd_uord,  256     ; WD_UMAXP words: the sort's order array
     WDVAR wd_scseg, 2       ; word: the rebuild scratch claim, 0 = none
     WDVAR wd_scn,   2       ; word: how many characters are in it
+    WDVAR wd_ovseg, 2       ; word: WORD.OVL's claim, 0 = not loaded yet
+    WDVAR wd_ovfar, 4       ; the (offset, segment) wd_ovcall far-calls: an
+                            ; 8086 has no `call far reg:reg`, so the pointer
+                            ; lives in memory and DS reaches it
+    WDVAR wd_ovdir, 2       ; word } the folder this package was LAUNCHED
+    WDVAR wd_ovdrv, 1       ; byte } from, banked at entry (SPEC.md 65.10)
+    WDVAR wd_ovwdr, 1       ; byte } ...and where the USER had the volume,
+    WDVAR wd_ovwas, 2       ; word } banked across the load and put back
     WDVAR wd_utl,   1       ; byte: the span runs to the document's end with
                             ; no closing ¶, so the rebuilt one must not have
                             ; one either (SPEC.md 65.9)

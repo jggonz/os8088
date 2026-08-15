@@ -44180,3 +44180,72 @@ document carries rather than guesses:
 Both radios are live; From..To filters by the level either rule produced,
 and a collection that found nothing toasts 'No table of contents entries'
 and inserts nothing.
+
+### 65.10 WORD.OVL — code that ships beside the package, not inside it
+
+A package's image + bss is capped at `APP_MAX_SIZE`, and that ceiling is not
+a budget anyone can raise: a package links at `org 0` and addresses itself
+with 16-bit offsets (§33), so image + bss can never reach 64KB whatever the
+heap has free. **A module has a segment of its own, so it does not spend the
+package's.** `WORD.OVL` is code that ships as a file beside `WORD.O88`, is
+read into a heap claim the first time one of its features is asked for, and
+is far-called through a dispatcher at its offset 0.
+
+The shape is the kernel's §2.8 on-demand module, not §52.11's self-contained
+driver, and the difference is the whole design: **the module keeps
+`DS` = the package's segment** and reaches the document, the claims and every
+`wd_*` variable through it exactly as resident code does. That is what makes
+moving a subsystem out a matter of moving its text rather than rewriting
+every data reference in it — the three candidate `.inc` files carry 375
+outgoing data references between them, and all 375 are free this way and
+would all break the other way.
+
+**It costs no kernel byte.** Loading is the sequence `drivers/hdd/hdtool.inc`
+already uses (§52.11): `OSAPI_FILE_HERE` / `_GOTO` to reach the folder the
+package was launched from, `OSAPI_MEM_CLAIM` for the image,
+`OSAPI_FILE_READ` to fill it, and a far call. Every one of those is a slot a
+package already has.
+
+Two rules follow from the module having a `CS` of its own, and they are the
+only tax on writing code out there:
+
+1. **A call from the module to resident code cannot be near.** It goes
+   through a vector — `call far [wd_v_*]`, a dword of (offset, segment) whose
+   offset is assembled in and whose segment `wd_ovbind` stamps at load. Each
+   vector points at a **shim**, never at the routine: every resident routine
+   is a near proc ending in `ret` (§20.1 — a package author never writes
+   `retf`), so far-calling one directly pops the offset, leaves the segment
+   on the stack and returns into nothing. The shim is the one place that
+   difference lives.
+2. **Nothing in the module may assume `CS`** beyond its own jump table, and
+   its data lives in `.text` with everything else.
+
+**The cut.** `.modc` is assembled WITH the package — one assembly, so every
+symbol the module names is the address the package itself uses — and
+`tools/os88ovl.py` splits it off afterwards. NASM coalesces every `.text`
+fragment before it, so `.modc` lands at the end of the image whatever order
+the source is in, and the cut point is the image size the package header
+already carries at +8, where `tools/os88pkg.py` and the loader both read it.
+The layout therefore lives in one place. `align=1` on the section is
+load-bearing: a bin section aligns to 4 by default, and the pad would land
+between the recorded image size and the section's real start, so the cut
+would take the pad with it and the dispatcher would not be at offset 0.
+
+**Refusal is an ordinary path** (§47). No heap, or a disk swapped for one
+without `WORD.OVL`, and the feature says which file is missing and the
+document is untouched. The load is UI-task only — it claims and it reads a
+floppy, both forbidden on a worker by §20.6 rule 7 — gated on `[wd_inwk]`,
+the same flag `wd_itinit` uses.
+
+**Status, stated plainly because the mechanism is in the tree before any
+feature rides on it.** Proven on the emulator: the file is found and read
+into a claim, the far call reaches the dispatcher at offset 0, the verb table
+dispatches, the `retf` returns, and a far call OUT to a shim that only
+returns works. **Not yet proven: a shim whose resident routine touches the
+UI** — calling `wd_saymsg` through one froze the app, and every static
+explanation was checked and cleared (the vector holds the shim's address, the
+segment is stamped, the string offset is the string, and the shim's near call
+lands exactly on `wd_saymsg` — its displacement wraps 64KB, which is legal
+and correct). The cause is dynamic and unknown. **No feature moves out of the
+resident image until that is understood**, because a subsystem that cannot
+report its own refusal is a subsystem that cannot ship.

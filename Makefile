@@ -1555,19 +1555,29 @@ $(BUILD)/word.bin: $(WORDSRC) apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/word/ -o $@ apps/word/word.asm
 	@echo "word:   $(call FILESIZE,$@) bytes"
 
-$(BUILD)/word.o88: $(BUILD)/word.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/word.bin -o $@
+# WORD.OVL is cut off the assembled image before it is packaged (SPEC.md
+# 65.10): the module is assembled WITH the package so it can reach every wd_*
+# through DS, and only then split out, so what ships in WORD.O88 is the
+# resident half alone. The cut point is the image size the package header
+# already carries, so the layout does not live in two places.
+$(BUILD)/WORD.OVL: $(BUILD)/word.bin tools/os88ovl.py
+	python3 tools/os88ovl.py $(BUILD)/word.bin -o $@ --trim $(BUILD)/word.trim.bin
+
+$(BUILD)/word.trim.bin: $(BUILD)/WORD.OVL
+
+$(BUILD)/word.o88: $(BUILD)/word.trim.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/word.trim.bin -o $@
 
 worddisk: $(BUILD)/word.img $(BUILD)/word720.img $(BUILD)/word360.img
 
-$(BUILD)/word.img: $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC --folder DOCS
+$(BUILD)/word.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
 
-$(BUILD)/word720.img: $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC --folder DOCS
+$(BUILD)/word720.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
 
-$(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC --folder DOCS
+$(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
 
 # --- the .DOC format gate (ON DEMAND: `make wordcheck`) ----------------------
 # There is no copy of Word here to open the output with, and "it round-trips
