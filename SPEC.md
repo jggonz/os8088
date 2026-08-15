@@ -43799,32 +43799,124 @@ box, and a Format command that refuses on one adapter of three is worse.
 
 ### 65.4 File format and association
 
-Native `.DOC`: a 16-byte os8088 FIB, then the three structures verbatim —
+**The file is a real Word file.** Not a private container with Opus's magic
+on it — the actual Word for Windows 1.x/2.x binary format, laid out from the
+Opus headers (`wordtech/file.h`, `wordtech/fkp.h`, `wordtech/doc.h`,
+`wordtech/prm.h`, `wordtech/props.h`, `wordwin.h`): a 314-byte FIB in a
+384-byte header page, the text, CHPX and PAPX **FKP** pages with their bin
+tables, a style sheet, a section table and a DOP. `wIdent` = 0xA59B,
+`nFib` = 33 (`nFibCurrent`), `nFibBack` = 25 (`nFibBackCurrent`).
 
-| off | size | content |
+The pieces `wd_docsave` writes, in Opus's own file order (the table at the
+head of `wordtech/savefast.c`):
+
+| structure | contents |
+|---|---|
+| FIB | offsets 0..313, zero-filled to `cbFileHeader` = 384. `fcMin` = 384, `fcMac` = `cbMac` = the end of the last structure, `ccpText` = the text length; every `fc*`/`cb*` pair below is filled in as its structure lands, and the pairs of structures this port has nothing to say about are left 0/0, which is exactly what Opus's reader tests (`if (fib.cbSttbfffn)`, `if (fib.cbPlcfsed)`, …) |
+| text | at `fcMin`, ANSI, one `chReturn` (13) per paragraph mark and `chTab` (9) for a tab — the same bytes the document model already holds (§65.3), so no transcoding happens on either side |
+| CHPX FKPs | 512-byte pages: `rgfc[crun+1]` file offsets, then `crun` one-byte offsets **in words** (`b << 1`; 0 = default CHP), then the CHPXs (a `cb` byte and a grpprl), `crun` in byte 511 |
+| PAPX FKPs | the same page shape, but each PAPX is `cw` (a **word** count — `nFib` ≥ 25, `file.h` history entry 25), `stc`, a 6-byte `PHE` with `fUnk` set (we do not paginate, so the height is honestly marked unknown), then the grpprl, padded to a word |
+| STSH | `cstcStd` = 0, then the three style STTBs (name / CHPX / PAPX) and the `PLESTCP`. One style, `stcNormal`: the name STTB carries `Normal`, the rule STTBs carry the style-rule 255 ('no rule'), the PLESTCP one `ESTCP{stcNext 0, stcBase 0}` |
+| plcfsed | one section: two CPs and one `SED` whose `fcSepx` is `fcNil` — Opus reads that as 'this section is the default section', so no SEPX is written at all |
+| plcfbteChpx / plcfbtePapx | the bin tables: `n+1` FCs then `n` `BTE`s (a PN each), plus `pnChpFirst`/`pnPapFirst` and `cpnBteChp`/`cpnBtePap` in the FIB |
+| DOP | 66 bytes: US Letter (`xaPage` 12240, `yaPage` 15840), 1″ top and bottom, 1.25″ left and right, `dxaTab` 720, everything else zero |
+
+The character and paragraph properties are **sprms**, from `wordtech/prm.h`
+with the operand widths from `dnsprm` in `wordtech/prcsubs.c` (`cch` 2 = a
+byte operand, 3 = a word):
+
+| our attribute (§65.3) | sprm | operand |
 |---|---|---|
-| +0 | 2 | magic 0xA59B (Opus's real `wIdent`) |
-| +2 | 2 | version = 1 |
-| +4 | 2 | text length in bytes (≤ `WD_MAXKB`×1024) |
-| +6 | 2 | CHP length (= text length; the two arrays are parallel) |
-| +8 | 2 | PAP entry count, 1..256 |
-| +10 | 2 | flags: low byte = the TAIL paragraph's PAP index (the last paragraph has no ¶ to carry it), high byte 0 |
-| +12 | 4 | pad, 0 |
+| bold | `sprmCFBold` 60 | 1 |
+| italic | `sprmCFItalic` 61 | 1 |
+| underline / word / double | `sprmCKul` 69 | `kulSingle` 1 / `kulWord` 2 / `kulDouble` 3 |
+| small caps | `sprmCFSmallCaps` 65 | 1 |
+| hidden | `sprmCFVanish` 67 | 1 |
+| alignment | `sprmPJc` 5 | `jcLeft` 0 / `jcCenter` 1 / `jcRight` 2 / `jcBoth` 3 |
+| left indent | `sprmPDxaLeft` 17 | twips |
+| first-line indent | `sprmPDxaLeft1` 19 | twips, signed |
+| right indent | `sprmPDxaRight` 16 | twips |
+| line spacing | `sprmPDyaLine` 20 | 240 / 360 / 480 |
+| space before | `sprmPDyaBefore` 21 | 120 |
 
-then text, CHP, PAP (count × 4 bytes). Save assembles header + text + CHP +
-PAP into a staging claim and writes it with ONE `OSAPI_FILE_WRITE` — and
-Save always writes the native format whatever the name's extension, as the
-real product's Save did. Save As through the kernel `FDLG_SAVE` appends
-`.DOC` to an extensionless typed name. Open reads the whole file into a
-staging claim first (the fdlg completion refuses a file larger than the
-staging ceiling from the dialog's own DX:CX size, BEFORE any read), then
-sniffs the magic: native validates every FIB field against the file size and
-refuses a corrupt file with a toast, the document untouched; anything else
-imports as plain text (CRLF and lone LF fold to ¶, tabs kept, other
-controls dropped, CHP zeroed, every paragraph Normal). The loaded PAP table
-becomes the session dictionary — indices never renumber, so the saved table
-may carry entries the document no longer references, and `[wd_hasfmt]` is
-raised whenever the count exceeds 1.
+One cell is 1/10″ = 144 twips (§65.3), so an indent converts by ×144 on the
+way out and ÷144 on the way in; a spacing that is not one of the three the
+renderer has rounds to the nearest of them on the way in.
+
+**Reading.** `wd_docload` reads the whole file into the staging claim, then
+sniffs: `wIdent` 0xA59B with `nFib` ≥ `nFibMinDoc` (18) is a Word file,
+`{\rtf` is RTF (§65.8), anything else is plain text (CRLF and lone LF fold
+to ¶, tabs kept, other controls dropped, CHP zeroed, every paragraph
+Normal). A Word file is validated field by field against the file size
+BEFORE anything is copied — every `fc`/`cb` pair must lie inside it, every
+FKP page number must address a whole page inside it, every plex length must
+divide — and a file that fails is refused with a toast, the document
+untouched.
+
+**The piece table is read** (§65.4.1), so a fast-saved file opens. CHPX and
+PAPX runs are walked through the bin tables and mapped back to the CHP byte
+and the PAP dictionary; sprms this port has no field for are skipped by
+their `dnsprm` width rather than guessed at, and a PAPX whose `stc` is not
+`stcNormal` still contributes its grpprl (the style's own properties are the
+one thing a port with no style sheet cannot honour, and that is a documented
+loss, not a wrong pixel). `chSect` (12) and every other control below 32
+except tab and ¶ are dropped on the way in, exactly as the plain-text path
+drops them.
+
+**Writing refuses rather than truncates.** The image is assembled in one
+staging claim and written with ONE `OSAPI_FILE_WRITE`, so its ceiling is the
+claim's: at `WD_MAXKB` = 30 the text and its header are 31,104 bytes and
+`WD_DOCCAP` (62KB) leaves ~30KB for the FKP pages and the tables, which is
+some 3,000 character runs and 1,500 paragraphs. A document that needs more
+pages than that is refused with 'Document too complex to save' and stays
+open and editable — §47's rule and PERFORMANCE.md's rule 6, at the file
+layer.
+
+Save always writes the Word format whatever the name's extension, as the
+real product's Save did — except `.RTF`, which §65.8 owns, because there the
+extension IS the format the user asked for. Save As through the kernel
+`FDLG_SAVE` appends `.DOC` to an extensionless typed name.
+
+The loaded PAP table becomes the session dictionary — indices never
+renumber — and `[wd_hasfmt]` is raised whenever more than Normal is in use.
+
+#### 65.4.1 The piece table
+
+A file whose FIB has `fComplex` set stores its text in pieces instead of one
+contiguous run, and `fcClx` points at the `CLX`: a sequence of `clxtPrc` (1)
+records — a byte, a word length, a grpprl — followed by one `clxtPlcpcd` (2)
+record, a byte, a word length, and a plex of `PCD`s. A `PCD` is 8 bytes:
+flags-and-`fn` word, the piece's file offset `fc`, and a `prm`. The plex's
+`n+1` CPs give each piece its length.
+
+The reader walks the pieces in CP order and copies each one's text out of
+the staging image, so a fast-saved document arrives as the same flat buffer
+a simple one does. The `prm`s are read for their single-sprm form (the
+`fComplex` bit clear: a sprm code and a value) and applied to the piece's
+paragraphs; the `clxtPrc` grpprls a complex `prm` indexes are skipped —
+naming them would need the whole PRC chain, and the properties they carry
+are the ones the FKPs already carry for a simple file.
+
+**Writing is simple, never complex** — which is what Word's own full save
+does (`FQuickSave` with `fCompleteSave`); complex is Fast Save's shape, and
+a port with one 30KB buffer has nothing to gain from it and a format to get
+wrong. So the pieces are read and not written, and that asymmetry is the
+point: it is the half that lets this app open other people's files.
+
+#### 65.4.2 Verifying it without Word
+
+There is no copy of Word here to open the output with, and 'it round-trips
+through the app that wrote it' proves only that the app is self-consistent.
+So the format has a **second, independent implementation**:
+`tools/wordfmt.py` parses a `.DOC` from the Opus structures — FIB, FKPs, bin
+tables, STSH, plcfsed, DOP, and the piece table — and dumps the text with
+its character and paragraph properties. `make wordcheck` builds the shipped
+`WELCOME.DOC`, parses it with that reader, and diffs the result against the
+markup it was generated from; `tools/os88doc.py` writes the same real format
+from the host side, so the tool that generates and the tool that verifies
+are separate code paths over one specification. What this does NOT establish
+is that a running Word 1.1a accepts the file, and no claim that it does
+belongs in this repo until someone runs one.
 
 **Dirty tracking**: every buffer or format mutation sets `[wd_dirty]`; a
 successful Save (and a load, and File > New) clears it. File > New / Open… /
@@ -43904,7 +43996,34 @@ scan: case folds BOTH sides when Match Upper/Lowercase is clear, Whole Word
 demands non-word neighbours (word characters are A-Z a-z 0-9), a search
 wraps around the document exactly once, a hit is selected and scrolled
 visible, a miss toasts 'Search text not found'. F4 / Shift-F4 repeat the
-last search down / up. **Edit > Replace…** is replace.des: Replace With and
+last search down / up.
+
+**The pattern is Word's**, compiled by `wd_pcomp` from `SetSpecialMatch` in
+`Opus/search.c` with the escape letters from `Opus/inter.h`:
+
+| in the box | matches |
+|---|---|
+| `?` | any one character — **unless every character of the pattern is `?`**, in which case they are literal question marks. `search.c`'s own rule, and the reason a user can still search for `???` |
+| `^?` | a literal `?` |
+| `^^` | a literal `^` |
+| `^p` | a paragraph mark (13) |
+| `^t` | a tab (9) |
+| `^w` | white space: one or MORE of space or tab, greedily, counted as one pattern character |
+| `^`digits | the character with that decimal code |
+| `^`anything else | that character, literally — `search.c` treats `^x` as `x` |
+
+`^s` (non-breaking space), `^-` (optional hyphen), `^~` (non-breaking
+hyphen) and `^d` (section mark) name characters the 8×8 font and the
+document model have no room for (§6, §65.3); they compile to their literal
+letter under the `^x` = `x` rule above rather than to a character that can
+never occur, so a search for one fails honestly instead of silently never
+matching. The replacement string takes Word's two specials from `inter.h`
+as well: **`^m`** inserts the text that matched (`chUseMatched`) and
+**`^c`** the clipboard's contents (`chUseScrap`, refused with a toast when
+the clipboard is empty or larger than the buffer); `^^` is a literal caret
+and every other `^x` is `x`, the same rule as the pattern.
+
+**Edit > Replace…** is replace.des: Replace With and
 a Confirm Changes check box on top of the Search set. OK with Confirm clear
 sweeps the whole document as ONE bulk undo record and toasts 'n changes';
 with Confirm set each match is selected in turn under a small Yes / No /
@@ -43917,3 +44036,125 @@ grew what these need: free-text edit fields (`WDDF_TXT`, printable 32..126,
 per-record capacity — a focused text edit consumes letters, so check-box
 mnemonics answer only while none is), per-dialog check-state initialisation,
 and a third button verb (No) beside OK and Cancel.
+
+### 65.8 RTF in and out
+
+Word's other portable format, and the one that is pure text transform:
+`Opus/RTFOUT.C` writes it and `Opus/RTFIN.C` reads it, neither touching
+Windows. Both directions live here.
+
+**Writing** (`wd_rtfsave`). The extension decides — Save or Save As onto a
+name ending `.RTF` writes RTF, everything else writes the Word format
+(§65.4) — because unlike a `.DOC`, a `.RTF` name is the user naming a
+format. The output is a single group, emitted straight into the staging
+claim:
+
+```
+{\rtf1\ansi\deff0{\fonttbl{\f0\fmodern Courier New;}}
+{\stylesheet{\snext0 Normal;}}
+\pard\plain\f0\fs20 …
+}
+```
+
+then, per paragraph, `\pard` followed by the PAP's own controls — `\qc`
+`\qr` `\qj` for the alignment (left is `\pard`'s default and emits
+nothing), `\li` `\fi` `\ri` in twips, `\sl240` / `\sl360` / `\sl480` for the
+three line spacings, `\sb120` for an open paragraph — and then the text as
+runs of equal CHP, each opened with the controls that turn its attributes on
+(`\b`, `\i`, `\ul`, `\ulw`, `\uldb`, `\scaps`, `\v`) and closed with their
+`0` forms. A tab is `\tab`, `{`, `}` and `\` are backslash-escaped, a
+character above 126 is `\'hh`, and a paragraph ends `\par`. A control word
+is terminated by exactly one space, which the reader eats — never two, so
+the file stays the size it needs to be.
+
+**Reading** (`wd_rtfload`). A file whose first bytes are `{\rtf` imports as
+RTF. The reader is Word's shape: a tokeniser over groups, control words
+(letters then an optional signed parameter then one optional space),
+control symbols, and text; a group stack that saves and restores the
+character properties on `{` and `}` so `\b`'s scope ends with its group; and
+a **destination** rule — `{\*\…}` and the known non-text destinations
+(`\fonttbl`, `\colortbl`, `\stylesheet`, `\info`, `\pict`, `\footnote`,
+`\header`, `\footer`) are skipped whole, to their matching `}`. Recognised:
+`\b \i \ul \ulw \uldb \ulnone \scaps \v \plain` and their `0` forms,
+`\pard \ql \qc \qr \qj \li \fi \ri \sl \sb`, `\par \line \tab \page`,
+`\'hh`, `\{ \} \\`, `\~` (a space) and `\-` (nothing). An unrecognised
+control word is ignored; an unrecognised control word introducing a group
+is ignored, not its group — `\*` is what says 'skip the group', and honouring
+that distinction is what stops an RTF file from arriving empty.
+
+The reader is bounded by the same ceilings as every other load: text past
+`WD_MAXKB`, a 257th paragraph format, or a group nesting deeper than
+`WD_RTFDEPTH` (16) stops the import with a toast and keeps what it had —
+Word's own reader truncates at its limits too, and a partial import that
+says so beats a refusal that loses the file.
+
+### 65.9 Utilities: Sort, Renumber, Table of Contents
+
+Three commands that are algorithms rather than screens, which is why they
+port: `Opus/sort.c`, `Opus/renum.c` and `Opus/toc.c` are all Windows-free.
+Each is the authentic dialog from its `.des` file on §65.3's framework, and
+each rewrites its span as ONE bulk undo record (`wd_urec_bulk`), so Alt+BkSp
+takes the whole operation back.
+
+All three operate on **the selection, or the whole document when there is
+none** — Word's own rule, and the reason Sort with nothing selected sorts
+everything. Each snaps the span out to whole paragraphs before it starts: a
+selection that ends mid-paragraph still sorts, renumbers or collects that
+paragraph whole, because a paragraph is the unit all three are defined over.
+
+**Utilities > Sort…** (sort.des). Sort Order Ascending / Descending; a Key
+Field group with Key Type (Alphanumeric / Numeric — Date is in the list and
+greyed, this port has no date parser), Separator Comma / Tab, and Field
+number; Sort Column Only and Case Sensitive check boxes — Sort Column Only
+greyed, because §65.1's draft view has no column selection to restrict to.
+The sort is **stable** (an insertion sort over an index array, so equal keys
+keep their document order, which is what makes a second sort on a second
+field a working two-level sort — Word's own idiom). Alphanumeric compares
+bytes, folding case unless Case Sensitive is set; Numeric parses a leading
+signed integer and compares values, and a field with no number sorts before
+every field that has one. The key is field N counting from 1 between
+separators within the paragraph; a paragraph with fewer fields than N keys
+on the empty string. Text and CHP move together, and each paragraph carries
+its own ¶ mark — and therefore its PAP index — with it.
+
+**Utilities > Renumber…** (renum.des). Renumber Paragraphs All / Numbered
+Only / Remove; Automatic / Manual with a Start at edit; a Format edit; a
+Show all levels check box (greyed — see below). Automatic numbers from 1,
+Manual from the Start at value. The Format string is Word's: the first
+digit-or-letter in it is the number's place and its KIND —
+`1` arabic, `I`/`i` roman, `A`/`a` alphabetic — and everything around it is
+kept verbatim, so `1.` gives `1.`, `(1)` gives `(1)` and `I.` gives `I.`.
+A number is separated from the paragraph's text by a tab, as Word's is.
+'Numbered Only' renumbers just the paragraphs that already begin with a
+number in that shape and leaves the rest alone; 'Remove' strips the number
+and its tab from every paragraph that has one. Show all levels is greyed
+because levels come from the style sheet (§65.4's documented loss) and there
+is none.
+
+**Insert > Table of Contents…** (toc.des). Use Heading Paragraphs / Use
+Table Entry Fields; All / From..To level edits. The collected entries are
+inserted at the caret as one bulk record, each as `text`, a tab, and the
+page number the entry's paragraph falls on (the caret's own Pg arithmetic,
+absolute line ÷ `WD_PGLINES`), with the entry indented one `WD_TABSTOP` per
+level below the first.
+
+Word takes an entry's level from the paragraph's **style code**
+(`toc.c`: `iLevel = stcLevLast - vpapFetch.stc + 1`), and this port has no
+style sheet. The two radios say what it does instead, and both are facts the
+document carries rather than guesses:
+
+* **Use Heading Paragraphs** — a paragraph whose FIRST character is bold is
+  a heading, and its level is `1 + left indent / WD_TABSTOP`, clamped to 9.
+  Bold-from-the-first-character is what a heading looks like in draft view
+  with one font, and the indent is the only paragraph-level rank the PAP
+  carries.
+* **Use Table Entry Fields** — a paragraph that begins with a HIDDEN `.C.`
+  run is an entry, the rest of the hidden run is its text, and the level is
+  the count of characters between the dots (`.C.` level 1, `.CC.` level 2 —
+  Word's own table-entry convention from before the field). Hidden text is
+  something this port really has (§65.1), so the marker is invisible in the
+  document exactly as Word's field is.
+
+Both radios are live; From..To filters by the level either rule produced,
+and a collection that found nothing toasts 'No table of contents entries'
+and inserts nothing.

@@ -302,7 +302,10 @@ WDA_CSEL     equ 19             ; a combo's entry - cosmetic select
 WDA_CHAR     equ 20             ; Format > Character... - the modal dialog
 WDA_PARA     equ 21             ; Format > Paragraph... (SPEC.md 65.3)
 WDA_GOTO     equ 22             ; Edit > Go To... (SPEC.md 65.7)
-WDA_MAX      equ 22
+WDA_SORT     equ 23             ; Utilities > Sort... (SPEC.md 65.9)
+WDA_RENUM    equ 24             ; Utilities > Renumber...
+WDA_TOC      equ 25             ; Insert > Table of Contents...
+WDA_MAX      equ 25
 
 ; --- the CHP attribute byte (SPEC.md 65.3) -----------------------------------
 ; One byte per character, in a claim that mirrors every gap operation the text
@@ -533,6 +536,12 @@ WD_UMAXKB    equ 16             ; ...and its ceiling. Note Pad's 16, KEPT at
 ; honouring the authentic search.des options. Note Pad's regex matcher and
 ; its docked panel are gone - Edit > Search... / Replace... / Go To... are
 ; modal dialogs on the SPEC.md 65.3 framework now.
+WD_FRXMAX    equ 96             ; the expanded replacement's ceiling
+                                ; (SPEC.md 65.7): ^m can be as long as the
+                                ; match and ^c as long as the clipboard, so
+                                ; the splice buffer is bounded here and a
+                                ; replacement that overflows it is REFUSED
+                                ; with a toast rather than truncated
 WD_PATMAX    equ 47             ; characters a pattern or a replacement holds
 WD_EDCAP     equ 32             ; ...and what the dialogs' edit boxes cap at
                                 ; (the box shows its whole text - no scroll)
@@ -5920,19 +5929,15 @@ wd_stghold:
     push ax
     push cx                         ; CL is the shift count below, and the
     push dx                         ; header promises every other register
-    mov ax, [wd_len]
-    add ax, [wd_len]                ; 2 x len (text + CHP), which cannot
-                                    ; carry: [wd_len] is bounded by
-                                    ; WD_MAXKB * 1024, sized for this sum
-    add ax, WD_FIB + WD_PAPMAX*4    ; ...the FIB and the worst-case PAP table
-    add ax, 1023                    ; (SPEC.md 65.4): 63,503 at the ceiling,
-                                    ; still 16-bit exact
-    mov cl, 10
-    shr ax, cl                      ; ...as whole kilobytes, rounded up
-    cmp ax, WD_STGMIN
-    jae .kb
-    mov ax, WD_STGMIN               ; an empty note still needs somewhere to
-.kb:                                ; put its zero bytes
+    mov ax, WD_DOCCAP               ; the WHOLE ceiling, not a size computed
+                                    ; from the document: a real Word file is
+                                    ; the text plus FKP pages, and how many
+                                    ; pages it needs is what the writer finds
+                                    ; out as it goes (SPEC.md 65.4). The claim
+                                    ; is transient - held only across the
+                                    ; write - so taking it whole costs the
+                                    ; machine nothing between saves
+.kb:
     call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
     jc .no
     mov [wd_stgseg], dx
@@ -5991,45 +5996,17 @@ wd_save:
     jc .out
     call wd_goto                ; the folder this document belongs to, if the
                                 ; volume has been moved since (SPEC.md 19.2)
-    cld                         ; DF=0 per SPEC.md 1
-    xor di, di                  ; --- the FIB (SPEC.md 65.4) ---
-    mov ax, WD_DOCMAGIC
-    stosw
-    mov ax, WD_DOCVER
-    stosw
-    mov ax, [wd_len]            ; text length...
-    stosw
-    stosw                       ; ...and the CHP's, which is the same number
-    mov ax, [wd_papn]
-    stosw
-    mov al, [wd_pap_tail]       ; flags: low byte = the tail paragraph's PAP
-    xor ah, ah                  ; index - the one fact with no ¶ to ride
-    stosw
-    xor ax, ax
-    stosw
-    stosw                       ; pad to 16
-    mov cx, [wd_len]            ; --- the text --- (counts loaded BEFORE the
-    push ds                     ; DS swap: no variable is readable after it)
-    mov ds, [cs:wd_dseg]
-    xor si, si
-    rep movsb
-    pop ds
-    mov cx, [wd_len]            ; --- the CHP bytes ---
-    push ds
-    mov ds, [cs:wd_cseg]
-    xor si, si
-    rep movsb
-    pop ds
-    mov cx, [wd_papn]           ; --- the PAP table, papn x 4 ---
-    shl cx, 1
-    shl cx, 1
-    push ds
-    mov ds, [cs:wd_pseg]
-    xor si, si
-    rep movsb
-    pop ds
-    mov cx, di                  ; ES:BX = the image, DX:CX its byte count
-    xor bx, bx                  ; (<= 63,503: 16-bit exact, see WD_MAXKB)
+    call wd_isrtf               ; a .RTF name is the user naming a FORMAT,
+    jnc .rtf                    ; and it is the one extension Save honours
+    call wd_docimg              ; the whole Word file - FIB, text, FKPs,
+    jc .big                     ; STSH, plcfsed, bin tables, DOP (65.4)
+    jmp short .write
+.rtf:
+    call wd_rtfimg              ; ...or the RTF text (SPEC.md 65.8)
+    jc .big
+.write:
+    mov cx, [wd_dend]           ; ES:BX = the image, DX:CX its byte count
+    xor bx, bx
     xor dx, dx
     mov si, wd_name
     call OSAPI_FILE_WRITE
@@ -6038,6 +6015,10 @@ wd_save:
     mov si, wd_m_saved
     call wd_setmsg
     jmp short .done
+.big:
+    mov ax, wd_m_toobig         ; more FKP pages than the staging claim holds
+    call wd_saymsg              ; - refused whole, the document still open
+    jmp short .done             ; and still editable (SPEC.md 65.4)
 .err:
     call wd_errmsg              ; AX = FERR_* -> the toast
 .done:
@@ -6050,6 +6031,59 @@ wd_save:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_isrtf - does the document's name end '.RTF'?
+; out: CF=0 = yes; preserves every register
+;
+; The one extension that decides a format (SPEC.md 65.8). Everything else -
+; including a name with no extension at all - writes the Word file, which is
+; what the real product's Save did.
+; -----------------------------------------------------------------------------
+wd_isrtf:
+    push ax
+    push bx
+    mov bx, wd_name
+.find:
+    mov al, [bx]
+    or al, al
+    jz .no
+    inc bx
+    cmp al, '.'
+    jne .find
+    mov al, [bx]
+    call wd_upc
+    cmp al, 'R'
+    jne .no
+    mov al, [bx+1]
+    call wd_upc
+    cmp al, 'T'
+    jne .no
+    mov al, [bx+2]
+    call wd_upc
+    cmp al, 'F'
+    jne .no
+    cmp byte [bx+3], 0
+    jne .no
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop bx
+    pop ax
+    stc
+    ret
+
+; wd_upc - AL to upper case. Preserves all others.
+wd_upc:
+    cmp al, 'a'
+    jb .out
+    cmp al, 'z'
+    ja .out
+    sub al, 32
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6086,117 +6120,36 @@ wd_load:
     call OSAPI_FILE_READ        ; DX:AX = the file's size; bigger than the
     jc .err                     ; capacity is FERR_BIG decided from the
                                 ; directory entry, buffer untouched (18.4)
-    cmp ax, WD_FIB
+    push ax                     ; the byte count, kept across the sniffs
+    call wd_isrtfimg            ; '{\rtf' -> the RTF reader (SPEC.md 65.8)
+    jc .nortf
+    pop ax
+    call wd_rtfparse
+    jc .bad
+    jmp short .loaded
+.nortf:
+    pop ax
+    cmp ax, WD_HDRPAGE
     jb .plain
     mov es, [wd_stgseg]
-    cmp word [es:0], WD_DOCMAGIC
+    cmp word [es:WDF_IDENT], WD_DOCMAGIC
     jne .plain
 
-    ; --- native: validate the WHOLE FIB against the file size (65.4) -------
-    cmp word [es:2], WD_DOCVER
-    jne .bad
-    mov cx, [es:4]              ; CX = text length, kept through the copies
-    cmp cx, WD_MAXKB * 1024
-    ja .bad
-    cmp [es:6], cx              ; the CHP is the text's parallel array
-    jne .bad
-    mov dx, [es:8]              ; DX = PAP count, 1..256
-    or dx, dx
-    jz .bad
-    cmp dx, WD_PAPMAX
-    ja .bad
-    mov bx, cx                  ; 16 + 2*text + 4*papn must BE the file size
-    add bx, cx
-    add bx, WD_FIB
-    mov di, dx
-    shl di, 1
-    shl di, 1
-    add bx, di
-    cmp bx, ax
-    jne .bad
-    mov bx, [es:10]             ; BL = the tail paragraph's index; the high
-    or bh, bh                   ; byte is reserved 0 (65.4)
-    jnz .bad
-    mov di, bx
-    cmp di, dx                  ; ...and it must name a live entry
-    jae .bad
-
-    push dx                     ; papn
-    push bx                     ; tail (BL)
-    mov ax, cx                  ; size the document claim to the file: whole
-    add ax, 1023                ; KB, plus one to type into
-    push cx
-    mov cl, 10
-    shr ax, cl
-    pop cx
-    inc ax
-    call wd_resize              ; grows/shrinks text AND CHP in lockstep
-    jnc .resok                  ; refused: the document is untouched - and
-    pop bx                      ; the papn/tail pair pushed above comes OFF
-    pop dx                      ; first, or the exit's seven pops unwind into
-    jmp .nomem3                 ; the two of them and ret leaves through
-                                ; whatever [wd_cur] was (found by the
-                                ; integration audit: a native open under
-                                ; heap pressure crashed instead of toasting)
-.resok:
-    push cx                     ; --- the text ---
-    push ds
-    mov ax, [wd_stgseg]
-    mov es, [wd_dseg]
-    mov ds, ax
-    mov si, WD_FIB
-    xor di, di
-    cld
-    rep movsb
-    pop ds
-    pop cx
-    push cx                     ; --- the CHP bytes ---
-    mov si, WD_FIB
-    add si, cx
-    push ds
-    mov ax, [wd_stgseg]
-    mov es, [wd_cseg]
-    mov ds, ax
-    xor di, di
-    rep movsb
-    pop ds
-    pop cx
-    pop bx                      ; tail back (BL)
-    pop dx                      ; papn back
-    push cx                     ; --- the PAP table, papn x 4 ---
-    mov si, WD_FIB
-    add si, cx
-    add si, cx
-    mov ax, dx
-    shl ax, 1
-    shl ax, 1
-    push ds
-    mov di, ax
-    mov ax, [wd_stgseg]
-    mov es, [wd_pseg]
-    mov cx, di
-    mov ds, ax
-    xor di, di
-    rep movsb
-    pop ds
-    pop cx
-    mov [wd_len], cx
-    mov [wd_papn], dx
+    ; --- a real Word file: FIB, pieces, FKPs, the lot (SPEC.md 65.4) ------
+    call wd_docparse            ; CF=1 = refused whole, document untouched
+    jc .bad
+.loaded:
     call wd_clamp               ; caret to the top; clears the has* flags,
                                 ; the tail and the typing attrs (65.3)
-    mov [wd_pap_tail], bl       ; ...then the loaded facts go back: the tail,
-    cmp dx, 1                   ; and [wd_hasfmt] whenever the dictionary
-    jbe .n1                     ; carries more than Normal or the tail wears
-    mov byte [wd_hasfmt], 1     ; a format (SPEC.md 65.4)
-.n1:
-    or bl, bl
-    jz .n2
-    mov byte [wd_hasfmt], 1
-.n2:
-    call wd_ldscan              ; tabs -> [wd_hastab], hidden -> [wd_hashid]
+    call wd_ldpost              ; ...then the loaded facts go back
     mov byte [wd_dirty], 0
     mov si, wd_m_loaded
     call wd_setmsg
+    cmp byte [wd_dtrunc], 0
+    je .done0
+    mov ax, wd_m_trunc
+    call wd_saymsg
+.done0:
     jmp .done
 
 .plain:
@@ -10608,20 +10561,27 @@ wd_iswordc:
 wd_matchat:
     push ax
     push bx
+    push cx
     push dx
     push si
     push di
-    mov si, wd_fpat
+    xor si, si                  ; SI = the compiled pattern's index
     mov di, ax
     mov dx, ax                  ; DX = the start, for the left boundary test
 .ll:
-    mov bl, [si]
-    or bl, bl
-    jz .tail
+    cmp si, [wd_fpwn]
+    jae .tail
+    mov bx, si
+    shl bx, 1
+    mov bx, [bx+wd_fpw]         ; BX = the compiled element
+    cmp bx, WDP_WHITE
+    je .white
     mov ax, di
     cmp ax, [wd_len]
     jae .fail
     call wd_docb                ; AL = the note at DI
+    cmp bx, WDP_ANY
+    je .step                    ; '?' matches any one character
     test byte [wd_fopt], WDFO_CASE
     jnz .exact
     call wd_foldc               ; fold the note's byte...
@@ -10631,8 +10591,27 @@ wd_matchat:
 .exact:
     cmp al, bl
     jne .fail
+.step:
     inc si
     inc di
+    jmp short .ll
+.white:
+    mov ax, di                  ; '^w' matches one or MORE white characters,
+    cmp ax, [wd_len]            ; greedily, and counts as one element
+    jae .fail
+    call wd_docb
+    call wd_iswhite
+    jc .fail
+.wmore:
+    inc di
+    mov ax, di
+    cmp ax, [wd_len]
+    jae .wdone
+    call wd_docb
+    call wd_iswhite
+    jnc .wmore
+.wdone:
+    inc si
     jmp short .ll
 .tail:
     test byte [wd_fopt], WDFO_WORD
@@ -10661,10 +10640,24 @@ wd_matchat:
     pop di
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
 
+; wd_iswhite - CF=0 if AL is white space: FMatchWhiteSpace's own set, less
+; the non-breaking space this character set has no room for (SPEC.md 65.7).
+; Preserves all registers.
+wd_iswhite:
+    cmp al, ' '
+    je .yes
+    cmp al, 9
+    je .yes
+    stc
+    ret
+.yes:
+    clc
+    ret
 
 ; =============================================================================
 ; Finding, and replacing (SPEC.md 27.10)
@@ -10878,6 +10871,15 @@ wd_replat:
     push di
     push es
     mov bx, ax
+    push ax                     ; ^m and ^c are resolved against THIS match
+    push cx                     ; (SPEC.md 65.7), so the bytes spliced in are
+    mov [wd_fmst], ax           ; built here and not taken from the dialog
+    add ax, cx
+    mov [wd_fmen], ax
+    call wd_rxpand
+    pop cx
+    pop ax
+    jc .nox
                                 ; THE ROOM COMES FIRST, and the order is the
                                 ; whole of this routine's promise. wd_delspan
                                 ; used to run before wd_gaproom, so a refused
@@ -10894,7 +10896,7 @@ wd_replat:
                                 ; through the document claim.
     mov ax, [wd_len]
     sub ax, cx                  ; what the note becomes: the span goes...
-    add ax, [wd_frepn]          ; ...and the replacement arrives
+    add ax, [wd_frxn]           ; ...and the replacement arrives
     jc .no                      ; a 16-bit note cannot pass 65,535
     push bx
     push cx
@@ -10905,14 +10907,14 @@ wd_replat:
     push bx
     call wd_delspan             ; out with the old...
     pop bx
-    mov cx, [wd_frepn]
+    mov cx, [wd_frxn]
     push cx
     call wd_gaproom             ; ...and in with the new, which can no longer
     pop cx                      ; be refused for want of room
     jc .no
     mov es, [wd_dseg]
     mov di, bx
-    mov si, wd_frep
+    mov si, wd_frx
     jcxz .filled
 .f:
     mov al, [si]
@@ -10923,12 +10925,14 @@ wd_replat:
     jnz .f
 .filled:
     mov ax, bx
-    mov cx, [wd_frepn]
+    mov cx, [wd_frxn]
     call wd_urec_ins
     mov dx, bx
-    add dx, [wd_frepn]
+    add dx, [wd_frxn]
     clc
     jmp short .out
+.nox:
+    mov bx, ax                  ; the expansion refused and said why
 .no:
     mov dx, bx
     stc
@@ -15199,6 +15203,9 @@ wd_ftab:
     dw wd_a_char                    ; Format > Character... (SPEC.md 65.3)
     dw wd_a_para                    ; Format > Paragraph... (SPEC.md 65.3)
     dw wd_a_goto                    ; Edit > Go To... (SPEC.md 65.7)
+    dw wd_a_sort                    ; Utilities > Sort... (SPEC.md 65.9)
+    dw wd_a_renum                   ; Utilities > Renumber...
+    dw wd_a_toc                     ; Insert > Table of Contents...
 
 wd_mf_ret:
     ret
@@ -15326,6 +15333,328 @@ wd_a_goto:
     pop di
     pop bx
     pop ax
+    ret
+
+; --- the three Utilities dialogs (SPEC.md 65.9) ------------------------------
+; Each opens with its radios and check boxes showing the state it last ran
+; with, so a second Sort remembers the first one's key - which is what makes
+; sorting on two fields two commands rather than a re-typed dialog.
+wd_a_sort:
+    push ax
+    push bx
+    push di
+    mov al, [wd_sopt]
+    and al, WDSO_CASE
+    shr al, 1
+    shr al, 1
+    mov [wd_dck], al                ; the Case Sensitive box is bit 1
+    mov bx, wd_so_asc               ; Ascending / Descending
+    mov al, [wd_sopt]
+    and al, WDSO_DESC
+    call wd_radset
+    mov bx, wd_so_alp               ; Alphanumeric / Numeric
+    mov al, [wd_sopt]
+    and al, WDSO_NUM
+    call wd_radset
+    mov bx, wd_so_com               ; Comma / Tab
+    mov al, [wd_sopt]
+    and al, WDSO_TAB
+    call wd_radset
+    mov ax, [wd_sofld]
+    or ax, ax                       ; the key is SOME field, and the first
+    jnz .fld                        ; one is the default
+    mov ax, 1
+.fld:
+    mov [wd_sofld], ax
+    mov bx, wd_de_fld
+    call wd_unum
+    mov bx, wd_dlgsort
+    call wd_dgopen
+    pop di
+    pop bx
+    pop ax
+    ret
+
+wd_a_renum:
+    push ax
+    push bx
+    push di
+    mov byte [wd_dck], 0
+    mov bx, wd_rn_all               ; a THREE-way radio: the first is
+    mov al, [wd_rnact]              ; selected when the value is 0, and
+    call wd_rad3                    ; wd_rad3 says which of three
+    mov bx, wd_rn_auto
+    mov al, [wd_rnman]
+    call wd_radset
+    mov ax, [wd_rnfrom]
+    mov bx, wd_de_start
+    call wd_unum
+    cmp byte [wd_rnfmt], 0          ; the format the real product starts with
+    jne .havef
+    mov byte [wd_rnfmt], '1'
+    mov byte [wd_rnfmt+1], '.'
+    mov byte [wd_rnfmt+2], 0
+.havef:
+    mov bx, wd_dlgrenum
+    call wd_dgopen
+    pop di
+    pop bx
+    pop ax
+    ret
+
+wd_a_toc:
+    push ax
+    push bx
+    push di
+    mov byte [wd_dck], 0
+    mov bx, wd_tc_head
+    mov al, [wd_tcsrc]
+    call wd_radset
+    mov bx, wd_tc_all               ; All / From..To
+    mov al, [wd_tclvl]
+    call wd_radset
+    mov ax, [wd_tcfrom]
+    or ax, ax
+    jnz .haver
+    mov ax, 1
+    mov [wd_tcfrom], ax
+    mov word [wd_tcto], 9
+.haver:
+    mov bx, wd_de_from
+    call wd_unum
+    mov ax, [wd_tcto]
+    mov bx, wd_de_to
+    call wd_unum
+    mov bx, wd_dlgtoc
+    call wd_dgopen
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; The three Utilities dialogs' OK verbs (SPEC.md 65.9). Each banks its radios
+; and edits into the command's state, closes, runs, and repaints - the same
+; shape wd_dsapply has, so the search dialogs and these cannot drift.
+; -----------------------------------------------------------------------------
+wd_dsoapply:
+    push ax
+    push bx
+    call wd_dgclose
+    xor al, al
+    cmp word [wd_so_des+8], 0
+    je .n1
+    or al, WDSO_DESC
+.n1:
+    cmp word [wd_so_num+8], 0
+    je .n2
+    or al, WDSO_NUM
+.n2:
+    cmp word [wd_so_tab+8], 0
+    je .n3
+    or al, WDSO_TAB
+.n3:
+    test byte [wd_dck], 2
+    jz .n4
+    or al, WDSO_CASE
+.n4:
+    mov [wd_sopt], al
+    mov bx, wd_de_fld
+    call wd_uatoi
+    or ax, ax                       ; field 0 is field 1: a key has to be
+    jnz .fld                        ; SOME field
+    mov ax, 1
+.fld:
+    mov [wd_sofld], ax
+    push si                         ; the command uses SI as scratch, and
+    call wd_dosort                     ; wd_redraw wants the WINDOW there
+    pop si
+    call wd_redraw
+    pop bx
+    pop ax
+    ret
+
+wd_drnapply:
+    push ax
+    push bx
+    call wd_dgclose
+    mov al, WDRN_ALL
+    cmp word [wd_rn_numd+8], 0
+    je .n1
+    mov al, WDRN_NUMD
+.n1:
+    cmp word [wd_rn_rem+8], 0
+    je .n2
+    mov al, WDRN_REMOVE
+.n2:
+    mov [wd_rnact], al
+    xor al, al
+    cmp word [wd_rn_man+8], 0
+    je .n3
+    mov al, 1
+.n3:
+    mov [wd_rnman], al
+    mov ax, 1                       ; Automatic numbers from 1; Manual from
+    or al, al                       ; the Start at value
+    jz .start
+    mov bx, wd_de_start
+    call wd_uatoi
+    or ax, ax
+    jnz .start
+    mov ax, 1
+.start:
+    mov [wd_rnfrom], ax
+    push si                         ; the command uses SI as scratch, and
+    call wd_dorenum                     ; wd_redraw wants the WINDOW there
+    pop si
+    call wd_redraw
+    pop bx
+    pop ax
+    ret
+
+wd_dtcapply:
+    push ax
+    push bx
+    call wd_dgclose
+    xor al, al
+    cmp word [wd_tc_fld+8], 0
+    je .n1
+    mov al, 1
+.n1:
+    mov [wd_tcsrc], al
+    xor al, al
+    cmp word [wd_tc_rng+8], 0
+    je .n2
+    mov al, 1
+.n2:
+    mov [wd_tclvl], al
+    mov word [wd_tcfrom], 1         ; All is levels 1..9
+    mov word [wd_tcto], 9
+    or al, al
+    jz .go
+    mov bx, wd_de_from
+    call wd_uatoi
+    or ax, ax
+    jnz .f
+    mov ax, 1
+.f:
+    mov [wd_tcfrom], ax
+    mov bx, wd_de_to
+    call wd_uatoi
+    or ax, ax
+    jnz .t
+    mov ax, 9
+.t:
+    mov [wd_tcto], ax
+.go:
+    push si                         ; the command uses SI as scratch, and
+    call wd_dotoc                     ; wd_redraw wants the WINDOW there
+    pop si
+    call wd_redraw
+    pop bx
+    pop ax
+    ret
+
+; wd_radset - a two-way radio pair at BX: AL = 0 selects the first, non-zero
+; the second. Preserves all registers.
+wd_radset:
+    push ax
+    push bx
+    or al, al
+    mov word [bx+8], 1
+    mov word [bx+12+8], 0
+    jz .out
+    mov word [bx+8], 0
+    mov word [bx+12+8], 1
+.out:
+    pop bx
+    pop ax
+    ret
+
+; wd_rad3 - a three-way radio row at BX: AL = 0, 1 or 2. Preserves all.
+wd_rad3:
+    push ax
+    push bx
+    mov word [bx+8], 0
+    mov word [bx+12+8], 0
+    mov word [bx+24+8], 0
+    xor ah, ah
+    cmp al, 2
+    jbe .ok
+    xor al, al
+.ok:
+    mov ah, 12
+    mul ah
+    add bx, ax
+    mov word [bx+8], 1
+    pop bx
+    pop ax
+    ret
+
+; wd_unum - write unsigned AX into the NUL buffer at BX. Preserves all.
+wd_unum:
+    push ax
+    push bx
+    push cx
+    push dx
+    xor cx, cx
+.d:
+    xor dx, dx
+    push bx
+    mov bx, 10
+    div bx
+    pop bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .d
+.e:
+    pop ax
+    add al, '0'
+    mov [bx], al
+    inc bx
+    loop .e
+    mov byte [bx], 0
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wd_uatoi - AX = the unsigned number in the NUL buffer at BX (0 if none).
+; Preserves all registers but AX.
+wd_uatoi:
+    push bx
+    push cx
+    push dx
+    xor cx, cx
+.l:
+    mov dl, [bx]
+    cmp dl, '0'
+    jb .done
+    cmp dl, '9'
+    ja .done
+    cmp cx, 6000
+    jae .skip
+    sub dl, '0'                     ; the digit is taken out of DX BEFORE the
+    xor dh, dh                      ; multiply: a 16-bit mul writes DX:AX and
+    push dx                         ; would otherwise overwrite it with the
+    mov ax, cx                      ; high half of the product
+    push bx
+    mov bx, 10
+    mul bx
+    pop bx
+    pop dx
+    add ax, dx
+    mov cx, ax
+.skip:
+    inc bx
+    jmp short .l
+.done:
+    mov ax, cx
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; wd_dirset - the Search dialog's Up/Down radio states from [wd_fdir]
@@ -16325,7 +16654,22 @@ wd_dgok:
     je .yes
     cmp bx, wd_dlgconf
     je .cyes
+    cmp bx, wd_dlgsort
+    je .sort
+    cmp bx, wd_dlgrenum
+    je .renum
+    cmp bx, wd_dlgtoc
+    je .toc
     call wd_dgclose                 ; unknown: just take it down
+    jmp short .out
+.sort:
+    call wd_dsoapply                ; the three Utilities commands (65.9)
+    jmp short .out
+.renum:
+    call wd_drnapply
+    jmp short .out
+.toc:
+    call wd_dtcapply
     jmp short .out
 .char:
     call wd_dgapply
@@ -16503,6 +16847,10 @@ wd_fplen:
     jmp short .l
 .done:
     mov [wd_fpatn], ax
+    call wd_pcomp               ; the raw text is what the dialog edits; the
+                                ; COMPILED pattern is what the engine walks
+                                ; (SPEC.md 65.7), and this is the one door
+                                ; the raw text changes through
     pop bx
     pop ax
     ret
@@ -17170,6 +17518,37 @@ wd_s_dcsp:   db 'Character Spacing', 0
 wd_s_dexp:   db 'Expanded', 0
 wd_s_dcond:  db 'Condensed', 0
 wd_s_dcanc:  db 'Cancel', 0
+wd_s_dsort:  db 'Sort', 0            ; sort.des
+wd_s_dorder: db 'Sort Order', 0
+wd_s_dasc:   db 'Ascending', 0
+wd_s_ddes:   db 'Descending', 0
+wd_s_dkey:   db 'Key Field', 0
+wd_s_dktype: db 'Key Type:', 0
+wd_s_dalpha: db 'Alphanumeric', 0
+wd_s_dnum:   db 'Numeric', 0
+wd_s_ddate:  db 'Date', 0            ; greyed: no date parser (SPEC.md 65.9)
+wd_s_dsep:   db 'Separator:', 0
+wd_s_dcomma: db 'Comma', 0
+wd_s_dtab:   db 'Tab', 0
+wd_s_dfldn:  db 'Field number:', 0
+wd_s_dscol:  db 'Sort Column Only', 0    ; greyed: draft view has no column
+wd_s_dcase:  db 'Case Sensitive', 0      ; selection to restrict to
+wd_s_drenum: db 'Renumber', 0        ; renum.des
+wd_s_drpara: db 'Renumber Paragraphs', 0
+wd_s_dall:   db 'All', 0
+wd_s_dnumd:  db 'Numbered Only', 0
+wd_s_drem:   db 'Remove', 0
+wd_s_dauto2: db 'Automatic', 0
+wd_s_dman:   db 'Manual:', 0
+wd_s_dstart: db 'Start at:', 0
+wd_s_dlevels: db 'Show all levels', 0    ; greyed: levels come from the style
+wd_s_dfmt:   db 'Format:', 0             ; sheet, and there is none
+wd_s_dtoc:   db 'Table of Contents', 0   ; toc.des
+wd_s_dtocg:  db 'Table Of Contents', 0
+wd_s_dhead:  db 'Use Heading Paragraphs', 0
+wd_s_dtcfld: db 'Use Table Entry Fields', 0
+wd_s_dfrom:  db 'From:', 0
+wd_s_dto:    db 'To:', 0
 
 ; --- the Search / Replace / Go To dialogs (search.des / replace.des / the
 ;     goto dialog, SPEC.md 65.7) and the two Yes/No/Cancel prompts (65.4) ----
@@ -17211,6 +17590,83 @@ wd_dg_edit:
     WDDC WDD_EDIT, 0,       112,  28, wd_de_goto,  56, 6
     WDDC WDD_BTN, 0,        184,  28, wd_s_ok,     56, 1
     WDDC WDD_BTN, 0,        248,  28, wd_s_dcanc,  56, 2
+    db 0
+
+; --- the Utilities dialogs (sort.des / renum.des / toc.des, SPEC.md 65.9) ---
+; The .des files' own strings and grouping. Their drop-down lists are RADIOS
+; here - this framework has no live list box (SPEC.md 65.3), and a radio row
+; says the same thing about a choice of three; the greyed controls are the
+; ones whose fact this port does not have (a column selection, a style sheet).
+wd_dlgsort:
+    dw 448, 168, wd_s_dsort
+    WDDC WDD_GRP, 0,          8,  24, wd_s_dorder, 360, 34
+wd_so_asc:
+    WDDC WDD_RAD, 0,         18,  40, wd_s_dasc,   1, 1
+wd_so_des:
+    WDDC WDD_RAD, 0,        140,  40, wd_s_ddes,   0, 1
+    WDDC WDD_GRP, 0,          8,  64, wd_s_dkey,   360, 76
+    WDDC WDD_LBL, 0,         16,  84, wd_s_dktype, 0, 0
+wd_so_alp:
+    WDDC WDD_RAD, 0,         92,  82, wd_s_dalpha, 1, 2
+wd_so_num:
+    WDDC WDD_RAD, 0,         92,  96, wd_s_dnum,   0, 2
+    WDDC WDD_RAD, WDDF_DIS,  92, 110, wd_s_ddate,  0, 2
+    WDDC WDD_LBL, 0,        216,  84, wd_s_dsep,   0, 0
+wd_so_com:
+    WDDC WDD_RAD, 0,        288,  82, wd_s_dcomma, 1, 3
+wd_so_tab:
+    WDDC WDD_RAD, 0,        288,  96, wd_s_dtab,   0, 3
+    WDDC WDD_LBL, 0,        216, 112, wd_s_dfldn,  0, 0
+wd_so_fld:
+    WDDC WDD_EDIT, 0,       320, 110, wd_de_fld,   40, 4
+    WDDC WDD_CHK, WDDF_DIS,   8, 146, wd_s_dscol,  1, 0
+    WDDC WDD_CHK, 0,        216, 146, wd_s_dcase,  2, 0
+    WDDC WDD_BTN, 0,        380,   6, wd_s_ok,     56, 1
+    WDDC WDD_BTN, 0,        380,  26, wd_s_dcanc,  56, 2
+    db 0
+
+wd_dlgrenum:
+    dw 448, 148, wd_s_drenum
+    WDDC WDD_GRP, 0,          8,  24, wd_s_drpara, 360, 34
+wd_rn_all:
+    WDDC WDD_RAD, 0,         18,  40, wd_s_dall,   1, 1
+wd_rn_numd:
+    WDDC WDD_RAD, 0,         80,  40, wd_s_dnumd,  0, 1
+wd_rn_rem:
+    WDDC WDD_RAD, 0,        216,  40, wd_s_drem,   0, 1
+wd_rn_auto:
+    WDDC WDD_RAD, 0,         18,  70, wd_s_dauto2, 1, 2
+wd_rn_man:
+    WDDC WDD_RAD, 0,        140,  70, wd_s_dman,   0, 2
+    WDDC WDD_LBL, 0,         18,  96, wd_s_dstart, 0, 0
+wd_rn_st:
+    WDDC WDD_EDIT, 0,        96,  94, wd_de_start, 48, 5
+    WDDC WDD_CHK, WDDF_DIS,  18, 120, wd_s_dlevels, 1, 0
+    WDDC WDD_LBL, 0,        216,  96, wd_s_dfmt,   0, 0
+wd_rn_fmt:
+    WDDC WDD_EDIT, WDDF_TXT, 280,  94, wd_rnfmt,    80, 10
+    WDDC WDD_BTN, 0,        380,   6, wd_s_ok,     56, 1
+    WDDC WDD_BTN, 0,        380,  26, wd_s_dcanc,  56, 2
+    db 0
+
+wd_dlgtoc:
+    dw 448, 124, wd_s_dtoc
+    WDDC WDD_GRP, 0,          8,  24, wd_s_dtocg,  360, 84
+wd_tc_head:                         ; the two SOURCE radios stay adjacent in
+    WDDC WDD_RAD, 0,         18,  40, wd_s_dhead,  1, 1
+wd_tc_fld:                          ; the descriptor - wd_radset addresses a
+    WDDC WDD_RAD, 0,         18,  88, wd_s_dtcfld, 0, 1
+wd_tc_all:                          ; PAIR by its first record, and where a
+    WDDC WDD_RAD, 0,         34,  62, wd_s_dall,   1, 2
+wd_tc_rng:                          ; control PAINTS is its x/y, not its
+    WDDC WDD_RAD, 0,         96,  62, wd_s_dfrom,  0, 2
+wd_tc_f:                            ; place in the list
+    WDDC WDD_EDIT, 0,       168,  60, wd_de_from,  32, 2
+    WDDC WDD_LBL, 0,        216,  62, wd_s_dto,    0, 0
+wd_tc_t:
+    WDDC WDD_EDIT, 0,       248,  60, wd_de_to,    32, 2
+    WDDC WDD_BTN, 0,        380,   6, wd_s_ok,     56, 1
+    WDDC WDD_BTN, 0,        380,  26, wd_s_dcanc,  56, 2
     db 0
 
 wd_dlgask:                          ; 'Do you want to save changes to X?' -
@@ -17363,7 +17819,7 @@ wd_it_ins:                          ; &Insert
     WDMI WDMF_DIS, 4, WDA_NONE,   'D', wd_L_field,  0
     WDMI WDMF_DIS, 6, WDA_NONE,   'E', wd_L_ixentry, 0
     WDMI WDMF_DIS, 0, WDA_NONE,   'I', wd_L_index,  0
-    WDMI WDMF_DIS, 9, WDA_NONE,   'C', wd_L_toc,    0
+    WDMI 0,        9, WDA_TOC,    'C', wd_L_toc,    0
 
 wd_it_fmt:                          ; Forma&t
     WDMI 0,        0, WDA_CHAR,   'C', wd_L_charctr, 0
@@ -17384,10 +17840,10 @@ wd_it_util:                         ; &Utilities
     WDMI WDMF_DIS, 0, WDA_NONE,   'T', wd_L_thesaur, 0
     WDMI WDMF_DIS, 0, WDA_NONE,   'H', wd_L_hyphen, 0
     WDMS
-    WDMI WDMF_DIS, 0, WDA_NONE,   'R', wd_L_renum,  0
+    WDMI 0,        0, WDA_RENUM,  'R', wd_L_renum,  0
     WDMI WDMF_DIS, 9, WDA_NONE,   'M', wd_L_revmark, 0
     WDMI WDMF_DIS, 8, WDA_NONE,   'V', wd_L_compver, 0
-    WDMI WDMF_DIS, 1, WDA_NONE,   'O', wd_L_sort,   0
+    WDMI 0,        1, WDA_SORT,   'O', wd_L_sort,   0
     WDMI WDMF_DIS, 0, WDA_NONE,   'C', wd_L_calc,   0
     WDMI WDMF_DIS, 2, WDA_NONE,   'P', wd_L_repag,  0
     WDMI WDMF_DIS, 1, WDA_NONE,   'U', wd_L_custom, 0
@@ -17632,8 +18088,32 @@ wd_m_repld:   db ' changes', 0       ; wd_saycnt's suffix: 'n changes' is the
                                      ; sweep's answer (SPEC.md 65.7)
 wd_m_noundo:  db 'Nothing to undo', 0
 wd_m_papfull: db 'Too many paragraph formats', 0
+wd_m_toobig:  db 'Document too complex to save', 0
+wd_m_noclip:  db 'The clipboard is empty', 0        ; ^c with nothing in it
+wd_m_replong: db 'Replacement too long', 0          ; ...and ^m/^c past
+                                     ; WD_FRXMAX (SPEC.md 65.7)
+wd_m_toomanyp: db 'Too many paragraphs', 0          ; past WD_UMAXP (65.9)
+wd_m_noundo2: db 'Too large to undo', 0             ; the span is bigger than
+                                     ; the undo blob, so the command refuses
+                                     ; rather than do it unundoably (65.9)
+wd_m_notoc:   db 'No table of contents entries', 0
+wd_m_sorted:  db 'Sorted', 0
+wd_m_renumd:  db 'Renumbered', 0   ; more FKP pages than
+                                     ; the staging claim holds (SPEC.md 65.4)
 wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                                         ; not fund the clipboard (SPEC.md 55)
+
+; --- the real Word file format (SPEC.md 65.4) --------------------------------
+; The FIB, the FKP pages, the bin tables, the style sheet, the section table,
+; the DOP and the piece table - a separate file because it is a FORMAT, laid
+; out from Opus's own headers, and reads as one.
+%include "wddoc.inc"
+
+; --- RTF, the other portable format (SPEC.md 65.8) ---------------------------
+%include "wdrtf.inc"
+
+; --- the search pattern and the Utilities commands (SPEC.md 65.7/65.9) -------
+%include "wdutil.inc"
 
 ; --- the state SPEC.md 27.8/27.9/27.10 added ---------------------------------
 ; The block below the image (further down this file) is ~120 hand-computed
@@ -18007,6 +18487,111 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
     WDVAR wd_dck,   1       ; byte: the attr byte the check boxes are editing
     WDVAR wd_dpad,  1       ; byte: keeps the words below even
     WDVAR wd_dgr,   8       ; 4 words: a button rect being drawn/hit
+
+; --- the real .DOC format (wddoc.inc, SPEC.md 65.4) --------------------------
+    WDVAR wd_dgrp,  24      ; a grpprl under construction. Six paragraph
+                            ; sprms at three bytes is 18; WD_GRPMAX is the
+                            ; same number stated where the builder is
+    WDVAR wd_dprop, 32      ; ...and the FKP property record built from it
+                            ; (a PAPX adds a cw byte, an stc and a 6-byte PHE)
+    WDVAR wd_dfkp,  512     ; the 512-byte FKP page being built. Built HERE
+                            ; and copied into the image whole, because in
+                            ; place it needs two pointers growing towards
+                            ; each other and that arithmetic is the entire
+                            ; risk of the structure (SPEC.md 65.4)
+    WDVAR wd_dfkn,  2       ; word: its crun
+    WDVAR wd_dfkhi, 2       ; word: how far DOWN its properties have got
+    WDVAR wd_dfkb,  128     ; its rgb offset bytes, BANKED: rgb[i] lives at
+                            ; 4*(crun+1) + i and crun is not final until the
+                            ; page is sealed, so storing one as it is made
+                            ; stores it where the next run moves it from
+    WDVAR wd_dbtfc, 128     ; WD_MAXBTE words: each FKP page's first fc, for
+                            ; the bin table written at the end
+    WDVAR wd_dbtn,  2       ; word: how many of them
+    WDVAR wd_dbn0,  2       ; word } the CHP and PAP page counts, kept apart
+    WDVAR wd_dbn1,  2       ; word } because the second pass reuses the array
+    WDVAR wd_dpn0,  2       ; word } ...and the page number each run starts at
+    WDVAR wd_dpn1,  2       ; word }
+    WDVAR wd_dend,  2       ; word: one past the run/paragraph just measured
+    WDVAR wd_dvlen, 2       ; word: [wd_len] plus the trailing ¶ the FILE has
+                            ; and this document model does not (SPEC.md 65.4)
+    WDVAR wd_dfsize, 2      ; word: the size of the file being read
+    WDVAR wd_dtrunc, 1      ; byte: it was bigger than this port can hold
+    WDVAR wd_dtail, 1       ; byte: the tail paragraph's PAP index, banked
+                            ; across wd_clamp - which clears the live one
+    WDVAR wd_dpcn,  2       ; word: how many pieces the text is in (1 for a
+                            ; simple file - SPEC.md 65.4.1)
+    WDVAR wd_dpcp,  2       ; word } the plcpcd's CP array and PCD array,
+    WDVAR wd_dpcd,  2       ; word } as offsets INTO the staging image
+    WDVAR wd_dp1fc, 2       ; word: a simple file's one piece's fc
+    WDVAR wd_dccp,  2       ; word: the document's total length in characters
+    WDVAR wd_dprem, 2       ; word: characters left in the piece being painted
+    WDVAR wd_dfclim, 2      ; word: the limit fc of the run wd_dfkfind found
+    WDVAR wd_dprop2, 2      ; word: ...and its property record's file offset
+
+; --- RTF in and out (wdrtf.inc, SPEC.md 65.8) --------------------------------
+    WDVAR wd_rfull, 1       ; byte: the writer ran out of staging claim
+    WDVAR wd_rat,   1       ; byte: the attributes the writer has OPEN, or
+                            ; the ones the reader is applying
+    WDVAR wd_rnew,  1       ; byte: a paragraph is about to start
+    WDVAR wd_rpad,  1       ; byte: keeps the words below even
+    WDVAR wd_rdep,  2       ; word: the reader's group depth
+    WDVAR wd_rskip, 2       ; word: the depth a skipped destination began at,
+                            ; 0 = not skipping (SPEC.md 65.8)
+    WDVAR wd_rstk,  32      ; WD_RTFDEPTH bytes of saved attributes, one per
+                            ; open group, so a \b's scope ends with its group
+                            ; (padded to a word each, which keeps the indexing
+                            ; a single shift)
+    WDVAR wd_rcw,   20      ; the control word being read, NUL-terminated
+    WDVAR wd_fpw,   94      ; the COMPILED search pattern (SPEC.md 65.7),
+                            ; one word per element: a value 0..255 is that
+                            ; character, WDP_ANY and WDP_WHITE the wildcards
+    WDVAR wd_fpwn,  2       ; word: how many elements it has
+    WDVAR wd_frx,   WD_FRXMAX   ; the EXPANDED replacement: ^m and ^c are
+                            ; resolved per match, so the bytes spliced in are
+                            ; never the ones the dialog holds
+    WDVAR wd_frxn,  2       ; word: how many of them
+; --- the Utilities commands (wdutil.inc, SPEC.md 65.9) -----------------------
+    WDVAR wd_us0,   2       ; word } the span Sort / Renumber / Table of
+    WDVAR wd_us1,   2       ; word } Contents operate on, snapped out to
+                            ; whole paragraphs
+    WDVAR wd_upst,  258     ; WD_UMAXP+1 words: each paragraph's start, plus
+                            ; a sentinel at [wd_us1] - so a paragraph's
+                            ; length is the NEXT entry and no second array
+                            ; exists to disagree with this one
+    WDVAR wd_upn,   2       ; word: how many paragraphs are in it
+    WDVAR wd_uord,  256     ; WD_UMAXP words: the sort's order array
+    WDVAR wd_scseg, 2       ; word: the rebuild scratch claim, 0 = none
+    WDVAR wd_scn,   2       ; word: how many characters are in it
+    WDVAR wd_utl,   1       ; byte: the span runs to the document's end with
+                            ; no closing ¶, so the rebuilt one must not have
+                            ; one either (SPEC.md 65.9)
+    WDVAR wd_sopt,  1       ; byte: the Sort dialog's options, WDSO_*
+    WDVAR wd_sofld, 2       ; word: its Field number, 1-based
+    WDVAR wd_sokb,  2       ; word } the second key of a comparison, banked
+    WDVAR wd_soke,  2       ; word } because wd_sonum walks SI..DI
+    WDVAR wd_rnact, 1       ; byte: Renumber's All / Numbered Only / Remove
+    WDVAR wd_rnpad, 1       ; byte: keeps the words below even
+    WDVAR wd_rnfrom, 2      ; word: the Start at value
+    WDVAR wd_rnnow, 2       ; word: ...and the running number
+    WDVAR wd_rnfmt, 12      ; the Format edit's text, NUL-terminated
+    WDVAR wd_tcsrc, 1       ; byte: TOC source, 0 = headings / 1 = fields
+    WDVAR wd_tcpst, 1       ; byte: the walk is standing on a paragraph start
+    WDVAR wd_tcfrom, 2      ; word } the level range From..To
+    WDVAR wd_tcto,  2       ; word }
+    WDVAR wd_tcn,   2       ; word: entries collected
+    WDVAR wd_tcline, 2      ; word } the collector's own row counter and the
+    WDVAR wd_tccol, 2       ; word } column inside the row it is on
+    WDVAR wd_de_fld, 8      ; the Utilities dialogs' numeric edit buffers
+    WDVAR wd_de_start, 8
+    WDVAR wd_de_from, 8
+    WDVAR wd_de_to,  8
+    WDVAR wd_rnman, 1       ; byte: Renumber's Automatic / Manual
+    WDVAR wd_tclvl, 1       ; byte: the TOC's All / From..To
+
+    WDVAR wd_rpp,   4       ; the PAP entry the writer is emitting, banked
+                            ; because SI is the string pointer every emit
+                            ; needs and the entry has to outlive them
 
 %ifdef WDBENCH
 ; --- the walk bench (tests/wdbench.inc), in the -DWDBENCH build only ---------

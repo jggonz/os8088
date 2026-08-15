@@ -214,3 +214,52 @@ feature stays unbound.
   italic table 3KB + undo arena ≤16KB — comfortably inside a 256KB XT's
   ~167KB heap for mid-size documents, with `OSAPI_MEM_AVAIL`-gated refusal
   (grey the fact) beyond that.
+
+## 11. The second pass: what else in Opus turned out to be portable
+
+Section 1 said the port is of "the thing a user actually touches", because
+Opus is pcode against the Windows API and none of that exists here. That is
+still true of the product as a whole — and it left four things on the table
+that are neither pcode nor Windows, only C over a document:
+
+| Opus | what landed | where |
+|---|---|---|
+| `wordtech/file.h`, `fkp.h`, `doc.h`, `prm.h`, `props.h`, `wordwin.h` | the REAL `.DOC` — FIB, FKP pages, bin tables, STSH, plcfsed, DOP, and the piece table on the read side | `apps/word/wddoc.inc`, SPEC.md §65.4 |
+| `RTFOUT.C` / `RTFIN.C` | RTF out and in | `apps/word/wdrtf.inc`, §65.8 |
+| `search.c`'s `SetSpecialMatch` | the pattern language: `?`, `^p`, `^t`, `^w`, `^nnn`, and `^m`/`^c` in the replacement | `apps/word/wdutil.inc`, §65.7 |
+| `sort.c`, `renum.c`, `toc.c` | Utilities > Sort / Renumber and Insert > Table of Contents | `apps/word/wdutil.inc`, §65.9 |
+
+Three things are worth writing down about how that went.
+
+**The file format needed a second implementation to be worth anything.**
+There is no Word here to open the output with, and a format that only
+round-trips through the app that wrote it is a private format with Opus's
+magic on it — which is exactly what the first version was. So
+`tools/os88doc.py` writes the real format from the host side and
+`tools/wordfmt.py` reads it, sharing no code, both from the Opus headers;
+`make wordcheck` runs the pair and diffs the result against the markup the
+document was generated from. That is what caught the FIB's `fcPlcfbteChpx`
+offset (160, not 172 — the pairs are `94 + 6n` and I had miscounted `n`), a
+CHPX written without its `cb` byte, an FKP whose `rgb` array was stored at
+the offset the CURRENT run count implied rather than the final one, and a
+PAPX pad byte left holding the previous record's sprm. None of those four
+would have shown up as a wrong pixel; all four make the file unreadable to
+Word. The two implementations now agree byte-for-byte on `WELCOME.DOC`.
+
+**`mul` writes `DX`.** Four separate defects in this work were one register
+discipline mistake: a 16-bit multiply or divide writes `DX:AX`, and in each
+case `DX` was carrying something — the packed PAP byte, the "this control
+word had a parameter" flag, the decimal digit being accumulated, the TOC
+entry's level. Three of the four are invisible until you look at the output
+closely (a lost space-before, `\b0` read as `\b`, an indent taken from a
+division remainder); the fourth wrapped every table-of-contents line to one
+character. The related trap is `pop ax` after a byte fetch: `call wd_docb2`
+answers in `AL`, and preserving `AX` across it throws the answer away. Both
+are the sort of thing a comment at the call site is worth more than a rule.
+
+**A command that clobbers `SI` cannot be followed by a repaint.** Sort,
+Renumber and Table of Contents all use `SI` as scratch, and `wd_redraw`
+wants the window there. The document was correct and the screen was not,
+which reads exactly like the command doing nothing — and the way it was
+found was saving the file and parsing it on the host, not looking harder at
+the screen.

@@ -561,7 +561,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         comscan lptlink \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
-        worddisk xt-word 386-word \
+        worddisk wordcheck xt-word 386-word \
         checkdocs clean clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -1542,7 +1542,10 @@ $(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat/disk2/CATALOG.TXT \
 # generated DETERMINISTICALLY by tools/os88doc.py from apps/word/welcome.wtx
 # - a document that exercises the formatting the same engine renders, so the
 # disk demonstrates the product the moment it is double-clicked.
-WORDSRC := apps/word/word.asm
+# Every include is a prerequisite: the format modules are where the file
+# layout lives, and a stale word.bin reads exactly like the layout being wrong.
+WORDSRC := apps/word/word.asm apps/word/wddoc.inc apps/word/wdrtf.inc \
+           apps/word/wdutil.inc
 
 $(BUILD)/WELCOME.DOC: tools/os88doc.py apps/word/welcome.wtx | $(BUILD)
 	python3 tools/os88doc.py apps/word/welcome.wtx -o $@
@@ -1565,6 +1568,24 @@ $(BUILD)/word720.img: $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC tools/os88disk.py
 
 $(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/word.o88 $(BUILD)/WELCOME.DOC --folder DOCS
+
+# --- the .DOC format gate (ON DEMAND: `make wordcheck`) ----------------------
+# There is no copy of Word here to open the output with, and "it round-trips
+# through the app that wrote it" proves only that the app is self-consistent.
+# So the format has a SECOND implementation: tools/os88doc.py writes it and
+# tools/wordfmt.py reads it, sharing no code, both from the Opus headers
+# (SPEC.md 65.4.2). This builds WELCOME.DOC, parses it back with the reader,
+# and diffs the result against the markup it was generated from - so a wrong
+# FIB offset, a wrong FKP offset scale or a wrong sprm width is a DIFF and
+# not a silently prettier document.
+#
+# What it does NOT establish is that a running Word 1.1a accepts the file.
+wordcheck: $(BUILD)/WELCOME.DOC
+	@python3 tools/wordfmt.py $(BUILD)/WELCOME.DOC
+	@grep -v '^;' apps/word/welcome.wtx | sed 's/^;;/;/' > $(BUILD)/word.src.wtx
+	@python3 tools/wordfmt.py $(BUILD)/WELCOME.DOC --wtx > $(BUILD)/word.rt.wtx
+	@diff $(BUILD)/word.src.wtx $(BUILD)/word.rt.wtx \
+		&& echo "wordcheck: the .DOC round-trips through an independent reader"
 
 # --- the Frotz gate (ON DEMAND: `make ztest`) --------------------------------
 # tests/frotz/zopstest.inf is a STORY, not a package, because the thing under
