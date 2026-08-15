@@ -43808,11 +43808,25 @@ each commented at the constant: Ctrl-A Select All, Ctrl-S Save, Ctrl-F/R
 Search/… as before Ctrl-R — Ctrl-R is RightPara now and Replace is the
 menu's.
 
+**The ruler is two rows, as Opus's own is.** `ibdefs.h`'s `ibdRuler2` puts
+every button at y=1 with height 12 and then `ibidCustomWnd(1,14,…)` —
+`idRulMark`, the scale — on a row of its own beneath them. Row 1 carries the
+Style combo, the four alignments, the three spacings, close/open and the four
+(greyed) tab types; **row 2 is the scale alone, and it is zeroed on the TEXT
+COLUMN and spans it.** That is the point of the second row: an indent marker
+at n cells then sits exactly over the column the text will indent to, and
+inch 1 is one inch of document. Sharing one row with the buttons had put the
+scale over the right-hand third of the window, starting at a fixed x, lined
+up with nothing — and in Page view (§65.11) it spans the sheet exactly,
+because the sheet IS the text column. `WD_RULER_H` is 34 and
+`WD_CHROME_TOP` is 64, still the multiple of 8 the blit paths want.
+
 **The ruler is live**: the alignment, spacing and open/close cells fire
 `wd_modpap` and their pressed state is delta-cached against the CARET's
-paragraph exactly as the ribbon's cells are against its attributes; the
-indent markers draw at the caret paragraph's indents on the inch scale and
-DRAG — an XOR guide over the text band, the release snapped to whole cells.
+paragraph exactly as the ribbon's cells are against its attributes; a click
+in row 2 is a marker drag whatever its x, because the scale is a row now and
+no cell can be under it; the indent markers draw at the caret paragraph's
+indents on the inch scale and DRAG — an XOR guide over the text band, the release snapped to whole cells.
 Format > Paragraph reuses the modal framework with live radios (grouped)
 and live edit fields (inches; cells = tenths; click or Tab focuses, digits
 '.' '-' '"' type, BkSp deletes); the Keep/Border/Pattern/Style groups are
@@ -44249,3 +44263,55 @@ lands exactly on `wd_saymsg` — its displacement wraps 64KB, which is legal
 and correct). The cause is dynamic and unknown. **No feature moves out of the
 resident image until that is understood**, because a subsystem that cannot
 report its own refusal is a subsystem that cannot ship.
+
+### 65.11 View > Page — the sheet
+
+Draft view (§65.1) wraps to the window, because the window is what the reader
+has. **Page view wraps to the SHEET**: a fixed `WD_PGCOLS` (60) cell column —
+480px, six inches at this port's scale of one cell to 1/10" — centred in the
+content, with its two edges drawn and a tick in the margin wherever a page
+begins. `View > Draft` and `View > Page` are a live pair and exactly one of
+them carries a check.
+
+**It is the text COLUMN and not the whole 8.5" sheet**, on every adapter. At
+this scale a full sheet is 680px wide, and of the three adapters only
+Hercules (720×348, §39) is wider than 640 — so a full sheet would be right on
+one adapter of three, and CLAUDE.md's rule is to look at a layout on a 1bpp
+adapter before calling it done. Six inches is US Letter less Word's own 1.25"
+margins, which is the part a reader is actually looking at.
+
+**The whole view is two numbers.** `wd_pgcol` runs inside `wd_bounds` at the
+point the column's RIGHT EDGE is decided, and moves `[wd_tx]` and that edge to
+the sheet's. Everything downstream — `[wd_rcols]`, `[wd_wrgt]`, the wrap
+decision, the row buffer's padding, the caret hit test, the ruler's scale
+(§65.2) — already derives from that pair, so every one of them is right for
+the sheet without knowing a sheet exists. Narrowing `[wd_rcols]` alone, which
+is where this started, left the WRAP at the window's width and merely
+truncated each row at the sheet's edge: the tail of every line vanished. A
+window too narrow to hold the sheet keeps its own width, so Page view never
+hides text Draft would have shown.
+
+**What it draws, and what it costs.** Two vertical rules and, per visible page
+boundary, two short ticks — all of them OUTSIDE the text column, in the margin
+either side. That is deliberate: a rule drawn inside the column would be
+erased by the next flush of the row under it, and putting it back would mean
+the row flush — the hottest path in the app (§65.6) — learning about pages.
+Outside, only a full fill or a band blit can take them, and both call
+`wd_sheet` again. Two `gfx` calls in the common case, ~1.5ms on the target,
+paid per full repaint and never per keystroke. **PERFORMANCE.md's standing
+budget is untouched: a keystroke still letters ~2 cells.**
+
+**What it does NOT draw, and why.** The inter-page WHITESPACE a real Page view
+shows — the gap between one sheet's last line and the next sheet's first — is
+not there. It would have to come out of the layout walk's row advance, which
+means the height model (`wd_ryb`, §65.6) and every path that maps a row to a
+y learning about pages; that is a change to the walk, not a change to the
+chrome, and it is deferred rather than approximated. Headers and footers are
+not there either, and cannot be until the document model grows the second
+text stream §65.4 records it does not have. The page a line falls on is still
+`WD_PGLINES`-based and so is the status bar's `Pg`.
+
+**Print Preview is not this.** It is greyed, and stays greyed, because there
+is no printing path in this OS to preview — no printer driver class in §51, no
+slot in the published API. §47's rule: the greyed item is telling the truth
+for nothing.

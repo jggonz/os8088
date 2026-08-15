@@ -241,7 +241,18 @@ WD_GROW      equ 13             ; the grow box the kernel draws in the
 ; font_run's single-store path exactly as reachable as they were in Note Pad.
 WD_MENU_H    equ 14             ; the in-window menu bar
 WD_RIBBON_H  equ 16             ; the ribbon (View > Ribbon)
-WD_RULER_H   equ 18             ; the ruler (View > Ruler)
+WD_RULER_H   equ 34             ; the ruler (View > Ruler): TWO rows, as
+                                ; Opus's own is. ibdefs.h's ibdRuler2 puts
+                                ; every button at y=1 with height 12 and then
+                                ; ibidCustomWnd(1,14,...) - idRulMark, the
+                                ; scale - on a row of its OWN below them. This
+                                ; port had the scale sharing the button row,
+                                ; starting at x=376, which put it over the
+                                ; right-hand third of the window and lined it
+                                ; up with nothing. Row 1 is the buttons, row 2
+                                ; is the scale, and the scale spans the TEXT
+                                ; COLUMN and starts where the text does
+WD_RL_ROW2   equ 16             ; ...where that second row begins in the strip
 WD_STATUS_H  equ 12             ; the status bar (View > Status Bar)
 WD_CHROME_TOP equ WD_MENU_H + WD_RIBBON_H + WD_RULER_H   ; 48, all strips ON.
                                 ; The LIVE chrome top is [wd_ctop], computed by
@@ -292,7 +303,7 @@ WDA_COPY     equ 9
 WDA_PASTE    equ 10
 WDA_SEARCH   equ 11
 WDA_REPL     equ 12
-WDA_DRAFT    equ 13             ; View > Draft: the one view; stays checked
+WDA_DRAFT    equ 13             ; View > Draft (SPEC.md 65.11)
 WDA_VRIB     equ 14
 WDA_VRUL     equ 15
 WDA_VSTA     equ 16
@@ -305,7 +316,8 @@ WDA_GOTO     equ 22             ; Edit > Go To... (SPEC.md 65.7)
 WDA_SORT     equ 23             ; Utilities > Sort... (SPEC.md 65.9)
 WDA_RENUM    equ 24             ; Utilities > Renumber...
 WDA_TOC      equ 25             ; Insert > Table of Contents...
-WDA_MAX      equ 25
+WDA_PAGE     equ 26             ; View > Page (SPEC.md 65.11)
+WDA_MAX      equ 26
 
 ; --- the CHP attribute byte (SPEC.md 65.3) -----------------------------------
 ; One byte per character, in a claim that mirrors every gap operation the text
@@ -430,6 +442,16 @@ WD_RL_SCALE  equ 376            ; the inch scale's zero
 WD_ST_CELLS  equ 46             ; status line text cells (delta-cached):
                                 ; 'Pg 15  Sec 1  15/15  At 54li  Ln 54  Col
                                 ; 171' is 44 at the worst (SPEC.md 65.2)
+WD_PGCOLS    equ 60             ; the sheet's text column in Page view: 60
+                                ; cells = 480px = 6 inches at this port's
+                                ; scale (1 cell = 1/10"), which is US Letter
+                                ; less Word's own 1.25" margins. The COLUMN
+                                ; and not the full 8.5" sheet, on every
+                                ; adapter: the sheet is 680px wide and only
+                                ; Hercules is wider than 640 (SPEC.md 39), so
+                                ; a full sheet would fit one adapter of three
+                                ; and CLAUDE.md's rule is to look at a 1bpp
+                                ; adapter before calling a layout done
 WD_PGLINES   equ 54             ; lines to a page (SPEC.md 65): Pg/Ln derive
                                 ; from the caret's absolute line by this
 
@@ -1699,6 +1721,8 @@ wd_bounds:
     mov [wd_sbr], ax                ; ...and the last drawable column.
     sub ax, WD_SB_W                 ; The scroll bar owns the rightmost
                                     ; WD_SB_W of it (SPEC.md 27.7). This was
+    call wd_pgcol                   ; Page view narrows the column to the SHEET
+                                    ; before anything derives from it
     mov [wd_rgt], ax                ; W_X+W_W-2 read off the record through ES;
                                     ; origin + size - 1 is the same pixel and
                                     ; needs no kernel pointer of our own - and
@@ -5740,6 +5764,7 @@ wd_paint:
     call wd_sbar                    ; the fill took the bar with it
     call wd_chrome                  ; ...and the chrome strips' rules, which
                                     ; only a full fill can have erased
+    call wd_sheet                   ; ...and the sheet's edges (SPEC.md 65.11)
     call wd_hire                    ; the worker exists from the first paint
                                     ; now (SPEC.md 65.2, Frotz's precedent):
                                     ; the CAPS/NUM lamps need its poll -
@@ -12169,8 +12194,18 @@ wd_mtitler:
 ; the window); the three View strips answer from their toggles.
 ; -----------------------------------------------------------------------------
 wd_mchk:
-    cmp al, WDA_DRAFT
+    cmp al, WDA_DRAFT               ; Draft and Page are the two views and
+    jne .npg                        ; exactly one of them is checked
+    cmp byte [wd_vpage], 0
     je .yes
+    jmp short .no
+.npg:
+    cmp al, WDA_PAGE
+    jne .nwin
+    cmp byte [wd_vpage], 0
+    jne .yes
+    jmp short .no
+.nwin:
     cmp al, WDA_WIN1
     je .yes
     cmp al, WDA_VRIB
@@ -13398,6 +13433,154 @@ wd_rmku:
     ret
 
 ; -----------------------------------------------------------------------------
+; wd_pgcol - in Page view, narrow the text column to the sheet
+; in:  AX = the column's right edge as the window would have it, [wd_tx] = its
+;      left
+; out: AX and [wd_tx] moved to the sheet's; [wd_shl]/[wd_shr] = its pixel
+;      edges. Preserves every other register.
+;
+; This runs where the RIGHT EDGE is decided and before anything derives from
+; it, which is the whole trick: [wd_rcols], [wd_wrgt], the wrap decision, the
+; row buffer's padding and the caret's hit test all fall out of (wd_tx,
+; wd_rgt) and every one of them is then right for the sheet without knowing
+; a sheet exists. Narrowing [wd_rcols] alone - which is where this started -
+; left the WRAP at the window's width and merely truncated each row at the
+; sheet's edge, dropping the tail of every line.
+;
+; A window too narrow to hold the sheet keeps its own width: Page view never
+; hides text that Draft would have shown.
+; -----------------------------------------------------------------------------
+wd_pgcol:
+    cmp byte [wd_vpage], 0
+    je .draft
+    push bx
+    push cx
+    push dx
+    mov bx, ax                      ; the cells the CONTENT could hold - the
+    sub bx, [wd_cl]                 ; content and not the text area, so the
+    inc bx                          ; slack either side of the sheet comes out
+    mov cl, 3                       ; equal instead of one margin heavier on
+    shr bx, cl                      ; the left
+    cmp bx, WD_PGCOLS + 1
+    jbe .narrow                     ; too narrow for a sheet: leave it alone
+    sub bx, WD_PGCOLS               ; the slack, halved, centres it
+    shr bx, 1
+    shl bx, cl
+    mov ax, [wd_cl]
+    add ax, bx
+    mov [wd_tx], ax                 ; ...and the right edge follows the width
+    add ax, WD_PGCOLS * 8
+    dec ax
+.narrow:
+    pop dx
+    pop cx
+    pop bx
+.draft:
+    push ax                         ; the sheet's edges, for wd_sheet. In
+    mov ax, [wd_tx]                 ; Draft they are the column's too, and
+    sub ax, WD_MARGIN               ; wd_sheet draws nothing there anyway
+    mov [wd_shl], ax
+    pop ax
+    push ax
+    add ax, WD_MARGIN
+    mov [wd_shr], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_sheet - the sheet's two edges and its page marks (SPEC.md 65.11)
+; in:  the geometry wd_bounds banked; gfx lock held
+; out: nothing; preserves all registers. A no-op in Draft view, which is what
+;      keeps this off every draft-view redraw's bill.
+;
+; The edges are drawn OUTSIDE the text column, in the margin either side, so a
+; row flush never touches them and they survive every partial repaint - only a
+; full fill or a band blit can take them, and both call this again. Two
+; gfx calls in the common case: at 756us each (PERFORMANCE.md) that is ~1.5ms
+; on the target, paid once per full repaint and never per keystroke.
+; -----------------------------------------------------------------------------
+wd_sheet:
+    cmp byte [wd_vpage], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov bx, [wd_ct]                 ; the band's top and bottom
+    add bx, [wd_ctop]
+    mov dx, [wd_bot]
+    mov ax, [wd_shl]
+    call OSAPI_GFX_VLINE
+    mov ax, [wd_shr]
+    call OSAPI_GFX_VLINE
+    call wd_pgmarks
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_pgmarks - a tick in each margin where a page begins
+; Preserves all registers.
+;
+; The mark sits in the MARGIN, not across the sheet: a rule drawn inside the
+; column would be erased by the next flush of the row under it, and putting it
+; back would mean the row flush - the hottest path in the app (SPEC.md 65.6) -
+; learning about pages. The tick says the same thing for two gfx calls a page
+; and no cost at all to a keystroke. The inter-page WHITESPACE a real Page
+; view shows is not drawn: it would have to come out of the layout walk's row
+; advance, and that is the change SPEC.md 65.11 defers.
+; -----------------------------------------------------------------------------
+wd_pgmarks:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor si, si                      ; SI = the visible row
+.row:
+    cmp si, [wd_vrows]
+    jae .out
+    mov ax, [wd_top]                ; its absolute row number
+    add ax, si
+    or ax, ax
+    jz .next                        ; row 0 is not a page BREAK
+    xor dx, dx
+    mov cx, WD_PGLINES
+    div cx
+    or dx, dx
+    jnz .next                       ; not the first row of a page
+    mov bx, si                      ; its y, from the height bank
+    shl bx, 1
+    mov dx, [bx+wd_ryb]             ; DX = y, which is what HLINE takes
+    mov ax, [wd_shl]                ; the left margin's tick
+    sub ax, 4
+    mov bx, [wd_shl]
+    dec bx
+    call OSAPI_GFX_HLINE
+    mov ax, [wd_shr]                ; ...and the right margin's
+    inc ax
+    mov bx, ax
+    add bx, 3
+    call OSAPI_GFX_HLINE
+.next:
+    inc si
+    jmp short .row
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; wd_ruler - the ruler strip (SPEC.md 65.2), per ibdefs.h's order: Style:
 ;            combo, alignment x4, spacing x3, closed/open space, tab type x4,
 ;            then the inch scale with the indent markers.
@@ -13763,6 +13946,30 @@ wd_rlmclamp:
     pop bx
     ret
 
+; wd_rlend - CX = the x of the text column's last pixel, which is where the
+; scale stops. Preserves all other registers.
+;
+; The column and not the window: the scale measures the DOCUMENT, so it ends
+; where the text does. In Page view that is the sheet's right edge, and the
+; ruler spans the sheet exactly (SPEC.md 65.11).
+wd_rlend:
+    push ax
+    mov cx, [wd_rcols]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, [wd_tx]
+    dec cx
+    mov ax, [wd_cl]
+    add ax, [wd_cw]
+    sub ax, 5
+    cmp cx, ax                      ; never past the strip itself
+    jbe .ok
+    mov cx, ax
+.ok:
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; wd_rlscale - the inch scale band whole: erase, ticks (ONE fill_pat),
 ;              digits, and the LIVE indent markers at the caret paragraph's
@@ -13783,12 +13990,14 @@ wd_rlscale:
     call wd_wfit
     jc .out
     call wd_ruly
-    mov di, ax                      ; DI = the strip's top
-    mov si, [wd_cl]
-    add si, WD_RL_SCALE             ; SI = the scale's zero
-    mov cx, [wd_cl]
-    add cx, [wd_cw]
-    sub cx, 5
+    add ax, WD_RL_ROW2              ; the scale has a row to itself now
+    mov di, ax                      ; DI = that row's top
+    mov si, [wd_tx]                 ; SI = the scale's zero: where the TEXT
+                                    ; starts, so an indent marker at n cells
+                                    ; sits exactly over the column the text
+                                    ; will indent to, and inch 1 is one inch
+                                    ; of document (SPEC.md 65.2)
+    call wd_rlend                   ; CX = the text column's right edge
     mov [wd_rlxe], cx
     mov al, CWHITE                  ; erase the band whole: digits, ticks and
     call OSAPI_SET_COLOR            ; markers all live in it and the markers
@@ -13967,15 +14176,15 @@ wd_rldrag:
     call wd_wfit
     jc .done
     call wd_rlcalc                  ; the live indents in wd_rll/f/r
-    mov ax, [wd_cl]
-    add ax, WD_RL_SCALE
+    mov ax, [wd_tx]
     mov [wd_rdz], ax                ; the zero, for the release's arithmetic
     mov al, [wd_rll]
     mov [wd_rdl], al                ; ...and the left, for the first marker's
                                     ; relative answer
     push cx                         ; the press x
     call wd_ruly
-    add ax, 9                       ; upper half = the first-line marker
+    add ax, WD_RL_ROW2 + 9          ; upper half of the SCALE row = the
+                                    ; first-line marker
     cmp dx, ax
     pop cx
     jb .first
@@ -14877,6 +15086,13 @@ wd_mroute:
     ja .norul
     call wd_settle
     call wd_uclose
+    call wd_ruly                    ; row 2 is the scale, whatever the x: it
+    add ax, WD_RL_ROW2              ; is a row of its own now and the cells
+    cmp dx, ax                      ; cannot be under it
+    jb .rlrow1
+    call wd_rldrag
+    jmp .cons
+.rlrow1:
     mov bx, [wd_cl]
     add bx, WD_RL_SBX
     cmp cx, bx
@@ -14942,14 +15158,7 @@ wd_mroute:
     call wd_modpap
     call wd_redraw                  ; the rows that moved; the tail re-inverts
     jmp .cons                       ; the cells (wd_rlstat)
-.rlscl:
-    mov ax, [wd_cl]                 ; the scale band: a marker drag
-    add ax, WD_RL_SCALE
-    sub ax, 8
-    cmp cx, ax
-    jb .rlnone                      ; dead ground between the cells: inert
-    call wd_rldrag
-.rlnone:
+.rlscl:                             ; row 1 past the last cell: dead ground
     jmp .cons
 .norul:
     ; the status strip is inert; the grow box never reaches W_ONCLICK
@@ -15219,7 +15428,7 @@ wd_ftab:
     dw wd_a_paste
     dw wd_a_search
     dw wd_a_repl
-    dw wd_mf_ret                    ; Draft: the one view, stays checked
+    dw wd_a_draft                   ; View > Draft (SPEC.md 65.11)
     dw wd_a_vrib
     dw wd_a_vrul
     dw wd_a_vsta
@@ -15232,6 +15441,7 @@ wd_ftab:
     dw wd_a_sort                    ; Utilities > Sort... (SPEC.md 65.9)
     dw wd_a_renum                   ; Utilities > Renumber...
     dw wd_a_toc                     ; Insert > Table of Contents...
+    dw wd_a_page                    ; View > Page (SPEC.md 65.11)
 
 wd_mf_ret:
     ret
@@ -15681,6 +15891,37 @@ wd_uatoi:
     pop dx
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; View > Draft / View > Page (SPEC.md 65.11)
+; in:  SI = window ptr; out: nothing; clobbers as a callback
+;
+; The view is one byte, and everything that differs falls out of it in
+; wd_bounds: the sheet's width and where it sits. Switching re-lays the whole
+; document, so both go through the full redraw rather than a damage range -
+; this is the one action in the app that legitimately repaints everything,
+; because everything moved.
+; -----------------------------------------------------------------------------
+wd_a_draft:
+    cmp byte [wd_vpage], 0
+    je wd_vwsame
+    mov byte [wd_vpage], 0
+    jmp short wd_vwset
+
+wd_a_page:
+    cmp byte [wd_vpage], 0
+    jne wd_vwsame
+    mov byte [wd_vpage], 1
+wd_vwset:
+    call wd_bounds                  ; the sheet moved, so the wrap width and
+    mov byte [wd_gchg], 1           ; the text origin did
+    mov byte [wd_hdirty], 1
+    mov byte [wd_ckok], 0
+    mov byte [wd_rowsok], 0
+    mov byte [wd_follow], 1
+    call wd_redraw
+wd_vwsame:
     ret
 
 ; wd_dirset - the Search dialog's Up/Down radio states from [wd_fdir]
@@ -17820,7 +18061,7 @@ wd_it_edit:                         ; &Edit
 wd_it_view:                         ; &View
     WDMI WDMF_DIS, 0, WDA_NONE,   'O', wd_L_outline, 0
     WDMI WDMF_CHK, 0, WDA_DRAFT,  'D', wd_L_draft,  0
-    WDMI WDMF_DIS, 0, WDA_NONE,   'P', wd_L_page,   0
+    WDMI WDMF_CHK, 0, WDA_PAGE,   'P', wd_L_page,   0
     WDMS
     WDMI WDMF_CHK, 2, WDA_VRIB,   'B', wd_L_ribbon, 0
     WDMI WDMF_CHK, 0, WDA_VRUL,   'R', wd_L_ruler,  0
@@ -18810,6 +19051,10 @@ section .text
     WDVAR wd_uord,  256     ; WD_UMAXP words: the sort's order array
     WDVAR wd_scseg, 2       ; word: the rebuild scratch claim, 0 = none
     WDVAR wd_scn,   2       ; word: how many characters are in it
+    WDVAR wd_vpage, 1       ; byte: 0 = Draft, 1 = Page (SPEC.md 65.11)
+    WDVAR wd_vppad, 1       ; byte: keeps the words below even
+    WDVAR wd_shl,   2       ; word } the sheet's left and right pixel edges,
+    WDVAR wd_shr,   2       ; word } banked by wd_bounds for the painters
     WDVAR wd_ovseg, 2       ; word: WORD.OVL's claim, 0 = not loaded yet
     WDVAR wd_ovfar, 4       ; the (offset, segment) wd_ovcall far-calls: an
                             ; 8086 has no `call far reg:reg`, so the pointer

@@ -1560,13 +1560,18 @@ $(BUILD)/word.bin: $(WORDSRC) apps/os88api.inc apps/os88ui.inc | $(BUILD)
 # through DS, and only then split out, so what ships in WORD.O88 is the
 # resident half alone. The cut point is the image size the package header
 # already carries, so the layout does not live in two places.
-$(BUILD)/WORD.OVL: $(BUILD)/word.bin tools/os88ovl.py
-	python3 tools/os88ovl.py $(BUILD)/word.bin -o $@ --trim $(BUILD)/word.trim.bin
-
-$(BUILD)/word.trim.bin: $(BUILD)/WORD.OVL
-
-$(BUILD)/word.o88: $(BUILD)/word.trim.bin tools/os88pkg.py
+# ONE recipe makes all three, because they are one operation: a rule whose
+# only prerequisite was WORD.OVL and which had NO recipe of its own left make
+# free to decide word.o88 was up to date against the PREVIOUS word.trim.bin,
+# and it packaged a stale image while the cut silently succeeded. That reads
+# exactly like the feature under test being broken - it cost a debugging pass
+# on a ruler that was already correct.
+$(BUILD)/word.o88: $(BUILD)/word.bin tools/os88ovl.py tools/os88pkg.py
+	python3 tools/os88ovl.py $(BUILD)/word.bin -o $(BUILD)/WORD.OVL \
+		--trim $(BUILD)/word.trim.bin
 	python3 tools/os88pkg.py $(BUILD)/word.trim.bin -o $@
+
+$(BUILD)/WORD.OVL: $(BUILD)/word.o88 ;
 
 worddisk: $(BUILD)/word.img $(BUILD)/word720.img $(BUILD)/word360.img
 
