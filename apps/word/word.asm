@@ -433,6 +433,25 @@ WD_ST_CELLS  equ 46             ; status line text cells (delta-cached):
 WD_PGLINES   equ 54             ; lines to a page (SPEC.md 65): Pg/Ln derive
                                 ; from the caret's absolute line by this
 
+; --- the italic claim (SPEC.md 65.1) -----------------------------------------
+; ONE claim carries two things: the sheared 4bpp glyph table, and the staging
+; area a run is composed in before its single gfx_blit4. The staging area used
+; to be BSS - 5,440 bytes of it, 55% of this package's whole bss, reserved on
+; every machine whether a document ever showed an italic or not. A package's
+; image + bss cannot reach 64KB (APP_MAX_SIZE, and the ceiling is the SEGMENT
+; rather than a policy), so bss is the scarcest thing here and the heap is
+; not: moving it costs one wider claim and the ES overrides that follow from
+; it, and buys back more room than every other reclaim in the package put
+; together.
+;
+; It rides the TABLE's claim rather than one of its own because the two have
+; exactly the same lifetime and the same refusal: wd_itinit already degrades
+; italic to the plain glyph when the heap says no (SPEC.md 47), and that one
+; path now covers both.
+WD_ITTAB     equ 95*8*4         ; the table: 95 glyphs x 8 rows x 4 bytes
+WD_STG4      equ WD_ITTAB       ; ...and the staging area starts after it
+WD_ITKB      equ 9              ; 3,040 + 5,440 = 8,480, so nine whole KB
+
 WD_MARGIN    equ 8              ; left/top text margin inside the content. It
                                 ; was 6, and 8 is what puts every glyph cell
                                 ; on a multiple of 8 once OSAPI_WM_SNAP has
@@ -3711,7 +3730,7 @@ wd_itinit:
     push si
     push di
     push es
-    mov ax, 3                       ; 95 x 32 = 3,040 bytes
+    mov ax, WD_ITKB                 ; the table AND the staging area
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [wd_iseg], dx
@@ -3842,13 +3861,13 @@ wd_itrun:
     mov di, dx
     shl di, 1
     shl di, 1
-    add di, wd_stg4                 ; DI = its column in the staging buffer
+    add di, WD_STG4                 ; DI = its column in the staging area
     push cx
     push dx
     push ds
-    pop es                          ; ES:DI = staging (ours)
-    push ds
-    mov ds, [wd_iseg]               ; DS:SI = the table
+    mov ds, [cs:wd_iseg]            ; DS:SI = the table and ES:DI = the
+    push ds                         ; staging area - the SAME claim now, so
+    pop es                          ; the copy never leaves it
     cld
     mov dx, 8
 .row:
@@ -3866,9 +3885,12 @@ wd_itrun:
 .staged:
     test byte [wd_runa], WDAT_BOLD
     jz .noem
-    mov si, wd_stg4                 ; bold-italic: AND in the 1px-right copy,
-    mov dx, 8                       ; row by pixel row, right to left so the
-.em:                                ; source byte is still the original
+    mov es, [wd_iseg]               ; the staged image lives in the italic
+    mov si, WD_STG4                 ; claim (SPEC.md 65.1), so every touch of
+    mov dx, 8                       ; it below carries an ES override
+.em:                                ; bold-italic: AND in the 1px-right copy,
+                                    ; row by pixel row, right to left so the
+                                    ; source byte is still the original
     mov di, [wd_itstr]
     dec di
 .emb:
@@ -3876,33 +3898,32 @@ wd_itrun:
     jz .emb0
     mov bx, si
     add bx, di                      ; BX = the byte (SI+DI is no 8086 mode)
-    mov al, [bx-1]
-    mov ah, [bx]
+    mov al, [es:bx-1]
+    mov ah, [es:bx]
     push cx
     mov cl, 4
     shl al, cl
     shr ah, cl
     pop cx
     or al, ah
-    and [bx], al
+    and [es:bx], al
     dec di
     jmp short .emb
 .emb0:
-    mov al, [si]
+    mov al, [es:si]
     push cx
     mov cl, 4
     shr al, cl
     pop cx
     or al, 0xF0                     ; white shifts in at the left edge
-    and [si], al
+    and [es:si], al
     add si, [wd_itstr]
     dec dx
     jnz .em
 .noem:
     push bp                         ; BP is the walk's pen y - the blit wants
-    push ds                         ; the stride there (SPEC.md 5.7)
-    pop es
-    mov si, wd_stg4
+    mov es, [wd_iseg]               ; the stride there (SPEC.md 5.7)
+    mov si, WD_STG4
     mov bp, [wd_itstr]
     mov ax, [wd_r0]
     push cx
@@ -18404,11 +18425,10 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; cell beside wd_rbuf
     WDVAR wd_pattr, WD_MAXCOL     ; ...and the attributes the cached row was
                             ; last DRAWN with, diffed beside wd_prow
-    WDVAR wd_stg4, (WD_MAXCOL-1)*4*8  ; the italic run's staged 4bpp image:
-                            ; up to WD_MAXCOL-1 cells x 4 bytes x 8 rows,
-                            ; blitted as ONE gfx_blit4 (SPEC.md 65.1)
-
-; --- paragraph formatting (SPEC.md 65.3) -------------------------------------
+                            ; (the italic run's staged 4bpp image used to be
+                            ; here: (WD_MAXCOL-1)*4*8 = 5,440 bytes of bss.
+                            ; It lives at WD_STG4 inside the italic claim
+                            ; now - see the constant for why)
     WDVAR wd_pseg,  2       ; word: the PAP dictionary's claim (256 x 4 bytes,
                             ; zeroed at entry so entry 0 IS Normal)
     WDVAR wd_papn,  2       ; word: entries live, 1..WD_PAPMAX

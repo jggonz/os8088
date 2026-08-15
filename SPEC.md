@@ -43646,8 +43646,20 @@ never strands its bleed); an italic run is staged from the sheared table and
 lands as one `gfx_blit4` (bold-italic ANDs the staged row with itself
 shifted one pixel — ink is the 0 nibble, so AND is the OR of ink); underline
 rules are drawn after the run. The italic table is built at first use into a
-3KB claim from `OSAPI_FONT_GLYPHS`; if the heap refuses it, italic degrades
-to the plain glyph (plus the double-strike when bold) — grey the fact. The
+9KB claim from `OSAPI_FONT_GLYPHS`; if the heap refuses it, italic degrades
+to the plain glyph (plus the double-strike when bold) — grey the fact.
+
+**That claim carries the staging area too**, at `WD_STG4` past the 3,040-byte
+table. The staging area — one run's 4bpp image, `(WD_MAXCOL-1)*4*8` = 5,440
+bytes — used to be bss, which meant every machine reserved it whether a
+document ever showed an italic or not, and it was **55% of this package's
+entire bss**. A package's image + bss cannot reach 64KB (`APP_MAX_SIZE`, and
+that ceiling is the SEGMENT rather than a policy — §33's near model), so bss
+is the scarcest thing in a package and the heap is not. The two halves share
+one claim because they share a lifetime and a refusal: `wd_itinit`'s existing
+degrade-to-plain covers both, and no second failure path exists to get wrong.
+The cost is that every touch of the staged image carries an `ES` override, and
+`OSAPI_GFX_BLIT4` already takes `ES:SI`, so nothing below the app changed. The
 build runs on the UI task only: a WORKER draw pass that meets italic text
 before the table exists never claims (§20.6 forbids `OSAPI_MEM_*` there) —
 it letters the run plain for that frame and the next UI redraw builds the
@@ -43713,10 +43725,20 @@ limitation.
 
 Three claims (§50.3): the text (¶ = byte 13, tab = 9, ceiling `WD_MAXKB` =
 30KB), one CHP attribute byte per character (bit 0 bold, 1 italic,
-2 underline, 3 word-ul, 4 double-ul, 5 small caps, 6 hidden, 7 reserved)
+2 underline, 3 word-ul, 4 double-ul, 5 small caps, 6 hidden, 7 **not free** —
+see below)
 mirroring every gap operation, and a 256-entry dictionary of unique paragraph
 formats (4 bytes: packed align/spacing/space-before, left, first (signed),
-right — indents in character cells, one cell = 1/10 inch). **A paragraph
+right — indents in character cells, one cell = 1/10 inch). **Bit 7 is not a spare bit.** `WDAT_PIL` is 0x80 and it is the ROW BUFFER's
+'this cell is a pilcrow' flag, and an ordinary character's CHP byte is copied
+straight into `wd_abuf` — so a document byte with bit 7 set arrives at the
+flush as a pilcrow and letters as one. Nothing produces such a byte today
+(the readers build attributes from known bits only, and typing sets one of
+the six), which is exactly why this is worth writing down: the next person to
+want a seventh attribute will find bit 7 apparently free, and it is not.
+Taking it means giving the row buffer its own flag word first.
+
+**A paragraph
 mark's CHP byte is its paragraph's dictionary index** — paragraph formatting
 lives on the ¶ exactly as in Word, so deleting a ¶ merges into the following
 paragraph's format, and undo/cut/paste need only the text+CHP machinery.
