@@ -44,6 +44,7 @@ make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
+make xt-multimon  # ...and an XT with BOTH mono cards, a monitor window each
 make 286      # 86Box: 286 @ 12.5MHz, 1MB, VGA
 make 386sx    # 86Box: 386SX @ 16MHz, 2MB, VGA
 make 386      # 86Box: 386DX @ 25MHz, 2MB, VGA
@@ -52,6 +53,9 @@ make pentium  # 86Box: Pentium @ 133MHz, 16MB, VGA, Sound Blaster 16
 make xt-sound # the 640KB XT with a Sound Blaster 2.0 (OPL2 + DSP)
 make 286-sound  # 86Box: the 286, with a Sound Blaster 16
 make 386-sound  # 86Box: the 386DX, with a Sound Blaster 16
+make worddisk # build the Microsoft Word floppy, all three geometries
+make xt-word  # 86Box: the 640KB XT with the Word disk in B:
+make 386-word # 86Box: the 386DX with the Word disk in B:
 make test     # boot headless with a QMP socket for scripted testing
 make debug    # boot with QEMU halted, waiting for gdb on :1234
 make marty    # a cycle-accurate IBM 5150 (MartyPC) with a debugger attached -
@@ -127,6 +131,18 @@ mean minutes per turn), which is why it wants a 640KB machine and says so
 plainly when a story will not fit. **No story file is committed to this
 repository** — `tools/getstories.py` fetches fifteen freely-released ones
 into `build/`, and `STORIES=` puts your own beside them.
+
+**Microsoft Word 1.1A** ships separately too, on a document floppy of its own
+(`make worddisk`): a reimplementation of Word for Windows 1.1a ("Opus") as a
+native package — Draft and Page views, a two-row ruler, real `.DOC` files in
+the Word for Windows 1.x/2.x binary format, RTF in and out, wildcard Search,
+Sort, Renumber and Table of Contents. It is not a recompile: Opus is pcode
+built against the Windows 2.x API, none of which exists here, so the UI
+definition is mined from the Computer History Museum's source release and
+every menu string is verbatim from it. The disk carries `WORD.O88`,
+`WORD.OVL`, a generated `WELCOME.DOC` and an empty `DOCS\`. **`all` does not
+build it and no shipped disk grows a byte** — `make wordcheck` is the format
+gate, which round-trips the `.DOC` through an independent host-side reader.
 
 **Hardware**
 
@@ -293,6 +309,7 @@ slot.
 | `build/apps720.img`    | 720KB FAT12              | 3.5" DD software floppy         |
 | `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
 | `build/zork*.img`      | 1.44MB / 720KB / 360KB   | Frotz story floppies (`make zdisk`) |
+| `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -393,14 +410,28 @@ All twelve, at a glance:
 | `386-sound` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | Sound Blaster 16 |
 | `486` | AMI SiS 471 | 486DX2 @ 66MHz | 8MB | OTI-067 VGA | Sound Blaster 16 |
 | `pentium` | ASUS P/I-P55TP4XE | Pentium P54C @ 133MHz | 16MB | OTI-067 VGA | Sound Blaster 16 |
+| `xt-multimon` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | CGA **and** Hercules | — |
 | `xt-z` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 2.0 |
 | `386-z` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | Sound Blaster 16 |
+| `xt-word` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `386-word` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
 
 The XT-class machines boot the 360KB pair; the AT-class ones boot the 1.44MB
-pair. The last two are the Frotz machines and put a **story floppy** in B:
-instead of the apps disk — `xt-z` with a 720KB 3.5" DD drive (360KB does not
-hold a library), `386-z` with two 1.44MB drives and a second library disk to
-swap in. Both carry the full 640KB, because a Z-machine story is resident. None of them can be scripted — 86Box has no automation socket, so
+pair.
+
+`xt-multimon` is the **two-card** XT — a CGA and a Hercules, a monitor window
+each — and the only 86Box machine that can show the extended desktop. It boots
+Single; Control Panel → Display → Desktop is what extends it.
+
+The last four put a **dedicated floppy** in B: instead of the apps disk.
+`xt-z` and `386-z` are the Frotz machines and take a **story floppy** — `xt-z`
+with a 720KB 3.5" DD drive (360KB does not hold a library), `386-z` with two
+1.44MB drives and a second library disk to swap in. Both carry the full 640KB,
+because a Z-machine story is resident. `xt-word` and `386-word` are the Word
+machines and take the **document floppy** `make worddisk` builds; `xt-word`
+uses a 720KB 3.5" DD drive, `386-word` two 1.44MB drives.
+
+None of them can be scripted — 86Box has no automation socket, so
 these are all interactive, and `make test` over QMP remains the only way to
 drive the system from a script.
 
