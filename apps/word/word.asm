@@ -125,9 +125,22 @@ WD_MAXKB     equ 30             ; ...and its ceiling (SPEC.md 65.3). Note
                                 ; - going further means teaching that loop to
                                 ; cross a segment and making its count 32-bit
 WD_STGMIN    equ 1              ; the save's transient staging claim, KB
-WD_MAXCOL    equ 171            ; cells a row can hold, plus one for the NUL.
+WD_MAXCOL    equ 341            ; cells a row can hold, plus one for the NUL.
                                 ; A row is accumulated into a buffer and drawn
-                                ; as ONE opaque font_run (SPEC.md 6.1/27.2)
+                                ; as ONE opaque font_run (SPEC.md 6.1/27.2) -
+                                ; or, in a proportional face, as one composed
+                                ; band (SPEC.md 6.3/65.13)
+                                ;
+                                ; 1360/4 AND NOT 1360/8 since SPEC.md 65.13:
+                                ; the divisor is the NARROWEST ADVANCE a face
+                                ; may have, which os88type.inc pins at
+                                ; TY_MINADV = 4 and refuses a face below
+                                ; (SPEC.md 6.4). It has to be that number and
+                                ; not the one the shipped face happens to use,
+                                ; because the face comes off a floppy and this
+                                ; constant is in the tree - the two can only
+                                ; be kept together by the OPEN checking it,
+                                ; which is where the check is.
                                 ;
                                 ; 1360/8 AND NOT 720/8. It was the widest
                                 ; SCREEN, and a window on an extended desktop
@@ -275,6 +288,47 @@ WD_CHROME_TOP equ WD_MENU_H + WD_RIBBON_H + WD_RULER_H   ; 48, all strips ON.
 ; painter, the hit test and the close repaint all read the same four words -
 ; the fm_hit discipline (SPEC.md 22).
 WD_M_N       equ 9              ; menus on the bar
+; WD_PROPDRAW - is a chosen face DRAWN, or only opened and named?
+;
+; 0 while SPEC.md 65.13's conversion is unfinished, and this is the switch it
+; finishes at. What works: the face opens, the ribbon names it, wd_bandrun
+; composes and emits a run through SPEC.md 6.3's band, and the row advance and
+; glyph band follow the face's own rows via [wd_gh]/[wd_ghb]. What does NOT,
+; measured by turning this on and looking:
+;
+;   1. the chrome doubles - the content geometry moves under the bar and the
+;      strips, and repainting them the way a View toggle does is not enough;
+;      wd_ctcalc/wd_bounds have to be understood first
+;   2. the rows redraw but the glyphs stay the 8x8 cell's, so ty_flush is
+;      refusing or the band is arriving empty - unproven either way
+;   3. the metrics are still the 8-pixel grid ([wd_pxon] is 0): the wrap rule,
+;      the accumulate walk's cell index and wd_px[] are not converted
+;
+; A half-converted Word is worse than an unconverted one - it draws in one
+; face and measures in another - so this stays 0 until all three are done, and
+; the code above it stays in the tree because it assembles and is most of the
+; way there.
+;
+; %assign AND NOT equ, and that distinction cost a whole debugging round: `%if`
+; is a PREPROCESSOR directive and an `equ` is an ASSEMBLER symbol, so `%if
+; WD_PROPDRAW` against an equ sees an undefined name, evaluates it as 0, and
+; silently assembles neither arm. The build is clean, the flag reads 1 in the
+; source, and nothing happens at run time.
+%assign WD_PROPDRAW 1
+%assign WD_BANDDBG 0            ; the band probe, off - see wd_bandrun
+
+WD_MAXFONT   equ 6              ; faces the Font combo will list beside Pica.
+                                ; Six and not os88type's eight: the dropdown
+                                ; hangs off a 96px box in the ribbon and a
+                                ; list longer than this runs off the bottom of
+                                ; a CGA window
+WD_MI_SZ     equ 8              ; bytes in one WDMI record - four bytes then
+                                ; two words, and wd_mitemp indexes by it. The
+                                ; dropdown is filled at run time now (SPEC.md
+                                ; 65.13), so the size the macro emits needs a
+                                ; name rather than being counted by hand
+WD_MT_SZ     equ 8              ; ...and one wd_mtab row, which wd_mgeti
+                                ; reaches with three shifts
 WD_M_FONTC   equ 9              ; the ribbon's Font combo, as a pseudo-menu
 WD_M_PTSC    equ 10             ; ...its Pts combo
 WD_M_STYLEC  equ 11             ; ...and the ruler's Style combo
@@ -624,6 +678,22 @@ wd_entry:
     mov [wd_ovdrv], bl              ; - it is where WORD.OVL lives, and the
                                     ; user is free to move the volume to DOCS\
                                     ; a moment later (SPEC.md 65.10)
+    call ty_init                    ; face 0 (the kernel's 8x8) before anything
+                                    ; can ask for a metric - SPEC.md 6.5, and
+                                    ; the reason nothing below has to test
+                                    ; whether a face was found
+    call wd_facemetrics             ; the glyph band and the row advance, which
+                                    ; are 8 and 7 for the kernel's cell - and
+                                    ; bss arrives ZEROED, so without this every
+                                    ; row-band test in the program compares
+                                    ; against y+0 instead of y+7 and drops most
+                                    ; of the note
+    mov word [wd_fcap], wd_s_pica   ; ...and the ribbon's Font box names it.
+                                    ; bss arrives zeroed, so without this the
+                                    ; first ribbon paint draws a string at
+                                    ; offset 0 - which is this package's own
+                                    ; header, and looks like a corrupt heap
+
     call wd_xdrop                   ; the row index starts EMPTY and at its
                                     ; initial stride (SPEC.md 27.13). bss
                                     ; arrives zeroed, and a zero [wd_xksh] is
@@ -845,7 +915,7 @@ wd_seecaret:
     or ax, ax                       ; walk (SPEC.md 65.6): its y is no longer
     js .up                          ; 8*row, but its NUMBER still is the row
     mov cx, [wd_cury]               ; visible = the caret's whole glyph band
-    add cx, 7                       ; fits above the content bottom
+    add cx, [wd_gh1]                       ; fits above the content bottom
     cmp cx, [wd_bot]
     jbe .same
     ; below the view. Formatted, the EXACT scroll is knowable: the caret is
@@ -1934,8 +2004,8 @@ wd_papload:
     mov [wd_walign], al
     mov al, dl                      ; advance = 8 + spacing*4, and the packed
     and al, WDPA_SPACE              ; field is already spacing << 2
-    add al, 8
-    mov [wd_wadv], al
+    add al, [wd_ghb]                ; ...over the FACE's own row advance, which
+    mov [wd_wadv], al               ; is 8 for the kernel's cell (SPEC.md 65.13)
     xor al, al
     test dl, WDPA_SB
     jz .nosb
@@ -2023,7 +2093,8 @@ wd_papload0:
     mov [wd_wpap], al
     mov [wd_walign], al
     mov [wd_wsb], al
-    mov byte [wd_wadv], 8
+    mov al, [wd_ghb]
+    mov [wd_wadv], al
     xor ax, ax
     mov [wd_wleftpx], ax
     mov [wd_wfirstpx], ax
@@ -2090,15 +2161,15 @@ wd_advy:
 .zero:
     mov bp, [wd_ty]                 ; band top of row 0 is wd_ty exactly
     add bp, [wd_rowhv]
-    sub bp, 8
+    sub bp, [wd_gh]
     jmp short .band
 .neg:
     mov bp, [wd_ty]
-    sub bp, 8
+    sub bp, [wd_gh]
 .band:
     mov ax, bp
     sub ax, [wd_rowhv]
-    add ax, 8
+    add ax, [wd_gh]
     mov [wd_rbandt], ax
     pop ax
     ret
@@ -2169,6 +2240,315 @@ wd_tabw:
 ; row: off <= free, and every word that fitted unoffset still fits offset
 ; (u + len <= cells and off + cells <= wcols, both by construction).
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wd_fontscan - build the Font combo from what the MACHINE has (SPEC.md 19.8)
+; in:  -
+; out: the dropdown's items and its count set; preserves all registers
+;
+; ONCE, and lazily. ty_scan is four remounts and two listings - a couple of
+; seconds on the target - so it runs the first time somebody opens this combo
+; and never again. A person who never opens it pays nothing, which is the same
+; bargain SPEC.md 6.2 strikes with a directory of faces nobody picks from.
+;
+; The dropdown is a STATIC table with room reserved (wd_it_fontc), and this
+; fills the reserved records and writes the count byte in wd_mtab. A menu whose
+; length is data rather than assembly is a menu that can grow when a disk
+; carries more faces, without this program knowing their names.
+; -----------------------------------------------------------------------------
+wd_fontscan:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [wd_fscan], 0
+    jne .out
+    mov byte [wd_fscan], 1          ; once, whatever the answer - a disk with
+                                    ; no FONTS/ must not be re-walked on every
+                                    ; press
+    call ty_scan
+    mov al, [ty_nfam]
+    or al, al
+    jz .out
+    cmp al, WD_MAXFONT
+    jbe .n
+    mov al, WD_MAXFONT
+.n:
+    mov [wd_nfont], al
+    xor ch, ch
+    mov cl, al
+    xor bx, bx                      ; BX = the family index
+.item:
+    mov ax, bx
+    mov si, WD_MI_SZ                ; the record for item 1 + BX: item 0 is
+    mul si                          ; Pica and is assembled, not filled in
+    mov di, wd_it_fontc + WD_MI_SZ
+    add di, ax
+    mov byte [di+0], 0              ; flags: live
+    mov byte [di+1], 0              ; no mnemonic index
+    mov byte [di+2], WDA_CSEL
+    mov byte [di+3], 0
+    mov al, bl
+    call ty_famname                 ; SI = the display name the scan built
+    mov [di+4], si
+    mov word [di+6], 0              ; no caption
+    inc bx
+    loop .item
+
+    mov al, [wd_nfont]              ; ...and the dropdown is that many items
+    inc al                          ; longer than the one Pica it had
+    mov [wd_mtab + WD_M_FONTC * WD_MT_SZ + 3], al
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_facemetrics - the three numbers the layout reads, from the current face
+; in:  [wd_prop] and the library's current face
+; out: [wd_gh]/[wd_gh1]/[wd_ghb]; preserves all registers
+;
+; AND IT FORCES [wd_hasfmt], which is the whole reason this change is small.
+; That flag already means "rows are not all 8 pixels and do not land at
+; wd_ty + 8*row" - it is what line spacing set - and twenty-three sites in
+; this program already branch on it to a path that handles arbitrary row ys:
+; the scroll band, the erase band, the row-fit count, the caret's visibility
+; test. A taller face needs exactly those paths, so it raises exactly that
+; flag rather than growing a second predicate beside it that every one of
+; them would have had to learn.
+; -----------------------------------------------------------------------------
+wd_facemetrics:
+    push ax
+    mov ax, 8                       ; the kernel's cell, and the default
+    mov [wd_gh], ax
+    dec ax
+    mov [wd_gh1], ax
+    mov word [wd_ghb], 8
+    cmp byte [wd_prop], 0
+    je .out
+    call ty_getrows
+    xor ah, ah
+    mov [wd_gh], ax
+    dec ax
+    mov [wd_gh1], ax
+    call ty_getrows
+    xor ah, ah
+    mov [wd_ghb], ax
+    call ty_getlead
+    xor ah, ah
+    add [wd_ghb], ax
+    cmp word [wd_ghb], 8            ; ...and ONLY a face whose row advance is
+    je .out                         ; not 8 needs the non-uniform paths. An
+    mov byte [wd_hasfmt], 1         ; 8-row face changes no geometry at all -
+.out:                               ; same pitch, same caret, same clicks, and
+                                    ; only the glyph shapes move
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_facedrop - give back the face this document had open, if any
+; in:  [wd_face]; out: it is 0; preserves all registers
+; -----------------------------------------------------------------------------
+wd_facedrop:
+    push ax
+    mov al, [wd_face]
+    or al, al
+    jz .out
+    call ty_close
+    mov byte [wd_face], 0
+    xor ax, ax                      ; ...and the CURRENT face goes back to the
+    call ty_use                     ; kernel's 8x8, so nothing is left pointing
+.out:                               ; at a slot that has just been freed
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_a_csel - a combo entry was chosen (SPEC.md 65.13)
+; in:  [wd_pickm] = which combo, [wd_picki] = which entry
+; out: the Font combo's caption follows the choice; the others are cosmetic
+;
+; ITEM 0 IS PICA - the kernel's 8x8 cell, which is what this program has
+; always set text in and is a perfectly good answer. Items 1.. are the faces
+; FONTS/ was carrying. Choosing one opens it and names it in the ribbon.
+;
+; WHAT IT DOES NOT DO YET is set [wd_prop]: the document still draws through
+; the 8x8 cell until wd_drawrun grows its band arm (SPEC.md 65.13), and a
+; half-converted Word - drawing proportionally while measuring on the 8-pixel
+; grid - would put the caret in the wrong place on every line. So the choice
+; is recorded and the face is opened, and the pixels follow when the rest of
+; 65.13 lands.
+; -----------------------------------------------------------------------------
+wd_a_csel:
+    push ax
+    push bx
+    push si                         ; SI IS THE WINDOW POINTER AND MUST SURVIVE
+    push di                         ; (wd_mfire's contract: "SI survives every
+                                    ; action"). ty_famname ANSWERS in SI, so
+                                    ; without this the caller is handed a name
+                                    ; string where a window record belongs and
+                                    ; the machine follows it into the weeds -
+                                    ; observed as a hang with CS:IP parked on
+                                    ; this package's own entry point
+    cmp byte [wd_pickm], WD_M_FONTC
+    jne .out
+    mov al, [wd_picki]
+    or al, al
+    jnz .face
+    call wd_facedrop                ; back to the built-in cell
+    mov word [wd_fcap], wd_s_pica
+    mov byte [wd_fsel], 0
+    mov byte [wd_prop], 0
+    jmp short .reflow               ; ...and the note is drawn again in it:
+                                    ; going BACK to the cell is as much a
+                                    ; change as leaving it
+.face:
+    cmp al, [wd_nfont]
+    ja .out
+    dec al
+    push ax
+    call wd_facedrop                ; ...and a face slot is not left behind by
+                                    ; every visit to this menu: there are four
+                                    ; and face 0 is one of them, so without
+                                    ; this the THIRD pick answers TYE_NOSLOT
+                                    ; and the combo quietly stops working
+    pop ax
+    push ax
+    call ty_openfam                 ; opened NOW rather than at draw time: a
+    pop bx                          ; face that will not read should say so
+    jc .out                         ; while the person is still looking at the
+    mov [wd_face], al               ; menu they picked it from - and the BOX
+    xor ah, ah                      ; is not renamed until it has, so the name
+    call ty_use                     ; in the ribbon is EVIDENCE that the face
+    call ty_cache                   ; is open and not just that it was asked
+    mov al, bl                      ; for
+    mov [wd_fsel], al
+    call ty_famname
+    mov [wd_fcap], si
+%if WD_PROPDRAW
+    mov byte [wd_prop], 1           ; ...and the document is SET in it - which
+%endif                              ; is off until the three things named at
+                                    ; WD_PROPDRAW are done
+.reflow:
+    call wd_facemetrics             ; the glyph band and the row advance follow
+                                    ; the face, so every cached row signature
+                                    ; describes a layout that may no longer
+                                    ; exist - all four caches go
+    mov byte [wd_sigok], 0
+    mov word [wd_prowi], 0xFFFF
+    mov byte [wd_ckok], 0
+    mov byte [wd_rowsok], 0
+    mov byte [wd_redrw], 1
+.paint:
+    cmp byte [wd_vrib], 0           ; ...and the BOX has to be lettered again.
+    je .out                         ; wd_mfire runs AFTER wd_mclose has put the
+    call wd_ribbon                  ; rows the dropdown covered back, so the
+                                    ; caption this just changed was drawn a
+                                    ; moment before it changed. One strip,
+                                    ; priced in calls, not a window
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    cmp byte [wd_redrw], 0
+    je .ret
+    mov byte [wd_redrw], 0
+    jmp wd_redraw                   ; A TAIL JUMP, which is how every other
+                                    ; action in this program reaches the
+                                    ; redraw - wd_a_new, wd_a_undo, wd_a_cut
+                                    ; and the rest all `jmp wd_redraw` rather
+                                    ; than call it. Calling it from inside the
+                                    ; handler left the chrome drawn at two
+                                    ; geometries at once
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_cx - the absolute screen x of a cell (SPEC.md 65.13)
+; in:  AX = a cell index, 0..[wd_rcols]
+; out: AX = its x; preserves every other register
+;
+; In the 8x8 cell the k-th glyph is at [wd_tx] + 8k and there is nothing to
+; look up. In a proportional face it is [wd_tx] + wd_px[k], which the
+; accumulate walk recorded as it stored the cell. EVERY cell-to-pixel site in
+; this program goes through here, so the two faces differ in one routine
+; instead of in thirty - and with [wd_prop] clear this is the same three
+; shifts those sites used to do inline.
+; -----------------------------------------------------------------------------
+wd_cx:
+    push bx
+    cmp byte [wd_pxon], 0           ; the METRICS flag, not [wd_prop]: a face
+    jne .prop                       ; is drawn on the 8-pixel grid first and
+                                    ; its own advances are honoured after
+                                    ; (SPEC.md 65.13), and only the second of
+                                    ; those two makes wd_px[] the truth
+    mov bx, ax
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    mov ax, bx
+    jmp short .add
+.prop:
+    cmp ax, WD_MAXCOL + 1           ; the map has one slot past the last cell,
+    jbe .in                         ; so a span's right edge is a lookup
+    mov ax, WD_MAXCOL + 1
+.in:
+    mov bx, ax
+    shl bx, 1
+    mov ax, [wd_px + bx]
+.add:
+    add ax, [wd_tx]
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_xc - the cell an x falls in - wd_cx's inverse (SPEC.md 65.13)
+; in:  AX = an absolute x
+; out: AX = the cell index; preserves every other register
+;
+; FLOOR, not nearest: this answers "which cell holds this pixel", which is
+; what the fixed-face `(x - tx) >> 3` it replaces answered, and every caller
+; is written against that. A caret that should land on the nearer EDGE is
+; ty_hit's question and not this one.
+; -----------------------------------------------------------------------------
+wd_xc:
+    push bx
+    push cx
+    sub ax, [wd_tx]
+    jns .in
+    xor ax, ax                      ; left of the row's first cell
+    jmp short .out
+.in:
+    cmp byte [wd_pxon], 0
+    jne .prop
+    mov cl, 3
+    shr ax, cl
+    jmp short .out
+.prop:
+    xor bx, bx
+.w:
+    cmp bx, [wd_rcols]
+    jae .have
+    push bx
+    shl bx, 1
+    mov cx, [wd_px + bx + 2]        ; ...the NEXT cell's pen: x belongs to
+    pop bx                          ; cell k while it is short of cell k+1
+    cmp ax, cx
+    jb .have
+    inc bx
+    jmp short .w
+.have:
+    mov ax, bx
+.out:
+    pop cx
+    pop bx
+    ret
+
 wd_rowmeasure:
     push bx
     push cx
@@ -2334,7 +2714,7 @@ wd_yrow:
     mov bx, ax
     shl bx, 1
     mov bx, [bx+wd_ryb]
-    add bx, 7
+    add bx, [wd_gh1]
     cmp dx, bx
     jbe .yes                        ; rows are met in order, so the first row
                                     ; whose glyph bottom is at/below y owns it
@@ -2567,7 +2947,7 @@ wd_walk:
     push bx
     push cx
     mov cx, bp                      ; the same three gates the glyph store has:
-    add cx, 7                       ; the row fits, this pass redraws it, and
+    add cx, [wd_gh1]                       ; the row fits, this pass redraws it, and
     cmp cx, [wd_bot]                ; the cell is inside the band
     ja .nlpop
     call wd_rowdirty
@@ -2639,7 +3019,7 @@ wd_walk:
     cmp byte [wd_draw], 0
     je .advance
     mov cx, bp                      ; vertical clip: drop rows that overflow,
-    add cx, 7                       ; but keep advancing the pen so every
+    add cx, [wd_gh1]                       ; but keep advancing the pen so every
     cmp cx, [wd_bot]                ; position below stays true
     ja .advance
     call wd_rowdirty                ; ...and drop the rows whose pixels this
@@ -2756,7 +3136,7 @@ wd_walk:
     cmp byte [wd_draw], 0
     je .tadv
     mov ax, bp                      ; the glyph-store gates, cell test aside
-    add ax, 7
+    add ax, [wd_gh1]
     cmp ax, [wd_bot]
     ja .tadv
     call wd_rowdirty
@@ -3116,7 +3496,7 @@ wd_ask:
     cmp cx, [wd_rbandt]             ; the click row is this pen row? The BAND
     jb .want                        ; reaches from the row's own top - a click
     mov cx, bp                      ; in a spaced row's leading gap belongs to
-    add cx, 7                       ; the row, not to nothing (SPEC.md 65.6)
+    add cx, [wd_gh1]                       ; the row, not to nothing (SPEC.md 65.6)
     cmp cx, [wd_hity]
     jb .want
     cmp byte [wd_hitset], 0
@@ -3198,7 +3578,7 @@ wd_carets:
     cmp ax, [wd_cur]
     jne .out
     mov cx, bp
-    add cx, 7
+    add cx, [wd_gh1]
     cmp cx, [wd_bot]
     ja .out                         ; its row does not fit: no caret
     call wd_rowdirty                ; ...nor does a row this pass is not
@@ -3401,7 +3781,7 @@ wd_rflush:
     mov ax, [wd_rby]
     cmp ax, [wd_ty]
     jb .out                         ; ABOVE the view: scrolled off the top
-    add ax, 7                       ; (SPEC.md 27.7), and the unsigned tests
+    add ax, [wd_gh1]                       ; (SPEC.md 27.7), and the unsigned tests
     cmp ax, [wd_bot]                ; elsewhere cannot see this one, because a
     ja .out                         ; row a little above wd_ty has an ordinary
                                     ; small y. Below: it does not fit, the pen
@@ -3449,7 +3829,7 @@ wd_rflush:
     pop ax
     mov bx, [wd_rby]
     mov dx, bx
-    add dx, 7
+    add dx, [wd_gh1]
     call OSAPI_GFX_XOR_FILL
     jmp .cache                      ; wd_prow still describes the screen -
                                     ; not one character moved - but .cache
@@ -3654,7 +4034,7 @@ wd_rflush:
     je .out
     mov bx, [wd_rby]                ; 1px black caret, 8 rows tall, on top of
     mov dx, bx                      ; the run that would otherwise have eaten it
-    add dx, 7
+    add dx, [wd_gh1]
     push ax
     mov al, CBLACK
     call OSAPI_SET_COLOR
@@ -3986,6 +4366,105 @@ wd_itrun:
 ;      [wd_rby] = the row's y, wd_rbuf accumulated; gfx lock held
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wd_bandrun - one styled run, composed into the band and put down in ONE call
+; in:  [wd_r0]/[wd_r1] = the run's cells, [wd_rby] = its glyph y, wd_rbuf holds
+;      the characters; gfx lock held
+; out: nothing; preserves all registers
+;
+; SPEC.md 6.3's method, and the whole of what a proportional face costs at draw
+; time: ty_band, ty_putn, ty_flush. It replaces ONE OSAPI_FONT_RUN with one
+; OSAPI_GFX_BLIT1, so the call count a row costs does not move - what moves is
+; that the glyphs are the face's instead of the cell's.
+;
+; THE BACK-UP RULE (SPEC.md 5.4.2). The blit wants an x on a multiple of 8, and
+; a run does not start on one - so the band starts at the byte column to its
+; LEFT, the 0..7 remainder becomes the pen inside the band, and the width is
+; rounded up to the next byte column. The band is paper where the run is not,
+; so this erases exactly what FONT_RUN's background would have.
+; -----------------------------------------------------------------------------
+wd_bandrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    mov dx, [wd_gh]
+    call ty_band                    ; paper, as tall as the face
+
+    mov ax, [wd_r0]                 ; the run's first cell, in screen x
+    call wd_cx
+    mov bx, ax
+    and ax, 0xFFF8                  ; ...backed up to its byte column
+    mov [wd_bx0], ax
+    sub bx, ax                      ; BX = the pen inside the band, 0..7
+
+    push ds
+    pop es                          ; ES:SI = the text, which is ours here
+    mov si, [wd_r0]
+    add si, wd_rbuf
+    mov cx, [wd_r1]
+    sub cx, [wd_r0]
+    inc cx
+    mov ax, bx
+    call ty_putn                    ; AX = the pen after the run
+    test byte [wd_runa], WDAT_BOLD
+    jz .nbold
+    push ax                         ; bold: the same glyphs again, one pixel
+    mov ax, bx                      ; right (SPEC.md 61.5/65.1). In the BAND
+    inc ax                          ; this is a second compose rather than a
+    push si                         ; second drawing call - it costs no floor
+    call ty_putn                    ; at all, where the cell arm pays a whole
+    pop si                          ; OSAPI_FONT_STR for it
+    pop ax
+    inc ax                          ; ...and the run is one pixel wider
+.nbold:
+
+%if WD_BANDDBG
+    ; WD_BANDDBG: every band goes down as a 50% dither instead of as text, so
+    ; "is this path running, and over which pixels" is a question a screendump
+    ; answers. It is kept because it is what FOUND the tail-jump bug (SPEC.md
+    ; 65.13.1): the bars landed at exactly the right x, width, y and height on
+    ; every row, which proved the whole rendering path correct in one look and
+    ; left the caller as the only suspect.
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, ty_bandbuf
+    mov cx, TY_BANDSZ
+    mov al, 0xAA
+    cld
+    rep stosb
+    pop es
+    pop di
+    pop cx
+    pop ax
+%endif
+    add ax, 7                       ; ...and the width, rounded up to a whole
+    and ax, 0xFFF8                  ; byte column
+    mov cx, ax
+    mov ax, [wd_bx0]
+    mov bx, [wd_rby]
+    mov dx, [wd_gh]
+    call ty_flush                   ; CF=1 = the kernel has no band blit, and
+                                    ; the row is simply not drawn in the face.
+                                    ; Not worth a fallback here: the machine
+                                    ; that answers so cannot load this program
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 wd_drawrun:
     push ax
     push bx
@@ -4022,10 +4501,23 @@ wd_drawrun:
 .nopil:
     test byte [wd_runa], WDAT_ITAL
     jz .plain
+    cmp byte [wd_prop], 0           ; wd_itrun shears the KERNEL's glyphs
+    jne .plain                      ; (SPEC.md 65.1), so in a chosen face it
+                                    ; would letter one run in a DIFFERENT
+                                    ; TYPEFACE from the words either side of
+                                    ; it - which reads as a bug rather than as
+                                    ; italic. Upright in the right face is the
+                                    ; better wrong answer until a face carries
+                                    ; a drawn italic (SPEC.md 6.4's style 2)
     call wd_itrun                   ; staged and blitted - or CF=1 with no
     jnc .rules                      ; table, and the plain letters below are
                                     ; the degrade (SPEC.md 65.1)
 .plain:
+    cmp byte [wd_prop], 0
+    je .cell
+    call wd_bandrun                 ; SPEC.md 6.3: composed once, put down once
+    jmp .rules
+.cell:
     mov bx, [wd_r1]                 ; NUL-cap the run inside the row string,
     inc bx                          ; letter it, put the byte back
     mov al, [wd_rbuf+bx]
@@ -4073,7 +4565,7 @@ wd_drawrun:
     add bx, [wd_tx]
     dec bx                          ; BX = x2
     mov dx, [wd_rby]
-    add dx, 7                       ; the cell's last row
+    add dx, [wd_gh1]                       ; the cell's last row
     test byte [wd_runa], WDAT_UL
     jz .nul
     call OSAPI_GFX_HLINE
@@ -4348,7 +4840,7 @@ wd_brktry:
     add ax, [wd_tx]
     mov bx, [wd_cury]
     mov dx, bx
-    add dx, 7
+    add dx, [wd_gh1]
     push ax
     mov al, CWHITE
     call OSAPI_SET_COLOR
@@ -8712,7 +9204,7 @@ wd_selxor:
     pop ax
     mov bx, [wd_rby]
     mov dx, bx
-    add dx, 7
+    add dx, [wd_gh1]
     call OSAPI_GFX_XOR_FILL
 .out:
     pop dx
@@ -11331,7 +11823,7 @@ wd_dmark_on:
     cmp bx, [wd_ty]
     jb .out
     mov dx, bx
-    add dx, 7
+    add dx, [wd_gh1]
     cmp dx, [wd_bot]
     ja .out
     mov cx, ax
@@ -11356,7 +11848,7 @@ wd_dmark_off:
     mov bx, [wd_dmy]
     mov cx, ax
     mov dx, bx
-    add dx, 7
+    add dx, [wd_gh1]
     call OSAPI_GFX_XOR_FILL
     mov word [wd_dmark], 0xFFFF
 .out:
@@ -11973,7 +12465,10 @@ wd_mact:
     push ax
     push bx
     push si
-    mov ah, al
+    mov [wd_picki], al              ; WHICH item, and out of WHICH menu: the
+    mov ah, [wd_mopen]              ; action byte alone cannot tell a combo's
+    mov [wd_pickm], ah              ; third entry from its first, and the Font
+    mov ah, al                      ; combo is the first menu here that cares
     mov al, [wd_mopen]
     call wd_mgeti
     mov al, ah
@@ -13122,8 +13617,8 @@ wd_ribbon:
     mov bx, di
     add bx, 2
     mov cx, WD_RB_FBW
-    mov si, wd_s_pica
-    call wd_combo
+    mov si, [wd_fcap]               ; the face the document is set in, which
+    call wd_combo                   ; is wd_s_pica until one is chosen
     ; Pts: and its combo
     mov ax, WD_RB_PBX + WD_RB_PBW - 1
     call wd_wfit
@@ -15010,6 +15505,12 @@ wd_mroute:
     cmp cx, di
     ja .rbpts
     mov al, WD_M_FONTC
+    call wd_fontscan                ; the machine's faces, listed the first
+                                    ; time this combo is opened and never
+                                    ; again (SPEC.md 19.8): the scan is real
+                                    ; floppy I/O, and a menu nobody opens
+                                    ; should cost nothing
+    mov al, WD_M_FONTC
     jmp short .combo1
 .rbpts:
     mov bx, [wd_cl]
@@ -15434,7 +15935,8 @@ wd_ftab:
     dw wd_a_vsta
     dw wd_abopen                    ; Help > About...
     dw wd_mf_ret                    ; Window > 1: the one window, checked
-    dw wd_mf_ret                    ; a combo entry: cosmetic select
+    dw wd_a_csel                    ; a combo entry: cosmetic, EXCEPT the
+                                    ; Font one (SPEC.md 65.13)
     dw wd_a_char                    ; Format > Character... (SPEC.md 65.3)
     dw wd_a_para                    ; Format > Paragraph... (SPEC.md 65.3)
     dw wd_a_goto                    ; Edit > Go To... (SPEC.md 65.7)
@@ -18142,8 +18644,11 @@ wd_it_help:                         ; &Help
     WDMS
     WDMI 0,        0, WDA_ABOUT,  'A', wd_L_about,  0
 
-wd_it_fontc:                        ; the one face there is (SPEC.md 6)
+wd_it_fontc:                        ; Pica, and room for what FONTS/ carries
     WDMI 0, 0, WDA_CSEL, 0, wd_s_pica, 0
+%rep WD_MAXFONT                     ; RESERVED, and filled by wd_fontscan
+    WDMI WDMF_DIS, 0, WDA_NONE, 0, wd_s_pica, 0
+%endrep
 wd_it_ptsc:                         ; ...at the one size
     WDMI 0, 0, WDA_CSEL, 0, wd_s_10, 0
 wd_it_stylec:                       ; ...in the one style
@@ -18799,6 +19304,53 @@ section .text
                             ; 4 as well, and adjacent rows they do not measure)
                             ; can never inherit an Up's bound
 
+; --- the proportional face, SPEC.md 65.13 ------------------------------------
+    WDVAR wd_px, (WD_MAXCOL + 2) * 2  ; word per cell: the pen the k-th cell
+                                  ; starts at, RELATIVE to [wd_tx], plus one
+                                  ; past the end so a span's right edge is a
+                                  ; lookup rather than a special case. This is
+                                  ; the whole of what a proportional row costs
+                                  ; over a fixed one - in a fixed face the
+                                  ; k-th cell is at 8k and nothing needs
+                                  ; storing, which is why wd_cx branches
+                                  ; rather than always reading this
+    WDVAR wd_rcn, 2               ; word: cells stored in the row so far. In a
+                                  ; fixed face the cell index comes from the
+                                  ; PEN - (di - tx) >> 3 - and a tab therefore
+                                  ; leaves empty cells behind it; proportional,
+                                  ; there is no such division, so the index is
+                                  ; counted here instead and a tab leaves none
+    WDVAR wd_prop, 1              ; byte: 1 = set the document in [wd_face],
+                                  ; 0 = the kernel's 8x8 cell. THE DEFAULT IS
+                                  ; 0 and bss arrives zeroed, so a build with
+                                  ; no face file, or a machine whose kernel
+                                  ; refuses the band blit, behaves exactly as
+                                  ; this program did before any of this
+    WDVAR wd_face, 1              ; byte: the ty_open handle, 0 = none opened
+    WDVAR wd_fname, 16            ; the family name for the Font combo
+    WDVAR wd_fcap, 2              ; word: what the ribbon's Font box SHOWS -
+                                  ; wd_s_pica until a face is chosen
+    WDVAR wd_fsel, 1              ; byte: the chosen family, 0-based
+    WDVAR wd_nfont, 1             ; byte: families the scan listed, clamped
+    WDVAR wd_fscan, 1             ; byte: the scan has run (once, lazily)
+    WDVAR wd_pickm, 1             ; byte } which menu a chosen item came out
+    WDVAR wd_picki, 1             ; byte } of, and which item it was
+    WDVAR wd_redrw, 1             ; byte: this action owes the note a redraw,
+                                  ; taken on the way out as a tail jump
+    WDVAR wd_pxon, 1              ; byte: wd_px[] is the truth about where a
+                                  ; cell sits. 0 = the 8-pixel grid, which is
+                                  ; what wd_cx computes without reading it
+    WDVAR wd_bx0,  2              ; word: wd_bandrun's aligned band origin
+    WDVAR wd_gh,   2              ; word: the GLYPH BAND's height in pixels -
+                                  ; 8 for the kernel's cell, the face's `rows`
+                                  ; for a chosen one. Every site that used to
+                                  ; add 7 to a row's y to reach its last row
+                                  ; reads wd_gh1 instead
+    WDVAR wd_gh1,  2              ; word: ...that, less one
+    WDVAR wd_ghb,  2              ; word: and the ROW ADVANCE's base - the band
+                                  ; plus the face's leading, which line spacing
+                                  ; is then added to (wd_papload)
+
     WDVAR wd_rbuf, WD_MAXCOL + 1  ; the row being accumulated, space-filled
     WDVAR wd_prow, WD_MAXCOL      ; ...and what was last DRAWN on the cached
                                   ; row, so the next keystroke draws the delta.
@@ -19106,9 +19658,16 @@ section .text
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %include "os88ui.inc"
+%include "os88type.inc"         ; SPEC.md 6.5: proportional type, and the band
+                                ; it is composed into. AFTER os88ui.inc for no
+                                ; reason but tidiness - it depends on nothing
+                                ; here and nothing here depends on it until
+                                ; [wd_prop] is set
 
-    OS88_BSS WD_BSS_TOTAL
+    OS88_BSS WD_BSS_TOTAL + TY_BSS_SIZE
     OS88_IMAGE_END
+
+    TY_BSS os88_image_end + WD_BSS_TOTAL
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
 ; All zero = a fresh empty note with the caret at the origin and no toast.

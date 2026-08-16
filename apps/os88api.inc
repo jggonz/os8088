@@ -597,6 +597,34 @@ VID_CGA    equ 2
                                  ; hundreds of OSAPI_GFX_HLINE calls a
                                  ; hand-rolled run-length blitter would make.
                                  ; Honours the clip region.
+%define OSAPI_GFX_BLIT1     KERNEL_SEG:0x03F0   ; ES:SI = a 1bpp BAND in the
+                                 ; framebuffer's own bit order (row-major, bit
+                                 ; 7 leftmost, 1 = a LIT pixel), BP = its
+                                 ; stride in BYTES per row, AX = destination x
+                                 ; and CX = width in pixels - BOTH MUST BE
+                                 ; MULTIPLES OF 8 - BX = y, DX = rows, 1..255.
+                                 ; x and y are SIGNED: a window dragged half
+                                 ; off the left edge has content at a negative
+                                 ; x, and whole 8-pixel columns simply drop.
+                                 ; out CF=1 = REFUSED and nothing drawn: the
+                                 ; arguments broke one of the rules above, or
+                                 ; this is a kern_small machine, which carries
+                                 ; the slot and not the body. TEST CF AND HAVE
+                                 ; A SECOND PATH - letter the run with
+                                 ; OSAPI_FONT_RUN in the 8x8 face.
+                                 ;
+                                 ; This is the call for text your package has
+                                 ; SET ITSELF (SPEC.md 5.4.2): compose the
+                                 ; whole row of proportional glyphs into your
+                                 ; own RAM and put it down in ONE drawing call
+                                 ; rather than one per glyph at SPEC.md 5.7's
+                                 ; ~756us floor. There is no ink or paper
+                                 ; argument and [gfx_color] is not read - the
+                                 ; band arrives in FINAL screen polarity, so
+                                 ; SPEC.md 47's greying is YOURS to apply
+                                 ; before you hand it over (read the flag with
+                                 ; OSAPI_GFX_PEN_CF). Honours the clip region,
+                                 ; to the exact pixel ROW.
 ; --- CPU tier and memory above 1MB (SPEC.md 41) --------------------------------
 ; On a 286 or a 386 the machine has RAM above linear 0x0FFFFF that the 640KB
 ; conventional map cannot name. These five slots lend you some of it.
@@ -967,6 +995,27 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; kernel is about to make. Its other half is
                                  ; OSAPI_WM_ONRESIZE, which is the NOTICE after
                                  ; a change nobody proposed - see below.
+%define OSAPI_VOL_SYS       KERNEL_SEG:0x03F8   ; out BL = the volume this
+                                 ; machine BOOTED from - A: on a floppy
+                                 ; machine, the installed partition on one
+                                 ; that boots from its hard disk. No disk I/O,
+                                 ; every other register preserved, and it
+                                 ; cannot fail.
+                                 ;
+                                 ; It is the volume half of an
+                                 ; OSAPI_FILE_GOTO, and it exists because
+                                 ; there was no other way to name the system
+                                 ; disk: your instance stands in the folder it
+                                 ; was launched from, or in one a dialog gave
+                                 ; it, and nothing told you where the SYSTEM's
+                                 ; own files are. FONTS/ is the first of those
+                                 ; (SPEC.md 19.7).
+                                 ;
+                                 ; Bank OSAPI_FILE_HERE first and GOTO back
+                                 ; when you are done: a visit leaves your
+                                 ; instance standing where you left it, and
+                                 ; every unqualified name you pass the file
+                                 ; API afterwards resolves THERE.
 %define OSAPI_FILE_HERE     KERNEL_SEG:0x0228   ; out DX = YOUR instance's
                                  ; current directory (0 = the root), BL = its
                                  ; drive. No disk I/O.

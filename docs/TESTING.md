@@ -1333,6 +1333,28 @@ make test TESTAPPS=build/bench.img \
      QEMU="qemu-system-i386 -icount shift=3,sleep=off"
 ```
 
+**Driving a harness under `-icount` is a different job from driving one
+without it**, and both ways of getting it wrong look like a click that was
+ignored. Guest time and host time come apart: a boot that takes 12 s of wall
+clock without the knob takes 45–90 s with it, and a screendump taken on the
+old schedule shows the desktop as it was before the click landed rather than
+after. **Poll the dump for the state you want; never sleep a fixed interval.**
+`shot.py` prints the non-white percentage on every call, which is enough of a
+state machine for this: the desktop is one figure, a Disk window another, a
+report page a third.
+
+And **there is no double-click in `tools/mouse.py`** — two `mouse.py click`
+runs are two processes and about a second apart, which the kernel reads as two
+single clicks (§9's `DBLCLICK` window). A double-click has to be one process:
+`goto`, then `mouse_button 1` / `mouse_button 0` twice with ~0.12 s between.
+Importing `mouse.py` to get `goto` has a trap worth naming, because it fails
+silently in the direction that looks like a lost click — `importlib`'s
+`exec_module` runs the module with `__name__` set to the loader's name, so
+`mouse.py`'s own `if __name__ == "__main__": main()` never fires and **the
+pointer never moves**. The clicks then land wherever the pointer happened to
+be, which is usually the last place a *previous* command left it, so the
+script appears to work for exactly as long as the two positions agree.
+
 `build/bench360.img` on a real 4.77 MHz 8088 (or 86Box) is where the PIT is a
 wall clock and the microsecond column means microseconds. That is where these
 numbers are worth taking. A VGA run measures the *fallback* path by design —

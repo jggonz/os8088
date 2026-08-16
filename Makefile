@@ -814,6 +814,23 @@ $(SYSLOGO): tools/os88logo.py | $(BUILD)
 # DOS line endings a .TXT on a FAT floppy is expected to have (the disks are
 # meant to be readable on a DOS PC - SPEC.md 19). The conversion is
 # idempotent: LF is normalised out first, so re-running it never doubles a CR.
+# --- the TYPEFACES (SPEC.md 6.4/19.8) ----------------------------------------
+# One .F88 per family, built from the reviewable art in faces/, and carried in
+# FONTS/ on the SYSTEM disk. A face is the machine's and not an application's -
+# the same thing the kernel's own 8x8 cell is - so a second program wanting
+# Charter finds it already there instead of carrying a copy. They are DATA: the
+# mount types a directory entry as an application only when its extension is
+# O88 (SPEC.md 19), so a .F88 can never be double-clicked into the loader.
+#
+# The list is generated from the directory, exactly as SPEC.md 6.2.1's FONT=
+# targets are, so a new face is a new file and not an edit here as well.
+FACESRC := $(wildcard faces/*.t88)
+FACES := $(patsubst faces/%.t88,$(BUILD)/%.f88,$(FACESRC))
+FACESARG := $(addprefix FONTS:,$(FACES))
+
+$(BUILD)/%.f88: faces/%.t88 tools/os88face.py | $(BUILD)
+	python3 tools/os88face.py $< -o $@
+
 SYSDOC := $(BUILD)/readme.txt
 
 $(BUILD)/readme.txt: readme.txt tools/checkreadme.py | $(BUILD)
@@ -999,10 +1016,10 @@ $(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
 	$(NASM) -f bin -w+error -I drivers/net/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes - the DOS end, for the FAR machine"
 
-$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
 # BETWEEN the two shipped ones have: an XT or AT fitted with a 3.5" DD drive,
@@ -1016,12 +1033,12 @@ $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(
 $(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG)
 
 $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG)
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
 # apps disks - their directory order is pinned (SPEC.md 24) - so it rides its
@@ -2035,7 +2052,8 @@ $(BUILD)/click360.img: $(BUILD)/trklog.o88 $(BUILD)/click.mod \
 # mono win because what alignment removes is disproportionately memory
 # traffic (SPEC.md 6.1.1).
 BENCHPKGS := $(BUILD)/fontbnch.o88 $(BUILD)/typebnch.o88 \
-             $(BUILD)/gfxbench.o88 $(BUILD)/sysbench.o88
+             $(BUILD)/gfxbench.o88 $(BUILD)/sysbench.o88 \
+             $(BUILD)/bandbnch.o88 $(BUILD)/facetest.o88
 BENCHDATA := $(BUILD)/bench.dat $(BUILD)/benchsml.dat $(BUILD)/bigfile.dat
 
 bench: $(BUILD)/bench.img $(BUILD)/bench360.img
@@ -2063,6 +2081,28 @@ $(BUILD)/gfxbench.bin: tests/gfxbench/gfxbench.asm tests/benchlib.inc apps/os88a
 
 $(BUILD)/gfxbench.o88: $(BUILD)/gfxbench.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/gfxbench.bin -o $@
+
+# ...and the third: the band blit against the face it replaces (SPEC.md 5.4.2).
+# It is the GATE on the proportional-type work, and it prints the 78-cell
+# FONT_RUN row it is competing against in the same run, on the same machine, so
+# the comparison never rests on a figure quoted from another harness.
+$(BUILD)/bandbnch.bin: tests/bandbench/bandbench.asm tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/bandbench/bandbench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/bandbench/bandbench.asm
+	@echo "bandbnch: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/bandbnch.o88: $(BUILD)/bandbnch.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/bandbnch.bin -o $@
+
+# ...and the one that shows a FACE rather than timing one: it draws the same
+# sentence through the kernel, through face 0, and through both of the
+# library's compose loops, so a screendump is the whole assertion (SPEC.md 6.5).
+$(BUILD)/facetest.bin: tests/facetest/facetest.asm apps/os88type.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/facetest/facetest.asm
+	@echo "facetest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/facetest.o88: $(BUILD)/facetest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/facetest.bin -o $@
 
 $(BUILD)/sysbench.bin: tests/sysbench/sysbench.asm tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
 	python3 tools/benchlint.py tests/sysbench/sysbench.asm
@@ -2713,6 +2753,7 @@ APPS_SYS := $(SYSAPPS)
 # anything that is not a v3 package) and reads as a broken file rather than
 # as a file for another computer.
 APPS_DOS := $(BUILD)/os88net.com
+
 APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -2910,9 +2951,17 @@ else
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
 endif
 
-run: $(IMG) $(APPSIMG)
+# RUNAPPS is what goes in B:, and it exists so that a disk built on demand can
+# be LOOKED AT rather than only driven over QMP. `make test` has taken TESTAPPS
+# since the first test disk; the interactive target hardcoded the apps floppy,
+# so seeing tests/facetest or tests/bandbench meant a hand-written qemu line.
+#   make bench && make run RUNAPPS=build/bench.img
+#   make worddisk && make run RUNAPPS=build/word.img
+RUNAPPS ?= $(APPSIMG)
+
+run: $(IMG) $(RUNAPPS)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
+		-drive file=$(RUNAPPS),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # A maxed-out 640KB machine. QEMU/SeaBIOS cannot boot with less than 1MB
 # of guest RAM (SeaBIOS wedges during POST at -m 512k and -m 640k alike),

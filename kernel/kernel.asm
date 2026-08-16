@@ -1907,7 +1907,29 @@ osapi_table:
                                   ;          Answers about BIOS-transport rows
                                   ;          alone: a driver's own rows are
                                   ;          the driver's to recognise
-osapi_table_end:                  ; 0x03F0
+    OSAPI_SLOT gfx_blit1          ; 0x03F0 - ES:SI = a 1bpp band in the
+                                  ;          framebuffer's own bit order,
+                                  ;          BP = its stride, AX = x and
+                                  ;          CX = width, BOTH multiples of 8,
+                                  ;          BX = y, DX = rows 1..255. Puts a
+                                  ;          composed run of proportional text
+                                  ;          down in ONE drawing call
+                                  ;          (SPEC.md 5.4.2). out CF=1 =
+                                  ;          refused and nothing drawn, which
+                                  ;          is also every kern_small
+    OSAPI_SLOT osapi_vol_sys      ; 0x03F8 - out BL = the volume the machine
+                                  ;          BOOTED from, which is where its
+                                  ;          system resources live (SPEC.md
+                                  ;          19.7). No disk I/O; every other
+                                  ;          register preserved. What it is
+                                  ;          FOR: OSAPI_FILE_GOTO takes a
+                                  ;          VOLUME and a cluster, and until
+                                  ;          this cell a package had no way to
+                                  ;          name the system disk at all - it
+                                  ;          could stand in its own folder, or
+                                  ;          in one a dialog had given it, and
+                                  ;          nowhere else
+osapi_table_end:                  ; 0x0400
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1915,8 +1937,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 124 * 8
-%error "os8088 API jump table must be exactly 124 8-byte slots"
+%if OSAPI_TABLE_LEN != 126 * 8
+%error "os8088 API jump table must be exactly 126 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -2732,6 +2754,22 @@ osapi_file_here:
     pop cx
     ret
 
+; ---- osapi_vol_sys - which volume did this machine BOOT from? ---------------
+; in:   -
+; out:  BL = the volume index, the same namespace osapi_file_here answers in
+;       and osapi_file_goto takes
+; clobbers: BL and nothing else - not even the flags
+;
+; [dsk_bootvol] is A: on a floppy machine and the installed PARTITION on one
+; that boots from its hard disk (SPEC.md 52.10.3), and the kernel has read it
+; that way for the driver load and the Control Panel for as long as both have
+; existed. This cell is that fact handed OUT, so a package can reach the
+; system disk's own folders - FONTS/ is the first (SPEC.md 19.7) - without
+; guessing a drive letter or walking every volume looking for one.
+osapi_vol_sys:
+    mov bl, [dsk_bootvol]
+    ret
+
 osapi_file_goto:
     push ax
     mov ax, dx
@@ -3039,7 +3077,11 @@ cw_clk_fld_str:         call clk_fld_str
                     retf
 cw_clk_snapshot:        call clk_snapshot
                     retf
-cw_evq_pop:             call evq_pop
+%ifdef KERN_BIG                 ; the four shims gfx_blit1_x needs (SPEC.md
+cw_cur_unlazy:          call cur_unlazy     ; 5.4.2) are its only callers, and
+                    retf                    ; its body is kern_big's alone -
+%endif                                      ; so kern_small pays for none of
+cw_evq_pop:             call evq_pop        ; them out of its 75-byte rung
                     retf
 cw_font_run:            call font_run
                     retf
@@ -3053,6 +3095,10 @@ cw_fpg_end:             call fpg_end
                     retf
 cw_fpg_step:             call fpg_step
                      retf
+%ifdef KERN_BIG                 ; ...and gfx_disp_enter is dual display's
+cw_gfx_disp_enter:      call gfx_disp_enter
+                    retf
+%endif
 cw_gfx_fill:            call gfx_fill
                     retf
 cw_gfx_fill_gray:       call gfx_fill_gray
@@ -3069,6 +3115,10 @@ cw_gfx_pen_live:        call gfx_pen_live
                     retf
 cw_gfx_pixel:           call gfx_pixel
                     retf
+%ifdef KERN_BIG
+cw_gfx_rowbase:         call gfx_rowbase
+                    retf
+%endif
 cw_gfx_scroll:          call gfx_scroll
                     retf                    ; retf leaves the flags alone, so
                                             ; gfx_scroll's CF is still its
@@ -3153,11 +3203,17 @@ cw_vid_dual_ok:         call vid_dual_ok
                     retf
 cw_vid_disp_relay:      call vid_disp_relayout
                     retf
+cw_vid_span_one:        call vid_span_one
+                    retf
 %endif
 cw_wm_clip_clear:        call wm_clip_clear
                      retf
 cw_wm_clip_rect:         call wm_clip_rect
                      retf
+%ifdef KERN_BIG
+cw_wm_clip_rows:        call wm_clip_rows
+                    retf
+%endif
 cw_wm_clip_set:         call wm_clip_set
                     retf
 cw_wm_clip_test:        call wm_clip_test
@@ -3221,6 +3277,19 @@ cp_tick_due:          call COLD_SEG:cpf_cp_tick_due
                     ret
 cp_tick:              call COLD_SEG:cpf_cp_tick
                     ret
+
+; --- ...and vga12.inc's band blit (SPEC.md 5.4.2). The PUBLIC name is the
+; thunk and the body is the same name with _x, so the OSAPI_SLOT cell below
+; names gfx_blit1 and knows nothing about which segment it lives in.
+%ifdef KERN_BIG
+gfx_blit1:            call COLD_SEG:gbz_gfx_blit1
+                  ret                   ; a near ret over a far one, neither
+                                        ; of which touches the flags - and CF
+                                        ; is this routine's whole answer
+%else
+gfx_blit1:            stc               ; kern_small carries the SLOT and not
+                  ret                   ; the body: a package tests CF and
+%endif                                  ; letters in the 8x8 face instead
 
 ; --- ...and the file modules': loader.inc, diskw.inc, files.inc (SPEC.md 2.6).
 ; filecp.inc needs none - every caller of an fcp_ routine is files.inc, which

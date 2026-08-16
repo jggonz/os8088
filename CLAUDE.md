@@ -29,7 +29,9 @@ deliberately, to keep Apple's Mach-O-only toolchain out of it.
 
 ```
 make          # build every floppy image into build/ (also runs tools/checkdocs.py)
-make run      # boot in QEMU with an emulated serial mouse
+make run      # boot in QEMU with an emulated serial mouse. RUNAPPS=<img>
+              # swaps the B: floppy, so a disk built on demand can be LOOKED
+              # at (`make bench && make run RUNAPPS=build/bench.img`)
 make test     # boot headless, QMP socket at build/qmp.sock — this is how you drive it
 make test-snd # ...plus PC speaker capture to build/snd.wav (verify: tools/sndcheck.py)
 make debug    # boot halted, waiting for gdb on :1234

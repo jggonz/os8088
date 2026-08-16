@@ -6551,3 +6551,74 @@ from outside the guest instead, with the offset taken from nasm's own `[map]` vi
 erase fill, so the capture shows the outgoing page underneath — the summary lines
 themselves are the evidence, and the two-pixel claim rests on `tm_rowfill`'s span
 rather than on the picture.
+
+### Set 62 — a composed band against the face it replaces (SPEC.md §5.4.2)
+
+Emulator: QEMU under `-icount shift=3,sleep=off`, so the PIT counts guest
+instructions; one count is **0.359 ms of real XT** (Part 2's conversion).
+Harness: `tests/bandbench`, `make bench`, N=8 a row. **Every row below was taken
+in one run on one adapter, including the `FONT_RUN` row it is compared with** —
+the point of the harness, because the plan this gated was written against two
+existing harnesses that disagreed by 23% about the same primitive.
+
+The workload is **one line of text 624 pixels wide**, two ways: 78 cells of the
+kernel's 8×8 face, and 104 proportional glyphs at a 6-px average advance — a
+third more characters in the same width, which is most of what setting a
+proportional line is for.
+
+| ms on a 4.77 MHz 8088 | VGA 640×480 | CGA 640×200 | Herc 720×348 |
+|---|---|---|---|
+| `FONT_RUN` 78 cells, byte-aligned | 59.06 | **24.37** | **24.32** |
+| `FONT_RUN` 78 cells at x+5 | 63.86 | 67.94 | 67.45 |
+| compose 104 glyphs (plain loop) | 42.50 | 42.68 | 42.59 |
+| `GFX_BLIT1` 624×8 | 2.87 | 2.83 | 2.83 |
+| `GFX_BLIT1` 624×12 | 3.19 | 4.04 | 4.04 |
+| band: plain compose + blit 624×12 | 45.73 | 46.63 | 46.63 |
+| compose 104 glyphs (**pre-shifted**) | — | **21.18** | — |
+| band: **pre-shifted** compose + blit | — | **25.31** | — |
+
+**The emit is nearly free and the compose is the whole bill.** `GFX_BLIT1`'s two
+heights give its line directly: 6.75 counts for 4 rows is **2.42 ms a row**, 78
+bytes, **3.9 µs a byte** — which is `rep movsb` on an 8088 to the byte, and the
+intercept is 1.1 counts ≈ 395 µs, under §5.7's 756 µs floor because the blit
+skips almost everything a drawing call normally does. Composing is 91% of the
+plain band and 84% of the pre-shifted one.
+
+**So the pre-shifted glyph table is not an optimisation, it is the design.** A
+95 × 8-phase × 8-row table of pre-shifted, pre-complemented AND masks is 12,160
+bytes and takes the compose from **42.68 to 21.18 ms — 2.01×** — because the
+inner loop stops being seven instructions with a `shr ax,cl` in it and becomes
+three with the band's stride as an assemble-time displacement. The whole
+operation then costs **25.31 ms against the aligned 8×8 row's 24.37 — 1.04×**,
+for 104 proportional glyphs in a 12-row face instead of 78 fixed 8×8 cells; and
+**2.68× less than the same line lettered at an unaligned x**, which is what a
+proportional pen actually is.
+
+**The two comparisons say different things and both are true.** Against the
+honest status quo for text at an arbitrary pen — `font_run`'s fallback, which is
+where every proportional glyph would land — the band is **2.7× faster**. Against
+a byte-aligned 8×8 run, which §11.94 made the default for windows, it is **4%
+dearer**. The plan this gated claimed "never slower" against a 71.4 ms bar; that
+bar is the *unaligned* row, and stated against the aligned one the claim is
+parity rather than a win.
+
+**Cross-check against Part 2, and one disagreement worth writing down.** The
+unaligned row is **865 µs a cell** on Hercules against Part 2's measured 905 —
+4.4% apart, and the two agree. The aligned row is **312 µs a cell**, and here
+`tests/fontbench`'s published 10-cell figures (§6.1.1) imply about 725. Most of
+that gap is arithmetic rather than contradiction: a 10-cell run is mostly
+`font_run`'s per-CALL setup — two `font_ink`s, a `gfx_rowbase` with a 16-bit
+`mul` an 8088 charges ~120 clocks for — and fitting both harnesses to one line
+puts that fixed cost near **4 ms**, five times §5.7's 756 µs floor, not at it.
+That is a figure neither harness set out to measure and neither has pinned;
+**§6.1.1's per-cell numbers should not be extrapolated to a long run until it
+is.** Nothing in this set depends on it: every ratio quoted above is between
+rows of the same run on the same machine.
+
+**Correctness, and it is in the same harness on purpose.** The identity row
+composes the same string at a fixed 8-px advance from the very ROM glyphs
+`FONT_RUN` letters with, and blits it directly under a `FONT_RUN` of it. Read
+back and compared pixel for pixel: **0 differing pixels of 624 × 8 on all three
+adapters** (1,236 ink pixels on VGA, 2,602 on CGA, 1,034 on Hercules). That
+covers the shift, the row walk and — on CGA and Hercules — the interleaved bank
+wrap, which is the part no screenshot of a working desktop would have exercised.

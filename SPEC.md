@@ -885,6 +885,7 @@ Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
 | `gfx_fill_gray` | AX=x1, BX=y1, CX=x2, DX=y2           | 50% dither: black/white checkerboard (pixel parity (x+y)&1: even=white, odd=black) — ignores gfx_color |
 | `gfx_fill_pat`  | AX=x1, BX=y1, CX=x2, DX=y2, `[gfx_pat]` = near ptr to 8 pattern bytes | 8×8 dither fill, screen-aligned: row y uses byte `pat[y&7]`, bit 7 = leftmost pixel of each screen byte, bit set = white (15), clear = black (0) — ignores gfx_color. Writes only colors 0/15, so it is a pattern rather than a solid colour |
 | `gfx_blit4`     | ES:SI=source, BP=source stride (bytes), AX=dest x, BX=dest y, CX=width px, DX=height rows | draw a block of packed 4bpp pixels (§5.4) |
+| `gfx_blit1`     | ES:SI=band, BP=band stride (bytes), AX=dest x (**×8**), BX=dest y, CX=width px (**×8**), DX=height rows | put a 1bpp band on the screen in one call, in the framebuffer's own bit order (§5.4.2). API slot 0x03F0. `kern_big` only — the small build refuses with CF=1 |
 | `gfx_xor_rect`  | AX=x1, BX=y1, CX=x2, DX=y2           | 1px outline, XOR 0Fh (drag outline)   |
 | `gfx_xor_fill`  | AX=x1, BX=y1, CX=x2, DX=y2           | filled rect, XOR 0Fh (menu highlight) |
 | `gfx_save`      | AX=x1, BX=y1, CX=x2, DX=y2, ES:DI=buf| copy region to buffer; x1 is rounded **down** to a byte boundary and x2 **up** internally. Buffer layout: plane 0 rows, plane 1 rows, plane 2, plane 3 — all four on VGA, the single plane at 1bpp (§39.3). Returns DI advanced past data. |
@@ -1142,6 +1143,128 @@ buys a whole 512-byte step; `kern_small`'s rung *was* crossed (1,536 → 1,024
 spare, two steps). The one arm neither gate reaches is a blit under ~16 pixels wide, where
 the split finds no whole destination byte at all; it degenerates to the
 general loop, which every capture here exercises.
+
+### 5.4.2 `gfx_blit1` — a band of pixels the caller already composed
+
+The other primitive that takes an image rather than a shape, and the opposite
+bargain to §5.4's. `gfx_blit4` takes *pixels* and does the arriving for the
+caller, once per coalesced run. `gfx_blit1` takes **framebuffer bytes** and does
+the arriving once for the whole band: the caller has already decided what every
+bit is, so what is left in the kernel is a `rep movsb` per row and nothing else.
+
+It exists for proportional text — a face a package carries and sets itself,
+against §6's fixed 8×8 cell, which stays exactly as it is and keeps every row of
+system chrome. A row of 104 variable-width glyphs
+letters at an arbitrary pen x, so it can never reach `font_run`'s single-store
+path (§6.1) and would be 104 drawing calls at §5.7's ~756 µs floor — 79 ms of
+*floor* before a pixel moves. Composed into the caller's own RAM and put down in
+one call it is one floor, and the composition happens at RAM speed
+(PERFORMANCE.md Part 2: 15.3 µs a byte against the framebuffer's 16.7).
+
+```
+in:   ES:SI = the band: 1bpp, row-major, bit 7 leftmost, 1 = a LIT pixel
+      BP    = the band's stride in BYTES per row
+      AX    = destination x, signed. MUST be a multiple of 8
+      BX    = destination y, signed
+      CX    = width in PIXELS.  MUST be a multiple of 8
+      DX    = height in rows
+      the gfx lock MUST be held (§1 rule 6)
+
+out:  CF=0  drawn — wholly, or clipped exactly
+      CF=1  REFUSED, nothing drawn, in three cases only:
+              1. AX & 7 or CX & 7 non-zero
+              2. CX or DX is zero
+              3. this is `kern_small`, which does not carry the body at all
+      EVERY register preserved, ES and BP included.
+```
+
+**The band arrives in final screen polarity, and there is no ink or paper
+argument.** `[gfx_color]` is not read, `font_ink` (§39.4) is not called, no
+plane is selected and no `out` is issued. A set bit is a lit pixel on all three
+adapters: on 1bpp because that is what the framebuffer byte means, and on VGA
+because vga12.inc's resting state pins Map Mask to 0Fh with Set/Reset disabled
+(§5's opening), so one CPU byte lands in all four planes at once — colour 15 for
+a set bit, 0 for a clear one. `gfx_fill_gray` already turns on exactly that.
+
+**It is the one drawing primitive that is greying-blind, and that is in the
+contract rather than left to drift.** Every other primitive reduces colour or
+dithers per §47 inside `font_ink`; this one cannot, because it never sees a
+colour. **§47's dither is the caller's to apply, before the band is handed
+over** — `gfx_pen_cf` (slot 0x0310) is published precisely so a package reads
+`[gfx_dis]` the way the kernel does, and `gfx_unlock` clears it, so the flag is
+valid for exactly the lock hold the blit runs inside.
+
+**Order of operations, and it is load-bearing (§39.14.8).**
+
+1. **The argument refusals above**, which are questions about the arguments and
+   nothing else.
+2. **Resolve the display, before anything is compared to a screen extent.**
+   AX/BX are VIRTUAL desktop coordinates. `vid_span_one` (§39.14.6) answers
+   "is this whole rect inside ONE display?", and only then does
+   `gfx_disp_enter` translate into that display's space. Clipping a virtual
+   rect against `[vid_cw]` — "THE ACTIVE DISPLAY's extent… Not the desktop's",
+   viddet.inc:106 — is the exact bug §39.14.8 records shipping in
+   `gfx_save`/`gfx_restore`: the rect is on display 1, display 0 is current, it
+   clips away to nothing. On `xt-multimon` every band on the second display has
+   AX ≥ 720 and would vanish.
+3. **Clip, do not refuse**, against that display's `[vid_cw]`/`[vid_ch]`:
+   whole 8-pixel band columns off the left or right edge are dropped and the
+   source pointer advanced past them, rows off the top or bottom are skipped.
+   A **negative** AX or BX is the ordinary case here and not an error — a
+   window dragged half off the left edge has content at a negative x — which is
+   why both are signed, where `gfx_fill`'s and `font_run`'s are not.
+4. **A rect that does not fit one display goes PER 8-PIXEL BAND COLUMN,
+   untranslated**, each column resolving its own display: §39.14.6's answer for
+   `font_run` ("a run that does not fit one display goes per CELL and
+   untranslated"), one granularity coarser. It is NOT refused, and the caller
+   never re-letters the row in another face.
+
+**An armed clip region is honoured, not refused.** `gfx_blit4` degrades under
+one (vga12.inc:1714) and no primitive in this system refuses under one; this is
+not the first. `wm_clip_rows` (§11.3.2) cuts the band to whole ROWS, which is
+**strictly finer than `font_char`'s whole-cell answer** — a horizontal window
+edge through a line of proportional text is exact to the pixel row, and that is
+the machinery §14.4's frozen half-covered Timer was fixed with. `wm_clip_rows`
+refuses a fragment that does not span the rect's full width (wm.inc:4844, "a
+vertical cut is refused here as it always was"), and on that refusal the emit
+falls to the **same per-column path as step 4** — each 8-pixel column asks
+`wm_clip_rows` its own question, and a refused column is skipped. The compose is
+untouched either way: a clipped band costs the same compose and *less* emit.
+
+**What §6.1's two guarantees become.** No flicker: a band byte goes from its old
+content to its final content in one `movsb`, so there is no interval in which
+the run is blank — and on VGA this is an *improvement* over the 8×8 face, whose
+`font_run` gate (font.inc:740) sends every VGA run to the `gfx_fill` +
+`font_str` pair that leaves the line blank between them. No double write: one
+store per band byte per row, one framebuffer write per pixel, PERFORMANCE.md
+rule 2 intact.
+
+**No `rep` carries a segment override**, deliberately: an 8086 loses the prefix
+if an interrupt lands mid-`rep`, and this is an interrupt-heavy kernel. DS is
+pointed at the caller's band and restored.
+
+**WHAT IT COSTS, MEASURED (PERFORMANCE.md Set 62).** `tests/bandbench` under
+`-icount`, converted at Part 2's 0.359 ms a count. The emit is **2.42 ms a row**
+of 78 bytes — 3.9 µs a byte, which is `rep movsb` on an 8088 to the byte — over
+an intercept of ~395 µs, *under* §5.7's 756 µs floor, because this primitive
+skips almost everything a drawing call normally does. A 624 × 12 band is
+**4.04 ms** on either mono adapter.
+
+**So the caller's compose is the bill, not this call**: 21–43 ms of the same
+line, depending on how the caller writes its inner loop, against ~4 ms here. A
+band put down whole costs **25.31 ms** against the **24.37 ms** the same 624
+pixels cost as a byte-aligned 78-cell `font_run` — parity — and against
+**67.94 ms** as an *unaligned* one, which is what every proportional pen is, a
+**2.68×** saving. Both comparisons are true and they answer different questions;
+§6.1's fast path is not beaten, it is matched, and what the parity buys is 104
+proportional glyphs in a 12-row face where the 8×8 row held 78.
+
+**The body is `.cold` and `%ifdef KERN_BIG`** (§2.6); `kern_small` carries the
+slot cell and a `stc`/`retf` stub, because its image rung has 75 bytes in it and
+neither package this serves can load on the machine that build is for — Word is
+46.5 KB and TeXPad 31.5 KB against a 128 KB machine's 28 KB heap. A package
+therefore **must test CF**, and the documented degrade is that it letters in the
+kernel's 8×8 face instead, with `font_run` (§6.1).
 
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
@@ -2481,6 +2604,218 @@ the kernel to measure it and had `build/` hard-coded, so it could not find
 `font8x8.inc` in a sub-make's directory and reported "could not measure" on
 every baked build. It was also quietly wrong for `small`, measuring that
 kernel against `build/`'s `associco.inc` rather than `smallk`'s.
+
+### 6.3 Setting type — compose in RAM, emit once
+
+§6 is the kernel's face and stays the kernel's: 8×8, fixed pitch, every row of
+system chrome, every fast path in §6.1 untouched. **A package that wants a
+typeface sets it itself**, and the method is one sentence: build the whole row
+of glyphs into a 1bpp band in your own RAM, then put it on the screen with one
+`OSAPI_GFX_BLIT1` (§5.4.2). `apps/os88type.inc` (§6.5) is that method written
+once; this section is why it has the shape it has, and every figure in it was
+measured before the library existed (PERFORMANCE.md Set 62).
+
+**The arithmetic that forces the design.** A proportional pen lands on an
+arbitrary bit, so a proportional glyph can never reach §6.1's single-store path.
+Lettered one at a time, a 104-glyph line is 104 drawing calls at §5.7's ~756 µs
+floor — **79 ms of floor before a pixel moves**, on a machine where the whole
+line ought to cost 25. Composed and emitted once it is **one** floor. That is
+the entire argument, and it is the same argument §6.1 makes one level down.
+
+**Composing is the bill; the emit is not.** Measured, on either mono adapter:
+the emit is 4.04 ms for a 624×12 band and the compose is 21–43 ms of the same
+line depending on how the inner loop is written. So the interesting engineering
+is all on the caller's side of the API, which is exactly where this design puts
+it — and why the second, fifth and tenth typeface cost the kernel nothing.
+
+**The band is composed in FINAL SCREEN POLARITY, and ink CLEARS bits.** A set
+bit is a lit pixel (§5.4.2), so white paper is `0xFF` and a glyph is ANDed in as
+a complement. Writing it the other way round — clear the band to the background
+byte, OR the ink in — sets nothing at all against `0xFF`, and every line comes
+out invisible. It is worth stating because it is the one bug in this area that
+produces a *plausible* wrong result rather than a crash.
+
+**The pre-shifted glyph table is the design and not an optimisation** (§6.5.2).
+The obvious compose loop widens each glyph row into a 16-bit window, shifts it
+by the pen's bit offset, complements it and ANDs two band bytes: seven
+instructions with a `shr ax,cl` an 8088 charges 8+4/bit for. Doing that
+arithmetic **once per (glyph, phase) at face-open time** instead of once per
+glyph per line takes the compose from **42.68 ms to 21.18 ms — 2.01×** — and
+leaves an inner loop of three instructions with no shift in it at all.
+
+**And the band's stride is an assemble-time constant, `TY_STRIDE` = 92 bytes**,
+which is the second half of that win: with the stride a literal, the eight or
+twelve rows of a glyph are unrolled and addressed as displacements off one `DI`,
+so nothing advances a pointer between rows either. 92 covers the widest line any
+adapter can show — Hercules at 720 px is 90 bytes — plus the one byte a glyph at
+the right-hand end spills into, rounded to even. A caller composing a narrower
+band simply uses fewer bytes of each row.
+
+**What this costs against the face it replaces**, and both halves are true:
+against `font_run` at an unaligned x — which is what every proportional pen
+is — a composed line is **2.68× cheaper**; against a byte-aligned 8×8 run,
+which §11.94 made the default for windows, it is **4% dearer**. §6.1's fast
+path is matched, not beaten, and what the parity buys is 104 proportional
+glyphs in a 12-row face where the 8×8 row held 78.
+
+### 6.4 `.F88` — the face file
+
+**One file per FAMILY**, carrying up to four drawn styles and their metrics.
+Disk work is costed in `int 13h` calls at ~400 ms each and not in bytes, so four
+style files would be four opens and four reads at an application's launch where
+one file is one of each.
+
+**The on-disk form IS the in-RAM form.** The file is read whole and used in
+place — no unpack, no relocation, no fixups — because one pass over a 6 KB face
+would be pure format-shuffling on the target and there is nothing to shuffle.
+
+**The read base is 512-byte aligned by hand, and this is not decoration.**
+§2.1.1 names "a package's file buffer out of the heap" among its int 13h
+targets, and §22.5 states the mechanism and the consequence: `mem_claim` is only
+paragraph aligned, a transfer straddling a 64KB physical boundary is answered
+with error 09h, and the failure "is not a *logic* error, so it does not fail —
+it hangs in the BIOS". So `ty_open` takes the face's claim with
+`OSAPI_MEM_CLAIM_DMA`, rounds the base up to a 32-paragraph boundary by hand and
+gives one KB back — `fcp_bufget`'s recipe — and every header offset is read
+relative to that rounded base. `claim_dma` answers the 64KB question; the
+rounding answers the 512 one; both are needed.
+
+#### Header — 64 bytes, fixed
+
+| off | size | field |
+|---|---|---|
+| +0 | 4 | magic `'F' '8' '8' 0x1A` |
+| +4 | 1 | version = 1 |
+| +5 | 1 | flags: bit0 fixed pitch, bit1 has AFM metrics, bits 2..7 reserved = 0 |
+| +6 | 1 | `rows` — cell height, 8..16, **must be EVEN** |
+| +7 | 1 | `ascent` — baseline row from the top of the cell, 1..`rows` |
+| +8 | 1 | `leading` — extra rows between baselines, 0..8; row advance = `rows + leading`, also even |
+| +9 | 1 | `stride` — bytes per glyph row: 1 (advance ≤ 8 px) or 2 (≤ 16 px) |
+| +10 | 1 | `first` = 32, must equal `FONT_FIRST` |
+| +11 | 1 | `last` = 126, must equal `FONT_LAST` |
+| +12 | 1 | `maxadv` — the widest advance, 1..`stride`×8 |
+| +13 | 1 | `minadv` — the narrowest, **`TY_MINADV` (4) .. `maxadv`** |
+| +14 | 1 | `maxover` — pixels a glyph may overhang its advance to the right, 0..2 |
+| +15 | 1 | `aspect` — 0 square, 1 Hercules 1.55:1, 2 CGA 2.40:1 |
+| +16 | 16 | family name, ASCII, NUL-padded — what a Font menu shows |
+| +32 | 8 | 4 words: byte offset of each style's BITMAP block, 0 = absent. Style 0 (regular) must be present; 1 bold, 2 italic, 3 bold-italic |
+| +40 | 8 | 4 words: byte offset of each style's METRIC block, 0 = fixed pitch (use `maxadv`) |
+| +48 | 8 | 4 words: byte offset of each style's PostScript base-font name (NUL string), 0 = none |
+| +56 | 2 | file length, checked against what `OSAPI_FILE_READ` returned |
+| +58 | 2 | checksum: every byte from +60 to EOF, summed mod 65536 |
+| +60 | 4 | reserved, zero |
+
+**`minadv`'s floor is load-bearing and is checked at open, not at build.**
+`WD_MAXCOL` and Word's row buffers are sized from the narrowest advance a face
+may have; a build-time assertion cannot defend that, because the constant is in
+the tree and the face comes off a floppy. So `ty_open` refuses a face whose
+`minadv` is below `TY_MINADV` with `TYE_SHAPE`, and the art is drawn to the
+floor rather than the floor being widened to the art.
+
+#### Blocks
+
+**`stride` 2 is in the format and not yet in the library.** `ty_open` refuses a
+face with `stride` 2 (`TYE_SHAPE`): a 16-pixel glyph is two half-cells and
+neither compose loop is written for one. The field is specified now so that the
+16-pixel display face a later stage wants needs no format change, and refusing
+is the right answer meanwhile — a face drawn for a renderer that cannot set it
+would letter as noise.
+
+**Bitmap block** — `95 × rows × stride` bytes, glyph-major; glyph *g* =
+`code − 32` starts at `block + g × rows × stride`. Rows 0 first; at `stride` 2
+the left 8-pixel column's rows come first and then the right column's, so **a
+16-pixel character is two ordinary 8-pixel half-cells** and cell width never
+enters the renderer. Bit 7 leftmost. **1 = ink**, because that is how a person
+reads `#` in the art; the compose complements it in an instruction it was
+paying anyway.
+
+**Metric block** — 286 bytes: 95 bytes of `ADV[]`, the screen advance in
+pixels; one pad byte to even; then 95 words of `ADVM[]`, the advance in AFM
+1/1000-em units. Both live in one file because a face is two things at once —
+bitmaps for the screen, metrics for the paper — and keeping them together is
+what lets a typeset preview and its PDF agree by construction rather than by
+hope.
+
+**Every advance is EVEN.** It costs the art very little at this size (4, 6 or 8
+pixels, which is what a 2-pixel stem wants on a 2.4:1 CGA pixel anyway) and it
+halves §6.5.2's pre-shifted table, because a pen that starts on an even bit and
+advances by an even number can only ever be at phases 0, 2, 4 and 6. The tool
+enforces it; `ty_open` re-checks it, because the tool is not what runs.
+
+### 6.5 `apps/os88type.inc` — the library
+
+The method of §6.3 written once, included by any package that wants it. It is
+**source**, not a service: there is no linker (§1), so each including package
+carries its own copy, and the kernel carries none of it.
+
+| entry | in | out |
+|---|---|---|
+| `ty_init` | — | face 0 open and current. Call it first, from the package entry |
+| `ty_open` | SI = NUL 8.3 name (e.g. `CHARTER.F88`) | CF=0 and AL = a face handle; CF=1 and AL = `TYE_*` |
+| `ty_close` | AL = handle | — |
+| `ty_use` | AL = handle, AH = style 0..3 | CF=1 if that style is absent; the face becomes current |
+| `ty_cache` | — | CF=0 the pre-shifted table holds the current face and style; CF=1 no claim, and the general compose is what every line will use (§6.5.2) |
+| `ty_width` | ES:SI = NUL string | AX = its width in pixels |
+| `ty_widthn` | ES:SI, CX = length | AX = width; the counted form, for a run |
+| `ty_fit` | ES:SI, CX = length, AX = pixels available | CX = characters that fit, AX = their width |
+| `ty_hit` | ES:SI, CX = length, AX = a pixel offset into the run | CX = the character index under it |
+| `ty_band` | DX = rows | the band cleared to paper, a whole `TY_STRIDE` wide |
+| `ty_put` | ES:SI = NUL string, AX = pen x within the band | AX = the pen after it |
+| `ty_putn` | ES:SI, CX = length, AX = pen | as above, counted |
+| `ty_flush` | AX = screen x (**×8**), BX = y, CX = width px (**×8**), DX = rows | CF as `OSAPI_GFX_BLIT1`, and `[ty_ok]` records it |
+| `ty_getrows` / `ty_getasc` / `ty_getlead` | — | AL = the current face's cell height / baseline row / leading |
+| `ty_advof` | AL = a character | AL = its advance in pixels |
+
+**Face 0 is the kernel's 8×8 face and is always open.** It needs no file, its
+`ADV[]` is 95 bytes of 8 and its bitmaps are `OSAPI_FONT_GLYPHS`'. It exists so
+that no caller ever branches on "is this the built-in one": a package written
+against this library measures, wraps, hits and draws through the same six calls
+whether or not a `.F88` was found, and a missing face file degrades to the
+system face rather than to a different code path.
+
+**`ty_flush` reads `[gfx_dis]` for the caller.** §5.4.2's blit is the one
+drawing primitive in the tree that is greying-blind, and rather than leave that
+to every author, `ty_flush` asks `OSAPI_GFX_PEN_CF` (slot 0x0310, published for
+exactly this) and dithers the band itself when the flag is set — so §47's
+"grey a fact, never a guess" survives on the band path without a package having
+to remember it. `gfx_unlock` clears the flag, so the answer is valid for
+precisely the lock hold `ty_flush` runs inside.
+
+**`ty_flush` answers the refusal; it does not paper over it.**
+`OSAPI_GFX_BLIT1` refuses on `kern_small`, which carries the slot and not the
+body, so CF=1 is a real answer on a real machine. The library **cannot** letter
+the run itself at that point — by then it holds a band of pixels and not the
+text — so `ty_flush` returns CF and records it in `[ty_ok]`, and the caller
+letters that row with `OSAPI_FONT_RUN` instead. It is a whole-ROW branch taken
+once per build rather than a per-glyph one, and face 0 is what keeps the
+*measuring* side of that fallback from needing a second code path at all: the
+wrap, the widths and the hit-testing are the same calls either way. (An earlier
+draft of this section had the library own the fallback outright. It cannot, and
+saying so is better than a promise the code would have to break.)
+
+#### 6.5.1 The band is one claim and the face is another
+
+They cannot share one. The face image is **refcounted across instances** — two
+Word windows open on the same family read the file once — while the band is per
+instance and per window width; and the face's claim is the one that must be
+`OSAPI_MEM_CLAIM_DMA` and 512-aligned by hand (§6.4), which is a property worth
+having on exactly one of the two. `TY_STRIDE × 16` = 1,472 bytes buys a band
+tall enough for any legal face and wide enough for any adapter.
+
+#### 6.5.2 The pre-shifted table, and what it costs
+
+For each style in use: **95 glyphs × 4 phases × `rows` × 2 bytes** — 9,120 bytes
+at 12 rows — of glyph rows already shifted into the pen's bit offset and already
+complemented, so the compose is `mov ax,[bx+k]` / `and [di+d],ah` /
+`and [di+d+1],al` and nothing else. Four phases and not eight because §6.4
+requires every advance to be even.
+
+It is built **lazily, per style, on first use**, and it costs about **160 ms
+once** on the target — a third of one `int 13h`. **If the claim fails it is not
+an error**: `ty_put` falls back to the general shift-and-merge loop, which is
+correct and measured at **2.01× the cost**. That is the degrade this library
+owes a small machine, and it is a degrade rather than a refusal because the
+result is identical pixels either way.
 
 ## 7. Concurrency model (read carefully — this is the crux)
 
@@ -14952,6 +15287,46 @@ copies eleven hundred lines apart — `dskw_wbody`'s replace and
 `KERNEL.SYS` down as a run of `OSAPI_FILE_APPEND_SYS` calls, so a fix applied
 to the replace alone would have left the low-heap path refusing.
 
+
+### 19.8 `FONTS/` — a system resource, and the slot that names the disk it is on
+
+**Typefaces ship on the SYSTEM disk, in `FONTS/`,** and not on the apps floppy
+where they started. A face is not an application's data — it is the machine's,
+the way the kernel's own 8×8 cell is (§6) — and a second application wanting the
+same family should find it already there rather than carry a copy. `FONTS/` sits
+beside `SYSTEM/` for that reason and is typed as data by the mount (§19), so a
+`.F88` can never be double-clicked into the loader.
+
+The 360 KB system disk carries the kernel and has **198,656 bytes free**, which
+is the rung this decision was checked against: a family is ~1.5 KB a style, so
+the whole set is a rounding error there and would have been 27% of the apps
+floppy's free space.
+
+**`OSAPI_VOL_SYS` (slot 0x03F8) is what makes it reachable, and it had to be
+new.** A package stands in the folder it was launched from, or in one a Standard
+File dialog gave it (§19.2.1); **nothing told it where the SYSTEM's files were**.
+`OSAPI_FILE_GOTO` has always taken a volume and a cluster, so the missing half
+was the volume — `[dsk_bootvol]`, which the kernel has read for the driver load
+and the Control Panel for as long as both have existed, handed out. It is A: on a
+floppy machine and the installed partition on one that boots from its hard disk
+(§52.10.3), it does no I/O and it cannot fail.
+
+**The visit is a bracket and the caller owns both ends.** `OSAPI_FILE_HERE` to
+bank where you are, `OSAPI_VOL_SYS` + `OSAPI_FILE_GOTO` with cluster 0 to stand
+on the system root, `OSAPI_FILE_FIND` to locate `FONTS` and again inside it, then
+`OSAPI_FILE_GOTO` back. Four remounts and two listings — **real floppy I/O,
+UI-task context only**, and on the target machine that is a couple of seconds. So
+it is done **once, lazily**, when something actually needs the list: a menu
+nobody opens should cost nothing, which is the same argument §6.2 makes about a
+directory of faces nobody picks from.
+
+**What a scan reads is the FILE NAME and not the family inside the header.**
+The header's 16-byte name (§6.4) is authoritative for a face that is *open*, but
+learning it costs a read per family, and a Font menu that spends eight `int 13h`
+calls before it can draw itself is a menu that feels broken. The 8.3 stem is
+already in the directory entry the scan is walking, so the list is built from
+that and the header name takes over the moment a face is chosen. The tool writes
+both from one source, so they agree; where they could not, the open is what wins.
 
 ## 20. Loadable programs — the .o88 package format
 
@@ -44315,6 +44690,148 @@ text stream §65.4 records it does not have. The page a line falls on is still
 is no printing path in this OS to preview — no printer driver class in §51, no
 slot in the published API. §47's rule: the greyed item is telling the truth
 for nothing.
+
+### 65.13 A typeface for the document
+
+Word sets its text in the kernel's 8×8 cell (§6) and always has. §65.13 is the
+route to setting it in a **proportional face** instead — `apps/os88type.inc`'s
+band (§6.3/§6.5) — and the shape of the change is one sentence: **the cell stays
+the unit and only its PIXEL POSITION stops being 8k.**
+
+That is worth stating plainly because the obvious alternative is worse. Word's
+row model is an array of cells with a delta diff against what the screen holds,
+a per-row signature, a per-row selection span and a caret column, and all four
+are indexed by cell. Reworking them into pixel runs would touch every one; giving
+a cell a *variable* position touches none of them, and reduces the whole
+conversion to two routines and the sites that call them.
+
+**`wd_cx` (cell → x) and `wd_xc` (x → cell) are those routines.** Every place
+that computed `[wd_tx] + 8k`, or `(x − [wd_tx]) >> 3`, calls one of them now.
+With `[wd_prop]` clear they are exactly the three shifts they replace, so the
+fixed face costs a `call`/`ret` and nothing else; with it set they read
+`wd_px[]`.
+
+**`wd_px[]` is the row's own map** — one word a cell, the pen that cell starts
+at relative to `[wd_tx]`, recorded by the accumulate walk as it stores the cell,
+**plus one slot past the last** so that a span's right edge is a lookup rather
+than a special case. It is the only new per-row state, and in a fixed face it is
+not read at all.
+
+**The accumulate walk changes in one place and it is not the obvious one.**
+Today the cell index is derived from the pen — `(DI − [wd_tx]) >> 3` — which is
+elegant and is exactly what a proportional face cannot do: there is no divisor.
+So in a proportional face the index is COUNTED, in `[wd_rcn]`, and the pen is
+recorded beside it. One consequence falls out and is worth writing down: a TAB
+leaves empty cells behind it in the fixed face (the pen jumps and the cells it
+skipped keep their space padding) and leaves NONE in a proportional one (it is
+one cell with a wide advance). The row buffer therefore holds characters rather
+than screen columns, which is what the delta diff, the signature and the
+selection span all want anyway.
+
+**`WD_MAXCOL` is sized from `TY_MINADV` and not from the face.** It went 171 →
+**341**: 1360 ÷ 4, the widest a window can be on an extended desktop over the
+narrowest advance §6.4 permits. It cannot be sized from the advance the shipped
+face happens to use, because the face comes off a floppy while the constant is
+in the tree — the two are kept together by `ty_open` refusing a face below
+`TY_MINADV`, which is why that check is in the open and not in a build assertion.
+Past the clamp `wd_rflush` DROPS the cell, and the field has already reported
+that once as a row of text with its tail missing.
+
+**The draw path is `wd_drawrun`'s second arm**: compose the run into the band
+with `ty_putn` and put it down with one `ty_flush`, against the one
+`OSAPI_FONT_RUN` a fixed run takes. Two properties of §5.4.2 shape it. The blit
+wants a byte-aligned x, so the band **starts one byte column LEFT of the first
+glyph redrawn** — the pen inside the band carries the 0..7 remainder — and its
+width is rounded up to a multiple of 8. And `ty_flush` may answer CF=1 (a
+`kern_small` kernel carries the slot and not the body, §6.5), so the arm falls
+back to lettering the row in the 8×8 face; because the *measuring* side goes
+through face 0 either way, that fallback needs no second layout.
+
+**A keystroke costs more in a proportional face and the reason is inherent.**
+Changing one character in a fixed cell moves that cell's pixels; changing one in
+a proportional face **re-flows every cell after it**, so the damage runs from the
+edited cell to the end of the row rather than over one cell. Typing at the end of
+a line — which is most typing — is unaffected, because there is nothing after it.
+The rest is what a proportional face costs, and PERFORMANCE.md Set 62 prices the
+row it lands in: 25.31 ms against the aligned 8×8 row's 24.37.
+
+**The Font combo is built from the disk, not from this program.** Its dropdown
+is a static table with `WD_MAXFONT` records reserved after Pica, and
+`wd_fontscan` fills them from `ty_scan` (§19.8) and writes the item count into
+`wd_mtab` — so the menu is as long as the machine's `FONTS/` folder, and a disk
+carrying more faces needs no edit here. It runs **the first time the combo is
+opened** and never again: the scan is real floppy I/O, and a person who never
+opens the menu should pay nothing for it.
+
+Three details of that are worth keeping. The scan runs **once whatever the
+answer**, so a disk with no `FONTS/` is not re-walked on every press. The
+ribbon's caption is a *pointer* (`[wd_fcap]`), initialised to `wd_s_pica` at
+entry — bss arrives zeroed, and a null there letters this package's own header
+onto the ribbon and reads as a corrupt heap. And the box is renamed **only after
+`ty_openfam` succeeds**, so the name in the ribbon is evidence that the face is
+open rather than evidence that one was asked for. `wd_a_csel` repaints the strip
+itself, because `wd_mfire` runs *after* `wd_mclose` has already put back the rows
+the dropdown covered — the caption it changes was drawn a moment before it
+changed.
+
+**And it preserves SI, which is not optional.** `wd_mfire`'s contract ends "SI
+survives every action" — SI is the window pointer every action is dispatched
+with — and `ty_famname` ANSWERS in SI. The first version of this handler
+therefore returned a pointer to a font name where a window record belonged, and
+the machine followed it: **a hard hang, with CS:IP parked on this package's own
+entry point**, reproducible on the pick and on nothing else. It is written down
+because the failure looks nothing like its cause — the last painted frame is
+intact and correct, including the caption the handler had just changed, so the
+screen shows a working program and the clock is what says otherwise.
+
+**What has landed, and what has not.** The library, the face file, `wd_cx`,
+`wd_xc`, `wd_px[]`, the raised `WD_MAXCOL`, the discovery and the Font combo are
+in, and **`[wd_prop]` is 0**: bss arrives zeroed, so a build with no face file, a machine
+whose kernel refuses the band blit, and today's tree all behave exactly as they
+did. **`WD_PROPDRAW` is 1: a chosen face is what the document is SET in.** The
+dropdown re-letters the whole note — every row, every run — and switching back
+to Pica re-letters it in the kernel's cell. What each face costs the layout is
+its own `rows` and `leading`: an 8-row face changes **nothing** (same pitch,
+same caret, same clicks, only the glyph shapes move), and a taller one moves the
+row advance through `[wd_ghb]` and raises `[wd_hasfmt]` so the non-uniform-row
+paths that line spacing already needed do the work.
+
+**Bold is a second compose, not a second call.** The cell arm strikes the run
+again one pixel right with an `OSAPI_FONT_STR`; the band arm composes it again
+into the same band before emitting, so the strike costs no drawing floor at all.
+
+**Italic in a chosen face is drawn UPRIGHT, deliberately.** `wd_itrun` shears the
+*kernel's* glyphs (§65.1), so in a chosen face it would letter one run in a
+different typeface from the words either side of it — which reads as a bug rather
+than as italic. Upright in the right face is the better wrong answer until a face
+carries a drawn italic (§6.4's style 2).
+
+**The metrics are still the 8-pixel grid.** `[wd_pxon]` is 0: the wrap rule, the
+accumulate walk's cell index and `wd_px[]` are unconverted, so a proportional
+face is set at fixed pitch — its shapes, its height, its leading, but eight
+pixels a character. That is the remaining half of this section, and it is
+separable precisely because `wd_cx`/`wd_xc` already stand between every call site
+and the answer.
+
+#### 65.13.1 Two bugs this cost, both worth writing down
+
+**A literal that becomes a variable must be initialised before anything reads
+it.** `[wd_gh1]` — the glyph band's height less one, which replaced a hard `7` at
+fourteen sites — lives in bss, and **bss arrives zeroed**. Until
+`wd_facemetrics` was called from `wd_entry`, every row-band test in the program
+compared against `y + 0` instead of `y + 7`, and most of the note simply
+vanished. It looks like a layout bug and is an initialisation one.
+
+**An action REACHES the redraw by a tail jump, and calling it is not the same
+thing.** `wd_a_new`, `wd_a_undo`, `wd_a_cut` and the rest all end `jmp
+wd_redraw`; the font pick was written to `call wd_redraw` and carry on. That one
+difference produced *two* symptoms that looked unrelated — the chrome drawn at
+two geometries at once, and the band arm never running at all — and neither
+pointed at the call. What settled it was making the band arm unconditional and
+looking: the bands landed at exactly the right x, width, y and height on every
+row, which proved the whole rendering path correct and left the caller as the
+only suspect. **When a change touches a drawing path, make the path
+unconditional and look at it before theorising about who calls it.**
 
 ## 66. TeXPad — the TeX pad (`apps/texpad/texpad.asm`)
 

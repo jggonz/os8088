@@ -3637,4 +3637,276 @@ vgas_ydst        resw 1          ;   first destination row
 vgas_step        resw 1          ;   +1 (up: top-down) / -1 (down: bottom-up)
 vgas_rows        resw 1          ;   rows to copy = height - |dy|
 vgas_left        resw 1          ;   per-pass row countdown
+
+; -----------------------------------------------------------------------------
+section .cold                   ; gfx_blit1's body, and its far entry below it
+%ifdef KERN_BIG
+; =============================================================================
+; gfx_blit1_x - a composed 1bpp band, straight into the framebuffer (SPEC.md
+;               5.4.2). kern_big only; kern_small's thunk is stc/retf.
+;
+; in:       ES:SI = the band, BP = its stride in bytes per row, AX = x (a
+;           multiple of 8, SIGNED), BX = y (SIGNED), CX = width in pixels (a
+;           multiple of 8), DX = rows (1..255); the gfx lock held
+; out:      CF = 0 drawn or clipped exactly, CF = 1 refused and nothing drawn
+; clobbers: NOTHING - every register, ES and BP included
+;
+; The whole routine is the arriving. The caller has already decided what every
+; bit is, so there is no colour to reduce, no plane to select and no glyph to
+; look up: what is left is a rep movsb a row. SPEC.md 5.4.2 is the contract and
+; the reasoning; this is the order of operations it pins, in the order it pins
+; them - refuse, resolve the display, clip, emit.
+;
+; The band step, the row step and the row count are pushed and read BP-relative
+; because BP addresses SS (SPEC.md 1) and DS spends the emit pointed at the
+; CALLER's band. This body's CS is COLD_SEG, so sw_xfer's [cs:vid_rowadd] idiom
+; does not transfer either - the frame is the way to reach a geometry word once
+; DS has moved.
+; =============================================================================
+gfx_blit1_x:
+    test ax, 7                  ; the two argument refusals, and they are the
+    jnz .refuse                 ; ONLY two: an x or a width off the byte grid
+    test cx, 7                  ; is a caller error, not a shape to clip
+    jnz .refuse
+    or cx, cx
+    jz .refuse
+    or dx, dx
+    jz .refuse
+    cmp dx, 255                 ; ...and a band taller than wm_clip_rows' own
+    ja .refuse                  ; byte answer can express (SPEC.md 11.3.2)
+
+    call KERNEL_SEG:cw_cur_unlazy   ; this may write any pixel on the screen,
+                                    ; so the deferred hide is owed (SPEC.md
+                                    ; 7.1.4) - and owed HERE, above the two
+                                    ; questions below, so nothing that answers
+                                    ; them can be read stale afterwards
+
+    ; --- resolve the display BEFORE anything meets a screen extent (39.14.8)
+    cmp byte [vid_ndisp], 1
+    jbe .spanok
+    cmp byte [gfx_dnest], 0
+    jne .spanok                 ; an outer whole-shape hook already chose one
+    push cx
+    push dx
+    add cx, ax
+    dec cx                      ; CX = x2, DX = y2, both still VIRTUAL
+    add dx, bx
+    dec dx
+    call KERNEL_SEG:cw_vid_span_one
+    pop dx
+    pop cx
+    jc .percol                  ; it crosses a seam: per band column, each
+.spanok:                        ; resolving its own display (SPEC.md 39.14.6)
+
+    ; --- ...and the clip region, in the same VIRTUAL space wm_clip_tab is in
+    cmp word [wm_clip_n], 0
+    je .clipok
+    push cx
+    push dx
+    add cx, ax
+    dec cx
+    add dx, bx
+    dec dx
+    call KERNEL_SEG:cw_wm_clip_rows
+    pop dx
+    pop cx
+    jc .percol                  ; a VERTICAL cut: wm_clip_rows refuses a
+.clipok:                        ; part-width row, so the columns ask singly
+
+    push es                     ; from here the caller's registers are banked
+    push ds                     ; and the body is free with all nine
+    push bp
+    push si
+    push di
+    push dx
+    push cx
+    push bx
+    push ax
+
+    cmp word [wm_clip_n], 0
+    je .rowsall
+    push ax                     ; x, which this block spends AX to compute
+    mov al, [wm_clip_r0]        ; skip the rows the region cut off the top:
+    xor ah, ah                  ; a row OFFSET is the same number in either
+    or ax, ax                   ; coordinate space, which is why this may be
+    jz .r0z                     ; applied before the translation below
+    add bx, ax
+    push dx
+    mul bp                      ; ...and the band skips r0 whole strides
+    add si, ax
+    pop dx
+.r0z:
+    mov al, [wm_clip_rn]
+    xor ah, ah
+    mov dx, ax                  ; DX = the rows one fragment can offer
+    pop ax
+.rowsall:
+
+    cmp byte [vid_ndisp], 1
+    jbe .noenter
+    call KERNEL_SEG:cw_gfx_disp_enter   ; AX/BX become this display's own
+.noenter:
+
+    ; --- clip to THAT display's extent. A negative x or y is the ordinary
+    ; case here and not an error: a window dragged half off the left edge has
+    ; its content at one, and whole 8-pixel columns simply drop.
+    or ax, ax
+    jns .xleft
+    add cx, ax                  ; CX loses the columns left of the screen
+    jle .none
+    push ax
+    neg ax
+    shr ax, 1                   ; three single shifts: 6 clocks against the
+    shr ax, 1                   ; 20 an 8088 charges for a shift by CL
+    shr ax, 1
+    add si, ax                  ; ...and the band starts that many bytes in
+    pop ax
+    xor ax, ax
+.xleft:
+    cmp ax, [vid_cw]
+    jae .none
+    mov di, ax
+    add di, cx
+    cmp di, [vid_cw]            ; vid_cw is 640 or 720, both multiples of 8,
+    jbe .xright                 ; so the truncation stays on the byte grid
+    mov cx, [vid_cw]
+    sub cx, ax
+.xright:
+    or bx, bx
+    jns .ytop
+    add dx, bx
+    jle .none
+    push ax
+    mov ax, bx
+    neg ax
+    push dx
+    mul bp                      ; the band skips |y| whole strides
+    add si, ax
+    pop dx
+    pop ax
+    xor bx, bx
+.ytop:
+    cmp bx, [vid_ch]
+    jae .none
+    mov di, bx
+    add di, dx
+    cmp di, [vid_ch]
+    jbe .ybot
+    mov dx, [vid_ch]
+    sub dx, bx
+.ybot:
+
+    ; --- the frame the row loop reads, and then DS leaves KERNEL_SEG --------
+    mov di, cx
+    shr di, 1
+    shr di, 1
+    shr di, 1                   ; DI = bytes per row
+    push dx                     ; [bp+10] rows remaining
+    push di                     ; [bp+8]  bytes per row
+    mov cx, bp
+    sub cx, di
+    push cx                     ; [bp+6]  the band's step, less what rep moved
+    push word [vid_rowadd]      ; [bp+4]  gfx_nextrow, inlined (Part 9 Set 3)
+    push word [vid_wrapbit]     ; [bp+2]
+    push word [vid_wrapfix]     ; [bp+0]
+    mov bp, sp
+
+    mov cx, ax                  ; AX is still x, and x is a multiple of 8
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    mov ax, bx
+    push cx
+    call KERNEL_SEG:cw_gfx_rowbase  ; AX = rowbase(y); it clobbers CX and DX
+    pop cx
+    add ax, cx
+    mov di, ax                  ; DI = the band's first framebuffer byte
+    mov ax, [vid_seg]           ; the UNIFORM cell, and NOT vid_rseg, which is
+    mov bx, es                  ; 0 on VGA (viddet.inc:115) - and already the
+    mov es, ax                  ; resolved display's, the enter above having
+    mov ds, bx                  ; run first (SPEC.md 39.12)
+    cld
+.row:
+    mov cx, [bp+8]
+    push di
+    rep movsb                   ; no segment override on a rep: an 8086 loses
+    pop di                      ; the prefix to an interrupt (SPEC.md 5.7)
+    add si, [bp+6]
+    add di, [bp+4]
+    test di, [bp+2]
+    jz .nowrap
+    add di, [bp+0]
+.nowrap:
+    dec word [bp+10]
+    jnz .row
+    mov sp, bp
+    add sp, 12
+.done:
+    cmp byte [vid_ndisp], 1
+    jbe .noleave
+    dec byte [gfx_dnest]        ; ...and NOTHING restores the display
+.noleave:                       ; (SPEC.md 39.14.3)
+    pop ax
+    pop bx
+    pop cx
+    pop dx
+    pop di
+    pop si
+    pop bp
+    pop ds
+    pop es
+    clc
+    ret
+.none:                          ; clipped away entirely: drawn, and nothing
+    jmp .done                   ; drawn, which is CF = 0 either way
+
+    ; --- per 8-pixel band column, untranslated (SPEC.md 5.4.2 step 4) -------
+    ; Each column re-enters this routine and resolves its own display and its
+    ; own row range, which is font_run's per-cell answer one granularity
+    ; coarser. A column that is refused a second time is a column that cannot
+    ; be drawn - it is skipped, and the caller never letters the row twice.
+.percol:
+    cmp cx, 8
+    jbe .okquiet                ; already one column: this is that skip
+    push ax
+    push cx
+    push si
+    push di
+    mov di, cx
+    shr di, 1
+    shr di, 1
+    shr di, 1                   ; DI = columns to place
+    mov cx, 8
+.pcol:
+    push ax
+    push cx
+    push si
+    push di
+    call gfx_blit1_x
+    pop di
+    pop si
+    pop cx
+    pop ax
+    add ax, 8
+    inc si
+    dec di
+    jnz .pcol
+    pop di
+    pop si
+    pop cx
+    pop ax
+.okquiet:
+    clc
+    ret
+.refuse:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; The far entry (SPEC.md 2.6): kernel.asm's resident thunk far-calls this, and
+; this near-calls the body above.
+; -----------------------------------------------------------------------------
+gbz_gfx_blit1:        call gfx_blit1_x
+                  retf
+%endif
 section .text
