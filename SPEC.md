@@ -44869,6 +44869,20 @@ width is rounded up to a multiple of 8. And `ty_flush` may answer CF=1 (a
 back to lettering the row in the 8×8 face; because the *measuring* side goes
 through face 0 either way, that fallback needs no second layout.
 
+**What the metrics cost, said plainly.** Three things got more expensive and
+none of them is free. The walk now asks `ty_advof` once a character instead of
+adding a literal 8 — a table lookup and a `call`/`ret`, against a pen that used
+to move in one instruction. `wd_wordfit` sums those advances instead of counting
+down a register, so the wrap lookahead pays the same per character of the word
+it measures. And `[wd_rcols]` is sized from `TY_MINADV`, which roughly **doubles
+it** on a fullscreen window — so `wd_rstart`'s two `rep stosb` and the delta
+diff's cell-by-cell compare each walk twice as many cells as they did in the
+kernel's cell, whether or not the row is that long. All of it is per-character
+work on a path that already costs a `gfx` call per row, and none of it changes
+the number of DRAWING calls a row makes, which is what PERFORMANCE.md prices a
+redraw by — but it is real, it is paid on the target machine, and it is paid
+only while a face is chosen.
+
 **A keystroke costs more in a proportional face and the reason is inherent.**
 Changing one character in a fixed cell moves that cell's pixels; changing one in
 a proportional face **re-flows every cell after it**, so the damage runs from the
@@ -44906,17 +44920,88 @@ because the failure looks nothing like its cause — the last painted frame is
 intact and correct, including the caption the handler had just changed, so the
 screen shows a working program and the clock is what says otherwise.
 
-**What has landed, and what has not.** The library, the face file, `wd_cx`,
-`wd_xc`, `wd_px[]`, the raised `WD_MAXCOL`, the discovery and the Font combo are
-in, and **`[wd_prop]` is 0**: bss arrives zeroed, so a build with no face file, a machine
-whose kernel refuses the band blit, and today's tree all behave exactly as they
-did. **`WD_PROPDRAW` is 1: a chosen face is what the document is SET in.** The
+**What has landed.** All of it. The library, the face file, `wd_cx`, `wd_xc`,
+`wd_px[]`, the raised `WD_MAXCOL`, the discovery, the Font combo, the band draw
+and the metrics. **`[wd_prop]` is 0 until a face is picked** — bss arrives
+zeroed, so a build with no face file, a machine whose kernel refuses the band
+blit, and a document nobody has set all behave exactly as they always did.
+**`WD_PROPDRAW` is 1: a chosen face is what the document is SET in.** The
 dropdown re-letters the whole note — every row, every run — and switching back
 to Pica re-letters it in the kernel's cell. What each face costs the layout is
-its own `rows` and `leading`: an 8-row face changes **nothing** (same pitch,
-same caret, same clicks, only the glyph shapes move), and a taller one moves the
-row advance through `[wd_ghb]` and raises `[wd_hasfmt]` so the non-uniform-row
-paths that line spacing already needed do the work.
+its own `rows` and `leading`: a taller face moves the row advance through
+`[wd_ghb]` and raises `[wd_hasfmt]` so the non-uniform-row paths that line
+spacing already needed do the work.
+
+**`[wd_pxon]` is `[wd_prop]`, and it is set in `wd_facemetrics` beside the
+glyph band.** One flag says "`wd_px[]` is the truth", every cell-to-pixel
+question goes through `wd_cx`/`wd_xc`, and the two faces differ in those two
+routines rather than in thirty. Five things follow it, and each is where a
+pitch used to be assumed:
+
+- **the pen advances by `ty_advof`**, not by 8, and by the advance of the
+  character that is DRAWN — so the small-caps case map (§65.1) happens before
+  the advance is taken and not inside the drawing gate below it. That single
+  choice is what makes `ty_putn`'s pen inside a band agree with `wd_px[]`
+  outside it: the band composes from the run's first cell, so if the walk
+  advanced by anything else the two would disagree by a pixel a glyph
+- **the wrap rule measures pixels.** `wd_wordfit`'s two thresholds — what is
+  left of this row, and what a fresh row of this paragraph would hold — are
+  pixel sums over `ty_advof` rather than cell counts, and `wd_rowmeasure`
+  answers the centre/right dry run in pixels for the same reason. `wd_tabw` is
+  pixel arithmetic in both faces (a tab stop is every `WD_TABSTOP`×8 pixels
+  from the row's own start pen), which is bit-identical to the cell version it
+  replaces whenever the pen is a multiple of 8
+- **a TAB is ONE cell** in a proportional face, wearing the tab's dress and
+  carrying the whole gap as its advance — against the fixed face's run of
+  space cells. That is the consequence named above, and it is why the row
+  buffer holds characters rather than screen columns
+- **the click's half-cell is a half-ADVANCE.** `wd_ask` splits the character at
+  `DI + adv/2`, so click-to-caret lands on the nearer edge of a 4-pixel `i` and
+  of an 8-pixel `m` alike
+- **`[wd_rcols]` is sized from `TY_MINADV`**, not from 8: a row of narrow
+  glyphs holds more cells than it holds byte columns, and the row buffer, its
+  padding and the delta diff are all bounded by it
+
+**The tail of a row is erased in pixels, once.** A fixed row erases itself: the
+buffer is space-padded to `[wd_rcols]` and one opaque run covers the band. A
+proportional row cannot pad, because a cell past the row's content has no pen —
+so `wd_rflush` clamps the span to the cells the walk actually stored, and where
+the row's glyphs used to reach further than they now do, ONE white fill covers
+the difference. `[wd_prowrx]` banks that right edge beside `wd_prow`, and a row
+whose cache describes some other row erases to the paragraph's right edge
+instead. It costs one `gfx_fill` on a row that SHRANK and nothing at all on a
+row that grew, which is the common case: typing. The band-level right-margin
+fill in `wd_redraw` is skipped outright for the same reason — `[wd_rcols]` is a
+count sized from `TY_MINADV` there and `8 ×` it is not a pixel coordinate.
+
+**And the SPAN GROWS OUTWARDS TO BYTE COLUMNS before it is drawn.** This is
+§5.4.2's back-up rule read the other way round. The band is blitted by whole
+byte columns and is paper where nothing was composed, so a run whose first cell
+starts mid-byte whitens up to 7 pixels of the glyph to its LEFT, and one whose
+last cell ends mid-byte does the same on its right. At the *row's* own edges
+that is exactly what `FONT_RUN`'s background would have done; between two
+neighbouring cells it rubs out ink that nothing is going to put back. In the
+kernel's cell the question never arose — every cell edge is a multiple of 8 —
+and the first proportional build showed it as a keystroke eating the tail of the
+character before it, one pixel column at a time. `wd_rflush` walks `[wd_flo]`
+down and `[wd_fhi]` up until both edges land on a multiple of 8; it costs a
+neighbouring cell or two redrawn and erases none.
+
+That leaves ONE case unhandled and it is written down rather than fixed: a row
+carrying **several different CHPs** is several runs, each with its own band, and
+the interior boundaries between them are not byte-aligned. Run *n* can therefore
+whiten up to 7 pixels of run *n−1*'s last glyph. The obvious repair — one band
+for the whole row, composed run by run and blitted once — was written and
+reverted: it hangs, and the cause is not yet understood, so what ships is the
+per-run band that has always shipped. Plain text, which is every run of a
+document nobody has styled, is one run and is unaffected.
+
+**Two fast paths refuse a chosen face outright.** `wd_append` (§27.14.1) patches
+one glyph and one caret onto the glass without walking, and `wd_brktry`
+(§27.12) scrolls a row band by whole cells; both do column arithmetic in
+multiples of 8 and both drew through the kernel's cell. They now test
+`[wd_pxon]` and fall back to the walk. This is the third bug below and the one
+that was actually reported.
 
 **Bold is a second compose, not a second call.** The cell arm strikes the run
 again one pixel right with an `OSAPI_FONT_STR`; the band arm composes it again
@@ -44928,14 +45013,7 @@ different typeface from the words either side of it — which reads as a bug rat
 than as italic. Upright in the right face is the better wrong answer until a face
 carries a drawn italic (§6.4's style 2).
 
-**The metrics are still the 8-pixel grid.** `[wd_pxon]` is 0: the wrap rule, the
-accumulate walk's cell index and `wd_px[]` are unconverted, so a proportional
-face is set at fixed pitch — its shapes, its height, its leading, but eight
-pixels a character. That is the remaining half of this section, and it is
-separable precisely because `wd_cx`/`wd_xc` already stand between every call site
-and the answer.
-
-#### 65.13.1 Two bugs this cost, both worth writing down
+#### 65.13.1 Four bugs this cost — three fixed, one open — all worth writing down
 
 **A literal that becomes a variable must be initialised before anything reads
 it.** `[wd_gh1]` — the glyph band's height less one, which replaced a hard `7` at
@@ -44954,6 +45032,73 @@ looking: the bands landed at exactly the right x, width, y and height on every
 row, which proved the whole rendering path correct and left the caller as the
 only suspect. **When a change touches a drawing path, make the path
 unconditional and look at it before theorising about who calls it.**
+
+**A FAST PATH IS A SECOND DRAWING PATH, and a face has to reach it too.** The
+half-converted state above shipped, and what it was reported as is neither of
+the things it was known to be: *"I can change the font used by the document, but
+when I start typing, the font used is not the one from the selected list."*
+`wd_append` (§27.14.1) is the reason. It is the whole point of §27.14.1 that a
+printable typed at the end of a line does not walk the note — it stamps the one
+glyph and moves the one caret — and it stamped it with `OSAPI_FONT_RUN`, which
+is the kernel's 8×8 cell and nothing else. Its guards were all about
+*geometry* (`[wd_hasfmt]`, hidden characters, tabs), and a face changes the
+GLYPHS without necessarily changing the geometry: `tallx` is 8 rows with an
+advance of 8, so it raises no flag any of those guards test, and every
+character typed at the end of a line in it came out in Pica while every
+character the walk redrew came out in tallx. A 12-row face hid it — `[wd_ghb]`
+≠ 8 raises `[wd_hasfmt]`, which refused the fast path for an unrelated reason —
+so the defect was invisible in nine of the ten faces on the disk and total in
+the tenth.
+
+Three lessons, and the last generalises past this program. A guard list that
+enumerates *what makes the geometry unusual* does not answer *what makes the
+pixels unusual*. A flag tested as a proxy — `[wd_hasfmt]` standing in for "this
+is not the plain 8×8 engine" — is a guard that holds only while the proxy
+happens to be exact, and nothing tells you the day it stops being. And **a
+screendump of the common case proves nothing**: nine faces looked right.
+
+**FINDING EVERY SITE OF A LITERAL IS THE OTHER HALF OF THE FIRST BUG ABOVE —
+and this one is NOT FIXED.** `[wd_gh1]` was found because the note vanished. Its
+siblings were not: `wd_walk` sets the y of the row a walk STARTS on, and it is
+`wd_advy`'s three arms written out longhand — `.yzero` (`ty + h − 8`), `.ynegs`
+(`ty − 8`) and `.yhave`'s `[wd_rbandt]` (`bp − h + 8`) — each carrying a literal
+8 where `wd_advy` had already learned to read `[wd_gh]`. `wd_advblank` steps a
+blank row 8 pixels where a real one steps `[wd_ghb]`; `wd_seecaret`, `wd_redraw`,
+`wd_shiftrows`, `wd_mclose` and `wd_scrollpaint` each derive a band top or a band
+bottom from `wd_ryb` with a literal `8` or `7`.
+
+**The symptom is §65.6's leading-gap fill eating the row above.** `wd_rflush`
+whitens `[wd_rbandt] .. rby−1` to clear a spaced row's gap; a band top `gh − 8`
+pixels too high puts that fill *inside the row above*, so **every keystroke
+shaves the bottom off the line before it** — reported, exactly, as the new line
+overlapping the old one. It is worst where the face has no leading: `jetbrain`
+and `courier` are 14 rows with `leading 0`, so the band IS the advance and
+nothing absorbs the 6-pixel error; `times` and `helv` (12 rows, `leading 2`)
+lose 4 pixels and merely look tight; the kernel's 8×8 cell has `gh = 8` and
+loses nothing, which is why it shipped and why §65.13's own testing missed it.
+
+**What was tried.** Converting the sites — `.yzero`, `.ynegs`, `.yhave`,
+`wd_advblank` and five of the `wd_ryb` derivations — DOES fix the shaving:
+verified in `jetbrain`, `courier` and `times`, typing and Enter, on VGA and CGA,
+with the kernel's cell staying pixel-identical. It also moves **every row's y**,
+which is exactly the input to §65.6's rows-MOVED repaint, and in that state some
+sequences leave earlier rows erased and never redrawn. No variant tried both
+fixed the shaving and kept the incremental repaint honest: the band top alone
+leaves the origin disagreeing with it, and the origin too puts the banked
+`wd_ryb` a face-height away from what the last pass drew. **A half-converted
+height model is worse than an unconverted one**, which is §65.13's own rule
+about `[wd_prop]` applied to y instead of x, so none of it is in the tree.
+
+Whoever takes it next: the conversion is right and the fix is those sites, but
+it has to arrive with `[wd_vrows]` (which counts 8-pixel rows into a band that
+holds 14-pixel ones), `wd_advblank` and `wd_scrollpaint`'s scroll delta in the
+same change, and it has to be tested by *switching faces on a note that already
+has rows* — not by typing into an empty one. And **the lesson is not "use the
+variable"**: it is that a variable replacing a literal has to be hunted by
+VALUE, not by meaning. `8` in this file is a glyph height, a row advance, a cell
+width, a tab stop and a byte column, and only a handful of the dozens of them
+are the height. Nothing but reading each one tells them apart, and a face whose
+height differs from its advance is the only test that separates them.
 
 ## 66. TeXPad — the TeX pad (`apps/texpad/texpad.asm`)
 

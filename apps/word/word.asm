@@ -290,24 +290,17 @@ WD_CHROME_TOP equ WD_MENU_H + WD_RIBBON_H + WD_RULER_H   ; 48, all strips ON.
 WD_M_N       equ 9              ; menus on the bar
 ; WD_PROPDRAW - is a chosen face DRAWN, or only opened and named?
 ;
-; 0 while SPEC.md 65.13's conversion is unfinished, and this is the switch it
-; finishes at. What works: the face opens, the ribbon names it, wd_bandrun
-; composes and emits a run through SPEC.md 6.3's band, and the row advance and
-; glyph band follow the face's own rows via [wd_gh]/[wd_ghb]. What does NOT,
-; measured by turning this on and looking:
+; 1, and SPEC.md 65.13's conversion is finished behind it: the face opens, the
+; ribbon names it, wd_bandrun composes and emits a run through SPEC.md 6.3's
+; band, the row advance and glyph band follow the face's own rows via
+; [wd_gh]/[wd_ghb], and [wd_pxon] makes wd_px[] the truth about where a cell
+; sits - so the pen advances by ty_advof, the wrap rule measures pixels and a
+; click splits a character at half its own advance.
 ;
-;   1. the chrome doubles - the content geometry moves under the bar and the
-;      strips, and repainting them the way a View toggle does is not enough;
-;      wd_ctcalc/wd_bounds have to be understood first
-;   2. the rows redraw but the glyphs stay the 8x8 cell's, so ty_flush is
-;      refusing or the band is arriving empty - unproven either way
-;   3. the metrics are still the 8-pixel grid ([wd_pxon] is 0): the wrap rule,
-;      the accumulate walk's cell index and wd_px[] are not converted
-;
-; A half-converted Word is worse than an unconverted one - it draws in one
-; face and measures in another - so this stays 0 until all three are done, and
-; the code above it stays in the tree because it assembles and is most of the
-; way there.
+; The switch stays because it is the one place to stand a whole face's worth of
+; drawing down from, and because a half-converted Word is worse than an
+; unconverted one: it draws in one face and measures in another. That state
+; DID ship once and SPEC.md 65.13.1 records what it was reported as.
 ;
 ; %assign AND NOT equ, and that distinction cost a whole debugging round: `%if`
 ; is a PREPROCESSOR directive and an `equ` is an ASSEMBLER symbol, so `%if
@@ -1803,13 +1796,22 @@ wd_bounds:
                                     ; it stays right under WF_FULL, where the
                                     ; frame IS the content (SPEC.md 11.2)
 
-    mov ax, [wd_rgt]                ; whole 8px CELLS between the pen and the
-    sub ax, [wd_tx]                 ; right edge: the width of one opaque run,
-    inc ax                          ; and what the row buffer is padded to
+    mov ax, [wd_rgt]                ; whole CELLS between the pen and the right
+    sub ax, [wd_tx]                 ; edge: the width of one opaque run, and
+    inc ax                          ; what the row buffer is padded to
     jns .cok
     xor ax, ax
 .cok:
     mov cl, 3
+    cmp byte [wd_pxon], 0           ; ...and a CELL is 8 pixels in the kernel's
+    je .cshr                        ; cell and as little as TY_MINADV in a
+    mov cl, 2                       ; chosen face (SPEC.md 6.4), so a row of
+                                    ; narrow glyphs holds more cells than it
+                                    ; holds byte columns. WD_MAXCOL was sized
+                                    ; from that floor and not from the face -
+                                    ; the face comes off a floppy while the
+                                    ; constant is in the tree (SPEC.md 65.13)
+.cshr:
     shr ax, cl
     cmp ax, WD_MAXCOL - 1
     jbe .csave
@@ -2061,6 +2063,19 @@ wd_papload:
     mov dx, [wd_rcols]
 .cok:
     mov [wd_wcols], dx
+    cmp byte [wd_pxon], 0           ; ...and the same capacity in PIXELS, which
+    jne .wpx                        ; is what wd_wordfit's second threshold
+    shl dx, cl                      ; measures now (SPEC.md 65.13). The fixed
+    jmp short .wpxs                 ; face takes exactly 8 x the cells, so its
+.wpx:                               ; wrap is the one it always had
+    mov dx, [wd_wrgt]
+    inc dx
+    sub dx, [wd_tx]
+    sub dx, [wd_wleftpx]
+    jns .wpxs
+    xor dx, dx
+.wpxs:
+    mov [wd_wcpx], dx
     mov al, [es:bx+2]               ; first-line, SIGNED, clamped so the pen
     cbw                             ; lands in [tx .. wrgt-7]
     shl ax, cl
@@ -2106,6 +2121,21 @@ wd_papload0:
     mov [wd_wrgt], ax
     mov ax, [wd_rcols]
     mov [wd_wcols], ax
+    cmp byte [wd_pxon], 0           ; the fresh-row capacity in pixels, exactly
+    jne .wpx                        ; as wd_papload derives it
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    jmp short .wpxs
+.wpx:
+    mov ax, [wd_rgt]
+    inc ax
+    sub ax, [wd_tx]
+    jns .wpxs
+    xor ax, ax
+.wpxs:
+    mov [wd_wcpx], ax
     pop ax
     ret
 
@@ -2212,21 +2242,15 @@ wd_tabw:
     push cx
     push dx
     mov ax, di
-    sub ax, [wd_rowx0]
-    mov cl, 3
-    shr ax, cl                      ; cells consumed on this row
-    mov cx, ax
-    xor dx, dx
-    mov ax, cx
-    push cx
-    mov cx, WD_TABSTOP
-    div cx
-    inc ax
-    mul cx                          ; the next stop, cells
-    pop cx
-    sub ax, cx
-    mov cl, 3
-    shl ax, cl
+    sub ax, [wd_rowx0]              ; PIXELS consumed on this row, not cells:
+    xor dx, dx                      ; a proportional row's pen is not a
+                                    ; multiple of 8 and flooring it to one
+    mov cx, WD_TABSTOP * 8          ; loses the remainder - the tab then lands
+    div cx                          ; short of its stop by up to 7px and the
+    inc ax                          ; column walks. Identical to the cell
+    mul cx                          ; arithmetic this replaces whenever the pen
+    sub ax, di                      ; IS a multiple of 8, which is every row of
+    add ax, [wd_rowx0]              ; the fixed face
     pop dx
     pop cx
     ret
@@ -2333,8 +2357,15 @@ wd_facemetrics:
     dec ax
     mov [wd_gh1], ax
     mov word [wd_ghb], 8
-    cmp byte [wd_prop], 0
-    je .out
+    mov word [wd_spadv], 8          ; ...and a space is 8 wide in it
+    mov al, [wd_prop]               ; ...and the METRICS follow the face too
+    mov [wd_pxon], al               ; (SPEC.md 65.13): one flag, read by wd_cx
+    cmp byte [wd_prop], 0           ; and wd_xc, and by the two fast paths that
+    je .out                         ; cannot be expressed without an 8px column
+    mov al, ' '                     ; the padding cell's own width, banked: the
+    call ty_advof                   ; row buffer pads with spaces and wd_pxcell
+    xor ah, ah                      ; extrapolates the caret's parking cell by
+    mov [wd_spadv], ax              ; exactly this
     call ty_getrows
     xor ah, ah
     mov [wd_gh], ax
@@ -2346,11 +2377,13 @@ wd_facemetrics:
     call ty_getlead
     xor ah, ah
     add [wd_ghb], ax
-    cmp word [wd_ghb], 8            ; ...and ONLY a face whose row advance is
-    je .out                         ; not 8 needs the non-uniform paths. An
-    mov byte [wd_hasfmt], 1         ; 8-row face changes no geometry at all -
-.out:                               ; same pitch, same caret, same clicks, and
-                                    ; only the glyph shapes move
+    cmp word [wd_ghb], 8            ; ...and only a face whose row advance is
+    je .out                         ; not 8 needs the non-uniform-ROW paths. An
+    mov byte [wd_hasfmt], 1         ; 8-row face still lands every row where it
+.out:                               ; always did - what its glyphs no longer do
+                                    ; is land on the 8-pixel COLUMN, and that
+                                    ; is [wd_pxon]'s business above and not
+                                    ; this flag's (SPEC.md 65.13)
     pop ax
     ret
 
@@ -2536,10 +2569,10 @@ wd_xc:
 .prop:
     xor bx, bx
 .w:
-    cmp bx, [wd_rcols]
-    jae .have
-    push bx
-    shl bx, 1
+    cmp bx, [wd_rcn]                ; ...the cells the WALK stored, not the
+    jae .have                       ; buffer's capacity: wd_px past the row's
+    push bx                         ; own content is the last row's pens and
+    shl bx, 1                       ; describes nothing on this one
     mov cx, [wd_px + bx + 2]        ; ...the NEXT cell's pen: x belongs to
     pop bx                          ; cell k while it is short of cell k+1
     cmp ax, cx
@@ -2551,6 +2584,133 @@ wd_xc:
 .out:
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_advof - the advance of one character, in pixels (SPEC.md 65.13)
+; in:  AL = the character AS DRAWN (small caps already mapped)
+; out: AX = its advance; preserves every other register
+;
+; 8 in the kernel's cell, the face's own otherwise - and the face's own is the
+; number ty_putn will step by when the band composes this very character, which
+; is the whole of why wd_px[] and the drawn glyphs agree.
+; -----------------------------------------------------------------------------
+wd_advof:
+    cmp byte [wd_pxon], 0
+    jne .prop
+    mov ax, 8
+    ret
+.prop:
+    call ty_advof                   ; AL = the advance, AH untouched
+    xor ah, ah
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_scapof - small caps: the character as it is DRAWN (SPEC.md 65.1)
+; in:  AL = the character, AH = its CHP byte; out: AL mapped; preserves the rest
+;
+; The map used to live inside wd_walk's drawing gate, because the only thing it
+; changed was which glyph went into the row buffer. It changed the WIDTH too the
+; moment a face arrived, and a width the gate can skip is a pen that disagrees
+; with the pixels - so it is a helper now, called before the advance is taken
+; and by the dry run as well.
+; -----------------------------------------------------------------------------
+wd_scapof:
+    test ah, WDAT_SCAP
+    jz .out
+    cmp al, 'a'
+    jb .out
+    cmp al, 'z'
+    ja .out
+    sub al, 32
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_penadv - the advance of the character the walk is ABOUT to take
+; in:  ES:SI -> it, BX = characters left; out: AX = pixels; preserves the rest
+;
+; The wrap rule and the click's half-cell both need the width of the cell this
+; index WILL occupy, before it has been consumed. A newline or a tab answers 8:
+; neither is measured here (a tab goes to wd_tabw and a newline ends the row),
+; and 8 is what the fixed face asked for both.
+; -----------------------------------------------------------------------------
+wd_penadv:
+    cmp byte [wd_pxon], 0
+    jne .prop
+.eight:
+    mov ax, 8
+    ret
+.prop:
+    or bx, bx
+    jz .eight
+    mov al, [es:si]                 ; THE DOCUMENT IS ES:SI (SPEC.md 27.6)
+    cmp al, 13
+    je .eight
+    cmp al, 9
+    je .eight
+    call ty_advof                   ; preserves BX, and AH with it
+    xor ah, ah
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_cellat - the cell index the pen is standing on (SPEC.md 65.13)
+; out: BX = it; preserves every other register
+;
+; COUNTED in a proportional face and DERIVED in the fixed one, which is the one
+; place the accumulate walk had to change: (DI - [wd_tx]) >> 3 needs a divisor
+; the face does not have. The count is [wd_rcn], kept by wd_pxcell below.
+; -----------------------------------------------------------------------------
+wd_cellat:
+    cmp byte [wd_pxon], 0
+    jne .prop
+    push cx
+    mov bx, di
+    sub bx, [wd_tx]
+    mov cl, 3
+    shr bx, cl
+    pop cx
+    ret
+.prop:
+    mov bx, [wd_rcn]
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_pxcell - record the cell at the pen and count it (SPEC.md 65.13)
+; in:  BX = the cell (wd_cellat), DI = the pen, AX = the cell's advance
+; out: wd_px[BX..BX+2] written, [wd_rcn] = BX+1; preserves every register
+;
+; THREE slots for one cell, and the third is not spare. The slot past the cell
+; makes a span's right edge a lookup rather than a special case, and the next
+; cell overwrites it with the same value, so the two can never disagree. The
+; slot past THAT is the caret's parking cell - the one index past the row's
+; last character, which wd_rflush letters a space into when a caret leaves it -
+; and it is a space's own advance wide, which is what the band will step by
+; when it composes that very space.
+; -----------------------------------------------------------------------------
+wd_pxcell:
+    cmp byte [wd_pxon], 0
+    je .out
+    cmp bx, WD_MAXCOL               ; the map is WD_MAXCOL + 3 slots, so a cell
+    ja .out                         ; at WD_MAXCOL still has two past it
+    push ax
+    push bx
+    push dx
+    mov dx, di
+    sub dx, [wd_tx]                 ; the pen, RELATIVE to the content left -
+    shl bx, 1                       ; a window that MOVES does not reflow
+    mov [wd_px + bx], dx
+    add dx, ax
+    mov [wd_px + bx + 2], dx
+    add dx, [wd_spadv]
+    mov [wd_px + bx + 4], dx
+    shr bx, 1
+    inc bx
+    mov [wd_rcn], bx
+    pop dx
+    pop bx
+    pop ax
+.out:
     ret
 
 wd_rowmeasure:
@@ -2569,8 +2729,10 @@ wd_rowmeasure:
     mov al, [es:si]
     cmp al, 13
     je .done
-    mov cx, di
-    add cx, 7
+    call wd_penadv                  ; the cell this index will occupy, which is
+    mov cx, di                      ; 8 wide in the kernel's cell and the
+    add cx, ax                      ; face's own otherwise (SPEC.md 65.13)
+    dec cx
     cmp cx, [wd_wrgt]
     ja .over
     call wd_wordfit
@@ -2582,8 +2744,12 @@ wd_rowmeasure:
 .take:
     cmp al, 9
     je .tab
-    cmp byte [wd_hashid], 0         ; hidden occupies no cell (SPEC.md 65.1)
-    je .vis
+    xor ah, ah                      ; the cell's dress. Fetched when the note
+    cmp byte [wd_hashid], 0         ; carries hidden text - which is what this
+    jne .chp                        ; dry run always needed it for - and in a
+    cmp byte [wd_pxon], 0           ; chosen face as well, because small caps
+    je .vis                         ; measures as the CAPITAL there and the
+.chp:                               ; live walk draws it as one
     push es
     push bx
     mov bx, si
@@ -2591,11 +2757,14 @@ wd_rowmeasure:
     mov ah, [es:bx]
     pop bx
     pop es
-    test ah, WDAT_HID
+    test ah, WDAT_HID               ; hidden occupies no cell (SPEC.md 65.1)
     jnz .adv0
 .vis:
-    add di, 8
-.adv0:
+    call wd_scapof
+    call wd_advof
+    add di, ax
+    mov al, [es:si]                 ; ...and the word state below reads the
+.adv0:                              ; character as TYPED, not as drawn
     mov byte [wd_wstart], 0
     cmp al, ' '
     jne .ws
@@ -2613,10 +2782,8 @@ wd_rowmeasure:
     dec bx
     jmp short .loop
 .done:
-    mov ax, di
-    sub ax, bp
-    mov cl, 3
-    shr ax, cl
+    mov ax, di                      ; PIXELS (SPEC.md 65.13), which is what the
+    sub ax, bp                      ; centre/right offset wants in either face
     pop cx                          ; the saved word state
     mov [wd_wstart], cl
     pop bp
@@ -2655,23 +2822,40 @@ wd_rowsetup:
     cmp al, 2                       ; justified renders as left (65.1)
     jne .anchor
 .meas:
-    call wd_rowmeasure              ; AX = the row's cells
+    call wd_rowmeasure              ; AX = the row's width in PIXELS
     mov dx, [wd_wrgt]
     inc dx
-    sub dx, di
-    mov cl, 3
-    shr dx, cl                      ; cells available from this pen
+    sub dx, di                      ; pixels available from this pen
     sub dx, ax
     jle .anchor                     ; full (or hanging): no offset
-    cmp byte [wd_walign], 2
-    je .roff
-    shr dx, 1                       ; centred: half the free cells
-.roff:
-    mov cl, 3
+    cmp byte [wd_pxon], 0
+    jne .poff
+    mov cl, 3                       ; the kernel's cell: whole cells, exactly
+    shr dx, cl                      ; the rounding this always did (SPEC.md
+    cmp byte [wd_walign], 2         ; 65.1) - the row is 8k wide and the offset
+    je .croff                       ; is 8k too, so the pen stays on the grid
+    shr dx, 1
+.croff:
     shl dx, cl
+    jmp short .roff
+.poff:
+    cmp byte [wd_walign], 2         ; a chosen face: PIXELS, because there is no
+    je .roff                        ; grid left to round to
+    shr dx, 1
+.roff:
     add di, dx
 .anchor:
     mov [wd_rowx0], di
+    cmp byte [wd_pxon], 0           ; cell 0's pen, before a character has been
+    je .nopx0                       ; stored: an EMPTY row still carries a
+    push ax                         ; caret, and wd_cx(0) has to answer where
+    mov ax, di                      ; it stands (SPEC.md 65.13)
+    sub ax, [wd_tx]
+    mov [wd_px], ax
+    add ax, [wd_spadv]              ; ...and cell 0 IS the parking cell there,
+    mov [wd_px+2], ax               ; so it is a space wide, as wd_pxcell has it
+    pop ax
+.nopx0:
     cmp byte [wd_hasfmt], 0
     je .nofold
     push ax                         ; fold the pen and the height into the
@@ -2883,8 +3067,10 @@ wd_walk:
 
 .loop:
     ; --- the wrap rule, applied to the cell this index will occupy ---------
-    mov cx, di
-    add cx, 7
+    call wd_penadv                  ; ...and the cell is as wide as the FACE
+    mov cx, di                      ; says, which is 8 in the kernel's cell and
+    add cx, ax                      ; the character's own otherwise (SPEC.md
+    dec cx                          ; 65.13)
     cmp cx, [wd_wrgt]               ; the paragraph's own right edge (its
     ja .over                        ; right indent; [wd_rgt] when Normal)
     call wd_wordfit                 ; ...or the WORD that begins here would run
@@ -2945,21 +3131,24 @@ wd_walk:
     mov ax, WDAT_PIL
     call wd_fold
     pop ax
-    cmp byte [wd_draw], 0
-    je .nlplain
     push ax
     push bx
     push cx
+    call wd_cellat                  ; the mark's own cell, and its pen - taken
+    mov ax, 8                       ; OUTSIDE the drawing gates below, because
+    call wd_pxcell                  ; [wd_rcn] is the cell INDEX in a chosen
+                                    ; face and a count a pass may skip is a
+                                    ; count that describes no row. 8 wide: the
+                                    ; pilcrow is a stamp, not a glyph of the
+                                    ; face (SPEC.md 65.1)
+    cmp byte [wd_draw], 0
+    je .nlpop
     mov cx, bp                      ; the same three gates the glyph store has:
-    add cx, [wd_gh1]                       ; the row fits, this pass redraws it, and
+    add cx, [wd_gh1]                ; the row fits, this pass redraws it, and
     cmp cx, [wd_bot]                ; the cell is inside the band
     ja .nlpop
     call wd_rowdirty
     jc .nlpop
-    mov bx, di
-    sub bx, [wd_tx]
-    mov cl, 3
-    shr bx, cl
     cmp bx, [wd_rcols]
     jae .nlpop
     mov byte [wd_rbuf+bx], ' '
@@ -3020,38 +3209,41 @@ wd_walk:
     jmp .loop                       ; fold above still saw it, so toggling
                                     ; hidden dirties the row
 .visible:
+    ; The character AS DRAWN and its ADVANCE, both taken before the drawing
+    ; gates below (SPEC.md 65.13). The small-caps map used to live inside them,
+    ; because the only thing it changed was which glyph reached the row buffer;
+    ; it changes the WIDTH too the moment a face arrives, and a pen that moves
+    ; by one character while the band composes another is a row that drifts a
+    ; pixel a glyph. The pen record is outside them for the same reason: in a
+    ; chosen face [wd_rcn] IS the cell index, and a count a pass may skip is a
+    ; count that describes no row.
+    push dx
+    mov ah, [wd_cattr]
+    call wd_scapof
+    mov dl, al                      ; DL = the character as drawn...
+    call wd_advof
+    mov dh, al                      ; ...DH = its advance (a byte: SPEC.md 6.4)
+    push bx
+    call wd_cellat                  ; BX = the cell this pen occupies
+    mov al, dh
+    xor ah, ah
+    call wd_pxcell
     cmp byte [wd_draw], 0
-    je .advance
+    je .nocell
     mov cx, bp                      ; vertical clip: drop rows that overflow,
-    add cx, [wd_gh1]                       ; but keep advancing the pen so every
+    add cx, [wd_gh1]                ; but keep advancing the pen so every
     cmp cx, [wd_bot]                ; position below stays true
-    ja .advance
+    ja .nocell
     call wd_rowdirty                ; ...and drop the rows whose pixels this
-    jc .advance                     ; redraw already knows are right
-    push bx                         ; into the row buffer at this pen's CELL -
-    mov bx, di                      ; wd_rflush draws the whole row at once
-    sub bx, [wd_tx]
-    push cx
-    mov cl, 3
-    shr bx, cl
-    pop cx
+    jc .nocell                      ; redraw already knows are right
     cmp bx, [wd_rcols]
     jae .nocell                     ; past the band: the wrap rule above means
-    push ax                         ; this cannot normally happen, and a
+                                    ; this cannot normally happen, and a
                                     ; clamped wd_rcols is the case where it can
-    mov ah, [wd_cattr]              ; small caps case-map at accumulate time
-    test ah, WDAT_SCAP              ; (SPEC.md 65.1): the row buffer holds the
-    jz .nomap                       ; capital, so the delta diff and the run
-    cmp al, 'a'                     ; draw both see what the screen shows
-    jb .nomap
-    cmp al, 'z'
-    ja .nomap
-    sub al, 32
-.nomap:
-    mov [wd_rbuf+bx], al
-    mov al, ah                      ; ...and the cell's attribute beside it,
+    mov al, dl                      ; into the row buffer at this pen's CELL -
+    mov [wd_rbuf+bx], al            ; wd_rflush draws the whole row at once
+    mov al, [wd_cattr]              ; ...and the cell's attribute beside it,
     mov [wd_abuf+bx], al            ; which is what wd_rflush splits into runs
-    pop ax
     push ax
     push dx
     mov ax, [wd_i]
@@ -3080,8 +3272,10 @@ wd_walk:
     pop ax
 .nocell:
     pop bx
-.advance:
-    add di, 8
+    mov al, dh                      ; the pen moves by the advance the band
+    xor ah, ah                      ; will step by, and by nothing else
+    add di, ax
+    pop dx
     jmp .loop                       ; near: the cell-buffer store above pushed
                                     ; the loop body past a short jump's reach
 
@@ -3137,24 +3331,28 @@ wd_walk:
     mov ax, 8
 .twok:
     mov cx, ax                      ; CX = the width, held to the advance
-    cmp byte [wd_draw], 0
-    je .tadv
-    mov ax, bp                      ; the glyph-store gates, cell test aside
-    add ax, [wd_gh1]
-    cmp ax, [wd_bot]
-    ja .tadv
-    call wd_rowdirty
-    jc .tadv
     push ax
     push bx
     push dx
-    mov dx, cx                      ; DX = px still to write
-    mov bx, di
-    sub bx, [wd_tx]
-    push cx
-    mov cl, 3
-    shr bx, cl
-    pop cx                          ; BX = the first cell
+    call wd_cellat                  ; BX = the tab's first cell, taken outside
+    mov dx, cx                      ; the gates for .visible's reason. DX = the
+    cmp byte [wd_pxon], 0           ; px the store loop still owes cells
+    je .tgate
+    mov ax, cx                      ; A CHOSEN FACE GIVES A TAB ONE CELL, as
+    call wd_pxcell                  ; wide as the whole gap (SPEC.md 65.13) -
+    mov dx, 8                       ; against the kernel's cell, where it is a
+.tgate:                             ; run of space cells one per 8 pixels. That
+                                    ; is the row buffer holding characters
+                                    ; rather than screen columns, which is what
+                                    ; the delta diff wanted all along
+    cmp byte [wd_draw], 0
+    je .tcdone
+    mov ax, bp                      ; the glyph-store gates, cell test aside
+    add ax, [wd_gh1]
+    cmp ax, [wd_bot]
+    ja .tcdone
+    call wd_rowdirty
+    jc .tcdone
 .tcell:
     cmp bx, [wd_rcols]
     jae .tcdone
@@ -3391,34 +3589,41 @@ wd_wordfit:
     push dx
     push si
 
-    mov ax, [wd_wrgt]
-    inc ax
-    sub ax, di                      ; pixels left on this row, this cell first
-    jle .pop_no                     ; the caller has already tested the cell,
-    mov cl, 3                       ; so this cannot fire - but a shift of a
-    shr ax, cl                      ; negative width would answer nonsense
-    mov dx, ax                      ; DX = R, whole cells left on this row
-
+    mov ax, [wd_wrgt]               ; PIXELS throughout, in both faces (SPEC.md
+    inc ax                          ; 65.13). The fixed face's every advance is
+    sub ax, di                      ; 8 and its R was these pixels divided by
+    jle .pop_no                     ; it, so the arithmetic below is the same
+    mov dx, ax                      ; question scaled - and a chosen face has no
+    cmp byte [wd_pxon], 0           ; divisor to ask it any other way.
+    jne .rok                        ; DX = R, the pixels left on this row -
+    and dx, 0xFFF8                  ; floored to whole cells in the fixed face,
+.rok:                               ; where R WAS a cell count and [wd_wcpx] is
+                                    ; 8 x [wd_wcols]: without that the ragged
+                                    ; remainder of a window whose width is not
+                                    ; a multiple of 8 would move a break that
+                                    ; has never moved
     mov cx, dx                      ; --- does the word END inside them? -----
-.p1:                                ; THE BREAK TEST COMES FIRST, and the cell
-    or bx, bx                       ; count second: a word that exactly fills
-    jz .pop_no                      ; the space left ends on the cell after the
-    mov al, [es:si]                 ; last one it occupies, and testing the
-    cmp al, ' '                     ; count first calls that an overflow. It
-    je .pop_no                      ; is invisible at 29 columns and constant
-    cmp al, 13                      ; at 9, which is what a narrow window
-    je .pop_no                      ; showed
+.p1:                                ; THE BREAK TEST COMES FIRST, and the width
+    or bx, bx                       ; second: a word that exactly fills the
+    jz .pop_no                      ; space left ends on the cell after the last
+    mov al, [es:si]                 ; one it occupies, and testing the width
+    cmp al, ' '                     ; first calls that an overflow. It is
+    je .pop_no                      ; invisible at 29 columns and constant at 9,
+    cmp al, 13                      ; which is what a narrow window showed
+    je .pop_no
     cmp al, 9                       ; a tab ends a word too (SPEC.md 65.3)
     je .pop_no
-    jcxz .p2
-    inc si
+    call wd_penadv                  ; measured as TYPED: small caps would make
+    cmp cx, ax                      ; this word WIDER, so a word it lets by is
+    jb .p2                          ; split by the cell rule instead of broken
+    sub cx, ax                      ; in front of - the degrade, not a wrong
+    inc si                          ; break
     dec bx
-    dec cx
     jmp short .p1
 
 .p2:                                ; --- no. Would a whole row hold it? -----
-    mov cx, [wd_wcols]              ; a fresh row of THIS paragraph
-    sub cx, dx                      ; the cells a FRESH row would add
+    mov cx, [wd_wcpx]               ; a fresh row of THIS paragraph, in pixels
+    sub cx, dx                      ; the pixels a FRESH row would add
     jbe .pop_no                     ; the pen is at the left margin already
 .p2l:
     or bx, bx                       ; same order, for the same reason
@@ -3430,10 +3635,12 @@ wd_wordfit:
     je .pop_yes
     cmp al, 9
     je .pop_yes
-    jcxz .pop_no                    ; longer than a row: the cell rule owns it
+    call wd_penadv
+    cmp cx, ax
+    jb .pop_no                      ; longer than a row: the cell rule owns it
+    sub cx, ax
     inc si
     dec bx
-    dec cx
     jmp short .p2l
 
 .pop_yes:
@@ -3508,10 +3715,10 @@ wd_ask:
     mov [wd_hiti], ax               ; the first index on the row, until a
     mov byte [wd_hitset], 1         ; later cell claims it
 .hit2:
-    mov cx, di
-    add cx, 4
-    cmp [wd_hitx], cx
-    jb .want                        ; the left half: the caret goes before it
+    call wd_halfadv                 ; CX = the middle of THIS character, which
+    cmp [wd_hitx], cx               ; in a chosen face is half its own advance
+    jb .want                        ; and not half a cell: the left half puts
+                                    ; the caret before it
     call wd_isnl
     jc .want                        ; a newline has no right half
     inc ax
@@ -3529,8 +3736,7 @@ wd_ask:
     mov [wd_wanti], ax
     mov byte [wd_wantset], 1
 .want2:
-    mov cx, di
-    add cx, 4
+    call wd_halfadv
     cmp [wd_wantx], cx
     jb .out
     call wd_isnl
@@ -3539,6 +3745,26 @@ wd_ask:
     mov [wd_wanti], ax
 .out:
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_halfadv - the pixel that splits the character at the pen down the middle
+; in:  DI = the pen, ES:SI -> the character, BX = characters left
+; out: CX = it; preserves every other register
+;
+; The half-cell rule of SPEC.md 27.6, made a half-ADVANCE: a click in the left
+; half of a character puts the caret before it and one in the right half after.
+; In the kernel's cell that is DI + 4 and always was; in a chosen face it is
+; half of what THIS character is worth, so a 4px `i` and an 8px `m` each split
+; where the reader sees their middle.
+; -----------------------------------------------------------------------------
+wd_halfadv:
+    push ax
+    call wd_penadv
+    shr ax, 1
+    mov cx, di
+    add cx, ax
     pop ax
     ret
 
@@ -3655,6 +3881,9 @@ wd_rstart:
     cld
     mov [wd_rby], bp
     mov word [wd_rcx], 0xFFFF
+    mov word [wd_rcn], 0            ; no cells stored: in a chosen face this IS
+                                    ; the next cell's index, and wd_rowsetup
+                                    ; writes cell 0's pen a moment from now
     mov word [wd_rs0], 0xFFFF       ; ...and no inverted cells yet either
     mov word [wd_rs1], 0xFFFF
     mov word [wd_xs0], 0xFFFF       ; ...nor any whose inversion must change
@@ -3815,20 +4044,12 @@ wd_rflush:
     cmp ax, 0xFFFF
     je .cache                       ; this row's inversion is already right
     mov cx, [wd_xs1]
-    push cx
-    mov cl, 3
-    shl ax, cl
-    pop cx
-    add ax, [wd_tx]                 ; x1
-    push ax
-    mov ax, cx
-    inc ax
-    push cx
-    mov cl, 3
-    shl ax, cl
-    pop cx
-    add ax, [wd_tx]
-    dec ax
+    call wd_cx                      ; x1 - through wd_cx, which is the same
+    push ax                         ; three shifts in the kernel's cell and a
+    mov ax, cx                      ; wd_px[] lookup in a chosen face
+    inc ax                          ; (SPEC.md 65.13)
+    call wd_cx                      ; ...and the slot PAST the span's last cell
+    dec ax                          ; is why wd_px[] carries one
     mov cx, ax                      ; x2
     pop ax
     mov bx, [wd_rby]
@@ -3844,14 +4065,16 @@ wd_rflush:
     mov ax, [wd_rcx]
     cmp ax, 0xFFFF
     je .span
-    sub ax, [wd_tx]
-    mov cl, 3
-    shr ax, cl
+    call wd_xc
     mov [wd_fcc], ax
 .span:
-    mov word [wd_flo], 0            ; the default span is the whole row
-    mov ax, [wd_rcols]
-    dec ax
+    mov word [wd_flo], 0            ; the default span is the whole row - which
+    mov ax, [wd_rcols]              ; in a chosen face is the cells the WALK
+    dec ax                          ; stored plus the one the caret parks in,
+    cmp byte [wd_pxon], 0           ; because a cell past those has no pen and
+    je .spanhi                      ; nothing to draw at (SPEC.md 65.13). The
+    mov ax, [wd_rcn]                ; tail past it is erased in pixels below
+.spanhi:
     mov [wd_fhi], ax
     mov ax, [wd_row]
     cmp ax, [wd_prowi]
@@ -3976,6 +4199,98 @@ wd_rflush:
 .tdone:
     mov [wd_fhi], bx
 .draw2:
+    cmp byte [wd_pxon], 0           ; --- the TAIL, in pixels (SPEC.md 65.13) -
+    je .runs                        ; A fixed row erases itself: the buffer is
+                                    ; space-padded to [wd_rcols] and one opaque
+                                    ; run covers the band. A proportional row
+                                    ; cannot pad, because a cell past its
+                                    ; content has no pen - so the span stops at
+                                    ; the cells the walk stored and ONE white
+                                    ; fill covers the ground the row's glyphs
+                                    ; used to reach and no longer do.
+    mov ax, [wd_rcn]
+    cmp ax, [wd_fhi]
+    ja .tailhi
+    mov [wd_fhi], ax                ; ...the caret's parking cell included: a
+.tailhi:                            ; caret that moved off the end has to be
+                                    ; lettered over, and the cell it stood in
+                                    ; is the one past the last character - so
+                                    ; wd_px[] carries a slot past THAT one too
+
+    ; --- and GROWN to byte columns at both ends (SPEC.md 5.4.2) -------------
+    ; The band is blitted by whole byte columns and is paper where nothing was
+    ; composed, so a span whose first cell starts mid-byte whitens up to 7
+    ; pixels of the glyph to its LEFT, and one whose last cell ends mid-byte
+    ; does the same on its right. Growing the span outwards until both edges
+    ; land on a multiple of 8 redraws a neighbour or two and rubs out none.
+    ; In the kernel's cell every cell edge IS a multiple of 8 and neither loop
+    ; runs past its first test.
+    mov ax, [wd_flo]
+.blo:
+    or ax, ax
+    jz .blodone                     ; the row's own first cell: what is left of
+    push ax                         ; it is the margin, and blank
+    call wd_cx
+    test ax, 7
+    pop ax
+    jz .blodone
+    dec ax
+    jmp short .blo
+.blodone:
+    mov [wd_flo], ax
+    mov ax, [wd_fhi]
+.bhi:
+    cmp ax, [wd_rcn]
+    jae .bhidone                    ; past the row's content: blank ground
+    push ax
+    inc ax
+    call wd_cx
+    test ax, 7
+    pop ax
+    jz .bhidone
+    inc ax
+    jmp short .bhi
+.bhidone:
+    mov [wd_fhi], ax
+
+    mov ax, [wd_fhi]
+    inc ax
+    call wd_cx
+    mov cx, ax                      ; CX = where this row's ink now ends
+    mov ax, [wd_prowrx]             ; ...against where it ended when last drawn
+    cmp byte [wd_clean], 0
+    jne .tailno                     ; a blank band owes nothing
+    push bx
+    mov bx, [wd_row]
+    cmp bx, [wd_prowi]
+    pop bx                          ; POP touches no flags
+    je .tailcmp
+    mov ax, [wd_rgt]                ; the cache is some other row's: erase to
+    inc ax                          ; the margin, which is what the padding
+.tailcmp:                           ; run did for the fixed face
+    cmp ax, cx
+    jbe .tailno
+    push ax
+    push bx
+    push cx
+    push dx
+    xchg ax, cx                     ; AX = x1, the new right edge; CX = x2, the
+    dec cx                          ; last column the old row still owns
+    mov bx, [wd_rby]
+    mov dx, bx
+    add dx, [wd_gh1]
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.tailno:
+    mov [wd_prowrx], cx             ; ...and this is the edge the next pass
+.runs:                              ; measures against
     ; --- the span, split into runs of equal CHP (SPEC.md 65.1) --------------
     ; Adjacent plain cells are one run by construction, so unstyled text is
     ; exactly the one opaque font_run it always was; each styled run draws by
@@ -4371,21 +4686,27 @@ wd_itrun:
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; wd_bandrun - one styled run, composed into the band and put down in ONE call
-; in:  [wd_r0]/[wd_r1] = the run's cells, [wd_rby] = its glyph y, wd_rbuf holds
-;      the characters; gfx lock held
-; out: nothing; preserves all registers
+; The band, opened once a ROW and not once a run (SPEC.md 6.3/65.13)
 ;
 ; SPEC.md 6.3's method, and the whole of what a proportional face costs at draw
-; time: ty_band, ty_putn, ty_flush. It replaces ONE OSAPI_FONT_RUN with one
-; OSAPI_GFX_BLIT1, so the call count a row costs does not move - what moves is
-; that the glyphs are the face's instead of the cell's.
+; time: ty_band, a ty_putn a run, ty_flush. It replaces the row's OSAPI_FONT_RUN
+; with one OSAPI_GFX_BLIT1, so the call count a row costs does not move - what
+; moves is that the glyphs are the face's instead of the cell's.
 ;
-; THE BACK-UP RULE (SPEC.md 5.4.2). The blit wants an x on a multiple of 8, and
-; a run does not start on one - so the band starts at the byte column to its
-; LEFT, the 0..7 remainder becomes the pen inside the band, and the width is
-; rounded up to the next byte column. The band is paper where the run is not,
-; so this erases exactly what FONT_RUN's background would have.
+; THE BACK-UP RULE (SPEC.md 5.4.2) is why the band belongs to the ROW. The blit
+; wants an x on a multiple of 8, and a run does not start on one - so the band
+; starts at the byte column to its LEFT, the 0..7 remainder becomes the pen
+; inside the band, and the width is rounded up to the next byte column. The band
+; is PAPER where nothing was composed, so those few pixels are whitened: at the
+; span's outer edges that is exactly what FONT_RUN's background would have done,
+; and in its MIDDLE it would rub out the tail of the run before. One band a row
+; has no middle. (wd_rflush grows the span outwards to byte columns for the two
+; outer edges, so no neighbour is rubbed out either.)
+;
+; wd_bandopen  - paper, and the byte column the band starts at
+; wd_bandrun   - compose one equal-CHP run into it; NOTHING is drawn
+; wd_bandclose - one blit, and the row is on the glass
+; All three preserve every register.
 ; -----------------------------------------------------------------------------
 wd_bandrun:
     push ax
@@ -4483,9 +4804,7 @@ wd_drawrun:
     cmp bx, [wd_r1]
     ja .done
     mov ax, bx
-    mov cl, 3
-    shl ax, cl
-    add ax, [wd_tx]
+    call wd_cx
     push bx
     push bp
     push es
@@ -4530,9 +4849,7 @@ wd_drawrun:
     push bx
     mov si, [wd_r0]
     mov ax, si
-    mov cl, 3
-    shl ax, cl
-    add ax, [wd_tx]
+    call wd_cx
     mov cx, ax                      ; CX = x of the run's first cell
     add si, wd_rbuf
     mov dx, [wd_rby]
@@ -4560,14 +4877,14 @@ wd_drawrun:
     call OSAPI_SET_COLOR
     pop ax
     mov ax, [wd_r0]
-    mov cl, 3
-    shl ax, cl
-    add ax, [wd_tx]                 ; AX = x1
-    mov bx, [wd_r1]
-    inc bx
-    shl bx, cl
-    add bx, [wd_tx]
-    dec bx                          ; BX = x2
+    call wd_cx                      ; AX = x1
+    push ax
+    mov ax, [wd_r1]
+    inc ax
+    call wd_cx
+    dec ax
+    mov bx, ax                      ; BX = x2
+    pop ax
     mov dx, [wd_rby]
     add dx, [wd_gh1]                       ; the cell's last row
     test byte [wd_runa], WDAT_UL
@@ -4597,16 +4914,12 @@ wd_drawrun:
     cmp byte [wd_rbuf+si], ' '
     jne .wx
 .wdraw:
+    mov ax, si
+    call wd_cx
+    dec ax
+    mov bx, ax                      ; BX = x2, the span's last column
     mov ax, di
-    push cx
-    mov cl, 3
-    shl ax, cl
-    add ax, [wd_tx]
-    mov bx, si
-    shl bx, cl
-    add bx, [wd_tx]
-    dec bx
-    pop cx
+    call wd_cx                      ; AX = x1
     call OSAPI_GFX_HLINE
 .wnext:
     inc si
@@ -4801,6 +5114,10 @@ wd_brktry:
     jne .no                         ; formatted rows are not 8px and do not
                                     ; start at [wd_tx]: the break's scroll
                                     ; and column arithmetic both die (65.6)
+    cmp byte [wd_pxon], 0
+    jne .no                         ; ...and a chosen face has no COLUMN for
+                                    ; the arithmetic below to count in
+                                    ; (SPEC.md 65.13)
     mov di, [wd_currow]             ; DI = the caret's row (banked by the
                                     ; pass-1 walk that just stood on it)
     mov ax, [wd_dr1]
@@ -8118,6 +8435,19 @@ wd_append:
     jne .no                         ; formatted rows have indents, offsets and
                                     ; heights this path's x/y arithmetic does
                                     ; not model - walk properly (SPEC.md 65.6)
+    cmp byte [wd_pxon], 0
+    jne .no                         ; ...AND A CHOSEN FACE (SPEC.md 65.13.1).
+                                    ; This path does not walk, so it does not
+                                    ; compose a band: it stamps the glyph with
+                                    ; OSAPI_FONT_RUN, which is the KERNEL's 8x8
+                                    ; cell and nothing else. Every guard above
+                                    ; is about geometry, and a face changes the
+                                    ; GLYPHS - tallx is 8 rows at an advance of
+                                    ; 8 and raises none of them, so a character
+                                    ; typed at the end of a line came out in
+                                    ; Pica while every character the walk
+                                    ; redrew came out in the face. That is the
+                                    ; bug this section was reported as
 
     ; NOTHING AFTER THE CARET ON THIS ROW, which is the whole precondition and
     ; has exactly two shapes (SPEC.md 27.14.1). The end of the NOTE, where
@@ -8576,7 +8906,16 @@ wd_redraw:
     jg .mr
     call OSAPI_GFX_FILL
 .mr:
-    mov ax, [wd_rcols]              ; right: the <8px tail past the last cell
+    cmp byte [wd_pxon], 0           ; right: the <8px tail past the last cell.
+    jne .mdone                      ; A CHOSEN FACE HAS NO SUCH TAIL - its rows
+                                    ; end where their glyphs do and each one
+                                    ; erases its own in wd_rflush (SPEC.md
+                                    ; 65.13), and [wd_rcols] there is sized from
+                                    ; TY_MINADV, so 8 x it is not a pixel count
+                                    ; at all. It happened to fall past [wd_rgt]
+                                    ; and be skipped, which is not a thing to
+                                    ; leave standing on
+    mov ax, [wd_rcols]
     push cx
     mov cl, 3
     shl ax, cl
@@ -9190,19 +9529,11 @@ wd_selxor:
 .l1:
     cmp ax, cx
     ja .out
-    push cx
-    mov cl, 3
-    shl ax, cl
-    pop cx
-    add ax, [wd_tx]             ; AX = x1
-    push ax
-    mov ax, cx
+    call wd_cx                  ; AX = x1 (SPEC.md 65.13: the same three shifts
+    push ax                     ; in the kernel's cell, a wd_px[] lookup in a
+    mov ax, cx                  ; chosen face)
     inc ax
-    push cx
-    mov cl, 3
-    shl ax, cl
-    pop cx
-    add ax, [wd_tx]
+    call wd_cx
     dec ax
     mov cx, ax                  ; CX = x2, the last column of the last cell
     pop ax
@@ -19346,15 +19677,18 @@ section .text
                             ; can never inherit an Up's bound
 
 ; --- the proportional face, SPEC.md 65.13 ------------------------------------
-    WDVAR wd_px, (WD_MAXCOL + 2) * 2  ; word per cell: the pen the k-th cell
-                                  ; starts at, RELATIVE to [wd_tx], plus one
-                                  ; past the end so a span's right edge is a
-                                  ; lookup rather than a special case. This is
-                                  ; the whole of what a proportional row costs
-                                  ; over a fixed one - in a fixed face the
-                                  ; k-th cell is at 8k and nothing needs
-                                  ; storing, which is why wd_cx branches
-                                  ; rather than always reading this
+    WDVAR wd_px, (WD_MAXCOL + 3) * 2  ; word per cell: the pen the k-th cell
+                                  ; starts at, RELATIVE to [wd_tx], plus TWO
+                                  ; past the end - one so a span's right edge
+                                  ; is a lookup rather than a special case, and
+                                  ; one for the caret's parking cell, which is
+                                  ; a cell the walk never stored and wd_rflush
+                                  ; still letters a space into. This is the
+                                  ; whole of what a proportional row costs over
+                                  ; a fixed one - in a fixed face the k-th cell
+                                  ; is at 8k and nothing needs storing, which
+                                  ; is why wd_cx branches rather than always
+                                  ; reading this
     WDVAR wd_rcn, 2               ; word: cells stored in the row so far. In a
                                   ; fixed face the cell index comes from the
                                   ; PEN - (di - tx) >> 3 - and a tab therefore
@@ -19380,8 +19714,22 @@ section .text
                                   ; taken on the way out as a tail jump
     WDVAR wd_pxon, 1              ; byte: wd_px[] is the truth about where a
                                   ; cell sits. 0 = the 8-pixel grid, which is
-                                  ; what wd_cx computes without reading it
-    WDVAR wd_bx0,  2              ; word: wd_bandrun's aligned band origin
+                                  ; what wd_cx computes without reading it.
+                                  ; wd_facemetrics sets it from [wd_prop], so
+                                  ; the metrics and the glyphs can never be two
+                                  ; different faces (SPEC.md 65.13.1)
+    WDVAR wd_spadv, 2             ; word: what a SPACE is worth in the current
+                                  ; face. The row buffer pads with spaces and
+                                  ; wd_pxcell extrapolates the parking cell by
+                                  ; exactly this, so the pen it predicts is the
+                                  ; one ty_putn will take
+    WDVAR wd_prowrx, 2            ; word: the absolute x the cached row's ink
+                                  ; ended at when it was drawn. A row that
+                                  ; SHRANK is erased from its new right edge to
+                                  ; this, in one fill - a proportional row
+                                  ; cannot pad itself blank the way a fixed one
+                                  ; does (SPEC.md 65.13)
+    WDVAR wd_bx0,  2              ; word: the band's aligned origin
     WDVAR wd_gh,   2              ; word: the GLYPH BAND's height in pixels -
                                   ; 8 for the kernel's cell, the face's `rows`
                                   ; for a chosen one. Every site that used to
@@ -19511,6 +19859,11 @@ section .text
     WDVAR wd_wfirstpx, 2    ; word } and the effective right edge and fresh-
     WDVAR wd_wrgt,  2       ; word } row cell capacity the wrap rule reads
     WDVAR wd_wcols, 2       ; word } instead of [wd_rgt]/[wd_rcols]
+    WDVAR wd_wcpx,  2       ; word: ...and that capacity in PIXELS, which is
+                            ; what wd_wordfit's second threshold measures now.
+                            ; Exactly 8 x [wd_wcols] in the kernel's cell, so
+                            ; the wrap it computes there is the one it always
+                            ; computed (SPEC.md 65.13)
     WDVAR wd_rowhv, 2       ; word: the entered row's height in px
     WDVAR wd_rowx0, 2       ; word: the row's start pen x (indent + alignment
                             ; offset) - the tab stops' anchor
