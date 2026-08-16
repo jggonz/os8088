@@ -91,6 +91,9 @@ a Standard File dialog for opening and saving.
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.
 - **A system clipboard**, shared across apps.
+- **Typefaces** — `.F88` faces in `FONTS/` on the system disk, found at run
+  time by any app that asks. The kernel keeps its 8x8 cell for chrome; an
+  app composes a row in a real face and puts it down in one call.
 
 **Disks and files**
 
@@ -145,7 +148,10 @@ into `build/`, and `STORIES=` puts your own beside them.
 (`make worddisk`): a reimplementation of Word for Windows 1.1a ("Opus") as a
 native package — Draft and Page views, a two-row ruler, real `.DOC` files in
 the Word for Windows 1.x/2.x binary format, RTF in and out, wildcard Search,
-Sort, Renumber and Table of Contents. It is not a recompile: Opus is pcode
+Sort, Renumber and Table of Contents. Its **Font menu is built from the
+disk**: it lists whatever `FONTS/` is carrying, and choosing one sets the
+whole document in it. The faces are set at fixed pitch for now — their
+shapes, their height and their leading, but eight pixels a character. It is not a recompile: Opus is pcode
 built against the Windows 2.x API, none of which exists here, so the UI
 definition is mined from the Computer History Museum's source release and
 every menu string is verbatim from it. The disk carries `WORD.O88`,
@@ -172,12 +178,12 @@ gate, which round-trips the `.DOC` through an independent host-side reader.
 | mouse         | Microsoft serial mouse on **COM1 or COM2** (IRQ4 / IRQ3), 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. The port is neither asked nor configured: both are probed for a UART, every one that answers is listened to at once, and the first to deliver a run of clean packets wins — so the other port stays free for the modem that is usually on it. QEMU emulates a mouse natively (`-chardev msmouse`); `make run MOUSEPORT=com2` puts it on the second port. |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
 | keyboard      | BIOS int 16h, polled by the UI task. |
-| font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
+| font          | two answers, and the second is new. **System chrome** is the VGA ROM's own 8x8 cell, copied out via int 10h AX=1130h at boot — one glyph, one byte-aligned store, and the fast path every menu, title and dialog is priced against. **An application** can set type in a real typeface instead: `FONTS/` on the system disk carries `.F88` faces, `apps/os88type.inc` composes a whole row of glyphs into a 1bpp band in the app's own RAM, and **one** kernel call puts the band on the screen. That split is the whole design — a proportional pen can never reach the 8x8 fast path, so lettering a 104-glyph line one glyph at a time would be 79ms of per-call *floor* on an XT before a pixel moved; composed and emitted once it is one floor, and measured it matches the 8x8 row it replaces. Glyph data, metrics, wrap and hit-testing live in the packages that want them, so the second and fifth face cost the kernel nothing. |
 | disks         | BIOS int 13h, with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart, and contiguous clusters coalesce into one transfer because a call costs roughly a disk revolution whatever it moves. Task switching pauses during a transfer (the tick still runs — the floppy motor needs it). FAT12 and FAT16, on floppies and on hard-disk partitions. |
 | software      | `.o88` packages on plain FAT volumes — any PC, Mac or Linux box can read and write the disks, and so can os8088: apps create, replace, rename and delete files through the API, and the kernel validates every byte it reads off a disk before any of it becomes an address. A package is a flat binary assembled at `org 0` and loaded into a paragraph-aligned **claim off the heap**, which is **its own address space**, one segment per package — so there are no relocations of any kind, and `tools/os88pkg.py` is a validator rather than a generator. It calls the kernel through a fixed table of far-call cells at 0060:0010, and the kernel calls back through a three-byte dispatcher in the package's header. Several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock and then arm a clip region — their window's content rect less every window above it — so a covered window draws the part that shows instead of skipping the frame; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
-The kernel is ~54KB of code and data, and 89.5KB all in — buffers, stacks,
+The kernel is ~54KB of code and data, and 103KB all in — buffers, stacks,
 the mount-time FAT snapshot and the boot-time code it later hands back.
 `tools/kernsize.py` prints both for the build in front of you, and attributes
 every byte to the module that emitted it, so prefer it to any figure written
