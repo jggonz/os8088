@@ -52,6 +52,18 @@ VM386Z := $(CURDIR)/vm/386-z
 VMXTWORD := $(CURDIR)/vm/xt-word
 VM386WORD := $(CURDIR)/vm/386-word
 
+# The CWORD machine (SPEC.md 67.12): the C toolchain's demonstrator on a
+# period machine. ONE machine and not two, and it is the 386 rather than the
+# XT, because what is being demonstrated first is that a C package boots, runs
+# and saves at all - the XT is where it then has to be MEASURED, and until
+# somebody has taken that measurement an `xt-c-word` target would be a claim
+# rather than a machine. It is a copy of vm/386-word with one line different
+# (fdd_02_fn), which is deliberate: 86Box silently substitutes an
+# unrecognised cpu_family at that family's default speed and rewrites the
+# config on the way out, so a hand-written profile is a machine nobody has
+# checked the clock of.
+VM386CWORD := $(CURDIR)/vm/386-c-word
+
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
 # this exists because QEMU emulates no CGA and no Hercules card, and forcing
@@ -562,11 +574,19 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
-        checkdocs clean clean-marty distclean
+        cc-note chello cword cworddisk 386-c-word \
+        checkdocs clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
 # below). The testing apps are on-demand only: `make bench`.
-all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360)
+#
+# It does not build anything C either, and it does not NEED the C compiler:
+# SmallerC is not in this tree (SPEC.md 67.1), so a clone with nasm, python3
+# and nothing else builds every floppy this project ships. `cc-note` is last
+# in the list and is the whole of what the default build says about C - one
+# paragraph, only when the compiler is absent, never an error.
+all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
+     cc-note
 
 # The documentation gate (SPEC.md is the binding contract, so a citation that
 # names a heading which does not exist is a defect in it): a stale section
@@ -1439,6 +1459,164 @@ $(BUILD)/assoctest.img: $(BUILD)/asstest.o88 $(BUILD)/test.ast tools/os88disk.py
 # of what --scramble exists to test.
 $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88 $(BUILD)/big.dat
+
+# =============================================================================
+# THE C TOOLCHAIN (SPEC.md 67) - ON DEMAND: `make cc-smoke`, `make chello`,
+#                                           `make cword`, `make cworddisk`
+# =============================================================================
+# apps/cc/Makefile.inc holds the rules that turn a .c file into an .o88: the
+# two new steps (smlrcc -tiny -S, then tools/cc8086.py, which lowers the seven
+# non-8086 forms SmallerC emits and REFUSES the C that is silently wrong here
+# - SPEC.md 67.6, 67.10) in front of the three steps every assembly package
+# already goes through unchanged. Its header asks to be included "anywhere
+# after $(BUILD) and $(NASM) are defined"; here also puts it after FILESIZE,
+# which its size report uses.
+#
+# Until this line existed nothing in the tree built any C at all, while three
+# files already advertised `make cc-smoke`. That target is real from here.
+#
+# NOTHING IN `all` REACHES ANY OF IT, in two separate senses and both on
+# purpose:
+#
+#  * THE DEFAULT BUILD DOES NOT NEED THE COMPILER. SmallerC is not in this
+#    tree - tools/setup-cc.sh fetches it at a pinned commit into build/cc/,
+#    which is gitignored, so no compiler binary and no compiler source is ever
+#    committed (SPEC.md 67.1). A clone with nasm and python3 and nothing else
+#    builds every floppy this project ships; `make` there prints the one
+#    paragraph cc-note holds and exits 0. Every rule below reaches the
+#    compiler only through the `cc-toolchain` order-only guard in
+#    apps/cc/Makefile.inc, which prints the command to run rather than failing
+#    from inside a recipe with "no such file".
+#
+#  * CWORD DOES NOT RIDE THE SHIPPED APPS DISKS. It takes Frotz's and Word's
+#    precedent (SPEC.md 61, 65.5, and 67.12 names the disk and the machine):
+#    its own floppy, all three geometries, built only when asked for.
+include apps/cc/Makefile.inc
+
+# The one thing the default build says about C, and it says it only when there
+# is something to say. A guard nobody types is a guard that does not run
+# (SPEC.md 15.1's shape, the same argument checkdocs is in `all` for) - but
+# the converse also holds, so this is silent on a tree that has run
+# setup-cc.sh, and it can never fail a build.
+cc-note:
+	@test -x $(CC_SMLRCC) || { \
+	  echo "";                                                              \
+	  echo "note: the C toolchain (SPEC.md 67) is not built, so the C";     \
+	  echo "      targets - cc-smoke, chello, cword, cworddisk and";        \
+	  echo "      386-c-word - are unavailable. Everything else, which is"; \
+	  echo "      every floppy this project ships, is built above.";        \
+	  echo "";                                                              \
+	  echo "      To get it:  tools/setup-cc.sh";                           \
+	  echo "";                                                              \
+	  echo "      It fetches SmallerC at its pinned commit into build/cc/"; \
+	  echo "      - the compiler is not in this tree because build/ is";    \
+	  echo "      gitignored - builds three binaries, and runs a canary C"; \
+	  echo "      file through the whole chain.";                           \
+	  echo ""; }
+
+# --- CHELLO, the C capability gate (ON DEMAND: `make chello`) ----------------
+# tests/chello is the program that established a compiled package can hold a
+# window down on all three adapters: it has been booted on VGA 640x480, on CGA
+# 640x200 and off a 360KB floppy, clicked, typed at, dragged and closed. It is
+# under tests/ because it is a capability gate and nothing under tests/ ships
+# (CLAUDE.md), so it is on demand exactly like bench.
+#
+# IT IS OPEN-CODED RATHER THAN CALLED THROUGH CC_PACKAGE, and the choice is
+# worth writing down because the template is right there. CC_PACKAGE is
+# `$(eval $(call CC_PACKAGE,<name>,<dir under apps/>))` and it roots BOTH the
+# source and the shim at apps/$(2)/ - chello is under tests/, and its nasm
+# line needs a third -I as well. The two ways out are a second template in
+# apps/cc/Makefile.inc taking a directory, or one open-coded rule here. This
+# is the second, for two reasons: there is exactly one C package outside
+# apps/ and there is meant to be exactly one, so a generalised template would
+# be a parameter with a single caller; and it would put knowledge of tests/
+# into the SDK's own build fragment, which is the file a C author reads to
+# learn how to ship an application. If a second tests/ C package ever turns
+# up, that is the moment to lift these four rules into a directory-taking
+# CC_PACKAGE_AT and give both callers the same one.
+$(BUILD)/chello.raw.asm: tests/chello/chello.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		tests/chello/chello.c -o $@
+
+$(BUILD)/chello.gen.asm: $(BUILD)/chello.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/chello.bin: tests/chello/chello.asm $(BUILD)/chello.gen.asm $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -I tests/chello/ \
+		-o $@ tests/chello/chello.asm
+	@echo "chello: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/chello.o88: $(BUILD)/chello.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+
+# Two geometries and not three, which is tests/chello/build.sh's own choice
+# and the right one for a gate: 1.44MB is what QEMU gets and 360KB is what an
+# 86Box XT or a real one takes, and the 720KB disk would exercise no third
+# thing. A shipped image is a different obligation and gets all three.
+$(BUILD)/chello.img: $(BUILD)/chello.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/chello.o88
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/chello360.img: $(BUILD)/chello.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/chello.o88
+	@python3 tools/os88disk.py --verify $@
+
+#   make chello                            builds both images
+#   make test TESTAPPS=build/chello.img    boots with it in B:
+chello: $(BUILD)/chello.img $(BUILD)/chello360.img
+
+# --- CWORD and its document floppy (SPEC.md 67.12) ---------------------------
+# The C toolchain's demonstrator: a word processor whose UI, layout, redraw
+# and RTF engine are all C, going through the same five steps ccsmoke and
+# chello do. `make cword` builds the package, `make cworddisk` the floppy in
+# all three geometries, and `make 386-c-word` boots a period machine with it.
+#
+# IT IS NOT THE WORD PORT (SPEC.md 67.12). §65's apps/word/ is hand-written
+# assembly and the two share no file, no package name, no make target, no disk
+# image, no VM directory and no extension. Nothing here may reach a `word`
+# name, and nothing in the Word section above may reach a `cword` one.
+$(eval $(call CC_PACKAGE,cword,cword))
+
+# THE REST OF THE TRANSLATION UNIT. `nasm -f bin` has no notion of an external
+# symbol, so a C package is ONE compilation and one assembly (SPEC.md 67.1):
+# cword.c #includes the RTF tables and the RTF engine, and the shim %includes
+# the one hand-written routine (SPEC.md 67.11's exception, cw_memmove - the
+# only place ES is loaded). CC_PACKAGE names apps/cword/cword.c and
+# apps/cword/cword.asm, which is right for the general case and four files
+# short here, and make cannot see through a #include. Without these two lines
+# an edit to the RTF engine or to the byte mover leaves build/cword.o88
+# untouched - and a stale package reads exactly like the change having done
+# nothing, which is the failure the WORD.OVL rule above already paid for once.
+CWORDSRC := apps/cword/cwrtfio.c apps/cword/cwrtftbl.c apps/cword/cwrtftbl.h
+$(BUILD)/cword.raw.asm: $(CWORDSRC)
+$(BUILD)/cword.bin: apps/cword/cwmove.inc
+
+cword: $(BUILD)/cword.o88
+
+# All three geometries, as every disk-visible image in this tree is built
+# (CLAUDE.md): 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one.
+# The C toolchain has been booted from a 360KB floppy once, on chello, and
+# that is the geometry a 20KB image most wants re-checked on.
+#
+# --verify is a standalone structural fsck of what came out (tools/os88disk.py)
+# and it is in the recipe rather than in a separate target because it costs
+# milliseconds and catches the class of defect - a bad FAT chain, a directory
+# entry pointing at nothing - that otherwise arrives as "Disk error" inside
+# the emulator, ten minutes later, reading like a bug in the file system.
+cworddisk: $(BUILD)/cword.img $(BUILD)/cword720.img $(BUILD)/cword360.img
+
+$(BUILD)/cword.img: $(BUILD)/cword.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/cword.o88
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/cword720.img: $(BUILD)/cword.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/cword.o88
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/cword360.img: $(BUILD)/cword.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/cword.o88
+	@python3 tools/os88disk.py --verify $@
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`
@@ -3278,6 +3456,32 @@ xt-word: $(IMG360) $(BUILD)/word720.img
 	@$(UNPROTECT) $(VM386WORD)/86box.cfg
 	$(BOX) -P $(VM386WORD) -N
 
+# The CWORD machine (SPEC.md 67.12) - the C toolchain's demonstrator on a
+# period machine, with build/cword.img in B: instead of the apps disk.
+#
+#   386-c-word  A 386DX/25 with TWO 1.44MB drives, B: = build/cword.img.
+#               AT-class, so the first launch stops at the BIOS setup wanting
+#               a CMOS - pick EXIT FOR BOOT once and 86Box writes
+#               vm/386-c-word/nvr/ for every later boot.
+#
+# vm/386-c-word/86box.cfg is vm/386-word/86box.cfg with the B: image and the
+# uuid changed and NOTHING else, which is the whole reason it exists as a copy
+# of a machine that has been booted rather than as a profile written from the
+# documentation: 86Box does not reject an unrecognised cpu_family, it
+# substitutes that family's default speed and rewrites the config on exit, so
+# a typo there is a machine running at a clock nobody chose and no error
+# anywhere. $(UNPROTECT) for the standing reason - 86Box re-adds wp:// to its
+# floppy paths on the way out, which turns every guest write into FERR_WPROT,
+# and here that is every document save.
+#
+# ONE machine and not two. The XT is where a C package has to be MEASURED
+# rather than merely run (PERFORMANCE.md: 756us a drawing call, ~900us a glyph
+# cell, and C is 2-4x hand assembly), and an `xt-c-word` target before anybody
+# has taken that measurement would be a claim rather than a machine.
+386-c-word: $(IMG) $(BUILD)/cword.img
+	@$(UNPROTECT) $(VM386CWORD)/86box.cfg
+	$(BOX) -P $(VM386CWORD) -N
+
 # The MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug server bolted
 # into MartyPC's headless frontend, giving memory, registers, breakpoints,
 # single-step and cycle counts on a running os8088 with NO code in the guest
@@ -3389,11 +3593,23 @@ pentium: $(IMG) $(APPSIMG)
 # the wrong incentive when CLAUDE.md's rule is "build it at the START of a
 # session". `clean-marty` is the escape hatch, and it is what re-pinning
 # wants.
+#
+# It spares build/cc for the same reason and by the same test: SmallerC is an
+# INSTRUMENT, not an output of this source tree. It is pinned to an upstream
+# commit (tools/setup-cc.sh's PIN), nothing in this repo changes what it
+# builds, and it is a fetch over the network - so a `clean` that threw it away
+# would make the C targets need the network to come back, which is the wrong
+# incentive for a check that is meant to be cheap to re-run. `clean-cc` is the
+# escape hatch, and re-pinning does not need it: setup-cc.sh compares HEAD
+# against PIN on every run and re-fetches when they differ.
 clean:
-	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc -exec rm -rf {} + \
-		2>/dev/null || true
+	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc ! -name cc \
+		-exec rm -rf {} + 2>/dev/null || true
 
 clean-marty:
 	rm -rf $(BUILD)/martypc
 
-distclean: clean clean-marty
+clean-cc:
+	rm -rf $(BUILD)/cc
+
+distclean: clean clean-marty clean-cc

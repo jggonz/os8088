@@ -3,7 +3,7 @@
 # setup-macos.sh - install everything `make`, `make run` and `make xt` need
 #                  on a Mac, Apple Silicon or Intel.
 #
-# Four things get installed and one gets DOWNLOADED, which is the whole
+# Four things get installed and two get DOWNLOADED, which is the whole
 # reason this script exists:
 #
 #   nasm        the assembler (see the version gate below - the 3.0 floor
@@ -11,9 +11,15 @@
 #               the comment there says why)
 #   qemu        qemu-system-i386, for `make run` / `make test`
 #   python3     the host-side tooling in tools/ - stdlib only, no pip
-#   86Box       optional, for `make xt` and the nine other period machines
+#   86Box       optional, for `make xt` and the other period machines
 #   86Box ROMs  NOT shipped with 86Box, from github.com/86Box/roms. Without
 #               them 86Box starts and every machine in vm/ fails to boot.
+#   SmallerC    optional, for `make cword` and the other C targets. NOT
+#               installed - fetched and built into build/cc, which is
+#               gitignored, by tools/setup-cc.sh. This script only offers to
+#               run that; the script itself is the authority (SPEC.md 67,
+#               docs/C-TOOLCHAIN.md). NOTHING IN `make` DEPENDS ON IT, so
+#               declining costs only the C targets.
 #
 # Nothing here is installed for the Frotz gates, and two of them want more:
 # `make ztest` and `make zcheck` need `inform` and `dfrotz` (`brew install
@@ -27,7 +33,8 @@
 #   tools/setup-macos.sh                 install everything, ask before big steps
 #   tools/setup-macos.sh --yes           ...without asking
 #   tools/setup-macos.sh --dry-run       print what it would do, change nothing
-#   tools/setup-macos.sh --no-86box      just the build/QEMU toolchain
+#   tools/setup-macos.sh --no-86box      skip 86Box and its ROM set
+#   tools/setup-macos.sh --no-cc         skip the C toolchain (SmallerC)
 #   tools/setup-macos.sh --roms-only     just (re)install the 86Box ROM set
 #   tools/setup-macos.sh --force-roms    re-download ROMs even if present
 #   tools/setup-macos.sh --no-build      skip the closing `make` smoke test
@@ -81,6 +88,7 @@ WANT_86BOX=1
 ROMS_ONLY=0
 FORCE_ROMS=0
 WANT_BUILD=1
+WANT_CC=1
 
 # --------------------------------------------------------------------------
 # plumbing
@@ -119,13 +127,18 @@ confirm() {
 	case "$reply" in ''|y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
-usage() { sed -n '3,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0; }
+# The range ENDS AT THE LAST OPTION LINE, and it used to end at "Usage:" -
+# so `--help` printed the description and then stopped one line before the
+# only part anybody runs it for. If a line is added to the header above, this
+# number moves with it.
+usage() { sed -n '3,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--dry-run)    DRY_RUN=1 ;;
 		--yes|-y)     ASSUME_YES=1 ;;
 		--no-86box)   WANT_86BOX=0 ;;
+		--no-cc)      WANT_CC=0 ;;
 		--roms-only)  ROMS_ONLY=1 ;;
 		--force-roms) FORCE_ROMS=1 ;;
 		--no-build)   WANT_BUILD=0 ;;
@@ -366,7 +379,43 @@ if [ "$WANT_86BOX" = 1 ] || [ "$ROMS_ONLY" = 1 ]; then
 fi
 
 # --------------------------------------------------------------------------
-# 6. smoke test: actually build the six floppies
+# 6. the C toolchain - OPTIONAL, and nothing in `make` needs it
+# --------------------------------------------------------------------------
+# This is not installed like the four above: it is FETCHED AND BUILT INTO
+# build/cc, which is gitignored, and it is tools/setup-cc.sh that does it.
+# That script is the authority and this is only the offer to run it, because
+# somebody setting a machine up should not have to find out later that C
+# needed a second command (SPEC.md 67, docs/C-TOOLCHAIN.md).
+#
+# It is asked separately, and last, for two reasons that are the same reason:
+# it is a network fetch of somebody else's source, and NOTHING IN `make`
+# DEPENDS ON IT. A tree without it builds every shipping floppy and prints one
+# note. So declining here costs nothing but `make cword` and its siblings, and
+# `tools/setup-cc.sh` can be run at any later moment.
+#
+# The step below is one line of real work. Everything setup-cc.sh does - the
+# pinned commit, the idempotence, the closing canary that runs a C file all
+# the way through cc8086.py and nasm - belongs to that script, and duplicating
+# any of it here is how the two drift.
+
+if [ "$ROMS_ONLY" = 0 ] && [ "$WANT_CC" = 1 ]; then
+	step "The C toolchain (optional): SmallerC, for \`make cword\` and friends"
+	if [ -x "$REPO/build/cc/SmallerC/smlrcc" ]; then
+		ok "already built - build/cc/SmallerC/smlrcc"
+	elif confirm "fetch and build SmallerC into build/cc? (a git clone, ~15k lines of C)"; then
+		if [ "$DRY_RUN" = 1 ]; then
+			printf '    %s+%s tools/setup-cc.sh\n' "$Y" "$Z"
+		else
+			( cd "$REPO" && ./tools/setup-cc.sh ) \
+				|| warn "setup-cc.sh failed - the C targets are unavailable, everything else is fine"
+		fi
+	else
+		warn "skipped - \`make\` is unaffected; run tools/setup-cc.sh whenever you want C"
+	fi
+fi
+
+# --------------------------------------------------------------------------
+# 7. smoke test: actually build the six floppies
 # --------------------------------------------------------------------------
 
 if [ "$ROMS_ONLY" = 0 ] && [ "$WANT_BUILD" = 1 ]; then
@@ -413,6 +462,12 @@ $B==> Ready.$Z
   the developer cannot be verified"), clear the quarantine flag:
 
     xattr -dr com.apple.quarantine $BOX_APP
+
+  If you took the C toolchain, \`make cword\` builds the C word processor and
+  \`make cworddisk\` its floppies; if you did not, \`tools/setup-cc.sh\` is the
+  one command, and nothing in \`make\` was affected either way. Read
+  docs/C-TOOLCHAIN.md before writing any C - four rules there are build
+  failures rather than style advice.
 
   Toolchain notes live in CONTRIBUTING.md; the QEMU test harness and its
   traps are in docs/TESTING.md.
