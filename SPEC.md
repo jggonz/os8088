@@ -44315,3 +44315,236 @@ text stream §65.4 records it does not have. The page a line falls on is still
 is no printing path in this OS to preview — no printer driver class in §51, no
 slot in the published API. §47's rule: the greyed item is telling the truth
 for nothing.
+
+## 66. TeXPad — the TeX pad (`apps/texpad/texpad.asm`)
+
+A two-pane editor for a small, paper-oriented subset of TeX: the source on the
+left, the typeset page on the right, and File > Export writing PDF 1.4 or
+PostScript Level 1. Contributed, and brought in against the SDK of the day
+(§20) — it needed no kernel change of any kind, which is the claim §20 exists
+to make good. Three sources, one binary, prefix `tp_` throughout: `texpad.asm`
+is the window, the editor and the file paths, `tpparse.inc` is the typesetter,
+`tpexport.inc` is the two writers.
+
+It ships on the ORDINARY apps disk rather than on one of its own. Word and
+Frotz each got a disk (§65.5, §61.9) because each needs DOCUMENTS beside it
+and neither leaves room for the rest of the software on a 360KB floppy;
+TeXPad is under 20KB and its two documents come to 3KB, so the argument does
+not reach it. Those documents ride `MEDIA/` for §38.10's reason — that is
+where a File > Open starts.
+
+### 66.1 Typesetting is an act, not a consequence
+
+**F5 typesets. Nothing else does.** The preview does not track the source as
+it is edited, and that is the design rather than a missing feature: setting
+the document walks the whole source, and on the target machine (PERFORMANCE.md
+— an 8088 at 4.77 MHz) that is not something to do between keystrokes. The
+top bar carries `(edit)` for exactly as long as the preview is older than the
+source, so the staleness is a fact on screen and never a guess.
+
+The preview is redrawn from the typeset OUTPUT — the run and box arrays of
+§66.3 — and never by re-reading the source, so paging, scrolling and resizing
+cost a walk of those arrays and no parse at all. A caret move repaints the
+SOURCE PANE only (`tp_redraw_src`), which is the §11.3 granularity rule
+applied to the one thing that changed.
+
+`tp_redraw` is the internal "paint the whole window" entry and `tp_paint` is
+the WM's callback (§20.5). They are not interchangeable: `tp_paint` takes the
+window in SI the way the WM passes it, and the editing routines that a key
+handler goes through — `tp_go_left`, `tp_up`, `tp_down`, `tp_sol`, `tp_home`,
+`tp_end` — all RETURN a source offset in SI. So `tp_redraw` reloads SI from
+`[tp_win]` itself, and every caller is relieved of a contract it had no way to
+know it was holding. Called with the offset still in SI, `tp_paint` asks
+`OSAPI_WM_CONTENT` where that "window" is and paints the answer, which lands a
+second set of chrome over the menu bar.
+
+### 66.2 The dialect is a paper-oriented subset
+
+Text, sections, quotes, lists and ruled tables; `\documentclass` with
+`letterpaper` / `legalpaper` / `a4paper` / `a5paper`, `10pt` / `11pt` /
+`12pt`, `twoside`, `article` / `book`; `\title` / `\author` / `\date` /
+`\maketitle`; `\section` / `\subsection` / `\chapter`; `\textbf`, `\emph`,
+`\textit`, `\texttt`; `center`, `quote`, `abstract`, `itemize`, `enumerate`,
+`tabular`; and the dimension setters (`\parindent`, `\parskip`,
+`\baselineskip`, `\tabcolsep`, `\oddsidemargin`, `\topmargin`, `\textwidth`).
+
+**There is no math engine, no figure inclusion and no colour.** `$...$` passes
+through as roman text; an unknown command is skipped along with its optional
+`[...]` and its `{...}` group, which is the one behaviour that lets a document
+written for real LaTeX open here and still be readable. `apps/texpad/GUIDE.TEX`
+is that list written as a document TeXPad sets, so the manual for the markup is
+a worked example of it.
+
+The face is the kernel 8×8 monofont (§6.2) and only that, which is why a paper
+looks the same on all three adapters (§39) and why the exports name Courier: a
+monospaced cell is what was measured, so a monospaced face is what must render
+it. Size is carried per run and honoured by scaling the CELL, not by having a
+second face.
+
+### 66.3 The typesetter's output is two bounded arrays
+
+`tp_ts_scan` walks the source once and emits into two fixed arrays in bss —
+`tp_runs` (`TP_MAX_RUNS` = 480 records of 10 bytes: page, style bits, x, y,
+size, length, and an offset into a 5,120-byte text pool) and `tp_boxes`
+(`TP_MAX_BOXES` = 64 of the same size: page, x, y, w, h). A rule, a table grid
+and an underline are all boxes; everything with glyphs in it is a run. Page
+count is capped at `TP_MAX_PAGES` = 16.
+
+**Every one of those limits is enforced at the emitter and not at the caller.**
+`tp_put_run_at` refuses past `TP_MAX_RUNS` and again past the text pool;
+`tp_emit_box` refuses past `TP_MAX_BOXES`; `tp_newpage` pins the page count and
+un-advances the page. A document that overruns any of them is TRUNCATED and
+sets what fits — which is the right failure for a preview, and the reason the
+arrays can be plain bss with no allocation path behind them.
+
+The scan carries two guards that exist because the alternative is a black
+screen rather than a wrong page. `tp_budget` is a hard iteration ceiling of
+source length + 16. `tp_scanat` records the source offset at the top of each
+iteration and the dispatcher compares it at the bottom: a handler that returns
+without consuming its byte would otherwise spin forever under the gfx lock, so
+the scanner consumes one byte on its behalf and continues. Both are cheap and
+neither is reachable by a correct handler; they bound what an INCORRECT one
+costs.
+
+### 66.4 Memory: two claims, and a hand-laid bss
+
+The image is under 20KB and the bss is 12,288 bytes, so the package sits well
+inside `APP_MAX_SIZE` (§33's near model — image plus bss cannot reach 64KB,
+because the offsets are 16 bits). Two heap claims (§50.3) sit outside it:
+
+| claim | size | what it holds |
+|---|---|---|
+| `tp_srcseg` | 8KB | the document source, `TP_SRC_MAX` = 8,190 bytes of it |
+| `tp_expseg` | 24KB | the export buffer, `TP_EXP_MAX` = 24,576 bytes |
+
+The source claim is taken at entry and a launch that cannot get it fails
+(§20.1's CF); the export claim is taken on the first export and never freed,
+so a second export costs nothing. Both are freed with the instance by the
+kernel, so there is no teardown hook.
+
+**The bss is a hand-computed map of `equ`s off `os88_image_end`, and nothing
+checks the offsets against each other.** A new field goes at the END and a
+field that grows moves everything under it. `TP_BSS_LAST` and the `%if` beside
+it catch overflowing the block; they cannot catch two fields OVERLAPPING
+inside it. That is the standing hazard in this package and the reason §66.7's
+ceilings are written as constants next to the copies that use them rather than
+inferred at the call site.
+
+### 66.5 Export: PDF 1.4 and PostScript Level 1
+
+Both writers build the whole file in the export claim and hand it to
+`OSAPI_FILE_WRITE` in one call (§18.4). The PDF is classic xref — no 1.5
+object or xref streams — with uncompressed content streams, `4 + 2n` objects
+for n pages (catalog, pages, font, info, then a page and a contents object
+each), and `/Courier`. The PostScript is DSC-commented Level 1: `moveto` and
+`show` per run, `re`-equivalent line paths for boxes, one `showpage` a page.
+
+**Every byte goes through `tp_xw_al`, which SATURATES at `TP_EXP_MAX` rather
+than growing past it.** That makes the buffer un-overrunnable and makes a
+too-big document a silent truncation instead — a PDF whose xref offsets and
+stream lengths point at bytes that were never written. So `tp_export_do`
+compares the length against the ceiling before it writes anything and refuses
+with 'Export too large'; a file a reader opens and reports as corrupt looks
+like a broken exporter, and a refusal looks like what it is. `tp_pdf_patch5`
+is the one write into the claim that does NOT go through `tp_xw_al` — it goes
+back to fill in five reserved digits of a stream length — so it carries the
+same bound itself.
+
+The PS writer re-selects the face only when the SIZE CHANGES, which is what
+the PDF writer always did. Emitting `/Courier findfont N scalefont setfont` in
+front of every run is 38 bytes each, and a body of ordinary 12pt text is
+hundreds of runs that all ask for the size already in effect: PAPER.TEX
+exported as a 15KB PDF and did not fit 24KB as PostScript on that alone.
+
+### 66.6 The `.TEX` association, and why the load is deferred
+
+The package header claims `TEX` through `OS88_ASSOC16` (§54.5), so a
+double-click on a `.TEX` file launches TeXPad on it once the volume carrying
+both has been mounted. It is NOT one of the four associations baked into the
+kernel (§54.3) — those exist so a document icon costs no disk read on the
+first boot of a machine, and paying kernel bytes for a fifth is a decision for
+whoever wants it, not a consequence of adding an app.
+
+**The entry proc copies the argument's NAME and reads nothing.** `tp_entry`
+calls `OSAPI_ARG_FILE`, stores the name, directory cluster and volume, and
+sets a pending flag; `tp_deferred_ld` does the `OSAPI_FILE_GOTO` + read +
+typeset later, on the first key or click. Reading a floppy from the entry proc
+happens under the loader's lock and freezes the desktop for the length of the
+read — an `int 13h` call is ~400 ms on the target machine, so that is seconds,
+visibly.
+
+The load then owes a FULL repaint rather than the source-pane one the key
+handler was on its way to doing: the byte count in the status strip and the
+page count in the top bar both changed. `tp_ldfull` says so and the handler
+promotes itself, which keeps it to ONE draw — repainting the pane and then the
+window would put the source through twice, and a double draw is invisible in
+an emulator and seconds on an XT.
+
+### 66.7 Every buffer a document can reach is bounded at the copy
+
+The source of this package is a `.TEX` file, and a `.TEX` file is hostile
+input like every other byte read off a disk (§19). The rule here is that the
+CEILING lives at the copy, as a named constant beside it, because the bss
+offsets it is protecting are hand-laid (§66.4):
+
+- `tp_read_group` fills `tp_arg` to `TP_ARG_MAX`; `tp_plain_arg` strips
+  commands out of it into `tp_wbuf` capped at `TP_WBUF_MAX`, and every other
+  writer into `tp_wbuf` uses the same 70.
+- `\title` / `\author` / `\date` copy with `tp_cpatn` under `TP_TITLE_MAX`,
+  `TP_AUTHOR_MAX` and `TP_DATE_MAX` — `tp_date` is the one field smaller than
+  a full `tp_wbuf`.
+- A `\section` or `\subsection` heading is assembled out of several pieces
+  into the 48-byte `tp_nbuf`, and the last piece — the document's own text,
+  the only piece with no length of its own — takes whatever `tp_nbuf_left`
+  says is free. Numbering in front of a `\subsection` title can be eight
+  bytes, so the ceiling is computed rather than assumed.
+- `tp_tab_note` refuses to WRITE past `TP_COL_MAX` columns and `tp_tab_cell`
+  clamps to it before READING: nothing makes a table row agree with its
+  `\begin{tabular}{...}` preamble, so a row with more cells than columns is an
+  ordinary document, and unclamped it lays the cell out from whatever follows
+  `tp_colw` in the bss.
+
+The editor side has one invariant and it is worth naming: **`tp_cur` is an
+offset into the document and never exceeds `tp_srclen`.** `tp_open_gap`
+derives the tail it has to move as `srclen - cur`, which UNDERFLOWS to ~64KB
+when that is violated, and the `std` / `rep movsb` under it then walks
+backwards over the whole segment the 8KB claim sits in — the claim heap above
+it included. `tp_crlf_fix` is what can violate it: it collapses CR LF to LF
+across the whole buffer and knows nothing about the caret, so a paste of CRLF
+text at the end of the document leaves the caret past the end. `tp_clamp_cur`
+runs after it, and `tp_open_gap` refuses an out-of-range offset as well —
+every caller is checked, but that is the one place the damage is unbounded.
+
+A paste also advances by what `OSAPI_CLIP_GET` actually COPIED and not by what
+`OSAPI_CLIP_SIZE` promised. The clipboard belongs to the desktop and this app
+is pre-empted between the two calls (§20.6): another program replacing it with
+a shorter one in between would otherwise splice that many bytes of whatever
+was already in the claim into the document.
+
+### 66.8 Performance posture
+
+The target is PERFORMANCE.md's 8088. What follows from it, beyond §66.1's
+"F5 typesets":
+
+- A caret move repaints the source pane; a page turn or a layout change
+  repaints the window. Nothing repaints on a timer and there is no worker
+  task — TeXPad owns no background task at all (§20.6), so there is no
+  question of a mixer-style redraw racing a paint.
+- A preview row is one `OSAPI_FONT_RUN` per run, which is §6.1's
+  erase-and-letter in one decision per cell; bold is a second transparent
+  strike at x+1, the same trick §65.1 uses.
+- Export is `tp_typeset` plus a linear walk of the run and box arrays plus ONE
+  `OSAPI_FILE_WRITE`. Costing disk work in calls rather than sectors is the
+  whole reason the file is built in RAM first.
+- The refusals are §47's rule: 'Export too large', 'Document full (8K)' and
+  'Need more RAM' are facts the code tested, not guesses about size.
+
+### 66.9 What it deliberately is not
+
+It is not TeX. There is no macro expansion, no `\def`, no hyphenation, no
+ligature handling, no kerning, no math, no floats and no bibliography, and the
+line breaker is greedy rather than Knuth-Plass. Justification is recorded and
+rendered as left. The measure is in whole 8-px cells everywhere including the
+exports, so the PDF has the same loose word spacing the preview does — that is
+the monospaced cell being honest about itself, not a rounding bug to be fixed
+by moving the exports to a proportional face they were not measured for.

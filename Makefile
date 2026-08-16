@@ -1125,6 +1125,28 @@ $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc 
 $(BUILD)/notepad.o88: $(BUILD)/notepad.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/notepad.bin -o $@
 
+# TeXPad (SPEC.md 66): source on the left, typeset preview on the right, and
+# File > Export writes PDF 1.4 or PostScript Level 1. Contributed.
+#
+# It ships on the ORDINARY apps disk rather than getting its own the way Word
+# and Frotz did (SPEC.md 65.5/61.9), because the argument that gave them one
+# does not apply: those two need a disk with DOCUMENTS on it - stories, a
+# .DOC - and at 43KB Word does not leave room for the rest of the software on
+# a 360KB floppy anyway. TeXPad is 20KB and its documents are two .TEX files
+# of 3KB together, so it fits beside everything else with room to spare.
+#
+# Three sources, one binary, and each is a prerequisite: the typesetter and
+# the exporter are where the page layout lives, and a stale texpad.bin reads
+# exactly like the layout being wrong.
+$(BUILD)/texpad.bin: apps/texpad/texpad.asm apps/texpad/tpparse.inc \
+                     apps/texpad/tpexport.inc apps/os88api.inc \
+                     apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/texpad/texpad.asm
+	@echo "texpad: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/texpad.o88: $(BUILD)/texpad.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/texpad.bin -o $@
+
 # Piano, the fifth shipped package (SPEC.md 36): a colorful playable piano
 # over the SPEC.md 34 tone tier (note viewer, replay, embedded songs).
 $(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
@@ -2643,7 +2665,8 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # left here is which packages ship and which folder each lands in.
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/fractal.o88 $(BUILD)/hello.o88 \
               $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 $(BUILD)/paint.o88 \
-              $(BUILD)/piano.o88 $(BUILD)/recorder.o88 $(BUILD)/tracker.o88
+              $(BUILD)/piano.o88 $(BUILD)/recorder.o88 $(BUILD)/texpad.o88 \
+              $(BUILD)/tracker.o88
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/missile.o88 \
               $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
 
@@ -2657,7 +2680,16 @@ APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/missile.o88 \
 # is where a File Open starts (SPEC.md 38.10): the module Tracker and ModPlug
 # were written against is in the folder their Open dialog already opens on,
 # which is the whole point of having a default location at all.
-APPS_DATA := apps/tracker/beverly.mod
+#
+# TeXPad's two documents are here for that same reason, and they are the
+# reason the folder is not just the module's: PAPER.TEX is a short paper that
+# exercises the dialect the typesetter implements, and GUIDE.TEX is the
+# markup written up as a document TeXPad itself sets - so the manual for the
+# markup is a worked example of it. Both are the kernel's default Open
+# location, and both are ASSOCIATED (SPEC.md 66.6), so a double-click on
+# either one opens TeXPad on it without going through APPS/ at all.
+APPS_DATA := apps/tracker/beverly.mod apps/texpad/PAPER.TEX \
+             apps/texpad/GUIDE.TEX
 
 # The Task Manager, in SYSTEM/ and not in the root, because that is where
 # ui_tm_open looks (SPEC.md 28.3). Not in APPS_TOOLS - it is not a program to

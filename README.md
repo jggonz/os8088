@@ -107,15 +107,24 @@ a Standard File dialog for opening and saving.
 
 **Software**
 
-Fifteen loadable packages ship on the software disk, all closable and most
+Sixteen loadable packages ship on the software disk, all closable and most
 multi-instance:
 
-- **Apps** — Note Pad (word wrap, DOS-readable text files), Paint,
+- **Apps** — Note Pad (word wrap, DOS-readable text files), TeXPad, Paint,
   ArtfulType, Fractal, Piano, Recorder, Tracker and ModPlug Player (both play
   Amiga MOD files).
 - **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command and TameGram.
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
+
+**TeXPad** is the newest of them and a contributed one: a two-pane pad for a
+small, paper-oriented subset of TeX — source on the left, the typeset page on
+the right, and File > Export writing PDF 1.4 or PostScript Level 1 that a host
+reader opens. The dialect is text, sections, quotes, lists and ruled tables,
+with paper size, margins, gutter, facing pages and page numbers on the menus;
+there is no math engine, no figures and no colour. `PAPER.TEX` and `GUIDE.TEX`
+ride the software disk beside it, and `GUIDE.TEX` is the markup written up as
+a document TeXPad sets.
 
 Timer and Bounce are built into the kernel rather than loaded. **Drivers**
 load the same way packages do — hard disk, sound, and a serial debug
