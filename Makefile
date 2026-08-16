@@ -826,10 +826,25 @@ $(SYSLOGO): tools/os88logo.py | $(BUILD)
 # targets are, so a new face is a new file and not an edit here as well.
 FACESRC := $(wildcard faces/*.t88)
 FACES := $(patsubst faces/%.t88,$(BUILD)/%.f88,$(FACESRC))
-FACESARG := $(addprefix FONTS:,$(FACES))
+
+# ...and the LICENCE rides beside them (SPEC.md 6.4.1). Eight of the ten
+# families are fitted from typefaces somebody else drew, all of them under the
+# SIL Open Font License 1.1, which asks that its notice travel with anything
+# derived from the font - so it travels on the disk the faces are on and not
+# only in the tree. It is a .TXT: ty_scan takes .F88 and nothing else, so it
+# cannot turn up in a Font menu, and the mount types it as a document, so the
+# person at the machine can double-click it and read it. CRLF here for the
+# same reason readme.txt gets it below.
+FACELIC := $(BUILD)/license.txt
+FACESARG := $(addprefix FONTS:,$(FACES)) FONTS:$(FACELIC)
 
 $(BUILD)/%.f88: faces/%.t88 tools/os88face.py | $(BUILD)
 	python3 tools/os88face.py $< -o $@
+
+$(FACELIC): faces/LICENSES.txt | $(BUILD)
+	python3 -c "import sys; d = open(sys.argv[1], 'rb').read(); \
+		open(sys.argv[2], 'wb').write(d.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))" \
+		$< $@
 
 SYSDOC := $(BUILD)/readme.txt
 
@@ -1016,7 +1031,7 @@ $(BUILD)/os88net.com: drivers/net/os88net.asm drivers/net/lplink.inc \
 	$(NASM) -f bin -w+error -I drivers/net/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes - the DOS end, for the FAR machine"
 
-$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG)
@@ -1030,12 +1045,12 @@ $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG)
 
-$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) $(SYSAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG)

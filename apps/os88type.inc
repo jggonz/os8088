@@ -125,9 +125,14 @@ TYE_MAGIC   equ 4               ; not an .F88, or not version 1
 TYE_SHAPE   equ 5               ; a header field outside SPEC.md 6.4's range
 TYE_SUM     equ 6               ; the checksum or the length disagrees
 
-TY_MAXFAM   equ 8               ; families a scan will list. The Font menu is
+TY_MAXFAM   equ 10              ; families a scan will list. The Font menu is
                                 ; the consumer and a menu longer than this is
-                                ; a menu nobody reads
+                                ; a menu nobody reads - but the system disk
+                                ; carries TEN faces (SPEC.md 6.4.1), and a
+                                ; ceiling that silently drops the last two is
+                                ; worse than a menu two rows longer. It costs
+                                ; 23 bytes of the including package's bss a
+                                ; family, and nothing at all in the kernel
 TY_NAMSZ    equ 13              ; an 8.3 name, NUL-terminated, as
                                 ; OSAPI_FILE_FIND hands it over
 TY_DISPSZ   equ 10              ; ...and the display name built from its stem

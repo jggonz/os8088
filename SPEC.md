@@ -2742,6 +2742,128 @@ halves §6.5.2's pre-shifted table, because a pen that starts on an even bit and
 advances by an even number can only ever be at phases 0, 2, 4 and 6. The tool
 enforces it; `ty_open` re-checks it, because the tool is not what runs.
 
+#### 6.4.1 The faces the disk carries, and what fitting one costs
+
+`FONTS/` carries **ten families**. Two are drawn by hand — `charter`, whose art
+*is* the design, and `tallx`, which is the kernel's own 8×8 cell offered as a
+face so that a document can be set in it with no layout change at all. The
+other **eight are fitted from open outline typefaces** by `tools/os88ttf.py`,
+which renders each glyph through FreeType's monochrome hinter and then argues
+with it about the grid. Nothing in the Makefile runs that tool: it drafts a
+`faces/<name>.t88` once, the draft is committed, and **from then on the art is
+the source** — every face below has been hand-fitted since, and the `DRAFTED`
+line in its header reproduces the first draft rather than the file.
+
+| file | menu | family in the header | cell | advance | drawn from |
+|---|---|---|---|---|---|
+| `TALLX.F88` | Tallx | Tallx | 8 rows | 8, fixed | `fonts/tallx.f8`, the house 8×8 |
+| `CHARTER.F88` | Charter | Charter | 12 rows | 4–8 | drawn by hand (§6.2's proportions) |
+| `TIMES.F88` | Times | Times Roman | 12 rows | 4–8 | Tinos — Times New Roman's widths |
+| `HELV.F88` | Helv | Helvetica | 12 rows | 4–8 | Arimo — Arial/Helvetica's widths |
+| `NOTO.F88` | Noto | Noto Serif | 12 rows | 4–8 | Noto Serif Condensed 700 |
+| `ARCHIVO.F88` | Archivo | Archivo Narrow | 12 rows | 4–8 | Archivo Narrow 700 |
+| `COURIER.F88` | Courier | Courier | 14 rows | 8, fixed | Cousine Bold — Courier New's widths |
+| `JETBRAIN.F88` | Jetbrain | JetBrains Mono | 14 rows | 8, fixed | JetBrains Mono 700 |
+| `ROBOMONO.F88` | Robomono | Roboto Mono | 12 rows | 8, fixed | Roboto Mono 800 |
+| `INCONSOL.F88` | Inconsol | Inconsolata | 12 rows | 6, fixed | Inconsolata 600 |
+
+**The FILE NAME is the name.** §19.8 settled that a scan reads the 8.3 stem and
+not the header inside each file, because learning the header name costs a read
+per family and a Font menu that spends ten `int 13h` calls before it can draw
+itself is a menu that feels broken. So the stem is chosen to *be* the menu
+entry, and the 16-byte header name — which takes over the moment the face is
+opened, and is what the ribbon then shows — carries the full one. Three stems
+name the **base-14** face they stand in for rather than the font they were
+fitted from, and their `psname` is that base-14 name: a document set in Times,
+Helv or Courier asks a PostScript or PDF exporter for `Times-Roman`,
+`Helvetica` or `Courier`, so what is printed is the real thing (§6.4).
+
+**Eight pixels is the whole width there is, and that is the binding
+constraint** — not the cap height. `stride` 2 is refused by the library, so an
+advance is 4..8 and no glyph is wider than 8 pixels, which is **narrower than
+any real proportional face at a cap height of 8**: rendered at the ppem that
+gives Times its 8-row capitals, `M`, `W`, `m`, `%`, `&` and `@` all want 9 to
+11. Two answers, in this order:
+
+* **Ask the family for a narrow master.** Noto Serif carries a `wdth` axis and
+  is drawn at 62.5% of it — a condensed face by its designer, not a squeezed
+  one by this tool. Archivo Narrow is narrow to begin with.
+* **Merge columns out of what is left.** Six glyphs a face, typically. The
+  merge is cheapest-first and prices lost ink (`&`) four times what joined ink
+  (`^`) costs, so it lands inside a diagonal rather than flattening a stem into
+  its counter. Scaling was tried instead and is worse for the reason every
+  bitmap designer already knows: at 8 pixels a scaled diagonal is a staircase
+  with a hole in it.
+
+**A 2-pixel stem comes from a heavier MASTER, never from dilating the regular.**
+FreeType's mono hinter at 11–13 ppem puts a Times stem on exactly one pixel,
+and §6.2's finding is that on a CGA 640×200 — where the pixel is 2.4:1 tall —
+one pixel reads far thinner than the one-pixel bar crossing it. The obvious fix
+is to OR the glyph with itself shifted a pixel. **That was tried and it is a
+dead end**: at an x-height of 6 the counter of `o`, `e`, `a` and `n` is ONE
+pixel wide, so widening the stem beside it closes the letter and the word turns
+into a row of blocks — `brown` sets as `browo`. Rendering the family's 700 or
+800 master at the same ppem gives the 2-pixel stem *with* the counter the
+designer opened to hold it, which is why every face above but one names a
+weight.
+
+**Times is the one light face, on purpose.** A book serif whose stems are 2
+pixels at a cap height of 8 is Times *Bold* — a headline, not a page — so
+`TIMES.F88` is fitted from the regular master and reads thin on a CGA. Charter
+and Noto are the sturdy serifs for that machine, and the menu is better for
+carrying both kinds.
+
+**The gap between letters is bought with the ADVANCE and never with the glyph.**
+An advance is even, so spacing comes in 2-pixel steps: a digit whose outline
+wants 6.5 pixels is set at 6, its ink fills the cell, and `0123456789` sets as
+one word. Condensing the glyph into a blank column was the first answer and it
+is visibly wrong — a `0` at 5 pixels is a blob and an `a` loses its bowl — so
+the glyph is left alone and the advance goes up a step instead. It costs 2
+pixels on a handful of characters.
+
+**What the hinter cannot be told, is hand-fitted afterwards.** Four faces
+carry a glyph the draft got wrong, and all four are recorded here because they
+are the same four failures any future fitting will hit:
+
+* `archivo`'s `!` came off the hinter as a solid 8-row stem — **pixel-identical
+  to `I` and to `l`**. The dot needs its gap drawn in.
+* `archivo`'s and `helv`'s capital `I` *is* their lowercase `l`, which is true
+  of every grotesque and unacceptable here for `charter`'s reason: a bare stem
+  in the middle of a file name cannot be read. Both get the serifed `I`.
+* `robomono`'s `f` has its hook a row above the cell, and clipped there it
+  reads as a `t` — `fox` sets as `tox`. Redrawn a row shorter, hook intact.
+* `times`'s `$` overhangs the cap line, and the row that was cut off took the
+  top of the S with it. Redrawn on `charter`'s proven shape at Times' weight.
+
+**Two ceilings went up with the eight faces, and one of them needed code.**
+`TY_MAXFAM` (§6.5) was 8 and `WD_MAXFONT` (§65.13) was 6; both are 10 now,
+because a ceiling that silently drops the last two faces on the disk is worse
+than a menu two rows longer. `WD_MAXFONT`'s 6 was not arbitrary, though — it
+was sized so the dropdown fitted, and eleven 10-pixel items hanging off a
+ribbon box 60 rows down a **200-row CGA screen** run off the bottom of the
+window. `wd_mgeo` therefore **flips a combo's dropdown upward** when it will not
+fit downward: same anchor, bottom edge one row above it, clamped inside the
+content like every other panel. A bar menu never flips — it hangs under its own
+title or nowhere.
+
+**What it costs.** A face is 1,498–1,688 bytes (95 glyphs × `rows` + 286 bytes
+of metrics + a 64-byte header), so the eight are **12,376 bytes**, and the
+licence beside them another 6,676. On the 360 KB rung — the tightest of the
+three geometries, and the one this was checked against — that is **23 clusters
+of 1 KB**, and the disk still has **169,984 bytes free**. The kernel does not grow by a byte: a
+`.F88` is data, read by the package that wants it. `TY_MAXFAM` costs the
+*including package* 23 bytes of bss a family and `os88type.inc` is included by
+one program.
+
+**The licences ride with them.** Every source font above is under the SIL Open
+Font License 1.1, which requires its notice to travel with the derivative, so
+`FONTS/LICENSE.TXT` is on the disk beside the faces — the full licence and a
+line naming each font's authors. It is a `.TXT`, so `ty_scan` skips it (the
+scan takes `.F88` and nothing else) and the mount types it as a document, which
+means the person at the machine can double-click and read it. `faces/LICENSES.txt`
+is that file in the tree, and each `faces/*.t88` header records the exact source
+file it was fitted from, its URL and its SHA-256.
+
 ### 6.5 `apps/os88type.inc` — the library
 
 The method of §6.3 written once, included by any package that wants it. It is

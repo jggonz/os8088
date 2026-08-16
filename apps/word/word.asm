@@ -317,11 +317,15 @@ WD_M_N       equ 9              ; menus on the bar
 %assign WD_PROPDRAW 1
 %assign WD_BANDDBG 0            ; the band probe, off - see wd_bandrun
 
-WD_MAXFONT   equ 6              ; faces the Font combo will list beside Pica.
-                                ; Six and not os88type's eight: the dropdown
-                                ; hangs off a 96px box in the ribbon and a
-                                ; list longer than this runs off the bottom of
-                                ; a CGA window
+WD_MAXFONT   equ 10             ; faces the Font combo will list beside Pica.
+                                ; Ten, which is os88type's TY_MAXFAM and what
+                                ; FONTS/ carries (SPEC.md 6.4.1). It used to
+                                ; be six, because eleven 10px items hang off a
+                                ; ribbon box 60 rows down a 200-row CGA screen
+                                ; ran off the bottom of the window; wd_mgeo
+                                ; now SLIDES a combo's dropdown up until it
+                                ; fits instead of clipping its tail off, which
+                                ; is what makes the tenth face reachable there
 WD_MI_SZ     equ 8              ; bytes in one WDMI record - four bytes then
                                 ; two words, and wd_mitemp indexes by it. The
                                 ; dropdown is filled at run time now (SPEC.md
@@ -12762,6 +12766,8 @@ wd_mgeo:
     mov dx, [wd_may]
     mov [wd_mry1], dx
 .size:
+    push ax                         ; the menu index - the height loop below
+                                    ; eats AL and the flip needs it back
     mov cl, [bx+3]                  ; height: 4 + 10/5 per item
     xor ch, ch
     mov si, [bx+4]
@@ -12779,13 +12785,48 @@ wd_mgeo:
     dec cx
     jmp short .hh
 .hd:
-    add ax, [wd_mry1]
-    dec ax
+    pop cx                          ; CL = the menu index again
+    mov si, ax                      ; SI = the panel's height in pixels
     mov dx, [wd_ct]
     add dx, [wd_ch]
     sub dx, 2                       ; leave the shadow's pixel inside too
+    add ax, [wd_mry1]
+    dec ax
     cmp ax, dx
     jbe .yok
+    cmp cl, WD_M_N
+    jb .clip                        ; a BAR menu hangs under its own title and
+                                    ; nowhere else - moving one would put it
+                                    ; over the menu bar it came from
+    ; --- the SLIDE (SPEC.md 6.4.1). A combo's list is anchored at its box, and
+    ; with ten faces in FONTS/ eleven 10px items stand 114 rows tall - past the
+    ; bottom of a 200-row CGA window by a few pixels. Clipping is what used to
+    ; happen and it is SILENT: the trailing faces are drawn nowhere and
+    ; wd_mfind refuses to find them, so a disk carrying more faces than the
+    ; anchor has room below it simply loses the last ones, which is how
+    ; WD_MAXFONT came to be 6. Sliding the panel up until its bottom sits on
+    ; the limit keeps every item on the screen and reachable; it costs one
+    ; subtraction, and it is only ever taken when the alternative was to lose
+    ; an item.
+    ;
+    ; THE ARITHMETIC IS UNSIGNED AND THE ROOM IS MEASURED, NOT THE TOP. The
+    ; first version computed the new top and compared it against the content
+    ; edge, which is a NEGATIVE number the moment the panel is taller than the
+    ; space above the anchor - and `jb` read it as 65,490 and slid the panel
+    ; off the top of the screen, over the menu bar and the desktop. Subtracting
+    ; two rows that are both on the screen cannot go negative.
+    mov cx, dx
+    sub cx, [wd_ct]                 ; CX = the rows the content has for it
+    cmp cx, si
+    jb .clip                        ; taller than the whole content: nothing
+                                    ; to slide into, so clip as before
+    mov ax, dx
+    sub ax, si
+    inc ax                          ; the top that puts its bottom on DX
+    mov [wd_mry1], ax
+    mov ax, dx                      ; ...and that bottom is the limit itself
+    jmp short .yok
+.clip:
     mov ax, dx                      ; clipped: trailing items are not drawn
 .yok:                               ; and wd_mfind stops at the same edge
     mov [wd_mry2], ax
