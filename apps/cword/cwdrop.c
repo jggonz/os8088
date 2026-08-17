@@ -97,7 +97,7 @@ static void cw_menu_geom(int m)
     for (i = 0; i < n; i++)
         h = h + ((cw_it[first + i].flag & CWF_SEP) ? CW_MI_SEP : CW_MI_H);
 
-    cw_m_x1 = cw_tx + cw_mn_cell[m] * 8 - 4;
+    cw_m_x1 = cw_bx + cw_mn_cell[m] * 8 - 4;
     cw_m_y1 = cw_by + CW_H_BAR;
     cw_m_x2 = cw_m_x1 + cw_mn_width[m];
     cw_m_y2 = cw_m_y1 + h;
@@ -177,8 +177,23 @@ static void cw_menu_paint(void)
         if (dis)
             os88_gfx_pen(0);
         if ((cw_it[it].flag & CWF_CHK) && cw_item_chk(it)) {
+            /* THE CHECK IS DRAWN, BECAUSE THIS MACHINE HAS NO GLYPH FOR ONE.
+             * This asked os88_font_char() for 0xFB, the IBM ROM's check - and
+             * the kernel's face is characters 32..126 (SPEC.md 6), so the call
+             * drew NOTHING and no menu item in this program has ever carried a
+             * check. It is the same defect cw_pilcrow() exists for, in a second
+             * place, and it hid because every checkable item here was one whose
+             * state the user could see elsewhere: the ribbon lit, the strip was
+             * on the screen or it was not. View > Draft / Page is the first pair
+             * where the check IS the answer (SPEC.md 67.12.1), which is what
+             * turned it up.
+             *
+             * Two strokes, which is what apps/word draws - a short down-stroke
+             * and a long up-stroke - and two calls per checked item, never one
+             * per pixel. */
             os88_set_color(OS88_BLACK);
-            os88_font_char(cw_m_x1 + 6, y, 0xFB);        /* the ROM check */
+            os88_gfx_line(cw_m_x1 + 2, y + 5, cw_m_x1 + 3, y + 7, 0);
+            os88_gfx_line(cw_m_x1 + 3, y + 7, cw_m_x1 + 7, y + 3, 0);
         }
         /* the mnemonic, underlined where menus.cmd put the '&' */
         if (!dis) {
@@ -249,7 +264,7 @@ static int cw_bar_hit(int mx, int my)
     if (my < cw_by || my >= cw_by + CW_H_BAR)
         return -1;
     for (i = 0; i < CW_NMENU; i++) {
-        x = cw_tx + cw_mn_cell[i] * 8;
+        x = cw_bx + cw_mn_cell[i] * 8;
         if (mx >= x - 4 && mx < x + cw_mn_cells[i] * 8 + 4)
             return i;
     }
@@ -265,8 +280,8 @@ static void cw_menu_open(int m)
     cw_menu_paint();
     /* the bar title inverts while its menu is down, which is how the product
      * showed which one was open */
-    os88_gfx_xor_fill(cw_tx + cw_mn_cell[m] * 8 - 4, cw_by + 1,
-                      cw_tx + (cw_mn_cell[m] + cw_mn_cells[m]) * 8 + 3,
+    os88_gfx_xor_fill(cw_bx + cw_mn_cell[m] * 8 - 4, cw_by + 1,
+                      cw_bx + (cw_mn_cell[m] + cw_mn_cells[m]) * 8 + 3,
                       cw_by + CW_H_BAR - 2);
 }
 
@@ -285,8 +300,8 @@ static void cw_menu_close(void *win)
     if (cw_m_open < 0)
         return;
 
-    os88_gfx_xor_fill(cw_tx + cw_mn_cell[cw_m_open] * 8 - 4, cw_by + 1,
-                      cw_tx + (cw_mn_cell[cw_m_open] + cw_mn_cells[cw_m_open])
+    os88_gfx_xor_fill(cw_bx + cw_mn_cell[cw_m_open] * 8 - 4, cw_by + 1,
+                      cw_bx + (cw_mn_cell[cw_m_open] + cw_mn_cells[cw_m_open])
                           * 8 + 3, cw_by + CW_H_BAR - 2);
     cw_m_open = -1;
     cw_m_item = -1;
@@ -298,10 +313,13 @@ static void cw_menu_close(void *win)
         cw_ribbon();
         cw_ruler();
     }
+    cw_sheet();                         /* the panel stood over the margins the
+                                         * sheet's rules are drawn in, and the
+                                         * fill above has just whitened them */
 
     /* the text rows the panel's rectangle touched */
-    r0 = (cw_m_y1 - cw_ty) / CW_PITCH;
-    r1 = (cw_m_y2 - cw_ty) / CW_PITCH;
+    r0 = (cw_m_y1 - cw_ty) / cw_pitch;
+    r1 = (cw_m_y2 - cw_ty) / cw_pitch;
     if (r0 < 0)
         r0 = 0;
     if (r1 >= cw_rows)

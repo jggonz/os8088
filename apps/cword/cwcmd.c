@@ -23,7 +23,7 @@
  * the 60KB ceiling spent on a second name for one thing.
  * ========================================================================*/
 
-static void cw_copy(void *win)
+static void ovl_copy(void *win)
 {
     int a;
     int b;
@@ -43,15 +43,15 @@ static void cw_copy(void *win)
         cw_toast("The clipboard would not take it.");
 }
 
-static void cw_cut(void *win)
+static void ovl_cut(void *win)
 {
     if (!cw_sel_on)
         return;
-    cw_copy(win);
+    ovl_copy(win);
     cw_sel_kill(win);
 }
 
-static void cw_paste(void *win)
+static void ovl_paste(void *win)
 {
     int n;
     int i;
@@ -108,7 +108,7 @@ static void cw_paste(void *win)
  * to make.
  * ========================================================================*/
 
-static void cw_retitle(void *win)
+static void ovl_retitle(void *win)
 {
     os88_strcpy(cw_title, "Microsoft Word - ", sizeof(cw_title));
     os88_strcpy(cw_title + 17, cw_fname[0] ? cw_fname : "Document",
@@ -121,7 +121,7 @@ static void cw_retitle(void *win)
                 sizeof(cw_wname) - 2);
 }
 
-static void cw_newdoc(void *win)
+static void ovl_newdoc(void *win)
 {
     cw_doc_clear();
     cw_cur = 0;
@@ -132,7 +132,136 @@ static void cw_newdoc(void *win)
     cw_ext = 0;
     cw_mod = 0;
     cw_fname[0] = 0;
-    cw_retitle(win);
+    ovl_retitle(win);
+    cw_redraw_all(win);
+}
+
+/* ==========================================================================
+ * THE FONT LIST (SPEC.md 19.8, 67.12.2)
+ * ========================================================================*/
+
+/* ovl_font_open - drop the list down, scanning the system disk if this is the
+ * first time anybody asked.
+ *
+ * THE SCAN RUNS ONCE, WHATEVER THE ANSWER. It is four remounts and two
+ * directory listings of real floppy I/O (SPEC.md 19.8) - a couple of seconds on
+ * the target machine - so a person who never opens this box pays nothing for
+ * it, and a machine with no `FONTS/` folder is not walked again on the next
+ * press. cw_scanned is what says "asked", as against cw_nfam, which says
+ * "found": without the difference an empty disk is re-read on every click. */
+static void ovl_font_open(void)
+{
+    if (!cw_scanned) {
+        cw_scanned = 1;
+        cw_nfam = cw_ty_scan();
+    }
+    cw_caret_off();
+    cw_fl_open = 1;
+    ovl_font_geom();
+    ovl_font_paint();
+}
+
+/* ovl_font_close - take the panel off the glass by repainting what it covered,
+ * and nothing else. It stood over the ruler and over the top text rows; a full
+ * repaint of this window is 1.8 seconds on the target machine and what the
+ * panel covered is a tenth of that (cwdrop.c makes the same trade for the same
+ * reason). */
+static void ovl_font_close(void *win)
+{
+    int r;
+    int r0;
+    int r1;
+    int i;
+    int base;
+
+    (void)win;
+    if (!cw_fl_open)
+        return;
+    cw_fl_open = 0;
+
+    os88_set_color(OS88_WHITE);
+    os88_gfx_fill(cw_fl_x1, cw_fl_y1, cw_fl_x2, cw_fl_y2);
+    if (cw_fl_y1 < cw_chrome_top)
+        cw_ruler();
+    cw_sheet();
+
+    r0 = (cw_fl_y1 - cw_ty) / cw_pitch;
+    r1 = (cw_fl_y2 - cw_ty) / cw_pitch;
+    if (r0 < 0)
+        r0 = 0;
+    if (r1 >= cw_rows)
+        r1 = cw_rows - 1;
+    for (r = r0; r <= r1; r++) {
+        base = r * CW_SH_STRIDE;
+        for (i = 0; i < cw_cols; i++) {
+            cw_sh[base + i] = (char)0xFF;   /* a cell no text can equal, so the
+                                             * whole row is damaged */
+            cw_sha[base + i] = 0xFF;
+        }
+        cw_sh_ind[r] = -128;
+    }
+    if (cw_sh_ok) {
+        for (r = r0; r <= r1; r++)
+            cw_render_row(r);
+    }
+    cw_sel_xor();
+    cw_caret_on();
+}
+
+/* ovl_font_pick - set the DOCUMENT in family i, or in the kernel's cell (i < 0).
+ *
+ * A CHOSEN FACE IS WHAT THE DOCUMENT IS SET IN and not a preview: this
+ * re-letters the whole note, and picking Pica re-letters it in the kernel's
+ * cell. What the face costs the layout is its own rows and leading, which
+ * cw_facemetrics() turns into cw_gh and cw_pitch.
+ *
+ * THE BOX IS RENAMED ONLY AFTER THE FACE ACTUALLY OPENS, so the name on the
+ * ribbon is evidence that the face is open rather than evidence that one was
+ * asked for. An open can fail on a real machine for four reasons the library
+ * distinguishes and this does not need to: no face slot, no heap for the image,
+ * a file that would not read, and a header that is not a `.F88` (SPEC.md 6.4).
+ * All four leave the document in the face it was already in.
+ *
+ * THE OLD FACE IS CLOSED AFTER THE NEW ONE OPENS, never before. Closing first
+ * would give a refused open a document set in a face whose claim had just been
+ * freed - and there are only TY_MAXFACE slots, so it also has to be closed at
+ * all or a fourth pick would find none free. */
+static void ovl_font_pick(void *win, int i)
+{
+    int h;
+
+    if (i < 0) {                        /* back to the kernel's 8x8 cell */
+        if (cw_face != 0) {
+            cw_ty_use(0, 0);
+            cw_ty_close(cw_face);
+            cw_face = 0;
+        }
+        cw_prop = 0;
+        cw_fam = -1;
+        os88_strcpy(cw_fcap, "Pica", sizeof(cw_fcap));
+    } else {
+        h = cw_ty_open(i);
+        if (h == 0) {
+            cw_toast("That typeface would not open.");
+            return;
+        }
+        if (!cw_ty_use(h, 0)) {
+            cw_ty_close(h);
+            cw_toast("That typeface has no regular style.");
+            return;
+        }
+        if (cw_face != 0)
+            cw_ty_close(cw_face);
+        cw_face = h;
+        cw_ty_cache();                  /* 2.01x off every line this face draws
+                                         * afterwards, and a refusal is a SPEED
+                                         * difference and never a visible one
+                                         * (SPEC.md 6.5.2) */
+        cw_prop = 1;
+        cw_fam = i;
+        cw_ty_name(i, cw_fcap);
+    }
+    cw_facemetrics();
     cw_redraw_all(win);
 }
 
@@ -153,7 +282,7 @@ static void cw_do(void *win, int act)
             ovl_dlg_open(win, CW_DLG_SAVE_NEW);
             return;
         }
-        cw_newdoc(win);
+        ovl_newdoc(win);
         break;
     case CWA_OPEN:
         if (cw_mod) {
@@ -183,9 +312,9 @@ static void cw_do(void *win, int act)
         cw_quit = 1;
         break;
 
-    case CWA_CUT:      cw_cut(win);   break;
-    case CWA_COPY:     cw_copy(win);  break;
-    case CWA_PASTE:    cw_paste(win); break;
+    case CWA_CUT:      ovl_cut(win);   break;
+    case CWA_COPY:     ovl_copy(win);  break;
+    case CWA_PASTE:    ovl_paste(win); break;
 
     case CWA_SEARCH:   ovl_dlg_open(win, CW_DLG_FIND);    break;
     case CWA_REPL:     ovl_dlg_open(win, CW_DLG_REPLACE); break;
@@ -198,8 +327,22 @@ static void cw_do(void *win, int act)
     case CWA_RENUM:    ovl_util(win, 1); break;
     case CWA_TOC:      ovl_util(win, 2); break;
 
+    /* Draft and Page are a LIVE PAIR and exactly one of them carries a check
+     * (SPEC.md 67.12.1). Choosing the mode already in force is a no-op rather
+     * than a repaint: a full repaint is 1.8 seconds on the target machine and
+     * clicking View > Draft in draft view must not cost it. */
     case CWA_DRAFT:
-        break;                          /* already the mode, and the only one */
+        if (!cw_page)
+            break;
+        cw_page = 0;
+        cw_redraw_all(win);
+        break;
+    case CWA_PAGE:
+        if (cw_page)
+            break;
+        cw_page = 1;
+        cw_redraw_all(win);
+        break;
     case CWA_VRIB:  cw_vrib = !cw_vrib; cw_redraw_all(win); break;
     case CWA_VRUL:  cw_vrul = !cw_vrul; cw_redraw_all(win); break;
     case CWA_VSTA:  cw_vsta = !cw_vsta; cw_redraw_all(win); break;
@@ -229,7 +372,7 @@ static int cw_text_hit(int mx, int my)
 
     if (my < cw_ty)
         return -1;
-    r = (my - cw_ty) / CW_PITCH;
+    r = (my - cw_ty) / cw_pitch;
     if (r >= cw_rows)
         r = cw_rows - 1;
     while (r > 0 && cw_ls[r] < 0)
@@ -238,7 +381,16 @@ static int cw_text_hit(int mx, int my)
         return cw_len;
 
     n = cw_build_row(r);
-    c = (mx - cw_tx) / 8 - cw_row_ind;
+    /* THE CLICK'S HALF-CELL BECOMES A HALF-ADVANCE (SPEC.md 65.13). The fixed
+     * arm is left exactly as it was - it truncates, so a click anywhere in a
+     * cell lands at that cell's left edge - and the chosen face goes through
+     * apps/os88type.inc's ty_hit, which splits each character at its own
+     * midpoint so the caret lands on the nearer edge of a 4-pixel `i` and of an
+     * 8-pixel `m` alike. */
+    c = mx - cw_tx - cw_row_ind * 8;
+    if (c < 0)
+        c = 0;
+    c = cw_prop ? cw_ty_hit(cw_row, n, c) : c / 8;
     if (c < 0)
         c = 0;
     if (c > n)
@@ -319,6 +471,19 @@ void os88_onclick(int x, int y, void *win)
         return;
     }
 
+    /* The Font list is modal while it is down, exactly as a menu is: a click
+     * inside it chooses and a click anywhere else closes it and does nothing
+     * more. THE PANEL COMES DOWN BEFORE THE PICK IS ACTED ON - ovl_font_pick()
+     * re-letters the whole note, and doing that under a panel would draw the
+     * document where the panel is and leave the panel's pixels on top of it. */
+    if (cw_fl_open) {
+        k = ovl_font_hit(x, y);
+        ovl_font_close(win);
+        if (k >= 0)
+            ovl_font_pick(win, k - 1);   /* item 0 is Pica, which is face 0 */
+        return;
+    }
+
     m = cw_bar_hit(x, y);
     if (m >= 0) {
         cw_menu_open(m);
@@ -337,21 +502,23 @@ void os88_onclick(int x, int y, void *win)
 
     bit = cw_rib_hit(x, y);
     if (bit != 0) {
-        if (bit < 0)
+        if (bit == -2)
+            ovl_font_open();
+        else if (bit < 0)
             cw_do(win, CWA_SHOWP);
         else
-            cw_chp_apply(win, bit, 0);
+            ovl_chp_apply(win, bit, 0);
         return;
     }
 
     k = cw_rul_hit(x, y);
     if (k != 0) {
         if (k <= 4)
-            cw_align(win, k - 1);
+            ovl_align(win, k - 1);
         else if (k <= 7)
-            cw_spacing(win, k - 5);
+            ovl_spacing(win, k - 5);
         else
-            cw_openspc(win, k == 8);
+            ovl_openspc(win, k == 8);
         return;
     }
 
@@ -417,7 +584,7 @@ void os88_onfile(int mode, const char *name, unsigned size_lo,
     if (mode == OS88_FDLG_OPEN)
         changed = ovl_file_load(win, name, size_lo, size_hi);
     else if (ovl_file_store(win, name))
-        cw_retitle(win);
+        ovl_retitle(win);
     (void)changed;
 
     /* EVERYTHING, EVEN AFTER A SAVE THAT CHANGED NOT ONE CHARACTER. The
@@ -503,6 +670,28 @@ void os88_onkey(int ascii, int scan, void *win)
         return;
     }
 
+    /* The Font list takes Esc, Enter and the up/down arrows, and hands every
+     * other key back to the document by closing first: a list nobody can leave
+     * with the keyboard is a list that traps the caret. */
+    if (cw_fl_open) {
+        if (scan == 0x01) {                     /* Esc */
+            ovl_font_close(win);
+            return;
+        }
+        if (scan == CW_K_DOWN || scan == CW_K_UP) {
+            i = cw_fam + ((scan == CW_K_DOWN) ? 1 : -1);
+            if (i < -1)
+                i = cw_nfam - 1;
+            if (i >= cw_nfam)
+                i = -1;
+            ovl_font_close(win);
+            ovl_font_pick(win, i);
+            return;
+        }
+        ovl_font_close(win);
+        /* ...and fall through: the key was meant for the document */
+    }
+
     /* --- an open menu is modal: it consumes every key ------------------- */
     if (cw_m_open >= 0) {
         int first;
@@ -576,11 +765,11 @@ void os88_onkey(int ascii, int scan, void *win)
     /* --- the control characters, keys.cmd's map ------------------------- */
     if (ascii != 0) {
         switch (ascii) {
-        case CW_C_BOLD:   cw_chp_apply(win, CW_A_BOLD, 0);  return;
-        case CW_C_ULINE:  cw_chp_apply(win, CW_A_ULINE, 0); return;
-        case CW_C_WUL:    cw_chp_apply(win, CW_A_WUL, 0);   return;
-        case CW_C_DUL:    cw_chp_apply(win, CW_A_DUL, 0);   return;
-        case CW_C_SCAP:   cw_chp_apply(win, CW_A_SCAP, 0);  return;
+        case CW_C_BOLD:   ovl_chp_apply(win, CW_A_BOLD, 0);  return;
+        case CW_C_ULINE:  ovl_chp_apply(win, CW_A_ULINE, 0); return;
+        case CW_C_WUL:    ovl_chp_apply(win, CW_A_WUL, 0);   return;
+        case CW_C_DUL:    ovl_chp_apply(win, CW_A_DUL, 0);   return;
+        case CW_C_SCAP:   ovl_chp_apply(win, CW_A_SCAP, 0);  return;
                                         /* and NOT Ctrl+Space, keys.cmd's
                                          * "reset character formatting": int
                                          * 16h hands it over as ASCII 32 with
@@ -593,15 +782,15 @@ void os88_onkey(int ascii, int scan, void *win)
                                          * as Ctrl-H/I/M, and the command is
                                          * reached from Format > Character with
                                          * every box cleared. */
-        case CW_C_LEFT:   cw_align(win, CW_AL_LEFT);        return;
-        case CW_C_CENTER: cw_align(win, CW_AL_CENTER);      return;
-        case CW_C_RIGHT:  cw_align(win, CW_AL_RIGHT);       return;
-        case CW_C_JUST:   cw_align(win, CW_AL_JUST);        return;
-        case CW_C_OPEN:   cw_openspc(win, 1);               return;
-        case CW_C_CLOSE:  cw_openspc(win, 0);               return;
-        case CW_C_INDENT: cw_indent(win, 5);                return;
-        case CW_C_HANG:   cw_hang(win, 1);                  return;
-        case CW_C_UNHANG: cw_hang(win, 0);                  return;
+        case CW_C_LEFT:   ovl_align(win, CW_AL_LEFT);        return;
+        case CW_C_CENTER: ovl_align(win, CW_AL_CENTER);      return;
+        case CW_C_RIGHT:  ovl_align(win, CW_AL_RIGHT);       return;
+        case CW_C_JUST:   ovl_align(win, CW_AL_JUST);        return;
+        case CW_C_OPEN:   ovl_openspc(win, 1);               return;
+        case CW_C_CLOSE:  ovl_openspc(win, 0);               return;
+        case CW_C_INDENT: ovl_indent(win, 5);                return;
+        case CW_C_HANG:   ovl_hang(win, 1);                  return;
+        case CW_C_UNHANG: ovl_hang(win, 0);                  return;
         case CW_C_FIND:   cw_do(win, CWA_CHAR);             return;
         case CW_C_GOTO:   cw_do(win, CWA_GOTO);             return;
         case CW_C_SAVE:   cw_do(win, CWA_SAVE);             return;

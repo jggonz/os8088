@@ -36,14 +36,24 @@
  * ---------------------------------------------------------------------------
  * THE MODE IS DRAFT VIEW, WHICH IS NOT A SIMPLIFICATION BUT A SHIPPED MODE
  * ---------------------------------------------------------------------------
- * os8088 has one 8x8 fixed face and no styles in the renderer (SPEC.md 6), and
- * Word 1.1a shipped View > Draft for exactly that situation: fixed pitch,
- * formatting shown synthesised, layout simplified, editing fast. That is the
- * mode this port lives in, and the synthesis follows SPEC.md 61.5's precedent -
- * bold is a second strike one pixel right, italic a strike one pixel up and
- * right, the three underlines are drawn rules, small caps is a case map, hidden
- * text leaves the layout. Each costs ONE extra call per RUN, never one per
- * glyph, which is the difference between affordable and not on a 4.77 MHz 8088.
+ * os8088's kernel has one 8x8 fixed face and no styles in the renderer (SPEC.md
+ * 6), and Word 1.1a shipped View > Draft for exactly that situation: fixed
+ * pitch, formatting shown synthesised, layout simplified, editing fast. That is
+ * the mode this port starts in, and the synthesis follows SPEC.md 61.5's
+ * precedent - bold is a second strike one pixel right, italic a strike one
+ * pixel up and right, the three underlines are drawn rules, small caps is a
+ * case map, hidden text leaves the layout. Each costs ONE extra call per RUN,
+ * never one per glyph, which is the difference between affordable and not on a
+ * 4.77 MHz 8088.
+ *
+ * TWO THINGS HAVE BEEN ADDED SINCE AND NEITHER CHANGES THAT. View > Page
+ * (SPEC.md 67.12.1) wraps to a 60-cell SHEET instead of to the window, which is
+ * two numbers in cw_layout() and a pair of rules drawn outside the text column.
+ * And the ribbon's Font box now lists the machine's typefaces off the system
+ * disk's FONTS/ folder and SETS THE DOCUMENT IN ONE (SPEC.md 19.8, 67.12.2) -
+ * for which the cell stays the unit of the row model and only its PIXEL
+ * POSITION stops being 8k. With no face chosen, cw_prop is 0, cw_cx() is the
+ * shift it replaces, and every path below is the one it always was.
  *
  * ---------------------------------------------------------------------------
  * WHERE THE CODE LIVES, AND WHY HALF OF IT IS NOT IN THIS SEGMENT
@@ -54,13 +64,22 @@
  * not fit in one segment and could not be made to.
  *
  * So it is in two. Everything on the redraw path - layout, wrap, the glass
- * shadow, the chrome, the keyboard - is resident and in this file. Everything
- * that runs ONCE PER COMMAND is in the overlay (apps/cword/cwovl.c, every
- * function named `ovl_*`): the dialogs, RTF in and out, Sort, Renumber, Table
- * of Contents. It ships as CWORD.OVL beside CWORD.O88 and is read into a heap
- * claim the first time one of those is asked for. The split is not arbitrary -
- * it is exactly the line between what a keystroke touches and what a menu
- * command touches, so nothing in the inner loop ever pays for it.
+ * shadow, the chrome, the keyboard, and the type library a chosen face is set
+ * through - is resident. Everything that runs ONCE PER COMMAND is in the
+ * overlay (every function named `ovl_*`, wherever it is written): the dialogs,
+ * RTF in and out, Sort, Renumber, Table of Contents, the clipboard, the
+ * paragraph dictionary, and the Font list. It ships as CWORD.OVL beside
+ * CWORD.O88 and is read into a heap claim the first time one of those is asked
+ * for. The split is not arbitrary - it is exactly the line between what a
+ * keystroke touches and what a menu command touches, so nothing in the inner
+ * loop ever pays for it.
+ *
+ * THAT LINE MOVED WHEN THE TYPEFACES ARRIVED (SPEC.md 67.12.2), and the shape
+ * of the move is worth reading before adding anything here: the resident image
+ * got SMALLER while the program grew a second view and a typeface engine,
+ * because everything that runs once per command went out. There are 971 bytes
+ * left. The next thing to move is not code - it is CW_RTF_MAX, out of bss and
+ * into a heap claim, the way SPEC.md 46.9 moved ArtfulType's document.
  *
  * ---------------------------------------------------------------------------
  * WHAT A KEYSTROKE COSTS, WHICH IS THE POINT OF THE WHOLE DESIGN
@@ -88,13 +107,16 @@
  * ---------------------------------------------------------------------------
  * Measured by tools/os88pkg.py and tools/os88ovl.py on the shipping package:
  *
- *     resident image  37,062   the code above, its strings, the Opus tables
- *              bss    22,028   the document (4,000 + 4,000), the RTF staging
- *                              buffer (6,000), the glass shadow (6,144)
+ *     resident image  35,958   the code above, its strings, the Opus tables,
+ *                              and apps/os88type.inc (SPEC.md 6.3)
+ *              bss    24,511   the document (4,000 + 4,000), the RTF staging
+ *                              buffer (6,000), the glass shadow (6,144), the
+ *                              type library's band and face table (1,933)
  *              -------------
- *              total  59,090   96% of APP_MAX_SIZE; 2,350 bytes spare
- *     CWORD.OVL        9,430   the dialogs, RTF in and out, search, Sort,
- *                              Renumber, Table of Contents
+ *              total  60,469   98% of APP_MAX_SIZE; 971 bytes spare
+ *     CWORD.OVL       18,564   the dialogs, RTF in and out, search, Sort,
+ *                              Renumber, Table of Contents, the clipboard, the
+ *                              paragraph dictionary, the Font list
  *
  * THE TIGHTEST NUMBER IN THE PACKAGE IS CW_RTF_MAX, the RTF staging buffer, at
  * 6,000 bytes - which is why a document that is 4,000 characters of dense
@@ -135,10 +157,21 @@
  *     here is file scope, including the out-parameters. Refused at build time.
  *  2. NO STRING INSTRUCTION - ES is the kernel's. Nothing here assigns a
  *     struct, passes one by value or returns one. The menu table is INDEXED,
- *     which copies nothing. The one `rep movsb` in the package is hand-written
- *     in apps/cword/cword.asm, where ES is loaded on purpose and put back.
+ *     which copies nothing. The string instructions in this package are all in
+ *     the two hand-written files apps/cword/cword.asm includes - cwmove.inc's
+ *     byte mover and cwtype.inc's shims - and each of those loads ES on purpose
+ *     and puts it back.
  *  3. NO long, NO float, NO bit-field.
  *  4. SMALL FRAMES - no local arrays; the build prints every frame size.
+ *
+ * AND ONE RULE OF THIS PROGRAM'S OWN, which SPEC.md 67.11 states generally and
+ * this file meets in three places: THE PER-CHARACTER LOOP IS ASSEMBLY. A
+ * proportional layout wants an advance per character of every word the wrap
+ * measures, a pen per cell of every row drawn, and one glyph divided in half
+ * per click - and in C each of those is a cdecl call, a frame and a return PER
+ * CHARACTER on a machine where the whole row costs 25 ms. So the C calls
+ * cw_ty_fit(), cw_ty_pen() and cw_ty_hit() ONCE A ROW and never once a
+ * character.
  * ==========================================================================*/
 
 #include "os88.h"
@@ -155,8 +188,39 @@
  * two adapters of three are 640x200 and a constant here would be wrong on both
  * (SPEC.md 39). CW_COLS_MAX x CW_ROWS_MAX only bounds the shadow.
  * ========================================================================*/
-#define CW_COLS_MAX   76
+#define CW_COLS_MAX  127                /* cells a row may hold. IT WENT 76 ->
+                                         * 127 WHEN A FACE COULD BE CHOSEN
+                                         * (SPEC.md 67.12.2): the narrowest
+                                         * advance apps/os88type.inc permits is
+                                         * TY_MINADV (4), so a row of narrow
+                                         * glyphs holds more cells than it holds
+                                         * byte columns. 127 and not 160 because
+                                         * CW_SH_STRIDE is 128 and DOES NOT
+                                         * CHANGE - the shadow already wasted 52
+                                         * bytes a row on the power-of-two
+                                         * stride, and spending them costs
+                                         * nothing where doubling the stride
+                                         * would cost 6,144 bytes this package
+                                         * does not have.
+                                         *
+                                         * PAST THIS THE ROW WRAPS; IT IS NEVER
+                                         * TRUNCATED. SPEC.md 65.13 records the
+                                         * other choice as a defect the field
+                                         * reported - a row of text with its
+                                         * tail missing - so cw_wrap() takes
+                                         * whichever comes first, the pixel
+                                         * width or this count, and a face
+                                         * narrow enough to reach it breaks its
+                                         * lines early and loses nothing. */
 #define CW_ROWS_MAX   24
+#define CW_RULE_MAX   92                /* the ruler's scale is one tick per
+                                         * 1/10 inch and an inch is 80 px in
+                                         * EVERY face - it measures the sheet,
+                                         * not the type - so it is sized from
+                                         * the widest adapter (Hercules, 720 px,
+                                         * SPEC.md 39) and not from CW_COLS_MAX,
+                                         * which stopped meaning a byte column
+                                         * the day a face could be chosen */
 #define CW_SH_STRIDE 128                /* a POWER OF TWO: `row * 76` is an
                                          * 8086 imul needing a scratch register
                                          * and tools/cc8086.py refuses the site
@@ -164,6 +228,29 @@
                                          * `row * 128` is a shift. The wasted
                                          * bytes are bss, the cheap half of the
                                          * ceiling (SPEC.md 67.9) */
+#define CW_BAND_PX   736                /* the compose band's width in pixels -
+                                         * apps/os88type.inc's TY_STRIDE (92
+                                         * bytes) times 8. It covers the widest
+                                         * line any adapter shows (Hercules at
+                                         * 720, SPEC.md 39) plus the byte a
+                                         * glyph at the right-hand end spills
+                                         * into, and a run wider than it takes
+                                         * the fixed arm rather than composing
+                                         * past the end of the buffer */
+#define CW_GAP         3                /* the pixel rows a row of text needs
+                                         * OUTSIDE its glyph band: one ABOVE it
+                                         * for the italic overstrike, one below
+                                         * for the underline and a second below
+                                         * for the DOUBLE underline. At a gap of
+                                         * 2 that last rule lands exactly where
+                                         * the next row's italic goes - so a
+                                         * double-underlined line ate the italic
+                                         * off the line beneath it, and the
+                                         * strip erase then rubbed it out again
+                                         * on every repaint. Found by
+                                         * apps/cword/hosttest/cwuitest.c, which
+                                         * models those two pixel rows
+                                         * separately for exactly this reason */
 #define CW_PITCH      11                /* an 8-px glyph band and THREE px of
                                          * gap, which is one more than the
                                          * demonstrator needed and is the
@@ -184,6 +271,22 @@
                                          * separately for exactly this reason.
                                          * The cost is one screen row on a
                                          * 640x200 adapter. */
+
+#define CW_PGCOLS     60                /* View > Page wraps to the SHEET and
+                                         * not to the window: 60 cells, 480 px,
+                                         * six inches at one cell to 1/10" -
+                                         * US Letter less Word's own 1.25"
+                                         * margins, which is the part a reader
+                                         * is actually looking at. It is the
+                                         * text COLUMN and not the whole 8.5"
+                                         * sheet because a full sheet is 680 px
+                                         * and only Hercules is wider than 640
+                                         * (SPEC.md 39, 67.12.1) */
+#define CW_PGLINES    54                /* ...and a page is this many
+                                         * paragraphs, which is the number
+                                         * cw_caret_place() has always divided
+                                         * by - so the status line's Pg and the
+                                         * sheet's ticks cannot disagree */
 
 #define CW_H_BAR      14                /* the nine-title menu bar */
 #define CW_H_RIB      16                /* the ribbon      (View > Ribbon)     */
@@ -303,8 +406,29 @@ static int cw_pap_n = 1;                       /* entry 0 is the default and
 static struct os88_size cw_sz;          /* the live content box */
 static struct os88_pt   cw_org;
 
+/* THE TEXT COLUMN AND THE CHROME ARE TWO ORIGINS AND NOT ONE (SPEC.md 67.12.1).
+ * They are equal in Draft view. In Page view the text narrows to the sheet and
+ * moves to the middle of the window, and the menu bar, the ribbon and the
+ * status line must NOT go with it - so everything that draws the document reads
+ * cw_tx/cw_cols and everything that draws the chrome reads cw_bx/cw_bcols. The
+ * ruler is the one strip that belongs with the text: it measures the sheet. */
+static int cw_bx;                       /* content origin, screen px */
+static int cw_bcols;                    /* ...and its width in cells */
+
 static int cw_cols;                     /* the live text grid */
 static int cw_rows;
+static int cw_wpx;                      /* THE TEXT COLUMN'S WIDTH IN PIXELS,
+                                         * which is the primary number a face
+                                         * made it: cw_cols is a CELL ceiling
+                                         * and stopped being `cw_wpx / 8` the
+                                         * day a cell could be four pixels wide.
+                                         * Everywhere below that meant a pixel
+                                         * span reads this; everywhere that
+                                         * meant "how many cells may a row
+                                         * hold" reads cw_cols. In the kernel's
+                                         * 8x8 cell they are still 8k apart and
+                                         * every one of them is the number it
+                                         * always was */
 static int cw_tx;                       /* text area origin, screen px */
 static int cw_ty;
 static int cw_by;                       /* the menu bar's top */
@@ -327,6 +451,59 @@ static int cw_ovr;                      /* overtype (Ins), status lamp OVR */
 static int cw_ext;                      /* F8 extend-selection, lamp EXT */
 static int cw_showp;                    /* Show paragraph marks */
 static int cw_page;                     /* View > Page rather than Draft */
+
+/* ==========================================================================
+ * THE CHOSEN FACE (SPEC.md 67.12.2)
+ *
+ * cw_prop IS THE ONE FLAG, and everything that used to be 8k asks cw_cx() /
+ * cw_xc() instead of shifting. With it clear those two are exactly the shifts
+ * they replace, so the kernel's cell costs a call and a return and NOTHING
+ * ELSE changes - a build with no FONTS/ folder, a kernel that refuses the band
+ * blit (SPEC.md 6.5) and a document nobody has set all behave as they always
+ * did, because bss arrives zeroed and this is 0 until a face is picked.
+ * ========================================================================*/
+static int cw_prop;                     /* a chosen face is in force */
+static int cw_face;                     /* its handle; 0 = the kernel's cell */
+static int cw_fam = -1;                 /* ...and which family it came from */
+static int cw_gh = 8;                   /* THE GLYPH BAND'S HEIGHT, which was a
+                                         * literal 8 at every attribute strip */
+static int cw_pitch = CW_PITCH;         /* ...and the row advance, which was
+                                         * CW_PITCH at every row-to-y site.
+                                         * SPEC.md 65.13.1's OPEN BUG is that
+                                         * the assembly port carries this
+                                         * quantity in four places with a
+                                         * literal in each; here there is one of
+                                         * it, and the conversion is that both
+                                         * of these are initialised HERE and not
+                                         * in bss - a variable replacing a
+                                         * literal that arrives zeroed compares
+                                         * every band against y+0 */
+static int cw_px[CW_COLS_MAX + 1];      /* the row's own pixel map: the pen each
+                                         * cell starts at, plus ONE SLOT PAST
+                                         * THE LAST so a span's right edge is a
+                                         * lookup and not a special case */
+static int cw_nfam;                     /* families the scan found */
+static int cw_scanned;                  /* ...and that it has run at all: it
+                                         * runs ONCE WHATEVER THE ANSWER, so a
+                                         * disk with no FONTS/ is not re-walked
+                                         * on the next press (SPEC.md 19.8) */
+static int cw_fl_open;                  /* the Font list is down */
+static int cw_fl_rows;                  /* ...and how many items a column of it
+                                         * holds, which is the window's height
+                                         * rather than the list's length: past
+                                         * that it wraps into a second column
+                                         * (SPEC.md 67.12.2) */
+static int cw_fl_x1;                    /* ...and its rectangle, banked once */
+static int cw_fl_y1;
+static int cw_fl_x2;
+static int cw_fl_y2;
+
+/* THE RIBBON'S CAPTION IS A BUFFER AND NOT A POINTER, and it is initialised
+ * here rather than left to bss. The assembly port made it a pointer into a
+ * table of names and SPEC.md 65.13 records what a null one did: bss arrives
+ * zeroed, and a null caption letters this package's own header onto the ribbon,
+ * which reads as a corrupt heap. A buffer with "Pica" in it cannot be null. */
+static char cw_fcap[16] = "Pica";
 
 static int cw_sel_on;                   /* a selection is up */
 static int cw_anchor;                   /* ...and this is its other end */
@@ -370,6 +547,24 @@ static signed char   cw_sh_ind[CW_ROWS_MAX];   /* the row's left indent, in
                                                 * cells: a row that moved
                                                 * sideways changed even though
                                                 * its text did not */
+static int           cw_sh_rx[CW_ROWS_MAX];    /* the row's right edge in
+                                                * pixels. A FIXED row erases
+                                                * itself - the buffer is
+                                                * space-padded to the column and
+                                                * one opaque run covers the band
+                                                * - and A PROPORTIONAL ROW
+                                                * CANNOT PAD, because a cell
+                                                * past the row's content has no
+                                                * pen. So the span is clamped to
+                                                * the cells the walk actually
+                                                * stored and this says where the
+                                                * ink used to reach; where the
+                                                * row SHRANK, one white fill
+                                                * covers the difference. It
+                                                * costs a fill on a row that
+                                                * shrank and nothing at all on
+                                                * one that grew, which is the
+                                                * common case: typing */
 static int           cw_sh_ok;          /* 0 = the glass is unknown */
 
 static char          cw_row[CW_COLS_MAX + 1];  /* the row being laid out */
@@ -380,9 +575,21 @@ static int           cw_row_txt;               /* ...and its TEXT length */
 
 static int cw_wiped;                    /* the kernel just whitened our
                                          * content: a full repaint need not */
+static int cw_scrolled;                 /* ...and the band moved under Page
+                                         * view's marks on this pass */
 static int cw_car_on;
 static int cw_car_x;
 static int cw_car_y;
+static int cw_car_h = 7;                /* ...and its height less one, which
+                                         * follows the face. BANKED beside the
+                                         * position rather than recomputed, so
+                                         * that a caret put on in one face is
+                                         * taken off with the same XOR that put
+                                         * it there: an XOR is its own inverse
+                                         * only over the same rectangle, and a
+                                         * face picked while the caret was up
+                                         * would otherwise leave a stripe of it
+                                         * on the glass */
 
 static char cw_fname[16];               /* "" until the document has a name */
 static char cw_title[40];               /* "Microsoft Word - NAME" */
@@ -431,6 +638,35 @@ static int cw_pg;
 void cw_memmove(void *dst, const void *src, unsigned n);
 
 /* ==========================================================================
+ * THE TYPE LIBRARY (apps/cword/cwtype.inc, SPEC.md 6.3/6.5, 67.12.2)
+ *
+ * apps/os88type.inc wearing a C calling convention. Face 0 is the kernel's 8x8
+ * cell and is always open, so every one of these answers whether or not a
+ * `.F88` was ever found and NOTHING here branches on "is a face open" - which
+ * is the whole reason face 0 exists (SPEC.md 6.5).
+ *
+ * ZERO MEANS IT DID NOT HAPPEN, in every one that can be refused: the library
+ * reports refusal in the carry flag and C has no carry, so the shims convert
+ * it once, to the same convention SPEC.md 67.14's overlay doors already use.
+ * ========================================================================*/
+void cw_ty_init(void);
+int  cw_ty_rows(void);                  /* the current face's cell height */
+int  cw_ty_lead(void);                  /* ...and its leading */
+int  cw_ty_adv(int ch);                 /* one character's advance, in pixels */
+int  cw_ty_use(int handle, int style);  /* 1 = it is current now */
+void cw_ty_cache(void);                 /* the pre-shifted glyph table */
+void cw_ty_band(int rows);              /* clear the compose band to paper */
+int  cw_ty_putn(int pen, const char *s, int n);       /* out: the pen after */
+int  cw_ty_flush(int x, int y, int w, int rows);      /* 1 = drawn */
+int  cw_ty_fit(const char *s, int n, int px);   /* characters that fit */
+int  cw_ty_hit(const char *s, int n, int px);   /* the character under px */
+void cw_ty_pen(const char *s, int n, int *px);  /* the row's pixel map */
+int  cw_ty_scan(void);                  /* families in FONTS/, 0 = none */
+void cw_ty_name(int i, char *dst);      /* family i's display name */
+int  cw_ty_open(int i);                 /* a handle, or 0 = refused */
+void cw_ty_close(int handle);
+
+/* ==========================================================================
  * FORWARD DECLARATIONS - this is one translation unit and the chrome, the
  * commands and the engine all reach each other.
  * ========================================================================*/
@@ -441,8 +677,16 @@ static void cw_ribbon(void);
 static void cw_ruler(void);
 static void cw_menubar(void);
 static void cw_pilcrow(int x, int y, int ink);
-static void cw_retitle(void *win);
+static void cw_sheet(void);
+static void cw_sheet_scrolled(void);
+static void ovl_retitle(void *win);
+static void cw_draw_rules(int x, int w, int y, int a, int c0, int c1, int x0);
+static void ovl_font_geom(void);
+static void ovl_font_paint(void);
+static int  ovl_font_hit(int mx, int my);
+static void cw_facemetrics(void);
 static int  cw_layout(void *win);
+static int  cw_build_row(int r);
 static void cw_wrap(int s, int pap);
 static int  cw_pap_of(int para_end);
 static void cw_toast(const char *s);
@@ -519,7 +763,7 @@ static void cw_num_at(char *dst, int v, int at)
 /* ==========================================================================
  * THE PARAGRAPH DICTIONARY
  *
- * cw_pap_find() is the only way an entry is made, and it DEDUPLICATES: a
+ * ovl_pap_find() is the only way an entry is made, and it DEDUPLICATES: a
  * document where every paragraph is left-aligned and unindented uses one
  * entry, which is what keeps a 64-entry dictionary sufficient for a real
  * document rather than a toy one.
@@ -527,7 +771,7 @@ static void cw_num_at(char *dst, int v, int at)
 
 /* out: the index of an entry with these properties, making one if needed, or
  * -1 if the dictionary is full - a refusal the caller reports (SPEC.md 47). */
-static int cw_pap_find(int al, int sp, int op, int li, int fi, int ri)
+static int ovl_pap_find(int al, int sp, int op, int li, int fi, int ri)
 {
     int i;
 
@@ -586,23 +830,33 @@ static int cw_pap_mark(int p)
     return -1;
 }
 
-/* The text width available to a row of paragraph `pap`: the grid less its
- * indents. Never less than 8 cells, because a document with a silly indent
- * must still be editable. */
+/* The text width available to a row of paragraph `pap`: the column less its
+ * indents, IN PIXELS. Never less than 64, because a document with a silly
+ * indent must still be editable.
+ *
+ * AN INDENT STAYS A COUNT OF 8-PIXEL CELLS in both faces, and that is a
+ * decision rather than an oversight: it is the RULER's unit - a mark the user
+ * dragged to a tick on a scale that measures the sheet - so it means the same
+ * distance on the page whatever the document is set in, which is what an indent
+ * is for. The type's own metrics decide where the GLYPHS fall inside it. */
 static int cw_pap_width(int pap, int first)
 {
     int w;
 
-    w = cw_cols - cw_pap_li[pap] - cw_pap_ri[pap];
+    w = cw_wpx - (cw_pap_li[pap] + cw_pap_ri[pap]) * 8;
     if (first)
-        w = w - cw_pap_fi[pap];
-    if (w < 8)
-        w = 8;
-    if (w > cw_cols)
-        w = cw_cols;
+        w = w - cw_pap_fi[pap] * 8;
+    if (w < 64)
+        w = 64;
+    if (w > cw_wpx)
+        w = cw_wpx;
     return w;
 }
 
+/* ...and where that row starts, in CELLS OF 8 PIXELS - see above. Keeping it a
+ * multiple of 8 is also what puts the row's first glyph on a byte boundary,
+ * which the fixed face needs for os88_font_run()'s single-store path (SPEC.md
+ * 6.1) and the chosen one needs for the band blit (SPEC.md 5.4.2). */
 static int cw_pap_left(int pap, int first)
 {
     int x;
@@ -612,8 +866,8 @@ static int cw_pap_left(int pap, int first)
         x = x + cw_pap_fi[pap];
     if (x < 0)
         x = 0;
-    if (x > cw_cols - 8)
-        x = cw_cols - 8;
+    if (x > cw_wpx / 8 - 8)
+        x = cw_wpx / 8 - 8;
     return x;
 }
 
@@ -630,6 +884,8 @@ static int cw_layout(void *win)
 {
     int c;
     int r;
+    int w;
+    int x;
     int y;
     int bot;
 
@@ -637,7 +893,7 @@ static int cw_layout(void *win)
         return -1;
     os88_wm_content(win, &cw_org);
 
-    cw_tx = cw_org.x + 8;               /* a multiple of 8: the content origin
+    cw_bx = cw_org.x + 8;               /* a multiple of 8: the content origin
                                          * is snapped to one, which is what
                                          * puts every os88_font_run() on the
                                          * single-store path at 1bpp (6.1) */
@@ -667,23 +923,107 @@ static int cw_layout(void *win)
     }
 
     c = (cw_sz.w - 16) / 8;
-    if (c > CW_COLS_MAX)
-        c = CW_COLS_MAX;
+    if (c > CW_RULE_MAX)
+        c = CW_RULE_MAX;
     if (c < 8)
         c = 8;
-    r = (bot - cw_ty) / CW_PITCH;
+    cw_bcols = c;
+    x = cw_bx;
+
+    /* VIEW > PAGE NARROWS THE TEXT COLUMN TO THE SHEET and centres it, which
+     * is the whole of the mode (SPEC.md 67.12.1): every wrap decision, indent,
+     * caret x and click hit test below derives from this pair and is right for
+     * the sheet without knowing a sheet exists. The centring stays on a
+     * multiple of 8 so the fixed face keeps font_run's single-store path, and a
+     * window too narrow to hold the sheet keeps its own width - Page view never
+     * hides text Draft would have shown. */
+    if (cw_page && c > CW_PGCOLS) {
+        x = cw_bx + ((c - CW_PGCOLS) / 2) * 8;
+        c = CW_PGCOLS;
+    }
+    w = c * 8;                          /* the column, in PIXELS - which is the
+                                         * number every span below wants */
+
+    /* THE CELL CEILING IS NOT THE PIXEL WIDTH DIVIDED BY 8 any more. In the
+     * kernel's cell it still is, exactly; in a face whose narrowest advance is
+     * TY_MINADV a row of narrow glyphs holds more cells than the column holds
+     * byte columns, and CW_COLS_MAX is what bounds the row buffer, the shadow
+     * and the delta diff (SPEC.md 67.12.2). */
+    if (cw_prop) {
+        c = w / 4;                      /* TY_MINADV, the floor SPEC.md 6.4
+                                         * permits and ty_open enforces */
+        if (c > CW_COLS_MAX)
+            c = CW_COLS_MAX;
+    }
+    if (c < 8)
+        c = 8;
+
+    r = (bot - cw_ty) / cw_pitch;
     if (r > CW_ROWS_MAX)
         r = CW_ROWS_MAX;
     if (r < 1)
         r = 1;
 
-    if (c != cw_cols || r != cw_rows) {
+    if (c != cw_cols || r != cw_rows || x != cw_tx || w != cw_wpx) {
         cw_cols = c;
         cw_rows = r;
+        cw_tx = x;
+        cw_wpx = w;
         cw_sh_ok = 0;                   /* a different grid: the shadow is not
                                          * about this screen any more */
     }
     return 0;
+}
+
+/* cw_facemetrics - the two numbers a face costs the layout.
+ *
+ * BOTH ARE INITIALISED AT THEIR DECLARATION AND NOT LEFT TO BSS, and that is
+ * SPEC.md 65.13.1's first bug written down rather than repeated: the assembly
+ * port turned a literal 7 into a variable in bss, bss arrives zeroed, and until
+ * something called the routine that fills it every row-band test in the program
+ * compared against y + 0 instead of y + 7 - so most of the note simply
+ * vanished. It looks like a layout bug and it is an initialisation one. */
+static void cw_facemetrics(void)
+{
+    cw_gh = cw_ty_rows();
+    if (cw_gh < 4 || cw_gh > 16)        /* TY_BROWS is the band's own ceiling */
+        cw_gh = 8;
+    cw_pitch = cw_gh + cw_ty_lead() + CW_GAP;
+}
+
+/* cw_cx - a cell's pen, in pixels from the row's left edge.
+ * cw_xc - and back: which cell is under a pixel offset.
+ *
+ * EVERY SITE THAT COMPUTED `k * 8` OR `x / 8` CALLS ONE OF THESE. With cw_prop
+ * clear they are the shifts they replace and the fixed face pays a call and a
+ * return; with it set they read cw_px[], the map the row's own walk left
+ * (SPEC.md 65.13, 67.12.2).
+ *
+ * The clamp is not defensive. cw_px[] holds one slot past the row's last cell
+ * and a caller may legitimately ask for that slot - it is how a span's right
+ * edge is taken - but a caller asking past it has a stale cell count, and
+ * answering the row's end is the answer that draws nothing rather than the one
+ * that draws somewhere else. */
+static int cw_cx(int cell)
+{
+    int x;
+
+    if (cell < 0)
+        cell = 0;
+    if (cell > CW_COLS_MAX)
+        cell = CW_COLS_MAX;
+    /* THE MULTIPLY COMES FIRST AND THE TEST AFTER IT, which is not how this
+     * reads most naturally and is not cosmetic: an 8086 has no `imul reg, imm`,
+     * so tools/cc8086.py lowers `cell * 8` to a shift chain that WRITES FLAGS,
+     * and it refuses the site outright when it cannot prove the flags dead
+     * (SPEC.md 67.6). Written as `if (!cw_prop) return cell * 8;` the multiply
+     * is the last thing before a branch and the build stops naming this line.
+     * With the test after it, the compare that follows kills the flags and the
+     * lowering is provably safe. */
+    x = cell * 8;
+    if (cw_prop)
+        x = cw_px[cell];
+    return x;
 }
 
 /* cw_wrap - lay out the row that starts at s, in paragraph format `pap`.
@@ -709,8 +1049,25 @@ static void cw_wrap(int s, int pap)
     int w;
 
     first = (s == 0 || cw_buf[s - 1] == '\n');
-    w = cw_pap_width(pap, first);
-    lim = s + w;
+    w = cw_pap_width(pap, first);       /* pixels */
+
+    /* HOW MANY CHARACTERS FIT, measured rather than divided. cw_ty_fit() is
+     * apps/os88type.inc's own walk (SPEC.md 67.11 - the per-character loop is
+     * assembly and the C calls it once), and in the kernel's cell it answers
+     * exactly `w / 8` because every advance there is 8.
+     *
+     * THE LENGTH HANDED TO IT IS BOUNDED BY cw_cols AND NOT BY THE DOCUMENT.
+     * Without that a row near the top of a 4,000-character note would walk
+     * every byte of it, once per row, on every layout - and the walk would
+     * find the answer in its first 70 steps and keep going. It is also the
+     * cell ceiling itself: a row may hold at most cw_cols cells, so a face
+     * narrow enough to reach that count breaks its line there (SPEC.md
+     * 67.12.2) rather than dropping the tail, which SPEC.md 65.13 records as a
+     * defect the field reported. */
+    lim = cw_len - s;
+    if (lim > cw_cols)
+        lim = cw_cols;
+    lim = s + cw_ty_fit(cw_buf + s, lim, w);
     if (lim > cw_len)
         lim = cw_len;
 
@@ -872,22 +1229,31 @@ static int cw_row_indent(int r, int n)
     int first;
     int x;
     int w;
+    int t;
 
     if (cw_ls[r] < 0)
         return 0;
     pap = cw_lp[r];
     first = (cw_ls[r] == 0 || cw_buf[cw_ls[r] - 1] == '\n');
-    x = cw_pap_left(pap, first);
-    w = cw_pap_width(pap, first);
+    x = cw_pap_left(pap, first);        /* cells */
+    w = cw_pap_width(pap, first);       /* pixels */
+    t = cw_cx(n);                       /* ...and the row's own width */
 
-    if (cw_pap_al[pap] == CW_AL_CENTER && n < w)
-        x = x + (w - n) / 2;
-    else if (cw_pap_al[pap] == CW_AL_RIGHT && n < w)
-        x = x + (w - n);
+    /* CENTRE AND RIGHT STILL ROUND DOWN TO A WHOLE CELL OF 8 PIXELS, which
+     * they did when a cell WAS 8 pixels and which is worth more now than it was
+     * then: it is what keeps x0 on a byte boundary, and a run whose first pixel
+     * is not on one cannot take os88_font_run()'s single-store path at 1bpp
+     * (SPEC.md 6.1) and forces the band blit to back up a byte column (SPEC.md
+     * 5.4.2). The difference between the two roundings is at most 7 pixels of
+     * a centred line's left margin. */
+    if (cw_pap_al[pap] == CW_AL_CENTER && t < w)
+        x = x + (w - t) / 16;
+    else if (cw_pap_al[pap] == CW_AL_RIGHT && t < w)
+        x = x + (w - t) / 8;
     if (x < 0)
         x = 0;
-    if (x + n > cw_cols)
-        x = cw_cols - n;
+    if (x * 8 + t > cw_wpx)
+        x = (cw_wpx - t) / 8;
     if (x < 0)
         x = 0;
     return x;
@@ -904,7 +1270,7 @@ static void cw_caret_off(void)
 {
     if (!cw_car_on)
         return;
-    os88_gfx_xor_fill(cw_car_x, cw_car_y, cw_car_x, cw_car_y + 7);
+    os88_gfx_xor_fill(cw_car_x, cw_car_y, cw_car_x, cw_car_y + cw_car_h);
     cw_car_on = 0;
 }
 
@@ -912,7 +1278,6 @@ static void cw_caret_on(void)
 {
     int r;
     int col;
-    int n;
 
     if (cw_car_on || cw_m_open >= 0 || cw_sel_on)
         return;                         /* a menu is over the text, or the
@@ -921,14 +1286,20 @@ static void cw_caret_on(void)
     if (r < 0)
         return;
     col = cw_cur - cw_ls[r];
-    n = cw_le[r] - cw_ls[r];
     if (col < 0 || col > cw_cols)
         return;
-    cw_car_x = cw_tx + (cw_row_indent(r, n) + col) * 8;
-    cw_car_y = cw_ty + r * CW_PITCH;
-    if (cw_car_x < cw_tx || cw_car_x > cw_tx + cw_cols * 8 - 1)
+    /* THE ROW IS BUILT rather than measured from its offsets, because a
+     * chosen face answers "where is cell col" out of cw_px[] and cw_px[] is
+     * the row's own (SPEC.md 65.13). It costs a layout of one row and no
+     * drawing call at all; cw_row_indent() needed the built width anyway, for
+     * a centred line. */
+    cw_build_row(r);
+    cw_car_x = cw_tx + cw_row_ind * 8 + cw_cx(col);
+    cw_car_y = cw_ty + r * cw_pitch;
+    cw_car_h = cw_gh - 1;
+    if (cw_car_x < cw_tx || cw_car_x > cw_tx + cw_wpx - 1)
         return;
-    os88_gfx_xor_fill(cw_car_x, cw_car_y, cw_car_x, cw_car_y + 7);
+    os88_gfx_xor_fill(cw_car_x, cw_car_y, cw_car_x, cw_car_y + cw_car_h);
     cw_car_on = 1;
 }
 
@@ -943,7 +1314,7 @@ static void cw_caret_on(void)
  * overstruck one pixel up and right. They are approximations of typefaces that
  * do not exist here, they are visibly different from each other and from roman
  * on all three adapters, and each costs ONE extra call - not one per glyph.
- * The three underlines are rules in the gap CW_PITCH leaves: underline under
+ * The three underlines are rules in the gap CW_GAP leaves: underline under
  * the whole run, word underline under its non-space spans only, double
  * underline as two rules a pixel apart. Small caps was case-mapped when the
  * row was built, and hidden text was dropped there.
@@ -957,6 +1328,8 @@ static void cw_draw_run(int c0, int c1, int x0, int y, int a)
     int x;
     int w;
     int s;
+    int bx;
+    int bw;
 
     n = 0;
     for (i = c0; i <= c1; i++) {
@@ -972,41 +1345,111 @@ static void cw_draw_run(int c0, int c1, int x0, int y, int a)
     }
     cw_rt[n] = 0;
 
-    x = x0 + c0 * 8;
-    w = n * 8;
+    x = x0 + cw_cx(c0);
+    w = cw_cx(c1 + 1) - cw_cx(c0);
+
+    /* --- THE SECOND ARM: A CHOSEN FACE (SPEC.md 6.3, 65.13, 67.12.2) -------
+     * Compose the whole run into a 1bpp band in this package's own RAM and put
+     * it down with ONE os88_gfx_blit1(). A proportional pen lands on an
+     * arbitrary bit, so a proportional glyph can never reach os88_font_run()'s
+     * single-store path - lettered one at a time a 70-glyph line is 70 drawing
+     * calls at SPEC.md 5.7's 756 us floor, which is 53 ms of FLOOR before a
+     * pixel moves. Composed and emitted once it is one floor.
+     *
+     * THE BAND STARTS ONE BYTE COLUMN LEFT OF THE FIRST GLYPH and its width is
+     * rounded up to a multiple of 8, because os88_gfx_blit1() blits whole byte
+     * columns (SPEC.md 5.4.2); the pen inside the band carries the 0..7
+     * remainder. cw_render_row() has already grown the damaged span outwards
+     * so that both edges land on a byte, which is what stops this whitening
+     * the neighbouring glyph - see it for the pixel bug that proves it.
+     *
+     * BOLD IS A SECOND COMPOSE AND NOT A SECOND CALL: composing the run again
+     * one pixel right into the SAME band costs no drawing floor at all, where
+     * the fixed arm below has to pay a whole os88_font_str() for it.
+     *
+     * ITALIC IS DRAWN UPRIGHT, DELIBERATELY. The fixed arm shears the KERNEL's
+     * glyphs, so in a chosen face it would letter one run in a different
+     * typeface from the words either side of it - which reads as a bug rather
+     * than as italic. Upright in the right face is the better wrong answer
+     * until a face carries a drawn italic (SPEC.md 6.4's style 2). */
+    if (cw_prop) {
+        bx = x & ~7;
+        bw = ((x + w + 7) & ~7) - bx;
+        if (bw > 0 && bw <= CW_BAND_PX) {
+            cw_ty_band(cw_gh);
+            cw_ty_putn(x - bx, cw_rt, n);
+            if (a & CW_A_BOLD)
+                cw_ty_putn(x - bx + 1, cw_rt, n);
+            if (cw_ty_flush(bx, y, bw, cw_gh)) {
+                for (i = c0; i <= c1; i++) {
+                    if (cw_row[i] == CW_MARK)
+                        cw_pilcrow(x0 + cw_cx(i), y, 0);
+                }
+                cw_draw_rules(x, w, y, a, c0, c1, x0);
+                return;
+            }
+        }
+        /* THE BLIT REFUSED, which is a real answer on a real machine and not a
+         * defensive branch: a kern_small kernel carries the slot and not the
+         * body (SPEC.md 6.5). Fall through and letter the row in the kernel's
+         * 8x8 cell. The MEASURING side went through the same metrics either
+         * way, so the row is laid out where it is - the glyphs are the wrong
+         * face and nothing is in the wrong place. */
+    }
 
     os88_font_run(x, y, cw_rt, OS88_BLACK, OS88_WHITE);
     for (i = c0; i <= c1; i++) {
         if (cw_row[i] == CW_MARK)
-            cw_pilcrow(x0 + i * 8, y, 0);
+            cw_pilcrow(x0 + cw_cx(i), y, 0);
     }
 
-    if (a & (CW_A_BOLD | CW_A_ITAL | CW_A_ULINE | CW_A_WUL | CW_A_DUL))
+    if (a & (CW_A_BOLD | CW_A_ITAL))
         os88_set_color(OS88_BLACK);
     if (a & CW_A_BOLD)
         os88_font_str(x + 1, y, cw_rt);
     if (a & CW_A_ITAL)
         os88_font_str(x + 1, y - 1, cw_rt);
+    cw_draw_rules(x, w, y, a, c0, c1, x0);
+}
+
+/* cw_draw_rules - the three underlines, which are drawn rules in BOTH faces.
+ *
+ * They are pulled out of cw_draw_run() because the two arms above share them
+ * exactly: an underline is a rule in the gap CW_GAP leaves and has nothing to
+ * do with how the glyphs got onto the glass. The band arm cannot draw them
+ * inside the band either way - the band is cw_gh rows tall and these land one
+ * and two rows BELOW it. */
+static void cw_draw_rules(int x, int w, int y, int a, int c0, int c1, int x0)
+{
+    int i;
+    int s;
+
+    if (!(a & (CW_A_ULINE | CW_A_WUL | CW_A_DUL)))
+        return;
+    os88_set_color(OS88_BLACK);
     if (a & CW_A_ULINE)
-        os88_gfx_hline(x, x + w - 1, y + 8);
+        os88_gfx_hline(x, x + w - 1, y + cw_gh);
     if (a & CW_A_DUL) {
-        os88_gfx_hline(x, x + w - 1, y + 8);
-        os88_gfx_hline(x, x + w - 1, y + 9);
+        os88_gfx_hline(x, x + w - 1, y + cw_gh);
+        os88_gfx_hline(x, x + w - 1, y + cw_gh + 1);
     }
     if (a & CW_A_WUL) {
         /* under the non-space spans only, which is what makes it a WORD
          * underline. One call per span; a run of ordinary prose is one or two
-         * of them, and the alternative - a call per cell - would be 8 to 60. */
-        i = 0;
-        while (i < n) {
-            if (cw_rt[i] == ' ') {
+         * of them, and the alternative - a call per cell - would be 8 to 60.
+         * The spans are found in the ROW's cells, so that each end is a
+         * cw_cx() lookup and the rule stops under the glyph rather than under
+         * a cell width the chosen face does not have. */
+        i = c0;
+        while (i <= c1) {
+            if (cw_row[i] == ' ' || cw_row[i] == CW_MARK) {
                 i++;
                 continue;
             }
             s = i;
-            while (i < n && cw_rt[i] != ' ')
+            while (i <= c1 && cw_row[i] != ' ' && cw_row[i] != CW_MARK)
                 i++;
-            os88_gfx_hline(x + s * 8, x + i * 8 - 1, y + 8);
+            os88_gfx_hline(x0 + cw_cx(s), x0 + cw_cx(i) - 1, y + cw_gh);
         }
     }
 }
@@ -1051,15 +1494,37 @@ static int cw_build_row(int r)
             n++;
         }
     }
+    /* THE PIXEL MAP, ONE CALL A ROW (SPEC.md 67.11, 67.12.2). It has to come
+     * before the indent, because centring and right-aligning ask how wide the
+     * row's text actually is - which in a chosen face is cw_px[n] and not
+     * n * 8 - and it is measured over cw_row[] rather than over the document
+     * because THIS is the text that gets drawn: small caps has already been
+     * case-mapped and hidden characters have already been dropped, and SPEC.md
+     * 65.13 is explicit that the pen advances by the advance of the character
+     * that is DRAWN. Measuring the document instead would put the band's pen
+     * and the map a pixel apart per mapped glyph. */
+    if (cw_prop)
+        cw_ty_pen(cw_row, n, cw_px);
+
     cw_row_ind = cw_row_indent(r, n);
     cw_row_txt = n;                     /* the TEXT, before the padding: a row
                                          * whose pixels are unspecified is
                                          * cleared with one fill and then only
                                          * this many cells are lettered */
-    while (n + cw_row_ind < cw_cols) {
-        cw_row[n] = ' ';
-        cw_rowa[n] = 0;
-        n++;
+
+    /* A FIXED ROW PADS AND A PROPORTIONAL ROW CANNOT. The padding is what makes
+     * a shortened fixed row erase what it used to show: one opaque run of
+     * spaces covers the band. A cell past a proportional row's content has no
+     * pen at all - cw_px[] ends one slot past the text - so there is nothing to
+     * pad TO, and the erase is done instead by cw_render_row(), which knows
+     * where the ink used to reach (cw_sh_rx[]) and whitens the difference with
+     * one fill on a row that SHRANK (SPEC.md 65.13). */
+    if (!cw_prop) {
+        while (n + cw_row_ind < cw_cols) {
+            cw_row[n] = ' ';
+            cw_rowa[n] = 0;
+            n++;
+        }
     }
     return n;
 }
@@ -1080,14 +1545,16 @@ static void cw_render_row(int r)
     int u0;
     int u1;
     int x0;
+    int rx;
     int ind;
 
     base = r * CW_SH_STRIDE;
-    y = cw_ty + r * CW_PITCH;
+    y = cw_ty + r * cw_pitch;
 
     n = cw_build_row(r);
     ind = cw_row_ind;
     x0 = cw_tx + ind * 8;
+    rx = x0 + cw_cx(cw_row_txt);        /* where this row's ink now ends */
 
     /* what actually changed. A row whose INDENT moved is redrawn whole: its
      * cells all landed somewhere else, and comparing them against the shadow
@@ -1108,7 +1575,7 @@ static void cw_render_row(int r)
      * different (they are 0xFF), and letter the row full width anyway. */
     if (cw_sh_ok && cw_sh_start[r] == -2) {
         os88_set_color(OS88_WHITE);
-        os88_gfx_fill(cw_tx, y - 1, cw_tx + cw_cols * 8 - 1, y + 9);
+        os88_gfx_fill(cw_tx, y - 1, cw_tx + cw_wpx - 1, y + cw_gh + 1);
         c0 = 0;
         c1 = cw_row_txt - 1;
     } else if (cw_sh_ok && cw_sh_ind[r] == (signed char)ind) {
@@ -1122,9 +1589,10 @@ static void cw_render_row(int r)
                 c1 = i;
             }
         }
-        if (c0 < 0) {
+        if (c0 < 0 && rx >= cw_sh_rx[r]) {
             cw_sh_start[r] = cw_ls[r];
             cw_sh_end[r] = cw_le[r];
+            cw_sh_rx[r] = rx;
             return;
         }
         /* ONE COLUMN OF BLEED AT THE RIGHT END. Bold and italic overstrike a
@@ -1132,7 +1600,8 @@ static void cw_render_row(int r)
          * column puts a pixel into the next one; if the formatting there has
          * just been switched off and that cell is outside the damaged span,
          * nothing repaints it. One extra cell removes it. */
-        if (c1 + 1 < n && (cw_sha[base + c1] & (CW_A_BOLD | CW_A_ITAL)))
+        if (c0 >= 0 && c1 + 1 < n &&
+            (cw_sha[base + c1] & (CW_A_BOLD | CW_A_ITAL)))
             c1++;
     } else {
         if (cw_sh_ok && cw_sh_ind[r] != (signed char)ind) {
@@ -1140,13 +1609,63 @@ static void cw_render_row(int r)
              * new text may be narrower than the old and no font_run of it
              * would cover where the old one was */
             os88_set_color(OS88_WHITE);
-            os88_gfx_fill(cw_tx, y - 1, cw_tx + cw_cols * 8 - 1, y + 9);
+            os88_gfx_fill(cw_tx, y - 1, cw_tx + cw_wpx - 1, y + cw_gh + 1);
         }
         c0 = 0;
         c1 = n - 1;
     }
-    if (c1 < c0)
+
+    /* THE TAIL OF A ROW THAT SHRANK, ERASED IN PIXELS AND ONCE (SPEC.md 65.13).
+     * A fixed row erases itself: cw_build_row() space-pads it to the column and
+     * one opaque run covers the band. A proportional row cannot pad, so where
+     * this row's glyphs used to reach further than they now do, ONE white fill
+     * covers the difference - and cw_sh_rx[] is what remembers how far that
+     * was. It costs a fill on a row that shrank and nothing at all on a row
+     * that grew, which is the common case: typing.
+     *
+     * A row whose shadow describes some OTHER row (a scroll, a moved indent)
+     * has taken the whole-band fill above already, and this is skipped by the
+     * same test that chose the branch. */
+    if (cw_prop && cw_sh_ok && cw_sh_ind[r] == (signed char)ind &&
+        cw_sh_start[r] != -2 && cw_sh_rx[r] > rx) {
+        os88_set_color(OS88_WHITE);
+        os88_gfx_fill(rx, y - 1, cw_sh_rx[r] - 1, y + cw_gh + 1);
+    }
+    cw_sh_rx[r] = rx;
+
+    /* Nothing to letter: the row shrank without any cell changing, or it is
+     * empty. The BOOKKEEPING still has to be written - this row is what the
+     * glass holds now, and leaving cw_sh_start[] saying otherwise makes the
+     * next repaint believe the row before it. */
+    if (c0 < 0 || c1 < c0) {
+        cw_sh_start[r] = cw_ls[r];
+        cw_sh_end[r] = cw_le[r];
+        cw_sh_ind[r] = (signed char)ind;
         return;
+    }
+
+    /* AND THE SPAN GROWS OUTWARDS TO BYTE COLUMNS BEFORE IT IS DRAWN. This is
+     * SPEC.md 5.4.2's back-up rule read the other way round, and it is the one
+     * pixel defect of this arm that looks like a different bug entirely. The
+     * band is blitted by whole byte columns and is PAPER where nothing was
+     * composed, so a run whose first cell starts mid-byte whitens up to 7
+     * pixels of the glyph to its LEFT, and one whose last cell ends mid-byte
+     * does the same on its right. At the row's own edges that is exactly what
+     * os88_font_run()'s background would have done; between two neighbouring
+     * cells it rubs out ink that nothing is going to put back, and the first
+     * proportional build showed it as a keystroke eating the tail of the
+     * character before it, one pixel column at a time.
+     *
+     * So both edges are walked out until they land on a multiple of 8. It
+     * costs a neighbouring cell or two redrawn and erases none. x0 is already
+     * a multiple of 8 (cw_pap_left() and the centring both keep it one), so
+     * the test is on cw_px[] alone. */
+    if (cw_prop) {
+        while (c0 > 0 && (cw_cx(c0) & 7) != 0)
+            c0--;
+        while (c1 + 1 < cw_row_txt && (cw_cx(c1 + 1) & 7) != 0)
+            c1++;
+    }
 
     /* THE INK OUTSIDE THE GLYPH BAND. os88_font_run() repaints rows y..y+7, so
      * the attributes that draw outside it - italic one row above, the three
@@ -1165,7 +1684,8 @@ static void cw_render_row(int r)
         }
         if (u0 >= 0) {
             os88_set_color(OS88_WHITE);
-            os88_gfx_fill(x0 + u0 * 8, y + 8, x0 + u1 * 8 + 7, y + 9);
+            os88_gfx_fill(x0 + cw_cx(u0), y + cw_gh,
+                          x0 + cw_cx(u1 + 1) - 1, y + cw_gh + 1);
         }
         u0 = -1;
         u1 = -1;
@@ -1178,7 +1698,7 @@ static void cw_render_row(int r)
         }
         if (u0 >= 0) {
             os88_set_color(OS88_WHITE);
-            os88_gfx_hline(x0 + u0 * 8, x0 + u1 * 8 + 8, y - 1);
+            os88_gfx_hline(x0 + cw_cx(u0), x0 + cw_cx(u1 + 1), y - 1);
         }
     }
 
@@ -1205,6 +1725,104 @@ static void cw_render_row(int r)
     cw_sh_start[r] = cw_ls[r];
     cw_sh_end[r] = cw_le[r];
     cw_sh_ind[r] = (signed char)ind;
+}
+
+/* cw_sheet - the sheet's two edges, and a tick where a page begins.
+ *
+ * EVERYTHING IT DRAWS IS OUTSIDE THE TEXT COLUMN, in the margin either side,
+ * and that is deliberate rather than tidy (SPEC.md 65.11, 67.12.1): a rule
+ * drawn inside the column would be erased by the next flush of the row under
+ * it, and putting it back would mean cw_render_row() - the hottest path in this
+ * program - learning about pages. Outside, only a full repaint can take them,
+ * and a full repaint calls this again.
+ *
+ * Two gfx calls in the common case. The page number is CARRIED DOWN the rows
+ * rather than recounted per row: counting '\n' from offset zero for each of 24
+ * rows is 24 walks of the document on a machine where one walk is already
+ * visible.
+ *
+ * What it does NOT draw is the inter-page WHITESPACE a real page view shows.
+ * That would have to come out of the layout walk's row advance, which means the
+ * height model and every path that maps a row to a y learning about pages -
+ * a change to the walk rather than to the chrome, and deferred rather than
+ * approximated. Headers and footers are not there either, and cannot be until
+ * the document model grows a second text stream. */
+static void cw_sheet(void)
+{
+    int x1;
+    int x2;
+    int y;
+    int r;
+    int i;
+    int ln;
+
+    if (!cw_page)
+        return;
+    x1 = cw_tx - 4;
+    x2 = cw_tx + cw_wpx + 3;
+    y = cw_ty + (cw_rows - 1) * cw_pitch + cw_gh + 1;
+
+    os88_set_color(OS88_BLACK);
+    if (x1 > cw_bx - 8)
+        os88_gfx_vline(x1, cw_ty - 1, y);
+    if (x2 < cw_bx + cw_bcols * 8 + 7)
+        os88_gfx_vline(x2, cw_ty - 1, y);
+
+    ln = 1;
+    for (i = 0; i < cw_ls[0] && i < cw_len; i++) {
+        if (cw_buf[i] == '\n')
+            ln++;
+    }
+    for (r = 0; r < cw_rows; r++) {
+        if (cw_ls[r] < 0)
+            break;
+        if (r > 0) {
+            for (i = cw_ls[r - 1]; i < cw_ls[r] && i < cw_len; i++) {
+                if (cw_buf[i] == '\n')
+                    ln++;
+            }
+            /* a page begins at the first row of a paragraph whose number is a
+             * multiple of CW_PGLINES away from the first, which is exactly the
+             * division cw_caret_place() reports as Pg */
+            if (((ln - 1) % CW_PGLINES) == 0 && cw_ls[r] > 0 &&
+                cw_buf[cw_ls[r] - 1] == '\n') {
+                y = cw_ty + r * cw_pitch - 2;
+                os88_gfx_hline(x1 - 3, x1, y);
+                os88_gfx_hline(x2, x2 + 3, y);
+            }
+        }
+    }
+}
+
+/* cw_sheet_scrolled - the sheet's marks after the band moved under them.
+ *
+ * cw_glass_scroll() moves the TEXT COLUMN and nothing else, which is exactly
+ * right: the rules and the ticks are drawn OUTSIDE that column so that the row
+ * flush can never touch them, and a scroll of the column leaves them standing.
+ * The rules are the same wherever the view is - but THE TICKS ARE PER ROW, and
+ * the rows have just moved, so every one of them now marks the wrong line.
+ *
+ * Measured as the opposite mistake: with nothing here at all, paging down to
+ * the second page in Page view showed no boundary tick anywhere, because the
+ * only tick ever drawn was the one that had been on screen at the last full
+ * repaint - and there had not been one.
+ *
+ * Two 8-pixel margin strips whitened and cw_sheet() again: four calls, paid
+ * only in Page view and only on a scroll. A keystroke that does not scroll the
+ * view still costs what SPEC.md 67.12 says it costs. */
+static void cw_sheet_scrolled(void)
+{
+    int y1;
+    int y2;
+
+    if (!cw_page)
+        return;
+    y1 = cw_ty - 1;
+    y2 = cw_ty + (cw_rows - 1) * cw_pitch + cw_gh + 1;
+    os88_set_color(OS88_WHITE);
+    os88_gfx_fill(cw_tx - 8, y1, cw_tx - 1, y2);
+    os88_gfx_fill(cw_tx + cw_wpx, y1, cw_tx + cw_wpx + 7, y2);
+    cw_sheet();
 }
 
 /* --- the selection -------------------------------------------------------
@@ -1256,8 +1874,9 @@ static void cw_sel_xor(void)
             e = n;
         if (e <= s)
             continue;
-        os88_gfx_xor_fill(x0 + s * 8, cw_ty + r * CW_PITCH,
-                          x0 + e * 8 - 1, cw_ty + r * CW_PITCH + 7);
+        os88_gfx_xor_fill(x0 + cw_cx(s), cw_ty + r * cw_pitch,
+                          x0 + cw_cx(e) - 1,
+                          cw_ty + r * cw_pitch + cw_gh - 1);
     }
 }
 
@@ -1287,10 +1906,10 @@ static int cw_glass_scroll(int n)
         return -1;
 
     y1 = cw_ty - 1;
-    y2 = cw_ty + (cw_rows - 1) * CW_PITCH + 9;
-    x2 = cw_tx + cw_cols * 8 - 1;
+    y2 = cw_ty + (cw_rows - 1) * cw_pitch + cw_gh + 1;
+    x2 = cw_tx + cw_wpx - 1;
 
-    if (os88_gfx_scroll(cw_tx, y1, x2, y2, n * CW_PITCH) != 0)
+    if (os88_gfx_scroll(cw_tx, y1, x2, y2, n * cw_pitch) != 0)
         return -1;
 
     cnt = (cw_rows - 1) * CW_SH_STRIDE;
@@ -1301,6 +1920,7 @@ static int cw_glass_scroll(int n)
             cw_sh_start[i] = cw_sh_start[i + 1];
             cw_sh_end[i] = cw_sh_end[i + 1];
             cw_sh_ind[i] = cw_sh_ind[i + 1];
+            cw_sh_rx[i] = cw_sh_rx[i + 1];
         }
         dst = cw_rows - 1;
     } else {
@@ -1310,6 +1930,7 @@ static int cw_glass_scroll(int n)
             cw_sh_start[i] = cw_sh_start[i - 1];
             cw_sh_end[i] = cw_sh_end[i - 1];
             cw_sh_ind[i] = cw_sh_ind[i - 1];
+            cw_sh_rx[i] = cw_sh_rx[i - 1];
         }
         dst = 0;
     }
@@ -1328,6 +1949,9 @@ static int cw_glass_scroll(int n)
     cw_sh_start[dst] = -2;
     cw_sh_end[dst] = -2;
     cw_sh_ind[dst] = 0;
+    cw_sh_rx[dst] = cw_tx + cw_wpx;     /* nothing is known about the row that
+                                         * came into view, so the shrink fill
+                                         * must not believe it is short */
     return 0;
 }
 
@@ -1363,8 +1987,11 @@ static void cw_follow_caret(void)
     cw_from = 0;
     cw_stop = cw_rows;
     if (n == 1 || n == -1) {
-        if (cw_glass_scroll(n) == 0)
+        if (cw_glass_scroll(n) == 0) {
+            cw_scrolled = 1;            /* Page view's ticks mark rows, and the
+                                         * rows just moved (cw_sheet_scrolled) */
             return;
+        }
     }
     cw_sh_ok = 0;
 }
@@ -1391,7 +2018,7 @@ static void cw_caret_place(void)
             ln++;
     }
     cw_ln = ln;
-    cw_pg = (ln - 1) / 54 + 1;
+    cw_pg = (ln - 1) / CW_PGLINES + 1;
 }
 
 /* cw_show - the single repaint entry point for the TEXT.
@@ -1458,18 +2085,30 @@ static void cw_show(void *win, int lo, int hi, int delta)
 
     if (!cw_sh_ok) {
         if (!cw_wiped) {
+            /* THE WHOLE CONTENT WIDTH AND NOT THE TEXT COLUMN. In Page view the
+             * sheet's rules are drawn in the margins outside the column, so a
+             * fill bounded by the column left both of them on the glass when
+             * the view went back to Draft - the text redrawn correctly with two
+             * vertical rules standing through it. Same one call, wider span
+             * (SPEC.md 67.12.1). */
             os88_set_color(OS88_WHITE);
-            os88_gfx_fill(cw_tx, cw_ty - 1, cw_tx + cw_cols * 8 - 1,
-                          cw_ty + (cw_rows - 1) * CW_PITCH + 9);
+            os88_gfx_fill(cw_bx, cw_ty - 1, cw_bx + cw_bcols * 8 - 1,
+                          cw_ty + (cw_rows - 1) * cw_pitch + cw_gh + 1);
         }
         cw_menubar();
         cw_ribbon();
         cw_ruler();
+        cw_sheet();
     }
     cw_wiped = 0;
 
     for (r = cw_from; r < cw_stop; r++)
         cw_render_row(r);
+    if (cw_scrolled)
+        cw_sheet_scrolled();            /* ...after the rows, so the ticks are
+                                         * taken from the layout that just
+                                         * landed on the glass */
+    cw_scrolled = 0;
     cw_sh_ok = 1;
 
     cw_caret_place();
@@ -1713,14 +2352,14 @@ static void cw_down(void)
  * FORMATTING COMMANDS
  * ========================================================================*/
 
-/* cw_chp_apply - set or clear CHP bits over the selection, or - with no
+/* ovl_chp_apply - set or clear CHP bits over the selection, or - with no
  * selection - on what is typed next, which is what Word does with an
  * insertion point. `how`: 0 = toggle, 1 = set these, 2 = clear ALL, 3 = clear
  * these. The Format Character dialog uses 1 and 3 in that order, which is how
  * a dialog that shows seven boxes applies all seven answers rather than only
  * the ones that are ticked.
  * out: the range that changed, through cw_show(). */
-static void cw_chp_apply(void *win, int bits, int how)
+static void ovl_chp_apply(void *win, int bits, int how)
 {
     int a;
     int b;
@@ -1774,14 +2413,14 @@ static void cw_chp_apply(void *win, int bits, int how)
     cw_ribbon();
 }
 
-/* cw_pap_apply - change the paragraph format of every paragraph the selection
+/* ovl_pap_apply - change the paragraph format of every paragraph the selection
  * touches, or of the one the caret is in. `what` names the field and `v` the
  * value; -1 for a field means "leave it".
  *
- * It goes through cw_pap_find(), so two paragraphs given the same format share
+ * It goes through ovl_pap_find(), so two paragraphs given the same format share
  * one dictionary entry and the 65th UNIQUE format is the refusal, not the 65th
  * paragraph. */
-static void cw_pap_apply(void *win, int al, int sp, int op, int li, int fi,
+static void ovl_pap_apply(void *win, int al, int sp, int op, int li, int fi,
                          int ri)
 {
     int a;
@@ -1826,7 +2465,7 @@ static void cw_pap_apply(void *win, int al, int sp, int op, int li, int fi,
         if (nli > cw_cols - 8)
             nli = cw_cols - 8;
 
-        idx = cw_pap_find(nal, nsp, nop, nli, nfi, nri);
+        idx = ovl_pap_find(nal, nsp, nop, nli, nfi, nri);
         if (idx < 0) {
             cw_toast("Too many different paragraph formats.");
             break;
@@ -1849,28 +2488,28 @@ static void cw_pap_apply(void *win, int al, int sp, int op, int li, int fi,
 }
 
 /* The ruler's and the keyboard's alignment/spacing/indent commands, each one
- * line through cw_pap_apply(). */
-static void cw_align(void *win, int al)   { cw_pap_apply(win, al, -1, -1, -128, -128, -128); }
-static void cw_spacing(void *win, int sp) { cw_pap_apply(win, -1, sp, -1, -128, -128, -128); }
-static void cw_openspc(void *win, int op) { cw_pap_apply(win, -1, -1, op, -128, -128, -128); }
+ * line through ovl_pap_apply(). */
+static void ovl_align(void *win, int al)   { ovl_pap_apply(win, al, -1, -1, -128, -128, -128); }
+static void ovl_spacing(void *win, int sp) { ovl_pap_apply(win, -1, sp, -1, -128, -128, -128); }
+static void ovl_openspc(void *win, int op) { ovl_pap_apply(win, -1, -1, op, -128, -128, -128); }
 
-static void cw_indent(void *win, int by)
+static void ovl_indent(void *win, int by)
 {
     int p;
 
     p = cw_pap_of(cw_cur);
-    cw_pap_apply(win, -1, -1, -1, cw_pap_li[p] + by, -128, -128);
+    ovl_pap_apply(win, -1, -1, -1, cw_pap_li[p] + by, -128, -128);
 }
 
-static void cw_hang(void *win, int on)
+static void ovl_hang(void *win, int on)
 {
     int p;
 
     p = cw_pap_of(cw_cur);
     if (on)
-        cw_pap_apply(win, -1, -1, -1, cw_pap_li[p] + 5, -5, -128);
+        ovl_pap_apply(win, -1, -1, -1, cw_pap_li[p] + 5, -5, -128);
     else
-        cw_pap_apply(win, -1, -1, -1, -128, 0, -128);
+        ovl_pap_apply(win, -1, -1, -1, -128, 0, -128);
 }
 
 #include "cwcmd.c"                      /* the command dispatcher, the mouse
@@ -1891,7 +2530,9 @@ void os88_paint(void *win)
     cw_st_left[0] = 0;
     cw_st_lamp[0] = 0;
     cw_m_open = -1;                     /* a dropdown does not survive a
-                                         * repaint it did not ask for */
+                                         * repaint it did not ask for, and
+                                         * neither does the Font list */
+    cw_fl_open = 0;
     cw_show(win, -1, 0, 0);
     if (cw_dlg)
         ovl_dlg_paint(win);             /* the panel was over all of that */
@@ -1909,7 +2550,19 @@ void *os88_main(void)
 {
     void *win;
 
-    cw_pap_find(CW_AL_LEFT, 0, 0, 0, 0, 0);     /* entry 0, the default */
+    cw_ty_init();                       /* face 0 - the kernel's 8x8 cell - is
+                                         * open from here on, so every metric
+                                         * and every draw below goes through the
+                                         * same calls whether or not a face is
+                                         * ever chosen (SPEC.md 6.5) */
+    /* ENTRY 0 OF THE PARAGRAPH DICTIONARY NEEDS NO CALL. It used to be made
+     * here with ovl_pap_find(CW_AL_LEFT, 0, 0, 0, 0, 0), which was a no-op the
+     * day it was written: cw_pap_n starts at 1, the six property arrays are
+     * bss and bss arrives zeroed, so entry 0 already IS left-aligned, single
+     * spaced and unindented and the search found it. Saying so is worth more
+     * than the call, and the call could not stay - ovl_pap_find() is module code
+     * now (SPEC.md 67.12.2) and os88_main() runs before there is an instance to
+     * load a module for (SPEC.md 20.2). */
     cw_doc_clear();
     cw_cur = 0;
     cw_top = 0;

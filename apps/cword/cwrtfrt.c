@@ -42,7 +42,7 @@
  *   3  refusals       a file that is not RTF leaves the document untouched;
  *                     a document too big to write is refused rather than
  *                     truncated; text past CW_DOC_MAX raises cw_trunc
- *   4  properties     cw_apply() against each rrba: a bit set and cleared, a
+ *   4  properties     ovl_apply() against each rrba: a bit set and cleared, a
  *                     byte, a word, a flag, and the two resets - including
  *                     the one that catches the mistake cwrtfio.c warns about,
  *                     that \plain must NOT come out underlined
@@ -95,7 +95,7 @@ static void build_doc(void)
             a |= CW_A_ITAL;
         if (i >= 40 && i < 44)
             a |= CW_A_ULINE;
-        cw_put((unsigned char)rt_text[i], a);
+        ovl_put((unsigned char)rt_text[i], a);
     }
 }
 
@@ -113,14 +113,14 @@ static int check_roundtrip(void)
     memcpy(keep, cw_buf, keepn);
     memcpy(keepa, cw_att, keepn);
 
-    n = cw_rtf_build();
+    n = ovl_rtf_build();
     if (n < 0) {
         fail("1 round trip: the writer overflowed on a 150-character document");
         return 1;
     }
 
     cw_doc_clear();
-    if (cw_rtf_parse(n) != CW_RTF_OK) {
+    if (ovl_rtf_parse(n) != CW_RTF_OK) {
         fail("1 round trip: the reader refused cword's own output");
         return 1;
     }
@@ -203,7 +203,7 @@ static int check_file(void)
 
     n = (int)strlen(rt_file);
     memcpy(cw_rtf, rt_file, n);
-    if (cw_rtf_parse(n) != CW_RTF_OK) {
+    if (ovl_rtf_parse(n) != CW_RTF_OK) {
         fail("2 fixture: the reader refused it");
         return 2;
     }
@@ -291,7 +291,7 @@ static int check_refusals(void)
     build_doc();
     n = cw_len;
     memcpy(cw_rtf, "Once upon a time, in a plain text file.", 39);
-    rc = cw_rtf_parse(39);
+    rc = ovl_rtf_parse(39);
     if (rc != CW_RTF_NOTRTF) {
         fail("3 refusals: a plain text file was accepted as RTF");
         return 3;
@@ -301,16 +301,16 @@ static int check_refusals(void)
         return 3;
     }
 
-    /* Too much text: cw_put refuses and says so. */
+    /* Too much text: ovl_put refuses and says so. */
     cw_doc_clear();
     for (i = 0; i < CW_DOC_MAX + 100; i++)
-        cw_put('x', 0);
+        ovl_put('x', 0);
     if (cw_len != CW_DOC_MAX) {
-        fail("3 refusals: cw_put ran past CW_DOC_MAX");
+        fail("3 refusals: ovl_put ran past CW_DOC_MAX");
         return 3;
     }
     if (!cw_trunc) {
-        fail("3 refusals: cw_put overran without raising cw_trunc");
+        fail("3 refusals: ovl_put overran without raising cw_trunc");
         return 3;
     }
 
@@ -319,8 +319,8 @@ static int check_refusals(void)
      * bytes of control word for one byte of text. */
     cw_doc_clear();
     for (i = 0; i < CW_DOC_MAX; i++)
-        cw_put('x', (i & 1) ? CW_A_BOLD : 0);
-    if (cw_rtf_build() != -1) {
+        ovl_put('x', (i & 1) ? CW_A_BOLD : 0);
+    if (ovl_rtf_build() != -1) {
         fail("3 refusals: an over-long document was written anyway");
         return 3;
     }
@@ -328,8 +328,8 @@ static int check_refusals(void)
     /* ...and the ordinary case still fits, or the cap is useless. */
     cw_doc_clear();
     for (i = 0; i < CW_DOC_MAX; i++)
-        cw_put((i % 64) == 63 ? '\n' : 'x', 0);
-    n = cw_rtf_build();
+        ovl_put((i % 64) == 63 ? '\n' : 'x', 0);
+    n = ovl_rtf_build();
     if (n < 0) {
         fail("3 refusals: a plain full document does not fit CW_RTF_MAX");
         return 3;
@@ -343,53 +343,53 @@ static int check_refusals(void)
 
 static int check_props(void)
 {
-    cw_pard();
-    cw_plain();
+    ovl_pard();
+    ovl_plain();
 
     /* rrbaBit, the row class Opus stamps a seven-fold warning over. */
-    cw_apply(CW_IRRB_B, 0, 0);
-    if (!(cw_pw_get(cw_chp, CW_CHP_O_GRPF) & CW_CHP_F_BOLD)) {
+    ovl_apply(CW_IRRB_B, 0, 0);
+    if (!(ovl_pw_get(cw_chp, CW_CHP_O_GRPF) & CW_CHP_F_BOLD)) {
         fail("4 properties: \\b did not set the bold bit");
         return 4;
     }
-    if (cw_pw_get(cw_chp, CW_CHP_O_GRPF) & CW_CHP_F_ITALIC) {
+    if (ovl_pw_get(cw_chp, CW_CHP_O_GRPF) & CW_CHP_F_ITALIC) {
         fail("4 properties: \\b set the italic bit as well");
         return 4;
     }
-    cw_apply(CW_IRRB_B, 0, 1);          /* \b0 */
-    if (cw_pw_get(cw_chp, CW_CHP_O_GRPF) & CW_CHP_F_BOLD) {
+    ovl_apply(CW_IRRB_B, 0, 1);          /* \b0 */
+    if (ovl_pw_get(cw_chp, CW_CHP_O_GRPF) & CW_CHP_F_BOLD) {
         fail("4 properties: \\b0 did not clear the bold bit");
         return 4;
     }
 
     /* rrbaByte with a number, and with none. */
-    cw_apply(CW_IRRB_FS, 28, 1);
+    ovl_apply(CW_IRRB_FS, 28, 1);
     if (cw_chp[CW_CHP_O_HPS] != 28) {
         fail("4 properties: \\fs28");
         return 4;
     }
-    cw_apply(CW_IRRB_FS, 0, 0);
+    ovl_apply(CW_IRRB_FS, 0, 0);
     if (cw_chp[CW_CHP_O_HPS] != 24) {
         fail("4 properties: a bare \\fs is not the row's 24");
         return 4;
     }
 
     /* rrbaWord, signed. */
-    cw_apply(CW_IRRB_FI, -360, 1);
-    if (cw_pw_get(cw_pap, CW_PAP_O_DXALEFT1) != 0xFE98) {
+    ovl_apply(CW_IRRB_FI, -360, 1);
+    if (ovl_pw_get(cw_pap, CW_PAP_O_DXALEFT1) != 0xFE98) {
         printf("cwrtfrt: \\fi-360 stored %04X\n",
-               cw_pw_get(cw_pap, CW_PAP_O_DXALEFT1));
+               ovl_pw_get(cw_pap, CW_PAP_O_DXALEFT1));
         fail("4 properties: \\fi-360 (a negative twip count)");
         return 4;
     }
 
     /* rrbaFlag: presence sets, \keep0 clears. */
-    cw_apply(CW_IRRB_KEEP, 0, 0);
+    ovl_apply(CW_IRRB_KEEP, 0, 0);
     if (cw_pap[CW_PAP_O_FKEEP] != 1) {
         fail("4 properties: \\keep");
         return 4;
     }
-    cw_apply(CW_IRRB_KEEP, 0, 1);
+    ovl_apply(CW_IRRB_KEEP, 0, 1);
     if (cw_pap[CW_PAP_O_FKEEP] != 0) {
         fail("4 properties: \\keep0");
         return 4;
@@ -397,10 +397,10 @@ static int check_props(void)
 
     /* rrbaSpec: a tab stop, with the pending justification the previous
      * keyword left. */
-    cw_apply(CW_IRRB_TJC, CW_JC_CENTER, 1);
-    cw_apply(CW_IRRB_TX, 1440, 1);
+    ovl_apply(CW_IRRB_TJC, CW_JC_CENTER, 1);
+    ovl_apply(CW_IRRB_TX, 1440, 1);
     if (cw_pap[CW_PAP_O_ITBDMAC] != 1 ||
-        cw_pw_get(cw_pap, CW_PAP_O_RGDXATAB) != 1440 ||
+        ovl_pw_get(cw_pap, CW_PAP_O_RGDXATAB) != 1440 ||
         CW_TBD_JC(cw_pap[CW_PAP_O_RGTBD]) != CW_JC_CENTER) {
         fail("4 properties: \\tqc\\tx1440");
         return 4;
@@ -409,12 +409,12 @@ static int check_props(void)
     /* THE ONE THAT CATCHES THE OBVIOUS IMPLEMENTATION. \plain must not leave
      * the text underlined - and it would, if the reset walked cw_rrb[] and
      * stored each row's `w`, because the \ul row's w is kulSingle. */
-    cw_apply(CW_IRRB_KUL, 0, 0);        /* a bare \ul */
+    ovl_apply(CW_IRRB_KUL, 0, 0);        /* a bare \ul */
     if (cw_chp[CW_CHP_O_KUL] != CW_KUL_SINGLE) {
         fail("4 properties: a bare \\ul is not kulSingle");
         return 4;
     }
-    cw_apply(CW_IRRB_PLAIN, 0, 0);
+    ovl_apply(CW_IRRB_PLAIN, 0, 0);
     if (cw_chp[CW_CHP_O_KUL] != CW_KUL_NONE) {
         fail("4 properties: \\plain left the text underlined");
         return 4;
@@ -425,9 +425,9 @@ static int check_props(void)
     }
 
     /* \pard clears the paragraph, tab stops and all. */
-    cw_apply(CW_IRRB_PARD, 0, 0);
+    ovl_apply(CW_IRRB_PARD, 0, 0);
     if (cw_pap[CW_PAP_O_ITBDMAC] != 0 ||
-        cw_pw_get(cw_pap, CW_PAP_O_DXALEFT1) != 0) {
+        ovl_pw_get(cw_pap, CW_PAP_O_DXALEFT1) != 0) {
         fail("4 properties: \\pard");
         return 4;
     }
@@ -435,7 +435,7 @@ static int check_props(void)
     /* A property aimed at a record cword does not keep must be dropped, not
      * written somewhere. There is no CW_IRRB_* for one, so this checks the
      * gate itself. */
-    if (cw_record(CW_PGC_TABLE) != 0 || cw_record(CW_PGC_BRC) != 0) {
+    if (ovl_record(CW_PGC_TABLE) != 0 || ovl_record(CW_PGC_BRC) != 0) {
         fail("4 properties: a record cword does not keep answered a pointer");
         return 4;
     }

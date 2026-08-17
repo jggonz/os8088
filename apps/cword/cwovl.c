@@ -594,11 +594,11 @@ static int ovl_dlg_end(void *win, int ok)
     if (ok) {
         switch (which) {
         case CW_DLG_CHAR:
-            cw_chp_apply(win, cw_d_attr, 1);
-            cw_chp_apply(win, (~cw_d_attr) & CW_A_CHP, 3);
+            ovl_chp_apply(win, cw_d_attr, 1);
+            ovl_chp_apply(win, (~cw_d_attr) & CW_A_CHP, 3);
             break;
         case CW_DLG_PARA:
-            cw_pap_apply(win, cw_d_al, cw_d_sp, cw_d_op, cw_d_li, cw_d_fi,
+            ovl_pap_apply(win, cw_d_al, cw_d_sp, cw_d_op, cw_d_li, cw_d_fi,
                          cw_d_ri);
             break;
         case CW_DLG_FIND:
@@ -877,7 +877,7 @@ int ovl_file_load(void *win, const char *name, unsigned lo, unsigned hi)
         cw_toast("Could not read that file.");
         return 0;
     }
-    r = cw_rtf_parse(cw_rtfn);
+    r = ovl_rtf_parse(cw_rtfn);
     if (r == CW_RTF_NOTRTF) {
         cw_toast("That is not an RTF file.");
         return 0;
@@ -893,7 +893,7 @@ int ovl_file_load(void *win, const char *name, unsigned lo, unsigned hi)
     cw_ext = 0;
     cw_mod = 0;
     os88_strcpy(cw_fname, name, sizeof(cw_fname));
-    cw_retitle(win);
+    ovl_retitle(win);
     return 1;
 }
 
@@ -901,7 +901,7 @@ int ovl_file_store(void *win, const char *name)
 {
     int r;
 
-    if (cw_rtf_build() < 0 || cw_ovf) {
+    if (ovl_rtf_build() < 0 || cw_ovf) {
         cw_toast("This document is too large to save as RTF.");
         return 0;
     }
@@ -912,7 +912,7 @@ int ovl_file_store(void *win, const char *name)
     }
     os88_strcpy(cw_fname, name, sizeof(cw_fname));
     cw_mod = 0;
-    cw_retitle(win);
+    ovl_retitle(win);
     cw_toast("Saved.");
     return 1;
 }

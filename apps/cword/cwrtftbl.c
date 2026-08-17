@@ -26,7 +26,7 @@
  *                    - 40 of Opus's 141 rows; the `w` defaults are Opus's
  *                      values unchanged, the `b` offsets are cword's own
  *                      record layouts (see cwrtftbl.h) except where noted
- *   cw_rtf_lookup()  Opus/rtfsubs.c:89-127  C_FSearchRgrsym() - ported
+ *   ovl_rtf_lookup()  Opus/rtfsubs.c:89-127  C_FSearchRgrsym() - ported
  *   the divergence   listed row by row under "WHERE THIS DIVERGES" below
  *   notes
  *
@@ -98,7 +98,7 @@
 /* ===========================================================================
  * THE KEYWORD TABLE
  *
- * SORTED, AND THE SORT IS LOAD-BEARING. cw_rtf_lookup() is a binary search
+ * SORTED, AND THE SORT IS LOAD-BEARING. ovl_rtf_lookup() is a binary search
  * that compares bytes as UNSIGNED, so the order is plain ASCII with a shorter
  * name before a longer one that begins with it ("f" < "fi" < "fs" < "fswiss",
  * because the NUL sorts below every letter). That is Opus's order in
@@ -302,7 +302,7 @@ CW_CTASSERT(73, sizeof(struct CW_RRB)  == 4);
  * unsearchable from that row down. One cast now, or that bug later.
  * ========================================================================= */
 
-int cw_rtf_lookup(const char *sz)
+int ovl_rtf_lookup(const char *sz)
 {
     int lo;
     int hi;
@@ -338,19 +338,19 @@ int cw_rtf_lookup(const char *sz)
 /* --- the accessors -------------------------------------------------------
  * Every caller goes through these, so the packing of rac with fPassVal, and of
  * rrba with pgc, is known in exactly one place each. None of them range-checks
- * its index: the index came from cw_rtf_lookup() or from a CW_IRRB_* constant,
+ * its index: the index came from ovl_rtf_lookup() or from a CW_IRRB_* constant,
  * and a check on every property applied is a cost paid on every character of
  * every document to catch a bug the self-check already caught at build time. */
 
-int cw_rsym_val(int irsym)      { return cw_rsym[irsym].val; }
-int cw_rsym_rac(int irsym)      { return cw_rsym[irsym].racf & CW_RSF_RACMASK; }
-int cw_rsym_passval(int irsym)  { return (cw_rsym[irsym].racf & CW_RSF_PASSVAL) != 0; }
-int cw_rsym_arg(int irsym)      { return cw_rsym[irsym].arg; }
+int ovl_rsym_val(int irsym)      { return cw_rsym[irsym].val; }
+int ovl_rsym_rac(int irsym)      { return cw_rsym[irsym].racf & CW_RSF_RACMASK; }
+int ovl_rsym_passval(int irsym)  { return (cw_rsym[irsym].racf & CW_RSF_PASSVAL) != 0; }
+int ovl_rsym_arg(int irsym)      { return cw_rsym[irsym].arg; }
 
-int cw_rrb_rrba(int irrb)       { return cw_rrb[irrb].ap & CW_RRB_RRBAMASK; }
-int cw_rrb_pgc(int irrb)        { return (cw_rrb[irrb].ap >> CW_RRB_PGCSHIFT) & CW_RRB_PGCMASK; }
-int cw_rrb_b(int irrb)          { return cw_rrb[irrb].b; }
-int cw_rrb_w(int irrb)          { return cw_rrb[irrb].w; }
+int ovl_rrb_rrba(int irrb)       { return cw_rrb[irrb].ap & CW_RRB_RRBAMASK; }
+int ovl_rrb_pgc(int irrb)        { return (cw_rrb[irrb].ap >> CW_RRB_PGCSHIFT) & CW_RRB_PGCMASK; }
+int ovl_rrb_b(int irrb)          { return cw_rrb[irrb].b; }
+int ovl_rrb_w(int irrb)          { return cw_rrb[irrb].w; }
 
 /* ===========================================================================
  * THE SELF-CHECK
@@ -543,7 +543,7 @@ static const char * const cw_xabsent[] = {
 
 #define CW_NXABSENT  (sizeof(cw_xabsent) / sizeof(cw_xabsent[0]))
 
-/* cw_strcmpu - the same unsigned byte compare cw_rtf_lookup() makes, so the
+/* cw_strcmpu - the same unsigned byte compare ovl_rtf_lookup() makes, so the
  * order check tests the order the SEARCH sees and not some other order. */
 static int cw_strcmpu(const char *a, const char *b)
 {
@@ -594,8 +594,8 @@ int cw_rtf_selfcheck(void)
     /* (2)(3)(4) every keyword row: a rac in range, an arg that indexes the
      * table its rac says it indexes, and a name that finds its own row. */
     for (i = 0; i < CW_RTF_NAMES; i++) {
-        rac = cw_rsym_rac(i);
-        arg = cw_rsym_arg(i);
+        rac = ovl_rsym_rac(i);
+        arg = ovl_rsym_arg(i);
 
         if (rac >= CW_RAC_MAX)
             return CW_CHK_RAC * 1000 + i;
@@ -613,15 +613,15 @@ int cw_rtf_selfcheck(void)
             return CW_CHK_ARG * 1000 + i;
         }
 
-        if (cw_rtf_lookup(cw_rsym[i].sz) != i)
+        if (ovl_rtf_lookup(cw_rsym[i].sz) != i)
             return CW_CHK_ROUNDTRIP * 1000 + i;
     }
 
     /* (5)(6)(7)(8)(9) every property row lands somewhere real. */
     for (i = 0; i < CW_IRRB_MAX; i++) {
-        rrba = cw_rrb_rrba(i);
-        pgc  = cw_rrb_pgc(i);
-        b    = cw_rrb_b(i);
+        rrba = ovl_rrb_rrba(i);
+        pgc  = ovl_rrb_pgc(i);
+        b    = ovl_rrb_b(i);
         cb   = cw_recsize(pgc);
 
         if (rrba >= CW_RRBA_MAX)
@@ -633,7 +633,7 @@ int cw_rtf_selfcheck(void)
             /* b is a BIT index and w is a WORD index - Opus's irregularity. */
             if (b >= 16)
                 return CW_CHK_BIT * 1000 + i;
-            if ((cw_rrb_w(i) * 2) + 2 > cb)
+            if ((ovl_rrb_w(i) * 2) + 2 > cb)
                 return CW_CHK_BIT * 1000 + i;
         } else if (rrba == CW_RRBA_WORD || rrba == CW_RRBA_UNS) {
             if ((b & 1) != 0)
@@ -653,27 +653,27 @@ int cw_rtf_selfcheck(void)
 
     /* (10) the second transcription of the keyword rows. */
     for (j = 0; j < (int)CW_NXSYM; j++) {
-        i = cw_rtf_lookup(cw_xsym[j].sz);
+        i = ovl_rtf_lookup(cw_xsym[j].sz);
         if (i < 0)
             return CW_CHK_EXPECT_SYM * 1000 + j;
-        if (cw_rsym_val(i)     != cw_xsym[j].val)     return CW_CHK_EXPECT_SYM * 1000 + j;
-        if (cw_rsym_rac(i)     != cw_xsym[j].rac)     return CW_CHK_EXPECT_SYM * 1000 + j;
-        if (cw_rsym_passval(i) != cw_xsym[j].passval) return CW_CHK_EXPECT_SYM * 1000 + j;
-        if (cw_rsym_arg(i)     != cw_xsym[j].arg)     return CW_CHK_EXPECT_SYM * 1000 + j;
+        if (ovl_rsym_val(i)     != cw_xsym[j].val)     return CW_CHK_EXPECT_SYM * 1000 + j;
+        if (ovl_rsym_rac(i)     != cw_xsym[j].rac)     return CW_CHK_EXPECT_SYM * 1000 + j;
+        if (ovl_rsym_passval(i) != cw_xsym[j].passval) return CW_CHK_EXPECT_SYM * 1000 + j;
+        if (ovl_rsym_arg(i)     != cw_xsym[j].arg)     return CW_CHK_EXPECT_SYM * 1000 + j;
     }
 
     /* (11) ...and of the property rows. */
     for (j = 0; j < (int)CW_NXRRB; j++) {
         i = cw_xrrb[j].irrb;
-        if (cw_rrb_rrba(i) != cw_xrrb[j].rrba) return CW_CHK_EXPECT_RRB * 1000 + j;
-        if (cw_rrb_pgc(i)  != cw_xrrb[j].pgc)  return CW_CHK_EXPECT_RRB * 1000 + j;
-        if (cw_rrb_b(i)    != cw_xrrb[j].b)    return CW_CHK_EXPECT_RRB * 1000 + j;
-        if (cw_rrb_w(i)    != cw_xrrb[j].w)    return CW_CHK_EXPECT_RRB * 1000 + j;
+        if (ovl_rrb_rrba(i) != cw_xrrb[j].rrba) return CW_CHK_EXPECT_RRB * 1000 + j;
+        if (ovl_rrb_pgc(i)  != cw_xrrb[j].pgc)  return CW_CHK_EXPECT_RRB * 1000 + j;
+        if (ovl_rrb_b(i)    != cw_xrrb[j].b)    return CW_CHK_EXPECT_RRB * 1000 + j;
+        if (ovl_rrb_w(i)    != cw_xrrb[j].w)    return CW_CHK_EXPECT_RRB * 1000 + j;
     }
 
     /* (12) and what must not be found. */
     for (j = 0; j < (int)CW_NXABSENT; j++) {
-        if (cw_rtf_lookup(cw_xabsent[j]) != CW_RTF_NOTFOUND)
+        if (ovl_rtf_lookup(cw_xabsent[j]) != CW_RTF_NOTFOUND)
             return CW_CHK_ABSENT * 1000 + j;
     }
 
@@ -695,7 +695,7 @@ int cw_rtf_selfcheck(void)
  *          -I $SC/v0100/include -I apps/cword apps/cword/cwrtftbl.c -o t.asm
  *     python3 tools/cc8086.py t.asm -o t8086.asm
  *
- *   .text     455   cw_rtf_lookup() and the eight accessors
+ *   .text     455   ovl_rtf_lookup() and the eight accessors
  *   .rodata   343   the 76 keyword names, NUL terminated, unpadded
  *   .data     616   cw_rsym[] 456 (76 x 6) + cw_rrb[] 160 (40 x 4)
  *   .bss        0   there is no mutable state here at all

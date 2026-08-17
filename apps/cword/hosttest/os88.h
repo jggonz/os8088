@@ -59,6 +59,7 @@ void os88_font_run(int x, int y, const char *s, int ink, int paper);
 void os88_font_str(int x, int y, const char *s);
 void os88_font_char(int x, int y, int ch);
 void os88_gfx_vline(int x, int y1, int y2);
+void os88_gfx_line(int x1, int y1, int x2, int y2, int dilate);
 void os88_gfx_pixel(int x, int y);
 void os88_gfx_pen(int disabled);
 int  os88_gfx_blit1(const void *bits, int stride, int x, int y,

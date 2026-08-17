@@ -20,13 +20,13 @@
  *
  * WHICH OPUS FILE EACH PART CAME FROM:
  *
- *   Opus/RTFIN.C:790-905     the tokenizer and dispatch loop - cw_rtf_parse()
- *                            and cw_rtf_control() are that loop, with Opus's
+ *   Opus/RTFIN.C:790-905     the tokenizer and dispatch loop - ovl_rtf_parse()
+ *                            and ovl_rtf_control() are that loop, with Opus's
  *                            rac switch kept case for case
- *   Opus/RTFIN2.C:20-95      ApplyPropChange - cw_apply() is that routine, one
+ *   Opus/RTFIN2.C:20-95      ApplyPropChange - ovl_apply() is that routine, one
  *                            arm per rrba, over cwrtftbl.h's byte-array records
  *   Opus/RTFIN.C:395-470     the group stack (SavePropsRtf / RestorePropsRtf) -
- *                            cw_push() / cw_pop()
+ *                            ovl_push() / ovl_pop()
  *   Opus/RTFOUT.C            the writer's shape: a header group, a \fonttbl,
  *                            document geometry, then \pard\plain and the text
  *                            with a control word only where something CHANGES
@@ -69,7 +69,7 @@
  * code, which is paid for twice.
  *
  *   CW_DOC_MAX  4,000 characters, about two typed pages. HARD, ENFORCED, AND
- *               REPORTED: cw_put() refuses past it and raises cw_trunc, the
+ *               REPORTED: ovl_put() refuses past it and raises cw_trunc, the
  *               reader stops filling and says so, and the editor greys and
  *               toasts rather than dropping keys silently (SPEC.md 47).
  *               It is far below the 65,535 that cwrtftbl.h's 16-bit CP
@@ -111,7 +111,7 @@
 
 #define CW_A_BOLD      1                /* cw_att[] bits. They are the app's, */
 #define CW_A_ITAL      2                /* not Opus's - the mapping onto      */
-#define CW_A_ULINE     4                /* CW_CHP_* happens in cw_attr_now()  */
+#define CW_A_ULINE     4                /* CW_CHP_* happens in ovl_attr_now()  */
 #define CW_A_ALL       7
 
 char          cw_buf[CW_DOC_MAX];       /* the text */
@@ -126,7 +126,7 @@ int           cw_ovf;                   /* the writer ran out of cw_rtf */
 /* --- the reader's property records (cwrtftbl.h owns the layouts) ----------
  * Byte arrays with manifest offsets, exactly as Opus's ApplyPropChange treats
  * them, so no compiler layout decision can disagree with a table row. cword
- * keeps four of the nine pgc records; cw_record() answers 0 for the five it
+ * keeps four of the nine pgc records; ovl_record() answers 0 for the five it
  * does not (tables, pictures, borders, sections, date fields), and a property
  * aimed at one of those is dropped where it arrives rather than tested for at
  * every call site. */
@@ -163,7 +163,7 @@ int cw_stk_n;
  * They are also the reason the host harness needs no stubs.
  * ========================================================================= */
 
-void cw_zero(unsigned char *p, int n)
+void ovl_zero(unsigned char *p, int n)
 {
     int i;
     for (i = 0; i < n; i++)
@@ -178,7 +178,7 @@ void cw_zero(unsigned char *p, int n)
  * harness exercises the same arithmetic the 8088 will, which is the whole
  * value of having a host harness. It costs a few instructions in a path that
  * runs once per document. */
-int cw_pw_get(const unsigned char *p, int o)
+int ovl_pw_get(const unsigned char *p, int o)
 {
     int v;
     v = p[o];
@@ -187,7 +187,7 @@ int cw_pw_get(const unsigned char *p, int o)
                                          * bits on the target */
 }
 
-void cw_pw_set(unsigned char *p, int o, int v)
+void ovl_pw_set(unsigned char *p, int o, int v)
 {
     p[o]     = (unsigned char)v;
     p[o + 1] = (unsigned char)(v >> 8);
@@ -204,7 +204,7 @@ void cw_doc_clear(void)
     cw_trunc = 0;
 }
 
-/* cw_attr_now - the editor attribute the reader's CHP currently means.
+/* ovl_attr_now - the editor attribute the reader's CHP currently means.
  *
  * This is the ONE place Opus's character properties and cword's three
  * formatting bits meet, and it is a narrowing that is stated rather than
@@ -214,13 +214,13 @@ void cw_doc_clear(void)
  * flags, the font, the size, the colour and the super/subscript are READ AND
  * DISCARDED. They are parsed - the records above hold them, correctly - so
  * adding a renderer for one is a change in cword.c and not here. */
-int cw_attr_now(void)
+int ovl_attr_now(void)
 {
     int a;
     int g;
 
     a = 0;
-    g = cw_pw_get(cw_chp, CW_CHP_O_GRPF);
+    g = ovl_pw_get(cw_chp, CW_CHP_O_GRPF);
     if (g & CW_CHP_F_BOLD)
         a = a | CW_A_BOLD;
     if (g & CW_CHP_F_ITALIC)
@@ -230,10 +230,10 @@ int cw_attr_now(void)
     return a;
 }
 
-/* cw_put - append one character in the current formatting.
+/* ovl_put - append one character in the current formatting.
  * Refuses at CW_DOC_MAX and raises cw_trunc; a refusal is a normal path here
  * and the caller reports it (SPEC.md 47). */
-void cw_put(int c, int a)
+void ovl_put(int c, int a)
 {
     if (cw_len >= CW_DOC_MAX) {
         cw_trunc = 1;
@@ -251,7 +251,7 @@ void cw_put(int c, int a)
     cw_len++;
 }
 
-/* cw_put_special - one of Word's special characters (Opus racSpecChar), by
+/* ovl_put_special - one of Word's special characters (Opus racSpecChar), by
  * the character code the keyword table carries.
  *
  * WHERE cword NARROWS, AND IT IS VISIBLE RATHER THAN SILENT: the document
@@ -261,32 +261,32 @@ void cw_put(int c, int a)
  * and an optional hyphen - which is a hyphen that is NOT to be printed unless
  * the line breaks there - becomes nothing at all. Every one of those keeps
  * the text readable and loses a distinction cword cannot draw. */
-void cw_put_special(int val, int a)
+void ovl_put_special(int val, int a)
 {
     if (val == CW_CH_EOP || val == CW_CH_CRJ || val == CW_CH_SECT) {
-        cw_put('\n', a);
+        ovl_put('\n', a);
         return;
     }
     if (val == CW_CH_TAB || val == CW_CH_NONBREAKSP) {
-        cw_put(' ', a);
+        ovl_put(' ', a);
         return;
     }
     if (val == CW_CH_NONBREAKHYPH) {
-        cw_put('-', a);
+        ovl_put('-', a);
         return;
     }
     if (val == CW_CH_NONREQHYPH)
         return;                         /* an optional hyphen: print nothing */
     if (val >= 32 && val <= 126)
-        cw_put(val, a);
+        ovl_put(val, a);
 }
 
 /* ===========================================================================
  * APPLYING A PROPERTY - Opus/RTFIN2.C:20-95, one arm per rrba
  * ========================================================================= */
 
-/* cw_record - the byte array a pgc names, or 0 for one cword does not keep. */
-unsigned char *cw_record(int pgc)
+/* ovl_record - the byte array a pgc names, or 0 for one cword does not keep. */
+unsigned char *ovl_record(int pgc)
 {
     if (pgc == CW_PGC_CHAR)
         return cw_chp;
@@ -299,7 +299,7 @@ unsigned char *cw_record(int pgc)
     return 0;                           /* SECT, PIC, BRC, TABLE, DTR */
 }
 
-/* cw_pard / cw_plain - the two resets.
+/* ovl_pard / ovl_plain - the two resets.
  *
  * THESE ARE WRITTEN OUT AND NOT DRIVEN OFF THE TABLE, and that is the single
  * most easily-got-wrong thing in this file, so here is the reason in full.
@@ -316,31 +316,31 @@ unsigned char *cw_record(int pgc)
  * CHP field is zero at rest EXCEPT the size, which is RTF's default of 24
  * half-points - the same 24 the \fs row carries, and the one value the two
  * meanings of that column agree on. */
-void cw_pard(void)
+void ovl_pard(void)
 {
-    cw_zero(cw_pap, CW_CB_PAP);
+    ovl_zero(cw_pap, CW_CB_PAP);
     cw_tjc = CW_JC_LEFT;
 }
 
-void cw_plain(void)
+void ovl_plain(void)
 {
-    cw_zero(cw_chp, CW_CB_CHP);
+    ovl_zero(cw_chp, CW_CB_CHP);
     cw_chp[CW_CHP_O_HPS] = 24;          /* RTF's default, not Opus's hpsDefault */
 }
 
-/* cw_apply_spec - the rrbaSpec rows, which are the ones no generic store can
+/* ovl_apply_spec - the rrbaSpec rows, which are the ones no generic store can
  * express. Opus keeps a switch here too (RTFIN2.C:88) for exactly the rows
  * whose meaning is not "put this value at this offset". */
-void cw_apply_spec(int irrb, int val, int fval, int b)
+void ovl_apply_spec(int irrb, int val, int fval, int b)
 {
     int n;
 
     if (irrb == CW_IRRB_PARD) {
-        cw_pard();
+        ovl_pard();
         return;
     }
     if (irrb == CW_IRRB_PLAIN) {
-        cw_plain();
+        ovl_plain();
         return;
     }
     if (irrb == CW_IRRB_TJC) {
@@ -354,7 +354,7 @@ void cw_apply_spec(int irrb, int val, int fval, int b)
                                          * extra ones are dropped, and that is
                                          * visible in the ruler rather than
                                          * silent (cwrtftbl.h's narrowing) */
-        cw_pw_set(cw_pap, CW_PAP_O_RGDXATAB + n + n, val);
+        ovl_pw_set(cw_pap, CW_PAP_O_RGDXATAB + n + n, val);
         cw_pap[CW_PAP_O_RGTBD + n] = (unsigned char)CW_TBD(cw_tjc, CW_TLC_NONE);
         cw_pap[CW_PAP_O_ITBDMAC] = (unsigned char)(n + 1);
         cw_tjc = CW_JC_LEFT;            /* the stop consumed it */
@@ -382,19 +382,19 @@ void cw_apply_spec(int irrb, int val, int fval, int b)
         return;
     }
     if (irrb == CW_IRRB_DEFF) {
-        cw_pw_set(cw_ris, CW_RIS_O_DEFF, val);
+        ovl_pw_set(cw_ris, CW_RIS_O_DEFF, val);
         return;
     }
     /* CW_IRRB_IGNORE and anything else: recognised, does nothing. */
 }
 
-/* cw_apply - Opus's ApplyPropChange.
+/* ovl_apply - Opus's ApplyPropChange.
  *
  * in:  irrb - a CW_IRRB_* row index
  *      val  - the number that followed the keyword, or the keyword's own val
  *      fval - 1 if a number (or a fPassVal keyword value) was actually given
  * out: the property record named by the row is updated */
-void cw_apply(int irrb, int val, int fval)
+void ovl_apply(int irrb, int val, int fval)
 {
     unsigned char *p;
     int rrba;
@@ -403,15 +403,15 @@ void cw_apply(int irrb, int val, int fval)
     int v;
     int m;
 
-    rrba = cw_rrb_rrba(irrb);
-    b    = cw_rrb_b(irrb);
+    rrba = ovl_rrb_rrba(irrb);
+    b    = ovl_rrb_b(irrb);
 
     if (rrba == CW_RRBA_SPEC) {
-        cw_apply_spec(irrb, val, fval, b);
+        ovl_apply_spec(irrb, val, fval, b);
         return;
     }
 
-    p = cw_record(cw_rrb_pgc(irrb));
+    p = ovl_record(ovl_rrb_pgc(irrb));
     if (p == 0)
         return;                         /* a record cword does not keep */
 
@@ -433,9 +433,9 @@ void cw_apply(int irrb, int val, int fval)
             m = m + m;
             b--;
         }
-        o = cw_rrb_w(irrb);
+        o = ovl_rrb_w(irrb);
         o = o + o;                      /* a word index -> a byte offset */
-        v = cw_pw_get(p, o);
+        v = ovl_pw_get(p, o);
         if (fval && val == 0)
             v = v & (0xFFFF - m);       /* ~m, without relying on the width of
                                          * `int`: this file compiles on the
@@ -443,12 +443,12 @@ void cw_apply(int irrb, int val, int fval)
                                          * set than the record has */
         else
             v = v | m;
-        cw_pw_set(p, o, v);
+        ovl_pw_set(p, o, v);
         return;
     }
 
     if (!fval)
-        val = cw_rrb_w(irrb);           /* no number: the row's own value */
+        val = ovl_rrb_w(irrb);           /* no number: the row's own value */
 
     if (rrba == CW_RRBA_BYTE) {
         p[b] = (unsigned char)val;
@@ -458,7 +458,7 @@ void cw_apply(int irrb, int val, int fval)
     /* CW_RRBA_WORD and CW_RRBA_UNS. The difference is how the NUMBER was
      * scanned (a leading '-' is legal for one and not the other), which the
      * tokenizer has already dealt with by the time it gets here. */
-    cw_pw_set(p, b, val);
+    ovl_pw_set(p, b, val);
 }
 
 /* ===========================================================================
@@ -472,33 +472,33 @@ void cw_apply(int irrb, int val, int fval)
 int cw_skipd;                           /* group depth being discarded, -1 = no */
 int cw_depth;                           /* current group depth */
 
-/* cw_push / cw_pop - the group stack. Opus saves the whole property state; the
+/* ovl_push / ovl_pop - the group stack. Opus saves the whole property state; the
  * three things cword can act on are the character flags, the underline and
  * the destination. On overflow the parse stops with CW_RTF_DEEP rather than
  * running off the array: a malformed file is not allowed to be a memory bug,
  * and every byte read off a disk is hostile (CLAUDE.md). */
-int cw_push(void)
+int ovl_push(void)
 {
     if (cw_stk_n >= CW_STK_MAX)
         return -1;
-    cw_stk_grpf[cw_stk_n] = cw_pw_get(cw_chp, CW_CHP_O_GRPF);
+    cw_stk_grpf[cw_stk_n] = ovl_pw_get(cw_chp, CW_CHP_O_GRPF);
     cw_stk_kul[cw_stk_n]  = cw_chp[CW_CHP_O_KUL];
     cw_stk_rds[cw_stk_n]  = cw_rds;
     cw_stk_n++;
     return 0;
 }
 
-void cw_pop(void)
+void ovl_pop(void)
 {
     if (cw_stk_n <= 0)
         return;                         /* an unbalanced '}': ignore it */
     cw_stk_n--;
-    cw_pw_set(cw_chp, CW_CHP_O_GRPF, cw_stk_grpf[cw_stk_n]);
+    ovl_pw_set(cw_chp, CW_CHP_O_GRPF, cw_stk_grpf[cw_stk_n]);
     cw_chp[CW_CHP_O_KUL] = (unsigned char)cw_stk_kul[cw_stk_n];
     cw_rds = cw_stk_rds[cw_stk_n];
 }
 
-int cw_isalpha(int c)
+int ovl_isalpha(int c)
 {
     if (c >= 'a' && c <= 'z')
         return 1;
@@ -507,7 +507,7 @@ int cw_isalpha(int c)
     return 0;
 }
 
-int cw_hexval(int c)
+int ovl_hexval(int c)
 {
     if (c >= '0' && c <= '9')
         return c - '0';
@@ -525,12 +525,12 @@ char cw_kw[34];
 int  cw_kw_val;
 int  cw_kw_fval;
 
-/* cw_rtf_control - scan and act on the control word at cw_rtf[i], where
+/* ovl_rtf_control - scan and act on the control word at cw_rtf[i], where
  * cw_rtf[i] is the backslash.
  * out: the offset of the first byte after it (and after the one optional
  *      space that delimits it, which is part of the control word and not
  *      text - the classic way to lose every space in a document). */
-int cw_rtf_control(int i, int n)
+int ovl_rtf_control(int i, int n)
 {
     int j;
     int k;
@@ -550,7 +550,7 @@ int cw_rtf_control(int i, int n)
     cw_kw_fval = 0;
     c = (unsigned char)cw_rtf[j];
 
-    if (!cw_isalpha(c)) {
+    if (!ovl_isalpha(c)) {
         /* A control SYMBOL: exactly one character, and it is its own name.
          * \n and \r - a backslash followed by a line break - are two of them,
          * and cwrtftbl.c carries both as one-character rows for that reason
@@ -560,7 +560,7 @@ int cw_rtf_control(int i, int n)
         j++;
     } else {
         k = 0;
-        while (j < n && cw_isalpha((unsigned char)cw_rtf[j])) {
+        while (j < n && ovl_isalpha((unsigned char)cw_rtf[j])) {
             if (k < 32) {
                 cw_kw[k] = cw_rtf[j];
                 k++;
@@ -596,7 +596,7 @@ int cw_rtf_control(int i, int n)
             j++;
     }
 
-    irsym = cw_rtf_lookup(cw_kw);
+    irsym = ovl_rtf_lookup(cw_kw);
 
     if (irsym < 0) {
         /* An unknown control word. If \* preceded it, the writer has told us
@@ -611,11 +611,11 @@ int cw_rtf_control(int i, int n)
         return j;
     }
 
-    rac = cw_rsym_rac(irsym);
-    arg = cw_rsym_arg(irsym);
+    rac = ovl_rsym_rac(irsym);
+    arg = ovl_rsym_arg(irsym);
 
-    if (cw_rsym_passval(irsym)) {       /* the keyword IS the value: \qc, \ansi */
-        cw_kw_val  = cw_rsym_val(irsym);
+    if (ovl_rsym_passval(irsym)) {       /* the keyword IS the value: \qc, \ansi */
+        cw_kw_val  = ovl_rsym_val(irsym);
         cw_kw_fval = 1;
     }
 
@@ -634,25 +634,25 @@ int cw_rtf_control(int i, int n)
     }
 
     if (rac == CW_RAC_CHNGPROP) {
-        cw_apply(arg, cw_kw_val, cw_kw_fval);
+        ovl_apply(arg, cw_kw_val, cw_kw_fval);
         return j;
     }
 
     if (rac == CW_RAC_SPECCHAR) {
         if (cw_rds == CW_RDS_MAIN)
-            cw_put_special(cw_rsym_val(irsym), cw_attr_now());
+            ovl_put_special(ovl_rsym_val(irsym), ovl_attr_now());
         return j;
     }
 
     if (rac == CW_RAC_SPECCHARACT) {
         if (arg == CW_IPFN_PARAEND) {
             if (cw_rds == CW_RDS_MAIN)
-                cw_put('\n', cw_attr_now());
+                ovl_put('\n', ovl_attr_now());
             return j;
         }
         if (arg == CW_IPFN_TAB) {
             if (cw_rds == CW_RDS_MAIN)
-                cw_put_special(CW_CH_TAB, cw_attr_now());
+                ovl_put_special(CW_CH_TAB, ovl_attr_now());
             return j;
         }
         if (arg == CW_IPFN_HEXCHAR) {
@@ -660,8 +660,8 @@ int cw_rtf_control(int i, int n)
              * rule above, so they are read straight off j. */
             val = -1;
             if (j + 1 < n) {
-                a = cw_hexval((unsigned char)cw_rtf[j]);
-                k = cw_hexval((unsigned char)cw_rtf[j + 1]);
+                a = ovl_hexval((unsigned char)cw_rtf[j]);
+                k = ovl_hexval((unsigned char)cw_rtf[j + 1]);
                 if (a >= 0 && k >= 0) {
                     val = (a << 4) | k;
                     j = j + 2;
@@ -669,9 +669,9 @@ int cw_rtf_control(int i, int n)
             }
             if (val >= 0 && cw_rds == CW_RDS_MAIN) {
                 if (val >= 32 && val <= 126)
-                    cw_put(val, cw_attr_now());
+                    ovl_put(val, ovl_attr_now());
                 else
-                    cw_put_special(val, cw_attr_now());
+                    ovl_put_special(val, ovl_attr_now());
             }
             return j;
         }
@@ -682,7 +682,7 @@ int cw_rtf_control(int i, int n)
         if (arg == CW_IPFN_RDSRTF)
             cw_rds = CW_RDS_MAIN;
         else if (arg == CW_IPFN_RDSNEWSTD)
-            cw_rds = cw_rsym_val(irsym); /* \fonttbl, \colortbl */
+            cw_rds = ovl_rsym_val(irsym); /* \fonttbl, \colortbl */
         return j;
     }
 
@@ -703,7 +703,7 @@ int cw_rtf_control(int i, int n)
     return j;                           /* CW_RAC_IGNORE */
 }
 
-/* cw_rtf_parse - read cw_rtf[0..n) into the document.
+/* ovl_rtf_parse - read cw_rtf[0..n) into the document.
  *
  * The document is REPLACED, and only after the file has been recognised: a
  * file that does not begin `{\rtf` is refused with the old document intact,
@@ -713,7 +713,7 @@ int cw_rtf_control(int i, int n)
  * out: CW_RTF_OK, or a CW_RTF_* reason. TRUNC and DEEP both leave a partial
  *      document on purpose - what was read is readable, and the caller says
  *      what was lost (SPEC.md 47). */
-int cw_rtf_parse(int n)
+int ovl_rtf_parse(int n)
 {
     int i;
     int c;
@@ -726,10 +726,10 @@ int cw_rtf_parse(int n)
         return CW_RTF_NOTRTF;
 
     cw_doc_clear();
-    cw_zero(cw_ris, CW_CB_RIS);
-    cw_zero(cw_dop, CW_CB_DOP);
-    cw_pard();
-    cw_plain();
+    ovl_zero(cw_ris, CW_CB_RIS);
+    ovl_zero(cw_dop, CW_CB_DOP);
+    ovl_pard();
+    ovl_plain();
     cw_rds   = CW_RDS_MAIN;
     cw_stk_n = 0;
     cw_depth = 0;
@@ -741,7 +741,7 @@ int cw_rtf_parse(int n)
         c = (unsigned char)cw_rtf[i];
 
         if (c == '{') {
-            if (cw_push() != 0)
+            if (ovl_push() != 0)
                 return CW_RTF_DEEP;
             cw_depth++;
             i++;
@@ -749,7 +749,7 @@ int cw_rtf_parse(int n)
         }
         if (c == '}') {
             cw_depth--;
-            cw_pop();
+            ovl_pop();
             if (cw_skipd >= 0 && cw_depth < cw_skipd)
                 cw_skipd = -1;          /* the discarded group CLOSED - and it
                                          * is `<` and not `<=`, because
@@ -764,7 +764,7 @@ int cw_rtf_parse(int n)
             continue;
         }
         if (c == '\\') {
-            i = cw_rtf_control(i, n);
+            i = ovl_rtf_control(i, n);
             continue;
         }
         i++;
@@ -780,7 +780,7 @@ int cw_rtf_parse(int n)
             c = ' ';
         if (c < 32 || c > 126)
             continue;                   /* the model holds printable ASCII */
-        cw_put(c, cw_attr_now());
+        ovl_put(c, ovl_attr_now());
     }
 
     if (cw_trunc)
@@ -797,7 +797,7 @@ int cw_rtf_parse(int n)
  * five times the size of the text.
  * ========================================================================= */
 
-void cw_emitc(int c)
+void ovl_emitc(int c)
 {
     if (cw_rtfn >= CW_RTF_MAX) {
         cw_ovf = 1;
@@ -807,13 +807,13 @@ void cw_emitc(int c)
     cw_rtfn++;
 }
 
-void cw_emit(const char *s)
+void ovl_emit(const char *s)
 {
     int i;
 
     i = 0;
     while (s[i] != 0) {
-        cw_emitc((unsigned char)s[i]);
+        ovl_emitc((unsigned char)s[i]);
         i++;
     }
 }
@@ -825,12 +825,12 @@ void cw_emit(const char *s)
  * here is the most natural thing to write and it does not build. */
 char cw_dig[8];
 
-void cw_emitnum(int v)
+void ovl_emitnum(int v)
 {
     int i;
 
     if (v < 0) {
-        cw_emitc('-');
+        ovl_emitc('-');
         v = 0 - v;
     }
     i = 0;
@@ -841,11 +841,11 @@ void cw_emitnum(int v)
     } while (v != 0 && i < 7);
     while (i > 0) {
         i--;
-        cw_emitc(cw_dig[i]);
+        ovl_emitc(cw_dig[i]);
     }
 }
 
-/* cw_rtf_build - write the document into cw_rtf.
+/* ovl_rtf_build - write the document into cw_rtf.
  *
  * The header is the smallest one a reader can rely on: the version and
  * charset, a one-entry font table (cword has one face - the kernel's 8x8, and
@@ -858,7 +858,7 @@ void cw_emitnum(int v)
  * out: the byte count, or -1 if the document does not fit CW_RTF_MAX. The
  *      caller must refuse the save on -1 and say so - a truncated RTF file is
  *      unreadable, where a refusal costs nothing. */
-int cw_rtf_build(void)
+int ovl_rtf_build(void)
 {
     int i;
     int a;
@@ -868,25 +868,25 @@ int cw_rtf_build(void)
     cw_rtfn = 0;
     cw_ovf  = 0;
 
-    cw_emit("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fmodern os8088 8x8;}}\r\n");
+    ovl_emit("{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0\\fmodern os8088 8x8;}}\r\n");
 
-    cw_emit("\\paperw");
-    cw_emitnum(cw_rrb_w(CW_IRRB_PAPERW));
-    cw_emit("\\paperh");
-    cw_emitnum(cw_rrb_w(CW_IRRB_PAPERH));
-    cw_emit("\\margl");
-    cw_emitnum(cw_rrb_w(CW_IRRB_MARGL));
-    cw_emit("\\margr");
-    cw_emitnum(cw_rrb_w(CW_IRRB_MARGR));
-    cw_emit("\\margt");
-    cw_emitnum(cw_rrb_w(CW_IRRB_MARGT));
-    cw_emit("\\margb");
-    cw_emitnum(cw_rrb_w(CW_IRRB_MARGB));
-    cw_emit("\\deftab");
-    cw_emitnum(cw_rrb_w(CW_IRRB_DEFTAB));
-    cw_emit("\r\n\\pard\\plain\\f0\\fs");
-    cw_emitnum(cw_rrb_w(CW_IRRB_FS));
-    cw_emit("\r\n");
+    ovl_emit("\\paperw");
+    ovl_emitnum(ovl_rrb_w(CW_IRRB_PAPERW));
+    ovl_emit("\\paperh");
+    ovl_emitnum(ovl_rrb_w(CW_IRRB_PAPERH));
+    ovl_emit("\\margl");
+    ovl_emitnum(ovl_rrb_w(CW_IRRB_MARGL));
+    ovl_emit("\\margr");
+    ovl_emitnum(ovl_rrb_w(CW_IRRB_MARGR));
+    ovl_emit("\\margt");
+    ovl_emitnum(ovl_rrb_w(CW_IRRB_MARGT));
+    ovl_emit("\\margb");
+    ovl_emitnum(ovl_rrb_w(CW_IRRB_MARGB));
+    ovl_emit("\\deftab");
+    ovl_emitnum(ovl_rrb_w(CW_IRRB_DEFTAB));
+    ovl_emit("\r\n\\pard\\plain\\f0\\fs");
+    ovl_emitnum(ovl_rrb_w(CW_IRRB_FS));
+    ovl_emit("\r\n");
 
     cur = 0;
     for (i = 0; i < cw_len; i++) {
@@ -904,33 +904,33 @@ int cw_rtf_build(void)
         a = (cw_buf[i] == '\n') ? cur : (cw_att[i] & CW_A_ALL);
 
         if ((a & CW_A_BOLD) != (cur & CW_A_BOLD))
-            cw_emit((a & CW_A_BOLD) ? "\\b " : "\\b0 ");
+            ovl_emit((a & CW_A_BOLD) ? "\\b " : "\\b0 ");
         if ((a & CW_A_ITAL) != (cur & CW_A_ITAL))
-            cw_emit((a & CW_A_ITAL) ? "\\i " : "\\i0 ");
+            ovl_emit((a & CW_A_ITAL) ? "\\i " : "\\i0 ");
         if ((a & CW_A_ULINE) != (cur & CW_A_ULINE))
-            cw_emit((a & CW_A_ULINE) ? "\\ul " : "\\ulnone ");
+            ovl_emit((a & CW_A_ULINE) ? "\\ul " : "\\ulnone ");
         cur = a;
 
         c = (unsigned char)cw_buf[i];
         if (c == '\n') {
-            cw_emit("\\par\r\n");
+            ovl_emit("\\par\r\n");
             continue;
         }
         if (c == '\\' || c == '{' || c == '}')
-            cw_emitc('\\');
-        cw_emitc(c);
+            ovl_emitc('\\');
+        ovl_emitc(c);
     }
 
     /* Close what is open, then the document group. Turning the attributes off
      * explicitly is not needed - the '}' ends their scope - but a reader that
      * concatenates files is a real thing, and three keywords cost nine bytes. */
     if (cur & CW_A_BOLD)
-        cw_emit("\\b0 ");
+        ovl_emit("\\b0 ");
     if (cur & CW_A_ITAL)
-        cw_emit("\\i0 ");
+        ovl_emit("\\i0 ");
     if (cur & CW_A_ULINE)
-        cw_emit("\\ulnone ");
-    cw_emit("\r\n}\r\n");
+        ovl_emit("\\ulnone ");
+    ovl_emit("\r\n}\r\n");
 
     if (cw_ovf)
         return -1;

@@ -293,6 +293,31 @@ void os88_task_alive(void *win) { (void)win; }
 int  os88_peek(unsigned seg, unsigned off) { (void)seg; (void)off; return 0; }
 void os88_gfx_pen(int disabled) { (void)disabled; }
 void os88_gfx_vline(int x, int y1, int y2) { os88_gfx_fill(x, y1, x, y2); }
+/* The arbitrary-angle line (SPEC.md 5.6), which the menu check is two of. The
+ * model is a Bresenham walk rather than a bounding fill: the harness audits the
+ * glass cell for cell, and a stub that blackened the whole box would report a
+ * check mark as damage over the label beside it. */
+void os88_gfx_line(int x1, int y1, int x2, int y2, int dilate)
+{
+    int dx, dy, sx, sy, err, e2;
+
+    (void)dilate;
+    n_fill++;                           /* one drawing call, whatever it draws */
+    dx = x2 > x1 ? x2 - x1 : x1 - x2;
+    dy = y2 > y1 ? y2 - y1 : y1 - y2;
+    sx = x1 < x2 ? 1 : -1;
+    sy = y1 < y2 ? 1 : -1;
+    err = dx - dy;
+    for (;;) {
+        if (x1 >= 0 && x1 < GW * 8 && y1 >= 0 && y1 < GH)
+            pixline[x1][y1] = 1;
+        if (x1 == x2 && y1 == y2)
+            break;
+        e2 = err * 2;
+        if (e2 > -dy) { err -= dy; x1 += sx; }
+        if (e2 <  dx) { err += dx; y1 += sy; }
+    }
+}
 void os88_gfx_pixel(int x, int y) { os88_gfx_fill(x, y, x, y); }
 void os88_font_char(int x, int y, int ch)
 { char b[2]; b[0] = (char)ch; b[1] = 0; os88_font_str(x, y, b); }
@@ -384,6 +409,73 @@ char *os88_utoa(unsigned v, char *dst)
 /* the one hand-written routine, in C for the host */
 void cw_memmove(void *dst, const void *src, unsigned n) { memmove(dst, src, n); }
 
+/* ==========================================================================
+ * THE TYPE LIBRARY (apps/cword/cwtype.inc), STUBBED AS FACE 0
+ *
+ * The library is apps/os88type.inc, hand-written 8086 assembly that reads a
+ * `.F88` off a floppy and composes proportional glyphs into a 1bpp band. None
+ * of that can run here, and none of it needs to: FACE 0 IS THE KERNEL'S 8x8
+ * CELL AND IS ALWAYS OPEN (SPEC.md 6.5), so a host that answers "one family,
+ * which is the fixed one" exercises exactly the code path this harness is for
+ * - the fixed-face layout, whose pixel output it audits cell for cell.
+ *
+ * WHAT THIS DOES AND DOES NOT PROVE, stated because a pass here is easy to
+ * read as more than it is. It proves the proportional conversion did not
+ * change the FIXED face: every `cw_cx()` / `cw_xc()` site is walked with
+ * cw_prop clear, and a shift replaced by a lookup that answers differently
+ * shows up as a cell in the wrong column. It proves NOTHING about a chosen
+ * face - the band, the compose and the blit are all on the target - which is
+ * why SPEC.md 67.12.2's own testing is on three adapters with a face on each.
+ *
+ * cw_ty_scan() answering 0 is the honest model of a machine with no FONTS/
+ * folder, and it is what keeps the Font list's refusal path exercised on every
+ * build rather than only on a disk somebody remembered to break.
+ * ========================================================================*/
+void cw_ty_init(void) { }
+int  cw_ty_rows(void) { return 8; }
+int  cw_ty_lead(void) { return 0; }
+int  cw_ty_adv(int ch) { (void)ch; return 8; }
+int  cw_ty_use(int h, int style) { return (h == 0 && style == 0); }
+void cw_ty_cache(void) { }
+void cw_ty_band(int rows) { (void)rows; }
+int  cw_ty_putn(int pen, const char *s, int n)
+{ (void)s; return pen + n * 8; }
+int  cw_ty_flush(int x, int y, int w, int rows)
+{ (void)x; (void)y; (void)w; (void)rows; return 0; }   /* never drawn here */
+/* ty_fit and ty_hit, which in the fixed face are the division and the
+ * half-cell they replaced. Written out rather than answered as `px / 8` so
+ * that the harness walks the same shape the library does - the count is
+ * bounded by n at both ends, which is where an off-by-one would live. */
+int  cw_ty_fit(const char *s, int n, int px)
+{
+    int i, w = 0;
+    (void)s;
+    for (i = 0; i < n; i++) {
+        if (w + 8 > px) break;
+        w += 8;
+    }
+    return i;
+}
+int  cw_ty_hit(const char *s, int n, int px)
+{
+    int i;
+    (void)s;
+    for (i = 0; i < n; i++) {
+        if (px < i * 8 + 4) break;
+    }
+    return i;
+}
+void cw_ty_pen(const char *s, int n, int *px)
+{
+    int i;
+    (void)s;
+    for (i = 0; i <= n; i++) px[i] = i * 8;
+}
+int  cw_ty_scan(void) { return 0; }                    /* no FONTS/ folder */
+void cw_ty_name(int i, char *dst) { (void)i; dst[0] = 0; }
+int  cw_ty_open(int i) { (void)i; return 0; }          /* always refused */
+void cw_ty_close(int h) { (void)h; }
+
 #include "cword.c"
 
 /* ==========================================================================
@@ -449,7 +541,7 @@ static void shadow_audit(const char *what)
     if (shadow_lied)
         return;
     for (r = 0; r < cw_rows; r++) {
-        y = cw_ty + r * CW_PITCH;
+        y = cw_ty + r * cw_pitch;
         for (c = 0; c < cw_cols; c++) {
             char g = cellch[(cw_tx + c * 8) / 8][y];
             char sh = cw_sh[r * CW_SH_STRIDE + c];
@@ -474,7 +566,7 @@ static void verify(const char *what)
     model();
     shadow_audit(what);
     for (r = 0; r < cw_rows && !bad; r++) {
-        y = cw_ty + r * CW_PITCH;
+        y = cw_ty + r * cw_pitch;
         for (c = 0; c < cw_cols; c++) {
             x = cw_tx + c * 8;
             if (cellch[x / 8][y] != exp_ch[r][c]) {
@@ -628,9 +720,9 @@ static void cost_table(void)
     verify("after the cost table's scrolling");
 
     key(0, CW_K_END);
-    cw_chp_apply(win, CW_A_BOLD, 0);
+    ovl_chp_apply(win, CW_A_BOLD, 0);
     callreset(); key('B', 0);   cost("typing one BOLD character");
-    cw_chp_apply(win, CW_A_ULINE, 0);
+    ovl_chp_apply(win, CW_A_ULINE, 0);
     callreset(); key('U', 0);   cost("...bold and underlined");
     verify("after the cost table's formatting");
 }
@@ -695,17 +787,17 @@ int main(void)
     key(0, CW_K_DEL); verify("delete");
 
     /* 5. formatting: bold, then italic, then underline, then plain */
-    cw_chp_apply(win, CW_A_BOLD, 0);
+    ovl_chp_apply(win, CW_A_BOLD, 0);
     typestr("BOLD ");
     verify("bold text");
-    cw_chp_apply(win, CW_A_ITAL, 0);
+    ovl_chp_apply(win, CW_A_ITAL, 0);
     typestr("bold+italic ");
     verify("bold and italic");
-    cw_chp_apply(win, CW_A_BOLD, 0);
-    cw_chp_apply(win, CW_A_ULINE, 0);
+    ovl_chp_apply(win, CW_A_BOLD, 0);
+    ovl_chp_apply(win, CW_A_ULINE, 0);
     typestr("italic+under ");
     verify("italic and underline");
-    cw_chp_apply(win, 0, 2);
+    ovl_chp_apply(win, 0, 2);
     typestr("plain again and some more text to push the formatted run around ");
     verify("back to plain");
 
@@ -740,8 +832,8 @@ int main(void)
 
         cw_do(win, CWA_NEW);
         if (cw_dlg) { key(9, 0); key(13, 0); }
-        cw_chp_apply(win, CW_A_ITAL, 0);
-        cw_chp_apply(win, CW_A_ULINE, 0);
+        ovl_chp_apply(win, CW_A_ITAL, 0);
+        ovl_chp_apply(win, CW_A_ULINE, 0);
         typestr("italic and underlined on the very first row");
         verify("formatted text on row 0");
         /* File > New on a DIRTY document asks Word's question - "Do you want
@@ -756,10 +848,10 @@ int main(void)
         cw_do(win, CWA_NEW);
         if (cw_dlg) { key(9, 0); key(13, 0); }
         verify("Clear All must take the attribute strips with it");
-        cw_chp_apply(win, 0, 2);
+        ovl_chp_apply(win, 0, 2);
 
         for (ki = 0; ki < keepn; ki++)
-            cw_put(keep[ki], keepa[ki]);
+            ovl_put(keep[ki], keepa[ki]);
         cw_cur = cw_len;
         cw_top = 0;
         os88_paint(win);
@@ -783,7 +875,7 @@ int main(void)
     for (i = 0; i < cw_rows + 10; i++) { key(0, CW_K_UP); verify("scroll back up"); }
 
     /* 8. clicking to place the caret */
-    os88_onclick(cw_tx + 3 * 8 + 2, cw_ty + 2 * CW_PITCH + 3, win);
+    os88_onclick(cw_tx + 3 * 8 + 2, cw_ty + 2 * cw_pitch + 3, win);
     verify("click");
     os88_onclick(cw_tx + 900, cw_ty + 4000, win);   /* far outside */
     verify("click outside");
@@ -863,7 +955,7 @@ int main(void)
     }
 
     /* 9c. the keyboard shortcuts that are not menu commands */
-    cw_chp_apply(win, 0, 2);
+    ovl_chp_apply(win, 0, 2);
     key(CW_C_BOLD, 0);
     if (!(cw_attr & CW_A_BOLD)) { printf("FAIL: Ctrl-B did not set bold\n"); fails++; }
     key(CW_C_ULINE, 0);

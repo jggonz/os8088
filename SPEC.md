@@ -46362,29 +46362,41 @@ made to. It is split by §67.14's overlay along the line between **what a
 keystroke touches** and **what a menu command touches**:
 
 ```
-resident   image  37,062   the chrome, the layout, the glass shadow, the
-                           document model, the keyboard, the mouse
-           bss    22,028   the document (4,000 chars + 4,000 attribute bytes),
+resident   image  35,958   the chrome, the layout, the glass shadow, the
+                           document model, the keyboard, the mouse, and the
+                           type library (§6.3) the chosen face is set through
+           bss    24,511   the document (4,000 chars + 4,000 attribute bytes),
                            the RTF staging buffer (6,000), the shadow
-                           (2 x 24 x 128 = 6,144)
+                           (2 x 24 x 128 = 6,144), the type library's band and
+                           face table (1,933)
            -------------
-           total  59,090   96% of APP_MAX_SIZE; 2,350 bytes spare
-CWORD.OVL         9,430    the dialogs, RTF in and out, search, Sort,
-                           Renumber, Table of Contents
+           total  60,469   98% of APP_MAX_SIZE; 971 bytes spare
+CWORD.OVL        18,564    the dialogs, RTF in and out, search, Sort,
+                           Renumber, Table of Contents, the clipboard, the
+                           paragraph dictionary and the Font list
 ```
 
-`cc8086.py` reports **146 functions, 26 frame bytes maximum against the 96-byte
-cap, 1,204 sites lowered, 27 functions moved to `.modc`, 30 resident shims**.
+`cc8086.py` reports **156 functions, 26 frame bytes maximum against the 96-byte
+cap, 1,323 sites lowered, 76 functions moved to `.modc`, 47 resident shims**.
 
-**The mode is Draft view**, for §65.1's reason: os8088 has one 8x8 fixed face
-and Word 1.1a shipped a mode for exactly that situation. Bold is a second
-strike one pixel right, italic a strike one pixel up and right, underline /
-word underline / double underline are drawn rules, small caps is a case map,
-hidden text leaves the layout. Each costs **one extra call per RUN**, never one
-per glyph. The row pitch is **11** and not the demonstrator's 10: the italic
-overstrike is one pixel above the band and the double underline two below it,
-and at a pitch of 10 that second rule lands exactly where the next row's italic
-goes — a double-underlined line ate the italic off the line beneath it.
+**Those numbers moved a long way for §67.12.2**, and the direction is the
+point: the resident image got SMALLER while the program grew a typeface engine
+and a second view. Everything that runs once per command went to the module,
+which is what §67.14's rule says to do and what nobody had needed to do until
+the ceiling bound.
+
+**Draft and Page are both here** (§67.12.1), and Draft is where the program
+starts for §65.1's reason: os8088 has one 8x8 fixed face and Word 1.1a shipped a
+mode for exactly that situation. Bold is a second strike one pixel right,
+italic a strike one pixel up and right, underline / word underline / double
+underline are drawn rules, small caps is a case map, hidden text leaves the
+layout. Each costs **one extra call per RUN**, never one per glyph. The row
+pitch is **11** and not the demonstrator's 10: the italic overstrike is one
+pixel above the band and the double underline two below it, and at a pitch of
+10 that second rule lands exactly where the next row's italic goes — a
+double-underlined line ate the italic off the line beneath it. **That pitch is a
+variable now** and not a constant, because a face off `FONTS/` brings its own
+height (§67.12.2).
 
 **Paragraph formatting lives on the paragraph mark**, which is Word's own
 arrangement: the `'\n'` that ends a paragraph carries, in its attribute byte,
@@ -46403,8 +46415,11 @@ mode, Ins overtype, Show Paragraph Marks; the seven character attributes from
 the ribbon, the Ctrl keys and Format Character; alignment, line spacing, space
 before and the three indents from the ruler, the Ctrl keys and Format
 Paragraph; Search, Replace and Go To; Sort, Renumber and Table of Contents;
-Open and Save through the Standard File dialog with **RTF** as the file format;
-New / Open / Close / Exit with Word's save-changes prompt; and About.
+**View > Draft and View > Page** (§67.12.1); **the Font list, built from the
+system disk's `FONTS/` folder, which sets the document in a proportional face**
+(§19.8, §67.12.2); Open and Save through the Standard File dialog with **RTF**
+as the file format; New / Open / Close / Exit with Word's save-changes prompt;
+and About.
 
 **What is present and greyed** (§47 — grey a fact): the Print family, Spelling,
 Thesaurus, Hyphenate, the whole Macro menu, Outline, footnotes, annotations,
@@ -46449,6 +46464,256 @@ and `vm/386-word`, and it stays that way; this one is `apps/cword`, package
 `CWORD`, `.RTF`, `build/cword*.img` and `vm/386-c-word`. Two programs may have
 the same ambition; what they may not be is two things answering to one name,
 because the next person to touch either will silently get the other.
+
+#### 67.12.1 View > Page — the sheet, and the two origins it needed
+
+Draft view wraps to the WINDOW because the window is what the reader has.
+**Page view wraps to the SHEET**: `CW_PGCOLS` (60) cells — 480 px, six inches
+at this port's scale of one cell to 1/10" — centred in the content, its two
+edges drawn and a tick in each margin wherever a page begins. `View > Draft`
+and `View > Page` are a live pair and exactly one of them carries a check.
+§65.11 is the same mode in the assembly port and its reasoning holds here
+without change: it is the text COLUMN and not the whole 8.5" sheet, because a
+full sheet is 680 px and only Hercules is wider than 640 (§39).
+
+**In assembly the whole view was two numbers. Here it is FOUR**, and that
+difference is the only interesting thing about this port of it. `apps/word`
+draws its chrome from `[wd_tx]`, so moving that one word moved the ruler with
+the sheet and there was nothing else to move. This program draws a nine-title
+menu bar, a ribbon and a status line from the same origin the text uses — so
+narrowing that origin would have slid the MENU BAR into the middle of the
+window. The pair is therefore split in `cw_layout`:
+
+| | is | and is read by |
+|---|---|---|
+| `cw_bx`, `cw_bcols` | the content box, always | the menu bar, the ribbon, the status line, the ruler's own CONTROLS, every hit test on them, and the dropdown's geometry |
+| `cw_tx`, `cw_wpx` | the sheet's column in Page view, the content box in Draft | the text, the caret, the selection, the click hit test, the band scroll — and the ruler's SCALE and indent markers, which measure the sheet and belong with it |
+
+Everything downstream of `cw_tx`/`cw_wpx` — the wrap width, `cw_row_indent`,
+`cw_caret_on`, `cw_text_hit`, the ruler's scale and its indent markers — already
+derives from that pair, so each is right for the sheet without knowing a sheet
+exists. **A window too narrow to hold the sheet keeps its own width**, so Page
+view never hides text Draft would have shown.
+
+(`cw_cols` is the third number and it is not a width: it is the CELL ceiling a
+row may hold, which stopped being `cw_wpx / 8` the day a cell could be four
+pixels wide — see §67.12.2.)
+
+**What it draws, and what it costs.** `cw_sheet()` is two vertical rules and,
+per visible page boundary, two short ticks, **all of them OUTSIDE the text
+column** in the margin either side. That is §65.11's rule and its reason is the
+same: a rule drawn inside the column would be erased by the next row flush, and
+putting it back would mean `cw_render_row` — the hottest path in the program —
+learning about pages. Outside, only a full repaint can take them, and a full
+repaint calls `cw_sheet` again. Two `gfx` calls in the common case, and the
+standing cost table in §67.12 is untouched: **a keystroke still draws 5 calls
+and 8 cells.**
+
+**The page a tick marks is the page the status line already believes in.** A
+page is `CW_PGLINES` (54) paragraphs, which is what `cw_caret_place` has always
+divided by, so `Pg` and the ticks cannot disagree. The paragraph number is
+carried DOWN the rows rather than recounted per row: counting `'\n'` from offset
+zero for each of 24 rows is 24 walks of the document on a machine where one walk
+is already visible, and the count from the top of the view plus the marks
+between consecutive row starts is the same number for one walk.
+
+**The band fill widened, and that is a fix rather than a detail.** `cw_show`
+whitened `cw_tx .. cw_tx + cw_cols * 8 - 1` before laying rows down. In Page
+view that span excludes the margins the sheet's rules are drawn in, so leaving
+Page view left both rules on the glass with the text redrawn around them. It
+fills the content box now — the same one call, a wider span.
+
+**Print Preview stays greyed**, for §65.11's reason: there is no printing path
+in this OS to preview, so the greyed item is telling the truth (§47).
+
+**And the check mark had never been drawn.** `cw_menu_paint` asked
+`os88_font_char` for **0xFB**, the IBM ROM's check — and the kernel's face is
+characters 32..126 (§6), so the call drew NOTHING and no menu item in this
+program has ever carried a check. It is exactly the defect `cw_pilcrow` exists
+for, in a second place, and it hid because every checkable item until now was
+one whose state the user could see somewhere else: the ribbon lit, or the strip
+was on the screen or it was not. **Draft / Page is the first pair where the
+check IS the answer**, which is what turned it up. It is two `gfx_line` strokes
+now — a short down-stroke and a long up-stroke, which is what `apps/word` draws
+— and two calls per checked item, never one per pixel.
+
+#### 67.12.2 A typeface for the document, and the room it had to be found in
+
+The Font box on the ribbon was a `cw_combo` that dropped nothing down, and said
+so: one face, one size, and an arrow drawn because a control that lies about
+being interactive is worse than one that is honest about being the only choice.
+It drops down now. **The list is the machine's `FONTS/` folder** (§19.8) read
+through `apps/os88type.inc`'s `ty_scan`, and picking from it sets the whole
+document in that face.
+
+**The shape of the change is §65.13's and the summary is one sentence: the cell
+stays the unit and only its PIXEL POSITION stops being 8k.** This program's row
+model is an array of cells with a delta diff against a shadow, a per-row indent
+and a caret column, and every one of them is indexed by cell; giving a cell a
+variable position touches none of them. `cw_cx` (cell → x) and `cw_xc` (x →
+cell) are the two routines every site that computed `cw_tx + 8k` or
+`(x − cw_tx) / 8` goes through now, and `cw_px[]` is the row's own map — one
+word a cell, plus one slot past the last so a span's right edge is a lookup
+rather than a special case. With `cw_prop` clear they are the shifts they
+replace and the fixed face costs a call and a return.
+
+**Where the room came from, which is most of the work.** The resident image and
+its bss shared 59,090 of `APP_MAX_SIZE`'s 61,440 before this — 2,350 spare
+(§67.12) — and `os88type.inc` is 2,850 bytes of code and 1,933 of bss before a
+line of this program changes. So the space was found first, in the order
+§67.14's rule prescribes — **split by FREQUENCY** — and every byte of it came
+from code that runs once per command and was resident only because nobody had
+needed the bytes yet:
+
+| moved to `CWORD.OVL` | why it is module code |
+|---|---|
+| the whole RTF engine's helpers — the parser, the control-word scanner, the writer, the property setters | they run inside `ovl_file_load` / `ovl_file_store`, which were already out there. Only the TABLES stayed, because they are data and data is resident by construction (§67.14) |
+| the clipboard's three commands | once per Cut / Copy / Paste |
+| the paragraph dictionary's apply and find, and the seven alignment / spacing / indent commands over them | once per ruler click or `Ctrl`-key |
+| `cw_chp_apply` | once per ribbon click or `Ctrl`-key |
+| New, and the retitle both it and a Save As go through | once per File command |
+| **the Font list itself** — its geometry, its painter, its hit test, the scan and the pick | once per visit to the Font box |
+
+That last row is worth stating plainly rather than leaving in a table, because
+it is the one that costs something a user can notice: **choosing a typeface
+needs `CWORD.OVL` on the disk.** It is the right side of the line — a face is
+chosen about as often as a document is opened — and the refusal is the ordinary
+one, a toast naming the missing file and a list that does not drop down.
+
+**The type LIBRARY, though, is resident whole**, and that was decided the other
+way. `ty_putn`, `ty_flush` and `ty_advof` are the redraw path and could never
+have moved; `ty_scan` and `ty_open` could have, and moving them would have
+meant a `%ifdef` through `apps/os88type.inc` — a file `apps/word` and
+`tests/facetest` also include — to sort its own labels into two sections for
+one caller's benefit. The 2,850 bytes stayed and the room came from this
+program's own commands instead.
+
+`cw_doc_clear` is the one RTF-file function that could not move: `os88_main`
+calls it before there is an instance to load a module for. The dictionary's
+entry 0 used to be made there too, by a `cw_pap_find` call that was a **no-op
+the day it was written** — `cw_pap_n` starts at 1 and the six property arrays
+are bss, so entry 0 already was left-aligned, single-spaced and unindented.
+Deleting it was how that call site stopped being a problem.
+
+**The draw path is `cw_draw_run`'s second arm**: compose the run into the band
+with `ty_putn` and put it down with one `ty_flush`, against the one
+`os88_font_run` a fixed run takes. Two properties of §5.4.2 shape it, both
+lifted from §65.13 rather than rediscovered. The blit wants a byte-aligned x, so
+the band **starts one byte column LEFT of the first glyph redrawn** and its
+width is rounded up to a multiple of 8. And **the damaged span grows outwards to
+byte columns before it is drawn**, because the band is paper where nothing was
+composed and a run starting mid-byte would otherwise whiten up to 7 pixels of
+the glyph to its left — which the first build showed as a keystroke eating the
+tail of the character before it, one pixel column at a time.
+
+**`ty_flush` may answer CF=1** — a `kern_small` kernel carries the `GFX_BLIT1`
+slot and not its body (§6.5) — so the arm falls back to lettering the row in the
+kernel's 8×8 cell. The measuring side goes through the fixed metrics either way,
+so that fallback needs no second layout.
+
+**And `ty_flush` must be CALLED with the carry clear, which is a defect in the
+library rather than a convention.** It opens `call OSAPI_GFX_PEN` / `jnc` /
+`call ty_gray`, which reads as a QUERY of the disabled pen and is not one:
+`OSAPI_GFX_PEN` is a **setter whose argument is CF** (§20.3) and the cell
+preserves every flag, so the carry that comes back is the carry that went in.
+The routine therefore greys the band whenever its caller happened to arrive with
+CF set — and a compiled C call site arrives with whatever the last instruction
+of the argument setup left there. The symptom is a run of the DOCUMENT drawn as
+a 50% checkerboard, exactly as a greyed control is (§47), on some runs and not
+others; it was found on a run that was bold **and** underlined and on nothing
+else. `cwtype.inc`'s shim does `clc` before the call, which is what
+`os88api.inc`'s own note about that slot tells a caller to do. **`apps/word`
+reaches the same routine from assembly and has the same exposure**, and nothing
+here fixes that for it: there is no getter for `[gfx_dis]` to make the routine
+ask properly, so the fix would be to make the carry-in that routine's documented
+argument and audit both callers.
+
+**The row pitch is a variable and every literal that meant one was hunted by
+VALUE.** This is §65.13.1's open bug, and it is closed here rather than
+inherited, because this port's height model is one number: `cw_pitch`, and
+`cw_ty + r * cw_pitch` at every site that maps a row to a y. The assembly port's
+`wd_ryb` / `wd_advy` / `wd_walk` carry the same quantity in four places with a
+literal `8` in each, which is why converting it there moved every row's y and
+broke the incremental repaint. Here there is one place. **The lesson §65.13.1
+draws still stands and is why this was checked and not assumed**: `8` in this
+file is a glyph height, a row advance, a cell width, a tab stop and a byte
+column, and only reading each one tells them apart.
+
+**Two ceilings moved and one deliberately did not.** `CW_COLS_MAX` went 76 →
+**127**: a face's narrowest advance is `TY_MINADV` (4), so a row of narrow
+glyphs holds more cells than it holds byte columns. 127 and not 160 because
+`CW_SH_STRIDE` is **128 and does not change** — the shadow already wasted 52
+bytes a row on the power-of-two stride (§67.12), and spending them costs nothing
+where doubling the stride would cost 6,144 bytes this package does not have.
+**Past 127 cells the row WRAPS; it is never truncated.** §65.13 records the
+other choice as a defect the field reported — a row of text with its tail
+missing — so the wrap rule takes whichever comes first, the pixel width or the
+cell count, and a face narrow enough to hit the count breaks its lines early and
+loses nothing.
+
+**A chosen face is what the DOCUMENT is set in**, not a preview: picking from
+the list re-letters the whole note, and picking Pica re-letters it in the
+kernel's cell. What each face costs the layout is its own rows and leading,
+through `cw_pitch`.
+
+**Italic in a chosen face is drawn UPRIGHT, deliberately**, and bold is a second
+compose rather than a second call — §65.13's two decisions, for its two reasons:
+shearing the kernel's glyphs would letter one run in a different typeface from
+the words either side of it, and a second compose into the same band costs no
+drawing floor at all.
+
+**The scan runs once, whatever the answer.** It is four remounts and two
+listings of real floppy I/O (§19.8) — a couple of seconds on the target machine
+— so it runs the first time the Font box is opened and never again, and a disk
+with no `FONTS/` is not re-walked on the next press. The box is renamed **only
+after the face actually opens**, so the name in the ribbon is evidence that the
+face is open rather than evidence that one was asked for. The caption is a
+BUFFER and not a pointer, initialised to `Pica` at its declaration: §65.13
+records what a null one did in the assembly port, which is letter that package's
+own header onto the ribbon and read as a corrupt heap.
+
+**Item 0 of the list is always `Pica`,** which is face 0 and is not on the disk
+at all — it is what the document is set in until somebody chooses otherwise, and
+it is how they choose to come back. The other items are the machine's, so the
+list is as long as `FONTS/` is and a disk carrying more faces needs no edit.
+
+**The list WRAPS INTO COLUMNS rather than being cut.** One column clamped to the
+content box is what `cwdrop.c`'s menus do, and it is defensible there because
+losing the last item of a menu on a short screen is what the real product did.
+It is not defensible here: the items are the machine's typefaces, and an item
+that does not fit is a face on the disk that cannot be chosen at all. Measured
+on **CGA** (640×200, §39), where the window is 150 rows of content and the tenth
+face was the last one the panel could show — `Times` was on the disk, in the
+scan, and unreachable. So the height is whatever the window has and the WIDTH
+grows instead. On VGA and Hercules all eleven fit in one column and the geometry
+is the one it always was.
+
+**What a chosen face costs, said plainly.** The DRAWING CALL COUNT does not
+change — a run is one `gfx_blit1` where it was one `font_run`, and bold is a
+second compose into the same band where the fixed arm pays a whole
+`os88_font_str` — so §67.12's cost table is the table for both faces and
+PERFORMANCE.md Part 5's budget is untouched. What does change is the work
+*around* the calls, and three things got more expensive: the wrap measures with
+`ty_fit` instead of dividing, the row walk records a pen per cell with
+`ty_pen`, and `cw_cols` is sized from `TY_MINADV` so the row buffer's clears
+and the delta diff's compare each walk up to twice as many cells. All of it is
+per-character work on a path that already costs a `gfx` call per row, all of it
+is in assembly for §67.11's reason, and none of it is paid while the document
+is set in Pica. §65.13 prices the row it lands in on the target machine:
+**25.31 ms against the aligned 8×8 row's 24.37**.
+
+**None of that has been measured on an XT**, and the harness cannot help: it
+models face 0 and answers "no `FONTS/` folder", so what it proves is that the
+conversion did not change the FIXED face — every `cw_cx`/`cw_xc` site walked
+with `cw_prop` clear, audited cell for cell. The chosen face was checked by
+looking, on all three adapters, which is the other half and not a substitute.
+
+**The pre-shifted glyph table is built on the pick** (`ty_cache`, §6.5.2):
+~160 ms once — a third of one `int 13h` — and **2.01×** off every line the face
+draws afterwards. Its refusal is a 12 KB heap claim declined by a small machine,
+`ty_putn` takes the general path, and the pixels are identical; so it is the one
+call in `cwtype.inc` whose carry is dropped on purpose, because there is nothing
+for the caller to do about it and nothing to tell the user.
 
 
 ### 67.13 The build targets, and what is deliberately not in `all`

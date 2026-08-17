@@ -187,8 +187,8 @@ int main(void)
         else if (check >= 5 && check <= 9 && row < CW_IRRB_MAX)
             fprintf(stderr,
                     "  cw_rrb[%d]: rrba %d, pgc %d, b %d, w %d\n",
-                    row, cw_rrb_rrba(row), cw_rrb_pgc(row),
-                    cw_rrb_b(row), cw_rrb_w(row));
+                    row, ovl_rrb_rrba(row), ovl_rrb_pgc(row),
+                    ovl_rrb_b(row), ovl_rrb_w(row));
         else if (check == 10 && row < (int)CW_NXSYM)
             fprintf(stderr,
                     "  the expectation is \"%s\" = val %d, rac %d, passval %d,"

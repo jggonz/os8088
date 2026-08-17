@@ -111,14 +111,12 @@ static const struct cw_item cw_it[] = {
 /* --- &View, 13 ---------------------------------------------------------- */
 /* 29 */ { "Outline",          0,                 CWF_DIS, 0, 'O', CWA_NONE   },
          { "Draft",            0,                 CWF_CHK, 0, 'D', CWA_DRAFT  },
-         /* Page view is GREYED AS A FACT (SPEC.md 47), not omitted: draft view
-          * wraps to the WINDOW and page view wraps to the SHEET, with a page
-          * break every 54 lines and the sheet's edges drawn (SPEC.md 65.11
-          * describes it in the assembly port). That is a second layout engine,
-          * and this segment does not have room for one. A View menu with the
-          * item missing would be a different product; a View menu whose Page
-          * is grey says which mode this is. */
-         { "Page",             0,                 CWF_DIS, 0, 'P', CWA_NONE   },
+         /* Draft wraps to the WINDOW and Page wraps to the SHEET - a 60-cell
+          * column centred in the content, its edges drawn and a tick where a
+          * page begins (SPEC.md 67.12.1, and SPEC.md 65.11 for the same mode in
+          * the assembly port). They are a LIVE PAIR: exactly one of the two
+          * carries a check, which cw_item_chk() answers from cw_page. */
+         { "Page",             0,                 CWF_CHK, 0, 'P', CWA_PAGE   },
          CWSEP,
          { "Ribbon",           0,                 CWF_CHK, 2, 'B', CWA_VRIB   },
          { "Ruler",            0,                 CWF_CHK, 0, 'R', CWA_VRUL   },

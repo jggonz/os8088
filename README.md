@@ -321,15 +321,20 @@ slot.
 The OS itself is assembly and stays that way. But a **package** can be written
 in C, and one is: `apps/cword` — a second reimplementation of **Microsoft Word
 1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
-line as `apps/word` and RTF as its file format.
+line as `apps/word` and RTF as its file format. It has both of the product's
+views — Draft, which wraps to the window, and Page, which wraps to the sheet —
+and its **Font box lists the typefaces on the system disk** and sets the
+document in the one you pick, proportional metrics and all.
 
 It does not fit in one segment, and that is the interesting part. A package's
 image and bss share 60KB and that ceiling IS the segment; C costs two to three
-times the image of hand assembly for the same work. So half of it lives in
-`CWORD.OVL`, a file beside the package that is read into a heap claim the
-first time a dialog, a file command or one of the utilities is asked for — the
-split falling exactly between what a keystroke touches and what a menu command
-touches.
+times the image of hand assembly for the same work. So a good deal of it lives
+in `CWORD.OVL`, a file beside the package that is read into a heap claim the
+first time a dialog, a file command, the clipboard, the ruler or the Font list
+is asked for — the split falling exactly between what a keystroke touches and
+what a menu command touches. When the typefaces went in, that line is what
+moved: the resident half got *smaller* while the program grew a view and a text
+engine.
 
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in

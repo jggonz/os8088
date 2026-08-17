@@ -51,7 +51,7 @@
  * fits in a package that must also hold an editor. Two tables:
  *
  *   cw_rsym[]  - THE KEYWORD TABLE. 76 entries, sorted by name, searched by
- *                cw_rtf_lookup(). Each says what kind of thing the keyword is
+ *                ovl_rtf_lookup(). Each says what kind of thing the keyword is
  *                (its `rac`), what value it carries, and an index into...
  *   cw_rrb[]   - THE PROPERTY-ACTION TABLE. 40 entries, indexed by an
  *                CW_IRRB_* constant. Each says which property record to touch,
@@ -148,17 +148,17 @@
  * ---------------------------------------------------------------------------
  * HOW A READER USES THIS (the contract, from Opus/RTFIN.C:812-905)
  * ---------------------------------------------------------------------------
- *   i = cw_rtf_lookup(name);
+ *   i = ovl_rtf_lookup(name);
  *   if (i < 0) {
  *       if (ris.fNextIsDest)  skip the whole group;   <-- \* said so
  *       else                  ignore the control word;
  *   } else {
  *       ris.fNextIsDest = 0;
- *       if (cw_rsym_passval(i)) { val = cw_rsym_val(i); have_val = 1; }
- *       switch (cw_rsym_rac(i)) {
+ *       if (ovl_rsym_passval(i)) { val = ovl_rsym_val(i); have_val = 1; }
+ *       switch (ovl_rsym_rac(i)) {
  *       case CW_RAC_CHNGDEST:
- *       case CW_RAC_SPECCHARACT: do action cw_rsym_arg(i) with val;  break;
- *       case CW_RAC_CHNGPROP:    apply cw_rrb[cw_rsym_arg(i)];       break;
+ *       case CW_RAC_SPECCHARACT: do action ovl_rsym_arg(i) with val;  break;
+ *       case CW_RAC_CHNGPROP:    apply cw_rrb[ovl_rsym_arg(i)];       break;
  *       case CW_RAC_SPECCHAR:    insert the character val;           break;
  *       case CW_RAC_BINPARM:     consume `val` raw bytes;            break;
  *       case CW_RAC_SCANBYDEST:  skip the whole group;               break;
@@ -195,7 +195,7 @@
  * on the floppy AND bytes in the region: they are paid for twice, which is why
  * the keyword set is frozen and the strings are not padded to a fixed width.
  *
- * cw_rtf_lookup() is a binary search: 7 probes over 76 names, each probe a
+ * ovl_rtf_lookup() is a binary search: 7 probes over 76 names, each probe a
  * compare of a few bytes, so a control word costs roughly 700-1,000 8088
  * cycles - about 0.2 ms on the 4.77 MHz target. A 20 KB document holding
  * ~2,000 control words spends ~0.4 s in here, against the ~400 ms EACH that
@@ -582,8 +582,8 @@
  *
  *   val     widened to a full int, so 160 is 160 (see the narrowing note)
  *   racf    rac in bits 0-6 and fPassVal in bit 7, which is the same byte
- *           Opus's two adjacent fields occupied - unpacked by cw_rsym_rac()
- *           and cw_rsym_passval(), the only two places that know the layout
+ *           Opus's two adjacent fields occupied - unpacked by ovl_rsym_rac()
+ *           and ovl_rsym_passval(), the only two places that know the layout
  *   arg     the union, discriminated by rac: an CW_IRRB_* for CW_RAC_CHNGPROP,
  *           a CW_IPFN_* for CW_RAC_CHNGDEST and CW_RAC_SPECCHARACT, a
  *           "this is a special character" flag for CW_RAC_SPECCHAR, and
@@ -730,27 +730,27 @@ CW_CTASSERT(66, CW_IRRB_PLAIN >= CW_IRRB_CHP_LIM);
 extern const struct CW_RSYM cw_rsym[];
 extern const struct CW_RRB  cw_rrb[];
 
-/* cw_rtf_lookup - find a control word.
+/* ovl_rtf_lookup - find a control word.
  * in:  sz - the keyword with its leading backslash and any trailing number
  *           already stripped, NUL terminated. Case matters: RTF keywords are
  *           lower case and Opus does not fold either.
  * out: its index in cw_rsym[], or CW_RTF_NOTFOUND. A miss is a NORMAL result -
  *      it is 211 of Opus's 287 keywords plus everything a later writer
  *      invented, and the caller's ignore path is where they go. */
-int cw_rtf_lookup(const char *sz);
+int ovl_rtf_lookup(const char *sz);
 
 /* The four accessors. rac and fPassVal share a byte; these are the only places
  * that know it, so a change to the packing is a change to two lines. */
-int cw_rsym_val(int irsym);
-int cw_rsym_rac(int irsym);
-int cw_rsym_passval(int irsym);
-int cw_rsym_arg(int irsym);
+int ovl_rsym_val(int irsym);
+int ovl_rsym_rac(int irsym);
+int ovl_rsym_passval(int irsym);
+int ovl_rsym_arg(int irsym);
 
 /* ...and the four for a property row. Same reason. */
-int cw_rrb_rrba(int irrb);
-int cw_rrb_pgc(int irrb);
-int cw_rrb_b(int irrb);
-int cw_rrb_w(int irrb);
+int ovl_rrb_rrba(int irrb);
+int ovl_rrb_pgc(int irrb);
+int ovl_rrb_b(int irrb);
+int ovl_rrb_w(int irrb);
 
 /* cw_rtf_selfcheck - the run-time half of the self-check (the compile-time half
  * is the CW_CTASSERTs above and costs nothing).

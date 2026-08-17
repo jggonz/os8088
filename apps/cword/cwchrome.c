@@ -72,10 +72,15 @@ static void cw_pilcrow(int x, int y, int ink)
 }
 
 /* cw_combo - a drop-down box with a caption and the down-arrow well at its
- * right end. Nothing drops down: this port has one face, one size and one
- * style, so the boxes show what is in force and the arrow is drawn because a
- * control that lies about being interactive is worse than one that is honest
- * about being the only choice (SPEC.md 47 - grey a fact). */
+ * right end.
+ *
+ * THE FONT BOX DROPS DOWN AND THE OTHER TWO DO NOT, which is the honest state
+ * of this port rather than an inconsistency: there is a list of typefaces on
+ * the system disk (SPEC.md 19.8) and there is exactly one size and one style.
+ * The arrow is drawn on all three because a control that lies about being
+ * interactive is worse than one that is honest about being the only choice
+ * (SPEC.md 47 - grey a fact), and the Pts and Style boxes say what is in force
+ * and do nothing when clicked. */
 static void cw_combo(int x, int y, int w, const char *s)
 {
     cw_box(x, y, x + w - 1, y + 11, 0);
@@ -109,13 +114,13 @@ static void cw_menubar(void)
     os88_set_color(OS88_WHITE);
     os88_gfx_fill(cw_org.x, cw_by, cw_org.x + cw_sz.w - 1, cw_by + CW_H_BAR - 1);
 
-    cw_pad(cw_rt, cw_mbar, cw_cols);
-    os88_font_run(cw_tx, y, cw_rt, OS88_BLACK, OS88_WHITE);
+    cw_pad(cw_rt, cw_mbar, cw_bcols);
+    os88_font_run(cw_bx, y, cw_rt, OS88_BLACK, OS88_WHITE);
 
     os88_set_color(OS88_BLACK);
     for (i = 0; i < CW_NMENU; i++) {
-        x = cw_tx + (cw_mn_cell[i] + cw_mn_tmn[i]) * 8;
-        if (x + 7 > cw_tx + cw_cols * 8 - 1)
+        x = cw_bx + (cw_mn_cell[i] + cw_mn_tmn[i]) * 8;
+        if (x + 7 > cw_bx + cw_bcols * 8 - 1)
             break;                      /* a narrow window: the bar is clipped
                                          * by the run above and the rules must
                                          * stop where it did */
@@ -138,6 +143,9 @@ static void cw_menubar(void)
 
 #define CW_RB_BX     264                /* where the six letter buttons start */
 #define CW_RB_STEP    14
+/* ...and the Font box, which is the one control on this ribbon that opens. */
+#define CW_RB_FX      48
+#define CW_RB_FW      96
 
 static int cw_rib_attr(void)
 {
@@ -176,12 +184,12 @@ static void cw_ribbon(void)
     os88_set_color(OS88_WHITE);
     os88_gfx_fill(cw_org.x, cw_ry, cw_org.x + cw_sz.w - 1, cw_ry + CW_H_RIB - 1);
 
-    os88_font_run(cw_tx, y + 2, "Font:", OS88_BLACK, OS88_WHITE);
-    cw_combo(cw_tx + 48, y, 96, "Pica");
-    os88_font_run(cw_tx + 152, y + 2, "Pts:", OS88_BLACK, OS88_WHITE);
-    cw_combo(cw_tx + 192, y, 56, "10");
+    os88_font_run(cw_bx, y + 2, "Font:", OS88_BLACK, OS88_WHITE);
+    cw_combo(cw_bx + CW_RB_FX, y, CW_RB_FW, cw_fcap);
+    os88_font_run(cw_bx + 152, y + 2, "Pts:", OS88_BLACK, OS88_WHITE);
+    cw_combo(cw_bx + 192, y, 56, "10");
 
-    x = cw_tx + CW_RB_BX;
+    x = cw_bx + CW_RB_BX;
     if (x + 8 * CW_RB_STEP < cw_org.x + cw_sz.w) {
         cw_btn(x, y, 'B', a & CW_A_BOLD);
         cw_btn(x + CW_RB_STEP, y, 'I', a & CW_A_ITAL);
@@ -199,9 +207,121 @@ static void cw_ribbon(void)
     os88_gfx_hline(cw_org.x, cw_org.x + cw_sz.w - 1, cw_ry + CW_H_RIB - 1);
 }
 
+/* ==========================================================================
+ * THE FONT LIST (SPEC.md 19.8, 67.12.2)
+ *
+ * The list is the MACHINE'S and not this program's: `FONTS/` sits beside
+ * `SYSTEM/` on the system disk because a typeface is the machine's the way the
+ * kernel's own 8x8 cell is, and a second application wanting the same family
+ * should find it already there rather than carry a copy. So this panel is
+ * built from what apps/os88type.inc's ty_scan() found and its length is
+ * whatever that disk holds - a disk carrying more faces needs no edit here.
+ *
+ * ITEM 0 IS ALWAYS `Pica`, which is the kernel's cell and is not on the disk at
+ * all: it is face 0 (SPEC.md 6.5), it is what the document is set in until
+ * somebody chooses otherwise, and it is how they choose to come BACK.
+ * ========================================================================*/
+
+#define CW_FL_H      10                 /* an item's height, the dropdown's */
+
+/* The panel's rectangle, computed in ONE place and read by the painter, the hit
+ * test and the close - which is cwdrop.c's discipline in a second dropdown, and
+ * for its reason: a hit test that recomputes the layout is a second
+ * implementation of it, and the symptom is a list that highlights one row and
+ * opens another. */
+static void ovl_font_geom(void)
+{
+    int n;
+    int avail;
+    int ncol;
+
+    n = cw_nfam + 1;
+    cw_fl_x1 = cw_bx + CW_RB_FX;
+    cw_fl_y1 = cw_ry + 14;
+
+    /* IT WRAPS INTO COLUMNS RATHER THAN BEING CUT, and that is not tidiness.
+     * The first version was one column clamped to the content box, which is
+     * what cwdrop.c's menus do - and a menu that loses its last item on a short
+     * screen is what the real product did, so it was defensible there. Here it
+     * is not: the items are the machine's typefaces and losing one means a face
+     * on the disk that cannot be chosen at all. Measured on CGA (640x200,
+     * SPEC.md 39), where the window is 150 rows of content and the tenth face
+     * was the last one the panel could show - `Times` was on the disk, in the
+     * scan, and unreachable.
+     *
+     * So the height is what the window has and the WIDTH grows instead. On VGA
+     * every face fits in one column and this is the geometry it always was. */
+    avail = (cw_org.y + cw_sz.h - 1) - cw_fl_y1 - 3;
+    cw_fl_rows = avail / CW_FL_H;
+    if (cw_fl_rows < 1)
+        cw_fl_rows = 1;
+    if (cw_fl_rows > n)
+        cw_fl_rows = n;
+    ncol = (n + cw_fl_rows - 1) / cw_fl_rows;
+
+    cw_fl_x2 = cw_fl_x1 + ncol * CW_RB_FW - 1;
+    cw_fl_y2 = cw_fl_y1 + cw_fl_rows * CW_FL_H + 3;
+    if (cw_fl_x2 > cw_org.x + cw_sz.w - 2) {
+        cw_fl_x1 = cw_org.x + cw_sz.w - 2 - ncol * CW_RB_FW;
+        cw_fl_x2 = cw_fl_x1 + ncol * CW_RB_FW - 1;
+    }
+    if (cw_fl_x1 < cw_org.x)
+        cw_fl_x1 = cw_org.x;
+}
+
+static void ovl_font_paint(void)
+{
+    int i;
+    int x;
+    int y;
+
+    os88_set_color(OS88_WHITE);
+    os88_gfx_fill(cw_fl_x1, cw_fl_y1, cw_fl_x2, cw_fl_y2);
+    os88_set_color(OS88_BLACK);
+    os88_gfx_frame(cw_fl_x1, cw_fl_y1, cw_fl_x2, cw_fl_y2);
+
+    for (i = 0; i <= cw_nfam; i++) {
+        x = cw_fl_x1 + (i / cw_fl_rows) * CW_RB_FW;
+        y = cw_fl_y1 + 2 + (i % cw_fl_rows) * CW_FL_H;
+        /* THE NAME IS FETCHED INTO A BUFFER OF OURS and never held as a
+         * pointer into the library's table - see cw_ty_name() in
+         * apps/cword/cwtype.inc for the hard hang that rule is written from. */
+        if (i == 0)
+            cw_pad(cw_rt, "Pica", (CW_RB_FW - 8) / 8);
+        else {
+            cw_ty_name(i - 1, cw_tmp);
+            cw_pad(cw_rt, cw_tmp, (CW_RB_FW - 8) / 8);
+        }
+        os88_font_run(x + 4, y, cw_rt, OS88_BLACK, OS88_WHITE);
+        if (i - 1 == cw_fam)
+            os88_gfx_xor_fill(x + 1, y - 1, x + CW_RB_FW - 2, y + 8);
+    }
+}
+
+/* The item under a point, or -1. It reads the same two divisions the painter
+ * does, which is why they are here and not in two places. */
+static int ovl_font_hit(int mx, int my)
+{
+    int i;
+    int c;
+    int r;
+
+    if (mx < cw_fl_x1 || mx > cw_fl_x2 || my < cw_fl_y1 || my > cw_fl_y2)
+        return -1;
+    c = (mx - cw_fl_x1) / CW_RB_FW;
+    r = (my - cw_fl_y1 - 2) / CW_FL_H;
+    if (r < 0 || r >= cw_fl_rows)
+        return -1;
+    i = c * cw_fl_rows + r;
+    if (i > cw_nfam)
+        return -1;
+    return i;
+}
+
 /* The hit test, sharing the numbers above rather than repeating them: the
  * ribbon is laid out in ONE place and read in two.
- * out: the CW_A_* bit clicked, -1 for the paragraph-mark button, 0 for a miss */
+ * out: the CW_A_* bit clicked, -1 for the paragraph-mark button, -2 for the
+ *      Font box, 0 for a miss */
 static int cw_rib_hit(int mx, int my)
 {
     int x;
@@ -211,7 +331,9 @@ static int cw_rib_hit(int mx, int my)
         return 0;
     if (my < cw_ry + 2 || my > cw_ry + 13)
         return 0;
-    x = cw_tx + CW_RB_BX;
+    if (mx >= cw_bx + CW_RB_FX && mx < cw_bx + CW_RB_FX + CW_RB_FW)
+        return -2;
+    x = cw_bx + CW_RB_BX;
     for (i = 0; i < 7; i++) {
         int bx;
 
@@ -257,7 +379,7 @@ static int cw_rib_hit(int mx, int my)
 /* The ruler's scale, composed here and blitted in one call - four pixel rows,
  * one byte a cell plus one for the mark at the right margin. */
 #define CW_SCALE_ROWS  4
-static unsigned char cw_scale[CW_SCALE_ROWS * (CW_COLS_MAX + 1)];
+static unsigned char cw_scale[CW_SCALE_ROWS * (CW_RULE_MAX + 1)];
 #define CW_RU_STEP    14
 
 static void cw_ruler(void)
@@ -267,6 +389,7 @@ static void cw_ruler(void)
     int i;
     int p;
     int sx;
+    int nc;
 
     if (!cw_vrul || cw_uy < 0)
         return;
@@ -276,10 +399,10 @@ static void cw_ruler(void)
     os88_set_color(OS88_WHITE);
     os88_gfx_fill(cw_org.x, cw_uy, cw_org.x + cw_sz.w - 1, cw_uy + CW_H_RUL - 1);
 
-    os88_font_run(cw_tx, y + 2, "Style:", OS88_BLACK, OS88_WHITE);
-    cw_combo(cw_tx + 56, y, 88, "Normal");
+    os88_font_run(cw_bx, y + 2, "Style:", OS88_BLACK, OS88_WHITE);
+    cw_combo(cw_bx + 56, y, 88, "Normal");
 
-    x = cw_tx + CW_RU_BX;
+    x = cw_bx + CW_RU_BX;
     if (x + 9 * CW_RU_STEP + 20 < cw_org.x + cw_sz.w) {
         cw_btn(x, y, 'L', cw_pap_al[p] == CW_AL_LEFT);
         cw_btn(x + CW_RU_STEP, y, 'C', cw_pap_al[p] == CW_AL_CENTER);
@@ -307,27 +430,35 @@ static void cw_ruler(void)
      * row of proportional text. blit1 can refuse - a kern_small machine
      * carries the slot without the body - so the dot-by-dot loop stays as the
      * fallback rather than as the method. */
+    /* THE SCALE IS IN 1/10 INCH AND NOT IN CELLS, which stopped being the same
+     * thing the day a face could be chosen (SPEC.md 67.12.2): a ruler measures
+     * the SHEET, so a tick is 8 pixels in every face and `nc` is the column's
+     * width in ticks - cw_wpx / 8 - rather than cw_cols, which is now a count
+     * of however many glyphs a row may hold. */
+    nc = cw_wpx / 8;
+    if (nc > CW_RULE_MAX)
+        nc = CW_RULE_MAX;
     sx = cw_uy + CW_H_RUL - 3;
     os88_set_color(OS88_BLACK);
-    for (i = 0; i < CW_SCALE_ROWS * (CW_COLS_MAX + 1); i++)
+    for (i = 0; i < CW_SCALE_ROWS * (CW_RULE_MAX + 1); i++)
         cw_scale[i] = 0;
-    for (i = 0; i <= cw_cols; i++) {
+    for (i = 0; i <= nc; i++) {
         int b;
 
-        b = i;                          /* cell i's leftmost pixel is bit 7 of
-                                         * byte i: the grid is 8 px a cell and
-                                         * the band starts at cw_tx */
-        cw_scale[3 * (CW_COLS_MAX + 1) + b] = 0x80;
+        b = i;                          /* tick i's pixel is bit 7 of byte i:
+                                         * the scale is 8 px a tick and the
+                                         * band starts at cw_tx */
+        cw_scale[3 * (CW_RULE_MAX + 1) + b] = 0x80;
         if ((i % 5) == 0)
-            cw_scale[2 * (CW_COLS_MAX + 1) + b] = 0x80;
+            cw_scale[2 * (CW_RULE_MAX + 1) + b] = 0x80;
         if ((i % 10) == 0) {
             cw_scale[b] = 0x80;
-            cw_scale[(CW_COLS_MAX + 1) + b] = 0x80;
+            cw_scale[(CW_RULE_MAX + 1) + b] = 0x80;
         }
     }
-    if (os88_gfx_blit1(cw_scale, CW_COLS_MAX + 1, cw_tx, sx - 3,
-                       cw_cols * 8, CW_SCALE_ROWS) != 0) {
-        for (i = 0; i <= cw_cols; i++) {
+    if (os88_gfx_blit1(cw_scale, CW_RULE_MAX + 1, cw_tx, sx - 3,
+                       nc * 8, CW_SCALE_ROWS) != 0) {
+        for (i = 0; i <= nc; i++) {
             if ((i % 10) == 0)
                 os88_gfx_vline(cw_tx + i * 8, sx - 3, sx);
             else if ((i % 5) == 0)
@@ -336,7 +467,7 @@ static void cw_ruler(void)
                 os88_gfx_pixel(cw_tx + i * 8, sx);
         }
     }
-    for (i = 10; i <= cw_cols; i = i + 10) {
+    for (i = 10; i <= nc; i = i + 10) {
         if (i / 10 >= 10)
             break;
         cw_rt[0] = (char)('0' + i / 10);
@@ -352,7 +483,7 @@ static void cw_ruler(void)
     i = cw_pap_li[p] + cw_pap_fi[p];
     if (i >= 0)
         os88_gfx_fill(cw_tx + i * 8 - 2, sx - 6, cw_tx + i * 8 + 2, sx - 5);
-    i = cw_cols - cw_pap_ri[p];
+    i = nc - cw_pap_ri[p];
     os88_gfx_fill(cw_tx + i * 8 - 2, sx - 3, cw_tx + i * 8 + 2, sx - 2);
 
     os88_gfx_hline(cw_org.x, cw_org.x + cw_sz.w - 1, cw_uy + CW_H_RUL - 1);
@@ -369,7 +500,7 @@ static int cw_rul_hit(int mx, int my)
         return 0;
     if (my < cw_uy + 2 || my > cw_uy + 13)
         return 0;
-    x = cw_tx + CW_RU_BX;
+    x = cw_bx + CW_RU_BX;
     for (i = 0; i < 9; i++) {
         bx = x + i * CW_RU_STEP;
         if (i >= 4)
@@ -428,7 +559,7 @@ static void cw_status(void)
     int x;
     int n;
 
-    if (!cw_vsta || cw_sy == 0 || cw_cols < 24)
+    if (!cw_vsta || cw_sy == 0 || cw_bcols < 24)
         return;
 
     /* BUILT BY APPENDING AND NOT BY WRITING NUMBERS INTO A TEMPLATE AT FIXED
@@ -442,12 +573,12 @@ static void cw_status(void)
     cw_st_add("  Sec 1  ");
     cw_st_num(cw_pg);
     cw_st_add("/");
-    cw_st_num((cw_ln - 1) / 54 + 1);
+    cw_st_num((cw_ln - 1) / CW_PGLINES + 1);
 
     /* A window too narrow to show every cell DROPS the At field first: it
      * duplicates Ln by construction, so losing it keeps the two numbers that
      * do not repeat each other (SPEC.md 65.2). */
-    n = cw_cols - 19;
+    n = cw_bcols - 19;
     if (n >= 40) {
         cw_st_add("  At ");
         cw_st_num(cw_ln);
@@ -489,7 +620,7 @@ static void cw_status(void)
         }
         os88_strcpy(cw_st_left, cw_rt, sizeof(cw_st_left));
         cw_rt[b + 1] = 0;
-        os88_font_run(cw_tx + a * 8, cw_sy, cw_rt + a, OS88_BLACK, OS88_WHITE);
+        os88_font_run(cw_bx + a * 8, cw_sy, cw_rt + a, OS88_BLACK, OS88_WHITE);
     }
 
     /* the four lamps, inverse-video when lit */
@@ -507,11 +638,11 @@ static void cw_status(void)
     if (cw_ovr) {
         cw_rt[13] = 'O'; cw_rt[14] = 'V'; cw_rt[15] = 'R';
     }
-    if (cw_cols < 44)
+    if (cw_bcols < 44)
         return;                         /* the lamps stand down whole rather
                                          * than collide with the text */
     if (!cw_streq(cw_rt, cw_st_lamp)) {
-        x = cw_tx + (cw_cols - 17) * 8;
+        x = cw_bx + (cw_bcols - 17) * 8;
         os88_font_run(x, cw_sy, cw_rt, OS88_BLACK, OS88_WHITE);
         os88_strcpy(cw_st_lamp, cw_rt, sizeof(cw_st_lamp));
         /* inverse where a lamp is lit: one XOR per lit lamp, and a lamp
