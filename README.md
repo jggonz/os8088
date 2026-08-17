@@ -91,9 +91,12 @@ a Standard File dialog for opening and saving.
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.
 - **A system clipboard**, shared across apps.
-- **Typefaces** — `.F88` faces in `FONTS/` on the system disk, found at run
-  time by any app that asks. The kernel keeps its 8x8 cell for chrome; an
-  app composes a row in a real face and puts it down in one call.
+- **Typefaces** — **ten** `.F88` faces in `FONTS/` on the system disk, found
+  at run time by any app that asks: Charter and the house 8x8 cell, a Times, a
+  Helvetica and a Courier, two more text faces and three monospaces, each
+  fitted onto an 8-pixel grid from an open outline font (SPEC.md 6.4.1). The
+  kernel keeps its 8x8 cell for chrome; an app composes a row in a real face
+  and puts it down in one call.
 
 **Disks and files**
 
@@ -149,8 +152,8 @@ into `build/`, and `STORIES=` puts your own beside them.
 native package — Draft and Page views, a two-row ruler, real `.DOC` files in
 the Word for Windows 1.x/2.x binary format, RTF in and out, wildcard Search,
 Sort, Renumber and Table of Contents. Its **Font menu is built from the
-disk**: it lists whatever `FONTS/` is carrying, and choosing one sets the
-whole document in it. The faces are set at fixed pitch for now — their
+disk**: it lists whatever `FONTS/` is carrying — ten families as shipped, from
+Times to JetBrains Mono — and choosing one sets the whole document in it. The faces are set at fixed pitch for now — their
 shapes, their height and their leading, but eight pixels a character. It is not a recompile: Opus is pcode
 built against the Windows 2.x API, none of which exists here, so the UI
 definition is mined from the Computer History Museum's source release and

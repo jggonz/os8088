@@ -1241,7 +1241,9 @@ rule 2 intact.
 
 **No `rep` carries a segment override**, deliberately: an 8086 loses the prefix
 if an interrupt lands mid-`rep`, and this is an interrupt-heavy kernel. DS is
-pointed at the caller's band and restored.
+pointed at the caller's band and restored — and **between those two moments
+this routine has no kernel variables**, which is a rule about the exit as much
+as the emit (§5.4.2.1).
 
 **WHAT IT COSTS, MEASURED (PERFORMANCE.md Set 62).** `tests/bandbench` under
 `-icount`, converted at Part 2's 0.359 ms a count. The emit is **2.42 ms a row**
@@ -1265,6 +1267,67 @@ neither package this serves can load on the machine that build is for — Word i
 46.5 KB and TeXPad 31.5 KB against a 128 KB machine's 28 KB heap. A package
 therefore **must test CF**, and the documented degrade is that it letters in the
 kernel's 8×8 face instead, with `font_run` (§6.1).
+
+#### 5.4.2.1 The two bytes that decremented the CALLER'S IMAGE
+
+These two lines sat at `.done`, **above `pop ds`**:
+
+```
+    cmp byte [vid_ndisp], 1         ; both DS-relative, and DS at this point
+    jbe .noleave                    ; is still the CALLER's band segment
+    dec byte [gfx_dnest]
+```
+
+The emit moves DS to the caller (the rule above), and the exit read and wrote
+two kernel variables before putting it back. So both addressed **the package**,
+at `vid_ndisp`'s and `gfx_dnest`'s kernel offsets. Three things follow, and each
+one is worse than the last.
+
+**The read decides the write, so the guard is not a guard.** `[vid_ndisp]` is
+"how many displays" and is 1 on every ordinary machine, which is what makes this
+look untestable — a single-monitor build should never take the branch. But the
+byte actually read is whatever the *package* holds at offset 0x11FD. The
+multi-monitor path was not being exercised; a package's code was being read as a
+monitor count.
+
+**The write is a silent one-byte-per-blit rot of the caller's own image.**
+`dec byte [gfx_dnest]` decrements the package at offset 0x1698, once per band it
+puts down. Nothing detects it: there is no checksum over a loaded package, the
+loader is long finished, and the damaged byte is in a region nobody reads back.
+
+**WHETHER IT FIRES AT ALL IS DECIDED BY ONE ARBITRARY BYTE OF THE CALLER**, and
+that is the part worth keeping. At the build this was found in, Word held `0x01`
+at 0x11FD — so `1 ≤ 1`, the branch skipped, and the bug did nothing whatsoever.
+An unrelated edit to `apps/word/word.asm` (§65.13's proportional metrics) moved
+that offset onto a byte of `wd_walk`'s code holding `0x53`, 83 > 1, and the same
+kernel armed itself: every blit rotted a byte, and inside twenty keystrokes the
+machine wedged. **A latent write that is gated on a byte of an unrelated file is
+not a dormant bug, it is a scheduled one** — nothing about the edit that arms it
+is anywhere near this code, and nothing warns.
+
+The freeze it eventually produces is two steps past the corruption: the mangled
+instruction derails the package, and by then the rot has also changed the
+segment immediate of one of its `call KERNEL_SEG:...` instructions, so a far
+call goes to an unmapped window, reads `0xFF`, takes an invalid-opcode fault,
+and returns to it forever. **A frozen guest whose timer still runs is a fault
+loop, not a hang** — and the registers being *identical* sample after sample,
+rather than merely similar, is what says so.
+
+And on a machine that really does have two displays it was broken the other way
+round. `gfx_disp_enter`'s `inc byte [gfx_dnest]` (vga12.inc:249) runs *above*
+the emit, with DS still KERNEL_SEG, so it was always correct; only the matching
+`dec` addressed the package. The kernel's nest count therefore **ratcheted up by
+one per band blit and never came down**, and §39.14.4's `cmp byte [gfx_dnest],
+0` and this section's `cmp byte [gfx_dnest], 1` both read it — so every
+primitive after the first band on `xt-multimon` would take the nested path and
+translate against the wrong origin. One `pop ds` in the wrong place is two
+different bugs on two different machines.
+
+**A `push ds`/`pop ds` pair does not mean DS is safe in between — it means it is
+NOT**, and the window ends at the `pop`, not at the last instruction that looked
+like work. The emit loop here was scrupulous about exactly that
+(`[cs:gfx_sub_rs]` at vga12.inc:3118 carries the comment "CS: IS MANDATORY"),
+and the exit four lines below it was not.
 
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
@@ -2741,6 +2804,128 @@ pixels, which is what a 2-pixel stem wants on a 2.4:1 CGA pixel anyway) and it
 halves §6.5.2's pre-shifted table, because a pen that starts on an even bit and
 advances by an even number can only ever be at phases 0, 2, 4 and 6. The tool
 enforces it; `ty_open` re-checks it, because the tool is not what runs.
+
+#### 6.4.1 The faces the disk carries, and what fitting one costs
+
+`FONTS/` carries **ten families**. Two are drawn by hand — `charter`, whose art
+*is* the design, and `tallx`, which is the kernel's own 8×8 cell offered as a
+face so that a document can be set in it with no layout change at all. The
+other **eight are fitted from open outline typefaces** by `tools/os88ttf.py`,
+which renders each glyph through FreeType's monochrome hinter and then argues
+with it about the grid. Nothing in the Makefile runs that tool: it drafts a
+`faces/<name>.t88` once, the draft is committed, and **from then on the art is
+the source** — every face below has been hand-fitted since, and the `DRAFTED`
+line in its header reproduces the first draft rather than the file.
+
+| file | menu | family in the header | cell | advance | drawn from |
+|---|---|---|---|---|---|
+| `TALLX.F88` | Tallx | Tallx | 8 rows | 8, fixed | `fonts/tallx.f8`, the house 8×8 |
+| `CHARTER.F88` | Charter | Charter | 12 rows | 4–8 | drawn by hand (§6.2's proportions) |
+| `TIMES.F88` | Times | Times Roman | 12 rows | 4–8 | Tinos — Times New Roman's widths |
+| `HELV.F88` | Helv | Helvetica | 12 rows | 4–8 | Arimo — Arial/Helvetica's widths |
+| `NOTO.F88` | Noto | Noto Serif | 12 rows | 4–8 | Noto Serif Condensed 700 |
+| `ARCHIVO.F88` | Archivo | Archivo Narrow | 12 rows | 4–8 | Archivo Narrow 700 |
+| `COURIER.F88` | Courier | Courier | 14 rows | 8, fixed | Cousine Bold — Courier New's widths |
+| `JETBRAIN.F88` | Jetbrain | JetBrains Mono | 14 rows | 8, fixed | JetBrains Mono 700 |
+| `ROBOMONO.F88` | Robomono | Roboto Mono | 12 rows | 8, fixed | Roboto Mono 800 |
+| `INCONSOL.F88` | Inconsol | Inconsolata | 12 rows | 6, fixed | Inconsolata 600 |
+
+**The FILE NAME is the name.** §19.8 settled that a scan reads the 8.3 stem and
+not the header inside each file, because learning the header name costs a read
+per family and a Font menu that spends ten `int 13h` calls before it can draw
+itself is a menu that feels broken. So the stem is chosen to *be* the menu
+entry, and the 16-byte header name — which takes over the moment the face is
+opened, and is what the ribbon then shows — carries the full one. Three stems
+name the **base-14** face they stand in for rather than the font they were
+fitted from, and their `psname` is that base-14 name: a document set in Times,
+Helv or Courier asks a PostScript or PDF exporter for `Times-Roman`,
+`Helvetica` or `Courier`, so what is printed is the real thing (§6.4).
+
+**Eight pixels is the whole width there is, and that is the binding
+constraint** — not the cap height. `stride` 2 is refused by the library, so an
+advance is 4..8 and no glyph is wider than 8 pixels, which is **narrower than
+any real proportional face at a cap height of 8**: rendered at the ppem that
+gives Times its 8-row capitals, `M`, `W`, `m`, `%`, `&` and `@` all want 9 to
+11. Two answers, in this order:
+
+* **Ask the family for a narrow master.** Noto Serif carries a `wdth` axis and
+  is drawn at 62.5% of it — a condensed face by its designer, not a squeezed
+  one by this tool. Archivo Narrow is narrow to begin with.
+* **Merge columns out of what is left.** Six glyphs a face, typically. The
+  merge is cheapest-first and prices lost ink (`&`) four times what joined ink
+  (`^`) costs, so it lands inside a diagonal rather than flattening a stem into
+  its counter. Scaling was tried instead and is worse for the reason every
+  bitmap designer already knows: at 8 pixels a scaled diagonal is a staircase
+  with a hole in it.
+
+**A 2-pixel stem comes from a heavier MASTER, never from dilating the regular.**
+FreeType's mono hinter at 11–13 ppem puts a Times stem on exactly one pixel,
+and §6.2's finding is that on a CGA 640×200 — where the pixel is 2.4:1 tall —
+one pixel reads far thinner than the one-pixel bar crossing it. The obvious fix
+is to OR the glyph with itself shifted a pixel. **That was tried and it is a
+dead end**: at an x-height of 6 the counter of `o`, `e`, `a` and `n` is ONE
+pixel wide, so widening the stem beside it closes the letter and the word turns
+into a row of blocks — `brown` sets as `browo`. Rendering the family's 700 or
+800 master at the same ppem gives the 2-pixel stem *with* the counter the
+designer opened to hold it, which is why every face above but one names a
+weight.
+
+**Times is the one light face, on purpose.** A book serif whose stems are 2
+pixels at a cap height of 8 is Times *Bold* — a headline, not a page — so
+`TIMES.F88` is fitted from the regular master and reads thin on a CGA. Charter
+and Noto are the sturdy serifs for that machine, and the menu is better for
+carrying both kinds.
+
+**The gap between letters is bought with the ADVANCE and never with the glyph.**
+An advance is even, so spacing comes in 2-pixel steps: a digit whose outline
+wants 6.5 pixels is set at 6, its ink fills the cell, and `0123456789` sets as
+one word. Condensing the glyph into a blank column was the first answer and it
+is visibly wrong — a `0` at 5 pixels is a blob and an `a` loses its bowl — so
+the glyph is left alone and the advance goes up a step instead. It costs 2
+pixels on a handful of characters.
+
+**What the hinter cannot be told, is hand-fitted afterwards.** Four faces
+carry a glyph the draft got wrong, and all four are recorded here because they
+are the same four failures any future fitting will hit:
+
+* `archivo`'s `!` came off the hinter as a solid 8-row stem — **pixel-identical
+  to `I` and to `l`**. The dot needs its gap drawn in.
+* `archivo`'s and `helv`'s capital `I` *is* their lowercase `l`, which is true
+  of every grotesque and unacceptable here for `charter`'s reason: a bare stem
+  in the middle of a file name cannot be read. Both get the serifed `I`.
+* `robomono`'s `f` has its hook a row above the cell, and clipped there it
+  reads as a `t` — `fox` sets as `tox`. Redrawn a row shorter, hook intact.
+* `times`'s `$` overhangs the cap line, and the row that was cut off took the
+  top of the S with it. Redrawn on `charter`'s proven shape at Times' weight.
+
+**Two ceilings went up with the eight faces, and one of them needed code.**
+`TY_MAXFAM` (§6.5) was 8 and `WD_MAXFONT` (§65.13) was 6; both are 10 now,
+because a ceiling that silently drops the last two faces on the disk is worse
+than a menu two rows longer. `WD_MAXFONT`'s 6 was not arbitrary, though — it
+was sized so the dropdown fitted, and eleven 10-pixel items hanging off a
+ribbon box 60 rows down a **200-row CGA screen** run off the bottom of the
+window. `wd_mgeo` therefore **flips a combo's dropdown upward** when it will not
+fit downward: same anchor, bottom edge one row above it, clamped inside the
+content like every other panel. A bar menu never flips — it hangs under its own
+title or nowhere.
+
+**What it costs.** A face is 1,498–1,688 bytes (95 glyphs × `rows` + 286 bytes
+of metrics + a 64-byte header), so the eight are **12,376 bytes**, and the
+licence beside them another 6,676. On the 360 KB rung — the tightest of the
+three geometries, and the one this was checked against — that is **23 clusters
+of 1 KB**, and the disk still has **169,984 bytes free**. The kernel does not grow by a byte: a
+`.F88` is data, read by the package that wants it. `TY_MAXFAM` costs the
+*including package* 23 bytes of bss a family and `os88type.inc` is included by
+one program.
+
+**The licences ride with them.** Every source font above is under the SIL Open
+Font License 1.1, which requires its notice to travel with the derivative, so
+`FONTS/LICENSE.TXT` is on the disk beside the faces — the full licence and a
+line naming each font's authors. It is a `.TXT`, so `ty_scan` skips it (the
+scan takes `.F88` and nothing else) and the mount types it as a document, which
+means the person at the machine can double-click and read it. `faces/LICENSES.txt`
+is that file in the tree, and each `faces/*.t88` header records the exact source
+file it was fitted from, its URL and its SHA-256.
 
 ### 6.5 `apps/os88type.inc` — the library
 
@@ -44786,6 +44971,20 @@ width is rounded up to a multiple of 8. And `ty_flush` may answer CF=1 (a
 back to lettering the row in the 8×8 face; because the *measuring* side goes
 through face 0 either way, that fallback needs no second layout.
 
+**What the metrics cost, said plainly.** Three things got more expensive and
+none of them is free. The walk now asks `ty_advof` once a character instead of
+adding a literal 8 — a table lookup and a `call`/`ret`, against a pen that used
+to move in one instruction. `wd_wordfit` sums those advances instead of counting
+down a register, so the wrap lookahead pays the same per character of the word
+it measures. And `[wd_rcols]` is sized from `TY_MINADV`, which roughly **doubles
+it** on a fullscreen window — so `wd_rstart`'s two `rep stosb` and the delta
+diff's cell-by-cell compare each walk twice as many cells as they did in the
+kernel's cell, whether or not the row is that long. All of it is per-character
+work on a path that already costs a `gfx` call per row, and none of it changes
+the number of DRAWING calls a row makes, which is what PERFORMANCE.md prices a
+redraw by — but it is real, it is paid on the target machine, and it is paid
+only while a face is chosen.
+
 **A keystroke costs more in a proportional face and the reason is inherent.**
 Changing one character in a fixed cell moves that cell's pixels; changing one in
 a proportional face **re-flows every cell after it**, so the damage runs from the
@@ -44823,17 +45022,88 @@ because the failure looks nothing like its cause — the last painted frame is
 intact and correct, including the caption the handler had just changed, so the
 screen shows a working program and the clock is what says otherwise.
 
-**What has landed, and what has not.** The library, the face file, `wd_cx`,
-`wd_xc`, `wd_px[]`, the raised `WD_MAXCOL`, the discovery and the Font combo are
-in, and **`[wd_prop]` is 0**: bss arrives zeroed, so a build with no face file, a machine
-whose kernel refuses the band blit, and today's tree all behave exactly as they
-did. **`WD_PROPDRAW` is 1: a chosen face is what the document is SET in.** The
+**What has landed.** All of it. The library, the face file, `wd_cx`, `wd_xc`,
+`wd_px[]`, the raised `WD_MAXCOL`, the discovery, the Font combo, the band draw
+and the metrics. **`[wd_prop]` is 0 until a face is picked** — bss arrives
+zeroed, so a build with no face file, a machine whose kernel refuses the band
+blit, and a document nobody has set all behave exactly as they always did.
+**`WD_PROPDRAW` is 1: a chosen face is what the document is SET in.** The
 dropdown re-letters the whole note — every row, every run — and switching back
 to Pica re-letters it in the kernel's cell. What each face costs the layout is
-its own `rows` and `leading`: an 8-row face changes **nothing** (same pitch,
-same caret, same clicks, only the glyph shapes move), and a taller one moves the
-row advance through `[wd_ghb]` and raises `[wd_hasfmt]` so the non-uniform-row
-paths that line spacing already needed do the work.
+its own `rows` and `leading`: a taller face moves the row advance through
+`[wd_ghb]` and raises `[wd_hasfmt]` so the non-uniform-row paths that line
+spacing already needed do the work.
+
+**`[wd_pxon]` is `[wd_prop]`, and it is set in `wd_facemetrics` beside the
+glyph band.** One flag says "`wd_px[]` is the truth", every cell-to-pixel
+question goes through `wd_cx`/`wd_xc`, and the two faces differ in those two
+routines rather than in thirty. Five things follow it, and each is where a
+pitch used to be assumed:
+
+- **the pen advances by `ty_advof`**, not by 8, and by the advance of the
+  character that is DRAWN — so the small-caps case map (§65.1) happens before
+  the advance is taken and not inside the drawing gate below it. That single
+  choice is what makes `ty_putn`'s pen inside a band agree with `wd_px[]`
+  outside it: the band composes from the run's first cell, so if the walk
+  advanced by anything else the two would disagree by a pixel a glyph
+- **the wrap rule measures pixels.** `wd_wordfit`'s two thresholds — what is
+  left of this row, and what a fresh row of this paragraph would hold — are
+  pixel sums over `ty_advof` rather than cell counts, and `wd_rowmeasure`
+  answers the centre/right dry run in pixels for the same reason. `wd_tabw` is
+  pixel arithmetic in both faces (a tab stop is every `WD_TABSTOP`×8 pixels
+  from the row's own start pen), which is bit-identical to the cell version it
+  replaces whenever the pen is a multiple of 8
+- **a TAB is ONE cell** in a proportional face, wearing the tab's dress and
+  carrying the whole gap as its advance — against the fixed face's run of
+  space cells. That is the consequence named above, and it is why the row
+  buffer holds characters rather than screen columns
+- **the click's half-cell is a half-ADVANCE.** `wd_ask` splits the character at
+  `DI + adv/2`, so click-to-caret lands on the nearer edge of a 4-pixel `i` and
+  of an 8-pixel `m` alike
+- **`[wd_rcols]` is sized from `TY_MINADV`**, not from 8: a row of narrow
+  glyphs holds more cells than it holds byte columns, and the row buffer, its
+  padding and the delta diff are all bounded by it
+
+**The tail of a row is erased in pixels, once.** A fixed row erases itself: the
+buffer is space-padded to `[wd_rcols]` and one opaque run covers the band. A
+proportional row cannot pad, because a cell past the row's content has no pen —
+so `wd_rflush` clamps the span to the cells the walk actually stored, and where
+the row's glyphs used to reach further than they now do, ONE white fill covers
+the difference. `[wd_prowrx]` banks that right edge beside `wd_prow`, and a row
+whose cache describes some other row erases to the paragraph's right edge
+instead. It costs one `gfx_fill` on a row that SHRANK and nothing at all on a
+row that grew, which is the common case: typing. The band-level right-margin
+fill in `wd_redraw` is skipped outright for the same reason — `[wd_rcols]` is a
+count sized from `TY_MINADV` there and `8 ×` it is not a pixel coordinate.
+
+**And the SPAN GROWS OUTWARDS TO BYTE COLUMNS before it is drawn.** This is
+§5.4.2's back-up rule read the other way round. The band is blitted by whole
+byte columns and is paper where nothing was composed, so a run whose first cell
+starts mid-byte whitens up to 7 pixels of the glyph to its LEFT, and one whose
+last cell ends mid-byte does the same on its right. At the *row's* own edges
+that is exactly what `FONT_RUN`'s background would have done; between two
+neighbouring cells it rubs out ink that nothing is going to put back. In the
+kernel's cell the question never arose — every cell edge is a multiple of 8 —
+and the first proportional build showed it as a keystroke eating the tail of the
+character before it, one pixel column at a time. `wd_rflush` walks `[wd_flo]`
+down and `[wd_fhi]` up until both edges land on a multiple of 8; it costs a
+neighbouring cell or two redrawn and erases none.
+
+That leaves ONE case unhandled and it is written down rather than fixed: a row
+carrying **several different CHPs** is several runs, each with its own band, and
+the interior boundaries between them are not byte-aligned. Run *n* can therefore
+whiten up to 7 pixels of run *n−1*'s last glyph. The obvious repair — one band
+for the whole row, composed run by run and blitted once — was written and
+reverted: it hangs, and the cause is not yet understood, so what ships is the
+per-run band that has always shipped. Plain text, which is every run of a
+document nobody has styled, is one run and is unaffected.
+
+**Two fast paths refuse a chosen face outright.** `wd_append` (§27.14.1) patches
+one glyph and one caret onto the glass without walking, and `wd_brktry`
+(§27.12) scrolls a row band by whole cells; both do column arithmetic in
+multiples of 8 and both drew through the kernel's cell. They now test
+`[wd_pxon]` and fall back to the walk. This is the third bug below and the one
+that was actually reported.
 
 **Bold is a second compose, not a second call.** The cell arm strikes the run
 again one pixel right with an `OSAPI_FONT_STR`; the band arm composes it again
@@ -44845,14 +45115,7 @@ different typeface from the words either side of it — which reads as a bug rat
 than as italic. Upright in the right face is the better wrong answer until a face
 carries a drawn italic (§6.4's style 2).
 
-**The metrics are still the 8-pixel grid.** `[wd_pxon]` is 0: the wrap rule, the
-accumulate walk's cell index and `wd_px[]` are unconverted, so a proportional
-face is set at fixed pitch — its shapes, its height, its leading, but eight
-pixels a character. That is the remaining half of this section, and it is
-separable precisely because `wd_cx`/`wd_xc` already stand between every call site
-and the answer.
-
-#### 65.13.1 Two bugs this cost, both worth writing down
+#### 65.13.1 Four bugs this cost — three fixed, one open — all worth writing down
 
 **A literal that becomes a variable must be initialised before anything reads
 it.** `[wd_gh1]` — the glyph band's height less one, which replaced a hard `7` at
@@ -44871,6 +45134,73 @@ looking: the bands landed at exactly the right x, width, y and height on every
 row, which proved the whole rendering path correct and left the caller as the
 only suspect. **When a change touches a drawing path, make the path
 unconditional and look at it before theorising about who calls it.**
+
+**A FAST PATH IS A SECOND DRAWING PATH, and a face has to reach it too.** The
+half-converted state above shipped, and what it was reported as is neither of
+the things it was known to be: *"I can change the font used by the document, but
+when I start typing, the font used is not the one from the selected list."*
+`wd_append` (§27.14.1) is the reason. It is the whole point of §27.14.1 that a
+printable typed at the end of a line does not walk the note — it stamps the one
+glyph and moves the one caret — and it stamped it with `OSAPI_FONT_RUN`, which
+is the kernel's 8×8 cell and nothing else. Its guards were all about
+*geometry* (`[wd_hasfmt]`, hidden characters, tabs), and a face changes the
+GLYPHS without necessarily changing the geometry: `tallx` is 8 rows with an
+advance of 8, so it raises no flag any of those guards test, and every
+character typed at the end of a line in it came out in Pica while every
+character the walk redrew came out in tallx. A 12-row face hid it — `[wd_ghb]`
+≠ 8 raises `[wd_hasfmt]`, which refused the fast path for an unrelated reason —
+so the defect was invisible in nine of the ten faces on the disk and total in
+the tenth.
+
+Three lessons, and the last generalises past this program. A guard list that
+enumerates *what makes the geometry unusual* does not answer *what makes the
+pixels unusual*. A flag tested as a proxy — `[wd_hasfmt]` standing in for "this
+is not the plain 8×8 engine" — is a guard that holds only while the proxy
+happens to be exact, and nothing tells you the day it stops being. And **a
+screendump of the common case proves nothing**: nine faces looked right.
+
+**FINDING EVERY SITE OF A LITERAL IS THE OTHER HALF OF THE FIRST BUG ABOVE —
+and this one is NOT FIXED.** `[wd_gh1]` was found because the note vanished. Its
+siblings were not: `wd_walk` sets the y of the row a walk STARTS on, and it is
+`wd_advy`'s three arms written out longhand — `.yzero` (`ty + h − 8`), `.ynegs`
+(`ty − 8`) and `.yhave`'s `[wd_rbandt]` (`bp − h + 8`) — each carrying a literal
+8 where `wd_advy` had already learned to read `[wd_gh]`. `wd_advblank` steps a
+blank row 8 pixels where a real one steps `[wd_ghb]`; `wd_seecaret`, `wd_redraw`,
+`wd_shiftrows`, `wd_mclose` and `wd_scrollpaint` each derive a band top or a band
+bottom from `wd_ryb` with a literal `8` or `7`.
+
+**The symptom is §65.6's leading-gap fill eating the row above.** `wd_rflush`
+whitens `[wd_rbandt] .. rby−1` to clear a spaced row's gap; a band top `gh − 8`
+pixels too high puts that fill *inside the row above*, so **every keystroke
+shaves the bottom off the line before it** — reported, exactly, as the new line
+overlapping the old one. It is worst where the face has no leading: `jetbrain`
+and `courier` are 14 rows with `leading 0`, so the band IS the advance and
+nothing absorbs the 6-pixel error; `times` and `helv` (12 rows, `leading 2`)
+lose 4 pixels and merely look tight; the kernel's 8×8 cell has `gh = 8` and
+loses nothing, which is why it shipped and why §65.13's own testing missed it.
+
+**What was tried.** Converting the sites — `.yzero`, `.ynegs`, `.yhave`,
+`wd_advblank` and five of the `wd_ryb` derivations — DOES fix the shaving:
+verified in `jetbrain`, `courier` and `times`, typing and Enter, on VGA and CGA,
+with the kernel's cell staying pixel-identical. It also moves **every row's y**,
+which is exactly the input to §65.6's rows-MOVED repaint, and in that state some
+sequences leave earlier rows erased and never redrawn. No variant tried both
+fixed the shaving and kept the incremental repaint honest: the band top alone
+leaves the origin disagreeing with it, and the origin too puts the banked
+`wd_ryb` a face-height away from what the last pass drew. **A half-converted
+height model is worse than an unconverted one**, which is §65.13's own rule
+about `[wd_prop]` applied to y instead of x, so none of it is in the tree.
+
+Whoever takes it next: the conversion is right and the fix is those sites, but
+it has to arrive with `[wd_vrows]` (which counts 8-pixel rows into a band that
+holds 14-pixel ones), `wd_advblank` and `wd_scrollpaint`'s scroll delta in the
+same change, and it has to be tested by *switching faces on a note that already
+has rows* — not by typing into an empty one. And **the lesson is not "use the
+variable"**: it is that a variable replacing a literal has to be hunted by
+VALUE, not by meaning. `8` in this file is a glyph height, a row advance, a cell
+width, a tab stop and a byte column, and only a handful of the dozens of them
+are the height. Nothing but reading each one tells them apart, and a face whose
+height differs from its advance is the only test that separates them.
 
 ## 66. TeXPad — the TeX pad (`apps/texpad/texpad.asm`)
 
