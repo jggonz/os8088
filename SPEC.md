@@ -15525,6 +15525,55 @@ already in the directory entry the scan is walking, so the list is built from
 that and the header name takes over the moment a face is chosen. The tool writes
 both from one source, so they agree; where they could not, the open is what wins.
 
+### 19.9 `apps-all.img` — one floppy with everything, and why it is on demand
+
+The shipped apps floppy is built in three geometries and carries the fifteen
+packages that fit the smallest of them. Three applications are deliberately not
+on it, each with a disk of its own and for the same reason — they are large and
+they travel with data: **Frotz** (§61), **Word** (§65.5) and **cword**
+(§67.12). That is right for the machines this runs on and awkward for a person
+downloading it, who wants to try the software rather than curate a shelf of
+floppies.
+
+`make allapps` builds **`build/apps-all.img`**: one 1.44MB volume with every
+application on it, offered beside the shipped images on a release page. It is a
+convenience and nothing in the tree boots it by default.
+
+**It is 1.44MB and has no smaller variants.** The contents are ~430KB, so a
+720KB or 360KB build of this list does not exist rather than being declined —
+and the machines those geometries are for are already served by the shipped
+disks. One size means no set of variants to keep in step.
+
+**It is not in `all`, because `cword` needs a compiler this tree does not
+contain** (§67.1). A clone with `nasm` and `python3` builds every *shipped*
+floppy; this one is the exception, on demand exactly like `cworddisk`.
+
+The tree, and the one part of it that is a correctness requirement:
+
+| folder | what |
+|---|---|
+| `APPS/` | the ten tools, plus `FROTZ.O88` |
+| `GAMES/` | the five games |
+| `WORD/` | `WORD.O88`, `WORD.OVL`, `WELCOME.DOC` |
+| `CWORD/` | `CWORD.O88`, `CWORD.OVL`, `WELCOME.RTF` |
+| `MEDIA/` | the module and the two `.TEX` documents — where a File Open starts (§38.10) |
+| `SYSTEM/`, `SYSTEM/DOS/` | the Task Manager (§28.3) and `OS88NET.COM` (§62) |
+| `DOCS/` | empty, for the user's own saves |
+
+**Each Word gets a folder of its own, and that is not tidiness.** Both carry an
+overlay resolved in the launching instance's current directory (§65.10, §67.14,
+§19.2.1), and a double-click on a document leaves that directory on the
+**document's** (§54.9). Package, overlay and welcome document therefore have to
+be three files in one folder: split them and the document opens a program whose
+every menu then refuses, politely and for a reason nobody can see. The failure
+window is only the first overlay-needing command — the module is loaded once and
+cached, and a `File > Open` or a `Save As` into `DOCS/` afterwards has already
+paid for it.
+
+**Frotz ships without a story.** `tools/getstories.py` fetches those and they
+are never committed (§61), so what rides here is the interpreter; `make zdisk`
+is still where a story disk comes from.
+
 ## 20. Loadable programs — the .o88 package format
 
 ### 20.1 A package owns a segment, and its region is a heap claim
@@ -46362,7 +46411,7 @@ made to. It is split by §67.14's overlay along the line between **what a
 keystroke touches** and **what a menu command touches**:
 
 ```
-resident   image  35,958   the chrome, the layout, the glass shadow, the
+resident   image  35,886   the chrome, the layout, the glass shadow, the
                            document model, the keyboard, the mouse, and the
                            type library (§6.3) the chosen face is set through
            bss    24,511   the document (4,000 chars + 4,000 attribute bytes),
@@ -46370,14 +46419,14 @@ resident   image  35,958   the chrome, the layout, the glass shadow, the
                            (2 x 24 x 128 = 6,144), the type library's band and
                            face table (1,933)
            -------------
-           total  60,469   98% of APP_MAX_SIZE; 971 bytes spare
+           total  60,397   98% of APP_MAX_SIZE; 1,043 bytes spare
 CWORD.OVL        18,564    the dialogs, RTF in and out, search, Sort,
                            Renumber, Table of Contents, the clipboard, the
                            paragraph dictionary and the Font list
 ```
 
-`cc8086.py` reports **156 functions, 26 frame bytes maximum against the 96-byte
-cap, 1,323 sites lowered, 76 functions moved to `.modc`, 47 resident shims**.
+`cc8086.py` reports **158 functions, 26 frame bytes maximum against the 96-byte
+cap, 1,327 sites lowered, 76 functions moved to `.modc`, 47 resident shims**.
 
 **Those numbers moved a long way for §67.12.2**, and the direction is the
 point: the resident image got SMALLER while the program grew a typeface engine
@@ -46420,6 +46469,30 @@ system disk's `FONTS/` folder, which sets the document in a proportional face**
 (§19.8, §67.12.2); Open and Save through the Standard File dialog with **RTF**
 as the file format; New / Open / Close / Exit with Word's save-changes prompt;
 and About.
+
+**The kernel bar reads 'Microsoft Word'**, and that is the whole reason this
+program registers a kernel menu set at all. Nine menus is more than
+`MENU_APPMAX`'s five, so the menus are drawn in the window (§12.2, §65.2) —
+but a set also carries an `AM_NAME`, and with no set the bar falls back to the
+instance name, which is the header's `CWORD`: the FILE's name standing where
+the PRODUCT's belongs. So the set is EMPTY — count 0, one name — and its
+command handler is a stub that can never be called, because a set with no
+menus has no item to pick. The About box beneath it (`OSAPI_ABOUT_SET`, the
+same box Help > About… opens) carries the product, the version, what this port
+is, and the Computer History Museum credit — and **nothing about how this
+build renders**. What is synthesised, drafted or unimplemented is a fact about
+the build; it belongs in this document and in the greyed items themselves
+(§47), not in the box a user opens to find out whose software this is.
+
+**And it is TWELVE ROWS, which is a 640x200 number** (§39). `ovl_dlg_open()`
+clamps the PANEL to the live content box, but a control's y is its row —
+`cw_d_y + 6 + row * 10` — and nothing clamps that, so a table with more rows
+than the window is tall does not shrink: the box stops at the window edge and
+the last controls carry on past it. This one ran to nineteen rows, and on CGA
+and Hercules its OK button was drawn on the DESKTOP, below the window
+entirely. Twelve is what fits: `6 + 10 * 10 + 11 = 117` against the ~122 those
+adapters leave. **Adding a row to a dialog table here is a change that looks
+right on VGA and is wrong on two adapters of three.**
 
 **What is present and greyed** (§47 — grey a fact): the Print family, Spelling,
 Thesaurus, Hyphenate, the whole Macro menu, Outline, footnotes, annotations,
@@ -46716,6 +46789,44 @@ call in `cwtype.inc` whose carry is dropped on purpose, because there is nothing
 for the caller to do about it and nothing to tell the user.
 
 
+#### 67.12.3 `WELCOME.RTF` — the document, and the two things it may not claim
+
+`cworddisk` puts **`WELCOME.RTF`** in the root of all three geometries, beside
+`CWORD.O88` and `CWORD.OVL`, exactly as §65.5's disk puts `WELCOME.DOC` beside
+Word: a disk that demonstrates the product the moment it is double-clicked.
+It is generated **deterministically** by `tools/os88rtf.py` from
+`apps/cword/welcome.wtx`, so the shipped file rebuilds byte for byte.
+
+**The markup is `apps/word/welcome.wtx`'s and the parser is the same code** —
+`tools/os88rtf.py` imports `parse_line` from `tools/os88doc.py` rather than
+carrying a second one, because a second parser is a second dialect and the two
+documents would drift where nobody looks. (The `.DOC` *format* is the opposite
+case on purpose: `tools/wordfmt.py` is a deliberate second implementation,
+§65.4.2. A binary layout is worth reading back independently; markup has no
+spec to disagree about.)
+
+**The source is a second file, and that is what this section is for.** cword's
+RTF reader carries the text and its **character** formatting; every paragraph
+arrives in the default format, which `ovl_put()` says in as many words — the
+mark's attribute byte is a paragraph-dictionary index, and the reader has
+nothing to put in it. Two character spans narrow the same way: `\ulw` and
+`\uldb` both fold into one underline in the model, and there is no small caps
+at all. So the Word document's demonstrations of centring, hanging indents and
+double spacing, and the sentences *naming* them, would be **claims the screen
+does not keep** — which is the one thing a shipped sample may not be. It is the
+same argument §47 makes about greying: state a fact, never a guess.
+
+What is left is the same document — the same greeting, the same demonstration
+that formatting survived a save and a load, the same key list, the same credit
+— with the paragraph-format demonstration replaced by a sentence about setting
+those formats **in the program**, which is true, and the three narrowed spans
+named in the text rather than worn by it.
+
+**The generator still emits the full paragraph properties** (`\qc`, `\li`,
+`\fi`, `\ri`, `\sl`, `\sb`) when the markup carries them. A file is not the
+place to encode one reader's narrowing: the RTF is correct for anything else
+that opens it, and correct here the day the reader learns to apply them.
+
 ### 67.13 The build targets, and what is deliberately not in `all`
 
 `apps/cc/Makefile.inc` is a **fragment**, included by the top-level Makefile
@@ -46730,8 +46841,9 @@ rules that turn `apps/<dir>/<name>.c` plus `apps/<dir>/<name>.asm` into
 | `chello` | `build/chello.img` + `build/chello360.img` — `tests/chello/`, the capability gate that first proved a compiled package can hold a window |
 | `covl` | `build/covl.img` + `build/covl360.img` — `tests/covl/`, the capability gate for the OVERLAY (§67.14) |
 | `cword` | `build/cword.o88` + `build/CWORD.OVL` (§67.12) |
-| `cworddisk` | `build/cword.img`, `cword720.img`, `cword360.img`, each carrying both files and each `os88disk.py --verify`ed |
+| `cworddisk` | `build/cword.img`, `cword720.img`, `cword360.img`, each carrying both files plus `WELCOME.RTF` and an empty `DOCS/` (§67.12.3), and each `os88disk.py --verify`ed |
 | `386-c-word` | boots `$(IMG)` in A: and `build/cword.img` in B: on `vm/386-c-word` |
+| `allapps` | `build/apps-all.img` — one 1.44MB floppy with every application on it (§19.9). The only target outside this section that needs the compiler, which is why it is on demand too |
 | `clean-cc` | removes `build/cc`, which plain `clean` spares |
 
 **Nothing in `all` depends on the compiler, and that is the requirement rather

@@ -1,0 +1,40 @@
+; apps/cword/welcome.wtx - the shipped WELCOME.RTF's source (SPEC.md 67.12.3).
+; Same markup and the same parser as apps/word/welcome.wtx (tools/os88doc.py
+; owns parse_line; tools/os88rtf.py turns the result into RTF instead of .DOC).
+;
+; WHY THIS IS A SECOND SOURCE AND NOT THE SAME FILE. cword's RTF reader carries
+; the text and its CHARACTER formatting; every paragraph arrives in the default
+; format, which apps/cword/cwrtfio.c's ovl_put() says in as many words. So the
+; paragraph directives that make the .DOC demonstrate centring, indents and
+; double spacing would be silent here - and the sentences NAMING them would be
+; claims the screen does not keep, which is the one thing a shipped sample
+; document must never be (SPEC.md 47 is the same argument about greying).
+; Two spans go the same way: \ulw and \uldb both fold into one underline in
+; cword's model and there is no small caps at all, so those three are named in
+; the text and not worn by it.
+;
+; What is left is the same document: the same greeting, the same demonstration
+; that formatting survived a save and a load, the same key list, the same
+; credit.
+{b}{u}WELCOME TO MICROSOFT WORD{/u}{/b}
+Version 1.1a for os8088, written in C
+
+This document is an RTF file: the {b}bold{/b}, the {i}italics{/i} and the {u}underline{/u} on this page were saved into it and are being rendered back by the same engine you are typing into.
+
+{b}What works{/b}
+Type anywhere; select with the mouse, or press F8 and extend with the arrow keys. Character formats live on the ribbon, in Format Character, and on the Ctrl keys: {b}bold{/b} (Ctrl-B), {i}italic{/i}, {b}{i}both together{/b}{/i} and {u}underline{/u} (Ctrl-U). Word underline (Ctrl-W), double underline (Ctrl-D) and small caps (Ctrl-K) are drawn in the window too - this FILE cannot carry them, because cword's RTF folds every underline into one and has no small caps.
+
+Paragraph formats - alignment, line spacing, space before and the three indents - come from the ruler, the Ctrl keys and Format Paragraph. Set them and the page follows; they last as long as the document is open, and what this file carries from one session to the next is the text and its character formatting.
+
+{b}A few keys{/b}
+Ctrl-F        Search
+F4 / Shift-F4 Repeat the search down / up
+F5            Go To a page
+Ins           Overtype (the status bar's OVR lamp)
+F8            Extend the selection (EXT)
+Shift-F12     Save
+F12           Save As
+Alt-BkSp      Undo
+
+View > Draft wraps the text to the window; View > Page shows the sheet it will print on. The Font list is built from the system disk's FONTS folder and sets the document in a proportional face. The menus, ribbon, ruler, status line and dialogs follow the Opus source release preserved by the Computer History Museum.
+Save your own documents into the DOCS folder with Save As.

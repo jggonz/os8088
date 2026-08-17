@@ -607,6 +607,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
         cc-note chello covl cword cworddisk 386-c-word \
+        allapps \
         checkdocs clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -1697,21 +1698,30 @@ cword: $(BUILD)/cword.o88
 # milliseconds and catches the class of defect - a bad FAT chain, a directory
 # entry pointing at nothing - that otherwise arrives as "Disk error" inside
 # the emulator, ten minutes later, reading like a bug in the file system.
+# WELCOME.RTF rides the ROOT of all three, beside CWORD.O88 - which is where
+# the assembly port puts WELCOME.DOC and for a reason that is not tidiness:
+# a double-click on the document launches the program through SPEC.md 54.4.2,
+# and assoc_back then leaves the app's current directory on the DOCUMENT's
+# (SPEC.md 54.9, 19.2.1). CWORD.OVL is resolved in that directory (SPEC.md
+# 67.14), so a document in a folder of its own would open a program whose
+# every menu then refused, politely and inexplicably.
+$(BUILD)/WELCOME.RTF: tools/os88rtf.py tools/os88doc.py apps/cword/welcome.wtx | $(BUILD)
+	python3 tools/os88rtf.py apps/cword/welcome.wtx -o $@
+
 cworddisk: $(BUILD)/cword.img $(BUILD)/cword720.img $(BUILD)/cword360.img
 
-$(BUILD)/cword.img: $(BUILD)/cword.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/cword.o88 \
-		$(BUILD)/CWORD.OVL
+CWORDDISK := $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF
+
+$(BUILD)/cword.img: $(CWORDDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(CWORDDISK) --folder DOCS
 	@python3 tools/os88disk.py --verify $@
 
-$(BUILD)/cword720.img: $(BUILD)/cword.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/cword.o88 \
-		$(BUILD)/CWORD.OVL
+$(BUILD)/cword720.img: $(CWORDDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(CWORDDISK) --folder DOCS
 	@python3 tools/os88disk.py --verify $@
 
-$(BUILD)/cword360.img: $(BUILD)/cword.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/cword.o88 \
-		$(BUILD)/CWORD.OVL
+$(BUILD)/cword360.img: $(CWORDDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(CWORDDISK) --folder DOCS
 	@python3 tools/os88disk.py --verify $@
 
 # =============================================================================
@@ -3056,6 +3066,61 @@ $(APPSIMG720): $(APPS) tools/os88disk.py
 
 $(APPSIMG360): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(APPSARGS)
+
+# =============================================================================
+# THE EVERYTHING DISK (ON DEMAND: `make allapps`) - SPEC.md 19.9
+# =============================================================================
+# build/apps-all.img: ONE 1.44MB floppy with every application this project
+# ships on it, including the three that have their own disks and therefore
+# never appear on the shipped apps disk - FROTZ (SPEC.md 61), WORD (SPEC.md
+# 65) and CWORD (SPEC.md 67.12). It is a CONVENIENCE, offered beside the
+# shipped images on a release page for somebody who wants one disk rather
+# than four, and nothing in the tree boots it by default.
+#
+# It is NOT in `all`, and the reason is CWORD: a C package needs SmallerC,
+# which tools/setup-cc.sh fetches and which is deliberately not in this tree
+# (SPEC.md 67.1). A clone with nasm and python3 builds every SHIPPED floppy;
+# this one target is the exception, so it is on demand exactly like cworddisk.
+#
+# WHY 1.44MB AND ONLY 1.44MB. The contents are ~430KB. That is not a geometry
+# choice made to be generous - a 720KB or 360KB build of this list simply does
+# not fit, and the shipped disks already cover those machines. So there is one
+# size here and no --size variants to keep in step.
+#
+# THE TREE: each Word gets a FOLDER OF ITS OWN rather than a place in APPS/,
+# and that is a correctness requirement and not tidiness. Both carry an
+# overlay resolved in the launching instance's current directory (SPEC.md
+# 65.10, 67.14, 19.2.1), and a double-click on a document leaves that
+# directory on the DOCUMENT's (SPEC.md 54.9) - so package, overlay and welcome
+# document have to be three files in one folder or the document opens a
+# program whose every menu then refuses.
+#
+# FROTZ ships without a story. The stories are fetched by tools/getstories.py
+# and are never committed (SPEC.md 61), so what rides here is the interpreter;
+# `make zdisk` is still where a story disk comes from.
+ALLAPPSIMG := $(BUILD)/apps-all.img
+
+ALLAPPS := $(APPS) $(BUILD)/frotz.o88 \
+           $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC \
+           $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL $(BUILD)/WELCOME.RTF
+
+ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BUILD)/frotz.o88) \
+               $(addprefix GAMES:,$(APPS_GAMES)) \
+               $(addprefix MEDIA:,$(APPS_DATA)) \
+               $(addprefix WORD:,$(BUILD)/word.o88 $(BUILD)/WORD.OVL \
+                                 $(BUILD)/WELCOME.DOC) \
+               $(addprefix CWORD:,$(BUILD)/cword.o88 $(BUILD)/CWORD.OVL \
+                                  $(BUILD)/WELCOME.RTF) \
+               $(SYSAPPSARGS) \
+               $(addprefix SYSTEM/DOS:,$(APPS_DOS))
+
+allapps: $(ALLAPPSIMG)
+
+$(ALLAPPSIMG): $(ALLAPPS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(ALLAPPSARGS) --folder DOCS
+	@python3 tools/os88disk.py --verify $@
+	@echo "allapps: $@ - every app on one 1.44MB floppy; boot the system"
+	@echo "         disk with it in B: (make run RUNAPPS=$@)"
 
 # `make combo` -> build/combo.img: ONE 360KB bootable disk with the system,
 # every application AND the four benchmarks on it.

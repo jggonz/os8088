@@ -59,6 +59,10 @@ make covl       #   covl is the OVERLAY gate (§67.14); cword is the
                 #   application — Word 1.1a again, in C, in two segments
                 #   (§67.12). `make clean` SPARES build/cc
                 #   (clean-cc removes it) — it is a pinned upstream instrument
+make allapps  # build/apps-all.img (§19.9): ONE 1.44MB floppy with every app
+              #   on it, Frotz and both Words included, for a release page.
+              #   Needs the C toolchain, so it is on demand like cworddisk —
+              #   it is the only target outside §67 that does
 make clean
 ```
 
@@ -88,7 +92,9 @@ machines (§65.5) and `386-c-word` is the C word processor's (§67.12) — the
 five that put a dedicated floppy in B: instead of the apps disk. `make zdisk`
 builds the story disk (`tools/getstories.py` fetches the stories, which are
 never committed), `make worddisk` the Word disk and `make cworddisk` the CWORD
-disk.
+disk — which carries `WELCOME.RTF`, the same welcome document the Word disk
+carries as a `.DOC`, adapted to what cword's RTF can actually say (§67.12.3).
+`make allapps` collapses all of them onto one 1.44MB floppy (§19.9).
 
 **`RESET=` clears a machine's non-volatile state on the way in**, and it
 reaches every one of those targets because they all launch through the same
