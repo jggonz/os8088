@@ -316,6 +316,59 @@ window's — and from one of those it can claim a single pre-empted worker task
 of its own. Closing a package frees its claim, its task and its instance
 slot.
 
+### A package can also be written in C
+
+The OS itself is assembly and stays that way. But a **package** can be written
+in C, and one is: `apps/cword` — a second reimplementation of **Microsoft Word
+1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
+line as `apps/word` and RTF as its file format. It has both of the product's
+views — Draft, which wraps to the window, and Page, which wraps to the sheet —
+and its **Font box lists the typefaces on the system disk** and sets the
+document in the one you pick, proportional metrics and all.
+
+It does not fit in one segment, and that is the interesting part. A package's
+image and bss share 60KB and that ceiling IS the segment; C costs two to three
+times the image of hand assembly for the same work. So a good deal of it lives
+in `CWORD.OVL`, a file beside the package that is read into a heap claim the
+first time a dialog, a file command, the clipboard, the ruler or the Font list
+is asked for — the split falling exactly between what a keystroke touches and
+what a menu command touches. When the typefaces went in, that line is what
+moved: the resident half got *smaller* while the program grew a view and a text
+engine.
+
+The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
+BSD), pinned to one commit and **fetched rather than vendored** — it is not in
+this repository, `tools/setup-cc.sh` builds it into the gitignored `build/cc`,
+and nothing in `make` depends on it. It was chosen because it emits **NASM
+source**, so the output drops into the existing `nasm -f bin` pipeline and
+there is still no linker anywhere in the tree.
+
+`tools/cc8086.py` stands between the compiler and the assembler. It lowers the
+seven 80186/80386 forms SmallerC emits into 8086 instructions — differentially
+tested against a real x86 under QEMU, 428 cases — and **refuses four
+constructs outright**, because each is silently wrong here rather than merely
+unsupported:
+
+- **the address of a local.** `SS` is not `DS` in this OS, so `&x` on an
+  automatic is a stack offset that every later dereference resolves through
+  the package's own segment. Every addressable object must be `static`.
+- **string instructions.** They address `ES:DI` and `ES` is the kernel's
+  segment, so a compiler-emitted `rep movsb` writes into the kernel. This also
+  rules out struct assignment, struct arguments and struct returns by value,
+  which is how the compiler implements them.
+- **`long`, `float`, `double`, bit-fields and anonymous unions.** There is no
+  32-bit integer in 16-bit mode; `float` is worse than absent, because it
+  compiles and is silently two bytes wide.
+- **stack frames over 96 bytes.** The UI task's whole stack is 1,024 bytes and
+  a background task's is 256.
+
+The 60KB per-package ceiling is unchanged and C reaches it two to four times
+sooner, so a C package is a small package. Everything else — the header, the
+loader, the disk format, the 60KB check — cannot tell a C package from an
+assembly one, which is the test of whether it was done right.
+**[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** is the guide;
+[SPEC.md](SPEC.md) §70 is the contract.
+
 ## Three geometries of everything
 
 | image                  | geometry                 | for                             |
@@ -328,6 +381,7 @@ slot.
 | `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
 | `build/zork*.img`      | 1.44MB / 720KB / 360KB   | Frotz story floppies (`make zdisk`) |
 | `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
+| `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -496,10 +550,30 @@ ever does land, rotate it; deleting the line does not un-leak it.
 
 ## License
 
-MIT -- see [LICENSE](LICENSE). No third-party code is vendored into the OS, so
-the whole tree is covered by that one license. As noted at the top, the code
-was written with AI coding agents; it is an experimental hobby project and, per
-the MIT text, comes with no warranty of any kind.
+MIT -- see [LICENSE](LICENSE). As noted at the top, the code was written with
+AI coding agents; it is an experimental hobby project and, per the MIT text,
+comes with no warranty of any kind.
+
+Two things in the tree are not simply covered by that, and both are named
+rather than buried:
+
+- **The C compiler is not vendored.** SmallerC (2-clause BSD) is fetched at a
+  pinned commit into the gitignored `build/cc` by `tools/setup-cc.sh` and is
+  never committed here. What is committed is the hash and `tools/cc8086.py`.
+- **Two of the word processors draw on the Microsoft Word for Windows 1.1a
+  source code** ("Opus"), released by the Computer History Museum in 2014.
+  `apps/word` takes its menu strings, ribbon and ruler layout, dialogs and key
+  assignments from that release and writes real Word `.DOC` files built out of
+  its documented structures; `apps/cword` takes the same menus, keys, ribbon,
+  ruler and status fields, and transcribes RTF keyword and property tables from
+  it — `cwrtftbl.c`, `cwrtftbl.h`, and the interpreter shape in `cwrtfio.c`. Those files carry a header naming **Microsoft Corporation** as
+  copyright holder, the CHM release as the source, and the specific Opus file
+  each table came from. **The CHM release carries no licence grant**; it is
+  published for study, and every file in it is headed "COPYRIGHT (C) 1987
+  MICROSOFT". Anyone redistributing this repository, or a floppy image built
+  from it, should be aware of that and decide for themselves. The rest of both
+  programs — their windows, their layout engines, their redraw paths — is
+  os8088's own.
 
 The website in the sibling `os8088-web` repository is a separate matter: it
 vendors the v86 emulator (BSD-2-Clause), SeaBIOS and SeaVGABIOS binaries

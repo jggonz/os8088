@@ -152,6 +152,23 @@ a real problem, not something to work around. Report the kernel size; if it has
 grown, say by how much and how much headroom is left (the ceiling is 0xA000 =
 40,960 bytes for image + bss).
 
+**The optional fifth image** is `build/apps-all.img` (SPEC.md 19.9): one
+1.44MB floppy with every application on it, Frotz and both Words included, for
+somebody who wants one disk rather than four. It is not built by `make`,
+because `cword` needs a compiler this tree does not contain:
+
+```bash
+tools/setup-cc.sh && make allapps
+ls -l build/apps-all.img
+```
+
+Offer it, do not assume it. If `tools/setup-cc.sh` cannot run -- no network,
+no host toolchain -- **release the four and say the fifth was skipped**; it is
+a convenience, and a release that waits on it is a release that does not
+happen. When it is included, boot it in step 3 like any other image (it goes
+in B:, `make test TESTAPPS=build/apps-all.img`) and list it last everywhere,
+so the four shipped images stay the obvious download.
+
 ### 3. Smoke-test the build before publishing
 
 Never publish an image that has not been booted.
@@ -457,6 +474,11 @@ gh release create "$VERSION" \
   --notes "<notes>" \
   build/os8088.img build/os8088-360.img build/apps.img build/apps360.img
 ```
+
+Add `build/apps-all.img` to that argument list **only if step 2 built it**, and
+last, after the four. A missing asset makes `gh release create` fail with the
+tag already pushed, which is the one failure in this whole procedure that
+cannot simply be re-run.
 
 `gh` infers the repository from the checkout's remote, so this works for a
 fork or a rename without any edit here.

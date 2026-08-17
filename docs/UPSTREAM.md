@@ -204,6 +204,12 @@ squashed, and that shapes what to write:
 - **The squash replaces `main`'s tree wholesale**, so the branch's SPEC
   numbering becomes `main`'s. When ModPlug landed, `main`'s §52 ModPlug became
   §52 HDD plus §56 ModPlug. That is expected, not a conflict to resolve.
+  The second time it happened was PR #92: `main`'s §67 C toolchain met the
+  branch's §65 Calculator / §66 Heap compaction / §67 Cyclone 88, so the C
+  toolchain became **§70** and its Word/TeXPad references followed Word and
+  TeXPad to §68/§69. Git merges that cleanly and `checkdocs` cannot see the
+  duplicate `§67` heading, so after any merge in either direction check
+  `grep -oE '^#+ [0-9.]+' SPEC.md | sort | uniq -d` by hand.
 
 ## Quick reference
 

@@ -3876,11 +3876,23 @@ Three things follow and each broke first:
   module's init routine.
 - `task_spawn` — three callers: `app_launch` (a built-in kind's `KD_TASK`,
   §29.4), `inst_pkg_spawn` (a package's worker, §20.6) and the SB
-  refill/drain spawns (§34.5). In: AX = entry point (near), DX = argument
+  refill/drain spawns (§34.5). In: AX = entry point (near), **BX = the
+  segment the task runs in — 0 meaning `KERNEL_SEG`**, DX = argument
   word — delivered
   in the new task's DX register; DL is additionally stored to `T_INST`
   (instance index, 0xFF = none). Builds a fresh stack frame that `iret`s
-  into the entry with IF=1, DS=ES=KERNEL_SEG, all other GP regs zero.
+  into the entry with IF=1, **CS = DS = that segment and ES = `KERNEL_SEG`
+  always**, all other GP regs zero. **BX is not optional detail and this
+  entry used to omit it, saying flatly `DS=ES=KERNEL_SEG`.** That is what
+  the routine does for a *kernel* task and it is wrong for the two callers
+  that pass a segment: a package's worker (§20.6) and a driver's
+  (§51). Their code lives in their own image and their statics are DS-relative,
+  so DS must be theirs; the window record and every other kernel structure
+  they were handed lives in the kernel's, so ES must be the kernel's
+  (kernel/sched.inc:422–423 and :434). The frame carries the two
+  separately — `mov [es:di], ax` for DS from `[sch_newseg]`,
+  `mov word [es:di+2], KERNEL_SEG` for ES — which is why there is no
+  configuration in which they are the same for a package.
   Out: CF set if no free slot, else CF clear and **AL = slot index**
   (1..MAX_TASKS-1; the scan starts at slot 1 — slot 0 is the UI task and is
   never free). Clobbers AX. Zeroes the slot's `sch_cycles` dword **before**
@@ -15832,6 +15844,55 @@ already in the directory entry the scan is walking, so the list is built from
 that and the header name takes over the moment a face is chosen. The tool writes
 both from one source, so they agree; where they could not, the open is what wins.
 
+### 19.9 `apps-all.img` — one floppy with everything, and why it is on demand
+
+The shipped apps floppy is built in three geometries and carries the fifteen
+packages that fit the smallest of them. Three applications are deliberately not
+on it, each with a disk of its own and for the same reason — they are large and
+they travel with data: **Frotz** (§61), **Word** (§68.5) and **cword**
+(§70.12). That is right for the machines this runs on and awkward for a person
+downloading it, who wants to try the software rather than curate a shelf of
+floppies.
+
+`make allapps` builds **`build/apps-all.img`**: one 1.44MB volume with every
+application on it, offered beside the shipped images on a release page. It is a
+convenience and nothing in the tree boots it by default.
+
+**It is 1.44MB and has no smaller variants.** The contents are ~430KB, so a
+720KB or 360KB build of this list does not exist rather than being declined —
+and the machines those geometries are for are already served by the shipped
+disks. One size means no set of variants to keep in step.
+
+**It is not in `all`, because `cword` needs a compiler this tree does not
+contain** (§70.1). A clone with `nasm` and `python3` builds every *shipped*
+floppy; this one is the exception, on demand exactly like `cworddisk`.
+
+The tree, and the one part of it that is a correctness requirement:
+
+| folder | what |
+|---|---|
+| `APPS/` | the ten tools, plus `FROTZ.O88` |
+| `GAMES/` | the five games |
+| `WORD/` | `WORD.O88`, `WORD.OVL`, `WELCOME.DOC` |
+| `CWORD/` | `CWORD.O88`, `CWORD.OVL`, `WELCOME.RTF` |
+| `MEDIA/` | the module and the two `.TEX` documents — where a File Open starts (§38.10) |
+| `SYSTEM/`, `SYSTEM/DOS/` | the Task Manager (§28.3) and `OS88NET.COM` (§62) |
+| `DOCS/` | empty, for the user's own saves |
+
+**Each Word gets a folder of its own, and that is not tidiness.** Both carry an
+overlay resolved in the launching instance's current directory (§68.10, §70.14,
+§19.2.1), and a double-click on a document leaves that directory on the
+**document's** (§54.9). Package, overlay and welcome document therefore have to
+be three files in one folder: split them and the document opens a program whose
+every menu then refuses, politely and for a reason nobody can see. The failure
+window is only the first overlay-needing command — the module is loaded once and
+cached, and a `File > Open` or a `Save As` into `DOCS/` afterwards has already
+paid for it.
+
+**Frotz ships without a story.** `tools/getstories.py` fetches those and they
+are never committed (§61), so what rides here is the interpreter; `make zdisk`
+is still where a story disk comes from.
+
 ## 20. Loadable programs — the .o88 package format
 
 ### 20.1 A package owns a segment, and its region is a heap claim
@@ -16721,8 +16782,24 @@ window record and the kernel calls blind (§11). The entry is a plain near
 label inside the package's relocated region, so it satisfies §33 rule 3 by
 construction and needs no shim.
 
-On entry the worker gets DX = its instance index, DS = ES = CS =
-`KERNEL_SEG`, IF = 1, gfx lock free — the ordinary `task_spawn` frame (§8).
+On entry the worker gets DX = its instance index, **DS = CS = the package's
+own segment** and **ES = `KERNEL_SEG`**, IF = 1, gfx lock free — the ordinary
+`task_spawn` frame (§8), which since v3 takes the segment in BX.
+`inst_pkg_spawn` passes `mov bx, [di+I_SPTR]` (kernel/instance.inc:1339) and
+`task_spawn` writes that segment into both the frame's DS slot
+(kernel/sched.inc:422) and its CS slot (kernel/sched.inc:434) while the ES
+slot is `KERNEL_SEG` unconditionally (kernel/sched.inc:423 —
+`mov word [es:di+2], KERNEL_SEG ; ES slot: the kernel, always`). **This spec and `apps/os88api.inc` both used to say
+`DS = ES = CS = KERNEL_SEG`, and that was never true of a package worker** —
+it is the shape of a *kernel* task, which is what `task_spawn` builds when
+BX is 0. The distinction is not cosmetic: a worker whose DS were
+`KERNEL_SEG` could not read one byte of its own package's data without an
+override, and the reason a worker can call `mem_claim` and be identified as
+its own package (§50.3, `mem_own` answers with the caller's segment) is
+exactly that DS is the package's. The `ES = KERNEL_SEG` half is the same
+rule as every callback's (§11): the window record the worker was handed
+lives in the kernel's segment, so it is `[es:bx+W_FLAGS]`, never
+`[bx+W_FLAGS]`.
 
 ### 20.8 Forbidden (binding)
 
@@ -16991,9 +17068,20 @@ rule is enforced by os88pkg, not re-checked); image+bss ≤ APP_MAX_SIZE
 (else "Too large"); image = file size (guards truncated files and stale
 directories — sound because FAT directory sizes are byte-exact and
 os88disk.py never pads the size field, §24; cluster slack on disk is
-invisible here). It does **not** validate the dispatcher bytes at +12:
-os88pkg.py does, and a package that reached a disk without them is
-indistinguishable from one whose code is corrupt in any other way.
+invisible here). **It also validates the dispatcher bytes at +12** —
+`cmp word [si+LD_H_DISP], 0D5FFh` and `cmp byte [si+LD_H_DISP+2], 0CBh`
+(kernel/loader.inc:163 and :165) — so `FF D5 CB` is checked twice, by
+os88pkg.py when the file is stamped and by the loader when it is read. That
+is deliberate and this spec used to claim the opposite. os88pkg.py cannot be
+the only gate: it sees the file the build produced, and the loader sees the
+bytes that came off **this** disk, which is a different question the moment
+a sector goes bad or a foreign `.O88` is copied onto a volume by a host OS
+(§19 — every byte read off a disk is hostile). The three bytes are the one
+piece of the header that is *executed*, at a fixed offset, by a far call the
+kernel makes on the first paint; a header that reached the loader without
+them sends `wm_pkgcall` into that package's data with the return address
+already on the stack. Checking them costs three compares in the peek that
+was happening anyway.
 
 `loader_run` — in AX = directory index. UI task only, gfx lock not held
 on entry. Steps:
@@ -48372,14 +48460,29 @@ the same flag `wd_itinit` uses.
 feature rides on it.** Proven on the emulator: the file is found and read
 into a claim, the far call reaches the dispatcher at offset 0, the verb table
 dispatches, the `retf` returns, and a far call OUT to a shim that only
-returns works. **Not yet proven: a shim whose resident routine touches the
-UI** — calling `wd_saymsg` through one froze the app, and every static
-explanation was checked and cleared (the vector holds the shim's address, the
-segment is stamped, the string offset is the string, and the shim's near call
-lands exactly on `wd_saymsg` — its displacement wraps 64KB, which is legal
-and correct). The cause is dynamic and unknown. **No feature moves out of the
-resident image until that is understood**, because a subsystem that cannot
-report its own refusal is a subsystem that cannot ship.
+returns works.
+
+**The UI-touching shim was the open question, and it no longer reproduces.**
+The record used to say that calling `wd_saymsg` through `wd_s_saymsg` froze
+the app, that every static explanation had been checked and cleared, and that
+no feature could move out until the cause was understood. Re-run against the
+tree at §5.4.2.1: a temporary `WDM_SAY` verb was added in three variants —
+the toast through the shim, the toast called from the module's own segment,
+and a shim to a routine that touches nothing — and **all three work**, seven
+round trips interleaved, with editing across a paragraph break afterwards to
+show the app healthy. The likeliest explanation is that the defect was
+`gfx_blit1` restoring `DS` after its nest count rather than before (§5.4.2.1),
+which landed after that note was written and which the toast's own lettering
+goes through; that is an inference and is written down as one. The diagnosis
+hooks were removed; what stands is that the mechanism carries a call into the
+UI and back.
+
+§70.14 is the same design for a **compiled** module, and it is proven the
+other way — by a capability gate that ships nothing, `tests/covl`, whose
+module calls back out into resident C that toasts. It also names the one place
+this design cannot be copied into C unchanged: a shim of `call` / `retf` puts
+a compiled routine's arguments two bytes further from its frame than every
+reference to them says.
 
 ### 68.11 View > Page — the sheet
 
@@ -48952,3 +49055,1509 @@ rendered as left. The measure is in whole 8-px cells everywhere including the
 exports, so the PDF has the same loose word spacing the preview does — that is
 the monospaced cell being honest about itself, not a rounding bug to be fixed
 by moving the exports to a proportional face they were not measured for.
+
+## 70. The C toolchain — compiling C into an `.o88` package
+
+Everything in this OS is hand-written assembly, and that is a choice rather
+than an accident: the target is a 4.77 MHz 8088 and the per-call floors in
+PERFORMANCE.md are what the design is built around. This section does not
+change that. It adds a **second** way to write a package — one that is
+allowed to be slower and larger in exchange for being writable — and it pins
+the exact boundary at which that trade is still safe.
+
+The whole of it is one sentence: **C is a package like any other, and the
+package ABI does not bend to accommodate it.** No kernel change, no new API
+slot, no per-language special case in the loader. Every constraint below is
+the consequence of holding the kernel still while a compiler that knows
+nothing about this OS emits code into it — and the three that matter, the
+`&local` rule (§70.5), the ES rule beside it (§70.5.1) and the stack budget
+(§70.8), are the ones a C author cannot see and the build therefore refuses on
+their behalf.
+
+### 70.1 Why SmallerC, and why the toolchain still has no linker
+
+The compiler is **SmallerC**, pinned at commit
+`1865d79ce7a5ad3f8a9515a571437cee084b8b1d`, 2-clause BSD. It is ~15.5k lines
+of portable C and builds clean on macOS arm64 with no dependencies.
+
+The three obvious alternatives were tried first and all three failed on the
+same host: OpenWatcom has no macOS build, `ia16-elf-gcc` has no macOS
+prebuilt, and Docker was not available to stand in for either. But the
+decisive property is not availability, it is output format. **SmallerC emits
+NASM source.** Every other 16-bit C compiler emits an object file, an object
+file needs a 16-bit linker, and a 16-bit linker is precisely the thing
+CLAUDE.md's "no linker — everything is `nasm -f bin` flat binaries,
+deliberately, to keep Apple's Mach-O-only toolchain out of it" exists to keep
+out. A toolchain that gained a linker to gain C would have paid for C with the
+build system.
+
+So the package pipeline gains **one step at the front** and is otherwise
+untouched:
+
+```
+apps/cword/cword.c   --smlrcc -S--> build/cword.raw.asm  (NASM, but 80386)
+build/cword.raw.asm --cc8086.py--> build/cword.gen.asm   (8086-clean, gated)
+apps/cword/cword.asm  (the hand-written shim: it %includes apps/cc/crt0.asm
+        for the header, the sections, the trampolines and the API shims, and
+        then %includes build/cword.gen.asm through nasm's -I build/)
+                     --nasm -f bin--> build/cword.bin     (org 0, unchanged)
+build/cword.bin      --os88pkg.py--> build/cword.o88      (unchanged validator)
+build/*.o88          --os88disk.py--> build/cword.img     (FAT12, three geometries, §24)
+```
+
+**The two intermediate names are pinned and they are not interchangeable.**
+`.raw.asm` is what the compiler wrote and `.gen.asm` is what `cc8086.py`
+passed; a build that assembles `.raw.asm` assembles ungated 80386 code, so the
+suffix is the only thing distinguishing "compiled" from "compiled and
+checked". Neither may be `build/<pkg>.asm`: that name would collide with the
+hand-written shim `apps/<pkg>/<pkg>.asm`, which is the file `nasm` is actually
+pointed at, and `-I $(BUILD)/` puts both on the same include path. The rules
+are `apps/cc/Makefile.inc`'s `CC_PACKAGE` (§70.13).
+
+`nasm`, `os88pkg.py`, `os88disk.py` and the header contract (§20.2) do not
+know a C package from an assembly one, and that is the test of whether this
+was done right.
+
+**The invocation is pinned** — it is not a suggestion, because three of its
+flags are load-bearing:
+
+```
+smlrcc -tiny -S -SI <smallerc>/v0100/include -I <smallerc>/v0100/include f.c -o f.asm
+```
+
+- `-tiny` is the one-segment memory model (CS = DS = SS in the compiler's
+  world view), which is the shape closest to an os8088 package and the only
+  model in which every pointer is a bare 16-bit near offset. It is also the
+  model that makes §70.5's defect possible, because the compiler believes
+  something about SS that is false here.
+- `-S` stops at assembly. There is no assembling and no linking inside the
+  compiler driver; `nasm` remains the only assembler in the tree.
+- `-nopp` **must not be passed** when the source has a `#include`. It
+  disables the preprocessor and the failure is a parse error a long way from
+  the cause.
+
+**One translation unit, always.** `nasm -f bin` has no notion of an external
+symbol — verified: `binary output format does not support external
+references` — so a C package cannot be several `.c` files linked together.
+What it can be is one `.c` file plus a hand-written assembly runtime
+`%include`d into the *same* nasm job, which is the arrangement §70.4 needs
+anyway. SmallerC emits an `extern` line for every symbol it did not define,
+and nasm **accepts a redundant `extern` for a symbol defined in the same
+assembly** (verified: assembles clean, correct output), so the compiler's own
+`extern` lines cost nothing and need no stripping. What they do is turn a
+genuinely *missing* symbol — a runtime shim the C called and nobody wrote —
+into nasm's external-reference error, which is a build failure with the
+symbol's name in it. The gate does not check for that and does not need to:
+this is the one failure in the C path that already names its own cause.
+
+### 70.2 Sections — the layout that keeps the image-size word true
+
+SmallerC emits four sections and switches between them freely, several times
+per function: `.text`, `.rodata`, `.data`, `.bss`. An assembly package emits
+none — it is one flat run of bytes from `org 0` — and `apps/os88api.inc` was
+written on that assumption.
+
+**This is the trap, and it is silent.** `OS88_IMAGE_END` computes
+`OS88_IMAGE_SIZE equ os88_image_end - $$`, and in nasm `$$` is the start of
+the **current section**. Land that macro in `.data` and the header's
+image-size word becomes the size of `.data` rather than the size of the
+image. Measured on the first C package built: the word said **397** for a
+**478**-byte file. nasm assembles it without a murmur, because nothing about
+it is ill-formed; the only thing in the tree that notices is `os88pkg.py`'s
+"image size must equal file size" check, and it reports the number mismatch,
+which reads exactly like a truncated file (§21's own reason for that check).
+An author who did not know about sections would go looking at the disk.
+
+**The layout, pinned.** A C package's assembly opens with these four
+directives, before any content, and nothing else in the package may open a
+section:
+
+```nasm
+cpu 8086
+bits 16
+section .text   start=0
+section .rodata follows=.text   align=2
+section .data   follows=.rodata align=2
+section .bss    follows=.data   align=2 nobits
+```
+
+Three things follow, and each is why a directive is written the way it is:
+
+- **`.text start=0` makes every label absolute.** With the head of `.text` at
+  offset 0 and every other section chained to it by `follows=`, a label's
+  value *is* its offset from the head of the image — which is exactly what
+  the header words want. So the image size is an **absolute end label** and
+  not a difference: `CC_IMAGE_SIZE equ cc_image_end`, where `cc_image_end` is
+  the final label in `.data`. There is no `- $$` anywhere in a C package's
+  header, which is what makes the trap above structurally impossible rather
+  than merely avoided.
+- **The bss size is a difference taken inside one section.**
+  `CC_BSS_SIZE equ cc_bss_end - cc_bss_beg`, both labels in `.bss`. It cannot
+  be `cc_bss_end - cc_image_end`: nasm refuses a cross-section subtraction in
+  an `equ` — verified, `error: invalid operand type` — because an `equ` is a
+  critical expression and section placement is not resolved when it is
+  evaluated. Both-labels-in-one-section always resolves.
+- **`.bss` is last and `nobits`.** It contributes no file bytes, so the image
+  size stays equal to the file size (§20.2), and the region the loader zeroes
+  at §21 step 8 is exactly it. `.rodata` before `.data` is arbitrary; it is
+  pinned so that the layout is one fixed thing and not a per-package
+  decision, and so a byte-for-byte rebuild (§24) is reproducible.
+
+The 32-byte header itself is emitted by the C runtime include and not by
+`OS88_HEADER`: that macro emits `org 0` of its own and closes with the `$$`
+arithmetic above, so a C package uses a sibling pair of macros with the same
+field layout, the same magic, the same version 3 and the same `FF D5 CB 00`
+dispatcher bytes at +12. **The header a C package emits is byte-identical in
+shape to an assembly package's** — that is the requirement, and `os88pkg.py`
+plus `ld_check_hdr` (§21) are the two things that prove it on every build.
+
+The whole layout was assembled and checked before this section was written: a
+48-byte fixture with content in all four sections produced an image-size word
+of 48 against a 48-byte file and a bss word of 8, under `nasm -f bin -w+error`
+with `cpu 8086`.
+
+#### 70.2.1 Two more silent layout defects, both found after that fixture
+
+The fixture above proved the *shape* right and still missed two things, both
+of which reached a booting package. Both are closed in `apps/cc/crt0.asm`, and
+both are recorded here because the failure mode is the reason the file looks
+the way it does.
+
+- **`.data` may never be empty.** nasm materialises a section's alignment
+  padding only if the section has content, so with nothing in `.data` the file
+  ends at the tail of `.rodata` while `cc_image_end` sits one byte past it.
+  Measured: a 37-byte file with a 38 in its header, and `os88pkg.py` reporting
+  a size mismatch that reads exactly like a bad disk. The runtime therefore
+  keeps one object of its own in `.data` (`cc_tpl`, the window template), so
+  the section is never empty whatever the C does.
+- **`.data` is padded to even *before* `cc_image_end` is taken, and that
+  `align 2` is a memory bug rather than a tidy number.** `.bss` is
+  `follows=.data align=2`, so nasm rounds its base **up**: with an odd-length
+  `.data` — one `static char name[9] = "SAVE.DAT";` is enough —
+  `cc_bss_beg` lands at `cc_image_end + 1`. The loader zeroes exactly
+  `[image, image + bss_size)` (§21 step 8), so it clears one byte *before*
+  `.bss` and stops one byte *short* of its end, and **the last byte of `.bss`
+  keeps whatever the previous tenant of that heap claim left in it** —
+  `mem_claim_hi_x` does not pre-zero (§15). Measured before the fix, on a
+  package whose only change was the parity of one string literal:
+  `cc_bss_beg` = 2290 against `cc_image_end` = 2289, with the even-length
+  sibling agreeing at 2288. Nothing warns. The symptom is a C global that is
+  occasionally not 0 on the second launch of the package, and only on the
+  second — which is the hardest shape of bug this tree produces, and it was
+  bought with one byte of string.
+
+The `align 2` must live in the runtime rather than in a package's shim,
+because the runtime is the only place that is guaranteed to be after all of
+the C's `.data` and before `cc_image_end` is defined.
+
+There is deliberately **no assembly-time `APP_MAX_SIZE` assertion** in the
+runtime: `%if` cannot compare a section-relative label to a constant (`nasm`
+answers `operands differ by a non-scalar`). The 60KB ceiling (§70.9) is
+enforced twice downstream instead — `os88pkg.py` on every build and
+`ld_check_hdr` on every load (§21) — and the build rule prints the sizes.
+
+### 70.3 The C ABI where it meets the package ABI
+
+SmallerC's 16-bit output is plain cdecl, and every clause of it matters here:
+
+| | |
+|---|---|
+| arguments | pushed **right to left**, all on the stack, none in registers |
+| cleanup | **the caller cleans** — the emitted form is `sub sp, -N`, which is `add sp, N` in a shorter encoding |
+| return value | **AX** |
+| callee-saved registers | **none at all** — a compiled function may clobber AX, BX, CX, DX, SI and DI, and rebuilds BP itself with `push bp` / `mov bp, sp` |
+| `int`, `void *` | 2 bytes, both; pointers are **near** |
+| `char` | signed |
+| segment registers | generated code never writes one; it reads DS implicitly and touches ES, SS and CS not at all |
+
+Two of those rows are the whole interface problem. **"No callee-saved
+registers" is the reason §70.4 exists**: the kernel's callback contracts
+expect registers back. **"Generated code never touches ES" is the reason
+compiled C cannot read a window record**: ES is `KERNEL_SEG` on callback entry
+(§11, §20.1) and the record lives there, so every `[es:bx+W_*]` access is
+assembly the runtime provides and hands to C as a value. That is not a
+limitation to work around; it is §20.8 rule 3 — a pointer crosses the
+boundary by being copied, never by threading a segment answer through a body
+that does not want one — stated in the language C forces it into.
+
+DS is the package's own segment throughout compiled code (§20.1 for a
+callback, §20.6 for a worker), which is why every static, every string
+literal and every `.rodata` table is an ordinary DS-relative `[label]`
+reference and needs no thought. **SS is not**, and that is §70.5.
+
+### 70.4 A C function becomes a callback through a thunk
+
+The kernel reaches a package by far-calling `<package segment>:12` with BP =
+the callback's near offset, DS switched to the package and ES = `KERNEL_SEG`;
+the three bytes there are `call bp` / `retf`, so the callback itself is an
+ordinary near proc ending in a near `ret` (§20.2, `wm_pkgcall`). A compiled C
+function is, structurally, exactly that. **It must still never be the
+dispatch target directly**, and the near proc the window record names is
+always a hand-written **thunk**, for three reasons that are each fatal
+separately:
+
+1. **The kernel passes arguments in registers and C takes them on the
+   stack.** `W_PAINT`, `W_ONKEY` and `W_ONCLICK` all arrive with SI = the
+   window record (§11); a click adds CX/DX = x/y; a key adds AL = the ASCII
+   code and AH = the scan code. Compiled C reads none of that. The thunk
+   pushes what the C body declared, right to left, and cleans up after the
+   call — and for `W_ONKEY` it must move AX out of the way first, because
+   building the second C argument destroys the register the first one is
+   still in.
+2. **The kernel expects registers back that C does not preserve.** SI must
+   survive `W_PAINT` and `W_ONCLICK`: `wm_draw_win` does `mov bx, si` after
+   the dispatch returns, and the comment beside it — *"wm_pkgcall preserves
+   both, but the paint proc need not preserve BX"* (kernel/wm.inc:7875) — is
+   the same sentence saying the paint proc **must** preserve SI. C preserves
+   nothing. So the thunk **saves and restores every register it can**, rather
+   than the minimum set per callback: the minimum set is a fact about kernel
+   code that the package cannot see and that may change under it, and getting
+   it wrong produces a package that assembles cleanly and runs wrong, which
+   is the failure class this whole spec is organised against.
+3. **The direction flag.** Every callback must leave DF clear (§1, §20.2).
+   SmallerC never emits `std`, so the flag would in fact survive — but a
+   guarantee that rests on a compiler's habits is not a guarantee. The thunk
+   issues `cld`, one byte, and makes it local.
+
+The shape is binding:
+
+```nasm
+cw_paint:                       ; the near offset W_PAINT carries
+        push    bx
+        push    cx
+        push    dx
+        push    si
+        push    di
+        push    es
+        cld
+        push    si              ; cdecl argument 1: the window record ptr
+        call    _cw_on_paint    ; the compiled C body
+        add     sp, 2           ; the CALLER cleans (§70.3)
+        pop     es
+        pop     di
+        pop     si
+        pop     dx
+        pop     cx
+        pop     bx
+        ret                     ; NEAR - the dispatcher owns the only retf
+```
+
+Notes that are part of the contract, not commentary:
+
+- **AX is deliberately not saved.** It is C's return register and it is the
+  return register of every callback contract that returns a value, so the two
+  agree for free.
+- **A callback whose answer is CF sets it last.** Testing the C return value
+  clobbers FLAGS, and the register restores must therefore happen *before*
+  the test: pops, then `or ax, ax`, then `stc`/`clc`, then `ret`. `pop` does
+  not touch FLAGS, so the reverse order would also work — pinning one order
+  removes the question.
+- **No thunk may `retf`** (§20.8 rule 5), and none has any reason to: the
+  dispatcher owns the only one in the package.
+- **The worker entry is the exception.** It never returns (§20.6 rule 2), so
+  it saves nothing; it sets up whatever the C body's outer loop needs and
+  calls it, and the C body loops for ever around `OSAPI_TASK_ALIVE`, reached
+  through a runtime shim because a far call is not something C emits. A C
+  worker is possible **because** `task_spawn` gives it DS = the package's
+  segment (§20.6) — a worker whose DS were the kernel's could not read one
+  static.
+
+### 70.5 `&local` is silently wrong, and the build REFUSES it
+
+This is the load-bearing paragraph of the section. Everything else here is
+bookkeeping; this is the one thing that will destroy a machine and leave no
+trace of why.
+
+**SS is `LOW_SEG` and DS is the package's segment, on every task, always.**
+That is §1's near-model rule and §2.1's memory map, and it is not negotiable
+for the sake of a compiler: SS is not part of the saved task frame (§8), the
+eleven worker stacks are one 256-aligned block in `.lowbss` whose slice top is
+derived from SP alone, and the canary check that catches an overrun reads
+through SS. **SS ≠ DS is a property of the whole operating system.** No
+kernel change was made to accommodate C and none should be proposed; the
+alternative — a per-task SS so that a package's compiled code could run with
+SS = DS — touches the scheduler, the canary, the ISR entry paths and the
+memory map, in exchange for making one compiler's assumption true.
+
+SmallerC addresses locals and parameters as `[bp+N]`. On the 8086 `[bp+disp]`
+addresses **SS**, and *that is correct*: the local really is on the stack.
+Reading and writing an automatic through `[bp+N]` works, and works on a
+worker as well as on the UI task.
+
+**What is wrong is the address.** `&x` on an automatic compiles to:
+
+```nasm
+        lea     ax, [bp-2]
+```
+
+— a bare 16-bit offset with no segment attached, because in the `-tiny` model
+the compiler believes there is only one. Every later dereference of that
+pointer is a DS-relative `[bx]` or `[si]`, because that is what a C pointer
+compiles to. So **the program writes to the stack and reads out of its own
+image**, at whatever offset the stack frame happened to occupy. It assembles.
+It links. It runs. It returns plausible numbers, and it corrupts a different
+part of the package's data depending on how deep the call was, which is to
+say depending on what the user did.
+
+**The detection is exact for the form it names, and the completeness argument
+has to be stated carefully, because the obvious version of it is false.**
+
+`lea r16, [bp±N]` is the form SmallerC uses to make the address of a **named
+automatic**. Checked against every construct that can produce one — an
+explicit `&` on a scalar, a variable-indexed local array, and a local struct
+passed, assigned and returned by value — and each emitted `lea ax, [bp-N]`.
+
+It is **not** the only way the compiler forms a stack address. SmallerC's
+struct-by-value *argument* helper builds one out of SP directly:
+
+```nasm
+        add     sp, 4*2
+        sub     sp, ax
+        mov     di, sp          ; <- a stack address, and no `lea [bp…]` in sight
+        cld
+        rep     movsb
+```
+
+A gate that only refused bp-relative `lea` would let that through. It does not
+get through, and the reason is §70.5.1 rather than this rule: **that helper
+always carries the `rep movsb` beside it**, because forming the address is
+only ever the first half of copying the struct, and the ES rule refuses the
+`rep movsb` by name. Verified on the four-way fixture above: `struct P p = q;`
+, `f(q)` and `return p;` produce five findings between them — three
+bp-relative `lea` and two `rep movsb` — and the two helpers are caught by the
+second rule, not the first.
+
+So the honest statement of coverage is: **the two rules are complete together
+and neither is complete alone**, and that is a property of this compiler at
+this pinned commit rather than a theorem. It is the assumption to re-check
+first if the pin ever moves — a future SmallerC that formed a stack address
+without copying through ES would need a third rule.
+
+And note that the `lea` rule catches more than a literal `&`:
+
+- `&x` on any automatic, obviously;
+- **a local array with a variable index.** `buf[0]` on a local `char buf[8]`
+  compiles to a direct `mov [bp-10], al` and is perfectly safe; `buf[i]`
+  compiles to `lea ax, [bp-8]` and is not. The difference is invisible in the
+  C source and is exactly the kind of thing a reviewer's eye slides over;
+- **a local struct passed or assigned by value**, which the compiler
+  implements as an address and a copy — again `lea ax, [bp-N]`, with nothing
+  in the C source that looks like a pointer;
+- any library helper the runtime offers that takes a pointer, called on an
+  automatic.
+
+So the rule is mechanical: **`tools/cc8086.py` refuses any `lea` whose source
+operand names BP**, and fails the build. It is not a warning. There is no flag
+that permits it, and adding one would be adding a switch labelled "corrupt
+memory quietly".
+
+**What the message actually gives you is a line, not a function name.** Every
+finding is `<file>:<line>: error: …` against the *generated* assembly, quoting
+the offending instruction and naming the fix. It does not name the C function
+containing it and it does not map back to a line of C: SmallerC emits no
+source-line information at all, so there is nothing to map through. Finding
+the C is a two-step, and it is written out in docs/C-TOOLCHAIN.md: open
+`build/<pkg>.raw.asm` at the reported line and read **upwards** to the nearest
+`_name:` label, which is the C function's name with SmallerC's leading
+underscore. The one case where that fails is the one that most needs
+explaining: the struct helpers above are emitted at the foot of the file under
+bare `L<n>:` labels with no C function anywhere above them, so a `rep movsb`
+reported there names no caller at all and the answer is "you passed, assigned
+or returned a struct by value somewhere". The gate's messages are long on
+purpose to make up for it — each
+one states the rule, the failure mode and the C to write instead — but the
+locating step is manual and it should be expected.
+This is a gate in the same sense as `os88pkg.py` and `checkdocs.py`: a machine
+check standing where a human check has already been shown to fail.
+
+**What a C author writes instead: static storage.** Every buffer whose
+address is taken lives in static storage, which means `.bss` (or `.data` if
+it needs an initialiser), which means DS-relative, which means the address is
+an ordinary image offset and every dereference is right.
+
+```c
+static char line[80];           /* fine: DS-relative, &line is a real address */
+void draw(void) { char tmp[80]; ... }   /* refused if tmp's address escapes  */
+```
+
+A `static` declared *inside* a function is the idiom and reads correctly —
+the scope is still the function, only the storage moved. Two consequences the
+author owns, because the compiler will not mention them:
+
+- **A static is per package *instance*, not per call.** It is not re-entrant.
+  A paint that triggers a paint of the same package's second window (§11)
+  shares it, and so do the UI task and the worker (§20.6), which are
+  pre-empted against each other. Where an assembly package would have used a
+  stack buffer and been safe by construction, a C package must either own the
+  aliasing deliberately or not share the buffer between the two contexts.
+- **It costs image or bss against the 60KB ceiling** (§70.9) rather than
+  costing stack.
+
+And note what the rule buys, because it is not only a prohibition: **§70.5 and
+§70.8 are the same rule seen twice.** A package that may spend ~512 bytes of
+stack in a callback could not have afforded that 80-byte local anyway, two
+frames down. Forcing buffers into static storage is what makes the frames
+words wide, which is what makes the stack budget hold.
+
+The corpus measurement found **69 bp-relative `lea` sites**, and every one of
+them was real — this is not a rule guarding against a rare mistake, it is the
+rule that decides whether ordinary C can be written here at all.
+
+### 70.5.1 The same mistake with the other segment: ES belongs to the kernel
+
+`&local` is the compiler being wrong about SS. There is a second construct
+where it is wrong about **ES**, it arrives from the same C, and it is worse
+when it fires.
+
+**The 8086 string instructions address ES:DI**, and every callback is entered
+with `ES = KERNEL_SEG` (§11, §20.1). Compiled code never loads ES (§70.3), so
+a `movsb`, `stosb`, `scasb` or `cmpsb` — with or without a `rep` — emitted by
+the compiler writes into or compares against **the kernel's own segment**. It
+does not fault. `rep stosb` clearing what the C thought was a 200-byte buffer
+overwrites 200 bytes of the kernel at whatever offset DI happened to hold.
+
+So `tools/cc8086.py` refuses all four, prefixed or not, and the reason it must
+is not a corner case: **`rep movsb` is how SmallerC copies a struct by
+value.** It emits a helper that `lea`s the source local and then `rep movsb`es
+it, so a single C line —
+
+```c
+struct point p = q;             /* or f(q), or `return p;` */
+```
+
+— trips §70.5 and this rule at the same time. That is the shape of the
+hazard: the two rules are one defect with two symptoms, and a C author who
+keeps every addressable buffer static never meets either.
+
+`lods` is **allowed**: it reads DS:SI, which is the package's own segment and
+is correct. Hand-written inline assembly that has loaded ES itself and knows
+what it is doing marks the line `; cc8086:allow <reason>` — a per-line,
+reasoned, greppable exception, which is a different thing from a build flag
+(§70.10).
+
+### 70.6 The seven non-8086 forms, and the lowering of each
+
+SmallerC targets an 80386 even in 16-bit mode. The feasibility corpus is
+SmallerC's own `srclib` — 201 `.c` files, of which **198 compile** (the three
+that do not want `long` or `L_tmpnam`) — giving **48,466 lines** of emitted
+assembly. Counted with `cc8086.py`'s own parser, so the numbers mean what the
+tool means by them rather than what a grep would:
+
+```
+setcc r8        200      imul r16, r16, imm     16   (15 lowered, 1 refused)
+leave           141      shl/shr/sar r, imm>1    2
+push imm        120      movzx r16, r/m8         2
+                         movsx r16, r/m8         1
+```
+
+**482 sites, about 1.0% of instructions, in seven forms.** 481 of them are
+lowered — that is the tool's own tally, printed per file and summed over the
+corpus. The one that is not is `imul eax, eax, 1103515245` in `rand.c`, which
+is refused for its 32-bit registers rather than for being an `imul`, and is
+the only file of the 198 that `cc8086.py --no-gate` rejects.
+
+Two of those figures used to be wrong here and are worth pinning down, because
+both are numbers somebody will recount:
+
+- **`push imm` is 120, not 105.** 105 is what a grep for `push <digit>` finds.
+  The other 15 push a **symbol** — `push _table` — which is just as much an
+  immediate and just as illegal on an 8086, and the tool classifies by operand
+  kind rather than by first character. Count it the tool's way or the liveness
+  census below does not add up.
+- **`imul r,r,imm` is 16 three-operand sites and 15 lowerings**, and the
+  difference is not a failure. The 16th has a 32-bit destination, so it is a
+  gate finding (§70.10 rule 4) and never reaches the lowering.
+
+Alongside those, **91 sites in the same corpus have no lowering because the
+fix belongs in the C**: 69 bp-relative `lea` (§70.5), 18 string operations
+through ES (§70.5.1) and 4 references to a 32-bit register — the last four all
+in `rand.c`, all the same `long`. Those are the gate, not the lowering.
+
+**The set is closed** at the pinned commit: there is no long tail, and a form
+outside it is a change in the compiler and a change to this table. The closing
+sweep (§70.10 step 3) is what makes that safe to say — an eighth form is
+refused by name rather than passed through.
+
+The lowering is a pass over the emitted assembly in `tools/cc8086.py`, and
+the standard each one is held to is that **it must be provably right about
+what it clobbers**, not merely plausible:
+
+| form | 8086 lowering | costs | how that was established |
+|---|---|---|---|
+| `leave` | `mov sp, bp` / `pop bp` | nothing | neither MOV nor POP writes FLAGS, and `leave` already defines both SP and BP |
+| `setcc r8` (all ten spellings, `sete setne setl setle setg setge setb setbe seta setae`) | `mov r8, 1` / `j<cc> .1` / `mov r8, 0` / `.1:` | nothing | MOV, Jcc and JMP all leave FLAGS as they found them on an 8086, so this branch-shaped rewrite carries **no liveness obligation** — which matters, because FLAGS is provably dead by a linear scan at only 111 of the 200 sites; 89 are followed immediately by a label and a second predecessor decides nothing. A lowering that costs nothing beats a proof that does not close |
+| `shl/shr/sar/rol/ror/rcl/rcr r/m, N` | N copies of the 1-bit form | nothing | exact, carry included; the only flag that differs is OF, which the multi-bit form leaves undefined for N ≠ 1 anyway |
+| `movzx r16, r/m8` | `mov <lo>, src` / `mov <hi>, 0`, **low half first** | nothing | low-half-first is what keeps `movzx bx, byte [bx]` reading the old BX |
+| `movsx r16, r/m8` | `mov al, src` / `cbw` / `mov r16, ax`, collapsing to a bare `cbw` when the destination is already AX | AX | CBW writes no flags; AX must be **provably dead** unless it is the destination, and the site is refused otherwise |
+| `imul r16, src, imm` | a shift-and-add chain: a scratch holds the multiplicand, the destination accumulates `src << b` per set bit; `imul ax, ax, 2` collapses to one `shl ax, 1` | FLAGS, and a scratch | the one lowering that **cannot** preserve FLAGS (ADD and SHL define them), so it carries a real liveness obligation and refuses the site unless FLAGS is provably dead after it. It is also the right shape for the target: `mul` is 118–133 cycles on an 8088 and a shift is 2 |
+| `push imm` | `mov <scratch>, imm` / `push <scratch>` | one register | see below |
+
+**`push imm` is the delicate one, and the reason is the instruction set.** The
+8086 has no push-immediate, and SP is not a legal base register in an 8086
+effective address, so a scratch register is unavoidable and the only question
+is which one is dead. That was **censused rather than assumed**: over the
+corpus, by the same conservative forward scan the tool uses at every site, **AX
+is dead at 120 of 120** `push imm` sites and no other register is (BX 119,
+CX 115, DX 115, SI 113, DI 113). It is killed within three instructions every
+time — by a `call` (the ABI has no callee-saved register and returns in AX, so
+a call ends AX's life), by a `mov ax, …`, or once by a `lea ax, …`. That is
+simply the shape of the code: SmallerC evaluates each argument into AX and
+pushes it, so at an argument push the previous argument is already on the
+stack. AX is therefore tried first and CX, DX, BX, SI, DI in turn, and **a
+site where none of them is provably dead is refused, not guessed at**.
+
+**The rejected alternative is worth recording, because it looks correct.**
+`mov word [scratch], imm` followed by `push word [scratch]` is 8086-legal,
+touches no register and no flag, and costs two bytes of the package's bss. It
+is **not re-entrant**, and this OS pre-empts: a package's worker and its
+UI-task callbacks share one DS and would share the one scratch word, so a task
+switch landing between the two instructions splices the worker's constant into
+the callback's argument list. A wrong number, once in a while, in a program
+nobody can attach a debugger to — the worst available failure, bought to avoid
+a liveness scan that turned out to close at 120 of 120 anyway.
+
+#### 70.6.1 The liveness scans, and the two things that were wrong in them
+
+Three of the seven lowerings ask a liveness question — `push imm` and both
+widenings ask whether a register is dead, `imul r,r,imm` asks whether FLAGS
+is. Every question is asked of the **original** instruction stream, which stays
+correct after rewriting because no lowering changes the control flow outside
+itself: the `setcc` branch and its label begin and end between the same two
+instructions the `setcc` did, so the set of paths reaching any later use is
+unchanged.
+
+Both scans were wrong when first written, in opposite directions, and the two
+corrections are the reason ordinary C compiles here at all.
+
+- **Stopping at a label was too conservative, and it refused real C.** Both
+  scans used to answer "not provably dead" at the first label. SmallerC ends
+  every function `L<n>: / leave / ret`, so `int f(int i) { return i * 10; }`
+  reached the label one instruction after the `imul` and was refused, with
+  advice that did not work either. Measured over four small files of ordinary
+  C: **eleven of fourteen constant-multiply sites were refused before the fix
+  and one after** — and that one is an honest refusal for a different reason.
+  It was also unnecessary. Liveness at a point is a question about the paths
+  **out** of that point, and a label does not add any: it adds *incoming*
+  edges, and what another predecessor did before arriving cannot change what
+  the instructions after the label go on to read. The one path out is the
+  fall-through, which is the path the scan follows, and it still stops at a
+  branch, because a branch really does fork it. A loop is covered by the same
+  rule from the other end — the backward `jcc` that closes it stops the scan.
+  A **directive** still stops both scans: `section`, `equ` and `times` can put
+  anything at all between two instructions, and unlike a label they are not
+  merely a name for the point in between.
+- **Treating `inc`/`dec` as full FLAGS writers was too permissive, and that is
+  the direction that produces a wrong program rather than a refusal.**
+  `flags_dead_after` may answer *yes* only on an instruction that leaves **no**
+  flag holding its old value. INC and DEC deliberately **do not write CF** —
+  that is the whole reason they exist beside ADD and SUB — so a `cmp` / `inc` /
+  `jc` sequence still reads the `cmp`'s carry, and an `imul` lowering inserted
+  before that `inc` would have clobbered it. They were in the full-writer set
+  and it was a latent bug; the label fix above is what made the scan reach far
+  enough for it to have fired. The same distinction puts ROL/ROR/RCL/RCR out
+  of the set (they write CF and OF only), and puts a shift **by an unreadable
+  or zero count** out of it too (`shl r, cl` with CL = 0 leaves FLAGS exactly
+  as it found them on an 8086). An instruction that writes *some* flags is
+  neither a stopper nor an answer: the scan walks past it, which can only
+  shrink what is live.
+
+Anything absent from both sets stops the scan with "not provably dead", so a
+mnemonic the tool has never seen refuses rather than guesses.
+
+**And the lowerings are differentially tested, not argued.** Each lowering and
+the instruction it replaces are executed from bit-identical machine state on a
+real x86 under QEMU, and the whole register file and FLAGS compared — every
+`setcc` spelling, seven shift and rotate mnemonics, both widenings with and
+without the AX bracket, thirteen multipliers, and the push-immediate scratch
+search. The sequences come out of the shipping `Lowerer` rather than a
+restatement of it. **428 cases, 0 failures**, and a negative control that
+injects four deliberately broken lowerings into the same harness reports
+exactly **4 failures**, which is what proves the comparison can fail at all.
+The AX-bracket cases mask nothing off — AX and SP are compared like every
+other register, because the whole claim about `push ax` … `pop ax` is that the
+borrow is invisible.
+
+**And nothing trusts the lowering.** After rewriting, the tool sweeps the
+whole file again against the 8086's instruction set — a mnemonic outside it is
+refused by name, and a mnemonic inside it can still be refused for its operand
+form (`push imm`, `shl r, 3`) — and its output opens with `cpu 8086`, so
+**nasm is the last word rather than the tool's opinion** (§1). The two nets
+have never disagreed. The reason the first one exists at all is the message:
+nasm's error names a line in a generated file with no C in sight, and an error
+a human cannot act on is a gate that gets worked around.
+
+### 70.7 What the type system does not have, and `float`, which is poisoned
+
+**No `long`.** There is no 32-bit integer type in 16-bit mode and the
+compiler will not parse the keyword — verified, the diagnostic is
+`Unexpected token long`. `sizeof(int) == sizeof(void *) == 2`, full stop. A
+byte count that can exceed 65,535, a file offset, a tick accumulator or a
+cycle total is a **struct of two words** with helpers written in assembly,
+which is the shape the kernel already uses everywhere it needs 32 bits
+(`DX:AX` from `dskw_read`, `DX:CX` into `dskw_write`, `sch_cycles`, §8.1).
+This is a real constraint on what belongs in C and it should be read as one:
+a feature whose natural unit is a 32-bit quantity is a feature to write in
+assembly.
+
+**No bit-fields and no anonymous unions.** Both are parse errors. A packed
+hardware layout or an on-disk header field is masks and shifts, which is what
+the assembly does anyway and what a reader of this tree expects to see.
+
+**`float` is POISONED, and the danger is that it compiles.** It is not
+rejected. A `float` global assembles to `resb 2` — verified — so
+`sizeof(float)` is **2**, and a program that declares one, assigns to it and
+compares it will build and run and be silently wrong about every value it
+ever held. Arithmetic on it emits a call to `___addsf3`, a soft-float helper
+that does not exist in this tree, which nasm then reports as
+*"binary output format does not support external references"* — a build
+failure, but one that names a mangled symbol and says nothing about floating
+point. And the arithmetic is the *lucky* case: the assignment-and-compare
+program never reaches it.
+
+So **`tools/cc8086.py` refuses any reference to a soft-float helper** —
+`___addsf3`, `___mulsf3`, `___fixsfsi` and the rest of the family, in both the
+one- and two-underscore spellings SmallerC produces — and says why in those
+words: on this target a `float` is two bytes with none of the range or
+precision it was written for, use scaled integers. It looks at code only,
+because the identifier table SmallerC prints in a comment at the foot of every
+file names the helpers too.
+
+**Know the limit of that check.** It fires on *arithmetic*. A `float` that is
+only declared, assigned and compared emits no helper call and reaches nasm as
+two silent bytes. There is no assembly-level signature for it, so the
+remaining defence is this paragraph and a reviewer: **`float` and `double` do
+not appear in a C package's source, at all.** A package that needs fractional
+arithmetic uses fixed point in `int`, which is what every assembly package in
+this tree already does.
+
+### 70.8 The stack budget, and the frame-size cap
+
+There are two stacks, both small, both in `LOW_SEG`, neither growable, and
+both measured rather than guessed (§2.1):
+
+- **The UI task: `STK0_SIZE` = 1,024 bytes.** Every window callback runs
+  here — a package's `W_PAINT`, `W_ONKEY`, `W_ONCLICK`, its menu handlers and
+  its file-dialog completion procs (§13.7, §12.2, §38.6) — on top of whatever
+  the kernel spent getting there, with the tick and mouse ISR frames landing
+  on top of that. The 0xCC-fill probe under the hardest load the machine takes
+  left its deepest mark at **246 bytes** (§2.1).
+- **A worker: `SCH_STACK` = 256 bytes.** Deepest mark **150** (§2.1), ISR
+  frames included. An overrun is not silent here — §8's `SCH_MAGIC` canary is
+  compared on every switch away and a dead canary **halts the machine** in
+  `sch_stkdie` — but a caught halt is still the machine stopping in front of
+  the user.
+
+§70 pins three numbers against those, and **only one of the three is a symbol
+that exists anywhere in the tree** — which is the distinction that matters,
+because the other two are budgets nothing can check:
+
+| number | value | what it bounds | enforced by |
+|---|---|---|---|
+| the UI-side budget | **512** bytes | the deepest chain of C frames reachable from one window callback | nothing — a design figure, see below |
+| the worker-side budget | **64** bytes | the same, on a worker | nothing — a design figure, see below |
+| **`CC_MAXFRAME`** | **96** bytes | any single function's frame | `tools/cc8086.py`, on every build |
+
+**The two budgets are stated, not enforced, and saying so is the point.** The
+number that would actually matter is a *sum over a call chain*; the chain runs
+through kernel dispatches no static analysis can see; so there is no symbol to
+define and nothing to compare it against. They are here as the figures a
+reviewer holds a design against — 512 of the UI task's ~778 free bytes, 64 of
+a worker's ~106 — and the mechanism that keeps them true in practice is
+§70.5's `&local` rule, which pushes every buffer out of the frame, plus the
+frame report below, which makes the numbers visible on every build. Do not go
+looking for `CC_STACK_UI` or `CC_STACK_WORKER`: earlier drafts of this section
+named them and no such symbol was ever written.
+
+**`CC_MAXFRAME` is real.** It is the make variable in `apps/cc/Makefile.inc`
+(`CC_MAXFRAME ?= 96`) that supplies `tools/cc8086.py`'s `--max-frame`, whose
+own default is also 96. Note the spelling: `apps/cc/os88.h` calls it
+`CC_FRAME_MAX` in its rule-3 prose and means this same number — one of the two
+is a typo and neither is a compiled symbol, so nothing breaks, but a grep for
+either will miss the other.
+
+It is not a budget — it is a **smell threshold**. A 96-byte frame in this OS is a
+local buffer; a local buffer is either an `&local` (§70.5 refuses it) or dead
+weight that should have been static, and on a worker it is over a third of the
+entire stack with the tick and mouse ISRs still to land on top of it. The tool
+finds every `push bp` / `mov bp, sp` prologue, reads the `sub sp, N` that
+follows it, and fails the build on **any** N over the cap, naming the function
+and saying where the buffer should have gone. It also reads the *commented-out*
+form — SmallerC writes `;sub sp, 0` rather than emitting a zero adjust, so a
+scan for live `sub sp` alone would omit every leaf function, and **a report
+that silently omits functions is worse than no report**. Lowering the default
+is a normal thing to do for a package that runs on a worker; raising it is a
+decision to argue for here.
+
+**And it reports.** The gate prints a frame table on every build — every
+function, its frame size, and the total — because the number that actually
+matters is a *sum over a call chain*, the chain runs through kernel dispatches
+the tool cannot see, and no static analysis is going to produce it. Printing
+the frames on every build is what keeps the budget a live number that an
+author notices growing, instead of a paragraph in a spec. This is §15.1's
+size-guard idea applied to the stack: the guard that works is the one that
+prints on every build, not the one you remember to run.
+
+### 70.9 The 60KB ceiling, in a language that spends it faster
+
+`APP_MAX_SIZE` (0xF000 = **61,440**) bounds the image, the bss and their sum
+(§20.1, and `ld_check_hdr` enforces all three, §21). An assembly package meets
+that ceiling as an occasional design pressure. **A C package meets it two to
+four times sooner** — the same feature in C is 2–4× the bytes — and that is
+not a fact to discover halfway through a program.
+
+Read as a design input rather than a limit: **a C package is a small
+package**, and a feature that wants the whole 60KB is a feature to write in
+assembly. What follows from the ceiling in practice:
+
+- One translation unit, `-tiny`, no soft-float (§70.7), and **no `printf`
+  family**. SmallerC's own `printf` is thousands of bytes and drags in the
+  entire formatting machinery for the one conversion a program wanted. Number
+  formatting is a dozen lines of assembly in the runtime.
+- The runtime a C package carries is the shims in the C include and nothing
+  else: the header, the thunks (§70.4), the far-call wrappers over the API
+  slots it uses, and the handful of string and memory helpers. Everything
+  else comes from the API table, which costs the package no bytes at all —
+  and that is the strongest argument for C here. A package that spends its
+  code on *decisions* and reaches every primitive through §20.3 is one whose
+  bulk is exactly the part C is good at.
+- **Bss is cheap where image is not.** `.bss` occupies zero file bytes and is
+  zeroed by the loader (§21 step 8), so a static buffer is the right way to
+  spend the ceiling and a large initialised array in `.data` is the wrong
+  way — it is paid for twice, once on the floppy and once in the region.
+
+### 70.10 `tools/cc8086.py` — the gate, in order
+
+One tool owns the C half of the build:
+
+```
+python3 tools/cc8086.py IN.asm -o OUT.asm [--max-frame N] [--quiet]
+```
+
+`IN.asm` is what `smlrcc -tiny -S` wrote (§70.1). `OUT.asm` is the same program
+in instructions an 8088 can execute, and **is not written at all if anything
+below fails** — there is no partial output to be picked up by a later build
+step. Every failure is `file:line: error: …` on stderr with exit 1, and every
+message says what to write instead, because a gate whose message is only
+"refused" is one that gets argued with.
+
+It does four things, and it does **all four before reporting any of them** —
+one run tells you everything wrong with the file rather than the first thing:
+
+1. **Gate.** Four constructs are refused outright, and each is a defect the C
+   author cannot see: **any bp-relative `lea`** (§70.5 — `&local`); **any
+   `movs`/`stos`/`scas`/`cmps`, prefixed or not** (§70.5.1 — ES is the
+   kernel's); **any soft-float helper reference** (§70.7); **any 32-bit
+   register** (`cpu 8086` would catch it, but naming it beats nasm's error).
+   Gate findings are printed **first**, ahead of everything below, because
+   they are the ones whose fix is in the C.
+2. **Lower** the seven forms of §70.6, each with the liveness proof that form
+   requires, refusing any site where the proof does not close.
+3. **Sweep** the rewritten file against the 8086's instruction set — by
+   mnemonic and by operand form — so nothing the lowering left behind
+   survives. The sweep runs over the lowerer's *own* replacements as well, and
+   a finding there says so in the message: `internal: … survived lowering —
+   this is a cc8086 bug, not a source bug`.
+4. **Report frames.** Every function's frame, printed on every build, with a
+   failure on any over `--max-frame` (§70.8). `--quiet` prints only the
+   offenders. It also prints the lowering tally, so a form appearing that
+   never appeared before is visible rather than absorbed. The report goes to
+   **stdout when `-o` was given and stderr when it was not**, so piping the
+   lowered assembly cannot splice the report into it.
+
+Then the ordinary pipeline: `nasm -f bin -w+error` over the package's
+hand-written shim, which `%include`s the C runtime `apps/cc/crt0.asm` (§70.2's
+section directives, the 32-byte header, §70.4's trampolines and the API
+bridge) and then `OUT.asm`, then `os88pkg.py`, then `os88disk.py` in three
+geometries (§24) — none of which knows the source was C.
+
+**Two things about the escape hatches, because they are the part that decays.**
+
+- **`; cc8086:allow <reason>` on a line** exempts that one line from the gate.
+  It exists for hand-written inline assembly that has, for instance, loaded ES
+  itself and genuinely means `rep movsb`. It is per-line, it carries a written
+  reason, and it is greppable — which makes it reviewable, and makes it a
+  different kind of thing from a switch.
+- **`--no-gate` is not for a package that ships.** It lowers without enforcing
+  the `&local` / ES-string / float / 32-bit rules, and exists to measure a
+  corpus that is never going to run here — that is how the numbers in §70.5,
+  §70.5.1 and §70.6 were taken. It prints the count of findings it suppressed
+  so a run with it on can never be mistaken for a clean one. **No build target
+  that produces an `.o88` may pass it**, and one that does is the bug, not the
+  package it produced.
+
+### 70.11 Performance posture — nothing on a redraw path is written in C
+
+**PERFORMANCE.md's numbers do not change because the source language did.**
+A `gfx_*` call is 756 us whoever makes it; an `OSAPI_*` far call is 46.7 us; a
+78-cell row of text is ~71 ms. A redraw is priced by how many primitive calls
+it makes, not by how many pixels it covers — and C neither reduces that count
+nor is charged differently for it. What C does change is the loop *around* the
+calls, by a factor of **3–5×** against hand assembly.
+
+Two things follow and both are binding:
+
+- **Part 5 of PERFORMANCE.md applies to a C package unchanged.** It is the
+  standing budget: the operation, what it used to cost, what it costs now, and
+  the § that owns it. A C package that reintroduces a full repaint is a
+  regression against a documented number in exactly the way an assembly one
+  is, and "it is written in C" is not a row in that table.
+- **The inner loop is assembly.** A C package composes and decides; anything
+  that touches pixels, cells or bytes per iteration is a hand-written proc
+  that C calls once. §6.3 and §6.5 are the model to copy, not to reinvent:
+  `apps/os88type.inc` composes a whole row of glyphs into a 1bpp band in the
+  package's own RAM and emits it with **one** `gfx_blit1` (§5.4.2), because
+  lettering a 104-glyph line one glyph at a time is 79 ms of pure per-call
+  floor on the target machine (§68.13). A C text renderer that calls a
+  per-glyph primitive is that same defect, rewritten in a slower language and
+  harder to see.
+
+Three further rules, which are the general ones restated where a C author
+will meet them:
+
+1. **No C between `gfx_lock` and `gfx_unlock` that is not bounded by a count
+   the author can state.** The lock stops every other task from drawing (§7);
+   a worker holding it across a computation is a livelock the watchdog cannot
+   break (§20.6 rule 3), and C makes every computation longer.
+2. **Measure the way this project measures**: a counter in a primitive, one
+   rebuild, multiplied by the table. Note what that does *not* see — the
+   counters live in the drawing primitives, and C changes the multiplier on
+   the non-drawing part of the frame, which is precisely the part no counter
+   is watching. A C path that keeps its call count and still feels slow on
+   hardware is the expected shape of this failure.
+3. **Refusal stays a normal path** (§47). A C package that cannot do something
+   in the time the target machine has greys the control and says which fact it
+   tested. Being written in C is a reason to hit that path sooner, not a
+   reason to ship the slow version.
+
+And the three defects that are invisible in an emulator — a visible redraw, a
+double-draw flash, and input overrun — are all *more* likely from C, because
+the language makes the wasteful structure the natural one to write. None of
+them will show in a screendump. Check them the way the rest of the tree checks
+them: on hardware, or by counting.
+
+### 70.12 `cword` — Microsoft Word 1.1a, written in C
+
+The C toolchain's application is **`apps/cword/`**, package name `CWORD`, and
+it is a native reimplementation of **Microsoft Word for Windows 1.1a
+("Opus")**: the same product §68's `apps/word/` reimplements in hand-written
+assembly, ported again into C to find out what this toolchain can carry.
+
+**The user interface is Opus's, taken from the source rather than from
+memory.** The Computer History Museum's 2014 release supplies:
+
+| what | from |
+|---|---|
+| the nine menus, every string and every mnemonic | `Opus/resource/menus.cmd`, MW_MENU |
+| the shortcut captions and the keyboard map | `Opus/resource/keys.cmd` |
+| the ribbon's six buttons and the ruler's controls | `Opus/ibdefs.h` |
+| the status line's field order | `Opus/status.h` |
+| the dialogs' contents | `Opus/dlg/*.des` |
+| RTF in and out | `Opus/RTFOUT.C`, `RTFIN.C` |
+
+Microsoft holds the copyright in everything derived from that release, and the
+attribution is on every file that carries any of it and in the About box, which
+is the part of the program a user can see. What could **not** be ported is the
+code: Opus is pcode built by a proprietary CSL compiler against the Windows 2.x
+API, and none of that exists here.
+
+**It is in two segments, and that is the point of it being here.** A package's
+image and bss share 61,440 bytes and that ceiling IS the segment (§33); the
+assembly port spends 54,952 of it; C costs two to three times the image for the
+same work (§70.9). So this program does not fit in one segment and could not be
+made to. It is split by §70.14's overlay along the line between **what a
+keystroke touches** and **what a menu command touches**:
+
+```
+resident   image  35,886   the chrome, the layout, the glass shadow, the
+                           document model, the keyboard, the mouse, and the
+                           type library (§6.3) the chosen face is set through
+           bss    24,511   the document (4,000 chars + 4,000 attribute bytes),
+                           the RTF staging buffer (6,000), the shadow
+                           (2 x 24 x 128 = 6,144), the type library's band and
+                           face table (1,933)
+           -------------
+           total  60,397   98% of APP_MAX_SIZE; 1,043 bytes spare
+CWORD.OVL        18,564    the dialogs, RTF in and out, search, Sort,
+                           Renumber, Table of Contents, the clipboard, the
+                           paragraph dictionary and the Font list
+```
+
+`cc8086.py` reports **158 functions, 26 frame bytes maximum against the 96-byte
+cap, 1,327 sites lowered, 76 functions moved to `.modc`, 47 resident shims**.
+
+**Those numbers moved a long way for §70.12.2**, and the direction is the
+point: the resident image got SMALLER while the program grew a typeface engine
+and a second view. Everything that runs once per command went to the module,
+which is what §70.14's rule says to do and what nobody had needed to do until
+the ceiling bound.
+
+**Draft and Page are both here** (§70.12.1), and Draft is where the program
+starts for §68.1's reason: os8088 has one 8x8 fixed face and Word 1.1a shipped a
+mode for exactly that situation. Bold is a second strike one pixel right,
+italic a strike one pixel up and right, underline / word underline / double
+underline are drawn rules, small caps is a case map, hidden text leaves the
+layout. Each costs **one extra call per RUN**, never one per glyph. The row
+pitch is **11** and not the demonstrator's 10: the italic overstrike is one
+pixel above the band and the double underline two below it, and at a pitch of
+10 that second rule lands exactly where the next row's italic goes — a
+double-underlined line ate the italic off the line beneath it. **That pitch is a
+variable now** and not a constant, because a face off `FONTS/` brings its own
+height (§70.12.2).
+
+**Paragraph formatting lives on the paragraph mark**, which is Word's own
+arrangement: the `'\n'` that ends a paragraph carries, in its attribute byte,
+an index into a 64-entry dictionary of unique formats (alignment, line spacing,
+space before, left / first-line / right indent). That is why cut, paste, split
+and join need no third structure — a paragraph's format travels with its mark
+through the same array as everything else — and it is why nothing may read CHP
+bits out of a mark's byte. The RTF writer did, once, and emitted `\b` from a
+number that meant "centred".
+
+**What it does**: the nine-menu bar with both period gestures (press-drag-
+release and click-open) plus Esc / arrows / Enter / mnemonics and
+Alt+mnemonic; the ribbon, ruler and status line, each togglable from the View
+menu; typing, the editing keys, word wrap, click and drag selection, F8 extend
+mode, Ins overtype, Show Paragraph Marks; the seven character attributes from
+the ribbon, the Ctrl keys and Format Character; alignment, line spacing, space
+before and the three indents from the ruler, the Ctrl keys and Format
+Paragraph; Search, Replace and Go To; Sort, Renumber and Table of Contents;
+**View > Draft and View > Page** (§70.12.1); **the Font list, built from the
+system disk's `FONTS/` folder, which sets the document in a proportional face**
+(§19.8, §70.12.2); Open and Save through the Standard File dialog with **RTF**
+as the file format; New / Open / Close / Exit with Word's save-changes prompt;
+and About.
+
+**The kernel bar reads 'Microsoft Word'**, and that is the whole reason this
+program registers a kernel menu set at all. Nine menus is more than
+`MENU_APPMAX`'s five, so the menus are drawn in the window (§12.2, §68.2) —
+but a set also carries an `AM_NAME`, and with no set the bar falls back to the
+instance name, which is the header's `CWORD`: the FILE's name standing where
+the PRODUCT's belongs. So the set is EMPTY — count 0, one name — and its
+command handler is a stub that can never be called, because a set with no
+menus has no item to pick. The About box beneath it (`OSAPI_ABOUT_SET`, the
+same box Help > About… opens) carries the product, the version, what this port
+is, and the Computer History Museum credit — and **nothing about how this
+build renders**. What is synthesised, drafted or unimplemented is a fact about
+the build; it belongs in this document and in the greyed items themselves
+(§47), not in the box a user opens to find out whose software this is.
+
+**And it is TWELVE ROWS, which is a 640x200 number** (§39). `ovl_dlg_open()`
+clamps the PANEL to the live content box, but a control's y is its row —
+`cw_d_y + 6 + row * 10` — and nothing clamps that, so a table with more rows
+than the window is tall does not shrink: the box stops at the window edge and
+the last controls carry on past it. This one ran to nineteen rows, and on CGA
+and Hercules its OK button was drawn on the DESKTOP, below the window
+entirely. Twelve is what fits: `6 + 10 * 10 + 11 = 117` against the ~122 those
+adapters leave. **Adding a row to a dialog table here is a change that looks
+right on VGA and is wrong on two adapters of three.**
+
+**What is present and greyed** (§47 — grey a fact): the Print family, Spelling,
+Thesaurus, Hyphenate, the whole Macro menu, Outline, footnotes, annotations,
+fields, tables, styles beyond the one dictionary, Paste Link, Summary Info,
+Glossary, and Undo — which is greyed as a fact about this build rather than
+about the platform.
+
+**Three collisions are the BIOS's and not decisions.** int 16h folds Ctrl-H,
+Ctrl-I and Ctrl-M into BkSp, Tab and Enter, so italic, hidden text and one
+indent command have no Ctrl key here. **Ctrl+Space is worse**: it arrives as
+ASCII 32 with the space bar's own scan code, so it cannot be told from SPACE
+at all, and the binding for "reset character formatting" ate every space the
+user typed. All four reach the document through the ribbon and Format
+Character instead.
+
+**The host harness is `apps/cword/hosttest/cwuitest.c`**, run by
+`apps/cword/build.sh` before anything is built for the 8086. It stubs the whole
+API with a model of the glass, drives the program the way a user does, and
+after every keystroke rebuilds what the screen ought to show from an
+independently written word wrap — and it audits the app's shadow against the
+modelled glass, which catches a damage model that BELIEVES it drew something.
+Three real defects in this port came out of it, none of which a screendump
+would have shown:
+
+- **A row's line break is decided by the character one PAST its own end**, so
+  an edit inside row N can change row N-1's break. Starting the relayout at the
+  row containing the edit left the row above one word short, permanently.
+- **The double underline / italic collision** described above.
+- **A modal panel takes the glass**, and the shadow went on claiming cells that
+  the panel had covered.
+
+Its cost table is printed on every build. A keystroke is **5 calls and 8 glyph
+cells**; the one that scrolls the view is 8 calls and 9 cells, because the row
+that came into view is cleared with one fill and only its text is lettered
+rather than the row being lettered full width; a full repaint is 132 calls and
+1,899 cells, which is 1.8 seconds and is what a full screen of text costs on
+this machine whatever writes it.
+
+**It is not §68's port and shares nothing with it.** That one is `apps/word`,
+hand-written assembly, package `WORD`, `.DOC`, `build/word*.img`, `vm/xt-word`
+and `vm/386-word`, and it stays that way; this one is `apps/cword`, package
+`CWORD`, `.RTF`, `build/cword*.img` and `vm/386-c-word`. Two programs may have
+the same ambition; what they may not be is two things answering to one name,
+because the next person to touch either will silently get the other.
+
+#### 70.12.1 View > Page — the sheet, and the two origins it needed
+
+Draft view wraps to the WINDOW because the window is what the reader has.
+**Page view wraps to the SHEET**: `CW_PGCOLS` (60) cells — 480 px, six inches
+at this port's scale of one cell to 1/10" — centred in the content, its two
+edges drawn and a tick in each margin wherever a page begins. `View > Draft`
+and `View > Page` are a live pair and exactly one of them carries a check.
+§68.11 is the same mode in the assembly port and its reasoning holds here
+without change: it is the text COLUMN and not the whole 8.5" sheet, because a
+full sheet is 680 px and only Hercules is wider than 640 (§39).
+
+**In assembly the whole view was two numbers. Here it is FOUR**, and that
+difference is the only interesting thing about this port of it. `apps/word`
+draws its chrome from `[wd_tx]`, so moving that one word moved the ruler with
+the sheet and there was nothing else to move. This program draws a nine-title
+menu bar, a ribbon and a status line from the same origin the text uses — so
+narrowing that origin would have slid the MENU BAR into the middle of the
+window. The pair is therefore split in `cw_layout`:
+
+| | is | and is read by |
+|---|---|---|
+| `cw_bx`, `cw_bcols` | the content box, always | the menu bar, the ribbon, the status line, the ruler's own CONTROLS, every hit test on them, and the dropdown's geometry |
+| `cw_tx`, `cw_wpx` | the sheet's column in Page view, the content box in Draft | the text, the caret, the selection, the click hit test, the band scroll — and the ruler's SCALE and indent markers, which measure the sheet and belong with it |
+
+Everything downstream of `cw_tx`/`cw_wpx` — the wrap width, `cw_row_indent`,
+`cw_caret_on`, `cw_text_hit`, the ruler's scale and its indent markers — already
+derives from that pair, so each is right for the sheet without knowing a sheet
+exists. **A window too narrow to hold the sheet keeps its own width**, so Page
+view never hides text Draft would have shown.
+
+(`cw_cols` is the third number and it is not a width: it is the CELL ceiling a
+row may hold, which stopped being `cw_wpx / 8` the day a cell could be four
+pixels wide — see §70.12.2.)
+
+**What it draws, and what it costs.** `cw_sheet()` is two vertical rules and,
+per visible page boundary, two short ticks, **all of them OUTSIDE the text
+column** in the margin either side. That is §68.11's rule and its reason is the
+same: a rule drawn inside the column would be erased by the next row flush, and
+putting it back would mean `cw_render_row` — the hottest path in the program —
+learning about pages. Outside, only a full repaint can take them, and a full
+repaint calls `cw_sheet` again. Two `gfx` calls in the common case, and the
+standing cost table in §70.12 is untouched: **a keystroke still draws 5 calls
+and 8 cells.**
+
+**The page a tick marks is the page the status line already believes in.** A
+page is `CW_PGLINES` (54) paragraphs, which is what `cw_caret_place` has always
+divided by, so `Pg` and the ticks cannot disagree. The paragraph number is
+carried DOWN the rows rather than recounted per row: counting `'\n'` from offset
+zero for each of 24 rows is 24 walks of the document on a machine where one walk
+is already visible, and the count from the top of the view plus the marks
+between consecutive row starts is the same number for one walk.
+
+**The band fill widened, and that is a fix rather than a detail.** `cw_show`
+whitened `cw_tx .. cw_tx + cw_cols * 8 - 1` before laying rows down. In Page
+view that span excludes the margins the sheet's rules are drawn in, so leaving
+Page view left both rules on the glass with the text redrawn around them. It
+fills the content box now — the same one call, a wider span.
+
+**Print Preview stays greyed**, for §68.11's reason: there is no printing path
+in this OS to preview, so the greyed item is telling the truth (§47).
+
+**And the check mark had never been drawn.** `cw_menu_paint` asked
+`os88_font_char` for **0xFB**, the IBM ROM's check — and the kernel's face is
+characters 32..126 (§6), so the call drew NOTHING and no menu item in this
+program has ever carried a check. It is exactly the defect `cw_pilcrow` exists
+for, in a second place, and it hid because every checkable item until now was
+one whose state the user could see somewhere else: the ribbon lit, or the strip
+was on the screen or it was not. **Draft / Page is the first pair where the
+check IS the answer**, which is what turned it up. It is two `gfx_line` strokes
+now — a short down-stroke and a long up-stroke, which is what `apps/word` draws
+— and two calls per checked item, never one per pixel.
+
+#### 70.12.2 A typeface for the document, and the room it had to be found in
+
+The Font box on the ribbon was a `cw_combo` that dropped nothing down, and said
+so: one face, one size, and an arrow drawn because a control that lies about
+being interactive is worse than one that is honest about being the only choice.
+It drops down now. **The list is the machine's `FONTS/` folder** (§19.8) read
+through `apps/os88type.inc`'s `ty_scan`, and picking from it sets the whole
+document in that face.
+
+**The shape of the change is §68.13's and the summary is one sentence: the cell
+stays the unit and only its PIXEL POSITION stops being 8k.** This program's row
+model is an array of cells with a delta diff against a shadow, a per-row indent
+and a caret column, and every one of them is indexed by cell; giving a cell a
+variable position touches none of them. `cw_cx` (cell → x) and `cw_xc` (x →
+cell) are the two routines every site that computed `cw_tx + 8k` or
+`(x − cw_tx) / 8` goes through now, and `cw_px[]` is the row's own map — one
+word a cell, plus one slot past the last so a span's right edge is a lookup
+rather than a special case. With `cw_prop` clear they are the shifts they
+replace and the fixed face costs a call and a return.
+
+**Where the room came from, which is most of the work.** The resident image and
+its bss shared 59,090 of `APP_MAX_SIZE`'s 61,440 before this — 2,350 spare
+(§70.12) — and `os88type.inc` is 2,850 bytes of code and 1,933 of bss before a
+line of this program changes. So the space was found first, in the order
+§70.14's rule prescribes — **split by FREQUENCY** — and every byte of it came
+from code that runs once per command and was resident only because nobody had
+needed the bytes yet:
+
+| moved to `CWORD.OVL` | why it is module code |
+|---|---|
+| the whole RTF engine's helpers — the parser, the control-word scanner, the writer, the property setters | they run inside `ovl_file_load` / `ovl_file_store`, which were already out there. Only the TABLES stayed, because they are data and data is resident by construction (§70.14) |
+| the clipboard's three commands | once per Cut / Copy / Paste |
+| the paragraph dictionary's apply and find, and the seven alignment / spacing / indent commands over them | once per ruler click or `Ctrl`-key |
+| `cw_chp_apply` | once per ribbon click or `Ctrl`-key |
+| New, and the retitle both it and a Save As go through | once per File command |
+| **the Font list itself** — its geometry, its painter, its hit test, the scan and the pick | once per visit to the Font box |
+
+That last row is worth stating plainly rather than leaving in a table, because
+it is the one that costs something a user can notice: **choosing a typeface
+needs `CWORD.OVL` on the disk.** It is the right side of the line — a face is
+chosen about as often as a document is opened — and the refusal is the ordinary
+one, a toast naming the missing file and a list that does not drop down.
+
+**The type LIBRARY, though, is resident whole**, and that was decided the other
+way. `ty_putn`, `ty_flush` and `ty_advof` are the redraw path and could never
+have moved; `ty_scan` and `ty_open` could have, and moving them would have
+meant a `%ifdef` through `apps/os88type.inc` — a file `apps/word` and
+`tests/facetest` also include — to sort its own labels into two sections for
+one caller's benefit. The 2,850 bytes stayed and the room came from this
+program's own commands instead.
+
+`cw_doc_clear` is the one RTF-file function that could not move: `os88_main`
+calls it before there is an instance to load a module for. The dictionary's
+entry 0 used to be made there too, by a `cw_pap_find` call that was a **no-op
+the day it was written** — `cw_pap_n` starts at 1 and the six property arrays
+are bss, so entry 0 already was left-aligned, single-spaced and unindented.
+Deleting it was how that call site stopped being a problem.
+
+**The draw path is `cw_draw_run`'s second arm**: compose the run into the band
+with `ty_putn` and put it down with one `ty_flush`, against the one
+`os88_font_run` a fixed run takes. Two properties of §5.4.2 shape it, both
+lifted from §68.13 rather than rediscovered. The blit wants a byte-aligned x, so
+the band **starts one byte column LEFT of the first glyph redrawn** and its
+width is rounded up to a multiple of 8. And **the damaged span grows outwards to
+byte columns before it is drawn**, because the band is paper where nothing was
+composed and a run starting mid-byte would otherwise whiten up to 7 pixels of
+the glyph to its left — which the first build showed as a keystroke eating the
+tail of the character before it, one pixel column at a time.
+
+**`ty_flush` may answer CF=1** — a `kern_small` kernel carries the `GFX_BLIT1`
+slot and not its body (§6.5) — so the arm falls back to lettering the row in the
+kernel's 8×8 cell. The measuring side goes through the fixed metrics either way,
+so that fallback needs no second layout.
+
+**And `ty_flush` must be CALLED with the carry clear, which is a defect in the
+library rather than a convention.** It opens `call OSAPI_GFX_PEN` / `jnc` /
+`call ty_gray`, which reads as a QUERY of the disabled pen and is not one:
+`OSAPI_GFX_PEN` is a **setter whose argument is CF** (§20.3) and the cell
+preserves every flag, so the carry that comes back is the carry that went in.
+The routine therefore greys the band whenever its caller happened to arrive with
+CF set — and a compiled C call site arrives with whatever the last instruction
+of the argument setup left there. The symptom is a run of the DOCUMENT drawn as
+a 50% checkerboard, exactly as a greyed control is (§47), on some runs and not
+others; it was found on a run that was bold **and** underlined and on nothing
+else. `cwtype.inc`'s shim does `clc` before the call, which is what
+`os88api.inc`'s own note about that slot tells a caller to do. **`apps/word`
+reaches the same routine from assembly and has the same exposure**, and nothing
+here fixes that for it: there is no getter for `[gfx_dis]` to make the routine
+ask properly, so the fix would be to make the carry-in that routine's documented
+argument and audit both callers.
+
+**The row pitch is a variable and every literal that meant one was hunted by
+VALUE.** This is §68.13.1's open bug, and it is closed here rather than
+inherited, because this port's height model is one number: `cw_pitch`, and
+`cw_ty + r * cw_pitch` at every site that maps a row to a y. The assembly port's
+`wd_ryb` / `wd_advy` / `wd_walk` carry the same quantity in four places with a
+literal `8` in each, which is why converting it there moved every row's y and
+broke the incremental repaint. Here there is one place. **The lesson §68.13.1
+draws still stands and is why this was checked and not assumed**: `8` in this
+file is a glyph height, a row advance, a cell width, a tab stop and a byte
+column, and only reading each one tells them apart.
+
+**Two ceilings moved and one deliberately did not.** `CW_COLS_MAX` went 76 →
+**127**: a face's narrowest advance is `TY_MINADV` (4), so a row of narrow
+glyphs holds more cells than it holds byte columns. 127 and not 160 because
+`CW_SH_STRIDE` is **128 and does not change** — the shadow already wasted 52
+bytes a row on the power-of-two stride (§70.12), and spending them costs nothing
+where doubling the stride would cost 6,144 bytes this package does not have.
+**Past 127 cells the row WRAPS; it is never truncated.** §68.13 records the
+other choice as a defect the field reported — a row of text with its tail
+missing — so the wrap rule takes whichever comes first, the pixel width or the
+cell count, and a face narrow enough to hit the count breaks its lines early and
+loses nothing.
+
+**A chosen face is what the DOCUMENT is set in**, not a preview: picking from
+the list re-letters the whole note, and picking Pica re-letters it in the
+kernel's cell. What each face costs the layout is its own rows and leading,
+through `cw_pitch`.
+
+**Italic in a chosen face is drawn UPRIGHT, deliberately**, and bold is a second
+compose rather than a second call — §68.13's two decisions, for its two reasons:
+shearing the kernel's glyphs would letter one run in a different typeface from
+the words either side of it, and a second compose into the same band costs no
+drawing floor at all.
+
+**The scan runs once, whatever the answer.** It is four remounts and two
+listings of real floppy I/O (§19.8) — a couple of seconds on the target machine
+— so it runs the first time the Font box is opened and never again, and a disk
+with no `FONTS/` is not re-walked on the next press. The box is renamed **only
+after the face actually opens**, so the name in the ribbon is evidence that the
+face is open rather than evidence that one was asked for. The caption is a
+BUFFER and not a pointer, initialised to `Pica` at its declaration: §68.13
+records what a null one did in the assembly port, which is letter that package's
+own header onto the ribbon and read as a corrupt heap.
+
+**Item 0 of the list is always `Pica`,** which is face 0 and is not on the disk
+at all — it is what the document is set in until somebody chooses otherwise, and
+it is how they choose to come back. The other items are the machine's, so the
+list is as long as `FONTS/` is and a disk carrying more faces needs no edit.
+
+**The list WRAPS INTO COLUMNS rather than being cut.** One column clamped to the
+content box is what `cwdrop.c`'s menus do, and it is defensible there because
+losing the last item of a menu on a short screen is what the real product did.
+It is not defensible here: the items are the machine's typefaces, and an item
+that does not fit is a face on the disk that cannot be chosen at all. Measured
+on **CGA** (640×200, §39), where the window is 150 rows of content and the tenth
+face was the last one the panel could show — `Times` was on the disk, in the
+scan, and unreachable. So the height is whatever the window has and the WIDTH
+grows instead. On VGA and Hercules all eleven fit in one column and the geometry
+is the one it always was.
+
+**What a chosen face costs, said plainly.** The DRAWING CALL COUNT does not
+change — a run is one `gfx_blit1` where it was one `font_run`, and bold is a
+second compose into the same band where the fixed arm pays a whole
+`os88_font_str` — so §70.12's cost table is the table for both faces and
+PERFORMANCE.md Part 5's budget is untouched. What does change is the work
+*around* the calls, and three things got more expensive: the wrap measures with
+`ty_fit` instead of dividing, the row walk records a pen per cell with
+`ty_pen`, and `cw_cols` is sized from `TY_MINADV` so the row buffer's clears
+and the delta diff's compare each walk up to twice as many cells. All of it is
+per-character work on a path that already costs a `gfx` call per row, all of it
+is in assembly for §70.11's reason, and none of it is paid while the document
+is set in Pica. §68.13 prices the row it lands in on the target machine:
+**25.31 ms against the aligned 8×8 row's 24.37**.
+
+**None of that has been measured on an XT**, and the harness cannot help: it
+models face 0 and answers "no `FONTS/` folder", so what it proves is that the
+conversion did not change the FIXED face — every `cw_cx`/`cw_xc` site walked
+with `cw_prop` clear, audited cell for cell. The chosen face was checked by
+looking, on all three adapters, which is the other half and not a substitute.
+
+**The pre-shifted glyph table is built on the pick** (`ty_cache`, §6.5.2):
+~160 ms once — a third of one `int 13h` — and **2.01×** off every line the face
+draws afterwards. Its refusal is a 12 KB heap claim declined by a small machine,
+`ty_putn` takes the general path, and the pixels are identical; so it is the one
+call in `cwtype.inc` whose carry is dropped on purpose, because there is nothing
+for the caller to do about it and nothing to tell the user.
+
+
+#### 70.12.3 `WELCOME.RTF` — the document, and the two things it may not claim
+
+`cworddisk` puts **`WELCOME.RTF`** in the root of all three geometries, beside
+`CWORD.O88` and `CWORD.OVL`, exactly as §68.5's disk puts `WELCOME.DOC` beside
+Word: a disk that demonstrates the product the moment it is double-clicked.
+It is generated **deterministically** by `tools/os88rtf.py` from
+`apps/cword/welcome.wtx`, so the shipped file rebuilds byte for byte.
+
+**The markup is `apps/word/welcome.wtx`'s and the parser is the same code** —
+`tools/os88rtf.py` imports `parse_line` from `tools/os88doc.py` rather than
+carrying a second one, because a second parser is a second dialect and the two
+documents would drift where nobody looks. (The `.DOC` *format* is the opposite
+case on purpose: `tools/wordfmt.py` is a deliberate second implementation,
+§68.4.2. A binary layout is worth reading back independently; markup has no
+spec to disagree about.)
+
+**The source is a second file, and that is what this section is for.** cword's
+RTF reader carries the text and its **character** formatting; every paragraph
+arrives in the default format, which `ovl_put()` says in as many words — the
+mark's attribute byte is a paragraph-dictionary index, and the reader has
+nothing to put in it. Two character spans narrow the same way: `\ulw` and
+`\uldb` both fold into one underline in the model, and there is no small caps
+at all. So the Word document's demonstrations of centring, hanging indents and
+double spacing, and the sentences *naming* them, would be **claims the screen
+does not keep** — which is the one thing a shipped sample may not be. It is the
+same argument §47 makes about greying: state a fact, never a guess.
+
+What is left is the same document — the same greeting, the same demonstration
+that formatting survived a save and a load, the same key list, the same credit
+— with the paragraph-format demonstration replaced by a sentence about setting
+those formats **in the program**, which is true, and the three narrowed spans
+named in the text rather than worn by it.
+
+**The generator still emits the full paragraph properties** (`\qc`, `\li`,
+`\fi`, `\ri`, `\sl`, `\sb`) when the markup carries them. A file is not the
+place to encode one reader's narrowing: the RTF is correct for anything else
+that opens it, and correct here the day the reader learns to apply them.
+
+### 70.13 The build targets, and what is deliberately not in `all`
+
+`apps/cc/Makefile.inc` is a **fragment**, included by the top-level Makefile
+after `$(BUILD)` and `$(NASM)` are defined. It defines `CC_PACKAGE`, the four
+rules that turn `apps/<dir>/<name>.c` plus `apps/<dir>/<name>.asm` into
+`build/<name>.o88`, and is instantiated with
+`$(eval $(call CC_PACKAGE,<name>,<dir>))`.
+
+| target | builds |
+|---|---|
+| `cc-smoke` | `build/ccsmoke.img` — `apps/cc/ccsmoke.c`, the toolchain's smoke test and the SDK's worked example of the two files a C package is made of |
+| `chello` | `build/chello.img` + `build/chello360.img` — `tests/chello/`, the capability gate that first proved a compiled package can hold a window |
+| `covl` | `build/covl.img` + `build/covl360.img` — `tests/covl/`, the capability gate for the OVERLAY (§70.14) |
+| `cword` | `build/cword.o88` + `build/CWORD.OVL` (§70.12) |
+| `cworddisk` | `build/cword.img`, `cword720.img`, `cword360.img`, each carrying both files plus `WELCOME.RTF` and an empty `DOCS/` (§70.12.3), and each `os88disk.py --verify`ed |
+| `386-c-word` | boots `$(IMG)` in A: and `build/cword.img` in B: on `vm/386-c-word` |
+| `allapps` | `build/apps-all.img` — one 1.44MB floppy with every application on it (§19.9). The only target outside this section that needs the compiler, which is why it is on demand too |
+| `clean-cc` | removes `build/cc`, which plain `clean` spares |
+
+**Nothing in `all` depends on the compiler, and that is the requirement rather
+than a convenience.** SmallerC is not in this tree — `tools/setup-cc.sh`
+fetches it at the pinned commit into `build/cc/`, which is gitignored, so no
+compiler binary and no compiler source is ever committed. A checkout without
+it must build every shipping floppy exactly as before. Two mechanisms keep
+that true:
+
+- `all` gains one phony prerequisite, `cc-note`, which prints a short
+  paragraph naming `tools/setup-cc.sh` **only** when `build/cc` is absent, and
+  cannot fail a build. Proven by moving `build/cc` aside, `make clean`, and a
+  full `make` from nothing: every floppy built, note printed, exit 0.
+- Every C rule depends on the `cc-toolchain` guard, which prints the one
+  command to run rather than failing inside a recipe with "no such file".
+
+**`make clean` spares `build/cc`**, and `clean-cc` is the escape hatch that
+removes it (`distclean` calls it). This is the same reasoning `clean-marty`
+already uses: the compiler is an **instrument** pinned to an upstream commit,
+nothing in this repo changes what it builds, and it is a network fetch — so a
+`clean` that threw it away would make the C targets need the network to come
+back. Re-pinning does not need `clean-cc`: `setup-cc.sh` compares HEAD to
+`PIN` on every run and re-fetches when they differ.
+
+**There is one 86Box machine and not two.** `xt-c-word` does not exist. The XT
+is where a C package has to be *measured* rather than merely run — 756 us a
+drawing call, ~900 us a glyph cell, C at 3–5× hand assembly — and a target
+before anybody has taken that measurement is a claim. `cworddisk` already
+builds the 720KB image such a machine would want in B:.
+
+### 70.14 The overlay — a second segment for a C package
+
+`APP_MAX_SIZE` is the segment, not a budget: a package links at `org 0` and
+addresses itself with 16-bit offsets (§33), so image + bss can never reach
+64KB whatever the heap has free. §70.9 is the arithmetic of spending that
+ceiling in C rather than in assembly, and the ratio is 2–3×. **A module has a
+segment of its own, so it does not spend the package's.**
+
+The shape is §68.10's and kernel §2.8's, and the difference from §52.11's
+self-contained driver is the whole design: **the module keeps `DS` = the
+package's segment**, so every global, every string literal and every `.bss`
+byte the moved code names is still a plain DS-relative reference and is still
+resident. **Only code moves.** In assembly that choice was about not
+rewriting 375 data references; in C it is what makes the mechanism possible at
+all, because a compiled function names its data through DS and there is no way
+to tell the compiler otherwise.
+
+**The marking is the name.** A C function called `ovl_*` is module code.
+Nothing else is declared, nothing is annotated, and the cost is visible at
+every call site in the source, which is the point: a far call through a vector
+and a possible disk read are not something a reader should have to look up.
+
+`tools/cc8086.py` does the moving, in a pass that runs **after** lowering
+(a lowering can emit a `[bp+N]` that was not in the source):
+
+| what | becomes |
+|---|---|
+| `section .text` inside an `ovl_*` function | `section .modc` |
+| any `call _ovl_f`, from either segment | `call far [cc_ovm_ovl_f]` |
+| `[bp+N]`, N ≥ 4, inside a moved function | `[bp+N+2]` |
+| `ret` inside a moved function | `retf` |
+| `call _resident` inside a moved function | `call far [cc_ovv_resident]` |
+| a resident call site's preamble | `call cc_ovneed` / `jc` past the call |
+
+A function is **not one contiguous block** — SmallerC switches to `.rodata` in
+the middle of one to emit a string literal and switches back — so the pass
+tracks which function each `.text` fragment belongs to and moves the code
+fragments only. A fragment with no label of its own continues the last one.
+
+**Every call to an overlay function is far, including one from inside the
+module.** A far call pushes four bytes of return address and a near call
+pushes two, and a function body cannot have two argument layouts: two kinds of
+entry would need two copies of the function. The intra-module far call costs
+two bytes and about thirteen clocks on an 8088, which is nothing beside a
+756 us drawing call. That is why the `[bp+N]` fixup is unconditional, and the
+fixup is safe to do by inspection because **the sign of the displacement is
+the whole distinction** — arguments are `[bp+N]`, locals are `[bp-N]`.
+
+**The other direction is where the two calling conventions meet, and it is not
+what §68.10 does.** A shim of `call _f` / `retf` is correct for assembly,
+where a shimmed routine takes its arguments in registers and never looks at
+the stack. In C it is fatal and silent: the far call's four bytes and the
+shim's own two put the routine's first argument at `[bp+8]` while every
+compiled reference to it says `[bp+4]`, so the routine reads the module's
+return offset as its first argument. Measured on `tests/covl` before the fix —
+**a function told 10 saw 49**, which was exactly where in a 110-byte module
+the far call had come from. So each shim is six bytes, `mov bx, _f` /
+`jmp cc_ovthunk`, and `cc_ovthunk` takes the four bytes back off:
+
+```
+[ret IP][ret CS][args]  --pop--pop-->  [args]  --call bx-->  [ret][args]
+```
+
+The return segment is not stashed — it is `[cc_ovseg]` by construction, there
+being one module — so only the offset needs somewhere to live across the call.
+It lives in a **global LIFO**, and that is safe for exactly one reason:
+**overlay code is UI-task code**, enforced in `cc_ovneed` at the only door in.
+Two tasks sharing one LIFO is not a race a `cli` could fix — the entries are
+LIFO per task and interleave across tasks — so the fix is the rule, not a
+critical section. Nesting is real (module → resident → module → resident
+happens the moment a resident routine reached from the module calls another
+overlay function), which is why it is a stack; `CC_OVDEPTH` = 16 is far more
+than the UI task's ~700 bytes of headroom can hold C frames for, so the task
+stack is the limit that binds.
+
+**Loading is on demand and needs no kernel byte.** `cc_ovneed` claims
+`ceil(size / 1024)` KB and reads `<CC_PKG_NAME>.OVL` into it. It does **not**
+visit a folder first: every file name a package passes the file API already
+resolves in that instance's own directory (§19.2.1), which is the folder it
+was launched from. The KB is computed at run time from a `.data` word holding
+`cc_modc_end`, because `%if` cannot compare a section-relative label to a
+constant (§70.2) and a build that fails on assembler arithmetic is the worse
+trade.
+
+**The stamp is two words at the module's offset 0** — its own size, and the
+resident image size it was built beside — compared before anything in the file
+is believed. A rebuilt package beside a stale module is something a user can
+produce with a file copy, and every offset in both vector tables would be
+wrong. It catches a stale **pair**, not every stale pair: two builds whose
+resident image and module were both the same size would pass it, and that is
+worth stating rather than implying.
+
+**Refusal is an ordinary path** (§47). No heap, a disk without the file, a
+stamp mismatch, or a **worker task** asking: the reason is toasted, `AX` is 0,
+and the `jc` in the call-site preamble skips the far call — so the C sees the
+function return 0 without having happened. A C function that can be refused
+answers a status, and 0 is "it did not happen". The document is untouched.
+
+**The sections.** `.modc follows=.data align=1 vstart=0`, declared beside
+`.bss`, which also follows `.data` and does not collide with it because `.bss`
+is `nobits` and writes no file byte: `.bss`'s base and `.modc`'s first byte
+are both `cc_image_end`, which is exactly right — `.bss` is *addressed* there
+at run time and `.modc` is *cut* there at build time. `align=1` is
+load-bearing for the reason §68.10 gives: a bin section aligns to 4 by
+default, and the pad would land between the recorded image size and the
+section's real start, so the cut would take the pad with it.
+
+`tools/os88ovl.py` is unchanged and did not need to change, which is the test
+of whether the section layout was done right: it reads the image-size word out
+of the header and cuts there, and it does not know a C package from an
+assembly one.
+
+**What is refused: taking the address of an overlay function.** A function
+pointer here is a 16-bit offset with no segment, and a module offset means
+something else entirely in the package's segment — a call through one lands in
+the middle of whatever resident code is at that offset. It assembles and it
+runs, which is the signature of everything else `cc8086.py` exists to refuse.
+
+**`tests/covl` is the capability gate** (`make covl`), and it is under `tests/`
+because it proves a capability rather than being one. It puts five things on
+the glass that are each a different way for the mechanism to be wrong: the
+module loads and the far call lands; `ovl_mix(1,2,3,4)` answers **1234**,
+which is what says the argument fixup reached every one of four arguments;
+`ovl_inner` proves a module-to-module call; the module calls back out through
+a resident routine that toasts, **which is the case §68.10 could not prove for
+the assembly module**; and the counters go up by exactly one per press, ten
+presses running, because a mechanism that leaks two bytes of stack per call
+works for a while and then does not. The refusal screen is the second half:
+build the disk without the `.OVL` and every number stays 0 with the reason in
+the menu bar.
