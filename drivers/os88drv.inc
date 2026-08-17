@@ -472,7 +472,13 @@ HDD_LISTKB   equ 6
     dw 0                    ; +4  link base: 0 (org 0, like every package)
     dw (%3) - $$            ; +6  entry offset
     dw OS88_DRV_SIZE        ; +8  image size = the whole file, data included
-    dw 0                    ; +10 reserved
+    dw FSV_SIZE             ; +10 THE FSV_* TABLE LENGTH THIS DRIVER WAS BUILT
+                            ;     WITH (SPEC.md 62.9.1.1). Every class writes
+                            ;     it and only DRVC_FILE is read: the kernel
+                            ;     refuses a verb past it instead of reading
+                            ;     whatever follows your table. Was reserved
+                            ;     (0), which the kernel reads as 28 - the
+                            ;     length every driver before this word had
     db 0FFh, 0D5h           ; +12 THE DISPATCHER: `call bp`...
     db 0CBh                 ; +14 ...`retf`. The kernel far-calls this fixed
     db 0                    ; +15 offset with BP = the proc it wants.

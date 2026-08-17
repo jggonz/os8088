@@ -446,10 +446,12 @@ inst_park_wait:
     push di
     mov bx, di
     sub bx, inst_tab
-    mov cl, 5                   ; I_RECSZ = 32; CL is banked below
-    push cx
-    shr bx, cl
-    pop cx
+    push cx                     ; bank CX BEFORE the shift count lands in it:
+    mov cl, 5                   ; I_RECSZ = 32. The first cut wrote CL and
+    shr bx, cl                  ; then pushed, so the pop restored a 5, and
+    pop cx                      ; OSAPI_TASK_ALIVE - which promises every
+                                ; register back - handed a worker CL = 5 on
+                                ; exactly the pass a compaction was pending
     cmp bx, INST_MAX
     jae .out                    ; not a record at all: park nothing
     mov bl, [sch_cur]           ; PER TASK and not per instance (SPEC.md
@@ -550,7 +552,7 @@ inst_park_me:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_parksafe_set - API slot 0x0400: "you may park me while I am blocked in
+; inst_parksafe_set - API slot 0x0408: "you may park me while I am blocked in
 ;                     the kernel" (SPEC.md 66.5.4)
 ; in:  AL = 1 declare / 0 withdraw, ES = the caller's segment (the X stub's)
 ; out: CF = 0 recorded; CF = 1 the caller is not a live package instance
@@ -791,7 +793,7 @@ inst_svc_parked:
     ret
 
 ; -----------------------------------------------------------------------------
-; inst_task_park - API slot 0x0408: a DRIVER's worker parks here (SPEC.md
+; inst_task_park - API slot 0x0410: a DRIVER's worker parks here (SPEC.md
 ;                  66.5.5), the way a package's parks at OSAPI_TASK_ALIVE
 ; in:  nothing
 ; out: nothing (all registers and the flags preserved)
@@ -890,7 +892,7 @@ inst_find_kind:
 ; inst_alloc - claim a free record (UI task only; does NOT publish)
 ; in:  nothing
 ; out: CF = 0, DI = record with I_FLAGS/I_SPTR/I_SIZE/I_ICON/reserved
-;      zeroed; CF = 1 table full
+;      zeroed, and the slot's inst_parksafe byte with them; CF = 1 table full
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
 inst_alloc:
@@ -912,7 +914,11 @@ inst_alloc:
     mov word [di+I_CYC], 0      ; a reused record never inherits a dead
     mov word [di+I_CYC+2], 0    ; instance's CPU tally (SPEC.md 8.1)
     call inst_fhome_clr         ; ...nor its Standard File location (38.10)
-    clc
+    push bx                     ; ...nor a dead instance's PARKSAFE (66.5.4):
+    call inst_fhome_idx         ; the byte is a side table keyed by slot, and
+    mov byte [bx+inst_parksafe], 0 ; a package that never declared it must
+    pop bx                      ; not be parked in gfx_lock because the last
+    clc                         ; tenant of its slot said so
 .out:
     pop cx
     ret

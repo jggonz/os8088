@@ -8924,6 +8924,21 @@ serves both. The cost is up to **7px of vertical drop precision** — exactly wh
 `dx` has cost horizontally since §11.96.13 — and a vertical drag keeps the cache
 it has always taken.
 
+**The interval argument is exact on one display and false on two, and the
+phase re-asks on two.** On an extended desktop (§39.12) the legal top-lefts
+are the *union* of two rectangles, and a union of two intervals is an interval
+only when they overlap. Below-arranged, or a CGA beside a taller Hercules, they
+do not: rows 200..206 exist on the Hercules and not on the CGA, so a window
+whose origin sat on the Hercules, dropped on the CGA at `y` 193..199 (legal —
+`ui_drag_dead` passed it) is phased *up toward its origin* into a row no
+display has, title bar and all, and `ui_drag_dead` already ran. So on a
+machine with more than one display `ui_drag_phase` puts the phased point to
+`vid_disp_find` — the same question `ui_drag_dead` asks — and a NO undoes the
+phase in both axes: the drop stands where the clamps left it and that one drag
+replays by cards. It is the one-time-in-eight cost the phase exists to avoid,
+paid only on the seam, and a title bar is never phased off the desktop. One
+display asks nothing more, so the single-adapter path is unchanged.
+
 **The consequence most likely to be reported as a bug is that a NUDGE does not
 move the window**: truncation is toward zero, so a drag of fewer than 8 pixels
 lands back where it started. That has been true horizontally since §11.96.13
@@ -43617,8 +43632,36 @@ FSV_COPY    equ 26      ; AX = source folder, DX = destination folder,
                         ; VOLUME (§62.9.8). PUBLISHING IT IS OPTIONAL: leave
                         ; the row 0 and the copy engine streams through
                         ; FSV_READAT/FSV_WRITE as it always did
-FSV_SIZE    equ 28
+FSV_RMTREE  equ 28      ; SI = a folder's name, in the CURRENT folder: remove
+                        ; it AND EVERYTHING IN IT (§62.10.7). out CF=0; CF=1
+                        ; and AX = FERR_*. Optional like FSV_COPY: a 0 row
+                        ; sends dskw_rtbody to the empty-only FSV_RMDIR
+FSV_SIZE    equ 30
+FSV_TAB0    equ 28      ; the length a driver whose header says 0 has (below)
 ```
+
+##### 62.9.1.1 The table has a length, and the driver's header carries it
+
+The table grew twice — `FSV_ENUM`/`FSV_COPY` took it to 28, `FSV_RMTREE` to
+30 — and each time the kernel simply read the new cell, which is fine for a
+driver built in the same tree and **wrong for the file on somebody's disk**:
+`NET.DRV` and `RAMDISK.DRV` both place their name string directly after the
+table, so a v1.0.20260815 `NET.DRV` on a kernel that asks for `FSV_RMTREE`
+read `'os'` (0x736F) out of `net_name`, found it non-zero, and far-called
+into it. `DRV_VER` did not change because the driver ABI did not: every
+existing cell means what it meant.
+
+So the driver header's reserved word at +10 is now **`DRV_H_FSV`, the byte
+length of the `FSV_*` table this driver was built with** — `OS88_DRIVER`
+writes `FSV_SIZE` there for every class, and only `DRVC_FILE` is ever read.
+`drv_fs_call` and `drv_fs_has` refuse a verb at or past that length exactly as
+they refuse a 0 cell: `CF=1, AX=0`, "not published", which every caller
+already handles by falling back. **A word of 0 means `FSV_TAB0` = 28**, which
+is what every released driver has and what every one of them carried in that
+word, so a mismatched floppy set degrades to the older behaviour (a folder
+delete on the Link volume goes back to empty-only) instead of a jump into a
+name string. Growing the table again is now one constant: the length travels
+with the driver, and a cell the driver does not have is not read.
 
 **`FSV_ENUM` IS NOT `FSV_LIST`, AND THAT IS NOT A DUPLICATION.** They ask the
 same question of the same folder and they cannot share a verb, because
@@ -45192,9 +45235,25 @@ it, the same reason it declines `FSV_COPY`.
 drive (§62.10.2), so a name in the root resolves to `C:` and a recursive
 delete there is a DOS machine's entire disk. `srv_rmtree` refuses that outright
 — whole-machine mode plus folder handle 0 — and nothing else is special-cased,
-because the fence is already drawn everywhere else: without `/W` the root is
-the served folder and a name can only ever be one of its children, so the root
-itself is unnameable and there is no path out of it.
+because the fence is drawn in **one** place for every verb: `path_join`
+refuses a name that is not one entry of its folder, so without `/W` the root
+is the served folder, a name can only ever be one of its children, and the
+root itself is unnameable.
+
+**That fence is a test, not a construction, and the first cut had it wrong.**
+The name on the wire is thirteen raw bytes, `..\DOS` fits in them, and DOS
+resolves the `..` — so before the test, `T`, handle 0, `..\DOS` walked and
+removed `C:\DOS` from a share of `C:\SHARE`, and every one-name write verb
+had the same one-file escape (a rename *to* `..\X` moves a file out of the
+subtree). `path_join` now answers CF=1 for a name holding `\`, `/` or `:`; a
+wildcard or another character DOS itself will not put in a name (`*` `?` `<`
+`>` `|` `"`); a leading `.` (`.` and `..` are the two entries every folder has
+that are not its children); or nothing at all (which would name the folder).
+Every caller answers that with `FERR_NOENT`, which is true — no entry of that
+folder has that name — and nothing legitimate is turned away, because a
+master's names come out of FAT directory entries and cannot contain any of
+it. It sits in `path_join` rather than in `srv_rname` so that a verb which
+takes two names (`NF_COPY`, `NF_RENAME`) cannot forget the second.
 
 Two more refusals are inherited rather than added. A **read-only, hidden or
 system** entry stops the walk with `FERR_PROT`, which is letter for letter what
@@ -46135,15 +46194,23 @@ silent memory corruption rather than a crash:
 1. **It is an ordinary near proc with a near `ret`**, called through your own
    dispatcher with `BX` = the old base, `DX` = the new one, `DS` = `CS` = your
    segment and `ES` = `KERNEL_SEG` — `wm_pkgcall`'s contract exactly, so you
-   never write a `retf` and a missing one cannot exist.
+   never write a `retf` and a missing one cannot exist. It **may clobber
+   AX/BX/CX/DX/SI/DI/ES like any window callback** (§13): `mem_reloc_call`
+   banks every one of them, because the walk that drives it holds the claim
+   record in `SI` and reads it the instruction after the proc returns — a
+   proc that used SI would otherwise have moved the fill point onto a live
+   block.
 2. **Put right every pointer you derived from the base, not just the word you
    keep it in** — and, between calls, re-read your base at each use rather
    than carrying a derived pointer across a claim.
 3. **Do not claim, free, resize, yield, draw, sleep or touch a file slot.** It
    runs inside the allocator, with task switching paused, mid-walk. The
-   `[mem_cp_busy]` re-entry guard makes a claim from inside one *bounded*
-   rather than permitted — it refuses the nested compaction instead of walking
-   a map that is moving underneath it.
+   `[mem_cp_busy]` re-entry guard makes the first three *bounded* rather than
+   permitted: while it is raised `mem_claim` (every entry, and the shed behind
+   it), `mem_free` and `mem_regrow` all answer CF=1 without touching the map.
+   Refusing only the nested *compaction* was not enough — a nested `mem_claim`
+   still ran the first-fit scan, and first fit would hand it the very run the
+   walk had just vacated and was about to copy the next block onto.
 4. **It may never be called at all.** The kernel pins claims for reasons of
    its own and does not report them; a relocation proc that never runs is a
    normal outcome, not a symptom.
@@ -46154,7 +46221,9 @@ silent memory corruption rather than a crash:
    walking pointer, which no relocation proc can repair because the stale copy
    is on the kernel's stack, not in your bss. `dsk_xfer` therefore publishes
    its destination in `[mem_pinseg]` and `mem_can_move` refuses any claim
-   containing it.
+   containing it — and `clip_put` publishes its *source* through the same
+   word across its own claim (§66.5.6), which is why the word nests: every
+   publisher saves what it found there and puts it back.
 
    **It fails safe by construction**: the only thing a wrong value there can
    do is decline to move a block, so the worst outcome is a compaction that
@@ -46303,6 +46372,13 @@ compaction with **137KB free underneath it**. It is §50.2's "one long-lived
 data claim mid-heap permanently splits the space", and declaring it is the
 cure.
 
+**The BMP save pins the canvas** (`pt_pin`/`pt_unpin`, §66.5.7.1's shape):
+it is one `OSAPI_FILE_WRITE` straight out of the canvas, and the kernel holds
+`ES:BX` into it for the whole call — a volume switch inside the write can
+claim, a claim can compact, and `pt_reloc` would put `[pt_base]` right while
+the kernel went on writing from the old segment. Loading and the GIF save go
+through the staging block, which is never declared, so they need nothing.
+
 `tests/paintmove.py` is the gate, and it drives a real heap into a real app:
 heapfrag first so it owns the floor, Paint above it, heapfrag closed to open
 the floor, then heapfrag again so its claim forces the compaction. Five
@@ -46386,7 +46462,7 @@ which `apps/paint`'s `pt_wait` shows is ordinary.
 
 ### 66.5.4 `OSAPI_MEM_PARKSAFE` — the rule that lifts §66.5.3
 
-**Slot 0x0400**, `AL` = 1 declare / 0 withdraw, the `mem_own`-style fence in
+**Slot 0x0408**, `AL` = 1 declare / 0 withdraw, the `mem_own`-style fence in
 `ES`. It says one thing:
 
 > **No register and no stack slot of mine holds a pointer *derived* from one
@@ -46471,6 +46547,22 @@ driver-owned claim unconditionally. Three things close it:
   all-or-nothing: no driver-owned claim moves while any service task runs.
   Conservative, and the conservative direction is a claim that stays put.
 
+**The park answers for the driver's tasks and not for its callers, and the
+pool is copied by its callers.** `sbl_v_stage`, `sbl_v_read` and the priming
+`sbl_fill_half` all run on the *client's* task — Tracker's worker calls verb 6
+mid-mix — and that task is not a driver task, so `inst_svc_parked` cannot see
+it, and it is not asked by `inst_park_req` either, which parks a package's
+worker only at `OSAPI_TASK_ALIVE`; a worker that misses the four-tick
+deadline simply keeps its *own* claims (§66.5). So the refill task can be
+parked, the pool declared free to move, and a client worker suspended
+half-way through a `rep movsb` into it — which would resume through the old
+segment into whatever packed down into that address. The pool stays movable;
+**every copy into or out of it goes in `SBL_DCHUNK` chunks under `cli`,
+re-reading `[sbl_poolseg]` per chunk**, which is `sbl_fill_guard`'s own idiom
+for the refill path. A chunk cannot be pre-empted, a compaction is atomic
+against this task (it runs under `sch_lock`), so between two chunks the word
+is either the old segment or the new one and never a stale copy of either.
+
 ### 66.5.6 The kernel's own claims, and the barrier they were
 
 `docs/HEAP-CLAIMS.md` measured the thing this section fixes, and it
@@ -46508,6 +46600,17 @@ segment immediately before a short in-memory burst and never carries it across
 a call that can yield. The only disk read that targets any of them is the one
 that *fills* the ASSOC cache, and `dsk_xfer` pins the transfer's buffer for
 its duration (§66.3 rule 5).
+
+**The clipboard has one more thing to pin, and it is not the clipboard.**
+`clip_put` banks the *caller's* segment — very often a Note Pad or ArtfulType
+document, both movable since §66.5.7 — and then `mem_claim`s the destination,
+which can compact. The holder's relocation proc would put the app's word
+right and leave the copy of the old segment on `clip_put`'s own stack, so the
+`rep movsb` that follows would read the hole. So `clip_put` publishes its
+source in `[mem_pinseg]` across the claim, exactly as `dsk_xfer` publishes a
+transfer's destination — and `dsk_xfer` therefore *nests* that word (saves
+and restores it) rather than zeroing it on the way out, so a transfer on
+another task cannot unpin a source that a `clip_put` is still holding.
 
 **The FAT window is deliberately still pinned.** It is `[dsk_fatseg]` *plus*
 the per-volume `dsk_fatw0` array, so it needs a real proc — and unlike the

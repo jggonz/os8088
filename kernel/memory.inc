@@ -352,6 +352,12 @@ mem_claim_x:
                                 ; and the tag is now a RANGE, because the high
                                 ; byte carries the priority too (50.6.4)
 .go:
+    cmp byte [mem_cp_busy], 0   ; INSIDE A COMPACTION - a relocation proc that
+    jne .busy                   ; claimed (SPEC.md 66.3 rule 3 forbids it) -
+                                ; the map is mid-walk and first fit would hand
+                                ; it the very run the walk is about to copy
+                                ; the next block onto. Refuse, and refuse the
+                                ; shed too, which frees records the walk holds
     call mem_claim_1            ; COMPACT, THEN SHED AND RETRY (SPEC.md 66.4 /
     jnc .out                    ; 50.6.2). A cache loses to anything that is
     call mem_compact            ; not one, and a package load loses to nothing
@@ -370,6 +376,9 @@ mem_claim_x:
                                 ; every movable claim against the one below
                                 ; it - so the next call finds no movers and
                                 ; answers CF = 1 (SPEC.md 66.4)
+    jmp short .out
+.busy:
+    stc
 .out:
     pop di
     pop si
@@ -1366,8 +1375,13 @@ mem_cp_run:
 ; raised.
 mem_reloc_call:
     push ax
-    push bp
-    push ds
+    push bx                     ; ALL of them, because the proc is a window
+    push cx                     ; callback in every other respect and a window
+    push dx                     ; callback may clobber AX/BX/CX/DX/SI/DI/ES
+    push si                     ; (SPEC.md 13). mem_cp_run reads SI - the
+    push di                     ; record - straight after this returns, and a
+    push bp                     ; proc that used SI would have moved the fill
+    push ds                     ; point onto a live block
     push es
     mov ax, KERNEL_SEG
     mov es, ax                  ; wm_pkgcall's ES contract: the callback may
@@ -1401,6 +1415,11 @@ mem_reloc_call:
     pop es
     pop ds
     pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -1630,6 +1649,8 @@ mem_regrow:
     push di
     pushf
     cli
+    cmp byte [mem_cp_busy], 0   ; not from inside a relocation proc either
+    jne .fail                   ; (SPEC.md 66.3 rule 3): path 3 would claim
     or ax, ax
     jz .fail
     mov cl, 6
@@ -1736,6 +1757,8 @@ mem_free_x:
     push si
     pushf
     cli
+    cmp byte [mem_cp_busy], 0   ; a relocation proc may not free (SPEC.md 66.3
+    jne .busy                   ; rule 3): the walk is standing on the record
     mov si, mem_tab
     mov cx, MEM_MAX
 .scan:
@@ -1752,6 +1775,7 @@ mem_free_x:
 .next:
     add si, MC_SIZE
     loop .scan
+.busy:
     popf
     stc
 .out:

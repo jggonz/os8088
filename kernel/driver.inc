@@ -141,7 +141,12 @@ DRV_H_CLASS equ 3               ; byte: DRVC_*
 DRV_H_LINK  equ 4               ; word: 0 (org 0, like every v3 package)
 DRV_H_ENTRY equ 6               ; word: entry offset
 DRV_H_IMG   equ 8               ; word: image size = the file's whole size
-DRV_H_RSV   equ 10              ; word: reserved (the bss is inside the image)
+DRV_H_FSV   equ 10              ; word: THE FSV_* TABLE LENGTH THIS DRIVER WAS
+                                ; BUILT WITH (SPEC.md 62.9.1.1) - 0 = written
+                                ; before the word existed, which is every
+                                ; driver up to v1.0.20260815 and means
+                                ; FSV_TAB0. Was reserved; the bss is inside
+                                ; the image so nothing else ever needed it
 DRV_H_DISP  equ PKG_DISP        ; 12: `call bp / retf`, exactly as a package
 DRV_HDR_SZ  equ 0x20
 DRV_VER     equ 4
@@ -311,6 +316,13 @@ FSV_RMTREE  equ 28              ; SI = a folder's name, in the CURRENT folder:
                                 ; FSV_RMDIR - which is what a redirected
                                 ; volume did before this existed
 FSV_SIZE    equ 30
+FSV_TAB0    equ 28              ; ...and the length every driver that carries 0
+                                ; at DRV_H_FSV has: the table stood at 28 from
+                                ; the release FSV_ENUM/FSV_COPY landed in until
+                                ; FSV_RMTREE, and NET.DRV's and RAMDISK.DRV's
+                                ; name strings follow their tables directly -
+                                ; so a kernel that read cell 28 out of one of
+                                ; those files got 'os' / 'Ra' and far-called it
 
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every
@@ -1132,6 +1144,15 @@ drv_fs_call:
     jz .none                    ; a DRVC_FILE driver that published no table
     add di, bp                  ; ...+ the verb
     mov es, [drv_fseg5]
+    push ax                     ; ...IF ITS TABLE REACHES THAT FAR (SPEC.md
+    mov ax, [es:DRV_H_FSV]      ; 62.9.1.1): the driver says how long a table
+    or ax, ax                   ; it was built with, 0 meaning the 28 bytes
+    jnz .len                    ; every released driver has, and a verb past
+    mov ax, FSV_TAB0            ; it is refused like an unpublished one - not
+.len:                           ; read out of whatever the driver put after
+    cmp bp, ax                  ; its table
+    pop ax
+    jae .none
     mov bp, [es:di]             ; BP = the near proc, in the driver's segment
     pop di
     pop es
@@ -1180,6 +1201,15 @@ drv_fs_has:
     jz .no                      ; a DRVC_FILE driver that published no table
     add di, bp                  ; ...+ the verb
     mov es, [drv_fseg5]
+    push ax                     ; the same length test as drv_fs_call's, for
+    mov ax, [es:DRV_H_FSV]      ; the same reason: what the two answer must
+    or ax, ax                   ; agree, or a caller that probes here and then
+    jnz .len                    ; calls would reach a cell the call refuses
+    mov ax, FSV_TAB0
+.len:
+    cmp bp, ax
+    pop ax
+    jae .no
     cmp word [es:di], 0
     je .no
     pop di

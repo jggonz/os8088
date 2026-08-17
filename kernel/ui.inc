@@ -1003,16 +1003,44 @@ ui_drag:
 ui_drag_phase:
     push ax
     push bx
-    mov ax, [bx + W_X]
+    push cx
+    push dx
+    push si
+    mov si, bx
+    mov cx, [si + W_X]          ; the drop as the clamps left it, banked
+    mov dx, [si + W_Y]
+    mov ax, cx
     sub ax, [ui_origx]          ; AX = dx, signed
     call ui_drag_ph8
     add ax, [ui_origx]
-    mov [bx + W_X], ax
-    mov ax, [bx + W_Y]          ; ...AND dy, FOR THE DITHER (SPEC.md 11.96.13.1)
+    mov [si + W_X], ax
+    mov ax, dx                  ; ...AND dy, FOR THE DITHER (SPEC.md 11.96.13.1)
     sub ax, [ui_origy]
     call ui_drag_ph8
     add ax, [ui_origy]
-    mov [bx + W_Y], ax
+    mov [si + W_Y], ax
+%ifdef KERN_BIG                 ; kern_small has one display and no
+                                ; vid_disp_find (SPEC.md 39.12)
+    cmp byte [vid_ndisp], 1     ; ONE DISPLAY: the interval argument above is
+    jbe .out                    ; the whole proof and nothing more is asked.
+    mov ax, [si + W_X]          ; TWO: the legal top-lefts are a UNION of two
+    mov bx, [si + W_Y]          ; rectangles and not an interval - a CGA over
+    call vid_disp_find          ; a taller Hercules has rows 200..206 on the
+    jnc .out                    ; second display only, and a window dropped
+    mov [si + W_X], cx          ; on the CGA at y 193..199 with its origin on
+    mov [si + W_Y], dx          ; the Hercules phased UP toward it into rows no
+                                ; display has, title bar and all. ui_drag_dead
+                                ; ran before this and cannot see it. So the
+                                ; phased point is asked the same question, and
+                                ; a NO undoes the phase: the drop stands where
+                                ; the clamps left it and replays by cards, the
+                                ; one-time-in-eight cost this exists to avoid,
+                                ; paid only on the seam
+%endif
+.out:
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret

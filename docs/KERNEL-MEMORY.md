@@ -318,6 +318,18 @@ ahead of it. The figure is the base plus all three, and the numbering follows
 the integration branch's; the merged tree measures 102,400 against it, five
 steps.
 
+**`kern_small` spent four of its steps on this branch and asked for nothing,
+which is allowed and is recorded here so that it is not discovered.** The
+compaction, the key-state map, the display work and the folder verbs are all
+in both kernels, and `kern_small` measured **100,864 → 102,912** at the merge
+with `main`'s C toolchain (the blessed block below is that build) — **512
+spare, ONE step**, three under the four-step standard. That is a rung spent
+and not a move (§5.4.2's paragraph above is the precedent), so the budget
+stands at 103,424; but the next `kern_small` feature has one step and then
+asks. The safety fixes made at review (`SPEC.md` §66.3, §66.5.5, §62.9.1.1,
+§11.96.13.1) cost `kern_big` +126 bytes and `kern_small` +0 steps — both
+absorbed inside their rungs, footprints unchanged.
+
 **And one place NOT to go looking for bytes.** §18.98's `DVOL_MAX` 6 → 8
 costs `.bss` 134, of which 128 are `dsk_bpbv` — a **64-byte banked BPB per
 volume**. Re-indexing it from volume 2 to reclaim those was proposed here and
@@ -511,7 +523,7 @@ Three things about it:
     "bss": 5959,
     "budget": 108544,
     "codemax": 65536,
-    "cold": 36012,
+    "cold": 36081,
     "coldpara": 2272,
     "fatpara": 288,
     "imgpara": 3584,
@@ -522,24 +534,24 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2828,
     "stk0": 1024,
-    "text": 50899
+    "text": 50956
   },
   "small": {
-    "bss": 5649,
-    "budget": 102400,
+    "bss": 5686,
+    "budget": 103424,
     "codemax": 65536,
-    "cold": 34439,
-    "coldpara": 2176,
+    "cold": 35141,
+    "coldpara": 2208,
     "fatpara": 288,
-    "imgpara": 3264,
-    "kend": 6400,
+    "imgpara": 3360,
+    "kend": 6528,
     "kseg": 96,
-    "ksize": 100864,
-    "lowbss": 7762,
+    "ksize": 102912,
+    "lowbss": 7830,
     "lowpara": 576,
-    "ovl": 2796,
+    "ovl": 2799,
     "stk0": 1024,
-    "text": 46397
+    "text": 47819
   }
 }
 ```
@@ -1044,14 +1056,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 30,917 | 35.6% |
-| the window system and its furniture | 22,163 | 25.5% |
+| the file system, end to end | 30,919 | 35.5% |
+| the window system and its furniture | 22,221 | 25.5% |
 | drawing: adapters, primitives, glyphs, icons | 13,739 | 15.8% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,149 | 11.7% |
-| the kernel proper: API table, heap, scheduler, events | 7,569 | 8.7% |
-| the three built-in kinds | 1,530 | 1.8% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 10,183 | 11.7% |
+| the kernel proper: API table, heap, scheduler, events | 7,602 | 8.7% |
+| the three built-in kinds | 1,529 | 1.8% |
 | the Control Panel | 844 | 1.0% |
-| **total** | **86,911** | |
+| **total** | **87,037** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -1059,23 +1071,23 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `wm.inc` — the window manager (§11) | 9,946 | — | **9,946** | 789 | — |
 | `files.inc` — the Disk window (§22) | 1,119 | 8,036 | **9,155** | 471 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 358 | 6,045 | **6,403** | 890 | 3,584 |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 358 | 6,047 | **6,405** | 890 | 3,584 |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,419 | 425 | **5,844** | 654 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 179 | 5,041 | **5,220** | 155 | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 223 | 3,950 | **4,173** | 139 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,769 | — | **3,769** | 149 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,640 | **3,050** | 341 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 3,041 | — | **3,041** | 197 | 98 |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 410 | 2,606 | **3,016** | 341 | — |
 | `assoc.inc` — file type associations (§54) | 528 | 2,338 | **2,866** | 43 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,767 | — | **2,767** | 40 | — |
-| `memory.inc` — the claim heap (§50) | 14 | 2,717 | **2,731** | 22 | 324 |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,803 | — | **2,803** | 40 | — |
+| `memory.inc` — the claim heap (§50) | 14 | 2,754 | **2,768** | 22 | 324 |
+| `instance.inc` — instances and the built-in kinds (§29) | 2,310 | — | **2,310** | 698 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,306 | **2,306** | 139 | — |
-| `instance.inc` — instances and the built-in kinds (§29) | 2,300 | — | **2,300** | 698 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,632 | — | **1,632** | 197 | 768 |
 | `icons.inc` — the icon renderer (§10) | 1,570 | — | **1,570** | 34 | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 1,548 | — | **1,548** | 84 | — |
-| `apps.inc` — the three built-in kinds (§14) | 1,530 | — | **1,530** | 15 | 240 |
+| `apps.inc` — the three built-in kinds (§14) | 1,529 | — | **1,529** | 15 | 240 |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,205 | — | **1,205** | 4 | — |
 | `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
@@ -1088,14 +1100,14 @@ generated in the first place.
 | `loader.inc` — the package loader (§21) | — | 794 | **794** | 58 | — |
 | `toast.inc` — the menu bar's transient message (§59) | 547 | — | **547** | 25 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 467 | — | **467** | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 36 | 412 | **448** | 34 | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 36 | 408 | **444** | 34 | — |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 269 | 96 | **365** | 22 | — |
-| `clip.inc` — the system clipboard (§55) | 215 | — | **215** | 6 | — |
+| `clip.inc` — the system clipboard (§55) | 227 | — | **227** | 6 | — |
 | `events.inc` — the event ring (§10) | 141 | — | **141** | 134 | — |
 | `blank.inc` — **(undescribed)** | 124 | — | **124** | — | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 3,161 | — | **3,161** | — | — |
-| **total** | **50,899** | **36,012** | **86,911** | **5,959** | **7,830** |
+| **total** | **50,956** | **36,081** | **87,037** | **5,959** | **7,830** |
 <!-- END generated table -->
 
 ### Reading it

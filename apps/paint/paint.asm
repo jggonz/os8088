@@ -776,6 +776,40 @@ pt_movable:
     ret
 
 ; -----------------------------------------------------------------------------
+; pt_pin / pt_unpin - hold the canvas still across a kernel call that keeps a
+; pointer INTO it (SPEC.md 66.5.7.1); preserves all registers and the flags
+;
+; The BMP save is one OSAPI_FILE_WRITE straight out of the canvas, and the
+; kernel holds ES:BX across the whole call - a volume switch inside it can
+; claim (SPEC.md 18.95), a claim can compact, and pt_reloc would put
+; [pt_base] right while the kernel went on writing from the old segment.
+; dsk_xfer's [mem_pinseg] covers each transfer, not the walk between them.
+; Note Pad's np_dmov and ArtfulType's at_dmov are the same shape.
+; -----------------------------------------------------------------------------
+pt_pin:
+    pushf
+    push ax
+    push dx
+    xor ax, ax                      ; AX = 0: pin it again
+    mov dx, [pt_base]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
+    popf
+    ret
+pt_unpin:
+    pushf
+    push ax
+    push dx
+    mov ax, pt_reloc
+    mov dx, [pt_base]
+    call OSAPI_MEM_MOVABLE
+    pop dx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; pt_alloc_undo - claim an undo image the size of the canvas claim
 ; out: [pt_unseg]/[pt_undelta]/[pt_haveundo]; preserves all registers
 ;
@@ -7901,10 +7935,12 @@ pt_save:
     adc dx, 0
     mov cx, ax                      ; DX:CX = the file's 32-bit length
     call pt_bmp_hdr                 ; re-stamp it: the live size is the truth
-    mov ax, [pt_base]
-    mov es, ax
+    call pt_pin                     ; PINNED across the write (SPEC.md
+    mov ax, [pt_base]               ; 66.5.7.1): the kernel holds ES:BX into
+    mov es, ax                      ; the canvas for the whole call
     xor bx, bx                      ; ES:BX = the DIB, header and all
     call OSAPI_FILE_WRITE           ; SI is still the name
+    call pt_unpin                   ; ...and movable again, CF untouched
     jnc .wrote
     call pt_ferr
     jmp short .out

@@ -1830,6 +1830,7 @@ srv_stat:
     call hd_path                ; the folder, as a path
     jc  .no
     call path_join              ; + '\' + namebuf -> wildbuf
+    jc  .no                     ; ...not a name any entry can have (the fence)
     mov al, 'S'                 ; a STAT: what a launch or an open begins with
     call say_file
     call stat_file              ; -> the DTA, or CF=1
@@ -1969,10 +1970,59 @@ stat_file:
     ret
 
 ; path_join - pathbuf + '\' + namebuf -> wildbuf
+; path_join - pathbuf + '\' + namebuf -> wildbuf
+; out: CF=0 wildbuf built; CF=1 the NAME IS NOT ONE ENTRY OF THAT FOLDER, and
+;      wildbuf is left empty
+;
+; THIS IS THE FENCE. Every verb that takes a name off the wire joins it here
+; (stat, every write verb through wr_arg, both ends of a copy, a rename's new
+; name), and the served folder is only "the subtree" if a name can only ever
+; be one of its children. Thirteen raw bytes cannot promise that: `..\DOS`
+; fits, DOS resolves the `..`, and NF_RMTREE would walk C:\DOS. So a name is
+; refused when it holds a separator or a drive colon (`\` `/` `:`), a
+; wildcard or another character DOS itself will not put in a name (`*` `?`
+; `<` `>` `|` `"`), when it begins with `.` (`.` and `..` are the two entries
+; every folder has that are NOT its children), or when it is empty (which
+; would name the FOLDER). Every caller answers a refusal with FERR_NOENT,
+; which is true: no entry of that folder has that name. A real master never
+; sends one - its names come out of FAT directory entries - so nothing legit
+; is turned away.
 path_join:
     push ax
     push si
     push di
+    mov si, namebuf
+    mov al, [si]
+    or  al, al
+    jz  .bad                    ; empty: it would name the folder itself
+    cmp al, ' '
+    je  .bad
+    cmp al, '.'
+    je  .bad                    ; `.` and `..`, and nothing legit starts so
+.chk:
+    lodsb
+    or  al, al
+    jz  .okname
+    cmp al, '\'
+    je  .bad
+    cmp al, '/'
+    je  .bad
+    cmp al, ':'
+    je  .bad
+    cmp al, '*'
+    je  .bad
+    cmp al, '?'
+    je  .bad
+    cmp al, '<'
+    je  .bad
+    cmp al, '>'
+    je  .bad
+    cmp al, '|'
+    je  .bad
+    cmp al, '"'
+    je  .bad
+    jmp short .chk
+.okname:
     mov si, pathbuf
     mov di, wildbuf
     call str_app
@@ -1987,6 +2037,14 @@ path_join:
     pop di
     pop si
     pop ax
+    clc
+    ret
+.bad:
+    mov byte [wildbuf], 0       ; nothing downstream may see a half-built path
+    pop di
+    pop si
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2355,6 +2413,8 @@ wr_arg:
     call hd_path                ; -> pathbuf
     jc  .nodir
     call path_join              ; ...+ '\' + namebuf -> wildbuf
+    jc  .nodir                  ; ...not a name any entry can have (the fence):
+                                ; the verb answers FERR_NOENT, which is true
     mov al, [sf_wtag]           ; ...whichever write verb we are inside
     call say_file
     clc
@@ -2409,6 +2469,7 @@ srv_copy:
     call hd_path                ; the SOURCE, as a path
     jc  .nodir
     call path_join              ; + '\' + namebuf -> wildbuf
+    jc  .nodir                  ; the fence (path_join's header)
     mov al, 'Y'                 ; the SOURCE, before wildbuf is rebuilt
     call say_file
     mov si, wildbuf             ; ...banked whole: building the destination
@@ -2420,6 +2481,7 @@ srv_copy:
     call hd_path
     jc  .nodir
     call path_join
+    jc  .nodir                  ; (the same name, so the same verdict)
     mov al, 'y'                 ; ...lower case: the same copy's other end
     call say_file
 
@@ -2735,10 +2797,13 @@ srv_name1:
 ; ONE THING IS REFUSED OUTRIGHT: a whole volume. Under /W the first level of
 ; the synthetic root IS a drive (62.10.2), so a name in the root resolves to
 ; `C:` and this would be a DOS machine's entire disk. Nothing else is
-; special-cased, because the fence is already drawn: WITHOUT /W the root is the
-; served folder, a name can only ever be one of its children, and the root
-; itself is unnameable - so there is no path out of the subtree by
-; construction rather than by a test.
+; special-cased, because the fence is drawn in ONE place: path_join refuses a
+; name that is not one entry of its folder - a separator, a drive colon, a
+; leading `.` - so WITHOUT /W the root is the served folder, a name can only
+; ever be one of its children, and the root itself is unnameable. The first
+; cut said "by construction rather than by a test", and it was not: thirteen
+; raw bytes hold `..\DOS` comfortably, and DOS resolves the `..`. It is by
+; test, and the test is path_join's, for every verb at once.
 ;
 ; Two more refusals are INHERITED rather than added. A read-only, hidden or
 ; system entry stops the walk with FERR_PROT, which is letter for letter what
@@ -3149,6 +3214,8 @@ srv_rename:
     cmp byte [srv_ok], 0
     je  .nodir
     call path_join              ; the new name, in the same folder
+    jc  .nodir                  ; ...and the fence applies to it too: a rename
+                                ; TO `..\X` moves the file out of the subtree
     mov dx, oldbuf
     mov di, wildbuf
     push ds

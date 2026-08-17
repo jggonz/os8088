@@ -1515,12 +1515,26 @@ sbl_v_read:
                                 ; (SPEC.md 20.3/34.6; a package's DI is an
                                 ; offset in its OWN segment, never the
                                 ; kernel's)
-    mov ax, [sbl_poolseg]       ; the grant lives in the POOL claim
-    push ds
-    mov ds, ax                  ; DS:SI = the grant source
     cld
-    rep movsb                   ; pool:SI -> caller DI, interruptible
+.copy:                          ; IN CHUNKS, THE POOL SEGMENT RE-DERIVED PER
+    jcxz .ok                    ; CHUNK UNDER IF=0 (SPEC.md 66.5.5): the pool
+    mov ax, SBL_DCHUNK          ; is movable and this runs on the CALLER's
+    cmp cx, ax                  ; task, which the compactor's park handshake
+    jae .csz                    ; never asks - a worker preempted mid-copy
+    mov ax, cx                  ; would resume through a stale segment. A
+.csz:                           ; chunk cannot be preempted; between chunks
+    sub cx, ax                  ; the word is read again, and a compaction is
+    pushf                       ; atomic against this task (sch_lock)
+    cli
+    push cx
+    mov cx, ax
+    push ds
+    mov ds, [sbl_poolseg]       ; DS:SI = the grant source, in the POOL claim
+    rep movsb                   ; pool:SI -> caller DI
     pop ds
+    pop cx
+    popf
+    jmp .copy
 .ok:
     xor ax, ax
     clc
@@ -1567,14 +1581,28 @@ sbl_v_stage:
     call sbl_grant_chk
     pop si
     jc .e7
-    mov ax, [sbl_poolseg]       ; the grant lives in the POOL claim
-    mov es, ax
-    mov ax, bx                  ; the caller's segment (slot wrapper, BX):
-    cld                         ; the source pointer lives THERE since v3
+    cld
+.copy:                          ; chunked exactly as sbl_v_read: the pool is
+    jcxz .ok                    ; movable and this is the caller's task
+    mov ax, SBL_DCHUNK          ; (SPEC.md 66.5.5)
+    cmp cx, ax
+    jae .csz
+    mov ax, cx
+.csz:
+    sub cx, ax
+    pushf
+    cli
+    mov es, [sbl_poolseg]       ; ES:DI = the grant, in the POOL claim -
+                                ; re-derived per chunk, with DS still ours
+    push cx
+    mov cx, ax
     push ds
-    mov ds, ax
-    rep movsb                   ; callerseg:SI -> pool:DI, interruptible
-    pop ds
+    mov ds, bx                  ; the caller's segment (slot wrapper, BX):
+    rep movsb                   ; the source pointer lives THERE since v3
+    pop ds                      ; callerseg:SI -> pool:DI
+    pop cx
+    popf
+    jmp .copy
 .ok:
     xor ax, ax
     clc
@@ -1719,11 +1747,25 @@ sbl_fill_half:
     xor dx, dx                  ; and never a pad (SPEC.md 34.5 rule 1)
 .copy:
     cld
-    jcxz .pad
+.chunk:                         ; chunked like every other pool copy (SPEC.md
+    jcxz .pad                   ; 66.5.5): the pool is movable, and the
+    mov ax, SBL_DCHUNK          ; segment is re-derived per chunk under IF=0
+    cmp cx, ax
+    jae .csz
+    mov ax, cx
+.csz:
+    sub cx, ax
+    pushf
+    cli
+    push cx
+    mov cx, ax
     push ds
     mov ds, [sbl_poolseg]       ; DS = the POOL: the grant is there now, the
     rep movsb                   ; destination half is in the DMA claim (ES)
     pop ds
+    pop cx
+    popf
+    jmp .chunk
 .pad:
     mov cx, dx
     jcxz .done

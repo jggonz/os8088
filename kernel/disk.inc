@@ -946,6 +946,11 @@ dsk_xfer:
 
 
     inc byte [sch_lock]         ; pause task switching across all int 13h
+    push word [mem_pinseg]      ; NESTED, not owned: clip_put pins its source
+                                ; through the same word across a claim that
+                                ; can yield, and a transfer on another task
+                                ; that zeroed it on the way out would unpin
+                                ; that source for the compaction that follows
     push es
     pop word [mem_pinseg]       ; ...AND PIN WHATEVER CLAIM THE DESTINATION IS
                                 ; IN (SPEC.md 66.3 rule 5). A transfer holds
@@ -1269,9 +1274,9 @@ dsk_xfer:
     call dsk_bpb_bank_zap       ; an I/O error is exactly the shape "this is
     stc                         ; not the disk you think it is" arrives in
 .out:
-    mov word [mem_pinseg], 0    ; the destination is nobody's again (dec and
-    dec byte [sch_lock]         ; mov leave CF alone, and CF is the answer)
-    pop bp
+    pop word [mem_pinseg]       ; the destination is nobody's again - or the
+    dec byte [sch_lock]         ; outer pin's (dec and pop leave CF alone, and
+    pop bp                      ; CF is the answer)
     pop di
     pop si
     pop dx
