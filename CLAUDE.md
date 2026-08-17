@@ -88,6 +88,17 @@ builds the story disk (`tools/getstories.py` fetches the stories, which are
 never committed), `make worddisk` the Word disk and `make cworddisk` the CWORD
 disk.
 
+**`RESET=` clears a machine's non-volatile state on the way in**, and it
+reaches every one of those targets because they all launch through the same
+`$(BOX)`: `RESET=1` (or `cmos`) for the CMOS, `RESET=flash`, `RESET=both`.
+86Box's own `-X` does it, and `-X` clears and then goes on to boot, which is
+why this is a knob and not a target. On an AT-class machine a cleared CMOS
+means the next boot stops in BIOS setup — pick EXIT FOR BOOT once and
+`vm/<machine>/nvr/` is written again. It does **not** reach an *orphaned*
+`.nvr`: that file is named for the `machine =` key, so editing that key in a
+`86box.cfg` strands the old one; `rm -rf vm/<name>/nvr` is the bigger hammer.
+Every `nvr/` is gitignored, so neither can reach the repo.
+
 **Nothing in `build/` is tracked — never commit a binary.** The toolchain is
 deterministic on purpose (`tools/os88disk.py` pins the volume serial and every
 FAT timestamp), so a released image can be rebuilt byte-for-byte. Releases are

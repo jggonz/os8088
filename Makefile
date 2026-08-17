@@ -17,6 +17,38 @@ APPSIMG := $(BUILD)/apps.img
 APPSIMG720 := $(BUILD)/apps720.img
 APPSIMG360 := $(BUILD)/apps360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
+
+# RESET= clears a machine's non-volatile state on the way in, and it reaches
+# EVERY 86Box target at once because all eighteen of them launch through
+# $(BOX) and differ only in which vm/ directory they point at:
+#
+#   make 386-c-word RESET=1       the CMOS  (the one you almost always want)
+#   make xt RESET=flash           the flash, leaving the CMOS alone
+#   make 386-word RESET=both      both
+#
+# 86Box's own -X does the clearing, so this is its supported mechanism rather
+# than us deleting files under it: -X clears and then GOES ON TO BOOT, which
+# is why RESET is a knob on the normal target and not a target of its own.
+# On an AT-class machine (286 and up) a cleared CMOS means the first boot
+# stops in BIOS setup wanting one - pick EXIT FOR BOOT once and 86Box writes
+# vm/<machine>/nvr/ again for every later boot. The XT machines have no CMOS
+# to clear and ignore this.
+#
+# What it does NOT clear is an ORPHANED .nvr: the file is named for the
+# `machine =` key, so editing that key in a 86box.cfg strands the old file and
+# -X never touches it again. `rm -rf vm/<name>/nvr` is the bigger hammer, and
+# nvr/ is gitignored for every machine, so neither can reach the repo.
+ifneq ($(RESET),)
+ ifeq ($(RESET),1)
+BOX   += -X cmos
+ else
+  ifeq ($(filter $(RESET),cmos flash both),)
+   $(error RESET must be 1, cmos, flash or both - got '$(RESET)')
+  endif
+BOX   += -X $(RESET)
+ endif
+endif
+
 VM    := $(CURDIR)/vm/xt
 VM640 := $(CURDIR)/vm/xt640
 VMCGA := $(CURDIR)/vm/xt-cga
