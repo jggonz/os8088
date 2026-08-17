@@ -143,9 +143,12 @@ THEMES = (
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
      ("mouse.inc", "clock.inc", "driver.inc", "snd.inc", "cpudet.inc",
       "xmem.inc")),
+    # blank.inc (SPEC.md 64) is here and not under hardware, although all it
+    # does is write a video port: what it owns is whether the SIGNAL is on,
+    # which is a property of the adapter the rest of this group programs.
     ("drawing: adapters, primitives, glyphs, icons",
      ("vga12.inc", "softgfx.inc", "font.inc", "icons.inc", "viddet.inc",
-      "vidsel.inc", "splash.inc")),
+      "vidsel.inc", "splash.inc", "blank.inc")),
     ("the kernel proper: API table, heap, scheduler, events",
      (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc")),
     ("the Control Panel", ("ctrl.inc",)),

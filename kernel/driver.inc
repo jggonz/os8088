@@ -295,7 +295,22 @@ FSV_COPY    equ 26              ; AX = source folder, DX = destination folder,
                                 ; and fcp_xfer streams as before - which is
                                 ; what makes this an optimisation rather than
                                 ; a contract every DRVC_FILE driver owes
-FSV_SIZE    equ 28
+FSV_RMTREE  equ 28              ; SI = a folder's name, in the CURRENT folder:
+                                ; remove it AND EVERYTHING IN IT (SPEC.md
+                                ; 62.10.7). out CF=0; CF=1 and AX = FERR_*
+                                ;
+                                ; The far side recurses with its own file
+                                ; calls, for FSV_COPY's reason in the other
+                                ; direction: a kernel-side walk is one
+                                ; FSV_ENUM plus one FSV_DELETE per file and an
+                                ; FSV_CHDIR per level, each a full command
+                                ; frame, where this is one frame and one
+                                ; status. A driver that does not publish it is
+                                ; refused by drv_fs_call with AX = 0 and
+                                ; dskw_rtbody falls back to the empty-only
+                                ; FSV_RMDIR - which is what a redirected
+                                ; volume did before this existed
+FSV_SIZE    equ 30
 
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every

@@ -42,6 +42,15 @@ vid_avail   db 0                ; which adapters answered (VID_A_*). Probed
                                 ; ONCE, at boot, and cached - vid_switch moves
                                 ; [vid_kind], so re-deriving it later would
                                 ; ask the question of the wrong machine
+vid_hprobe  db 0                ; ...and HOW the mono card answered, because
+                                ; "not detected" is three different faults and
+                                ; the field cannot tell them apart from a
+                                ; screenshot (SPEC.md 39.11.1.1). 0 = not
+                                ; probed (it IS the running adapter), 1 = the
+                                ; plain memory probe, 2 = only after the config
+                                ; switch was written, 3 = refused both. It sits
+                                ; here so 57.4's +4 pointer covers it with no
+                                ; new word in the block
 
 ; -----------------------------------------------------------------------------
 ; The 'VD' block of SPEC.md 57.4 - nine words, no .bss, nothing copied.
@@ -59,7 +68,8 @@ vid_avail   db 0                ; which adapters answered (VID_A_*). Probed
 vid_dbg_blk:
     dw DBG_TAG_VIDEO            ; +0  'VD', and the block's own first word
     dw vid_kind                 ; +2  db kind, db mono, db planes (viddet.inc)
-    dw vid_avail                ; +4  db: which adapters answered
+    dw vid_avail                ; +4  db avail, db hprobe (how the mono card
+                                ;     answered - SPEC.md 39.11.1.1)
 %ifdef KERN_BIG
     dw vid_ndisp                ; +6  db ndisp, db cur, dw ox, dw oy,
                                 ;     db dmode, db dlay
@@ -160,6 +170,8 @@ vid_memchk:
 vid_probe_avail:
     push ax
     push cx
+    push dx                     ; ...DX because the Hercules retry below
+                                ; addresses the config switch
     mov cl, [vid_kind]          ; the adapter we are RUNNING on: available by
     mov al, 1                   ; definition, and the one we must not write to
     shl al, cl
@@ -173,7 +185,33 @@ vid_probe_avail:
     je .cga                     ; already marked, and its RAM is the screen
     mov ax, VID_HERC_SEG
     call vid_memchk
-    jc .cga
+    mov byte [vid_hprobe], 1    ; ...and RECORD which answer this was, or the
+    jnc .hyes                   ; field can only report that the card is
+                                ; missing (SPEC.md 39.11.1.1)
+    mov byte [vid_hprobe], 2
+                                ; --- AND AGAIN WITH GRAPHICS ALLOWED --------
+                                ; (SPEC.md 39.11.1.1). A Hercules whose config
+                                ; switch has never been written is an MDA: 4KB
+                                ; at B000, aliased upward, so the probe's 0xAA
+                                ; at 0x1000 lands on its own 0x55 and the card
+                                ; is rejected as the text-only part that
+                                ; signature means. That is the RIGHT answer for
+                                ; an MDA and the wrong one for this card, and
+                                ; the two are indistinguishable until the
+                                ; switch is written - which is the one thing
+                                ; that can only be true of a Hercules, an MDA
+                                ; having no 3BFh at all.
+    mov dx, 0x3BF               ; bit 0 ONLY: graphics allowed, page 1 left
+    mov al, 1                   ; disabled, because B8000 is where a CGA lives
+    out dx, al                  ; and vid_setmode leaves it alone for the same
+    mov ax, VID_HERC_SEG        ; reason (SPEC.md 39.6)
+    call vid_memchk             ; ...preserves DX, so the switch is still
+    jnc .hyes                   ; addressed below
+    mov byte [vid_hprobe], 3
+    xor al, al                  ; nothing answered: put the switch back as it
+    out dx, al                  ; was found rather than leaving a card nobody
+    jmp short .cga              ; has proved is there in a state nobody chose
+.hyes:
     or byte [vid_avail], VID_A_HERC
 .cga:
     test byte [vid_avail], VID_A_CGA
@@ -204,6 +242,7 @@ vid_probe_avail:
                                 ; missing, so cp_v2r can skip it wherever it
                                 ; sits and the ordering is free
 .done:
+    pop dx
     pop cx
     pop ax
     ret

@@ -144,7 +144,7 @@ SOUND
 Which sound hardware to use: PC Speaker, AdLib or Sound Blaster. Hardware the machine does not have is greyed out, and the Test button plays a tone through whatever is picked.
 
 DISPLAY
-Only on a machine with two video cards. One row per card, and Activate Mode moves the machine onto the one you pick. Below that, Single uses just that card, while Right and Below let the desktop span both screens.
+Only on a machine with two video cards. One row per card, and Set Primary moves the machine onto the one you pick. Below that, under Desktop Extension Mode, Single uses just that card, while Right and Below let the desktop span both screens.
 
 *** IMPORTANT ***
 Settings are written to the system disk when you CLOSE the Control Panel - the box at the LEFT of its title bar. Putting it away into the dock does not save them. If the system disk is not in A:, or is write-protected, the menu bar says so and the machine starts up with the old settings.

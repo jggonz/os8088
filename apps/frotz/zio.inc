@@ -257,13 +257,53 @@ zi_yield:
                                     ; far as its first prompt and then executed
                                     ; whatever lay at the same offset in some
                                     ; other segment.
+    mov ax, [zf_sdelta]             ; ...AND THE STORY CAN MOVE ACROSS THIS
+                                    ; (SPEC.md 66.5.9). OSAPI_TASK_ALIVE is
+                                    ; the heap compactor's park point, so this
+                                    ; is the one place in the interpreter
+                                    ; where a story-derived segment is on a
+                                    ; stack while the block under it is
+                                    ; eligible to slide. Bank the running
+                                    ; shift, difference it after, and add
+                                    ; what the compactor moved
     mov bx, [zf_win]
     call OSAPI_TASK_ALIVE           ; never returns if we were closed
     call OSAPI_TASK_YIELD
-    pop es
+    mov bx, [zf_sdelta]
+    sub bx, ax                      ; BX = paragraphs the story moved by, 0 in
+    pop es                          ; every ordinary pass - so the whole of
+    jnz .moved                      ; this costs one word and a compare
+.out:
     pop bx
     pop ax
     ret
+
+    ; IT MOVED. Shift the saved ES only if it POINTED INTO THE STORY, and
+    ; decide that by range rather than by "was it the PC's segment": the
+    ; @verify walk holds a story segment that is not the PC, and a caller
+    ; holding something else entirely must not have a delta added to it.
+.moved:
+    push ax
+    push cx
+    mov ax, es
+    mov cx, [zf_sseg]
+    sub cx, bx                      ; CX = where the story was when ES was
+    sub ax, cx                      ; saved, so AX = paragraphs into it
+    jb .nofix                       ; below the claim: never ours
+    push dx
+    mov dx, [zf_skb]
+    mov cl, 6
+    shl dx, cl                      ; DX = the claim in paragraphs; 508KB is
+    cmp ax, dx                      ; 32,512, so this cannot overflow a word
+    pop dx
+    jae .nofix                      ; past its end: not ours either
+    mov ax, es
+    add ax, bx
+    mov es, ax
+.nofix:
+    pop cx
+    pop ax
+    jmp short .out
 
 ; =============================================================================
 ; SMALL ACCESSORS - the only places this module forms an address by hand
@@ -754,10 +794,24 @@ zi_load:
     call zm_setup                   ; CF=1 and AL = ZERR_* if unsupported
     jc .badstory
 
+    mov dx, [zf_sseg]           ; ONLY NOW is it movable (SPEC.md 66.2/66.5.9)
+    mov ax, zf_reloc            ; - not at the claim. OSAPI_FILE_READ above
+    call OSAPI_MEM_MOVABLE      ; holds ES:BX into this block across a call
+    mov word [zf_sdelta], 0     ; that itself CLAIMS (18.95's sector cache),
+                                ; and zm_setup reads the header through it.
+                                ; A reload needs no pin/unpin pair the way the
+                                ; editors do (66.5.7.1), because zi_free_all
+                                ; above hands the old claim back and a FRESH
+                                ; claim starts undeclared
+
     mov ax, ZI_STKKB
     call OSAPI_MEM_CLAIM
     jc .nomem
     mov [zf_stkseg], dx
+    mov ax, zf_reloc
+    call OSAPI_MEM_MOVABLE      ; one word: every cursor into it - [zf_sp],
+                                ; [zf_fp], every frame's base - is a BYTE
+                                ; OFFSET, and zi_zsw/zi_zsp load ES per word
     mov word [zf_sp], 0
     mov word [zf_fp], 0FFFFh        ; no frame yet; zx_run pushes the dummy one
 
@@ -786,6 +840,10 @@ zi_load:
     call OSAPI_MEM_CLAIM
     jc .noundo
     mov [zi_undoseg], dx
+    push ax
+    mov ax, zf_reloc            ; one word too, and NOT a file target - a
+    call OSAPI_MEM_MOVABLE      ; snapshot is a memory copy (Standard 6.1.2)
+    pop ax
     mov ax, [zi_savkb]
     mov [zi_undokb], ax
     jmp short .win
@@ -871,6 +929,64 @@ zi_load:
     call zi_free_all
     mov byte [zf_state], ZFS_NONE
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; zf_reloc - the compactor moved one of our claims (SPEC.md 66.5.9)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing; preserves every register
+;
+; THREE claims, and the story is the reason any of this is worth doing: at up
+; to 508KB it is the largest block this OS hands out, and it is resident by
+; contract (SPEC.md 61.4 - there is no paging, so a story that does not fit is
+; REFUSED). A heap that cannot compact around it is a heap where the second
+; story of a session does not open.
+;
+; The story costs three words and not one, and the extra two are the whole
+; difficulty §61.3 describes:
+;
+;   [zf_sseg]    the base itself
+;   [zf_pcseg]   THE PROGRAM COUNTER, which is a live segment INTO the story
+;                and must be shifted rather than set - the PC is somewhere in
+;                the middle of it, not at its start
+;   [zf_sdelta]  the running total, which zi_yield differences to fix an ES
+;                that was pushed before the move (66.5.9)
+;
+; What costs NOTHING is everything else the Z-machine holds, and that is a
+; property of the design rather than luck: zm_pcaddr turns the live ES:SI back
+; into a 20-bit STORY ADDRESS, so every return address in every frame on the
+; Z-stack, every object pointer and every packed address is relative to the
+; base and survives a move untouched.
+;
+; The Z-stack and the undo snapshot are one word each. Neither is a file
+; target and both are addressed by loading ES immediately before a burst of
+; string ops (zi_zsw/zi_zsp do it per WORD), so there is no derived segment
+; anywhere to fall out of step.
+; -----------------------------------------------------------------------------
+zf_reloc:
+    cmp bx, [zf_sseg]
+    jne .stack
+    mov [zf_sseg], dx
+    push ax
+    mov ax, dx
+    sub ax, bx                      ; AX = the paragraph delta
+    add [zf_sdelta], ax
+    cmp word [zf_pcseg], 0          ; 0 = no PC yet: a story claimed but not
+    je .nopc                        ; booted, and zx_boot writes it shortly.
+    add [zf_pcseg], ax              ; Adding to 0 would invent an address
+.nopc:
+    pop ax
+    ret
+.stack:
+    cmp bx, [zf_stkseg]
+    jne .undo
+    mov [zf_stkseg], dx
+    ret
+.undo:
+    cmp bx, [zi_undoseg]
+    jne .out
+    mov [zi_undoseg], dx
+.out:
     ret
 
 ; -----------------------------------------------------------------------------

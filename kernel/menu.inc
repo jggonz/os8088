@@ -1867,6 +1867,16 @@ menu_save_kb:
     ret
 
 ; -----------------------------------------------------------------------------
+; menu_reloc - the compactor moved the save-under (SPEC.md 66.2). One word,
+; re-read at every use: menu_drop loads it to save, menu_undrop to restore, and
+; nothing holds a pointer into it across the tracking loop's yields.
+menu_reloc:
+    cmp bx, [menu_sseg]
+    jne .out
+    mov [menu_sseg], dx
+.out:
+    ret
+
 menu_drop:
     push bx
     push cx
@@ -1883,6 +1893,11 @@ menu_drop:
     call mem_claim
     jc .noclaim                 ; refused: the restore repaints instead
     mov [menu_sseg], dx
+    push ax                     ; ...and MOVABLE (SPEC.md 66.5.6). It is only
+    mov ax, menu_reloc          ; 20KB and only lives for one menu - but that
+    mov bx, MEM_K_SAVE          ; is 20KB sitting mid-arena at exactly the
+    call mem_movable            ; moment a MENU COMMAND claims, which is one of
+    pop ax                      ; the commonest ways a claim happens at all
 .noclaim:
 
     ; --- save the pixels under the menu to the claimed buffer -----------------

@@ -195,6 +195,15 @@ rd_fsv:
                                 ; of it. The row still exists because the
                                 ; table is indexed by verb and dispatching
                                 ; past its end is a wild far call
+    dw 0                        ; FSV_RMTREE - DECLINED, on the same reasoning
+                                ; and for the same job (SPEC.md 62.10.7). The
+                                ; kernel's fallback for an unpublished verb is
+                                ; the empty-only FSV_RMDIR, which is what every
+                                ; redirected volume did before the verb
+                                ; existed, and this is the only DRVC_FILE
+                                ; driver that can exercise it. There is no win
+                                ; to give up either: a RAM-disk tree is a table
+                                ; walk whichever side does it
 rd_fsv_end:
 %if rd_fsv_end - rd_fsv != FSV_SIZE
   %error "ramdisk: the FSV_* table is not FSV_SIZE bytes - a swallowed row?"
@@ -296,9 +305,36 @@ rd_arena_get:
     call OSAPI_MEM_CLAIM        ; owner = our segment, so drv_release sweeps
     jc .none                    ; it even if detach somehow does not
     mov [rd_arena], dx
-    ret
+    mov ax, rd_reloc            ; ...and it MOVES (SPEC.md 66.5.10): the
+    call OSAPI_MEM_MOVABLE      ; largest claim any driver here makes, and
+    ret                         ; live for as long as the volume is mounted
 .none:
     mov word [rd_arena], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; rd_reloc - the compactor moved the store (SPEC.md 66.5.10)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing; preserves every register
+;
+; ONE word, and the reason is the same one that makes the SB pool one word
+; (§66.5.5): nothing outside this file ever sees the arena. A handle here is
+; an OFFSET into it - the directory rows, the extent numbers, every RDE_*
+; field - and the three blitters load ES or DS from [rd_arena] immediately
+; before the rep movsb that uses it, so there is no derived segment anywhere
+; to fall out of step. rd_blit_prog reports progress between chunks and is
+; safe for the same reason: it re-enters rd_blit_user, which re-reads.
+;
+; It has no worker, so it needs no OSAPI_TASK_PARK of its own - but §66.5.5's
+; rule still binds it, because that rule is all-or-nothing across every
+; TF_SERVICE task on the machine: a Sound Blaster stream mid-refill pins this
+; arena too, and there is no handle finer than that.
+; -----------------------------------------------------------------------------
+rd_reloc:
+    cmp bx, [rd_arena]
+    jne .out
+    mov [rd_arena], dx
+.out:
     ret
 
 ; Every row starts free, then the seeds are laid in ORDER so that row i is

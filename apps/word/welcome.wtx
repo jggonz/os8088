@@ -1,4 +1,4 @@
-; apps/word/welcome.wtx - the shipped WELCOME.DOC's source (SPEC.md 65.4).
+; apps/word/welcome.wtx - the shipped WELCOME.DOC's source (SPEC.md 68.4).
 ; One paragraph per line; leading '.'-directives set the paragraph format,
 ; {b}..{/b}-style spans set character formats, a literal tab is a tab.
 ; tools/os88doc.py turns this into a native .DOC deterministically.

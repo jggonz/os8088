@@ -221,6 +221,64 @@ here, and it is the one to repeat if anything in that block changes.
 
 ---
 
+## The IBM 5150 #2 — `Elendilon/os8088`'s, the "not period" one
+
+**The same CPU as the calibration machine and none of its discipline**, and
+that is what it is *for*. The 5150 above is kept entirely period so its disk
+and floppy timings mean what they say; this one carries a modern multi-function
+card, so it is the box that can answer questions the period machine cannot —
+and the box whose timings must never be quoted as field numbers.
+
+It is also where the **VGA** in this register lives, and therefore the only
+real machine that can test SPEC.md §39's VGA paths and §39.11's VGA-plus-mono
+pairing at all.
+
+| | |
+|---|---|
+| owner | **`Elendilon/os8088`** |
+| machine | **IBM PC 5150**, Intel 8088 at 4.77 MHz — stock, not turbo |
+| memory | **640 KB**: 256 KB on the board, **384 KB on an ISA expansion card** |
+| keyboard | a generic AT keyboard through an **AT→XT adapter**, so the keyboard is *not* a Model F. Worth knowing before any §9.6/§9.7 scancode result is read off it |
+| video | **PVGA1A-JK, 256 KB** (a Western Digital / Paradise chip) as primary, **plus the Hercules GB101 moved over from 5150 #1** |
+| the modern card | a **Picomem**, playing drive A and B (360 KB), a hard disk, an AdLib, a Sound Blaster (needs a rebuilt PMInit before os8088 sees it), an NE2000 and EMS |
+| period | **no.** Every storage timing on this machine is the Picomem's, not a drive's — so **nothing from here goes into PERFORMANCE.md Part 2**, and a disk number taken here answers a question about the emulated device |
+
+**What it has found, in its first session:**
+
+- **The Hercules was not detected** with the VGA primary — SPEC.md §39.11.1.1.
+  A Hercules whose configuration switch has never been written is an MDA, 4 KB
+  aliased upward, and the memory probe correctly rejects that signature; the
+  probe now writes 3BFh and asks again, and `[vid_hprobe]` (in `sysbench`'s
+  video block) says which answer it took. The same shape had already been seen
+  on 86Box and filed as a difference between the model and the card — it was
+  not.
+- **The screen recoloured after a few minutes** — **FIXED, and it was the
+  card**: four socketed chips pulled, sockets cleaned with DeoxIT, reseated,
+  and a whole clean session afterwards (docs/FIELD-NOTES.md 24.1.3). The chase
+  is worth reading for its shape: every shape on screen stayed intact while
+  every colour moved, which ruled out display RAM; the trigger turned out to be
+  **drawing volume** — a drag corrupts instantly, sixty idle seconds do not,
+  mode 6 never does — which ruled out time, the disk and the kernel in turn and
+  left contact resistance under burst load. It also cost this tree a flawed
+  instrument: the DAC readback row did not correlate with the screen and is now
+  taken twice so it can say when it is lying (§39.21) — **which it did on its
+  first outing**, two sums of the same sixteen entries disagreeing in one pass
+  (FIELD-NOTES 24.1.4).
+- **The extended desktop runs on it** — VGA primary at (0,0) 640x480, Hercules
+  at **(640, 20)** 720x348, `displays brought up 2`, both monitors live. That
+  origin is §39.19.3 on iron: the second monitor's top row is the DESKTOP's
+  band, not the screen's, so it does not spend `MBAR_H` rows on a menu bar it
+  does not carry. **This is the first real hardware the feature has ever run
+  on**, and PERFORMANCE.md Sets 62 and 63 are its first numbers.
+- **…and so did the Hercules, once the desktop could reach it** — wavy, "out
+  of phase". A Hercules has no palette at all, so that cannot be the same
+  fault; two cards misbehaving on one machine, a mode set repairing the VGA,
+  and mode 6 never failing point at the **supply or the bus** rather than at
+  either card (FIELD-NOTES 24.2). This backplane is 384KB of ISA RAM, a
+  Picomem and two video cards on a 63.5W 5150 supply.
+
+---
+
 ## The Toshiba T1100 Plus — `Elendilon/os8088`'s, and the only 8086 in the register
 
 The second real machine, and it earns its place by being *nearly* the target
@@ -726,7 +784,7 @@ updates, which is exactly why the shipped images stopped being tracked.
   is what lets one disk carry a set from both cards without either file
   overwriting the other.
 - **For the second card, do not swap disks: switch the display.** Control
-  Panel ▸ **Display** ▸ pick the other adapter ▸ **Activate Mode** (SPEC.md
+  Panel ▸ **Display** ▸ pick the other adapter ▸ **Set Primary** (SPEC.md
   §31.10/§39.11), then run `GFXBENCH.O88` again. It re-reads the geometry
   from `OSAPI_VIDEO` at run time, so the second run is the same measurement
   on the other card and it names its own file. That is the whole reason the

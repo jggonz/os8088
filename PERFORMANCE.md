@@ -6552,7 +6552,94 @@ erase fill, so the capture shows the outgoing page underneath — the summary li
 themselves are the evidence, and the two-pixel claim rests on `tm_rowfill`'s span
 rather than on the picture.
 
-### Set 62 — a composed band against the face it replaces (SPEC.md §5.4.2)
+### Set 62 — the first VGA field set, off 5150 #2
+
+**Machine: `Elendilon/os8088`'s IBM PC 5150 #2** (docs/FIELD-MACHINES.md) —
+stock 8088 at 4.77MHz, 640KB, **PVGA1A-JK VGA, 256KB**, mode 12h at 640x480x4.
+Not the calibration machine and deliberately not period: its storage is a
+Picomem, so **no disk row from it belongs in Part 2**. Drawing is another
+matter — the CPU is a stock 8088 and the card is a real PVGA1A on a real ISA
+bus, and nothing in the drawing path touches the Picomem. **These are the
+first VGA numbers this project has ever had off real hardware**; every
+calibrated figure in Part 2 came off Hercules and CGA.
+
+Taken after the machine's colour fault was repaired (docs/FIELD-NOTES.md 24.1.3),
+on a session with no corruption in it.
+
+| row | 5150 #2, VGA | Part 2, mono (5150 #1) |
+|---|---|---|
+| `GFX_PIXEL` | **505.4 us** | ~756 us fixed per call |
+| `GFX_FILL 8x8` | **593.5 us** | — |
+| `GFX_FILL 64x64` | 3,922 us | — |
+| `GFX_FILL 256x1` | 620.5 us | — |
+| `FONT_CHAR one cell` | **620.4 us** | ~1 ms |
+| `FONT_RUN 10 aligned` | 7,029 us | — |
+| `FONT_RUN 10 skewed` | 7,882 us | — |
+| `GFX_UNLOCK+LOCK pair` | 316.3 us | — |
+| `WM_CLIP_TEST` | 71.5 us | — |
+| boot | **155 ticks** (8.5 s) | 181 (Set 18) |
+
+**The headline is that VGA is FASTER per call than the mono adapters**, which
+is the opposite of the assumption a reader would carry in from Part 2's "756us
+of fixed cost" and worth stating plainly. A planar write puts eight pixels
+across four planes into one store through Set/Reset, where the 1bpp renderer
+does a read-modify-write for anything unaligned; the per-call floor lands at
+~505 us against mono's ~756, and a glyph cell at 620 us against ~1 ms.
+
+**What this does NOT license.** Part 2's constants stay as they are: they are
+the *calibration* machine's, on the *target* adapters, and SPEC.md's redraw
+budgets are written against them. This set is a second column, not a
+replacement — and the honest reading of it is that **the mono adapters are the
+slow case and sizing against them is still right**.
+
+**Alignment shows here too**: `FONT_RUN 10 aligned` 7,029 us against `skewed`
+7,882 — **12.1%**, which is within a whisker of §11.94's `gfxbench`-under-icount
+figure of 12.5% for the same pair. An independent confirmation on iron of a
+number that had only ever been counted in instructions.
+
+### Set 63 — a STRADDLED window, priced on iron, and what it costs
+
+Same machine and session as Set 62 (5150 #2, VGA primary + Hercules extended
+right), with the `gfxbench` window **across the seam** — `displays 2`,
+`sandbox display 0`, **`sandbox straddles 1`**, which the report says itself.
+The first measurement of SPEC.md §39.14's per-display split on real cards.
+
+| row | VGA alone | straddled | x |
+|---|---|---|---|
+| `GFX_PIXEL` | 505.4 us | 930.1 us | **1.84** |
+| `GFX_FILL 8x8` | 593.5 | 1,036.1 | 1.75 |
+| `GFX_FILL 64x64` | 3,922.6 | 4,478.0 | 1.14 |
+| `GFX_FILL 256x1` | 620.5 | 2,437.3 | **3.93** |
+| `FONT_CHAR one cell` | 620.4 | 851.1 | 1.37 |
+| `FONT_RUN 10 aligned` | 7,028.8 | 8,715.5 | 1.24 |
+| `GFX_BLIT4 solid` | 39,498.8 | 164,777.2 | **4.17** |
+| `GFX_UNLOCK+LOCK pair` | 316.3 | 322.8 | 1.02 |
+| `WM_CLIP_SET+CLEAR` | 549.9 | 574.2 | 1.04 |
+
+**The shape is the finding, not the ratios.** A straddling primitive is issued
+twice — once per display, through `gfx_disp_run` — so a *small* operation pays
+close to double (`GFX_PIXEL` 1.84x, `GFX_FILL 8x8` 1.75x) because it is nearly
+all fixed cost, and a *large* one pays much less (`GFX_FILL 64x64` 1.14x)
+because the per-scan-line work is split between the two halves rather than
+duplicated. Anything that does not draw is untouched: the lock pair and
+`wm_clip_set` are within 4%, which is measurement noise.
+
+**The two outliers are the two that change SHAPE, and both are documented.**
+`GFX_FILL 256x1` at 3.93x is a 256px-wide row against a 640px display: split
+at the seam it becomes two fills of a few dozen pixels each, so it lands on the
+per-call floor twice and loses the whole benefit of being one wide rect.
+`GFX_BLIT4` at 4.17x is SPEC.md §39.14.7.1's gate doing exactly what it says —
+a straddled blit gives up §5.4.1's fast path and every coalesced run becomes a
+`gfx_fill`, which is the trade that section made deliberately after the
+extended-desktop Paint regression.
+
+**None of this is a number to design against**, and that is worth stating
+plainly: a straddled window is a transient state a user creates by dragging,
+not a configuration anything runs in. What the set is for is that the cost was
+modelled in §39.14 and had never been weighed on iron; it is 1.1x–1.8x for
+ordinary drawing and 4x for the two shapes that were already known to
+degenerate.
+### Set 64 — a composed band against the face it replaces (SPEC.md §5.4.2)
 
 Emulator: QEMU under `-icount shift=3,sleep=off`, so the PIT counts guest
 instructions; one count is **0.359 ms of real XT** (Part 2's conversion).

@@ -292,7 +292,7 @@ def main(argv):
         v = VD(m)
         say("primary swapped: %s" % v)
         if v.kind == was.kind:
-            fail.append("Activate did not move the primary off adapter %d"
+            fail.append("Set Primary did not move the primary off adapter %d"
                         % was.kind)
         elif v.ndisp != 2:
             fail.append("swapping the primary lost the extended desktop "

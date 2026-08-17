@@ -468,6 +468,74 @@ fsx_mode:
     ret
 
 ; -----------------------------------------------------------------------------
+; fsx_surf - the rect this bracket owns (SPEC.md 53.7.1, slot 0x03F8)
+;
+; in:       nothing. Bracket-only, exclusive task only.
+; out:      CF=0 with AX = x, BX = y, CX = w, DX = h - the surface the app may
+;           draw on, in the coordinates the DRAWING SLOTS take. CF=1 outside a
+;           bracket or on the wrong task, with every register preserved.
+;
+; A SAME-MODE BRACKET (SPEC.md 53.7) DOES NOT COLLAPSE THE DESKTOP (39.18.3),
+; so inside one the coordinate system is still the whole virtual desktop -
+; and an app that reads "fullscreen" as (0,0) plus OSAPI_VIDEO's size then
+; draws on the PRIMARY however far away its own window is. Measured on a
+; cycle-accurate XT with a VGA and a Hercules extended right, Tracker's
+; window wholly on the Hercules: pressing F took the VGA from 189,477 lit
+; pixels to 95,619 - the FT2 screen, on the monitor Tracker is not on - while
+; the Hercules kept the stale windowed desktop it had. Both come back on the
+; way out, because SPEC.md 53.6's wm_paint_all repaints the world, so what
+; this defect costs is the whole of the fullscreen session and nothing after
+; it: "switching Tracker to full screen corrupts the other screen".
+;
+; Missile Command never had it because it stacks SPEC.md 11.2 on the bracket
+; and wm_fullscreen sizes the window to THE DISPLAY IT IS ON (39.17.1) - so
+; its geometry came out of the window record and was already right. This is
+; that same answer for the two consumers that deliberately take no 11.2
+; surface (SPEC.md 42.7's measured reason), handed over rather than derived.
+;
+; IT ANSWERS (0,0,w,h) ON EVERY ONE-DISPLAY MACHINE and after any fsx_mode
+; call, because the collapse has then run and the machine really is one
+; display at the virtual origin - which is exactly what those apps used to
+; hard-code, so a single-display machine cannot see this change at all.
+;
+; The extent comes out of the DISPLAY'S RECORD and not out of [vid_cw]: the
+; live block follows vid_ctx_act, which every straddling primitive moves, so
+; a read of it answers about whichever display the last drawing call touched.
+; -----------------------------------------------------------------------------
+fsx_surf:
+    push di
+    push ax
+    mov ah, [fsx_task]
+    cmp ah, 0xFF
+    je .fail
+    cmp ah, [sch_cur]
+    jne .fail
+    pop ax
+    xor ax, ax
+    xor bx, bx
+    mov cx, [vid_cw]
+    mov dx, [vid_ch]
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    jbe .done
+    mov al, [fsx_wdisp]
+    call vid_ctx_ptr            ; DI = that display's record; AX preserved
+    mov ax, [di+VID_CTX_VX]
+    mov bx, [di+VID_CTX_VY]
+    mov cx, [di+VID_CTX_CW]
+    mov dx, [di+VID_CTX_CH]
+.done:
+%endif
+    pop di
+    clc
+    ret
+.fail:
+    pop ax
+    pop di
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; fsx_setbios - int 10h AH=00h with everything banked. A mode set is rare
 ; and some BIOSes scribble more than AX, so the insurance is cheap where it
 ; matters and paid nowhere hot.

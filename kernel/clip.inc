@@ -100,6 +100,11 @@ clip_put:
     call mem_claim              ; out CF = 0, DX = base segment
     jc .toobig                  ; clip_drop already emptied it
     mov [clip_seg], dx
+    push ax                     ; ...and MOVABLE (SPEC.md 66.5.6): one word,
+    mov ax, clip_reloc          ; read immediately before each copy, and a
+    mov bx, MEM_K_CLIP          ; claim that outlives the app that filled it -
+    call mem_movable            ; so it is long-lived by design and exactly
+    pop ax                      ; the shape that ends up mid-arena
     mov [clip_kb], ax
 .room:
     mov [clip_bytes], cx        ; while DS is still ours
@@ -228,6 +233,18 @@ clip_drop:
     pop bx
     pop ax
     popf
+    ret
+
+section .text
+
+; clip_reloc - the compactor moved the clipboard (SPEC.md 66.2). One word:
+; clip_put and clip_get each load it immediately before their rep movsb, and
+; nothing derives anything from it.
+clip_reloc:
+    cmp bx, [clip_seg]
+    jne .out
+    mov [clip_seg], dx
+.out:
     ret
 
 section .bss

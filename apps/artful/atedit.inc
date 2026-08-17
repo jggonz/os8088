@@ -1371,6 +1371,10 @@ at_ualloc:
     call OSAPI_MEM_CLAIM            ; AX KB -> DX segment (SPEC.md 50.3)
     jc .no
     mov [at_aseg], dx
+    push ax                         ; the arena moves too (SPEC.md 66.5.7):
+    mov ax, at_reloc                ; [at_coff]/[at_usz]/[at_csz] are OFFSETS
+    call OSAPI_MEM_MOVABLE          ; and spans within it, so at_reloc has one
+    pop ax                          ; more word to fix and nothing else
     mov [at_usz], bx
     mov dx, bx
     add dx, bx

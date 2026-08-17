@@ -110,6 +110,29 @@ NF_RMDIR    equ 'K'             ; folder, name -> status
 NF_COPY     equ 'Y'             ; src folder, dst folder, name -> status. Both
                                 ; ends are OURS, so the file never crosses the
                                 ; cable (SPEC.md 62.9.8)
+NF_ENUM     equ 'E'             ; folder, ordinal -> status, ONE 32-byte entry.
+                                ; NF_LIST is about the folder the master is
+                                ; STANDING in; this is about any folder at all,
+                                ; which is what a recursive COPY walks its
+                                ; source with (SPEC.md 62.10.6)
+NF_RMTREE   equ 'T'             ; folder, name -> status. NF_RMDIR's frame and
+                                ; a DIFFERENT COMMAND, which is 62.10.1's rule
+                                ; and also the safe way round: a far side built
+                                ; before this verb ignores an unknown letter,
+                                ; where a mode flag on RMDIR would have made an
+                                ; old one empty a folder and answer OK
+
+RT_DEPTH    equ 16              ; how deep the walk will go before refusing.
+                                ; The REAL bound is rtpath overflowing - DOS's
+                                ; own path limit gets there first - and this is
+                                ; the belt to that brace
+RT_PATHMAX  equ 95              ; ...and that bound, in characters. The longest
+                                ; thing rt_build can produce is this + '\' +
+                                ; a 12-character 8.3 name + a NUL, which is
+                                ; what sizes the buffer below - so the WRITE
+                                ; can never overrun and the length test is
+                                ; about the RESULT rather than about the room
+RT_BUFSZ    equ RT_PATHMAX + 1 + 12 + 1 + 3
 
 ; A FILE-MODE STATUS IS A FERR_* AND A BLOCK-MODE ONE IS AN INT 13H CODE, and
 ; they are NOT the same numbering however alike two small integers look. The
@@ -124,6 +147,8 @@ FERR_NAME   equ 3
 FERR_NOENT  equ 4
 FERR_EXIST  equ 5
 FERR_FULL   equ 6
+FERR_DIRFULL equ 7              ; ...and what srv_rmtree answers for a path it
+                                ; cannot name (62.10.7.2)
 FERR_PROT   equ 8
 FERR_WPROT  equ 9
 
@@ -331,6 +356,10 @@ serve:
     je  .frmdir
     cmp al, NF_COPY
     je  .fcopy
+    cmp al, NF_ENUM
+    je  .fenum
+    cmp al, NF_RMTREE
+    je  .frmtree
     jmp short .cmd
 
 .fwrite:
@@ -357,6 +386,10 @@ serve:
     call srv_rmdir
     jc  .out
     jmp .cmd
+.frmtree:
+    call srv_rmtree
+    jc  .out
+    jmp .cmd
 .fcopy:
     call srv_copy
     jc  .out
@@ -364,6 +397,10 @@ serve:
 
 .flist:
     call srv_list
+    jc  .out
+    jmp .cmd
+.fenum:
+    call srv_enum
     jc  .out
     jmp .cmd
 .fchdir:
@@ -1009,6 +1046,214 @@ srv_list:
     ret
 .lost:
     pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_enum - NF_ENUM: a handle and an ORDINAL -> status and ONE entry
+; out: CF=1 = the link went away
+;
+; This is the verb a FOLDER copy walks its source with, and it is deliberately
+; not NF_LIST with a count of one. LIST is about the folder the master is
+; standing in and appends into its one global listing; a recursive copy walks
+; a folder several levels below that and must disturb neither (SPEC.md
+; 62.9.7). So the folder is an argument and nothing here touches the cwd.
+;
+; THREE STATUSES, AND THE THIRD IS THE POINT. `NST_OK` means an entry follows.
+; `FERR_NOENT` means PAST THE LAST ENTRY, which is how every walk of every
+; folder finishes and is not an error. `FERR_IO` means this folder could not
+; be walked at all - a handle we never issued, or DOS refusing the path - and
+; it must not be reported as the end, because the master's end-of-folder
+; answer is the same `CF=1, AX=0` an absent verb gives: fcp_scan would take an
+; unwalkable subdirectory for an empty one and report a paste DONE over a
+; subtree it never copied.
+;
+; The 32 bytes go out whatever the status said (62.10.1's fixed frame), so a
+; refusal costs the master one blank entry and never a resynchronisation.
+;
+; THE COUNTDOWN IS IN BX AND NOT CX, which is srv_count's own choice for the
+; same reason: `srv_first` spends CX on findfirst's attribute mask, and BX is
+; the register DOS's findfirst/findnext are already trusted to preserve here.
+; -----------------------------------------------------------------------------
+srv_enum:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call lp_rword               ; the folder's handle
+    jc  .lost
+    mov [srv_h], ax
+    call lp_rword               ; ...and how far into it
+    jc  .lost
+    mov [srv_ord], ax
+
+    cmp byte [wholemc], 0       ; the whole-machine root is a list of DRIVES,
+    je  .named                  ; exactly as srv_list answers it - and it is
+    cmp word [srv_h], 0         ; answered FIRST, because hd_path refuses that
+    jne .named                  ; handle on purpose (it has no path of its own)
+    call srv_drv_nth
+    jmp short .out
+
+.named:
+    call hd_path                ; -> pathbuf, or CF=1 for a handle we never
+    jc  .nodir                  ; issued
+    mov bx, [srv_ord]
+    call srv_first
+    jc  .none
+.step:
+    call srv_keep               ; CF=0 = one we would show, so the ordinal
+    jc  .skip                   ; counts the same entries the LISTING does
+    or  bx, bx
+    jz  .found
+    dec bx
+.skip:
+    call srv_more
+    jnc .step
+
+    ; NOTHING LEFT - BUT IS THAT AN EMPTY FOLDER OR A FOLDER THAT IS GONE?
+    ; DOS answers findfirst with error 2 for BOTH, so the walk alone cannot
+    ; tell them apart, and this verb's whole contract is that it must: the end
+    ; of a folder is `FERR_NOENT` and a folder that cannot be walked is
+    ; `FERR_IO`, because the master reads the first as `CF=1, AX=0` and would
+    ; take a vanished subdirectory for an empty one - a paste reporting DONE
+    ; over a subtree that is not there. So the folder itself is stat'd, and
+    ; only HERE: once per walk rather than once per entry, and never on the
+    ; ordinary path where an entry was found.
+    ;
+    ; The root is exempt because it always exists and because `findfirst` on a
+    ; bare `C:\` is not a question DOS has a good answer to.
+.none:
+    cmp word [srv_h], 0
+    je  .end
+    call srv_isdir              ; pathbuf: still a directory? CF=1 = no
+    jc  .nodir
+    jmp short .end              ; ...it is there and it is empty
+
+.found:
+    call srv_ent                ; the DTA -> entbuf, registering a handle for
+                                ; a folder or a package exactly as a listing
+                                ; does - a copy DIVES on that handle
+
+    ; A FOLDER THAT GOT HANDLE 0 IS A FULL TABLE, AND IT IS A REFUSAL HERE.
+    ; `hd_get` answers 0 when `hdtab`'s 64 slots are gone, and 0 IS THE ROOT
+    ; (62.9.1's convention) - so a copy engine handed it would `chdir` to the
+    ; root and start copying the whole volume into a subfolder of itself,
+    ; bounded only by the engine's depth limit and silent the whole way.
+    ; `srv_stat` learned the same lesson at 62.10.4.7 and for the same reason:
+    ; a success the caller cannot use is worse than a refusal. A LISTING
+    ; cannot say this - it has one status for the whole frame - which is
+    ; another thing the per-entry verb buys.
+    cmp word [entbuf + DE_TYPE], 2
+    jne .send
+    cmp word [entbuf + DE_HAND], 0
+    je  .nodir
+.send:
+    mov al, NST_OK
+    call lp_sbyte
+    jc  .lost
+    call srv_put
+    jc  .lost
+    jmp short .out
+
+.end:
+    mov al, FERR_NOENT          ; the ordinary end of a walk
+    jmp short .blank
+.nodir:
+    mov al, FERR_IO             ; ...and NOT the end: see the header
+.blank:
+    call lp_sbyte
+    jc  .lost
+    call srv_blank
+    call srv_put                ; the entry is owed whatever the status said
+    jc  .lost
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; srv_drv_nth - the whole-machine root's Nth live drive, as one ENUM reply
+; out: CF=1 = the link went away
+;
+; srv_drives' scan with the send taken out of the loop. The two are not folded
+; together because they answer different frames - a count and every entry
+; against a status and one - and the shared part is `drive_live`, which is
+; already a routine.
+; -----------------------------------------------------------------------------
+srv_drv_nth:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, [srv_ord]
+    mov cx, 26
+    mov dl, 1
+.scan:
+    call drive_live             ; DL and CX preserved by contract
+    jc  .next
+    or  bx, bx
+    jz  .found
+    dec bx
+.next:
+    inc dl
+    loop .scan
+    mov al, FERR_NOENT          ; past the last drive: the end of the root
+    call lp_sbyte
+    jc  .lost
+    call srv_blank
+    call srv_put
+    jc  .lost
+    jmp short .out
+.found:
+    call srv_blank
+    mov al, dl
+    add al, 'A' - 1
+    mov [entbuf], al            ; 'C:' - a NAME, and the kernel prints it as
+    mov byte [entbuf+1], ':'    ; one (SPEC.md 26.4)
+    mov byte [entbuf+2], 0
+    mov word [entbuf + DE_TYPE], 2
+    push dx
+    xor ax, ax                  ; parent = the root
+    mov si, entbuf
+    call hd_get
+    pop dx
+    mov [entbuf + DE_HAND], ax
+    mov al, NST_OK
+    call lp_sbyte
+    jc  .lost
+    call srv_put
+    jc  .lost
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
     pop si
     pop dx
     pop cx
@@ -2479,6 +2724,409 @@ srv_name1:
     ret
 
 ; -----------------------------------------------------------------------------
+; srv_rmtree - NF_RMTREE: a folder AND EVERYTHING IN IT (SPEC.md 62.10.7)
+; out: CF=1 = the link went away
+;
+; The most destructive verb this program serves, and the one the master cannot
+; check for itself: os8088 has no way to see what is inside a folder on this
+; machine without asking, so what a WHOLE VOLUME is and what is PROTECTED are
+; questions only this side can answer.
+;
+; ONE THING IS REFUSED OUTRIGHT: a whole volume. Under /W the first level of
+; the synthetic root IS a drive (62.10.2), so a name in the root resolves to
+; `C:` and this would be a DOS machine's entire disk. Nothing else is
+; special-cased, because the fence is already drawn: WITHOUT /W the root is the
+; served folder, a name can only ever be one of its children, and the root
+; itself is unnameable - so there is no path out of the subtree by
+; construction rather than by a test.
+;
+; Two more refusals are INHERITED rather than added. A read-only, hidden or
+; system entry stops the walk with FERR_PROT, which is letter for letter what
+; os8088's own FAT recursive delete does (dskw_dbody_n83's DSKW_PROT test) -
+; this is somebody's real disk and a file they protected is not ours to guess
+; about. And /RO refuses before anything is touched, through the wr_gate every
+; other write verb goes through.
+;
+; A PARTIAL DELETE IS POSSIBLE AND IS NOT A BUG. The tree is emptied depth
+; first, so a refusal part way leaves the deletions already made - which is the
+; FAT path's own behaviour, and its own comment is "stop, and go home".
+; -----------------------------------------------------------------------------
+srv_rmtree:
+    mov byte [sf_wtag], 'T'
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call wr_arg                 ; the handle and the name, then pathbuf and
+    jc  .lost                   ; wildbuf = the subtree's root
+    call wr_gate
+    jc  .gsay                   ; /RO, with every argument off the wire
+
+    ; A WHOLE VOLUME IS NOT DELETABLE, and this test comes BEFORE the
+    ; `srv_ok` one for the reason srv_list and srv_enum both give about the
+    ; same handle: under /W, `hd_path` REFUSES the root on purpose - its first
+    ; level IS a drive, so the root has no path of its own - and `wr_arg`
+    ; therefore leaves srv_ok = 0. Tested the other way round the fence never
+    ; fires at all: the drive survives, because DOS will not rmdir `C:`
+    ; either, but the answer is `no such folder` for the most important
+    ; refusal this program makes. A refusal that reports the wrong REASON is
+    ; a refusal nobody can act on, and it is one edit away from not being a
+    ; refusal at all.
+    cmp byte [wholemc], 0
+    je  .fenced
+    cmp word [srv_h], 0
+    jne .fenced
+    mov al, FERR_PROT
+    call wr_done
+    jmp .out
+
+.fenced:
+    cmp byte [srv_ok], 0
+    je  .nodir                  ; a handle we never issued
+
+    mov si, wildbuf             ; the subtree's root, banked as the working
+    call rt_fits                ; path: every pass below rebuilds wildbuf.
+    jc  .toodeep                ; MEASURED FIRST - str_cpy96 would TRUNCATE,
+    mov si, wildbuf             ; and a truncated path names a different folder
+    mov di, rtpath
+    call str_cpy96
+    mov word [rtdep], 0
+
+    ; IS IT A FOLDER AT ALL? A file here is dskw_delete's job and answering OK
+    ; would delete it, which is a verb doing another verb's work.
+    call rt_stat
+    jc  .noent
+    test byte [dtabuf + DTA_ATTR], 0x10
+    jz  .isfile
+
+.pass:
+    ; --- the first entry we can see in rtpath, if there is one --------------
+    call rt_first               ; CF=1 = the folder is empty
+    jc  .empty
+    mov al, [dtabuf + DTA_ATTR]
+    test al, 0x07               ; read-only | hidden | system: stop, and say so
+    jnz .prot
+    test al, 0x10
+    jnz .down
+
+    call rt_join                ; rtpath + '\' + the DTA's name -> wildbuf
+    jc  .toodeep
+    mov al, 'T'
+    call say_file
+    mov dx, wildbuf
+    mov ah, 0x41                ; delete the file where it stands
+    int 0x21
+    jc  .doserr
+    jmp short .pass
+
+.down:
+    call rt_push                ; ...into it: rtpath += '\' + the DTA's name
+    jc  .toodeep
+    jmp short .pass
+
+.empty:
+    push si                     ; ...and SAY SO, lower case, which is the same
+    push di                     ; convention the copy's two ends use ('Y'/'y').
+    mov si, rtpath              ; This is the most destructive verb here and
+    mov di, wildbuf             ; the two machines are usually in different
+    call str_cpy96              ; rooms (62.10.5): the log is the only record
+    pop di                      ; of what went, and one that named the files
+    pop si                      ; and not the folders would be half of it
+    mov al, 't'
+    call say_file
+    mov dx, rtpath              ; nothing left in it, so it can go
+    mov ah, 0x3A
+    int 0x21
+    jc  .doserr
+    cmp word [rtdep], 0
+    je  .done                   ; that was the folder we were asked about
+    call rt_pop                 ; ...otherwise climb, and carry on emptying
+    jmp short .pass
+
+.done:
+    mov al, FERR_OK
+    call wr_done
+    jmp short .out
+.doserr:
+    call dos_ferr               ; AX = DOS's code -> AL = a FERR_*
+    call wr_done
+    jmp short .out
+.prot:
+    mov al, FERR_PROT
+    call wr_done
+    jmp short .out
+.isfile:
+    mov al, FERR_PROT           ; a FILE: dskw_delete's job, not this one
+    call wr_done
+    jmp short .out
+.toodeep:
+    mov al, FERR_DIRFULL        ; the path will not fit, so we cannot name the
+    call wr_done                ; folder we would be deleting
+    jmp short .out
+.noent:
+    mov al, FERR_NOENT
+    call wr_done
+    jmp short .out
+.gsay:
+    mov al, FERR_WPROT
+    call wr_done
+    jmp short .out
+.nodir:
+    mov al, FERR_NOENT
+    call wr_done
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.lost:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; rt_first - the first entry of rtpath that is not '.' or '..'
+; out: CF=0 and the DTA holds it; CF=1 = there is nothing left
+;
+; THERE IS NO DTA STACK, and that is the design rather than a shortcut. DOS
+; keeps findfirst/findnext state IN THE DTA, so a recursive walk wants one per
+; level - 43 bytes each, at a depth nobody can bound in advance. The kernel's
+; own FAT recursive delete solved this years ago and this is that algorithm:
+; delete the first thing you can see, descend into a folder, and remove a
+; folder once it is empty. Every pass re-runs findfirst from scratch, so the
+; only state is a path string and a counter.
+;
+; It asks for 0x16 - directories, hidden AND system - because srv_rmtree has
+; to SEE a protected entry to refuse it. srv_keep would make one invisible,
+; and the folder would then simply never empty.
+; -----------------------------------------------------------------------------
+rt_first:
+    push ax
+    push cx
+    push dx
+    call rt_wild                ; rtpath + '\*.*' -> wildbuf
+    mov dx, wildbuf
+    call rt_ff16
+    jc  .none
+.test:
+    cmp byte [dtabuf + DTA_NAME], '.'
+    jne .have                   ; '.' and '..' are the only names DOS returns
+    mov ah, 0x4F                ; that start with one
+    int 0x21
+    jnc .test
+.none:
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+.have:
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+
+; rt_stat  - findfirst on rtpath ITSELF, so its attribute can be read
+; srv_isdir - the same for pathbuf, and it also checks the directory bit
+; out: CF=1 = no such thing (srv_isdir: ...or it is not a folder)
+;
+; Both leave the answer in the DTA. Neither is on a hot path: rt_stat runs
+; once per NF_RMTREE and srv_isdir once per NF_ENUM walk, at its end.
+rt_stat:
+    push dx
+    mov dx, rtpath
+    call rt_ff16
+    pop dx
+    ret
+
+srv_isdir:
+    push ax
+    push dx
+    mov dx, pathbuf
+    call rt_ff16
+    jc  .no
+    test byte [dtabuf + DTA_ATTR], 0x10
+    jz  .no
+    pop dx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop ax
+    stc
+    ret
+
+; rt_ff16 - findfirst DS:DX with directories, hidden and system included
+rt_ff16:
+    push ax
+    push cx
+    push dx
+    mov dx, dtabuf              ; our own DTA, never DOS's at PSP:0080
+    mov ah, 0x1A
+    int 0x21
+    pop dx
+    push dx
+    mov cx, 0x16
+    mov ah, 0x4E
+    int 0x21
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; rt_wild  - rtpath + '\*.*'          -> wildbuf
+; rt_join  - rtpath + '\' + DTA name  -> wildbuf. CF=1 = it will not fit
+rt_wild:
+    push si
+    mov si, s_wild
+    call rt_build
+    pop si
+    ret
+
+rt_join:
+    push si
+    mov si, dtabuf + DTA_NAME
+    call rt_build
+    pop si
+    ret
+
+; rt_build - rtpath + '\' + the string at SI -> wildbuf. CF=1 = too long.
+; The overflow is a REFUSAL and never a truncation: a truncated path names a
+; DIFFERENT folder, and this verb deletes what it names.
+;
+; wildbuf is RT_BUFSZ and the longest thing that can land in it is
+; RT_PATHMAX + '\' + a 12-character 8.3 name + NUL, which is what sizes it -
+; so the WRITE can never run off the end and the test below is about whether
+; the RESULT is a path we are willing to keep walking, not about the buffer.
+rt_build:
+    push ax
+    push cx
+    push di
+    mov di, wildbuf
+    mov cx, si                  ; ...banked: str_app walks SI
+    mov si, rtpath
+    call str_app
+    cmp byte [di-1], '\'
+    je  .sep
+    mov byte [di], '\'
+    inc di
+.sep:
+    mov si, cx
+    call str_app
+    mov byte [di], 0
+    sub di, wildbuf
+    cmp di, RT_PATHMAX
+    ja  .long
+    pop di
+    pop cx
+    pop ax
+    clc
+    ret
+.long:
+    pop di
+    pop cx
+    pop ax
+    stc
+    ret
+
+; rt_fits - is the ASCIIZ string at SI short enough to be an rtpath?
+; out: CF=1 = no. SI preserved.
+rt_fits:
+    push ax
+    push si
+    xor ax, ax
+.l:
+    cmp byte [si], 0
+    je  .end
+    inc si
+    inc ax
+    cmp ax, RT_PATHMAX
+    jbe .l
+    pop si
+    pop ax
+    stc
+    ret
+.end:
+    pop si
+    pop ax
+    clc
+    ret
+
+; rt_push - descend: rtpath += '\' + the DTA's name. CF=1 = too deep to name.
+rt_push:
+    push ax
+    push si
+    push di
+    call rt_join                ; the child's full path, length-checked there
+    jc  .no
+    cmp word [rtdep], RT_DEPTH
+    jae .no
+    mov si, wildbuf
+    mov di, rtpath
+    call str_cpy96
+    inc word [rtdep]
+    pop di
+    pop si
+    pop ax
+    clc
+    ret
+.no:
+    pop di
+    pop si
+    pop ax
+    stc
+    ret
+
+; rt_pop - climb: cut rtpath at its last '\'. Only ever called with rtdep > 0,
+; so there is always one to cut at and no root can be reached by accident.
+rt_pop:
+    push ax
+    push si
+    push di
+    mov si, rtpath
+    xor di, di                  ; the last '\' seen, as an offset+1
+.scan:
+    mov al, [si]
+    or  al, al
+    jz  .cut
+    cmp al, '\'
+    jne .nx
+    mov di, si
+.nx:
+    inc si
+    jmp short .scan
+.cut:
+    or  di, di
+    jz  .out                    ; no separator at all: leave it alone rather
+    mov byte [di], 0            ; than empty it
+.out:
+    dec word [rtdep]
+    pop di
+    pop si
+    pop ax
+    ret
+
+str_cpy96:                      ; SI -> DI, at most RT_PATHMAX+1 bytes
+    push cx
+    mov cx, RT_PATHMAX+1
+    call str_cpy
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
 ; srv_rename - NF_RENAME: two 13-byte names and no length between them
 ; -----------------------------------------------------------------------------
 srv_rename:
@@ -3352,6 +4000,7 @@ secbuf:     times 512 db 0
 wholemc:    db 0                ; /W: the root lists the DRIVES
 srv_h:      dw 0                ; the handle the command in hand is about
 srv_n:      dw 0                ; ...and how many entries we promised it
+srv_ord:    dw 0                ; NF_ENUM's ordinal, across hd_path (62.10.6)
 srv_cwd:    db 0                ; the DRIVE the last NF_CHDIR stood on, for
                                 ; NF_DFREE - which is the one verb with no
                                 ; handle to work it out from. 0 = the default
@@ -3364,7 +4013,16 @@ nhd:        dw 0                ; handles issued this session
 hdtab:      times HD_MAX*HD_SZ db 0
 rootpath:   times 72 db 0       ; 'C:\' + DOS's 64 + a NUL
 pathbuf:    times 80 db 0       ; ...one handle's, rebuilt per command
-wildbuf:    times 88 db 0       ; ...plus '\*.*'
+wildbuf:    times RT_BUFSZ db 0 ; ...plus '\*.*', and it is sized by the
+                                ; RECURSIVE DELETE now rather than by that:
+                                ; rt_build appends an 8.3 name to a path that
+                                ; may already be RT_PATHMAX long, and a write
+                                ; that could overrun is not something a
+                                ; length check AFTER it can fix (62.10.7.2)
+rtpath:     times RT_BUFSZ db 0 ; the folder srv_rmtree is currently emptying.
+                                ; The whole of the walk's state, with rtdep -
+                                ; there is no DTA stack, deliberately
+rtdep:      dw 0                ; ...how far below the subtree's root we are
 entbuf:     times DE_SZ db 0    ; one staged entry, on its way to the wire
 namebuf:    times 16 db 0       ; the 13 bytes a name crosses as, terminated
 srv_fh:     dw 0                ; the FILE handle a read is about

@@ -224,10 +224,10 @@ that are neither pcode nor Windows, only C over a document:
 
 | Opus | what landed | where |
 |---|---|---|
-| `wordtech/file.h`, `fkp.h`, `doc.h`, `prm.h`, `props.h`, `wordwin.h` | the REAL `.DOC` — FIB, FKP pages, bin tables, STSH, plcfsed, DOP, and the piece table on the read side | `apps/word/wddoc.inc`, SPEC.md §65.4 |
-| `RTFOUT.C` / `RTFIN.C` | RTF out and in | `apps/word/wdrtf.inc`, §65.8 |
-| `search.c`'s `SetSpecialMatch` | the pattern language: `?`, `^p`, `^t`, `^w`, `^nnn`, and `^m`/`^c` in the replacement | `apps/word/wdutil.inc`, §65.7 |
-| `sort.c`, `renum.c`, `toc.c` | Utilities > Sort / Renumber and Insert > Table of Contents | `apps/word/wdutil.inc`, §65.9 |
+| `wordtech/file.h`, `fkp.h`, `doc.h`, `prm.h`, `props.h`, `wordwin.h` | the REAL `.DOC` — FIB, FKP pages, bin tables, STSH, plcfsed, DOP, and the piece table on the read side | `apps/word/wddoc.inc`, SPEC.md §68.4 |
+| `RTFOUT.C` / `RTFIN.C` | RTF out and in | `apps/word/wdrtf.inc`, §68.8 |
+| `search.c`'s `SetSpecialMatch` | the pattern language: `?`, `^p`, `^t`, `^w`, `^nnn`, and `^m`/`^c` in the replacement | `apps/word/wdutil.inc`, §68.7 |
+| `sort.c`, `renum.c`, `toc.c` | Utilities > Sort / Renumber and Insert > Table of Contents | `apps/word/wdutil.inc`, §68.9 |
 
 Three things are worth writing down about how that went.
 

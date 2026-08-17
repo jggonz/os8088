@@ -24,6 +24,7 @@ import os88geom                                              # noqa: E402
 # with MENU_ITEM_H per item. Item 1 is CMD_CTRL (About, Control Panel, Task
 # Manager, ...).
 from os88geom import (MBAR_H, MENU_ITEM_H, TITLE_H, KERNEL_SEG,  # noqa: E402
+                      WF_SAVEU,
                       WIN_SIZE, MAX_WIN, W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE,
                       DESK_ZY0, DESK_ZW, DESK_COLW,
                       DV_KIND, DV_FLAGS, DV_SIZE, DVOL_MAX, DVK_FREE,
@@ -48,9 +49,16 @@ AVAIL_HERC_CGA, AVAIL_VGA_HERC = 0x06, 0x07
 # pane, then SPEC.md 31.10.2's row inside it.
 CP_IX, CP_I0Y, CP_IROWH = 6, 6, 14
 CP_RX, CP_PGX = 96, 4
-CPV_MY, CPV_MSTEP = 96, 74
+CPV_MY, CPV_MSTEP = 106, 74         # SPEC.md 31.10.3 moved this row DOWN, from
+                                    # 96 to 106, to put 'Desktop Extension
+                                    # Mode:' above it. A stale 96 here is not a
+                                    # near miss: the label has no hit band, so
+                                    # the click lands on nothing, set_mode's
+                                    # verify sees the mode unchanged, and every
+                                    # dual-display test in this directory fails
+                                    # pointing at the kernel
 CPV_R0Y, CPV_ROWH = 20, 16          # the ADAPTER rows, which pick the primary
-CPV_BTNX, CPV_BTNY = 2, 72          # ...and the Activate button under them
+CPV_BTNX, CPV_BTNY = 2, 72          # ...and the Set Primary button under them
 
 MODES = {"single": 0, "right": 1, "below": 2}
 
@@ -146,7 +154,7 @@ def adapter_row(avail, kind):
 
 
 def set_primary(m, mo, S, settle, slot, card=None):
-    """Click adapter row `slot` and press Activate - which is how the OTHER
+    """Click adapter row `slot` and press Set Primary - which is how the OTHER
     two of SPEC.md 39.19.2's four arrangements are reached: the primary is
     always at the virtual origin, so swapping it is what puts the other
     monitor on the left. The panel must already be open on the Display page.
@@ -256,6 +264,62 @@ def open_row(m, mo, S, settle, wx, wy, row=0, card=None):
     mo.dblclick(x, y)
     settle(m, card=card)
     return x, y
+
+
+# --- the listing, read out of the guest (SPEC.md 19.1/19.4) ------------------
+#
+# A ROW NUMBER IS NOT A FILE, and writing one down is the same mistake
+# drive_xy's block above is about. It cost a whole investigation: a test
+# navigated "row 1 of B:, then row 3" believing that was APPS then HELLO.O88,
+# and it is GAMES then MISSILE.O88 - the root has no synthesized `..` (19.5)
+# and a subdirectory does, so the two listings are offset by one from each
+# other, and the Makefile's build order is not the display order either
+# (19.4 sorts by name). The test then measured a window with a live worker
+# animating in it with a method that requires a screen that settles, and
+# reported the harness's own moving picture as a kernel defect.
+#
+# So: ask. disk_dir is the global mount snapshot and a navigation is a full
+# mount, so it names the folder just entered.
+DSK_DE_SIZE = 32                # SPEC.md 19.1: name @0 NUL-padded, type @16,
+DSK_DE_TYPE = 16                # first cluster @18, size @20
+
+
+def listing(m, S):
+    """[(name, type)] of the current global mount snapshot, in display order.
+
+    Read through [dsk_dseg]:[dsk_doff] rather than at `disk_dir`, because a
+    driver-backed volume lists into its driver's claim instead (disk.inc's
+    dsk_doff comment) - the floppy case is the one where those two agree.
+    """
+    n = _u16(m.read(S("disk_nfiles"), 2))
+    seg = _u16(m.read(S("dsk_dseg"), 2))
+    off = _u16(m.read(S("dsk_doff"), 2))
+    if not n:
+        return []
+    raw = m.read((seg << 4) + off, n * DSK_DE_SIZE)
+    out = []
+    for i in range(n):
+        e = raw[i * DSK_DE_SIZE:(i + 1) * DSK_DE_SIZE]
+        out.append((e[:16].split(b"\0")[0].decode("latin-1"),
+                    _u16(e, DSK_DE_TYPE)))
+    return out
+
+
+def row_of(m, S, name):
+    """Which display row is `name`? Raises rather than returning a wrong row -
+    a silent miss here lands a double-click on whatever sorted into that slot,
+    which is exactly the failure this exists to end."""
+    rows = listing(m, S)
+    for i, (nm, _) in enumerate(rows):
+        if nm.upper() == name.upper():
+            return i
+    raise RuntimeError("%r is not in this folder - it lists %r"
+                       % (name, [r[0] for r in rows]))
+
+
+def open_named(m, mo, S, settle, wx, wy, name, card=None):
+    """Double-click the row called `name` in the Disk window at (wx, wy)."""
+    return open_row(m, mo, S, settle, wx, wy, row_of(m, S, name), card=card)
 
 
 # --- the window record (SPEC.md 11) ------------------------------------------

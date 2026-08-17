@@ -111,13 +111,39 @@ TC_N      equ 18
 tui_layout_init:
     push ax
     push bx
+    push dx
+    call OSAPI_VIDEO                ; AX = w, BX = h, DL = adapter, DH = bpp
+    mov [tui_scrh], bx              ; ...banked, so tui_track can tell "the
+    call tui_layout_for             ; tables are the screen's" from "the tables
+    pop dx                          ; are some bracket surface's" with a
+    pop bx                          ; compare rather than a far call per draw
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tui_layout_for - ...and the same pick for a SURFACE that is not the screen
+; in:       AX = width, BX = height, DH = bits per pixel (OSAPI_VIDEO's own
+;           three outputs, so the caller above just forwards them)
+; preserves all registers
+;
+; IT IS A PARAMETER NOW BECAUSE OF THE SECOND DISPLAY. The layout is chosen by
+; HEIGHT - it is really "which class of machine is this" - and a bracket on a
+; two-display desktop owns one display which need not be the primary and need
+; not be the same shape (SPEC.md 53.7.1): a 480-row VGA layout drawn onto a
+; 350-row Hercules loses its bottom third. tui_track re-picks per draw, which
+; costs two compares in the steady state because [tui_layh] records what the
+; live tables were picked FOR.
+; -----------------------------------------------------------------------------
+tui_layout_for:
+    push ax
+    push bx
     push cx
     push dx
     push si
     push di
-    call OSAPI_VIDEO                ; AX = w, BX = h, DL = adapter, DH = bpp
     mov [tui_vw], ax
     mov [tui_vh], bx
+    mov [tui_layh], bx
     mov byte [tui_mono], 0
     cmp dh, 1
     jne .depth
@@ -195,16 +221,60 @@ tui_track:
     push cx
     push dx
     cmp byte [trk_fs], 0            ; on the fsx surface (SPEC.md 53) the
-    je .win                         ; screen IS the content: origin 0, the
-    xor ax, ax                      ; whole adapter. fsx does not resize the
-    mov [tui_ox], ax                ; window record the way WF_FULL did, so
-    mov [tui_oy], ax                ; the kernel would answer the WINDOWED
-    mov ax, [tui_vw]                ; box - the FT2 screen is drawn from the
-    mov [tui_cw], ax                ; live adapter size instead (tui_vw/vh,
-    mov ax, [tui_vh]                ; from OSAPI_VIDEO at layout init)
+    je .win                         ; SURFACE is the content, and it is asked
+                                    ; for rather than assumed (SPEC.md 53.7.1).
+                                    ; fsx does not resize the window record the
+                                    ; way WF_FULL did, so the kernel would
+                                    ; answer the WINDOWED box - and the old
+                                    ; answer here, (0,0) plus the live adapter
+                                    ; size, is only right while the desktop is
+                                    ; ONE display: a same-mode bracket does not
+                                    ; collapse a two-display desktop (39.18.3),
+                                    ; so (0,0) is the PRIMARY and Tracker
+                                    ; fullscreened on the second monitor drew
+                                    ; the FT2 screen over the OTHER one
+    call OSAPI_FSX_SURF             ; AX = x, BX = y, CX = w, DX = h
+    jc .fsold                       ; refused: not in a bracket after all -
+                                    ; keep the historical answer rather than
+                                    ; draw at a garbage origin
+    mov [tui_ox], ax
+    mov [tui_oy], bx
+    mov [tui_cw], cx
+    mov [tui_ch], dx
+    mov [tui_vw], cx                ; ...and the fullscreen EXTENT, which most
+    mov [tui_vh], dx                ; of this file's fills reach for by name.
+                                    ; Written whatever the layout does below,
+                                    ; so a surface that shares the screen's
+                                    ; height but not its width is still right
+    cmp dx, [tui_layh]              ; ...and the layout is picked by HEIGHT, so
+    je .out                         ; a surface of a different shape from the
+    mov bx, [trk_win]               ; screen needs its own (see tui_layout_for)
+    call OSAPI_FSX_CAPS             ; DL = THIS display's VID_* kind - the only
+    mov dh, 1                       ; place the DEPTH can come from, since
+    cmp dl, VID_VGA                 ; OSAPI_VIDEO answers about the primary and
+    jne .fsdep                      ; the two cards of a mixed machine disagree
+    mov dh, 4
+.fsdep:
+    mov ax, [tui_cw]
+    mov bx, [tui_ch]
+    call tui_layout_for
+    jmp short .out
+.fsold:
+    xor ax, ax
+    mov [tui_ox], ax
+    mov [tui_oy], ax
+    mov ax, [tui_vw]
+    mov [tui_cw], ax
+    mov ax, [tui_vh]
     mov [tui_ch], ax
     jmp short .out
 .win:
+    mov ax, [tui_layh]              ; ...and the way back: a bracket that took
+    cmp ax, [tui_scrh]              ; a differently-shaped surface left the
+    je .winok                       ; tables AND [tui_vw]/[tui_vh] picked for
+    call tui_layout_init            ; IT, and the windowed face is drawn
+.winok:                             ; against the SCREEN's class. Both come
+                                    ; back in the one call
     mov bx, [trk_win]
     call OSAPI_WM_CONTENT           ; AX = content left, DX = top
     mov [tui_ox], ax
@@ -2265,12 +2335,14 @@ tui_scrl:
     mov ax, [tui_lay + TL_RAB]      ; upper region: ROWT .. ROWT + RAB*8 - 1
     mov cl, 3
     shl ax, cl
-    mov bx, [tui_lay + TL_ROWT]
-    mov dx, bx
-    add dx, ax
-    dec dx
-    xor ax, ax                      ; full width: x2+1 = vid_w, a multiple
-    mov cx, [tui_vw]                ; of 8 on all three adapters
+    mov bx, [tui_lay + TL_ROWT]     ; THE TWO RAW SITES IN THIS FILE - every
+    add bx, [tui_oy]                ; other drawing call goes through the
+    mov dx, bx                      ; tui_*c helpers, which add the origin. On
+    add dx, ax                      ; a bracket that origin is the DISPLAY's
+    dec dx                          ; now and not (0,0) (SPEC.md 53.7.1), so a
+    mov ax, [tui_ox]                ; scroll left here would move the primary's
+    mov cx, ax                      ; pixels while the rest of the screen drew
+    add cx, [tui_cw]                ; on the second monitor
     dec cx
     call OSAPI_GFX_SCROLL
     jc .no
@@ -2278,11 +2350,13 @@ tui_scrl:
     mov cl, 3
     shl ax, cl
     mov bx, [tui_lay + TL_LOWY]
+    add bx, [tui_oy]
     mov dx, bx
     add dx, ax
     dec dx
-    xor ax, ax
-    mov cx, [tui_vw]
+    mov ax, [tui_ox]
+    mov cx, ax
+    add cx, [tui_cw]
     dec cx
     call OSAPI_GFX_SCROLL
     jc .no                          ; half-scrolled: the full repaint the
@@ -3135,8 +3209,12 @@ tui_ab5:     db 'Any key closes', 0
 ; =============================================================================
     TRKB tui_inited                 ; layout + colours are live
     TRKB tui_mono                   ; 1bpp adapter (SPEC.md 39.4)
-    TRKW tui_vw                     ; the live screen (OSAPI_VIDEO)
-    TRKW tui_vh
+    TRKW tui_vw                     ; the surface the LAYOUT was picked for -
+    TRKW tui_vh                     ; the screen windowed, the bracket's own
+                                    ; display inside one (SPEC.md 53.7.1)
+    TRKW tui_layh                   ; ...its height, so a re-pick is a compare
+    TRKW tui_scrh                   ; ...and the SCREEN's, so the way back out
+                                    ; of a bracket is one too
     TRKW tui_ox                     ; content origin + size, re-read per draw
     TRKW tui_oy
     TRKW tui_cw

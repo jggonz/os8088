@@ -18,8 +18,13 @@ Two things go wrong there and this gate covers both.
     'Loading...' still on its status line, and files_poster then clears that
     word through wm_clip_set, which drops the cache - correctly, the window is
     about to draw. It cannot take a new one, because by then Minesweeper is on
-    top of it. The line's text has been known since ui.inc consumed the click,
-    so the loader pays it BEFORE wm_show instead.
+    top of it. That was first fixed by paying the line BEFORE wm_show, and is
+    now fixed by CONSTRUCTION: the word is retired (12.8's menu-bar widget
+    reports the read live, for every reader in the machine) and files_poster
+    with it, so nothing touches the poster's window during a launch at all.
+    The check below is unchanged and still discriminating - it is now
+    satisfied because there is no toucher rather than because the touch was
+    reordered - so this file also guards against the routine coming back.
 
   11.96.16 - ONLY THE FRONT WINDOW WAS EVER BANKED. wm_raise banks the outgoing
     front and nothing below it, so any other window the newcomer lands on that

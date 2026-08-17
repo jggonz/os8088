@@ -945,8 +945,8 @@ assoc_run_x:
                                 ; Nothing downstream needs the globals to be
                                 ; this folder: assoc_locate navigates itself,
                                 ; assoc_back comes back to what is banked
-                                ; here, and files_refresh / files_poster
-                                ; paint from the WINDOW's cache (SPEC.md 22.1)
+                                ; here, and files_refresh paints from the
+                                ; WINDOW's cache (SPEC.md 22.1)
 .curvol:
     mov ax, [dsk_cwd]           ; no poster - a package's own request - so the
     mov [assoc_dclus], ax       ; volume the machine is on IS the home
@@ -979,10 +979,10 @@ assoc_run_x:
     pop es                      ; ld_run_body's failure exits leave ES adrift
     call assoc_back             ; the user's volume FIRST, then the window
     cmp byte [ld_painted], 0
-    jne .out                    ; ld_run_body paid the poster's status line
-                                ; before its wm_show covered it (SPEC.md
-                                ; 22.17); a second files_poster here would
-                                ; drop the raise cache that took
+    jne .out                    ; ld_run_body's wm_show drew the new window
+                                ; and the poster's own window was never
+                                ; written on by this load at all (SPEC.md
+                                ; 22.17), so nothing here is owed a repaint
     call files_refresh_x
     jmp short .out
 
@@ -1429,6 +1429,12 @@ asc_use_x:
     call mem_claim_x
     jc .out                     ; refused: tier 2, every lookup misses
     mov [asc_seg], dx
+    push ax                     ; ...and MOVABLE (SPEC.md 66.5.6). This is the
+    mov ax, asc_reloc           ; claim docs/HEAP-CLAIMS.md measured acting as a
+    mov bx, MEM_K_ASC           ; BARRIER: it is taken on a VOLUME SWITCH, so
+    call mem_movable_x          ; on a machine that has been used it sits
+    pop ax                      ; wherever the arena had room - 3KB holding
+                                ; 40KB out of reach on the run that found it
 .haveseg:
     call asc_root_find          ; CF=0, AX = first cluster, DX = sectors
     jc .out
@@ -1955,6 +1961,17 @@ asc_s_name: db 'ASSOC   DAT'    ; the RAW 8.3 form: this walks directory
 ; asc_seg would have the harvest reading icons out of whatever segment those
 ; bytes name, and a stale asc_vol would tell the first mount its cache is
 ; already loaded.
+; asc_reloc - the compactor moved the cache (SPEC.md 66.2). ONE WORD: every
+; reader loads ES from [asc_seg] immediately before a short in-memory burst,
+; and the only disk read that targets the cache is the one that FILLS it,
+; which dsk_xfer pins for the duration (SPEC.md 66.3 rule 5).
+asc_reloc:
+    cmp bx, [asc_seg]
+    jne .out
+    mov [asc_seg], dx
+.out:
+    ret
+
 asc_seg:  dw 0                  ; the claim, 0 = none (refused, or not yet)
 asc_n:    dw 0                  ; app rows in it, 0 = no usable cache
 asc_ne:   dw 0                  ; ...and association rows

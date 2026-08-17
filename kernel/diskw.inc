@@ -848,7 +848,7 @@ dskw_rtbody:
     ret
 .gated:
     cmp byte [dsk_vkind], DVK_FILE
-    je dskw_rmbody              ; A REDIRECTED VOLUME HAS NO DIRECTORY SECTORS
+    jne .fat                    ; A REDIRECTED VOLUME HAS NO DIRECTORY SECTORS
                                 ; (SPEC.md 62.9) and everything below this line
                                 ; reads them - dskw_find, dskw_rt_scan,
                                 ; dsk_dotdot and dskw_rt_byclus all walk the
@@ -865,31 +865,59 @@ dskw_rtbody:
                                 ; with no application behind it - and nothing
                                 ; ever drove a Delete from this end.
                                 ;
-                                ; IT GOES TO dskw_rmbody RATHER THAN STRAIGHT
-                                ; TO dskw_fsop so that "what a redirected
-                                ; rmdir is" has ONE answer: that body's own
-                                ; DVK_FILE arm two hundred lines up is the
-                                ; FSV_RMDIR call, and a second copy here is a
-                                ; second thing to keep in step. It re-runs the
-                                ; [dsk_mntok] gate, which is free, and it takes
-                                ; SI = the name, which is what we were handed.
+                                ; SO THE TREE IS WALKED BY THE SIDE THAT HOLDS
+                                ; IT (SPEC.md 62.10.7). FSV_RMTREE is one
+                                ; command frame and one status where a
+                                ; kernel-side walk is an FSV_ENUM plus an
+                                ; FSV_DELETE per file and an FSV_CHDIR per
+                                ; level - FSV_COPY's argument (62.9.8) in the
+                                ; other direction, against the same 3,741
+                                ; bytes a second.
+.fsrt:
+    mov bp, FSV_RMTREE          ; SI = the name, which is what we were handed
+    call dskw_fsop              ; ...AND NOT drv_fs_call: that is the whole of
+                                ; what this shares with the other nine write
+                                ; bodies, and the half that is not the call is
+                                ; dskw_sync_x - the ONE routine a successful
+                                ; file operation passes through, so no
+                                ; operation can forget to mark the folder it
+                                ; changed (SPEC.md 22.8). Hand-rolled around
+                                ; it, the delete WORKED and the Disk window
+                                ; went on listing the folder that was gone:
+                                ; a stale row is a wrong FILE the moment
+                                ; anything resolves an index against it
+                                ; (docs/FIELD-NOTES.md 4). BP is spent by
+                                ; drv_fs_call and dskw_rmtree banks it
+    jnc .fsok
+    or ax, ax
+    jnz .fsno                   ; THE FAR SIDE TRIED AND SAID NO, and that is
+                                ; its FERR_* to report: a whole volume, a
+                                ; protected file, a read-only run
                                 ;
-                                ; SO A REDIRECTED TREE IS NOT WALKED, and that
-                                ; is a real difference from the FAT path worth
-                                ; stating rather than leaving to be found.
-                                ; Emptiness is the driver's test here (the same
-                                ; reason dskw_rmbody's own branch gives), so a
+                                ; AX = 0 IS THE OTHER THING ENTIRELY - it is
+                                ; what drv_fs_call answers for a verb the
+                                ; driver does not publish, and it is the same
+                                ; word an absent FSV_ENUM gives (62.9.7). So
+                                ; a driver that declines this falls back to
+                                ; the empty-only FSV_RMDIR, which is exactly
+                                ; what a redirected volume did before the verb
+                                ; existed: emptiness is the driver's test, a
                                 ; folder with anything in it comes back
-                                ; FERR_PROT and the file manager SAYS SO -
-                                ; which is the honest answer this end can give
-                                ; and is what the confirm line's "+contents"
-                                ; over-promises. Recursing would mean the
-                                ; kernel walking the far side's tree, and the
-                                ; only verb for that is FSV_ENUM, which
-                                ; NET.DRV does not publish (its table carries 0
-                                ; there) - a recursive delete over the cable is
-                                ; a change at both ends of the protocol, not a
-                                ; branch here.
+                                ; FERR_PROT, and the file manager says so.
+                                ; RAMDISK.DRV declines on purpose, which is
+                                ; what keeps this branch tested.
+    jmp dskw_rmbody             ; ...and it goes THERE rather than to
+                                ; dskw_fsop so that "what a redirected rmdir
+                                ; is" has one answer: that body's own
+                                ; DVK_FILE arm two hundred lines up. It
+                                ; re-runs the [dsk_mntok] gate, which is free
+.fsok:
+    clc
+    ret
+.fsno:
+    stc
+    ret
+.fat:
     mov ax, [dsk_cwd]           ; where we must end up, whatever happens
     mov [dskw_rt_home], ax
     mov di, dskw_rt_name        ; keep the caller's name: the last removal

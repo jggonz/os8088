@@ -1271,10 +1271,19 @@ kbm_btn:
 ; kbm_key claims it and clears [kbm_p5], and this claims nothing. Without that
 ; guard both would fire and one press would open a menu and shut it again.
 ;
-; Three gates before the peek, in cost order: a mouse that has spoken (so a
-; machine with one never reads the port at all), then NumLock - on, int 16h
-; delivers the key on every BIOS tried and kbm_key has it - and ScrollLock,
-; which is 9.6.2's hatch and must hand this key back with all the others.
+; Three gates around the peek, in cost order: a mouse that has spoken (so a
+; machine with one reads the port only if SPEC.md 9.7's map is armed), then
+; NumLock - on, int 16h delivers the key on every BIOS tried and kbm_key has
+; it - and ScrollLock, which is 9.6.2's hatch and must hand this key back with
+; all the others.
+;
+; THE PEEK IS ALSO SPEC.md 9.7's, and that is why the first gate moved rather
+; than went. A key-state map has to see every byte, including on a machine
+; with a mouse - so `[kbd_armed]` is a second reason to read the port, and a
+; machine where nothing has ever asked for key state still never reads it.
+; That is the whole reason the map arms on being ASKED: the 8042 paragraph
+; below is a claim no period AT ROM has been put to, and it stays scoped to
+; the machines that need it rather than being spent on every machine.
 ;
 ; ON THE 8042 THE READ IS NOT ACKNOWLEDGED EITHER, but the reasoning differs
 ; and is worth stating because the first version gated this to tier 0 over it.
@@ -1296,11 +1305,21 @@ kbm_isr:
     push ds
     mov ax, KERNEL_SEG
     mov ds, ax
-    cmp byte [mou_seen], 0
-    jne .chain                  ; a real mouse has spoken: never intercept, and
-                                ; never read the port either
+    mov ah, [kbd_armed]         ; SPEC.md 9.7's key-state map wants every byte
+    or ah, ah                   ; that arrives; the keypad-5 half wants one
+    jnz .peek                   ; byte on a mouseless machine. EITHER is a
+    cmp byte [mou_seen], 0      ; reason to read the port, and neither being
+    jne .chain                  ; one is what keeps an idle machine off it
+.peek:
     in al, 0x60                 ; PEEK - see above: the 8255 holds it until the
-    cmp al, KBM_5SCAN           ; BIOS acks, so this consumes nothing
+                                ; BIOS acks, so this consumes nothing
+    or ah, ah
+    jz .p5                      ; nobody is tracking keys: keypad 5 only
+    call kbd_track              ; SPEC.md 9.7 - preserves AL
+.p5:
+    cmp byte [mou_seen], 0
+    jne .chain                  ; a real mouse has spoken: never intercept
+    cmp al, KBM_5SCAN
     jne .chain
     push es
     mov ax, 0x40                ; the BIOS data area, NOT zero: KB_FLAG is at
@@ -1339,6 +1358,131 @@ kbm_isr:
     pop ds                      ; service and takes the mouse's IRQ3/IRQ4 down
     pop ax                      ; with it
     iret
+
+; =============================================================================
+; The key-state map (SPEC.md 9.7) - IS THIS KEY DOWN RIGHT NOW?
+;
+; int 16h answers "what was typed", which is a different question, and for a
+; real-time app it is the WRONG one: there is no key-up in it and a typematic
+; repeat is byte-identical to a fresh press, so "is left held" cannot be asked
+; of it at all. Every consumer therefore ended up inferring a hold from the
+; INTERVAL between events, and that inference has two failures nothing inside
+; it can fix. It cannot see the typematic DELAY - about 9 ticks in which a
+; held key produces no evidence whatever, so the app either stops dead in the
+; middle of a hold or must move for the whole delay whether the key came up or
+; not. And the keyboard repeats the LAST key pressed, so pressing a second key
+; (a fire button) silently ends the first key's evidence while the finger is
+; still on it. Both are apps/arkanoid's, both were reported off the field
+; machine, and neither is an app bug.
+;
+; The scancodes carry the answer and always did: a make code and its break
+; code differ by bit 7, and the kernel is already inside int 09h for SPEC.md
+; 9.6.4's keypad 5. So one bit per key, written by that ISR, read by anyone.
+;
+; It is 128 bits - one per set-1 make code - and E0/E1 are skipped, because
+; those are PREFIXES and name no key of their own: the key's own code follows
+; the prefix and its break code follows a second one, so an extended arrow and
+; the keypad arrow beside it land on the same bit, which is what a caller
+; asking "is left down" means.
+;
+; ASKING IS WHAT ARMS IT (kbd_down), and the first answer after arming is
+; always "up". A machine whose software never asks never reads port 60h at
+; all - which keeps kbm_isr's unproven 8042 claim scoped to the machines that
+; want the feature - and a key already held when the map arms is simply not
+; seen until it is pressed again. Nothing latches wrong: a break code clears a
+; bit that is already clear.
+;
+; What it cannot survive is a LOST break code - an interrupt dropped inside a
+; long IF=0 window leaves that key reading down until it is pressed and
+; released again. That is why this is advice and not an oracle: a consumer
+; bounds what it does with the answer (apps/arkanoid clamps at its rails), and
+; the state self-heals on the next press of the same key.
+; =============================================================================
+KBD_MAPSZ   equ 16              ; 128 bits, one per set-1 make code
+
+; -----------------------------------------------------------------------------
+; kbd_bit - where does this scancode live in the map?
+; in:  AL = a scancode, make or break
+; out: BX = the byte index, AH = the bit's mask; AL and every other register
+;      kept. ONE copy of this arithmetic, because a reader and a writer that
+;      disagree about which bit a key is would be a bug with no symptom until
+;      one particular key was pressed.
+; -----------------------------------------------------------------------------
+kbd_bit:
+    push cx
+    mov bl, al
+    and bl, 0x7F                ; make and break index the SAME bit
+    mov cl, bl
+    and cl, 7
+    shr bl, 1                   ; 8086: no shr reg, imm - and three of these is
+    shr bl, 1                   ; smaller than loading CL to shift by 3
+    shr bl, 1
+    mov bh, 0
+    mov ah, 1
+    shl ah, cl
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; kbd_track - one scancode from kbm_isr into the map
+; in:  AL = the byte port 60h just gave; DS = KERNEL_SEG
+; out: nothing; preserves every register and the flags are the caller's to
+;      ignore. INSIDE AN INTERRUPT, so it touches no port and ends no
+;      interrupt: it is four instructions and a store.
+; -----------------------------------------------------------------------------
+kbd_track:
+    push ax
+    push bx
+    cmp al, 0xE0                ; a prefix names no key: the code that follows
+    je .out                     ; it does, and that code's break follows a
+    cmp al, 0xE1                ; second prefix
+    je .out
+    call kbd_bit
+    test al, 0x80               ; bit 7 = break
+    jnz .up
+    or [kbd_dnmap+bx], ah
+    jmp short .out
+.up:
+    not ah
+    and [kbd_dnmap+bx], ah
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; kbd_down - is this key down right now? (SPEC.md 9.7, slot 0x03F0)
+; in:  AL = a make scancode (0x4B left, 0x4D right, 0x39 space, ...)
+; out: CF = 1 down, CF = 0 up; every register preserved
+;
+; No lock, no VRAM, no port: legal from a worker task, from a callback, and
+; from anywhere else a package can call at all.
+; -----------------------------------------------------------------------------
+kbd_down:
+    push ax
+    push bx
+    cmp byte [kbd_armed], 0
+    je .arm
+.go:
+    call kbd_bit
+    mov al, ah
+    and al, [kbd_dnmap+bx]
+    add al, 0xFF                ; CF = 1 exactly when the bit was set, and the
+    pop bx                      ; pops leave the flags alone
+    pop ax
+    ret
+.arm:
+    ; The map starts from "nothing is down" rather than from whatever .bss
+    ; happened to hold: a bit stuck ON here is a key an app believes is held
+    ; for the rest of the session, which is the one failure worth spending
+    ; nine bytes to make impossible.
+    mov bx, KBD_MAPSZ
+.z:
+    dec bx
+    mov byte [kbd_dnmap+bx], 0  ; a store leaves the flags alone, so the jnz
+    jnz .z                      ; below is still testing the dec
+    mov byte [kbd_armed], 1     ; ...and only NOW may the ISR write here
+    jmp short .go
 
 ; -----------------------------------------------------------------------------
 ; kbm_p5spend - turn a keypad-5 press the ISR saw into the button press
@@ -1533,6 +1677,15 @@ kbm_btick   dw 0                ; ...and of the last button key, for the repeat
 kbm_slast   db 0                ; the ScrollLock level kbm_ui last saw (9.6.2)
 kbm_eat     db 0                ; kbm_pollm: eat a key we did not claim
 kbm_ev      times 8 db 0        ; the record kbm_post fills for evq_push
+kbd_armed   db 0                ; SPEC.md 9.7: has anything ever ASKED for key
+                                ; state? Until it has, kbm_isr does not read
+                                ; the port for it. .text with a real
+                                ; initialiser for kbm_old9's reason - the ISR
+                                ; reads it on the machine's first keystroke,
+                                ; and a 1 here would let it write a map
+                                ; kbd_down has not cleared yet
+kbd_dnmap   times KBD_MAPSZ db 0 ; ...and the bit per key. Zeroed again at the
+                                ; arm, so this initialiser is belt and braces
 
 ; -----------------------------------------------------------------------------
 ; mou_isr / mou_isr3 - IRQ4 and IRQ3. Microsoft

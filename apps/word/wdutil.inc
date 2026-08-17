@@ -1,8 +1,8 @@
 ; =============================================================================
 ; os8088 - apps/word/wdutil.inc
 ;
-; WORD'S SEARCH PATTERN (SPEC.md 65.7) and the three Utilities commands that
-; are algorithms rather than screens (SPEC.md 65.9): Sort, Renumber and Table
+; WORD'S SEARCH PATTERN (SPEC.md 68.7) and the three Utilities commands that
+; are algorithms rather than screens (SPEC.md 68.9): Sort, Renumber and Table
 ; of Contents. All four port because none of them touches Windows -
 ; Opus/search.c, Opus/sort.c, Opus/renum.c and Opus/toc.c are C over the
 ; document, and the document is the one thing this port has.
@@ -28,7 +28,7 @@ WDP_WHITE    equ 0x0200         ; '^w' - one or more spaces or tabs
 ;   ^<digits>  the character with that decimal code
 ;   ^x         x, literally - which is search.c's own default and what makes
 ;              ^s, ^-, ^~ and ^d (characters this font and this document model
-;              have no room for - SPEC.md 6/65.3) fail honestly rather than
+;              have no room for - SPEC.md 6/68.3) fail honestly rather than
 ;              compile to something that can never occur
 ; -----------------------------------------------------------------------------
 wd_pcomp:
@@ -246,7 +246,7 @@ wd_rxpand:
     ret
 
 ; =============================================================================
-; THE SPAN THE THREE COMMANDS OPERATE ON (SPEC.md 65.9)
+; THE SPAN THE THREE COMMANDS OPERATE ON (SPEC.md 68.9)
 ;
 ; The selection, or the whole document when there is none - Word's own rule -
 ; snapped out to whole paragraphs, because a paragraph is the unit Sort,
@@ -402,7 +402,7 @@ wd_plist:
 ; out: CF=0 with [wd_scseg] set; CF=1 = refused (the toast is set)
 ; Preserves all registers. Two halves, WD_SCHALF apart: the rebuilt text and
 ; its CHP twin, so the splice moves both in step exactly as every other
-; operation in this app does (SPEC.md 65.3).
+; operation in this app does (SPEC.md 68.3).
 ; -----------------------------------------------------------------------------
 wd_scget:
     push ax
@@ -588,7 +588,7 @@ wd_usplice:
     ret
 
 ; =============================================================================
-; UTILITIES > SORT (SPEC.md 65.9, Opus/sort.c)
+; UTILITIES > SORT (SPEC.md 68.9, Opus/sort.c)
 ;
 ; A STABLE insertion sort over an index array: equal keys keep their document
 ; order, which is what makes a second sort on a second field a working
@@ -1052,7 +1052,7 @@ wd_sonum:
     ret
 
 ; =============================================================================
-; UTILITIES > RENUMBER (SPEC.md 65.9, Opus/renum.c)
+; UTILITIES > RENUMBER (SPEC.md 68.9, Opus/renum.c)
 ;
 ; The Format string is Word's: the FIRST digit-or-letter in it is the
 ; number's place and its kind - 1 arabic, I/i roman, A/a alphabetic - and
@@ -1440,7 +1440,7 @@ wd_rn_iv: db 'IV', 0
 wd_rn_i:  db 'I', 0
 
 ; =============================================================================
-; INSERT > TABLE OF CONTENTS (SPEC.md 65.9, Opus/toc.c)
+; INSERT > TABLE OF CONTENTS (SPEC.md 68.9, Opus/toc.c)
 ;
 ; Word takes an entry's level from the paragraph's STYLE code (toc.c:
 ; iLevel = stcLevLast - vpapFetch.stc + 1) and this port has no style sheet,
@@ -1458,7 +1458,7 @@ wd_rn_i:  db 'I', 0
 ;                           the level is the count of characters between the
 ;                           dots. Word's own table-entry convention from
 ;                           before the field, and hidden text is something
-;                           this port really has (SPEC.md 65.1).
+;                           this port really has (SPEC.md 68.1).
 ;
 ; One forward walk does both jobs: it counts ROWS by the same greedy word
 ; wrap the layout uses, so an entry's page is [line] / WD_PGLINES + 1 at the

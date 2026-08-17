@@ -1536,6 +1536,10 @@ sb_video:
     mov si, sb_s_h_vid
     call bl_sline
     mov si, sb_s_h_vid2
+    call bl_sline
+    mov si, sb_s_h_vid3
+    call bl_sline
+    mov si, sb_s_h_vid4
     call bl_sline   ; ...and no bl_head, for sb_mouse's reason
 
     mov ax, DBG_TAG_VIDEO           ; SPEC.md 57's registry
@@ -1568,6 +1572,26 @@ sb_video:
     xor ah, ah
     mov si, sb_l_vavail
     call sb_hex
+    mov bx, [sb_vavail]             ; ...and HOW the mono card answered, which
+    mov al, [es:bx+1]               ; is the row that turns "the Hercules is
+    xor ah, ah                      ; not detected" into a diagnosis (SPEC.md
+    mov si, sb_l_vhpr               ; 39.11.1.1). A 3 here is a fault that
+    call sb_num                     ; section does not cover
+
+    mov dx, 0x3BA                   ; ...and whether a mono card is DRIVING its
+    call sb_porttog                 ; status port at all, which is the question
+    mov si, sb_l_v3ba               ; a 3 above leaves open. FFFF = nothing
+    call sb_hex                     ; there; anything else = a live 6845
+    mov dx, 0x3DA                   ; ...and the colour side as the CONTROL, so
+    call sb_porttog                 ; a machine that reports FFFF for both has
+    mov si, sb_l_v3da               ; a broken test rather than two dead cards
+    call sb_hex
+
+    mov bx, [sb_vkind]              ; ...and the colour path, on the one
+    cmp byte [es:bx], 0             ; adapter that has one (VID_VGA = 0)
+    jne .novga
+    call sb_vga_regs
+.novga:
 
     cmp word [sb_vnd], 0            ; a kern_small kernel is single-display by
     je .small                       ; CONSTRUCTION and has no bytes to report
@@ -1724,6 +1748,301 @@ sb_vdead:
     ret
 
 ; sb_v2 - SI = label, AX and DX = two numbers, one row. Preserves everything.
+; sb_v3 - SI = label, AX / DX / CX = three values on one row. sb_v2's body
+; with a third column at BL_C_N + 14, which still clears BL_C_US at 39.
+; Written for the DAC triples (sb_vga_regs): an RGB entry printed as three
+; separate rows is three times the report for one fact.
+; =============================================================================
+; sb_vga_regs - what the VGA's COLOUR PATH currently holds (SPEC.md 39.21)
+;
+; Reported from the field on a 5150 with a PVGA1A: after a few minutes the
+; whole screen recolours - the desktop's black/white dither goes lavender, a
+; red brick row goes purple, a white window frame goes cyan - with every
+; shape, glyph and edge still exactly where it belongs.
+;
+; THAT SHAPE IS NOT DISPLAY RAM AND THIS BLOCK EXISTS TO PROVE IT EITHER WAY.
+; In mode 12h a pixel is four plane bits -> one of 16 ATTRIBUTE palette
+; registers -> one of 256 DAC entries -> three analog guns. A fault in the
+; RAM moves PIXELS: speckle, dropped columns, sheared glyphs, garbage in
+; patches. A fault anywhere in the three stages after it recolours a
+; still-correct picture, uniformly, which is what was photographed.
+;
+; Two of those three stages can be READ BACK and the third cannot, and that
+; is the whole diagnostic: run this with the screen right and again with it
+; wrong. Identical numbers put the fault after the DAC - the analog output,
+; the cable, the monitor - where no software can reach it. Different numbers
+; put it in a register somebody wrote, and then it is ours.
+;
+; THE ATTRIBUTE READ BLANKS THE SCREEN and must be bracketed. Selecting a
+; palette register at 3C0h needs bit 5 (PAS) CLEAR, which is the bit that
+; turns video on; the write that restores it is not optional, and an
+; interrupt landing between the index and the data write would leave the
+; index half-selected - so the whole sequence runs with IF=0 and ends with
+; PAS back up on every path. 3DAh is read first to put the port's own
+; index/data flip-flop into a known state, which is the one thing about the
+; attribute controller that cannot be assumed.
+;
+; VGA ONLY. On a CGA or a Hercules 3C0h/3C7h are nobody's, and reading them
+; would print four rows of bus noise that look like measurements.
+; =============================================================================
+sb_vga_regs:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, sb_s_h_vga
+    call bl_sline
+
+    mov dx, 0x3C4                   ; --- SR01: the blank bit (SPEC.md 64) ---
+    mov al, 1
+    out dx, al
+    inc dx
+    in al, dx
+    xor ah, ah
+    mov bx, ax
+    mov dx, 0x3CE                   ; --- GR06: which aperture this card
+    mov al, 6                       ; decodes. 01 = A0000 alone, which is what
+    out dx, al                      ; makes the B000 probe above mean anything
+    inc dx                          ; (SPEC.md 39.11.1)
+    in al, dx
+    xor ah, ah
+    mov cl, 8
+    shl bx, cl
+    or ax, bx
+    mov si, sb_l_vsr
+    call sb_hex
+
+    xor al, al                      ; --- DAC 0, which IS the reported fault:
+    call sb_dacrd                   ; a black that is not black recolours
+    mov si, sb_l_vdac0              ; every dithered pixel on the screen
+    call sb_v3
+    mov al, 0x3F                    ; ...and WHITE, which is DAC entry 0x3F and
+    call sb_dacrd                   ; not entry 15: the attribute palette maps
+    mov si, sb_l_vdacf              ; colour 15 to 3Fh (measured - the sixteen
+    call sb_v3                      ; registers read 00 01 02 03 04 05 14 07
+                                    ; 38..3F), so entry 15 is a number no pixel
+                                    ; on this screen goes through
+
+    mov word [sb_vsum], 0           ; --- ...and all 768 bytes as one number,
+    xor bl, bl                      ; because 256 entries is not a report and
+.sum:                               ; a checksum is what a diff needs.
+    mov al, bl                      ; THE COUNTER IS BL AND NOT DL: sb_dacrd
+    call sb_dacrd                   ; ANSWERS in DX (green), so a counter kept
+    add [sb_vsum], ax               ; there is overwritten by the value it just
+    add [sb_vsum], dx               ; fetched - the loop then ends when green
+    add [sb_vsum], cx               ; happens to be 0xFF, which is to say
+    inc bl                          ; almost never. BL survives because
+    jnz .sum                        ; sb_dacrd banks BX
+    mov ax, [sb_vsum]
+    mov si, sb_l_vdsum
+    call sb_hex
+
+    pushf                           ; --- the 16 attribute palette registers,
+    cli                             ; behind the blank (see the header)
+    mov word [sb_vsum], 0
+    xor cx, cx
+.pal:
+    mov dx, 0x3DA                   ; THE FLIP-FLOP IS RESET EVERY ITERATION,
+    in al, dx                       ; and this is the whole correctness of the
+                                    ; loop. Only a WRITE to 3C0h toggles it;
+                                    ; reading the data at 3C1h does not. So a
+                                    ; reset taken once outside the loop leaves
+                                    ; the port in DATA state after the first
+                                    ; index write, and the SECOND iteration's
+                                    ; `out 3C0` is then a DATA write into the
+                                    ; register the first one selected - a
+                                    ; diagnostic that scrambles the palette it
+                                    ; was written to measure, which is exactly
+                                    ; the fault under investigation
+    mov dx, 0x3C0
+    mov al, cl                      ; PAS clear: selecting a palette register
+    out dx, al                      ; is what turns the screen off
+    inc dx
+    in al, dx
+    xor ah, ah
+    add [sb_vsum], ax
+    mov bl, cl                      ; ...and BANK it: these sixteen bytes are
+    xor bh, bh                      ; the DAC entries the screen actually goes
+    mov [bx+sb_vpal], al            ; through, and the sum below is over THEM
+    cmp cl, 0
+    jne .pal2
+    mov [sb_v3a], ax                ; ...and keep the first three, so a human
+.pal2:                              ; can read the row as well as diff it
+    cmp cl, 1
+    jne .pal3
+    mov [sb_v3b], ax
+.pal3:
+    cmp cl, 2
+    jne .paln
+    mov [sb_v3c], ax
+.paln:
+    inc cl
+    cmp cl, 16
+    jb .pal
+    mov dx, 0x3DA                   ; ...and once more before the restore, for
+    in al, dx                       ; the same reason: the last read left the
+    mov dx, 0x3C0                   ; port in DATA state, so this would set
+    mov al, 0x20                    ; palette register 15 to 0x20 instead of
+    out dx, al                      ; turning the screen back on. PAS back up -
+    popf                            ; and this write is not optional
+
+    mov ax, [sb_v3a]
+    mov dx, [sb_v3b]
+    mov cx, [sb_v3c]
+    mov si, sb_l_vpal
+    call sb_v3
+    mov ax, [sb_vsum]
+    mov si, sb_l_vpsum
+    call sb_hex
+
+    call sb_shownsum
+    mov ax, [sb_vsum]
+    mov si, sb_l_vssum
+    call sb_hex
+    mov [sb_vshown], ax             ; ...and AGAIN, because a DAC read is not
+    call sb_shownsum                ; obviously reliable on every card and this
+    mov si, sb_l_vssum2             ; is the only way to find out: the IBM VGA
+    call sb_hex                     ; spec says a palette access can collide
+                                    ; with the display's own lookup, which is
+                                    ; why software of the period programmed the
+                                    ; DAC during retrace. TWO SUMS THAT DIFFER
+                                    ; MEAN THE ROW ABOVE CANNOT BE TRUSTED on
+                                    ; this card, and no amount of diffing two
+                                    ; reports would have said so - the first
+                                    ; field numbers did not correlate with what
+                                    ; was on the screen, and this row is what
+                                    ; that cost
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sb_shownsum - out AX = the sum of the sixteen DAC entries the SCREEN goes
+;               through, from the attribute palette sb_vga_regs banked.
+;
+; Mode 12h displays 16 colours and the attribute palette says which DAC entries
+; they are (00 01 02 03 04 05 14 07 38..3F on a standard table, which reads
+; 05D3 on a healthy card - verified against a known-good VGA). A drift in the
+; other 240 moves the all-256 sum and changes nothing anybody can see; this is
+; how the two are told apart.
+sb_shownsum:
+    push bx
+    push cx
+    push dx
+    mov word [sb_vsum], 0
+    xor bl, bl
+.s:
+    push bx
+    xor bh, bh
+    mov al, [bx+sb_vpal]
+    call sb_dacrd
+    add [sb_vsum], ax
+    add [sb_vsum], dx
+    add [sb_vsum], cx
+    pop bx
+    inc bl
+    cmp bl, 16
+    jb .s
+    mov ax, [sb_vsum]
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sb_porttog - DX = a status port; out AX = (every bit ever SET) << 8 | (every
+;              bit ever CLEAR, as an AND). Reads only, 20,000 times - about
+;              42 ms on a 4.77MHz 8088, which is two frames at 50 Hz and so
+;              long enough for a vertical-sync bit to have moved.
+;
+; IT IS THE QUESTION TO ASK WHEN THE MEMORY PROBE SAYS NO (SPEC.md 39.11.1.1).
+; A card that is present drives its status register and the retrace bits
+; change as the beam scans; an empty ISA slot answers 0xFF to every read,
+; forever, and OR == AND == FF says so in one number. That separates "there is
+; no mono card in this machine" from "there is one and its RAM is not
+; answering at B000", which no memory test can do and which a screenshot of a
+; desktop with no Display page cannot even hint at.
+sb_porttog:
+    push bx
+    push cx
+    xor bh, bh                      ; BH accumulates the OR...
+    mov bl, 0xFF                    ; ...BL the AND
+    mov cx, 20000
+.t:
+    in al, dx
+    or bh, al
+    and bl, al
+    loop .t
+    mov ax, bx                      ; AH = OR (BH), AL = AND (BL) - which is
+                                    ; already the order the label promises, and
+                                    ; the xchg that used to be here reversed it:
+                                    ; a field run read `88FF` for or/and, an
+                                    ; impossible pair (AND cannot hold a bit OR
+                                    ; does not), which is what caught it
+    pop cx
+    pop bx
+    ret
+
+; sb_dacrd - AL = a DAC entry; out AX/DX/CX = its red, green and blue (0..63)
+; No blanking and no flip-flop: the DAC's read port is its own.
+sb_dacrd:
+    push bx
+    mov dx, 0x3C7
+    out dx, al
+    mov dx, 0x3C9
+    in al, dx
+    mov bl, al
+    in al, dx
+    mov bh, al
+    in al, dx
+    mov cl, al
+    xor ch, ch
+    mov al, bh
+    xor ah, ah
+    mov dx, ax                      ; DX = green
+    mov al, bl
+    xor ah, ah                      ; AX = red, CX = blue
+    pop bx
+    ret
+
+sb_v3:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov [sb_v3a], ax                ; STAGED, not juggled: bl_dec wants AX, CX
+    mov [sb_v3b], dx                ; and DX itself, and three values through
+    mov [sb_v3c], cx                ; four registers is where a row prints one
+    call bl_lclr                    ; of its neighbours' numbers
+    xor di, di
+    call bl_lput
+    mov ax, [sb_v3a]
+    xor dx, dx
+    mov di, BL_C_N
+    mov cx, 6
+    call bl_dec
+    mov ax, [sb_v3b]
+    xor dx, dx
+    mov di, BL_C_N + 7
+    mov cx, 6
+    call bl_dec
+    mov ax, [sb_v3c]
+    xor dx, dx
+    mov di, BL_C_N + 14
+    mov cx, 6
+    call bl_dec
+    call bl_lcommit
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 sb_v2:
     push ax
     push bx
@@ -4758,10 +5077,24 @@ sb_l_hdsz:    db '  hdd bytes read', 0
 ; --- the mouse (SPEC.md 9.4.1/9.4.2) -----------------------------------------
 sb_s_h_vid:  db '-- the displays: what SPEC.md 39 arranged, and on which cards (39.19) --', 0
 sb_s_h_vid2: db '   kind 0=Vga 1=Herc 2=Cga; avail is a BITMAP of 1<<kind, so 6 = both.', 0
+sb_s_h_vid3: db '   mono probe: 0 it IS the screen, 1 memory, 2 after 3BFh, 3 refused.', 0
+sb_s_h_vid4: db '   3BA/3DA: FFFF = no card drives that port. 3DA is the control.', 0
 sb_s_vnone:  db '   this kernel publishes no display block (built before SPEC.md 57.4).', 0
 sb_s_vsmall: db '   kern_small: single-display by CONSTRUCTION, so there is nothing set.', 0
 sb_l_vkind:  db '  adapter running', 0
 sb_l_vavail: db '  adapters avail (hex)', 0
+sb_l_vhpr:   db '  mono probe 1/2/3', 0
+sb_l_v3ba:   db '  3BA or/and (hex)', 0
+sb_l_v3da:   db '  3DA or/and (hex)', 0
+sb_s_h_vga:  db '   the VGA colour path, read back (SPEC.md 39.21) - run it good AND bad.', 0
+sb_l_vsr:    db '  SR01 GR06 (hex)', 0
+sb_l_vdac0:  db '  dac 0 r g b', 0
+sb_l_vdacf:  db '  dac 3F r g b (white)', 0
+sb_l_vdsum:  db '  dac 0..255 sum (hex)', 0
+sb_l_vpal:   db '  attr pal 0 1 2', 0
+sb_l_vpsum:  db '  attr pal sum (hex)', 0
+sb_l_vssum:  db '  dac SHOWN 16 sum (hex)', 0
+sb_l_vssum2: db '  ...read again (hex)', 0
 sb_l_vnd:    db '  displays brought up', 0
 sb_l_vdm:    db '  desktop 0=Sing 1=Ext', 0
 sb_l_vdl:    db '  layout 0=Right 1=Below', 0
@@ -4991,7 +5324,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 248              ; ...and the scalars end at 247 now
+SB_O_SYSKB equ 274              ; ...and the scalars end at 273 now
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -5149,6 +5482,15 @@ sb_skcyl    equ os88_image_end + 240   ; word: the cylinder the seek pair steps
                                        ; to, 0 for the baseline row
 sb_mtst     equ os88_image_end + 242   ; word: 40:3F before the cold row - 0 if
                                        ; the motor really had stopped (242..243)
+sb_v3a      equ os88_image_end + 248   ; word: sb_v3's three staged values
+sb_v3b      equ os88_image_end + 250   ; word:
+sb_v3c      equ os88_image_end + 252   ; word:
+sb_vsum     equ os88_image_end + 254   ; word: the DAC checksum being built
+sb_vpal     equ os88_image_end + 256   ; 16 bytes: the attribute palette as
+                                       ; read, so the DAC entries the screen
+                                       ; goes through can be summed (256..271)
+sb_vshown   equ os88_image_end + 272   ; word: the first shown-16 sum, so the
+                                       ; second can be compared against it
 sb_syskb    equ os88_image_end + SB_O_SYSKB    ; SYSKB_SIZE bytes
 sb_res      equ os88_image_end + SB_O_RES      ; SB_NCPU dwords
 sb_rrow     equ os88_image_end + SB_O_RROW     ; SB_BWROWS words

@@ -638,12 +638,11 @@ fnt_unlazy:
     ret
 
 font_run:
-    call fnt_unlazy
-    push es
-    push ds
-    pop es
-    call font_run_x
-    pop es
+    push es                     ; the deferred hide is spent in font_run_x and
+    push ds                     ; NOT here, which is SPEC.md 6.1.9: this entry
+    pop es                      ; is the kernel's, and the API slot 0x0258 is
+    call font_run_x             ; an X STUB straight to font_run_x - so a hide
+    pop es                      ; owed here was owed by kernel callers only
     ret
 
 ; SPEC.md 6.1.7: one cell of a row pass, and the row advance after it. Macros
@@ -669,6 +668,13 @@ font_run:
 
 font_run_x:
     SNAPAUDIT_TALLY snap_hrun, snap_krun
+    call fnt_unlazy             ; SPEC.md 6.1.9: HERE, not at font_run above,
+                                ; because api_font_run is an X STUB to this
+                                ; label - so every package's opaque run drew
+                                ; over the mouse pointer with gfx_lock's
+                                ; promised hide unspent, and gfx_unlock then
+                                ; took cur_lazyend's "the arrow never left the
+                                ; screen" path and did not put it back
     push ax
     push bx
     push cx

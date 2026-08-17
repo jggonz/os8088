@@ -46,7 +46,7 @@ VMPENT := $(CURDIR)/vm/pentium
 VMXTZ := $(CURDIR)/vm/xt-z
 VM386Z := $(CURDIR)/vm/386-z
 
-# The two WORD machines (SPEC.md 65.5): the same pairing as the Frotz two -
+# The two WORD machines (SPEC.md 68.5): the same pairing as the Frotz two -
 # an XT with the 720KB Word disk in B:, a 386 with the 1.44MB one - but no
 # sound card on either, because Word makes no sound.
 VMXTWORD := $(CURDIR)/vm/xt-word
@@ -188,6 +188,41 @@ endif
 # screenshot shows.
 ifeq ($(KEEPH),0)
 VIDDEF += -DNOKEEPH
+endif
+
+# HEAPCOMPACT=0 removes the heap compactor (SPEC.md 66) - the BODY, not merely
+# the call, so the A/B measures the feature and not a branch around it. With it
+# off, mem_claim's retry loop is the shed-and-retry it was, every claim stays
+# where it was first placed, and OSAPI_MEM_MOVABLE records a handle nothing
+# ever reads. This is the reference build for tests/heapfrag and for any claim
+# that compaction changed a byte it should not have: the two kernels must
+# produce identical contents in every surviving block, and only the ADDRESSES
+# may differ.
+ifeq ($(HEAPCOMPACT),0)
+VIDDEF += -DNOCOMPACT
+endif
+
+# HEAPPARK=0 keeps the compactor and removes only the WORKER PARK (SPEC.md
+# 66.5), so a claim owned by a package with a live worker stays pinned - which
+# is what the kernel did before the handshake existed. It is a separate knob
+# from HEAPCOMPACT because the two answer separate questions: HEAPCOMPACT=0
+# asks whether compaction does anything at all, and this asks whether the park
+# is what lets it reach the claims that actually fragment a heap. Against
+# tests/heapfrag, which runs its suite with a live worker on purpose, both
+# produce the same two failures - and a kernel where only the park is broken
+# passes the first A/B and fails this one.
+ifeq ($(HEAPPARK),0)
+VIDDEF += -DNOPARK
+endif
+
+# HEAPPARKLK=0 keeps the park and removes only its GFX-LOCK half (SPEC.md
+# 66.5.4), so a worker parks at OSAPI_TASK_ALIVE and nowhere else - which is
+# what the kernel did before the declaration existed. It is the A/B for that
+# section alone, and it is the one that matters for a DRAWING worker:
+# tests/trackmove.py holds the gfx lock across the triggering claim on purpose,
+# so with this set Tracker's module cannot move and check 1 must fail.
+ifeq ($(HEAPPARKLK),0)
+VIDDEF += -DNOPARKLK
 endif
 
 # FDDPROBE=0 never asks the FDC whether the second floppy drive is really there
@@ -476,12 +511,12 @@ endif
 # BOOTDIAG is the one asymmetry that is meant to be one: it feeds $(BOOTDEF)
 # alone, and the stamp deletes boot.bin/boot360.bin whatever it says.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             KFZ DIRW1 INSTRO KEEPH DIRTYRAM FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
+                             KFZ DIRW1 INSTRO KEEPH DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSUOCCL SNDSNIFF RAMKB DRAGCACHE \
                              SNAPAUDIT SCROLLROW \
                              CURFIX \
                              FONT INSTCHUNK,\
                              $(if $($(k)),$(k)=$($(k)))))
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(DIRTYRAM),-dr$(DIRTYRAM))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(DIRTYRAM),-dr$(DIRTYRAM))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -558,7 +593,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
 .PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules xt-multimon 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field combo combo144 combo720 stackprobe trklog npbench clicktest marty \
-        comscan lptlink \
+        comscan lptlink calcref \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
@@ -1157,11 +1192,39 @@ $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc 
 $(BUILD)/notepad.o88: $(BUILD)/notepad.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/notepad.bin -o $@
 
-# TeXPad (SPEC.md 66): source on the left, typeset preview on the right, and
+# Calculator (SPEC.md 65): a four-function desk calculator with a foldaway
+# history. It uses os88ui.inc for its twenty keys and OSAPI_WM_ONRESIZE to
+# re-derive how many history rows fit whenever the kernel moves its box.
+$(BUILD)/calc.bin: apps/calc/calc.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/calc/calc.asm
+	@echo "calc:   $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/calc.bin -o $@
+
+# ...and the REFERENCE build, which letters every history row where the
+# shipped one scrolls the band (SPEC.md 65.4.1). It is the A/B for that
+# claim - `make calcref` then `python3 tests/calcflick.py --ref` prices both
+# on the same machine - and it goes on its own scratch image, never on a
+# shipped disk.
+calcref: $(BUILD)/calcref.img
+
+$(BUILD)/calcref.bin: apps/calc/calc.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DCALC_NOSCROLL -I apps/ -o $@ apps/calc/calc.asm
+	@echo "calcref: $(call FILESIZE,$@) bytes (the no-scroll reference)"
+
+$(BUILD)/calcref.o88: $(BUILD)/calcref.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/calcref.bin -o $@
+
+$(BUILD)/calcref.img: $(BUILD)/calcref.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 APPS:$(BUILD)/calcref.o88
+
+# TeXPad (SPEC.md 69): source on the left, typeset preview on the right, and
 # File > Export writes PDF 1.4 or PostScript Level 1. Contributed.
 #
 # It ships on the ORDINARY apps disk rather than getting its own the way Word
-# and Frotz did (SPEC.md 65.5/61.9), because the argument that gave them one
+# and Frotz did (SPEC.md 68.5/61.9), because the argument that gave them one
 # does not apply: those two need a disk with DOCUMENTS on it - stories, a
 # .DOC - and at 43KB Word does not leave room for the rest of the software on
 # a 360KB floppy anyway. TeXPad is 20KB and its documents are two .TEX files
@@ -1365,6 +1428,30 @@ $(BUILD)/missile.bin: apps/missile/missile.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/missile.o88: $(BUILD)/missile.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/missile.bin -o $@
 
+# Cyclone 88, a Tempest 2000 clone (SPEC.md 67). The web is a polygon of rim
+# vertices in a normalised space plus a depth ladder, resolved ONCE per layout
+# into a vertex table, so no frame does any perspective arithmetic. It is drawn
+# once and never again: level entry EXTRUDES it a few pixels of every spoke per
+# frame through SPEC.md 5.6.7's resumable walk, batched into one
+# OSAPI_GFX_LSTEPV a frame, and level exit replays the identical walks in the
+# background colour so the erase visits exactly the pixels the draw visited.
+# Every mover is a rect drawn strictly inside its lane, which is what lets an
+# erase be one gfx_fill rather than a repair. No heap claim.
+# CYTRACE=1 records the CALLER of every background fill landing in a watch
+# rect the host writes into the app's bss - the instrument that settled which
+# routine was erasing the movers, after three source-reading theories missed.
+# It is not in `all` and costs the shipped build nothing.
+CYCFLAGS :=
+ifdef CYTRACE
+CYCFLAGS += -DCYTRACE
+endif
+$(BUILD)/cyclone.bin: apps/cyclone/cyclone.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ $(CYCFLAGS) -o $@ apps/cyclone/cyclone.asm
+	@echo "cyclone: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/cyclone.o88: $(BUILD)/cyclone.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/cyclone.bin -o $@
+
 # TameGram, the thirteenth shipped package (SPEC.md 49): a four-direction,
 # dual-faction containment matrix contributed by Jason Page (store.amfile.org),
 # credited under its own name in the bar (OSAPI_ABOUT_SET, SPEC.md 12.2). Like
@@ -1391,6 +1478,96 @@ $(BUILD)/tamegram.o88: $(BUILD)/tamegram.bin tools/os88pkg.py
 #   make test TESTAPPS=build/filetest.img
 # then, after QMP quit, checked from the host with:
 #   python3 tools/os88disk.py --verify build/filetest.img
+# heapfrag - the heap-compaction gate (SPEC.md 66.8). Its own scratch image
+# like filetest's, and it needs no data file: the whole suite is heap.
+#
+#   make marty TESTAPPS=build/heapfrag.img          the one that matters
+#   make marty TESTAPPS=build/heapfrag.img HEAPCOMPACT=0    the A/B
+#
+# With HEAPCOMPACT=0 checks 7 and 10 MUST fail and 8 and 9 must still pass:
+# nothing moved, so nothing was corrupted and nothing was claimed. That pattern
+# is the gate - a suite that passes against both kernels is measuring something
+# other than compaction. (Check 11 passes in both, honestly: it compares moves
+# against notifications and both are 0. That is why 10 exists.)
+$(BUILD)/heapfrag.bin: tests/heapfrag/heapfrag.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/heapfrag/heapfrag.asm
+	@echo "heapfrag: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/heapfrag.o88: $(BUILD)/heapfrag.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/heapfrag.bin -o $@
+
+$(BUILD)/heapfrag.img: $(BUILD)/heapfrag.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/heapfrag.o88
+
+# ...and the 360KB twin, which is the one that gets used: every 5150 machine
+# config in tools/martypc has 360KB drives, and a 1.44MB image mounted in one
+# does not error - the Disk window opens HIDDEN and the run reports that the
+# package would not launch (SPEC.md 66.8).
+# PAINT rides along, because tests/paintmove.py needs a REAL holder with a
+# real derived row table on the heap while heapfrag forces a compaction: the
+# canvas is the biggest claim on the machine and the one whose relocation proc
+# has actual work to do (SPEC.md 66.2, apps/paint's pt_reloc).
+$(BUILD)/heapfrag360.img: $(BUILD)/heapfrag.o88 $(BUILD)/paint.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/heapfrag.o88 \
+		$(BUILD)/paint.o88
+
+# ...and Tracker's own disk, for tests/trackmove.py (SPEC.md 66.5.2). It is a
+# SEPARATE image and not an addition to heapfrag360: the listing is sorted by
+# name (SPEC.md 19.4), so dropping BEVERLY.MOD into that one renumbers every
+# row tests/heapcheck.py clicks.
+#
+# BEVERLY.MOD rides in the ROOT rather than MEDIA because the point is a
+# double-click on the .MOD row - Tracker claims the extension (SPEC.md 54), so
+# the association opens the app AND loads the module in one action, where
+# driving its File menu means a Standard File dialog on a 640x200 screen.
+$(BUILD)/trackmove360.img: $(BUILD)/heapfrag.o88 $(BUILD)/tracker.o88 \
+                           apps/tracker/beverly.mod tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/heapfrag.o88 \
+		$(BUILD)/tracker.o88 apps/tracker/beverly.mod
+
+# ...and the three editors' disk, for tests/editmove.py (SPEC.md 66.5.7). One
+# image for all three because each run needs heapfrag plus exactly ONE app -
+# the app has to land ABOVE heapfrag in the arena, and a second app opened
+# first would sit between them. The listing is sorted by name (SPEC.md 19.4):
+# ARTFUL 0, FRACTAL 1, HEAPFRAG 2, NOTEPAD 3, which is what editmove.py's
+# ROW_* constants say.
+$(BUILD)/editmove360.img: $(BUILD)/heapfrag.o88 $(BUILD)/notepad.o88 \
+                          $(BUILD)/fractal.o88 $(BUILD)/artful.o88 \
+                          tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/heapfrag.o88 \
+		$(BUILD)/notepad.o88 $(BUILD)/fractal.o88 $(BUILD)/artful.o88
+
+# ModPlug's own disk, for tests/trackmove.py --app modplug (SPEC.md 66.5.8).
+# Same shape as trackmove360 and separate for the same reason: the listing is
+# sorted by name (SPEC.md 19.4), so an extra package renumbers every row the
+# script clicks. ModPlug does NOT own .MOD (SPEC.md 56.13 leaves that pointed
+# at Tracker), so the module is opened through its own File menu rather than
+# by a double-click on the row.
+$(BUILD)/mppmove360.img: $(BUILD)/heapfrag.o88 $(BUILD)/modplug.o88 \
+                         apps/tracker/beverly.mod tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/heapfrag.o88 \
+		$(BUILD)/modplug.o88 apps/tracker/beverly.mod
+
+# ...and Frotz's, for tests/editmove.py --app frotz (SPEC.md 66.5.9).
+#
+# The STORY is compiled here rather than fetched: tools/getstories.py needs the
+# network once and this has to run in a container that has none, and no story
+# file may be committed (SPEC.md 61.9). tests/frotz/zopstest.inf is the tree's
+# own Inform source and `make zpic` already sets the precedent for inform being
+# an on-demand dependency. v5 because zopstest uses call_vn, which v3 has not.
+#
+# Frotz OWNS .Z5 (SPEC.md 54), so one double-click on the row opens the app and
+# loads the story - the trackmove.py route, and the reason this is easier to
+# drive than ModPlug.
+$(BUILD)/zt/ZOPS.Z5: tests/frotz/zopstest.inf
+	@mkdir -p $(BUILD)/zt
+	inform -v5 $< $@
+
+$(BUILD)/zmove360.img: $(BUILD)/heapfrag.o88 $(BUILD)/frotz.o88 \
+                       $(BUILD)/zt/ZOPS.Z5 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/heapfrag.o88 \
+		$(BUILD)/frotz.o88 $(BUILD)/zt/ZOPS.Z5
+
 $(BUILD)/filetest.bin: tests/filetest/filetest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/filetest/filetest.asm
 	@echo "filetest: $(call FILESIZE,$@) bytes"
@@ -1585,14 +1762,14 @@ $(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat/disk2/CATALOG.TXT \
 		ART:$(BUILD)/BRONZE.PIX --folder SAVES
 
 # =============================================================================
-# MICROSOFT WORD and its document floppy (SPEC.md 65) - ON DEMAND: `make worddisk`
+# MICROSOFT WORD and its document floppy (SPEC.md 68) - ON DEMAND: `make worddisk`
 # =============================================================================
-# Word follows Frotz's precedent (SPEC.md 65.5) exactly: WORD.O88 does NOT
+# Word follows Frotz's precedent (SPEC.md 68.5) exactly: WORD.O88 does NOT
 # ride the shipped apps disks - it gets its own floppy in all three
 # geometries, each with an empty DOCS\ folder where the file dialog lands the
 # user's documents, and `all` does not build any of them. The xt-word and
 # 386-word machines below put this disk in B: instead of the apps disk.
-# WELCOME.DOC rides the root of all three: a native .DOC (SPEC.md 65.4)
+# WELCOME.DOC rides the root of all three: a native .DOC (SPEC.md 68.4)
 # generated DETERMINISTICALLY by tools/os88doc.py from apps/word/welcome.wtx
 # - a document that exercises the formatting the same engine renders, so the
 # disk demonstrates the product the moment it is double-clicked.
@@ -1643,7 +1820,7 @@ $(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC t
 # through the app that wrote it" proves only that the app is self-consistent.
 # So the format has a SECOND implementation: tools/os88doc.py writes it and
 # tools/wordfmt.py reads it, sharing no code, both from the Opus headers
-# (SPEC.md 65.4.2). This builds WELCOME.DOC, parses it back with the reader,
+# (SPEC.md 68.4.2). This builds WELCOME.DOC, parses it back with the reader,
 # and diffs the result against the markup it was generated from - so a wrong
 # FIB offset, a wrong FKP offset scale or a wrong sprm width is a DIFF and
 # not a silently prettier document.
@@ -2718,12 +2895,12 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # whoever wrote it and whatever order its entries are stored in - which is
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
-APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/fractal.o88 $(BUILD)/hello.o88 \
-              $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 $(BUILD)/paint.o88 \
-              $(BUILD)/piano.o88 $(BUILD)/recorder.o88 $(BUILD)/texpad.o88 \
-              $(BUILD)/tracker.o88
-APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/missile.o88 \
-              $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
+APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/fractal.o88 \
+              $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
+              $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
+              $(BUILD)/texpad.o88 $(BUILD)/tracker.o88
+APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/cyclone.o88 $(BUILD)/mines.o88 \
+              $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
 
 # Data that ships beside the programs that read it (SPEC.md 24): os88disk.py
 # treats anything not ending .o88 as a plain file. Tracker with no module to
@@ -2741,7 +2918,7 @@ APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/missile.o88 \
 # exercises the dialect the typesetter implements, and GUIDE.TEX is the
 # markup written up as a document TeXPad itself sets - so the manual for the
 # markup is a worked example of it. Both are the kernel's default Open
-# location, and both are ASSOCIATED (SPEC.md 66.6), so a double-click on
+# location, and both are ASSOCIATED (SPEC.md 69.6), so a double-click on
 # either one opens TeXPad on it without going through APPS/ at all.
 APPS_DATA := apps/tracker/beverly.mod apps/texpad/PAPER.TEX \
              apps/texpad/GUIDE.TEX
@@ -3263,13 +3440,13 @@ xt-z: $(IMG360) $(BUILD)/zork720.img
 	@$(UNPROTECT) $(VM386Z)/86box.cfg
 	$(BOX) -P $(VM386Z) -N
 
-# The two WORD machines (SPEC.md 65.5), both with the Word document floppy in
+# The two WORD machines (SPEC.md 68.5), both with the Word document floppy in
 # B: instead of the apps disk - Frotz's precedent, for Frotz's reason: an app
 # whose documents live on its own disk is best launched from that disk.
 #
 #   xt-word   An IBM XT at 4.77MHz with the FULL 640KB - the document, CHP,
 #             save-staging and undo claims are what the memory is for
-#             (SPEC.md 65.5) - booting the 360KB system floppy with the
+#             (SPEC.md 68.5) - booting the 360KB system floppy with the
 #             720KB Word disk in B: (the 3.5" DD drive xt-z already
 #             established as period-plausible). NO sound card: Word makes no
 #             sound, so the plain-machine precedent applies rather than the

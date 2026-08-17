@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""os88doc.py - generate a REAL Word for Windows .DOC (SPEC.md 65.4) from a
+"""os88doc.py - generate a REAL Word for Windows .DOC (SPEC.md 68.4) from a
 minimal line-based markup (.wtx).
 
 Usage: os88doc.py SOURCE.wtx -o OUT.DOC
@@ -13,7 +13,7 @@ FIB in a 384-byte header page (wIdent 0xA59B, nFib 33), the text, CHPX and
 PAPX FKP pages with their bin tables, a one-style STSH, a one-section
 plcfsed whose SEPX is fcNil, and a DOP. tools/wordfmt.py reads it back -
 deliberately a SECOND implementation, so the generator and the verifier are
-separate code paths over one specification (SPEC.md 65.4.2).
+separate code paths over one specification (SPEC.md 68.4.2).
 
 Markup (.wtx), one PARAGRAPH per line:
   ; comment            a line starting ';' is dropped (';;' escapes a
@@ -42,7 +42,7 @@ MAGIC = 0xA59B
 NFIB = 33                               # nFibCurrent   (wordtech/file.h)
 NFIBBACK = 25                           # nFibBackCurrent
 PAPMAX = 256
-MAXTEXT = 30 * 1024                     # WD_MAXKB (SPEC.md 65.3)
+MAXTEXT = 30 * 1024                     # WD_MAXKB (SPEC.md 68.3)
 HDR = 384                               # cbFileHeader
 SECT = 512                              # cbSector
 TWIPCELL = 144                          # one cell = 1/10 inch
@@ -115,7 +115,7 @@ def parse_line(line):
     return pap, chars
 
 
-# --- the real file format (SPEC.md 65.4) ------------------------------------
+# --- the real file format (SPEC.md 68.4) ------------------------------------
 
 class Fkp:
     """One 512-byte formatting page (wordtech/fkp.h): rgfc[crun+1] file
@@ -220,7 +220,7 @@ def pack_runs(runs, fc0):
 def build_doc(text, chp, paps, tail):
     # A Word file's text ends with a paragraph mark and its N marks are N
     # paragraphs; this document model holds N-1 marks and a TAIL paragraph
-    # (SPEC.md 65.3/65.4), so the two differ by exactly this one character.
+    # (SPEC.md 68.3/68.4), so the two differ by exactly this one character.
     text = text + b'\r'
     chp = chp + bytes([tail])
 
@@ -342,7 +342,7 @@ def main():
     if not lines:
         raise SystemExit('os88doc: empty source')
 
-    paps = [(0, 0, 0, 0)]               # entry 0 IS Normal (SPEC.md 65.3)
+    paps = [(0, 0, 0, 0)]               # entry 0 IS Normal (SPEC.md 68.3)
     text = bytearray()
     chp = bytearray()
     tail = 0
@@ -362,7 +362,7 @@ def main():
         if n < len(lines) - 1:          # the mark carries its paragraph's
             text.append(13)             ; chp.append(idx)
         else:
-            tail = idx                  # the tail has no mark (SPEC.md 65.4)
+            tail = idx                  # the tail has no mark (SPEC.md 68.4)
 
     if len(text) > MAXTEXT:
         raise SystemExit('os88doc: %d bytes of text; the ceiling is %d'

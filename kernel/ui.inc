@@ -38,6 +38,15 @@
 ; already holds (it is non-reentrant, SPEC 7).
 ; =============================================================================
 
+; What a posted restart ASKED FOR (SPEC.md 20.10). Two values rather than a
+; bare flag, because the two doors labelled Restart know different things: the
+; System menu's is the user quitting the GUI with the Control Panel possibly
+; open and unsaved, and a driver's dialog may have just told them to take the
+; floppy OUT - in which case the flush is a mount of an empty drive, seconds of
+; frozen UI, and a toast about a disk the user was asked to remove.
+UI_RBQ_FLUSH   equ 1            ; flush the Control Panel on the way out
+UI_RBQ_NOFLUSH equ 2            ; ...and do not go near a disk at all
+
 UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
                                 ; same half second as DESK_DBLT, FM_DBLCLK
                                 ; and FD_DBLCLK, and deliberately the same
@@ -65,6 +74,8 @@ ui_task:
     ; --- 0. a posted restart, spent with NOTHING held (SPEC.md 20.10) --------
     cmp byte [ui_rebootq], 0
     je .keys
+    mov al, [ui_rebootq]        ; what the poster ASKED for, carried into AL:
+    sub al, UI_RBQ_FLUSH        ; 0 = flush the panel first, non-0 = do not
     mov byte [ui_rebootq], 0    ; ...cleared first: ui_cmd_reboot does not
     call ui_cmd_reboot          ; return, but a path that ever did must not
                                 ; find the post still standing
@@ -943,9 +954,10 @@ ui_drag:
     ret
 
 ; -----------------------------------------------------------------------------
-; ui_drag_phase - put a dropped window's x where the drag cache can replay it
-;                 (SPEC.md 11.96.13)
-; in:  BX = the window, its W_X already clamped and snapped; ui_origx = the old
+; ui_drag_phase - put a dropped window's x AND y where the drag cache can
+;                 replay it (SPEC.md 11.96.13, 11.96.13.1)
+; in:  BX = the window, its W_X/W_Y already clamped and snapped; ui_origx and
+;      ui_origy = the old ones
 ; out: nothing; preserves every register
 ;
 ; 11.96.12's byte phase is not a bug and cannot be argued away: gfx_save lays
@@ -957,12 +969,31 @@ ui_drag:
 ; 210 calls at dx = -64 against 1,007 at dx = -60.
 ;
 ; So the drop is moved onto the phase instead, and the direction is the whole
-; safety argument: it always moves TOWARD ui_origx, never away. The window was
+; safety argument: it always moves TOWARD the origin, never away. The window was
 ; legal where it started and legal where the clamps left it, the legal x's are
 ; an INTERVAL, so every point between the two is legal as well - which is why
 ; this needs no clamp of its own and cannot fight wm_dock_snap, ui_drag_dead or
 ; the dual-display bounds above. Rounding to the NEAREST multiple would be
 ; half the error and is not worth re-deriving those bounds here.
+;
+; ...AND THE SAME IS DONE TO dy, FOR A DIFFERENT REASON (SPEC.md 11.96.13.1).
+; There is no LAYOUT reason: rows are whole, so any dy replays correctly as far
+; as gfx_save's buffer is concerned, and that is why "snap dy too" has been
+; asked before and answered "no benefit". The benefit is not the layout, it is
+; the DITHER. gfx_fill_gray is "(x + y) even = white, odd = black" - phased on
+; ABSOLUTE screen coordinates, deliberately, because that is what lets
+; wm_dmg_gray draw the desktop as fragments and get the pixels drawing it whole
+; would give - and files.inc draws a Disk window's scroll-bar track with it,
+; fdlg.inc the file dialog's, and the Task Manager its whole memory map with
+; gfx_fill_pat, which is screen-aligned on y & 7. Replay any of that an ODD
+; number of rows away and every dithered pixel comes back INVERTED; a multiple
+; of 8 covers the 8x8 patterns as well, and 8 is even, so one rule serves both.
+;
+; The safety argument carries over word for word: the legal y's are an interval
+; too (MBAR_H at the top, wm_dock_snap's ceiling at the bottom), both ends of
+; the move are in it, so every point between them is. It runs AFTER
+; ui_drag_dead and wm_dock_snap for exactly that reason - it is the last thing
+; to touch the rect before wm_dc_take banks it.
 ;
 ; It is inside the caller's %ifndef NODRAGCACHE, and so is the body below, so a
 ; DRAGCACHE=0 reference build drops the window exactly where it always did AND
@@ -974,19 +1005,34 @@ ui_drag_phase:
     push bx
     mov ax, [bx + W_X]
     sub ax, [ui_origx]          ; AX = dx, signed
-    or ax, ax
-    jns .pos
-    neg ax                      ; TRUNCATE TOWARD ZERO, and the sign is why
-    and ax, 0xFFF8              ; this is done on the magnitude rather than in
-    neg ax                      ; place: `and ax, 0xFFF8` rounds toward MINUS
-    jmp short .set              ; INFINITY, so on a leftward drag it moves the
-.pos:                           ; window further from the origin - out of the
-    and ax, 0xFFF8              ; interval the safety argument above rests on
-.set:
+    call ui_drag_ph8
     add ax, [ui_origx]
     mov [bx + W_X], ax
+    mov ax, [bx + W_Y]          ; ...AND dy, FOR THE DITHER (SPEC.md 11.96.13.1)
+    sub ax, [ui_origy]
+    call ui_drag_ph8
+    add ax, [ui_origy]
+    mov [bx + W_Y], ax
     pop bx
     pop ax
+    ret
+
+; ui_drag_ph8 - AX = a signed delta -> AX truncated TOWARD ZERO to a multiple
+;               of 8; clobbers nothing else (flags)
+;
+; The sign is why this is done on the magnitude rather than in place:
+; `and ax, 0xFFF8` rounds toward MINUS INFINITY, so on a leftward or upward
+; drag it would move the window further from the origin - out of the interval
+; the safety argument above rests on.
+ui_drag_ph8:
+    or ax, ax
+    jns .pos
+    neg ax
+    and ax, 0xFFF8
+    neg ax
+    ret
+.pos:
+    and ax, 0xFFF8
     ret
 %endif
 
@@ -1940,16 +1986,31 @@ ui_cmd:
     ret
 
 .reboot:
+    xor al, al                  ; the System menu's Restart FLUSHES: the user
+                                ; is quitting the GUI from the bar, and the
+                                ; panel they may have left open is a window
+                                ; they can see
 ; ...and its OTHER entry point, ui_reboot_post's deferred one (SPEC.md 20.10).
 ; A label rather than a routine: the body below never returns, so there is
 ; nothing for two callers to disagree about.
+;
+; in: AL = 0 flush the Control Panel first, non-0 skip it (SPEC.md 20.10).
+; The flag is the CALLER'S statement about the disk, not a preference: a
+; driver's dialog that has just asked the user to remove the floppy knows the
+; write cannot land, and the kernel has no way to work that out for itself.
 ui_cmd_reboot:
+    or al, al
+    jnz .nosave                 ; ...and then nothing on this path touches a
+                                ; disk at all: drv_shutdown's detaches are
+                                ; memory and ports (hd_cfg_mark stages its
+                                ; blob and writes nothing - SPEC.md 51.9)
     call cp_flush_close         ; the OTHER way the panel stops existing
                                 ; (SPEC.md 31.8). Before the lock, because a
                                 ; disk write is not something to do with the
                                 ; GUI already torn down - and before vid_text,
                                 ; so a failure still has a screen to have
                                 ; happened on
+.nosave:
     call drv_shutdown           ; detach every loaded driver (SPEC.md 51.2):
                                 ; int 19h resets no hardware, so a hooked
                                 ; card would ride the reboot with its vector
@@ -1968,7 +2029,15 @@ ui_cmd_reboot:
     jmp ui_cmd_reboot           ; unreachable; int 19h does not return
 
 ; -----------------------------------------------------------------------------
-; ui_reboot_post - API slot 0x0368 (SPEC.md 20.10). No arguments, no answer.
+; ui_reboot_post - API slot 0x0368 (SPEC.md 20.10). AL in, no answer.
+;
+; AL = 0 restart the way the System menu does, flushing the Control Panel's
+; settings on the way out; AL non-0 restart WITHOUT going near a disk. The
+; second is for a caller that has just asked the user to take the floppy out -
+; the hard disk installer's Restart (SPEC.md 52.10.6) is the case it exists
+; for, and there the flush is a mount of an empty drive, seconds of frozen UI
+; under a stopped cursor, and a toast telling the user to put back the disk
+; they were told to remove.
 ;
 ; POSTS a restart; it does not perform one. Every caller of this slot is a
 ; window callback or a Control Panel page, and all of those run on the UI task
@@ -1981,15 +2050,38 @@ ui_cmd_reboot:
 ; where nothing is held - the same reasoning that runs the app menu's Close
 ; inline in ui_dispatch (SPEC.md 12.7). A second post before the first is
 ; spent is the same restart, which is why this is a flag and not a count.
+;
+; Two posts that DISAGREE about the flush settle towards not touching a disk,
+; and that is not "the safe default" wearing a disguise: a caller asking to
+; skip is reporting a FACT nobody else has - the drive is empty - while a
+; plain post is merely not saying anything about it. Unreachable today, there
+; being one caller; written down because the rule has to be somebody's.
 ; -----------------------------------------------------------------------------
 ui_reboot_post:
-    mov byte [ui_rebootq], 1
+    pushf                       ; ...AND THE FLAGS, which this cell used to
+                                ; preserve by ACCIDENT: it was two mov's, and a
+                                ; mov touches none. The tests below do. A
+                                ; package's entry proc hands CF back to the
+                                ; loader, so a stray one aborts a launch -
+                                ; wm_snap's own bug (SPEC.md 11.94), and the
+                                ; reason a slot's contract is never widened
+                                ; quietly
+    cmp byte [ui_rebootq], UI_RBQ_NOFLUSH
+    je .out
+    mov byte [ui_rebootq], UI_RBQ_FLUSH
+    or al, al
+    jz .out
+    mov byte [ui_rebootq], UI_RBQ_NOFLUSH
+.out:
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
 section .bss
 
-ui_rebootq: resb 1              ; 1 = a restart is owed (SPEC.md 20.10)
+ui_rebootq: resb 1              ; 0 = nothing owed, else UI_RBQ_* - a restart
+                                ; is owed AND whether it may touch a disk on
+                                ; the way out (SPEC.md 20.10)
 
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
 ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,

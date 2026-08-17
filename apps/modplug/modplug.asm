@@ -315,6 +315,16 @@ mpp_hire:
     push bx
     cmp byte [mpp_hired], 0
     jne .out
+    mov al, 1                       ; PARK-SAFE (SPEC.md 66.5.4): the worker's
+    call OSAPI_MEM_PARKSAFE         ; ONE lock site is mpp_render, which runs
+                                    ; AFTER mpp_feed has returned - so no
+                                    ; mixer pointer is live across it, and
+                                    ; what mppu_frame draws from is bss
+                                    ; (mpm_chans, mpp_lcdname) rather than the
+                                    ; module. A worker suspended INSIDE a feed
+                                    ; pass is a different matter and is not
+                                    ; this: [mpp_mixing] and the ALIVE park
+                                    ; already keep a compaction out of one
     mov ax, mpp_worker
     mov bx, [mpp_win]
     call OSAPI_TASK_SPAWN
@@ -1049,6 +1059,15 @@ mpp_load_name:
     mov [mpm_blobseg], ax           ; moved is still the one mpm_load indexes
     call mpm_load                   ; CF=1, AX = offset of a NUL error string
     jc .lderr
+    mov dx, [mpp_modseg]        ; ONLY NOW is it movable (SPEC.md 66.2/66.5.8),
+    mov ax, mpp_reloc           ; and the ordering is the safety argument
+    call OSAPI_MEM_MOVABLE      ; rather than a tidiness: OSAPI_FILE_READ above
+                                ; holds ES:BX into this block across a call
+                                ; that itself CLAIMS (SPEC.md 18.95's sector
+                                ; cache). Unlike the two editors (66.5.7.1)
+                                ; this needs no pin/unpin pair, because a
+                                ; reload FREES the claim and takes a fresh one
+                                ; - and a fresh claim starts undeclared
     mov si, mpp_fname               ; the LCD's first line is the module's own
     mov di, mpp_lcdname             ; title, and its second the file name
     call mpp_strcpy12
@@ -1148,6 +1167,56 @@ mpp_trim:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mpp_reloc - the compactor moved the module (SPEC.md 66.5.8)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing; preserves every register
+;
+; 36 WORDS, AND IT IS NOT trk_reloc. SPEC.md 56.1 is the whole reason this
+; file exists in the shape it does: ModPlug's replayer is an INDEPENDENT copy
+; of Tracker's, so a fix in one is not a fix in the other - and the layouts
+; really do differ (MPS_SZ is 12 against trkplay's MS_SZ, MPM_CHSZ 40), which
+; is what would make a copied-and-renamed proc walk the tables with the wrong
+; stride and produce plausible garbage rather than an error.
+;
+; Everything else is trk_reloc's argument verbatim, including the trap it
+; sprang: a channel's MPM_SEG of 0 means THIS CHANNEL IS PLAYING NOTHING and
+; is not a base to be adjusted. Adding the delta to it invents an address out
+; of nowhere, which on a machine with no Sound Blaster is all four of them.
+; -----------------------------------------------------------------------------
+mpp_reloc:
+    push ax
+    push cx
+    push si
+    cmp bx, [mpp_modseg]
+    jne .out
+    mov [mpp_modseg], dx
+    mov ax, dx
+    sub ax, bx                      ; AX = the paragraph delta
+    cmp bx, [mpm_blobseg]
+    jne .out                        ; the replayer is looking at something else
+    add [mpm_blobseg], ax
+    mov si, mpm_smptab
+    mov cx, 31
+.smp:
+    add [si+MPS_SEG], ax
+    add si, MPS_SZ
+    loop .smp
+    mov si, mpm_chans
+    mov cx, 4
+.ch:
+    cmp word [si+MPM_SEG], 0        ; 0 = playing nothing (see above)
+    je .chnext
+    add [si+MPM_SEG], ax
+.chnext:
+    add si, MPM_CHSZ
+    loop .ch
+.out:
+    pop si
+    pop cx
     pop ax
     ret
 

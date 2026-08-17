@@ -946,6 +946,25 @@ dsk_xfer:
 
 
     inc byte [sch_lock]         ; pause task switching across all int 13h
+    push es
+    pop word [mem_pinseg]       ; ...AND PIN WHATEVER CLAIM THE DESTINATION IS
+                                ; IN (SPEC.md 66.3 rule 5). A transfer holds
+                                ; ES:BX across a call that itself CLAIMS -
+                                ; SPEC.md 18.95's sector cache, MEM_P_DIRW,
+                                ; taken lazily inside disk_read - so a movable
+                                ; block being read INTO could be compacted out
+                                ; from under the kernel's own walking pointer,
+                                ; which no relocation proc can repair because
+                                ; the stale copy is on this stack.
+                                ;
+                                ; It fails SAFE by construction: the only
+                                ; thing a wrong value here can do is refuse to
+                                ; move a block, so the worst outcome is a
+                                ; compaction that achieves less. That is why
+                                ; the guard lives here rather than in an
+                                ; author rule - the rule would be correct,
+                                ; unenforceable, and paid for in silent
+                                ; corruption the one time somebody missed it
 
     mov si, cx                  ; SI = sectors remaining
     mov di, ax                  ; DI = current LBA
@@ -1250,7 +1269,8 @@ dsk_xfer:
     call dsk_bpb_bank_zap       ; an I/O error is exactly the shape "this is
     stc                         ; not the disk you think it is" arrives in
 .out:
-    dec byte [sch_lock]         ; resume switching (dec leaves CF alone)
+    mov word [mem_pinseg], 0    ; the destination is nobody's again (dec and
+    dec byte [sch_lock]         ; mov leave CF alone, and CF is the answer)
     pop bp
     pop di
     pop si

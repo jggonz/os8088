@@ -74,7 +74,7 @@ exactly like the feature being broken.
 CGA and a Hercules, a monitor window each — and the only 86Box machine that
 can show §39.12–§39.19's extended desktop; it boots Single, and Control Panel
 → Display → Desktop is what extends it (§39.19.1). `xt-z` and `386-z` are the
-Frotz machines (§61.9), and `xt-word`/`386-word` are the Word machines (§65.5)
+Frotz machines (§61.9), and `xt-word`/`386-word` are the Word machines (§68.5)
 — the four that put a dedicated floppy in B: instead of the apps disk. `make
 zdisk` builds the story disk (`tools/getstories.py` fetches the stories, which
 are never committed) and `make worddisk` builds the Word disk.

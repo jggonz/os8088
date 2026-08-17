@@ -1,9 +1,9 @@
 ; =============================================================================
 ; os8088 - apps/word/word.asm
 ;
-; MICROSOFT WORD (SPEC.md 65) - a faithful native reimplementation of Word
+; MICROSOFT WORD (SPEC.md 68) - a faithful native reimplementation of Word
 ; for Windows 1.1a ("Opus") as an os8088 package. The reasoning and feature
-; inventory are docs/WORD-PLAN.md; SPEC.md 65 is the binding contract.
+; inventory are docs/WORD-PLAN.md; SPEC.md 68 is the binding contract.
 ;
 ; The text engine is Note Pad's (SPEC.md 27), transplanted wholesale with
 ; prefix wd_: the one-walk/many-queries layout pass, row signatures and
@@ -13,10 +13,10 @@
 ; 5-deep undo, find/replace with its docked panel, and the lazy worker that
 ; pays the wrap/height debts. The engine comments below still cite SPEC.md
 ; 27 - deliberately: they describe the transplanted machinery, and 27 is
-; where that machinery is specified. SPEC.md 65.6 keeps the architecture
+; where that machinery is specified. SPEC.md 68.6 keeps the architecture
 ; whole by reference.
 ;
-; On top of the transplant, the AUTHENTIC in-window chrome (SPEC.md 65.2):
+; On top of the transplant, the AUTHENTIC in-window chrome (SPEC.md 68.2):
 ; the nine-title menu bar with Opus's verbatim menus (dropdowns, separators,
 ; right-justified shortcut captions, check marks, mnemonic underlines,
 ; disabled-pen greying, press-drag-release AND click-open interaction,
@@ -35,7 +35,7 @@
 %include "os88api.inc"
 
     OS88_HEADER 'WORD', wd_entry, 3    ; bit 0 icon, bit 1 the DOC
-                                       ; association block (SPEC.md 65.4)
+                                       ; association block (SPEC.md 68.4)
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A white page with a big black 'W' - the document identity, one glyph. The
@@ -94,7 +94,7 @@
     dw 0x0000
     OS88_ICON16_END
 
-; --- the association block (SPEC.md 54/65.4): double-clicking a .DOC on the
+; --- the association block (SPEC.md 54/68.4): double-clicking a .DOC on the
 ; desktop launches Word with the document in OSAPI_ARG_FILE. Declared in the
 ; header (flags bit 1) so the mount's icon harvest reads it for free.
     OS88_ASSOC16
@@ -110,7 +110,7 @@
 ; on File > New. [wd_dseg]:0000 is the text and [wd_cap] its capacity.
 WD_KB0       equ 1              ; the document claim at launch, KB
 WD_GROWKB    equ 1              ; ...and the quantum it grows by
-WD_MAXKB     equ 30             ; ...and its ceiling (SPEC.md 65.3). Note
+WD_MAXKB     equ 30             ; ...and its ceiling (SPEC.md 68.3). Note
                                 ; Pad's was 16, and what bounds it is the
                                 ; SAVE arithmetic, not memory: a save expands
                                 ; every 13 to CR LF, and its staging pass
@@ -129,9 +129,9 @@ WD_MAXCOL    equ 341            ; cells a row can hold, plus one for the NUL.
                                 ; A row is accumulated into a buffer and drawn
                                 ; as ONE opaque font_run (SPEC.md 6.1/27.2) -
                                 ; or, in a proportional face, as one composed
-                                ; band (SPEC.md 6.3/65.13)
+                                ; band (SPEC.md 6.3/68.13)
                                 ;
-                                ; 1360/4 AND NOT 1360/8 since SPEC.md 65.13:
+                                ; 1360/4 AND NOT 1360/8 since SPEC.md 68.13:
                                 ; the divisor is the NARROWEST ADVANCE a face
                                 ; may have, which os88type.inc pins at
                                 ; TY_MINADV = 4 and refuses a face below
@@ -237,7 +237,7 @@ WD_GROW      equ 13             ; the grow box the kernel draws in the
                                 ; the Disk window's stops above its status
                                 ; line - drawn into, the two overlap and the
                                 ; down arrow comes out as a square
-; --- the chrome strips (SPEC.md 65.2) ----------------------------------------
+; --- the chrome strips (SPEC.md 68.2) ----------------------------------------
 ; Word's chrome is the WINDOW's, not the kernel's: MENU_APPMAX is five and
 ; Word's bar is nine menus, so wd_bounds reserves four strips inside the
 ; content and the text band is what remains. THIS STAGE paints each strip as
@@ -270,7 +270,7 @@ WD_STATUS_H  equ 12             ; the status bar (View > Status Bar)
 WD_CHROME_TOP equ WD_MENU_H + WD_RIBBON_H + WD_RULER_H   ; 48, all strips ON.
                                 ; The LIVE chrome top is [wd_ctop], computed by
                                 ; wd_ctcalc from the View toggles - ribbon and
-                                ; ruler can each be hidden (SPEC.md 65.2), and
+                                ; ruler can each be hidden (SPEC.md 68.2), and
                                 ; then the sum is 30 or 32 or 14. The align-
                                 ; ment note above holds for the default stack;
                                 ; a toggled top costs the blit its banked fast
@@ -280,7 +280,7 @@ WD_CHROME_TOP equ WD_MENU_H + WD_RIBBON_H + WD_RULER_H   ; 48, all strips ON.
   %error "WD_CHROME_TOP must be a multiple of 8 - see the note above"
 %endif
 
-; --- the in-window menu system (SPEC.md 65.2) --------------------------------
+; --- the in-window menu system (SPEC.md 68.2) --------------------------------
 ; Word's nine menus, verbatim from Opus's menus.cmd. A menu (or a ribbon/ruler
 ; combo's one-entry list, which reuses all of this) is described by an 8-byte
 ; row of wd_mtab and an array of 8-byte item records; the open dropdown's
@@ -290,7 +290,7 @@ WD_CHROME_TOP equ WD_MENU_H + WD_RIBBON_H + WD_RULER_H   ; 48, all strips ON.
 WD_M_N       equ 9              ; menus on the bar
 ; WD_PROPDRAW - is a chosen face DRAWN, or only opened and named?
 ;
-; 1, and SPEC.md 65.13's conversion is finished behind it: the face opens, the
+; 1, and SPEC.md 68.13's conversion is finished behind it: the face opens, the
 ; ribbon names it, wd_bandrun composes and emits a run through SPEC.md 6.3's
 ; band, the row advance and glyph band follow the face's own rows via
 ; [wd_gh]/[wd_ghb], and [wd_pxon] makes wd_px[] the truth about where a cell
@@ -300,7 +300,7 @@ WD_M_N       equ 9              ; menus on the bar
 ; The switch stays because it is the one place to stand a whole face's worth of
 ; drawing down from, and because a half-converted Word is worse than an
 ; unconverted one: it draws in one face and measures in another. That state
-; DID ship once and SPEC.md 65.13.1 records what it was reported as.
+; DID ship once and SPEC.md 68.13.1 records what it was reported as.
 ;
 ; %assign AND NOT equ, and that distinction cost a whole debugging round: `%if`
 ; is a PREPROCESSOR directive and an `equ` is an ASSEMBLER symbol, so `%if
@@ -354,7 +354,7 @@ WDA_COPY     equ 9
 WDA_PASTE    equ 10
 WDA_SEARCH   equ 11
 WDA_REPL     equ 12
-WDA_DRAFT    equ 13             ; View > Draft (SPEC.md 65.11)
+WDA_DRAFT    equ 13             ; View > Draft (SPEC.md 68.11)
 WDA_VRIB     equ 14
 WDA_VRUL     equ 15
 WDA_VSTA     equ 16
@@ -362,15 +362,15 @@ WDA_ABOUT    equ 17
 WDA_WIN1     equ 18             ; Window > 1 <doc>: the one window; checked
 WDA_CSEL     equ 19             ; a combo's entry - cosmetic select
 WDA_CHAR     equ 20             ; Format > Character... - the modal dialog
-WDA_PARA     equ 21             ; Format > Paragraph... (SPEC.md 65.3)
-WDA_GOTO     equ 22             ; Edit > Go To... (SPEC.md 65.7)
-WDA_SORT     equ 23             ; Utilities > Sort... (SPEC.md 65.9)
+WDA_PARA     equ 21             ; Format > Paragraph... (SPEC.md 68.3)
+WDA_GOTO     equ 22             ; Edit > Go To... (SPEC.md 68.7)
+WDA_SORT     equ 23             ; Utilities > Sort... (SPEC.md 68.9)
 WDA_RENUM    equ 24             ; Utilities > Renumber...
 WDA_TOC      equ 25             ; Insert > Table of Contents...
-WDA_PAGE     equ 26             ; View > Page (SPEC.md 65.11)
+WDA_PAGE     equ 26             ; View > Page (SPEC.md 68.11)
 WDA_MAX      equ 26
 
-; --- the CHP attribute byte (SPEC.md 65.3) -----------------------------------
+; --- the CHP attribute byte (SPEC.md 68.3) -----------------------------------
 ; One byte per character, in a claim that mirrors every gap operation the text
 ; claim makes. Bit 7 is reserved in the FILE format; in the ROW's attribute
 ; buffer it marks a paragraph-mark cell (Show-all's pilcrow), which never
@@ -384,7 +384,7 @@ WDAT_SCAP    equ 0x20
 WDAT_HID     equ 0x40
 WDAT_PIL     equ 0x80           ; row-buffer only: this cell is a pilcrow
 
-; --- the PAP dictionary (SPEC.md 65.3) ---------------------------------------
+; --- the PAP dictionary (SPEC.md 68.3) ---------------------------------------
 ; Paragraph formatting lives ON THE PARAGRAPH MARK: a 13's CHP byte is an
 ; index into a 256-entry dictionary of unique 4-byte formats, exactly Word's
 ; arrangement shrunk to fit - so undo, cut/paste and the drag-move's rotate
@@ -427,7 +427,7 @@ WDPO_SETFIRST equ 8             ; arg = SIGNED cells (the first-line marker)
 WDPO_SETRIGHT equ 9             ; arg = cells (the right marker)
 WDPO_SETALL  equ 10             ; the whole candidate [wd_pfb] (the dialog)
 
-; --- the modal dialog framework (SPEC.md 65.3) -------------------------------
+; --- the modal dialog framework (SPEC.md 68.3) -------------------------------
 ; A dialog is a descriptor: dw width, height, title; then 12-byte control
 ; records (db type, flags; dw x, y, p1, p2, p3 - x/y relative to the dialog's
 ; top-left), terminated by a type-0 byte. Painter and hit test walk the SAME
@@ -447,7 +447,7 @@ WDD_EDIT     equ 7              ; live edit:  p1 = its buffer (NUL), p2 = w,
                                 ;             p3 = capacity in chars (0 = 6).
                                 ;             Click or Tab focuses; digits
                                 ;             . - " type; BkSp deletes
-                                ;             (SPEC.md 65.3). With WDDF_TXT
+                                ;             (SPEC.md 68.3). With WDDF_TXT
                                 ;             in the flags it takes every
                                 ;             printable 32..126 instead - the
                                 ;             search dialogs' boxes (65.7)
@@ -461,7 +461,7 @@ WDDF_TXT     equ 2              ; bit 1, WDD_EDIT only: free text (SPEC.md
                                 ; letters, so check-box mnemonics answer
                                 ; only when no text edit has the focus
 
-; --- ribbon and ruler layout (SPEC.md 65.2), content-relative x --------------
+; --- ribbon and ruler layout (SPEC.md 68.2), content-relative x --------------
 ; Grouping and order per Opus ibdefs.h: Font/Pts combos, then Bold Italic
 ; SmallKaps | Underline Word Double | the stacked super/subscript pair | the
 ; show-all pilcrow at the far right; ruler: Style combo, align x4, spacing x3,
@@ -492,7 +492,7 @@ WD_RL_TAB    equ 314            ; tab type L C R D
 WD_RL_SCALE  equ 376            ; the inch scale's zero
 WD_ST_CELLS  equ 46             ; status line text cells (delta-cached):
                                 ; 'Pg 15  Sec 1  15/15  At 54li  Ln 54  Col
-                                ; 171' is 44 at the worst (SPEC.md 65.2)
+                                ; 171' is 44 at the worst (SPEC.md 68.2)
 WD_PGCOLS    equ 60             ; the sheet's text column in Page view: 60
                                 ; cells = 480px = 6 inches at this port's
                                 ; scale (1 cell = 1/10"), which is US Letter
@@ -503,10 +503,10 @@ WD_PGCOLS    equ 60             ; the sheet's text column in Page view: 60
                                 ; a full sheet would fit one adapter of three
                                 ; and CLAUDE.md's rule is to look at a 1bpp
                                 ; adapter before calling a layout done
-WD_PGLINES   equ 54             ; lines to a page (SPEC.md 65): Pg/Ln derive
+WD_PGLINES   equ 54             ; lines to a page (SPEC.md 68): Pg/Ln derive
                                 ; from the caret's absolute line by this
 
-; --- the italic claim (SPEC.md 65.1) -----------------------------------------
+; --- the italic claim (SPEC.md 68.1) -----------------------------------------
 ; ONE claim carries two things: the sheared 4bpp glyph table, and the staging
 ; area a run is composed in before its single gfx_blit4. The staging area used
 ; to be BSS - 5,440 bytes of it, 55% of this package's whole bss, reserved on
@@ -545,7 +545,7 @@ WD_MARGIN    equ 8              ; left/top text margin inside the content. It
                                 ; window has a Macintosh menu bar over it
 WD_K_F1      equ 0x3B           ; F1 - Help: opens the About box (the only
                                 ; help there is; Help > Index is greyed)
-WD_K_F4      equ 0x3E           ; F4 - repeat search down (SPEC.md 65.7)
+WD_K_F4      equ 0x3E           ; F4 - repeat search down (SPEC.md 68.7)
 WD_K_F5      equ 0x3F           ; F5 - Go To... (keys.cmd EditGoTo)
 WD_K_F8      equ 0x42           ; F8 - extend selection (status EXT)
 WD_K_SF4     equ 0x57           ; Shift-F4 - repeat search up (Shift-F1..F10
@@ -559,7 +559,7 @@ WD_K_DOWN    equ 0x50
 WD_K_DEL     equ 0x53
 WD_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
 
-; --- keys (SPEC.md 27.8/65.3) ------------------------------------------------
+; --- keys (SPEC.md 27.8/68.3) ------------------------------------------------
 ; The control characters int 16h already hands over in AL. Backspace (8),
 ; Tab (9) and Enter (13) are Ctrl-H/I/M, so italic, hidden and UnIndent are
 ; spoken for (the first two ride the Format Character dialog; UnIndent rides
@@ -576,7 +576,7 @@ WD_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
 ; box focus - have no home yet, and a Save with no key is a document lost),
 ; Ctrl-Z stays undo beside Alt+BkSp (unbound in keys.cmd, harmless).
 WD_C_SELALL  equ 0x01           ; Ctrl-A
-WD_C_BOLD    equ 0x02           ; Ctrl-B - bold (keys.cmd; SPEC.md 65.3)
+WD_C_BOLD    equ 0x02           ; Ctrl-B - bold (keys.cmd; SPEC.md 68.3)
 WD_C_CENTER  equ 0x03           ; Ctrl-C - CenterPara (keys.cmd!)
 WD_C_DUL     equ 0x04           ; Ctrl-D - double underline (keys.cmd)
 WD_C_CLOSESP equ 0x05           ; Ctrl-E - CloseUpPara
@@ -623,13 +623,13 @@ WD_UMAXKB    equ 16             ; ...and its ceiling. Note Pad's 16, KEPT at
                                 ; own decision when the undo arena is looked
                                 ; at again, not a silent 14KB of heap here
 
-; --- search and replace (SPEC.md 65.7) ---------------------------------------
+; --- search and replace (SPEC.md 68.7) ---------------------------------------
 ; Word 1.1 had no regex, and neither does this: the engine is a literal scan
 ; honouring the authentic search.des options. Note Pad's regex matcher and
 ; its docked panel are gone - Edit > Search... / Replace... / Go To... are
-; modal dialogs on the SPEC.md 65.3 framework now.
+; modal dialogs on the SPEC.md 68.3 framework now.
 WD_FRXMAX    equ 96             ; the expanded replacement's ceiling
-                                ; (SPEC.md 65.7): ^m can be as long as the
+                                ; (SPEC.md 68.7): ^m can be as long as the
                                 ; match and ^c as long as the clipboard, so
                                 ; the splice buffer is bounded here and a
                                 ; replacement that overflows it is REFUSED
@@ -641,7 +641,7 @@ WDFO_WORD    equ 1              ; [wd_fopt] bits, and the search/replace
 WDFO_CASE    equ 2              ; dialogs' check-box masks: Whole Word,
 WDFO_CONF    equ 4              ; Match Upper/Lowercase, Confirm Changes
 
-; --- the native .DOC file (SPEC.md 65.4) -------------------------------------
+; --- the native .DOC file (SPEC.md 68.4) -------------------------------------
 ; 16-byte FIB, then text, CHP, PAP (papn x 4). The flags word's LOW BYTE is
 ; the tail paragraph's PAP index - the one paragraph fact with no ¶ to ride.
 WD_DOCMAGIC  equ 0xA59B         ; Opus's real wIdent
@@ -652,7 +652,7 @@ WD_FIB       equ 16             ; header bytes
 WD_LSTGKB    equ 62
 WD_STGCAP    equ WD_FIB + 2*(WD_MAXKB*1024) + WD_PAPMAX*4
 
-; --- the dirty prompt's pending action (SPEC.md 65.4) ------------------------
+; --- the dirty prompt's pending action (SPEC.md 68.4) ------------------------
 WDP_NEW      equ 1              ; what 'Yes'/'No' proceed to once the
 WDP_OPEN     equ 2              ; save-changes question is answered
 WDP_CLOSE    equ 3
@@ -674,7 +674,7 @@ wd_entry:
     mov [wd_ovdir], dx              ; banked before anything can navigate away
     mov [wd_ovdrv], bl              ; - it is where WORD.OVL lives, and the
                                     ; user is free to move the volume to DOCS\
-                                    ; a moment later (SPEC.md 65.10)
+                                    ; a moment later (SPEC.md 68.10)
     call ty_init                    ; face 0 (the kernel's 8x8) before anything
                                     ; can ask for a metric - SPEC.md 6.5, and
                                     ; the reason nothing below has to test
@@ -703,11 +703,11 @@ wd_entry:
     mov [wd_dseg], dx               ; loader's LD_EABORT says so for us
     mov ax, WD_KB0                  ; ...and the CHP claim, one attribute byte
     call OSAPI_MEM_CLAIM            ; per character, grown/shrunk in lockstep
-    jc .nomem                       ; by wd_resize (SPEC.md 65.3). Claimed here
+    jc .nomem                       ; by wd_resize (SPEC.md 68.3). Claimed here
     mov [wd_cseg], dx               ; so wd_arg's load can zero it; a refusal
                                     ; aborts the launch and ld_unreserve frees
                                     ; the text claim with the region
-    mov ax, 1                       ; ...and the PAP dictionary (SPEC.md 65.3):
+    mov ax, 1                       ; ...and the PAP dictionary (SPEC.md 68.3):
     call OSAPI_MEM_CLAIM            ; 256 x 4 bytes, session-lived. Zeroed by
     jc .nomem                       ; hand - a claim arrives dirty and entry 0
     mov [wd_pseg], dx               ; must BE Normal, all zero
@@ -727,7 +727,7 @@ wd_entry:
     mov word [wd_capkb], WD_KB0
     mov word [wd_cap], WD_KB0 * 1024
     call wd_defname                 ; the name and the TITLE the template
-    call wd_compttl                 ; points at (SPEC.md 65.2: 'Microsoft
+    call wd_compttl                 ; points at (SPEC.md 68.2: 'Microsoft
                                     ; Word - DOCUMENT.DOC') must exist before
                                     ; wm_create banks the pointer - the
                                     ; buffer is bss and arrives zeroed
@@ -760,7 +760,7 @@ wd_entry:
                                     ; which typebench prices at 9.4% of every
                                     ; keystroke (SPEC.md 11.94)
     push si
-    mov si, wd_habout               ; NO kernel menus (SPEC.md 65.2): the
+    mov si, wd_habout               ; NO kernel menus (SPEC.md 68.2): the
     call OSAPI_ABOUT_SET            ; nine-menu bar is drawn in the window.
     mov si, wd_menus0               ; The kernel bar carries only the app
     call OSAPI_MENU_SET             ; name pull-down - an EMPTY set (count 0)
@@ -773,7 +773,7 @@ wd_entry:
                                     ; preserve flags (SPEC.md 12.2)
     mov byte [wd_vrib], 1           ; every strip starts SHOWN (View > Ribbon /
     mov byte [wd_vrul], 1           ; Ruler / Status Bar are checked toggles,
-    mov byte [wd_vsta], 1           ; SPEC.md 65.2)
+    mov byte [wd_vsta], 1           ; SPEC.md 68.2)
     mov word [wd_ctop], WD_CHROME_TOP
     mov byte [wd_mopen], WD_M_NONE  ; no dropdown, no highlight - bss zero is
     mov byte [wd_mhi], 0xFF         ; a REAL menu index and a real item
@@ -909,7 +909,7 @@ wd_seecaret:
     push cx
     push dx
     mov ax, [wd_currow]             ; the caret's VISIBLE row, banked by the
-    or ax, ax                       ; walk (SPEC.md 65.6): its y is no longer
+    or ax, ax                       ; walk (SPEC.md 68.6): its y is no longer
     js .up                          ; 8*row, but its NUMBER still is the row
     mov cx, [wd_cury]               ; visible = the caret's whole glyph band
     add cx, [wd_gh1]                       ; fits above the content bottom
@@ -918,7 +918,7 @@ wd_seecaret:
     ; below the view. Formatted, the EXACT scroll is knowable: the caret is
     ; (cury+7 - bot) pixels past the bottom, and the pixels freed by
     ; scrolling k rows off the top are band-top(k) - ty, which the banked ys
-    ; answer - so take the smallest k that frees enough (SPEC.md 65.6). The
+    ; answer - so take the smallest k that frees enough (SPEC.md 68.6). The
     ; conservative [wd_vfit] target is the fallback, and the uniform case's
     ; exact answer as it always was.
     cmp byte [wd_hasfmt], 0
@@ -1223,7 +1223,7 @@ wd_sbclick:
 .pageup:
     mov ax, [wd_top]
     sub ax, [wd_vfit]               ; a page is the rows GUARANTEED visible
-    jmp short .set                  ; (= vrows while uniform, SPEC.md 65.6)
+    jmp short .set                  ; (= vrows while uniform, SPEC.md 68.6)
 .pagedn:
     mov ax, [wd_top]
     add ax, [wd_vfit]
@@ -1371,7 +1371,7 @@ wd_shiftrows:
     rep movsw
     pop cx
     mov di, wd_ryb                  ; ...and the ys, which ride the same shift
-    mov si, di                      ; (SPEC.md 65.6)
+    mov si, di                      ; (SPEC.md 68.6)
     add si, bx
     rep movsw
     jmp short .adj
@@ -1468,7 +1468,7 @@ wd_scrollpaint:
                                     ; same work without the blit
     cmp byte [wd_hasfmt], 0
     je .pxuni
-    or ax, ax                       ; formatted (SPEC.md 65.6): an UP scroll's
+    or ax, ax                       ; formatted (SPEC.md 68.6): an UP scroll's
     js .nope                        ; entering rows have unknown heights -
                                     ; the full repaint is the honest path
     cmp byte [wd_ymoved], 0         ; ...and so is a scroll riding an edit
@@ -1496,7 +1496,7 @@ wd_scrollpaint:
     pop cx                          ; view down, which moves the text UP
 .pxhave:
     mov [wd_sdpx], di               ; wd_shiftrows adjusts the shifted ys by
-                                    ; this (SPEC.md 65.6)
+                                    ; this (SPEC.md 68.6)
     call wd_vshift
     jc .nope                        ; refused, and having drawn nothing
 
@@ -1531,7 +1531,7 @@ wd_scrollpaint:
     js .exup
     cmp byte [wd_hasfmt], 0
     je .exdn8
-    ; formatted (SPEC.md 65.6): the vacated pixels are the bottom sdpx of
+    ; formatted (SPEC.md 68.6): the vacated pixels are the bottom sdpx of
     ; the band, and the rows that own them are found from the PRE-shift
     ; banks - the first retained row whose old glyph crossed the bottom
     ; edge (it was clipped then, it is drawable now), else the first row
@@ -1665,7 +1665,7 @@ wd_scrollpaint:
     cmp byte [wd_hasfmt], 0         ; the formatted band includes retained
     je .clok                        ; rows ABOVE the erased pixels: their
     mov byte [wd_clean], 0          ; runs must pad, or an old caret bar past
-.clok:                              ; the text survives (SPEC.md 65.6)
+.clok:                              ; the text survives (SPEC.md 68.6)
     mov byte [wd_resume], 0
     cmp byte [wd_rowsok], 0
     je .xseed
@@ -1721,7 +1721,7 @@ wd_scrollpaint:
 
 ; -----------------------------------------------------------------------------
 ; wd_ctcalc - the live chrome top: menu bar + the strips View has switched on
-; out: [wd_ctop] refreshed; preserves all registers (SPEC.md 65.2)
+; out: [wd_ctop] refreshed; preserves all registers (SPEC.md 68.2)
 ; -----------------------------------------------------------------------------
 wd_ctcalc:
     push ax
@@ -1757,17 +1757,17 @@ wd_bounds:
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [wd_cl], ax                 ; the content box, banked for every chrome
-    mov [wd_ct], dx                 ; painter and hit test (SPEC.md 65.2) -
+    mov [wd_ct], dx                 ; painter and hit test (SPEC.md 68.2) -
                                     ; read here once, exactly like wd_tx/wd_ty
     push ax
     push dx
     add ax, WD_MARGIN
     mov [wd_tx], ax
     call wd_ctcalc                  ; [wd_ctop] = the LIVE chrome top from the
-    add dx, [wd_ctop]               ; View toggles (SPEC.md 65.2): menu bar,
+    add dx, [wd_ctop]               ; View toggles (SPEC.md 68.2): menu bar,
                                     ; then ribbon and ruler if shown. (The
                                     ; find panel that used to dock here is
-                                    ; gone - Search is a dialog, SPEC.md 65.7)
+                                    ; gone - Search is a dialog, SPEC.md 68.7)
     add dx, WD_MARGIN               ; wd_bounds's own geometry test below
     mov [wd_ty], dx                 ; catches a chrome-top change and
                                     ; wd_sigsame turns it into a full repaint
@@ -1778,7 +1778,7 @@ wd_bounds:
     add ax, dx
     dec ax                          ; the content's own last row...
     cmp byte [wd_vsta], 0           ; ...less the status strip when it is
-    je .nosta                       ; shown (SPEC.md 65.2): the text band ends
+    je .nosta                       ; shown (SPEC.md 68.2): the text band ends
     sub ax, WD_STATUS_H             ; above it, and the kernel's grow box
 .nosta:                             ; lives in the strip's right corner where
     mov [wd_bot], ax                ; the bar already stopped clear of it
@@ -1810,7 +1810,7 @@ wd_bounds:
                                     ; holds byte columns. WD_MAXCOL was sized
                                     ; from that floor and not from the face -
                                     ; the face comes off a floppy while the
-                                    ; constant is in the tree (SPEC.md 65.13)
+                                    ; constant is in the tree (SPEC.md 68.13)
 .cshr:
     shr ax, cl
     cmp ax, WD_MAXCOL - 1
@@ -1905,7 +1905,7 @@ wd_bounds:
     ret
 
 ; =============================================================================
-; Paragraph layout state (SPEC.md 65.3/65.6)
+; Paragraph layout state (SPEC.md 68.3/68.6)
 ;
 ; The walk carries the GOVERNING paragraph's decoded format beside the pen:
 ; the format lives on the ¶ that ENDS the paragraph, so entering a paragraph
@@ -1990,7 +1990,7 @@ wd_pback:
 ; wd_papload - decode dictionary entry AL into the walk's wd_w* state
 ; preserves all registers. Clamped against the LIVE geometry: at least one
 ; cell survives every combination of indents, and the clamped pens stay on
-; byte columns so the single-store paths survive (SPEC.md 65.1).
+; byte columns so the single-store paths survive (SPEC.md 68.1).
 ; -----------------------------------------------------------------------------
 wd_papload:
     push ax
@@ -2011,7 +2011,7 @@ wd_papload:
     mov al, dl                      ; advance = 8 + spacing*4, and the packed
     and al, WDPA_SPACE              ; field is already spacing << 2
     add al, [wd_ghb]                ; ...over the FACE's own row advance, which
-    mov [wd_wadv], al               ; is 8 for the kernel's cell (SPEC.md 65.13)
+    mov [wd_wadv], al               ; is 8 for the kernel's cell (SPEC.md 68.13)
     xor al, al
     test dl, WDPA_SB
     jz .nosb
@@ -2065,7 +2065,7 @@ wd_papload:
     mov [wd_wcols], dx
     cmp byte [wd_pxon], 0           ; ...and the same capacity in PIXELS, which
     jne .wpx                        ; is what wd_wordfit's second threshold
-    shl dx, cl                      ; measures now (SPEC.md 65.13). The fixed
+    shl dx, cl                      ; measures now (SPEC.md 68.13). The fixed
     jmp short .wpxs                 ; face takes exactly 8 x the cells, so its
 .wpx:                               ; wrap is the one it always had
     mov dx, [wd_wrgt]
@@ -2359,7 +2359,7 @@ wd_facemetrics:
     mov word [wd_ghb], 8
     mov word [wd_spadv], 8          ; ...and a space is 8 wide in it
     mov al, [wd_prop]               ; ...and the METRICS follow the face too
-    mov [wd_pxon], al               ; (SPEC.md 65.13): one flag, read by wd_cx
+    mov [wd_pxon], al               ; (SPEC.md 68.13): one flag, read by wd_cx
     cmp byte [wd_prop], 0           ; and wd_xc, and by the two fast paths that
     je .out                         ; cannot be expressed without an 8px column
     mov al, ' '                     ; the padding cell's own width, banked: the
@@ -2383,7 +2383,7 @@ wd_facemetrics:
 .out:                               ; always did - what its glyphs no longer do
                                     ; is land on the 8-pixel COLUMN, and that
                                     ; is [wd_pxon]'s business above and not
-                                    ; this flag's (SPEC.md 65.13)
+                                    ; this flag's (SPEC.md 68.13)
     pop ax
     ret
 
@@ -2405,7 +2405,7 @@ wd_facedrop:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_a_csel - a combo entry was chosen (SPEC.md 65.13)
+; wd_a_csel - a combo entry was chosen (SPEC.md 68.13)
 ; in:  [wd_pickm] = which combo, [wd_picki] = which entry
 ; out: the Font combo's caption follows the choice; the others are cosmetic
 ;
@@ -2414,7 +2414,7 @@ wd_facedrop:
 ; FONTS/ was carrying. Choosing one opens it and names it in the ribbon.
 ;
 ; WHAT IT DOES NOT DO YET is set [wd_prop]: the document still draws through
-; the 8x8 cell until wd_drawrun grows its band arm (SPEC.md 65.13), and a
+; the 8x8 cell until wd_drawrun grows its band arm (SPEC.md 68.13), and a
 ; half-converted Word - drawing proportionally while measuring on the 8-pixel
 ; grid - would put the caret in the wrong place on every line. So the choice
 ; is recorded and the face is opened, and the pixels follow when the rest of
@@ -2506,7 +2506,7 @@ wd_a_csel:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_cx - the absolute screen x of a cell (SPEC.md 65.13)
+; wd_cx - the absolute screen x of a cell (SPEC.md 68.13)
 ; in:  AX = a cell index, 0..[wd_rcols]
 ; out: AX = its x; preserves every other register
 ;
@@ -2522,7 +2522,7 @@ wd_cx:
     cmp byte [wd_pxon], 0           ; the METRICS flag, not [wd_prop]: a face
     jne .prop                       ; is drawn on the 8-pixel grid first and
                                     ; its own advances are honoured after
-                                    ; (SPEC.md 65.13), and only the second of
+                                    ; (SPEC.md 68.13), and only the second of
                                     ; those two makes wd_px[] the truth
     mov bx, ax
     shl bx, 1
@@ -2544,7 +2544,7 @@ wd_cx:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_xc - the cell an x falls in - wd_cx's inverse (SPEC.md 65.13)
+; wd_xc - the cell an x falls in - wd_cx's inverse (SPEC.md 68.13)
 ; in:  AX = an absolute x
 ; out: AX = the cell index; preserves every other register
 ;
@@ -2587,7 +2587,7 @@ wd_xc:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_advof - the advance of one character, in pixels (SPEC.md 65.13)
+; wd_advof - the advance of one character, in pixels (SPEC.md 68.13)
 ; in:  AL = the character AS DRAWN (small caps already mapped)
 ; out: AX = its advance; preserves every other register
 ;
@@ -2606,7 +2606,7 @@ wd_advof:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_scapof - small caps: the character as it is DRAWN (SPEC.md 65.1)
+; wd_scapof - small caps: the character as it is DRAWN (SPEC.md 68.1)
 ; in:  AL = the character, AH = its CHP byte; out: AL mapped; preserves the rest
 ;
 ; The map used to live inside wd_walk's drawing gate, because the only thing it
@@ -2654,7 +2654,7 @@ wd_penadv:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_cellat - the cell index the pen is standing on (SPEC.md 65.13)
+; wd_cellat - the cell index the pen is standing on (SPEC.md 68.13)
 ; out: BX = it; preserves every other register
 ;
 ; COUNTED in a proportional face and DERIVED in the fixed one, which is the one
@@ -2676,7 +2676,7 @@ wd_cellat:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_pxcell - record the cell at the pen and count it (SPEC.md 65.13)
+; wd_pxcell - record the cell at the pen and count it (SPEC.md 68.13)
 ; in:  BX = the cell (wd_cellat), DI = the pen, AX = the cell's advance
 ; out: wd_px[BX..BX+2] written, [wd_rcn] = BX+1; preserves every register
 ;
@@ -2731,7 +2731,7 @@ wd_rowmeasure:
     je .done
     call wd_penadv                  ; the cell this index will occupy, which is
     mov cx, di                      ; 8 wide in the kernel's cell and the
-    add cx, ax                      ; face's own otherwise (SPEC.md 65.13)
+    add cx, ax                      ; face's own otherwise (SPEC.md 68.13)
     dec cx
     cmp cx, [wd_wrgt]
     ja .over
@@ -2757,7 +2757,7 @@ wd_rowmeasure:
     mov ah, [es:bx]
     pop bx
     pop es
-    test ah, WDAT_HID               ; hidden occupies no cell (SPEC.md 65.1)
+    test ah, WDAT_HID               ; hidden occupies no cell (SPEC.md 68.1)
     jnz .adv0
 .vis:
     call wd_scapof
@@ -2782,7 +2782,7 @@ wd_rowmeasure:
     dec bx
     jmp short .loop
 .done:
-    mov ax, di                      ; PIXELS (SPEC.md 65.13), which is what the
+    mov ax, di                      ; PIXELS (SPEC.md 68.13), which is what the
     sub ax, bp                      ; centre/right offset wants in either face
     pop cx                          ; the saved word state
     mov [wd_wstart], cl
@@ -2796,7 +2796,7 @@ wd_rowmeasure:
 
 ; -----------------------------------------------------------------------------
 ; wd_rowsetup - the pen for the row just entered: indents, then the centre/
-;               right offset (SPEC.md 65.1: rounded DOWN to whole cells)
+;               right offset (SPEC.md 68.1: rounded DOWN to whole cells)
 ; in:  ES:SI/BX = the walk at the row's first char, pap state loaded
 ; out: DI = the pen, [wd_rowx0] = it (the tab anchor); preserves all others
 ; -----------------------------------------------------------------------------
@@ -2849,7 +2849,7 @@ wd_rowsetup:
     cmp byte [wd_pxon], 0           ; cell 0's pen, before a character has been
     je .nopx0                       ; stored: an EMPTY row still carries a
     push ax                         ; caret, and wd_cx(0) has to answer where
-    mov ax, di                      ; it stands (SPEC.md 65.13)
+    mov ax, di                      ; it stands (SPEC.md 68.13)
     sub ax, [wd_tx]
     mov [wd_px], ax
     add ax, [wd_spadv]              ; ...and cell 0 IS the parking cell there,
@@ -2998,7 +2998,7 @@ wd_walk:
                                     ; its pixels are on screen
     cmp byte [wd_hasfmt], 0         ; ...but a FORMATTED resume also trusts
     je .rok                         ; the banked y of the row above the seed
-    mov dx, [wd_sdr]                ; (SPEC.md 65.6), and a stale bank would
+    mov dx, [wd_sdr]                ; (SPEC.md 68.6), and a stale bank would
     or dx, dx                       ; draw every row at a lie. Verify it is a
     jle .rok                        ; y the band could hold; when it is not,
     cmp dx, [wd_vrows]              ; fall back to the unseeded walk - slow
@@ -3022,7 +3022,7 @@ wd_walk:
 .seeded:
     call wd_papini                  ; the governing paragraph format and the
     call wd_rowhc                   ; row's first-of-paragraph-ness, then its
-                                    ; height (SPEC.md 65.3/65.6)
+                                    ; height (SPEC.md 68.3/68.6)
     mov ax, [wd_row]
     or ax, ax
     js .ynegs                       ; above the view: rows park at the ty-8
@@ -3040,7 +3040,7 @@ wd_walk:
     dec ax                          ; formatted: glyph y = ryb[row-1] + h -
     shl ax, 1                       ; the rows above the seed are exactly the
     push bx                         ; ones the seed's licence says stood still
-    mov bx, ax                      ; (SPEC.md 27.4/65.6), so their banked ys
+    mov bx, ax                      ; (SPEC.md 27.4/68.6), so their banked ys
     mov bp, [bx+wd_ryb]             ; still describe the glass
     pop bx
     add bp, [wd_rowhv]
@@ -3117,13 +3117,13 @@ wd_walk:
     inc word [wd_i]
     cmp al, 13
     je .nl13
-    cmp al, 9                       ; a tab (SPEC.md 65.3): one selectable
+    cmp al, 9                       ; a tab (SPEC.md 68.3): one selectable
     jne .glyph                      ; character occupying the cells to the
     jmp .tab                        ; next default stop
 .nl13:
     mov byte [wd_wstart], 1         ; a line break is a break opportunity like
                                     ; a space (SPEC.md 27.11)
-    cmp byte [wd_showall], 0        ; Show-all (SPEC.md 65.1): the mark takes a
+    cmp byte [wd_showall], 0        ; Show-all (SPEC.md 68.1): the mark takes a
     je .nlplain                     ; cell of its own, stamped as a pilcrow by
     push ax                         ; wd_rflush. Folded - character and marker
     mov ax, 13                      ; attribute both - so toggling Show-all
@@ -3140,7 +3140,7 @@ wd_walk:
                                     ; face and a count a pass may skip is a
                                     ; count that describes no row. 8 wide: the
                                     ; pilcrow is a stamp, not a glyph of the
-                                    ; face (SPEC.md 65.1)
+                                    ; face (SPEC.md 68.1)
     cmp byte [wd_draw], 0
     je .nlpop
     mov cx, bp                      ; the same three gates the glyph store has:
@@ -3177,7 +3177,7 @@ wd_walk:
     jne .wsdone
     mov byte [wd_wstart], 1         ; ...unless this is the space that ended
 .wsdone:                            ; one (SPEC.md 27.11)
-    push ax                         ; the character's CHP byte (SPEC.md 65.3):
+    push ax                         ; the character's CHP byte (SPEC.md 68.3):
     push bx                         ; the same index in the CHP claim. Fetched
     mov bx, si                      ; through ES with the document segment put
     dec bx                          ; back after - ES belongs to the text for
@@ -3199,18 +3199,18 @@ wd_walk:
 .nfsel:                             ; touches no flags, so the answer survives
     call wd_fold
     push ax                         ; ...and the CHP byte folds BESIDE the
-    mov al, [wd_cattr]              ; character (SPEC.md 65.1), so a formatting
+    mov al, [wd_cattr]              ; character (SPEC.md 68.1), so a formatting
     xor ah, ah                      ; change dirties exactly the rows it
     call wd_fold                    ; touched and nothing else
     pop ax
     pop ax
     test byte [wd_cattr], WDAT_HID  ; hidden: dropped at accumulate time - no
-    jz .visible                     ; cell, no pen advance (SPEC.md 65.1). The
+    jz .visible                     ; cell, no pen advance (SPEC.md 68.1). The
     jmp .loop                       ; fold above still saw it, so toggling
                                     ; hidden dirties the row
 .visible:
     ; The character AS DRAWN and its ADVANCE, both taken before the drawing
-    ; gates below (SPEC.md 65.13). The small-caps map used to live inside them,
+    ; gates below (SPEC.md 68.13). The small-caps map used to live inside them,
     ; because the only thing it changed was which glyph reached the row buffer;
     ; it changes the WIDTH too the moment a face arrives, and a pen that moves
     ; by one character while the band composes another is a row that drifts a
@@ -3280,7 +3280,7 @@ wd_walk:
                                     ; the loop body past a short jump's reach
 
 .tab:
-    ; A TAB (SPEC.md 65.3): it advances the pen to the next default stop -
+    ; A TAB (SPEC.md 68.3): it advances the pen to the next default stop -
     ; every WD_TABSTOP cells from the row's start pen - and is ONE selectable
     ; character. Its cells go into the row buffer as spaces wearing the tab's
     ; own dress, so an underlined tab draws its rule and a selected one
@@ -3339,7 +3339,7 @@ wd_walk:
     cmp byte [wd_pxon], 0           ; px the store loop still owes cells
     je .tgate
     mov ax, cx                      ; A CHOSEN FACE GIVES A TAB ONE CELL, as
-    call wd_pxcell                  ; wide as the whole gap (SPEC.md 65.13) -
+    call wd_pxcell                  ; wide as the whole gap (SPEC.md 68.13) -
     mov dx, 8                       ; against the kernel's cell, where it is a
 .tgate:                             ; run of space cells one per 8 pixels. That
                                     ; is the row buffer holding characters
@@ -3611,7 +3611,7 @@ wd_wordfit:
     je .pop_no                      ; invisible at 29 columns and constant at 9,
     cmp al, 13                      ; which is what a narrow window showed
     je .pop_no
-    cmp al, 9                       ; a tab ends a word too (SPEC.md 65.3)
+    cmp al, 9                       ; a tab ends a word too (SPEC.md 68.3)
     je .pop_no
     call wd_penadv                  ; measured as TYPED: small caps would make
     cmp cx, ax                      ; this word WIDER, so a word it lets by is
@@ -3684,7 +3684,7 @@ wd_ask:
     push ax
     mov ax, [wd_row]                ; ...and its VISIBLE row, signed - what
     mov [wd_currow], ax             ; wd_seecaret scrolls by now that a row's
-    pop ax                          ; y is no longer 8*row (SPEC.md 65.6)
+    pop ax                          ; y is no longer 8*row (SPEC.md 68.6)
     mov byte [wd_curseen], 1
     push ax                         ; the row the caret is on starts HERE, and
     mov ax, [wd_ckpc]               ; that is the only state the next keystroke
@@ -3707,7 +3707,7 @@ wd_ask:
     cmp cx, [wd_rbandt]             ; the click row is this pen row? The BAND
     jb .want                        ; reaches from the row's own top - a click
     mov cx, bp                      ; in a spaced row's leading gap belongs to
-    add cx, [wd_gh1]                       ; the row, not to nothing (SPEC.md 65.6)
+    add cx, [wd_gh1]                       ; the row, not to nothing (SPEC.md 68.6)
     cmp cx, [wd_hity]
     jb .want
     cmp byte [wd_hitset], 0
@@ -3726,7 +3726,7 @@ wd_ask:
     dec ax
 .want:
     cmp word [wd_wanty], 0x7FFF     ; [wd_wanty] is a VISIBLE ROW now, not a
-    je .out                         ; pixel (SPEC.md 65.6): a row's y is no
+    je .out                         ; pixel (SPEC.md 68.6): a row's y is no
     mov cx, [wd_wanty]              ; longer derivable outside the walk, but
     cmp cx, [wd_row]                ; its NUMBER is what the callers had
     jne .out                        ; anyway. 0x7FFF disables (0xFFFF is a
@@ -3903,7 +3903,7 @@ wd_rstart:
     mov ax, [wd_i]
     mov [di+wd_rows], ax
 .norow:
-    ; --- the row's GLYPH y, banked and compared (SPEC.md 65.6) --------------
+    ; --- the row's GLYPH y, banked and compared (SPEC.md 68.6) --------------
     ; wd_ryb is the heights array in prefix form: what a seeded walk resumes
     ; its y from, and what pass 1 compares so a row whose pixels MOVED is
     ; dirty even when its text did not. A pure measure walk must not touch
@@ -3940,7 +3940,7 @@ wd_rstart:
     cmp bx, ax                      ; glyph pixel it owned or owns - the band
     jbe .rya                        ; repaint erases from there to the content
     mov bx, ax                      ; bottom and redraws every row below
-.rya:                               ; (SPEC.md 65.6). NEVER higher: the first
+.rya:                               ; (SPEC.md 68.6). NEVER higher: the first
     cmp bx, [wd_ymv0]               ; moved row's old and new glyphs both sit
     jae .ryd                        ; strictly below the unmoved row above it,
     mov [wd_ymv0], bx               ; so the erase cannot eat a row nobody
@@ -3969,7 +3969,7 @@ wd_rstart:
     rep stosb
     mov byte [di], 0
     mov di, wd_abuf                 ; ...and the attribute cells to PLAIN
-    mov cx, [wd_rcols]              ; (SPEC.md 65.1): the padding's erase is a
+    mov cx, [wd_rcols]              ; (SPEC.md 68.1): the padding's erase is a
     xor al, al                      ; plain run, and the run splitter reads
     rep stosb                       ; this beside every cell
     pop es
@@ -4047,7 +4047,7 @@ wd_rflush:
     call wd_cx                      ; x1 - through wd_cx, which is the same
     push ax                         ; three shifts in the kernel's cell and a
     mov ax, cx                      ; wd_px[] lookup in a chosen face
-    inc ax                          ; (SPEC.md 65.13)
+    inc ax                          ; (SPEC.md 68.13)
     call wd_cx                      ; ...and the slot PAST the span's last cell
     dec ax                          ; is why wd_px[] carries one
     mov cx, ax                      ; x2
@@ -4072,7 +4072,7 @@ wd_rflush:
     mov ax, [wd_rcols]              ; in a chosen face is the cells the WALK
     dec ax                          ; stored plus the one the caret parks in,
     cmp byte [wd_pxon], 0           ; because a cell past those has no pen and
-    je .spanhi                      ; nothing to draw at (SPEC.md 65.13). The
+    je .spanhi                      ; nothing to draw at (SPEC.md 68.13). The
     mov ax, [wd_rcn]                ; tail past it is erased in pixels below
 .spanhi:
     mov [wd_fhi], ax
@@ -4080,7 +4080,7 @@ wd_rflush:
     cmp ax, [wd_prowi]
     je .delta                       ; the cached row diffs cell by cell
     ; a WHOLE-row redraw of a spaced row also erases its leading GAP - the
-    ; band between the row's top and its glyphs (SPEC.md 65.6). Glyph runs
+    ; band between the row's top and its glyphs (SPEC.md 68.6). Glyph runs
     ; never touch it, so ink parked there by an older layout (a caret bar, a
     ; taller row's letters) would survive every redraw without this. One fill,
     ; only for a row taller than its glyphs, only when the band was not
@@ -4127,7 +4127,7 @@ wd_rflush:
     jne .dmk
     mov al, [wd_abuf+bx]            ; same character, different dress: a
     cmp al, [wd_pattr+bx]           ; formatting change moves pixels too
-    je .dn                          ; (SPEC.md 65.1)
+    je .dn                          ; (SPEC.md 68.1)
 .dmk:
     cmp word [wd_flo], 0xFFFF
     jne .dhi
@@ -4191,7 +4191,7 @@ wd_rflush:
     jne .tdone                      ; and five. A DRESSED space is not blank -
     cmp bx, cx                      ; an underlined space is a rule, a pilcrow
     jbe .tstop                      ; cell is a stamp - so the trim stops at
-    dec bx                          ; any styled cell (SPEC.md 65.1)
+    dec bx                          ; any styled cell (SPEC.md 68.1)
     jmp short .tl
 .tstop:
     cmp word [wd_rs1], 0xFFFF       ; all blank from the floor up: nothing to
@@ -4199,7 +4199,7 @@ wd_rflush:
 .tdone:
     mov [wd_fhi], bx
 .draw2:
-    cmp byte [wd_pxon], 0           ; --- the TAIL, in pixels (SPEC.md 65.13) -
+    cmp byte [wd_pxon], 0           ; --- the TAIL, in pixels (SPEC.md 68.13) -
     je .runs                        ; A fixed row erases itself: the buffer is
                                     ; space-padded to [wd_rcols] and one opaque
                                     ; run covers the band. A proportional row
@@ -4291,7 +4291,7 @@ wd_rflush:
 .tailno:
     mov [wd_prowrx], cx             ; ...and this is the edge the next pass
 .runs:                              ; measures against
-    ; --- the span, split into runs of equal CHP (SPEC.md 65.1) --------------
+    ; --- the span, split into runs of equal CHP (SPEC.md 68.1) --------------
     ; Adjacent plain cells are one run by construction, so unstyled text is
     ; exactly the one opaque font_run it always was; each styled run draws by
     ; its dress in wd_drawrun. Left to right, so a bold strike's 1px bleed
@@ -4390,7 +4390,7 @@ wd_fold1:
     ret
 
 ; =============================================================================
-; The styled run drawers (SPEC.md 65.1)
+; The styled run drawers (SPEC.md 68.1)
 ;
 ; wd_rflush splits the dirty span into runs of equal CHP and hands each one
 ; here. A plain run is exactly the one opaque font_run the engine always drew;
@@ -4436,7 +4436,7 @@ wd_x4tab:
 %endrep
 
 ; -----------------------------------------------------------------------------
-; wd_itinit - make sure the sheared italic glyph table exists (SPEC.md 65.1)
+; wd_itinit - make sure the sheared italic glyph table exists (SPEC.md 68.1)
 ; out: CF=0 with [wd_iseg] the claim holding 95 glyphs x 8 rows x 4 bytes;
 ;      CF=1 the heap refused (italic degrades to the plain glyph).
 ;      Preserves all registers.
@@ -4614,7 +4614,7 @@ wd_itrun:
     test byte [wd_runa], WDAT_BOLD
     jz .noem
     mov es, [wd_iseg]               ; the staged image lives in the italic
-    mov si, WD_STG4                 ; claim (SPEC.md 65.1), so every touch of
+    mov si, WD_STG4                 ; claim (SPEC.md 68.1), so every touch of
     mov dx, 8                       ; it below carries an ES override
 .em:                                ; bold-italic: AND in the 1px-right copy,
                                     ; row by pixel row, right to left so the
@@ -4686,7 +4686,7 @@ wd_itrun:
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; The band, opened once a ROW and not once a run (SPEC.md 6.3/65.13)
+; The band, opened once a ROW and not once a run (SPEC.md 6.3/68.13)
 ;
 ; SPEC.md 6.3's method, and the whole of what a proportional face costs at draw
 ; time: ty_band, a ty_putn a run, ty_flush. It replaces the row's OSAPI_FONT_RUN
@@ -4739,7 +4739,7 @@ wd_bandrun:
     test byte [wd_runa], WDAT_BOLD
     jz .nbold
     push ax                         ; bold: the same glyphs again, one pixel
-    mov ax, bx                      ; right (SPEC.md 61.5/65.1). In the BAND
+    mov ax, bx                      ; right (SPEC.md 61.5/68.1). In the BAND
     inc ax                          ; this is a second compose rather than a
     push si                         ; second drawing call - it costs no floor
     call ty_putn                    ; at all, where the cell arm pays a whole
@@ -4825,7 +4825,7 @@ wd_drawrun:
     test byte [wd_runa], WDAT_ITAL
     jz .plain
     cmp byte [wd_prop], 0           ; wd_itrun shears the KERNEL's glyphs
-    jne .plain                      ; (SPEC.md 65.1), so in a chosen face it
+    jne .plain                      ; (SPEC.md 68.1), so in a chosen face it
                                     ; would letter one run in a DIFFERENT
                                     ; TYPEFACE from the words either side of
                                     ; it - which reads as a bug rather than as
@@ -4834,7 +4834,7 @@ wd_drawrun:
                                     ; a drawn italic (SPEC.md 6.4's style 2)
     call wd_itrun                   ; staged and blitted - or CF=1 with no
     jnc .rules                      ; table, and the plain letters below are
-                                    ; the degrade (SPEC.md 65.1)
+                                    ; the degrade (SPEC.md 68.1)
 .plain:
     cmp byte [wd_prop], 0
     je .cell
@@ -4859,7 +4859,7 @@ wd_drawrun:
     test byte [wd_runa], WDAT_BOLD
     jz .nbold
     inc cx                          ; bold: the same glyphs again, transparent,
-    push ax                         ; one pixel right (SPEC.md 61.5/65.1) -
+    push ax                         ; one pixel right (SPEC.md 61.5/68.1) -
     mov al, CBLACK                  ; FONT_STR ORs ink and erases nothing
     call OSAPI_SET_COLOR
     pop ax
@@ -5107,9 +5107,9 @@ wd_brktry:
     jnz .no                         ; rule 4: the scroll is byte-column granular
     cmp byte [wd_hashid], 0
     jne .no                         ; hidden characters break wd_ecol's
-                                    ; column arithmetic (SPEC.md 65.1)
+                                    ; column arithmetic (SPEC.md 68.1)
     cmp byte [wd_hastab], 0
-    jne .no                         ; ...and so does a tab (SPEC.md 65.3)
+    jne .no                         ; ...and so does a tab (SPEC.md 68.3)
     cmp byte [wd_hasfmt], 0
     jne .no                         ; formatted rows are not 8px and do not
                                     ; start at [wd_tx]: the break's scroll
@@ -5117,7 +5117,7 @@ wd_brktry:
     cmp byte [wd_pxon], 0
     jne .no                         ; ...and a chosen face has no COLUMN for
                                     ; the arithmetic below to count in
-                                    ; (SPEC.md 65.13)
+                                    ; (SPEC.md 68.13)
     mov di, [wd_currow]             ; DI = the caret's row (banked by the
                                     ; pass-1 walk that just stood on it)
     mov ax, [wd_dr1]
@@ -5341,7 +5341,7 @@ wd_worker:
     call OSAPI_TASK_ALIVE           ; the lock must NOT be held here (rule 4)
     mov ax, WD_WTICKS
     call OSAPI_TASK_SLEEP
-    cmp byte [wd_quit], 0           ; File > Close / Exit (SPEC.md 65.2): the
+    cmp byte [wd_quit], 0           ; File > Close / Exit (SPEC.md 68.2): the
     jne .quit                       ; UI hid the window and left the teardown
                                     ; to us, because only a task can end an
                                     ; instance cleanly - see .quit below
@@ -5371,7 +5371,7 @@ wd_worker:
                                     ; (SPEC.md 20.6 rule 7) - raised for the
                                     ; draw burst, cleared before the unlock
     cmp byte [wd_mopen], WD_M_NONE  ; a dropdown, the About box or a dialog is
-    jne .unlock                     ; over the content (SPEC.md 65.2): every
+    jne .unlock                     ; over the content (SPEC.md 68.2): every
     cmp byte [wd_about], 0          ; draw below would letter text straight
     jne .unlock                     ; through it. The debts stay raised and
     cmp word [wd_dlg], 0            ; are paid on the pass after it closes
@@ -5431,7 +5431,7 @@ wd_worker:
     call wd_sbcheck
 .unlock:
     mov byte [wd_inwk], 0
-    call wd_stkchk                  ; the CAPS/NUM lamps (SPEC.md 65.2): the
+    call wd_stkchk                  ; the CAPS/NUM lamps (SPEC.md 68.2): the
                                     ; lock flags byte can change with no key
                                     ; EVENT arriving (CapsLock alone emits
                                     ; none), so the worker is the only thing
@@ -5441,7 +5441,7 @@ wd_worker:
     jmp .loop
 
 .quit:
-    ; File > Close / Exit (SPEC.md 65.2). There is no self-close API slot: the
+    ; File > Close / Exit (SPEC.md 68.2). There is no self-close API slot: the
     ; instance normally dies through the close box (app_close_win) or through
     ; OSAPI_TASK_ALIVE noticing. So the UI half hid the window for instant
     ; feedback and set [wd_quit]; here the window record is destroyed and the
@@ -5541,7 +5541,7 @@ wd_sigmark:
                                     ; moves the band's own top edge, and the
                                     ; blit must span from the SMALLER of the
                                     ; two tops or the moving rows fall outside
-                                    ; its rect (SPEC.md 65.2)
+                                    ; its rect (SPEC.md 68.2)
     mov byte [wd_sigok], 1
     mov byte [wd_gchg], 0           ; this paint laid the note out under the
     pop ax                          ; geometry just recorded, so the view has
@@ -5820,7 +5820,7 @@ wd_seedck:
     cmp cl, ' '
     je .ckw
     cmp cl, 9                       ; a tab is a break opportunity like a
-    jne .back                       ; space (SPEC.md 65.3)
+    jne .back                       ; space (SPEC.md 68.3)
 .ckw:
     call wd_ckword                  ; ...and a wrapped row is safe too as long
     jnc .seed                       ; as the edit is past its first word
@@ -6468,7 +6468,7 @@ wd_seedrow:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_chrome - the whole in-window chrome (SPEC.md 65.2): the nine-title menu
+; wd_chrome - the whole in-window chrome (SPEC.md 68.2): the nine-title menu
 ;             bar, then whichever of ribbon / ruler / status bar the View
 ;             toggles have on. Each strip painter fills its own band, so this
 ;             is correct over a fresh white fill AND as a repair after a
@@ -6506,9 +6506,9 @@ wd_paint:
     mov word [wd_dlg], 0            ; state with them rather than redraw a
     mov byte [wd_pend], 0           ; (...and the dirty prompt's pending
                                     ; action and the confirm session end with
-                                    ; their dialogs, SPEC.md 65.4/65.7)
+                                    ; their dialogs, SPEC.md 68.4/68.7)
                                     ; menu the user has visibly lost
-                                    ; (SPEC.md 65.2)
+                                    ; (SPEC.md 68.2)
     call wd_bounds
     mov byte [wd_bmode], 0          ; whatever the break was showing, this
     mov word [wd_prowi], 0xFFFF     ; draws the NOTE over a filled content
@@ -6577,9 +6577,9 @@ wd_paint:
     call wd_sbar                    ; the fill took the bar with it
     call wd_chrome                  ; ...and the chrome strips' rules, which
                                     ; only a full fill can have erased
-    call wd_sheet                   ; ...and the sheet's edges (SPEC.md 65.11)
+    call wd_sheet                   ; ...and the sheet's edges (SPEC.md 68.11)
     call wd_hire                    ; the worker exists from the first paint
-                                    ; now (SPEC.md 65.2, Frotz's precedent):
+                                    ; now (SPEC.md 68.2, Frotz's precedent):
                                     ; the CAPS/NUM lamps need its poll -
                                     ; CapsLock alone emits no key event - and
                                     ; File > Close needs a task to die on.
@@ -6777,7 +6777,7 @@ wd_room:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_stghold - claim the save's .DOC staging buffer (SPEC.md 65.4)
+; wd_stghold - claim the save's .DOC staging buffer (SPEC.md 68.4)
 ; in:  [wd_len]
 ; out: CF=0 with [wd_stgseg] set and ES = it, or CF=1 (the toast is already
 ;      set); preserves every other register
@@ -6797,7 +6797,7 @@ wd_stghold:
                                     ; from the document: a real Word file is
                                     ; the text plus FKP pages, and how many
                                     ; pages it needs is what the writer finds
-                                    ; out as it goes (SPEC.md 65.4). The claim
+                                    ; out as it goes (SPEC.md 68.4). The claim
                                     ; is transient - held only across the
                                     ; write - so taking it whole costs the
                                     ; machine nothing between saves
@@ -6839,7 +6839,7 @@ wd_stgdrop:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_save - write the document as a native .DOC (SPEC.md 65.4)
+; wd_save - write the document as a native .DOC (SPEC.md 68.4)
 ; in:  nothing (the buffers and their lengths)
 ; out: nothing; the outcome is said as a toast; preserves all registers
 ;
@@ -6866,7 +6866,7 @@ wd_save:
     jc .big                     ; STSH, plcfsed, bin tables, DOP (65.4)
     jmp short .write
 .rtf:
-    call wd_rtfimg              ; ...or the RTF text (SPEC.md 65.8)
+    call wd_rtfimg              ; ...or the RTF text (SPEC.md 68.8)
     jc .big
 .write:
     mov cx, [wd_dend]           ; ES:BX = the image, DX:CX its byte count
@@ -6882,7 +6882,7 @@ wd_save:
 .big:
     mov ax, wd_m_toobig         ; more FKP pages than the staging claim holds
     call wd_saymsg              ; - refused whole, the document still open
-    jmp short .done             ; and still editable (SPEC.md 65.4)
+    jmp short .done             ; and still editable (SPEC.md 68.4)
 .err:
     call wd_errmsg              ; AX = FERR_* -> the toast
 .done:
@@ -6901,7 +6901,7 @@ wd_save:
 ; wd_isrtf - does the document's name end '.RTF'?
 ; out: CF=0 = yes; preserves every register
 ;
-; The one extension that decides a format (SPEC.md 65.8). Everything else -
+; The one extension that decides a format (SPEC.md 68.8). Everything else -
 ; including a name with no extension at all - writes the Word file, which is
 ; what the real product's Save did.
 ; -----------------------------------------------------------------------------
@@ -6951,7 +6951,7 @@ wd_upc:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_load - read a file into the document (SPEC.md 65.4)
+; wd_load - read a file into the document (SPEC.md 68.4)
 ; in:  nothing (wd_name)
 ; out: nothing; the outcome is said as a toast; preserves all registers
 ;
@@ -6985,7 +6985,7 @@ wd_load:
     jc .err                     ; capacity is FERR_BIG decided from the
                                 ; directory entry, buffer untouched (18.4)
     push ax                     ; the byte count, kept across the sniffs
-    call wd_isrtfimg            ; '{\rtf' -> the RTF reader (SPEC.md 65.8)
+    call wd_isrtfimg            ; '{\rtf' -> the RTF reader (SPEC.md 68.8)
     jc .nortf
     pop ax
     call wd_rtfparse
@@ -6999,7 +6999,7 @@ wd_load:
     cmp word [es:WDF_IDENT], WD_DOCMAGIC
     jne .plain
 
-    ; --- a real Word file: FIB, pieces, FKPs, the lot (SPEC.md 65.4) ------
+    ; --- a real Word file: FIB, pieces, FKPs, the lot (SPEC.md 68.4) ------
     call wd_docparse            ; CF=1 = refused whole, document untouched
     jc .bad
 .loaded:
@@ -7043,7 +7043,7 @@ wd_load:
 .notlf:
     cmp al, 13
     je .store
-    cmp al, 9                   ; tabs import (SPEC.md 65.3); wd_ldscan
+    cmp al, 9                   ; tabs import (SPEC.md 68.3); wd_ldscan
     je .store                   ; re-raises the flag after the clamp
     cmp al, 32
     jb .skip
@@ -7063,7 +7063,7 @@ wd_load:
     pop ds
     mov [wd_len], di
     push ax                     ; a plain-text load arrives undressed: its
-    push cx                     ; CHP bytes are all zero (SPEC.md 65.3)
+    push cx                     ; CHP bytes are all zero (SPEC.md 68.3)
     push di
     mov es, [wd_cseg]
     mov cx, di
@@ -7089,7 +7089,7 @@ wd_load:
 
 .bad:
     mov ax, wd_m_baddoc         ; refused whole: the document is untouched
-    call wd_saymsg              ; (SPEC.md 65.4)
+    call wd_saymsg              ; (SPEC.md 68.4)
     jmp short .done
 .err:
     call wd_errmsg
@@ -7115,7 +7115,7 @@ wd_load:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_ldscan - what a load must rediscover: tabs and hidden text (SPEC.md 65.4)
+; wd_ldscan - what a load must rediscover: tabs and hidden text (SPEC.md 68.4)
 ; in:  the document and CHP claims loaded, [wd_len] set (wd_clamp has run)
 ; out: [wd_hastab] / [wd_hashid] raised as found; preserves all registers
 ; A ¶ mark's CHP byte is a PAP index (65.3), so the hidden scan steps over
@@ -7201,7 +7201,7 @@ wd_ins:
     push es
     mov dl, al
     cmp al, 9                       ; a tab entered: the column-arithmetic
-    jne .nt9                        ; fast paths stand down (SPEC.md 65.3;
+    jne .nt9                        ; fast paths stand down (SPEC.md 68.3;
     mov byte [wd_hastab], 1         ; set-only, conservative, like wd_hashid)
 .nt9:
     call wd_room                    ; grow by a kilobyte if this is the
@@ -7228,7 +7228,7 @@ wd_ins:
 .place:
     mov bx, [wd_cur]
     mov [es:bx], dl
-    ; --- the same gap on the CHP claim (SPEC.md 65.3), in lockstep: open it
+    ; --- the same gap on the CHP claim (SPEC.md 68.3), in lockstep: open it
     ; backwards exactly as above, and the new cell takes the typing attrs
     mov es, [wd_cseg]
     mov cx, [wd_len]
@@ -7293,7 +7293,7 @@ wd_move:
     push ax
     push dx
     mov word [wd_hity], 0xFFFF      ; one query at a time
-    mov ax, [wd_wanty]              ; the VISIBLE ROW it names (SPEC.md 65.6)
+    mov ax, [wd_wanty]              ; the VISIBLE ROW it names (SPEC.md 68.6)
     mov dx, ax                      ; is the ONLY row this walk has to visit
                                     ; (SPEC.md 27.5); negative = above the
                                     ; view, which is not in [wd_rows]...
@@ -7336,7 +7336,7 @@ wd_move:
     ; whichever of the two rows comes FIRST. Up lands on the row above the
     ; checkpoint, and seeding at the checkpoint would then walk straight past
     ; the caret without ever finding it, which draws the bar at (0,0).
-    mov ax, [wd_wanty]              ; already a row (SPEC.md 65.6)
+    mov ax, [wd_wanty]              ; already a row (SPEC.md 68.6)
     or ax, ax
     js .out
 
@@ -7393,7 +7393,7 @@ wd_move:
 
 ; -----------------------------------------------------------------------------
 ; wd_vmove - Up / Down: the same column, one row away
-; in:  SI = window ptr, DX = -1 (up) or +1 (down), in ROWS (SPEC.md 65.6)
+; in:  SI = window ptr, DX = -1 (up) or +1 (down), in ROWS (SPEC.md 68.6)
 ; out: nothing; preserves all registers
 ;
 ; It measures twice: once to find the pixel the caret is at, then again for
@@ -7442,7 +7442,7 @@ wd_vmove:
     call wd_measure                 ; [wd_curx]/[wd_currow]
     mov byte [wd_resume], 0
     mov ax, [wd_currow]             ; the neighbouring ROW - a row's y is the
-    add ax, dx                      ; walk's business now (SPEC.md 65.6)
+    add ax, dx                      ; walk's business now (SPEC.md 68.6)
     mov [wd_wanty], ax
     mov ax, [wd_curx]
     mov [wd_wantx], ax
@@ -7464,7 +7464,7 @@ wd_hmove:
     cmp byte [wd_ckok], 0           ; the caret's row IS the checkpoint's, so
     je .measure                     ; Home and End need no walk at all to find
     mov ax, [wd_ckpr]               ; the row they are aiming at - a ROW,
-    jmp short .have                 ; straight through (SPEC.md 65.6)
+    jmp short .have                 ; straight through (SPEC.md 68.6)
 .measure:
     call wd_measure                 ; [wd_currow] = the row we are on
     mov ax, [wd_currow]
@@ -7574,12 +7574,12 @@ wd_clamp:
     push ax
     mov byte [wd_chp], 0            ; a new document types plain until told
     mov byte [wd_hashid], 0         ; otherwise, and carries no hidden text
-                                    ; (SPEC.md 65.3; a load zeroes the CHP)
+                                    ; (SPEC.md 68.3; a load zeroes the CHP)
     mov byte [wd_hastab], 0         ; ...and no tabs (a load that kept some
                                     ; re-raises this after the clamp)
     mov byte [wd_hasfmt], 0         ; every paragraph is Normal again: a load
     mov byte [wd_pap_tail], 0       ; zeroes the CHP, so every ¶ is index 0,
-                                    ; and the tail follows suit (SPEC.md 65.3).
+                                    ; and the tail follows suit (SPEC.md 68.3).
                                     ; The dictionary itself is session-lived
                                     ; and stands - indices in dead text point
                                     ; nowhere
@@ -7595,7 +7595,7 @@ wd_clamp:
                                     ; just opened is where a reader starts
     mov byte [wd_sigok], 0          ; ...and the SCREEN's signatures describe
                                     ; the note that went away. Found the hard
-                                    ; way (SPEC.md 65.4): File > New over a
+                                    ; way (SPEC.md 68.4): File > New over a
                                     ; FORMATTED document cleared [wd_hasfmt]
                                     ; here, and the uniform walk that followed
                                     ; redraws rows at 8px pitch - but the old
@@ -7740,7 +7740,7 @@ wd_onkey:
     push dx
     push di
 
-    call wd_mkey                    ; the menu system first (SPEC.md 65.2): an
+    call wd_mkey                    ; the menu system first (SPEC.md 68.2): an
     jc .out                         ; open dropdown or the About box is MODAL
                                     ; and consumes every key (Esc, arrows,
                                     ; Enter, mnemonics); with nothing open
@@ -7769,7 +7769,7 @@ wd_onkey:
     je .kselall
     cmp al, WD_C_SAVE
     je .ksave
-    cmp al, WD_C_BOLD               ; the formatting toggles (SPEC.md 65.3):
+    cmp al, WD_C_BOLD               ; the formatting toggles (SPEC.md 68.3):
     je .kbold                       ; keys.cmd's Ctrl letters, less the three
     cmp al, WD_C_DUL                ; int 16h eats (Ctrl-H/I/M are BS/Tab/CR
     je .kdul                        ; - italic and hidden ride the Format
@@ -7779,7 +7779,7 @@ wd_onkey:
     je .kul
     cmp al, WD_C_WUL
     je .kwul
-    ; --- the paragraph keys, keys.cmd's own letters (SPEC.md 65.3):
+    ; --- the paragraph keys, keys.cmd's own letters (SPEC.md 68.3):
     ; C-L/C/R/J alignment, C-2 spacing (below, a NUL key), C-O/E open/close
     ; space, C-N indent, C-T hanging, C-G unhang, C-X reset
     cmp al, WD_C_LEFT
@@ -7813,7 +7813,7 @@ wd_onkey:
     je .kf1                         ; F1 - the About box (the help there is)
     cmp ah, WD_K_F4
     je .kf4                         ; F4 / Shift-F4 - repeat the search down
-    cmp ah, WD_K_SF4                ; / up (SPEC.md 65.7)
+    cmp ah, WD_K_SF4                ; / up (SPEC.md 68.7)
     je .ksf4
     cmp ah, WD_K_F5
     je .kf5                         ; F5 - Go To... (keys.cmd EditGoTo)
@@ -7835,7 +7835,7 @@ wd_onkey:
     je .del
     cmp ah, WD_K_INS
     je .eins                        ; Ctrl+Ins = Copy / Shift+Ins = Paste
-                                    ; (keys.cmd; SPEC.md 65.3)
+                                    ; (keys.cmd; SPEC.md 68.3)
     cmp ah, WD_K_PGUP
     je .pgup
     cmp ah, WD_K_PGDN
@@ -7872,7 +7872,7 @@ wd_onkey:
     push es                         ; int 16h hands it over as a plain Space -
     mov ax, 0x40                    ; the BIOS shift flags say whether a Ctrl
     mov es, ax                      ; is down (0040:0017 bit 2, the same byte
-    mov al, [es:0x17]               ; the CAPS/NUM lamps read; SPEC.md 65.3)
+    mov al, [es:0x17]               ; the CAPS/NUM lamps read; SPEC.md 68.3)
     test al, 4
     pop es
     pop ax                          ; POP touches no flags
@@ -7885,7 +7885,7 @@ wd_onkey:
     call wd_selkill                 ; typing REPLACES a selection (SPEC.md
     jnc .insplain                   ; 27.8) - in overtype too - and the two
                                     ; halves land in one undo group
-    cmp byte [wd_ovr], 0            ; OVERTYPE (Ins, SPEC.md 65.2): the char
+    cmp byte [wd_ovr], 0            ; OVERTYPE (Ins, SPEC.md 68.2): the char
     je .insplain                    ; under the caret goes first - except a ¶
     push bx                         ; or the end, where overtype inserts
     push es
@@ -7910,7 +7910,7 @@ wd_onkey:
 .append:                            ; jumps in below wd_fastok
     call wd_selkill
     push ax                         ; the new ¶ inherits the paragraph it
-    mov ax, [wd_cur]                ; SPLITS (Word's rule, SPEC.md 65.3): its
+    mov ax, [wd_cur]                ; SPLITS (Word's rule, SPEC.md 68.3): its
     call wd_papat                   ; CHP byte is a PAP INDEX, never the
     mov [wd_entpap], al             ; typing attributes
     pop ax
@@ -7976,7 +7976,7 @@ wd_onkey:
     call wd_fastokm                 ; a caret move is not an edit, but the row
     dec word [wd_cur]               ; above it still cannot have changed
     call wd_chpsync                 ; the typing attrs follow the caret
-    jmp short .moved                ; (SPEC.md 65.3), on every plain move
+    jmp short .moved                ; (SPEC.md 68.3), on every plain move
 .right:
     call wd_movpre
     mov ax, [wd_cur]
@@ -7988,7 +7988,7 @@ wd_onkey:
     jmp short .moved
 .up:
     call wd_movpre
-    mov dx, -1                      ; in ROWS now (SPEC.md 65.6)
+    mov dx, -1                      ; in ROWS now (SPEC.md 68.6)
     call wd_vmove
     call wd_chpsync
     jmp short .moved
@@ -8037,24 +8037,24 @@ wd_onkey:
     pop ax
     ret
 
-    ; --- the shortcuts (SPEC.md 27.8/65.7) ---------------------------------
+    ; --- the shortcuts (SPEC.md 27.8/68.7) ---------------------------------
     ; Reached only by the ladder at the top of this proc, which is why they
     ; sit past its `ret`: every one of them ends by jumping back into it.
 .kfind:
     call wd_a_search                ; Ctrl-F: the modal Search dialog
-    jmp .out                        ; (SPEC.md 65.7); no repaint owed - the
+    jmp .out                        ; (SPEC.md 68.7); no repaint owed - the
                                     ; dialog is on top of us
 .kesc:
-    mov byte [wd_ext], 0            ; Esc disarms extend mode (SPEC.md 65.2)
+    mov byte [wd_ext], 0            ; Esc disarms extend mode (SPEC.md 68.2)
     call wd_selclr
     jc .redraw                      ; nothing selected: the tail still
                                     ; relights the EXT lamp
     mov byte [wd_ckok], 0
     call wd_chpsync                 ; the collapse leaves a bare caret: its
-    jmp .redraw                     ; attrs are its neighbour's (SPEC.md 65.3)
+    jmp .redraw                     ; attrs are its neighbour's (SPEC.md 68.3)
 .ktab:
     mov byte [wd_ext], 0
-    mov al, 9                       ; a TAB is a CHARACTER (SPEC.md 65.3) -
+    mov al, 9                       ; a TAB is a CHARACTER (SPEC.md 68.3) -
     call wd_selkill                 ; it advances to the next default stop;
     call wd_ins                     ; wd_ins raises [wd_hastab] so the fast
     jmp .edited                     ; paths stand down before the redraw runs
@@ -8092,21 +8092,21 @@ wd_onkey:
     jmp .redraw
 .kopen:
     call wd_a_open                  ; Ctrl+F12 = Open, through the dirty
-    jmp .out                        ; prompt like the menu item (SPEC.md 65.4)
+    jmp .out                        ; prompt like the menu item (SPEC.md 68.4)
 .kf1:
     call wd_habout                  ; F1: the About box (bounds+settle inside)
     jmp .out
 .kf4:
-    call wd_donext                  ; F4: repeat search down (SPEC.md 65.7)
+    call wd_donext                  ; F4: repeat search down (SPEC.md 68.7)
     jmp .redraw
 .ksf4:
     call wd_doprev                  ; Shift-F4: ...and up
     jmp .redraw
 .kf5:
-    call wd_a_goto                  ; F5: the Go To dialog (SPEC.md 65.7)
+    call wd_a_goto                  ; F5: the Go To dialog (SPEC.md 68.7)
     jmp .out
 .kf8:
-    xor byte [wd_ext], 1            ; F8 toggles extend mode (SPEC.md 65.2);
+    xor byte [wd_ext], 1            ; F8 toggles extend mode (SPEC.md 68.2);
     cmp byte [wd_ext], 0            ; arming banks the anchor so the first
     je .kf8off                      ; move has one to extend from
     cmp byte [wd_selon], 0
@@ -8123,7 +8123,7 @@ wd_onkey:
     mov [wd_ktick], ax              ; but the toast it may have set stands,
     jmp .redraw                     ; which is why this is not .edited
 
-    ; --- the formatting toggles (SPEC.md 65.3): five doors onto one routine,
+    ; --- the formatting toggles (SPEC.md 68.3): five doors onto one routine,
     ; exactly as the ribbon cells and the dialog are
 .kbold:
     mov al, WDAT_BOLD
@@ -8146,10 +8146,10 @@ wd_onkey:
                                     ; the ribbon cell
 .krst:
     xor al, al                      ; Ctrl-Space: ResetChar - everything back
-    call wd_applyattr               ; to plain (SPEC.md 65.3)
+    call wd_applyattr               ; to plain (SPEC.md 68.3)
     jmp .redraw
 
-    ; --- the paragraph formats (SPEC.md 65.3): keys.cmd's letters, twin
+    ; --- the paragraph formats (SPEC.md 68.3): keys.cmd's letters, twin
     ; doors with the ruler cells and the Format Paragraph dialog onto
     ; wd_modpap - the one span modifier
 .kleft:
@@ -8291,7 +8291,7 @@ wd_caretpre:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_movpre - what a caret-motion key does before moving (SPEC.md 65.2)
+; wd_movpre - what a caret-motion key does before moving (SPEC.md 68.2)
 ; out: nothing; preserves all registers
 ; Plain motion collapses the selection (wd_caretpre); with F8's extend mode
 ; armed it KEEPS it, banking the anchor if none exists yet, so the move that
@@ -8311,7 +8311,7 @@ wd_movpre:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_extpost - after the caret moved: extend the selection to it (SPEC.md 65.2)
+; wd_extpost - after the caret moved: extend the selection to it (SPEC.md 68.2)
 ; out: nothing; preserves all registers
 ; The anchored end is [wd_anchor]; the selection is the ordered pair, and a
 ; caret back ON the anchor is an empty selection, cleared. The signatures
@@ -8420,7 +8420,7 @@ wd_append:
     cmp byte [wd_selon], 0
     jne .no                         ; a selection folds into the row's cells
     cmp byte [wd_chp], 0
-    jne .no                         ; only a PLAIN character (SPEC.md 65.1):
+    jne .no                         ; only a PLAIN character (SPEC.md 68.1):
                                     ; a styled one needs the run drawers, and
                                     ; the signature patch below assumes the
                                     ; attribute fold added nothing
@@ -8430,13 +8430,13 @@ wd_append:
                                     ; index with no cell) - walk properly
     cmp byte [wd_hastab], 0
     jne .no                         ; a tab is an index with SEVERAL cells:
-                                    ; same refusal (SPEC.md 65.3)
+                                    ; same refusal (SPEC.md 68.3)
     cmp byte [wd_hasfmt], 0
     jne .no                         ; formatted rows have indents, offsets and
                                     ; heights this path's x/y arithmetic does
-                                    ; not model - walk properly (SPEC.md 65.6)
+                                    ; not model - walk properly (SPEC.md 68.6)
     cmp byte [wd_pxon], 0
-    jne .no                         ; ...AND A CHOSEN FACE (SPEC.md 65.13.1).
+    jne .no                         ; ...AND A CHOSEN FACE (SPEC.md 68.13.1).
                                     ; This path does not walk, so it does not
                                     ; compose a band: it stamps the glyph with
                                     ; OSAPI_FONT_RUN, which is the KERNEL's 8x8
@@ -8539,7 +8539,7 @@ wd_append:
     mov [wd_prow+bx], al
     mov byte [wd_pattr+bx], 0       ; the cell is plain by the gate above, and
                                     ; the attr cache must say what the diff
-                                    ; will re-ask (SPEC.md 65.1)
+                                    ; will re-ask (SPEC.md 68.1)
     inc bx
     mov [wd_prcc], bx               ; ...and its caret is one along
 
@@ -8554,7 +8554,7 @@ wd_append:
     add dx, ax                      ; the character folds where it stood
     rol dx, 1                       ; ...then its CHP byte - zero by the gate
     rol dx, 1                       ; above, so its fold is the rotate alone
-    mov ax, [wd_apx2]               ; (SPEC.md 65.1)
+    mov ax, [wd_apx2]               ; (SPEC.md 68.1)
     xor ax, 0x5A5A
     add dx, ax                      ; ...and the caret after it
     mov [bx+wd_sig], dx
@@ -8691,7 +8691,7 @@ wd_redraw:
     mov word [wd_wanty], 0x7FFF     ; which rows stopped matching
     mov word [wd_dr0], 0xFFFF
     mov word [wd_dr1], 0
-    mov byte [wd_ymoved], 0         ; ...and which rows MOVED (SPEC.md 65.6):
+    mov byte [wd_ymoved], 0         ; ...and which rows MOVED (SPEC.md 68.6):
     mov word [wd_ymv0], 0x7FFF      ; a height change shifts every row below
     mov word [wd_ymv1], 0           ; it without changing a character
     mov byte [wd_draw], 0
@@ -8801,7 +8801,7 @@ wd_redraw:
     mov ax, [wd_dr0]                ; reloaded: wd_brktry is free with AX
 
     ; the band's pixel edges: arithmetic while uniform; from the banked ys -
-    ; which pass 1 has just rewritten - under formats (SPEC.md 65.6)
+    ; which pass 1 has just rewritten - under formats (SPEC.md 68.6)
     cmp byte [wd_hasfmt], 0
     je .bxy8
     or ax, ax
@@ -8845,7 +8845,7 @@ wd_redraw:
     ; rows MOVED: erase from the highest pixel a moved row owned or owns
     ; down to the content bottom, and redraw EVERY row from there - a glyph
     ; run only self-erases at its own y, and a row that shifted leaves its
-    ; old pixels standing (SPEC.md 65.6). The fill makes the band clean, so
+    ; old pixels standing (SPEC.md 68.6). The fill makes the band clean, so
     ; the runs draw trimmed, exactly the full-repaint discipline; the
     ; to-the-bottom sweep is the honest cost of pixels that all moved.
     cmp byte [wd_ymoved], 0
@@ -9040,12 +9040,12 @@ wd_redraw:
                                     ; meant this redraw and no other, and the
                                     ; next one may well be a scroll bar click
     call wd_stat                    ; the status line follows the caret
-                                    ; (SPEC.md 65.2): delta-cached, so a
+                                    ; (SPEC.md 68.2): delta-cached, so a
                                     ; keystroke that moved neither Ln nor Col
                                     ; draws not a cell of it
     call wd_rbstat                  ; ...and the ribbon's pressed cells follow
                                     ; the caret's attributes, same delta rule
-                                    ; (SPEC.md 65.3)
+                                    ; (SPEC.md 68.3)
     call wd_rlstat                  ; ...and the ruler's cells and markers
                                     ; follow the caret's PARAGRAPH, same rule
     pop dx
@@ -9080,7 +9080,7 @@ wd_new:
     call wd_resize              ; place, so this cannot fail (SPEC.md 50.3.1)
     pop ax
     mov byte [wd_dirty], 0      ; a fresh document matches nothing on disk
-                                ; and owes no prompt (SPEC.md 65.4)
+                                ; and owes no prompt (SPEC.md 68.4)
     call wd_defname             ; a new note is a new document: leaving the
                                 ; old name would make the next Ctrl-S overwrite
                                 ; the file the user just walked away from
@@ -9123,7 +9123,7 @@ wd_dlgopen:
 wd_ondlg:
     mov [wd_fsz], cx                ; the file's size from the LISTING (38.6),
     mov [wd_fszh], dx               ; banked FIRST - the open gate reads it
-                                    ; BEFORE any disk I/O (SPEC.md 65.4)
+                                    ; BEFORE any disk I/O (SPEC.md 68.4)
     mov bl, al                      ; BL = the mode; AL becomes a name byte
     mov dx, si                      ; DX = our window: SI is about to be the
                                     ; kernel's buffer, and wd_redraw wants
@@ -9142,7 +9142,7 @@ wd_ondlg:
     mov byte [di], 0
 .copied:
     or bl, bl                       ; Save As: an extensionless typed name
-    jz .noext                       ; gets .DOC appended (SPEC.md 65.4)
+    jz .noext                       ; gets .DOC appended (SPEC.md 68.4)
     push bx
     push di
     mov di, wd_name
@@ -9186,7 +9186,7 @@ wd_ondlg:
     jmp short .draw
 .load:
     cmp word [wd_fszh], 0           ; the refusal gate, BEFORE any read
-    jne .toobig                     ; (SPEC.md 65.4): a file the staging
+    jne .toobig                     ; (SPEC.md 68.4): a file the staging
     cmp word [wd_fsz], WD_STGCAP    ; claim cannot hold is refused from the
     ja .toobig                      ; directory entry's own size
     call wd_load
@@ -9330,7 +9330,7 @@ wd_defname:
 ; wd_compttl - compose the window title: 'Microsoft Word - ' + wd_name
 ; out: wd_wttl (bss - the window record points at it for its whole life);
 ;      preserves all registers. Compose-only: wd_entry runs it before the
-;      window exists (SPEC.md 65.2).
+;      window exists (SPEC.md 68.2).
 ; wd_settitle - ...and tell the kernel the bytes changed (caption redraw).
 ;      Callback context (lock held).
 ; -----------------------------------------------------------------------------
@@ -9529,7 +9529,7 @@ wd_selxor:
 .l1:
     cmp ax, cx
     ja .out
-    call wd_cx                  ; AX = x1 (SPEC.md 65.13: the same three shifts
+    call wd_cx                  ; AX = x1 (SPEC.md 68.13: the same three shifts
     push ax                     ; in the kernel's cell, a wd_px[] lookup in a
     mov ax, cx                  ; chosen face)
     inc ax
@@ -9713,7 +9713,7 @@ wd_delspan:
 .have:
     jcxz .out
     call wd_hmark
-    mov byte [wd_dirty], 1      ; bytes are leaving: dirty (SPEC.md 65.4)
+    mov byte [wd_dirty], 1      ; bytes are leaving: dirty (SPEC.md 68.4)
     mov ax, bx
     call wd_urec_del            ; while the bytes are still here to be copied
     mov es, [wd_dseg]
@@ -9732,7 +9732,7 @@ wd_delspan:
     pop ds
 .nomv:
     pop cx
-    ; --- the same close on the CHP claim (SPEC.md 65.3); the undo blob
+    ; --- the same close on the CHP claim (SPEC.md 68.3); the undo blob
     ; above already banked both halves while the bytes were still here
     push cx
     mov es, [wd_cseg]
@@ -9787,7 +9787,7 @@ wd_gaproom:
     jc .no                      ; a 16-bit note cannot pass 65535
     call wd_capfor
     jc .no
-    mov byte [wd_dirty], 1      ; a gap is opening: dirty (SPEC.md 65.4)
+    mov byte [wd_dirty], 1      ; a gap is opening: dirty (SPEC.md 68.4)
     mov es, [wd_dseg]
     mov si, [wd_len]
     dec si                      ; the last live byte
@@ -9807,7 +9807,7 @@ wd_gaproom:
 .nomv:
     pop cx
     ; --- the same gap on the CHP claim, FILLED with the typing attrs
-    ; (SPEC.md 65.3): a paste's characters arrive dressed as the caret is;
+    ; (SPEC.md 68.3): a paste's characters arrive dressed as the caret is;
     ; the undo restore overwrites the fill with the blob's own bytes
     push cx
     push ax
@@ -9890,7 +9890,7 @@ wd_editinv:
     ret
 
 ; =============================================================================
-; Applying character formatting (SPEC.md 65.3)
+; Applying character formatting (SPEC.md 68.3)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -9911,7 +9911,7 @@ wd_chpsync:
     jz .at0
     dec bx
 .at0:
-    ; a ¶ mark's byte is a PAP INDEX, not character attrs (SPEC.md 65.3):
+    ; a ¶ mark's byte is a PAP INDEX, not character attrs (SPEC.md 68.3):
     ; look left past marks to the last real character; a run of marks back
     ; to the start answers plain
     mov es, [wd_dseg]
@@ -9982,7 +9982,7 @@ wd_dispattr:
 ; out: nothing; preserves all registers. The caller repaints (wd_redraw's
 ;      pass 1 finds the dirtied rows through the signatures).
 ;
-; Word's span semantics (SPEC.md 65.3): if ANY character in the span lacks
+; Word's span semantics (SPEC.md 68.3): if ANY character in the span lacks
 ; the attribute, set it on all; else clear it on all. ONE undo group - the
 ; bulk record, whose blob banks text AND CHP; the text half comes back
 ; unchanged and the CHP half is the change.
@@ -9999,7 +9999,7 @@ wd_applyattr:
     je .typing
     call wd_selget              ; AX = start, CX = length
     jc .typing
-    mov byte [wd_dirty], 1      ; the span's dress changes (SPEC.md 65.4)
+    mov byte [wd_dirty], 1      ; the span's dress changes (SPEC.md 68.4)
     push ax
     push cx
     call wd_urec_bulk           ; the span, text and CHP, into the arena -
@@ -10010,7 +10010,7 @@ wd_applyattr:
     mov di, cx                  ; DI = count
     push ds
     mov ds, [wd_dseg]           ; [bx] = the text: a ¶ mark's CHP byte is a
-                                ; PAP INDEX (SPEC.md 65.3) and every loop
+                                ; PAP INDEX (SPEC.md 68.3) and every loop
                                 ; below must step over it untouched. wd_*
                                 ; is unreachable until the pop - the loops
                                 ; touch only registers
@@ -10078,7 +10078,7 @@ wd_applyattr:
     cmp dl, WDAT_HID
     jne .norec
     mov byte [wd_hashid], 1         ; hidden entered the document: the cheap
-.norec:                             ; column paths stand down (SPEC.md 65.1)
+.norec:                             ; column paths stand down (SPEC.md 68.1)
     mov byte [wd_ckok], 0
     mov byte [wd_rowsok], 0
     call wd_hmark
@@ -10100,7 +10100,7 @@ wd_applyattr:
     ret
 
 ; =============================================================================
-; Applying paragraph formatting (SPEC.md 65.3)
+; Applying paragraph formatting (SPEC.md 68.3)
 ;
 ; Every door - the Ctrl keys, the ruler's cells, the marker drags, the Format
 ; Paragraph dialog - funnels through wd_modpap, one span modifier: it walks
@@ -10108,7 +10108,7 @@ wd_applyattr:
 ; each mark's CHP byte to the dictionary index of its MODIFIED format. The
 ; indices ride the ordinary text+CHP undo machinery; the tail paragraph's
 ; index lives in [wd_pap_tail] outside the buffers, and a change to it is
-; the one paragraph fact undo cannot restore (SPEC.md 65.3).
+; the one paragraph fact undo cannot restore (SPEC.md 68.3).
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -10326,7 +10326,7 @@ wd_modone:
 
 ; -----------------------------------------------------------------------------
 ; wd_modpap - apply operation AL (argument AH) to every paragraph the
-;             selection touches, or the caret's (SPEC.md 65.3)
+;             selection touches, or the caret's (SPEC.md 68.3)
 ; in:  AL = WDPO_*, AH = argument (signed where the op says), SI = window ptr
 ; out: nothing; preserves all registers. ONE bulk undo group over
 ;      [paragraph start .. last affected ¶]; the caller redraws.
@@ -10433,7 +10433,7 @@ wd_modpap:
     mov byte [wd_hasfmt], 1
 .invd:
     mov byte [wd_ckok], 0           ; row starts and heights may all have
-    mov byte [wd_rowsok], 0         ; moved (SPEC.md 65.6): the next pass 1
+    mov byte [wd_rowsok], 0         ; moved (SPEC.md 68.6): the next pass 1
     call wd_hmark                   ; re-lays the view and the moved-rows
     mov byte [wd_follow], 1         ; erase repaints what shifted; the caret's
                                     ; row may have left the view
@@ -10548,7 +10548,7 @@ wd_paste:
 .fnotlf:
     cmp ah, 13
     je .fkeep
-    cmp ah, 9                   ; a tab survives the paste now (SPEC.md 65.3)
+    cmp ah, 9                   ; a tab survives the paste now (SPEC.md 68.3)
     jne .fno9
     mov byte [wd_hastab], 1
     jmp short .fkeep
@@ -10581,7 +10581,7 @@ wd_paste:
     jmp short .t
 .tdone:
     pop cx
-    ; --- mirror the tail compaction on the CHP claim (SPEC.md 65.3): the
+    ; --- mirror the tail compaction on the CHP claim (SPEC.md 68.3): the
     ; filter kept CX of the DX-byte gap, so the CHP tail slides down the
     ; difference; the kept cells already hold [wd_chp] from wd_gaproom
     push cx
@@ -10605,7 +10605,7 @@ wd_paste:
     add ax, cx
     mov [wd_len], ax            ; the gap was n; only CX of it is text
     ; pasted ¶ marks: their CHP byte is a PAP INDEX, not the typing attrs
-    ; wd_gaproom filled (SPEC.md 65.3) - every pasted paragraph joins the
+    ; wd_gaproom filled (SPEC.md 68.3) - every pasted paragraph joins the
     ; paragraph it was pasted INTO
     push ax
     push cx
@@ -10956,7 +10956,7 @@ wd_ublob_copy:
     pop si
     pop cx
     mov ax, [cs:wd_cuseg]       ; ...and the CHP half at the SAME offsets
-    mov es, ax                  ; (SPEC.md 65.3). CS: because DS is the
+    mov es, ax                  ; (SPEC.md 68.3). CS: because DS is the
     mov ax, [cs:wd_cseg]        ; document's segment right now
     mov ds, ax
     rep movsb
@@ -11033,7 +11033,7 @@ wd_ublob_pre:
     mov es, [wd_useg]
     push ax
     mov ax, [wd_utop]
-    push dx                     ; the slide's count, run twice (SPEC.md 65.3)
+    push dx                     ; the slide's count, run twice (SPEC.md 68.3)
     mov di, ax
     add di, cx
     dec di                      ; the new last byte...
@@ -11305,7 +11305,7 @@ wd_undo:
     push es
     push cx                     ; the copy runs twice - text arena into the
     push si                     ; document, CHP arena into the CHP claim,
-    push di                     ; same offsets both times (SPEC.md 65.3)
+    push di                     ; same offsets both times (SPEC.md 68.3)
     mov es, [wd_dseg]           ; both segments loaded while DS is still ours
     mov ax, [wd_useg]
     mov ds, ax
@@ -11354,13 +11354,13 @@ wd_undo:
     ret
 
 ; =============================================================================
-; The search engine (SPEC.md 65.7)
+; The search engine (SPEC.md 68.7)
 ;
 ; A LITERAL scan over the note with the authentic search.des options - Whole
 ; Word and Match Upper/Lowercase - and one wrap. Word 1.1 had no regex; the
 ; engine Note Pad carried (and its docked panel) is deleted here, the bytes
 ; reclaimed, and Edit > Search... / Replace... / Go To... are modal dialogs
-; on the SPEC.md 65.3 framework.
+; on the SPEC.md 68.3 framework.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -11388,7 +11388,7 @@ wd_docb2:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_foldc - AL folded for a caseless compare: a-z -> A-Z (SPEC.md 65.7)
+; wd_foldc - AL folded for a caseless compare: a-z -> A-Z (SPEC.md 68.7)
 ; preserves everything else
 ; -----------------------------------------------------------------------------
 wd_foldc:
@@ -11401,7 +11401,7 @@ wd_foldc:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_iswordc - CF = 1 when AL is a word character: A-Z a-z 0-9 (SPEC.md 65.7)
+; wd_iswordc - CF = 1 when AL is a word character: A-Z a-z 0-9 (SPEC.md 68.7)
 ; preserves all registers
 ; -----------------------------------------------------------------------------
 wd_iswordc:
@@ -11425,14 +11425,14 @@ wd_iswordc:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_matchat - does the search text match the note at index AX? (SPEC.md 65.7)
+; wd_matchat - does the search text match the note at index AX? (SPEC.md 68.7)
 ; in:  AX = the index; the text in wd_fpat, options in [wd_fopt]
 ; out: CF = 0 with [wd_rxend] = one past the match; CF = 1 = no match HERE
 ;      (this asks about one position - wd_findfrom is what walks).
 ;      Preserves all registers.
 ;
 ; A LITERAL scan - Word 1.1 had no regex and neither does this port (the
-; engine Note Pad carried is gone with its panel, SPEC.md 65.7). Match
+; engine Note Pad carried is gone with its panel, SPEC.md 68.7). Match
 ; Upper/Lowercase clear folds BOTH sides through wd_foldc; Whole Word demands
 ; a non-word character (or the document's edge) on each side of the match.
 ; -----------------------------------------------------------------------------
@@ -11524,7 +11524,7 @@ wd_matchat:
     ret
 
 ; wd_iswhite - CF=0 if AL is white space: FMatchWhiteSpace's own set, less
-; the non-breaking space this character set has no room for (SPEC.md 65.7).
+; the non-breaking space this character set has no room for (SPEC.md 68.7).
 ; Preserves all registers.
 wd_iswhite:
     cmp al, ' '
@@ -11550,7 +11550,7 @@ wd_iswhite:
 ; The wrap is unconditional and is the whole of what "loops once" means: the
 ; second pass stops where the first began, so a text that occurs once is
 ; found from anywhere and one that occurs nowhere is refused after exactly
-; one traversal (SPEC.md 65.7).
+; one traversal (SPEC.md 68.7).
 ; -----------------------------------------------------------------------------
 wd_findfrom:
     push bx
@@ -11590,7 +11590,7 @@ wd_findfrom:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_findfwd - the first match at or after index AX, NO wrap (SPEC.md 65.7)
+; wd_findfwd - the first match at or after index AX, NO wrap (SPEC.md 68.7)
 ; in:  AX = where to start; out: as wd_findfrom (AX = start, DX = end)
 ; The replace sweeps' walker: a sweep that wrapped would re-visit its own
 ; replacements.
@@ -11698,7 +11698,7 @@ wd_showmatch:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_donext - F4: the next match after the caret (SPEC.md 65.7)
+; wd_donext - F4: the next match after the caret (SPEC.md 68.7)
 ; wd_doprev - Shift-F4: the last one before it
 ; in:  SI = window ptr; out: nothing; clobbers what a callback may
 ; -----------------------------------------------------------------------------
@@ -11722,7 +11722,7 @@ wd_doprev:
     call wd_showmatch
     ret
 
-; wd_fmiss - say why nothing happened (SPEC.md 65.7's authentic string).
+; wd_fmiss - say why nothing happened (SPEC.md 68.7's authentic string).
 ; Preserves all registers.
 wd_fmiss:
     push ax
@@ -11750,7 +11750,7 @@ wd_replat:
     push es
     mov bx, ax
     push ax                     ; ^m and ^c are resolved against THIS match
-    push cx                     ; (SPEC.md 65.7), so the bytes spliced in are
+    push cx                     ; (SPEC.md 68.7), so the bytes spliced in are
     mov [wd_fmst], ax           ; built here and not taken from the dialog
     add ax, cx
     mov [wd_fmen], ax
@@ -11997,7 +11997,7 @@ wd_hitpt:
     call wd_yrow                ; there and stop after it, which is what
     jc .nseed                   ; wd_onclick has always done for a click; the
     mov dx, ax                  ; ys are banked, so formats answer too, and a
-    call wd_seedrow             ; refusal is the unseeded walk (SPEC.md 65.6)
+    call wd_seedrow             ; refusal is the unseeded walk (SPEC.md 68.6)
 .nseed:
     pop dx
     pop ax
@@ -12380,7 +12380,7 @@ wd_absw:
     ret
 
 ; =============================================================================
-; A View toggle MOVES the text band (SPEC.md 65.2; this blit once served the
+; A View toggle MOVES the text band (SPEC.md 68.2; this blit once served the
 ; find panel, SPEC.md 27.10.2 - the panel is gone, the mechanism stays)
 ;
 ; A ribbon/ruler toggle changes exactly one number - the chrome top wd_bounds
@@ -12458,7 +12458,7 @@ wd_panmove:
     mov bx, si                  ; the band is everything below the chrome
     call OSAPI_WM_CONTENT       ; strips, so the panel's own pixels move with
     push ax                     ; the text and the menu bar never rides a
-    mov ax, [wd_sctop]          ; blit (SPEC.md 65.2). The band's top is the
+    mov ax, [wd_sctop]          ; blit (SPEC.md 68.2). The band's top is the
     cmp ax, [wd_ctop]           ; SMALLER of the chrome top the screen was
     jbe .stop                   ; drawn under and the live one: for a panel
     mov ax, [wd_ctop]           ; open/close the two are equal (the old
@@ -12611,7 +12611,7 @@ wd_panmove:
 
 .done:
     push cx                     ; the blit moved every row's pixels by DI:
-    push si                     ; keep the banked ys truthful (SPEC.md 65.6) -
+    push si                     ; keep the banked ys truthful (SPEC.md 68.6) -
     mov ax, di                  ; unread while uniform, but the bank must not
     mov cx, [wd_vrows]          ; go stale across a later 0 -> 1 transition
     jcxz .noadj
@@ -12741,7 +12741,7 @@ wd_saycnt:
     ret
 
 ; =============================================================================
-; The Word chrome (SPEC.md 65.2): the nine-title menu bar and its dropdowns,
+; The Word chrome (SPEC.md 68.2): the nine-title menu bar and its dropdowns,
 ; the ribbon, the ruler and the status line, all drawn IN the window.
 ;
 ; MENU_APPMAX is five and Word's bar is nine menus, so the bar is ours: the
@@ -12834,7 +12834,7 @@ wd_wfit:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_mbar - the menu bar strip: nine titles, ONE opaque run (SPEC.md 65.2)
+; wd_mbar - the menu bar strip: nine titles, ONE opaque run (SPEC.md 68.2)
 ; in:  wd_bounds run, gfx lock held; out: nothing; preserves all registers
 ;
 ; The titles are one 56-cell string drawn with one font_run at cl+8 - the
@@ -13192,7 +13192,7 @@ wd_mgeo:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_mdraw - draw the open dropdown from wd_mrect (SPEC.md 65.2)
+; wd_mdraw - draw the open dropdown from wd_mrect (SPEC.md 68.2)
 ; in:  [wd_mopen], wd_mrect computed, gfx lock held; preserves all registers
 ;
 ; White panel, 1px black frame, 1px grey drop shadow right and bottom
@@ -13613,7 +13613,7 @@ wd_mclose:
 ; repainted whole (bounded call counts); the margin band above the text is
 ; refilled; the text rows are erased FULL WIDTH and re-lettered by one
 ; clipped walk seeded at the first covered row - row-granular, the band-blit
-; idiom (SPEC.md 65.2); the bar, status line and grow box only when reached.
+; idiom (SPEC.md 68.2); the bar, status line and grow box only when reached.
 ; -----------------------------------------------------------------------------
 wd_mrepair:
     push ax
@@ -13641,7 +13641,7 @@ wd_mrepair:
     mov ax, dx
 .y2ok:
     mov [wd_mry2], ax
-    ; the menu bar strip (a modal dialog may cover it - SPEC.md 65.3)
+    ; the menu bar strip (a modal dialog may cover it - SPEC.md 68.3)
     mov ax, [wd_ct]
     mov dx, ax
     add dx, WD_MENU_H-1
@@ -13717,7 +13717,7 @@ wd_mrepair:
     mov dx, ax
 .r0a:
     call wd_yrow                    ; DI = r0, the first covered row, found
-    jnc .r0b                        ; from the banked ys (SPEC.md 65.6) -
+    jnc .r0b                        ; from the banked ys (SPEC.md 68.6) -
     xor ax, ax                      ; refused, it is the whole band: slow and
 .r0b:                               ; never wrong
     mov di, ax
@@ -13940,7 +13940,7 @@ wd_btn12:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_ribbon - the ribbon strip (SPEC.md 65.2), per ibdefs.h's order:
+; wd_ribbon - the ribbon strip (SPEC.md 68.2), per ibdefs.h's order:
 ;             Font:/Pts: combos, B I K | U W D | super/sub pair | pilcrow.
 ; in:  wd_bounds run, gfx lock held; preserves all registers
 ; The buttons are drawn and hit-tested but inert this stage - pressed-state
@@ -14038,7 +14038,7 @@ wd_ribbon:
     mov cl, 'D'
     call wd_btn12
     ; the stacked superscript/subscript pair (ScrptPos): a raised and a
-    ; dropped mark in one cell's two halves - GREYED whole (SPEC.md 47/65.3):
+    ; dropped mark in one cell's two halves - GREYED whole (SPEC.md 47/68.3):
     ; super/subscript does not exist in draft view's one cell height
     mov ax, WD_RB_SS + WD_BTN_W - 1
     call wd_wfit
@@ -14122,7 +14122,7 @@ wd_ribbon:
 .sync:
     mov byte [wd_rbold], 0          ; every cell was just drawn UNPRESSED:
     mov byte [wd_rbok], 1           ; re-invert the ones the caret's attrs
-    call wd_rbstat                  ; say are on (SPEC.md 65.3)
+    call wd_rbstat                  ; say are on (SPEC.md 68.3)
 .out:
     pop di
     pop si
@@ -14191,7 +14191,7 @@ wd_rbmask: db WDAT_BOLD, WDAT_ITAL, WDAT_SCAP, WDAT_UL, WDAT_WUL, WDAT_DUL
            db 0x80
 
 ; -----------------------------------------------------------------------------
-; wd_rbstat - the ribbon's pressed states, delta-cached (SPEC.md 65.3)
+; wd_rbstat - the ribbon's pressed states, delta-cached (SPEC.md 68.3)
 ; in:  wd_bounds run, gfx lock held; preserves all registers
 ; Reads the display attrs (caret's, or the selection's first character) plus
 ; the Show-all toggle in bit 7, compares against what the cells show, and
@@ -14355,7 +14355,7 @@ wd_pgcol:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_sheet - the sheet's two edges and its page marks (SPEC.md 65.11)
+; wd_sheet - the sheet's two edges and its page marks (SPEC.md 68.11)
 ; in:  the geometry wd_bounds banked; gfx lock held
 ; out: nothing; preserves all registers. A no-op in Draft view, which is what
 ;      keeps this off every draft-view redraw's bill.
@@ -14398,11 +14398,11 @@ wd_sheet:
 ;
 ; The mark sits in the MARGIN, not across the sheet: a rule drawn inside the
 ; column would be erased by the next flush of the row under it, and putting it
-; back would mean the row flush - the hottest path in the app (SPEC.md 65.6) -
+; back would mean the row flush - the hottest path in the app (SPEC.md 68.6) -
 ; learning about pages. The tick says the same thing for two gfx calls a page
 ; and no cost at all to a keystroke. The inter-page WHITESPACE a real Page
 ; view shows is not drawn: it would have to come out of the layout walk's row
-; advance, and that is the change SPEC.md 65.11 defers.
+; advance, and that is the change SPEC.md 68.11 defers.
 ; -----------------------------------------------------------------------------
 wd_pgmarks:
     push ax
@@ -14448,7 +14448,7 @@ wd_pgmarks:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_ruler - the ruler strip (SPEC.md 65.2), per ibdefs.h's order: Style:
+; wd_ruler - the ruler strip (SPEC.md 68.2), per ibdefs.h's order: Style:
 ;            combo, alignment x4, spacing x3, closed/open space, tab type x4,
 ;            then the inch scale with the indent markers.
 ; in:  wd_bounds run, gfx lock held; preserves all registers
@@ -14606,7 +14606,7 @@ wd_ruler:
     mov dx, di
     add dx, 11
     call OSAPI_GFX_HLINE
-    ; the four tab-type cells: L C R D - GREYED whole (SPEC.md 47/65.3):
+    ; the four tab-type cells: L C R D - GREYED whole (SPEC.md 47/68.3):
     ; custom tab stops are out of scope, every tab lands on the default
     ; stops, so a cell that picks the NEXT stop's type would be a lie
     stc
@@ -14666,7 +14666,7 @@ wd_ruler:
     call wd_rlscale
     mov word [wd_rlold], 0          ; every cell was just drawn UNPRESSED:
     mov byte [wd_rlok], 1           ; re-invert the ones the caret's
-    call wd_rlstat                  ; paragraph says are on (SPEC.md 65.3)
+    call wd_rlstat                  ; paragraph says are on (SPEC.md 68.3)
 .out:
     pop di
     pop si
@@ -14677,7 +14677,7 @@ wd_ruler:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_rlcalc - the ruler's state for the CARET's paragraph (SPEC.md 65.3)
+; wd_rlcalc - the ruler's state for the CARET's paragraph (SPEC.md 68.3)
 ; out: AX = pressed-cell bits (0..3 alignment, 4..6 spacing 1/1.5/2,
 ;      7 closed, 8 open); [wd_rll]/[wd_rlf]/[wd_rlr] = its left / first
 ;      (signed) / right indents in cells. Preserves everything else.
@@ -14818,7 +14818,7 @@ wd_rlmclamp:
 ;
 ; The column and not the window: the scale measures the DOCUMENT, so it ends
 ; where the text does. In Page view that is the sheet's right edge, and the
-; ruler spans the sheet exactly (SPEC.md 65.11).
+; ruler spans the sheet exactly (SPEC.md 68.11).
 wd_rlend:
     push ax
     mov cx, [wd_rcols]
@@ -14840,7 +14840,7 @@ wd_rlend:
 ; -----------------------------------------------------------------------------
 ; wd_rlscale - the inch scale band whole: erase, ticks (ONE fill_pat),
 ;              digits, and the LIVE indent markers at the caret paragraph's
-;              positions (SPEC.md 65.3). ~12 calls, drawn by wd_ruler and by
+;              positions (SPEC.md 68.3). ~12 calls, drawn by wd_ruler and by
 ;              wd_rlstat when the caret enters a differently-indented
 ;              paragraph. Banks the marker caches.
 ; -----------------------------------------------------------------------------
@@ -14863,7 +14863,7 @@ wd_rlscale:
                                     ; starts, so an indent marker at n cells
                                     ; sits exactly over the column the text
                                     ; will indent to, and inch 1 is one inch
-                                    ; of document (SPEC.md 65.2)
+                                    ; of document (SPEC.md 68.2)
     call wd_rlend                   ; CX = the text column's right edge
     mov [wd_rlxe], cx
     mov al, CWHITE                  ; erase the band whole: digits, ticks and
@@ -14950,7 +14950,7 @@ wd_rlscale:
 
 ; -----------------------------------------------------------------------------
 ; wd_rlstat - the ruler's pressed cells and markers, delta-cached exactly as
-;             the ribbon's cells are (SPEC.md 65.3): a caret move that stays
+;             the ribbon's cells are (SPEC.md 68.3): a caret move that stays
 ;             inside one paragraph format draws not a call
 ; in:  wd_bounds run, gfx lock held; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -15173,7 +15173,7 @@ wd_rgclamp:
     ret
 
 ; =============================================================================
-; The status line (SPEC.md 65.2): 'Pg n  Sec 1  At n  Ln n  Col n' live from
+; The status line (SPEC.md 68.2): 'Pg n  Sec 1  At n  Ln n  Col n' live from
 ; the caret, CAPS/NUM lamps from the BIOS shift flags at the right end. Page
 ; = WD_PGLINES lines; Ln restarts per page; Col is 1-based; At is the line on
 ; the page (draft view's honest unit is the line). The composed text is
@@ -15270,7 +15270,7 @@ wd_stcomp:
     call wd_stcat
     pop ax                          ; --- p/t: the page over the total pages
     call wd_utoa                    ; (status.h's pageInDoc/totalPages field,
-    mov byte [di], '/'              ; SPEC.md 65.2) - the total from
+    mov byte [di], '/'              ; SPEC.md 68.2) - the total from
     inc di                          ; [wd_drows], a lower bound the height
     mov ax, [wd_drows]              ; count only ever raises
     add ax, WD_PGLINES - 1
@@ -15281,7 +15281,7 @@ wd_stcomp:
     inc ax                          ; an empty document is page 1 of 1
 .t1:
     call wd_utoa
-    ; --- graceful field dropping (SPEC.md 65.2): a window too narrow to
+    ; --- graceful field dropping (SPEC.md 68.2): a window too narrow to
     ; show every cell drops the At field FIRST - it duplicates Ln by
     ; construction (a page is 54 lines), and losing it keeps Ln and Col,
     ; which wd_stdiff's right-edge clamp would otherwise cut off
@@ -15301,7 +15301,7 @@ wd_stcomp:
     mov ax, cx
     inc ax
     call wd_utoa                    ; At = the line on the page, in li - the
-    mov si, wd_s_li                 ; honest draft-view unit (SPEC.md 65.2)
+    mov si, wd_s_li                 ; honest draft-view unit (SPEC.md 68.2)
     call wd_stcat
     jmp short .atdone
 .noat:
@@ -15434,7 +15434,7 @@ wd_stdiff:
 ; 0040:0017 is the BIOS keyboard flag byte - bit 6 CAPS lock, bit 5 NUM lock.
 ; The keyboard driver keeps BIOS int 16h alive, so the byte is maintained;
 ; reading it is a plain memory read through a scratch segment register, not a
-; BIOS call, so any task and any lock state may do it (SPEC.md 65.2).
+; BIOS call, so any task and any lock state may do it (SPEC.md 68.2).
 ; -----------------------------------------------------------------------------
 wd_stkval:
     push bx
@@ -15446,7 +15446,7 @@ wd_stkval:
     pop es
     pop bx
     cmp byte [wd_ovr], 0            ; ...and our own two lamps fold into the
-    je .noov                        ; unused low bits (SPEC.md 65.2), so the
+    je .noov                        ; unused low bits (SPEC.md 68.2), so the
     or al, 0x01                     ; worker's delta poll and wd_stat's both
 .noov:                              ; notice an Ins or an F8 for free
     cmp byte [wd_ext], 0
@@ -15458,7 +15458,7 @@ wd_stkval:
 ; -----------------------------------------------------------------------------
 ; wd_kbflags - AL = the whole BIOS shift-flag byte at 0040:0017 (bits 0/1
 ; shift, 2 ctrl, 3 alt) - what tells Shift+Del from NumLock's '.', and
-; Alt+BkSp from a backspace (SPEC.md 65.3). Preserves everything else.
+; Alt+BkSp from a backspace (SPEC.md 68.3). Preserves everything else.
 ; -----------------------------------------------------------------------------
 wd_kbflags:
     push bx
@@ -15660,7 +15660,7 @@ wd_stat:
     ret
 
 ; =============================================================================
-; Menu interaction (SPEC.md 65.2). Both period styles at once:
+; Menu interaction (SPEC.md 68.2). Both period styles at once:
 ;  - press-drag-release (Macintosh): the press opens the dropdown, dragging
 ;    moves an XOR highlight (and slides across the bar between menus), the
 ;    release fires the item under the pointer;
@@ -15807,7 +15807,7 @@ wd_minrect:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_mroute - route a content click through the chrome (SPEC.md 65.2)
+; wd_mroute - route a content click through the chrome (SPEC.md 68.2)
 ; in:  CX = x, DX = y, SI = window ptr, gfx lock held
 ; out: CF=1 the click was chrome's and is fully handled; CF=0 not ours.
 ;      Preserves CX/DX/SI (and everything else).
@@ -15818,7 +15818,7 @@ wd_mroute:
     push di
     call wd_bounds
     cmp word [wd_dlg], 0            ; an open dialog is modal before anything
-    je .nodlg                       ; else is (SPEC.md 65.3)
+    je .nodlg                       ; else is (SPEC.md 68.3)
     call wd_dgclick
     jmp .cons
 .nodlg:
@@ -15855,7 +15855,7 @@ wd_mroute:
     jmp .cons
 .notbar:
     ; the ribbon strip: the two combos open; the toggles are hit-tested and
-    ; inert this stage (SPEC.md 65.2)
+    ; inert this stage (SPEC.md 68.2)
     cmp byte [wd_vrib], 0
     je .norib
     mov ax, [wd_ct]
@@ -15909,7 +15909,7 @@ wd_mroute:
     call wd_mtrack
     jmp .cons
 .rbtns:
-    ; the toggle cells (SPEC.md 65.3): B I K | U W D fire wd_applyattr, the
+    ; the toggle cells (SPEC.md 68.3): B I K | U W D fire wd_applyattr, the
     ; pilcrow toggles Show-all, the greyed super/sub pair is inert. The hit
     ; geometry is wd_rbxy's - the same rows the painter and the delta update
     ; read, so a cell cannot be drawn one place and clicked another
@@ -15935,7 +15935,7 @@ wd_mroute:
 .rbsa:
     xor byte [wd_showall], 1        ; Show-all: the pilcrow cells appear in
     call wd_redraw                  ; every row that carries a mark - the
-    jmp .cons                       ; signatures find them (SPEC.md 65.1)
+    jmp .cons                       ; signatures find them (SPEC.md 68.1)
 .rbtn:
     pop ax
     inc ax
@@ -15944,7 +15944,7 @@ wd_mroute:
     jmp .cons                       ; the strip's blank ground, and the greyed
                                     ; super/sub cell: inert
 .norib:
-    ; the ruler strip (SPEC.md 65.3): the Style combo opens; the alignment,
+    ; the ruler strip (SPEC.md 68.3): the Style combo opens; the alignment,
     ; spacing and open/close cells FIRE (wd_modpap, the same door as the
     ; keys); the scale drags its indent markers; the greyed tab cells are
     ; inert
@@ -16052,7 +16052,7 @@ wd_mroute:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_mkey - route a key through the menu system (SPEC.md 65.2)
+; wd_mkey - route a key through the menu system (SPEC.md 68.2)
 ; in:  AL = ascii, AH = scan, SI = window ptr, gfx lock held
 ; out: CF=1 consumed. An open dropdown (and the About box) is MODAL and
 ;      consumes everything: Esc closes, Left/Right slide along the bar,
@@ -16066,7 +16066,7 @@ wd_mkey:
     push cx
     push dx
     push di
-    cmp word [wd_dlg], 0            ; the dialog is modal (SPEC.md 65.3):
+    cmp word [wd_dlg], 0            ; the dialog is modal (SPEC.md 68.3):
     je .nodlg                       ; Enter fires OK, Esc cancels, a letter
     call wd_dgkey                   ; toggles its box, and nothing leaks
     jmp .cons
@@ -16268,7 +16268,7 @@ wd_mstep:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_mfire - dispatch an action byte (SPEC.md 65.2)
+; wd_mfire - dispatch an action byte (SPEC.md 68.2)
 ; in:  AL = WDA_*, SI = window ptr; gfx lock held, the menu already closed
 ;      and its cover repainted
 ; out: clobbers registers like any callback (callers bank what they keep);
@@ -16301,26 +16301,26 @@ wd_ftab:
     dw wd_a_paste
     dw wd_a_search
     dw wd_a_repl
-    dw wd_a_draft                   ; View > Draft (SPEC.md 65.11)
+    dw wd_a_draft                   ; View > Draft (SPEC.md 68.11)
     dw wd_a_vrib
     dw wd_a_vrul
     dw wd_a_vsta
     dw wd_abopen                    ; Help > About...
     dw wd_mf_ret                    ; Window > 1: the one window, checked
     dw wd_a_csel                    ; a combo entry: cosmetic, EXCEPT the
-                                    ; Font one (SPEC.md 65.13)
-    dw wd_a_char                    ; Format > Character... (SPEC.md 65.3)
-    dw wd_a_para                    ; Format > Paragraph... (SPEC.md 65.3)
-    dw wd_a_goto                    ; Edit > Go To... (SPEC.md 65.7)
-    dw wd_a_sort                    ; Utilities > Sort... (SPEC.md 65.9)
+                                    ; Font one (SPEC.md 68.13)
+    dw wd_a_char                    ; Format > Character... (SPEC.md 68.3)
+    dw wd_a_para                    ; Format > Paragraph... (SPEC.md 68.3)
+    dw wd_a_goto                    ; Edit > Go To... (SPEC.md 68.7)
+    dw wd_a_sort                    ; Utilities > Sort... (SPEC.md 68.9)
     dw wd_a_renum                   ; Utilities > Renumber...
     dw wd_a_toc                     ; Insert > Table of Contents...
-    dw wd_a_page                    ; View > Page (SPEC.md 65.11)
+    dw wd_a_page                    ; View > Page (SPEC.md 68.11)
 
 wd_mf_ret:
     ret
 
-; File > New / Open... ask the dirty question first (SPEC.md 65.4); the
+; File > New / Open... ask the dirty question first (SPEC.md 68.4); the
 ; wd_do* halves are what Yes/No proceed to, and what a clean document runs
 ; directly.
 wd_a_new:
@@ -16385,9 +16385,9 @@ wd_a_paste:
 
 ; Edit > Search... / Replace... open the legacy find panel this stage - the
 ; real Search/Replace DIALOGS are a later stage; the panel is the same
-; feature behind the authentic menu item (SPEC.md 65.2).
+; feature behind the authentic menu item (SPEC.md 68.2).
 ; Edit > Search... / Replace... / Go To... - the authentic modal dialogs
-; (SPEC.md 65.7). Each presets [wd_dck] (the check bits) and its radios
+; (SPEC.md 68.7). Each presets [wd_dck] (the check bits) and its radios
 ; before wd_dgopen paints, then focuses its first edit box.
 wd_a_search:
     push ax
@@ -16414,7 +16414,7 @@ wd_a_repl:
     push bx
     push di
     mov al, [wd_fopt]               ; all three bits: Confirm Changes rides
-    mov [wd_dck], al                ; along (SPEC.md 65.7)
+    mov [wd_dck], al                ; along (SPEC.md 68.7)
     mov bx, wd_dlgrepl
     call wd_dgopen
     cmp [wd_dlg], bx
@@ -16445,7 +16445,7 @@ wd_a_goto:
     pop ax
     ret
 
-; --- the three Utilities dialogs (SPEC.md 65.9) ------------------------------
+; --- the three Utilities dialogs (SPEC.md 68.9) ------------------------------
 ; Each opens with its radios and check boxes showing the state it last ran
 ; with, so a second Sort remembers the first one's key - which is what makes
 ; sorting on two fields two commands rather than a re-typed dialog.
@@ -16543,7 +16543,7 @@ wd_a_toc:
     ret
 
 ; -----------------------------------------------------------------------------
-; The three Utilities dialogs' OK verbs (SPEC.md 65.9). Each banks its radios
+; The three Utilities dialogs' OK verbs (SPEC.md 68.9). Each banks its radios
 ; and edits into the command's state, closes, runs, and repaints - the same
 ; shape wd_dsapply has, so the search dialogs and these cannot drift.
 ; -----------------------------------------------------------------------------
@@ -16768,7 +16768,7 @@ wd_uatoi:
     ret
 
 ; -----------------------------------------------------------------------------
-; View > Draft / View > Page (SPEC.md 65.11)
+; View > Draft / View > Page (SPEC.md 68.11)
 ; in:  SI = window ptr; out: nothing; clobbers as a callback
 ;
 ; The view is one byte, and everything that differs falls out of it in
@@ -16857,7 +16857,7 @@ wd_vtoggle:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_a_close - File > Close and File > Exit (SPEC.md 65.2/65.4)
+; wd_a_close - File > Close and File > Exit (SPEC.md 68.2/68.4)
 ; in:  SI = window ptr, gfx lock held; preserves all registers
 ;
 ; A dirty document raises the save-changes prompt first; wd_doclose is the
@@ -16870,7 +16870,7 @@ wd_vtoggle:
 ;
 ; THE KERNEL CLOSE BOX CANNOT PROMPT: clicking it tears the instance down
 ; inside the kernel's own path (task, region, claims and record freed) with
-; no callback in between - a documented limitation (SPEC.md 65.4). The File
+; no callback in between - a documented limitation (SPEC.md 68.4). The File
 ; menu's Close and Exit, and their keys, all come through here.
 ; -----------------------------------------------------------------------------
 wd_a_close:
@@ -16899,7 +16899,7 @@ wd_doclose:
     ret
 
 ; =============================================================================
-; The About box (SPEC.md 65.2): 'Microsoft Word 1.1a for os8088' + OK,
+; The About box (SPEC.md 68.2): 'Microsoft Word 1.1a for os8088' + OK,
 ; centred, modal exactly like a dropdown - wd_mkey and wd_mroute consume
 ; everything while [wd_about] is up, and closing repaints through the same
 ; wd_mrepair. Reached from Help > About... and from the kernel bar's 'About
@@ -16987,7 +16987,7 @@ wd_abopen:
     inc cx
     mov dx, bx
     call OSAPI_GFX_FILL_GRAY
-    ; the three lines (SPEC.md 65.2): the name, the version, and where the
+    ; the three lines (SPEC.md 68.2): the name, the version, and where the
     ; authentic UI came from - the Computer History Museum's Opus release
     mov cx, [wd_abrect]
     add cx, 8
@@ -17052,7 +17052,7 @@ wd_abclose:
     ret
 
 ; =============================================================================
-; The modal dialog framework (SPEC.md 65.3), and Format > Character...
+; The modal dialog framework (SPEC.md 68.3), and Format > Character...
 ;
 ; A dialog is data - the WDD_* records up top - drawn centred over the
 ; content in the dropdown's dress (white panel, black frame, grey shadow).
@@ -17083,7 +17083,7 @@ wd_dgopen:
     add ax, 2                       ; the shadow's pixel; a modal dialog may
     cmp ax, [wd_ch]                 ; cover the in-window menu bar (the close
     ja .toast                       ; repaint restores it) - it need only fit
-                                    ; the content box (SPEC.md 65.3)
+                                    ; the content box (SPEC.md 68.3)
     mov ax, [wd_cw]                 ; centred, the x snapped to a byte column
     sub ax, [bx]                    ; (the content origin is snapped, so the
     shr ax, 1                       ; sum stays on one)
@@ -17097,13 +17097,13 @@ wd_dgopen:
     mov ax, [wd_ch]
     sub ax, [bx+2]
     cmp bx, wd_dlgconf              ; the confirm strip PINS to the bottom of
-    je .bot                         ; the content (SPEC.md 65.7): the match it
+    je .bot                         ; the content (SPEC.md 68.7): the match it
     shr ax, 1                       ; asks about is selected in the text above
 .bot:
     add ax, [wd_ct]
     mov dx, [wd_ct]                 ; ...its bottom (the shadow adds one) must
     add dx, [wd_ch]                 ; not spill past the content onto the
-    sub dx, [bx+2]                  ; window's border (SPEC.md 65.3): a short
+    sub dx, [bx+2]                  ; window's border (SPEC.md 68.3): a short
     dec dx                          ; CGA content centres the box too low, so
     cmp ax, dx                      ; clamp the bottom - the height check above
     jbe .ybot                       ; guarantees such a y exists
@@ -17121,7 +17121,7 @@ wd_dgopen:
     mov [wd_dlrect+6], ax
     cmp bx, wd_dlgchar              ; only Format Character reads the caret's
     jne .ckset                      ; attributes; every other dialog's opener
-    call wd_dispattr                ; preset [wd_dck] itself (SPEC.md 65.7)
+    call wd_dispattr                ; preset [wd_dck] itself (SPEC.md 68.7)
     mov [wd_dck], al
 .ckset:
     mov word [wd_dgfoc], 0          ; no edit is focused yet
@@ -17426,7 +17426,7 @@ wd_dghit:
     cmp al, WDD_RAD
     jne .next
     cmp word [di+10], 0             ; a LIVE radio has a group; the char
-    je .next                        ; dialog's are decorative (SPEC.md 65.3)
+    je .next                        ; dialog's are decorative (SPEC.md 68.3)
 .rect:
     mov bx, [di+2]
     add bx, [wd_dlgx]               ; BX = x1
@@ -17517,7 +17517,7 @@ wd_dgclick:
 .btn:
     cmp word [di+10], 1
     je .ok
-    cmp word [di+10], 3             ; the prompt's third verb (SPEC.md 65.4)
+    cmp word [di+10], 3             ; the prompt's third verb (SPEC.md 68.4)
     je .no
     call wd_dgcancel                ; Cancel: discard
     jmp short .out
@@ -17607,9 +17607,9 @@ wd_dgkey:
     cmp al, 13
     je .enter
     cmp al, 9
-    je .tab                         ; Tab cycles the edit fields (SPEC.md 65.3)
+    je .tab                         ; Tab cycles the edit fields (SPEC.md 68.3)
     cmp word [wd_dlg], wd_dlgask    ; the two Yes/No/Cancel prompts answer Y
-    je .yn                          ; and N from the keyboard (SPEC.md 65.4)
+    je .yn                          ; and N from the keyboard (SPEC.md 68.4)
     cmp word [wd_dlg], wd_dlgconf
     jne .noyn
 .yn:
@@ -17628,7 +17628,7 @@ wd_dgkey:
     cmp word [wd_dgfoc], 0
     je .fold
     mov di, [wd_dgfoc]              ; a FREE-TEXT edit consumes every
-    test byte [di+1], WDDF_TXT      ; printable (SPEC.md 65.7) - the check
+    test byte [di+1], WDDF_TXT      ; printable (SPEC.md 68.7) - the check
     jz .num                         ; boxes' mnemonics answer only while no
     cmp al, 8                       ; text edit is focused
     je .ebs
@@ -17775,7 +17775,7 @@ wd_dgkey:
 ; -----------------------------------------------------------------------------
 ; wd_dgok - OK (or Yes): apply the open dialog's answer, close, repaint
 ; in:  SI = window ptr, gfx lock held; preserves all
-; Which dialog is up decides which apply runs (SPEC.md 65.3/65.4/65.7).
+; Which dialog is up decides which apply runs (SPEC.md 68.3/68.4/68.7).
 ; -----------------------------------------------------------------------------
 wd_dgok:
     push ax
@@ -17824,7 +17824,7 @@ wd_dgok:
     call wd_redraw
     jmp short .out
 .srch:
-    call wd_dsapply                 ; closes, searches, redraws (SPEC.md 65.7)
+    call wd_dsapply                 ; closes, searches, redraws (SPEC.md 68.7)
     jmp short .out
 .repl:
     call wd_drapply
@@ -17833,17 +17833,17 @@ wd_dgok:
     call wd_dgoto
     jmp short .out
 .yes:
-    call wd_dgyes                   ; the dirty prompt's Yes (SPEC.md 65.4)
+    call wd_dgyes                   ; the dirty prompt's Yes (SPEC.md 68.4)
     jmp short .out
 .cyes:
-    call wd_dcyes                   ; the confirm strip's Yes (SPEC.md 65.7)
+    call wd_dcyes                   ; the confirm strip's Yes (SPEC.md 68.7)
 .out:
     pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dgno - the prompts' No verb (SPEC.md 65.4/65.7)
+; wd_dgno - the prompts' No verb (SPEC.md 68.4/68.7)
 ; in:  SI = window ptr, gfx lock held; preserves all
 ; -----------------------------------------------------------------------------
 wd_dgno:
@@ -17880,7 +17880,7 @@ wd_dgcancel:
     cmp bx, wd_dlgconf
     jne .out
     mov ax, [wd_cfn]                ; the sweep so far is what happened: say
-    call wd_saycnt                  ; how much (SPEC.md 65.7)
+    call wd_saycnt                  ; how much (SPEC.md 68.7)
 .out:
     pop bx
     pop ax
@@ -17892,7 +17892,7 @@ wd_dgcancel:
 ; With a selection every character in the span takes the byte WHOLE (the
 ; boxes are authoritative - that is what OK on this dialog means), as ONE
 ; bulk undo group; hidden may have changed either way, so the layout tables
-; drop (SPEC.md 65.3).
+; drop (SPEC.md 68.3).
 ; -----------------------------------------------------------------------------
 wd_dgapply:
     push ax
@@ -17917,7 +17917,7 @@ wd_dgapply:
     mov di, cx
     push ds
     mov ds, [wd_dseg]               ; step over ¶ marks: their byte is a PAP
-.f:                                 ; index (SPEC.md 65.3)
+.f:                                 ; index (SPEC.md 68.3)
     cmp byte [bx], 13
     je .fnx
     mov [es:bx], dl
@@ -17970,7 +17970,7 @@ wd_dgclose:
     ret
 
 ; =============================================================================
-; Search / Replace / Go To (SPEC.md 65.7) and the dirty prompt (SPEC.md 65.4)
+; Search / Replace / Go To (SPEC.md 68.7) and the dirty prompt (SPEC.md 68.4)
 ; - the appliers behind wd_dgok's dispatcher
 ; =============================================================================
 
@@ -17990,7 +17990,7 @@ wd_fplen:
     mov [wd_fpatn], ax
     call wd_pcomp               ; the raw text is what the dialog edits; the
                                 ; COMPILED pattern is what the engine walks
-                                ; (SPEC.md 65.7), and this is the one door
+                                ; (SPEC.md 68.7), and this is the one door
                                 ; the raw text changes through
     pop bx
     pop ax
@@ -18064,7 +18064,7 @@ wd_drapply:
 .conf:
     call wd_uclose
     mov word [wd_cfn], 0            ; the confirm sweep starts at the top,
-    xor ax, ax                      ; like Replace All (SPEC.md 65.7)
+    xor ax, ax                      ; like Replace All (SPEC.md 68.7)
     call wd_cfstep
     jmp short .out
 .miss:
@@ -18078,7 +18078,7 @@ wd_drapply:
 ; wd_cfstep - the confirm session's step: select the next match at/after AX
 ;             under the Yes/No/Cancel strip, or finish with the count
 ; in:  AX = where to look from, SI = window ptr, gfx lock held; preserves all
-; The strip closes before each replacement and reopens after (SPEC.md 65.7):
+; The strip closes before each replacement and reopens after (SPEC.md 68.7):
 ; a replacement reflows rows, and lettering them under a modal's pixels would
 ; corrupt it - the close repair and reopen are the price of a per-match answer.
 ; -----------------------------------------------------------------------------
@@ -18146,7 +18146,7 @@ wd_dcno:
 
 ; -----------------------------------------------------------------------------
 ; wd_dgoto - the Go To dialog's OK: page N -> the caret at line (N-1)*54
-; in:  SI = window ptr, gfx lock held; preserves all (SPEC.md 65.7)
+; in:  SI = window ptr, gfx lock held; preserves all (SPEC.md 68.7)
 ; -----------------------------------------------------------------------------
 wd_dgoto:
     push ax
@@ -18192,7 +18192,7 @@ wd_dgoto:
                                     ; (<= 999*54: DX = 0)
     mov cx, [wd_drows]              ; clamp to the known height - a lower
     jcxz .rok                       ; bound, so a deep page may land short
-    cmp ax, cx                      ; and honestly so (SPEC.md 65.7)
+    cmp ax, cx                      ; and honestly so (SPEC.md 68.7)
     jb .rok
     mov ax, cx
     dec ax
@@ -18235,7 +18235,7 @@ wd_dgoto:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_askdirty - the save-changes gate every destructive door asks (SPEC.md 65.4)
+; wd_askdirty - the save-changes gate every destructive door asks (SPEC.md 68.4)
 ; in:  AL = the pending action (WDP_*), SI = window ptr, gfx lock held
 ; out: CF = 0 proceed now (not dirty); CF = 1 the prompt is up and the action
 ;      is deferred to its answer (or the prompt could not fit: deferred to
@@ -18316,7 +18316,7 @@ wd_runpend:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_a_char - Format > Character... (SPEC.md 65.3)
+; wd_a_char - Format > Character... (SPEC.md 68.3)
 ; in:  SI = window ptr, gfx lock held
 ; -----------------------------------------------------------------------------
 wd_a_char:
@@ -18328,7 +18328,7 @@ wd_a_char:
 
 ; --- the Format Character dialog (char.des, dltCharacter): the seven check
 ; boxes live, Font/Points/Color and the Position/Character Spacing groups
-; present and greyed - facts of the platform (SPEC.md 47/65.3) ----------------
+; present and greyed - facts of the platform (SPEC.md 47/68.3) ----------------
 %macro WDDC 7                       ; type, flags, x, y, p1, p2, p3
     db %1, %2
     dw %3, %4, %5, %6, %7
@@ -18362,7 +18362,7 @@ wd_dlgchar:
     db 0
 
 ; -----------------------------------------------------------------------------
-; wd_a_para - Format > Paragraph... (SPEC.md 65.3), per para.des: Alignment
+; wd_a_para - Format > Paragraph... (SPEC.md 68.3), per para.des: Alignment
 ; radios in a row, Indents as inch edits (cells = tenths), Spacing (Line as
 ; the three draft spacings; Before as 0/1 li), OK/Cancel and a greyed Tabs...
 ; The authentic Keep Paragraph / Border / Pattern / Style groups are OMITTED,
@@ -18531,7 +18531,7 @@ wd_dparse:
     ret
 
 ; wd_dpapply - OK: the radios and parsed edits -> ONE candidate, applied to
-; the selection's paragraphs through wd_modpap (SPEC.md 65.3)
+; the selection's paragraphs through wd_modpap (SPEC.md 68.3)
 wd_dpapply:
     push ax
     push bx
@@ -18667,7 +18667,7 @@ wd_s_dkey:   db 'Key Field', 0
 wd_s_dktype: db 'Key Type:', 0
 wd_s_dalpha: db 'Alphanumeric', 0
 wd_s_dnum:   db 'Numeric', 0
-wd_s_ddate:  db 'Date', 0            ; greyed: no date parser (SPEC.md 65.9)
+wd_s_ddate:  db 'Date', 0            ; greyed: no date parser (SPEC.md 68.9)
 wd_s_dsep:   db 'Separator:', 0
 wd_s_dcomma: db 'Comma', 0
 wd_s_dtab:   db 'Tab', 0
@@ -18692,7 +18692,7 @@ wd_s_dfrom:  db 'From:', 0
 wd_s_dto:    db 'To:', 0
 
 ; --- the Search / Replace / Go To dialogs (search.des / replace.des / the
-;     goto dialog, SPEC.md 65.7) and the two Yes/No/Cancel prompts (65.4) ----
+;     goto dialog, SPEC.md 68.7) and the two Yes/No/Cancel prompts (65.4) ----
 wd_dlgsrch:
     dw 448, 96, wd_s_dsrch
     WDDC WDD_LBL, 0,          8,  26, wd_s_dsfor,  0, 0
@@ -18733,9 +18733,9 @@ wd_dg_edit:
     WDDC WDD_BTN, 0,        248,  28, wd_s_dcanc,  56, 2
     db 0
 
-; --- the Utilities dialogs (sort.des / renum.des / toc.des, SPEC.md 65.9) ---
+; --- the Utilities dialogs (sort.des / renum.des / toc.des, SPEC.md 68.9) ---
 ; The .des files' own strings and grouping. Their drop-down lists are RADIOS
-; here - this framework has no live list box (SPEC.md 65.3), and a radio row
+; here - this framework has no live list box (SPEC.md 68.3), and a radio row
 ; says the same thing about a choice of three; the greyed controls are the
 ; ones whose fact this port does not have (a column selection, a style sheet).
 wd_dlgsort:
@@ -18816,10 +18816,10 @@ wd_dlgask:                          ; 'Do you want to save changes to X?' -
     WDDC WDD_BTN, 0,         80,  44, wd_s_dyes,   64, 1
     WDDC WDD_BTN, 0,        160,  44, wd_s_dno,    64, 3
     WDDC WDD_BTN, 0,        240,  44, wd_s_dcanc,  64, 2
-    db 0                            ; real message box was (SPEC.md 65.4)
+    db 0                            ; real message box was (SPEC.md 68.4)
 
 wd_dlgconf:                         ; the confirm strip, pinned to the bottom
-    dw 384, 44, wd_s_drepl          ; of the content (SPEC.md 65.7)
+    dw 384, 44, wd_s_drepl          ; of the content (SPEC.md 68.7)
     WDDC WDD_LBL, 0,          8,  22, wd_s_dconfq, 0, 0
     WDDC WDD_BTN, 0,        208,  18, wd_s_dyes,   48, 1
     WDDC WDD_BTN, 0,        264,  18, wd_s_dno,    48, 3
@@ -18847,7 +18847,7 @@ wd_m_nfound: db 'Search text not found', 0
 wd_m_baddoc: db 'Bad .DOC file', 0
 
 ; =============================================================================
-; The menu data (SPEC.md 65.2) - verbatim from Opus resource/menus.cmd
+; The menu data (SPEC.md 68.2) - verbatim from Opus resource/menus.cmd
 ; (MW_MENU, the full-menus bar). '&' marked the mnemonic in the source; here
 ; the display string is plain, the mnemonic's cell index and its letter ride
 ; the item record, and the shortcut captions are keys.cmd's bindings for
@@ -19006,7 +19006,7 @@ wd_it_help:                         ; &Help
     WDMI WDMF_DIS, 0, WDA_NONE,   'I', wd_L_index2, 0
                                     ; Index stays greyed: no help files exist
                                     ; on this platform - F1 and About... are
-                                    ; the help there is (SPEC.md 47/65.2)
+                                    ; the help there is (SPEC.md 47/68.2)
     WDMS
     WDMI WDMF_DIS, 0, WDA_NONE,   'K', wd_L_keybrd, 0
     WDMI WDMF_DIS, 7, WDA_NONE,   'W', wd_L_actwin, 0
@@ -19171,7 +19171,7 @@ wd_tpl:
                                     ; composes - 'Microsoft Word - <NAME>' -
                                     ; before wm_create banks the pointer, and
                                     ; wd_settitle recomposes it on every name
-                                    ; change (SPEC.md 65.2)
+                                    ; change (SPEC.md 68.2)
 
 ; The EMPTY kernel menu set (SPEC.md 12.2): zero menus, but its AM_NAME puts
 ; 'Microsoft Word' in the kernel bar instead of the 15-char header name. The
@@ -19226,16 +19226,16 @@ wd_e_wprot:   db 'Write protected', 0
 wd_e_big:     db 'Too big', 0
 wd_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
-; --- search and the clipboard (SPEC.md 65.7/55) ------------------------------
+; --- search and the clipboard (SPEC.md 68.7/55) ------------------------------
 wd_m_nopat:   db 'No search text', 0
 wd_m_repld:   db ' changes', 0       ; wd_saycnt's suffix: 'n changes' is the
-                                     ; sweep's answer (SPEC.md 65.7)
+                                     ; sweep's answer (SPEC.md 68.7)
 wd_m_noundo:  db 'Nothing to undo', 0
 wd_m_papfull: db 'Too many paragraph formats', 0
 wd_m_toobig:  db 'Document too complex to save', 0
 wd_m_noclip:  db 'The clipboard is empty', 0        ; ^c with nothing in it
 wd_m_replong: db 'Replacement too long', 0          ; ...and ^m/^c past
-                                     ; WD_FRXMAX (SPEC.md 65.7)
+                                     ; WD_FRXMAX (SPEC.md 68.7)
 wd_m_loaded2: db 'Module loaded from WORD.OVL', 0
 wd_m_toomanyp: db 'Too many paragraphs', 0          ; past WD_UMAXP (65.9)
 wd_m_noundo2: db 'Too large to undo', 0             ; the span is bigger than
@@ -19244,24 +19244,24 @@ wd_m_noundo2: db 'Too large to undo', 0             ; the span is bigger than
 wd_m_notoc:   db 'No table of contents entries', 0
 wd_m_sorted:  db 'Sorted', 0
 wd_m_renumd:  db 'Renumbered', 0   ; more FKP pages than
-                                     ; the staging claim holds (SPEC.md 65.4)
+                                     ; the staging claim holds (SPEC.md 68.4)
 wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                                         ; not fund the clipboard (SPEC.md 55)
 
-; --- the real Word file format (SPEC.md 65.4) --------------------------------
+; --- the real Word file format (SPEC.md 68.4) --------------------------------
 ; The FIB, the FKP pages, the bin tables, the style sheet, the section table,
 ; the DOP and the piece table - a separate file because it is a FORMAT, laid
 ; out from Opus's own headers, and reads as one.
 %include "wddoc.inc"
 
-; --- RTF, the other portable format (SPEC.md 65.8) ---------------------------
+; --- RTF, the other portable format (SPEC.md 68.8) ---------------------------
 %include "wdrtf.inc"
 
-; --- the search pattern and the Utilities commands (SPEC.md 65.7/65.9) -------
+; --- the search pattern and the Utilities commands (SPEC.md 68.7/68.9) -------
 %include "wdutil.inc"
 
 ; =============================================================================
-; THE ON-DEMAND MODULE (SPEC.md 65.10)
+; THE ON-DEMAND MODULE (SPEC.md 68.10)
 ;
 ; Code that ships as WORD.OVL beside WORD.O88 instead of inside it, is read
 ; into a heap claim the first time one of its features is asked for, and is
@@ -19573,7 +19573,7 @@ section .text
                             ; would be recorded as an edit
     WDVAR wd_upad, 1        ; byte: keeps the words below even
 
-; --- search / replace / go to (SPEC.md 65.7) ---------------------------------
+; --- search / replace / go to (SPEC.md 68.7) ---------------------------------
     WDVAR wd_lmx, 2         ; word } the drag loop's last pointer position
     WDVAR wd_lmy, 2         ; word } (wd_dragsel's has-it-moved filter)
     WDVAR wd_fopt, 1        ; byte: the search options, WDFO_* bits - Whole
@@ -19590,7 +19590,7 @@ section .text
     WDVAR wd_fpat,  WD_PATMAX+1
     WDVAR wd_frep,  WD_PATMAX+1
 
-; --- the file, the dirty prompt and the title (SPEC.md 65.4) -----------------
+; --- the file, the dirty prompt and the title (SPEC.md 68.4) -----------------
     WDVAR wd_dirty, 1       ; byte: the document differs from the disk. Set
                             ; by every buffer/format mutation, cleared by a
                             ; successful save, a load and File > New
@@ -19600,7 +19600,7 @@ section .text
                             ; (WDP_*), 0 = nothing pending
     WDVAR wd_wttl,  32      ; 'Microsoft Word - ' + wd_name + NUL: the title
                             ; the window record points at, so it must live
-                            ; for the window's whole life (SPEC.md 65.2)
+                            ; for the window's whole life (SPEC.md 68.2)
     WDVAR wd_pmsg,  46      ; 'Do you want to save changes to <name>?'
     WDVAR wd_de_goto, 8     ; the Go To dialog's page-number edit
     WDVAR wd_fsz,   2       ; word } the dialog listing's file size, banked
@@ -19676,7 +19676,7 @@ section .text
                             ; 4 as well, and adjacent rows they do not measure)
                             ; can never inherit an Up's bound
 
-; --- the proportional face, SPEC.md 65.13 ------------------------------------
+; --- the proportional face, SPEC.md 68.13 ------------------------------------
     WDVAR wd_px, (WD_MAXCOL + 3) * 2  ; word per cell: the pen the k-th cell
                                   ; starts at, RELATIVE to [wd_tx], plus TWO
                                   ; past the end - one so a span's right edge
@@ -19717,7 +19717,7 @@ section .text
                                   ; what wd_cx computes without reading it.
                                   ; wd_facemetrics sets it from [wd_prop], so
                                   ; the metrics and the glyphs can never be two
-                                  ; different faces (SPEC.md 65.13.1)
+                                  ; different faces (SPEC.md 68.13.1)
     WDVAR wd_spadv, 2             ; word: what a SPACE is worth in the current
                                   ; face. The row buffer pads with spaces and
                                   ; wd_pxcell extrapolates the parking cell by
@@ -19728,7 +19728,7 @@ section .text
                                   ; SHRANK is erased from its new right edge to
                                   ; this, in one fill - a proportional row
                                   ; cannot pad itself blank the way a fixed one
-                                  ; does (SPEC.md 65.13)
+                                  ; does (SPEC.md 68.13)
     WDVAR wd_bx0,  2              ; word: the band's aligned origin
     WDVAR wd_gh,   2              ; word: the GLYPH BAND's height in pixels -
                                   ; 8 for the kernel's cell, the face's `rows`
@@ -19748,7 +19748,7 @@ section .text
                                   ; the hand-numbered block above (see the hole
                                   ; at +238 there)
 
-; --- the chrome's state (SPEC.md 65.2) ---------------------------------------
+; --- the chrome's state (SPEC.md 68.2) ---------------------------------------
     WDVAR wd_cl,   2        ; word } the content box, banked by wd_bounds so
     WDVAR wd_ct,   2        ; word } every strip painter and hit test reads
     WDVAR wd_cw,   2        ; word } the same four numbers
@@ -19788,7 +19788,7 @@ section .text
     WDVAR wd_win1, 16       ; the Window menu's live item: '1 ' + wd_name
     WDVAR wd_mbbuf, 58      ; the menu bar's truncated copy, narrow windows
 
-; --- character formatting (SPEC.md 65.1/65.3) --------------------------------
+; --- character formatting (SPEC.md 68.1/68.3) --------------------------------
     WDVAR wd_cseg,  2       ; word: the CHP claim's segment - one attribute
                             ; byte per character at [wd_cseg]:index, sized in
                             ; lockstep with [wd_dseg] by wd_resize. Claimed in
@@ -19809,7 +19809,7 @@ section .text
                             ; occupies no cell, so "column = index - row
                             ; start" stops holding, and the two paths that
                             ; lean on it - wd_append and the visual break -
-                            ; refuse while this is up (SPEC.md 65.1)
+                            ; refuse while this is up (SPEC.md 68.1)
     WDVAR wd_r0,    2       ; word } the run's first and last cell, for
     WDVAR wd_r1,    2       ; word } wd_drawrun and the italic stager
     WDVAR wd_iseg,  2       ; word: the sheared italic glyph table's claim,
@@ -19828,7 +19828,7 @@ section .text
     WDVAR wd_itstr, 2       ; word: the staged run's stride in bytes
     WDVAR wd_itmp,  8       ; one source glyph's rows, banked so the font
                             ; table and the claim are never open at once
-    WDVAR wd_cuseg, 2       ; word: the undo arena's CHP twin (SPEC.md 65.3)
+    WDVAR wd_cuseg, 2       ; word: the undo arena's CHP twin (SPEC.md 68.3)
                             ; - same size, same offsets as [wd_useg]
     WDVAR wd_abuf, WD_MAXCOL + 1  ; the accumulated row's attributes, one per
                             ; cell beside wd_rbuf
@@ -19863,7 +19863,7 @@ section .text
                             ; what wd_wordfit's second threshold measures now.
                             ; Exactly 8 x [wd_wcols] in the kernel's cell, so
                             ; the wrap it computes there is the one it always
-                            ; computed (SPEC.md 65.13)
+                            ; computed (SPEC.md 68.13)
     WDVAR wd_rowhv, 2       ; word: the entered row's height in px
     WDVAR wd_rowx0, 2       ; word: the row's start pen x (indent + alignment
                             ; offset) - the tab stops' anchor
@@ -19913,7 +19913,7 @@ section .text
     WDVAR wd_de_first, 8
     WDVAR wd_de_bef, 8      ; 'Before:' - 0 or 1 (li)
 
-; --- the modal dialog (SPEC.md 65.3): Format > Character... ------------------
+; --- the modal dialog (SPEC.md 68.3): Format > Character... ------------------
     WDVAR wd_dlg,   2       ; word: the open dialog's descriptor, 0 = none
     WDVAR wd_dlgx,  2       ; word } its top-left corner on screen, banked
     WDVAR wd_dlgy,  2       ; word } at open - painter and hit test share it
@@ -19922,7 +19922,7 @@ section .text
     WDVAR wd_dpad,  1       ; byte: keeps the words below even
     WDVAR wd_dgr,   8       ; 4 words: a button rect being drawn/hit
 
-; --- the real .DOC format (wddoc.inc, SPEC.md 65.4) --------------------------
+; --- the real .DOC format (wddoc.inc, SPEC.md 68.4) --------------------------
     WDVAR wd_dgrp,  24      ; a grpprl under construction. Six paragraph
                             ; sprms at three bytes is 18; WD_GRPMAX is the
                             ; same number stated where the builder is
@@ -19932,7 +19932,7 @@ section .text
                             ; and copied into the image whole, because in
                             ; place it needs two pointers growing towards
                             ; each other and that arithmetic is the entire
-                            ; risk of the structure (SPEC.md 65.4)
+                            ; risk of the structure (SPEC.md 68.4)
     WDVAR wd_dfkn,  2       ; word: its crun
     WDVAR wd_dfkhi, 2       ; word: how far DOWN its properties have got
     WDVAR wd_dfkb,  128     ; its rgb offset bytes, BANKED: rgb[i] lives at
@@ -19948,13 +19948,13 @@ section .text
     WDVAR wd_dpn1,  2       ; word }
     WDVAR wd_dend,  2       ; word: one past the run/paragraph just measured
     WDVAR wd_dvlen, 2       ; word: [wd_len] plus the trailing ¶ the FILE has
-                            ; and this document model does not (SPEC.md 65.4)
+                            ; and this document model does not (SPEC.md 68.4)
     WDVAR wd_dfsize, 2      ; word: the size of the file being read
     WDVAR wd_dtrunc, 1      ; byte: it was bigger than this port can hold
     WDVAR wd_dtail, 1       ; byte: the tail paragraph's PAP index, banked
                             ; across wd_clamp - which clears the live one
     WDVAR wd_dpcn,  2       ; word: how many pieces the text is in (1 for a
-                            ; simple file - SPEC.md 65.4.1)
+                            ; simple file - SPEC.md 68.4.1)
     WDVAR wd_dpcp,  2       ; word } the plcpcd's CP array and PCD array,
     WDVAR wd_dpcd,  2       ; word } as offsets INTO the staging image
     WDVAR wd_dp1fc, 2       ; word: a simple file's one piece's fc
@@ -19963,7 +19963,7 @@ section .text
     WDVAR wd_dfclim, 2      ; word: the limit fc of the run wd_dfkfind found
     WDVAR wd_dprop2, 2      ; word: ...and its property record's file offset
 
-; --- RTF in and out (wdrtf.inc, SPEC.md 65.8) --------------------------------
+; --- RTF in and out (wdrtf.inc, SPEC.md 68.8) --------------------------------
     WDVAR wd_rfull, 1       ; byte: the writer ran out of staging claim
     WDVAR wd_rat,   1       ; byte: the attributes the writer has OPEN, or
                             ; the ones the reader is applying
@@ -19971,13 +19971,13 @@ section .text
     WDVAR wd_rpad,  1       ; byte: keeps the words below even
     WDVAR wd_rdep,  2       ; word: the reader's group depth
     WDVAR wd_rskip, 2       ; word: the depth a skipped destination began at,
-                            ; 0 = not skipping (SPEC.md 65.8)
+                            ; 0 = not skipping (SPEC.md 68.8)
     WDVAR wd_rstk,  32      ; WD_RTFDEPTH bytes of saved attributes, one per
                             ; open group, so a \b's scope ends with its group
                             ; (padded to a word each, which keeps the indexing
                             ; a single shift)
     WDVAR wd_rcw,   20      ; the control word being read, NUL-terminated
-    WDVAR wd_fpw,   94      ; the COMPILED search pattern (SPEC.md 65.7),
+    WDVAR wd_fpw,   94      ; the COMPILED search pattern (SPEC.md 68.7),
                             ; one word per element: a value 0..255 is that
                             ; character, WDP_ANY and WDP_WHITE the wildcards
     WDVAR wd_fpwn,  2       ; word: how many elements it has
@@ -19985,7 +19985,7 @@ section .text
                             ; resolved per match, so the bytes spliced in are
                             ; never the ones the dialog holds
     WDVAR wd_frxn,  2       ; word: how many of them
-; --- the Utilities commands (wdutil.inc, SPEC.md 65.9) -----------------------
+; --- the Utilities commands (wdutil.inc, SPEC.md 68.9) -----------------------
     WDVAR wd_us0,   2       ; word } the span Sort / Renumber / Table of
     WDVAR wd_us1,   2       ; word } Contents operate on, snapped out to
                             ; whole paragraphs
@@ -19997,7 +19997,7 @@ section .text
     WDVAR wd_uord,  256     ; WD_UMAXP words: the sort's order array
     WDVAR wd_scseg, 2       ; word: the rebuild scratch claim, 0 = none
     WDVAR wd_scn,   2       ; word: how many characters are in it
-    WDVAR wd_vpage, 1       ; byte: 0 = Draft, 1 = Page (SPEC.md 65.11)
+    WDVAR wd_vpage, 1       ; byte: 0 = Draft, 1 = Page (SPEC.md 68.11)
     WDVAR wd_vppad, 1       ; byte: keeps the words below even
     WDVAR wd_shl,   2       ; word } the sheet's left and right pixel edges,
     WDVAR wd_shr,   2       ; word } banked by wd_bounds for the painters
@@ -20006,12 +20006,12 @@ section .text
                             ; 8086 has no `call far reg:reg`, so the pointer
                             ; lives in memory and DS reaches it
     WDVAR wd_ovdir, 2       ; word } the folder this package was LAUNCHED
-    WDVAR wd_ovdrv, 1       ; byte } from, banked at entry (SPEC.md 65.10)
+    WDVAR wd_ovdrv, 1       ; byte } from, banked at entry (SPEC.md 68.10)
     WDVAR wd_ovwdr, 1       ; byte } ...and where the USER had the volume,
     WDVAR wd_ovwas, 2       ; word } banked across the load and put back
     WDVAR wd_utl,   1       ; byte: the span runs to the document's end with
                             ; no closing ¶, so the rebuilt one must not have
-                            ; one either (SPEC.md 65.9)
+                            ; one either (SPEC.md 68.9)
     WDVAR wd_sopt,  1       ; byte: the Sort dialog's options, WDSO_*
     WDVAR wd_sofld, 2       ; word: its Field number, 1-based
     WDVAR wd_sokb,  2       ; word } the second key of a comparison, banked

@@ -279,6 +279,20 @@ f_open:
     push cs
     pop ds
     jc  .notree
+    ; A DIRECTORY IS REFUSED, because DOS 2.0+ refuses one: int 21h 3Dh on a
+    ; folder's name answers AX = 5 (access denied) with CF, and `srv_copy`
+    ; leans on that - it opens the source and lets DOS decide. Opening it here
+    ; made this stub KINDER THAN THE MACHINE (SPEC.md 62.10.4.2/62.10.4.7.1),
+    ; and the shape of the lie is the usual one: NF_COPY of a folder answered
+    ; `ok` on the harness and would have answered `no such file` in the field.
+    push bx
+    push ax
+    xor ah, ah
+    call dr_row                 ; -> CS:BX, the row
+    pop ax
+    test byte [cs:bx+DR_ATTR], 0x10
+    pop bx
+    jnz .nodir
     mov [cs:fh_row], al
     jmp short .ok
 .notree:
@@ -299,6 +313,11 @@ f_open:
     pop si
     mov ax, 2                   ; DOS's 'file not found', which is what an
     jmp cf_set                  ; open of something absent has to be
+.nodir:
+    pop ds
+    pop si
+    mov ax, 5                   ; ...and 'access denied' for a directory, which
+    jmp cf_set                  ; is the other answer DOS gives here
 %endif
 
 ; --- AH=3Eh: close ------------------------------------------------------------

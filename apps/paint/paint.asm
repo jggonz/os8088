@@ -617,12 +617,21 @@ pt_alloc:
     call pt_paras                   ; CX = paragraphs one canvas needs
     mov [pt_needp], cx
 
-    cmp word [pt_scseg], 0          ; scratch is claimed once and never moves
-    jne .canvas
-    mov ax, PT_SC_KB
-    call OSAPI_MEM_CLAIM
+    cmp word [pt_scseg], 0          ; scratch is claimed once and never freed
+    jne .canvas                     ; - which is exactly the shape SPEC.md
+    mov ax, PT_SC_KB                ; 50.2 warns about, a long-lived data claim
+    call OSAPI_MEM_CLAIM            ; sitting mid-arena and splitting it in two
     jc .fail
     mov [pt_scseg], dx
+    call pt_movable                 ; ...so it is declared too. It is the
+                                    ; SMALLEST of the four and the one whose
+                                    ; declaration matters most: pinned, it is
+                                    ; a BARRIER (SPEC.md 66.4) sitting under
+                                    ; the canvas, so nothing above it could
+                                    ; ever pack down past it - measured, that
+                                    ; alone held a 25KB canvas exactly where it
+                                    ; was across a compaction with 137KB free
+                                    ; underneath it
 
 .canvas:
     mov cx, [pt_needp]
@@ -630,6 +639,8 @@ pt_alloc:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [pt_base], dx
+    call pt_movable                 ; the biggest claim on the machine, and
+                                    ; the one worth moving (SPEC.md 66)
     mov cl, 6
     shl ax, cl                      ; what the claim actually holds...
     mov [pt_smaxp], ax              ; ...which is >= [pt_needp]
@@ -648,6 +659,120 @@ pt_alloc:
     pop cx
     pop bx
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_reloc - THE HEAP COMPACTOR MOVED ONE OF OUR CLAIMS (SPEC.md 66.2)
+; in:  BX = the base segment it WAS at, DX = the base it is at NOW.
+;      DS = CS = ours, ES = KERNEL_SEG. The bytes have already moved.
+; out: nothing; every register preserved
+;
+; The kernel packs the data arena down when a claim would otherwise be
+; refused, and tells each holder afterwards. What it CANNOT do is know what
+; we derived from a base, which is why this is a callback and not a word the
+; kernel pokes - and Paint is the case that makes the point, because the
+; canvas's base is not held in one place at all:
+;
+;   [pt_base]     the block itself
+;   pt_rowseg[]   ONE SEGMENT PER ROW, built off it by pt_geom - a canvas can
+;                 be bigger than a segment, so a row is a (segment, offset)
+;                 pair and the whole table is derived
+;   [pt_undelta]  canvas -> undo image, a DELTA, so it is wrong when EITHER
+;                 end moves
+;
+; The row table is SHIFTED rather than rebuilt: every entry is the base plus
+; a per-row constant, so adding the move's delta gives exactly what pt_geom
+; would recompute, at a fraction of the cost and with no dependence on
+; [pt_cw]/[pt_stride] being current. If the table happens to be stale (built
+; for a canvas we have since replaced), shifting leaves it exactly as stale as
+; it was - never worse - and pt_geom rebuilds it before anything reads it.
+;
+; [pt_obase]/[pt_osrc] are here because a RESIZE holds the outgoing canvas
+; across further claims (pt_alloc_undo's, in the .inplace path), so the old
+; block is live, movable, and named by two words nothing else would fix.
+;
+; It claims nothing, frees nothing, yields nothing and draws nothing, which
+; is SPEC.md 66.3 rule 3.
+; -----------------------------------------------------------------------------
+pt_reloc:
+    push ax
+    push cx
+    push si
+    cmp bx, [pt_base]
+    jne .notcv
+    mov [pt_base], dx
+    mov ax, dx
+    sub ax, bx                      ; AX = the paragraph delta, and 16-bit
+                                    ; wraparound makes a downward move work
+                                    ; unchanged - which is every move, since
+                                    ; the compactor only ever packs DOWN
+    mov cx, [pt_ch]
+    jcxz .notcv
+    mov si, pt_rowseg
+.shift:
+    add [si], ax
+    inc si
+    inc si
+    loop .shift
+.notcv:
+    cmp bx, [pt_unseg]
+    jne .notun
+    mov [pt_unseg], dx
+.notun:
+    cmp bx, [pt_cbseg]
+    jne .notcb
+    mov [pt_cbseg], dx
+.notcb:
+    cmp bx, [pt_scseg]              ; the fill stack: one word, re-read at every
+    jne .notsc                      ; use, and nothing derived from it
+    mov [pt_scseg], dx
+.notsc:
+    cmp bx, [pt_obase]              ; a resize's outgoing canvas, held live
+    jne .notob                      ; across the claims below it
+    mov [pt_obase], dx
+.notob:
+    cmp bx, [pt_osrc]               ; ...and whichever block it is staging
+    jne .notos                      ; from, which is the old canvas on one
+    mov [pt_osrc], dx               ; path and the undo image on the other
+.notos:
+    mov ax, [pt_unseg]              ; the delta LAST, and unconditionally:
+    or ax, ax                       ; either end may have been what moved,
+    jz .out                         ; and by here both words are current
+    sub ax, [pt_base]
+    mov [pt_undelta], ax
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_movable - declare the claim in DX relocatable (SPEC.md 66.2)
+; in:  DX = a base segment we hold
+; out: nothing; every register and the flags preserved
+;
+; A REFUSAL IS NOT AN ERROR and is deliberately not reported: the kernel pins
+; claims for reasons of its own and does not say which, so a claim that never
+; moves is a normal outcome. All this costs when it fails is the fragmentation
+; Paint had before.
+;
+; Four of Paint's five claims are declared and one is not: the GIF codec's
+; tables live for one file and have [pt_gbase] derived off them in ways this
+; proc does not account for, so they stay pinned and stay transient.
+;
+; THE SMALL ONE IS NOT THE OPTIONAL ONE. Three of the four are canvas-SIZED
+; and are declared because of what they cost; the scratch block is 12KB and is
+; declared because of WHERE it is - claimed once at startup, never freed, and
+; sitting under the canvas, so pinned it is a barrier (SPEC.md 66.4) that no
+; amount of free heap below it lets anything cross.
+; -----------------------------------------------------------------------------
+pt_movable:
+    pushf
+    push ax
+    mov ax, pt_reloc
+    call OSAPI_MEM_MOVABLE
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -670,6 +795,7 @@ pt_alloc_undo:
     call OSAPI_MEM_CLAIM
     jc .out
     mov [pt_unseg], dx
+    call pt_movable
     sub dx, [pt_base]
     mov [pt_undelta], dx
     mov byte [pt_haveundo], 1
@@ -711,6 +837,7 @@ pt_alloc_clip:
     jmp short .try
 .got:
     mov [pt_cbseg], dx
+    call pt_movable
     mov cl, 6
     shl ax, cl
     mov [pt_cbparas], ax
@@ -749,6 +876,7 @@ pt_clip_need:
     call pt_free_clip               ; ...then give the smaller one back
     pop dx
     mov [pt_cbseg], dx
+    call pt_movable
     mov cl, 6
     shl ax, cl
     mov [pt_cbparas], ax
@@ -1178,12 +1306,27 @@ pt_org:
     pop ax                          ; nothing to say about a window that has
     jmp short .org                  ; no title bar
 .fsx:
-    xor ax, ax                      ; the bracket owns the machine, so the
-    xor dx, dx                      ; content IS the screen. The window record
-    mov cx, [pt_scrw]               ; still describes a window - one nothing
-    mov [pt_contw], cx              ; can see, and one the kernel puts back
-    mov cx, [pt_scrh]               ; for us when the bracket ends
-    mov [pt_conth], cx
+    call OSAPI_FSX_SURF             ; the bracket owns ONE DISPLAY, and it says
+    jnc .fsok                       ; which (SPEC.md 53.7.1): AX = x, BX = y,
+    xor ax, ax                      ; CX = w, DX = h. The window record still
+    xor bx, bx                      ; describes a window - one nothing can see,
+    mov cx, [pt_scrw]               ; and one the kernel puts back for us when
+    mov dx, [pt_scrh]               ; the bracket ends
+.fsok:                              ;
+                                    ; IT USED TO BE (0,0) PLUS THE SCREEN, and
+                                    ; that is only the same answer while the
+                                    ; desktop is one display: a same-mode
+                                    ; bracket does not collapse a two-display
+                                    ; one (39.18.3), so (0,0) is the PRIMARY
+                                    ; and Paint fullscreened on the second
+                                    ; monitor drew its whole face over the
+                                    ; OTHER one. The refusal path above is the
+                                    ; historical answer, which cannot be
+                                    ; reached from inside a bracket
+    mov [pt_contw], cx
+    mov [pt_conth], dx
+    mov dx, bx                      ; ...and .org below wants the origin in
+                                    ; AX/DX, which is WM_CONTENT's pairing
 .org:
     mov [pt_ox], ax
     mov [pt_oy], dx
@@ -3218,19 +3361,28 @@ PT_PTR_R    equ 2                   ; half-side: the pointer is a 5x5 square
 ; pt_ptr_rect - the clipped pointer square about (AX, DX), into the four words
 ; at DS:DI - left, top, right, bottom
 ; out: nothing; preserves all registers
+;
+; IT CLIPS TO THE SURFACE AND NOT TO THE SCREEN. Bracket-only code (pt_ptr_on
+; and its two siblings are the only callers, and [pt_ptron] gates all three),
+; so [pt_ox]/[pt_oy] plus [pt_contw]/[pt_conth] IS the surface - which on a
+; two-display desktop is one display at its own virtual origin (SPEC.md 53.7.1)
+; and not 0..[pt_scrw]-1. Clamping to the screen there gave a pointer that
+; could not reach the left edge of its own display and ran past the right.
 pt_ptr_rect:
     push ax
     push bx
     push dx
     mov bx, ax
     sub bx, PT_PTR_R
-    jns .l
-    xor bx, bx
+    cmp bx, [pt_ox]
+    jge .l
+    mov bx, [pt_ox]
 .l:
     mov [di], bx
     mov bx, ax
     add bx, PT_PTR_R
-    mov ax, [pt_scrw]
+    mov ax, [pt_ox]
+    add ax, [pt_contw]
     dec ax
     cmp bx, ax
     jle .r
@@ -3239,13 +3391,15 @@ pt_ptr_rect:
     mov [di+4], bx
     mov bx, dx
     sub bx, PT_PTR_R
-    jns .t
-    xor bx, bx
+    cmp bx, [pt_oy]
+    jge .t
+    mov bx, [pt_oy]
 .t:
     mov [di+2], bx
     mov bx, dx
     add bx, PT_PTR_R
-    mov ax, [pt_scrh]
+    mov ax, [pt_oy]
+    add ax, [pt_conth]
     dec ax
     cmp bx, ax
     jle .b
@@ -6676,10 +6830,15 @@ pt_resize:
                                     ; which is exactly what .inplace expects
 
 .moved:
-    mov bx, [pt_base]
+    mov bx, [pt_base]               ; ...read AFTER the claim above, which may
+                                    ; have compacted the heap and moved this
+                                    ; very block - pt_reloc will have put
+                                    ; [pt_base] right, and nothing else here
+                                    ; has read it yet (SPEC.md 66.3 rule 2)
     mov [pt_obase], bx              ; the old canvas: source, then freed
     mov [pt_osrc], bx
     mov [pt_base], dx
+    call pt_movable                 ; the new one is ours to move too
     mov cl, 6
     shl ax, cl
     mov [pt_smaxp], ax
@@ -9715,17 +9874,16 @@ pt_s_title:  db 'Paint', 0          ; the title's stem, and the fingerprint
 pt_appname:  db 'Paint', 0          ; the menu bar's app label (SPEC.md 12.2)
 
 ; --- the About card (SPEC.md 12.2/42) ---------------------------------------
-; A 12px line pitch rather than the kernel About's 16: six lines have to fit
+; A 12px line pitch rather than the kernel About's 16: every line has to fit
 ; a CGA content of about 132 rows (SPEC.md 39.2), and pt_abmeas clamps to
 ; whatever the window has actually been resized to anyway.
 PT_ABLH     equ 12
 pt_ablines:
-    dw pt_ab_1, pt_ab_2, pt_ab_3, pt_ab_4, pt_ab_5, 0
+    dw pt_ab_1, pt_ab_2, pt_ab_3, pt_ab_4, 0
 pt_ab_1:     db 'Paint for os8088', 0
 pt_ab_2:     db 'a bitmap editor for the 8086', 0
 pt_ab_3:     db 0                   ; a blank line is a line with no glyphs
-pt_ab_4:     db 'contributed by Elendilon', 0
-pt_ab_5:     db 'github.com/Elendilon', 0
+pt_ab_4:     db 'Contributed by Elendilon', 0
 pt_s_defname: db 'PICTURE.BMP', 0
 pt_s_defgif:  db 'PICTURE.GIF', 0
 pt_s_ebmp:    db 'BMP', 0

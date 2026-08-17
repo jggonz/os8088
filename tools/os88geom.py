@@ -126,7 +126,8 @@ _MIRROR = {
     "MC_PARA": ("kernel/memory.inc", 2),
     "MC_OWN": ("kernel/memory.inc", 4),
     "MC_DMA": ("kernel/memory.inc", 6),
-    "MC_SIZE": ("kernel/memory.inc", 8),
+    "MC_RLOC": ("kernel/memory.inc", 8),
+    "MC_SIZE": ("kernel/memory.inc", 10),
 }
 
 globals().update({k: v for k, (_, v) in _MIRROR.items()})

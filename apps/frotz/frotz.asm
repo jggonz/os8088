@@ -372,6 +372,18 @@ zf_paint:
 ; does not advance - there is no fallback that runs the VM under the caller's
 ; lock, because a turn is seconds and that is exactly what the worker exists
 ; to avoid.
+;
+; THERE IS DELIBERATELY NO OSAPI_MEM_PARKSAFE HERE, and this is the one app in
+; the tree that must never grow one (SPEC.md 66.5.9.1). That declaration says
+; "no register and no stack slot of mine holds a pointer derived from a
+; movable claim across a call that can yield" - and zx_lock does exactly that,
+; by design: ES is the program counter's segment and it is PUSHED across
+; OSAPI_GFX_LOCK, because an OSAPI slot owes us nothing but DS. The
+; interpreter is built on ES being the PC (SPEC.md 61.3); it cannot make this
+; promise, and it does not need to. Its claims move at the ordinary
+; OSAPI_TASK_ALIVE park instead, which zx_worker reaches once per 64-opcode
+; burst - and zi_yield, the only other place ALIVE is called with a story
+; segment live, repairs its own ES from [zf_sdelta].
 ; -----------------------------------------------------------------------------
 zf_hire:
     push ax

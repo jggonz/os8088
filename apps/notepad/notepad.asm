@@ -373,6 +373,10 @@ np_entry:
     mov [np_dseg], dx               ; loader's LD_EABORT says so for us
     mov word [np_capkb], NP_KB0
     mov word [np_cap], NP_KB0 * 1024
+    mov ax, np_reloc                ; ...and it MOVES (SPEC.md 66.5.7), from
+    call OSAPI_MEM_MOVABLE          ; here rather than later: an empty note
+                                    ; has nothing pointing into it, and DX is
+                                    ; still the claim
     push si
     mov si, np_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
@@ -2649,6 +2653,25 @@ np_hire:
     push bx
     cmp byte [np_hired], 0
     jne .out
+    mov al, 1                   ; PARK-SAFE (SPEC.md 66.5.4): no register and
+    call OSAPI_MEM_PARKSAFE     ; no stack slot here holds a pointer derived
+                                ; from the note or the undo arena across a
+                                ; call that can yield. The worker takes the
+                                ; lock at .go holding only a window pointer;
+                                ; np_selpace - the ONLY other lock site, and
+                                ; the one both drag loops spin in - is entered
+                                ; with indices alone (np_dragsel's BX is a
+                                ; character index, np_dragmove's a flag). The
+                                ; walk at np_measure DOES hold ES = the note
+                                ; across its callees, and cannot be caught by
+                                ; this: it runs under a lock the caller
+                                ; already holds, so it never blocks in one.
+                                ; It is a WIDENING and not what makes these
+                                ; two claims movable (SPEC.md 66.5.7.2): this
+                                ; worker sleeps NP_WTICKS and so reaches
+                                ; OSAPI_TASK_ALIVE inside INST_PARKW on its
+                                ; own, measured. Tracker's cannot, which is
+                                ; the case 66.5.4 was written for
     mov ax, np_worker
     mov bx, [np_win]
     call OSAPI_TASK_SPAWN
@@ -3962,6 +3985,51 @@ np_resize:
     ret
 
 ; -----------------------------------------------------------------------------
+; np_dmov - AX = np_reloc to let the note move, 0 to pin it (SPEC.md 66.5.7.1)
+; in:  AX; out: nothing - every register AND the flags preserved, because the
+;      caller's CF is the file operation's verdict and this runs beside it
+; -----------------------------------------------------------------------------
+np_dmov:
+    push ax
+    push dx
+    pushf
+    mov dx, [np_dseg]           ; re-read: np_resize above may have moved it
+    call OSAPI_MEM_MOVABLE
+    popf
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_reloc - the compactor moved the note or the undo arena (SPEC.md 66.5.7)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing; preserves every register
+;
+; TWO claims and one proc, because the kernel calls the proc that the moved
+; claim was declared with and BX says which one it was. Two words is all
+; either costs: every cursor into the note ([np_len], [np_caret], the two
+; selection ends, np_rows' whole table) and every cursor into the arena
+; ([np_utop], each record's blob offset) is a byte OFFSET, and an offset is
+; what a move does not change.
+;
+; The staging buffer is deliberately absent. It is claimed for one save and
+; freed at the end of it, it is the OSAPI_FILE_WRITE target throughout, and
+; it never outlives the call that made it - so it is pinned by having no
+; declaration, which is the cheapest correct answer for a transient.
+; -----------------------------------------------------------------------------
+np_reloc:
+    cmp bx, [np_dseg]
+    jne .undo
+    mov [np_dseg], dx
+    ret
+.undo:
+    cmp bx, [np_useg]
+    jne .out
+    mov [np_useg], dx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; np_fitclaim - size the claim to the note plus one kilobyte to type into
 ; out: nothing (all registers and the flags preserved)
 ;
@@ -4169,12 +4237,26 @@ np_load:
                                 ; the document buffer itself and folds in
                                 ; place, and there is no load staging at all
     call np_goto                ; ...and the same folder dance on the way in
+    xor ax, ax                  ; PIN it across the read (SPEC.md 66.5.7.1):
+    call np_dmov                ; ES:BX below is a pointer INTO this claim and
+                                ; OSAPI_FILE_READ holds it across the sector
+                                ; cache's own claims (SPEC.md 18.95), which
+                                ; can compact. dsk_xfer's [mem_pinseg] guard
+                                ; (66.3 rule 5) covers the transfer itself and
+                                ; not the walk between transfers - Tracker
+                                ; escapes this by declaring only after the
+                                ; read, which an editor that loads repeatedly
+                                ; cannot do
     mov es, [np_dseg]
     xor bx, bx                  ; ES:BX = the document, DX:CX its capacity
     mov cx, [np_cap]
     xor dx, dx
     mov si, np_name
     call OSAPI_FILE_READ        ; DX:AX = bytes read, and DX is 0 - a longer
+    push ax                     ; movable again, and on BOTH paths out: the
+    mov ax, np_reloc            ; error one returns through .err
+    call np_dmov
+    pop ax
     jc .err                     ; file is FERR_BIG, "Too big", and the note is
                                 ; left alone. That is the honest answer and it
                                 ; used to be a half-loaded note that the next
@@ -6738,6 +6820,10 @@ np_ugrow:
     jc .no
     mov [np_useg], dx
     mov [np_ukb], ax
+    push ax                     ; the arena moves too (SPEC.md 66.5.7): the
+    mov ax, np_reloc            ; undo records index it by OFFSET, so np_reloc
+    call OSAPI_MEM_MOVABLE      ; has one word to fix here as well
+    pop ax
     jmp short .yes
 .re:
     mov dx, [np_useg]

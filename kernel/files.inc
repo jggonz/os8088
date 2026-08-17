@@ -280,6 +280,7 @@ fm_kinit_x:
     jc .nocache                 ; no room: the window still works, it just
     mov [di+FS_VSEG], dx        ; re-reads the global snapshot to paint
     mov byte [di+FS_VKB], VIEW_KB
+    call fmv_movable            ; ...and it is MOVABLE (SPEC.md 66.5.6)
 .nocache:
     pop dx
     pop bx
@@ -513,10 +514,11 @@ fmv_get_icon:
 ; out: BX = its window ptr and CF = 0, or CF = 1 = no live record owns it
 ; clobbers: nothing else (flags)
 ;
-; fm_win_of answers the same question about [ld_pwin] by walking wm_zord for a
-; VISIBLE window, which is what files_poster wants; this one walks inst_tab and
-; finds a hidden window too, because a minimized Disk window still owns a
-; raise cache somebody has to drop.
+; It walks inst_tab and so finds a HIDDEN window too, because a minimized Disk
+; window still owns a raise cache somebody has to drop. There used to be a
+; second walk of this shape - fm_win_of, over wm_zord, answering only about a
+; VISIBLE window - and it went with files_poster, its only caller (SPEC.md
+; 22.17), so there is one answer to "which window owns this block" again.
 ; -----------------------------------------------------------------------------
 fmv_winof:
     push cx
@@ -658,6 +660,7 @@ fmv_fit:
     jc .out                     ; refused: no cache, and that is a normal
     mov [di+FS_VSEG], dx        ; path (SPEC.md 50.3)
     mov [di+FS_VKB], cl
+    call fmv_movable
 .out:
     mov bx, [di+FS_VSEG]        ; fm_vseg is what every reader looks at, and
     mov [fm_vseg], bx           ; this may just have changed it
@@ -665,6 +668,23 @@ fmv_fit:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_movable - declare the view cache at DX relocatable (SPEC.md 66.5.6)
+; in:  DX = the claim, DI = the state block that owns it
+; out: nothing; every register and the flags preserved
+; -----------------------------------------------------------------------------
+fmv_movable:
+    pushf
+    push ax
+    push bx
+    call fmv_owner              ; BX = the owning instance slot, which is what
+    mov ax, fm_reloc            ; the claim was made under
+    call mem_movable_x
+    pop bx
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1218,7 +1238,6 @@ fm_s_refresh: db 'Refresh', 0   ; button label, 7 chars = 56 px
 fm_s_icons:   db 'Icons', 0     ; view-toggle labels: the view a click
 fm_s_list:    db 'List', 0      ; switches TO (SPEC.md 22)
 
-fm_s_loading: db 'Loading...', 0
 fm_s_empty:   db 0              ; status line strings, indexed by [ld_status]
 fm_s_dskerr:  db 'Disk error', 0
 fm_s_badpkg:  db 'Bad package', 0
@@ -1262,7 +1281,12 @@ FM_NERR       equ 11            ; FERR_OK .. FERR_BIG
 ;
 ; A FOLDER gets a different tail, because Delete on one now removes
 ; everything under it (SPEC.md 18.6) and the line is the only place that can
-; say so. It costs nine characters, so a maximal 12-character folder name
+; say so. THAT TAIL IS TRUE ON EVERY VOLUME NOW - it was an over-promise on a
+; REDIRECTED one for two milestones, where dskw_rtbody could only ever reach
+; the empty-only FSV_RMDIR, and SPEC.md 62.10.7's FSV_RMTREE is what closed
+; it. A driver may still decline that verb (RAMDISK.DRV does, on purpose), and
+; there the refusal is honest and visible: FERR_PROT, said in this same line.
+; It costs nine characters, so a maximal 12-character folder name
 ; overflows the default width by a few and clips the tail of 'Esc=no'; that
 ; is the right thing to lose, and widening the window shows it whole.
 fm_s_newfld:  db 'New folder: ', 0
@@ -1752,105 +1776,38 @@ files_refresh_x:
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_win_of - the visible window that owns the state block in [ld_pwin]
-; in:  nothing ([ld_pwin])
-; out: BX = its window ptr, CF = 0; CF = 1 = no visible window owns it
-; clobbers: nothing else (flags)
+; files_poster and fm_win_of are RETIRED (SPEC.md 22.17)
 ;
-; The reverse of fm_vp_set, and it exists because [ld_pwin] is the poster's
-; STATE BLOCK (SPEC.md 22.1) - the loader needs the block, files_poster
-; needs the window. Walking wm_zord rather than wm_wins means a window that
-; has been closed or hidden since the load was posted simply is not found,
-; which is the answer that path wants anyway.
-; -----------------------------------------------------------------------------
-fm_win_of:
-    push ax
-    push cx
-    push si
-    push di
-    mov si, wm_zord
-    mov cl, [wm_zn]
-    xor ch, ch
-    jcxz .no
-.scan:
-    mov al, [si]
-    inc si
-    call KERNEL_SEG:cw_wm_idx2ptr ; BX = window ptr; CX preserved
-    test word [bx+W_FLAGS], 2
-    jz .next
-    push cx
-    call KERNEL_SEG:cw_inst_win_owner ; DI = its instance record, or 0
-    pop cx
-    or di, di
-    jz .next
-    mov di, [di+I_SPTR]
-    cmp di, [ld_pwin]
-    je .found
-.next:
-    loop .scan
-.no:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    xor bx, bx
-    stc
-    ret
-.found:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; files_poster - repaint JUST the window that posted a load (loader_run)
-; in:  nothing ([ld_pwin]); no lock held on entry
-; out: nothing
-; clobbers: nothing (flags only)
+; They were the two ends of one word. A Disk window that posted a load drew
+; 'Loading...' in its status line, so the load finishing owed that window one
+; line back: files_poster armed a clip region on it, called fm_status_only and
+; unlocked, and fm_win_of was the wm_zord walk that turned [ld_pwin] - a STATE
+; BLOCK, not a window - into something to aim at.
 ;
-; The window that posted the load has "Loading..." in its status line, drawn
-; because [ld_pending] was set (SPEC.md 22). The load clears it, and since
-; SPEC.md 11.90 the successful path's wm_show draws only the window it just
-; put up - so that one line would sit there stale until something else
-; repainted. This is the cheap correction: one window's content, and the
-; SPEC.md 11.3 clip region is what makes it safe to draw a window that the
-; new one may now be sitting on top of.
+; The word itself was the wrong report in the wrong place. SPEC.md 12.8's
+; file-activity widget sits in the MENU BAR and reports the read while it is
+; happening, for every reader in the machine; this one said only that
+; something had been posted, only in the window that posted it, and only while
+; that window was still on screen to be looked at. So the rung went, and with
+; nothing left to correct there is nothing for these two to do: posting a load
+; and finishing one now draw no pixel of this window at all.
 ;
-; A poster-less load (a package asking for one, SPEC.md 22.1) falls back to
-; the whole screen, because there is no window to aim at. A pending retitle
-; does NOT: this is one of the two places that can spend one, and it is spent
-; BEFORE the clip is armed - wm_title_set does its own region arithmetic on
-; the title strip, and would otherwise be clipped to the content rect that
-; strip is not inside.
+; Three earlier fixes were about this routine and two of them are answered by
+; its ABSENCE rather than by any code - the reordering that paid it before
+; wm_show (22.17), and 11.96.9.1's dropped raise cache, which was this arming
+; wm_clip_set on a window the newly launched one was already covering. The
+; third is not, and must not be taken out with them: fm_stat_line's opaque
+; font_run (22.13.1) is how the line stops FLICKERING, and every editor prompt
+; this window puts up is still owed that.
+;
+; The one duty that had to go somewhere was fm_title_flush, which this spent
+; before arming the clip. It goes nowhere: [fm_tdirty] is a POINTER to the
+; window owing a caption precisely so it can be spent by whoever repaints
+; next, and the single path that can set one here (fmv_sync's folder-vanished
+; mount, SPEC.md 19.2) has also replaced the whole listing - so fmv_store has
+; raised WF_STALE, the raise cache refuses to restore it, and the next raise
+; is a full fm_repaint, which is where the flush lives.
 ; -----------------------------------------------------------------------------
-files_poster_x:
-    push ax
-    push bx
-    push si
-    cmp word [ld_pwin], 0
-    je .full
-    call fm_win_of              ; [ld_pwin] is a STATE BLOCK, not a window
-    jc .full                    ; ptr - its window has gone since it posted
-    call KERNEL_SEG:cw_gfx_lock
-    call fm_title_flush
-    call KERNEL_SEG:cw_wm_clip_set ; CF = 1: none of it is visible any more
-    jc .unlock
-    mov si, bx
-    call fm_status_only         ; the load changed ONE line of this window;
-    jnc .unlock                 ; only a clip edge across it forces the rest
-    call fm_repaint
-.unlock:
-    call KERNEL_SEG:cw_gfx_unlock ; ...which also disarms the clip
-    jmp short .out
-.full:
-    call files_refresh_x
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; fm_layout - derive every layout value from the live window record
@@ -2254,9 +2211,13 @@ fm_onclick_x:
     call fm_open_sel            ; double-click: a package goes to the
     cmp word [ld_pending], 0    ; loader, a folder re-lists this window (22)
     je .redraw                  ; folder: fm_go changed the whole listing
-    call fm_status_only         ; package: the ONLY thing that changed on
-    jnc .out                    ; screen is 'Loading...' in the status line
-    jmp short .redraw           ; a clip edge crosses it: whole content
+    jmp short .quiet            ; package: the loader is somebody else's
+                                ; window and NOTHING here changed at all
+                                ; (SPEC.md 22.17 - it used to be one line,
+                                ; 'Loading...'). Through .quiet and not
+                                ; straight out, because this click may also
+                                ; have retired an editor prompt, which is a
+                                ; different question with its own answer
 
 .restamp:                       ; already selected, too slow to be a double
     mov dx, [ui_click_t]        ; click: the entry does not move, so NOT ONE
@@ -3031,8 +2992,9 @@ fm_settitle:
 ; in:  nothing ([fm_tdirty]); caller HOLDS the gfx lock
 ; out: nothing (all registers preserved)
 ;
-; Called from the two places that repaint a Disk window under the lock -
-; fm_repaint and files_poster - and from nowhere else. W_TITLE already points
+; Called from the one place that repaints a Disk window under the lock -
+; fm_repaint - and from nowhere else; files_poster was the second and is
+; retired (SPEC.md 22.17). W_TITLE already points
 ; at the bytes fm_settitle rewrote, so wm_title_set is told to leave it alone
 ; (AX = 0) and just correct the strip.
 ; -----------------------------------------------------------------------------
@@ -3286,11 +3248,12 @@ fm_c_open:                      ; File > Open - the selection, if any
     jae .none
     call fm_open_sel
     cmp word [ld_pending], 0    ; a folder re-listed us and owes the whole
-    je .out                     ; window; a PACKAGE went to the loader, and
-    mov byte [fm_cmdchg], FMD_LINE  ; the only thing that changed on screen
-.out:                           ; is 'Loading...' in the status line - the
-    ret                         ; same [ld_pending] test fm_onclick makes on
-                                ; a double-click (SPEC.md 22.2/22.13)
+    je .out                     ; window; a PACKAGE went to the loader and
+    mov byte [fm_cmdchg], FMD_NONE  ; changed NOTHING on this one - the same
+.out:                           ; [ld_pending] test fm_onclick makes on a
+    ret                         ; double-click (SPEC.md 22.2/22.13). It was
+                                ; FMD_LINE while the line still said
+                                ; 'Loading...' (SPEC.md 22.17)
 .none:
     mov byte [fm_cmdchg], FMD_NONE  ; nothing selected: a no-op, and a no-op
     ret                             ; draws nothing
@@ -4636,7 +4599,7 @@ fm_dgdrop:
     call KERNEL_SEG:cw_wm_hit   ; BX = the window under the point, 0 = none
     or bx, bx
     jz .out
-    push cx                     ; is it a DISK window? fm_win_of goes the
+    push cx                     ; is it a DISK window? fmv_winof goes the
     push dx                     ; other way (block -> window), so the test is
     call KERNEL_SEG:cw_inst_win_owner ; the instance that owns it
     pop dx
@@ -5417,10 +5380,9 @@ fm_draw_core:
                                 ; without the header and the two buttons,
                                 ; which a scroll never changes (SPEC.md 22.11)
     call fm_draw_status         ; the status line is a proc of its own so a
-                                ; status-ONLY change - the loader's
-                                ; 'Loading...' and back again - can cost one
-                                ; line instead of a whole content repaint
-                                ; (fm_status_only below)
+                                ; status-ONLY change - an editor prompt armed
+                                ; or retired - can cost one line instead of a
+                                ; whole content repaint (fm_status_only below)
 
     pop bp
     pop di
@@ -5839,19 +5801,27 @@ fm_sel_bar:
 ; out: CF = 0 drawn; CF = 1 refused (a content rect with nothing in it) - the
 ;      caller must fall back to a whole repaint. All registers preserved.
 ;
-; This exists for the loader round trip. Posting a load and finishing one
-; change exactly one line of text - "Loading..." on, then off again - and both
-; used to cost a full fm_repaint: a white fill of the whole content plus every
-; row, every icon, the header and the buttons, to correct eight pixel rows.
+; Arming an editor prompt or retiring one changes exactly one line of text,
+; and it used to cost a full fm_repaint: a white fill of the whole content
+; plus every row, every icon, the header and the buttons, to correct eight
+; pixel rows.
+;
+; It was WRITTEN for the loader round trip - 'Loading...' on when a load was
+; posted and off when it finished - and that round trip no longer exists
+; (SPEC.md 22.17): posting a load draws nothing now. The prompts had always
+; been the other caller, which is why the routine outlived the reason it was
+; built for.
 ;
 ; IT USED TO REFUSE UNDER A CUT CLIP REGION and that refusal is gone (SPEC.md
 ; 22.13.1), because the pair that needed it is gone: fm_stat_line is one
 ; OPAQUE font_run now, so the erase and the letter are one decision per cell
 ; and cannot disagree about which rows they cover. The refusal cost the whole
-; window every time - and the case it fires in is precisely the one where
-; something has just been raised over this window, which is where files_poster
-; runs. Reported from the field as a Disk window redrawing in full behind
-; every app launched out of it.
+; window every time - and the case it fired in was precisely the one where
+; something had just been raised over this window, which is where files_poster
+; ran. Reported from the field as a Disk window redrawing in full behind
+; every app launched out of it. Its caller is retired and this is KEPT: the
+; opaque run is also what stops the line flashing (SPEC.md 6.1), which is owed
+; to every prompt this window puts up.
 ;
 ; The band fill went with it. The run's own padding is the erase (SPEC.md 6.1),
 ; and it is the only thing that ever writes in these rows: the scroll bar stops
@@ -5882,7 +5852,7 @@ fm_status_only:
                                 ; fm_repaint has always done this after its own
                                 ; fill; the cheap path had not, and every
                                 ; status-line-only draw - a New Folder prompt,
-                                ; a Rename, 'Loading...' - left the box a
+                                ; a Rename - left the box a
                                 ; broken glyph (SPEC.md 22.13). The band fill
                                 ; is gone (22.13.1) and this is not: an opaque
                                 ; run ends 6px short of fm_rgt and the box
@@ -6307,21 +6277,22 @@ fm_draw_status:
     push si
     push di
     ; --- status line at (6, staty): the precedence is binding (SPEC.md 22),
-    ;     because every one of these can be true at the same moment. There
-    ;     used to be five rungs and two of them were VERDICTS - the FERR_* of
-    ;     the last file operation and the LD_* of the last load - which took
-    ;     the line until some later interaction retired it. Those are toasts
-    ;     now (SPEC.md 59.5): a verdict is a report about what just happened,
-    ;     so it belongs to the moment rather than to a window, and it goes
-    ;     away on its own. What is left is what the line is FOR - one thing
-    ;     that is true now (a load pending), one being typed, and one that
-    ;     describes the folder. The header buffer is free by now, so every
-    ;     branch stages into it and one truncation serves them all.
+    ;     because both of these can be true at the same moment. There used to
+    ;     be FIVE rungs and three of them were the wrong species. Two were
+    ;     VERDICTS - the FERR_* of the last file operation and the LD_* of the
+    ;     last load - which took the line until some later interaction retired
+    ;     it; those are toasts now (SPEC.md 59.5), a verdict being a report
+    ;     about what just happened, so it belongs to the moment rather than to
+    ;     a window and goes away on its own. The third was 'Loading...', and it
+    ;     went for the opposite reason (SPEC.md 22.17): SPEC.md 12.8's
+    ;     file-activity widget reports the same read LIVE, in the menu bar, for
+    ;     every reader in the machine - so this was the same fact said twice
+    ;     and the worse of the two. What is left is what the line is FOR - one
+    ;     thing being typed, and one that describes the folder. The header
+    ;     buffer is free by now, so every branch stages into it and one
+    ;     truncation serves them all.
     mov di, fm_hdrbuf
-    mov si, fm_s_loading        ; 1. a pending load trumps everything
-    cmp word [ld_pending], 0
-    jne .fs_stat
-    mov al, [fm_ledit]          ; 2. the input line, prompt and all - the
+    mov al, [fm_ledit]          ; 1. the input line, prompt and all - the
     or al, al                   ;    editor IS the status line (SPEC.md 22)
     jz .fs_st_space
     cmp al, 3
@@ -6432,7 +6403,7 @@ fm_draw_status:
     je .fs_stat
     mov si, fm_s_delq2
     jmp short .fs_stat
-    ; --- 3. the resting state: this folder's size and the volume's free
+    ; --- 2. the resting state: this folder's size and the volume's free
     ;     space (SPEC.md 22.7). The two rungs that used to sit between here
     ;     and the editor walked a word table by index, and a code past the end
     ;     of it is what once made this whole ladder go SILENT - LD_EBAD
@@ -6704,10 +6675,11 @@ fm_tdirty:  resw 1              ; the window whose caption fm_settitle just
                                 ; rewrote and nobody has drawn yet, or 0. A
                                 ; POINTER, not a flag: fmv_sync can retitle a
                                 ; window from ld_run, which holds no lock, so
-                                ; the redraw is spent later by whichever of
-                                ; fm_repaint / files_poster gets there first -
-                                ; and it must not be spendable on some other
-                                ; window that repainted in between
+                                ; the redraw is spent later - by fm_repaint,
+                                ; now the only caller of fm_title_flush
+                                ; (SPEC.md 22.17 retired the other) - and it
+                                ; must not be spendable on some other window
+                                ; that repainted in between
 fm_cmdwin:  resw 1              ; fm_oncmd/fm_rclick scratch: the acting
                                 ; window ptr, held across the dispatch
 fm_rcmdid:  resb 1              ; the FMC_* a context menu chose, handed from
@@ -6853,8 +6825,6 @@ fmf_files_open:         call files_open_x
                     retf
 fmf_files_open_drive:   call files_open_drive_x
                     retf
-fmf_files_poster:       call files_poster_x
-                    retf
 fmf_files_refresh:      call files_refresh_x
                     retf
 fmf_fm_focus:           call fm_focus_x
@@ -6878,3 +6848,48 @@ fmf_fmv_sync:           call fmv_sync_x
                     retf
 
 section .text
+
+; -----------------------------------------------------------------------------
+; fm_reloc - the compactor moved a Disk window's listing cache (SPEC.md 66.2)
+; in:  BX = the base segment it WAS at, DX = the base it is at NOW
+; out: nothing; every register preserved
+;
+; TWO NAMING WORDS, which is the pair that decided SPEC.md 66's whole shape:
+; FS_VSEG in the window's own state block, and [fm_vseg], the global mirror
+; fmv_fit's comment calls "what every reader looks at". A relocation that
+; poked one word would move the block, update the state block, and leave every
+; painter reading the old address - which is why relocation is a CALLBACK.
+;
+; It finds the owner by walking the Disk instances rather than being told,
+; because the compactor knows a claim and not a window; fmv_mark's walk
+; exactly, with the folder tests dropped.
+; -----------------------------------------------------------------------------
+fm_reloc:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, inst_tab
+    mov cx, INST_MAX
+.scan:
+    cmp byte [si+I_STATE], 1
+    jne .next
+    cmp byte [si+I_KIND], KIND_FILES
+    jne .next
+    mov di, [si+I_SPTR]
+    cmp [di+FS_VSEG], bx
+    jne .next
+    mov [di+FS_VSEG], dx
+.next:
+    add si, I_RECSZ
+    loop .scan
+    cmp [fm_vseg], bx           ; ...and the mirror, which is the half a word
+    jne .out                    ; poke would have missed
+    mov [fm_vseg], dx
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+

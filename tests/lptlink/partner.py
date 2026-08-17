@@ -503,6 +503,35 @@ class Partner(object):
         self.send(self._name13(name))
         return self.recv_byte()
 
+    def mst_enum(self, folder, ordinal):
+        """NF_ENUM -> (status, 32-byte entry).
+
+        THE ENTRY IS ALWAYS READ, whatever the status said (SPEC.md 62.10.6):
+        the frame is fixed, so a master that stopped at a refusal would leave
+        the far side driving nibbles at an end that had gone quiet, and that
+        ends the SESSION rather than the command. Status 4 is the end of the
+        folder and status 2 is a folder that could not be walked - the caller
+        has to keep those apart, which is the verb's whole point.
+        """
+        self.mst_cmd('E', folder)
+        self.send_word(ordinal)
+        st = self.recv_byte()
+        return st, self.recv(DE_SIZE)
+
+    def mst_rmtree(self, folder, name):
+        """NF_RMTREE -> status. A folder AND EVERYTHING IN IT (SPEC.md
+        62.10.7). RMDIR's frame exactly, and a different letter."""
+        self.mst_cmd('T', folder)
+        self.send(self._name13(name))
+        return self.recv_byte()
+
+    def mst_copy(self, src, dst, name):
+        """NF_COPY -> status. Two handles and one name; no body crosses."""
+        self.mst_cmd('Y', src)
+        self.send_word(dst)
+        self.send(self._name13(name))
+        return self.recv_byte()
+
     def mst_dfree(self):
         """NF_DFREE -> (status, free bytes, granule)."""
         self.mst_cmd('F')
@@ -600,6 +629,39 @@ class Partner(object):
                 self.send_word(len(ents))
                 for e in ents:
                     self.send(e)
+            elif c == ord('E'):             # NF_ENUM: handle + ordinal -> ONE
+                h = self.recv_word()        # entry, for a folder COPY
+                n = self.recv_word()
+                e = tree.enum(h, n)
+                if e is False:              # THREE ANSWERS, NOT TWO: see
+                    st, e = 0x02, bytes(DE_SIZE)    # FileTree.enum. FERR_IO
+                    what = 'NO SUCH HANDLE'         # for a folder that cannot
+                elif e is None:                     # be walked, FERR_NOENT
+                    st, e = 0x04, bytes(DE_SIZE)    # for the end of one
+                    what = 'end'
+                else:
+                    st, what = 0, repr(e[:e.index(b'\0')].decode('ascii'))
+                self.log.append('ENUM folder=%d ord=%d -> %s' % (h, n, what))
+                self.send_byte(st)
+                self.send(e)                # ...ALWAYS 32 bytes: the frame is
+                                            # fixed whatever the status said
+            elif c == ord('T'):             # NF_RMTREE: a folder AND its
+                fold = self.recv_word()     # contents, walked by the far side
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.rmtree(fold, name)
+                self.log.append('RMTREE folder=%d %r -> %s'
+                                % (fold, name,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
+            elif c == ord('Y'):             # NF_COPY: both ends are the far
+                src = self.recv_word()      # side's, so no body crosses
+                dst = self.recv_word()
+                name = self.recv(13).split(b'\0')[0].decode('ascii', 'replace')
+                st = tree.copy(src, dst, name)
+                self.log.append('COPY %d -> %d %r : %s'
+                                % (src, dst, name,
+                                   'ok' if st == 0 else 'FERR %d' % st))
+                self.send_byte(st)
             elif c == ord('C'):             # NF_CHDIR: handle -> parent
                 h = self.recv_word()
                 par = tree.parent(h)
@@ -809,7 +871,17 @@ class FileTree(object):
             if h is not None and self.meta[h][1] == self.T_DIR:
                 return self.F_PROT
             if h is None:
-                h = self.add(folder, name, content=data)
+                # THE TYPE COMES FROM THE NAME, because on the far side it
+                # always did: os88net.asm has no stored type at all, and
+                # `ent_ispkg` decides a listed entry's from the extension
+                # every time it walks. A file created here and typed T_FILE
+                # would list as a plain file where the real far end lists it
+                # as a package - so a package copied ONTO the Link volume
+                # would lose its icon and its double-click, and only in the
+                # harness.
+                typ = (self.T_PKG if name.upper().endswith('.O88')
+                       else self.T_FILE)
+                h = self.add(folder, name, typ=typ, content=data)
                 return self.F_OK
             self.blobs[h] = bytes(data)
         n, t, _ = self.meta[h]
@@ -831,6 +903,31 @@ class FileTree(object):
         del self.nodes[h]
         del self.meta[h]
         self.blobs.pop(h, None)
+        return self.F_OK
+
+    def rmtree(self, folder, name):
+        """NF_RMTREE: a folder and everything under it (SPEC.md 62.10.7).
+
+        A FILE IS REFUSED, and that is not fussiness: `dskw_delete` is the
+        verb for one, and a remover that quietly did another verb's job would
+        turn a mis-typed name into a deletion nobody asked for. os88net.asm
+        refuses one the same way, off the DTA's attribute byte.
+        """
+        h = self.find(folder, name)
+        if h is None:
+            return self.F_NOENT
+        if self.meta[h][1] != self.T_DIR:
+            return self.F_PROT
+        doomed = [h]
+        i = 0
+        while i < len(doomed):                  # breadth first, no recursion:
+            doomed.extend(self.nodes[doomed[i]][1])     # a stand-in that can
+            i += 1                                      # blow its own stack is
+        for d in reversed(doomed):                      # not a stand-in
+            self.nodes[self.nodes[d][0]][1].remove(d)
+            del self.nodes[d]
+            del self.meta[d]
+            self.blobs.pop(d, None)
         return self.F_OK
 
     def rename(self, folder, old, new):
@@ -878,6 +975,47 @@ class FileTree(object):
         b[22] = (size >> 16) & 0xFF
         b[23] = (size >> 24) & 0xFF
         return bytes(b)
+
+    def enum(self, h, n):
+        """One child BY ORDINAL, for NF_ENUM - what a folder COPY walks with.
+
+        THREE ANSWERS AND NOT TWO, which is the verb's whole contract
+        (SPEC.md 62.10.6): the entry, `None` for past the last one, and
+        `False` for a folder that cannot be walked at all. The master's
+        end-of-folder answer is `CF=1, AX=0` - letter for letter what an
+        absent verb gives - so a stand-in that reported an unknown handle as
+        the end would let a folder copy report DONE over a subtree it never
+        read, and the harness would be the only thing in the world that could
+        not see it.
+
+        The ordinal counts the entries a LISTING shows, so this walks the same
+        children `list` does. os88net.asm gets that for free by sharing
+        `srv_keep` between the two walks.
+        """
+        if h not in self.nodes:
+            return False
+        kids = self.nodes[h][1]
+        if n >= len(kids):
+            return None
+        return self.entry(kids[n])
+
+    def copy(self, src, dst, name):
+        """NF_COPY: one file between two folders that are both ours.
+
+        A FOLDER IS REFUSED, and that is not a limitation: the copy ENGINE
+        walks a tree (it needs the replace question and the free-space check
+        per file), and this verb is the leaf optimisation underneath it
+        (SPEC.md 62.9.8). os88net.asm's srv_copy opens the source with
+        int 21h 3Dh, which fails on a directory for the same reason.
+        """
+        if src not in self.nodes or dst not in self.nodes:
+            return self.F_NOENT
+        h = self.find(src, name)
+        if h is None:
+            return self.F_NOENT
+        if self.meta[h][1] == self.T_DIR:
+            return self.F_PROT
+        return self.put(dst, name, self.data(h))
 
     def list(self, h):
         """This folder's children. NO '..' AND NO SORT - the kernel does both

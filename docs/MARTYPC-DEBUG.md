@@ -629,7 +629,9 @@ guest's turnaround puts it. Quote the **class**, not the machine.
 | `os8088_xt_vga_sb` | ...and the same XT with the AdLib + Sound Blaster pair, which exists **to be run with `--turbo`** — see below |
 | `os8088_xt_hdd` | the same XT with an **XT-IDE** controller — SPEC.md §52's rung 0 — **and a parallel port**, which makes it the one machine here where TWO drivers publish a Control Panel page at once (SPEC.md §31.9/§62.7). That is what exercises `drv_cp_class`'s ordinal-to-class walk rather than asserting it: Hard Drive lands on row 5 and Network on row 6 with class 3 unpublished in between, and on a machine with one page an off-by-one there is invisible |
 | `os8088_5150_cga_hdd` | the same XT-IDE disk on a **5150 behind the PERIOD ROM**, which every other hard-disk machine here lacks — the rest are `Ibm5160` on GLaBIOS, so until this existed "a hard disk" and "the ROM the reporter runs" were two axes that could not be crossed. That matters because this tree already has one defect (SPEC.md §18.91's `AL`) that *only* the IBM ROM exposes, and because a field report arrives in this shape: docs/FIELD-MACHINES.md's machine is a 5150 with an ST-225 on an ST11M, where a controller's own option ROM is rung 0 exactly as XT-IDE is here. Needs the ROM this tree cannot ship, so a container without one runs the GLaBIOS twins only |
-| `os8088_5150_cga_lpt` | the CGA GLaBIOS 5150 with a **Centronics card at 0x378** — SPEC.md §62's machine, and the only other one here with a parallel port. MartyPC's `ParallelPort` has a readable data register, so `lp_latch` succeeds and the whole os8088 side of the link is testable: the scan, the attach, the publication, the page, and `net_connect` failing in bounded time. It has **no partner and cannot be given one** — the status lines read a constant, so `mst_hello` always times out and the page says `No partner`, which is docs/NET-PLAN.md §1.4.4's own distinction being drawn by the machine rather than by an argument. The WIRE is the 5150's question and `tests/lptlink` is how it is asked. GLaBIOS on purpose: nothing here is a timing question, so this is one of the machines that runs in a container with no IBM ROM |
+| `os8088_5150_cga_lpt` | the CGA GLaBIOS 5150 with a **Centronics card at 0x378** — SPEC.md §62's machine, and the only other one here with a parallel port. MartyPC's `ParallelPort` has a readable data register, so `lp_latch` succeeds and the whole os8088 side of the link is testable: the scan, the attach, the publication, the page, and `net_connect` failing in bounded time. **IT CAN BE GIVEN A PARTNER, and this row said for two milestones that it could not** — the claim was that the status lines read a constant, and they do until something writes them: stock `lpt_port.rs` implements `status_register_write` and stores the byte the guest reads back, so the debug server's `outb` drives exactly the lines `lp_snib`/`lp_rnib` poll. `tests/lptlink/partner.py` is that far end in both roles (SPEC.md §62.10.3), and on this machine it has driven a handshake, a mount, a listing and a whole recursive **folder copy** (§62.10.6). No patch was needed; the capability was there the whole time and the row was the reason nobody looked. What is still out of reach here is the WIRE's verdict — timings, levels, a real cable — which is the 5150's question, and `tests/lptlink` is how it is asked.
+
+**Two things to know before driving it.** MartyPC headless free-runs at about **4x real time** (measured: 74.0 guest ticks a wall second against 18.2), and `net_connect` leaves the reply deadline at `REPLY_TMO` = ten GUEST seconds — so a mouse `settle` of 6 s is 24 guest seconds of nobody answering, `net_lost` fires, and every verb after it is refused by the `NS_LINKED` gate with **no wire traffic at all**. That reads as a UI that does nothing, nowhere near its cause. Click with a short settle and answer immediately. And `Partner.serve` **steps** the guest, so it leaves it paused: call `m.run()` afterwards or `os88mouse` reports the next target as one it cannot reach. GLaBIOS on purpose: nothing here is a timing question, so this is one of the machines that runs in a container with no IBM ROM |
 | `os8088_5150_both` | **two cards**: a CGA *and* a Hercules, which is docs/FIELD-MACHINES.md's machine as it actually is. SPEC.md §39.11's adapter switching exists for this, and docs/DUAL-DISPLAY-PLAN.md is the study of driving both at once |
 | `os8088_5150_both_gla` | its GLaBIOS twin, and the one `tests/dualcheck.py` runs by default — the IBM ROM this tree cannot ship is what the other needs |
 | `os8088_5150_herc_gla` | a single-card Hercules on GLaBIOS: `os8088_5150_herc` without the ROM, and the control for "does this card rasterise at all" with no second card to confuse the question |
@@ -853,6 +855,36 @@ bytes execute first (measured: parking at 0x0500 landed at 0xD4CC). The flush is
 not reachable through `CpuDispatch`, so `park` goes through the CPU's reset
 vector, and **clears every register** as a documented consequence. Devices are
 untouched: it resets the processor, not the machine.
+
+**So DO NOT park the CPU to call a kernel routine when a flag the kernel
+already polls will do it.** Forcing a `wm_paint_all` — which every "does the
+incremental drawing agree with a full repaint" test needs — was done for a
+while by building a stub in `menu_bcell`, parking on it, and handing it the
+banked SS:SP. It works, and it is a trap with a long fuse: the frame it is
+handed belongs to whichever task the pause happened to catch, so if that was
+the UI task **inside a lock hold**, the stub's own `gfx_lock` spins on
+`sti / task_yield`, the scheduler switches away, and the CS:IP restored at the
+end names a task whose stack has moved on. Measured, that surfaced THREE
+assertions later as a window rect reading 2056x2056 and a keyboard that had
+stopped arriving — nowhere near the call that caused it.
+`tests/dispcalc.py`'s `full_repaint` is the shape to copy instead:
+
+```python
+m.cmd(cmd="run")
+m.write(S("cp_dirty"), b"\x01")     # ui_task step 3: gfx_lock / wm_paint_all
+while m.read(S("cp_dirty"), 1)[0]:  # / gfx_unlock, on its own stack
+    time.sleep(0.05)
+os88marty.settle(m); m.cmd(cmd="pause")
+```
+
+Nothing is parked, nothing is reset, no kernel scratch is borrowed, and the
+repaint happens at a moment the kernel chose. The general rule: **prefer
+poking a byte the guest already polls over executing kernel code from
+outside** — `[cp_dirty]`, `[desk_zdirty]`, `[menu_bdirty]`, `[cal_dirty]` and
+their kind are all deferred-work posts, which is exactly what a harness wants.
+The one cost is that the repaint now takes real wall time, so a run can
+straddle the menu bar's once-a-minute clock change: exclude `y < MBAR_H,
+x >= [vid_clk_hx]` rather than chasing 42 pixels at the top right.
 | `flicker` | one sample per DISPLAYED FRAME, and the flash/redraw counts |
 | `pace` | per-frame changed counts over a long run — frame pacing / smoothness. `ignore` excludes a rect (a blinking cursor); `video` reports the card's cursor state |
 | `advance` | run a bounded amount of GUEST time — `frames=` or `cycles=` |

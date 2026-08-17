@@ -3191,7 +3191,13 @@ gfx_lock:
     cmp byte [gfx_lock_flag], 0
     je .take
     sti
-    call task_yield
+%ifndef NOPARKLK
+    call inst_park_lk           ; BLOCKED HERE HOLDS NOTHING, if the package
+%endif                          ; said so (SPEC.md 66.5.4) - which is what
+    call task_yield             ; lets the compactor reach a DRAWING worker's
+%ifndef NOPARKLK                ; claims at all. make HEAPPARKLK=0 is the A/B
+    call inst_park_unlk
+%endif
     jmp .retry
 .take:
     mov byte [gfx_lock_flag], 1
@@ -3670,7 +3676,7 @@ section .cold                   ; gfx_blit1's body, and its far entry below it
 ; offset fell through the guard - and the write then decremented one byte of
 ; that package's own IMAGE, once per blit. Nothing in the kernel or the package
 ; is checking, so it is silent until the rotted byte is CODE the package
-; executes: Word (SPEC.md 65.13) hit it at 0x1698, the head of wd_rflush's
+; executes: Word (SPEC.md 68.13) hit it at 0x1698, the head of wd_rflush's
 ; leading-gap fill, which only a face taller than the 8x8 cell ever runs.
 ; SPEC.md 5.4.2.1 is the account.
 ; =============================================================================

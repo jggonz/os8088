@@ -149,6 +149,25 @@ dock_force_x:
     xor ax, ax                  ; REFERENCE BUILD: every damage is the whole
     mov cx, [vid_pwm1]           ; strip, the behaviour this replaced
 %endif
+%ifdef KERN_BIG
+    ; --- THE STRIP IS THE PRIMARY'S, AND SO IS ITS DAMAGE (SPEC.md 39.19.5) -
+    ; The span comes from a CALLER - wm_paint_dmg hands over the damage a drag
+    ; made - and that damage is in VIRTUAL coordinates, so on an extended
+    ; desktop it runs straight past the primary's last column. dock_paint then
+    ; drew its rule and white field at [vid_dock_y0] across it, and the
+    ; primary's dock ROW is inside the secondary's extent, so a full-width
+    ; white band appeared across the second monitor on every drag. dock_force
+    ; already clamped; this is the entry that did not, and clamping HERE is
+    ; what makes it true of every caller rather than of the ones that
+    ; remembered. The second monitor carries no menu bar (39.19.3) and it
+    ; carries no dock either.
+    cmp cx, [vid_pwm1]
+    jbe .xok
+    mov cx, [vid_pwm1]
+.xok:
+    cmp ax, cx
+    ja .out                     ; wholly past the primary: nothing to restore
+%endif
     cmp byte [dock_full], 0
     jne .union
     mov byte [dock_full], 1

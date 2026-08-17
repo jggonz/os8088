@@ -126,9 +126,9 @@ emulator have the hardware": a ✅ means reach for it first.
 | VGA 640x480x16 (mode 12h) | ✅ | ✅ | `make test`, or the `os8088_xt_vga` machine | boots to Locator; loads packages. MartyPC has a register-level VGA and rasterises 12h — `vid_w=640 vid_h=480 vid_planes=4`, raster 800x524, and Minesweeper renders in 8 distinct palette colours |
 | CGA 640x200 mono | ✅ | ✅ | `make test VIDEO=cga` | renders; dumps 640x400 (line-doubled) |
 | Hercules 720x348 mono | ✅ | ✅ | `make test VIDEO=herc HERCSEG=0x7000` | renders; 55.8% lit at the desktop |
-| The DOS end of the parallel link (SPEC.md §62) | ✅ | ➖ | `make dosstub`, then MartyPC `os8088_5150_cga_lpt` | **There is no DOS here and none this tree may ship**, so `OS88NET.COM` shipped to the field TWICE without one instruction of it executing - the second time it came back "returns to prompt instantly with nothing printed", which is a `.COM` whose entry is not at offset 0x100. `tests/dosstub` is a bootable floppy carrying an int 21h stub and the .COM inside its own image, on a real 4.77MHz 8088 with a real parallel port at 0x378: the banner, the default name, `/RO`, `/P:`, a filename, the cannot-open refusal, the sector arithmetic at all three of its outcomes and the latch probe are all verified there. What it CANNOT do is be a PARTNER - MartyPC's status lines read a constant, so the wire is still the 5150's question and `tests/lptlink` is how it is asked |
+| The DOS end of the parallel link (SPEC.md §62) | ✅ | ➖ | `make dosstub`, then MartyPC `os8088_5150_cga_lpt` | **There is no DOS here and none this tree may ship**, so `OS88NET.COM` shipped to the field TWICE without one instruction of it executing - the second time it came back "returns to prompt instantly with nothing printed", which is a `.COM` whose entry is not at offset 0x100. `tests/dosstub` is a bootable floppy carrying an int 21h stub and the .COM inside its own image, on a real 4.77MHz 8088 with a real parallel port at 0x378: the banner, the default name, `/RO`, `/P:`, a filename, the cannot-open refusal, the sector arithmetic at all three of its outcomes and the latch probe are all verified there. **AND IT CAN BE GIVEN A PARTNER**, which this cell denied for two milestones: stock MartyPC stores what is written to the LPT status register, so `tests/lptlink/partner.py` in its MASTER role drives the real program's whole command loop - every file verb answered by `OS88NET.COM`'s own instructions (SPEC.md §62.10.3/§62.10.6). Two limits are real. The stub has **one file handle**, so `NF_COPY` - which opens a source and creates a destination at once - reads and writes the same row and lands a 0-byte file; the verb's *frame* is exercised and its *body* is not, and the byte-exact claim belongs to the os8088-side harness where `partner.py` holds real blobs. And the WIRE's verdict - timings, levels, a real cable - is still the 5150's question |
 | Adapter switching (SPEC.md §39.11) | ⚠️ | ➖ | the `os8088_xt_vga` / `_5150_both` / `_5150_herc` / `_5150_cga` machines | MartyPC is the instrument, and one direction is out of its reach. Verified: the page lists **Vga + Cga** on `_xt_vga`, **Hercules + Cga** on `_5150_both`, and exactly **one** row on the two single-card machines; the live switch works **both ways on `_xt_vga`** and **CGA → Hercules on `_5150_both`**; the choice survives a reboot through `SYSTEM.CFG`'s `VM` key; and a disk asking for a card the machine lacks is **refused**, staying on the probe's answer. NOT verifiable here: **Hercules → CGA on a dual-card machine**, because MartyPC's MDA decodes the whole 64KB at B0000–BFFFF whatever 3BFh's page bit says — measured, B0000 and B8000 read back byte-identical — so the two cards contend for B8000 and the CGA's rendered output stays black although the card is correctly in `Mode6HiResGraphics`. A real HGC with that bit clear (which `vid_setmode` leaves clear) decodes B0000–B7FFF only. **That direction wants a run on the 5150.** The same aliasing is what `vid_cga_alias` (§39.11.1) exists to reject, and it is why the Hercules-only machine stopped reporting a CGA that is not there. **Hiding the page** (§31.10.1) verified on both single-card 5150s — the list is Scheduler/Buffer/Date-Time/Drivers/Sound and no Display row — with the static/driver boundary checked on `os8088_xt_hdd`, where the hard-disk driver's own page lands at row 5 (the slot the hidden page vacated) and dispatches to the driver, not to Display. **Blanking the outgoing card** (§39.11.4) verified on `_5150_both` in both directions: CGA → Hercules takes the CGA card from `Mode6HiResGraphics` to `Mode1TextCo40` (3D8h video bit clear), and Hercules → CGA trips an I/O breakpoint on 3B8h — a port `vid_setmode`'s CGA path never touches, so that write is `vid_blank` and nothing else |
-| Two displays at once (SPEC.md §39.12–§39.19) | ✅ | ❌ | `tests/dualcheck.py` on the `os8088_5150_both` machine, or `make xt-multimon` | MartyPC is the instrument, because only it can read the guest's own answer back; 86Box is where the pair is two 6845s on a period bus. Verified on `xt-multimon` (an `ibmxt86`, 640KB, `gfxcard = cga` + `gfxcard_2 = hercules_plus`): the machine boots to the desktop on the **CGA**, the probe finds the mono card, and forcing `[vid_dmode]` to Extend grows the desktop onto "86Box Monitor #2" - §39.13's bring-up of a card the ROM never touched, on a second card that works. **`gfxcard_2 = hercules` is NOT found, and reads exactly like the feature being missing**: 86Box's plain Hercules answers only 4KB at B0000 while it is still in POST's text mode, so `vid_memchk`'s 0xAA at B000:1000 lands on its 0x55 at B000:0000 and the card is rejected as the text-only MDA that signature means (§39.11.1). The kernel is right and the model differs; the symptom is a Control Panel with **no Display page at all** (§31.10.1 hides it when `[vid_avail]` has one bit), which announces nothing about why. NOT verifiable here: **the extend as the user reaches it**. 86Box has no automation socket, the Desktop row is a mouse click (`tests/dispcp.py`'s coordinates, driven by hand), and macOS will not let a script synthesise one - so `[vid_dmode]` forced in a scratch build is how the machine was checked, and `dualcheck.py` is what says the geometry is right |
+| Two displays at once (SPEC.md §39.12–§39.19) | ✅ | ❌ | `tests/dualcheck.py` on the `os8088_5150_both` machine, or `make xt-multimon` | MartyPC is the instrument, because only it can read the guest's own answer back; 86Box is where the pair is two 6845s on a period bus. Verified on `xt-multimon` (an `ibmxt86`, 640KB, `gfxcard = cga` + `gfxcard_2 = hercules_plus`): the machine boots to the desktop on the **CGA**, the probe finds the mono card, and forcing `[vid_dmode]` to Extend grows the desktop onto "86Box Monitor #2" - §39.13's bring-up of a card the ROM never touched, on a second card that works. **`gfxcard_2 = hercules` WAS not found, and it was the KERNEL** — see §39.11.1.1. 86Box's plain Hercules answers only 4KB at B0000 while it is still in POST's text mode, so `vid_memchk`'s 0xAA at B000:1000 landed on its 0x55 at B000:0000 and the card was rejected as the text-only MDA that signature means. **This was filed as "the kernel is right and the model differs", and that was wrong**: a real Hercules GB101 in a real 5150 behaves identically (docs/FIELD-MACHINES.md, 5150 #2), because a Hercules whose configuration switch has never been written *is* an MDA. `vid_probe_avail` writes 3BFh and asks again now, and `[vid_hprobe]` in `sysbench`'s video block says which answer it took. The symptom to recognise is a Control Panel with **no Display page at all** (§31.10.1 hides it when `[vid_avail]` has one bit), which announces nothing about why. NOT verifiable here: **the extend as the user reaches it**. 86Box has no automation socket, the Desktop row is a mouse click (`tests/dispcp.py`'s coordinates, driven by hand), and macOS will not let a script synthesise one - so `[vid_dmode]` forced in a scratch build is how the machine was checked, and `dualcheck.py` is what says the geometry is right |
 | PC speaker | ✅ | ✅ | `make test-snd`, or `MARTYPC_WAV=` | dominant 880.0 Hz (891.0 on MartyPC, inside tolerance) |
 | AdLib / OPL2 | ✅ | ✅ | `make test-snd ADLIB=1`, or the `os8088_5150_sb` machine | dominant 880.0 Hz from a keyed 440; the Sound page's Test tone came out of MartyPC's OPL2 at 660 Hz |
 | Sound Blaster (DMA streams) | ✅ | ✅ | `make test-snd SB16=1 TESTAPPS=build/sbtest.img`, or the `os8088_5150_sb` machine | 2.00 s at 1000.0 Hz on BOTH. MartyPC's is a DSP **2.01** by default — the classic `0x48`+`0x1C` auto-init path — where QEMU's is an SB16; `dsp_version` picks |
@@ -141,6 +141,8 @@ emulator have the hardware": a ✅ means reach for it first.
 | Performance benchmarks | ✅ | ✅ | `make bench` (from `tests/`, not in `all`) | numbers are always in flux — see below |
 | **Flicker** — the double-draw flash | ✅ | ❌ | `os88marty.py flicker` (PERFORMANCE.md Part 3.1) | one sample per displayed frame. A Disk window repaint flashes 1,963 px for 166 ms; an idle desktop and a pointer move measure zero. CGA, Hercules and VGA — the MDA's rasterisation of Hercules graphics was measured working at the pinned build (docs/MARTYPC-DEBUG.md); this row used to exclude it |
 | Fullscreen exclusive (SPEC.md §53) | ➖ | ✅ | `make test TESTAPPS=build/fsxtest.img` | every FSXM mode the adapter owns sets, draws and restores — the desktop screendump below the bar is byte-identical after a full sweep; Mode X dumps 640x480 (line-doubled 320x240) |
+| ...**which MONITOR it lands on** (SPEC.md §53.7.1) | ✅ | ❌ | `python3 tests/dispfsx.py [--app paint] [--far] [--noxt]` on `os8088_xt_vga_herc` | needs two cards and the guest's own answer back, so it is MartyPC's alone. **Two assertions, and they are different questions**: while the bracket is UP, its own display must change a lot and the other must not change at all; AFTER the round trip, both cards must be pixel-identical to a forced full repaint (and so must their raster dimensions and the `vid_ctx` records — a card left in the wrong mode is a state a repaint cannot fix, so that comparison would read 0 either way). The second alone passes on a broken kernel: §53.6's exit `wm_paint_all` repaints the world, so a bracket that drew its whole face onto the *wrong* monitor for its entire session leaves no trace afterwards. A one-card machine (`--machine os8088_5150_cga_gla`) is the regression leg — `fsx_surf` answers `(0,0,w,h)` there, which is what both apps hard-coded before it existed |
+| Does an INCREMENTAL redraw agree with a full repaint? | ✅ | ❌ | `python3 tests/dispcorner.py [--only a\|b] [--under hello] [--dest seam\|near\|far] [--mode right\|below] [--single]` on `os8088_xt_vga_herc` | do the thing, capture, force a repaint (poke `[cp_dirty]` with `WF_SAVEU` cleared, then read the flag back — see "Prefer a self-checking harness" below for why it is neither of the two more obvious ways), diff. **A** sweeps `hello` through launch / raise / drag / drag-back / close-the-Disk-window and watches `(W_X, W_Y+W_H)`, the drop shadow's bottom-left corner, which nothing writes (`wm_draw_shadow`'s L starts at x+1) and which therefore has to be desktop dither on both paths. **B** drags a window off two others and across the seam. **C is the one that found a real defect** (SPEC.md §11.96.13.1): it drags a Disk window ±40 and ±41 rows and labels each leg by the parity **the record actually took**, because `wm_dock_snap` and `ui_drag`'s clamp both move a dropped window — a requested +180 came out +175 in the run that found it. Its control is `make DRAGCACHE=0 && … --define NODRAGCACHE`. A and C need no seam and run on a one-card machine, which is where the two **mono** adapters get checked — `CDGRAY` really is a checkerboard there. It prints WHERE and crops a PNG of both captures, because a count says a defect exists and only a picture says which of the things in that rect it is. Two rules it exists to enforce, both learned the expensive way: the subject is chosen **by name out of the guest**, never by a row number, and it must be **inert** — see "Prefer a self-checking harness" below |
 | **What the guest WROTE to a floppy** | ✅ | ⚠️ | `tools/os88flush.py diff 0` (docs/MARTYPC-DEBUG.md); on QEMU the mounted `.img` is written in place, so `os88disk.py --verify` it after `quit` | the only route to os8088's write path that is not os8088's read path. A Control Panel close adds `SYSTEM.CFG` and moves sectors 1, 3, 5, 268 — both FATs, the root, the data cluster: SPEC.md §18.4's commit order, seen from outside. QEMU's ⚠️ is that its writeback is all-or-nothing at exit, so there is no *mid-session* snapshot and no per-drive control |
 | Boot-sector relocation (SPEC.md §2.7) | ✅ | ✅ | `make test RAMKB=<n>` — see below | 105 boots, 104 prints `RAM` and never loads a byte |
 | A machine that reports a **small** `int 12h` to the KERNEL | ✅ | ❌ | MartyPC `conventional.size`, or 86Box `mem_size` | `RAMKB=` moves the sector only; the heap still sees the real answer. MartyPC's real BIOS counts what the config says it has |
@@ -809,6 +811,16 @@ harness" below for the way it once passed without testing anything) and
 full repaint). `tests/dualcheck.py` is the same species living on the other
 side of the line, because what it drives is a machine rather than a program
 (two adapters in one box, §39.11.1).
+
+**`tests/wmartifact.py` is that same "is the glass what a repaint would draw"
+question aimed at two OPEN defects**, and it is here rather than in a package's
+folder because neither belongs to a package: one reproduces with `hello` and
+the other by dragging a Disk window. docs/WM-ARTIFACTS.md is its report and
+carries the measurements. Read that file's section 0 before concluding either
+one does not reproduce — both are invisible in a screenshot (the glass is
+stale, not corrupt), the first needs two windows clamped to the same shadow
+row, and the second leaves its residue on the **secondary** display, so a run
+that diffs the expected card alone comes back clean.
 
 **A tool that grows into several files gets a directory, and the directory is
 named for WHAT IT DRIVES**, not for what it does:
@@ -1607,6 +1619,56 @@ to find, and the counters were only reached for because the claim map was
 empty; had the cache been small enough to miss, the gate would still be
 green and still be testing nothing.
 
+**A hard-coded ROW NUMBER is that same defect one step further out: it does
+not select nothing, it selects a DIFFERENT PROGRAM.** `tests/dispcorner.py`
+opened "row 1 of B:, then row 3", believing that was `APPS` and then
+`HELLO.O88`. It is `GAMES` and then `MISSILE.O88` — a root has no synthesized
+`..` and a subdirectory does (SPEC.md §19.5), so the two listings are offset
+by one from each other, and the Makefile's build order is not the display
+order either (§19.4 sorts by name). Nothing errored: both double-clicks landed
+on real rows and a real program launched.
+
+**What that cost is the METHOD, not the coordinate.** Missile Command has a
+worker task drawing every tick, and *do the thing, capture, force a full
+repaint, diff* requires a screen that **settles** — two captures seconds apart
+of a running arcade game differ because the game moved, and that difference
+reads as precisely what the run was looking for. It reported 219 differing
+pixels near a dragged window's old rect, then **62 for the identical script**,
+and an unstable count is the tell: a redraw defect is deterministic. Driven
+against the window it meant all along, the same two operations answer **0**.
+
+Two guards, and it wants both. The row is looked up **by name out of the
+guest** (`dispcp.row_of`, over the live mount snapshot), and the launched
+window's size is asserted against `hl_tpl`'s 240x90 — so another program in
+that slot *fails* instead of being measured. The harness's own output had
+carried the refutation the whole time, printing `hello at (39,47) 560x381`
+about a window whose template is 240x90. **A subject for a pixel diff must be
+chosen for being INERT**, which is a good part of what `hello` is in the tree
+for.
+
+**And then the CONTROL was not a control**, which is the same file's third
+defect and the one that would have voided every figure it ever printed. Its
+"force a full repaint" was *open and close the Control Panel*, on the stated
+belief that closing a window ends in `wm_paint_all`. **It ends in
+`wm_paint_dmg`** (SPEC.md §11.91) — the incremental path, over the panel's own
+vacated rect — so both captures came off incremental draws, and for a region
+the panel never covered the second capture was the first one again. Zero, on
+any build. `[cp_dirty]` is what to poke instead: `ui_task`'s `.chk_cp` is the
+only consumer and it is `gfx_lock` / `wm_paint_all` / `gfx_unlock` with nothing
+between, so there is no other thing the flag could mean — **and the flag is
+read back afterwards**, because the poke happening is not the repaint running.
+
+**`wm_paint_all` is still not enough on its own inside a window.** It draws
+every window through `wm_draw_win`, which puts a valid raise cache back
+*instead of* running `W_PAINT` (SPEC.md §11.96) — so the "full repaint" of a
+window's content can be a byte copy of the capture it is being compared
+against. That is `tools/notepad/pixcheck.py`'s tautology exactly, and its fix
+is the one to copy: clear `WF_SAVEU` across the forced repaint, which
+`wm_su_ck` tests, so a cache *already banked* is invalidated too. The desktop
+dither is drawn directly and is honest either way, which is why a defect in
+desktop pixels can be believed from the weaker control and one in window
+content cannot.
+
 ### What the emulator cannot show at all
 
 Not "shows inaccurately" — cannot show. **Do not call all of these
@@ -1953,9 +2015,12 @@ monitor window each, which is what SPEC.md §39.12–§39.19's extended desktop
 is for. 86Box takes the second card as `gfxcard_2 = hercules_plus` alongside
 `gfxcard = cga` and opens it as "86Box Monitor #2"; that key was established
 the same way every other machine setting in this file was, by reading the
-config back after an exit. **`hercules_plus` and not `hercules`** — the matrix
-row above has the measurement, and the failure mode is a Control Panel with no
-Display page rather than an error. It is a **second instrument** for a machine
+config back after an exit. **`hercules_plus` was needed and no longer is** —
+a plain `hercules` comes up text-configured, which SPEC.md §39.11.1.1's retry
+now gets past; the matrix row above has the history, and it is worth reading
+because that difference was blamed on the model for a year and belonged to the
+kernel. The failure mode either way is a Control Panel with no Display page
+rather than an error. It is a **second instrument** for a machine
 MartyPC already has (`os8088_5150_both`, and `tests/dualcheck.py` is the
 gate), and the card order matches it, so the two emulators disagree about
 nothing. What 86Box adds is a real 6845 pair on a period bus; what it lacks

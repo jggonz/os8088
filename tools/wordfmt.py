@@ -6,7 +6,7 @@ Usage: wordfmt.py FILE.DOC [--wtx]
 There is no copy of Word here to open apps/word's output with, and 'it
 round-trips through the app that wrote it' proves only that the app is
 self-consistent. So this is a SECOND, independent implementation of the
-format described in SPEC.md 65.4, written from the same Opus headers -
+format described in SPEC.md 68.4, written from the same Opus headers -
 
   wordtech/file.h   struct FIB, cbSector, struct BTE
   wordtech/fkp.h    struct FKP
@@ -22,7 +22,7 @@ generated file can be diffed against the source it was generated from. That
 is what `make wordcheck` does.
 
 What this does NOT establish is that a running Word 1.1a accepts the file.
-Nobody here has run one (SPEC.md 65.4.2).
+Nobody here has run one (SPEC.md 68.4.2).
 """
 
 import argparse
@@ -90,7 +90,7 @@ class Doc:
         self.chp = self._paint_chp()
         self.paps = self._paint_pap()
 
-    # --- the piece table (SPEC.md 65.4.1) ---------------------------------
+    # --- the piece table (SPEC.md 68.4.1) ---------------------------------
     def _pieces(self):
         if not self.complex:
             return [(self.fcmin, 0, self.ccp)]
@@ -259,7 +259,7 @@ def to_wtx(doc):
     """Re-emit the document in os88doc.py's markup."""
     lines = []
     # The file's LAST paragraph mark is this port's tail paragraph
-    # (SPEC.md 65.4), so it contributes no line of its own.
+    # (SPEC.md 68.4), so it contributes no line of its own.
     paras = doc.paps
     for n, (pap, start, mark) in enumerate(paras):
         packed, left, first, right = pap

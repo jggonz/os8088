@@ -421,6 +421,17 @@ trk_hire:
     push bx
     cmp byte [trk_hired], 0
     jne .out
+    mov al, 1                       ; PARK-SAFE (SPEC.md 66.5.4): this app
+    call OSAPI_MEM_PARKSAFE         ; never holds a pointer derived from the
+                                    ; module across a call that can yield -
+                                    ; trk_render takes the gfx lock as its
+                                    ; first instruction, before it addresses
+                                    ; anything, and the fullscreen drain holds
+                                    ; only a counter. Without this the worker
+                                    ; can only park at OSAPI_TASK_ALIVE, which
+                                    ; it cannot reach while blocked on a lock
+                                    ; some other app's callback is holding -
+                                    ; and the module then never moves
     mov ax, trk_worker
     mov bx, [trk_win]
     call OSAPI_TASK_SPAWN
@@ -1128,6 +1139,21 @@ trk_fdone:
     mov [mp_blobseg], ax            ; moved is still the one mp_load indexes
     call mp_load                    ; CF=1, AX = offset of a NUL error string
     jc .lderr
+    mov dx, [trk_modseg]        ; ONLY NOW is it movable (SPEC.md 66.2). Not
+    mov ax, trk_reloc           ; at the claim, and the ordering is the whole
+    call OSAPI_MEM_MOVABLE      ; safety argument rather than a tidiness:
+                                ; OSAPI_FILE_READ above holds ES:BX into this
+                                ; block across a call that itself CLAIMS
+                                ; (SPEC.md 18.95's sector cache), and
+                                ; trk_ring_probe before it is a claim outright.
+                                ; Pinned until the module is parsed, both are
+                                ; safe by construction; declared any earlier,
+                                ; the block could move mid-read with the
+                                ; kernel's own pointer stale on its stack.
+                                ; dsk_xfer pins the destination for the same
+                                ; reason (66.3 rule 5) - this ordering does not
+                                ; NEED that guard, and having both is how a
+                                ; rule survives the next author
     mov byte [ttx_shok], 0          ; a NEW module can name the same pattern
                                     ; NUMBER with different rows in it, and
                                     ; that is the one thing SPEC.md 45.13.6's
@@ -2516,6 +2542,78 @@ trk_s_txxt:   db 'XT off is windowed: Esc first', 0
 ; what XT mode's fullscreen is)
 ; =============================================================================
 %include "trkplay.inc"
+
+; -----------------------------------------------------------------------------
+; trk_reloc - THE HEAP COMPACTOR MOVED THE MODULE (SPEC.md 66.2/45)
+; in:  BX = the base segment it WAS at, DX = the base it is at NOW.
+;      DS = CS = ours, ES = KERNEL_SEG. The bytes have already moved.
+; out: nothing; every register preserved
+;
+; A 116KB module is the largest single claim this OS ever hands out, and it is
+; the reason SPEC.md 66's relocation is a CALLBACK rather than the kernel
+; poking a word. [trk_modseg] is one word and rewriting it relocates NOTHING:
+; the replayer never reads it again after load. What it reads is
+;
+;   [mp_blobseg]         trkplay's own copy of the base
+;   mp_smptab[31].MS_SEG A NORMALIZED BASE SEGMENT PER SAMPLE - "each sample
+;                        gets a base seg = blobseg + (start >> 4)", which is
+;                        how a blob bigger than a segment is addressed at all
+;   mp_chans[4].MP_SEG   ...and the segment of the sample each channel is
+;                        PLAYING, which the mixer walks every chunk
+;
+; so thirty-six words, all of them blobseg plus a constant, all fixed by
+; adding the delta.
+;
+; IT IS PLACED AFTER trkplay.inc AND NOT BESIDE ITS CALLERS, because MS_SZ,
+; MP_CHSZ and the bss labels are that file's and this is the first point they
+; all exist.
+;
+; WHY IT IS SAFE TO MOVE AT ALL, given a mixer that reads those words with no
+; lock: the worker is PARKED (SPEC.md 66.5). It calls OSAPI_TASK_ALIVE at the
+; top of every pass and sleeps a tick, so it reaches the park well inside
+; INST_PARKW, and it parks BEFORE trk_feed and trk_render - the two things
+; that touch any of this.
+;
+; It claims nothing, frees nothing, yields nothing and draws nothing (66.3
+; rule 3), and it refuses to touch the replayer's tables unless they actually
+; describe THIS buffer: between the claim and mp_load they still describe the
+; last module, and shifting them then would invent addresses out of a blob
+; that has been freed.
+; -----------------------------------------------------------------------------
+trk_reloc:
+    push ax
+    push cx
+    push si
+    cmp bx, [trk_modseg]
+    jne .out
+    mov [trk_modseg], dx
+    mov ax, dx
+    sub ax, bx                  ; AX = the paragraph delta
+    cmp bx, [mp_blobseg]
+    jne .out                    ; the replayer is looking at something else
+    add [mp_blobseg], ax
+    mov si, mp_smptab
+    mov cx, 31
+.smp:
+    add [si+MS_SEG], ax
+    add si, MS_SZ
+    loop .smp
+    mov si, mp_chans
+    mov cx, 4
+.ch:
+    cmp word [si+MP_SEG], 0     ; 0 = this channel is playing NOTHING, and it
+    je .chnext                  ; is not a base to be adjusted - adding the
+    add [si+MP_SEG], ax         ; delta to it invents an address out of
+.chnext:                        ; nowhere. Found by tests/trackmove.py on a
+    add si, MP_CHSZ             ; machine with no sound card, where all four
+    loop .ch                    ; channels sit at 0 and every one of them came
+                                ; out pointing outside the module
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
 %include "trkui.inc"
 %include "trktxt.inc"
 %ifdef TRKLOG

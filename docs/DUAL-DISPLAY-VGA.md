@@ -1308,6 +1308,62 @@ text screen untestable on that card in this container.
     rung crossed. `tests/dispblit.py` (straddled) still passes untouched, and
     a canvas dragged wholly onto the Hercules renders complete.
 
+15. **"Switching Tracker to full screen then back corrupts the other
+    screen."** **FIXED** — SPEC.md §53.7.1, `tests/dispfsx.py`.
+
+    **The round trip is not what is broken, and four runs said so before
+    anything was changed.** Tracker's fullscreen on a tier-0 machine is XT
+    mode's 80x25 TEXT screen (§45.13) — `FSXM_TEXT80`, a *mode-setting*
+    bracket, which is exactly the path 13 above moved the collapse into — so
+    that was the suspect. It is clean: VGA-primary and Hercules-primary,
+    window on either display, both cards come back **0 differing pixels**
+    against a forced full repaint, with the raster geometry and both `vid_ctx`
+    records unchanged across the trip.
+
+    **What is broken is the SAME-MODE bracket, and only while it is up.**
+    Turn XT mode off (`X`) — which is also every machine above tier 0, since
+    XT mode is only pre-armed on an 8088 — and `F` is §53.7's "exclusive but
+    same mode": no `fsx_mode` call, so by 13's fix nothing collapses, so the
+    coordinates are still the whole virtual desktop's and **(0,0) is the
+    primary**. Tracker's `tui_track` answered the fullscreen case with
+    *(0,0) plus `osapi_video`'s size*, so with its window wholly on the
+    Hercules at x 767..1186, pressing **F** took the **VGA** from 189,477 lit
+    pixels to **95,619** — the FT2 screen, on the monitor Tracker is not on —
+    while the Hercules sat unchanged at 152,778 showing the desktop it
+    already had. Paint's `pt_org` had the identical line and the identical
+    defect.
+
+    **It is invisible to a round-trip test by construction**, which is why
+    the first four runs passed: §53.6's exit `wm_paint_all` repaints the
+    world, so what this costs is the whole of the fullscreen session and
+    nothing after it. The assertion that catches it is *which card changed
+    while the bracket was up* — the bracket's own display must change a lot
+    and the other must not change at all — and it is a different question
+    from 13's, not a better version of it.
+
+    Verified after: **140,747 pixels on the bracket's own card and 0 on the
+    other**, Tracker and Paint alike, both cards still pixel-identical to a
+    forced repaint afterwards.
+
+    `fsx_surf` (slot 0x03F8) hands the app the rect its bracket owns, in the
+    coordinates the drawing slots take. It answers `(0,0,w,h)` on every
+    one-display machine and after any `fsx_mode` call, so it is exactly what
+    the two apps hard-coded and a single-display machine cannot see the
+    change. Missile Command needed nothing: it stacks §11.2, and
+    `wm_fullscreen` sizes the window to the display it is on (§39.17.1), so
+    its geometry came out of the window record and was already right.
+
+    **Two things came with it, because a display is not only a rect.** The
+    layout Tracker picks by screen HEIGHT needs re-picking for a surface of a
+    different shape (a 480-row VGA layout on a 350-row Hercules loses its
+    bottom third), and the DEPTH cannot come from `osapi_video` either — it
+    answers about the primary (§39.2.1) — so it comes from `fsx_caps`' `DL`,
+    which is already *that display's* kind (§39.18.2).
+
+    Cost: `.text` **+70 bytes**, no rung crossed (the image rung's slack
+    327 → 257). Every `.o88` is invalidated by the slot append, which §20.8
+    rule 4 makes a rebuild rather than a compatibility event.
+
 ---
 
 ## 9. If the answer is "not now"

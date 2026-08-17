@@ -882,12 +882,16 @@ app_bounce_task:
     jc .blind
 
     mov di, si                  ; DI = ball state for app_ball_fill
-    mov byte [gfx_color], CWHITE
-    call app_ball_fill          ; erase at the old position
+    mov cx, [ss:si+BAL_X]       ; bank where the square is ON THE GLASS
+    mov dx, [ss:si+BAL_Y]
     call app_ball_step
     mov byte [gfx_color], CBLACK
-    call app_ball_fill          ; draw at the new position
-    jmp short .skip
+    call app_ball_fill          ; the NEW square FIRST (SPEC.md 14.5)...
+    mov byte [gfx_color], CWHITE
+    call app_ball_wipe          ; ...then the part of the old one it does not
+    jmp short .skip             ; cover. Erase-then-draw wrote every pixel the
+                                ; two share white and then black, once a
+                                ; frame, and the glass caught it
 .blind:
     call app_ball_step          ; nothing on screen to keep in step with
 .skip:
@@ -897,6 +901,118 @@ app_bounce_task:
 .die:
     mov di, bp
     jmp inst_task_die           ; never returns
+
+; -----------------------------------------------------------------------------
+; app_ball_wipe - white out the part of the OLD square the new one does not
+;                 cover (SPEC.md 14.5)
+; in:  BX = window ptr, DI = ball state (already stepped, so it holds the NEW
+;      position), CX = the OLD content x, DX = the OLD content y; [gfx_color]
+;      set to the background
+; out: nothing
+; clobbers: nothing (flags only; internal helper)
+;
+; Two equal squares offset by (ddx, ddy) leave an L: a COLUMN strip |ddx| wide
+; over the old square's full height on the trailing side, plus a ROW strip
+; |ddy| tall over the columns the two share. Either can be empty and both are
+; skipped then; nothing is written twice, and nothing is ever absent, because
+; the caller has already drawn the new square.
+;
+; IT IS THIS SHORT BECAUSE THE STEP IS SMALLER THAN THE SQUARE. With
+; |ddx| and |ddy| under 8 the strips need no clamping against the old rect and
+; the no-overlap case cannot arise - the column strip degenerates to the whole
+; old square by itself. The velocities are constants and a bounce only ever
+; SHORTENS a step (the clamp at the wall), so the assertions below are the
+; whole guard; raise a velocity past the square's width and this needs
+; apps/arkanoid's general four-strip version instead.
+; -----------------------------------------------------------------------------
+%if 3 >= 8 || 2 >= 8
+%error "app_ball_wipe: a Bounce step must stay under the 8px square"
+%endif
+
+app_ball_wipe:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov si, [ss:di+BAL_X]
+    sub si, cx                  ; SI = ddx, new - old
+    mov bp, [ss:di+BAL_Y]
+    sub bp, dx                  ; BP = ddy
+    mov ax, si
+    or ax, bp
+    jz .out                     ; a step the clamps ate entirely
+
+    push cx                     ; wm_content answers in AX and DX, which is
+    push dx                     ; where the old position is
+    call wm_content             ; AX = content left, DX = content top
+    pop cx
+    add cx, dx
+    mov [app_bwy], cx           ; the old square, ABSOLUTE
+    pop cx
+    add cx, ax
+    mov [app_bwx], cx
+
+    or si, si                   ; --- the column strip, full height ----------
+    jz .rows
+    mov ax, [app_bwx]
+    mov cx, ax
+    add cx, si
+    dec cx                      ; moved right: from the old left edge
+    or si, si                   ; ...and the TEST is of ddx, not of the edge
+    jg .colgo                   ; the dec above just computed - which left the
+                                ; square trailing a solid diagonal line, the
+                                ; erase being an inverted rect on every step
+                                ; that went left
+    add ax, 8
+    add ax, si                  ; moved left: from the far side back
+    mov cx, [app_bwx]
+    add cx, 7
+.colgo:
+    mov bx, [app_bwy]
+    mov dx, bx
+    add dx, 7
+    call gfx_fill
+
+.rows:
+    or bp, bp                   ; --- the row strip, over the SHARED columns -
+    jz .out
+    mov ax, [app_bwx]
+    mov cx, ax
+    add cx, 7
+    or si, si
+    jz .ry
+    jg .rright
+    add cx, si                  ; moved left: they end earlier
+    jmp short .ry
+.rright:
+    add ax, si                  ; moved right: they start later
+.ry:
+    mov bx, [app_bwy]
+    mov dx, bx
+    add dx, bp
+    dec dx                      ; moved down: from the old top edge
+    or bp, bp
+    jg .rowgo
+    mov bx, [app_bwy]
+    add bx, 8
+    add bx, bp                  ; moved up: from the bottom back
+    mov dx, [app_bwy]
+    add dx, 7
+.rowgo:
+    call gfx_fill
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; app_ball_step - advance one instance's ball, bouncing off the content edges
@@ -1004,5 +1120,9 @@ app_tmr_c0:     resb 1          ; app_tmr_span's answer: the first and last
 app_tmr_c1:     resb 1          ; cell of it that changed. Module scratch for
                                 ; the same reason app_tmr_str is - every path
                                 ; that reads them holds the gfx lock
+app_bwx:        resw 1          ; app_ball_wipe's old square, absolute. Module
+app_bwy:        resw 1          ; scratch for the same reason again: it runs
+                                ; under the lock, which is what makes it safe
+                                ; with several Bounce instances live
 
 section .text

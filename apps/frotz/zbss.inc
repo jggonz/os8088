@@ -204,4 +204,12 @@ ZSND_SLACK   equ 2140                         ; 64
 ZIO_SLACK    equ 2204                         ; 256
 ZEXEC_SLACK  equ 2460                         ; 512
 
+; zio.inc's zi_yield reads this and zexec.inc owns the region, but the define
+; has to be HERE: zbss is included first and a %define must precede its use.
+%define zf_sdelta  (os88_image_end + ZEXEC_SLACK + 76)  ; word: the RUNNING
+                                    ; total of paragraphs the heap compactor
+                                    ; has slid the story by (SPEC.md 66.5.9).
+                                    ; Only ever DIFFERENCED across one wait,
+                                    ; so wrapping is not a case to handle
+
 ZF_BSS_TOTAL equ 2976

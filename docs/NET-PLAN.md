@@ -843,6 +843,20 @@ folder is made from the clipboard entry and never goes near the enumerate —
 which is why the verification pulls the file bodies off the host rather than
 counting rows in a window.
 
+**…AND THE CABLE ONLY GOT IT TWO MILESTONES LATER** (SPEC.md §62.10.6). That
+paragraph describes the RAM disk. `NET.DRV` carried `0` in the `FSV_ENUM`
+cell, and §62.9.7's own probe — `fcp_mkroot` reading the cell with
+`drv_fs_has` — turned that into an honest `Protected` notice rather than a
+silent nothing, so the field reported it as *a folder that will not drag onto
+or off the Link volume* and the diagnosis was already written down when it
+arrived. The verb is `'E'` on the wire, one folder handle and an ordinal out,
+a status and one 32-byte entry back; the DOS side walks it through the same
+`srv_keep` a listing does, so the ordinal counts the rows the window shows.
+Three statuses rather than two, because `CF=1, AX=0` is what an ABSENT verb
+answers as well as what the end of a folder does — collapse them and an
+unwalkable folder reads as an empty one, which is a paste reporting success
+over a subtree it never copied.
+
 **THE ACTIVITY BAR REPORTS ON A CABLE NOW** (SPEC.md §12.8.1), which is the
 one thing three milestones of branch sites left visibly missing. §12.8's
 widget took a SECTOR count, a redirected volume has none, so the single

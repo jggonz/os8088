@@ -191,6 +191,36 @@ CWHITE    equ 15
 %define OSAPI_SRAND         KERNEL_SEG:0x00D0   ; AX -> [osapi_seed]
 %define OSAPI_RAND          KERNEL_SEG:0x00D8   ; out AX = next pseudo-random word
 
+; --- is this key DOWN right now? (SPEC.md 9.7) -------------------------------
+; int 16h answers what was TYPED. There is no key-up in it, and a typematic
+; repeat is byte-identical to a fresh press, so "is left held" cannot be asked
+; of it - which is why every real-time app here used to infer a hold from the
+; INTERVAL between events, and why all of them had the same two bugs: the
+; paddle stops dead for the ~9-tick typematic DELAY, in which a held key
+; produces no evidence at all, and pressing a SECOND key (fire) ends the
+; first key's repeats while the finger is still on it.
+;
+; This reads the scancodes instead, which carry make AND break. Legal from a
+; worker task: no lock, no VRAM, no port.
+;
+; ASKING IS WHAT ARMS IT, so the first call always answers "up" and a machine
+; whose software never asks never touches the keyboard hardware for it. Call
+; it once in your entry proc and ignore that answer.
+;
+; It is ADVICE, not an oracle: a break code lost inside a long interrupts-off
+; window leaves that key reading down until it is pressed again, so bound what
+; you do with a "yes" (apps/arkanoid clamps at its rails) rather than trusting
+; it to end on its own.
+%define OSAPI_KEY_DOWN      KERNEL_SEG:0x03F0   ; AL = a make scancode (KSC_*).
+                                 ; out CF=1 down, CF=0 up; every register kept
+KSC_LEFT    equ 0x4B             ; the scancodes an app is likely to want; the
+KSC_RIGHT   equ 0x4D             ; extended arrows land on these too, the E0
+KSC_UP      equ 0x48             ; prefix naming no key of its own
+KSC_DOWN    equ 0x50
+KSC_SPACE   equ 0x39
+KSC_ENTER   equ 0x1C
+KSC_ESC     equ 0x01
+
 ; --- sound (SPEC.md 20.3/34): the PC speaker, which is the whole of it.
 %define OSAPI_SND_CAPS      KERNEL_SEG:0x00E0   ; out AX = caps word (SND_CAP_*),
                                  ; BL = 0 (the speaker), DX = 1 (present)
@@ -597,7 +627,7 @@ VID_CGA    equ 2
                                  ; hundreds of OSAPI_GFX_HLINE calls a
                                  ; hand-rolled run-length blitter would make.
                                  ; Honours the clip region.
-%define OSAPI_GFX_BLIT1     KERNEL_SEG:0x03F0   ; ES:SI = a 1bpp BAND in the
+%define OSAPI_GFX_BLIT1     KERNEL_SEG:0x0418   ; ES:SI = a 1bpp BAND in the
                                  ; framebuffer's own bit order (row-major, bit
                                  ; 7 leftmost, 1 = a LIT pixel), BP = its
                                  ; stride in BYTES per row, AX = destination x
@@ -995,7 +1025,7 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; kernel is about to make. Its other half is
                                  ; OSAPI_WM_ONRESIZE, which is the NOTICE after
                                  ; a change nobody proposed - see below.
-%define OSAPI_VOL_SYS       KERNEL_SEG:0x03F8   ; out BL = the volume this
+%define OSAPI_VOL_SYS       KERNEL_SEG:0x0420   ; out BL = the volume this
                                  ; machine BOOTED from - A: on a floppy
                                  ; machine, the installed partition on one
                                  ; that boots from its hard disk. No disk I/O,
@@ -1071,6 +1101,108 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; ALWAYS take the answer from DX. A grow that
                                  ; moved leaves your old segment pointing at
                                  ; memory that is no longer yours.
+
+%define OSAPI_MEM_MOVABLE   KERNEL_SEG:0x0400   ; DX = a claim YOU hold, AX =
+                                 ; a near proc in YOUR segment, or 0 to pin the
+                                 ; claim again. out CF=1 = no such claim, or
+                                 ; not yours. Preserves every other register.
+                                 ;
+                                 ; DECLARES THE CLAIM RELOCATABLE. The heap
+                                 ; fragments over a long session - a buffer
+                                 ; freed between two live ones leaves a hole
+                                 ; nothing big will fit in - and the kernel can
+                                 ; slide the movable claims down against each
+                                 ; other and hand the middle back in one piece
+                                 ; (SPEC.md 66). It does that on DEMAND, inside
+                                 ; a claim that would otherwise be refused, so
+                                 ; the cost lands where a user has just asked
+                                 ; for something and is expecting a pause.
+                                 ;
+                                 ; Your proc is called through your own
+                                 ; dispatcher, exactly like W_PAINT - an
+                                 ; ordinary near proc with a near `ret`, never
+                                 ; a retf - with:
+                                 ;
+                                 ;     BX = the base segment it WAS at
+                                 ;     DX = the base segment it is at NOW
+                                 ;     DS = CS = your segment, ES = KERNEL_SEG
+                                 ;
+                                 ; THE BYTES HAVE ALREADY MOVED. Your job is
+                                 ; the pointers, and it is ALL of them, not
+                                 ; just the word you keep the base in: any
+                                 ; segment you derived from it - a row pointer,
+                                 ; a per-sample base, a seg:off pair - is stale
+                                 ; the instant this is called and is yours to
+                                 ; recompute. That is why this is a callback
+                                 ; and not the kernel poking a word for you.
+                                 ;
+                                 ; Inside it you MUST NOT claim, free, resize,
+                                 ; yield, draw, or touch a file slot. It runs
+                                 ; with task switching paused, inside the
+                                 ; allocator, and the map is mid-walk.
+                                 ;
+                                 ; THE DEFAULT IS PINNED. A claim you never
+                                 ; declare behaves exactly as every claim did
+                                 ; before this existed, so adopt it one buffer
+                                 ; at a time. The kernel may ALSO pin a claim
+                                 ; you declared - a DMA buffer, or anything
+                                 ; owned by a package whose worker is running -
+                                 ; and will not tell you; a relocation proc
+                                 ; that is never called is a normal outcome.
+
+%define OSAPI_TASK_PARK     KERNEL_SEG:0x0410   ; a DRIVER's worker parks here
+                                 ; for a heap compaction (SPEC.md 66.5.5), the
+                                 ; way a package's parks at OSAPI_TASK_ALIVE.
+                                 ; Call it once per outer loop, where you hold
+                                 ; no pointer derived from a claim of the
+                                 ; driver's. Preserves every register and the
+                                 ; flags; one compare when nothing is asking.
+                                 ;
+                                 ; WITHOUT IT NO CLAIM YOUR DRIVER OWNS CAN
+                                 ; EVER MOVE. A driver has no instance record,
+                                 ; so its worker carries T_INST = 0xFF and the
+                                 ; kernel cannot tell a service task that is
+                                 ; running from one that is idle; it therefore
+                                 ; refuses to compact any driver-owned claim
+                                 ; while any service task is unparked.
+
+%define OSAPI_MEM_PARKSAFE  KERNEL_SEG:0x0408   ; AL = 1 declare / 0 withdraw.
+                                 ; out CF=1 = you are not a live package
+                                 ; instance. Preserves every register.
+                                 ;
+                                 ; "THE KERNEL MAY PARK ME WHILE I AM BLOCKED
+                                 ; IN IT" (SPEC.md 66.5.4). Without it, a
+                                 ; worker of yours parks for a compaction only
+                                 ; at OSAPI_TASK_ALIVE - and a worker that
+                                 ; DRAWS is usually sitting in OSAPI_GFX_LOCK
+                                 ; exactly when a compaction wants it, because
+                                 ; the claim that triggered one came from a
+                                 ; callback holding that same lock. Undeclared,
+                                 ; your movable claims then never move.
+                                 ;
+                                 ; WHAT YOU ARE ASSERTING is one thing: no
+                                 ; register and no stack slot of yours holds a
+                                 ; pointer DERIVED from one of your movable
+                                 ; claims across a call that can yield. Take
+                                 ; the lock before you address the block - not
+                                 ; after - and re-read your base after any
+                                 ; call that can yield, and it is true by
+                                 ; construction. It is the same discipline
+                                 ; OSAPI_MEM_MOVABLE already asks for, applied
+                                 ; to the moment you are descheduled rather
+                                 ; than to the moment you are called back.
+                                 ;
+                                 ; It is DECLARED and never assumed because
+                                 ; what your stack holds is yours to know. The
+                                 ; default is undeclared, and the cost of
+                                 ; forgetting is a compaction that achieves
+                                 ; less - never memory that moved under you.
+                                 ;
+                                 ; If a future version of your app really does
+                                 ; need to carry a derived pointer across a
+                                 ; yield, withdraw this (AL = 0) or pin the
+                                 ; claim for that stretch with
+                                 ; OSAPI_MEM_MOVABLE AX = 0.
 
 %define OSAPI_WM_TITLE      KERNEL_SEG:0x0240   ; BX = win ptr, AX = a NUL
                                  ; string IN YOUR OWN SEGMENT, or 0 to mean
@@ -1689,6 +1821,44 @@ OS88_BSS_SIZE equ 0
                                                 ; Bracket-only, CF=1 outside
                                                 ; or on an unknown AL.
                                                 ; Draw, wait, repeat.
+
+%define OSAPI_FSX_SURF      KERNEL_SEG:0x03F8   ; THE RECT YOUR BRACKET OWNS
+                                                ; (SPEC.md 53.7.1). No inputs;
+                                                ; out CF=0 with AX = x, BX =
+                                                ; y, CX = w, DX = h, in the
+                                                ; coordinates the drawing
+                                                ; slots take. CF=1 outside a
+                                                ; bracket, registers
+                                                ; untouched.
+                                                ;
+                                                ; ASK IT INSTEAD OF ASSUMING
+                                                ; (0,0) AND OSAPI_VIDEO'S
+                                                ; SIZE, which is what every
+                                                ; same-mode bracket here used
+                                                ; to do. A same-mode bracket
+                                                ; (SPEC.md 53.7) does not
+                                                ; collapse a two-display
+                                                ; desktop (39.18.3), so the
+                                                ; coordinates are still the
+                                                ; whole virtual desktop's and
+                                                ; (0,0) is the PRIMARY - your
+                                                ; fullscreen then lands on
+                                                ; the monitor you are not on
+                                                ; and your own goes stale.
+                                                ; This answers your display's
+                                                ; own origin and extent.
+                                                ;
+                                                ; It is (0,0,w,h) on every
+                                                ; one-display machine and
+                                                ; after any OSAPI_FSX_MODE
+                                                ; call, so it costs a
+                                                ; single-display machine
+                                                ; nothing but the call. If
+                                                ; you take the SPEC.md 11.2
+                                                ; surface as well (Missile
+                                                ; Command does) your window
+                                                ; record already carries this
+                                                ; rect and you need neither.
 %define OSAPI_ARG_FILE      KERNEL_SEG:0x02E8   ; the document this instance was
                                  ; launched to open (SPEC.md 54.5). No
                                  ; inputs; out CF=1 = launched empty, the
@@ -2078,21 +2248,35 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; folder, and it does not move your app's own
                                  ; current folder the way GOTO does.
 
-%define OSAPI_REBOOT        KERNEL_SEG:0x0368   ; no arguments, no answer, every
-                                 ; register preserved. POSTS a restart (SPEC.md
-                                 ; 20.10): the System menu's own Restart, but
-                                 ; performed by ui_task at the top of its next
-                                 ; pass rather than here. You are holding the
-                                 ; gfx lock and that path takes it, so an
-                                 ; inline restart would deadlock with the
-                                 ; machine already half torn down.
+%define OSAPI_REBOOT        KERNEL_SEG:0x0368   ; AL = 0 the ordinary restart /
+                                 ; non-0 restart WITHOUT touching a disk. No
+                                 ; answer, every register AND THE FLAGS
+                                 ; preserved. POSTS a restart (SPEC.md 20.10):
+                                 ; the System menu's
+                                 ; own Restart, but performed by ui_task at the
+                                 ; top of its next pass rather than here. You
+                                 ; are holding the gfx lock and that path takes
+                                 ; it, so an inline restart would deadlock with
+                                 ; the machine already half torn down.
                                  ;
                                  ; So this RETURNS, and your callback should
                                  ; finish normally afterwards - draw what it
                                  ; was going to draw, return to the kernel.
                                  ; The restart happens a moment later, after
                                  ; the Control Panel's settings are flushed and
-                                 ; every driver is detached
+                                 ; every driver is detached.
+                                 ;
+                                 ; PASS AL NON-0 IF YOU HAVE JUST ASKED THE
+                                 ; USER TO REMOVE A FLOPPY. That flush is a
+                                 ; mount of A:, a write and a coherence
+                                 ; remount, and against an empty drive it is
+                                 ; seconds of frozen UI under a stopped cursor
+                                 ; and then a toast telling them to put back
+                                 ; the disk you told them to take out. The
+                                 ; kernel cannot work that out for itself; you
+                                 ; are the one who knows. AL = 0 otherwise -
+                                 ; the settings are worth saving, and the
+                                 ; Control Panel may be open and unsaved
 
 ; --- listing a directory (SPEC.md 19.7.1) -------------------------------------
 ; The operation this API had no way to express: a package could read a file by

@@ -1,12 +1,12 @@
 ; =============================================================================
 ; os8088 - apps/word/wdrtf.inc
 ;
-; RTF IN AND OUT (SPEC.md 65.8) - Word's other portable format, and the one
+; RTF IN AND OUT (SPEC.md 68.8) - Word's other portable format, and the one
 ; that is pure text transform: Opus/RTFOUT.C writes it and Opus/RTFIN.C reads
 ; it, neither touching Windows. Both directions live here.
 ;
 ; The extension decides which format a save writes: a name ending .RTF gets
-; this, everything else gets the Word file (SPEC.md 65.4). On the way in the
+; this, everything else gets the Word file (SPEC.md 68.4). On the way in the
 ; CONTENT decides - a file beginning '{\rtf' is RTF whatever it is called -
 ; because a file that arrives from elsewhere may be named anything.
 ; =============================================================================
@@ -69,7 +69,7 @@ wd_rtfimg:
 .tail:
     mov si, wd_r_par                ; the tail paragraph's own \par: a Word
     call wd_res                     ; file's text ends with a mark and so
-    mov si, wd_r_tail               ; does RTF's (SPEC.md 65.4)
+    mov si, wd_r_tail               ; does RTF's (SPEC.md 68.4)
     call wd_res
     mov [wd_dend], di
     cmp byte [wd_rfull], 0
@@ -460,7 +460,7 @@ wd_isrtfimg:
 ; A tokeniser over groups, control words, control symbols and text, with a
 ; group stack that saves and restores the character attributes so a \b's
 ; scope ends with its group, and a destination rule: {\* ...} and the known
-; non-text destinations are skipped whole (SPEC.md 65.8).
+; non-text destinations are skipped whole (SPEC.md 68.8).
 ; -----------------------------------------------------------------------------
 wd_rtfparse:
     mov [wd_dfsize], ax
@@ -554,7 +554,7 @@ wd_rput:
     push es
     cmp al, 9                       ; \tab arrives here, and a tab is one of
     je .store                       ; the three control codes this document
-    cmp al, 32                      ; model holds (SPEC.md 65.3)
+    cmp al, 32                      ; model holds (SPEC.md 68.3)
     jb .out
     cmp al, 126
     ja .out
@@ -598,7 +598,7 @@ wd_rputm:
     pop ax
     mov es, [wd_cseg]
     mov [es:bx], al                 ; the mark's CHP byte IS the paragraph's
-                                    ; dictionary index (SPEC.md 65.3)
+                                    ; dictionary index (SPEC.md 68.3)
     inc word [wd_len]
     jmp short .out
 .full:
@@ -807,7 +807,7 @@ wd_rhex:
 ;
 ; An unrecognised control word is IGNORED - not its group. \* is what says
 ; 'skip the group', and honouring that distinction is what stops an RTF file
-; from arriving empty (SPEC.md 65.8).
+; from arriving empty (SPEC.md 68.8).
 ; -----------------------------------------------------------------------------
 wd_rword:
     push ax

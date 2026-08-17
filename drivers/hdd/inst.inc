@@ -1243,6 +1243,11 @@ hd_iw_click:
     jge .done
     call hd_rest_ok             ; a greyed control explains itself, so a
     jc .done                    ; refused click here says nothing (47 rule 5)
+    mov al, 1                   ; ...and NOT the flushing kind: the caption
+                                ; this button sits under has just told the
+                                ; user to take the floppy out, so the Control
+                                ; Panel's write would mount an empty drive and
+                                ; then say so (SPEC.md 20.10/52.10.6)
     call OSAPI_REBOOT           ; POSTED, not performed: we are holding the
     jmp short .done             ; gfx lock (SPEC.md 20.10)
 .close:

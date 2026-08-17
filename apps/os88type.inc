@@ -22,7 +22,7 @@
 ; 6.1); lettered one at a time a 104-glyph line is 104 drawing calls at
 ; SPEC.md 5.7's ~756us floor - 79 ms of FLOOR on the target machine before a
 ; pixel moves. Composed and emitted once it is one floor, and measured, the
-; emit is 4.04 ms of a 25 ms line (PERFORMANCE.md Set 62).
+; emit is 4.04 ms of a 25 ms line (PERFORMANCE.md Set 64).
 ;
 ; THERE IS NO LINKER (SPEC.md 1), so this is source: every including package
 ; carries its own copy and the kernel carries none of it.
@@ -46,7 +46,7 @@
 ; one widens each glyph row into a 16-bit window and shifts it by the pen's
 ; bit offset; the fast one reads a word that was shifted and complemented
 ; once, at ty_cache time. They draw identical pixels and the fast one is 2.01x
-; (PERFORMANCE.md Set 62). ty_putn takes it whenever the cache holds the face
+; (PERFORMANCE.md Set 64). ty_putn takes it whenever the cache holds the face
 ; and style being drawn and the pen is even, and the general one otherwise - a
 ; missing cache is a SPEED difference, never a visible one.
 ; =============================================================================
@@ -1303,7 +1303,7 @@ ty_put:
 ;
 ; Seven instructions a glyph row with a `shr ax,cl` an 8088 charges 8+4/bit
 ; for. This path always works - any pen, any height, cache or no cache - and
-; it is what a missing table falls back to, at 2.01x (PERFORMANCE.md Set 62).
+; it is what a missing table falls back to, at 2.01x (PERFORMANCE.md Set 64).
 ; -----------------------------------------------------------------------------
 ty_put_slow:
     mov [ty_left], cx

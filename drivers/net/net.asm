@@ -104,6 +104,10 @@ NF_COPY     equ 'Y'             ; src folder, dst folder, name -> status. 'Y'
                                 ; A are taken above and R, W, I, X are block
                                 ; mode's - the one-byte space is shared, which
                                 ; SPEC.md 62.10.1 learned the hard way
+NF_ENUM     equ 'E'             ; folder, ordinal -> status, ONE 32-byte entry
+NF_RMTREE   equ 'T'             ; folder, name -> status. RMDIR's frame exactly,
+                                ; and a different verb because it means
+                                ; something a caller must ask for on purpose
 
 NET_PCHUNK  equ 64              ; bytes between OSAPI_FS_PROG reports, and
                                 ; between destination re-normalisations. One
@@ -159,8 +163,19 @@ net_fsv:
     dw net_mkdir                ; FSV_MKDIR
     dw net_rmdir                ; FSV_RMDIR
     dw net_dfree                ; FSV_DFREE
-    dw 0                        ; FSV_ENUM
+    dw net_enum                 ; FSV_ENUM (SPEC.md 62.9.7/62.10.6) - the verb
+                                ; a FOLDER copy walks its source with. This
+                                ; carried 0 for two milestones, and the effect
+                                ; was not a broken copy but a REFUSED one:
+                                ; fcp_mkroot probes the cell with drv_fs_has
+                                ; and answers FERR_PROT, so dragging a folder
+                                ; onto or off the Link volume reported
+                                ; `Protected` and moved nothing
     dw net_copy                 ; FSV_COPY (SPEC.md 62.9.8)
+    dw net_rmtree               ; FSV_RMTREE (SPEC.md 62.10.7) - the far side
+                                ; recurses with its own int 21h, so a tree
+                                ; costs one command frame instead of an
+                                ; FSV_ENUM and an FSV_DELETE per file
 net_fsv_end:
 %if net_fsv_end - net_fsv != FSV_SIZE
   %error "net: the FSV_* table is not FSV_SIZE bytes - a swallowed row?"
@@ -495,6 +510,91 @@ net_list:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; FSV_ENUM - the Nth entry of a folder that is NOT the one on screen
+;            (SPEC.md 62.9.7/62.10.6)
+; in:  AX = the folder's handle, CX = the ordinal, DX:BX = a 32-byte buffer
+;      (DX:BX and not ES:BX, because ES is KERNEL_SEG on entry to anything the
+;      kernel far-calls - SPEC.md 51.8)
+; out: CF=0 and the entry is in the caller's buffer;
+;      CF=1 with AX = 0 = PAST THE LAST ENTRY, which is a normal end and not
+;      an error; CF=1 with AX = FERR_* = this folder could not be walked
+;
+; This is what a FOLDER copy walks its source with, and it is NOT FSV_LIST:
+; that appends into the kernel's one global listing and is about the folder
+; the driver is STANDING in, where a recursive copy walks a folder several
+; levels below it and must not disturb the mount. So the folder is an
+; argument here and [net_cwd] is untouched.
+;
+; THE THREE STATUSES ARE THE WHOLE CONTRACT. `CF=1, AX=0` is letter for letter
+; what the END of a folder answers, so a far side that cannot walk a folder at
+; all must NOT say that - fcp_scan would read it as an empty subdirectory,
+; report FCPS_DONE, and the paste would look like a success over a subtree it
+; never copied. FERR_NOENT is the end; anything else is FERR_IO.
+;
+; The 32 bytes are on the wire whatever the status said (62.10.1's fixed
+; frame), so they are READ before the status is acted on - a refusal that
+; short-changed the frame would leave the far side driving nibbles at an end
+; that had stopped listening, which ends the SESSION and not the command.
+; -----------------------------------------------------------------------------
+net_enum:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [net_earg], cx          ; the ordinal, across net_fcmd_h's send of AX
+    mov [net_ebuf], bx          ; ...and the caller's buffer, both halves,
+    mov [net_eseg], dx          ; because the reply spends BX, CX and DX
+    mov bl, NF_ENUM
+    call net_fcmd_h             ; the command and the FOLDER it is about
+    jc  .bad
+    mov ax, [net_earg]
+    call lp_sword               ; ...and how far into it
+    jc  .bad
+    call lp_rbyte               ; status
+    jc  .bad
+    mov [net_est], al
+    mov cx, DSK_DE_SIZE
+    mov si, net_ent
+.byte:
+    call lp_rbyte
+    jc  .bad
+    mov [si], al
+    inc si
+    loop .byte
+    cmp byte [net_est], NST_OK
+    jne .no
+    mov es, [net_eseg]          ; ...and out to DX:BX. net_ent is staged first
+    mov di, [net_ebuf]          ; rather than read straight into the caller's
+    mov si, net_ent             ; buffer because a torn read must not leave
+    mov cx, DSK_DE_SIZE         ; half an entry in it
+    cld
+    rep movsb
+    clc
+    jmp short .out
+.no:
+    xor ax, ax                  ; the end of the folder: CF=1, AX=0
+    cmp byte [net_est], FERR_NOENT
+    je  .end
+    mov ax, FERR_IO             ; ...and a folder we could not walk is NOT
+.end:                           ; that, however alike they read here
+    stc
+    jmp short .out
+.bad:
+    call net_lost
+    mov ax, FERR_IO
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1073,14 +1173,28 @@ net_append:
     ret
 
 ; -----------------------------------------------------------------------------
-; FSV_DELETE / FSV_MKDIR / FSV_RMDIR - one name, one status
+; FSV_DELETE / FSV_MKDIR / FSV_RMDIR / FSV_RMTREE - one name, one status
 ; in:  SI = a NUL 8.3 name in KERNEL_SEG
+;
+; FSV_RMTREE is the same FRAME as FSV_RMDIR and a different COMMAND, which is
+; 62.10.1's rule rather than a preference: `no command means two things`. It
+; also happens to be the safe way round - a far side built before this verb
+; existed ignores an unknown letter, where a mode flag on RMDIR would have
+; made an old far side empty one folder and answer OK.
+;
+; NONE OF THESE CAN ANSWER `CF=1 WITH AX=0`, and dskw_rtbody depends on it:
+; that word is what drv_fs_call gives for a verb a driver does not publish, so
+; it is the fallback's trigger. net_wstat passes through a NON-ZERO FERR_* and
+; every transport failure here is FERR_IO.
 ; -----------------------------------------------------------------------------
 net_delete:
     mov bl, NF_DELETE
     jmp short net_name1
 net_mkdir:
     mov bl, NF_MKDIR
+    jmp short net_name1
+net_rmtree:
+    mov bl, NF_RMTREE
     jmp short net_name1
 net_rmdir:
     mov bl, NF_RMDIR
@@ -1729,6 +1843,13 @@ net_cwd:    dw 0                ; the far side's handle for where we STAND.
                                 ; back to the folder it just chdir'd into
 net_arg:    dw 0                ; net_fcmd_h's argument, across the send
 net_arg2:   dw 0                ; ...and net_chdir's, across the whole reply
+net_earg:   dw 0                ; FSV_ENUM's ordinal, its caller's buffer and
+net_ebuf:   dw 0                ; the status it was answered with - all three
+net_eseg:   dw 0                ; live across a reply that spends BX, CX and DX
+net_est:    db 0                ; and they are their own words rather than
+                                ; net_arg2 reused, because the ordinal has to
+                                ; survive net_fcmd_h AND the buffer has to
+                                ; survive the whole 32-byte read
 net_up:     dw 0                ; the parent handle the far side answered with
 net_full:   db 0                ; the kernel's listing filled: keep READING the
                                 ; run, stop APPENDING to it

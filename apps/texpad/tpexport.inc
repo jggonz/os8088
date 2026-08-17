@@ -3,7 +3,7 @@
 ;
 ; PDF 1.4, classic xref (no 1.5 object/xref streams). Uncompressed content
 ; streams, and Courier: what os8088 measured is an 8x8 monospaced cell, so a
-; monospaced face is the only one that can render it back (SPEC.md 66.2).
+; monospaced face is the only one that can render it back (SPEC.md 69.2).
 ; The whole file is built in the export claim and written in ONE call.
 ; =============================================================================
 

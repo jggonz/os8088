@@ -453,8 +453,15 @@ heap for no mid-heap claim); or take it from the top like a region; or give
 `mem_claim` a compaction-free "grow into the adjacent hole" path
 (`mem_regrow` already does something adjacent); or have Tracker size its
 request from `OSAPI_MEM_AVAIL`'s **largest-run** figure and say so honestly
-rather than failing late. **Do not add a compacting allocator** — a region's
-base is its CS and can never move (§50.3).
+rather than failing late. **"Do not add a compacting allocator" was this
+note's advice and it has been superseded** — SPEC.md §66 is one, and the half
+of the reasoning that stands is the half about REGIONS: a region's base is its
+CS and still can never move. What that ruled out was a compactor that slides
+everything; what was actually needed was one that slides DATA claims whose
+holders can be told, which is a smaller and safer thing. The note's own
+analysis is what made the case: the two blocks that stranded a 116KB reload
+were a driver's staging pool and a package's ring, so a compactor confined to
+the kernel's own claims would have moved neither.
 
 **A related honesty bug worth fixing at the same time:** the splash says only
 `Out of memory`. It should say which figure failed and how short it was —
@@ -2321,3 +2328,283 @@ The fix and both defects are SPEC.md §51.2.4. What it says generally:
 before `DS` and popped after it is back** — `loader.inc` had it right, the two
 driver dispatchers did not, and `wm_pkgcall`'s `SNAPAUDIT` bracket had the
 same shape.
+
+---
+
+## 24. The VGA's colours corrupt after a few minutes (FIXED — oxidised sockets on the card; §24.1.3)
+
+**5150 #2, the "not period" one** (docs/FIELD-MACHINES.md): a **PVGA1A-JK**
+as primary, a Hercules GB101 beside it, stock 4.77 MHz 8088. After a few
+minutes of ordinary use the whole screen **recolours** — the desktop's
+black/white dither goes lavender, Arkanoid's red brick row goes purple, a
+white window frame goes cyan — and the same wrong palette is on the Locator's
+own screens, not just the game's.
+
+**Every shape, glyph, window edge and brick is still exactly where it
+belongs**, and that is the finding rather than the decoration. In mode 12h a
+pixel is four plane bits → one of 16 **attribute** palette registers → one of
+256 **DAC** entries → three analog guns. A fault in the RAM moves *pixels*:
+speckle, dropped columns, sheared glyphs, garbage in patches, always local,
+because a plane bit belongs to one pixel. A fault in any stage after it
+recolours a correct picture **uniformly**, because those stages are shared by
+every pixel on the screen. **A photograph of intact text in the wrong colours
+has already ruled out the memory** — which is why the first answer to "is this
+bad video RAM, shall I write a RAM tester" is *no, and a RAM tester would
+measure the one part the evidence has cleared*.
+
+**What has NOT been ruled out, and how to tell them apart.** The three
+candidates are the attribute registers, the DAC, and everything after the DAC
+(output stage, cable, connector, monitor). The first two can be read back and
+the third cannot, so SPEC.md §39.21 puts the readback in `tests/sysbench`'s
+video block: DAC entry 0, DAC entry 0x3F, a checksum over all 768 DAC bytes,
+the first three attribute palette registers and a checksum over all sixteen,
+plus `SR01` and `GR06`. (0x3F and not 15: the attribute palette maps colour 15
+to 3Fh, so entry 15 is a number no pixel goes through.) **Run it with the screen right and again with it wrong.**
+
+- Numbers **differ** ⇒ a register somebody wrote, and it is ours. The
+  checksums say which stage.
+- Numbers **identical** ⇒ the digital side is intact and the fault is after
+  the DAC. No software can reach it, and the next moves are physical: reseat
+  the card and the monitor cable (a high-resistance ground on one colour pin
+  raises that gun's black level, which is exactly a lavender black), try the
+  other monitor, and try the card in another slot.
+
+**DAC entry 0 is the row to read first.** It is black. A black that is not
+black tints every dithered pixel on the screen, and a lavender desktop is
+precisely that.
+
+**One thing the kernel does NOT do, which is worth knowing before suspecting
+it:** os8088 never writes the attribute controller or the DAC. Neither port
+appears anywhere in `kernel/`; the palette is whatever the BIOS mode set
+installed, and the only 3C0-family access in the tree is `fsx_insync` READING
+3DAh, which resets the port's flip-flop rather than disturbing it. So if the
+registers have changed, something outside this kernel's own drawing changed
+them — the BIOS during an fsx mode round trip, a package, or the hardware.
+
+**The one software path that touches the palette at all is `int 10h`**, and
+that gives a cheap discriminating experiment. Nothing in this tree — kernel,
+apps or drivers — writes 3C0h, 3C8h or 3C9h; the palette is whatever the BIOS
+mode set installed. After boot the ONLY thing that re-issues a mode set is a
+fullscreen bracket that changes mode (SPEC.md §53.4) and its restore
+(§53.6). So:
+
+- if the recolour **only ever appears after entering and leaving a fullscreen
+  app**, suspect this card's BIOS mode set and say which app and which mode;
+- if it appears with **no mode set having happened in the session** — no
+  fullscreen, no reboot — then nothing in software wrote those registers and
+  the fault is drift, in the DAC or after it.
+
+Both are worth recording when it next happens, and both are one sentence.
+
+**Not reproducible here in any form.** No emulator in the container models a
+DAC that drifts, and 5150 #2 is the only real VGA in the register.
+
+### 24.1 The first field data, and what it changed
+
+Two `sysbench` runs minutes apart on 5150 #2, one screen-corrupt and one only
+slightly so:
+
+| row | run A | run B |
+|---|---|---|
+| `dac 0 r g b` | 0 0 0 | 0 0 0 |
+| `dac 3F r g b` | 63 63 63 | 63 63 63 |
+| `dac 0..255 sum` | **2130** | **32FD** |
+| `attr pal 0 1 2` | 0 1 2 | 0 1 2 |
+| `attr pal sum` | 0206 | 0206 |
+| `SR01 GR06` | 0105 | 0105 |
+
+**The DAC's contents moved and the attribute stage did not** — `0206` is also
+exactly what a known-good emulated card reads, so those sixteen registers are
+the standard table and intact. Black is black and white is white in both runs,
+which is why the *shown-16* sum was added: the all-256 checksum detects a
+change and cannot say whether it is in an entry anybody can see.
+
+**It is not yet drift, and the missing measurement is cheap.** No good/good
+pair exists — the machine will not stay clean long enough — and a DAC read
+that is merely noisy on a PVGA1A produces the same two numbers. **Two runs
+back to back while the screen is good** separate them, and nothing else does.
+
+### 24.1.1 The second pair: it is the DISPLAYED entries, and it happens ON ACTION
+
+Hercules removed, Picomem still in (it is the floppy controller, so it cannot
+come out without swapping hardware). Two more runs, with the shown-16 row:
+
+| row | less corrupt | more corrupt | healthy |
+|---|---|---|---|
+| `attr pal sum` | 0206 | 0206 | 0206 |
+| `dac 0` / `dac 3F` | 0 0 0 / 63 63 63 | 0 0 0 / 63 63 63 | same |
+| `dac 0..255 sum` | 4CAF | 3161 | — |
+| **`dac SHOWN 16 sum`** | **057E** | **044B** | **05D3** |
+
+`05D3` is the standard 16-colour VGA palette summed by hand (0,0,0 / 0,0,42 /
+… / 63,63,63). **Both runs are below it** — 1406 and 1099 against 1491 — so
+the entries the screen goes through really are being changed, the "less
+corrupt" screen really was already corrupt, and the direction is *darker*.
+That is the measurement §39.21's shown-16 row was added to make, and it makes
+it: this is not a read that is merely noisy, and it is not confined to the 240
+entries nobody displays.
+
+**AND THE TRIGGER IS AN ACTION, NOT TIME.** After switching the primary to Cga
+and back, the screen "stays good forever" if the machine is left alone.
+Switching to the File Manager window corrupts it; opening `sysbench` corrupts
+it again, differently; each action moves it to a *new* corruption state and it
+then holds that state until the next action. **A supply rail or a thermal
+fault does not wait to be clicked**, so 24.2's marginal-machine reading is
+wrong, or at least is not the whole of it.
+
+**What every one of those actions has in common is the DISK.** Raising a Disk
+window re-lists its folder (§22.8's `fm_focus`), which is a mount; launching
+`sysbench` is a mount plus a 21KB read. Sitting still is the only state with
+no floppy activity in it — and the Picomem is the floppy controller. So the
+correlation on the table is **disk activity ⇒ palette damage**, not
+**drawing ⇒ palette damage**, and the two are trivially separable:
+
+- **Drawing with no disk**: drag a window around the screen for a while, open
+  and close menus, run the pointer over the dock. Nothing there touches the
+  floppy. Does it corrupt?
+- **Disk**: open a Disk window on A: and press Refresh a few times.
+
+If dragging is safe and Refresh is not, it is the Picomem or the bus and no
+change to this kernel will help. If dragging alone corrupts it, it is the
+drawing path and it is ours.
+
+**What is already ruled out on the kernel side:** every VGA port write in the
+drawing path is a canonical Graphics Controller or Sequencer index+data pair
+written as one 16-bit `out dx, ax` — Set/Reset, Enable Set/Reset, Data
+Rotate, Read Map Select, Mode, Bit Mask, Map Mask, all with standard values —
+and **nothing in the tree writes 3C6h, 3C7h, 3C8h or 3C9h at all**. The
+kernel has no code that can change a DAC entry. That does not clear the *bus*,
+which is what the experiment above is for.
+
+### 24.1.2 The experiment ran, and it is DRAWING VOLUME — not the disk
+
+Reported, in one sitting: boot, open the Control Panel — *slight* corruption
+as the menu dropped, *more* when the panel opened. Switch the primary to Cga:
+corruption gone. Switch back to Vga: clean. **Wait 60 seconds: still clean.**
+Drag the Control Panel window: **instant** corruption.
+
+**A drag touches no disk whatever.** `ui_drag`'s tracking loop is an XOR
+outline redrawn at every mouse sample with the gfx lock held — nothing else,
+no mount, no read. So §24.1.1's disk correlation is dead and the Picomem is
+cleared: what the actions had in common was not the floppy, it was **how much
+they draw**.
+
+And the gradient is right there in the report: a menu drop is a save-under
+plus a highlight (slight), a window paint is a few hundred primitives (more),
+a drag is a continuous stream of read-modify-writes for as long as the button
+is held (instant). Sitting still draws nothing and never corrupts. **Mode 6
+never corrupts either**, and it is the same card: 640x200 in ONE plane against
+mode 12h's 640x480 in four, which is roughly an eighth of the memory traffic
+and none of the planar read-modify-write.
+
+**So the provocation is VGA memory traffic, and the damage lands in the DAC.**
+Those are different parts of the card, which is what makes this hardware
+rather than a register the kernel mismanages: no sequence of writes to the
+Graphics Controller or the Sequencer can change a DAC entry, and the kernel
+issues nothing else — it never writes 3C6h/3C7h/3C8h/3C9h at all (§24.1.1).
+A card whose DAC RAM loses bits while its display RAM is being hammered is a
+marginal card, a marginal slot, or a supply that sags under burst load, and
+this backplane is 384KB of ISA RAM plus a Picomem plus a VGA on an IBM 5150's
+63.5W supply.
+
+**One more measurement is free and worth having**, because it separates "any
+heavy drawing" from "something os8088 does": `gfxbench` on the combo disk
+hammers every primitive for minutes with almost no disk in it. If it corrupts
+within seconds, the answer is drawing volume and nothing about which program
+is doing it.
+
+**And a workaround exists if it is wanted, at a price worth naming.** The 16
+entries are deterministic — the standard table, summing to 05D3 — and a mode
+set already repairs them, which is why Cga-and-back works. The kernel could
+reload just those 16 entries on demand (a Control Panel button) or on every
+full repaint. That would make this machine usable and it would **end the rule
+that os8088 never writes the DAC**, which is currently what makes the readback
+above a diagnosis rather than a measurement of our own writes. It is not done
+unasked.
+
+### 24.1.3 FIXED — oxidised sockets — and the instrument was flawed
+
+**Four socketed chips on the PVGA1A, pulled, sockets sprayed with DeoxIT,
+reseated. No corruption for a whole session.** That is the fault: contact
+resistance on the card, provoked by the memory traffic that mode 12h drawing
+generates and not by time, the disk, or anything in this kernel — which is
+exactly where §24.1.2's gradient pointed, and it is a satisfying place for a
+software chase to end.
+
+**AND THE READBACK ROW DOES NOT SURVIVE THAT.** The clean, fixed machine
+reports `dac SHOWN 16 sum` = **0441**, where a known-good VGA reads **05D3**
+(verified independently: the sixteen attribute registers read the standard
+table and the entries they name sum to 1491). Worse, the three field readings
+do not order the way the screen did: **057E** on the *less* corrupt run,
+**044B** on the *more* corrupt one, **0441** on the *clean* one. **A number
+that does not correlate with the thing it is measuring is not measuring it.**
+
+The likely reason is in the IBM VGA documentation and I did not honour it: a
+palette access can collide with the display's own lookup, which is why period
+software programs the DAC during vertical retrace. A read taken mid-display
+can return what the CRT is fetching rather than what was addressed.
+
+So the row now **takes the sum twice and prints both**. Two sums that differ
+say the read is unreliable on this card and the first number cannot be
+trusted — and nothing about diffing two reports could ever have said that.
+**The claim in §24.1 and §24.1.1 that "the DAC's contents moved" is withdrawn:
+what moved may have been the reads.** What the field data does still support
+is the trigger — idle is safe, drawing is not, mode 6 is not — and that
+survives because it was observed on the glass rather than through this row.
+
+### 24.1.4 The double read fired on its first outing
+
+The very next field run, on the repaired machine, in ONE pass:
+
+    dac SHOWN 16 sum (hex)  0433
+    ...read again (hex)     03D2
+
+**Two sums of the same sixteen entries, taken milliseconds apart, disagree.**
+That settles it: the DAC readback is unreliable on this card, every number
+§24.1 and §24.1.1 read off it was noise, and the withdrawal of "the DAC's
+contents moved" was right. The instrument now says so itself instead of
+needing a second report and a hunch — which is the whole difference between a
+diagnostic and a number.
+
+The likely mechanism is the one §39.21 names: a palette access colliding with
+the display's own lookup, which is why period software programs the DAC during
+vertical retrace. **Fixing it properly means reading inside the retrace
+window**, and that is worth doing only if this row is ever needed again — the
+fault it was written for turned out to be contact resistance, and it was found
+by watching the screen rather than by reading registers.
+
+`3BA or/and` reads `9F16` in the same run and `3DA` reads `3D04`, both with
+AND a subset of OR, which is the byte order corrected — the `88FF` that
+exposed it was impossible.
+
+### 24.2 The Hercules destabilised too, and that outranks the DAC
+
+With the desktop extended onto it (which SPEC.md §39.11.1.1 made possible for
+the first time), the **Hercules** went wavy at the edges and "out of phase" as
+well. **A Hercules has no DAC, no attribute controller and no palette at
+all** — it is TTL mono, one bit per pixel, straight out of a 6845. Whatever is
+happening there cannot be a palette fault, so it cannot be the same fault as a
+palette fault, so *either* there are two faults *or* the common cause is
+upstream of both cards.
+
+The rest of the picture points the same way. The VGA **repairs itself on a
+mode set** (switching the primary to Cga and back, which is two `int 10h`
+calls on the same PVGA1A — §39.11's "a VGA can always do CGA" — and rewrites
+the DAC and the CRTC). Mode 6 at 640x200 **never** corrupts, which is a much
+lower dot clock than mode 12h's 640x480. And the fault drifts through
+*states* over minutes: whole screen purple, then reddish, then wavy lines.
+
+Latched state decaying, a lower-bandwidth mode surviving, a second unrelated
+card losing its timing, and a rewrite fixing it until it decays again looked
+like the signature of a **marginal machine** rather than a marginal card:
+supply rail or bus. **§24.1.1's trigger narrows that and §24.1.2 finishes it**: the
+damage arrives on an *action* and not with time, so a slowly-sagging rail is
+out; and the action turns out to be **drawing**, not disk, so the Picomem is
+out too. What is left is the card and the bus under burst load — which is
+exactly the reading a second card losing its 6845 timing supports. 5150 #2 carries 384KB of ISA RAM, a Picomem and **two** video cards on
+an IBM 5150's 63.5W supply, which is the load that supply is famous for not
+having. **This is a hypothesis about hardware nobody here can see**, and the
+tests that settle it are physical: pull the Picomem, then the Hercules, and
+see whether the VGA steadies; measure +5V under load; reseat both cards and
+try other slots. If it steadies with less in the backplane, no amount of
+software is the answer.

@@ -170,11 +170,42 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 107008          ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 108544          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE TWENTY-FOURTH MOVE, 107,008 -> 108,544,
+                                ; ASKED FOR AND GRANTED, kern_big's alone.
+                                ; 1.5KB, three steps, ATTRIBUTED TO THE FONT
+                                ; SYSTEM - SPEC.md 5.4.2's gfx_blit1 and the
+                                ; proportional type it exists for (6.3-6.5,
+                                ; 19.8), which arrived in the merge from main.
+                                ;
+                                ; WHAT IT COST AND WHERE: the merged kernel
+                                ; measures 107,520, which is 512 OVER the old
+                                ; figure - one step, not three. The grant is
+                                ; deliberately larger than the overrun, so the
+                                ; landing is 1,024 spare (two steps) rather
+                                ; than the ZERO the smallest honest figure
+                                ; would have given; 107,520 exactly would hand
+                                ; the next byte added anywhere the same build
+                                ; failure this move repairs, which is the trap
+                                ; moves 22 and 23 were both called out for.
+                                ; It is still one step UNDER the four-step
+                                ; standard, so the next feature asks in the
+                                ; usual way rather than finding room here.
+                                ;
+                                ; kern_small is UNTOUCHED at 103,424 and needs
+                                ; nothing: it carries the slot cell and a
+                                ; stc/ret stub instead of gfx_blit1's body
+                                ; (SPEC.md 5.4.2), which is main's own +10
+                                ; bytes, and it was re-measured at this merge
+                                ; rather than assumed - the two builds have
+                                ; twice been discovered broken rather than
+                                ; reported broken, because `all` never builds
+                                ; the small one.
                                 ;
                                 ; THE TWENTY-FIRST MOVE, 104,960 -> 107,008,
                                 ; ASKED FOR AND GRANTED, kern_big's alone -
@@ -389,7 +420,7 @@ KERN_BUDGET equ 107008          ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; the two by 2KB, which is the direction it
                                 ; should drift from here.
 %else
-KERN_BUDGET equ 102400          ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 103424          ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
                                 ;
@@ -555,6 +586,38 @@ KERN_BUDGET equ 102400          ; the whole kernel's FOOTPRINT. Growing past
                                 ; any more than it was by the twenty-second:
                                 ; the next move is 1KB again unless somebody
                                 ; says otherwise.
+                                ;
+                                ; THE TWENTY-FOURTH MOVE, 102,400 -> 103,424,
+                                ; ASKED FOR AND GRANTED, 1KB, and it is
+                                ; ALLOCATED TO HEAP COMPACTION (SPEC.md 66).
+                                ;
+                                ; It is the 1KB the rule above sets, back at
+                                ; that unit after the twenty-second's and
+                                ; twenty-third's stated departures - and this
+                                ; time the figure was neither discovered broken
+                                ; nor overshot: SPEC.md 66 landed the build on
+                                ; EXACTLY 102,400, 0 spare, which is the guard
+                                ; doing its job at the moment it is supposed
+                                ; to, reported rather than found. 1KB clears it
+                                ; and lands two steps.
+                                ;
+                                ; WHAT IT BUYS is a compactor that slides the
+                                ; movable data claims down when a claim would
+                                ; otherwise be refused, and the park handshake
+                                ; (66.5) that lets it reach the claims of a
+                                ; package with a live worker. THE ARGUMENT FOR
+                                ; SPENDING IT HERE RATHER THAN ON kern_big
+                                ; ALONE IS THE SEVENTEENTH MOVE'S: the machine
+                                ; that runs out of a contiguous run first is
+                                ; the SMALL one, so a feature about
+                                ; fragmentation is worth most exactly where
+                                ; this guard binds. A 128KB machine has one
+                                ; arena and no slack in it.
+                                ;
+                                ; The fifth move's rule binds the remainder as
+                                ; it binds every other - headroom for ordinary
+                                ; growth, not an invitation - and the next move
+                                ; is 1KB again.
                                 ;
                                 ; It had moved fourteen times before that, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
@@ -862,7 +925,7 @@ KERN_BUDGET equ 102400          ; the whole kernel's FOOTPRINT. Growing past
                                 ; machine can still install, just slowly.
 %endif                          ; KERN_BIG
 
-KERN_SMALL_BUDGET equ 102400    ; ...and kern_small's, named separately so it
+KERN_SMALL_BUDGET equ 103424    ; ...and kern_small's, named separately so it
                                 ; can be REPORTED on a big build rather than
                                 ; only enforced on a small one: the %else arm
                                 ; above is not taken on a kern_big assembly, so
@@ -1721,15 +1784,20 @@ osapi_table:
                                   ;         never needed a .text thunk, which
                                   ;         is the whole reason it looked
                                   ;         unpublished
-    OSAPI_SLOT ui_reboot_post     ; 0x0368  no arguments, no answer: POST a
-                                  ;         restart, which ui_task spends with
-                                  ;         no lock held (SPEC.md 20.10). The
-                                  ;         System menu's Restart, reachable
-                                  ;         from a callback - which cannot do
-                                  ;         it inline, because that path takes
-                                  ;         the gfx lock the caller is holding
-                                  ;         and waits on workers that need to
-                                  ;         be scheduled
+    OSAPI_SLOT ui_reboot_post     ; 0x0368  AL = 0 flush the Control Panel's
+                                  ;         settings on the way out / non-0 do
+                                  ;         not go near a disk at all. No
+                                  ;         answer: POST a restart, which
+                                  ;         ui_task spends with no lock held
+                                  ;         (SPEC.md 20.10). The System menu's
+                                  ;         Restart, reachable from a callback
+                                  ;         - which cannot do it inline,
+                                  ;         because that path takes the gfx
+                                  ;         lock the caller is holding and
+                                  ;         waits on workers that need to be
+                                  ;         scheduled. AL non-0 is for a caller
+                                  ;         that has just asked the user to
+                                  ;         take the floppy OUT
     OSAPI_SLOT osapi_file_goto_q  ; 0x0370  DX = folder cluster, BL = volume.
                                   ;         GOTO's quiet twin (SPEC.md 19.2.2):
                                   ;         same volume = a word, another one =
@@ -1907,7 +1975,101 @@ osapi_table:
                                   ;          Answers about BIOS-transport rows
                                   ;          alone: a driver's own rows are
                                   ;          the driver's to recognise
-    OSAPI_SLOT gfx_blit1          ; 0x03F0 - ES:SI = a 1bpp band in the
+    OSAPI_SLOT kbd_down           ; 0x03F0 - AL = a make scancode. out CF = 1
+                                  ;          that key is DOWN right now, CF = 0
+                                  ;          it is up; every register kept.
+                                  ;          int 16h answers what was TYPED,
+                                  ;          which has no key-up in it and
+                                  ;          cannot tell a typematic repeat
+                                  ;          from a press, so a real-time app
+                                  ;          inferring a hold from the interval
+                                  ;          goes blind for the whole typematic
+                                  ;          DELAY and loses the key entirely
+                                  ;          when a second one is pressed
+                                  ;          (SPEC.md 9.7). No lock and no
+                                  ;          port: legal from a worker.
+                                  ;          ASKING ARMS IT - a machine whose
+                                  ;          software never asks never reads
+                                  ;          port 60h - so the first answer
+                                  ;          after the first call is always
+                                  ;          "up", and a key already held when
+                                  ;          it arms is not seen until it is
+                                  ;          pressed again
+    OSAPI_SLOT fsx_surf           ; 0x03F8 - no arguments. Bracket-only. out
+                                  ;          CF=0 with AX = x, BX = y, CX = w,
+                                  ;          DX = h: THE RECT THIS BRACKET
+                                  ;          OWNS, in the coordinates the
+                                  ;          drawing slots take (SPEC.md 53.7.1).
+                                  ;          CF=1 outside a bracket. (0,0,w,h)
+                                  ;          on every one-display machine and
+                                  ;          after any fsx_mode call, so it is
+                                  ;          what a same-mode bracket used to
+                                  ;          hard-code - and the second
+                                  ;          display's own origin when the
+                                  ;          bracket is over there
+    OSAPI_JSLOT api_mem_movable   ; 0x0400 - X: DX = a claim of yours, AX = a
+                                  ;          near proc in YOUR segment (0 pins
+                                  ;          it again). out CF = 1 = no such
+                                  ;          claim, or not yours.
+                                  ;          DECLARES THE CLAIM RELOCATABLE
+                                  ;          (SPEC.md 66.2): the heap compactor
+                                  ;          may then slide it down to close a
+                                  ;          hole, and calls your proc through
+                                  ;          your own dispatcher afterwards
+                                  ;          with BX = the old base segment and
+                                  ;          DX = the new one, the bytes having
+                                  ;          already moved. An ordinary near
+                                  ;          proc with a near `ret`, like
+                                  ;          W_PAINT.
+                                  ;          THE DEFAULT IS PINNED, so a claim
+                                  ;          nobody declares behaves exactly as
+                                  ;          every claim did before this
+                                  ;          existed - which is what lets a
+                                  ;          package adopt it one buffer at a
+                                  ;          time. Your proc must put right
+                                  ;          EVERY pointer you derived from the
+                                  ;          base, not just the word you keep
+                                  ;          it in, and must not claim, free or
+                                  ;          resize anything (SPEC.md 66.3)
+    OSAPI_JSLOT api_mem_parksafe  ; 0x0408 - X: AL = 1 declare / 0 withdraw.
+                                  ;          out CF = 1 = you are not a live
+                                  ;          package instance.
+                                  ;          "THE KERNEL MAY PARK ME WHILE I
+                                  ;          AM BLOCKED IN IT" (SPEC.md
+                                  ;          66.5.4), which today means while
+                                  ;          a worker of yours is waiting on
+                                  ;          the gfx lock. Without it a worker
+                                  ;          parks only at OSAPI_TASK_ALIVE -
+                                  ;          and a worker that DRAWS is
+                                  ;          usually blocked on the lock
+                                  ;          exactly when a compaction wants
+                                  ;          it, so its claims never move.
+                                  ;          WHAT YOU ARE ASSERTING is that no
+                                  ;          register or stack slot of yours
+                                  ;          holds a pointer DERIVED from one
+                                  ;          of your movable claims across a
+                                  ;          call that can yield. Re-read your
+                                  ;          base after any such call and this
+                                  ;          is true by construction.
+                                  ;          The default is NOT declared, and
+                                  ;          forgetting costs a missed
+                                  ;          compaction and never memory
+    OSAPI_SLOT inst_task_park     ; 0x0410 - a DRIVER's worker parks here for
+                                  ;          a heap compaction (SPEC.md
+                                  ;          66.5.5), the way a package's
+                                  ;          parks at OSAPI_TASK_ALIVE. Call
+                                  ;          it once per outer loop, at a
+                                  ;          point where you hold no pointer
+                                  ;          derived from a claim of the
+                                  ;          driver's. Every register and the
+                                  ;          flags are preserved, and it costs
+                                  ;          one compare when nothing is
+                                  ;          asking. Without it NO claim your
+                                  ;          driver owns can ever be
+                                  ;          compacted, because the kernel
+                                  ;          cannot tell a running service
+                                  ;          task from an idle one
+    OSAPI_SLOT gfx_blit1          ; 0x0418 - ES:SI = a 1bpp band in the
                                   ;          framebuffer's own bit order,
                                   ;          BP = its stride, AX = x and
                                   ;          CX = width, BOTH multiples of 8,
@@ -1917,7 +2079,7 @@ osapi_table:
                                   ;          (SPEC.md 5.4.2). out CF=1 =
                                   ;          refused and nothing drawn, which
                                   ;          is also every kern_small
-    OSAPI_SLOT osapi_vol_sys      ; 0x03F8 - out BL = the volume the machine
+    OSAPI_SLOT osapi_vol_sys      ; 0x0420 - out BL = the volume the machine
                                   ;          BOOTED from, which is where its
                                   ;          system resources live (SPEC.md
                                   ;          19.7). No disk I/O; every other
@@ -1929,7 +2091,7 @@ osapi_table:
                                   ;          could stand in its own folder, or
                                   ;          in one a dialog had given it, and
                                   ;          nowhere else
-osapi_table_end:                  ; 0x0400
+osapi_table_end:                  ; 0x0428
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1937,8 +2099,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 126 * 8
-%error "os8088 API jump table must be exactly 126 8-byte slots"
+%if OSAPI_TABLE_LEN != 131 * 8
+%error "os8088 API jump table must be exactly 131 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -2037,6 +2199,8 @@ dbg_reg:
     OSAPI_XSTUB api_cm_alloc,   osapi_cm_alloc
     OSAPI_XSTUB api_cm_free,    osapi_cm_free
     OSAPI_XSTUB api_mem_regrow, osapi_mem_regrow
+    OSAPI_XSTUB api_mem_movable, osapi_mem_movable
+    OSAPI_XSTUB api_mem_parksafe, inst_parksafe_set
     OSAPI_XSTUB api_snd_fm,     osapi_snd_fm_x
     OSAPI_XSTUB api_drv_task,   drv_task
     OSAPI_XSTUB api_snd_stream, osapi_snd_stream
@@ -3135,6 +3299,12 @@ cw_icon_draw16:         call icon_draw16
                     retf
 cw_inst_alloc:          call inst_alloc
                     retf
+cw_inst_park_end:       call inst_park_end
+                    retf
+cw_inst_park_req:       call inst_park_req
+                    retf
+cw_inst_seg_parked:     call inst_seg_parked
+                    retf
 cw_inst_bind_win:       call inst_bind_win
                     retf
 cw_inst_find_kind:      call inst_find_kind
@@ -3146,6 +3316,8 @@ cw_inst_set_name_x:     call inst_set_name_x
 cw_inst_fhome_idx:      call inst_fhome_idx
                     retf
 cw_inst_win_owner:      call inst_win_owner
+                    retf
+cw_mem_disp:            call bp
                     retf
 cw_menu_activate:       call menu_activate
                     retf
@@ -3210,7 +3382,7 @@ cw_wm_clip_clear:        call wm_clip_clear
                      retf
 cw_wm_clip_rect:         call wm_clip_rect
                      retf
-%ifdef KERN_BIG
+%ifdef KERN_BIG                 ; gfx_blit1_x's, and kern_small has no body
 cw_wm_clip_rows:        call wm_clip_rows
                     retf
 %endif
@@ -3365,7 +3537,7 @@ fdlg_top:             call COLD_SEG:fdf_fdlg_top
 
 ; --- ...and assoc.inc's (SPEC.md 54). It joined the cold set because nothing
 ; in it runs faster than a double-click, and because its heaviest callees were
-; already there: the calls to ld_run_name, files_poster, files_refresh and
+; already there: the calls to ld_run_name, files_refresh and
 ; dskw_stat were a DOUBLE crossing (out through a cw_ shim, in through a
 ; resident thunk) and are near calls now - SPEC.md 2.6's "growing the set makes
 ; the ones already in it cheaper".
@@ -3457,6 +3629,8 @@ mem_free:             call COLD_SEG:mmf_mem_free
                   ret
 mem_free_rec:         call COLD_SEG:mmf_mem_free_rec
                   ret
+mem_movable:          call COLD_SEG:mmf_mem_movable
+                  ret
 mem_init:             call COLD_SEG:mmf_mem_init
                   ret
 mem_owned_kb:         call COLD_SEG:mmf_mem_owned_kb
@@ -3476,6 +3650,8 @@ osapi_mem_claim:      call COLD_SEG:mmf_osapi_mem_claim
 osapi_mem_claim_dma:  call COLD_SEG:mmf_osapi_mem_claim_dma
                   ret
 osapi_mem_free:       call COLD_SEG:mmf_osapi_mem_free
+                  ret
+osapi_mem_movable:    call COLD_SEG:mmf_osapi_mem_movable
                   ret
 osapi_mem_regrow:     call COLD_SEG:mmf_osapi_mem_regrow
                   ret

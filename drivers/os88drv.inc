@@ -310,7 +310,28 @@ FSV_COPY     equ 26             ; AX = source folder, DX = destination folder,
                                 ; far side can copy faster than the wire can
                                 ; carry - which for anything with a real disk
                                 ; behind it, it can
-FSV_SIZE     equ 28
+FSV_RMTREE   equ 28             ; SI = a folder's name in the CURRENT folder:
+                                ; remove it AND EVERYTHING INSIDE IT (SPEC.md
+                                ; 62.10.7). out CF=0; CF=1 and AX = FERR_*
+                                ;
+                                ; FSV_COPY's argument in the other direction,
+                                ; and OPTIONAL for the same reason: a
+                                ; kernel-side walk of your tree is one
+                                ; FSV_ENUM plus one FSV_DELETE per file and an
+                                ; FSV_CHDIR per level, and this is one call.
+                                ; Leave the row 0 and a folder with anything
+                                ; in it is refused by FSV_RMDIR exactly as it
+                                ; was before - which is a real answer and not
+                                ; a failure, so decline it unless you can
+                                ; recurse more cheaply than the kernel can ask
+                                ;
+                                ; IF YOU IMPLEMENT IT, REFUSE WHAT YOU CANNOT
+                                ; TAKE BACK. This is the most destructive verb
+                                ; in the table and the kernel cannot see what
+                                ; it is about to remove: what a whole VOLUME
+                                ; is, and what is protected, are questions
+                                ; only your side can answer
+FSV_SIZE     equ 30
 
 ; PUT A `%if` ON YOUR TABLE'S OWN LENGTH. A trailing backslash in a NASM
 ; comment is a LINE CONTINUATION, so an ASCII-art brace drawn down the right

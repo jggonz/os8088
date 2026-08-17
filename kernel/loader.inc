@@ -270,28 +270,22 @@ loader_run_x:
     pop cx                      ; window at all and appears at the moment of
     pop bx                      ; the act (SPEC.md 22.9)
     cmp byte [ld_painted], 0
-    jne .done                   ; the success path published the status, paid
-                                ; the poster's status line and THEN drew the
-                                ; new window over it (SPEC.md 22.17) - so
-                                ; nothing is owed here, and a second
-                                ; files_poster would only arm wm_clip_set on
-                                ; a window that is covered now and drop the
-                                ; cache wm_show took
-    cmp al, LD_EABORT           ; ...and a FAILED load drew nothing AT ALL, so
-    jne .poster                 ; it owes exactly the same one line - 'Bad
-                                ; package' where 'Loading...' is. This was an
-                                ; unconditional files_refresh, which is
-                                ; wm_paint_all: the desktop dither, the drive
-                                ; zones, the chrome and every window on the
-                                ; screen, to report four words. The one
-                                ; exception is a package the loader REFUSED
-                                ; after running its entry proc, which may have
-                                ; put pixels anywhere before it said no
+    jne .done                   ; the success path drew the new window itself
+                                ; (SPEC.md 11.90), so nothing is owed here
+    cmp al, LD_EABORT           ; ...and a FAILED load owes nothing either: it
+    jne .done                   ; drew nothing, and the poster's window never
+                                ; said a word about this load in the first
+                                ; place (SPEC.md 22.17 - it used to hold
+                                ; 'Loading...', and this path existed to take
+                                ; that back). The verdict went out as a toast
+                                ; above, which belongs to no window at all.
+                                ; The ONE exception is a package the loader
+                                ; REFUSED after running its entry proc, which
+                                ; may have put pixels anywhere before it said
+                                ; no - and that is a whole-screen repaint,
+                                ; because there is no telling where
     call files_refresh_x
-    jmp short .done
-.poster:                        ; (named for what it DOES: since the success
-    call files_poster_x         ; path pays its own poster above, everything
-.done:                          ; reaching here is a load that failed)
+.done:
 
     pop es
     pop bp
@@ -648,21 +642,19 @@ ld_run_body_x:
     ; every successful launch, purely to correct one line of text.
     mov byte [ld_status], LD_OK
     mov byte [ld_painted], 1    ; ...and this pass IS the repaint
-    ; --- and the POSTER is paid BEFORE it is covered (SPEC.md 22.17) --------
-    ; The window that posted this load still has 'Loading...' on its status
-    ; line and [ld_pending] went to 0 in ui.inc before we were called, so the
-    ; line's final text has been known since the top of loader_run - it was
-    ; simply drawn after wm_show, which is one instruction too late. By then
-    ; the new window is on top, so files_poster's wm_clip_set drops the raise
-    ; cache wm_show has just taken (11.96) and there is no longer anything on
-    ; the glass to bank a new one from: the poster repainted in full on every
+    ; --- and the POSTER is owed NOTHING (SPEC.md 22.17) ---------------------
+    ; There was a files_poster call here, immediately before the wm_show
+    ; below. The window that posted this load used to have 'Loading...' on
+    ; its status line, so somebody had to take the word back off - and doing
+    ; it AFTER wm_show was one instruction too late, because by then the new
+    ; window is on top, files_poster's wm_clip_set drops the raise cache
+    ; wm_show has just taken (11.96) and there is nothing left on the glass
+    ; to bank a new one from: that window then repainted in full on every
     ; interaction for the rest of the session (11.96.9.1's remaining row).
-    ; Paid here it costs the same one font_run, on a window nothing is
-    ; covering, and what wm_show banks a moment later is the window as it
-    ; will actually look. fm_status_only reads the WINDOW's own state block
-    ; (FS_USED/FS_FREE), never the mounted volume, so nothing here depends on
-    ; assoc_back having put the user's disk back yet.
-    call files_poster_x         ; preserves BX, which is still the window
+    ; The word is gone now - SPEC.md 12.8's menu-bar widget reports the read
+    ; live, for every reader in the machine - so the poster's window is
+    ; untouched by this load from beginning to end, and the ordering that
+    ; had to be got right no longer exists to get wrong.
     call KERNEL_SEG:cw_gfx_lock
     call KERNEL_SEG:cw_wm_show  ; in: BX = window ptr; repaints all
     call KERNEL_SEG:cw_gfx_unlock

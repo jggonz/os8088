@@ -105,6 +105,10 @@ at_entry:
     jc .out                         ; window worth opening, so a refusal is
     mov [at_dseg], dx               ; LD_EABORT and the loader says so - and
     mov word [at_dcap], AT_KB0*1024 ; nothing below has to test [at_dseg]
+    mov ax, at_reloc                ; ...and it MOVES (SPEC.md 66.5.7): an
+    call OSAPI_MEM_MOVABLE          ; empty document has nothing pointing into
+                                    ; it, so here is the earliest safe moment
+                                    ; and DX is still the claim
     push si
     mov si, at_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
@@ -497,6 +501,23 @@ at_fs_enter:
     call at_undo_init               ; the heap claim, once
     cmp byte [at_wspawned], 0
     jne .out
+    mov al, 1                       ; PARK-SAFE (SPEC.md 66.5.4): every reader
+    call OSAPI_MEM_PARKSAFE         ; of the document loads ES from [at_dseg]
+                                    ; immediately before the copy that uses it
+                                    ; and drops it after - at_getb does it per
+                                    ; CHARACTER (SPEC.md 46.9) - so no call
+                                    ; that can yield is ever crossed holding
+                                    ; one. The four unlock/yield/lock loops
+                                    ; (at_drag, the two scroll-bar tracks and
+                                    ; at_menu_track) carry indices only.
+                                    ; It is a WIDENING and not what makes the
+                                    ; two claims movable (SPEC.md 66.5.7.2):
+                                    ; the caret-blink worker sleeps between
+                                    ; blinks and so reaches OSAPI_TASK_ALIVE
+                                    ; inside INST_PARKW on its own, measured.
+                                    ; What it buys is the pass where it is
+                                    ; instead waiting on a lock somebody
+                                    ; else's callback is holding
     mov ax, at_worker
     mov bx, [at_win]
     call OSAPI_TASK_SPAWN           ; the caret-blink worker

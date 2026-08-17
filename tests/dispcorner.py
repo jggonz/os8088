@@ -1,0 +1,548 @@
+#!/usr/bin/env python3
+"""TWO REPORTED ARTIFACTS, LOCALISED (a corner pixel, and a drag across a seam)
+
+    make && python3 tests/dispcorner.py
+
+Reported by another agent, both as "incremental differs from a full repaint":
+
+  A. a window's (W_X, W_Y+W_H) - the drop shadow's bottom-LEFT corner - reads
+     differently after an incremental draw than after a full repaint. One
+     pixel, reproducible with `hello`.
+  B. dragging across an extended desktop's seam leaves pixels a repaint
+     disagrees with - hundreds of them.
+
+Both are asked the same way and it is the way this tree asks every question of
+this shape: do the thing, capture, force a full repaint, diff. What this adds
+is that it prints WHERE and shows WHAT - a count says a defect exists, a
+bounding box says which rect owns it, and a picture says which of the things
+in that rect it is.
+
+EVERY VARIABLE IS A FLAG, and that is the correction this file has already
+needed once. B ran after A, so it inherited A's open windows without saying
+so - and it FAILED with them and PASSED without them, which reads as a flaky
+test rather than as the discriminator it is. What is under the dragged window
+(--under) and where it is dragged to (--dest) are named now, so a run states
+its own conditions.
+
+THE FORCED REPAINT IS THE WHOLE CHECK, so it is poked and then VERIFIED. This
+opened and closed the Control Panel, on the belief that closing a window ends
+in wm_paint_all - it ends in wm_paint_dmg (SPEC.md 11.91), the incremental
+path, so both captures came off incremental draws and every run was comparing
+the machine with itself. It writes [cp_dirty], whose only consumer is
+ui_task's wm_paint_all (SPEC.md 31.2), and reads the flag back to see that the
+consumer ran. Each operation also has to MOVE some pixels, or its 0 is
+vacuous: tools/notepad/pixcheck.py and tools/sucheck.py are the two places
+this tree has already paid for a gate that could only pass.
+
+The mouse is parked at the same place for every capture so the arrow cancels
+out of every comparison.
+"""
+import argparse
+import sys
+import time
+
+sys.path.insert(0, "/home/user/os8088/tools")
+sys.path.insert(0, "/home/user/os8088/tests")
+import os88marty, os88mouse, os88sym, dispcp                # noqa: E402
+
+def S(name, _d=[()]):
+    """Kernel symbol -> linear address, THROUGH THE KNOB THE BUILD WAS MADE
+    WITH. os88sym asserts its map against build/kernel.bin, so a reference
+    build (`make DRAGCACHE=0`) fails outright rather than handing back a
+    plausible wrong address - which is the right behaviour and means every
+    A/B against a knob has to say which knob. --define is that."""
+    return os88sym.linear(name, defines=_d[0])
+
+
+TITLE_H, MBAR_H = 18, 19
+PARK = (4, MBAR_H + 4)
+
+# `hello` IS THE SUBJECT BECAUSE IT DOES NOTHING - no worker, no animation, a
+# 240x90 window that draws one string. That is what makes "capture, force a
+# repaint, diff" mean anything at all: a screen that never settles cannot be
+# compared with itself. This file reached row numbers for it (`APPS_ROW = 1`,
+# `HELLO_ROW = 3`) and they named GAMES and MISSILE.O88 - Missile Command, a
+# live arcade game with a worker drawing every tick - so it reported the
+# game's own motion as a kernel artifact, twice, with different counts.
+# dispcp.open_named asks the guest which row a NAME is on (SPEC.md 19.4).
+HELLO_DIR, HELLO_FILE = "APPS", "HELLO.O88"
+
+
+def u16(b, i=0): return b[i] | (b[i + 1] << 8)
+
+
+def shot(m, cards):
+    m.pause()
+    out = {c: m.fbuf(card=c) for c in cards}
+    m.run()
+    return out
+
+
+def diff(a, b, w):
+    """[(x, y)] where two captures of the same card differ."""
+    return [((i // 3) % w, (i // 3) // w)
+            for i in range(0, len(a), 3) if a[i:i + 3] != b[i:i + 3]]
+
+
+def bbox(d):
+    """The differing pixels' bounding box - the SHAPE, which is what says
+    which rect owns them. A count cannot, and the first six cannot either."""
+    if not d:
+        return None
+    xs = [p[0] for p in d]
+    ys = [p[1] for p in d]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def crop_png(path, cap, w, h, box, margin=24):
+    """Write the differing region plus `margin` of context, so the picture can
+    be read against what is around it."""
+    x0 = max(0, box[0] - margin)
+    y0 = max(0, box[1] - margin)
+    x1 = min(w - 1, box[2] + margin)
+    y1 = min(h - 1, box[3] + margin)
+    rows = bytearray()
+    for y in range(y0, y1 + 1):
+        o = (y * w + x0) * 3
+        rows += cap[o:o + (x1 - x0 + 1) * 3]
+    os88marty.write_png_rgb(path, x1 - x0 + 1, y1 - y0 + 1, bytes(rows))
+    return (x0, y0, x1, y1)
+
+
+def repaint(m, mo, card):
+    """FORCE A FULL REPAINT - and this is the whole check, so it may not be
+    something that merely looks like one.
+
+    It used to open and close the Control Panel, described here as "it ends in
+    wm_paint_all". IT DOES NOT: closing a window is wm_destroy, which passes
+    the vacated rect to wm_paint_dmg (SPEC.md 11.91) - the INCREMENTAL path.
+    So both captures came off incremental draws and the run compared the
+    machine with itself, which is tools/notepad/pixcheck.py's tautology and
+    tools/sucheck.py's vacuous pass in a third place. It reports 0 either way.
+
+    [cp_dirty] is the one flag in the machine whose only consumer IS
+    wm_paint_all (ui.inc's .chk_cp, SPEC.md 31.2). Poking it needs no window,
+    no click and no floppy write, and there is nothing between the flag and
+    the call for it to mean instead.
+    """
+    # ...AND wm_paint_all IS NOT ENOUGH ON ITS OWN. It draws every window
+    # through wm_draw_win, which puts a valid raise cache back INSTEAD of
+    # running W_PAINT (SPEC.md 11.96) - so inside a window the "full repaint"
+    # can be a byte copy of the very capture it is being compared against.
+    # The desktop dither is drawn directly and is honest either way, which is
+    # enough for (A); (B)'s pixels are window content and it is not.
+    # tools/notepad/pixcheck.py's fix, verbatim: clear WF_SAVEU, which
+    # wm_su_ck tests, so an already-banked cache is invalidated too.
+    saved = []
+    for w in dispcp.win_list(m, S):
+        a = S("wm_wins") + w * dispcp.WIN_SIZE + dispcp.W_FLAGS
+        f = m.read(a, 2)
+        saved.append((a, f))
+        m.write(a, bytes([f[0] & ~dispcp.WF_SAVEU & 0xFF, f[1]]))
+    m.write(S("cp_dirty"), b"\x01")
+    mo.to(*PARK)
+    os88marty.settle(m, card=card)
+    # ...AND CHECK IT WAS SPENT. The flag is cleared by the branch that calls
+    # wm_paint_all and by nothing else, so reading 0 back is the observation
+    # that the repaint ran - not an inference from the poke having happened.
+    spent = m.read(S("cp_dirty"), 1)[0]
+    for a, f in saved:              # ...PUT THE FLAG BACK, or every operation
+        m.write(a, f)               # after this one is testing a kernel with
+                                    # the drag cache and the raise cache
+                                    # switched off. Writing W_FLAGS directly
+                                    # skips wm_saveu_set, so the claim itself
+                                    # survives and is live again the moment
+                                    # the flag is - which is only SAFE because
+                                    # the subject is inert (above): a cache
+                                    # banked before this repaint describes the
+                                    # same pixels after it. A window whose
+                                    # content moved would need the claim
+                                    # dropped, not the flag masked.
+    if spent != 0:
+        raise RuntimeError("[cp_dirty] is still set: ui_task never reached "
+                           ".chk_cp, so NO full repaint happened and every "
+                           "figure below would be a comparison with itself")
+
+
+def probe(m, mo, pri, pw, ph, label, bad, prev, corner=None, tag="A"):
+    """Do the capture / force / capture / diff, below the menu bar.
+
+    `prev` is a one-element list holding the previous probe's post-repaint
+    capture: the operation just performed must have MOVED some pixels, or the
+    0 this is about to print is vacuous and says so.
+    """
+    mo.to(*PARK)
+    os88marty.settle(m, card=pri)
+    inc = shot(m, (pri,))[pri][2]
+    base = MBAR_H * pw * 3
+    if prev[0] is not None:
+        n = len(diff(prev[0][base:], inc[base:], pw))
+        if not n:
+            bad.append("%s/%s: the operation changed NO pixel, so the 0 below "
+                       "is vacuous" % (tag, label))
+        else:
+            print("%s: %-22s (moved %d px)" % (tag, label, n))
+    repaint(m, mo, pri)
+    full = shot(m, (pri,))[pri][2]
+    prev[0] = full
+    d = [(x, y + MBAR_H) for x, y in diff(inc[base:], full[base:], pw)]
+    print("%s: %-22s %d differing pixel(s)  bbox %r"
+          % (tag, label, len(d), bbox(d)))
+    if corner is not None and corner in d:
+        bad.append("%s/%s: the shadow corner %r differs"
+                   % (tag, label, corner))
+    elif d:
+        bad.append("%s/%s: %d pixels differ" % (tag, label, len(d)))
+    if d:
+        crop_png("/tmp/corner%s-%s-inc.png" % (tag, label), inc, pw, ph,
+                 bbox(d))
+        crop_png("/tmp/corner%s-%s-full.png" % (tag, label), full, pw, ph,
+                 bbox(d))
+    return d
+
+
+def wins(m, tag=""):
+    """Every visible window and its rect - printed, because 'which window did
+    this drag actually take hold of' has already been guessed wrong once."""
+    out = [(w, dispcp.win_rect(m, S, w)) for w in dispcp.win_list(m, S)]
+    if tag:
+        print("  %s: %s" % (tag, ", ".join(
+            "%d=(%d,%d %dx%d)" % (w, r[0], r[1], r[2], r[3]) for w, r in out)))
+    return out
+
+
+def launch_hello(m, mo, pri):
+    """A Disk window on B:, stepped into APPS, and HELLO launched out of it.
+    Returns (disk slot, hello slot)."""
+    dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
+    disk = dispcp.win_list(m, S)[-1]
+    bx, by = dispcp.win_rect(m, S, disk)[:2]
+    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, HELLO_DIR, card=pri)
+    bx, by = dispcp.win_rect(m, S, disk)[:2]
+    dispcp.open_named(m, mo, S, os88marty.settle, bx, by, HELLO_FILE, card=pri)
+    time.sleep(4)
+    other = [x for x in dispcp.win_list(m, S) if x != disk]
+    if not other:
+        sys.exit("%s did not launch out of %s" % (HELLO_FILE, HELLO_DIR))
+    return disk, other[-1]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--machine", default="os8088_xt_vga_herc")
+    ap.add_argument("--only", choices=("a", "b", "c"), default=None)
+    ap.add_argument("--under", choices=("none", "hello"), default="none",
+                    help="B: what is UNDER the dragged window")
+    ap.add_argument("--dest", choices=("seam", "near", "far"), default="seam",
+                    help="B: drag ONTO the seam, stay on the primary, or take "
+                         "the window's ORIGIN across onto the second display "
+                         "- which is a different case, because wm_dc_take "
+                         "refuses a drag whose two ends differ in DEPTH "
+                         "(SPEC.md 11.96.12) and the origin is what picks it")
+    ap.add_argument("--single", action="store_true",
+                    help="B: leave the desktop single-display")
+    ap.add_argument("--mode", choices=("right", "below"), default="right",
+                    help="B: which of SPEC.md 39.19.2's arrangements")
+    ap.add_argument("--primary", choices=("vga", "herc", "cga"), default=None,
+                    help="B: make this adapter the primary first. The primary "
+                         "sits at the virtual origin (SPEC.md 39.19.2), so "
+                         "this is what puts the OTHER monitor on the left - "
+                         "and it changes the DEPTH either side of the seam, "
+                         "which is what wm_dc_take branches on (11.96.12)")
+    ap.add_argument("--define", action="append", default=[],
+                    help="a NASM define this build was made with, e.g. "
+                         "--define NODRAGCACHE for `make DRAGCACHE=0`. "
+                         "Symbol resolution needs it or it refuses.")
+    a = ap.parse_args()
+    S.__defaults__[0][0] = tuple(a.define)
+    bad = []
+
+    with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+                          machine=a.machine, boot=False) as m:
+        cards = {c["idx"]: c for c in m.cards()}
+        m.run(); os88marty.settle(m, gate=os88marty.desktop_up)
+        mo = os88mouse.Mouse(marty=m)
+        pri = [i for i, c in cards.items()
+               if c["type"] == dispcp.KIND_CARD[m.read(S("vid_kind"), 1)[0]]][0]
+        other = [i for i in cards if i != pri]
+        sec = other[0] if other else pri     # ONE-CARD MACHINES RUN LEGS A AND
+                                             # C: neither needs a seam, and the
+                                             # dither is (x+y)-phased on every
+                                             # adapter - so 11.96.13.1 has to
+                                             # be checked on the two MONO ones
+                                             # as well, where a "grey" really
+                                             # is a checkerboard
+        pw, ph = m.fbuf(card=pri)[:2]
+
+        # --- A: the shadow's bottom-left corner ----------------------------
+        #
+        # SWEPT OVER OPERATIONS, because the report does not say which one it
+        # was and a raise alone answers 0. Every one of these takes a
+        # DIFFERENT path to the glass - wm_show, wm_raise, ui_drag +
+        # wm_paint_dmg, wm_hide + wm_paint_dmg - and only the last two dither
+        # any desktop at all, which is what would have to disagree for a
+        # corner nothing writes to come out differently.
+        if a.only in (None, "a"):       # ...and NOT on --only c, which was
+                                        # running A as well and saying nothing
+            disk, h = launch_hello(m, mo, pri)
+            hx, hy, hw, hh = dispcp.win_rect(m, S, h)
+            print("%s at (%d,%d) %dx%d - its shadow corner is (%d,%d)"
+                  % (HELLO_FILE, hx, hy, hw, hh, hx, hy + hh))
+            if (hw, hh) != (240, 90):       # hl_tpl. A window of another size
+                sys.exit("that is not %s: hl_tpl is 240x90 and this is %dx%d"
+                         % (HELLO_FILE, hw, hh))   # is another PROGRAM
+
+            prev = [None]           # the last check's post-repaint capture
+
+            def check(label):
+                mo.to(*PARK)
+                os88marty.settle(m, card=pri)
+                inc = shot(m, (pri,))[pri][2]
+                # ...AND THE OPERATION DID SOMETHING. A run of zeroes is worth
+                # nothing until the same comparison has been shown to report
+                # something else (tools/notepad/pixcheck.py's rule), and the
+                # cheapest proof is already in hand: the screen before this
+                # operation against the screen after it.
+                if prev[0] is not None:
+                    n = len(diff(prev[0][MBAR_H * pw * 3:],
+                                 inc[MBAR_H * pw * 3:], pw))
+                    if not n:
+                        bad.append("A/%s: the operation changed NO pixel, so "
+                                   "the 0 below is vacuous" % label)
+                    else:
+                        print("A: %-10s (moved %d px)" % (label, n))
+                repaint(m, mo, pri)
+                full = shot(m, (pri,))[pri][2]
+                prev[0] = full
+                # BELOW THE MENU BAR. The clock lives at the right of it and
+                # ticks between two captures seconds apart, which the first
+                # run of this reported as 28 differing pixels at (624..629,
+                # 6..9) - the harness's own, and exactly the kind of thing a
+                # COUNT would have let through as "the artifact reproduced".
+                base = MBAR_H * pw * 3
+                d = [(x, y + MBAR_H)
+                     for x, y in diff(inc[base:], full[base:], pw)]
+                r = dispcp.win_rect(m, S, h)          # RE-READ: a drag moved it
+                corner = (r[0], r[1] + r[3])
+                print("A: %-10s %d differing pixel(s)  corner %r  bbox %r"
+                      % (label, len(d), corner, bbox(d)))
+                for p in d[:8]:
+                    print("     %r%s" % (p, "  <-- (W_X, W_Y+W_H)"
+                                         if p == corner else ""))
+                if corner in d:
+                    bad.append("A/%s: the shadow corner %r differs"
+                               % (label, corner))
+                elif d:
+                    bad.append("A/%s: %d pixels differ, not the corner"
+                               % (label, len(d)))
+                if d:
+                    crop_png("/tmp/cornerA-%s-inc.png" % label,
+                             inc, pw, ph, bbox(d))
+                    crop_png("/tmp/cornerA-%s-full.png" % label,
+                             full, pw, ph, bbox(d))
+
+            check("launch")                 # wm_show: reveals nothing (11.90)
+
+            # ...AND NOW SEPARATE THE TWO WINDOWS, because hello opens INSIDE
+            # the Disk window's rect (hl_tpl (200,150) against fm_tpl
+            # (103,80) 320x200) and a click aimed at hello's title bar lands
+            # on whatever is on top of it. That is tools/sucheck.py's
+            # hard-coded (300,40) exactly: the raise raised the wrong window,
+            # the drag pressed on a Disk row instead of a title bar, and the
+            # window never moved - which the "did this operation move any
+            # pixels" guard caught and a bare 0 would not have.
+            dr = dispcp.win_rect(m, S, disk)
+            mo.drag(dr[0] + dr[2] // 2, dr[1] + TITLE_H // 2,
+                    dr[0] + dr[2] // 2, hy + hh + 20 + TITLE_H // 2)
+            os88marty.settle(m, card=pri)
+            dr = dispcp.win_rect(m, S, disk)
+            hx, hy, hw, hh = dispcp.win_rect(m, S, h)
+            if not (dr[1] > hy + hh or hy > dr[1] + dr[3]):
+                sys.exit("the two windows still overlap: hello (%d,%d %dx%d) "
+                         "and Disk (%d,%d %dx%d) - every click below would be "
+                         "aimed at whichever is on top"
+                         % (hx, hy, hw, hh, dr[0], dr[1], dr[2], dr[3]))
+            print("   parted: hello y %d..%d, Disk y %d..%d"
+                  % (hy, hy + hh, dr[1], dr[1] + dr[3]))
+
+            mo.click(dr[0] + 60, dr[1] + TITLE_H // 2)
+            os88marty.settle(m, card=pri)
+            mo.click(hx + hw // 2, hy + TITLE_H // 2)
+            os88marty.settle(m, card=pri)
+            check("raise")                  # wm_raise: one window, no desktop
+
+            def hdrag(dx, dy):
+                """...AND SETTLE AFTERWARDS. Without it the capture can be
+                taken while ui_drag is still tracking - the release not yet
+                decoded off the 1200-baud UART - and what is on the glass is
+                then an XOR outline over an unmoved window. The self-check
+                above is what caught that: two legs reported 0 differing
+                pixels because the operation had changed NO pixel."""
+                r = dispcp.win_rect(m, S, h)
+                mo.drag(r[0] + r[2] // 2, r[1] + TITLE_H // 2,
+                        r[0] + r[2] // 2 + dx, r[1] + TITLE_H // 2 + dy)
+                os88marty.settle(m, card=pri)
+                n = dispcp.win_rect(m, S, h)
+                print("   drag %+d%+d: (%d,%d) -> (%d,%d)"
+                      % (dx, dy, r[0], r[1], n[0], n[1]))
+
+            hdrag(+56, +40)                 # ui_drag: the union of both rects,
+            check("drag")                   # and the first path that dithers
+
+            hdrag(-56, -40)
+            check("dragback")               # ...and back over its own shadow
+
+            dr = dispcp.win_rect(m, S, disk)
+            mo.click(dr[0] + 10, dr[1] + TITLE_H // 2)  # the close box, LEFT
+            os88marty.settle(m, card=pri)
+            check("closedisk")              # wm_hide: the vacated rect
+
+        # --- C: THE DITHER'S PHASE ACROSS A VERTICAL DRAG ------------------
+        #
+        # SPEC.md 11.96.12's drag cache replays a window's banked content at
+        # its new position. wm_dc_take refuses when the x BYTE PHASE would
+        # change (`test al, 7`) and when the DEPTH would, and says in as many
+        # words that "Any dy is free - rows are whole".
+        #
+        # That is true of the framebuffer's layout and false of a DITHER.
+        # gfx_fill_gray is "(x+y) even = white, odd = black" - phased on
+        # ABSOLUTE screen coordinates, deliberately, so that drawing it as
+        # fragments is pixel-identical to drawing it whole (wm_dmg_gray) - and
+        # files.inc draws the Disk window's scroll-bar track with it. Replay
+        # those pixels an ODD number of rows away and every one of them is
+        # inverted. dx cannot do it: it is already forced to a multiple of 8,
+        # and 8 is even.
+        #
+        # So this is a parity A/B on a window that HAS a dither in it, and the
+        # control is `make DRAGCACHE=0` - with the cache gone the window
+        # redraws in full at the new place and an odd dy must read 0 as well.
+        if a.only == "c":
+            dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
+            d3 = dispcp.win_list(m, S)[-1]
+            prev = [None]
+            # HOW FAR THERE IS TO DRAG IS THE ADAPTER'S ANSWER, not a constant.
+            # CGA's desktop band is ~157 rows and wm_fit clamps a Disk window
+            # to 155 of them, so there is no vertical room here at all - a
+            # fixed +40 walked the pointer off a 200-row screen and the mouse
+            # driver refused, correctly, several steps from the reason. The
+            # legs are k and k+1 so that one of each pair is odd, which is the
+            # whole experiment.
+            wr = dispcp.win_rect(m, S, d3)
+            dock = u16(m.read(S("vid_dock_y0"), 2))
+            room = min(dock - 1 - (wr[1] + wr[3]), wr[1] - MBAR_H)
+            k = (min(40, room) // 8) * 8
+            if k < 8:
+                print("C: no vertical room on this adapter - a %dx%d window at "
+                      "y=%d in a band ending %d leaves %d rows. SKIPPED."
+                      % (wr[2], wr[3], wr[1], dock, max(room, 0)))
+                k = 0
+            for want in ([] if not k else (+k, +k + 1, -k - 1, -k)):
+                r0 = dispcp.win_rect(m, S, d3)
+                mo.drag(r0[0] + r0[2] // 2, r0[1] + TITLE_H // 2,
+                        r0[0] + r0[2] // 2, r0[1] + TITLE_H // 2 + want)
+                os88marty.settle(m, card=pri)
+                r1 = dispcp.win_rect(m, S, d3)
+                got = r1[1] - r0[1]
+                # THE PARITY THAT MATTERS IS THE ONE THE RECORD TOOK, not the
+                # one asked for: wm_dock_snap and ui_drag's clamp both move a
+                # dropped window, and in the run that found this they turned a
+                # requested +180 into an actual +175.
+                probe(m, mo, pri, pw, ph,
+                      "dy%+d got%+d %s" % (want, got,
+                                           "ODD" if got & 1 else "even"),
+                      bad, prev, tag="C")
+
+        # --- B: a drag that uncovers ---------------------------------------
+        if a.only not in ("a", "c"):
+            seam = None
+            if not a.single and len(cards) > 1:
+                dispcp.open_panel(m, mo, S, os88marty.settle, card=pri)
+                if a.primary:
+                    kind = {"vga": 0, "herc": 1, "cga": 2}[a.primary]
+                    av = m.read(S("vid_avail"), 1)[0]
+                    dispcp.set_primary(m, mo, S, os88marty.settle,
+                                       dispcp.adapter_row(av, kind), card=pri)
+                    # THE CARDS SWAP ROLES, so every index derived from
+                    # [vid_kind] above is now the other one - and a settle
+                    # gated on the wrong card watches a screen nothing is
+                    # drawing to.
+                    pri = [i for i, c in cards.items()
+                           if c["type"] ==
+                           dispcp.KIND_CARD[m.read(S("vid_kind"), 1)[0]]][0]
+                    sec = [i for i in cards if i != pri][0]
+                    pw, ph = m.fbuf(card=pri)[:2]
+                    print("primary is now %s (card %d)" % (a.primary, pri))
+                    dispcp.open_panel(m, mo, S, os88marty.settle, card=pri)
+                dispcp.set_mode(m, mo, S, os88marty.settle, a.mode, card=pri)
+                dispcp.close_panel(m, mo, S, os88marty.settle, card=pri)
+                ctx = m.read(S("vid_ctx"), 84)
+                seam = (u16(ctx, 42 + 36), u16(ctx, 42 + 38))
+                print("extended; the second display is at %r" % (seam,))
+            if a.under == "hello" and a.only == "b":
+                launch_hello(m, mo, pri)
+
+            before = {w for w, _ in wins(m, "before")}
+            dispcp.open_drive(m, mo, S, os88marty.settle, "B", card=pri)
+            after = wins(m, "after ")
+            fresh = [w for w, _ in after if w not in before]
+            d2 = fresh[-1] if fresh else after[-1][0]
+            wx, wy, ww, wh = dispcp.win_rect(m, S, d2)
+            print("dragging window %d from (%d,%d) %dx%d - occupied to (%d,%d)"
+                  % (d2, wx, wy, ww, wh, wx + ww, wy + wh))
+
+            # THE SEAM IS AN AXIS, not an x. In "below" the displays are
+            # stacked, so a drag along x crosses nothing at all and the run
+            # silently measures the same thing "near" does.
+            tx, ty = wx + ww // 2, wy + TITLE_H // 2
+            if not seam:
+                tx = pw - 130
+            elif a.mode == "right":
+                tx = seam[0] + (ww // 2 + 40 if a.dest == "far" else 40)
+                if a.dest == "near":
+                    tx = pw - 130
+            else:
+                ty = seam[1] + (TITLE_H + 8 if a.dest == "far" else 8)
+                if a.dest == "near":
+                    ty = seam[1] - 100
+            mo.drag(wx + ww // 2, wy + TITLE_H // 2, tx, ty)
+            os88marty.settle(m, card=pri)
+            mo.to(*PARK)
+            os88marty.settle(m, card=pri)
+            print("dragged to %r" % (dispcp.win_rect(m, S, d2),))
+            look = (pri, sec) if (seam and not a.single) else (pri,)
+            inc = shot(m, look)
+
+            repaint(m, mo, pri)
+            full = shot(m, look)
+
+            for c in look:
+                nm = "primary" if c == pri else "second"
+                w0, h0 = inc[c][0], inc[c][1]
+                off = MBAR_H if c == pri else 0
+                base = off * w0 * 3
+                dd = [(x, y + off)
+                      for x, y in diff(inc[c][2][base:], full[c][2][base:], w0)]
+                print("B: %-8s %d differing pixel(s)  bbox %r"
+                      % (nm, len(dd), bbox(dd)))
+                if not dd:
+                    continue
+                bad.append("B: %s differs by %d" % (nm, len(dd)))
+                # ...AND WHAT THE PIXELS ARE. A bbox says which rect owns them
+                # and a picture says what they show, which is the difference
+                # between "the drop shadow" and "three characters of a file
+                # name". Both captures are cropped identically so they can be
+                # looked at side by side.
+                for tag, cap in (("inc", inc[c][2]), ("full", full[c][2])):
+                    box = crop_png("/tmp/corner-%s-%s.png" % (nm, tag),
+                                   cap, w0, h0, bbox(dd))
+                print("     crops in /tmp/corner-%s-{inc,full}.png  %r"
+                      % (nm, box))
+
+        print()
+        print(("FAIL: " + "; ".join(bad)) if bad else
+              "PASS: incremental agrees with a full repaint")
+        return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

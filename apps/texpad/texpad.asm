@@ -4136,7 +4136,7 @@ tp_s_a5:        db 'amfile.org', 0
 tp_s_a6:        db 0
 tp_s_a7:        db 'A paper-oriented SUBSET of the markup, set in', 0
 tp_s_a8:        db 'the kernel 8x8 monofont. No math engine, no', 0
-tp_s_a9:        db 'figures, no colour - see SPEC.md 66.2.', 0
+tp_s_a9:        db 'figures, no colour - see SPEC.md 69.2.', 0
 tp_s_a10:       db 0
 tp_s_a11:       db 'F5 typesets.  File exports PDF 1.4 and PostScript.', 0
 

@@ -661,48 +661,155 @@ wm_fit_box:
 %endif
 
 ; -----------------------------------------------------------------------------
-; wm_dmg_band - the rows the desktop dither may use (SPEC.md 39.16.2)
+; wm_dmg_bands - seed the clip list with the DESKTOP BAND of every display the
+;                damage rect touches (SPEC.md 39.16.2.1)
 ;
-; in:       AX = a virtual x inside the damage, BX = a virtual y in it
-; out:      SI = the first usable row, DI = the last
-; clobbers: SI, DI, flags
+; in:       AX = x1, BX = y1, CX = x2, DX = y2 - the damage, VIRTUAL, already
+;           clamped to the desktop
+; out:      CF = 0: [wm_clip_n] seeds are armed and AX/BX/CX/DX is their
+;           bounding box. CF = 1: this rect holds no desktop row on any
+;           display, and nothing is armed
+; clobbers: flags, SI, DI and the four outputs
 ;
 ; MBAR_H .. [vid_dock_y0]-1 was the answer while there was one display, and it
 ; is still the answer ON display 0 - the menu bar and the dock are the
 ; PRIMARY's and no other card carries either. On any other display the whole
-; height is desktop, and flooring it at MBAR_H left the top 20 rows of the
-; second monitor undithered by the damage path: a window closing up there left
-; its own pixels behind. Capping at [vid_dock_y0] was the same mistake at the
-; other end and bites harder the other way round - a CGA primary puts that row
-; at 176, which would have left 172 rows of a Hercules secondary unreachable.
+; height is desktop.
+;
+; **IT TAKES A RECT BECAUSE A POINT CANNOT ANSWER** (SPEC.md 39.16.2.1). This
+; was `wm_dmg_band`, which took one (x, y) and answered one band, and
+; wm_paint_dmg asked it about the damage rect's top-left corner and applied the
+; answer to the whole rect. A drag across the seam is exactly the case where
+; that rect spans two displays with different bands: dragging a Disk window
+; back onto a CGA primary from a Hercules secondary put x1 on the CGA, so the
+; CGA's dock ceiling of 175 was applied to the Hercules part as well and every
+; vacated row below it there was never dithered - 3,844 stale pixels, which is
+; 320 columns x 24 rows half-lit in a 50% dither to within four
+; (docs/WM-ARTIFACTS.md 2). A one-display machine could not show it and never
+; will, so the shape of the contract is the only thing that stops it coming
+; back: there is no point-shaped entry point here any more to reach for.
+;
+; The SPLIT already existed and was never the problem - gfx_disp_run intersects
+; a rect with each display and translates it, and a fragment on no display is
+; drawn by nobody (SPEC.md 39.2.1). So this emits the bands as CLIP SEEDS and
+; leaves the caller one fill: the region confines it and gfx_disp_run splits
+; it, which is one region build and one primitive call rather than one of each
+; per display - PERFORMANCE.md Part 2's ~756us per call is the thing not being
+; spent twice.
 ; -----------------------------------------------------------------------------
-wm_dmg_band:
-    mov si, MBAR_H
-    mov di, [vid_dock_y0]
-    dec di
+wm_dmg_bands:
+    mov [wm_db_r+0], ax
+    mov [wm_db_r+2], bx
+    mov [wm_db_r+4], cx
+    mov [wm_db_r+6], dx
+    mov word [wm_clip_n], 0
+    mov word [wm_db_b+0], 0x7FFF        ; the bounding box, empty
+    mov word [wm_db_b+2], 0x7FFF
+    mov word [wm_db_b+4], 0x8000
+    mov word [wm_db_b+6], 0x8000
+    xor si, si                          ; SI = the display being asked
+.disp:
 %ifdef KERN_BIG
-    cmp byte [vid_ndisp], 1
-    jbe .out
-    push ax
-    push bx
-    call vid_disp_of            ; AL = the display this damage is on
-    or al, al
-    jz .pop                     ; display 0: the chrome's band, as before
-    call vid_ctx_ptr
-    mov si, [di+VID_CTX_VY]
+    mov al, [vid_ndisp]
+    xor ah, ah
+    cmp si, ax
+    jae .done
     mov ax, si
-    add ax, [di+VID_CTX_CH]
-    dec ax
-    mov di, ax
-    pop bx
-    pop ax
-    ret
-.pop:
-    pop bx
-    pop ax
-.out:
+    call vid_ctx_ptr                    ; DI = its record (AX preserved)
+    mov ax, [di+VID_CTX_VX]
+    mov cx, ax
+    add cx, [di+VID_CTX_CW]
+    dec cx
+    mov bx, [di+VID_CTX_VY]
+    mov dx, bx
+    add dx, [di+VID_CTX_CH]
+    dec dx
+%else
+    or si, si
+    jnz .done
+    xor ax, ax                          ; one display, and it IS the screen
+    xor bx, bx
+    mov cx, [vid_wm1]
+    mov dx, [vid_hm1]
 %endif
+    cmp ax, [wm_db_r+0]                 ; ...intersected with the damage
+    jge .x1
+    mov ax, [wm_db_r+0]
+.x1:
+    cmp cx, [wm_db_r+4]
+    jle .x2
+    mov cx, [wm_db_r+4]
+.x2:
+    cmp bx, [wm_db_r+2]
+    jge .y1
+    mov bx, [wm_db_r+2]
+.y1:
+    cmp dx, [wm_db_r+6]
+    jle .y2
+    mov dx, [wm_db_r+6]
+.y2:
+    or si, si                           ; ...and the CHROME is display 0's
+    jnz .band                           ; alone (SPEC.md 39.16.2)
+    cmp bx, MBAR_H
+    jge .top
+    mov bx, MBAR_H
+.top:
+    push ax
+    mov ax, [vid_dock_y0]               ; stopping above the strip, which
+    dec ax                              ; dock_force_x restores: damage that
+    cmp dx, ax                          ; reaches it already forces the span,
+    jle .bot                            ; so dithering those rows is drawn only
+    mov dx, ax                          ; to be painted over (SPEC.md 30.3.2)
+.bot:
+    pop ax
+.band:
+    cmp ax, cx                          ; nothing of this display is desktop
+    jg .next                            ; here - and an empty seed must not
+    cmp bx, dx                          ; grow the bounding box either
+    jg .next
+    mov [wm_cl_fx1], ax
+    mov [wm_cl_fy1], bx
+    mov [wm_cl_fx2], cx
+    mov [wm_cl_fy2], dx
+    call wm_clip_add                    ; WM_CLIP_MAX is 16 and this appends at
+                                        ; most VID_NDISP_MAX, so the full case
+                                        ; is unreachable rather than handled
+    cmp ax, [wm_db_b+0]
+    jge .b1
+    mov [wm_db_b+0], ax
+.b1:
+    cmp bx, [wm_db_b+2]
+    jge .b2
+    mov [wm_db_b+2], bx
+.b2:
+    cmp cx, [wm_db_b+4]
+    jle .b3
+    mov [wm_db_b+4], cx
+.b3:
+    cmp dx, [wm_db_b+6]
+    jle .b4
+    mov [wm_db_b+6], dx
+.b4:
+.next:
+    inc si
+    jmp .disp                   ; NEAR: the body outgrew a short jump
+.done:
+    cmp word [wm_clip_n], 0
+    je .none
+    mov ax, [wm_db_b+0]
+    mov bx, [wm_db_b+2]
+    mov cx, [wm_db_b+4]
+    mov dx, [wm_db_b+6]
+    clc
     ret
+.none:
+    stc
+    ret
+
+wm_db_r     times 4 dw 0        ; wm_dmg_bands: the damage it was handed, and
+wm_db_b     times 4 dw 0        ; the bounding box of the seeds it emitted -
+                                ; .text for wm_clip_n's reason, and read back
+                                ; by wm_dmg_gray, which is its only caller
 
 ; -----------------------------------------------------------------------------
 ; The natural bank: the frame a window goes back to when the screen grows again
@@ -3322,25 +3429,11 @@ wm_paint_dmg:
                                 ; is disarmed rather than reasoned about
 
 .fill:
-    mov ax, [wm_dmg_x1]         ; the desktop dither, clipped to the damage
-    mov bx, [wm_dmg_y1]         ; and to the band the CHROME leaves free
-    push ax                     ; (SPEC.md 39.16.2: only display 0 has any)
-    call wm_dmg_band            ; SI = the floor, DI = the ceiling
-    pop ax
-    cmp bx, si
-    jge .fy
-    mov bx, si
-.fy:
-    mov cx, [wm_dmg_x2]
-    mov dx, di                  ; ...and stopping above the strip, which
-                                ; dock_paint restores below (SPEC.md 30.3.2):
-    cmp dx, [wm_dmg_y2]         ; damage that reaches the dock already forces
-    jle .fy2                    ; the span through dock_force_x, so dithering
-    mov dx, [wm_dmg_y2]         ; those rows is drawn only to be painted over
-.fy2:
-    cmp bx, dx
-    jg .zones
-    call wm_dmg_gray            ; ...minus the windows about to cover it
+    mov ax, [wm_dmg_x1]         ; the desktop dither, clipped to the damage,
+    mov bx, [wm_dmg_y1]         ; to EACH display's own chrome band and to the
+    mov cx, [wm_dmg_x2]         ; windows about to cover it. The band used to
+    mov dx, [wm_dmg_y2]         ; be worked out here, from this rect's top-left
+    call wm_dmg_gray            ; corner alone - see wm_dmg_bands
 .zones:
     mov al, [wm_dmg_zn]
     call desk_paint_mask        ; the touched drive zones, whole
@@ -4070,10 +4163,12 @@ wm_clip_rn  db 8                ; first drawable row of the cell it was last
 ; seed is the window's own rect and wm_clip_occl subtracts the windows ABOVE
 ; it, so a hidden window with nothing on top of it armed its full content rect
 ; and every clipped primitive then drew straight onto the desktop. The contract
-; above already said otherwise, and files_poster_x reads it exactly as written
+; above already said otherwise, and files_poster_x read it exactly as written
 ; ("CF = 1: none of it is visible any more") with no visibility test of its
 ; own - so this was a promise the routine did not keep rather than a rule its
-; callers were failing to learn.
+; callers were failing to learn. That caller is gone (SPEC.md 22.17) and the
+; fix is not: the contract is what it always said, and the next caller to take
+; it at its word gets the behaviour it promises.
 ;
 ; Asked FIRST, above wm_su_drop: a hidden window is about to draw nothing, so
 ; the raise cache wm_hide banked at the moment it went down (11.96.5) has to
@@ -4334,10 +4429,13 @@ wm_covered:
 ;   - The dither's phase is a function of ABSOLUTE x+y (see gfx_fill_gray), so
 ;     drawing it as fragments is pixel-identical to drawing it whole. A
 ;     pattern phased from the fill's own origin could not be split this way.
-;   - Overflow degrades to dithering the WHOLE rect, which is the opposite of
-;     wm_clip_set's degradation and for the opposite reason: a fragment too
-;     many there means "skip, we might overdraw somebody", here it means
-;     "draw it all, or we leave stale pixels behind".
+;   - Overflow degrades to dithering the whole of every BAND, which is the
+;     opposite of wm_clip_set's degradation and for the opposite reason: a
+;     fragment too many there means "skip, we might overdraw somebody", here it
+;     means "draw it all, or we leave stale pixels behind". It was the whole
+;     RECT until the bands became per display (SPEC.md 39.16.2.1); that rect is
+;     now a bounding box which can span a seam, so the degradation re-seeds
+;     rather than disarming.
 ;   - The hide is spent explicitly. GFXCLIP only calls cur_unlazy on its
 ;     UNCLIPPED branch (SPEC.md 7.1.4), trusting wm_clip_set's cur_lazyck to
 ;     have decided for an armed one - and there is no window here to decide
@@ -4351,25 +4449,32 @@ wm_dmg_gray:
     push dx
     push si
     call cur_unlazy             ; ...as the unclipped fill did (see above)
-    mov [wm_dg_r + 0], ax       ; the region build eats registers and the
-    mov [wm_dg_r + 2], bx       ; fill needs its rect back afterwards
-    mov [wm_dg_r + 4], cx
+    mov [wm_dg_r + 0], ax       ; the DAMAGE, banked: the overflow path below
+    mov [wm_dg_r + 2], bx       ; has to re-seed from it and the region build
+    mov [wm_dg_r + 4], cx       ; eats every register
     mov [wm_dg_r + 6], dx
-    mov si, dx                  ; wm_clip_seed wants AX,DX,CX,SI
-    mov dx, bx
-    call wm_clip_seed
+    call wm_dmg_bands           ; the seeds are each display's own band inside
+    jc .out                     ; that rect (SPEC.md 39.16.2.1), and AX..DX
+                                ; their bounding box - which the fill wants and
+                                ; which stays in wm_db_b across the build
     call wm_dmg_occl            ; every visible window, shadow included
     jc .whole                   ; overflowed: dither the lot, as before
     cmp word [wm_clip_n], 0
     je .out                     ; wholly covered: not one pixel is revealed
     jmp short .fill
 .whole:
-    mov word [wm_clip_n], 0
+    mov ax, [wm_dg_r + 0]       ; ...THE BANDS, not their bounding box, and not
+    mov bx, [wm_dg_r + 2]       ; the damage: re-seeding from the box would
+    mov cx, [wm_dg_r + 4]       ; dither columns of display 0 that the damage
+    mov dx, [wm_dg_r + 6]       ; never covered, because the box spans the seam
+    call wm_dmg_bands           ; and each display then clamps it back to its
+                                ; own full width. It is idempotent from the
+                                ; DAMAGE and is not from the box
 .fill:
-    mov ax, [wm_dg_r + 0]
-    mov bx, [wm_dg_r + 2]
-    mov cx, [wm_dg_r + 4]
-    mov dx, [wm_dg_r + 6]
+    mov ax, [wm_db_b + 0]       ; the bounding box of the seeds; the armed
+    mov bx, [wm_db_b + 2]       ; region confines the fill inside it and
+    mov cx, [wm_db_b + 4]       ; gfx_disp_run splits what is left per display
+    mov dx, [wm_db_b + 6]
     call gfx_fill_gray          ; clipped to what is really being revealed
 .out:
     mov word [wm_clip_n], 0     ; ours for one call and no longer
@@ -5847,7 +5952,22 @@ wm_chrome_clip:
     dec si
 .seed:
     call wm_clip_seed
-    call wm_clip_occl           ; BX = us; subtract every visible window above
+    call wm_clip_occlf          ; BX = us; subtract every visible window above,
+                                ; BY THE FRAME each of them REPAINTS and not by
+                                ; the box it occupies (SPEC.md 11.97.2). The
+                                ; paragraph at wm_clip_occlf says occlusion may
+                                ; claim the two unpainted shadow corners because
+                                ; "a clipped primitive declines to draw one
+                                ; nobody needed" - and that is 11.97's own
+                                ; licence, "a pixel the region drops is a pixel
+                                ; somebody above is about to write anyway",
+                                ; which holds INSIDE the upper window's frame
+                                ; and is false at exactly those two corners:
+                                ; nothing paints them, ever. So the seed here -
+                                ; a LOWER window's chrome, drop shadow included
+                                ; - lost its shadow pixel wherever an upper
+                                ; window's (x, y+h) or (x+w, y) landed on it,
+                                ; and nothing put it back
     jc .none                    ; overflowed: nothing about the list is valid
     cmp word [wm_clip_n], 0
     jne .out

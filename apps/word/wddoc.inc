@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/word/wddoc.inc
 ;
-; THE REAL WORD .DOC FORMAT (SPEC.md 65.4) - the Word for Windows 1.x/2.x
+; THE REAL WORD .DOC FORMAT (SPEC.md 68.4) - the Word for Windows 1.x/2.x
 ; binary file, written and read from the Opus structures rather than a
 ; private container with Opus's magic on it:
 ;
@@ -17,7 +17,7 @@
 ; (fComplex clear, one contiguous text run), which is what Word's own full
 ; save writes; the reader accepts simple AND complex, walking the piece table
 ; when it finds one, because that is the half that lets this app open a file
-; somebody else fast-saved (SPEC.md 65.4.1).
+; somebody else fast-saved (SPEC.md 68.4.1).
 ;
 ; Every FC in a file this app can touch fits in 16 bits - the whole file has
 ; to fit the staging claim to be read at all, and the writer refuses past
@@ -87,13 +87,13 @@ WD_KULSING   equ 1              ; kulSingle  (props.h)
 WD_KULWORD   equ 2              ; kulWord
 WD_KULDBL    equ 3              ; kulDouble
 
-WD_TWIPCELL  equ 144            ; one cell = 1/10" = 144 twips (SPEC.md 65.3)
+WD_TWIPCELL  equ 144            ; one cell = 1/10" = 144 twips (SPEC.md 68.3)
 WD_CBPHE     equ 6              ; sizeof (struct PHE)  - word.h
 WD_CBPCD     equ 8              ; sizeof (struct PCD)  - doc.h
 WD_CBSED     equ 6              ; sizeof (struct SED)
 WD_CBDOP     equ 66             ; sizeof (struct DOP)  - wordwin.h
 
-WD_DOCCAP    equ 62             ; the save staging claim, KB (SPEC.md 65.4).
+WD_DOCCAP    equ 62             ; the save staging claim, KB (SPEC.md 68.4).
                                 ; 30KB of text plus its 384-byte header is
                                 ; 31,104, so this leaves ~30KB of FKP pages
                                 ; and tables. Past it the save REFUSES; it
@@ -139,7 +139,7 @@ wd_docimg:
     mov [es:WDF_CCPTEXT], ax        ; with a ¶ and its N marks are N
     add ax, WD_HDRPAGE              ; paragraphs; this port holds N-1 marks
     mov [es:WDF_FCMAC], ax          ; and a TAIL paragraph with no mark
-    mov cx, [wd_len]                ; (SPEC.md 65.3), so the two
+    mov cx, [wd_len]                ; (SPEC.md 68.3), so the two
     jcxz .notext                    ; representations differ by exactly this
     push ds                         ; one character - appended here, dropped
     mov ds, [cs:wd_dseg]            ; by wd_dtrim on the way back in
@@ -562,7 +562,7 @@ wd_btadd:
 ;         count, and the page-start fcs are banked in wd_dbtfc.
 ;
 ; A run is a maximal span of equal attribute byte. A paragraph mark's CHP
-; byte is its PAP index, not attributes (SPEC.md 65.3), so a 13 reads as
+; byte is its PAP index, not attributes (SPEC.md 68.3), so a 13 reads as
 ; plain - which is also what it is in the file, where the paragraph's
 ; properties live in the PAPX.
 ; -----------------------------------------------------------------------------
@@ -1224,7 +1224,7 @@ wd_dvpair:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpieces - find the text's pieces (SPEC.md 65.4.1)
+; wd_dpieces - find the text's pieces (SPEC.md 68.4.1)
 ; in:  [wd_stgseg]
 ; out: CF=1 = refuse; [wd_dpcn] = the piece count, [wd_dpcp]/[wd_dpcd] = the
 ;      plcpcd's CP and PCD arrays, [wd_dccp] = the document's total length.
@@ -1263,7 +1263,7 @@ wd_dpieces:
     cmp bx, cx
     jae .no
     cmp byte [es:bx], 1             ; clxtPrc: a byte, a word length and a
-    jne .plc                        ; grpprl - skipped whole (SPEC.md 65.4.1)
+    jne .plc                        ; grpprl - skipped whole (SPEC.md 68.4.1)
     mov ax, [es:bx+1]
     add bx, 3
     add bx, ax
@@ -1556,7 +1556,7 @@ wd_dchpin:
 ; back to an fc through the pieces (wd_dfcof), and the PAPX covering that fc
 ; is the paragraph's format. Doing it in this direction means a run split
 ; across two pieces needs no special case at all, and the mark - the thing
-; that actually carries the index (SPEC.md 65.3) - is what drives the loop.
+; that actually carries the index (SPEC.md 68.3) - is what drives the loop.
 ; -----------------------------------------------------------------------------
 wd_dpapin:
     push ax
@@ -2088,7 +2088,7 @@ wd_dcwid:
 ;
 ; The other half of wd_docimg's appended 13. A Word file's text ends with a ¶
 ; and its N marks are N paragraphs; this document model holds N-1 marks and a
-; TAIL paragraph whose format lives in [wd_pap_tail] (SPEC.md 65.3). So the
+; TAIL paragraph whose format lives in [wd_pap_tail] (SPEC.md 68.3). So the
 ; final mark is REMOVED and its dictionary index becomes the tail's - which
 ; makes save/load a fixed point instead of growing a paragraph a round.
 ; -----------------------------------------------------------------------------
@@ -2120,7 +2120,7 @@ wd_dtrim:
 ; Runs LAST, after the properties are painted, so that a CP still indexed the
 ; same character while the painting happened. Text and CHP move together, one
 ; index at a time - the two claims are parallel arrays and every operation in
-; this app keeps them so (SPEC.md 65.3).
+; this app keeps them so (SPEC.md 68.3).
 ; -----------------------------------------------------------------------------
 wd_dcompact:
     push ax

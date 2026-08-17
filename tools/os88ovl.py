@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Split a package's on-demand module out of its assembled image.
 
-SPEC.md 65.10. The Word package assembles to `.text | .modc`, and everything
+SPEC.md 68.10. The Word package assembles to `.text | .modc`, and everything
 from `.modc` onward is code that must NOT ship inside WORD.O88: it becomes a
 file of its own that the package reads into a heap claim when the feature is
 asked for, and frees when it is done.
 
 **Why the module is assembled WITH the package** rather than as a second nasm
 run: the module keeps `DS` = the package's segment and reaches the document
-through it (SPEC.md 65.10), so every symbol it names has to be the address the
+through it (SPEC.md 68.10), so every symbol it names has to be the address the
 package itself uses. One assembly makes that true by construction. This is
 kernel SPEC.md 2.8's shape and its reasoning verbatim - "a second assembly
 would make it a claim, and the tree's rule about second opinions is that they

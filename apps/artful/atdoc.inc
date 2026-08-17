@@ -201,6 +201,49 @@ at_dfit:
     ret
 
 ; -----------------------------------------------------------------------------
+; at_dmov - AX = at_reloc to let the document move, 0 to pin it (66.5.7.1)
+; in:  AX; out: nothing - every register AND the flags preserved, because the
+;      caller's CF is the file operation's verdict and this runs beside it
+; -----------------------------------------------------------------------------
+at_dmov:
+    push ax
+    push dx
+    pushf
+    mov dx, [at_dseg]               ; re-read: at_dresize may have moved it
+    call OSAPI_MEM_MOVABLE
+    popf
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_reloc - the compactor moved the document or the undo arena (SPEC.md 66.5.7)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing; preserves every register
+;
+; TWO claims and one proc: the kernel calls the proc the moved claim was
+; declared with, and BX says which of the two it was. One word each, because
+; everything else either side is an OFFSET - the gap ends [at_gs]/[at_ge] and
+; the capacity in the document, [at_coff]/[at_usz]/[at_csz] and every
+; snapshot's position in the arena - and a move does not change an offset.
+;
+; at_dresize is NOT this. A regrow reports its new base in DX and the caller
+; takes it from there (SPEC.md 50.3.1); this is the other direction, where
+; nobody asked and the bytes have already gone.
+; -----------------------------------------------------------------------------
+at_reloc:
+    cmp bx, [at_dseg]
+    jne .arena
+    mov [at_dseg], dx
+    ret
+.arena:
+    cmp bx, [at_aseg]
+    jne .out
+    mov [at_aseg], dx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; at_dlen - AX = logical document length; preserves all else
 ; -----------------------------------------------------------------------------
 at_dlen:

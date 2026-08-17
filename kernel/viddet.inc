@@ -554,10 +554,22 @@ vid_setmode:
     push es
     cmp byte [vid_kind], VID_HERC
     je .herc
+    call vid_cga_equip          ; EITHER COLOUR CARD, NOT JUST THE CGA (SPEC.md
+                                ; 39.19.4). The XT ROM's mode set is
+                                ; EQUIPMENT-driven: with 40:10 saying mono it
+                                ; forces mode 7 and the 3B4h CRTC whatever mode
+                                ; was asked for, so `int 10h AX=0012h` on a
+                                ; HERCULES-PRIMARY machine programmed the
+                                ; Hercules into 80x25 text over its own graphics
+                                ; framebuffer and never touched the VGA at all.
+                                ; This call was below the VID_CGA test, so only
+                                ; the CGA arm got the treatment - and see there:
+                                ; it is a no-op unless the flag says mono, which
+                                ; is why every colour-primary machine is
+                                ; unaffected by moving it up
     mov ax, 0x0012              ; VGA: 640x480x16 planar
     cmp byte [vid_kind], VID_CGA
     jne .bios
-    call vid_cga_equip          ; ...and see there: on a mono-primary machine
 
     ; --- ZERO B800 WHILE THE CARD IS STILL IN TEXT MODE ---------------------
     ; The Hercules path below blanks the tube for its whole mode change and

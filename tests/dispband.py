@@ -143,10 +143,18 @@ def main(argv):
         wx, wy, ww, wh = win_by(m, slot)
         say("pushed to the top of display 1: W_Y = %d (wanted %d)"
             % (wy, d1vy))
-        if wy != d1vy:
-            fail.append("W_Y stopped at %d, not %d - the drag floor is still "
-                        "the primary's MBAR_H (SPEC.md 39.16.2)"
-                        % (wy, d1vy))
+        # WITHIN THE SNAP'S QUANTUM, not exactly on the floor. SPEC.md
+        # 11.96.13.1 truncates a drop's dy to a multiple of 8 toward where the
+        # drag began, and it runs AFTER ui_drag's clamps - so a window driven
+        # hard into a floor is clamped onto it and then pulled up to 7 rows
+        # back off it, and the landing row depends on where the drag started.
+        # This compared exactly, and failed on a kernel whose floor is right:
+        # from y = 55 the clamp gave 20 and the snap gave 23. What is under
+        # test is WHICH floor, so the quantum is the whole tolerance owed.
+        if not (d1vy <= wy < d1vy + 8):
+            fail.append("W_Y stopped at %d, not within a snap quantum of %d - "
+                        "the drag floor is still the primary's MBAR_H "
+                        "(SPEC.md 39.16.2)" % (wy, d1vy))
 
         # --- 2: ...and the pixels are actually up there --------------------
         sw, sh, srows = m.vram(skind)

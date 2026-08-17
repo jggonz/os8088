@@ -556,6 +556,27 @@ fr_hire:
     cmp byte [fr_spawned], 1
     je .out                         ; we own one already: a second
                                     ; OSAPI_TASK_SPAWN would only be refused
+    mov al, 1                       ; PARK-SAFE (SPEC.md 66.5.4): nothing here
+    call OSAPI_MEM_PARKSAFE         ; holds a cache-derived pointer across a
+                                    ; call that can yield. The worker's ONLY
+                                    ; lock site is fr_emit, which takes the
+                                    ; lock and then calls fr_emit_body - and
+                                    ; the body re-reads [fr_cseg] rather than
+                                    ; inheriting it, so the interval spent
+                                    ; blocked in OSAPI_GFX_LOCK holds nothing
+                                    ; at all. fr_take DOES hold [fr_cseg] in
+                                    ; AX for its whole walk, and is lock-free,
+                                    ; but a task pre-empted there is not
+                                    ; parked: this marks the task only while
+                                    ; it is descheduled INSIDE gfx_lock.
+                                    ; It is a WIDENING here and not the thing
+                                    ; that makes the cache movable (SPEC.md
+                                    ; 66.5.7.2) - this worker sleeps between
+                                    ; passes and reaches OSAPI_TASK_ALIVE
+                                    ; inside INST_PARKW anyway, measured. What
+                                    ; it buys is the pass where the worker
+                                    ; happens to be waiting on a lock some
+                                    ; long repaint is holding
     mov ax, fr_worker               ; a whole-word package address: os88pkg
     mov bx, [fr_win]                ; relocates it as class 0 (SPEC.md 20.2)
     call OSAPI_TASK_SPAWN           ; CF=1 refused, nothing was created
@@ -742,10 +763,34 @@ fr_cache_claim:
     jc .out
     mov [fr_cseg], dx
     mov word [fr_ckb], FR_CACHE_KB0
+    push ax                         ; ...and it MOVES (SPEC.md 66.5.7). Safe
+    mov ax, fr_reloc                ; from the instant it exists, unlike
+    call OSAPI_MEM_MOVABLE          ; Tracker's module (66.5.2): nothing has
+    pop ax                          ; been read into it yet, and every later
+                                    ; reader re-aims ES from [fr_cseg]
     call fr_cache_size
 .out:
     pop dx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_reloc - the compactor moved the run cache (SPEC.md 66.5.7)
+; in:  BX = the base it WAS at, DX = the base it is at NOW, DS = CS = ours
+; out: nothing; preserves every register
+;
+; ONE word, and that is a property of the cache's design rather than luck:
+; every cursor into it - [fr_cpos], [fr_cn], [fr_cmax], [fr_ctlen] - is a
+; byte OFFSET, and an offset is exactly what a move does not change. The
+; three walkers (the render, the frontier and the replay cursor) all re-aim
+; ES from [fr_cseg] per row or per run, so there is no second copy of the
+; base anywhere to fall out of step with this one.
+; -----------------------------------------------------------------------------
+fr_reloc:
+    cmp bx, [fr_cseg]
+    jne .out
+    mov [fr_cseg], dx
+.out:
     ret
 
 ; -----------------------------------------------------------------------------

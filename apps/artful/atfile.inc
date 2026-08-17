@@ -170,11 +170,20 @@ at_save_named:
     call at_gapto                   ; gap to the end - text is contiguous
     mov cx, ax                      ; wait: at_gapto wants AX = position =
     ; the length itself; AX already holds it. CX = byte count for write.
+    push ax                         ; PIN it across the write (66.5.7.1): the
+    xor ax, ax                      ; source below is a pointer INTO this
+    call at_dmov                    ; claim and OSAPI_FILE_WRITE holds it
+    pop ax                          ; across the sector cache's own claims
+                                    ; (SPEC.md 18.95), which can compact
     mov es, [at_dseg]               ; ES:BX = the document itself - no staging
     xor bx, bx                      ; pass, because the gap is parked at the
     xor dx, dx                      ; end and [0..len) is one straight run
     mov si, at_name                 ; (SPEC.md 18.4.1/46.9)
     call OSAPI_FILE_WRITE
+    push ax                         ; movable again on BOTH paths out, before
+    mov ax, at_reloc                ; the CF below picks one
+    call at_dmov
+    pop ax
     jc .err
     mov byte [at_dirty], 0
     jmp short .out
@@ -217,12 +226,20 @@ at_load_named:
                                     ; the file lands in the document buffer
                                     ; itself (SPEC.md 46.9). at_dfit gives the
                                     ; rest back at the end of both paths
+    push ax                         ; PIN it across the read, at_save_named's
+    xor ax, ax                      ; reasoning exactly (SPEC.md 66.5.7.1) -
+    call at_dmov                    ; and AFTER at_dresize above, whose regrow
+    pop ax                          ; is unaffected either way
     mov es, [at_dseg]
     xor bx, bx
     mov cx, [at_dcap]
     xor dx, dx                      ; DX:CX = the capacity; a file bigger than
     mov si, at_name                 ; the gap buffer is FERR_BIG, as before
     call OSAPI_FILE_READ            ; DX:AX = bytes read, and DX is 0 here
+    push ax
+    mov ax, at_reloc
+    call at_dmov
+    pop ax
     jc .err
     ; fold in place: SI reads, DI writes, both inside the document claim
     mov cx, ax

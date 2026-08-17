@@ -422,6 +422,406 @@ inst_init:
 ; out: DI = inst_tab + index*32
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; inst_park_wait - hold this worker still while the heap is compacted
+; in:  DI = the calling worker's own instance record
+; out: nothing (all registers and the flags preserved)
+;
+; SPEC.md 66.5. Sets this instance's parked byte, spins on task_yield until
+; the compactor withdraws the request, and clears it again. It runs with
+; [sch_lock] CLEAR by construction - mem_compact drops the lock before asking
+; and takes it back after - which is what lets the yield here make progress.
+;
+; It cannot deadlock the machine: the request is withdrawn unconditionally on
+; every path out of mem_compact, including the one where the plan turned out
+; not to be worth executing. A worker that never arrives here - asleep,
+; blocked on the gfx lock, or built against an SDK that predates this - simply
+; keeps its claims for that pass, which is the outcome the compactor already
+; has to handle.
+; -----------------------------------------------------------------------------
+inst_park_wait:
+    pushf
+    push ax
+    push bx
+    push di
+    mov bx, di
+    sub bx, inst_tab
+    mov cl, 5                   ; I_RECSZ = 32; CL is banked below
+    push cx
+    shr bx, cl
+    pop cx
+    cmp bx, INST_MAX
+    jae .out                    ; not a record at all: park nothing
+    mov bl, [sch_cur]           ; PER TASK and not per instance (SPEC.md
+    xor bh, bh                  ; 66.5.5): a driver's worker has T_INST = 0xFF
+    mov byte [bx+sch_parked], 1 ; and no record to be parked in at all
+.spin:
+    cmp byte [inst_parkreq], 0
+    je .done
+    call task_yield
+    jmp short .spin
+.done:
+    mov byte [bx+sch_parked], 0
+.out:
+    pop di
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_park_lk / inst_park_unlk - park while BLOCKED ON THE GFX LOCK (66.5.4)
+; in:  nothing (the running task's own instance)
+; out: nothing (all registers and the flags preserved)
+;
+; THE LIMIT THIS EXISTS TO LIFT. A worker parks at OSAPI_TASK_ALIVE; a worker
+; that DRAWS takes the gfx lock once a pass; and a claim that triggers
+; compaction almost always comes from a window callback holding that same
+; lock. So the worker blocks in gfx_lock, never reaches ALIVE, never parks,
+; and mem_can_move refuses every claim its instance owns. Measured before this
+; existed: Tracker's 114KB module sat still with 38KB free directly beneath it
+; (SPEC.md 66.5.3).
+;
+; A task spinning in gfx_lock is not executing package code, so parking it
+; there is safe IF its stack holds no pointer derived from a movable claim -
+; and that is the package's business, not the kernel's. So it is DECLARED:
+; only an instance that called OSAPI_MEM_PARKSAFE is marked here, and the
+; default is not to be. A package that forgets pays a missed optimisation;
+; there is no direction in which forgetting costs memory.
+;
+; The mark is set immediately before the yield and cleared immediately after,
+; so it is set exactly across the window in which this task is descheduled
+; inside gfx_lock. The few instructions either side are inside gfx_lock's own
+; retry loop, which is the state being asserted about. A compactor sampling
+; the mark in that gap simply waits another tick - inst_park_all is a poll -
+; and one sampling it late refuses the move, which is the safe direction.
+; -----------------------------------------------------------------------------
+inst_park_lk:
+    pushf
+    push bx
+    call inst_park_me           ; BX = our parked byte, or CF = 1 for none
+    jc .out
+    mov byte [bx], 1
+.out:
+    pop bx
+    popf
+    ret
+
+inst_park_unlk:
+    pushf
+    push bx
+    call inst_park_me
+    jc .out
+    mov byte [bx], 0
+.out:
+    pop bx
+    popf
+    ret
+
+; inst_park_me - BX = the running task's sch_parked byte; CF = 1 when it has
+; none (the UI task, or a task with no record) or has not declared itself
+; park-safe. Clobbers BX and the flags and nothing else.
+inst_park_me:
+    push ax
+    push cx
+    mov bl, [sch_cur]
+    xor bh, bh
+    mov cl, 3
+    shl bx, cl                  ; T_SIZE = 8, the snd.inc idiom
+    mov al, [bx+sch_tasks+T_INST]
+    cmp al, INST_MAX
+    jae .no
+    mov bl, al
+    xor bh, bh
+    cmp byte [bx+inst_parksafe], 0
+    je .no                      ; never declared: park it at ALIVE and nowhere
+                                ; else (SPEC.md 66.5.4)
+    mov bl, [sch_cur]           ; ...and the MARK is the running task's
+    xor bh, bh
+    add bx, sch_parked
+    pop cx
+    pop ax
+    clc
+    ret
+.no:
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_parksafe_set - API slot 0x0400: "you may park me while I am blocked in
+;                     the kernel" (SPEC.md 66.5.4)
+; in:  AL = 1 declare / 0 withdraw, ES = the caller's segment (the X stub's)
+; out: CF = 0 recorded; CF = 1 the caller is not a live package instance
+; clobbers: flags
+; -----------------------------------------------------------------------------
+inst_parksafe_set:
+    push ax
+    push bx
+    push cx
+    push di
+    mov di, inst_tab
+    xor bx, bx                  ; BL = the slot
+    mov cx, INST_MAX
+.scan:
+    cmp byte [di+I_STATE], 0
+    je .next
+    test byte [di+I_KIND], KIND_PKG
+    jz .next
+    mov ah, al
+    mov ax, es
+    cmp [di+I_SPTR], ax
+    mov al, ah
+    je .hit
+.next:
+    inc bl
+    add di, I_RECSZ
+    loop .scan
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.hit:
+    mov [bx+inst_parksafe], al
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_park_req - ask every package worker to stand still, and wait for them
+; in:  nothing
+; out: nothing (all registers and the flags preserved)
+;
+; Bounded by INST_PARKW ticks and NOT by the workers agreeing: whoever has
+; parked by the deadline gets its claims compacted and whoever has not keeps
+; them. That asymmetry is the whole safety property - the compactor asks and
+; never assumes, so a worker that cannot answer costs a missed optimisation
+; rather than a moved block under a running mixer.
+;
+; It returns as soon as every worker has parked, which on an idle machine is
+; the very next tick.
+; -----------------------------------------------------------------------------
+INST_PARKW equ 4                ; ticks: ~220ms, long enough for a worker that
+                                ; sleeps a tick between passes and short
+                                ; enough not to be felt inside a claim that is
+                                ; already going to pause the machine
+
+inst_park_req:
+%ifdef NOPARK
+    ret                         ; make HEAPPARK=0: nobody is ever asked, so
+                                ; nobody ever parks and inst_seg_parked keeps
+                                ; refusing - the A/B for SPEC.md 66.5 alone,
+                                ; with the compactor itself left in place
+%else
+    pushf
+    push ax
+    push cx
+    push dx
+    mov byte [inst_parkreq], 1
+    mov ax, [ticks]
+    add ax, INST_PARKW
+    mov dx, ax                  ; DX = the deadline
+.wait:
+    call inst_park_all          ; CF = 0: everybody who has a worker has parked
+    jnc .out
+    mov ax, [ticks]
+    sub ax, dx
+    jns .out                    ; SPEC.md 45.15's rule: two free-running
+                                ; counters compare by the SIGN of the
+                                ; difference, never with jg
+    call task_yield
+    jmp short .wait
+.out:
+    pop dx
+    pop cx
+    pop ax
+    popf
+    ret
+%endif
+
+; inst_park_end - withdraw the request; every parked worker resumes
+inst_park_end:
+    mov byte [inst_parkreq], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_park_all - has every live package worker parked? (module internal)
+; out: CF = 0 yes (or there are none), CF = 1 somebody is still running
+; clobbers: flags
+; -----------------------------------------------------------------------------
+inst_park_all:
+    push ax
+    push cx
+    push di
+    mov di, inst_tab
+    xor ax, ax                  ; AL = the index
+    mov cx, INST_MAX
+.scan:
+    cmp byte [di+I_STATE], 0
+    je .next
+    test byte [di+I_KIND], KIND_PKG
+    jz .next
+    cmp byte [di+I_TASK], 0xFF
+    je .next                    ; no worker: nothing to wait for
+    push bx
+    mov bl, [di+I_TASK]         ; the worker's OWN task slot
+    xor bh, bh
+    cmp byte [bx+sch_parked], 0
+    pop bx
+    je .busy
+.next:
+    inc al
+    add di, I_RECSZ
+    loop .scan
+    pop di
+    pop cx
+    pop ax
+    clc
+    ret
+.busy:
+    pop di
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_seg_parked - is the package running at segment BX standing still?
+; in:  BX = a package's region segment
+; out: CF = 0 it is parked (or owns no worker), CF = 1 it may be running
+; clobbers: flags
+;
+; mem_can_move's question, asked of instance.inc because inst_tab is this
+; module's (SPEC.md 29). A segment that matches no instance answers CF = 1:
+; a driver's image matches none, and "I cannot tell" has to mean "it is busy".
+; -----------------------------------------------------------------------------
+inst_seg_parked:
+    push ax
+    push cx
+    push di
+    mov di, inst_tab
+    xor ax, ax
+    mov cx, INST_MAX
+.scan:
+    cmp byte [di+I_STATE], 0
+    je .next
+    test byte [di+I_KIND], KIND_PKG
+    jz .next
+    cmp [di+I_SPTR], bx
+    jne .next
+    cmp byte [di+I_TASK], 0xFF
+    je .free                    ; no worker at all
+    push bx
+    mov bl, [di+I_TASK]
+    xor bh, bh
+    cmp byte [bx+sch_parked], 0
+    pop bx
+    jne .free                   ; parked: it is standing at the top of its own
+                                ; loop and holds nothing derived
+    jmp short .busy
+.next:
+    inc al
+    add di, I_RECSZ
+    loop .scan
+    call inst_svc_parked        ; no instance owns it, so it is a DRIVER image
+    jnc .free                   ; (SPEC.md 51.3) - and a driver's workers are
+                                ; the TF_SERVICE tasks (SPEC.md 66.5.5)
+.busy:
+    pop di
+    pop cx
+    pop ax
+    stc
+    ret
+.free:
+    pop di
+    pop cx
+    pop ax
+    clc
+    ret
+; -----------------------------------------------------------------------------
+; inst_svc_parked - has every DRIVER worker parked? (SPEC.md 66.5.5)
+; out: CF = 0 yes (or there are none), CF = 1 somebody is still running
+; clobbers: flags
+;
+; A driver has no instance record, so drv_task stamps its worker T_INST = 0xFF
+; and marks it TF_SERVICE - which is the only handle the kernel has on "a task
+; running inside a driver". It cannot say WHICH driver, so this is deliberately
+; all-or-nothing: no driver-owned claim moves while any service task is
+; running. Conservative, and the conservative direction is a claim that stays
+; where it is.
+; -----------------------------------------------------------------------------
+inst_svc_parked:
+    push ax
+    push bx
+    push cx
+    mov bx, sch_tasks
+    xor cx, cx                  ; CL = the slot
+.scan:
+    cmp byte [bx+T_STATE], 0
+    je .next                    ; a free slot
+    test byte [bx+T_FLAGS], TF_SERVICE
+    jz .next
+    push bx
+    mov bl, cl
+    xor bh, bh
+    cmp byte [bx+sch_parked], 0
+    pop bx
+    je .busy
+.next:
+    inc cl
+    add bx, T_SIZE
+    cmp cl, MAX_TASKS
+    jb .scan
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.busy:
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_task_park - API slot 0x0408: a DRIVER's worker parks here (SPEC.md
+;                  66.5.5), the way a package's parks at OSAPI_TASK_ALIVE
+; in:  nothing
+; out: nothing (all registers and the flags preserved)
+;
+; Its own slot rather than a branch of ALIVE, for drv_task's reason: ALIVE's
+; whole body is a chain of tests on an INSTANCE RECORD and a driver has none.
+; It costs one compare when nothing is asking.
+; -----------------------------------------------------------------------------
+inst_task_park:
+    pushf
+    push bx
+    cmp byte [inst_parkreq], 0
+    je .out
+    mov bl, [sch_cur]
+    xor bh, bh
+    mov byte [bx+sch_parked], 1
+.spin:
+    cmp byte [inst_parkreq], 0
+    je .done
+    call task_yield
+    jmp short .spin
+.done:
+    mov byte [bx+sch_parked], 0
+.out:
+    pop bx
+    popf
+    ret
+
+
+
 inst_ptr:
     push ax
     push cx
@@ -1396,8 +1796,14 @@ inst_pkg_alive:
     cmp byte [di+I_STATE], 1    ; 2 = close requested, 0 = already gone
     jne .die
 .live:
-    pop di
-    popf
+%ifndef NOPARK
+    cmp byte [inst_parkreq], 0  ; THE COMPACTION PARK (SPEC.md 66.5). This is
+    je .out                     ; the one call rule 2 already makes mandatory
+    call inst_park_wait         ; once per outer loop, and therefore the one
+%endif
+.out:                           ; point at which a worker is known to hold no
+    pop di                      ; pointer derived from any claim of its own -
+    popf                        ; it is at the top of its own loop
     ret
 
 .die:                           ; NEVER RETURNS - the frame above is abandoned
@@ -1644,6 +2050,20 @@ inst_fpick:  resb INST_MAX      ; 0 = the user has never chosen a folder for
                                 ; resolves against
 inst_fname:  resb INST_MAX * INST_FNSZ  ; ...and the name it picked there,
                                 ; NUL-terminated; an empty string = none
+
+inst_parkreq: resb 1            ; SPEC.md 66.5: the compactor is asking every
+                                ; package worker to stand still
+inst_parksafe: resb INST_MAX    ; ...and which instances said the kernel may
+                                ; park them while they are BLOCKED IN IT, not
+                                ; only at OSAPI_TASK_ALIVE (SPEC.md 66.5.4).
+                                ; Declared, never assumed: what a task's stack
+                                ; holds while it spins in gfx_lock is the
+                                ; package's business
+sch_parked:   resb MAX_TASKS    ; ...and which TASKS have. PER TASK and not per
+                                ; instance (SPEC.md 66.5.5): a driver's worker
+                                ; has T_INST = 0xFF and no record to be parked
+                                ; in, and an instance can have a package worker
+                                ; and a driver's stream task at once
 
 inst_launch: resw 1             ; deferred launch: 0 = none, else kind + 1
 inst_knd:    resb 1             ; app_launch scratch: kind being launched

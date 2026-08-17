@@ -3393,14 +3393,11 @@ sol_s_win:   db 'You win!', 0
 ; content, which is 27 glyphs less the panel's own margins (SPEC.md 39).
 SOL_ABLH equ 11                     ; line pitch, px (8px glyphs + 3 of air)
 sol_ablines:
-    dw sol_ab1, sol_ab2, sol_ab3, sol_ab4, sol_ab5, sol_ab6, sol_ab7, 0
+    dw sol_ab1, sol_ab2, sol_ab3, sol_ab4, 0
 sol_ab1:     db 'Solitaire for os8088', 0
 sol_ab2:     db 'Klondike, in 8086 asm', 0
 sol_ab3:     db 0                   ; a blank line is a line with no glyphs
-sol_ab4:     db 'Contributed by', 0
-sol_ab5:     db 'github.com/Elendilon,', 0
-sol_ab6:     db 'who forked os8088 and', 0
-sol_ab7:     db 'wrote this game.', 0
+sol_ab4:     db 'Contributed by Elendilon', 0
 
 ; needs two glyphs, and sol_drawface spells it out.
 sol_rankch:

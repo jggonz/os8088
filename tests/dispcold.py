@@ -13,6 +13,22 @@ segment that is COLD_SEG, and what it lands on is `fm_choose`, `fm_find_view`,
 `fm_front_win`, `fm_bar_gate_x` and `fm_layout` - the file manager's own code.
 Everything downstream (a `call far` turned into `cbw`, DS going to 0, garbage
 written over ui_rebootq, the reboot, the freeze) is that code being executed.
+(Those offsets are where they were WHEN IT WAS CAUGHT, and every one of them
+has moved since - which is what the next paragraph is about.)
+
+NOTHING ABOUT THE LAYOUT IS WRITTEN DOWN HERE ANY MORE, and that is the whole
+of this file's maintenance history. `COLD_SEG`, `.cold`'s length and its
+offset inside `kernel.bin` were three constants pinned to the kernel of the
+day, and the kernel moved: COLD_SEG went 0x0E00 -> 0x0E20 and the cold rung
+0x8900 -> 0x8A00, so this read 512 bytes short of `.cold`, compared THAT
+against the built image, and stopped at "already corrupt before the click" -
+announcing the very bug it exists to find, on a machine where nothing was
+wrong, every run. A diagnostic that cries wolf is worse than one that is
+missing, because the reading is plausible. All three are derived from the
+map's own equates now (os88sym asserts that map is byte-identical to
+`build/kernel.bin`), so a rung that moves cannot desync them, and the carpet
+span follows the file manager's CODE rather than the addresses it used to sit
+at.
 
 .cold is the right place to catch it because SPEC.md 2.6 rule 1 forbids a data
 directive there and tools/os88ovlchk.py enforces it: every byte of it is code,
@@ -25,16 +41,40 @@ A code FETCH does not trip these: MEM_BPA_BIT is checked in biu_bus_begin,
 which asserts the cycle is not a CodeFetch. So executing the carpeted code is
 free and only a data write (or read) stops it.
 """
-import sys, time
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import os, sys, time
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, os.path.join(ROOT, "tests"))
 import os88marty, os88mouse, os88sym, dispcp
 S = os88sym.linear
 SY = os88sym.syms()
 SEC = os88sym.sections()
-COLD_SEG = 0x0E00
 TITLE_H = 18
-LO, HI = 0x4000, 0x5000         # the span every observed hit fell inside
+
+# The ladder, out of the map rather than out of this file. `segment_of` reads
+# the section's base from the map's own equates, so COLD_SEG is whatever THIS
+# kernel put it at; FAT_SEG is what lands immediately above `.cold`, which is
+# what gives its length without needing a section-size accessor. The overlay
+# is the right upper bound in its own right: past FAT_SEG the first mount has
+# overwritten everything (SPEC.md 2.5), so there is nothing there to compare.
+KERNEL_SEG = 0x0060
+COLD_SEG = os88sym.segment_of("fm_layout")      # ...any .cold symbol will do
+FAT_SEG = os88sym.segment_of("ovl_base")        # ...and any .ovl one
+COLD_LEN = (FAT_SEG - COLD_SEG) << 4
+COLD_OFF = (COLD_SEG - KERNEL_SEG) << 4         # where it sits in kernel.bin
+
+# The carpet: the span the file manager's own code occupies, padded, rather
+# than the 0x4000..0x5000 that span happened to fall in when this was written.
+# The witnesses are the routines the original catch landed on - naming them
+# keeps the breakpoints pointed at the CODE this is about, so the span moves
+# when the code does instead of going quietly off-target.
+FM_WITNESS = ("fm_choose", "fm_find_view", "fm_front_win", "fm_bar_gate_x",
+              "fm_layout")
+_pad = 0x400                                    # ...enough to cover the last
+                                                # witness's body, not just its
+                                                # entry
+LO = max(0, (min(SY[n] for n in FM_WITNESS) - _pad) & ~0xFF)
+HI = min(COLD_LEN, (max(SY[n] for n in FM_WITNESS) + _pad + 0xFF) & ~0xFF)
 
 
 def u16(b, i=0): return b[i] | (b[i + 1] << 8)
@@ -43,13 +83,22 @@ def u16(b, i=0): return b[i] | (b[i + 1] << 8)
 def hexd(b): return " ".join("%02X" % c for c in b)
 
 
-def coldbase():
-    k = open("build/kernel.bin", "rb").read()
-    off = SY["fm_layout"]
-    for base in range(0xC000, len(k) - 0x8900, 2):
-        if k[base + off:base + off + 4] == b"\x50\x51\x52\x57":
-            return base, k
-    raise RuntimeError("cannot locate .cold inside kernel.bin")
+def coldimage():
+    """`.cold` as the build laid it out.
+
+    This used to SEARCH kernel.bin for fm_layout's first four opcode bytes,
+    which is two ways of being wrong at once: the prologue is not an ABI, and
+    a search that matches the wrong place answers confidently. The boot sector
+    does one contiguous read from KERNEL_SEG (SPEC.md 2.5/2.6), so the file
+    offset is arithmetic and there is nothing to look for.
+    """
+    k = open(os.path.join(ROOT, "build", "kernel.bin"), "rb").read()
+    if COLD_OFF + COLD_LEN > len(k):
+        raise RuntimeError(
+            ".cold at +%04X..%04X runs past kernel.bin (%d bytes) - the map "
+            "and the binary disagree, so rebuild before trusting this"
+            % (COLD_OFF, COLD_OFF + COLD_LEN, len(k)))
+    return k[COLD_OFF:COLD_OFF + COLD_LEN]
 
 
 def coldname(off):
@@ -130,13 +179,21 @@ def main():
         bx, by, bw, bh = dispcp.win_rect(m, S, disk)
         print("disk window x %d..%d y %d..%d" % (bx, bx + bw - 1, by, by + bh - 1))
 
-        base, k = coldbase()
-        img = k[base:base + 0x8900]
-        if m.read(COLD_SEG << 4, 0x8900) != img:
-            sys.exit(".cold is already corrupt before the click")
-        print(".cold is byte-identical to the built image; carpeting "
-              "COLD_SEG:%04X..%04X with %d memory breakpoints"
-              % (LO, HI - 1, HI - LO))
+        img = coldimage()
+        now = m.read(COLD_SEG << 4, COLD_LEN)
+        if now != img:
+            # NAME THE DAMAGE. A bare "already corrupt" was indistinguishable
+            # from this script pointing at the wrong memory, which is exactly
+            # what it did for as long as COLD_SEG was written down here.
+            bad = [i for i in range(COLD_LEN) if img[i] != now[i]]
+            sys.exit(".cold is already corrupt before the click: %d of %d "
+                     "bytes differ at COLD_SEG=%04X, first %s"
+                     % (len(bad), COLD_LEN, COLD_SEG,
+                        ", ".join("%04X (%s)" % (b, coldname(b))
+                                  for b in bad[:8])))
+        print(".cold at %04X:0000+%04X is byte-identical to the built image; "
+              "carpeting COLD_SEG:%04X..%04X with %d memory breakpoints"
+              % (COLD_SEG, COLD_LEN, LO, HI - 1, HI - LO))
 
         m.breakpoints([{"type": "mem", "addr": (COLD_SEG << 4) + a}
                        for a in range(LO, HI)])
@@ -146,7 +203,7 @@ def main():
             print("click %d at (%d,%d)" % (n, px, py))
             r = pump(m, mo, px, py)
             if r is None:
-                now = m.read(COLD_SEG << 4, 0x8900)
+                now = m.read(COLD_SEG << 4, COLD_LEN)
                 bad = [i for i in range(len(img)) if img[i] != now[i]]
                 print("   no write caught; .cold differs in %d byte(s)"
                       % len(bad))
@@ -182,7 +239,7 @@ def main():
         m.breakpoints([])
         m.mouse(0, 0, l=False)
         print("no write into COLD_SEG:%04X..%04X caught" % (LO, HI - 1))
-        now = m.read(COLD_SEG << 4, 0x8900)
+        now = m.read(COLD_SEG << 4, COLD_LEN)
         bad = [i for i in range(len(img)) if img[i] != now[i]]
         print(".cold now differs in %d byte(s)%s" % (len(bad),
               (": " + ", ".join("%04X (%s)" % (b, coldname(b))

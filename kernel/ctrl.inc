@@ -269,15 +269,17 @@ cp_s_vvga:  db 'Vga 640x480', 0
 cp_s_vherc: db 'Hercules 720x348', 0
 cp_s_vcga:  db 'Cga 640x200', 0
 cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga
-cp_s_vact:  db 'Activate Mode', 0
-; The two captions, both inside the pane's 27-character limit: the ordinary
-; one, and SPEC.md 47 rule 7's say-why-not for the button, which greys
-; whenever the dot is already on the running adapter. There was a third -
-; 'No other adapter found' - until SPEC.md 31.10.1 stopped drawing the page
-; at all on a machine with one adapter, which is the same answer given by
-; not asking the question.
+cp_s_vact:  db 'Set Primary', 0
+; The caption, inside the pane's 27-character limit. It is ONE string and the
+; page's only constant line: it says what the button does, on every state the
+; page can be in. It had three answers once - 'No other adapter found' went
+; when SPEC.md 31.10.1 stopped drawing the page at all on a machine with one
+; adapter, and 'This adapter is running' - SPEC.md 47 rule 7's say-why-not for
+; the greyed button - went at SPEC.md 31.10.3, where the room it was holding
+; paid for the desktop line's own label. So nothing here follows the
+; selection: cp_vid_click no longer redraws it, and it is drawn once, inline
+; in cp_vid_paint, on ground cp_page has already erased.
 cp_s_vcap:  db 'Switches now, and is kept', 0
-cp_s_vnow:  db 'This adapter is running', 0
 
 %ifdef KERN_BIG
 ; The DESKTOP line (SPEC.md 31.10.2): one row of three radios under the button.
@@ -288,8 +290,20 @@ cp_s_vnow:  db 'This adapter is running', 0
 ; 31.10.1's own answer one level down: that page stopped being drawn on a
 ; single-adapter machine rather than carrying a caption apologising for
 ; itself, and a permanently greyed control here would have to displace the
-; Activate button's say-why-not on the one page where that button is the
-; main control.
+; Set Primary button's caption on the one page where that button is the main
+; control - the caption being the page's ONE line, and the whole of what
+; SPEC.md 31.10.3 spent to put a label on this row.
+;
+; The row is LABELLED (SPEC.md 31.10.3), because 'Single / Right / Below' names
+; three arrangements of something the row never said the name of - and the one
+; other place in the panel where a control's subject is not obvious from its
+; own words is the page heading, which is a label in exactly this position.
+; The colon is what says it belongs to the row under it rather than being a
+; fourth thing on the page.
+cp_s_vdesk: db 'Desktop Extension Mode:', 0
+CPV_DESKN   equ $ - cp_s_vdesk - 1   ; ...measured rather than counted, so the
+                                     ; %if guard below cannot go stale behind
+                                     ; an edit to the string above it
 cp_s_vsing: db 'Single', 0
 cp_s_vrgt:  db 'Right', 0
 cp_s_vblw:  db 'Below', 0
@@ -298,26 +312,41 @@ cp_vmodnam: dw cp_s_vsing, cp_s_vrgt, cp_s_vblw
 
 ; Display page geometry, PANE-relative. The Sound page's tighter 16px row
 ; pitch rather than the two-row pages' 20, because three adapter rows, a
-; button, SPEC.md 31.10.2's desktop row and a caption all have to fit CP_CH -
-; and the two %if guards below are what say so rather than a comment claiming
-; it. 121 rows: adapters at 20/36/52, button 72..89, desktop row 96..107,
-; caption 112..119.
+; button, SPEC.md 31.10.2's desktop row and its label and a caption all have
+; to fit CP_CH - and the %if guards below are what say so rather than a
+; comment claiming it. Of 132 rows: adapters at 20/36/52, button 72..89,
+; desktop label 94..101, desktop row 106..117, caption 122..129.
 CPV_R0Y   equ 20                ; row 0 glyph top
 CPV_ROWH  equ 16                ; row pitch: rows at 20, 36, 52
-CPV_BTNX  equ CP_PMX            ; the Activate button, under the rows
+CPV_BTNX  equ CP_PMX            ; the Set Primary button, under the rows
 CPV_BTNY  equ 72
-CPV_BTNW  equ 116               ; 'Activate Mode' is 13 glyphs = 104px
+CPV_BTNW  equ 100               ; 'Set Primary' is 11 glyphs = 88px, and
+                                ; os88ui_btn centres it, so the box keeps the
+                                ; 6px each side the 116/104 pair had
 CPV_BTNH  equ 18
-CPV_MY    equ 96                ; SPEC.md 31.10.2's desktop row: glyph top
+CPV_MLY   equ 94                ; SPEC.md 31.10.3's label for the desktop row.
+                                ; It is NOT a control and has no hit band -
+                                ; CPV_MB1 starts below it, so a press here
+                                ; falls through rather than picking a radio
+                                ; out of an x that means nothing
+CPV_MY    equ 106               ; SPEC.md 31.10.2's desktop row: glyph top
 CPV_MSTEP equ 74                ; ...and its radio pitch, so the hit test is
                                 ; one divide like the adapter rows'. Glyphs at
                                 ; 4/78/152, labels at 22/96/170, and the last
                                 ; label ends at 210 inside a CP_PRGT of 221
-CPV_CAPY  equ 112               ; caption row, LAST as it is on every page -
-                                ; which is why the new control went above it
-                                ; rather than below (it was 96)
+CPV_CAPY  equ 122               ; caption row, LAST as it is on every page -
+                                ; which is why the label went above it rather
+                                ; than below (the caption was 96, then 112)
 %if CPV_CAPY + 8 > CP_CH
 %error "ctrl: the Display page's caption runs past the pane (SPEC.md 31.10.2)"
+%endif
+%if CPV_MLY + 8 > CPV_MY
+%error "ctrl: the Display page's desktop label runs into its radios (31.10.3)"
+%endif
+%ifdef KERN_BIG
+%if CP_PMX + CPV_DESKN*8 > CP_PRGT
+%error "ctrl: the Display page's desktop label runs past the pane (31.10.3)"
+%endif
 %endif
 %if CP_PLX + 2*CPV_MSTEP + 5*8 > CP_PRGT
 %error "ctrl: the Display page's desktop radios run past the pane"
@@ -331,11 +360,16 @@ CPV_B2Y2  equ CPV_R0Y + 2*CPV_ROWH + CP_GW - 1   ; 63: row 2 bottom
 ; ...and the button's, which must start below them
 CPV_BB1   equ CPV_BTNY - 4
 CPV_BB2   equ CPV_BTNY + CPV_BTNH + 3
-; ...and the desktop row's, which must start below THAT: generous and
-; contiguous like every other band on the page (SPEC.md 31.2), so a press
-; between two radios lands on one of them rather than on nothing.
-CPV_MB1   equ CPV_BB2 + 1
+; ...and the desktop row's, which must start below THAT and below SPEC.md
+; 31.10.3's label: generous and contiguous like every other band on the page
+; (SPEC.md 31.2), so a press between two radios lands on one of them rather
+; than on nothing - but a press on the LABEL lands on nothing, because a
+; label is not a control and its x carries no radio.
+CPV_MB1   equ CPV_MLY + 8
 CPV_MB2   equ CPV_MY + CP_GW + 3
+%if CPV_MB1 <= CPV_BB2
+%error "ctrl: the Display page's desktop band overlaps the button's"
+%endif
 %if CPV_MB1 > CPV_MY
 %error "ctrl: the Display page's desktop band starts below its own glyphs"
 %endif
@@ -1427,13 +1461,15 @@ cp_vid_slot:
     ret
 
 ; -----------------------------------------------------------------------------
-; cpf_vidok - has the Activate button anything to do? (far, internal)
+; cpf_vidok - has the Set Primary button anything to do? (far, internal)
 ; in:  nothing
 ; out: CF = 0 yes, CF = 1 no (the dot is already on the running adapter)
 ; clobbers: nothing (flags)
 ;
-; The SPEC.md 31.3 idiom: one predicate, read by the greying, by the click's
-; refusal and by the caption, so all three agree by construction.
+; The SPEC.md 31.3 idiom: one predicate, read by the greying and by the
+; click's refusal, so the two agree by construction. It had a third reader -
+; the caption, which said WHY the button was grey - until SPEC.md 31.10.3
+; made that line constant; two readers is still the reason this is a routine.
 ; -----------------------------------------------------------------------------
 cpf_vidok:
     push ax
@@ -1539,6 +1575,10 @@ cp_vid_msel:
 ; Drawn only where there is a choice - see the strings above. cp_vid_rows'
 ; label-before-glyph order, for its reason: both want AX, and os88ui_glyph
 ; fills its own box white first so nothing is left half-erased between the two.
+;
+; SPEC.md 31.10.3's row label is drawn HERE and not in cp_vid_paint, so that
+; the one vid_dual_ok test covers both: a machine that gets no radios cannot
+; be left with a heading over nothing.
 ; -----------------------------------------------------------------------------
 cp_vid_mode:
     push ax
@@ -1548,6 +1588,15 @@ cp_vid_mode:
     push si
     call KERNEL_SEG:cw_vid_dual_ok
     jc .done
+
+    mov byte [gfx_color], CBLACK    ; --- the row's label (SPEC.md 31.10.3).
+    mov si, cp_s_vdesk              ; No erase: cp_page has already whitened
+    mov cx, di                      ; the pane and nothing else ever draws
+    add cx, CP_PMX                  ; here - the caption below is constant
+    mov dx, bp                      ; too, so this page has no state line
+    add dx, CPV_MLY
+    call KERNEL_SEG:cw_font_str
+
     call cp_vid_msel
     mov bh, al                  ; BH = the radio that is on
     xor bl, bl                  ; BL = the radio being drawn
@@ -1650,55 +1699,16 @@ cp_vid_btn:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_vid_cap - the caption line, erased and redrawn (module internal)
-; in:  DI = pane left, BP = pane top; gfx lock held
-; out: nothing (all registers preserved)
-;
-; Three answers, most specific first: a machine with one adapter is not being
-; offered a choice at all and says so; a dot already on the running adapter
-; is SPEC.md 47 rule 7's say-why-not for the greyed button; anything else is
-; the ordinary "what pressing it will do".
-; -----------------------------------------------------------------------------
-cp_vid_cap:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov byte [gfx_color], CWHITE    ; erase the line first - the three answers
-    mov ax, di                      ; are different lengths
-    add ax, CP_PMX
-    mov bx, bp
-    add bx, CPV_CAPY
-    mov cx, di
-    add cx, CP_PRGT
-    mov dx, bx
-    add dx, 7
-    call KERNEL_SEG:cw_gfx_fill
-
-    mov byte [gfx_color], CBLACK
-    mov si, cp_s_vcap           ; two answers, not three: the page is not
-    call cpf_vidok              ; drawn at all on a machine with one adapter
-    jnc .draw                   ; (SPEC.md 31.10.1), so there is no longer a
-    mov si, cp_s_vnow           ; "nothing to choose from" case to caption
-.draw:
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CPV_CAPY
-    call KERNEL_SEG:cw_font_str
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; cp_vid_paint - the Display page
 ; in:  DI = pane left, BP = pane top; gfx lock held; entry pen is CWHITE
 ; out: nothing
 ; clobbers: nothing (flags only)
+;
+; The caption is drawn INLINE here, and had a routine of its own until the
+; string it chose between went (SPEC.md 31.10.3). It is one constant line on
+; ground cp_page has already whitened, so it needs no erase, no predicate and
+; no redraw when the selection moves - which is what a routine reached from
+; the click path exists for.
 ; -----------------------------------------------------------------------------
 cp_vid_paint:
     push cx
@@ -1718,7 +1728,14 @@ cp_vid_paint:
 %ifdef KERN_BIG
     call cp_vid_mode
 %endif
-    call cp_vid_cap
+
+    mov byte [gfx_color], CBLACK ; ...and the caption, LAST on the page as it
+    mov si, cp_s_vcap            ; is on every other one
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPV_CAPY
+    call KERNEL_SEG:cw_font_str
 
     pop si
     pop dx
@@ -1759,8 +1776,9 @@ cp_vid_click:
     jl .done
     cmp cx, CPV_BTNX + CPV_BTNW - 1
     jg .done
-    call cpf_vidok              ; greyed: the caption already says why, so a
-    jc .done                    ; refused press says nothing more (47 rule 5)
+    call cpf_vidok              ; greyed: the dot is already on the running
+    jc .done                    ; adapter, so a refused press says nothing
+                                ; more (SPEC.md 47 rule 5)
     mov al, [cp_vsel]
     call KERNEL_SEG:cw_vid_switch
     jc .done                    ; refused: the adapter went away under us
@@ -1823,8 +1841,9 @@ cp_vid_click:
     je .done                    ; already the pending choice: draw nothing
     mov [cp_vsel], al
     call cp_vid_rows            ; the dots...
-    call cp_vid_btn             ; ...the button, which may have just un-greyed
-    call cp_vid_cap             ; ...and the caption, which follows it
+    call cp_vid_btn             ; ...and the button, which may have just
+                                ; un-greyed. The caption follows nothing now
+                                ; (SPEC.md 31.10.3), so it is not redrawn
 .done:
     pop dx
     pop cx
