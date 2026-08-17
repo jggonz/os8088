@@ -50664,3 +50664,194 @@ presses running, because a mechanism that leaks two bytes of stack per call
 works for a while and then does not. The refusal screen is the second half:
 build the disk without the `.OVL` and every number stays 0 with the reason in
 the menu bar.
+
+## 71. RunCPM — a CP/M 2.2 emulator, written in C (`apps/runcpm/`)
+
+The C toolchain's second application is **`apps/runcpm/`**, package name
+`RUNCPM`, a native reimplementation of **RunCPM 6.9** (Marcelo Dantas,
+"Mockba the Borg", https://github.com/MockbaTheBorg/RunCPM, MIT licence) as a
+**windowed CP/M 2.2 emulator**: a Z80 running in a 64KB heap claim, a BDOS
+and BIOS in C, CP/M drives as folders on the floppy, and an 80×25 terminal
+drawn in a window. It is a port in §70.12's sense: **the behaviour is
+RunCPM's, taken from its source and not from memory; the code is
+reimplemented in the C this toolchain compiles (§70), plus the one hot loop
+that is hand-written 8086; what cannot carry is present and greyed with the
+fact that greys it (§47).** Nothing from RunCPM is vendored (CONTRIBUTING.md
+§6): every file that carries derived tables, strings or behaviour cites the
+RunCPM file in its header and carries the MIT attribution, and so does the
+About box. The design record is `docs/RUNCPM-PORT-PLAN.md`.
+
+**Where the behaviour comes from — the authority table.** Every user-visible
+surface names ONE RunCPM file:
+
+| what | from |
+|---|---|
+| the boot banner, the exit text, the load sequence | `RunCPM/main.c` (66–105, 125–137), `cpu_mhz.h` |
+| version, CCPHEAD, the memory layout constants (TPA 60K, BDOS 0xE400, BIOS 0xFE00, CCP 0xDC00) | `RunCPM/globals.h` |
+| page zero, the BIOS/BDOS jump pages, RST 08h/10h handoff, DPB/DPH | `RunCPM/cpm.h` `_PatchBIOS`/`_PatchCPM` |
+| BIOS entries BOOT..SECTRAN and their register answers | `RunCPM/cpm.h` `_Bios` |
+| BDOS 0–40 and RunCPM's private 230, 231, 248–254; the BDOS 10 line editor's key map and help text | `RunCPM/cpm.h` `_Bdos` |
+| console byte semantics (7-bit mask, no translation) | `RunCPM/console.h` |
+| `Bdos Err on X:` texts and the wait-and-warm-boot | `RunCPM/disk.h` `_error` |
+| the FCB and directory-entry layouts, name rules, extent/record synthesis, every file operation's return code | `RunCPM/disk.h`, `abstraction_posix.h` |
+| drives A..P / users 0..F as folders, `AUTOEXEC.TXT`, `$$$.SUB`, `PUN.TXT`/`LST.TXT` capture | `RunCPM/disk.h`, `cpm.h`, `globals.h` |
+| the command processor | `RunCPM/CCP/CCP-DR.60K` — Digital Research's CCP, run on the Z80, loaded from the launch folder |
+| HostOS code 0x08 (new; 0x00–0x07 are RunCPM's) | `abstraction_*.h` |
+| the terminal geometry: 80×25 | `abstraction_runvt.h`; `TE.COM`'s configuration block on the master disk |
+
+**Two segments' worth of memory, one 60KB package.** The package itself is
+one translation unit (`runcpm.c` including `rcterm.c`, `rccpm.c`, `rcfs.c`,
+`rcabout.c`) plus three hand-written includes in the shim (`rcz80.inc` the
+Z80 core, `rcmem.inc` the Z80-RAM movers, `rcband.inc` the row composer),
+and its budget is planned at ~42KB image + ~11.5KB bss — AT §70.9's split
+trigger, so the `ovl_*` candidates (About, `_PatchCPM`, the banner and clock
+estimate, ERA/REN/MAKE, the error texts) are named from the first wave and
+`RUNCPM.OVL` exists the moment the measured size line says so (§70.14). The
+Z80's 64KB is **not** in the package: it is `os88_mem_claim(64)`, its own
+segment, and the launch refuses (quoting what it asked and
+`os88_mem_largest_kb()`) if that claim, the 2KB CCP claim or one file claim
+cannot be had. *Numbers: measured, pending — every figure here is replaced by
+`os88pkg`'s line as the waves land.*
+
+**The Z80 core is hand-written 8086, and it is the only thing that touches
+Z80 memory per instruction.** `_rc_run(n)` is a cdecl entry that saves DS/ES/BP,
+loads DS = the Z80 claim, unpacks the Z80 registers from statics — A/F in
+AL/AH (F in `lahf` layout with P/V and N fixed up per operation), BC in CX, DE
+in DX, HL in DI, PC in SI, the Z80 SP in BP (every stack access `ds:`), BX the
+dispatch scratch (`xor bh,bh / mov bl,[si] / inc si / shl bx,1 / jmp
+[cs:bx+tab]`) — runs `n` instructions or until a RST 08h/10h handoff or HALT,
+packs them back and returns the reason. IX/IY, the alternate set, I/R and IFF
+live in statics; DDCB/FDCB run through the CB table with a precomputed
+`(IX+d)` operand pointer; IN answers 0 and OUT is a no-op. **The Z80's speed
+on the target is a number to MEASURE, not to estimate**: the banner's
+`Estimated Z80 clock speed` line is computed on the machine it runs on (16-bit
+tick arithmetic over a fixed instruction burst — a stated deviation from
+`cpu_mhz.h`'s 64-bit method), and the figure read on the 386 machine and on
+the XT is recorded here when it exists. C decides around the core: BDOS, BIOS,
+files, terminal.
+
+**No worker, no blocking, and the kernel grew a wake event for it (§71.1).**
+RunCPM blocks in the host's `getch()`; a package's worker cannot touch a file
+slot (§20.6) and has 256 bytes of stack, and W_ONKEY is dispatched under the
+gfx lock. So the emulator runs on the **UI task in bounded slices**: a slice
+runs N instructions (N sized by `os88_cpu()`, ~50 ms on the target), services
+the trap the Z80 stopped on, drains the terminal, takes the gfx lock only
+around the glass flush, and re-posts itself through `OSAPI_WM_WAKE`. A Z80
+program waiting on a key costs zero CPU until `os88_onkey` pushes the key and
+kicks. Every blocking BDOS call (CONIN 1/6, BIOS CONIN, the line editor 10)
+is either "retry the trap when a key exists" or a small state machine advanced
+by `os88_onkey`. Every callback that can run (paint, key, click) also kicks,
+so a wake dropped by a full event queue cannot stall the machine.
+
+### 71.1 The kernel additions: a UI-task wake, and a quiet goto that moves the instance
+
+Two things were added to the kernel for this port and both are general:
+
+- **`OSAPI_WM_WAKE` / `OSAPI_WM_ONWAKE`** — a package installs a near proc
+  (the shape of `OSAPI_WM_ONMOUSEUP`), and posts a wake for its window from
+  any context (ISR- and worker-safe; CF=1 if the event queue was full). The UI
+  task's event loop dispatches it through the package dispatcher **without
+  the gfx lock**, so the handler may call file slots and may take the lock
+  itself for as long as it can state. `crt0.asm` grows `CC_HAS_ONWAKE`; the C
+  sees `os88_wm_onwake(win)` and `int os88_wm_wake(win)`. It is what makes an
+  emulator (or any long computation with I/O) a UI-task program here.
+- **an instance-marking variant of `OSAPI_FILE_GOTO_Q`** — §19.2.2's quiet
+  stand moves the machine and deliberately not the instance, and every
+  package file cell first re-stands the machine in the instance's folder, so
+  a package that works in a folder that is not its own was undone by its next
+  read. The variant does the quiet stand and marks the instance
+  (`os88_file_goto_q_mark(clus, vol)`), and is how a CP/M drive/user switch is
+  one word rather than a full `dsk_chdir`.
+
+Both fit inside the image rung's measured headroom (429 bytes at the time of
+the decision, `tools/kernsize.py`); neither raises `KERN_BUDGET` or
+`KERN_CODE_MAX`. Their slot numbers, register contracts and the event record
+are pinned in `apps/os88api.inc` and in the §4 owners of `events.inc`,
+`ui.inc` and `wm.inc` when the wave lands, and this section is amended with
+them.
+
+### 71.2 The terminal, and what a byte costs
+
+The console is an **80×25 VT100-subset terminal model** — CR LF BS BEL TAB FF;
+`ESC [` H f A B C D J K m (0 and 7 only) L M s u ?25h/l — with a reverse-video
+attribute bitmap and the cursor as an inverse cell; every output byte is
+masked to 7 bits as `console.h` does. It is drawn **damage-only through a
+glass shadow** (§70.12's model): a scrolled line is one `gfx_scroll` plus the
+one repainted row; a changed row is composed into a 1bpp band by
+`rcband.inc` (from `OSAPI_FONT_GLYPHS`) and goes down with one `gfx_blit1`,
+or one `font_run` for a short span and as the fallback when `blit1` refuses;
+a full repaint happens only on expose. The host harness prints the cost
+table (echo one character, one DIR row, one scrolled line, `ESC[2J`, a
+25-row full-screen redraw) and the targets are: echo 2 calls, DIR row 2
+calls, full 25-row redraw 25 calls.
+
+**In a framed window a 640-px screen shows 78 of 80 columns and CGA shows 17
+of 25 rows** — facts of the window frame — so the terminal can take §11.2's
+fullscreen latch (`os88_fullscreen`, a new thunk) and show the whole 80×25 on
+every adapter. **The chord is Alt+F in both directions, which is a stated
+exception to §11.2.1's F/Esc binding**: a terminal owns both F and Esc, and
+the exception is the reason. Rows outside the window are model rows, not lost
+rows: `TE.COM`'s status line exists on CGA in fullscreen.
+
+Keys: arrows/Home/End/PgUp/PgDn/Del arrive as VT sequences; ^C is 3; the BIOS
+folds Ctrl-H/I/M into BkSp/Tab/Enter (identical bytes, no loss); `^?` is
+Ctrl+- and DEL is Ctrl+Backspace, both verified on the glass before the
+binding is believed. BEL is `os88_snd_tone`.
+
+### 71.3 The disks: drives are folders, files are whole
+
+CP/M drives are folders `A\0 .. P\F` below the launch folder, exactly RunCPM's
+host layout with FAT12's 8.3 names standing in for CP/M's; SELDSK of an absent
+folder answers `Bdos Err on X: Select`; USER n creates its folder on first
+write; `FORMAT.COM` (BDOS 249) creates a drive. **The record model is whole
+files in heap claims**: an 8-entry open-file table, open loads the file with
+`os88_file_read_seg`, close writes it back with `os88_file_write_seg` when
+dirty (and on warm boot), directory searches come from a 128-entry cache per
+current (drive, user) with `?` matching and the multi-entry extent chain for
+large files (`disk.h` `_mockupDirEntry`), and `$$$.SUB` works so `SUBMIT`
+does. `PUN.TXT`/`LST.TXT` capture are ordinary entries flushed at warm boot.
+**Files above 65,535 bytes are refused as a fact** — the file API a package
+reaches reads and writes whole files with a 16-bit count and no seek — with a
+BDOS error and a toast naming the file; DIR still lists them; none is shipped.
+A ninth open file evicts a clean entry or errors with a toast. The first
+search of a folder is O(files) `int 13h` calls (`os88_file_find` walks by
+ordinal); the cache makes later ones free.
+
+The CCP is `CCP-DR.60K`, loaded once at launch from the launch folder — before
+any folder move, like the `.OVL` — into a 2KB claim and copied to 0xDC00 on
+every warm boot with CCPHEAD printed above it; `AUTOEXEC.TXT` is read from the
+launch folder on every warm boot as upstream's default does.
+
+### 71.4 What is present and greyed, and what is absent
+
+Greyed with its fact (§47): CPU throttling / BDOS 254 (the emulated Z80 is
+slower than a real one on the target — nothing to throttle); files > 65,535
+bytes and > 8 open at once (above); ANSI bold/underline/colour (one 8×8 face,
+1bpp adapters — only reverse video renders); escapes outside the subset
+(swallowed); CP/M 3, banked memory, F_MULTISEC, date stamps (off by default
+upstream and needing `long`/`time()`); XMODEM (no serial path reaches a
+package); the 64-bit clock estimate (replaced, stated); `INFO.COM`'s host
+name (its table predates HostOS 0x08 — a third-party binary, not edited);
+`::CPU HALTED::` (DEBUG-only upstream — this port toasts the fact and
+self-closes).
+
+Absent: RunCPM's internal C CCP (host-blocking C; DRI's binary is the command
+processor), the debugger/disassembler, Arduino GPIO calls, STREAMIO, RunVT
+embedding, ABDOS, the alternate cores, and the three master-disk files above
+65,535 bytes (`Z80ASM.PDF`, `BDOS.ASM`, `ZCPR3.ASM`).
+
+### 71.5 Names, disks, targets
+
+Package `RUNCPM`, directory `apps/runcpm/`, images `build/runcpm.img` /
+`runcpm720.img` / `runcpm360.img` (each `--verify`'d), 86Box machine
+`vm/386-runcpm` (a copy of `vm/386-c-word` with the B: image and uuid
+changed), on `apps-all.img` as a folder of its own `RUNCPM\` (§19.9 — the
+CCP, and the `.OVL` if it exists, must sit beside the package). **Nothing
+third-party is committed** (CONTRIBUTING.md §6): `tools/getruncpm.py`
+fetches RunCPM at a pinned commit at build time — the CCP and `DISK/A0.zip` —
+the way `tools/getstories.py` fetches Frotz's stories, and the disk rules and
+`allapps` depend on its stamp. The disks carry everything on the master disk
+that fits and is under 65,535 bytes (360KB: the executables and text; 720KB
+and 1.44MB: sources as far as they fit, manifest listed). Like every §70
+target these are on demand and nothing in `all` needs the compiler or the
+network (§70.13). It shares nothing with any other package.
