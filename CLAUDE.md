@@ -110,7 +110,10 @@ Every `nvr/` is gitignored, so neither can reach the repo.
 **Nothing in `build/` is tracked — never commit a binary.** The toolchain is
 deterministic on purpose (`tools/os88disk.py` pins the volume serial and every
 FAT timestamp), so a released image can be rebuilt byte-for-byte. Releases are
-cut by `.claude/skills/release-os8088`.
+cut by `.claude/skills/release-os8088`; a port of an existing program to a
+C package, the way `apps/cword` was made, is driven by
+`.claude/skills/port-to-os8088` (`/port-to-os8088`), whose `LESSONS.md` is
+what that port learned.
 
 ## Hard rules (§1 — these break silently if violated)
 

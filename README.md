@@ -369,6 +369,22 @@ assembly one, which is the test of whether it was done right.
 **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** is the guide;
 [SPEC.md](SPEC.md) §70 is the contract.
 
+**Porting something else the same way is a skill.** The CWORD port took four
+sessions of finding out what the toolchain, the 60KB segment and a 4.77 MHz
+8088 would and would not allow, and everything it learned is written down in
+[`.claude/skills/port-to-os8088/`](.claude/skills/port-to-os8088/) as a
+Claude Code skill. Type `/port-to-os8088` in a session on this repo, point it
+at the original program's source — it offers to scan the directories next to
+this one for repositories, or to clone a list you give it — and it scouts the
+source and this tree with a team of agents, drafts a plan, asks you only the
+questions that are yours to answer (the name, a scope cut, which of two file
+formats), then builds the port one wave at a time, each wave reviewed,
+verified on QEMU and committed, and opens the pull request. It runs on Opus 5
+or Fable 5. **[CONTRIBUTING.md](CONTRIBUTING.md#porting-a-program-with-the-agent)**
+says how to use it, and `LESSONS.md` inside the skill is worth reading on its
+own even if you never run it: it is the list of everything that assembles
+cleanly and runs wrong when C meets this machine.
+
 ## Three geometries of everything
 
 | image                  | geometry                 | for                             |

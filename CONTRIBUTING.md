@@ -152,6 +152,65 @@ Useful in this repo:
   manager. Those two break in ways that only show up as a hang.
 - `claude --permission-mode acceptEdits` if you're tired of approving edits to
   `.inc` files; keep approvals on for `Bash` so you see what it boots.
+- Two project skills live in `.claude/skills/` and Claude Code picks them up
+  automatically: `/release-os8088` cuts a release, and `/port-to-os8088`
+  ports an existing program to a C package — the next section.
+
+#### Porting a program with the agent
+
+`apps/cword` — Microsoft Word 1.1a, in C — was built by porting: the
+original's source next door, this tree's C toolchain (SPEC.md §70), and a
+coding agent finding out, one obstacle at a time, what would and would not
+carry across a 16-bit compiler, a 60KB segment and a 4.77 MHz machine.
+`.claude/skills/port-to-os8088/` is that experience turned into a procedure,
+so the second port does not rediscover the first one's problems.
+
+```
+claude                                  # from the repo root, on Opus 5 or Fable 5
+> /port-to-os8088
+```
+
+What happens, and what it needs from you:
+
+1. **It checks the model.** Opus 5 and Fable 5 are the two it supports; on
+   anything else it tells you to `/model` and stops.
+2. **It asks where the original is.** Either it scans this directory and the
+   one above for git checkouts and lets you pick, or you give it a list of
+   repositories to clone into a scratch directory. The reference source stays
+   *outside* this repo — nothing is vendored (§6 below); the port quotes
+   strings, tables and formats and cites the file.
+3. **It scouts, with a team of agents** (this is the "ultracode" multi-agent
+   orchestration; invoking the skill authorises it), and drafts a plan: which
+   file of the original is the authority for each menu, key, dialog and
+   status field; what ships, what is present-and-greyed with the fact that
+   greys it, what is left out; the byte budget against the 60KB segment and
+   whether an overlay is needed from day one; the API thunks to add; the
+   order of the waves; how it will be verified.
+4. **It asks you only what is yours to decide** — the package name, a scope
+   cut that changes what ships, which of two file formats, whether to spend an
+   API slot, which reference wins when two disagree — with its recommendation
+   first. Everything else it decides and writes into `SPEC.md` (a new section,
+   before the code, as always) and `docs/<NAME>-PORT-PLAN.md`.
+5. **It builds one wave at a time**: an implementer builds through the
+   compiler gate and the host harness and boots the result; three reviewers
+   check the four C rules and the budget, the redraw cost, and fidelity to
+   the source; a verifier boots it again and looks. Each wave is committed. A
+   wave that hits a real decision comes back to you as a question, and the
+   wave re-runs with your answer.
+6. **It finishes**: the three floppy geometries, the 86Box machine if you
+   want one, the README and SPEC paragraphs, `make clean && make`, and a pull
+   request whose body says how it was verified, with cropped screendumps.
+
+Read `.claude/skills/port-to-os8088/LESSONS.md` before you start, even if
+you are going to drive the port by hand instead. It is the list of what the
+CWORD port hit — the compiler's silent narrowing of `float`, the segment
+ceiling arriving mid-feature, the dialog that drew its OK button on the
+desktop on a 200-line screen, the stale QEMU answering with the old image —
+and what each one cost to find.
+
+You can also run any single piece by hand: the two workflow scripts under
+`.claude/skills/port-to-os8088/workflows/` are ordinary `Workflow` scripts
+that take their inputs as `args`, and the skill file says what to pass.
 
 ### Codex
 
