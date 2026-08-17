@@ -104,7 +104,10 @@
 /* --- the document --------------------------------------------------------- */
 
 #define CW_DOC_MAX   4000               /* characters; see the caps above */
-#define CW_RTF_MAX  12000               /* bytes of RTF, both directions */
+#define CW_RTF_MAX   6000               /* bytes of RTF, both directions, and
+                                         * the tightest number in the package:
+                                         * see the note in apps/cword/cword.c
+                                         * about what the 60KB segment holds */
 
 #define CW_A_BOLD      1                /* cw_att[] bits. They are the app's, */
 #define CW_A_ITAL      2                /* not Opus's - the mapping onto      */
@@ -237,7 +240,14 @@ void cw_put(int c, int a)
         return;
     }
     cw_buf[cw_len] = (char)c;
-    cw_att[cw_len] = (unsigned char)a;
+    /* A PARAGRAPH MARK CARRIES A PARAGRAPH FORMAT, NOT CHARACTER BITS
+     * (apps/cword/cword.c): its attribute byte is an index into the format
+     * dictionary. Everything this reader can express about a paragraph is
+     * still the default one, so the mark gets index 0 - and the alternative,
+     * leaving the character formatting there, would be read back as a
+     * dictionary index and centre a paragraph because the word before it
+     * happened to be bold. */
+    cw_att[cw_len] = (unsigned char)((c == '\n') ? 0 : a);
     cw_len++;
 }
 
@@ -880,7 +890,18 @@ int cw_rtf_build(void)
 
     cur = 0;
     for (i = 0; i < cw_len; i++) {
-        a = cw_att[i] & CW_A_ALL;
+        /* A PARAGRAPH MARK'S ATTRIBUTE BYTE IS NOT CHARACTER FORMATTING. It
+         * is an index into the paragraph-format dictionary (apps/cword/cword.c
+         * - Word's own arrangement, where paragraph properties live on the
+         * mark), so reading CHP bits out of it would emit \b and \i from a
+         * number that means "centred, indented five". The mark takes the
+         * formatting in force, which is also what makes the run either side of
+         * it come out as one run rather than three.
+         *
+         * Found by writing a centred paragraph and reading the file: the
+         * dictionary index was 1, bit 0 is bold, and every centred paragraph
+         * in the document ended with a spurious \b. */
+        a = (cw_buf[i] == '\n') ? cur : (cw_att[i] & CW_A_ALL);
 
         if ((a & CW_A_BOLD) != (cur & CW_A_BOLD))
             cw_emit((a & CW_A_BOLD) ? "\\b " : "\\b0 ");

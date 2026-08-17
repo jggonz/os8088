@@ -54,8 +54,10 @@ make zgfx     # ...and what the reader can SEE (§61.14): every row the
 make cword      # the C toolchain (§67). `tools/setup-cc.sh` fetches and builds
 make cworddisk  #   SmallerC into build/cc/ first — nothing in `all` depends on
 make cc-smoke   #   it, and a tree without it builds every shipping floppy and
-make chello     #   prints one note. cc-smoke/chello are the two examples;
-                #   cword is the application. `make clean` SPARES build/cc
+make chello     #   prints one note. cc-smoke/chello are the two examples and
+make covl       #   covl is the OVERLAY gate (§67.14); cword is the
+                #   application — Word 1.1a again, in C, in two segments
+                #   (§67.12). `make clean` SPARES build/cc
                 #   (clean-cc removes it) — it is a pinned upstream instrument
 make clean
 ```
@@ -144,6 +146,12 @@ cut by `.claude/skills/release-os8088`.
   **ES = KERNEL_SEG on entry to every callback**, so it is `[es:bx+W_W]`, never
   `[bx+W_W]` — without the override a package reads its own image at that
   offset, which assembles cleanly and runs wrong.
+- **A C package that does not fit gets a second segment, not a bigger one**
+  (§67.14): a function named `ovl_*` has its CODE emitted into a module that
+  ships beside the package (`CWORD.OVL`) and is far-called both ways, while
+  every global, literal and bss byte it names stays resident and DS-relative. Split by
+  FREQUENCY — a keystroke's path stays in, a menu command's can go out — and
+  never take the address of an overlay function.
 - **A C package obeys four extra rules, and `tools/cc8086.py` fails the build
   on each** (§67, docs/C-TOOLCHAIN.md): **never take the address of an
   automatic** — SS ≠ DS, so `&local` is a stack offset dereferenced through the

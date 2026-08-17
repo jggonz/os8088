@@ -150,6 +150,12 @@
 ; name there is no header, and nasm goes on to report a `%strlen` complaint, an
 ; undefined `cc__namelen` and a non-constant TIMES - three messages, none of
 ; which says "you forgot the name". %fatal stops here with the one that does.
+; A task's whole stack (kernel/sched.inc, SCH_STACK), which cc_iswk needs as a
+; number rather than as a fact about the kernel it cannot see, and the depth of
+; cc_ovthunk's return stash in WORDS (SPEC.md 67.14).
+CC_STACK    equ 256
+CC_OVDEPTH  equ 16
+
 %ifndef CC_PKG_NAME
   %fatal "cc/crt0.asm: define CC_PKG_NAME (e.g. %define CC_PKG_NAME 'CWORD') before including this file"
 %endif
@@ -161,6 +167,22 @@ section .text   start=0
 section .rodata follows=.text   align=2
 section .data   follows=.rodata align=2
 section .bss    follows=.data   align=2 nobits
+%ifdef CC_HAS_OVL
+; The overlay's code (SPEC.md 67.14), which ships as <NAME>.OVL beside the
+; package instead of inside it. It FOLLOWS .data - the same section .bss
+; follows - and the two do not collide because .bss is `nobits` and writes no
+; file byte: .bss's base and .modc's first byte are both cc_image_end, which is
+; exactly right. .bss is addressed there at run time and .modc is CUT there at
+; build time, by tools/os88ovl.py, reading the image-size word the header
+; already carries.
+;
+; vstart=0 because it is read into a claim and runs at offset 0 of it, so its
+; labels must be numbered from there; align=1 because a bin section aligns to
+; 4 by default and the pad would land between the recorded image size and the
+; section's real start, so the cut would take the pad with it (SPEC.md 65.10 -
+; it was one byte, and the module ran off the end of its own jump table).
+section .modc   follows=.data   align=1 vstart=0
+%endif
 
 ; =============================================================================
 ; THE 32-BYTE HEADER (SPEC.md 20.2)
@@ -577,6 +599,9 @@ cc_onfile:
 ; -----------------------------------------------------------------------------
 cc_worker:
     cld
+    mov [cc_wksp], sp               ; the top of THIS task's 256-byte slice,
+                                    ; which is how cc_iswk answers "am I the
+                                    ; worker" without a kernel call - see it
     push word [cc_win]              ; arg 1: void *win, banked by cc_entry
     call _os88_worker               ; C: it must never return
     add sp, 2                       ; ...but if it does:
@@ -587,6 +612,283 @@ cc_worker:
     call OSAPI_TASK_ALIVE           ; never returns once we are being closed
     jmp short .park
 %endif
+
+; -----------------------------------------------------------------------------
+; cc_iswk - is this the worker task?
+; out: CF=1 on the worker, CF=0 on the UI task. Preserves every register.
+;
+; SPEC.md 20.6 rule 7 forbids a whole family of calls on a worker - claims,
+; file I/O, anything that touches the FAT - and the kernel has no slot that
+; answers "which task am I", so the runtime works it out from SP. Every task
+; stack is a 256-byte slice of LOW_SEG (kernel/sched.inc, SCH_STACK) and every
+; task runs with SS = LOW_SEG, so SP alone identifies the slice: cc_worker
+; banks its own stack top on entry, and the worker is the task whose SP is
+; inside that slice. Exact rather than approximate - the UI task's SP cannot be
+; in the worker's slice, because the slices do not overlap.
+;
+; A FLAG WOULD NOT DO, and getting this wrong is easy to miss: a byte raised
+; when cc_worker starts is still raised while the UI TASK runs, because the
+; worker never exits. Every UI-task overlay load would then be refused, which
+; presents as a feature that works until the app spawns a worker and never
+; again.
+; -----------------------------------------------------------------------------
+cc_iswk:
+    push ax
+    mov ax, [cc_wksp]
+    or ax, ax                       ; no worker at all: this is the UI task,
+    jz .no                          ; and it is the only task there is
+    cmp sp, ax                      ; SP is BELOW the banked top (we pushed AX,
+    ja .no                          ; and the worker pushed its own frames)
+    sub ax, CC_STACK                ; ...and no further below than one slice
+    cmp sp, ax
+    jbe .no
+    pop ax
+    stc
+    ret
+.no:
+    pop ax
+    clc
+    ret
+
+%ifdef CC_HAS_OVL
+; =============================================================================
+; THE OVERLAY (SPEC.md 67.14)
+;
+; A package links at org 0 and addresses itself with 16-bit offsets (SPEC.md
+; 33), so image + bss can never reach 64KB whatever the heap has free - and C
+; spends that ceiling two to three times faster than assembly does (67.9). A
+; MODULE HAS A SEGMENT OF ITS OWN, so it does not spend the package's.
+;
+; It is kernel SPEC.md 2.8's shape and SPEC.md 65.10's, not a driver's: the
+; module keeps DS = THE PACKAGE'S SEGMENT and reaches every global, every
+; string literal and every .bss byte through it exactly as resident code does.
+; That is what makes moving a subsystem out a matter of moving its text - and
+; in C it is what makes it possible at all, because a compiled function names
+; its data with plain DS-relative references and there is no way to tell the
+; compiler otherwise.
+;
+; tools/cc8086.py does the moving: a C function whose name begins with `ovl_`
+; is emitted into .modc instead of .text, every call TO one becomes a far call
+; through a vector here, and every call FROM one to resident code becomes a far
+; call through a shim. This file owns only what cannot be generated - the load,
+; the stamp check, the binding and the refusal.
+;
+; THE FOUR WORDS OF STATE, and why the stamp is two of them: WORD.OVL and
+; WORD.O88 are separate files on a floppy, so a rebuilt package beside a stale
+; module is a thing a user can produce with a file copy. The module carries the
+; two sizes it was built with; both change under almost any edit to either
+; half; and the check costs four bytes and one compare. It catches a stale
+; PAIR, not every stale pair - two builds whose resident image and module are
+; both the same size would pass it - and that is worth stating rather than
+; implying.
+; =============================================================================
+
+section .modc
+; +0 of the module, because tools/os88ovl.py cuts here and the loader below
+; reads these two words before it believes anything else in the file.
+cc_modc_beg:
+    dw cc_modc_end                  ; the module's own size...
+    dw cc_image_end                 ; ...and the resident image it was built
+                                    ;    with. Both are absolute labels: .modc
+                                    ;    is vstart=0 so the first IS a size,
+                                    ;    and .text starts at 0 so the second is
+                                    ;    the resident file's length.
+section .text
+
+; -----------------------------------------------------------------------------
+; cc_ovneed - make sure the module is in memory
+;
+; out: CF=0 and [cc_ovseg] is the claim holding it;
+;      CF=1, AX=0 and the toast already says why.
+; preserves: every register but AX (which is the C return register, and is
+;      dead at the call site this is generated in front of - see 67.14)
+;
+; UI TASK ONLY. It claims and it reads a floppy, both of which SPEC.md 20.6
+; rule 7 forbids on a worker, so a worker asking for an overlay feature is
+; refused rather than allowed to corrupt the FAT. cc_worker raises [cc_inwk]
+; before it calls the C, which is the whole of the gate.
+; -----------------------------------------------------------------------------
+cc_ovneed:
+    call cc_iswk                    ; THE WORKER NEVER ENTERS THE MODULE, and
+    jc .nowk                        ; not only because loading it is forbidden
+                                    ; out there: cc_ovthunk's return stash is
+                                    ; one LIFO, and one LIFO is only correct
+                                    ; for one task. The rule is the simple one
+                                    ; - overlay code is UI-task code - and it
+                                    ; is enforced HERE, at the only door in
+    cmp word [cc_ovseg], 0
+    je .load
+    clc                             ; already in: the common path
+    ret
+.load:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [cc_ovsize]             ; KB = ceil(size / 1024), computed here
+    add ax, 1023                    ; rather than by the assembler: nasm will
+    mov cl, 10                      ; not divide a section-relative label, and
+    shr ax, cl                      ; a build that fails on arithmetic is a
+    mov di, ax                      ; worse trade than four instructions
+    call OSAPI_MEM_CLAIM            ; AX = KB; out DX = the segment
+    jc .nomem
+    mov [cc_ovseg], dx
+    mov es, dx
+    xor bx, bx                      ; ES:BX = the claim, from its first byte
+    mov cx, di                      ; CX = the capacity, in bytes
+    mov ax, 1024
+    mul cx                          ; DX:AX - the claim is under 64KB by
+    mov cx, ax                      ; construction (it is a segment), so DX is
+    xor dx, dx                      ; 0 and the count is CX alone
+    mov si, cc_ovfile               ; the name resolves in THIS INSTANCE's
+    call OSAPI_FILE_READ            ; directory - the folder it was launched
+    jc .noread                      ; from (SPEC.md 19.2.1), so no visit is
+                                    ; needed and none is made
+    mov es, [cc_ovseg]
+    cmp word [es:0], cc_modc_end    ; the stamp: the module's size...
+    jne .stale
+    cmp word [es:2], cc_image_end   ; ...and the image it was built beside
+    jne .stale
+    call cc_ovbind                  ; the vectors are addresses until this runs
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.stale:
+    mov ax, cc_ovm_stale
+    jmp short .free
+.noread:
+    mov ax, cc_ovm_gone
+.free:
+    push ax                         ; a half-loaded module is worse than none
+    mov dx, [cc_ovseg]
+    call OSAPI_MEM_FREE
+    mov word [cc_ovseg], 0
+    pop ax
+    jmp short .say
+.nomem:
+    mov ax, cc_ovm_mem
+.say:
+    mov si, ax                      ; the kernel COPIES the string (SPEC.md
+    push ds                         ; 59), so nothing here has a lifetime
+    pop es
+    xor cx, cx                      ; CX = 0: the default ~3s
+    call OSAPI_TOAST
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+.nowk:
+    xor ax, ax                      ; the refused call's return value: 0. A C
+    stc                             ; function that can be refused answers a
+    ret                             ; status, and 0 is "it did not happen"
+
+; -----------------------------------------------------------------------------
+; cc_ovthunk - the module calling resident code: the ONE place the two calling
+; conventions meet, reached by a six-byte stub per resident routine.
+;
+; in:  BX = the resident near proc; the stack is [ret IP][ret CS][arguments]
+;      as the module's `call far` left it
+; out: whatever the routine answered, in AX, back in the module
+;
+; WHY THIS IS NOT `call _f` / `retf`, which is what SPEC.md 65.10's assembly
+; module uses and is right there to copy. A far call pushes FOUR bytes, and a
+; shim that then makes a near call of its own pushes two more, so the routine's
+; first argument sits at [bp+8] while every compiled reference to it says
+; [bp+4]. In assembly that costs nothing, because a shimmed routine takes its
+; arguments in REGISTERS and never looks at the stack. In C it is fatal and it
+; is silent: the routine reads the module's return offset as its first
+; argument. Measured on tests/covl before this existed - a function told 10 saw
+; 49, which is exactly where the far call had come from in a 110-byte module.
+;
+; So the four bytes come OFF, and the routine is entered with its arguments
+; where it expects them:
+;
+;   [IP][CS][args]   --pop--pop-->   [args]   --call-->   [ret][args]
+;
+; The segment is not stashed because it is [cc_ovseg] by construction - there
+; is one module - so only the offset needs somewhere to live across the call.
+;
+; THE STASH IS A GLOBAL LIFO, AND THAT IS SAFE FOR EXACTLY ONE REASON: overlay
+; code is UI-task code, enforced in cc_ovneed at the only door in. Two tasks
+; sharing one LIFO would not be a race that a `cli` could fix - the entries
+; are LIFO per task and interleave across tasks - so the fix is the rule, not
+; a critical section. Nesting is real (module -> resident -> module -> resident
+; happens the moment a resident routine reached from the module calls another
+; overlay function), which is why it is a stack at all; CC_OVDEPTH of them is
+; far more than the UI task's ~700 bytes of headroom can hold C frames for, so
+; the task stack is the limit that binds and this one cannot be reached first.
+; -----------------------------------------------------------------------------
+cc_ovthunk:
+    pop ax                          ; the module's return offset...
+    pop dx                          ; ...and its segment, which is [cc_ovseg]:
+                                    ; discarded rather than stashed
+    mov si, [cc_ovrsp]              ; AX, DX and SI are all dead here - the ABI
+    mov [cc_ovrst+si], ax           ; has no callee-saved register, so nothing
+    add si, 2                       ; is live in one across a call, which is
+    mov [cc_ovrsp], si              ; the same fact the push-imm lowering rests
+    call bx                         ; on (tools/cc8086.py)
+    mov si, [cc_ovrsp]
+    sub si, 2
+    mov [cc_ovrsp], si
+    push word [cc_ovseg]            ; AX is the answer and nothing above
+    push word [cc_ovrst+si]         ; touches it
+    retf
+
+; -----------------------------------------------------------------------------
+; cc_ovbind - stamp the segments into both vector tables. Preserves all.
+;
+; Every vector is a dword of (offset, segment) whose OFFSET is assembled in -
+; the module is assembled WITH the package, one nasm job, so both halves agree
+; about every address by construction - and whose segment is the one runtime
+; fact. There are two tables and they take different segments:
+;
+;   cc_ovm_*  the module's own entry points: the claim it was read into
+;   cc_ovv_*  the resident shims the module far-calls back through: CS
+;
+; Both are generated by tools/cc8086.py, contiguous, and walked here, so
+; adding a function to either side is no change to this file.
+; -----------------------------------------------------------------------------
+cc_ovbind:
+    push ax
+    push bx
+    mov ax, [cc_ovseg]
+    mov bx, cc_ovm_first
+.m:
+    cmp bx, cc_ovm_end
+    jae .res
+    mov [bx+2], ax
+    add bx, 4
+    jmp short .m
+.res:
+    mov ax, cs
+    mov bx, cc_ovv_first
+.v:
+    cmp bx, cc_ovv_end
+    jae .done
+    mov [bx+2], ax
+    add bx, 4
+    jmp short .v
+.done:
+    pop bx
+    pop ax
+    ret
+
+section .data
+cc_ovfile:  db CC_PKG_NAME, '.OVL', 0
+cc_ovm_mem: db 'Not enough memory for ', CC_PKG_NAME, '.OVL', 0
+cc_ovm_gone:db CC_PKG_NAME, '.OVL is not on this disk', 0
+cc_ovm_stale: db CC_PKG_NAME, '.OVL does not match this program', 0
+section .text
+%endif  ; CC_HAS_OVL
 
 ; =============================================================================
 ; THE API BRIDGE
@@ -621,6 +923,15 @@ cc_tpl:
     dw 0
 %endif
 
+%ifdef CC_HAS_OVL
+; The module's size, as a word the resident half can read before it has seen
+; the module: .modc is vstart=0, so this label's value IS the byte count, and
+; cc_ovneed turns it into the KB it claims. It is initialised DATA rather than
+; an equ because `%if` cannot compare a section-relative label to a constant
+; (SPEC.md 67.2, the same reason there is no assembly-time size assertion).
+cc_ovsize:  dw cc_modc_end
+%endif
+
 ; =============================================================================
 ; BSS - zeroed by the loader (SPEC.md 21 step 8), so every one of these starts
 ; at 0 and nothing here needs an initialiser. cc_bss_beg must be the FIRST
@@ -637,6 +948,17 @@ cc_fname:   resb 13                 ; the file dialog's chosen name, copied out
                                     ; of KERNEL_SEG before the C sees it
 cc_assoc:   resb 11                 ; os88_assoc_set()'s space-padded block:
                                     ; 3 extension bytes then 8 stem bytes
+cc_wksp:    resw 1                  ; SP at the top of the worker's stack
+                                    ; slice, 0 until one is spawned. cc_iswk
+                                    ; compares against it. Defined whether or
+                                    ; not this package HAS a worker, so the
+                                    ; test needs no %ifdef of its own
+%ifdef CC_HAS_OVL
+cc_ovseg:   resw 1                  ; the claim the module was read into,
+                                    ; 0 = not loaded yet (SPEC.md 67.14)
+cc_ovrsp:   resw 1                  ; and the return stash cc_ovthunk keeps -
+cc_ovrst:   resw CC_OVDEPTH         ; see it for why a global LIFO is safe
+%endif
 
 section .text                       ; leave the assembler in .text - the next
                                     ; %include is the compiled C, and it opens
@@ -666,6 +988,12 @@ section .text                       ; leave the assembler in .text - the next
 %macro CC_IMAGE_END 0
 section .bss
 cc_bss_end:
+%ifdef CC_HAS_OVL
+section .modc
+cc_modc_end:                        ; .modc is vstart=0, so this label's value
+                                    ; is the module's size - which is what the
+                                    ; stamp compares and what cc_ovneed claims
+%endif
 section .data
 align 2, db 0                       ; see above - NOT cosmetic
 cc_image_end:

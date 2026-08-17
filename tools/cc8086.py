@@ -1146,6 +1146,219 @@ def frames(items):
     return out
 
 
+# ----------------------------------------------------------------- overlay
+#
+# SPEC.md 67.14.  A C function whose name begins with `ovl_` does not live in
+# the package's segment: its code is emitted into `.modc`, which crt0.asm
+# declares `follows=.data vstart=0` and tools/os88ovl.py cuts off the end of
+# the assembled image into <NAME>.OVL - a file that ships beside the package
+# and is read into a heap claim the first time one of its functions is called.
+#
+# The module keeps DS = the package's segment, so every global, string literal
+# and .bss byte the moved code names is still a plain DS-relative reference and
+# is still resident.  ONLY CODE MOVES.  That is the whole reason this is
+# possible in C at all: a compiled function names its data through DS and there
+# is no way to tell the compiler otherwise, so a design where the data moved
+# too would need a compiler that does not exist here.
+#
+# Four rewrites, and each one is a consequence of the module having a CS of its
+# own rather than a policy:
+#
+#   1. `section .text` inside a moved function becomes `section .modc`.  A
+#      function is not one contiguous block - SmallerC switches to .rodata in
+#      the middle of one to emit a string literal and switches back - so this
+#      tracks which function each .text fragment belongs to and moves the code
+#      fragments only.  The data fragments stay exactly where they were.
+#
+#   2. EVERY CALL TO AN OVERLAY FUNCTION BECOMES A FAR CALL, including one
+#      from inside the module.  `call far [cc_ovm_<name>]`, a dword of
+#      (offset, segment) whose offset is assembled in - the module is
+#      assembled WITH the package, one nasm job, so both halves agree about
+#      every address by construction - and whose segment cc_ovbind stamps at
+#      load.  Uniformly far, because a far call pushes four bytes of return
+#      address and a near call pushes two, and the callee's arguments are at a
+#      fixed offset from its own frame: two kinds of entry would need two
+#      argument layouts for one function body.  An intra-module far call costs
+#      two extra bytes and about thirteen clocks on an 8088, which is nothing
+#      beside a 756 us drawing call (PERFORMANCE.md).
+#
+#   3. So every `[bp+N]` with N >= 4 inside a moved function - which is how
+#      SmallerC names an ARGUMENT - becomes `[bp+N+2]`.  Locals are `[bp-N]`
+#      and are untouched, which is what makes the rewrite safe to do by
+#      inspection: the sign of the displacement is the whole distinction.
+#      Every `ret` in a moved function becomes `retf` for the same reason.
+#
+#   4. A call FROM the module to resident code becomes `call far [cc_ovv_<n>]`
+#      pointing at a SHIM, never at the routine: every compiled C function ends
+#      in a near `ret`, so far-calling one directly pops the offset, leaves the
+#      segment on the stack and returns into nothing.  A shim is `call _f` then
+#      `retf`, and because the shim's own near call pushes exactly the two
+#      bytes the routine's frame expects, the arguments need no fixup in this
+#      direction at all.
+#
+# A resident call site also gets a three-instruction preamble: `call cc_ovneed`
+# / `jc` past the call.  cc_ovneed is a no-op of four bytes once the module is
+# in, loads it if it is not, and on refusal - no heap, or a disk without the
+# file - toasts the reason and answers AX = 0, so the call returns 0 without
+# happening (SPEC.md 47: refusal is an ordinary path).  It is safe to insert
+# between the argument pushes and the call because the ABI has no callee-saved
+# register: nothing is live in a register across a `call`, which is the same
+# fact the push-immediate lowering above is built on.
+#
+# What is refused: TAKING THE ADDRESS of an overlay function.  A function
+# pointer here is a 16-bit offset with no segment, and the module's offsets
+# mean something else entirely in the package's segment - a call through one
+# lands in the middle of resident code that happens to be at that offset.  It
+# assembles and it runs, which is the signature of everything else this file
+# exists to refuse.
+
+OVL_MARK = "_ovl_"                  # the C name is `ovl_*`; SmallerC adds the _
+
+FUNC_LABEL = re.compile(r"^(_[A-Za-z]\w*):\s*$")
+SECTION = re.compile(r"^\s*section\s+(\.\w+)", re.I)
+CALL_SYM = re.compile(r"^(\s*)call\s+(_[A-Za-z]\w*)\s*$")
+BP_ARG = re.compile(r"\[\s*bp\s*\+\s*(\d+)\s*\]")
+BARE_RET = re.compile(r"^(\s*)ret\s*$")
+
+
+def _owner(lines, i):
+    """The function a `section .text` at line i opens, or None to continue.
+
+    The block's own function label is the first thing in it that is not blank,
+    a comment or a `global` - so this looks for that and nothing else.  A
+    fragment with no label of its own is a continuation of the function the
+    last one belonged to, which is what makes a string literal in the middle of
+    a function harmless.
+    """
+    for line in lines[i + 1:]:
+        s = line.strip()
+        if not s or s.startswith(";") or s.lower().startswith("global"):
+            continue
+        m = FUNC_LABEL.match(line)
+        return m.group(1) if m else None
+    return None
+
+
+def overlay(lines, errors, path):
+    """Split `ovl_*` out into .modc and wire both directions.  See above.
+
+    Returns (lines, stats).  `lines` is unchanged, and no table is emitted, if
+    the program has no overlay function at all - a package that does not use
+    the mechanism must assemble byte for byte as it did before it existed.
+    """
+    funcs, sect, cur = set(), ".text", None
+    for i, line in enumerate(lines):        # pass one: who is out there
+        m = SECTION.match(line)
+        if m:
+            sect = m.group(1).lower()
+            if sect == ".text":
+                own = _owner(lines, i)
+                if own:
+                    cur = own
+                    if own.startswith(OVL_MARK):
+                        funcs.add(own)
+    if not funcs:
+        return lines, None
+
+    entries, shims, sites, moved = {}, {}, 0, set()
+    out, sect, cur, inmod = [], ".text", None, False
+    for i, line in enumerate(lines):
+        m = SECTION.match(line)
+        if m:
+            sect = m.group(1).lower()
+            if sect == ".text":
+                own = _owner(lines, i)
+                if own:
+                    cur = own
+                inmod = cur in funcs
+                if inmod:
+                    moved.add(cur)
+                    out.append("section .modc")
+                    continue
+            else:
+                inmod = False       # a data fragment inside a moved function
+            out.append(line)        # is still data, and data does not move
+            continue
+
+        call = CALL_SYM.match(line)
+        if call:
+            pad, sym = call.group(1), call.group(2)
+            if sym in funcs:
+                entries[sym] = True
+                if inmod:           # module to module: it is already loaded,
+                    out.append("%scall far [cc_ovm%s]" % (pad, sym))
+                else:               # so only a resident site pays for the load
+                    sites += 1
+                    lab = "..@ovl_site_%d" % sites
+                    out.append("%scall\tcc_ovneed\t\t; cc8086: overlay entry"
+                               % pad)
+                    out.append("%sjc\t%s" % (pad, lab))
+                    out.append("%scall far [cc_ovm%s]" % (pad, sym))
+                    out.append("%s:" % lab)
+                continue
+            if inmod:
+                shims[sym] = True
+                out.append("%scall far [cc_ovv%s]" % (pad, sym))
+                continue
+
+        if inmod:
+            r = BARE_RET.match(line)
+            if r:                   # entered far, so it leaves far
+                out.append("%sretf" % r.group(1))
+                continue
+            line = BP_ARG.sub(
+                lambda m: ("[bp+%d]" % (int(m.group(1)) + 2))
+                if int(m.group(1)) >= 4 else m.group(0), line)
+        out.append(line)
+
+    # Taking the address of one is the mistake this cannot let through.
+    for i, line in enumerate(lines):
+        if CALL_SYM.match(line) or FUNC_LABEL.match(line):
+            continue
+        for sym in funcs:
+            if re.search(r"(?<![\w.@])%s(?![\w.@])" % re.escape(sym), line) \
+                    and not re.match(r"^\s*global\b", line):
+                errors.append(
+                    "%s:%d: error: the address of the overlay function `%s` is "
+                    "taken here (`%s`). An overlay function lives in another "
+                    "segment: its offset means something else entirely in this "
+                    "one, so a call through the pointer lands in the middle of "
+                    "resident code. Call it directly, or move it back out of "
+                    "the overlay by renaming it."
+                    % (path, i + 1, sym[1:], line.strip()))
+
+    tail = ["", "; " + "-" * 74,
+            "; cc8086: the overlay's two vector tables (SPEC.md 67.14).",
+            "; Offsets assembled in - one nasm job, so both halves agree about",
+            "; every address; segments stamped by cc_ovbind at load.",
+            "; " + "-" * 74,
+            "%ifndef CC_HAS_OVL",
+            '%error "this package has ovl_* functions but its .asm shim does '
+            'not %define CC_HAS_OVL - see SPEC.md 67.14"',
+            "%endif",
+            "section .data",
+            "cc_ovm_first:"]
+    for sym in sorted(entries):
+        tail.append("cc_ovm%s:\tdw %s, 0" % (sym, sym))
+    tail += ["cc_ovm_end:", ""]
+    if shims:
+        # Six bytes each, and the whole convention change is in cc_ovthunk:
+        # a shim that made a near call of its own would leave the routine's
+        # arguments two bytes further away than every compiled reference to
+        # them says (see crt0.asm - a function told 10 saw 49).
+        tail.append("section .text")
+        for sym in sorted(shims):
+            tail.append("cc_ovs%s:\tmov\tbx, %s" % (sym, sym))
+            tail.append("\tjmp\tcc_ovthunk")
+        tail.append("section .data")
+    tail.append("cc_ovv_first:")
+    for sym in sorted(shims):
+        tail.append("cc_ovv%s:\tdw cc_ovs%s, 0" % (sym, sym))
+    tail += ["cc_ovv_end:", "section .text", ""]
+
+    return out + tail, (len(moved), len(entries), len(shims), sites)
+
+
 # -------------------------------------------------------------------- main
 
 def run(path, text, args):
@@ -1186,6 +1399,11 @@ def run(path, text, args):
     for it in items:
         lines.extend(it.out if it.out is not None else [it.raw])
 
+    # AFTER lowering, because a lowering can emit a `[bp+N]` of its own that
+    # was not in the source (a fused `imul ax, [bp+6], 2` becomes a `mov` from
+    # it), and an argument fixup that ran first would miss exactly those.
+    lines, ovl = overlay(lines, errors, path)
+
     fr = frames(items)
     over = [f for f in fr if f[1] > args.max_frame]
     for name, size, no in over:
@@ -1213,6 +1431,10 @@ def run(path, text, args):
           "site(s) [%s]"
           % (path, len(fr), max([f[1] for f in fr] or [0]),
              sum(low.counts.values()), tally), file=rep)
+    if ovl:
+        print("cc8086: %s: overlay - %d function(s) moved to .modc, %d entry "
+              "vector(s), %d resident shim(s), %d loading call site(s)"
+              % (path, ovl[0], ovl[1], ovl[2], ovl[3]), file=rep)
 
     return gate_errors, errors, "\n".join(lines)
 

@@ -72,6 +72,21 @@ It is idempotent — run it as often as you like. It re-fetches only when
 missing or older than its source. **Re-pinning does not need a clean**: it
 compares HEAD against `PIN` on every run.
 
+**It builds the compiler with four of its limits raised**, through `CFLAGS`
+and not a patch: `MAX_IDENT_TABLE_LEN`, `MAX_MACRO_TABLE_LEN`,
+`SYNTAX_STACK_MAX` and `MAX_CASES` are all `#ifndef`-guarded in `smlrc.c`,
+which is upstream saying they are meant to be set from outside. smlrc keeps
+those tables in fixed-size arrays and stops when one fills — `Identifier table
+exhausted`, naming no file, no line and no way forward — and a program the size
+of `cword` (SPEC.md 67.12: about 5,000 lines in ONE translation unit, because
+`nasm -f bin` has no notion of an external symbol) fills three of the four.
+Nothing about the compiler's OUTPUT changes, so the pin stays a pin. They go
+through `CFLAGS` because `CPPFLAGS` is `+=` in SmallerC's own makefile and
+carries `-DPATH_PREFIX` and `-DHOST_MACOS`: a command-line `CPPFLAGS` would
+REPLACE those and quietly build a compiler that cannot find its own include
+directory. Changing the numbers needs `make clean-cc` first — the freshness
+check compares source mtimes and cannot see a flag.
+
 `make clean` deliberately **spares** `build/cc`. The compiler is a pinned
 upstream instrument, not an output of this tree, and it arrives over the
 network — a clean that threw it away would make the C targets need the network
@@ -491,12 +506,55 @@ What follows in practice:
 `os88pkg.py` prints the numbers on every build:
 
 ```
-os88pkg: 'CWORD' entry=+0x0020 image=20010 bss=27040 icon=no assoc=0
+os88pkg: 'CWORD' entry=+0x0020 image=37062 bss=22028 icon=no assoc=0
 ```
 
-`cword` is 47,050 of 61,440 — **77%, with 14,390 spare**, for a word processor
-with word wrap, three character attributes and an RTF reader and writer.
+`cword` is 59,090 of 61,440 — **96%, with 2,350 spare** — and it is a
+reimplementation of Microsoft Word 1.1a (SPEC.md 67.12), which does not fit in
+one segment at all: another 9,430 bytes of its code are in `CWORD.OVL`. That is
+what the next section is about.
+
 **Track this from your first commit.** It is not a number to check at the end.
+
+---
+
+## When it does not fit: the overlay
+
+**A module has a segment of its own, so it does not spend the package's**
+(SPEC.md 67.14). Name a function `ovl_*` and its CODE is emitted into a section
+that ships as `<NAME>.OVL` beside `<NAME>.O88`, read into a heap claim the
+first time one of them is called:
+
+```c
+static int ovl_save_document(const char *name)   /* out there */
+{
+    return cw_write(name);                       /* back in here, by far call */
+}
+```
+
+Four things follow, and only the last is a rule you have to remember:
+
+- **Only code moves.** Every global, string literal and `.bss` byte the moved
+  code names is still resident and still a plain `DS`-relative reference,
+  because the module keeps `DS` = the package's segment. This is what makes the
+  mechanism possible in C at all.
+- **The calls are rewritten for you**, both ways, by `tools/cc8086.py`. A call
+  to an `ovl_*` function becomes a far call preceded by a load-on-demand check;
+  a call from one back to resident code becomes a far call through a shim.
+- **A refused load is an ordinary path** (SPEC.md 47). No heap, a disk without
+  the file, a stale module, or a **worker task** asking: the reason is toasted
+  and the call returns 0 without happening. So write an overlay function that
+  answers a status, and 0 means "it did not".
+- **Do not take the address of one.** A function pointer here is a 16-bit
+  offset with no segment, and a module offset means something else entirely in
+  the package's segment. `cc8086.py` refuses it by name.
+
+Two lines turn it on: `%define CC_HAS_OVL` in the shim, and the module's file
+name as the third argument to `CC_PACKAGE` in the Makefile. Put the split where
+the FREQUENCY divides rather than where the size does: everything a keystroke
+touches stays resident, and everything a menu command touches can go out.
+`tests/covl` (`make covl`) is the capability gate, and it is the smallest
+complete example.
 
 ---
 

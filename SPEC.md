@@ -44854,14 +44854,29 @@ the same flag `wd_itinit` uses.
 feature rides on it.** Proven on the emulator: the file is found and read
 into a claim, the far call reaches the dispatcher at offset 0, the verb table
 dispatches, the `retf` returns, and a far call OUT to a shim that only
-returns works. **Not yet proven: a shim whose resident routine touches the
-UI** — calling `wd_saymsg` through one froze the app, and every static
-explanation was checked and cleared (the vector holds the shim's address, the
-segment is stamped, the string offset is the string, and the shim's near call
-lands exactly on `wd_saymsg` — its displacement wraps 64KB, which is legal
-and correct). The cause is dynamic and unknown. **No feature moves out of the
-resident image until that is understood**, because a subsystem that cannot
-report its own refusal is a subsystem that cannot ship.
+returns works.
+
+**The UI-touching shim was the open question, and it no longer reproduces.**
+The record used to say that calling `wd_saymsg` through `wd_s_saymsg` froze
+the app, that every static explanation had been checked and cleared, and that
+no feature could move out until the cause was understood. Re-run against the
+tree at §5.4.2.1: a temporary `WDM_SAY` verb was added in three variants —
+the toast through the shim, the toast called from the module's own segment,
+and a shim to a routine that touches nothing — and **all three work**, seven
+round trips interleaved, with editing across a paragraph break afterwards to
+show the app healthy. The likeliest explanation is that the defect was
+`gfx_blit1` restoring `DS` after its nest count rather than before (§5.4.2.1),
+which landed after that note was written and which the toast's own lettering
+goes through; that is an inference and is written down as one. The diagnosis
+hooks were removed; what stands is that the mechanism carries a call into the
+UI and back.
+
+§67.14 is the same design for a **compiled** module, and it is proven the
+other way — by a capability gate that ships nothing, `tests/covl`, whose
+module calls back out into resident C that toasts. It also names the one place
+this design cannot be copied into C unchanged: a shim of `call` / `retf` puts
+a compiled routine's arguments two bytes further from its frame than every
+reference to them says.
 
 ### 65.11 View > Page — the sheet
 
@@ -46314,59 +46329,127 @@ the language makes the wasteful structure the natural one to write. None of
 them will show in a screendump. Check them the way the rest of the tree checks
 them: on hardware, or by counting.
 
-### 67.12 `cword` — the demonstrator, and what it must not touch
+### 67.12 `cword` — Microsoft Word 1.1a, written in C
 
-The C toolchain's first package is **`apps/cword/`**, package name `CWORD`,
-built by `make cworddisk` to `build/cword.img` / `build/cword720.img` /
-`build/cword360.img` (§24), with `vm/386-c-word/` and the `386-c-word` make
-target for a period machine. It exists to prove §67 end to end on something
-with real layout, real input and a real redraw path, rather than on a fixture.
+The C toolchain's application is **`apps/cword/`**, package name `CWORD`, and
+it is a native reimplementation of **Microsoft Word for Windows 1.1a
+("Opus")**: the same product §65's `apps/word/` reimplements in hand-written
+assembly, ported again into C to find out what this toolchain can carry.
 
-It is a word processor: one document of 4,000 characters in static storage,
-typing and the editing keys, word wrap, three character attributes carried per
-character, Open and Save through the Standard File dialog (§38), and **RTF as
-its file format**, read and written through tables transcribed out of the
-Microsoft Word for Windows 1.1a source (Computer History Museum release,
-2014). The attribution lives on every derived file — `apps/cword/cwrtftbl.c`,
-`cwrtftbl.h` and `cwrtfio.c` — and names Microsoft as copyright holder, the
-CHM release as the source, and the Opus file each table came from. The user
-interface is not derived from it.
+**The user interface is Opus's, taken from the source rather than from
+memory.** The Computer History Museum's 2014 release supplies:
 
-**Its size, which is the §67.9 number this section exists to make real**
-(`os88pkg.py` on the shipping package):
+| what | from |
+|---|---|
+| the nine menus, every string and every mnemonic | `Opus/resource/menus.cmd`, MW_MENU |
+| the shortcut captions and the keyboard map | `Opus/resource/keys.cmd` |
+| the ribbon's six buttons and the ruler's controls | `Opus/ibdefs.h` |
+| the status line's field order | `Opus/status.h` |
+| the dialogs' contents | `Opus/dlg/*.des` |
+| RTF in and out | `Opus/RTFOUT.C`, `RTFIN.C` |
+
+Microsoft holds the copyright in everything derived from that release, and the
+attribution is on every file that carries any of it and in the About box, which
+is the part of the program a user can see. What could **not** be ported is the
+code: Opus is pcode built by a proprietary CSL compiler against the Windows 2.x
+API, and none of that exists here.
+
+**It is in two segments, and that is the point of it being here.** A package's
+image and bss share 61,440 bytes and that ceiling IS the segment (§33); the
+assembly port spends 54,952 of it; C costs two to three times the image for the
+same work (§67.9). So this program does not fit in one segment and could not be
+made to. It is split by §67.14's overlay along the line between **what a
+keystroke touches** and **what a menu command touches**:
 
 ```
-image  20,010     code, string literals, the RTF tables
-bss    27,040     the document (4,000 + 4,000), the RTF buffer (12,000),
-                  the glass shadow (2 x 24 x 128 = 6,144)
------------------
-total  47,050     77% of APP_MAX_SIZE (61,440); 14,390 bytes spare
+resident   image  37,062   the chrome, the layout, the glass shadow, the
+                           document model, the keyboard, the mouse
+           bss    22,028   the document (4,000 chars + 4,000 attribute bytes),
+                           the RTF staging buffer (6,000), the shadow
+                           (2 x 24 x 128 = 6,144)
+           -------------
+           total  59,090   96% of APP_MAX_SIZE; 2,350 bytes spare
+CWORD.OVL         9,430    the dialogs, RTF in and out, search, Sort,
+                           Renumber, Table of Contents
 ```
 
-`cc8086.py` reports **78 functions, 24 frame bytes maximum against the 96-byte
-cap, 511 sites lowered**. Read those two figures together: a real C
-application of this shape spends three quarters of the ceiling and a quarter
-of the frame cap, which is exactly the trade §67.9 describes — C is cheap in
-stack and expensive in image, and the ceiling is what runs out first.
+`cc8086.py` reports **146 functions, 26 frame bytes maximum against the 96-byte
+cap, 1,204 sites lowered, 27 functions moved to `.modc`, 30 resident shims**.
 
-**Its redraw path is the §67.11 argument in practice.** A full repaint of its
-69×24 view is 29 drawing calls and 1,682 glyph cells — **1.5 seconds** on the
-target 8088 — so it shadows the glass, lays out only the rows that could have
-changed, and stops the relayout the moment a row's new start equals its old
-plus the insertion delta. A keystroke at the end of the document costs 3 calls
-and 1 cell. Those numbers are counted by a host harness that stubs the API
-with a model of the glass, and they are printed on every run of it; two real
-defects came out of it that no screenshot would have shown.
+**The mode is Draft view**, for §65.1's reason: os8088 has one 8x8 fixed face
+and Word 1.1a shipped a mode for exactly that situation. Bold is a second
+strike one pixel right, italic a strike one pixel up and right, underline /
+word underline / double underline are drawn rules, small caps is a case map,
+hidden text leaves the layout. Each costs **one extra call per RUN**, never one
+per glyph. The row pitch is **11** and not the demonstrator's 10: the italic
+overstrike is one pixel above the band and the double underline two below it,
+and at a pitch of 10 that second rule lands exactly where the next row's italic
+goes — a double-underlined line ate the italic off the line beneath it.
 
-**It is not the Word port.** §65's `apps/word/` is hand-written assembly and
-stays that way. The two share **no** file, no package name, no make target, no
-disk image, no VM directory and no file extension: `word`/`cword`,
-`worddisk`/`cworddisk`, `xt-word` and `386-word`/`386-c-word`,
-`build/word*.img`/`build/cword*.img`, `vm/xt-word` and `vm/386-word`/`vm/386-c-word`,
-`.DOC` and `.WTX`/`.RTF`, and `tools/wordfmt.py` belongs to §65 alone. Two
-programs may have similar ambitions; what they may not be is two things
-answering to one name, because the next person to touch either will silently
-get the other.
+**Paragraph formatting lives on the paragraph mark**, which is Word's own
+arrangement: the `'\n'` that ends a paragraph carries, in its attribute byte,
+an index into a 64-entry dictionary of unique formats (alignment, line spacing,
+space before, left / first-line / right indent). That is why cut, paste, split
+and join need no third structure — a paragraph's format travels with its mark
+through the same array as everything else — and it is why nothing may read CHP
+bits out of a mark's byte. The RTF writer did, once, and emitted `\b` from a
+number that meant "centred".
+
+**What it does**: the nine-menu bar with both period gestures (press-drag-
+release and click-open) plus Esc / arrows / Enter / mnemonics and
+Alt+mnemonic; the ribbon, ruler and status line, each togglable from the View
+menu; typing, the editing keys, word wrap, click and drag selection, F8 extend
+mode, Ins overtype, Show Paragraph Marks; the seven character attributes from
+the ribbon, the Ctrl keys and Format Character; alignment, line spacing, space
+before and the three indents from the ruler, the Ctrl keys and Format
+Paragraph; Search, Replace and Go To; Sort, Renumber and Table of Contents;
+Open and Save through the Standard File dialog with **RTF** as the file format;
+New / Open / Close / Exit with Word's save-changes prompt; and About.
+
+**What is present and greyed** (§47 — grey a fact): the Print family, Spelling,
+Thesaurus, Hyphenate, the whole Macro menu, Outline, footnotes, annotations,
+fields, tables, styles beyond the one dictionary, Paste Link, Summary Info,
+Glossary, and Undo — which is greyed as a fact about this build rather than
+about the platform.
+
+**Three collisions are the BIOS's and not decisions.** int 16h folds Ctrl-H,
+Ctrl-I and Ctrl-M into BkSp, Tab and Enter, so italic, hidden text and one
+indent command have no Ctrl key here. **Ctrl+Space is worse**: it arrives as
+ASCII 32 with the space bar's own scan code, so it cannot be told from SPACE
+at all, and the binding for "reset character formatting" ate every space the
+user typed. All four reach the document through the ribbon and Format
+Character instead.
+
+**The host harness is `apps/cword/hosttest/cwuitest.c`**, run by
+`apps/cword/build.sh` before anything is built for the 8086. It stubs the whole
+API with a model of the glass, drives the program the way a user does, and
+after every keystroke rebuilds what the screen ought to show from an
+independently written word wrap — and it audits the app's shadow against the
+modelled glass, which catches a damage model that BELIEVES it drew something.
+Three real defects in this port came out of it, none of which a screendump
+would have shown:
+
+- **A row's line break is decided by the character one PAST its own end**, so
+  an edit inside row N can change row N-1's break. Starting the relayout at the
+  row containing the edit left the row above one word short, permanently.
+- **The double underline / italic collision** described above.
+- **A modal panel takes the glass**, and the shadow went on claiming cells that
+  the panel had covered.
+
+Its cost table is printed on every build. A keystroke is **5 calls and 8 glyph
+cells**; the one that scrolls the view is 8 calls and 9 cells, because the row
+that came into view is cleared with one fill and only its text is lettered
+rather than the row being lettered full width; a full repaint is 132 calls and
+1,899 cells, which is 1.8 seconds and is what a full screen of text costs on
+this machine whatever writes it.
+
+**It is not §65's port and shares nothing with it.** That one is `apps/word`,
+hand-written assembly, package `WORD`, `.DOC`, `build/word*.img`, `vm/xt-word`
+and `vm/386-word`, and it stays that way; this one is `apps/cword`, package
+`CWORD`, `.RTF`, `build/cword*.img` and `vm/386-c-word`. Two programs may have
+the same ambition; what they may not be is two things answering to one name,
+because the next person to touch either will silently get the other.
+
 
 ### 67.13 The build targets, and what is deliberately not in `all`
 
@@ -46380,8 +46463,9 @@ rules that turn `apps/<dir>/<name>.c` plus `apps/<dir>/<name>.asm` into
 |---|---|
 | `cc-smoke` | `build/ccsmoke.img` — `apps/cc/ccsmoke.c`, the toolchain's smoke test and the SDK's worked example of the two files a C package is made of |
 | `chello` | `build/chello.img` + `build/chello360.img` — `tests/chello/`, the capability gate that first proved a compiled package can hold a window |
-| `cword` | `build/cword.o88` (§67.12) |
-| `cworddisk` | `build/cword.img`, `cword720.img`, `cword360.img`, each `os88disk.py --verify`ed |
+| `covl` | `build/covl.img` + `build/covl360.img` — `tests/covl/`, the capability gate for the OVERLAY (§67.14) |
+| `cword` | `build/cword.o88` + `build/CWORD.OVL` (§67.12) |
+| `cworddisk` | `build/cword.img`, `cword720.img`, `cword360.img`, each carrying both files and each `os88disk.py --verify`ed |
 | `386-c-word` | boots `$(IMG)` in A: and `build/cword.img` in B: on `vm/386-c-word` |
 | `clean-cc` | removes `build/cc`, which plain `clean` spares |
 
@@ -46412,3 +46496,134 @@ is where a C package has to be *measured* rather than merely run — 756 us a
 drawing call, ~900 us a glyph cell, C at 3–5× hand assembly — and a target
 before anybody has taken that measurement is a claim. `cworddisk` already
 builds the 720KB image such a machine would want in B:.
+
+### 67.14 The overlay — a second segment for a C package
+
+`APP_MAX_SIZE` is the segment, not a budget: a package links at `org 0` and
+addresses itself with 16-bit offsets (§33), so image + bss can never reach
+64KB whatever the heap has free. §67.9 is the arithmetic of spending that
+ceiling in C rather than in assembly, and the ratio is 2–3×. **A module has a
+segment of its own, so it does not spend the package's.**
+
+The shape is §65.10's and kernel §2.8's, and the difference from §52.11's
+self-contained driver is the whole design: **the module keeps `DS` = the
+package's segment**, so every global, every string literal and every `.bss`
+byte the moved code names is still a plain DS-relative reference and is still
+resident. **Only code moves.** In assembly that choice was about not
+rewriting 375 data references; in C it is what makes the mechanism possible at
+all, because a compiled function names its data through DS and there is no way
+to tell the compiler otherwise.
+
+**The marking is the name.** A C function called `ovl_*` is module code.
+Nothing else is declared, nothing is annotated, and the cost is visible at
+every call site in the source, which is the point: a far call through a vector
+and a possible disk read are not something a reader should have to look up.
+
+`tools/cc8086.py` does the moving, in a pass that runs **after** lowering
+(a lowering can emit a `[bp+N]` that was not in the source):
+
+| what | becomes |
+|---|---|
+| `section .text` inside an `ovl_*` function | `section .modc` |
+| any `call _ovl_f`, from either segment | `call far [cc_ovm_ovl_f]` |
+| `[bp+N]`, N ≥ 4, inside a moved function | `[bp+N+2]` |
+| `ret` inside a moved function | `retf` |
+| `call _resident` inside a moved function | `call far [cc_ovv_resident]` |
+| a resident call site's preamble | `call cc_ovneed` / `jc` past the call |
+
+A function is **not one contiguous block** — SmallerC switches to `.rodata` in
+the middle of one to emit a string literal and switches back — so the pass
+tracks which function each `.text` fragment belongs to and moves the code
+fragments only. A fragment with no label of its own continues the last one.
+
+**Every call to an overlay function is far, including one from inside the
+module.** A far call pushes four bytes of return address and a near call
+pushes two, and a function body cannot have two argument layouts: two kinds of
+entry would need two copies of the function. The intra-module far call costs
+two bytes and about thirteen clocks on an 8088, which is nothing beside a
+756 us drawing call. That is why the `[bp+N]` fixup is unconditional, and the
+fixup is safe to do by inspection because **the sign of the displacement is
+the whole distinction** — arguments are `[bp+N]`, locals are `[bp-N]`.
+
+**The other direction is where the two calling conventions meet, and it is not
+what §65.10 does.** A shim of `call _f` / `retf` is correct for assembly,
+where a shimmed routine takes its arguments in registers and never looks at
+the stack. In C it is fatal and silent: the far call's four bytes and the
+shim's own two put the routine's first argument at `[bp+8]` while every
+compiled reference to it says `[bp+4]`, so the routine reads the module's
+return offset as its first argument. Measured on `tests/covl` before the fix —
+**a function told 10 saw 49**, which was exactly where in a 110-byte module
+the far call had come from. So each shim is six bytes, `mov bx, _f` /
+`jmp cc_ovthunk`, and `cc_ovthunk` takes the four bytes back off:
+
+```
+[ret IP][ret CS][args]  --pop--pop-->  [args]  --call bx-->  [ret][args]
+```
+
+The return segment is not stashed — it is `[cc_ovseg]` by construction, there
+being one module — so only the offset needs somewhere to live across the call.
+It lives in a **global LIFO**, and that is safe for exactly one reason:
+**overlay code is UI-task code**, enforced in `cc_ovneed` at the only door in.
+Two tasks sharing one LIFO is not a race a `cli` could fix — the entries are
+LIFO per task and interleave across tasks — so the fix is the rule, not a
+critical section. Nesting is real (module → resident → module → resident
+happens the moment a resident routine reached from the module calls another
+overlay function), which is why it is a stack; `CC_OVDEPTH` = 16 is far more
+than the UI task's ~700 bytes of headroom can hold C frames for, so the task
+stack is the limit that binds.
+
+**Loading is on demand and needs no kernel byte.** `cc_ovneed` claims
+`ceil(size / 1024)` KB and reads `<CC_PKG_NAME>.OVL` into it. It does **not**
+visit a folder first: every file name a package passes the file API already
+resolves in that instance's own directory (§19.2.1), which is the folder it
+was launched from. The KB is computed at run time from a `.data` word holding
+`cc_modc_end`, because `%if` cannot compare a section-relative label to a
+constant (§67.2) and a build that fails on assembler arithmetic is the worse
+trade.
+
+**The stamp is two words at the module's offset 0** — its own size, and the
+resident image size it was built beside — compared before anything in the file
+is believed. A rebuilt package beside a stale module is something a user can
+produce with a file copy, and every offset in both vector tables would be
+wrong. It catches a stale **pair**, not every stale pair: two builds whose
+resident image and module were both the same size would pass it, and that is
+worth stating rather than implying.
+
+**Refusal is an ordinary path** (§47). No heap, a disk without the file, a
+stamp mismatch, or a **worker task** asking: the reason is toasted, `AX` is 0,
+and the `jc` in the call-site preamble skips the far call — so the C sees the
+function return 0 without having happened. A C function that can be refused
+answers a status, and 0 is "it did not happen". The document is untouched.
+
+**The sections.** `.modc follows=.data align=1 vstart=0`, declared beside
+`.bss`, which also follows `.data` and does not collide with it because `.bss`
+is `nobits` and writes no file byte: `.bss`'s base and `.modc`'s first byte
+are both `cc_image_end`, which is exactly right — `.bss` is *addressed* there
+at run time and `.modc` is *cut* there at build time. `align=1` is
+load-bearing for the reason §65.10 gives: a bin section aligns to 4 by
+default, and the pad would land between the recorded image size and the
+section's real start, so the cut would take the pad with it.
+
+`tools/os88ovl.py` is unchanged and did not need to change, which is the test
+of whether the section layout was done right: it reads the image-size word out
+of the header and cuts there, and it does not know a C package from an
+assembly one.
+
+**What is refused: taking the address of an overlay function.** A function
+pointer here is a 16-bit offset with no segment, and a module offset means
+something else entirely in the package's segment — a call through one lands in
+the middle of whatever resident code is at that offset. It assembles and it
+runs, which is the signature of everything else `cc8086.py` exists to refuse.
+
+**`tests/covl` is the capability gate** (`make covl`), and it is under `tests/`
+because it proves a capability rather than being one. It puts five things on
+the glass that are each a different way for the mechanism to be wrong: the
+module loads and the far call lands; `ovl_mix(1,2,3,4)` answers **1234**,
+which is what says the argument fixup reached every one of four arguments;
+`ovl_inner` proves a module-to-module call; the module calls back out through
+a resident routine that toasts, **which is the case §65.10 could not prove for
+the assembly module**; and the counters go up by exactly one per press, ten
+presses running, because a mechanism that leaks two bytes of stack per call
+works for a while and then does not. The refusal screen is the second half:
+build the disk without the `.OVL` and every number stays 0 with the reason in
+the menu bar.

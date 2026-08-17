@@ -84,15 +84,36 @@ CC_RUNTIME  := $(CC_DIR)/os88.h $(CC_DIR)/crt0.asm $(CC_DIR)/os88thunk.asm \
 # SPEC.md 67.8.
 CC_MAXFRAME ?= 96
 
+# One newline, so that the $(if) in the packaging rule below can expand to two
+# recipe lines rather than one. GNU make has no other spelling of it.
+define CC_NL
+
+
+endef
+
 # -----------------------------------------------------------------------------
 # CC_PACKAGE - the four rules for one C package.
-#   $(eval $(call CC_PACKAGE,<name>,<directory under apps/>))
+#   $(eval $(call CC_PACKAGE,<name>,<directory under apps/>[,<NAME>.OVL]))
 # expects apps/<dir>/<name>.c and apps/<dir>/<name>.asm (the shim - see the
 # head of apps/cc/crt0.asm, and apps/cc/ccsmoke.asm for a filled-in one).
 #
 # The nasm line carries -I apps/ so `%include "cc/crt0.asm"` resolves the same
 # way every other package's includes do, and -I $(BUILD)/ so the shim can name
 # the generated assembly without knowing where the build tree is.
+#
+# THE THIRD ARGUMENT IS THE OVERLAY (SPEC.md 67.14), and it is the file name
+# the module ships under - `CWORD.OVL`, matching CC_PKG_NAME, because that is
+# the name crt0.asm's loader asks the file API for. Given it, one step goes in
+# between nasm and os88pkg.py: tools/os88ovl.py cuts the assembled image at the
+# size its own header carries, writes the tail as that file, and os88pkg.py
+# stamps the trimmed head. Given nothing, the chain is exactly what it was and
+# not one byte of any existing package changes - which is the property to keep,
+# because every C package in the tree predates this.
+#
+# The cut is NOT optional for a package that has one: a build that skipped it
+# would ship a .o88 whose header says one size and whose file is another, and
+# os88pkg.py refuses exactly that. So the two halves cannot drift apart
+# silently in this direction either.
 # -----------------------------------------------------------------------------
 define CC_PACKAGE
 
@@ -108,8 +129,8 @@ $(BUILD)/$(1).bin: apps/$(2)/$(1).asm $(BUILD)/$(1).gen.asm $(CC_RUNTIME) | $(BU
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $$@ apps/$(2)/$(1).asm
 	@echo "$(1): $$(call FILESIZE,$$@) bytes"
 
-$(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py
-	python3 tools/os88pkg.py $$< -o $$@
+$(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py)
+	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(BUILD)/$(1).trim.bin -o $$@,python3 tools/os88pkg.py $$< -o $$@)
 
 endef
 

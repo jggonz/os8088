@@ -319,8 +319,17 @@ slot.
 ### A package can also be written in C
 
 The OS itself is assembly and stays that way. But a **package** can be written
-in C, and one is: `apps/cword`, a small word processor that reads and writes
-RTF.
+in C, and one is: `apps/cword` — a second reimplementation of **Microsoft Word
+1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
+line as `apps/word` and RTF as its file format.
+
+It does not fit in one segment, and that is the interesting part. A package's
+image and bss share 60KB and that ceiling IS the segment; C costs two to three
+times the image of hand assembly for the same work. So half of it lives in
+`CWORD.OVL`, a file beside the package that is read into a heap claim the
+first time a dialog, a file command or one of the utilities is asked for — the
+split falling exactly between what a keystroke touches and what a menu command
+touches.
 
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in
@@ -367,7 +376,7 @@ assembly one, which is the test of whether it was done right.
 | `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
 | `build/zork*.img`      | 1.44MB / 720KB / 360KB   | Frotz story floppies (`make zdisk`) |
 | `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
-| `build/cword*.img`     | 1.44MB / 720KB / 360KB   | the C word processor (`make cworddisk`) |
+| `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -550,9 +559,9 @@ rather than buried:
   source code** ("Opus"), released by the Computer History Museum in 2014.
   `apps/word` takes its menu strings, ribbon and ruler layout, dialogs and key
   assignments from that release and writes real Word `.DOC` files built out of
-  its documented structures; `apps/cword` transcribes RTF keyword and property
-  tables from it — `cwrtftbl.c`, `cwrtftbl.h`, and the interpreter shape in
-  `cwrtfio.c`. Those files carry a header naming **Microsoft Corporation** as
+  its documented structures; `apps/cword` takes the same menus, keys, ribbon,
+  ruler and status fields, and transcribes RTF keyword and property tables from
+  it — `cwrtftbl.c`, `cwrtftbl.h`, and the interpreter shape in `cwrtfio.c`. Those files carry a header naming **Microsoft Corporation** as
   copyright holder, the CHM release as the source, and the specific Opus file
   each table came from. **The CHM release carries no licence grant**; it is
   published for study, and every file in it is headed "COPYRIGHT (C) 1987

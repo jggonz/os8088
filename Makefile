@@ -606,7 +606,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
-        cc-note chello cword cworddisk 386-c-word \
+        cc-note chello covl cword cworddisk 386-c-word \
         checkdocs clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -1613,6 +1613,50 @@ $(BUILD)/chello360.img: $(BUILD)/chello.o88 tools/os88disk.py
 #   make test TESTAPPS=build/chello.img    boots with it in B:
 chello: $(BUILD)/chello.img $(BUILD)/chello360.img
 
+# --- COVL, the C OVERLAY capability gate (ON DEMAND: `make covl`) ------------
+# tests/covl is what SPEC.md 67.14 rests on: a compiled package half of whose
+# code is in a second segment, read off the floppy on demand and far-called
+# both ways. Open-coded for the same reason chello is - it is under tests/, so
+# CC_PACKAGE's apps/ rooting does not fit and its nasm line needs a third -I -
+# and if a third tests/ C package ever turns up, THAT is the moment to lift
+# these rules into a directory-taking CC_PACKAGE_AT rather than write them a
+# third time.
+#
+# The disk carries two files: COVL.O88 and the module beside it. Boot it, press
+# SPACE, and read the numbers - each one is a different way for the mechanism
+# to be wrong (tests/covl/covl.c says which).
+$(BUILD)/covl.raw.asm: tests/covl/covl.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		tests/covl/covl.c -o $@
+
+$(BUILD)/covl.gen.asm: $(BUILD)/covl.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/covl.bin: tests/covl/covl.asm $(BUILD)/covl.gen.asm $(CC_RUNTIME) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -I tests/covl/ \
+		-o $@ tests/covl/covl.asm
+	@echo "covl: $(call FILESIZE,$@) bytes (image + module)"
+
+$(BUILD)/covl.o88: $(BUILD)/covl.bin tools/os88pkg.py tools/os88ovl.py
+	python3 tools/os88ovl.py $< -o $(BUILD)/COVL.OVL \
+		--trim $(BUILD)/covl.trim.bin
+	python3 tools/os88pkg.py $(BUILD)/covl.trim.bin -o $@
+
+$(BUILD)/covl.img: $(BUILD)/covl.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/covl.o88 $(BUILD)/COVL.OVL
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/covl360.img: $(BUILD)/covl.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		$(BUILD)/covl.o88 $(BUILD)/COVL.OVL
+	@python3 tools/os88disk.py --verify $@
+
+#   make covl                            builds both images
+#   make test TESTAPPS=build/covl.img    boots with it in B:
+covl: $(BUILD)/covl.img $(BUILD)/covl360.img
+
 # --- CWORD and its document floppy (SPEC.md 67.12) ---------------------------
 # The C toolchain's demonstrator: a word processor whose UI, layout, redraw
 # and RTF engine are all C, going through the same five steps ccsmoke and
@@ -1623,7 +1667,7 @@ chello: $(BUILD)/chello.img $(BUILD)/chello360.img
 # assembly and the two share no file, no package name, no make target, no disk
 # image, no VM directory and no extension. Nothing here may reach a `word`
 # name, and nothing in the Word section above may reach a `cword` one.
-$(eval $(call CC_PACKAGE,cword,cword))
+$(eval $(call CC_PACKAGE,cword,cword,CWORD.OVL))
 
 # THE REST OF THE TRANSLATION UNIT. `nasm -f bin` has no notion of an external
 # symbol, so a C package is ONE compilation and one assembly (SPEC.md 67.1):
@@ -1635,7 +1679,9 @@ $(eval $(call CC_PACKAGE,cword,cword))
 # an edit to the RTF engine or to the byte mover leaves build/cword.o88
 # untouched - and a stale package reads exactly like the change having done
 # nothing, which is the failure the WORD.OVL rule above already paid for once.
-CWORDSRC := apps/cword/cwrtfio.c apps/cword/cwrtftbl.c apps/cword/cwrtftbl.h
+CWORDSRC := apps/cword/cwrtfio.c apps/cword/cwrtftbl.c apps/cword/cwrtftbl.h \
+            apps/cword/cwmenu.c apps/cword/cwchrome.c apps/cword/cwdrop.c \
+            apps/cword/cwcmd.c apps/cword/cwovl.c
 $(BUILD)/cword.raw.asm: $(CWORDSRC)
 $(BUILD)/cword.bin: apps/cword/cwmove.inc
 
@@ -1654,15 +1700,18 @@ cword: $(BUILD)/cword.o88
 cworddisk: $(BUILD)/cword.img $(BUILD)/cword720.img $(BUILD)/cword360.img
 
 $(BUILD)/cword.img: $(BUILD)/cword.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/cword.o88
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/cword.o88 \
+		$(BUILD)/CWORD.OVL
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/cword720.img: $(BUILD)/cword.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/cword.o88
+	python3 tools/os88disk.py -o $@ --size 720 $(BUILD)/cword.o88 \
+		$(BUILD)/CWORD.OVL
 	@python3 tools/os88disk.py --verify $@
 
 $(BUILD)/cword360.img: $(BUILD)/cword.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/cword.o88
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/cword.o88 \
+		$(BUILD)/CWORD.OVL
 	@python3 tools/os88disk.py --verify $@
 
 # =============================================================================

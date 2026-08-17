@@ -275,6 +275,56 @@ void os88_wm_snap(void *win, int on) { (void)win; (void)on; }
 void os88_menu_set(void *win, struct os88_menuset *set) { (void)win; (void)set; }
 void os88_about_set(void *win) { (void)win; }
 
+/* The API the Word port added on top of what the demonstrator used. The
+ * mouse, the tasks and the BIOS byte are stubbed to a machine where nothing
+ * moves and nothing is pressed, which is what a keystroke harness wants: the
+ * press-drag-release tracker returns immediately and the worker never runs. */
+void os88_wm_sizable(void *win, int on) { (void)win; (void)on; }
+void os88_wm_destroy(void *win) { (void)win; }
+void os88_wm_hide(void *win) { (void)win; }
+void os88_wm_onmouseup(void *win) { (void)win; }
+void os88_mouse(struct os88_mouse *m) { m->x = 0; m->y = 0; m->btn = 0; }
+void os88_task_yield(void) { }
+void os88_gfx_lock(void) { }
+void os88_gfx_unlock(void) { }
+void os88_task_sleep(int ticks) { (void)ticks; }
+int  os88_task_spawn(void *win) { (void)win; return -1; }
+void os88_task_alive(void *win) { (void)win; }
+int  os88_peek(unsigned seg, unsigned off) { (void)seg; (void)off; return 0; }
+void os88_gfx_pen(int disabled) { (void)disabled; }
+void os88_gfx_vline(int x, int y1, int y2) { os88_gfx_fill(x, y1, x, y2); }
+void os88_gfx_pixel(int x, int y) { os88_gfx_fill(x, y, x, y); }
+void os88_font_char(int x, int y, int ch)
+{ char b[2]; b[0] = (char)ch; b[1] = 0; os88_font_str(x, y, b); }
+unsigned os88_strlen(const char *s) { return (unsigned)strlen(s); }
+/* os88_gfx_blit1 - ONE call for a band the app composed itself (SPEC.md
+ * 5.4.2). Modelled rather than refused, because the ruler's scale goes through
+ * it and a stub that always refuses measures the FALLBACK path - 71 drawing
+ * calls where the machine makes one - and reports it as the cost of the
+ * program. It checks the alignment the real primitive requires, which is the
+ * other half of what a stub is for. */
+int  os88_gfx_blit1(const void *bits, int stride, int x, int y, int w, int rows)
+{
+    const unsigned char *p = (const unsigned char *)bits;
+    int r, c;
+
+    n_fill++;                           /* one drawing call, whatever it draws */
+    if ((x & 7) != 0 || (w & 7) != 0) {
+        printf("HARNESS: gfx_blit1 refused: x=%d w=%d not byte aligned\n", x, w);
+        return -1;
+    }
+    for (r = 0; r < rows; r++) {
+        for (c = 0; c < w; c++) {
+            int px = x + c;
+            int py = y + r;
+            if (px < 0 || px >= GW * 8 || py < 0 || py >= GH) continue;
+            if (p[r * stride + (c >> 3)] & (0x80 >> (c & 7)))
+                pixline[px][py] = 1;
+        }
+    }
+    return 0;
+}
+
 void os88_video(struct os88_video *v)
 { v->w = 640; v->h = 480; v->dock_top = 440; v->kind = OS88_VID_VGA; v->bpp = 4; }
 
@@ -384,12 +434,45 @@ static void model(void)
 
 static int fails;
 
+/* THE SHADOW IS A CLAIM ABOUT THE GLASS, and this checks it directly rather
+ * than through the document. The two can disagree with no visible symptom -
+ * the glass is right, the shadow merely believes something it did not draw -
+ * and the damage model then SKIPS a real change later, somewhere else, for a
+ * reason nothing at that moment explains. Reported once, because after the
+ * first divergence everything downstream is a consequence. */
+static int shadow_lied;
+
+static void shadow_audit(const char *what)
+{
+    int r, c, y;
+
+    if (shadow_lied)
+        return;
+    for (r = 0; r < cw_rows; r++) {
+        y = cw_ty + r * CW_PITCH;
+        for (c = 0; c < cw_cols; c++) {
+            char g = cellch[(cw_tx + c * 8) / 8][y];
+            char sh = cw_sh[r * CW_SH_STRIDE + c];
+            if (sh == (char)0xFF)
+                continue;               /* deliberately impossible: a row the
+                                         * app has marked for full redraw */
+            if (g != sh) {
+                printf("SHADOW %s: row %d col %d - glass '%c', shadow '%c'\n",
+                       what, r, c, g, sh);
+                shadow_lied = 1;
+                return;
+            }
+        }
+    }
+}
+
 static void verify(const char *what)
 {
     int r, c, y, x, bad = 0;
     int gb, gi, gu, wb, wi, wu;
 
     model();
+    shadow_audit(what);
     for (r = 0; r < cw_rows && !bad; r++) {
         y = cw_ty + r * CW_PITCH;
         for (c = 0; c < cw_cols; c++) {
@@ -398,6 +481,29 @@ static void verify(const char *what)
                 printf("FAIL %s: row %d col %d shows '%c' (%d), expected '%c'\n",
                        what, r, c, cellch[x / 8][y], cellch[x / 8][y],
                        exp_ch[r][c]);
+                {   int k;
+                    printf("     glass: [");
+                    for (k = 0; k < cw_cols; k++)
+                        putchar(cellch[(cw_tx + k * 8) / 8][y]);
+                    printf("]\n     model: [");
+                    for (k = 0; k < cw_cols; k++)
+                        putchar(exp_ch[r][k]);
+                    printf("]\n     rowspan %d..%d pap=%d w=%d first=%d showp=%d\n",
+                           cw_ls[r], cw_le[r], cw_lp[r],
+                           cw_pap_width(cw_lp[r], 1), 
+                           (cw_ls[r] == 0 || cw_buf[cw_ls[r]-1] == 10), cw_showp);
+                    cw_wrap(cw_ls[r], cw_lp[r]);
+                    printf("     re-wrap says end=%d next=%d; from=%d stop=%d shstart=%d shend=%d\n",
+                           cw_w_end, cw_w_next, cw_from, cw_stop,
+                           cw_sh_start[r], cw_sh_end[r]);
+                    printf("     shadow: [");
+                    for (k = 0; k < cw_cols; k++)
+                        putchar(cw_sh[r * CW_SH_STRIDE + k]);
+                    printf("]\n     doc: ");
+                    for (k = cw_ls[r]; k <= cw_le[r] && k < cw_len; k++)
+                        printf("%c/%d ", cw_buf[k], cw_att[k]);
+                    printf("\n");
+                }
                 bad = 1;
                 break;
             }
@@ -476,8 +582,8 @@ static void cost_table(void)
 {
     int i;
 
-    os88_oncmd(CW_F_NEW, CW_M_FILE, win);
-    os88_oncmd(CW_F_NEW, CW_M_FILE, win);
+    cw_do(win, CWA_NEW);
+    if (cw_dlg) { key(9, 0); key(13, 0); }   /* the save-changes prompt: No */
     gclear();
     os88_paint(win);
 
@@ -486,7 +592,14 @@ static void cost_table(void)
     callreset(); os88_paint(win);
     cost("a full repaint (W_PAINT)");
 
-    for (i = 0; i < 40; i++)
+    /* A DOCUMENT THAT IS NOT AT THE CAP. Filling it to CW_DOC_MAX made every
+     * line of the table below a measurement of the REFUSAL path - cw_type()
+     * toasts and returns without inserting - so "typing at the end of the
+     * document" was timing a keystroke that did not happen. 30 lines is about
+     * two thirds of the document. */
+    cw_do(win, CWA_NEW);
+    if (cw_dlg) { key(9, 0); key(13, 0); }
+    for (i = 0; i < 30; i++)
         typestr("The quick brown fox jumps over the lazy dog again and again "
                 "and again. ");
     verify("the cost table's document");
@@ -515,9 +628,9 @@ static void cost_table(void)
     verify("after the cost table's scrolling");
 
     key(0, CW_K_END);
-    os88_oncmd(CW_T_BOLD, CW_M_FMT, win);
+    cw_chp_apply(win, CW_A_BOLD, 0);
     callreset(); key('B', 0);   cost("typing one BOLD character");
-    os88_oncmd(CW_T_ULINE, CW_M_FMT, win);
+    cw_chp_apply(win, CW_A_ULINE, 0);
     callreset(); key('U', 0);   cost("...bold and underlined");
     verify("after the cost table's formatting");
 }
@@ -582,17 +695,17 @@ int main(void)
     key(0, CW_K_DEL); verify("delete");
 
     /* 5. formatting: bold, then italic, then underline, then plain */
-    os88_oncmd(CW_T_BOLD, CW_M_FMT, win);
+    cw_chp_apply(win, CW_A_BOLD, 0);
     typestr("BOLD ");
     verify("bold text");
-    os88_oncmd(CW_T_ITAL, CW_M_FMT, win);
+    cw_chp_apply(win, CW_A_ITAL, 0);
     typestr("bold+italic ");
     verify("bold and italic");
-    os88_oncmd(CW_T_BOLD, CW_M_FMT, win);
-    os88_oncmd(CW_T_ULINE, CW_M_FMT, win);
+    cw_chp_apply(win, CW_A_BOLD, 0);
+    cw_chp_apply(win, CW_A_ULINE, 0);
     typestr("italic+under ");
     verify("italic and underline");
-    os88_oncmd(CW_T_PLAIN, CW_M_FMT, win);
+    cw_chp_apply(win, 0, 2);
     typestr("plain again and some more text to push the formatted run around ");
     verify("back to plain");
 
@@ -625,16 +738,25 @@ int main(void)
         memcpy(keep, cw_buf, keepn);
         memcpy(keepa, cw_att, keepn);
 
-        os88_oncmd(CW_F_NEW, CW_M_FILE, win);
-        os88_oncmd(CW_F_NEW, CW_M_FILE, win);
-        os88_oncmd(CW_T_ITAL, CW_M_FMT, win);
-        os88_oncmd(CW_T_ULINE, CW_M_FMT, win);
+        cw_do(win, CWA_NEW);
+        if (cw_dlg) { key(9, 0); key(13, 0); }
+        cw_chp_apply(win, CW_A_ITAL, 0);
+        cw_chp_apply(win, CW_A_ULINE, 0);
         typestr("italic and underlined on the very first row");
         verify("formatted text on row 0");
-        os88_oncmd(CW_E_CLEAR, CW_M_EDIT, win);   /* arms */
-        os88_oncmd(CW_E_CLEAR, CW_M_EDIT, win);   /* discards */
+        /* File > New on a DIRTY document asks Word's question - "Do you want
+         * to save changes to <name>?" - and this is the answer. The
+         * demonstrator armed and discarded on two presses of one menu item;
+         * this is the product's prompt, and the harness has to work it: the
+         * focus opens on Yes, Tab moves to No, Enter presses it. Leaving the
+         * prompt up instead was silent and expensive - the panel covered the
+         * text band, the next paint drew the document and then drew the panel
+         * over it, and the shadow went on claiming cells the glass no longer
+         * had. */
+        cw_do(win, CWA_NEW);
+        if (cw_dlg) { key(9, 0); key(13, 0); }
         verify("Clear All must take the attribute strips with it");
-        os88_oncmd(CW_T_PLAIN, CW_M_FMT, win);
+        cw_chp_apply(win, 0, 2);
 
         for (ki = 0; ki < keepn; ki++)
             cw_put(keep[ki], keepa[ki]);
@@ -679,8 +801,8 @@ int main(void)
         verify("after save");
         if (disk_len <= 0) { printf("FAIL: nothing was written\n"); fails++; }
 
-        os88_oncmd(CW_F_NEW, CW_M_FILE, win);   /* arms */
-        os88_oncmd(CW_F_NEW, CW_M_FILE, win);   /* discards */
+        cw_do(win, CWA_NEW);
+        if (cw_dlg) { key(9, 0); key(13, 0); }
         verify("after New");
         if (cw_len != 0) { printf("FAIL: New did not empty the document\n"); fails++; }
 
@@ -710,23 +832,38 @@ int main(void)
      *     says, and the pasted run has to appear on the glass. */
     {
         int before = cw_len;
-        os88_oncmd(CW_E_COPY, CW_M_EDIT, win);
+
+        /* SELECT FIRST, which is a real change from the demonstrator: it had
+         * `Copy All` on its Edit menu, and this is Word's Edit menu, where Cut
+         * and Copy act on the selection and are greyed without one. F8 arms
+         * extend-selection and the arrows extend it, which is the keyboard
+         * route a user actually has (SPEC.md 65.2). */
+        cw_cur = cw_len;                /* the previous step left it at 0,
+                                         * and a selection that starts and
+                                         * ends there copies nothing */
+        cw_show(win, -2, 0, 0);
+        key(0, CW_K_F8);
+        for (i = 0; i < 30; i++) key(0, CW_K_LEFT);
+        cw_do(win, CWA_COPY);
+        cw_sel_on = 0;
+        cw_ext = 0;
+        cw_show(win, -1, 0, 0);
         printf("clipboard: %d characters copied, \"%s\"\n",
                os88_clip_size(), last_toast);
         for (i = 0; i < 20; i++) key(0, CW_K_LEFT);
-        os88_oncmd(CW_E_PASTE, CW_M_EDIT, win);
+        cw_do(win, CWA_PASTE);
         verify("after a paste");
         if (cw_len <= before) {
             printf("FAIL: the paste added nothing (%d -> %d)\n",
                    before, cw_len);
             fails++;
         }
-        while (cw_len > before) { key(8, 0); }
+        while (cw_len > before) { key(8, 0); verify("undo-paste backspace"); }
         verify("after undoing the paste by hand");
     }
 
     /* 9c. the keyboard shortcuts that are not menu commands */
-    os88_oncmd(CW_T_PLAIN, CW_M_FMT, win);
+    cw_chp_apply(win, 0, 2);
     key(CW_C_BOLD, 0);
     if (!(cw_attr & CW_A_BOLD)) { printf("FAIL: Ctrl-B did not set bold\n"); fails++; }
     key(CW_C_ULINE, 0);
@@ -761,9 +898,19 @@ int main(void)
     if (cw_len != CW_DOC_MAX) { printf("FAIL: typed past the cap\n"); fails++; }
     verify("at the cap");
 
-    /* 12. the About panel, and the repaint that takes it down */
+    /* 12. the About panel, and the repaint that takes it down.
+     *
+     * ESC AND NOT A CLICK, which is a behaviour change worth stating: the
+     * panel is a MODAL dialog now (it lives in the overlay, SPEC.md 67.14),
+     * so a click on its background goes nowhere - that is what modal means,
+     * and it is what the product does. Dismissing it with a click was how the
+     * demonstrator's About worked, and leaving that here did not fail HERE:
+     * it left the panel up, and the next fourteen steps typed into a dialog
+     * instead of into the document, reporting a stale screen at each one. A
+     * harness that cannot get out of a dialog reports the whole rest of the
+     * run as broken. */
     os88_about(win);
-    os88_onclick(cw_tx, cw_ty, win);
+    key(27, 0x01);
     verify("after the About panel");
 
     /* 13. obscured: the app must not draw, and must recover on the next paint */

@@ -205,7 +205,34 @@ else
 	# default target additionally builds SmallerC's DOS/Windows/Linux runtime
 	# libraries, which this repo has no use for - a package links against
 	# apps/os88api.inc and nothing else - and which take minutes.
-	run make -C "$SRC" -f GNUmakefile "${BINS[@]}"
+	# THE FOUR LIMITS, RAISED BY A BUILD FLAG AND NOT BY A PATCH. smlrc
+	# keeps its tables in fixed-size arrays and refuses when one fills:
+	# `Identifier table exhausted`, and the message names no file, no line
+	# and no way forward. A program of CWORD's size (SPEC.md 67.12, about
+	# 5,000 lines in one translation unit, because `nasm -f bin` has no
+	# notion of an external symbol) fills three of the four.
+	#
+	# Every one of them is #ifndef-guarded in smlrc.c, which is upstream
+	# saying they are meant to be set from outside, so this needs no patch
+	# and the pin stays a pin - nothing about the compiler's OUTPUT changes,
+	# only how much input it will accept before it stops.
+	#
+	# They go through CFLAGS and not CPPFLAGS deliberately: CPPFLAGS is `+=`
+	# in common.mk and carries -DPATH_PREFIX and -DHOST_MACOS, and a
+	# command-line assignment would REPLACE it and quietly build a compiler
+	# that cannot find its own include directory. CFLAGS is `?=`, so this
+	# repeats its default and adds to it.
+	#
+	# Changing these numbers does not re-trigger the freshness check above,
+	# which compares source mtimes: `tools/setup-cc.sh` after a `make
+	# clean-cc` is how you make them take effect.
+	run make -C "$SRC" -f GNUmakefile \
+		CFLAGS="-pipe -Wall -O2 \
+			-DMAX_IDENT_TABLE_LEN=32768 \
+			-DMAX_MACRO_TABLE_LEN=16384 \
+			-DSYNTAX_STACK_MAX=16384 \
+			-DMAX_CASES=512" \
+		"${BINS[@]}"
 	have_bins || die "make finished but one of ${BINS[*]} is missing"
 fi
 for b in "${BINS[@]}"; do
