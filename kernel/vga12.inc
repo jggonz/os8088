@@ -3662,6 +3662,17 @@ section .cold                   ; gfx_blit1's body, and its far entry below it
 ; CALLER's band. This body's CS is COLD_SEG, so sw_xfer's [cs:vid_rowadd] idiom
 ; does not transfer either - the frame is the way to reach a geometry word once
 ; DS has moved.
+;
+; THAT RULE COVERS THE EXIT TOO, and it did not: the nest count came down at
+; `.done`, which is ABOVE `pop ds`, so `cmp byte [vid_ndisp]` and `dec byte
+; [gfx_dnest]` both addressed the CALLER's segment. The read decided the write
+; - a package whose image happens to hold anything above 1 at vid_ndisp's
+; offset fell through the guard - and the write then decremented one byte of
+; that package's own IMAGE, once per blit. Nothing in the kernel or the package
+; is checking, so it is silent until the rotted byte is CODE the package
+; executes: Word (SPEC.md 65.13) hit it at 0x1698, the head of wd_rflush's
+; leading-gap fill, which only a face taller than the 8x8 cell ever runs.
+; SPEC.md 5.4.2.1 is the account.
 ; =============================================================================
 gfx_blit1_x:
     test ax, 7                  ; the two argument refusals, and they are the
@@ -3842,10 +3853,6 @@ gfx_blit1_x:
     mov sp, bp
     add sp, 12
 .done:
-    cmp byte [vid_ndisp], 1
-    jbe .noleave
-    dec byte [gfx_dnest]        ; ...and NOTHING restores the display
-.noleave:                       ; (SPEC.md 39.14.3)
     pop ax
     pop bx
     pop cx
@@ -3853,8 +3860,15 @@ gfx_blit1_x:
     pop di
     pop si
     pop bp
-    pop ds
-    pop es
+    pop ds                      ; DS IS KERNEL_SEG AGAIN, AND NOT ONE BYTE
+    pop es                      ; SOONER: the emit above spends it on the
+                                ; CALLER's band, so the two bytes below have to
+                                ; wait for this pop. They did not, and both of
+                                ; them landed in the CALLER'S IMAGE - see below.
+    cmp byte [vid_ndisp], 1
+    jbe .noleave
+    dec byte [gfx_dnest]        ; ...and NOTHING restores the display
+.noleave:                       ; (SPEC.md 39.14.3)
     clc
     ret
 .none:                          ; clipped away entirely: drawn, and nothing

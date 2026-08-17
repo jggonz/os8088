@@ -1241,7 +1241,9 @@ rule 2 intact.
 
 **No `rep` carries a segment override**, deliberately: an 8086 loses the prefix
 if an interrupt lands mid-`rep`, and this is an interrupt-heavy kernel. DS is
-pointed at the caller's band and restored.
+pointed at the caller's band and restored — and **between those two moments
+this routine has no kernel variables**, which is a rule about the exit as much
+as the emit (§5.4.2.1).
 
 **WHAT IT COSTS, MEASURED (PERFORMANCE.md Set 62).** `tests/bandbench` under
 `-icount`, converted at Part 2's 0.359 ms a count. The emit is **2.42 ms a row**
@@ -1265,6 +1267,67 @@ neither package this serves can load on the machine that build is for — Word i
 46.5 KB and TeXPad 31.5 KB against a 128 KB machine's 28 KB heap. A package
 therefore **must test CF**, and the documented degrade is that it letters in the
 kernel's 8×8 face instead, with `font_run` (§6.1).
+
+#### 5.4.2.1 The two bytes that decremented the CALLER'S IMAGE
+
+These two lines sat at `.done`, **above `pop ds`**:
+
+```
+    cmp byte [vid_ndisp], 1         ; both DS-relative, and DS at this point
+    jbe .noleave                    ; is still the CALLER's band segment
+    dec byte [gfx_dnest]
+```
+
+The emit moves DS to the caller (the rule above), and the exit read and wrote
+two kernel variables before putting it back. So both addressed **the package**,
+at `vid_ndisp`'s and `gfx_dnest`'s kernel offsets. Three things follow, and each
+one is worse than the last.
+
+**The read decides the write, so the guard is not a guard.** `[vid_ndisp]` is
+"how many displays" and is 1 on every ordinary machine, which is what makes this
+look untestable — a single-monitor build should never take the branch. But the
+byte actually read is whatever the *package* holds at offset 0x11FD. The
+multi-monitor path was not being exercised; a package's code was being read as a
+monitor count.
+
+**The write is a silent one-byte-per-blit rot of the caller's own image.**
+`dec byte [gfx_dnest]` decrements the package at offset 0x1698, once per band it
+puts down. Nothing detects it: there is no checksum over a loaded package, the
+loader is long finished, and the damaged byte is in a region nobody reads back.
+
+**WHETHER IT FIRES AT ALL IS DECIDED BY ONE ARBITRARY BYTE OF THE CALLER**, and
+that is the part worth keeping. At the build this was found in, Word held `0x01`
+at 0x11FD — so `1 ≤ 1`, the branch skipped, and the bug did nothing whatsoever.
+An unrelated edit to `apps/word/word.asm` (§65.13's proportional metrics) moved
+that offset onto a byte of `wd_walk`'s code holding `0x53`, 83 > 1, and the same
+kernel armed itself: every blit rotted a byte, and inside twenty keystrokes the
+machine wedged. **A latent write that is gated on a byte of an unrelated file is
+not a dormant bug, it is a scheduled one** — nothing about the edit that arms it
+is anywhere near this code, and nothing warns.
+
+The freeze it eventually produces is two steps past the corruption: the mangled
+instruction derails the package, and by then the rot has also changed the
+segment immediate of one of its `call KERNEL_SEG:...` instructions, so a far
+call goes to an unmapped window, reads `0xFF`, takes an invalid-opcode fault,
+and returns to it forever. **A frozen guest whose timer still runs is a fault
+loop, not a hang** — and the registers being *identical* sample after sample,
+rather than merely similar, is what says so.
+
+And on a machine that really does have two displays it was broken the other way
+round. `gfx_disp_enter`'s `inc byte [gfx_dnest]` (vga12.inc:249) runs *above*
+the emit, with DS still KERNEL_SEG, so it was always correct; only the matching
+`dec` addressed the package. The kernel's nest count therefore **ratcheted up by
+one per band blit and never came down**, and §39.14.4's `cmp byte [gfx_dnest],
+0` and this section's `cmp byte [gfx_dnest], 1` both read it — so every
+primitive after the first band on `xt-multimon` would take the nested path and
+translate against the wrong origin. One `pop ds` in the wrong place is two
+different bugs on two different machines.
+
+**A `push ds`/`pop ds` pair does not mean DS is safe in between — it means it is
+NOT**, and the window ends at the `pop`, not at the last instruction that looked
+like work. The emit loop here was scrupulous about exactly that
+(`[cs:gfx_sub_rs]` at vga12.inc:3118 carries the comment "CS: IS MANDATORY"),
+and the exit four lines below it was not.
 
 ### 5.5 `gfx_scroll` — move a rect instead of redrawing it
 
