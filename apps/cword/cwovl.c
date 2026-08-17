@@ -141,23 +141,37 @@ static const struct cw_ctl cw_dc_ask[] = {
 };
 #define CW_NC_ASK 6
 
-/* --- About (three lines, and the credit that has to be on the screen) ---- */
+/* --- About: the product, the version, what this port is, and the credit that
+ *     has to be on the screen (SPEC.md 67.12).
+ *
+ * AND NOTHING ELSE. It used to close with two lines about Draft view and the
+ * one 8x8 face - a fact about how the build renders, which belongs in SPEC.md
+ * and in the greyed items themselves (SPEC.md 47), not in the box a user opens
+ * to find out whose software this is. It also went stale the day View > Page
+ * and a face off FONTS/ landed (SPEC.md 67.12.1, 67.12.2), which is what a
+ * release note in an About box does.
+ *
+ * TWELVE ROWS, AND THAT NUMBER IS THE 640x200 ADAPTERS' (SPEC.md 39). A
+ * control's y is its ROW - ovl_ctl_y() is cw_d_y + 6 + row * 10 - while
+ * ovl_dlg_open() clamps only the PANEL to the live content box, so a table
+ * with more rows than the window is tall does not shrink: the box stops at the
+ * window edge and the last controls carry on past it. This one used to run to
+ * nineteen rows, and on CGA and Hercules the OK button was drawn on the
+ * DESKTOP, below the window entirely. Twelve is what fits there:
+ * 6 + 10 * 10 + 11 = 117 against the ~122 those adapters leave. Adding a row
+ * here is a change that looks fine on VGA and is broken on two thirds of the
+ * machines this runs on. */
 static const struct cw_ctl cw_dc_about[] = {
     { CWK_LABEL,  1,  0, 0, 0, "About" },
     { CWK_LABEL,  4,  2, 0, 0, "Microsoft Word" },
     { CWK_LABEL,  4,  3, 0, 0, "Version 1.1a for os8088" },
-    { CWK_LABEL,  4,  5, 0, 0, "A native reimplementation, in C, of the" },
-    { CWK_LABEL,  4,  6, 0, 0, "user interface and file format of Word" },
-    { CWK_LABEL,  4,  7, 0, 0, "for Windows 1.1a. Menus, ribbon, ruler," },
-    { CWK_LABEL,  4,  8, 0, 0, "status line, keyboard map and RTF are" },
-    { CWK_LABEL,  4,  9, 0, 0, "from the source release:" },
-    { CWK_LABEL,  4, 11, 0, 0, "Copyright (C) Microsoft Corporation." },
-    { CWK_LABEL,  4, 12, 0, 0, "Computer History Museum release, 2014." },
-    { CWK_LABEL,  4, 14, 0, 0, "Draft view: one 8x8 face, formatting" },
-    { CWK_LABEL,  4, 15, 0, 0, "synthesised (SPEC.md 65.1)." },
-    { CWK_BUTTON,17, 17, 8, 201, "OK" }
+    { CWK_LABEL,  4,  5, 0, 0, "A native reimplementation, in C, of the user" },
+    { CWK_LABEL,  4,  6, 0, 0, "interface and file format of Word for Windows" },
+    { CWK_LABEL,  4,  7, 0, 0, "1.1a. Copyright (C) Microsoft Corporation," },
+    { CWK_LABEL,  4,  8, 0, 0, "from the Computer History Museum release, 2014." },
+    { CWK_BUTTON,24, 10, 8, 201, "OK" }
 };
-#define CW_NC_ABOUT 13
+#define CW_NC_ABOUT 8
 
 /* --- the dialog's live state, all resident bss --------------------------- */
 static int  cw_d_n;                     /* controls in the open dialog */
@@ -389,7 +403,7 @@ int ovl_dlg_open(void *win, int which)
         cw_d_page[0] = 0;
         break;
     case CW_DLG_ABOUT:
-        cw_d_c = cw_dc_about; cw_d_n = CW_NC_ABOUT; rows = 19;
+        cw_d_c = cw_dc_about; cw_d_n = CW_NC_ABOUT; rows = 12;
         break;
     default:
         cw_d_c = cw_dc_ask;   cw_d_n = CW_NC_ASK;   rows = 7;

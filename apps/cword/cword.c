@@ -2580,7 +2580,10 @@ void *os88_main(void)
 
     /* The kernel's bar carries the app NAME and nothing else: this program's
      * nine menus are drawn inside its own window because MENU_APPMAX is five
-     * (SPEC.md 12.2, 65.2). About there opens the same box Help > About does. */
+     * (SPEC.md 12.2, 65.2). About there opens the same box Help > About does,
+     * and the empty set above it is what makes the bar read the product's name
+     * rather than the file's (SPEC.md 67.12). */
+    os88_menu_set(win, (struct os88_menuset *)&cw_kmenus);
     os88_about_set(win);
     os88_assoc_set("RTF", "CWORD");     /* double-clicking a document on the
                                          * desktop launches this (SPEC.md 54.5) */

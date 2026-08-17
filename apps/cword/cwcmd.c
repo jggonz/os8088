@@ -568,6 +568,38 @@ void os88_onmouseup(int x, int y, void *win)
     cw_show(win, -1, 0, 0);
 }
 
+/* ==========================================================================
+ * THE KERNEL BAR'S EMPTY MENU SET (SPEC.md 12.2, 67.12)
+ *
+ * The nine menus are the window's own, because MENU_APPMAX is five - so this
+ * set has NO menus. It exists for its name: with no set at all the bar falls
+ * back to the instance name, which is the 32-byte header's 'CWORD', and that
+ * is the FILE's name standing where the PRODUCT's belongs.
+ *
+ * Three fields and no array, which os88.h sanctions ("declare your own struct
+ * with the same first three fields and a shorter array, and cast"): six bytes
+ * of .data instead of struct os88_menuset's thirty-six, and .data is the one
+ * kind of memory this program pays for twice (SPEC.md 67.9). NOT const -
+ * os88_menu_set() writes `oncmd`, because a C program cannot name the
+ * assembly trampoline the kernel calls.
+ * ========================================================================*/
+struct cw_kmset {
+    const char *name;
+    int oncmd;
+    int nmenus;
+};
+static struct cw_kmset cw_kmenus = { "Microsoft Word", 0, 0 };
+
+/* ...and the handler that set can never reach: no menus, no item to pick. It
+ * is here because CC_HAS_MENUS declares it and the shim and the C cannot drift
+ * (apps/cword/cword.asm). */
+void os88_oncmd(int item, int menu, void *win)
+{
+    (void)item;
+    (void)menu;
+    (void)win;
+}
+
 /* The kernel's own bar carries this program's NAME and an About item; the nine
  * menus are the window's own (SPEC.md 12.2, 65.2). */
 void os88_about(void *win)

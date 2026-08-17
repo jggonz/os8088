@@ -30,11 +30,19 @@
 %define CC_HAS_OVL                  ; ...and half of this program is in
                                     ; CWORD.OVL (SPEC.md 67.14)
 
-                                    ; and NOT CC_HAS_MENUS: this program's
+%define CC_HAS_MENUS                ; void os88_oncmd(int, int, void *) - and
+                                    ; it can never be called. This program's
                                     ; nine menus are drawn in its own window
                                     ; because MENU_APPMAX is five (SPEC.md
-                                    ; 12.2, 65.2), so it registers no kernel
-                                    ; menu set at all
+                                    ; 12.2, 65.2); the set it registers is
+                                    ; EMPTY, and exists so that its AM_NAME
+                                    ; puts 'Microsoft Word' in the kernel bar
+                                    ; instead of this header's 'CWORD'
+                                    ; (SPEC.md 67.12). A set with no menus has
+                                    ; no item to pick, so the handler is a
+                                    ; stub - but the %define has to be here
+                                    ; anyway, because os88_menu_set() is the
+                                    ; slot that patches the trampoline in
 
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, the
