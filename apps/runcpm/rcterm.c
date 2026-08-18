@@ -380,7 +380,8 @@ static void rc_csi(int c)
  * would hand it to the host terminal: masked to 7 bits, nothing translated. */
 static void rc_putc(int c)
 {
-    c &= 0x7F;                             /* mask8bit, console.h */
+    c &= rc_mask;                          /* mask8bit, console.h (0x7F, or
+                                            * 0xFF after BDOS 230) */
 
     if (rc_esc == 1) {
         if (c == '[') {
@@ -437,7 +438,12 @@ static void rc_putc(int c)
     default: break;
     }
     if (c < 0x20 || c == 0x7F)
-        return;                            /* no glyph, no motion */
+        return;                            /* no glyph, no motion (DEL is
+                                            * ignored, the VT100 rule); a
+                                            * byte above 0x7F - mask8bit at
+                                            * 0xFF - takes a cell and draws
+                                            * as blank, since the face is
+                                            * 32..126 (rcband.inc) */
     if (rc_cx == RC_COLS) {                /* the pending wrap (VT100) */
         rc_cx = 0;
         rc_lf();

@@ -40,10 +40,13 @@
                                     ; kernel bar (SPEC.md 12.2, 70.12). The
                                     ; %define has to be here anyway, because
                                     ; os88_menu_set() patches the trampoline in
-                                    ; and NOT (yet): CC_HAS_WORKER - the
-                                    ; self-close path is wave 3's; CC_HAS_OVL -
-                                    ; only if the size line says so; CC_ICON -
-                                    ; wave 6
+%define CC_HAS_WORKER               ; void os88_worker(void *) - hired only
+                                    ; on main.c's exit (BIOS BOOT / EXIT.COM /
+                                    ; HALT) to close the window: there is no
+                                    ; self-close slot (SPEC.md 71, cword's
+                                    ; File > Close idiom)
+                                    ; and NOT (yet): CC_HAS_OVL - only if the
+                                    ; size line says so; CC_ICON - wave 6
 
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the

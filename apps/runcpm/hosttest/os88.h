@@ -54,6 +54,7 @@ void os88_onkey(int ascii, int scan, void *win);
 void os88_oncmd(int item, int menu, void *win);
 void os88_about(void *win);
 void os88_onwake(void *win);
+void os88_worker(void *win);
 
 void os88_gfx_lock(void);
 void os88_gfx_unlock(void);
@@ -76,6 +77,10 @@ int  os88_fullscreen(void *win, int enter);
 void os88_menu_set(void *win, struct os88_menuset *set);
 void os88_about_set(void *win);
 
+void os88_wm_destroy(void *win);
+int  os88_task_spawn(void *win);
+void os88_task_alive(void *win);
+void os88_task_sleep(int ticks);
 int  os88_snd_tone(int hz, int ticks, int prio);
 int  os88_toast(const char *text, int ticks);
 int  os88_cpu(void);

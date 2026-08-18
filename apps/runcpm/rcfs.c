@@ -23,6 +23,20 @@
  * and remembering it. rc_fs_cd() below is that switch; wave 4 grows the
  * directory cache and the open-file table around it.
  *
+ * WAVE 3's DRV_SET and BIOS SELDSK (rccpm.c) select a drive through
+ * rc_fs_cd() and answer disk.h's 'Bdos Err on X: Select' EXACTLY where
+ * upstream does - when the DRIVE's folder is not there: _SelectDisk calls
+ * _sys_select("A"+dr), which stats FILEBASE/<letter> ONLY (abstraction_
+ * posix.h 147-152); the user folder is never a Select error - _SetUser ->
+ * _MakeUserDir creates it on USER n (disk.h 862-870, abstraction_posix.h
+ * 344-354), and that creation is wave 4's (with the file calls that would
+ * populate it) - so USER 1 followed by a warm boot must NOT loop on Select
+ * (the DRI CCP restarts with C = DSKByte = 0x10: setuser(1), select(0)).
+ * Until wave 4, a (drive,user) whose user folder is absent stands in the
+ * drive's folder and every search there answers 'no file'.
+ * SELDSK's rc_fs_cd() MOVES the instance as a side effect where cpm.h's
+ * B_SELDSK only tests _sys_select() - a stand-in for an existence test that
+ * wave 4 replaces with a look-up in the place table that does not move.
  * WAVE 1 carried rc_fs_cd() and a probe that proved the mechanism from a
  * wake handler; wave 2's debug loader (runcpm.c) is the living proof now -
  * it stands in A\0 through rc_fs_cd(0, 0) and reads the .COM it was named
@@ -39,7 +53,14 @@ static struct os88_find rc_ff;               /* os88_file_find's answer */
 static unsigned rc_pl_clus[RC_DRIVES * RC_USERS];    /* (drive,user) -> the
                                               * folder's first cluster... */
 static unsigned char rc_pl_ok[RC_DRIVES * RC_USERS]; /* ...once resolved: 1
-                                              * = known, 2 = known absent */
+                                              * = known, 2 = known absent
+                                              * (wave 4's USER n creation
+                                              * clears the entry) */
+static unsigned rc_dr_clus[RC_DRIVES];       /* drive -> the letter folder's
+                                              * first cluster... */
+static unsigned char rc_dr_ok[RC_DRIVES];    /* ...once resolved: 1 = known,
+                                              * 2 = known absent (the Select
+                                              * fact, per letter) */
 static char rc_fs_name[13];                  /* a folder name being sought */
 
 static void rc_fs_init(void)
@@ -79,40 +100,69 @@ static int rc_fs_home(void)
 }
 
 /* rc_fs_cd - stand the instance in drive d (0 = A) user u (0..15): the
- * folder <letter>\<hex digit> below the launch folder. 0 = standing there;
- * -1 = there is no such folder (SPEC.md 71.3: 'Bdos Err on X: Select'), and
- * the instance is left where it was launched. */
+ * folder <letter>\<hex digit> below the launch folder. 0 = standing in the
+ * user folder; 1 = the drive's folder exists but the user folder does not -
+ * the instance stands in the DRIVE's folder (searches there answer 'no
+ * file'; wave 4's USER n creates the folder, _MakeUserDir); -1 = there is no
+ * such DRIVE (SPEC.md 71.3: 'Bdos Err on X: Select', the fact _sys_select
+ * decides from the letter alone), and the instance is left where it was
+ * launched. Each fact is looked up ONCE per (drive) and once per (drive,
+ * user): rc_dr_clus/rc_pl_clus remember the answer. */
 static int rc_fs_cd(int d, int u)
 {
-    int i = (d << 4) + u, c;
-    if (rc_pl_ok[i] == 0) {
+    int i, c;
+    unsigned dst;
+    if (d < 0 || d >= RC_DRIVES || u < 0)
+        return -1;
+    i = (d << 4) + (u & 15);
+    if (rc_dr_ok[d] == 0) {                  /* the letter, once */
         if (rc_fs_home() < 0)
             return -1;
         rc_fs_name[0] = (char)('A' + d);
         rc_fs_name[1] = 0;
         c = rc_fs_subdir(rc_fs_name);
-        if (c >= 0) {
-            if (os88_file_goto_q_mark((unsigned)c, rc_home.vol) < 0)
-                return -1;
-            rc_cur.clus = (unsigned)c;
-            rc_fs_name[0] = (char)(u < 10 ? '0' + u : 'A' + u - 10);
-            c = rc_fs_subdir(rc_fs_name);
-        }
         if (c < 0) {
-            rc_pl_ok[i] = 2;
-            rc_fs_home();
+            rc_dr_ok[d] = 2;
             return -1;
         }
-        rc_pl_clus[i] = (unsigned)c;
-        rc_pl_ok[i] = 1;
+        rc_dr_clus[d] = (unsigned)c;
+        rc_dr_ok[d] = 1;
     }
-    if (rc_pl_ok[i] == 2)
+    if (rc_dr_ok[d] == 2)
         return -1;
-    if (rc_cur.clus == rc_pl_clus[i] && rc_cur.vol == rc_home.vol)
-        return 0;
-    if (os88_file_goto_q_mark(rc_pl_clus[i], rc_home.vol) < 0)
-        return -1;
-    rc_cur.clus = rc_pl_clus[i];
-    rc_cur.vol = rc_home.vol;
-    return 0;
+    if (u >= RC_USERS) {                     /* user areas 16..31 - BDOS's
+                                              * unofficial ones (_SetUser
+                                              * keeps 0-31; upstream would
+                                              * make G..V) - have no place
+                                              * slot: the drive's folder,
+                                              * 'no file', never Select */
+        dst = rc_dr_clus[d];
+        goto stand;
+    }
+    if (rc_pl_ok[i] == 0) {                  /* the user folder, once */
+        if (rc_cur.clus != rc_dr_clus[d] || rc_cur.vol != rc_home.vol) {
+            if (os88_file_goto_q_mark(rc_dr_clus[d], rc_home.vol) < 0)
+                return -1;
+            rc_cur.clus = rc_dr_clus[d];
+            rc_cur.vol = rc_home.vol;
+        }
+        rc_fs_name[0] = (char)(u < 10 ? '0' + u : 'A' + u - 10);
+        rc_fs_name[1] = 0;
+        c = rc_fs_subdir(rc_fs_name);
+        if (c < 0) {
+            rc_pl_ok[i] = 2;
+        } else {
+            rc_pl_clus[i] = (unsigned)c;
+            rc_pl_ok[i] = 1;
+        }
+    }
+    dst = (rc_pl_ok[i] == 1) ? rc_pl_clus[i] : rc_dr_clus[d];
+stand:
+    if (rc_cur.clus != dst || rc_cur.vol != rc_home.vol) {
+        if (os88_file_goto_q_mark(dst, rc_home.vol) < 0)
+            return -1;
+        rc_cur.clus = dst;
+        rc_cur.vol = rc_home.vol;
+    }
+    return (u < RC_USERS && rc_pl_ok[i] == 1) ? 0 : 1;
 }

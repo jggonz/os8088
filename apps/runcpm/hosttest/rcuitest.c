@@ -13,7 +13,11 @@
  * font_run and blit1 record what they put in each cell, gfx_scroll moves it
  * and fills the vacated rows with GARBAGE (legal: SPEC.md 5.5), gfx_fill
  * whitens - includes the whole program (runcpm.c and its parts) against it,
- * feeds it byte streams the way the Z80 side will, and after every step
+ * feeds it byte streams the way the Z80 side will - and, from wave 3, drives
+ * the BDOS through a SCRIPTED Z80 (rc_run answers a list of handoffs) so the
+ * CCP's boot, the C_READSTR line editor, the error path and the exit are
+ * exercised key by key against stubs of the claims, the files and the
+ * worker - and after every step
  * asserts three things cell for cell: the glass shows the model, the shadow
  * describes the glass, and - for the scripted streams - the row reads what a
  * VT100 would have shown. Then it prints THE COST TABLE: calls and cells are
@@ -38,6 +42,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <setjmp.h>
 
 #define GW 84                    /* cells across: the content starts
                                   * one cell in and is 80 wide */
@@ -247,6 +252,26 @@ int  os88_fullscreen(void *win, int enter)
 void os88_menu_set(void *win, struct os88_menuset *set) {}
 void os88_about_set(void *win) {}
 int  os88_snd_tone(int hz, int ticks, int prio) { return 0; }
+/* the self-close (wave 3): os88_task_spawn wants the lock held (SPEC.md 20.6)
+ * and may refuse (the task table full - transient); the worker destroys the
+ * window under the lock and dies inside its next os88_task_alive(), which
+ * here longjmps back to the script (the real one never returns) */
+static int spawn_refuses, spawned, destroyed;
+static jmp_buf worker_end;
+int  os88_task_spawn(void *win)
+{
+    need_lock("task_spawn");
+    if (spawn_refuses) return -1;
+    spawned++;
+    return 0;
+}
+void os88_wm_destroy(void *win) { need_lock("wm_destroy"); destroyed++; }
+void os88_task_alive(void *win)
+{
+    if (lock_depth != 0) { printf("HARNESS: task_alive with the lock held (%d)\n", lock_depth); exit(1); }
+    if (destroyed) longjmp(worker_end, 1);
+}
+void os88_task_sleep(int ticks) {}
 int  os88_toast(const char *text, int ticks)
 { strncpy(last_toast, text, sizeof(last_toast) - 1); return 0; }
 int  os88_cpu(void) { return OS88_CPU_8086; }
@@ -260,7 +285,16 @@ int  os88_cpu(void) { return OS88_CPU_8086; }
 static unsigned ticks;
 static unsigned tick_step = 1;
 unsigned os88_ticks(void) { unsigned t = ticks; ticks += tick_step; return t; }
-unsigned os88_mem_claim(int kb) { return 0x2000; }
+/* two claims: the Z80's 64KB at 0x2000 and the CCP's 2KB at 0x3000 (wave 3) */
+static int n_claims;
+unsigned os88_mem_claim(int kb)
+{
+    n_claims++;
+    if (kb == 64) return 0x2000;
+    if (kb == 2)  return 0x3000;
+    printf("HARNESS: os88_mem_claim(%d): not a claim this program makes\n", kb);
+    exit(1);
+}
 unsigned os88_mem_largest_kb(void) { return 200; }
 
 int os88_ferr(void) { return ferr; }
@@ -292,8 +326,29 @@ int os88_file_find(int ordinal, struct os88_find *f)
     ferr = OS88_FERR_NOENT;
     return -1;
 }
+/* AUTOEXEC.TXT lives in the ROOT (the launch folder, clus 0) when the script
+ * says so - read ONCE at launch (SPEC.md 71: upstream re-reads it on every
+ * warm boot; here that is a directory walk of the launch folder per ^C and
+ * buys nothing, so it is cached). The stubs model OSAPI_FILE_READ as the
+ * kernel does it: a file LARGER THAN THE CAPACITY is FERR_BIG and NOTHING is
+ * read (decided from the directory entry, os88api.inc 0x0128) - never a
+ * truncation, which is the convenient thing and the wrong model (LESSONS.md
+ * 7): a 125-byte read of a 200-byte AUTOEXEC.TXT would silently ignore it. */
+static const char *autoexec_text;
+static unsigned n_axreads;
 unsigned os88_file_read(const char *name, void *buf, unsigned cap)
 {
+    if (strcmp(name, "AUTOEXEC.TXT") == 0) {
+        n_axreads++;
+        if (std_clus != 0) { printf("HARNESS: AUTOEXEC.TXT looked for in clus %u, not the launch folder\n", std_clus); exit(1); }
+        if (autoexec_text) {
+            unsigned n = (unsigned)strlen(autoexec_text);
+            if (n > cap) { ferr = OS88_FERR_BIG; return 0; }
+            memcpy(buf, autoexec_text, n);
+            ferr = 0;
+            return n;
+        }
+    }
     ferr = OS88_FERR_NOENT;
     return 0;
 }
@@ -306,6 +361,8 @@ unsigned os88_file_read(const char *name, void *buf, unsigned cap)
 static char last_read[16];
 static unsigned last_read_seg, n_reads;
 static unsigned char zram[65536];
+static unsigned char ccpram[2048];       /* the CCP claim, seg 0x3000 */
+static int ccp_missing;                  /* the disk without CCP-DR.60K */
 static const char hello_bytes[40] = "\016\011\021\011\001\315\005\000\311Hello from the Z80 - 40 bytes.$";
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
 {
@@ -315,6 +372,36 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
     if (seg & 0x1F) {
         printf("HARNESS: os88_file_read_seg to %04x: not a 512-aligned base (SPEC.md 2.1.1)\n", seg);
         exit(1);
+    }
+    if (strcmp(name, "AUTOEXEC.TXT") == 0) {
+        /* whole, into the Z80 claim's TPA at the loader's landing (0x2020:
+         * 512-aligned), the TPA up to the CCP as the capacity - FERR_BIG
+         * above it, as the kernel decides */
+        unsigned n;
+        n_axreads++;
+        if (std_clus != 0) { printf("HARNESS: AUTOEXEC.TXT looked for in clus %u, not the launch folder\n", std_clus); exit(1); }
+        if (seg != 0x2020 || cap != 0xE200) { printf("HARNESS: AUTOEXEC.TXT read into %04x cap %04x, wanted the TPA at 2020 cap e200\n", seg, cap); exit(1); }
+        if (!autoexec_text) { ferr = OS88_FERR_NOENT; return 0; }
+        n = (unsigned)strlen(autoexec_text);
+        if (n > cap) { ferr = OS88_FERR_BIG; return 0; }
+        memcpy(zram + 0x200, autoexec_text, n);
+        ferr = 0;
+        return n;
+    }
+    if (strcmp(name, "CCP-DR.60K") == 0) {
+        /* the DRI CCP, from the LAUNCH folder, into the 2KB claim: a fake
+         * image whose command buffer is where the real one's is - +6 the
+         * max (0x7F), +7 the length (0), +8 the characters (spaces) - so the
+         * AUTOEXEC poke and the copy to 0xE400 can be checked */
+        unsigned i;
+        if (std_clus != 0) { printf("HARNESS: the CCP read from clus %u, not the launch folder\n", std_clus); exit(1); }
+        if (seg != 0x3000 || cap != 2048) { printf("HARNESS: the CCP read into %04x cap %u\n", seg, cap); exit(1); }
+        if (ccp_missing) { ferr = OS88_FERR_NOENT; return 0; }
+        for (i = 0; i < 2048; i++) ccpram[i] = (unsigned char)(0xC0 + (i & 7));   /* a pattern */
+        ccpram[6] = 0x7F; ccpram[7] = 0;
+        for (i = 8; i < 136; i++) ccpram[i] = ' ';
+        ferr = 0;
+        return 2048;
     }
     if (std_clus == 9 && strcmp(name, "HELLO.COM") == 0) {
         if (seg < 0x2000 || ((seg - 0x2000) << 4) + 40 > 0x10000) { printf("HARNESS: read outside the claim\n"); exit(1); }
@@ -411,6 +498,12 @@ void rc_zcopy_out(void *dst, unsigned zaddr, unsigned n)
 void rc_zzcopy_in(unsigned zaddr, unsigned seg, unsigned off, unsigned n)
 {
     unsigned i;
+    if (seg == 0x3000) {                    /* the CCP claim -> the Z80 */
+        if (off + n > 2048) { printf("HARNESS: rc_zzcopy_in past the CCP claim\n"); exit(1); }
+        for (i = 0; i < n; i++)
+            zram[(zaddr + i) & 0xFFFF] = ccpram[off + i];
+        return;
+    }
     if (seg != 0x2000) { printf("HARNESS: rc_zzcopy_in from seg %04x: not the claim\n", seg); exit(1); }
     for (i = 0; i < n; i++)
         zram[(zaddr + i) & 0xFFFF] = zram[(off + i) & 0xFFFF];
@@ -591,10 +684,14 @@ static void print_costs(void)
 /* ==========================================================================
  * THE SCRIPTS
  * ========================================================================*/
+static char ax_long[201];                /* a 200-byte AUTOEXEC.TXT */
+static int ax_len;                       /* what the boot pokes at +7 */
 static void run_all(int cols_geom, int rows_geom, int table)
 {
     static char line[128];
     int i;
+    for (i = 0; i < 200; i++) ax_long[i] = (char)('A' + i % 26);
+    ax_long[200] = 0;
 
     cont_w = cols_geom * 8; cont_h = rows_geom * 8;
     gclear(); callreset(); ncosts = 0; wakes_posted = 0;
@@ -602,7 +699,18 @@ static void run_all(int cols_geom, int rows_geom, int table)
     ticks = 100; tick_step = 1; zscript_reset(); n_rc_run = 0;
     zclk_left = ZCLK_BURST; clk_restarts = clk_slices = clk_halts = 0;
     memset(zram, 0, sizeof(zram));
+    memset(ccpram, 0, sizeof(ccpram));
     rc_khead = rc_ktail = 0;
+    n_claims = 0; spawn_refuses = 0; spawned = 0; destroyed = 0;
+    ccp_missing = 0; n_axreads = 0;
+    /* AUTOEXEC.TXT: 'DIR' and a rest behind a CR - and on one geometry a
+     * 200-byte line, longer than main.c's 125-byte poke AND than a 125-byte
+     * read would carry: the file is read whole and the first 125 bytes are
+     * poked (SPEC.md 71) */
+    autoexec_text = (cols_geom == 79) ? ax_long : "DIR\r\nrest";
+    ax_len = (cols_geom == 79) ? 125 : 3;
+    rc_mask = 0x7F; rc_cdrive = rc_odrive = rc_user = 0; rc_rovec = rc_login = 0;
+    rc_tk_hi = rc_tk_last = 0;
 
     /* launch: os88_main builds the model (the banner's first four lines: the
      * clock estimate comes on the wake), the loader shows the window and
@@ -610,6 +718,15 @@ static void run_all(int cols_geom, int rows_geom, int table)
     win = os88_main();
     if (!win) { printf("FAIL: os88_main returned 0 (%s)\n", last_toast); fails++; return; }
     if (rc_z.seg != 0x2000) { printf("FAIL: rc_z.seg not the claim\n"); fails++; }
+    /* the CCP: its 2KB claim and the read from the launch folder happen in
+     * os88_main, before anything moves the instance (SPEC.md 71.3) */
+    if (n_claims != 2 || rc_ccpseg != 0x3000 || rc_ccplen != 2048) { printf("FAIL: the CCP claim/read: %d claims, seg %04x, %u bytes\n", n_claims, rc_ccpseg, rc_ccplen); fails++; }
+    /* ...and AUTOEXEC.TXT, ONCE, whole, from the launch folder, into the
+     * TPA (cleared behind it): its first 125 bytes cached, cut at the first
+     * control character */
+    if (strcmp(last_read, "AUTOEXEC.TXT") != 0 || n_axreads != 1) { printf("FAIL: os88_main read '%s' (%u AUTOEXEC reads), wanted the CCP then AUTOEXEC.TXT once\n", last_read, n_axreads); fails++; }
+    if ((int)rc_axlen != ax_len || memcmp(rc_axbuf, autoexec_text, ax_len) != 0 || rc_axbuf[ax_len] != 0) { printf("FAIL: the AUTOEXEC cache: len %u, wanted %d\n", rc_axlen, ax_len); fails++; }
+    if (zram[0x200] != 0 || zram[0x200 + ax_len - 1] != 0) { printf("FAIL: AUTOEXEC.TXT's bytes left in the TPA\n"); fails++; }
     expose();
     audit("expose after launch");
     expect_row("banner 1", 0, "  CP/M Emulator v6.9 by Marcelo Dantas");
@@ -634,7 +751,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     for (i = 0; i < 200 && rc_mode == RC_M_CLOCK; i++) wake();
     tick_step = 1;
     audit("clock estimate");
-    if (rc_mode != RC_M_IDLE) { printf("FAIL: the clock estimate did not finish (mode %d after %d wakes)\n", rc_mode, i); fails++; }
+    if (rc_mode != RC_M_RUN) { printf("FAIL: the clock estimate did not finish and boot (mode %d after %d wakes)\n", rc_mode, i); fails++; }
     if (clk_restarts) { printf("FAIL: %d clock slice(s) restarted the burst instead of resuming it\n", clk_restarts); fails++; }
     if (clk_slices < 4) { printf("FAIL: the clock ran whole bursts (%d slices cut a burst, wanted several)\n", clk_slices); fails++; }
     if (clk_halts != 4) { printf("FAIL: the clock estimate completed %d bursts, wanted 4\n", clk_halts); fails++; }
@@ -649,34 +766,296 @@ static void run_all(int cols_geom, int rows_geom, int table)
     expect_row("banner 5", 6, "BIOS at 0xfe00 - BDOS at 0xec00");
     expect_row("banner 6", 7, "BIOS/BDOS using interrupt handoff method");
     expect_row("banner 7", 8, "CCP CCP-DR.60K at 0xe400");
-    expect_cursor("after banner", 0, 9);
     if (n_rc_run != i) { printf("FAIL: the clock ran %d rc_run calls in %d wakes, wanted one a wake\n", n_rc_run, i); fails++; }
-    {   int w = wakes_posted;                /* idle: no wake is wanted */
-        wake();
-        if (wakes_posted != w) { printf("FAIL: an idle machine re-posted its wake\n"); fails++; }
-    }
 
-    /* the whole banner, exposed: ONE fill of the content and then only the
-     * rows with something on them, each to its last non-blank cell - the
-     * nine banner rows and the cursor's row (one cell) */
+    /* THE BOOT (main.c 110-140, rc_boot): the clock's last wake went straight
+     * on to CCPHEAD, _PatchCPM, the CCP copied out of its claim to 0xE400,
+     * AUTOEXEC.TXT from the launch folder poked at CCPaddr+7/+8, Z80reset,
+     * C = DSKByte, PC = CCPaddr, and the machine RUNNING - no idle state
+     * between the banner and the prompt */
+    expect_row("ccphead blank", 9, "");
+    expect_row("ccphead", 10, "RunCPM Version 6.9 (CCP-DR.60K) - CP/M 2.2");
+    expect_cursor("after ccphead", 0, 11);
+    if (rc_mode != RC_M_RUN || rc_z.pc != 0xE400) { printf("FAIL: after the boot: mode %d pc %04x, wanted RUN at e400\n", rc_mode, rc_z.pc); fails++; }
+    if (zram[0xE400] != 0xC0 || zram[0xE406] != 0x7F || zram[0xEBFF] != 0xC7) { printf("FAIL: the CCP was not copied to 0xE400 whole (%02x %02x %02x)\n", zram[0xE400], zram[0xE406], zram[0xEBFF]); fails++; }
+    if (zram[0] != 0xC3 || zram[5] != 0xC3 || zram[0xED00] != 0xD7 || zram[0xFF03] != 0xCF) { printf("FAIL: page zero / handoff pages not patched at boot\n"); fails++; }
+    if (zram[3] != 0x3D || zram[4] != 0x00) { printf("FAIL: IOBYTE/DSKByte not set on the cold boot\n"); fails++; }
+    if ((rc_z.bc & 0xFF) != 0 || rc_z.iff != 0) { printf("FAIL: Z80reset / C = DSKByte: bc %04x iff %u\n", rc_z.bc, rc_z.iff); fails++; }
+    if (n_axreads != 1) { printf("FAIL: AUTOEXEC.TXT read %u times by the boot, wanted 1 (at launch)\n", n_axreads); fails++; }
+    if (zram[0xE407] != ax_len || memcmp(zram + 0xE408, autoexec_text, ax_len) != 0 || zram[0xE408 + ax_len] != 0) { printf("FAIL: AUTOEXEC.TXT not poked at CCPaddr+7/+8: len %u '%.4s', wanted %d\n", zram[0xE407], zram + 0xE408, ax_len); fails++; }
+    if (std_clus != 0) { printf("FAIL: the boot left the instance in clus %u, not the launch folder\n", std_clus); fails++; }
+
+    /* THE CCP AT ITS PROMPT, scripted: the DRI CCP's first calls - reset
+     * the disk system (13), select the drive from C (14), print the prompt
+     * (2, 2), read a line (10, DE = its buffer at CCPaddr+6) - the last of
+     * which BLOCKS on the empty ring: no re-post, the machine costs nothing
+     * until a key comes */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000D, 0);
+    zstep(RC_RUN_BDOS, 0xED01, 0x000E, 0x0000);
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, 'A');
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, '>');
+    zstep(RC_RUN_BDOS, 0xED01, 0x000A, 0xE406);
+    callreset();
+    wake();
+    audit("the prompt");
+    expect_row("prompt", 11, "A>");
+    expect_cursor("prompt", 2, 11);
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: the CCP's C_READSTR on an empty ring did not block (mode %d)\n", rc_mode); fails++; }
+    if (rc_dma != 0x80 || rc_cdrive != 0 || (rc_login & 1) != 1) { printf("FAIL: DRV_ALLRESET / DRV_SET state: dma %04x cdrive %d login %04x\n", rc_dma, rc_cdrive, rc_login); fails++; }
+    if (std_clus != 9) { printf("FAIL: DRV_SET A: did not stand the instance in A\\0 (clus %u)\n", std_clus); fails++; }
+    {   int w = wakes_posted;                /* blocked: no wake is wanted */
+        wake();
+        if (wakes_posted != w) { printf("FAIL: a machine blocked at the prompt re-posted its wake\n"); fails++; }
+    }
+    if (table) cost("the boot's prompt (CCPHEAD + A>)");
+
+    /* the whole prompt screen, exposed: ONE fill of the content and then only
+     * the rows with something on them, each to its last non-blank cell - the
+     * nine banner rows, CCPHEAD, and the prompt's row with the cursor */
     callreset();
     { int r, c; for (r = 0; r < 25; r++) for (c = 0; c < 80; c++) gl_ch[cont_y + r*8][cont_x/8 + c] = '#'; }
     expose();
-    audit("expose the banner");
-    if (n_fill != 1 || n_blit != 10 || calls() != 11) { printf("FAIL: the banner expose cost %d fills / %d bands / %d calls, wanted 1 / 10 / 11\n", n_fill, n_blit, calls()); fails++; }
-    if (table) cost("expose: full repaint, banner (fill + 10 rows)");
+    audit("expose the prompt screen");
+    if (n_fill != 1 || n_blit != 11 || calls() != 12) { printf("FAIL: the prompt screen expose cost %d fills / %d bands / %d calls, wanted 1 / 11 / 12\n", n_fill, n_blit, calls()); fails++; }
+    if (table) cost("expose: full repaint, prompt screen (fill + 11 rows)");
 
-    /* THE DEBUG LOADER AND THE HANDOFFS: Alt+L, a name, Enter - the loader
-     * stands in A\0 (rc_fs_cd through the fake tree), reads HELLO.COM into
-     * the claim at paragraph 10h, patches page zero and runs; the scripted
-     * Z80 then does BDOS 9 (a string in its RAM), BDOS 2, and a BIOS WBOOT,
-     * which ends the program (SPEC.md 71) */
+    /* THE LINE EDITOR (cpm.h C_READSTR, as a state machine): each key is one
+     * os88_onkey (the ring, the kick) and one wake (the retried trap pops it,
+     * edits, echoes; then blocks again). 'dir' typed: three echoes; ^U:
+     * cpm.h's '#', BS, LF then curCol backspaces; a line, then ^? (Ctrl+-
+     * = 31): the two help lines and the line retyped; DEL (Ctrl+Backspace =
+     * 127) at EOL: BS, space, BS; ^A/^F move; ^G deletes at the cursor
+     * (retype + post-backspace); Enter ends: the count and the bytes in the
+     * CCP's buffer, HL = the count, a CR. Then ^C on an EMPTY line: '^C', a
+     * warm boot - CCPHEAD again. */
+#define KEY(ch, sc) do { lock_depth = 1; os88_onkey((ch), (sc), win); lock_depth = 0; wake(); } while (0)
+    callreset();
+    KEY('d', 0x20); 
+    audit("type d");
+    if (calls() != 1 || n_cells != 2) { printf("FAIL: one key into the line editor cost %d calls / %d cells, wanted 1 / 2\n", calls(), n_cells); fails++; }
+    if (table) cost("one key into C_READSTR (echo + cursor)");
+    KEY('i', 0x17); KEY('r', 0x13);
+    audit("type dir");
+    expect_row("dir typed", 11, "A>dir");
+    expect_cursor("dir typed", 5, 11);
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: the editor did not block again after a key (mode %d)\n", rc_mode); fails++; }
+    if (memcmp(zram + 0xE408, "dir", 3) != 0) { printf("FAIL: the editor did not put 'dir' in the CCP's buffer\n"); fails++; }
+    KEY(21, 0x16);                             /* ^U */
+    audit("^U");
+    expect_row("^U", 11, "A>dir#");
+    expect_cursor("^U", 2, 12);
+    KEY('t', 0x14); KEY('y', 0x15); KEY('p', 0x19); KEY('e', 0x12); KEY(' ', 0x39); KEY('x', 0x2D);
+    audit("type x");
+    expect_row("type x", 12, "  type x");
+    KEY(31, 0x0C);                             /* ^? = Ctrl+- : the help */
+    audit("help");
+    expect_row("help 1", 13, "^A Left  ^B B/EOL ^C Abort ^E N/Lin ^F Right ^G Del@C ^H/Del BackSp");
+    expect_row("help 2", 14, "^K DelEOL ^R Retype ^U DelAll ^W Recall ^X DelBOL ^? Help");
+    expect_row("help retype", 15, "type x");
+    expect_cursor("help", 6, 15);
+    KEY(127, 0x0E);                            /* DEL = Ctrl+Backspace, at EOL */
+    audit("DEL");
+    expect_row("DEL", 15, "type");
+    expect_cursor("DEL", 5, 15);
+    KEY(1, 0x1E); KEY(1, 0x1E);                /* ^A ^A: back two */
+    expect_cursor("^A", 3, 15);
+    KEY(7, 0x22);                              /* ^G: delete 'e' at the cursor */
+    audit("^G");
+    expect_row("^G", 15, "typ");
+    expect_cursor("^G", 3, 15);
+    KEY(6, 0x21);                              /* ^F: forward one */
+    expect_cursor("^F", 4, 15);
+    KEY(6, 0x21);                              /* ^F at EOL: refused, a bell */
+    if (rc_bells != 0) { printf("FAIL: the editor's bell was not serviced (%d)\n", rc_bells); fails++; }
+    KEY(13, 0x1C);                             /* Enter */
+    audit("enter");
+    expect_cursor("enter", 0, 15);             /* the CR */
+    if (rc_mode != RC_M_RUN) { printf("FAIL: Enter did not end the line (mode %d)\n", rc_mode); fails++; }
+    if (zram[0xE407] != 4 || memcmp(zram + 0xE408, "typ ", 4) != 0) { printf("FAIL: the line in the CCP's buffer: len %u '%.5s', wanted 4 'typ '\n", zram[0xE407], zram + 0xE408); fails++; }
+    if ((rc_z.af & 0xFF) != 4 || rc_z.hl != 4) { printf("FAIL: C_READSTR answered A=%02x HL=%04x, wanted the count 4\n", rc_z.af & 0xFF, rc_z.hl); fails++; }
+    if (rs_last[0] != 4 || memcmp(rs_last + 1, "typ ", 4) != 0) { printf("FAIL: the last command was not saved for ^W\n"); fails++; }
+    /* the CCP would answer; script its next prompt: a new line, the
+     * prompt, the read - and ^W recalls 'typ ' */
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, '\r');
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, '\n');
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, 'A');
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, '>');
+    zstep(RC_RUN_BDOS, 0xED01, 0x000A, 0xE406);
+    wake();
+    expect_row("prompt 2", 16, "A>");
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: the second prompt did not block (mode %d)\n", rc_mode); fails++; }
+    KEY(23, 0x11);                             /* ^W */
+    audit("^W");
+    expect_row("^W", 16, "A>typ");
+    expect_cursor("^W", 6, 16);
+    KEY(24, 0x2D);                             /* ^X: delete left of the cursor */
+    audit("^X");
+    expect_row("^X", 16, "A>");
+    expect_cursor("^X", 2, 16);
+    callreset();
+    KEY(3, 0x2E);                              /* ^C on an empty line: '^C', a warm boot */
+    audit("^C");
+    expect_row("^C", 16, "A>^C");
+    /* main.c's loop laps: CCPHEAD, the CCP again, AUTOEXEC POKED again from
+     * the cache (BOOTONLY FALSE - and NO disk: the file was read at launch)
+     * - and DSKByte kept, IOBYTE kept (a RESTART is not a cold start); the
+     * CCP's prompt then ran in the SAME slice (the scripted Z80 had nothing
+     * more, so the slice exhausted): CCPHEAD and whatever the CCP prints
+     * next are ONE flush */
+    expect_row("reboot ccphead", 17, "RunCPM Version 6.9 (CCP-DR.60K) - CP/M 2.2");
+    expect_cursor("reboot", 0, 18);
+    if (rc_mode != RC_M_RUN || rc_z.pc != 0xE400) { printf("FAIL: ^C did not warm-boot (mode %d pc %04x)\n", rc_mode, rc_z.pc); fails++; }
+    if (n_axreads != 1) { printf("FAIL: AUTOEXEC.TXT read %u times after a warm boot, wanted 1 (a warm boot touches no disk)\n", n_axreads); fails++; }
+    if (zram[0xE407] != ax_len || memcmp(zram + 0xE408, autoexec_text, ax_len) != 0) { printf("FAIL: the warm boot did not poke AUTOEXEC.TXT from the cache\n"); fails++; }
+    if (rs_on) { printf("FAIL: the editor's state survived the warm boot\n"); fails++; }
+    zscript_reset();
+    if (table) cost("^C at the prompt: the warm boot (CCPHEAD)");
+    /* the merged slice: ^C at the BOTTOM of the screen is ONE scroll (by 3:
+     * '^C''s row ends, CCPHEAD's blank and text, the CCP's next line) and
+     * one fill, not two of each - scripted with the CCP's prompt behind the
+     * ^C so the same wake prints CCPHEAD and 'A>' */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000A, 0xE406);
+    wake();
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: not blocked before the merged-boot row\n"); fails++; }
+    zstep(RC_RUN_BDOS, 0xED01, 0x000D, 0);          /* the CCP's boot calls */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000E, 0x0000);
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, 'A');
+    zstep(RC_RUN_BDOS, 0xED01, 0x0002, '>');
+    zstep(RC_RUN_BDOS, 0xED01, 0x000A, 0xE406);
+    feed("\033[25;1H");                            /* the cursor on the last row */
+    wake();
+    callreset();
+    KEY(3, 0x2E);                                    /* ^C: the boot AND the prompt */
+    audit("^C merged");
+    if (vis_rows() == 25) {
+        expect_row("^C merged ^C", 22, "^C");
+        expect_row("^C merged head", 23, "RunCPM Version 6.9 (CCP-DR.60K) - CP/M 2.2");
+        expect_row("^C merged prompt", 24, "A>");
+        expect_cursor("^C merged", 2, 24);
+        if (n_scroll != 1 || n_fill != 1) { printf("FAIL: ^C at the bottom cost %d scrolls / %d fills, wanted 1 / 1 (the boot and the prompt in one flush)\n", n_scroll, n_fill); fails++; }
+    }
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: the merged boot did not run on to the CCP's read (mode %d)\n", rc_mode); fails++; }
+    if (table) cost("^C at the bottom row: warm boot + prompt, one flush");
+    zscript_reset();
+    rc_mode = RC_M_RUN;                              /* the script is fresh */
+    feed("\033[2J\033[19;1H");                       /* back to a clean row 18 */
+    wake();
+
+    /* DRV_SET of a drive with no folder: disk.h _error - 'Bdos Err on B:
+     * Select', WAIT FOR A KEY, "\r\n", a warm boot; the wait is a blocked
+     * state the key ends (the machine costs nothing meanwhile) */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000E, 0x0001);     /* DRV_SET B: */
+    callreset();
+    wake();
+    audit("select error");
+    expect_row("select error", 19, "Bdos Err on B: Select");
+    if (rc_mode != RC_M_BLOCKED || !rc_errwait) { printf("FAIL: the Select error did not wait for a key (mode %d errwait %d)\n", rc_mode, rc_errwait); fails++; }
+    {   int w = wakes_posted; wake();
+        if (wakes_posted != w) { printf("FAIL: the error's wait re-posted its wake\n"); fails++; } }
+    KEY(' ', 0x39);
+    audit("select error key");
+    expect_row("select reboot", 21, "RunCPM Version 6.9 (CCP-DR.60K) - CP/M 2.2");
+    expect_cursor("select reboot", 0, 22);
+    if (rc_mode != RC_M_RUN || rc_cdrive != 0 || (zram[4] & 0x0F) != 0) { printf("FAIL: the error's key did not warm-boot back to A: (mode %d cdrive %d dsk %02x)\n", rc_mode, rc_cdrive, zram[4]); fails++; }
+    zscript_reset();
+    if (table) cost("Bdos Err on B: Select, then the key");
+    /* ...and with a key ALREADY in the ring (typeahead behind 'b:' Enter):
+     * the error's wait ends inside the same trap - upstream's _getcon()
+     * consumes the queued key - and the warm boot happens on the SAME wake,
+     * never a machine parked BLOCKED on a non-empty ring */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000E, 0x0001);     /* DRV_SET B: */
+    lock_depth = 1; os88_onkey('d', 0x20, win); lock_depth = 0;   /* queued */
+    rc_mode = RC_M_RUN;
+    wake();
+    audit("select error, typeahead");
+    if (rc_mode != RC_M_RUN || rc_errwait || rc_z.pc != 0xE400 || rc_khead != rc_ktail) { printf("FAIL: a Select error with a key queued did not boot on the same wake (mode %d errwait %d pc %04x)\n", rc_mode, rc_errwait, rc_z.pc); fails++; }
+    zscript_reset();
+    /* a drive that is not a letter: E = 16 is 'Q:' upstream (cDrive = E
+     * unmasked, cpm.h 1235; _sys_select stats a folder that cannot exist) -
+     * not a silent success on A: */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000E, 0x0010);
+    wake();
+    audit("select Q:");
+    { int r; for (r = 0; r < RC_ROWS; r++) if (model_ch(r, 0) == 'B' && model_ch(r, 12) == 'Q') break;
+      if (r == RC_ROWS) { printf("FAIL: DRV_SET 16 did not print 'Bdos Err on Q: Select'\n"); fails++; } }
+    if (!rc_errwait) { printf("FAIL: DRV_SET 16 did not err\n"); fails++; }
+    KEY(' ', 0x39);
+    if (rc_mode != RC_M_RUN || rc_cdrive != 0) { printf("FAIL: after Q:'s key: mode %d cdrive %d\n", rc_mode, rc_cdrive); fails++; }
+    zscript_reset();
+    /* USER 1, then the warm boot the DRI CCP does with C = DSKByte = 0x10:
+     * setuser(1), select(0) - the user FOLDER is absent (the fake tree has
+     * A\0 only) and that is NOT a Select error: _sys_select decides from the
+     * DRIVE's folder alone (abstraction_posix.h 147-152); the machine stands
+     * in A\ (clus 5), where searches answer 'no file', and the prompt comes.
+     * (Before this was fixed, USER 1 + ^C looped 'Bdos Err on A: Select' on
+     * every key: the harness had no USER script.) */
+    zstep(RC_RUN_BDOS, 0xED01, 0x0020, 0x0001);     /* F_USERNUM: set 1 */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000E, 0x0000);     /* DRV_SET A: */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000A, 0xE406);     /* the read: the prompt came */
+    wake();
+    audit("user 1");
+    if (rc_user != 1) { printf("FAIL: F_USERNUM 1 left user %d\n", rc_user); fails++; }
+    if (rc_errwait || rc_mode != RC_M_BLOCKED) { printf("FAIL: A: under USER 1 (no folder A\\1) erred Select (errwait %d mode %d)\n", rc_errwait, rc_mode); fails++; }
+    if (std_clus != 5) { printf("FAIL: A: under USER 1 stands in clus %u, wanted the drive's folder (5)\n", std_clus); fails++; }
+    if ((rc_z.af & 0xFF) != 0) { printf("FAIL: DRV_SET A: under USER 1 answered %02x\n", rc_z.af & 0xFF); fails++; }
+    zscript_reset();
+    zstep(RC_RUN_BDOS, 0xED01, 0x0020, 0x0000);     /* USER 0 again */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000E, 0x0000);
+    rc_mode = RC_M_RUN;
+    wake();
+    if (rc_user != 0 || std_clus != 9) { printf("FAIL: back to USER 0: user %d clus %u\n", rc_user, std_clus); fails++; }
+    zscript_reset();
+
+    /* the private calls: 250 HostOS 0x08, 251 6.9 BCD, 252 DRI, 253 CCPaddr,
+     * 248 uptime in DE:HL, 230 the mask, 254 accepted */
+    zstep(RC_RUN_BDOS, 0xED01, 0x00FA, 0); wake();
+    if ((rc_z.af & 0xFF) != 0x08) { printf("FAIL: F_HOSTOS answered %02x\n", rc_z.af & 0xFF); fails++; }
+    zstep(RC_RUN_BDOS, 0xED01, 0x00FB, 0); wake();
+    if ((rc_z.af & 0xFF) != 0x69) { printf("FAIL: F_VERSION answered %02x\n", rc_z.af & 0xFF); fails++; }
+    zstep(RC_RUN_BDOS, 0xED01, 0x00FC, 0); wake();
+    if ((rc_z.af & 0xFF) != 0x00) { printf("FAIL: F_CCPVERSION answered %02x\n", rc_z.af & 0xFF); fails++; }
+    zstep(RC_RUN_BDOS, 0xED01, 0x00FD, 0); wake();
+    if (rc_z.hl != 0xE400) { printf("FAIL: F_CCPADDR answered %04x\n", rc_z.hl); fails++; }
+    ticks = 1200; tick_step = 0;               /* 1200 x 55 = 66,000 = 0x000101D0 */
+    zstep(RC_RUN_BDOS, 0xED01, 0x00F8, 0); wake();
+    tick_step = 1;
+    if (rc_z.hl != 0x01D0 || rc_z.de != 0x0001) { printf("FAIL: F_UPTIME answered DE:HL %04x:%04x, wanted 0001:01d0\n", rc_z.de, rc_z.hl); fails++; }
+    /* ...and it does not wrap at the hour: the kernel's ticks lap at 65,536
+     * and the package keeps the high word - 65,500 seen, then 10: 65,546
+     * ticks x 55 = 3,605,030 = 0x0037:0226 */
+    ticks = 65500; tick_step = 0;
+    zstep(RC_RUN_BDOS, 0xED01, 0x00F8, 0); wake();
+    ticks = 10;
+    zstep(RC_RUN_BDOS, 0xED01, 0x00F8, 0); wake();
+    tick_step = 1;
+    if (rc_z.hl != 0x0226 || rc_z.de != 0x0037) { printf("FAIL: F_UPTIME across the tick lap answered DE:HL %04x:%04x, wanted 0037:0226\n", rc_z.de, rc_z.hl); fails++; }
+    ticks = 1300;
+    zstep(RC_RUN_BDOS, 0xED01, 0x00E6, 0xFF); wake();
+    if (rc_mask != 0xFF) { printf("FAIL: F_SETMASK did not set the mask\n"); fails++; }
+    zstep(RC_RUN_BDOS, 0xED01, 0x00E6, 0x7F); wake();
+    zstep(RC_RUN_BDOS, 0xED01, 0x00FE, 100); wake();
+    if (rc_mode != RC_M_RUN) { printf("FAIL: F_SETCPUSPEED stopped the machine\n"); fails++; }
+    zscript_reset();
+    feed("\033[2J\033[H");                    /* the loader tests below want
+                                                * a clean screen */
+    zstep(RC_RUN_BDOS, 0xED01, 0x000A, 0xE406);   /* the CCP back at its read */
+    wake();
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: not blocked at the prompt before the loader tests\n"); fails++; }
+    zscript_reset();
+
+    /* THE DEBUG LOADER AND THE HANDOFFS: Alt+L (from a machine BLOCKED at
+     * the CCP's prompt: the .COM runs in the CCP's place and its RET
+     * warm-boots back), a name, Enter - the loader stands in A\0
+     * (rc_fs_cd through the fake tree), reads HELLO.COM into the claim
+     * 512-aligned, patches page zero and runs; the scripted Z80 then does
+     * BDOS 9 (a string in its RAM), BDOS 2, and a BIOS WBOOT, which ends
+     * the program and boots the CCP again (SPEC.md 71) */
     callreset();
     lock_depth = 1;
     os88_onkey(0, 0x26, win);            /* Alt+L */
     lock_depth = 0;
     audit("load prompt");
-    expect_row("load prompt", 10, "Load .COM: ");
+    expect_row("load prompt", 1, "Load .COM: ");
     if (!rc_ldmode) { printf("FAIL: Alt+L did not open the loader prompt\n"); fails++; }
     lock_depth = 1;
     os88_onkey('h', 0x23, win); os88_onkey('e', 0x12, win); os88_onkey('l', 0x26, win);
@@ -684,7 +1063,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     os88_onkey('x', 0x2D, win); os88_onkey(8, 0x0E, win);      /* a typo, erased */
     lock_depth = 0;
     audit("load name typed");
-    expect_row("load name", 10, "Load .COM: HELLO");
+    expect_row("load name", 1, "Load .COM: HELLO");
     strcpy((char *)zram + 0x500, "Hello from the Z80$");   /* clear of the
                                                   * loader's 0x200 landing */
     zstep(RC_RUN_BDOS, 0xED01, 0x0009, 0x0500);      /* BDOS 9: DE = the string */
@@ -699,7 +1078,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
        * lock W_ONKEY holds - SPEC.md 71.1), a wake posted for it */
       if (last_read[0]) { printf("FAIL: the loader read %s from os88_onkey, under the lock\n", last_read); fails++; }
       if (rc_ldmode != RC_LD_LOAD || wakes_posted == w) { printf("FAIL: Enter did not hand the read to the wake (ldmode %d)\n", rc_ldmode); fails++; }
-      expect_cursor("load enter", 0, 11);
+      expect_cursor("load enter", 0, 2);
     }
     callreset();
     { int w = wakes_posted;
@@ -722,7 +1101,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
     wake();                                  /* the slice: BDOS 9, then the
                                               * script runs out */
     audit("hello slice");
-    expect_row("hello", 11, "Hello from the Z80");
+    expect_row("hello", 2, "Hello from the Z80");
     if (rc_mode != RC_M_RUN) { printf("FAIL: the machine stopped after BDOS 9 (mode %d)\n", rc_mode); fails++; }
     if (rc_z.hl != 0 || rc_z.bc != 0x0000 || (rc_z.af & 0xFF) != 0) { printf("FAIL: the BDOS tail (HL=0, C=E, B=H, A=L): hl %04x bc %04x af %04x\n", rc_z.hl, rc_z.bc, rc_z.af); fails++; }
     if (table) cost("a slice: BDOS 9 (18 chars)");
@@ -730,9 +1109,18 @@ static void run_all(int cols_geom, int rows_geom, int table)
     zstep(RC_RUN_BIOS, 0xFF04, 0, 0);                /* BIOS WBOOT (fn 3) */
     wake();
     audit("hello end");
-    expect_row("hello!", 11, "Hello from the Z80!");
-    if (rc_mode != RC_M_IDLE) { printf("FAIL: WBOOT did not end the program (mode %d)\n", rc_mode); fails++; }
-    if (rc_status != RC_ST_RESTART) { printf("FAIL: WBOOT did not ask for a restart\n"); fails++; }
+    expect_row("hello!", 2, "Hello from the Z80!");
+    /* WBOOT: the program ended, and main.c's loop lapped - CCPHEAD, the CCP
+     * at 0xE400 again (the hello's bytes are still at 0100h: nothing clears
+     * the TPA), running */
+    expect_row("hello reboot", 3, "RunCPM Version 6.9 (CCP-DR.60K) - CP/M 2.2");
+    if (rc_mode != RC_M_RUN || rc_z.pc != 0xE400) { printf("FAIL: WBOOT did not boot the CCP again (mode %d pc %04x)\n", rc_mode, rc_z.pc); fails++; }
+    if (rc_status != RC_ST_RUNNING) { printf("FAIL: the reboot left status %d\n", rc_status); fails++; }
+    zscript_reset();
+    zstep(RC_RUN_BDOS, 0xED01, 0x000A, 0xE406);   /* the CCP at its read */
+    wake();
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: the rebooted CCP did not block at its read (mode %d)\n", rc_mode); fails++; }
+    expect_cursor("after hello reboot", 0, 4);
 
     /* a .COM that exists in A\0 but is over the TPA: the fact printed is
      * 'too big', and the launch-folder fallback (whose NOENT would hide it)
@@ -745,11 +1133,28 @@ static void run_all(int cols_geom, int rows_geom, int table)
     n_reads = 0;
     wake();
     audit("big load");
-    expect_row("big load", 13, "BIG.COM: too big for the TPA");
+    expect_row("big load", 6, "BIG.COM: too big for the TPA");
     if (n_reads != 1) { printf("FAIL: a too-big .COM was read %u times (the fallback would hide the fact)\n", n_reads); fails++; }
-    if (rc_mode != RC_M_IDLE) { printf("FAIL: a refused load left mode %d\n", rc_mode); fails++; }
-    feed("\033[12;20H\033[J");          /* the cursor back after the hello,
-                                          * the rows below cleared */
+    if (rc_mode != RC_M_BLOCKED) { printf("FAIL: a refused load did not go back to the interrupted prompt (mode %d)\n", rc_mode); fails++; }
+    /* a key typed BETWEEN Enter and the load wake (the floppy is ~400 ms on
+     * the target) goes to the ring and must not park: os88_onkey does not
+     * flip BLOCKED->RUN while the loader is active, and the refused load
+     * hands the machine back RUNNING so the CCP's trap retries on that key */
+    lock_depth = 1;
+    os88_onkey(0, 0x26, win);
+    os88_onkey('b', 0x30, win); os88_onkey('i', 0x17, win); os88_onkey('g', 0x22, win);
+    os88_onkey(13, 0x1C, win);
+    os88_onkey('q', 0x10, win);              /* meanwhile */
+    lock_depth = 0;
+    if (rc_mode != RC_M_BLOCKED || rc_ldmode != RC_LD_LOAD) { printf("FAIL: a key during the pending load flipped the mode (%d) or ended the load (%d)\n", rc_mode, rc_ldmode); fails++; }
+    wake();
+    if (rc_mode != RC_M_RUN || rc_khead == rc_ktail) { printf("FAIL: a refused load with a key queued left mode %d (wanted RUN so the trap retries)\n", rc_mode); fails++; }
+    rc_key_pop();                             /* the 'q' */
+    rc_mode = RC_M_BLOCKED;
+    /* Esc at the loader's prompt goes back too */
+    lock_depth = 1; os88_onkey(0, 0x26, win); os88_onkey(27, 0x01, win); lock_depth = 0;
+    if (rc_ldmode != 0 || rc_mode != RC_M_BLOCKED) { printf("FAIL: Esc at the loader's prompt left ldmode %d mode %d\n", rc_ldmode, rc_mode); fails++; }
+    feed("\033[2J\033[12;20H");         /* a clean screen, the cursor parked */
     wake();
 
     /* the blocked read: BDOS 1 on an empty ring stops the machine WITHOUT a
@@ -776,15 +1181,16 @@ static void run_all(int cols_geom, int rows_geom, int table)
       audit("read retried");
       expect_row("echo", 12, "k");
       if ((rc_z.af & 0xFF) != 'k') { printf("FAIL: C_READ answered %02x\n", rc_z.af & 0xFF); fails++; }
-      if (rc_mode != RC_M_IDLE) { printf("FAIL: the WBOOT after the read did not end the program\n"); fails++; }
+      if (rc_mode != RC_M_RUN || rc_z.pc != 0xE400) { printf("FAIL: the WBOOT after the read did not reboot the CCP (mode %d)\n", rc_mode); fails++; }
     }
-    if (table) cost("a key into a blocked C_READ: the echo");
+    if (table) cost("a key into a blocked C_READ: the echo (+ the reboot)");
     zscript_reset();
 
     /* echo one character - the keystroke path: the machine waits in C_READ,
      * os88_onkey pushes and kicks, the retried trap pops and echoes, the
      * flush draws: ONE band, the character and the moved cursor */
-    feed("\033[14;1H");                 /* park the cursor on an empty row */
+    feed("\033[2J\033[14;1H");         /* a clean screen, the cursor parked
+                                          * on an empty row */
     wake();
     zstep(RC_RUN_BDOS, 0xED01, 0x0001, 0);           /* C_READ, no key yet */
     rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
@@ -845,21 +1251,44 @@ static void run_all(int cols_geom, int rows_geom, int table)
     }
 
     /* HALT is BOOT's exit (cpu1.h 0x76: Status = STATUS_EXIT): the toast,
-     * main.c's "\r\n", the machine idle - and it is not timed */
+     * main.c's "\r\n", then the exit - the worker hired on the wake to close
+     * the window; a refused spawn (the task table full) is retried on the
+     * next wake, which the machine keeps wanting - and it is not timed */
     {
-        int n0 = rc_slice_n;
+        int n0 = rc_slice_n, w;
+        feed("\033[14;1H");
+        wake();                                  /* the cursor move drawn (idle) */
         zstep(RC_RUN_HALT, 0x0123, 0, 0);
         rc_mode = RC_M_RUN; rc_status = RC_ST_RUNNING;
         last_toast[0] = 0;
-        feed("\033[14;1H");
+        spawn_refuses = 1;
         tick_step = 0;
+        w = wakes_posted;
+        callreset();
         wake();
         tick_step = 1;
-        audit("halt");
+        /* main.c's exit "\r\n" goes into the model and is NOT drawn: nothing
+         * outlives the window (a flush here would be a scroll destroyed
+         * within a tick - the double-draw class); no audit, since glass and
+         * model deliberately differ by that line until the destroy */
+        if (calls() != 0) { printf("FAIL: the exit's \\r\\n was drawn (%d calls) - a draw nobody can see\n", calls()); fails++; }
+        if (lock_depth != 0) { printf("FAIL: halt: lock left held\n"); fails++; }
         if (strcmp(last_toast, "RunCPM: CPU halted") != 0) { printf("FAIL: HALT toasted '%s'\n", last_toast); fails++; }
-        if (rc_mode != RC_M_IDLE || rc_status != RC_ST_EXIT) { printf("FAIL: HALT left mode %d status %d, wanted idle / EXIT\n", rc_mode, rc_status); fails++; }
+        if (rc_mode != RC_M_EXIT || rc_status != RC_ST_EXIT) { printf("FAIL: HALT left mode %d status %d, wanted EXIT / EXIT\n", rc_mode, rc_status); fails++; }
+        if (wakes_posted == w) { printf("FAIL: an exit whose worker was refused did not re-post\n"); fails++; }
         expect_cursor("halt crlf", 0, 14);
         if (rc_slice_n != n0) { printf("FAIL: a HALT slice adapted the budget\n"); fails++; }
+        spawn_refuses = 0;
+        wake();                                  /* the retry takes */
+        if (rc_mode != RC_M_DEAD || spawned != 1) { printf("FAIL: the exit's worker was not hired on the retry (mode %d spawned %d)\n", rc_mode, spawned); fails++; }
+        {   int w2 = wakes_posted; wake();
+            if (wakes_posted != w2) { printf("FAIL: a dead machine re-posted its wake\n"); fails++; } }
+        /* the worker: destroys under the lock, dies in task_alive (here: the
+         * longjmp) - the window is gone, the lock is not held */
+        if (setjmp(worker_end) == 0)
+            os88_worker(win);
+        if (destroyed != 1 || lock_depth != 0) { printf("FAIL: the worker: destroyed %d, lock %d\n", destroyed, lock_depth); fails++; }
+        destroyed = 0; spawned = 0;
         zscript_reset();
     }
 
@@ -1209,6 +1638,20 @@ static void run_all(int cols_geom, int rows_geom, int table)
       if (wakes_posted != w + 1) { printf("FAIL: a click kicked an idle machine\n"); fails++; }
     }
 
+    /* the keys without an ASCII code go into the ring as the VT100 sequence
+     * a host terminal sends RunCPM (SPEC.md 71.2): Up ESC[A, Del ESC[3~;
+     * Ctrl+2 is a NUL; a key the table does not name goes nowhere */
+    rc_khead = rc_ktail = 0;
+    lock_depth = 1;
+    os88_onkey(0, 0x48, win); os88_onkey(0, 0x53, win); os88_onkey(0, 0x03, win); os88_onkey(0, 0x3B, win);   /* Up, Del, Ctrl+2, F1 */
+    lock_depth = 0;
+    {   static const unsigned char want[] = { 27, '[', 'A', 27, '[', '3', '~', 0 };
+        int k, bad = 0;
+        for (k = 0; k < 8; k++) if (rc_key_pop() != want[k]) bad = 1;
+        if (rc_key_pop() != -1) bad = 1;
+        if (bad) { printf("FAIL: Up / Del / Ctrl+2 / F1 did not ring as ESC[A ESC[3~ NUL and nothing\n"); fails++; }
+    }
+
     /* input overrun is never silent: the 64-entry ring holds 63 keys, and
      * the key that finds it full RINGS (the PC BIOS's own answer to a full
      * keyboard buffer), at no glass cost */
@@ -1226,6 +1669,40 @@ static void run_all(int cols_geom, int rows_geom, int table)
     rc_khead = rc_ktail = 0;
 }
 
+/* a disk without CCP-DR.60K: the launch is not refused (the claims were had);
+ * main.c 118's text follows the banner and the machine idles, the window up
+ * to show it (SPEC.md 71) - and Alt+L is still there */
+static void run_noccp(void)
+{
+    int i;
+    cont_w = 640; cont_h = 200;
+    gclear(); callreset(); wakes_posted = 0;
+    std_clus = 0; std_vol = 0; ferr = 0;
+    ticks = 100; tick_step = 1; zscript_reset(); n_rc_run = 0;
+    zclk_left = ZCLK_BURST; clk_restarts = clk_slices = clk_halts = 0;
+    memset(zram, 0, sizeof(zram)); memset(ccpram, 0, sizeof(ccpram));
+    rc_khead = rc_ktail = 0; n_claims = 0; ccp_missing = 1; autoexec_text = 0;
+    rc_mode = RC_M_CLOCK; rc_ldmode = 0; rc_status = 0;
+    win = os88_main();
+    if (!win) { printf("FAIL: no CCP: os88_main refused the launch (%s)\n", last_toast); fails++; return; }
+    if (rc_ccplen != 0) { printf("FAIL: no CCP: rc_ccplen %u\n", rc_ccplen); fails++; }
+    expose();
+    tick_step = 0;
+    for (i = 0; i < 200 && rc_mode == RC_M_CLOCK; i++) wake();
+    tick_step = 1;
+    audit("no ccp");
+    expect_row("no ccp head", 10, "RunCPM Version 6.9 (CCP-DR.60K) - CP/M 2.2");
+    expect_row("no ccp 1", 11, "Unable to load CP/M CCP.");
+    expect_row("no ccp 2", 12, "CPU halted.");
+    if (rc_mode != RC_M_IDLE) { printf("FAIL: no CCP: mode %d, wanted idle\n", rc_mode); fails++; }
+    {   int w = wakes_posted; wake();
+        if (wakes_posted != w) { printf("FAIL: no CCP: the idle machine re-posted\n"); fails++; } }
+    lock_depth = 1; os88_onkey(0, 0x26, win); lock_depth = 0;
+    if (rc_ldmode != RC_LD_PROMPT) { printf("FAIL: no CCP: Alt+L refused\n"); fails++; }
+    lock_depth = 1; os88_onkey(27, 0x01, win); lock_depth = 0;
+    ccp_missing = 0;
+}
+
 int main(void)
 {
     printf("rcuitest: RUNCPM terminal against a model of the glass\n");
@@ -1233,6 +1710,7 @@ int main(void)
     print_costs();
     run_all(79, 25, 0);                 /* VGA framed (632 px of content) */
     run_all(78, 17, 0);                 /* CGA framed */
+    run_noccp();
     if (fails) {
         printf("rcuitest: %d FAILURE(S)\n", fails);
         return 1;

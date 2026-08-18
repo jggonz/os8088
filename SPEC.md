@@ -50733,10 +50733,20 @@ _PatchCPM, the clock estimate, the debug loader) measures `image=24848
 bss=6465`** (after two reviews: the clock in slices, the loader's read on the
 wake and 512-aligned, the adaptation blind to early-ended slices, the click
 kick), 58 functions, largest frame 30 — the core and its five tables
-are ~9KB of that, well under §70.9's 55,000 trigger, so no `RUNCPM.OVL`
-exists yet and the resident/overlay decision is deferred to the wave whose
-size line asks for it (the candidates stand as named). Every later figure
-replaces this one as the waves land.*
+are ~9KB of that; **wave 3 (the BDOS console side whole with the C_READSTR
+line editor as a state machine, the drive/user state and the private calls,
+`disk.h`'s error path, the key mapping, DRI's CCP loaded at launch and
+booted on every lap of `main.c`'s loop, AUTOEXEC.TXT, the exit's self-close
+worker) measures `image=29504 bss=6933`** (after the review: AUTOEXEC read
+once and whole, Select decided from the drive letter, the 32-bit uptime,
+the merged warm-boot flush, the exit's flush skipped, the loader's hand-back),
+68 functions, largest frame 30 —
+the editor and the CCP loop cost ~4.7KB of image and ~470 bytes of bss (the
+`^W` recall buffer, the AUTOEXEC buffer, the per-drive place cache), well
+under §70.9's 55,000
+trigger, so no `RUNCPM.OVL` exists yet and the resident/overlay decision is
+deferred to the wave whose size line asks for it (the candidates stand as
+named). Every later figure replaces this one as the waves land.*
 
 **The Z80 core is hand-written 8086 (`rcz80.inc`, wave 2), and it is the
 only thing that touches Z80 memory per instruction.** `_rc_run(n)` is a cdecl
@@ -50832,9 +50842,12 @@ build).
 **The slice driver (wave 2, `os88_onwake`)**: one wake runs `rc_run` for the
 slice's budget, servicing every RST handoff in between (`rccpm.c`'s
 `rc_bdos`/`rc_bios`, cpm.h's register plumbing — HL cleared, C = E, B = H, A =
-L on the way out — with the console functions 0–2, 6–9, 11–12 and BIOS
-BOOT..CONOUT and the register-only entries carried in wave 2 and a disk
-function answering 0xFF, never a false success, until wave 4), flushes the
+L on the way out — with the console functions 0–12 (wave 3: the line editor
+too), the drive/user state functions 13, 14, 24, 25, 27–32, 37–39, RunCPM's
+private 230, 231, 248–254, BIOS BOOT..CONOUT and the register-only entries,
+and a disk function answering 0xFF, never a false success, until wave 4 —
+so DIR and TYPE at the prompt answer `no file` / `X?` exactly as the DRI CCP
+does for a file that is not there), flushes the
 terminal ONCE under the lock, rings what rang, and re-posts only while the
 machine has work — never while blocked in a console read on an empty key ring
 (then PC is put back ON the RST, the machine is `RC_M_BLOCKED`, and
@@ -50905,8 +50918,9 @@ so it rides the image ROOT — the launch folder, where the loader looks after
 invented here). HALT is BOOT's exit: `cpu1.h` 0x76 sets `Status =
 STATUS_EXIT` exactly as BIOS BOOT does, so `main.c`'s "\r\n" and exit path
 follow for both, and the one deviation is that the fact is toasted (`RunCPM:
-CPU halted`, §71.4); BOOT/WBOOT/BDOS 0/HALT end the program and, until wave
-3's CCP and self-close, leave the machine idle for the next Alt+L. **A full
+CPU halted`, §71.4); WBOOT/BDOS 0/^C/a disk error end the program and lap
+`main.c`'s loop (CCPHEAD and the CCP again, below), BOOT/HALT end RunCPM
+(the "\r\n", then the window closes: the self-close below). **A full
 key ring rings**: the 64-entry ring holds 63 keys, and a key that finds it
 full is dropped with one BEL tone (the PC BIOS's own answer to a full
 keyboard buffer) — input overrun is one of the three defects CLAUDE.md names
@@ -50918,6 +50932,150 @@ MOVE** is one `rep movsb` through the mover (ascending, as `cpm.h`'s
 `while (BC--) RAM[HL++] = RAM[DE++]` is, the same bytes in the same order;
 HL and DE end past the block and BC = 0xFFFF as upstream's post-decrement
 leaves it) rather than ~50 µs a byte on the UI task.
+
+**The command processor is DRI's CCP, run on the Z80, and the boot is
+`main.c`'s loop (wave 3, `rc_boot`).** `CCP-DR.60K` is read ONCE, in
+`os88_main`, from the launch folder — before any folder move, the way an
+`.OVL` is resolved — into a **2KB claim** (`os88_mem_claim(2)`; the launch
+refuses with the same "what was asked / what there is" toast as the 64KB
+claim, `RunCPM: 2KB? n KB`, if it cannot be had), and every lap of the loop
+— the first, after the clock estimate; and every warm boot: BIOS WBOOT, BDOS
+0, `^C` on an empty line at the prompt, a disk error's key — does exactly
+`main.c` 110–140: CCPHEAD (`\r\nRunCPM Version 6.9 (CCP-DR.60K) - CP/M
+2.2\r\n`), `_PatchCPM` (IOBYTE 3Dh and DSKByte only on a cold start:
+`Status != STATUS_RESTART`), `Status = 0`, the CCP copied to 0xE400 out of
+its claim with `rc_zzcopy_in`, **`AUTOEXEC.TXT` poked on EVERY boot**
+(upstream's `BOOTONLY FALSE`, globals.h 305) — its first 125 bytes at
+CCPaddr+8, cut at the first control character, a NUL after it, its length
+at CCPaddr+7, which is the DRI CCP's own command buffer (`+6` the max 0x7F,
+`+7` the length, `+8` the text: `CCP-DR.60K` bytes 6–8 are `7F 00 20…`), so
+the CCP runs the line before its first prompt and prints its answer, not the
+line — Z80reset (PC, IFF, I, R cleared; SP is the CCP's own), C = DSKByte,
+PC = CCPaddr, run. **The file is READ ONCE, at launch** (`rc_ax_load` in
+`os88_main`, beside the CCP, from the launch folder before any move) and
+cached; upstream re-reads it from FILEBASE on every lap, which is a host
+`fopen` there and here would be a directory walk of the launch folder — one
+`int 13h` per directory sector, ~400 ms each on the target, and on every
+shipped disk the file is ABSENT so the whole root is walked to say so — on
+every `^C`, RET and WBOOT, buying nothing: the launch folder is outside
+CP/M's `A\0..P\F`, so no CP/M program can change `AUTOEXEC.TXT` during a
+session and "read on every boot" and "read once, poke on every boot" are the
+same observable behaviour. It is read WHOLE — `OSAPI_FILE_READ` answers
+FERR_BIG and reads NOTHING when a file is larger than the buffer (decided
+from the directory entry, so a 125-byte read would silently ignore any
+`AUTOEXEC.TXT` over 125 bytes, where upstream's `_RamLoad(AUTOEXEC, cmd,
+125)` delivers the first 125 bytes of a file of any size) — into the Z80
+claim's TPA at the loader's 512-aligned landing, with the TPA up to the CCP
+(~57KB) as the capacity, the first 125 bytes copied out and the TPA cleared
+behind them; a file above ~57KB is FERR_BIG and ignored, the one remaining
+cap, stated. **So a warm boot is a 2KB claim-to-claim copy and no disk at
+all**, and `rc_slice` runs the CCP's prompt in what is left of the same
+slice: CCPHEAD and the next `A>` are ONE flush — `^C` on the bottom row is
+one `gfx_scroll` and one fill, not two of each (harness: `^C at the bottom
+row: warm boot + prompt, one flush`, 5 calls / 1 scroll / 1 fill). A disk without `CCP-DR.60K` is not a
+refused launch: `main.c` 118's `Unable to load CP/M CCP.\r\nCPU halted.`
+follows CCPHEAD on the terminal, and — **one stated deviation** — the
+machine goes idle with the window up so the text can be read (upstream
+breaks out of the loop and the process ends, taking its terminal with it if
+it was launched by a double-click); the close box ends it and Alt+L still
+loads a `.COM`. **The exit** — BIOS BOOT (`EXIT.COM`) and HALT — is `main.c`
+141–160: the machine stops, `\r\n` goes into the terminal model and is
+**not drawn** (upstream's `\r\n` is for a host shell that outlives the
+process; here nothing outlives the window, which the worker destroys within
+a tick — a flush would be a scroll of the content when the cursor is on the
+last row, drawn and destroyed inside one tick, the double-draw class; the
+harness asserts the exit wake draws 0 calls), and then, since there is no
+self-close slot, `os88_onwake` hires the worker (`CC_HAS_WORKER`,
+`os88_task_spawn` under a short lock hold, retried on the next wake while the
+task table is full — the machine keeps wanting the wake until it takes)
+whose only job is cword's File > Close idiom: `os88_wm_destroy` under the
+lock, then `os88_task_alive`, which is the kernel's own teardown and frees
+the task, the instance, the region and every claim; it is hired at that
+moment and never before, so it costs nothing while the machine runs. **The
+line editor is `cpm.h`'s C_READSTR key by key** — the same `if`s in the same
+order, the pre-backspace / retype / post-backspace counts, `#\b\n` for `^R`
+and `^U`, the two help lines for `^?` (chr 31), the 256-byte `last` for
+`^W`, the bell on every refusal, printable 0x20–0x7E and `^Z` — with the one
+substitution the platform demands: `_getcon()` becomes "pop the ring, or
+answer −1 and keep the state" (`rs_on`, the three buffer indices, the max,
+the count and the column are statics), so a trap that finds the ring empty
+puts PC back on the RST and blocks (`RC_M_BLOCKED`, no re-post) and the
+retried trap RESUMES the line at the next key; typeahead is drained inside
+one trap; a line ends (CR/LF, `^C` on an empty line — `^C` printed and a
+warm boot — or the buffer full) with cpm.h's tail: the count into the
+buffer, HL = the count, `last` saved, a CR. A warm boot and the debug loader
+both reset that state (`rc_con_reset`), because a half-typed CCP line is
+not the next program's. **`disk.h`'s `_error`** — `\r\nBdos Err on X: ` +
+`R/O` / `Select` / `\r\nCP/M ERR` — is the same shape: the text, then a
+blocked wait for a key (`rc_errwait`), then `\r\n`, the drive back to
+DSKByte's and a warm boot, and the function that erred finishes its tail
+(DRV_SET's, cpm.h 1226, in wave 3; wave 4's callers add theirs). The
+erring function jumps INTO the wait in the same trap, so a key already in
+the ring (typeahead behind `b:` Enter) ends it at once as upstream's
+`_getcon()` would, and only an empty ring blocks. DRV_SET and BIOS SELDSK
+answer `Select` **exactly where upstream does — for a DRIVE whose folder
+does not exist below the launch folder**, decided from the letter alone
+(`_SelectDisk` → `_sys_select("A"+dr)` stats `FILEBASE/<letter>` only,
+abstraction_posix.h 147–152; the user folder is never a Select error —
+`_SetUser` → `_MakeUserDir` creates it on USER n, disk.h 862–870, and that
+creation is wave 4's): `rc_fs_cd` answers 0 standing in the user folder, 1
+standing in the DRIVE's folder when the user's is absent (searches there
+answer "no file" until wave 4 creates it), −1 for an absent drive, and only
+−1 is `Select` — so `USER 1` followed by any warm boot (the DRI CCP restarts
+with C = DSKByte = 0x10: setuser(1), select(0)) shows an empty A/1 rather
+than an unrecoverable `Bdos Err on A: Select` on every key (the wave-3
+review found it; the harness now scripts USER 1). The drive is `E`
+unmasked as `cpm.h` 1235 keeps it: `E` ≥ 16 has no folder and prints `Bdos
+Err on Q: Select` (measured: `q:` at the prompt), never a silent success on
+`E mod 16`; BIOS SELDSK's `rc_fs_cd` MOVES the instance where `B_SELDSK`
+only tests, a stand-in wave 4 replaces with a look-up. Measured on the
+glass: `B:` at the prompt prints `Bdos Err on B: Select`, waits, and the
+key boots back to `A>`; `user 1` then `^C` boots to `A>` with no error.
+F_USERNUM keeps the user code (0–31 as BDOS does; the folder is made in wave
+4, and areas 16–31 stand in the drive's folder). The
+private calls: 230 sets `console.h`'s `mask8bit` (`rc_mask`, applied by
+`rc_putc`; a byte above 0x7F then takes a cell and draws blank — the face is
+32..126), 231 answers 0 (`host.h`), 248 answers the uptime in ms in DE:HL
+as a **32-bit tick count × 55** — the kernel's `os88_ticks()` is 16 bits
+and laps hourly, so the package keeps the high word (`rc_ticks32`, sampled
+on every slice and every 248: a lap seen as the count going backwards; an
+idle of over an hour between two samples counts as one lap, the most a
+sampling scheme can promise) and the answer only grows, as upstream's 32-bit
+`millis()` does, 249 answers `_sys_makedisk`'s "not made" until wave
+4, 250 the HostOS code **0x08** (new; the shipped `INFO.COM` maps 0..7 and
+prints `Unknown` for it, §71.4), 251 `0x69`, 252 `0x00` (DRI), 253 CCPaddr,
+254 accepted and ignored (§71.4). **The keys** (`os88_onkey`): a key with an
+ASCII code goes into the ring as the BIOS delivers it — Ctrl+letter 1..26,
+**Ctrl+- is 31 (`^?`), Ctrl+Backspace is 127 (DEL)**, both verified on the
+glass in wave 3 (the help lines print, the character deletes), Enter 13,
+BkSp 8, Tab 9, Esc 27; a key with none goes as the VT100 sequence a host
+terminal would send RunCPM — Up/Down/Right/Left `ESC[A`/`B`/`C`/`D`, Home
+`ESC[H`, End `ESC[F`, PgUp `ESC[5~`, PgDn `ESC[6~`, Ins `ESC[2~`, Del
+`ESC[3~`, Ctrl+2 a NUL, anything else nowhere. (On a machine with no mouse
+the arrows are the kernel's mouse, §9.6, and never reach a package.) Alt+L,
+the debug loader, is also allowed while the machine is BLOCKED at the CCP's
+prompt: the `.COM` runs in the CCP's place and its RET warm-boots back — so
+`make rczex` still loads ZEXDOC that way until wave 4's disk layer lets the
+CCP load it; a refused load, Esc and an empty name go back to the state
+they interrupted — and if that state was BLOCKED and a key arrived while
+the load was pending (typed between Enter and the wake that read the
+floppy: `os88_onkey` does not flip BLOCKED→RUN while the loader is active),
+the machine comes back RUNNING so the CCP's trap retries on that key rather
+than sitting on a non-empty ring until the next keystroke. **Measured on the glass (wave 3, `build/runcpm.img`):**
+the `A>` prompt under CCPHEAD; `dir` → `no file`, `type x` → `X?`, `foo` →
+`FOO?` (the DRI CCP's own answers against a disk layer that answers 0xFF);
+`abc` `^U` → `abc#` and a fresh line; the two help lines on Ctrl+-;
+Ctrl+Backspace, `^A ^A ^G` editing in place; `^C` → `^C` and CCPHEAD again;
+`b:` → `Bdos Err on B: Select`, a key, `A>`; Alt+L `EXIT` (EXIT.COM from
+`A\0`: BIOS BOOT) closes the window; `AUTOEXEC.TXT` holding `DIR` runs
+before the first prompt; a disk without the CCP shows `Unable to load CP/M
+CCP.` / `CPU halted.`. The harness (`hosttest/rcuitest.c`) drives the same
+sequences against the scripted Z80 and asserts each row, the buffer bytes,
+the count in A/HL, the `^W` recall, the blocked/resumed states, the exit's
+worker (a refused spawn re-posts; the worker destroys under the lock and
+dies in `task_alive`), and prices them: one key into C_READSTR is **1 call /
+2 cells** (the echo and the cursor, one band); `^C`'s warm boot 3 calls; the
+prompt screen's full expose is the fill + 11 rows = **12 calls**.
 
 **No worker, no blocking, and the kernel grew a wake event for it (§71.1).**
 RunCPM blocks in the host's `getch()`; a package's worker cannot touch a file
@@ -51110,17 +51268,21 @@ once per clear.
 (wave 2: wave 1 clamped the restored column and lost the wrap — the reviewer's
 row, and the harness now asserts it).
 
-Keys: arrows/Home/End/PgUp/PgDn/Del arrive as VT sequences; ^C is 3; the BIOS
-folds Ctrl-H/I/M into BkSp/Tab/Enter (identical bytes, no loss); `^?` is
-Ctrl+- and DEL is Ctrl+Backspace, both verified on the glass before the
-binding is believed. BEL is `os88_snd_tone`.
+Keys: arrows/Home/End/PgUp/PgDn/Del arrive as VT sequences (the table is in
+§71's editor paragraph); ^C is 3; the BIOS folds Ctrl-H/I/M into
+BkSp/Tab/Enter (identical bytes, no loss); `^?` is Ctrl+- and DEL is
+Ctrl+Backspace, both verified on the glass in wave 3. BEL is
+`os88_snd_tone`.
 
 ### 71.3 The disks: drives are folders, files are whole
 
 CP/M drives are folders `A\0 .. P\F` below the launch folder, exactly RunCPM's
 host layout with FAT12's 8.3 names standing in for CP/M's; SELDSK of an absent
-folder answers `Bdos Err on X: Select`; USER n creates its folder on first
-write; `FORMAT.COM` (BDOS 249) creates a drive. **The record model is whole
+DRIVE folder answers `Bdos Err on X: Select` (the letter alone decides, as
+`_sys_select` does — an absent USER folder is never a Select error); USER n
+creates its folder at once, as `_SetUser` → `_MakeUserDir` does (wave 4; until
+then an absent user folder reads as empty); `FORMAT.COM` (BDOS 249) creates a
+drive. **The record model is whole
 files in heap claims**: an 8-entry open-file table, open loads the file with
 `os88_file_read_seg`, close writes it back with `os88_file_write_seg` when
 dirty (and on warm boot), directory searches come from a 128-entry cache per
@@ -51137,7 +51299,10 @@ ordinal); the cache makes later ones free.
 The CCP is `CCP-DR.60K`, loaded once at launch from the launch folder — before
 any folder move, like the `.OVL` — into a 2KB claim and copied to 0xE400 on
 every warm boot with CCPHEAD printed above it; `AUTOEXEC.TXT` is read from the
-launch folder on every warm boot as upstream's default does.
+launch folder once at launch and poked on every warm boot — identical to
+upstream's read-on-every-boot default here, because CP/M cannot reach the
+launch folder (wave 3 — the mechanics are in §71's command-processor
+paragraph).
 
 ### 71.4 What is present and greyed, and what is absent
 
@@ -51154,7 +51319,9 @@ upstream and needing `long`/`time()`); XMODEM (no serial path reaches a
 package); the 64-bit clock estimate (replaced, stated); `INFO.COM`'s host
 name (its table predates HostOS 0x08 — a third-party binary, not edited);
 `::CPU HALTED::` (DEBUG-only upstream — this port toasts the fact and then
-does exactly what BOOT does: the "\r\n", the exit path, wave 3's self-close).
+does exactly what BOOT does: the "\r\n", the exit path, the self-close);
+`Unable to load CP/M CCP.` leaves the window up rather than ending the
+process (stated in §71: the text would otherwise never be read).
 
 Absent: RunCPM's internal C CCP (host-blocking C; DRI's binary is the command
 processor), the debugger/disassembler, Arduino GPIO calls, STREAMIO, RunVT
