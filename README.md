@@ -56,6 +56,16 @@ make 386-sound  # 86Box: the 386DX, with a Sound Blaster 16
 make worddisk # build the Microsoft Word floppy, all three geometries
 make xt-word  # 86Box: the 640KB XT with the Word disk in B:
 make 386-word # 86Box: the 386DX with the Word disk in B:
+make zdisk    # build the Frotz story floppies (fetches the stories first)
+make xt-z     # 86Box: the 640KB XT with a story disk in B:
+make 386-z    # 86Box: the 386DX with a story disk in B:
+make cworddisk  # build the floppy for the word processor written in C
+make 386-c-word # 86Box: the 386DX with that disk in B:
+make runcpmdisk # build the RunCPM floppies - the CP/M 2.2 emulator, its
+                # overlay, DR's CCP and the master disk as CP/M drive A
+make 386-runcpm # 86Box: the 386DX with the RunCPM disk in B:
+make allapps  # one 1.44MB floppy with every program on it, both word
+              # processors, Frotz and RunCPM included
 make test     # boot headless with a QMP socket for scripted testing
 make debug    # boot with QEMU halted, waiting for gdb on :1234
 make marty    # a cycle-accurate IBM 5150 (MartyPC) with a debugger attached -
@@ -64,6 +74,13 @@ make marty    # a cycle-accurate IBM 5150 (MartyPC) with a debugger attached -
               # what you are testing runs on an 8088 (docs/MARTYPC-DEBUG.md)
 make clean
 ```
+
+`make` builds the six shipping floppies and needs nothing but `nasm` and
+`python3`. The three disks written in C — `cworddisk`, `runcpmdisk` and
+`allapps`, which carries both — want the compiler first: `tools/setup-cc.sh`
+fetches and builds it into `build/cc`, and nothing else in the tree depends on
+it. `runcpmdisk` and `allapps` also fetch RunCPM's command processor and
+master disk (`make runcpm-src`); neither is committed here.
 
 ![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
 Timer, Bounce, Control Panel and Task Manager windows, and the dock
@@ -113,13 +130,14 @@ a Standard File dialog for opening and saving.
 
 **Software**
 
-Sixteen loadable packages ship on the software disk, all closable and most
+Eighteen loadable packages ship on the software disk, all closable and most
 multi-instance:
 
 - **Apps** — Note Pad (word wrap, DOS-readable text files), TeXPad, Paint,
-  ArtfulType, Fractal, Piano, Recorder, Tracker and ModPlug Player (both play
-  Amiga MOD files).
-- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command and TameGram.
+  ArtfulType, Fractal, Calculator, Piano, Recorder, Tracker and ModPlug Player
+  (both play Amiga MOD files).
+- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Cyclone 88
+  and TameGram.
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
 
@@ -161,6 +179,14 @@ every menu string is verbatim from it. The disk carries `WORD.O88`,
 `WORD.OVL`, a generated `WELCOME.DOC` and an empty `DOCS\`. **`all` does not
 build it and no shipped disk grows a byte** — `make wordcheck` is the format
 gate, which round-trips the `.DOC` through an independent host-side reader.
+
+**Two more ship on disks of their own, and both are written in C** (below):
+`make cworddisk` builds a second Word 1.1a that saves RTF, and `make
+runcpmdisk` builds **RunCPM**, a CP/M 2.2 emulator in a window — a Z80 with
+Digital Research's own command processor at the `A>` prompt, its drives kept
+as folders on the floppy, and RunCPM's master disk in drive A so MBASIC, PIP,
+SUBMIT, TE and Z80ASM run. `make allapps` puts every one of these on one
+1.44MB floppy.
 
 **Hardware**
 
@@ -418,6 +444,7 @@ cleanly and runs wrong when C meets this machine.
 | `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 360KB   | RunCPM, package + `RUNCPM.OVL` + CP/M drive A (`make runcpmdisk`) |
+| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the four above included (`make allapps`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.

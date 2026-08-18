@@ -266,23 +266,49 @@ python3 - <<'EOF'
 import glob, os, re
 def n(p):
     return open(p, 'rb').read().count(b'\n')
-inc = re.findall(r'^\s*%include\s+"([^"]+)"', open('kernel/kernel.asm').read(), re.M)
-kern = [os.path.join('kernel', k) for k in inc]
+def incs(path, dirs):
+    out = []
+    for f in re.findall(r'^\s*%include\s+"([^"]+)"', open(path).read(), re.M):
+        for d in dirs:                  # an .asm names its include EITHER
+            q = os.path.normpath(os.path.join(d, f))   # beside itself or
+            if os.path.exists(q):       # apps/-relative, because that is the
+                out.append(q)           # -I nasm is given. Resolve BOTH: the
+                break                   # apps/-relative form is how cword and
+    return out                          # runcpm name theirs, and only trying
+                                        # the sibling form silently drops them
+kern = incs('kernel/kernel.asm', ['kernel'])
 apps = sorted(glob.glob('apps/*/*.asm'))
 pkg = []
 for a in apps:
-    d = os.path.dirname(a)
-    for f in re.findall(r'^\s*%include\s+"([^"]+)"', open(a).read(), re.M):
-        p = os.path.join(d, f)
-        if os.path.exists(p) and p not in pkg and 'zharness' not in p:
-            pkg.append(p)
+    for q in incs(a, [os.path.dirname(a), 'apps']):
+        if q not in pkg and 'zharness' not in q and 'crt0' not in q:
+            pkg.append(q)               # crt0.asm is the C runtime, counted
+                                        # once with the SDK rather than per
+                                        # C package that includes it
 files = ['boot/boot.asm', 'kernel/kernel.asm'] + kern + ['apps/os88api.inc'] + apps + pkg
+files = list(dict.fromkeys(files))
 print('sourceLines', sum(n(p) for p in files if os.path.exists(p)))
 print('modules    ', len(kern))
+# The C is NOT in sourceLines -- the page labels that figure "lines of
+# assembly". Count it separately and quote it in the entry when it moves.
+csrc = [p for p in sorted(glob.glob('apps/*/*.c') + glob.glob('apps/*/*.h'))
+        if 'hosttest' not in p]
+print('C lines    ', sum(n(p) for p in csrc))
 EOF
 ```
 
-**This recipe changed at v1.0.20260810 and the series steps there.** It used
+**This recipe changed AGAIN at v1.0.20260818 and the series steps there too.**
+Package includes are named `apps/`-relative as often as they are named beside
+the `.asm` -- `%include "cword/cwmove.inc"` -- and resolving only the sibling
+form dropped them, cword's and runcpm's bulk among them; the same pass also
+counted `apps/os88api.inc` and `apps/cc/os88thunk.asm` twice, once as a glob
+hit and once as an include, hence the `dict.fromkeys`. Net 9,324 lines out on
+that tree: the old recipe reported 222,280 lines, this one 231,604, and the
+previous release recounts to 228,855 -- **which is the number that entry's
+note quotes, so the +2,749 that is real growth is not read as +9,765.**
+Entries before v1.0.20260818 still hold their own recipe's numbers.
+
+**And it changed at v1.0.20260810 before that.** It used
 to glob `apps/*/*.asm` only, which missed the `.inc` files four packages keep
 their bulk in -- ArtfulType, ModPlug, Tracker and Frotz, 37,309 lines between
 them at that release. The old recipe reported 115,528 lines and 35 modules for
